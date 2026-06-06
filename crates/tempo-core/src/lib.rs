@@ -15,6 +15,7 @@ pub mod channel;
 pub mod fieldday;
 pub mod inbox;
 pub mod logbook;
+pub mod lotw;
 pub mod message;
 pub mod qso;
 pub mod qsy;
