@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LoggedQso } from '../types'
-import { getLog, importAdif, logQso } from '../api'
+import { getLog, importAdif, logQso, syncLotwReport } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 
 interface Props {
@@ -54,6 +54,7 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode }: Props) {
   }))
   const [err, setErr] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const syncRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(() => {
     getLog()
@@ -76,6 +77,24 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode }: Props) {
     if (stats) {
       const dupes = stats.skipped ? ` (${stats.skipped} dupes skipped)` : ''
       pushToast(`Imported ${stats.added} QSO${stats.added === 1 ? '' : 's'}${dupes}`, 'success')
+      load()
+    }
+  }
+
+  // Sync a LoTW (or any ADIF) confirmation report INTO the log: upgrades
+  // confirmation + credit on already-logged QSOs (which a plain import skips).
+  const onSyncFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return
+    const text = await f.text()
+    const r = await withErrorToast(() => syncLotwReport(text), 'LoTW sync failed')
+    if (r) {
+      const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
+      pushToast(
+        `Synced: ${r.newlyConfirmed} newly confirmed, ${r.newlyCredited} credited${orphans}`,
+        r.orphans.length ? 'info' : 'success',
+      )
       load()
     }
   }
@@ -131,6 +150,21 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode }: Props) {
           />
           <button type="button" className="export-btn" onClick={() => fileRef.current?.click()}>
             Import ADIF
+          </button>
+          <input
+            ref={syncRef}
+            type="file"
+            accept=".adi,.adif,text/plain"
+            style={{ display: 'none' }}
+            onChange={onSyncFile}
+          />
+          <button
+            type="button"
+            className="export-btn"
+            onClick={() => syncRef.current?.click()}
+            title="Reconcile a LoTW ADIF export into the log — upgrades confirmations + credit on existing QSOs"
+          >
+            Sync confirmations
           </button>
           <button type="button" className="export-btn" onClick={() => setShowForm((v) => !v)}>
             {showForm ? 'Close' : 'Log QSO'}

@@ -119,7 +119,8 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
             {aw.dxccConfirmed >= DXCC_BASIC
               ? `DXCC achieved ✓ · ${aw.dxccConfirmed} entities`
               : `${DXCC_BASIC - aw.dxccConfirmed} confirmed to go`}{' '}
-            · {aw.dxccWorked} worked
+            · {aw.dxccWorked} worked · {aw.dxccCredited} credited
+            {aw.readyToSubmit > 0 && ` · ${aw.readyToSubmit} ready to submit`}
           </span>
         </div>
 

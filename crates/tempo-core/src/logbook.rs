@@ -29,6 +29,14 @@ pub struct QsoRecord {
     /// accepted for DXCC/WAZ/WPX/WAS, so award counting (DXCC, Challenge, …) must
     /// use this — not [`confirmed`](Self::confirmed) — or it over-counts.
     pub award_confirmed: bool,
+    /// Awards credit has been **granted** (ARRL credited it) — normalized ADIF
+    /// award codes ("DXCC", "DXCC_BAND", "WAS"…), uppercased + sorted + deduped.
+    /// Distinct from `award_confirmed`: a confirmation you hold vs credit you've
+    /// been officially granted. From ADIF `CREDIT_GRANTED`.
+    pub credit_granted: Vec<String>,
+    /// Awards credit **applied/submitted** but not yet granted (ADIF
+    /// `CREDIT_SUBMITTED`).
+    pub credit_submitted: Vec<String>,
 }
 
 /// An in-memory logbook backed by an ADIF file.
@@ -119,6 +127,29 @@ impl Logbook {
         Ok(())
     }
 
+    /// Rewrite the entire ADIF file from the in-memory records (write-tmp +
+    /// rename, so a crash mid-write can't truncate the log). Needed after a
+    /// [`merge_report`](Self::merge_report), which mutates existing records (unlike
+    /// the append-only [`append`](Self::append)).
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("adi.tmp");
+        std::fs::write(&tmp, self.adif())?;
+        std::fs::rename(&tmp, path)
+    }
+
+    /// Merge a confirmation/credit report (ADIF — e.g. a LoTW export) into the
+    /// log: monotonically upgrade matched QSOs' confirmation + credit state, and
+    /// report confirmations that match no logged QSO. The fix for "re-importing a
+    /// report drops new confirmations on already-logged QSOs". Pure merge — call
+    /// [`save`](Self::save) to persist.
+    pub fn merge_report(&mut self, text: &str) -> crate::reconcile::ReconcileSummary {
+        let incoming = parse_adif(text);
+        crate::reconcile::reconcile(&mut self.records, &incoming)
+    }
+
     /// The whole logbook as ADIF text (header + records).
     pub fn adif(&self) -> String {
         let mut s = adif_header();
@@ -186,6 +217,14 @@ fn adif_record(r: &QsoRecord) -> String {
         out.push_str(&field("LOTW_QSL_RCVD", "Y"));
     } else if r.confirmed {
         out.push_str(&field("EQSL_QSL_RCVD", "Y"));
+    }
+    // Credit state round-trips so a reconciled log re-exports its granted/applied
+    // awards (and re-imports back to the same state).
+    if !r.credit_granted.is_empty() {
+        out.push_str(&field("CREDIT_GRANTED", &r.credit_granted.join(",")));
+    }
+    if !r.credit_submitted.is_empty() {
+        out.push_str(&field("CREDIT_SUBMITTED", &r.credit_submitted.join(",")));
     }
     out.push_str("<EOR>\n");
     out
@@ -285,6 +324,14 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
     let confirmed = rcvd("QSL_RCVD") || rcvd("LOTW_QSL_RCVD") || rcvd("EQSL_QSL_RCVD");
     // ...but only LoTW + paper count toward DXCC/WAZ/WPX/WAS awards (NOT eQSL).
     let award_confirmed = rcvd("QSL_RCVD") || rcvd("LOTW_QSL_RCVD");
+    let credit_granted = f
+        .get("CREDIT_GRANTED")
+        .map(|s| parse_credit(s))
+        .unwrap_or_default();
+    let credit_submitted = f
+        .get("CREDIT_SUBMITTED")
+        .map(|s| parse_credit(s))
+        .unwrap_or_default();
     Some(QsoRecord {
         call,
         grid: f.get("GRIDSQUARE").cloned(),
@@ -296,12 +343,34 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         when_unix: unix_from_ymdhms(y, mo, d, h, mi, s),
         confirmed,
         award_confirmed,
+        credit_granted,
+        credit_submitted,
     })
+}
+
+/// Parse an ADIF credit list (`CREDIT_GRANTED`/`CREDIT_SUBMITTED`): comma-separated
+/// entries, each `AWARD` or `AWARD:source` (sources `&`-joined) — keep the award
+/// code, drop the source, normalize (upper, sorted, deduped).
+fn parse_credit(s: &str) -> Vec<String> {
+    let mut v: Vec<String> = s
+        .split(',')
+        .map(|t| {
+            t.split(':')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_uppercase()
+        })
+        .filter(|t| !t.is_empty())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
 }
 
 /// Unix seconds → (year, month, day, hour, min, sec) UTC, via Howard Hinnant's
 /// civil-from-days algorithm (no external crates).
-fn datetime_utc(unix: u64) -> (i32, u32, u32, u32, u32, u32) {
+pub(crate) fn datetime_utc(unix: u64) -> (i32, u32, u32, u32, u32, u32) {
     let secs = unix as i64;
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
@@ -352,6 +421,8 @@ mod tests {
             when_unix: when,
             confirmed: false,
             award_confirmed: false,
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
         }
     }
 
@@ -431,6 +502,54 @@ mod tests {
         assert!(t2.contains("<EQSL_QSL_RCVD:1>Y"));
         let b2 = parse_adif(&t2);
         assert!(b2[0].confirmed && !b2[0].award_confirmed);
+    }
+
+    #[test]
+    fn credit_fields_parse_and_round_trip() {
+        // CREDIT_GRANTED with :source annotations → award codes only, normalized.
+        let adif = "<EOH>\n<CALL:5>K2DEF<BAND:3>20m<MODE:3>FT8<LOTW_QSL_RCVD:1>Y\
+                    <CREDIT_GRANTED:23>DXCC:lotw,WAS:card&lotw<CREDIT_SUBMITTED:4>IOTA<EOR>\n";
+        let recs = parse_adif(adif);
+        assert_eq!(
+            recs[0].credit_granted,
+            vec!["DXCC".to_string(), "WAS".to_string()]
+        );
+        assert_eq!(recs[0].credit_submitted, vec!["IOTA".to_string()]);
+        // round-trips through serialize → parse.
+        let mut lb = Logbook::new();
+        lb.add(recs[0].clone());
+        let back = parse_adif(&lb.adif());
+        assert_eq!(
+            back[0].credit_granted,
+            vec!["DXCC".to_string(), "WAS".to_string()]
+        );
+        assert_eq!(back[0].credit_submitted, vec!["IOTA".to_string()]);
+    }
+
+    #[test]
+    fn merge_report_upgrades_existing_qso_and_flags_orphan() {
+        // The regression "clean sync" fixes: a report confirming an ALREADY-logged
+        // QSO must upgrade it (plain dedup-import would skip and lose it).
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000)); // logged, unconfirmed
+        assert!(!lb.records()[0].award_confirmed);
+
+        let (y, mo, d, ..) = datetime_utc(1_700_000_000);
+        let date = format!("{y:04}{mo:02}{d:02}");
+        // Report: confirms W1AW (submode differs MFSK→Digital) + DXCC credit, plus
+        // a confirmation for a never-logged call.
+        let report = format!(
+            "<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:4>MFSK<QSO_DATE:8>{date}<LOTW_QSL_RCVD:1>Y\
+             <CREDIT_GRANTED:4>DXCC<EOR>\n\
+             <CALL:5>K9ZZZ<BAND:3>40m<MODE:2>CW<QSO_DATE:8>{date}<LOTW_QSL_RCVD:1>Y<EOR>\n"
+        );
+        let s = lb.merge_report(&report);
+        assert_eq!(s.newly_confirmed, 1);
+        assert_eq!(s.newly_credited, 1);
+        assert!(lb.records()[0].award_confirmed);
+        assert_eq!(lb.records()[0].credit_granted, vec!["DXCC".to_string()]);
+        assert_eq!(s.orphans.len(), 1, "K9ZZZ has no logged QSO");
+        assert!(s.orphans[0].reason.contains("K9ZZZ"));
     }
 
     #[test]

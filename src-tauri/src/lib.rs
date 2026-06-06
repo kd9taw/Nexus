@@ -30,7 +30,9 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::State;
-use tempo_app::dto::{AppSnapshot, ImportStats, LoggedQso, SourceKind, Spectrum, Tier};
+use tempo_app::dto::{
+    AppSnapshot, ImportStats, LoggedQso, LotwSyncResult, SourceKind, Spectrum, Tier,
+};
 use tempo_app::engine::Engine;
 use tempo_app::settings::Settings;
 
@@ -478,8 +480,11 @@ fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummar
     let eng = state.lock().map_err(|e| e.to_string())?;
     let mut awards = propagation::Awards::new();
     for q in eng.get_log() {
-        // Award-eligible confirmation only (LoTW/paper) — eQSL doesn't count.
-        awards.add(&q.call, &q.band, &q.mode, q.award_confirmed);
+        // Award-eligible confirmation only (LoTW/paper) — eQSL doesn't count; plus
+        // whether ARRL has granted DXCC-family credit (DXCC / DXCC_BAND /
+        // DXCC_MODE / … — real LoTW exports use the granular codes).
+        let credited = q.credit_granted.iter().any(|c| c.starts_with("DXCC"));
+        awards.add_with_credit(&q.call, &q.band, &q.mode, q.award_confirmed, credited);
     }
     Ok(awards.summary())
 }
@@ -491,6 +496,17 @@ fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportSta
     let mut eng = state.lock().map_err(|e| e.to_string())?;
     let (added, skipped, total) = eng.import_adif(&text);
     Ok(ImportStats { added, skipped, total })
+}
+
+/// Reconcile a confirmation/credit report (LoTW ADIF export) INTO the existing
+/// log — upgrades confirmation + credit on already-logged QSOs (which a plain
+/// import would skip), rewrites the log file, and returns the diff + any
+/// confirmations that matched no logged QSO. Offline; the live LoTW download is a
+/// later increment that feeds this the same ADIF.
+#[tauri::command]
+fn sync_lotw_report(state: State<'_, SharedEngine>, text: String) -> Result<LotwSyncResult, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(eng.merge_lotw_report(&text).into())
 }
 
 // ----- coordinated QSY ("move together") — a separate, opt-in feature ------
@@ -632,6 +648,7 @@ pub fn run() {
             get_log,
             get_awards,
             import_adif,
+            sync_lotw_report,
             get_propagation,
             qsy_set_enabled,
             qsy_configure,

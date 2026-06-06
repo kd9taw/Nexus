@@ -18,6 +18,7 @@ pub mod logbook;
 pub mod message;
 pub mod qso;
 pub mod qsy;
+pub mod reconcile;
 pub mod roster;
 pub mod spectrum;
 pub mod store;

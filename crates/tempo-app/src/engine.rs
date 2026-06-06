@@ -445,6 +445,20 @@ impl Engine {
         (added.len(), skipped, self.logbook.len())
     }
 
+    /// Reconcile a confirmation/credit report (ADIF — e.g. a LoTW export) INTO the
+    /// existing log: monotonically upgrade matched QSOs' confirmation + credit
+    /// (which a plain dedup-import would skip and lose), rewrite the ADIF file, and
+    /// return the reconcile summary (newly confirmed/credited + unmatched orphans).
+    pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
+        let summary = self.logbook.merge_report(text);
+        if let Some(path) = &self.log_path {
+            if let Err(e) = self.logbook.save(path) {
+                eprintln!("tempo: merge_lotw_report save failed: {e}");
+            }
+        }
+        summary
+    }
+
     /// A clone of all logbook records (oldest-first / newest-last).
     pub fn get_log(&self) -> Vec<QsoRecord> {
         self.logbook.records().to_vec()
@@ -1162,6 +1176,8 @@ impl Engine {
             when_unix: now_unix_secs(),
             confirmed: false,
             award_confirmed: false,
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
         }
     }
 

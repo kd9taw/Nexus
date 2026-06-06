@@ -13,6 +13,7 @@ import type {
   CatTestResult,
   ImportStats,
   LoggedQso,
+  LotwSyncResult,
   ModeRequest,
   Settings,
   SourceKind,
@@ -143,6 +144,14 @@ export async function importAdif(text: string): Promise<ImportStats> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<ImportStats>('import_adif', { text })
   return mockEngine.importAdif(text)
+}
+
+/** Reconcile a LoTW (or any ADIF) confirmation report INTO the log: upgrade
+ * confirmation + credit on already-logged QSOs, return the diff + orphans. */
+export async function syncLotwReport(text: string): Promise<LotwSyncResult> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<LotwSyncResult>('sync_lotw_report', { text })
+  return mockEngine.syncLotwReport(text)
 }
 
 /** Export the general logbook as ADIF or CSV text. */

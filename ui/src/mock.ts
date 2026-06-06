@@ -20,6 +20,8 @@ import type {
   FieldDayStatus,
   ImportStats,
   LoggedQso,
+  LotwOrphan,
+  LotwSyncResult,
   ModeRequest,
   OpMode,
   QsoStatus,
@@ -966,6 +968,8 @@ class MockEngine {
       confirmedQsos: 1043,
       dxccWorked: 142,
       dxccConfirmed: 118,
+      dxccCredited: 100,
+      readyToSubmit: 18,
       slotsWorked: 487,
       slotsConfirmed: 392,
       bands: [
@@ -1051,6 +1055,43 @@ class MockEngine {
       ]
     }
     return Promise.resolve({ added: calls.length, skipped: 0, total: this.logbook.length })
+  }
+
+  syncLotwReport(text: string): Promise<LotwSyncResult> {
+    // Demo-grade reconcile: confirm + DXCC-credit any logged call the report
+    // names; report names with no logged QSO as orphans. NOTE: matches on
+    // callsign only (lossy) — the real Rust reconcile keys on
+    // (call, band, mode-class, UTC-day) with consume-once, so demo diff counts
+    // won't exactly mirror production.
+    const calls = [...text.matchAll(/<CALL:\d+>([A-Z0-9/]+)/gi)].map((m) => m[1].toUpperCase())
+    let newlyConfirmed = 0
+    let newlyCredited = 0
+    let matched = 0
+    const orphans: LotwOrphan[] = []
+    for (const call of calls) {
+      const hit = this.logbook.find((q) => q.call.toUpperCase() === call)
+      if (hit) {
+        matched++
+        if (!hit.awardConfirmed) {
+          hit.awardConfirmed = true
+          hit.confirmed = true
+          newlyConfirmed++
+        }
+        if (!(hit.creditGranted ?? []).includes('DXCC')) {
+          hit.creditGranted = [...(hit.creditGranted ?? []), 'DXCC']
+          newlyCredited++
+        }
+      } else {
+        orphans.push({
+          call,
+          band: '20m',
+          mode: 'FT8',
+          whenUnix: Math.floor(Date.now() / 1000),
+          reason: `no logged QSO with ${call}`,
+        })
+      }
+    }
+    return Promise.resolve({ matched, newlyConfirmed, newlyCredited, newlySubmitted: 0, orphans })
   }
 
   // -- internals ----------------------------------------------------------

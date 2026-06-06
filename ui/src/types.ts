@@ -272,6 +272,28 @@ export interface LoggedQso {
   confirmed: boolean
   /** Award-eligible confirmation (LoTW or paper only — eQSL excluded). */
   awardConfirmed: boolean
+  /** Awards credit granted by ARRL (normalized ADIF codes, e.g. "DXCC"). */
+  creditGranted?: string[]
+  /** Awards credit applied/submitted but not yet granted. */
+  creditSubmitted?: string[]
+}
+
+/** A confirmation in a synced report with no matching logged QSO (diagnostic). */
+export interface LotwOrphan {
+  call: string
+  band: string
+  mode: string
+  whenUnix: number
+  reason: string
+}
+
+/** Result of reconciling a LoTW (or any ADIF) confirmation report into the log. */
+export interface LotwSyncResult {
+  matched: number
+  newlyConfirmed: number
+  newlyCredited: number
+  newlySubmitted: number
+  orphans: LotwOrphan[]
 }
 
 /** Per-band DXCC entity progress (worked vs confirmed). */
@@ -337,6 +359,10 @@ export interface AwardSummary {
   /** Distinct DXCC entities worked / confirmed (100 confirmed = basic DXCC). */
   dxccWorked: number
   dxccConfirmed: number
+  /** Distinct DXCC entities with ARRL credit granted (official standing). */
+  dxccCredited: number
+  /** Confirmed-but-not-credited entities (confirmed − credited) — ready to submit. */
+  readyToSubmit: number
   /** Entity×band "DXCC Challenge" slots worked / confirmed. */
   slotsWorked: number
   slotsConfirmed: number

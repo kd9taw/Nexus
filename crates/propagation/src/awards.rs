@@ -120,6 +120,12 @@ pub struct AwardSummary {
     /// Distinct DXCC entities worked / confirmed (100 confirmed = basic DXCC).
     pub dxcc_worked: usize,
     pub dxcc_confirmed: usize,
+    /// Distinct DXCC entities with award credit **granted** by ARRL (official
+    /// standing) — typically ≤ `dxcc_confirmed`.
+    pub dxcc_credited: usize,
+    /// Confirmed-but-not-yet-credited entities (`confirmed − credited`) — the
+    /// "ready to submit to ARRL" gap an elite chaser closes.
+    pub ready_to_submit: usize,
     /// Entity×band "DXCC Challenge" slots worked / confirmed.
     pub slots_worked: usize,
     pub slots_confirmed: usize,
@@ -160,6 +166,9 @@ pub struct Awards {
     confirmed_qsos: usize,
     worked_entity: HashSet<&'static str>,
     confirmed_entity: HashSet<&'static str>,
+    /// DXCC entities with award credit **granted** (ARRL credited it — a QSO with
+    /// `DXCC` in its `credit_granted`). Subset of confirmed in practice.
+    credited_entity: HashSet<&'static str>,
     worked_slot: HashSet<(&'static str, Band)>,
     confirmed_slot: HashSet<(&'static str, Band)>,
     /// band → (worked entities, confirmed entities)
@@ -182,6 +191,20 @@ impl Awards {
     /// still counts toward total QSOs but not DXCC; a band label that doesn't
     /// parse counts the entity but no slot.
     pub fn add(&mut self, call: &str, band: &str, mode: &str, confirmed: bool) {
+        self.add_with_credit(call, band, mode, confirmed, false)
+    }
+
+    /// As [`add`](Self::add), plus `credited` — whether ARRL has **granted** DXCC
+    /// credit for this QSO (its `credit_granted` contains `DXCC`). Drives the
+    /// "confirmed vs officially credited" gap on the dashboard.
+    pub fn add_with_credit(
+        &mut self,
+        call: &str,
+        band: &str,
+        mode: &str,
+        confirmed: bool,
+        credited: bool,
+    ) {
         self.qsos += 1;
         if confirmed {
             self.confirmed_qsos += 1;
@@ -209,6 +232,13 @@ impl Awards {
         self.worked_entity.insert(entity);
         if confirmed {
             self.confirmed_entity.insert(entity);
+        }
+        // Credit implies a held confirmation — gate on `confirmed` so credited can
+        // never exceed confirmed (keeps the "confirmed ≥ credited" dashboard model
+        // and ready_to_submit = confirmed − credited honest, even for a malformed
+        // report row carrying CREDIT_GRANTED without a QSL field).
+        if credited && confirmed {
+            self.credited_entity.insert(entity);
         }
         // Per-mode DXCC (CW/Phone/Digital are separate awards).
         let pm = self.per_mode.entry(ModeClass::from_adif(mode)).or_default();
@@ -388,11 +418,21 @@ impl Awards {
             dxcc_current_total: current_total as u32,
         });
 
+        // Credited (granted) entities + the confirmed-but-not-credited gap.
+        let dxcc_credited = self.credited_entity.len();
+        let ready_to_submit = self
+            .confirmed_entity
+            .iter()
+            .filter(|e| !self.credited_entity.contains(*e))
+            .count();
+
         AwardSummary {
             qsos: self.qsos,
             confirmed_qsos: self.confirmed_qsos,
             dxcc_worked: self.worked_entity.len(),
             dxcc_confirmed: self.confirmed_entity.len(),
+            dxcc_credited,
+            ready_to_submit,
             slots_worked: self.worked_slot.len(),
             slots_confirmed: self.confirmed_slot.len(),
             bands,
@@ -519,6 +559,32 @@ mod tests {
             s.bands.is_empty(),
             "no DXCC-by-band entry for a non-DXCC entity"
         );
+    }
+
+    #[test]
+    fn credited_tier_and_ready_to_submit() {
+        let mut a = Awards::new();
+        a.add_with_credit("W1AW", "20m", "CW", true, true); // confirmed + DXCC credited
+        a.add_with_credit("JA1XYZ", "20m", "FT8", true, false); // confirmed, not credited
+        a.add_with_credit("DL1ABC", "20m", "CW", false, false); // worked only
+        let s = a.summary();
+        assert_eq!(s.dxcc_worked, 3);
+        assert_eq!(s.dxcc_confirmed, 2, "USA + Japan confirmed");
+        assert_eq!(s.dxcc_credited, 1, "only USA is credited");
+        assert_eq!(s.ready_to_submit, 1, "Japan: confirmed but not credited");
+        // plain add() never credits.
+        let mut b = Awards::new();
+        b.add("W1AW", "20m", "CW", true);
+        assert_eq!(b.summary().dxcc_credited, 0);
+        assert_eq!(b.summary().ready_to_submit, 1);
+
+        // credited without a confirmation must NOT inflate credited (credited ≤
+        // confirmed always holds — a malformed credit-only report row).
+        let mut c = Awards::new();
+        c.add_with_credit("W1AW", "20m", "CW", false, true);
+        let s = c.summary();
+        assert_eq!(s.dxcc_confirmed, 0);
+        assert_eq!(s.dxcc_credited, 0, "credit without confirmation is ignored");
     }
 
     #[test]

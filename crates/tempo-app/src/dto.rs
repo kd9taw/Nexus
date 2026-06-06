@@ -331,6 +331,12 @@ pub struct LoggedQso {
     /// the award counts; the UI can distinguish award-grade from eQSL-only.
     #[serde(default)]
     pub award_confirmed: bool,
+    /// Awards credit GRANTED by ARRL (normalized ADIF codes, e.g. "DXCC").
+    #[serde(default)]
+    pub credit_granted: Vec<String>,
+    /// Awards credit applied/submitted but not yet granted.
+    #[serde(default)]
+    pub credit_submitted: Vec<String>,
 }
 
 impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
@@ -346,6 +352,8 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             when_unix: r.when_unix,
             confirmed: r.confirmed,
             award_confirmed: r.award_confirmed,
+            credit_granted: r.credit_granted,
+            credit_submitted: r.credit_submitted,
         }
     }
 }
@@ -363,6 +371,8 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             when_unix: q.when_unix,
             confirmed: q.confirmed,
             award_confirmed: q.award_confirmed,
+            credit_granted: q.credit_granted,
+            credit_submitted: q.credit_submitted,
         }
     }
 }
@@ -374,6 +384,50 @@ pub struct ImportStats {
     pub added: usize,
     pub skipped: usize,
     pub total: usize,
+}
+
+/// A confirmation in a synced report with no matching logged QSO (diagnostic).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LotwOrphan {
+    pub call: String,
+    pub band: String,
+    pub mode: String,
+    pub when_unix: u64,
+    pub reason: String,
+}
+
+/// Result of reconciling a LoTW (or any ADIF) confirmation report into the log.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LotwSyncResult {
+    pub matched: usize,
+    pub newly_confirmed: usize,
+    pub newly_credited: usize,
+    pub newly_submitted: usize,
+    pub orphans: Vec<LotwOrphan>,
+}
+
+impl From<tempo_core::reconcile::ReconcileSummary> for LotwSyncResult {
+    fn from(s: tempo_core::reconcile::ReconcileSummary) -> Self {
+        LotwSyncResult {
+            matched: s.matched,
+            newly_confirmed: s.newly_confirmed,
+            newly_credited: s.newly_credited,
+            newly_submitted: s.newly_submitted,
+            orphans: s
+                .orphans
+                .into_iter()
+                .map(|o| LotwOrphan {
+                    call: o.call,
+                    band: o.band,
+                    mode: o.mode,
+                    when_unix: o.when_unix,
+                    reason: o.reason,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// The full application snapshot the UI renders from.
