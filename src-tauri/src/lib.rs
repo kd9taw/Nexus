@@ -51,12 +51,19 @@ type SharedSpots = Arc<Mutex<tempo_net::cluster::SpotBuffer>>;
 /// this stop flag exists only so `cluster::run`'s signature is satisfied.
 static CLUSTER_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// One-shot latch: the cluster daemon thread is spawned at most once per process,
+/// whether at startup or lazily when a real callsign is first entered in Settings.
+static CLUSTER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Recent live PSK Reporter MQTT reception reports (the "getting out" firehose),
 /// fed by the background MQTT thread and merged into the propagation nowcast.
 type SharedLivePaths = Arc<Mutex<propagation::LiveSpots>>;
 
 /// Lifetime stop flag for the PSK Reporter MQTT daemon thread (see CLUSTER_STOP).
 static PSKR_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// One-shot latch for the PSK Reporter MQTT daemon thread (see CLUSTER_STARTED).
+static PSKR_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// PSK Reporter MQTT broker (plain MQTT over TCP).
 const PSKR_MQTT_ADDR: &str = "mqtt.pskreporter.info:1883";
@@ -67,6 +74,70 @@ fn now_unix() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// A usable operator callsign: non-empty and not the shipped `KD9TAW` placeholder
+/// ("operator hasn't set their call yet"). Network features that log in to public
+/// services (DX cluster / RBN, PSK Reporter MQTT) must never run under it, so they
+/// would key a third party's call on a public service.
+fn is_real_call(call: &str) -> bool {
+    let c = call.trim();
+    !c.is_empty() && !c.eq_ignore_ascii_case("KD9TAW")
+}
+
+/// Spawn the DX-cluster / RBN daemon thread once per process (the [`CLUSTER_STARTED`]
+/// latch makes repeat calls a no-op, so it is safe to call both at startup and from
+/// `set_settings`). No-op unless `mycall` is a [`is_real_call`]; the caller is
+/// responsible for the `cluster_enabled` gate. Parsed spots flow into `spots`.
+fn start_cluster_feed(spots: &SharedSpots, cluster_host: &str, mycall: &str) {
+    if !is_real_call(mycall) || CLUSTER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let buf = spots.clone();
+    let host = cluster_host.to_string();
+    let call = mycall.trim().to_string();
+    std::thread::spawn(move || {
+        tempo_net::cluster::run(
+            &host,
+            &call,
+            |sp| {
+                if let Ok(mut b) = buf.lock() {
+                    b.push(sp.clone());
+                }
+            },
+            &CLUSTER_STOP,
+        );
+    });
+}
+
+/// Spawn the PSK Reporter MQTT firehose thread once per process (the [`PSKR_STARTED`]
+/// latch makes repeat calls a no-op). No-op unless `mycall` is a [`is_real_call`].
+/// Parsed live `PathSpot`s flow into `live_paths`, which `get_propagation` merges
+/// into the nowcast. The CAS latch guarantees no double-spawn across concurrent
+/// `set_settings` calls and the startup path.
+fn start_pskr_feed(live_paths: &SharedLivePaths, mycall: &str) {
+    if !is_real_call(mycall) || PSKR_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let buf = live_paths.clone();
+    let call = mycall.trim().to_string();
+    std::thread::spawn(move || {
+        let topics = propagation::pskr_mqtt_topics(&call);
+        let topic_refs: Vec<&str> = topics.iter().map(|s| s.as_str()).collect();
+        tempo_net::mqtt::subscribe(
+            PSKR_MQTT_ADDR,
+            &format!("nexus-{call}"),
+            &topic_refs,
+            |topic, _payload| {
+                if let Some(spot) = propagation::parse_pskr_mqtt(topic, now_unix()) {
+                    if let Ok(mut b) = buf.lock() {
+                        b.push(spot);
+                    }
+                }
+            },
+            &PSKR_STOP,
+        );
+    });
 }
 
 /// How long a live propagation nowcast is reused before refetching (seconds).
@@ -131,8 +202,10 @@ fn select_peer(state: State<'_, SharedEngine>, peer: String) -> Result<AppSnapsh
 /// engine's signal source.
 #[tauri::command]
 fn set_tier(state: State<'_, SharedEngine>, tier: String) -> Result<AppSnapshot, String> {
-    let tier: Tier = serde_json::from_value(serde_json::Value::String(tier.clone()))
-        .map_err(|_| format!("invalid tier {tier:?}: expected \"FT1\", \"FT8\", \"FT4\", or \"DX1\""))?;
+    let tier: Tier =
+        serde_json::from_value(serde_json::Value::String(tier.clone())).map_err(|_| {
+            format!("invalid tier {tier:?}: expected \"FT1\", \"FT8\", \"FT4\", or \"DX1\"")
+        })?;
     let mut eng = state.lock().map_err(|e| e.to_string())?;
     eng.set_tier(tier);
     Ok(eng.snapshot())
@@ -249,17 +322,38 @@ fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
 }
 
 /// Apply + persist new settings. Returns the refreshed snapshot.
+///
+/// Also lazily starts the live network feeds: if this change supplies a real
+/// callsign (or enables the cluster) for the first time this session, the
+/// cluster/RBN and PSK Reporter MQTT daemons start immediately — no app restart.
+/// The `start_*_feed` latches make this a no-op once a feed is running (so an
+/// already-running feed keeps its original callsign until the next restart).
 #[tauri::command]
 fn set_settings(
     state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
     settings: Settings,
 ) -> Result<AppSnapshot, String> {
     if let Err(e) = settings.save(&settings_path()) {
         eprintln!("tempo: failed to persist settings: {e}");
     }
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
-    eng.apply_settings(settings);
-    Ok(eng.snapshot())
+    // Capture the feed config before `settings` moves into the engine.
+    let cluster_enabled = settings.cluster_enabled;
+    let cluster_host = settings.cluster_host.clone();
+    let mycall = settings.mycall.clone();
+
+    let snap = {
+        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        eng.apply_settings(settings);
+        eng.snapshot()
+    }; // release the engine lock before spawning feed threads
+
+    if cluster_enabled {
+        start_cluster_feed(spots.inner(), &cluster_host, &mycall);
+    }
+    start_pskr_feed(live_paths.inner(), &mycall);
+    Ok(snap)
 }
 
 /// Export the Field Day log as text in `format` ("cabrillo" | "adif"). Errors if
@@ -565,7 +659,10 @@ fn get_need_alerts(
     // ...plus recent DX-cluster / RBN spots (each on its own band, derived from
     // freq). Only the last 15 min — "heard now" must mean recent.
     if let Ok(buf) = spots.lock() {
-        for cs in buf.recent_within(std::time::Instant::now(), std::time::Duration::from_secs(900)) {
+        for cs in buf.recent_within(
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(900),
+        ) {
             // Pick a real mode keyword out of the comment (RBN leads with it;
             // human spots may lead with "up 2" etc.) rather than the first token.
             let mode = cs
@@ -574,8 +671,18 @@ fn get_need_alerts(
                 .find(|t| {
                     matches!(
                         t.to_ascii_uppercase().as_str(),
-                        "CW" | "SSB" | "USB" | "LSB" | "AM" | "FM" | "RTTY" | "PSK" | "FT8" | "FT4"
-                            | "JT65" | "JT9" | "MFSK"
+                        "CW" | "SSB"
+                            | "USB"
+                            | "LSB"
+                            | "AM"
+                            | "FM"
+                            | "RTTY"
+                            | "PSK"
+                            | "FT8"
+                            | "FT4"
+                            | "JT65"
+                            | "JT9"
+                            | "MFSK"
                     )
                 })
                 .unwrap_or("FT8");
@@ -584,7 +691,11 @@ fn get_need_alerts(
             }
         }
     }
-    Ok(propagation::rank_needs(&heard, &needs, needs.worked_zones()))
+    Ok(propagation::rank_needs(
+        &heard,
+        &needs,
+        needs.worked_zones(),
+    ))
 }
 
 /// Import an external ADIF logbook (deduped merge → real "needs"). Takes the
@@ -593,7 +704,11 @@ fn get_need_alerts(
 fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
     let mut eng = state.lock().map_err(|e| e.to_string())?;
     let (added, skipped, total) = eng.import_adif(&text);
-    Ok(ImportStats { added, skipped, total })
+    Ok(ImportStats {
+        added,
+        skipped,
+        total,
+    })
 }
 
 /// Reconcile a confirmation/credit report (LoTW ADIF export) INTO the existing
@@ -602,7 +717,10 @@ fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportSta
 /// confirmations that matched no logged QSO. Offline; the live LoTW download is a
 /// later increment that feeds this the same ADIF.
 #[tauri::command]
-fn sync_lotw_report(state: State<'_, SharedEngine>, text: String) -> Result<LotwSyncResult, String> {
+fn sync_lotw_report(
+    state: State<'_, SharedEngine>,
+    text: String,
+) -> Result<LotwSyncResult, String> {
     let mut eng = state.lock().map_err(|e| e.to_string())?;
     Ok(eng.merge_lotw_report(&text).into())
 }
@@ -698,57 +816,19 @@ pub fn run() {
     let cluster_call = settings.mycall.clone();
     let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(settings)));
 
-    // Recent DX-cluster / RBN spots for need-aware spotting. When enabled (and a
-    // callsign is set), a background daemon thread connects, logs in, and pushes
-    // parsed spots into this buffer; `get_need_alerts` reads it. Opt-in network.
+    // Live network feeds (DX-cluster / RBN spots + the PSK Reporter MQTT firehose).
+    // Each is spawned once per process (the *_STARTED latches), gated on a real
+    // callsign so we never log in to a public service under the `KD9TAW` placeholder.
+    // The same start_*_feed helpers are reused by `set_settings`, so entering a real
+    // callsign (or enabling the cluster) in Settings starts the feed immediately —
+    // no restart needed. The cluster is opt-in (`cluster_enabled`); the firehose
+    // mirrors the nowcast's existing PSK Reporter use, so it has no extra toggle.
     let spots: SharedSpots = Arc::new(Mutex::new(tempo_net::cluster::SpotBuffer::default()));
-    // Gate on a REAL callsign — never log in to a public service under the shipped
-    // placeholder (`KD9TAW` = "operator hasn't set their call yet", per the UI
-    // onboarding nudge); that would key an RBN session as a third party.
-    let real_call = !cluster_call.trim().is_empty()
-        && !cluster_call.trim().eq_ignore_ascii_case("KD9TAW");
-    let pskr_call = cluster_call.clone(); // before cluster_call moves into the thread
-    if cluster_enabled && real_call {
-        let buf = spots.clone();
-        std::thread::spawn(move || {
-            tempo_net::cluster::run(
-                &cluster_host,
-                &cluster_call,
-                |sp| {
-                    if let Ok(mut b) = buf.lock() {
-                        b.push(sp.clone());
-                    }
-                },
-                &CLUSTER_STOP,
-            );
-        });
-    }
-
-    // PSK Reporter MQTT firehose — live "who hears me / who I hear" merged into
-    // the propagation nowcast. The nowcast already consumes PSK Reporter (XML)
-    // when a callsign is set, so this just upgrades that to the live stream — same
-    // real-call gate (never the KD9TAW placeholder), no extra toggle.
     let live_paths: SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
-    if real_call {
-        let buf = live_paths.clone();
-        std::thread::spawn(move || {
-            let topics = propagation::pskr_mqtt_topics(&pskr_call);
-            let topic_refs: Vec<&str> = topics.iter().map(|s| s.as_str()).collect();
-            tempo_net::mqtt::subscribe(
-                PSKR_MQTT_ADDR,
-                &format!("nexus-{}", pskr_call.trim()),
-                &topic_refs,
-                |topic, _payload| {
-                    if let Some(spot) = propagation::parse_pskr_mqtt(topic, now_unix()) {
-                        if let Ok(mut b) = buf.lock() {
-                            b.push(spot);
-                        }
-                    }
-                },
-                &PSKR_STOP,
-            );
-        });
+    if cluster_enabled {
+        start_cluster_feed(&spots, &cluster_host, &cluster_call);
     }
+    start_pskr_feed(&live_paths, &cluster_call);
 
     // Point the logbook at its ADIF file and load prior contacts (so worked-
     // before highlighting and the log view reflect previous sessions), and
