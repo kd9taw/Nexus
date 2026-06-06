@@ -46,6 +46,16 @@ tempo-app = { path = "../crates/tempo-app" }
 propagation = { path = "../crates/propagation", features = ["live"] }
 # DX-cluster / RBN spot feed for need-aware spotting.
 tempo-net = { path = "../crates/tempo-net" }
+# OS-native credential vault for the LoTW password (Windows Credential Manager /
+# macOS Keychain / Linux Secret Service). No external dep on Windows/macOS.
+keyring = { version = "3.6", features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+] }
+# tempo-core for the pure LoTW URL/validate/high-water helpers used by the
+# download command (the reconcile path is reached via tempo-app).
+tempo-core = { path = "../crates/tempo-core" }
 # Real sound-card + rig transport (optional; enabled by the `radio` feature).
 tempo-audio = { path = "../crates/tempo-audio", optional = true }
 

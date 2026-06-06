@@ -262,6 +262,17 @@ impl Engine {
         }
     }
 
+    /// Advance the persisted LoTW incremental-sync cursor (`lotw_last_qsl`) WITHOUT
+    /// the heavyweight side effects of [`Engine::apply_settings`] (no mode reset,
+    /// no TX-queue clear, no QSY reconcile). Returns the updated [`Settings`] so the
+    /// caller can persist them. The LoTW confirmation download must be invisible to
+    /// live operation — a mid-QSO sync must not kick the operator back to Chat or
+    /// drop queued TX.
+    pub fn set_lotw_cursor(&mut self, high_water: String) -> Settings {
+        self.settings.lotw_last_qsl = high_water;
+        self.settings.clone()
+    }
+
     /// Change band / dial frequency / mode **live** — without resetting the
     /// operating mode or queues (unlike [`Engine::apply_settings`]). Updates the
     /// settings + the UI radio readout; the radio loop re-tunes the rig from

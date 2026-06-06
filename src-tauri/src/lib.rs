@@ -437,11 +437,8 @@ fn set_settings(
     spots: State<'_, SharedSpots>,
     live_paths: State<'_, SharedLivePaths>,
     health: State<'_, SharedHealth>,
-    settings: Settings,
+    mut settings: Settings,
 ) -> Result<AppSnapshot, String> {
-    if let Err(e) = settings.save(&settings_path()) {
-        eprintln!("tempo: failed to persist settings: {e}");
-    }
     // Capture the feed config before `settings` moves into the engine.
     let cluster_enabled = settings.cluster_enabled;
     let cluster_host = settings.cluster_host.clone();
@@ -449,6 +446,15 @@ fn set_settings(
 
     let snap = {
         let mut eng = state.lock().map_err(|e| e.to_string())?;
+        // The LoTW sync cursor is bound to the exact query (notably the username);
+        // if the username changed, reset it to a full pull so a config edit can't
+        // silently skip confirmations.
+        if eng.settings().lotw_username.trim() != settings.lotw_username.trim() {
+            settings.lotw_last_qsl.clear();
+        }
+        if let Err(e) = settings.save(&settings_path()) {
+            eprintln!("tempo: failed to persist settings: {e}");
+        }
         eng.apply_settings(settings);
         eng.snapshot()
     }; // release the engine lock before spawning feed threads
@@ -829,6 +835,115 @@ fn sync_lotw_report(
     Ok(eng.merge_lotw_report(&text).into())
 }
 
+// ----- LoTW credential vault + authenticated download -----------------------
+// The LoTW *website* password lives in the OS keychain (Windows Credential
+// Manager / macOS Keychain / Linux Secret Service), never in settings.json or a
+// log. The username + the incremental high-water cursor are non-secret and live
+// in Settings.
+
+const LOTW_KEYCHAIN_SERVICE: &str = "tempo";
+const LOTW_KEYCHAIN_USER: &str = "lotw-password";
+
+fn lotw_keychain() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, LOTW_KEYCHAIN_USER)
+        .map_err(|e| format!("couldn't open the system keychain: {e}"))
+}
+
+/// Store (or, if `password` is empty, clear) the LoTW website password in the OS
+/// keychain. Write-only: the password is never read back to the UI.
+#[tauri::command]
+fn set_lotw_password(password: String) -> Result<(), String> {
+    let entry = lotw_keychain()?;
+    if password.is_empty() {
+        return clear_lotw_entry(&entry);
+    }
+    entry
+        .set_password(&password)
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+}
+
+/// Remove the stored LoTW password from the OS keychain. Idempotent: a missing
+/// entry counts as success (nothing to forget).
+#[tauri::command]
+fn clear_lotw_password() -> Result<(), String> {
+    clear_lotw_entry(&lotw_keychain()?)
+}
+
+fn clear_lotw_entry(entry: &keyring::Entry) -> Result<(), String> {
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("couldn't clear the system keychain: {e}")),
+    }
+}
+
+/// Download new LoTW confirmations and reconcile them into the log.
+///
+/// Reads the LoTW username + incremental cursor from settings and the password
+/// from the keychain, fetches the report since the stored high-water, validates
+/// it, merges it via the same reconcile path as a pasted report, and advances the
+/// cursor — but only if the response carried a new high-water (an empty
+/// incremental response has none, so the cursor is preserved, not wiped). The
+/// password-bearing request URL is never logged or surfaced.
+#[tauri::command]
+fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
+    // Read username + cursor (non-secret) under a brief lock; the network fetch
+    // below must NOT hold the engine lock (it can block for up to 60 s).
+    let (username, owncall, since) = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        let s = eng.settings();
+        (
+            s.lotw_username.trim().to_string(),
+            s.mycall.trim().to_string(),
+            s.lotw_last_qsl.trim().to_string(),
+        )
+    };
+    if username.is_empty() {
+        return Err("Set your LoTW username in Settings first.".to_string());
+    }
+    let password = lotw_keychain()?
+        .get_password()
+        .map_err(|_| "No LoTW password stored — set it in Settings.".to_string())?;
+    let used_username = username.clone(); // for the post-fetch cursor-binding guard
+
+    // Build the URL, fetch, and drop the secret-bearing values immediately after.
+    let body = {
+        let query = tempo_core::lotw::LotwQuery {
+            username,
+            password,
+            owncall: Some(owncall).filter(|c| !c.is_empty()),
+            qsl_since: Some(since).filter(|c| !c.is_empty()),
+        };
+        let url = tempo_core::lotw::build_report_url(&query);
+        propagation::live::lotw::fetch_report(&url)?
+    }; // `query` + `url` (both hold the password) dropped here
+
+    if !tempo_core::lotw::is_lotw_adif(&body) {
+        return Err(
+            "LoTW returned an unexpected response — check your username/password.".to_string(),
+        );
+    }
+
+    // Merge via the shared reconcile path, then advance the cursor only on a real
+    // high-water (re-lock: the fetch ran without the engine lock held).
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
+    if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
+        // Only advance the cursor if the username is still the one this download
+        // used. If `set_settings` changed it during the (lock-free) fetch, it
+        // already reset the cursor to a full pull for the new identity — this
+        // high-water belongs to the old query, so binding it would risk skipping
+        // records on the next incremental pull. Persist via a narrow setter so the
+        // sync never disturbs live operation (no mode reset / TX-queue clear).
+        if eng.settings().lotw_username.trim() == used_username.trim() {
+            let updated = eng.set_lotw_cursor(high_water);
+            if let Err(e) = updated.save(&settings_path()) {
+                eprintln!("tempo: failed to persist LoTW cursor: {e}");
+            }
+        }
+    }
+    Ok(summary)
+}
+
 // ----- coordinated QSY ("move together") — a separate, opt-in feature ------
 //
 // All no-ops while disabled. Enabling/disabling + the channel set/cadence are
@@ -1000,6 +1115,9 @@ pub fn run() {
             get_awards,
             import_adif,
             sync_lotw_report,
+            set_lotw_password,
+            clear_lotw_password,
+            download_lotw_report,
             get_need_alerts,
             get_propagation,
             get_feed_health,

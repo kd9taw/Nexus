@@ -124,6 +124,17 @@ pub struct Settings {
     pub alert_cq: bool,
     /// Alert when a new (not previously heard) station is decoded.
     pub alert_new: bool,
+
+    // --- confirmations (LoTW) ---
+    /// LoTW account **username** (usually but not always the callsign). The
+    /// password is NOT stored here — it lives in the OS keychain (set via the
+    /// `set_lotw_password` command). Empty = LoTW sync not configured.
+    pub lotw_username: String,
+    /// Incremental-sync high-water mark: the `APP_LoTW_LASTQSL` timestamp from the
+    /// last successful download, passed back as `qso_qslsince`. Empty = full pull.
+    /// Reset to empty when `lotw_username` changes (the cursor is query-bound).
+    pub lotw_last_qsl: String,
+
     /// Editable quick-reply macros per mode (the Composer chips).
     pub macros: Macros,
 }
@@ -190,6 +201,8 @@ impl Default for Settings {
             alert_my_call: true,
             alert_cq: false,
             alert_new: false,
+            lotw_username: String::new(),
+            lotw_last_qsl: String::new(),
             macros: Macros::default(),
         }
     }
