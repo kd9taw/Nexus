@@ -12,10 +12,12 @@ import {
 import { PROFILES, resolveEnabled, type ProfileId } from './profiles'
 
 /** Persisted feature state: which profile is active (or 'custom' after a manual
- * tweak) and the resolved enabled-set. */
+ * tweak), the resolved enabled-set, and the reveal nudges the operator has
+ * dismissed (keyed by the triggering achievement id) so we never nag twice. */
 export interface FeatureState {
   profile: ProfileId | 'custom'
   enabled: Record<FeatureId, boolean>
+  dismissedReveals: string[]
 }
 
 /** Force every core feature on (the spine is never disableable). Returns a new
@@ -35,9 +37,16 @@ export function defaultState(): FeatureState {
   return applyProfile('everything')
 }
 
-/** State for a chosen profile. */
-export function applyProfile(profileId: ProfileId): FeatureState {
-  return { profile: profileId, enabled: resolveEnabled(profileId) }
+/** State for a chosen profile. Carries forward prior reveal dismissals (switching
+ * profiles shouldn't resurrect a nudge the operator already declined). */
+export function applyProfile(profileId: ProfileId, dismissedReveals: string[] = []): FeatureState {
+  return { profile: profileId, enabled: resolveEnabled(profileId), dismissedReveals }
+}
+
+/** Record that the operator dismissed the reveal nudge for `achievementId`. */
+export function dismissReveal(state: FeatureState, achievementId: string): FeatureState {
+  if (state.dismissedReveals.includes(achievementId)) return state
+  return { ...state, dismissedReveals: [...state.dismissedReveals, achievementId] }
 }
 
 /**
@@ -60,7 +69,7 @@ export function toggleFeature(state: FeatureState, id: FeatureId): FeatureState 
 
   const enabled = {} as Record<FeatureId, boolean>
   for (const f of FEATURES) enabled[f.id] = f.core ? true : on.has(f.id)
-  return { profile: 'custom', enabled }
+  return { profile: 'custom', enabled, dismissedReveals: state.dismissedReveals }
 }
 
 /** Parse persisted JSON into a valid state, repairing anything malformed:
@@ -82,7 +91,10 @@ export function normalizeState(raw: unknown): FeatureState {
   for (const id of [...on]) addWithDependencies(on, id)
   const enabled = {} as Record<FeatureId, boolean>
   for (const f of FEATURES) enabled[f.id] = f.core ? true : on.has(f.id)
-  return { profile, enabled }
+  const dismissedReveals = Array.isArray(obj.dismissedReveals)
+    ? obj.dismissedReveals.filter((x): x is string => typeof x === 'string')
+    : []
+  return { profile, enabled, dismissedReveals }
 }
 
 /** The landing view for the active profile. Falls back to 'operate' (core, always

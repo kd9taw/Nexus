@@ -3445,6 +3445,56 @@ select.settings-input {
   color: var(--text);
 }
 
+/* ---- Adaptive-reveal nudge (suggest enabling a now-relevant feature) ---- */
+.reveal-nudge {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--state-good) 12%, var(--bg-elev));
+  border-bottom: 1px solid color-mix(in srgb, var(--state-good) 40%, var(--border));
+}
+.reveal-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+.reveal-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text);
+}
+.reveal-sub {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.reveal-enable {
+  border: 1px solid color-mix(in srgb, var(--state-good) 55%, var(--border));
+  background: color-mix(in srgb, var(--state-good) 18%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+}
+.reveal-enable:hover {
+  background: color-mix(in srgb, var(--state-good) 30%, transparent);
+}
+.reveal-dismiss {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+}
+.reveal-dismiss:hover {
+  color: var(--text);
+}
+
 /* ---- Live-demo banner (browser/mock mode only) ---- */
 .demo-banner {
   flex: 0 0 auto;

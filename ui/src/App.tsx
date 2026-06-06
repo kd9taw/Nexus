@@ -32,6 +32,7 @@ import { useDensity } from './useDensity'
 import { useMotion } from './useMotion'
 import { useAchievements } from './useAchievements'
 import { useFeatures } from './useFeatures'
+import { useReveals } from './useReveals'
 import { sectionFeatures, type FeatureId } from './features/registry'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
@@ -58,6 +59,7 @@ import { RoamPanel } from './components/RoamPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Toasts } from './components/Toasts'
 import { OnboardingBanner } from './components/OnboardingBanner'
+import { RevealNudge } from './components/RevealNudge'
 import { DemoBanner } from './components/DemoBanner'
 
 // Placeholder identity shipped by the mock/default config. Until the operator
@@ -85,6 +87,7 @@ export default function App() {
   // gamification/achievements layer.
   const features = useFeatures()
   useAchievements(features.isOn('gamification'))
+  const reveal = useReveals(features)
   const { commitLeft, commitRight, resetWidths } = usePaneWidths()
   const layoutRef = useRef<HTMLElement>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
@@ -613,6 +616,15 @@ export default function App() {
         <OnboardingBanner
           onOpenSettings={() => handleView('settings')}
           onDismiss={handleDismissOnboarding}
+        />
+      )}
+
+      {reveal.pending && (
+        <RevealNudge
+          feature={reveal.pending.feature}
+          achievement={reveal.pending.achievement}
+          onEnable={reveal.enable}
+          onDismiss={reveal.dismiss}
         />
       )}
 

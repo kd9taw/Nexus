@@ -4,6 +4,7 @@ import {
   applyProfile,
   coerceEnabled,
   defaultState,
+  dismissReveal,
   landingFor,
   normalizeState,
   toggleFeature,
@@ -68,6 +69,7 @@ describe('feature state transitions', () => {
       profile: 'dx',
       // a corrupt store claiming a core feature is off
       enabled: { operate: false } as Record<FeatureId, boolean>,
+      dismissedReveals: [],
     }
     const n = normalizeState(stored)
     expect(n.profile).toBe('dx')
@@ -82,16 +84,38 @@ describe('feature state transitions', () => {
   it('landingFor follows the profile, custom → operate', () => {
     expect(landingFor(applyProfile('contest'))).toBe('fieldDay')
     expect(landingFor(applyProfile('vhf'))).toBe('propagation')
-    expect(landingFor({ profile: 'custom', enabled: applyProfile('dx').enabled })).toBe('operate')
+    expect(
+      landingFor({ profile: 'custom', enabled: applyProfile('dx').enabled, dismissedReveals: [] }),
+    ).toBe('operate')
   })
 
   it('landingFor falls back to operate when the profile landing is disabled (corrupt store)', () => {
     // A hand-edited/corrupt state: profile says contest but fieldDay is off.
-    const corrupt = {
-      profile: 'contest' as const,
+    const corrupt: FeatureState = {
+      profile: 'contest',
       enabled: { ...applyProfile('contest').enabled, fieldDay: false },
+      dismissedReveals: [],
     }
     expect(landingFor(corrupt)).toBe('operate')
+  })
+
+  it('dismissReveal records the achievement id once; transitions preserve dismissals', () => {
+    const base = applyProfile('starter')
+    const d1 = dismissReveal(base, 'dx-first')
+    expect(d1.dismissedReveals).toEqual(['dx-first'])
+    // idempotent
+    expect(dismissReveal(d1, 'dx-first')).toBe(d1)
+    // carried across a toggle and a profile switch (hook passes them through)
+    const toggled = toggleFeature(d1, 'awards')
+    expect(toggled.dismissedReveals).toEqual(['dx-first'])
+    expect(applyProfile('dx', d1.dismissedReveals).dismissedReveals).toEqual(['dx-first'])
+  })
+
+  it('normalizeState parses dismissedReveals and defaults missing/garbage to []', () => {
+    expect(normalizeState({ profile: 'custom', enabled: {}, dismissedReveals: ['qso-1'] } as never).dismissedReveals).toEqual([
+      'qso-1',
+    ])
+    expect(defaultState().dismissedReveals).toEqual([])
   })
 
   it('normalizeState restores dependency closure (enabled feature implies its deps)', () => {

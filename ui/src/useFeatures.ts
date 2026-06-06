@@ -3,6 +3,7 @@ import type { FeatureId, View } from './features/registry'
 import {
   applyProfile as applyProfileState,
   defaultState,
+  dismissReveal as dismissRevealState,
   landingFor,
   normalizeState,
   toggleFeature,
@@ -45,6 +46,10 @@ export interface FeaturesApi {
   applyProfile: (id: ProfileId) => void
   /** The active profile's landing view (custom → operate). */
   landing: View
+  /** Reveal nudges the operator has dismissed (by triggering achievement id). */
+  dismissedReveals: string[]
+  /** Permanently dismiss the reveal nudge for an achievement id. */
+  dismissReveal: (achievementId: string) => void
 }
 
 /**
@@ -54,11 +59,6 @@ export interface FeaturesApi {
  */
 export function useFeatures(): FeaturesApi {
   const [state, setState] = useState<FeatureState>(readInitial)
-
-  const commit = useCallback((next: FeatureState) => {
-    setState(next)
-    persist(next)
-  }, [])
 
   const toggle = useCallback(
     (id: FeatureId) => setState((s) => {
@@ -70,13 +70,36 @@ export function useFeatures(): FeaturesApi {
   )
 
   const applyProfile = useCallback(
-    (id: ProfileId) => commit(applyProfileState(id)),
-    [commit],
+    // Preserve prior reveal dismissals across a profile switch.
+    (id: ProfileId) => setState((s) => {
+      const next = applyProfileState(id, s.dismissedReveals)
+      persist(next)
+      return next
+    }),
+    [],
+  )
+
+  const dismissReveal = useCallback(
+    (achievementId: string) => setState((s) => {
+      const next = dismissRevealState(s, achievementId)
+      persist(next)
+      return next
+    }),
+    [],
   )
 
   const isOn = useCallback((id: FeatureId) => state.enabled[id] !== false, [state.enabled])
 
   const landing = useMemo(() => landingFor(state), [state])
 
-  return { profile: state.profile, enabled: state.enabled, isOn, toggle, applyProfile, landing }
+  return {
+    profile: state.profile,
+    enabled: state.enabled,
+    isOn,
+    toggle,
+    applyProfile,
+    landing,
+    dismissedReveals: state.dismissedReveals,
+    dismissReveal,
+  }
 }
