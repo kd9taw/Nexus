@@ -353,6 +353,20 @@ export interface NeedAlert {
   headline: string
 }
 
+/** A QRZ.com callsign-lookup result. grid/state are subscriber-only and routinely
+ *  null for free QRZ accounts. */
+export interface QrzLookup {
+  call: string
+  name: string | null
+  qth: string | null
+  grid: string | null
+  state: string | null
+  country: string | null
+  dxcc: number | null
+  cqZone: number | null
+  ituZone: number | null
+}
+
 /** Liveness of one background live feed, for the Now-Bar connector pills. */
 export interface FeedStatus {
   /** The feed's daemon is running. Started once a real callsign (and, for the
@@ -588,6 +602,9 @@ export interface Settings {
   /** eQSL incremental-sync cursor (YYYYMMDDHHMM). Managed by the app; not
    *  user-edited. Empty = next sync is a full pull. */
   eqslLastSync: string
+  /** QRZ.com account username for callsign lookup. Password is in the OS keychain
+   *  (set via setQrzPassword); the session key is cached in memory only. */
+  qrzUsername: string
   /** Editable quick-reply macros, per context. */
   macros: {
     chat: string[]

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LoggedQso } from '../types'
-import { getLog, importAdif, logQso, syncLotwReport } from '../api'
+import { getLog, importAdif, logQso, qrzLookup, syncLotwReport } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 
 interface Props {
@@ -53,8 +53,25 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode }: Props) {
     rstRcvd: '',
   }))
   const [err, setErr] = useState<string | null>(null)
+  const [qrzBusy, setQrzBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const syncRef = useRef<HTMLInputElement>(null)
+
+  // QRZ lookup for the QSO being logged: fills grid (subscriber-only) + shows the
+  // operator name. On-demand (QRZ free tier is ~100/day), one lookup per click.
+  const onQrzLookup = async () => {
+    const call = draft.call.trim()
+    if (!call) return
+    setQrzBusy(true)
+    const r = await withErrorToast(() => qrzLookup(call), 'QRZ lookup failed')
+    setQrzBusy(false)
+    if (r) {
+      if (r.grid && !draft.grid.trim()) setField('grid', r.grid)
+      const detail = [r.name, r.grid && `grid ${r.grid}`, r.state].filter(Boolean).join(' · ')
+      const note = r.grid ? '' : ' · grid/state need a QRZ subscription'
+      pushToast(`QRZ ${r.call}: ${detail || r.country || 'found'}${note}`, 'info')
+    }
+  }
 
   const load = useCallback(() => {
     getLog()
@@ -177,14 +194,25 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode }: Props) {
           <div className="logbook-form-grid">
             <label className="logbook-field">
               <span>Call</span>
-              <input
-                className="settings-input"
-                value={draft.call}
-                onChange={(e) => setField('call', e.target.value)}
-                placeholder="W1AW"
-                autoComplete="off"
-                spellCheck={false}
-              />
+              <div className="settings-input-row">
+                <input
+                  className="settings-input"
+                  value={draft.call}
+                  onChange={(e) => setField('call', e.target.value)}
+                  placeholder="W1AW"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  className="settings-refresh"
+                  onClick={onQrzLookup}
+                  disabled={qrzBusy || !draft.call.trim()}
+                  title="Look up name + grid on QRZ.com"
+                >
+                  {qrzBusy ? '…' : 'QRZ'}
+                </button>
+              </div>
             </label>
             <label className="logbook-field">
               <span>Grid</span>

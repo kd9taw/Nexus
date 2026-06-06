@@ -17,6 +17,7 @@ import type {
   LotwSyncResult,
   ModeRequest,
   NeedAlert,
+  QrzLookup,
   Settings,
   SourceKind,
   Spectrum,
@@ -216,6 +217,41 @@ export async function downloadEqslReport(): Promise<LotwSyncResult> {
     newlyCredited: 0,
     newlySubmitted: 0,
     orphans: [],
+  }
+}
+
+/** Store the QRZ password in the OS keychain (write-only; empty clears it). */
+export async function setQrzPassword(password: string): Promise<void> {
+  const invoke = tauriInvoke()
+  if (invoke) {
+    await invoke<void>('set_qrz_password', { password })
+  }
+}
+
+/** Remove the stored QRZ password from the OS keychain (idempotent). */
+export async function clearQrzPassword(): Promise<void> {
+  const invoke = tauriInvoke()
+  if (invoke) {
+    await invoke<void>('clear_qrz_password')
+  }
+}
+
+/** Look up a callsign on QRZ.com (uses the stored username + keychain password;
+ *  session key cached server-side in memory). Outside Tauri returns a canned demo
+ *  record so the form is exercisable in the browser. */
+export async function qrzLookup(callsign: string): Promise<QrzLookup> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<QrzLookup>('qrz_lookup', { callsign })
+  return {
+    call: callsign.trim().toUpperCase(),
+    name: 'Demo Operator',
+    qth: 'Anytown',
+    grid: 'FN31pr',
+    state: 'CT',
+    country: 'United States',
+    dxcc: 291,
+    cqZone: 5,
+    ituZone: 8,
   }
 }
 

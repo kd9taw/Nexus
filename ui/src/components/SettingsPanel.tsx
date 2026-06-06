@@ -3,6 +3,7 @@ import type { AudioDevices, BandChannel, CatTestResult, RadioStatus, Settings } 
 import {
   clearEqslPassword,
   clearLotwPassword,
+  clearQrzPassword,
   downloadEqslReport,
   downloadLotwReport,
   getAudioDevices,
@@ -12,6 +13,7 @@ import {
   getSettings,
   setEqslPassword,
   setLotwPassword,
+  setQrzPassword,
   setSettings,
   testCat,
 } from '../api'
@@ -108,6 +110,7 @@ export function SettingsPanel({
   const [lotwSyncing, setLotwSyncing] = useState(false)
   const [eqslPw, setEqslPw] = useState('')
   const [eqslSyncing, setEqslSyncing] = useState(false)
+  const [qrzPw, setQrzPw] = useState('')
 
   useEffect(() => {
     let mounted = true
@@ -316,6 +319,29 @@ export function SettingsPanel({
         r.orphans.length ? 'info' : 'success',
       )
       onSaved?.()
+    }
+  }
+
+  const onSaveQrzPassword = async () => {
+    if (!qrzPw) return
+    const ok = await withErrorToast(async () => {
+      await setQrzPassword(qrzPw)
+      return true
+    }, 'Could not save the QRZ password')
+    if (ok) {
+      setQrzPw('')
+      pushToast('QRZ password saved to the system keychain', 'success')
+    }
+  }
+
+  const onForgetQrzPassword = async () => {
+    const ok = await withErrorToast(async () => {
+      await clearQrzPassword()
+      return true
+    }, 'Could not clear the QRZ password')
+    if (ok) {
+      setQrzPw('')
+      pushToast('QRZ password cleared from the keychain', 'success')
     }
   }
 
@@ -1184,6 +1210,57 @@ export function SettingsPanel({
                   <strong>not</strong> for DXCC/WAS (ARRL doesn't accept eQSL) — a separate tier.
                 </span>
               </div>
+
+              <label className="settings-field">
+                <span className="settings-label">QRZ username</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.qrzUsername}
+                  placeholder="your QRZ.com account login"
+                  onChange={(e) => update('qrzUsername', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  Used to look up a callsign's name + grid when logging. Save settings to apply.
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">QRZ password</span>
+                <div className="settings-input-row">
+                  <input
+                    className="settings-input"
+                    type="password"
+                    value={qrzPw}
+                    placeholder="QRZ.com account password"
+                    onChange={(e) => setQrzPw(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={onSaveQrzPassword}
+                    disabled={!qrzPw}
+                  >
+                    Set
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={onForgetQrzPassword}
+                    title="Remove the stored password from the system keychain"
+                  >
+                    Forget
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  Stored in the OS keychain, never on disk. <strong>Grid &amp; state require a QRZ XML
+                  subscription</strong> — free accounts return only name/address/country.
+                </span>
+              </label>
             </div>
           </fieldset>
         </div>
