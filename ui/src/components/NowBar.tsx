@@ -1,15 +1,46 @@
 import type { ReactNode } from 'react'
-import { Activity, SignalHigh, Target } from 'lucide-react'
-import type { AppSnapshot, PropagationSnapshot } from '../types'
+import { Activity, Radio, SignalHigh, Target } from 'lucide-react'
+import type { AppSnapshot, FeedHealth, FeedStatus, PropagationSnapshot } from '../types'
 import type { View } from './ModeNav'
 
 interface Props {
   snap: AppSnapshot
   prop: PropagationSnapshot | null
+  /** Liveness of the background live feeds (cluster/RBN + PSK Reporter MQTT); null
+   * until the first poll. Each started feed shows a status pill. */
+  feedHealth: FeedHealth | null
   /** Whether the Propagation section is enabled — the Band/Need chips only offer a
    * drill-in when it is (otherwise they're informative-only, not dead links). */
   propEnabled: boolean
   onNavigate: (v: View) => void
+}
+
+/** Compact relative age, e.g. "12s" / "4m" / "2h". */
+function agoText(secs: number | null): string {
+  if (secs == null) return ''
+  if (secs < 60) return `${secs}s`
+  if (secs < 3600) return `${Math.round(secs / 60)}m`
+  return `${Math.round(secs / 3600)}h`
+}
+
+/** A connector-liveness pill (one per started feed). Hidden when the feed isn't
+ * running, so a user who never enabled a feed sees nothing for it. */
+function FeedPill({ name, status }: { name: string; status: FeedStatus }) {
+  if (!status.enabled) return null
+  const ago = agoText(status.lastEventSecs)
+  const [cls, val, title] =
+    status.state === 'live'
+      ? ['good', ago ? `live ${ago}` : 'live', `${name}: receiving (last ${ago} ago)`]
+      : status.state === 'waiting'
+        ? ['weak', 'waiting', `${name}: started — waiting for the first spot/report`]
+        : ['ok', `idle ${ago}`, `${name}: no data for ${ago} (a quiet band, or a feed problem)`]
+  return (
+    <span className={`nb-chip nb-feed ${cls}`} title={title}>
+      <Radio size={12} aria-hidden="true" />
+      <span className="nb-k">{name}</span>
+      <span className="nb-v">{val}</span>
+    </span>
+  )
 }
 
 /** A Now-Bar chip: a real button when `onClick` is given, else a plain status
@@ -58,7 +89,7 @@ const BAND_WORD: Record<string, [string, string]> = {
   Closed: ['closed', 'bad'],
 }
 
-export function NowBar({ snap, prop, propEnabled, onNavigate }: Props) {
+export function NowBar({ snap, prop, feedHealth, propEnabled, onNavigate }: Props) {
   const band = snap.radio.band
   const report = prop?.advisory.bands.find((b) => b.band === band) ?? null
   const need = prop?.dxpeditions.workableNow[0] ?? null
@@ -121,6 +152,13 @@ export function NowBar({ snap, prop, propEnabled, onNavigate }: Props) {
         <span className={`nb-src ${prop.source}`} title={`Propagation data: ${prop.source}`}>
           {prop.source === 'live' ? 'LIVE' : prop.source === 'cached' ? 'CACHED' : 'DEMO'}
         </span>
+      )}
+
+      {feedHealth && (
+        <>
+          <FeedPill name="Cluster" status={feedHealth.cluster} />
+          <FeedPill name="PSKR" status={feedHealth.pskr} />
+        </>
       )}
     </div>
   )

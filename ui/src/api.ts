@@ -11,6 +11,7 @@ import type {
   AwardSummary,
   BandChannel,
   CatTestResult,
+  FeedHealth,
   ImportStats,
   LoggedQso,
   LotwSyncResult,
@@ -160,6 +161,15 @@ export async function getNeedAlerts(): Promise<NeedAlert[]> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<NeedAlert[]>('get_need_alerts')
   return mockEngine.getNeedAlerts()
+}
+
+/** Liveness of the background live feeds (cluster/RBN + PSK Reporter MQTT) for the
+ *  Now-Bar connector pills. Outside Tauri there are no feeds, so both are off. */
+export async function getFeedHealth(): Promise<FeedHealth> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<FeedHealth>('get_feed_health')
+  const off = { enabled: false, lastEventSecs: null, state: 'off' as const }
+  return { cluster: off, pskr: off }
 }
 
 /** Export the general logbook as ADIF or CSV text. */

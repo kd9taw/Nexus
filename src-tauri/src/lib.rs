@@ -65,6 +65,23 @@ static PSKR_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 /// One-shot latch for the PSK Reporter MQTT daemon thread (see CLUSTER_STARTED).
 static PSKR_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Liveness of the background live feeds, updated from their daemon threads and
+/// read by `get_feed_health` for the Now-Bar connector pills. Timestamps are Unix
+/// secs of the last *successfully parsed* event; `0` = none yet this session.
+#[derive(Default)]
+struct FeedHealthState {
+    /// Last parsed DX-cluster / RBN spot.
+    cluster_last: std::sync::atomic::AtomicI64,
+    /// Last successfully parsed PSK Reporter MQTT report.
+    pskr_last_event: std::sync::atomic::AtomicI64,
+}
+type SharedHealth = Arc<FeedHealthState>;
+
+/// A feed counts as "live" if it parsed an event within this window; older ⇒
+/// "idle" (a lull on a quiet band, or a feed problem — the UI tooltip says so).
+/// Generous so a normal band lull doesn't flip the pill.
+const FEED_FRESH_SECS: i64 = 900;
+
 /// PSK Reporter MQTT broker (plain MQTT over TCP).
 const PSKR_MQTT_ADDR: &str = "mqtt.pskreporter.info:1883";
 
@@ -88,12 +105,19 @@ fn is_real_call(call: &str) -> bool {
 /// Spawn the DX-cluster / RBN daemon thread once per process (the [`CLUSTER_STARTED`]
 /// latch makes repeat calls a no-op, so it is safe to call both at startup and from
 /// `set_settings`). No-op unless `mycall` is a [`is_real_call`]; the caller is
-/// responsible for the `cluster_enabled` gate. Parsed spots flow into `spots`.
-fn start_cluster_feed(spots: &SharedSpots, cluster_host: &str, mycall: &str) {
+/// responsible for the `cluster_enabled` gate. Parsed spots flow into `spots`, and
+/// each one stamps `health.cluster_last` for the Now-Bar liveness pill.
+fn start_cluster_feed(
+    spots: &SharedSpots,
+    cluster_host: &str,
+    mycall: &str,
+    health: &SharedHealth,
+) {
     if !is_real_call(mycall) || CLUSTER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
     let buf = spots.clone();
+    let hp = health.clone();
     let host = cluster_host.to_string();
     let call = mycall.trim().to_string();
     std::thread::spawn(move || {
@@ -101,6 +125,8 @@ fn start_cluster_feed(spots: &SharedSpots, cluster_host: &str, mycall: &str) {
             &host,
             &call,
             |sp| {
+                hp.cluster_last
+                    .store(now_unix(), std::sync::atomic::Ordering::Relaxed);
                 if let Ok(mut b) = buf.lock() {
                     b.push(sp.clone());
                 }
@@ -113,13 +139,15 @@ fn start_cluster_feed(spots: &SharedSpots, cluster_host: &str, mycall: &str) {
 /// Spawn the PSK Reporter MQTT firehose thread once per process (the [`PSKR_STARTED`]
 /// latch makes repeat calls a no-op). No-op unless `mycall` is a [`is_real_call`].
 /// Parsed live `PathSpot`s flow into `live_paths`, which `get_propagation` merges
-/// into the nowcast. The CAS latch guarantees no double-spawn across concurrent
-/// `set_settings` calls and the startup path.
-fn start_pskr_feed(live_paths: &SharedLivePaths, mycall: &str) {
+/// into the nowcast; each parsed report stamps `health.pskr_last_event` (so a
+/// connected-but-all-drops feed shows "waiting", not "live"). The CAS latch
+/// guarantees no double-spawn across concurrent `set_settings` calls and startup.
+fn start_pskr_feed(live_paths: &SharedLivePaths, mycall: &str, health: &SharedHealth) {
     if !is_real_call(mycall) || PSKR_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
     let buf = live_paths.clone();
+    let hp = health.clone();
     let call = mycall.trim().to_string();
     std::thread::spawn(move || {
         let topics = propagation::pskr_mqtt_topics(&call);
@@ -130,6 +158,8 @@ fn start_pskr_feed(live_paths: &SharedLivePaths, mycall: &str) {
             &topic_refs,
             |topic, _payload| {
                 if let Some(spot) = propagation::parse_pskr_mqtt(topic, now_unix()) {
+                    hp.pskr_last_event
+                        .store(now_unix(), std::sync::atomic::Ordering::Relaxed);
                     if let Ok(mut b) = buf.lock() {
                         b.push(spot);
                     }
@@ -138,6 +168,79 @@ fn start_pskr_feed(live_paths: &SharedLivePaths, mycall: &str) {
             &PSKR_STOP,
         );
     });
+}
+
+/// Per-feed liveness for the Now-Bar connector pills.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedStatus {
+    /// The feed's daemon thread is running. It is started once a real callsign
+    /// (and, for the cluster, its toggle) is set, and then runs until app exit —
+    /// so this can stay true after the cluster toggle is later turned off (the
+    /// connection genuinely persists until restart). When false the UI hides the pill.
+    enabled: bool,
+    /// Seconds since the last parsed spot/report; `null` if none yet this session.
+    last_event_secs: Option<i64>,
+    /// "off" | "waiting" | "live" | "idle" (only meaningful when `enabled`).
+    state: String,
+}
+
+/// Liveness of both background live feeds.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedHealth {
+    cluster: FeedStatus,
+    pskr: FeedStatus,
+}
+
+fn feed_status(started: bool, last: i64, now: i64) -> FeedStatus {
+    if !started {
+        return FeedStatus {
+            enabled: false,
+            last_event_secs: None,
+            state: "off".into(),
+        };
+    }
+    if last == 0 {
+        return FeedStatus {
+            enabled: true,
+            last_event_secs: None,
+            state: "waiting".into(),
+        };
+    }
+    let age = (now - last).max(0);
+    FeedStatus {
+        enabled: true,
+        last_event_secs: Some(age),
+        state: if age <= FEED_FRESH_SECS {
+            "live"
+        } else {
+            "idle"
+        }
+        .into(),
+    }
+}
+
+/// Liveness of the background live feeds, for the Now-Bar connector pills. A feed
+/// is "live" if it parsed an event within FEED_FRESH_SECS, "waiting" if started
+/// but silent so far, "idle" if it has gone quiet (a lull on a quiet band, or a
+/// feed problem — the UI tooltip says so). Disabled feeds are hidden by the UI.
+#[tauri::command]
+fn get_feed_health(health: State<'_, SharedHealth>) -> FeedHealth {
+    use std::sync::atomic::Ordering::Relaxed;
+    let now = now_unix();
+    FeedHealth {
+        cluster: feed_status(
+            CLUSTER_STARTED.load(Relaxed),
+            health.cluster_last.load(Relaxed),
+            now,
+        ),
+        pskr: feed_status(
+            PSKR_STARTED.load(Relaxed),
+            health.pskr_last_event.load(Relaxed),
+            now,
+        ),
+    }
 }
 
 /// How long a live propagation nowcast is reused before refetching (seconds).
@@ -333,6 +436,7 @@ fn set_settings(
     state: State<'_, SharedEngine>,
     spots: State<'_, SharedSpots>,
     live_paths: State<'_, SharedLivePaths>,
+    health: State<'_, SharedHealth>,
     settings: Settings,
 ) -> Result<AppSnapshot, String> {
     if let Err(e) = settings.save(&settings_path()) {
@@ -350,9 +454,9 @@ fn set_settings(
     }; // release the engine lock before spawning feed threads
 
     if cluster_enabled {
-        start_cluster_feed(spots.inner(), &cluster_host, &mycall);
+        start_cluster_feed(spots.inner(), &cluster_host, &mycall, health.inner());
     }
-    start_pskr_feed(live_paths.inner(), &mycall);
+    start_pskr_feed(live_paths.inner(), &mycall, health.inner());
     Ok(snap)
 }
 
@@ -825,10 +929,11 @@ pub fn run() {
     // mirrors the nowcast's existing PSK Reporter use, so it has no extra toggle.
     let spots: SharedSpots = Arc::new(Mutex::new(tempo_net::cluster::SpotBuffer::default()));
     let live_paths: SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+    let health: SharedHealth = Arc::new(FeedHealthState::default());
     if cluster_enabled {
-        start_cluster_feed(&spots, &cluster_host, &cluster_call);
+        start_cluster_feed(&spots, &cluster_host, &cluster_call, &health);
     }
-    start_pskr_feed(&live_paths, &cluster_call);
+    start_pskr_feed(&live_paths, &cluster_call, &health);
 
     // Point the logbook at its ADIF file and load prior contacts (so worked-
     // before highlighting and the log view reflect previous sessions), and
@@ -862,6 +967,7 @@ pub fn run() {
         .manage(prop_cache)
         .manage(spots)
         .manage(live_paths)
+        .manage(health)
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             send_message,
@@ -896,6 +1002,7 @@ pub fn run() {
             sync_lotw_report,
             get_need_alerts,
             get_propagation,
+            get_feed_health,
             qsy_set_enabled,
             qsy_configure,
             qsy_move_now,

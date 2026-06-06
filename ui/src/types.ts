@@ -350,6 +350,24 @@ export interface NeedAlert {
   headline: string
 }
 
+/** Liveness of one background live feed, for the Now-Bar connector pills. */
+export interface FeedStatus {
+  /** The feed's daemon is running. Started once a real callsign (and, for the
+   *  cluster, its toggle) is set, then runs until app exit — so it can stay true
+   *  after the cluster toggle is later turned off. When false the UI hides the pill. */
+  enabled: boolean
+  /** Seconds since the last parsed spot/report; null if none yet this session. */
+  lastEventSecs: number | null
+  /** Only meaningful when `enabled`. */
+  state: 'off' | 'waiting' | 'live' | 'idle'
+}
+
+/** Liveness of both background live feeds (DX cluster/RBN + PSK Reporter MQTT). */
+export interface FeedHealth {
+  cluster: FeedStatus
+  pskr: FeedStatus
+}
+
 /** Worked All States progress (50 US states; LoTW/paper confirmed). */
 export interface WasProgress {
   worked: number

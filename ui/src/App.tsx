@@ -46,9 +46,9 @@ import { NowBar } from './components/NowBar'
 import { AwardsView } from './components/AwardsView'
 import { PropagationView } from './components/PropagationView'
 import { MapView } from './components/MapView'
-import { getPropagation } from './api'
+import { getPropagation, getFeedHealth } from './api'
 import { setStatus } from './status'
-import type { PropagationSnapshot } from './types'
+import type { PropagationSnapshot, FeedHealth } from './types'
 import { QsoPanel } from './components/QsoPanel'
 import { FieldDayView } from './components/FieldDayView'
 import { BandFeed } from './components/BandFeed'
@@ -162,6 +162,21 @@ export default function App() {
             setStatus('prop', null)
           }
         })
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 30_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [])
+  // Live-feed liveness for the Now-Bar connector pills (same cadence as prop).
+  const [feedHealth, setFeedHealth] = useState<FeedHealth | null>(null)
+  useEffect(() => {
+    let live = true
+    const load = () =>
+      getFeedHealth()
+        .then((h) => live && setFeedHealth(h))
         .catch(() => {})
     load()
     const id = setInterval(load, 30_000)
@@ -682,6 +697,7 @@ export default function App() {
       <NowBar
         snap={snap}
         prop={prop}
+        feedHealth={feedHealth}
         propEnabled={features.isOn('propagation')}
         onNavigate={handleView}
       />

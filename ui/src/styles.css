@@ -414,6 +414,12 @@ button.nb-chip:hover {
 .nb-src.demo {
   color: var(--text-faint);
 }
+/* Connector-liveness pills (cluster/RBN + PSK Reporter) — slightly more compact
+   than the verdict chips; they're infrastructure status, not the headline. */
+.nb-chip.nb-feed {
+  font-size: 11px;
+  padding: 1px 7px;
+}
 
 .status-lane {
   display: inline-flex;
