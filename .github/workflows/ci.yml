@@ -1,0 +1,166 @@
+# Tempo CI — headless Rust workspace tests/clippy + the web UI build.
+#
+# Scope: this runs the SIMULATION-ONLY checks that gate the repo on Linux.
+# It does NOT build the Windows desktop app or the NSIS installer. Those are
+# produced out-of-band by scripts/build-windows.sh (native MSYS2 UCRT64),
+# scripts/build-windows.ps1 (PowerShell wrapper), and
+# scripts/build-windows-cross.sh (Linux/WSL2 cross-compile) — see WINDOWS.md.
+# Published Windows binaries are cross-compiled beta and are not built here.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Job 1 — Rust workspace: build the Fortran/C/C++ libft1 modem (via the
+  # ft1-sys build.rs CMake project) and run the headless modem/engine/net/DX1
+  # round-trip tests, then clippy across the whole workspace.
+  test:
+    name: Rust tests + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # libft1 build deps. The native (host == target) CMake path locates the
+      # FFTW3 single-precision library via pkg-config (`pkg_check_modules(FFTW3F
+      # REQUIRED fftw3f)`) and Boost via `find_package(Boost REQUIRED)`:
+      #   - gfortran        : the 4-CPM turbo modem is Fortran (gfortran runtime).
+      #   - libfftw3-dev     : ships fftw3f.pc + libfftw3f + fftw3.f03 (FFTW3
+      #                        SINGLE precision — used by four2a.f90 / fftw3 module).
+      #   - libboost-dev     : ships <boost/crc.hpp> for the header-only CRC-14 in
+      #                        crc14.cpp (find_package(Boost) config).
+      #   - cmake, ninja-build : drive the libft1 CMake project.
+      #   - pkg-config       : required by find_package(PkgConfig REQUIRED).
+      - name: Install libft1 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran \
+            libfftw3-dev \
+            libboost-dev \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libasound2-dev \
+            libudev-dev
+
+      - name: Set up Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The real-radio path (cpal audio + serial PTT) is feature-gated out of the
+      # default build. Lint AND run its tests here — the Transport reconfig
+      # decisions, the WSJT-X/PSK emit builders, and the rigctld round-trip — so
+      # service.rs/device.rs can't silently rot or regress on the air.
+      - name: cargo clippy tempo-audio --features device,serial
+        run: cargo clippy -p tempo-audio --features device,serial --all-targets -- -D warnings
+
+      - name: cargo test tempo-audio --features device,serial
+        run: cargo test -p tempo-audio --features device,serial
+
+  # Job 2 — Web UI (Vite + React + TypeScript). `npm run build` is `tsc -b &&
+  # vite build`, so this also type-checks the DTO contract that mirrors
+  # crates/tempo-app/src/dto.rs.
+  ui:
+    name: Web UI build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install UI dependencies
+        run: npm --prefix ui install
+
+      - name: Build UI
+        run: npm --prefix ui run build
+
+      - name: Test UI (Vitest)
+        run: npm --prefix ui test
+
+  # Job 3 — MSRV: the workspace must compile on the pinned minimum toolchain
+  # (Cargo.toml [workspace.package] rust-version = "1.87"). Build-only check,
+  # incl. the propagation `live` feature (the heaviest dep set).
+  msrv:
+    name: MSRV (1.87) check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install libft1 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran libfftw3-dev libboost-dev cmake ninja-build pkg-config
+
+      - name: Set up Rust 1.87 toolchain
+        uses: dtolnay/rust-toolchain@1.87.0
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-msrv-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-msrv-
+
+      - name: cargo check --workspace (MSRV)
+        run: cargo check --workspace --all-targets
+
+      - name: cargo check propagation --features live (MSRV)
+        run: cargo check -p propagation --features live
+
+  # Job 4 — Supply chain: RustSec advisories, license allow-list, sources, bans.
+  deny:
+    name: cargo-deny (supply chain + licenses)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources licenses

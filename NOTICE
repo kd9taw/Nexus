@@ -1,0 +1,133 @@
+# Tempo — Attribution and License Heritage
+
+Tempo
+Copyright (C) 2026 Seth McCallister (KD9TAW) <kd9taw@protonmail.com>
+https://github.com/kd9taw/tempo
+
+Tempo is free software: you can redistribute it and/or modify it under the
+terms of the **GNU General Public License, version 3 or any later version**
+(SPDX: `GPL-3.0-or-later`). The full license text is in the file `COPYING` at
+the repository root.
+
+Because Tempo incorporates and links GPLv3 code (most significantly the
+WSJT-X-derived modem internals it reuses), Tempo *as a whole* is licensed
+under GPLv3-or-later. This NOTICE documents the upstream lineage and the
+third-party components that Tempo bundles, links, or depends on, along with
+their licenses and what is used from each. Where a license cannot be confirmed
+from this repository, this file says so rather than asserting it.
+
+---
+
+## Upstream lineage
+
+### WSJT-X — Joe Taylor (K1JT) and the WSJT Development Group
+License: **GNU GPL, version 3** (GPLv3).
+
+Tempo's modem library, `libft1/`, is derived from WSJT-X. The WSJT-X
+reference source is **referenced read-only at build time** (its `lib/`
+sources are compiled into `libft1` from an external checkout) and is **not
+redistributed in this repository**. From WSJT-X, `libft1` reuses:
+
+- the **77-bit message packing/unpacking** (`packjt77`, used via `unpack77`
+  in `libft1/ft1_cabi.f90`), so Chat / QSO / Field Day forms carry the same
+  77-bit payloads on either tier;
+- the **LDPC(174,91) codec** — `encode174_91` and the `bpdecode174_91`
+  soft-decision belief-propagation decoder;
+- the **CRC-14** message check (`chkcrc14a.f90` plus `crc14.cpp`);
+- the **`four2a` FFT** routine and surrounding DSP infrastructure that
+  `libft1` reuses (alongside FFTW3, below).
+
+WSJT-X is the work of Joe Taylor (K1JT) and the WSJT Development Group,
+including Steve Franke (K9AN), Bill Somerville (G4WJS), Nico Palermo (IV3NWV),
+Uwe Risse (DG2YCB), Brian Moran (N9ADG), and others. See the upstream project
+for the authoritative copyright and contributor list:
+https://sourceforge.net/projects/wsjt/
+
+### FT1 waveform — Seth McCallister (KD9TAW)
+License: **GPL-3.0-or-later** (part of Tempo / `libft1`).
+
+The FT1 waveform (the 4-CPM coherent turbo modem with IR-HARQ used by the
+"Fast" tier) is original work by KD9TAW. The DX1 mode (`libft1/dx1/` — the
+non-coherent 8-FSK + soft LDPC(174,91) "Robust" tier) is likewise authored by
+KD9TAW. Both are GPLv3 by virtue of the shared WSJT-X-derived code they build
+on.
+
+> Validation status: FT1 and DX1 are **simulation-validated only** (AWGN, with
+> a fading penalty modeled). They have **not** been validated on the air.
+> FT8/FT4 support is **Phase 2** — internals are compiled into `libft1` but no
+> decode pipeline is wired up. Published Windows binaries are cross-compiled
+> beta builds.
+
+---
+
+## Bundled components (shipped in the Windows installer)
+
+### Hamlib (rigctld)
+License: **GPL / LGPL** — see upstream project. Hamlib ships its own license
+texts with the binaries; the staging script
+(`scripts/fetch-hamlib.sh`) places them, along with `rigctld.exe`,
+`rigctl.exe`, and the required DLLs, under
+`src-tauri/resources/hamlib/`, which the Tauri bundle then includes
+(`tauri.conf.json` → `bundle.resources`). Tempo launches the bundled
+`rigctld` for offline CAT rig control. The Hamlib binaries are **not committed
+to this repository** — `scripts/fetch-hamlib.sh` reproduces them from the
+official Hamlib release. Refer to the license files shipped under
+`resources/hamlib/` (and the Hamlib project) for exact terms.
+
+---
+
+## Linked native libraries
+
+### FFTW (FFTW3, single precision)
+License: **GPL** (the version Tempo builds and links — `libfftw3f`). See the
+FFTW upstream project for terms. Used by `libft1` for the FFT routines
+(`four2a` and related DSP). On the Linux/WSL2 cross build it is statically
+linked from a MinGW-built `libfftw3f.a`; on native MSYS2 builds it is located
+via `pkg-config`.
+
+### Boost (header-only CRC)
+License: **Boost Software License 1.0** (SPDX: `BSL-1.0`). Only the
+**header-only** `<boost/crc.hpp>` is used, by `libft1`'s `crc14.cpp`. No
+compiled Boost library is linked.
+
+---
+
+## Rust dependencies
+
+Tempo's Rust workspace (`crates/ft1-sys`, `crates/ft1`, `crates/tempo-core`,
+`crates/tempo-app`, `crates/tempo-audio`, `crates/tempo-net`) and the
+standalone Tauri shell (`src-tauri/`) depend on the crates below. Pull in the
+full transitive license set with `cargo about` / `cargo deny` against
+`Cargo.lock`; the principal third-party components are:
+
+- **Tauri** (v2 desktop shell) — MIT OR Apache-2.0.
+- **cpal** (sound-card audio transport) — MIT OR Apache-2.0.
+- **serialport** (serial CAT / RTS-DTR keying) — MPL-2.0.
+
+`crates/tempo-net` (the WSJT-X-compatible UDP API and PSK Reporter spotting)
+is pure `std` Rust with no extra third-party crates of its own.
+
+## JavaScript / UI dependencies
+
+The web UI (`ui/`, Vite + React + TypeScript) depends on:
+
+- **React** / **react-dom** — MIT.
+- **Vite**, **TypeScript**, **@vitejs/plugin-react**, and React type
+  definitions (dev dependencies) — MIT. See each package for its terms.
+
+---
+
+## License compatibility
+
+All bundled and linked components above are GPLv3-compatible:
+
+- GPLv3 / LGPL (WSJT-X, Hamlib, FFTW) combine into the GPLv3-or-later whole.
+- Permissive licenses (BSL-1.0 for Boost; MIT / Apache-2.0 for Tauri, cpal,
+  React, Vite, TypeScript) are compatible with redistribution under GPLv3.
+- MPL-2.0 (serialport) is GPL-compatible; its source-disclosure obligations
+  apply per-file to that component.
+
+For the complete and authoritative GPL terms, see **`COPYING`**. For any
+component whose exact license is not stated above, consult the upstream
+project's own license files (for Hamlib, those ship under
+`resources/hamlib/`).

@@ -1,0 +1,28 @@
+[package]
+name = "propagation"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Propagation & opening intelligence: 6m/VHF opening detection (ported from weak-signal-sleuth), adaptive band recommendations, and DXpedition tracking. Pure logic over pluggable spot/space-weather sources."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+# Live feed adapters (NOAA SWPC + PSK Reporter) are opt-in so the pure-logic
+# intelligence stays dependency-light and unit-testable without a network.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"], optional = true }
+quick-xml = { version = "0.39", optional = true }
+serde_json = { version = "1", optional = true }
+
+[features]
+default = []
+live = ["dep:reqwest", "dep:quick-xml", "dep:serde_json"]
+
+[[example]]
+name = "live_snapshot"
+required-features = ["live"]
+
+[[example]]
+name = "dxped_calendar"
+required-features = ["live"]

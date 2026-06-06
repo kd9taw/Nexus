@@ -1,0 +1,488 @@
+//! Persistent QSO logbook (ADIF).
+//!
+//! Records completed contacts across sessions (so they survive restart, unlike
+//! the live roster) and answers "worked before?" for dupe / B4 highlighting.
+//! Stored as an ADIF file the operator can import into any logger. This is the
+//! general logbook for Chat/QSO contacts — Field Day keeps its own contest log
+//! ([`crate::fieldday`]).
+
+use std::path::Path;
+
+/// One logged contact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QsoRecord {
+    pub call: String,
+    pub grid: Option<String>,
+    pub band: String,
+    pub freq_mhz: f64,
+    /// Tempo tier / mode label ("FT1" | "DX1").
+    pub mode: String,
+    /// Signal report sent / received (dB SNR for digital), if known.
+    pub rst_sent: Option<i32>,
+    pub rst_rcvd: Option<i32>,
+    /// Contact time, Unix seconds (UTC).
+    pub when_unix: u64,
+    /// Confirmed by ANY channel — LoTW, eQSL, or paper (`*_QSL_RCVD`). For
+    /// general "has a confirmation" display only.
+    pub confirmed: bool,
+    /// **Award-eligible** confirmation: LoTW **or** paper QSL only. eQSL is NOT
+    /// accepted for DXCC/WAZ/WPX/WAS, so award counting (DXCC, Challenge, …) must
+    /// use this — not [`confirmed`](Self::confirmed) — or it over-counts.
+    pub award_confirmed: bool,
+}
+
+/// An in-memory logbook backed by an ADIF file.
+#[derive(Debug, Clone, Default)]
+pub struct Logbook {
+    records: Vec<QsoRecord>,
+}
+
+impl Logbook {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn records(&self) -> &[QsoRecord] {
+        &self.records
+    }
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    /// Add a record in memory.
+    pub fn add(&mut self, rec: QsoRecord) {
+        self.records.push(rec);
+    }
+
+    /// Merge external ADIF `text` into the log, skipping records already present
+    /// (deduped by call+band+mode+UTC-day). Returns the newly-added records (so
+    /// the caller can persist exactly those) and the count skipped as dupes.
+    /// Used to import an existing logbook so the "needs" model reflects real
+    /// worked entities/bands/modes (and confirmations).
+    pub fn import_adif(&mut self, text: &str) -> (Vec<QsoRecord>, usize) {
+        let mut seen: std::collections::HashSet<DedupKey> =
+            self.records.iter().map(dedup_key).collect();
+        let mut added = Vec::new();
+        let mut skipped = 0usize;
+        for rec in parse_adif(text) {
+            if seen.insert(dedup_key(&rec)) {
+                added.push(rec.clone());
+                self.records.push(rec);
+            } else {
+                skipped += 1;
+            }
+        }
+        (added, skipped)
+    }
+
+    /// True if `call` appears anywhere in the log (worked on any band).
+    pub fn worked_before(&self, call: &str) -> bool {
+        self.records
+            .iter()
+            .any(|r| r.call.eq_ignore_ascii_case(call))
+    }
+
+    /// True if `call` was worked on `band` (band-specific dupe check).
+    pub fn worked_before_band(&self, call: &str, band: &str) -> bool {
+        self.records
+            .iter()
+            .any(|r| r.call.eq_ignore_ascii_case(call) && r.band.eq_ignore_ascii_case(band))
+    }
+
+    /// Load from an ADIF file. Missing/unreadable file → empty log.
+    pub fn load(path: &Path) -> Self {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        Self {
+            records: parse_adif(&text),
+        }
+    }
+
+    /// Append one record to the ADIF file (creating it with a header if new).
+    /// Keeps the in-memory copy in sync — call after [`Logbook::add`].
+    pub fn append(path: &Path, rec: &QsoRecord) -> std::io::Result<()> {
+        use std::io::Write;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let new = !path.exists();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        if new {
+            f.write_all(adif_header().as_bytes())?;
+        }
+        f.write_all(adif_record(rec).as_bytes())?;
+        Ok(())
+    }
+
+    /// The whole logbook as ADIF text (header + records).
+    pub fn adif(&self) -> String {
+        let mut s = adif_header();
+        for r in &self.records {
+            s.push_str(&adif_record(r));
+        }
+        s
+    }
+
+    /// The whole logbook as RFC-4180 CSV (for spreadsheet / quick export).
+    pub fn csv(&self) -> String {
+        let mut s =
+            String::from("Call,Grid,Band,Freq_MHz,Mode,RST_Sent,RST_Rcvd,DateTimeUTC,Confirmed\n");
+        for r in &self.records {
+            let (y, mo, d, h, mi, se) = datetime_utc(r.when_unix);
+            let dt = format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{se:02}Z");
+            let cells = [
+                csv_cell(&r.call),
+                csv_cell(r.grid.as_deref().unwrap_or("")),
+                csv_cell(&r.band),
+                format!("{:.6}", r.freq_mhz),
+                csv_cell(&r.mode),
+                r.rst_sent.map(|v| v.to_string()).unwrap_or_default(),
+                r.rst_rcvd.map(|v| v.to_string()).unwrap_or_default(),
+                dt,
+                if r.confirmed { "Y" } else { "N" }.to_string(),
+            ];
+            s.push_str(&cells.join(","));
+            s.push('\n');
+        }
+        s
+    }
+}
+
+fn adif_header() -> String {
+    "Tempo logbook\n<ADIF_VER:5>3.1.4\n<PROGRAMID:5>Tempo\n<EOH>\n".to_string()
+}
+
+/// One `<FIELD:len>value` tag.
+fn field(name: &str, val: &str) -> String {
+    format!("<{}:{}>{}", name, val.len(), val)
+}
+
+fn adif_record(r: &QsoRecord) -> String {
+    let (y, mo, d, h, mi, s) = datetime_utc(r.when_unix);
+    let mut out = String::new();
+    out.push_str(&field("CALL", &r.call));
+    if let Some(g) = &r.grid {
+        out.push_str(&field("GRIDSQUARE", g));
+    }
+    out.push_str(&field("BAND", &r.band));
+    out.push_str(&field("FREQ", &format!("{:.6}", r.freq_mhz)));
+    out.push_str(&field("MODE", &r.mode));
+    out.push_str(&field("QSO_DATE", &format!("{y:04}{mo:02}{d:02}")));
+    out.push_str(&field("TIME_ON", &format!("{h:02}{mi:02}{s:02}")));
+    if let Some(rs) = r.rst_sent {
+        out.push_str(&field("RST_SENT", &rs.to_string()));
+    }
+    if let Some(rr) = r.rst_rcvd {
+        out.push_str(&field("RST_RCVD", &rr.to_string()));
+    }
+    // Preserve award-eligibility on round-trip: award-confirmed → LoTW; a
+    // confirmation that ISN'T award-eligible (eQSL-only) → eQSL.
+    if r.award_confirmed {
+        out.push_str(&field("LOTW_QSL_RCVD", "Y"));
+    } else if r.confirmed {
+        out.push_str(&field("EQSL_QSL_RCVD", "Y"));
+    }
+    out.push_str("<EOR>\n");
+    out
+}
+
+/// One RFC-4180 CSV cell (quote if it contains a comma, quote, or newline).
+fn csv_cell(s: &str) -> String {
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Import dedup identity: call (upper) + band (lower) + mode (upper) + UTC day.
+/// Needs-grade (preserves distinct QSOs, ignores re-imports), not award-grade.
+type DedupKey = (String, String, String, u64);
+fn dedup_key(r: &QsoRecord) -> DedupKey {
+    (
+        r.call.to_ascii_uppercase(),
+        r.band.to_ascii_lowercase(),
+        r.mode.to_ascii_uppercase(),
+        r.when_unix / 86_400,
+    )
+}
+
+/// Minimal ADIF parser: reads `<NAME:len>value` tags, splitting records on
+/// `<EOR>`. Tolerant of the header (everything up to `<EOH>` is skipped).
+fn parse_adif(text: &str) -> Vec<QsoRecord> {
+    let body = match text.to_ascii_uppercase().find("<EOH>") {
+        Some(i) => &text[i + 5..],
+        None => text,
+    };
+    let mut records = Vec::new();
+    let mut cur: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let end = match body[i..].find('>') {
+            Some(e) => i + e,
+            None => break,
+        };
+        let tag = &body[i + 1..end];
+        i = end + 1;
+        let upper = tag.to_ascii_uppercase();
+        if upper == "EOR" {
+            if let Some(rec) = record_from(&cur) {
+                records.push(rec);
+            }
+            cur.clear();
+            continue;
+        }
+        // NAME:len or NAME:len:type
+        let mut parts = tag.splitn(3, ':');
+        let name = parts.next().unwrap_or("").to_ascii_uppercase();
+        let len: usize = parts
+            .next()
+            .and_then(|l| l.trim().parse().ok())
+            .unwrap_or(0);
+        let val = body.get(i..i + len).unwrap_or("").to_string();
+        i += len;
+        cur.insert(name, val);
+    }
+    records
+}
+
+fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecord> {
+    let call = f.get("CALL")?.clone();
+    let (y, mo, d) = f
+        .get("QSO_DATE")
+        .filter(|s| s.len() >= 8)
+        .map(|s| {
+            (
+                s[0..4].parse::<i32>().unwrap_or(1970),
+                s[4..6].parse::<u32>().unwrap_or(1),
+                s[6..8].parse::<u32>().unwrap_or(1),
+            )
+        })
+        .unwrap_or((1970, 1, 1));
+    let (h, mi, s) = f
+        .get("TIME_ON")
+        .filter(|s| s.len() >= 6)
+        .map(|t| {
+            (
+                t[0..2].parse::<u32>().unwrap_or(0),
+                t[2..4].parse::<u32>().unwrap_or(0),
+                t[4..6].parse::<u32>().unwrap_or(0),
+            )
+        })
+        .unwrap_or((0, 0, 0));
+    let rcvd = |k: &str| f.get(k).is_some_and(|v| v.eq_ignore_ascii_case("Y"));
+    // Any confirmation (incl. eQSL) for general display...
+    let confirmed = rcvd("QSL_RCVD") || rcvd("LOTW_QSL_RCVD") || rcvd("EQSL_QSL_RCVD");
+    // ...but only LoTW + paper count toward DXCC/WAZ/WPX/WAS awards (NOT eQSL).
+    let award_confirmed = rcvd("QSL_RCVD") || rcvd("LOTW_QSL_RCVD");
+    Some(QsoRecord {
+        call,
+        grid: f.get("GRIDSQUARE").cloned(),
+        band: f.get("BAND").cloned().unwrap_or_default(),
+        freq_mhz: f.get("FREQ").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+        mode: f.get("MODE").cloned().unwrap_or_default(),
+        rst_sent: f.get("RST_SENT").and_then(|s| s.parse().ok()),
+        rst_rcvd: f.get("RST_RCVD").and_then(|s| s.parse().ok()),
+        when_unix: unix_from_ymdhms(y, mo, d, h, mi, s),
+        confirmed,
+        award_confirmed,
+    })
+}
+
+/// Unix seconds → (year, month, day, hour, min, sec) UTC, via Howard Hinnant's
+/// civil-from-days algorithm (no external crates).
+fn datetime_utc(unix: u64) -> (i32, u32, u32, u32, u32, u32) {
+    let secs = unix as i64;
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let (h, mi, s) = (
+        (rem / 3600) as u32,
+        ((rem % 3600) / 60) as u32,
+        (rem % 60) as u32,
+    );
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = (y + if m <= 2 { 1 } else { 0 }) as i32;
+    (year, m, d, h, mi, s)
+}
+
+/// Inverse of [`datetime_utc`] — (y,m,d,h,mi,s) UTC → Unix seconds.
+fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
+    let y = y as i64 - if m <= 2 { 1 } else { 0 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let m = m as i64;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + (h as i64) * 3600 + (mi as i64) * 60 + s as i64;
+    secs.max(0) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(call: &str, band: &str, when: u64) -> QsoRecord {
+        QsoRecord {
+            call: call.into(),
+            grid: Some("EN37".into()),
+            band: band.into(),
+            freq_mhz: 14.0905,
+            mode: "FT1".into(),
+            rst_sent: Some(-10),
+            rst_rcvd: Some(-12),
+            when_unix: when,
+            confirmed: false,
+            award_confirmed: false,
+        }
+    }
+
+    #[test]
+    fn worked_before_any_and_per_band() {
+        let mut lb = Logbook::new();
+        lb.add(rec("W9XYZ", "20m", 1_700_000_000));
+        assert!(lb.worked_before("w9xyz")); // case-insensitive
+        assert!(lb.worked_before_band("W9XYZ", "20m"));
+        assert!(!lb.worked_before_band("W9XYZ", "40m"));
+        assert!(!lb.worked_before("N0ABC"));
+    }
+
+    #[test]
+    fn adif_round_trips() {
+        let mut lb = Logbook::new();
+        lb.add(rec("W9XYZ", "20m", 1_700_000_000));
+        lb.add(rec("K2DEF", "40m", 1_700_003_600));
+        let text = lb.adif();
+        assert!(text.contains("<EOH>") && text.contains("<CALL:5>W9XYZ"));
+        let back = parse_adif(&text);
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].call, "W9XYZ");
+        assert_eq!(back[0].band, "20m");
+        assert_eq!(back[0].rst_rcvd, Some(-12));
+        assert!((back[0].freq_mhz - 14.0905).abs() < 1e-6);
+        // time round-trips to the same unix second
+        assert_eq!(back[0].when_unix, 1_700_000_000);
+    }
+
+    #[test]
+    fn confirmation_is_source_aware() {
+        // eQSL is NOT award-eligible: confirmed=true but award_confirmed=false
+        // (the bug fix — an eQSL-only QSO must NOT count toward DXCC/Challenge).
+        let eqsl = "<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<EQSL_QSL_RCVD:1>Y<EOR>\n";
+        let e = &parse_adif(eqsl)[0];
+        assert!(e.confirmed, "eQSL is a confirmation...");
+        assert!(!e.award_confirmed, "...but eQSL is NOT award-eligible");
+
+        // LoTW and paper QSL both count toward awards.
+        let lotw = "<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<LOTW_QSL_RCVD:1>Y<EOR>\n";
+        assert!(
+            parse_adif(lotw)[0].award_confirmed,
+            "LoTW is award-eligible"
+        );
+        let paper = "<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<QSL_RCVD:1>Y<EOR>\n";
+        assert!(
+            parse_adif(paper)[0].award_confirmed,
+            "paper QSL is award-eligible"
+        );
+
+        // Unconfirmed by default.
+        let n = rec("N0ABC", "20m", 1_700_000_000);
+        assert!(!n.confirmed && !n.award_confirmed);
+    }
+
+    #[test]
+    fn award_confirmation_round_trips() {
+        // An award-confirmed (LoTW/paper) record re-emits a LoTW field and
+        // parses back award-eligible; an eQSL-only one round-trips as eQSL.
+        let mut r = rec("W9XYZ", "20m", 1_700_000_000);
+        r.confirmed = true;
+        r.award_confirmed = true;
+        let mut lb = Logbook::new();
+        lb.add(r);
+        let text = lb.adif();
+        assert!(text.contains("<LOTW_QSL_RCVD:1>Y"));
+        let back = parse_adif(&text);
+        assert!(back[0].confirmed && back[0].award_confirmed);
+
+        // eQSL-only record → emits eQSL → round-trips confirmed but not award.
+        let mut e = rec("K2DEF", "40m", 1_700_003_600);
+        e.confirmed = true; // award_confirmed stays false
+        let mut lb2 = Logbook::new();
+        lb2.add(e);
+        let t2 = lb2.adif();
+        assert!(t2.contains("<EQSL_QSL_RCVD:1>Y"));
+        let b2 = parse_adif(&t2);
+        assert!(b2[0].confirmed && !b2[0].award_confirmed);
+    }
+
+    #[test]
+    fn csv_has_header_and_quotes() {
+        let mut lb = Logbook::new();
+        lb.add(rec("W9XYZ", "20m", 1_700_000_000));
+        let csv = lb.csv();
+        let mut lines = csv.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "Call,Grid,Band,Freq_MHz,Mode,RST_Sent,RST_Rcvd,DateTimeUTC,Confirmed"
+        );
+        let row = lines.next().unwrap();
+        assert!(row.starts_with("W9XYZ,EN37,20m,14.090500,FT1,-10,-12,2023-11-14T22:13:20Z,N"));
+    }
+
+    #[test]
+    fn import_merges_dedups_and_reads_confirmations() {
+        let mut lb = Logbook::new();
+        let adif = "<EOH>\n\
+            <CALL:5>C91RU<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20250101<EOR>\n\
+            <CALL:5>JA1XX<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20250101<LOTW_QSL_RCVD:1>Y<EOR>\n";
+        let (added, skipped) = lb.import_adif(adif);
+        assert_eq!(added.len(), 2);
+        assert_eq!(skipped, 0);
+        assert_eq!(lb.len(), 2);
+        assert!(lb.worked_before("C91RU"));
+        // JA1XX came in confirmed via LoTW → award-eligible.
+        assert!(lb
+            .records()
+            .iter()
+            .any(|r| r.call == "JA1XX" && r.confirmed && r.award_confirmed));
+
+        // Re-importing the same text adds nothing (all dupes).
+        let (added2, skipped2) = lb.import_adif(adif);
+        assert_eq!(added2.len(), 0);
+        assert_eq!(skipped2, 2);
+        assert_eq!(lb.len(), 2);
+
+        // A NEW band for an existing call is a distinct slot → imported.
+        let more = "<EOH>\n<CALL:5>C91RU<BAND:3>40m<MODE:3>FT8<QSO_DATE:8>20250102<EOR>\n";
+        let (added3, _) = lb.import_adif(more);
+        assert_eq!(added3.len(), 1);
+        assert!(lb.worked_before_band("C91RU", "40m"));
+    }
+
+    #[test]
+    fn date_conversion_is_correct() {
+        // 2023-11-14 22:13:20 UTC = 1_700_000_000
+        assert_eq!(datetime_utc(1_700_000_000), (2023, 11, 14, 22, 13, 20));
+        assert_eq!(unix_from_ymdhms(2023, 11, 14, 22, 13, 20), 1_700_000_000);
+        // epoch
+        assert_eq!(datetime_utc(0), (1970, 1, 1, 0, 0, 0));
+    }
+}

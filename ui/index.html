@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-layout="right">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Apply persisted theme / layout / scale / pane widths before first paint
+         so there's no reflow flash on launch. The React hooks keep them in sync. -->
+    <script>
+      (function () {
+        try {
+          var d = document.documentElement
+          var t = localStorage.getItem('tempo-theme')
+          if (t === 'light' || t === 'dark' || t === 'amber') d.setAttribute('data-theme', t)
+          var l = localStorage.getItem('tempo-layout')
+          if (l === 'right' || l === 'top') d.setAttribute('data-layout', l)
+          var den = localStorage.getItem('nexus-density')
+          if (den === 'guided' || den === 'standard' || den === 'dense') d.setAttribute('data-density', den)
+          if (localStorage.getItem('nexus-motion') === 'reduce') d.setAttribute('data-motion', 'reduce')
+          var s = Number(localStorage.getItem('tempo-ui-scale'))
+          if ([90, 100, 110, 125].indexOf(s) !== -1) d.style.setProperty('--ui-zoom', String(s / 100))
+          var lw = Number(localStorage.getItem('tempo-left-rail-w'))
+          if (lw > 0) d.style.setProperty('--left-rail-w', lw + 'px')
+          var rw = Number(localStorage.getItem('tempo-right-rail-w'))
+          if (rw > 0) d.style.setProperty('--right-rail-w', rw + 'px')
+        } catch (e) {}
+      })()
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0e151f" />
+    <title>Tempo — modern off-grid ham radio text</title>
+    <meta
+      name="description"
+      content="Tempo is a modern, chat-first HF/VHF/UHF text-messaging app for the off-grid / preparedness ham community. Fast conversational text (FT1) plus fading-resilient national reach (DX1)."
+    />
+
+    <!-- Open Graph / social unfurl -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Tempo — modern off-grid ham radio text" />
+    <meta
+      property="og:description"
+      content="Chat-first weak-signal text for the off-grid / preparedness ham community. Fast FT1 + fading-immune DX1, Field Day, rig control."
+    />
+    <meta property="og:url" content="https://github.com/kd9taw/tempo" />
+    <meta
+      property="og:image"
+      content="https://raw.githubusercontent.com/kd9taw/tempo/main/docs/img/social-card.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Tempo — modern off-grid ham radio text" />
+    <meta
+      name="twitter:description"
+      content="Chat-first weak-signal text for off-grid hams. Fast FT1 + fading-immune DX1, Field Day, rig control."
+    />
+    <meta
+      name="twitter:image"
+      content="https://raw.githubusercontent.com/kd9taw/tempo/main/docs/img/social-card.png"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

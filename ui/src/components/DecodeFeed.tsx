@@ -1,0 +1,86 @@
+import type { DecodeRow } from '../types'
+
+interface Props {
+  decodes: DecodeRow[]
+  /** Session count of IR-HARQ rescues (decodes recovered by combining). */
+  harqRescues: number
+  /** Work / answer a decoded station. */
+  onCall: (call: string) => void
+}
+
+/** Priority class for color-coding (directedToMe wins over CQ over worked). */
+function rowClass(d: DecodeRow): string {
+  if (d.directedToMe) return 'directed'
+  if (d.worked) return 'worked'
+  if (d.isCq) return 'cq'
+  return 'new'
+}
+
+function fmtSnr(snr: number): string {
+  return `${snr > 0 ? '+' : ''}${snr}`
+}
+
+export function DecodeFeed({ decodes, harqRescues, onCall }: Props) {
+  return (
+    <section className="decode-feed">
+      <div className="decode-head">
+        <h2>Band Activity</h2>
+        {harqRescues > 0 ? (
+          <span
+            className="harq-chip"
+            title={`IR-HARQ recovered ${harqRescues} decode${harqRescues === 1 ? '' : 's'} this session by combining retransmissions`}
+          >
+            HARQ ×{harqRescues}
+          </span>
+        ) : (
+          <span className="decode-sub">last RX slot</span>
+        )}
+      </div>
+      <div className="decode-scroll" role="list">
+        {decodes.length === 0 && <p className="empty">No decodes this slot.</p>}
+        {decodes.map((d, i) => {
+          const cls = rowClass(d)
+          return (
+            <div className={`decode-row ${cls}`} role="listitem" key={`${d.from}-${d.message}-${i}`}>
+              <span className={`decode-tier ${d.tier.toLowerCase()}`} title={`Decoded by ${d.tier}`}>
+                {d.tier}
+              </span>
+              <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
+              <span className="decode-freq">{Math.round(d.freqHz)}</span>
+              <span className="decode-msg" title={d.message}>
+                {d.message}
+                {d.worked && <span className="b4-chip" title="Worked before">B4</span>}
+                {d.isCq && !d.directedToMe && <span className="decode-tag cq">CQ</span>}
+                {d.directedToMe && <span className="decode-tag me">YOU</span>}
+                {d.rv > 0 && (
+                  <span
+                    className="harq-chip"
+                    title={`Recovered by IR-HARQ: joint-combined ${d.rv + 1} transmissions (RV0–RV${d.rv})`}
+                  >
+                    HARQ·RV{d.rv}
+                  </span>
+                )}
+              </span>
+              {d.from && (
+                <button
+                  type="button"
+                  className="decode-work"
+                  onClick={() => onCall(d.from as string)}
+                  title={`Answer ${d.from}`}
+                >
+                  {d.isCq ? 'Call' : 'Work'}
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function snrClass(snr: number): string {
+  if (snr >= -10) return 'good'
+  if (snr >= -18) return 'ok'
+  return 'weak'
+}

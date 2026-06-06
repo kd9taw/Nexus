@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tempo — Product Brief</title>
+<style>
+  :root{
+    --ink:#eaf0f7; --ink-dim:#9fb0c6; --ink-faint:#6f8097;
+    --bg:#0a0e13; --bg2:#121a25; --bg3:#0e151e; --panel:#0f1722;
+    --green:#3ddc8c; --green-deep:#1f8f5b; --teal:#4cc9f0; --amber:#ffc233; --amber-deep:#b8841a;
+    --border:#22304a; --border-soft:#1a2434;
+  }
+  *{box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact;}
+  @page{ size:Letter; margin:11mm 12mm 12mm; }
+  html,body{margin:0;padding:0;background:#0a0e13;}
+  .bg{position:fixed; inset:-2mm; z-index:-1;
+    background:
+      radial-gradient(120% 70% at 88% 0%, rgba(61,220,140,.10), transparent 55%),
+      radial-gradient(80% 60% at -5% 100%, rgba(255,194,51,.06), transparent 55%),
+      #0a0e13;}
+  body{font-family:'Inter','Helvetica Neue',system-ui,'Segoe UI',Roboto,Arial,sans-serif; color:var(--ink); font-size:10.6pt; line-height:1.5; -webkit-font-smoothing:antialiased;}
+  .mono{font-family:'JetBrains Mono','SFMono-Regular',ui-monospace,'DejaVu Sans Mono',Consolas,monospace;}
+  h1,h2,h3,h4{margin:0; line-height:1.12; letter-spacing:-0.01em; break-after:avoid;}
+  p{margin:0 0 10px;}
+  strong{color:#fff; font-weight:700;}
+  em{color:var(--ink); font-style:italic;}
+  a{color:var(--green); text-decoration:none;}
+  section{margin-bottom:24px;}
+  .avoid,blockquote,.tcards,.tcard,table,.cycle,.fcard,.status,.cta,.hero,.pillar,.shot,.usecase{break-inside:avoid;}
+
+  /* ---------- HERO ---------- */
+  .hero{
+    background:
+      radial-gradient(120% 90% at 82% -20%, rgba(61,220,140,.20), transparent 55%),
+      radial-gradient(90% 80% at -8% 120%, rgba(255,194,51,.12), transparent 55%),
+      linear-gradient(180deg,#0e1620,#0b1019);
+    border:1px solid var(--border); border-radius:16px; padding:30px 36px 24px; margin-bottom:18px;}
+  .kicker{font-size:8.6pt; letter-spacing:.32em; text-transform:uppercase; color:var(--green); font-weight:700; margin-bottom:16px; display:flex; align-items:center; gap:10px;}
+  .kicker .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px rgba(61,220,140,.18);}
+  .kicker .beta{color:var(--amber); border:1px solid rgba(255,194,51,.4); padding:2px 8px; border-radius:999px; letter-spacing:.18em; font-size:7.6pt;}
+  .wordmark{font-size:50pt; font-weight:800; letter-spacing:-.03em; line-height:.9; color:#fff;}
+  .wordmark .tick{color:var(--green);}
+  .tagline{font-size:16.5pt; font-weight:600; color:var(--ink); margin-top:14px; letter-spacing:-.01em;}
+  .tagline .accent{color:var(--green);}
+  .subtag{font-size:10.5pt; color:var(--ink-dim); margin-top:12px; max-width:64ch;}
+
+  /* ---------- VALUE PILLARS ---------- */
+  .pillars{display:flex; gap:14px; margin-bottom:18px;}
+  .pillar{flex:1; background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px 15px 13px; border-top:3px solid var(--green);}
+  .pillar.p2{border-top-color:var(--teal);}
+  .pillar.p3{border-top-color:var(--amber);}
+  .pillar .pi{font-size:8pt; letter-spacing:.16em; text-transform:uppercase; font-weight:700; color:var(--green); margin-bottom:7px;}
+  .pillar.p2 .pi{color:var(--teal);} .pillar.p3 .pi{color:var(--amber);}
+  .pillar h3{font-size:13pt; color:#fff; margin-bottom:6px; letter-spacing:-.01em;}
+  .pillar p{font-size:9.2pt; color:var(--ink-dim); margin:0; line-height:1.45;}
+
+  /* ---------- SCREENSHOT SHOWCASE ---------- */
+  .shot{margin:0 0 22px;}
+  .shot figure{margin:0; text-align:center;}
+  .shot img{max-height:268px; width:auto; max-width:100%; display:block; margin:0 auto; border:1px solid var(--border); border-radius:12px;}
+  .shot figcaption{margin-top:8px; font-size:8.6pt; color:var(--ink-faint); text-align:center; max-width:70ch; margin-left:auto; margin-right:auto;}
+  .shot figcaption strong{color:var(--ink-dim);}
+
+  /* ---------- SECTIONS ---------- */
+  .sec-label{font-size:8.4pt; letter-spacing:.26em; text-transform:uppercase; color:var(--green); font-weight:700; margin:0 0 8px; break-after:avoid;}
+  h2.sec{font-size:20pt; font-weight:800; color:#fff; margin-bottom:13px; letter-spacing:-.02em;}
+  .lead{font-size:11.2pt; color:var(--ink);}
+
+  /* ---------- PULL QUOTE ---------- */
+  blockquote{margin:18px 0; padding:15px 20px; background:var(--bg2); border-left:3px solid var(--amber); border-radius:0 8px 8px 0; font-size:12pt; font-weight:600; color:#fff; line-height:1.4;}
+  blockquote.green{border-left-color:var(--green);}
+
+  /* ---------- TECH CARDS ---------- */
+  .tcards{display:flex; gap:16px; margin:6px 0 16px;}
+  .tcard{flex:1; background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:17px 18px 15px;}
+  .tcard.ft1{border-top:3px solid var(--green);} .tcard.dx1{border-top:3px solid var(--amber);}
+  .tcard h3{font-size:13pt; color:#fff; margin-bottom:4px;}
+  .tcard .role{font-size:8.2pt; letter-spacing:.18em; text-transform:uppercase; font-weight:700; margin-bottom:10px;}
+  .ft1 .role{color:var(--green);} .dx1 .role{color:var(--amber);}
+  .tcard ul{margin:8px 0 0; padding:0; list-style:none;}
+  .tcard li{position:relative; padding-left:16px; margin-bottom:7px; font-size:9.6pt; color:var(--ink-dim); line-height:1.42;}
+  .tcard li::before{content:''; position:absolute; left:0; top:7px; width:6px;height:6px;border-radius:50%;}
+  .ft1 li::before{background:var(--green);} .dx1 li::before{background:var(--amber);}
+  .tcard li strong{color:var(--ink);}
+
+  /* ---------- COMPARISON TABLE ---------- */
+  table{width:100%; border-collapse:collapse; margin:4px 0; font-size:9.4pt; border:1px solid var(--border); border-radius:10px; overflow:hidden;}
+  thead th{background:var(--bg2); color:var(--ink-dim); text-align:left; padding:10px 12px; font-size:8.2pt; letter-spacing:.12em; text-transform:uppercase; font-weight:700;}
+  thead th.c-ft1{color:var(--green); border-bottom:2px solid var(--green);}
+  thead th.c-dx1{color:var(--amber); border-bottom:2px solid var(--amber);}
+  tbody th{text-align:left; font-weight:600; color:var(--ink-faint); padding:9px 12px; font-size:8.7pt; width:23%; background:var(--bg3);}
+  tbody td{padding:9px 12px; color:var(--ink); border-left:1px solid var(--border-soft); vertical-align:top;}
+  tbody tr{border-top:1px solid var(--border-soft);}
+  .sim{color:var(--ink-faint); font-size:8.3pt;}
+
+  /* ---------- CYCLE STRIP ---------- */
+  .cycle{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px 18px;}
+  .cycle .ct-title{font-size:9pt; font-weight:700; color:var(--ink); margin-bottom:2px;}
+  .cycle .ct-sub{font-size:8.2pt; color:var(--ink-faint); margin-bottom:14px;}
+  .bar-row{display:flex; align-items:center; gap:10px; margin-bottom:9px;}
+  .bar-name{width:118px; font-size:8.8pt; color:var(--ink-dim); text-align:right; flex:none;}
+  .bar-track{flex:1; height:16px; background:#0a1019; border-radius:5px; overflow:hidden;}
+  .bar-fill{height:100%; border-radius:5px; display:flex; align-items:center; justify-content:flex-end; padding-right:7px; font-size:7.6pt; font-weight:700; color:#04150d;}
+  .bar-fill.slow{background:linear-gradient(90deg,#3a4358,#566179); color:#dfe6f0;}
+  .bar-fill.tempo{background:linear-gradient(90deg,var(--green-deep),var(--green));}
+
+  /* ---------- FEATURE GRID ---------- */
+  .fgrid{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  .fcard{background:var(--panel); border:1px solid var(--border-soft); border-radius:10px; padding:13px 15px;}
+  .fcard h4{margin:0 0 4px; font-size:10pt; color:#fff;}
+  .fcard h4 .ic{color:var(--green); margin-right:6px;}
+  .fcard p{margin:0; font-size:8.9pt; color:var(--ink-dim); line-height:1.45;}
+  .fcard.wide{grid-column:1 / -1;}
+  .fcard.roam h4 .ic{color:var(--amber);}
+
+  /* ---------- USE CASES ---------- */
+  .usecases{display:flex; flex-direction:column; gap:10px;}
+  .usecase{display:flex; gap:13px; align-items:flex-start; background:var(--panel); border:1px solid var(--border-soft); border-radius:10px; padding:13px 15px;}
+  .usecase .uc-tag{flex:none; font-size:7.6pt; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--green); border:1px solid color-mix(in srgb, var(--green) 40%, transparent); background:color-mix(in srgb, var(--green) 12%, transparent); border-radius:999px; padding:4px 10px; margin-top:1px; min-width:96px; text-align:center;}
+  .usecase.wfd .uc-tag{color:var(--amber); border-color:color-mix(in srgb, var(--amber) 42%, transparent); background:color-mix(in srgb, var(--amber) 12%, transparent);}
+  .usecase .uc-body{font-size:9.4pt; color:var(--ink-dim); line-height:1.45;}
+  .usecase .uc-body strong{color:#fff;}
+
+  /* ---------- HONEST STATUS ---------- */
+  .status{background:linear-gradient(180deg, rgba(255,194,51,.06), rgba(255,194,51,.02)); border:1px solid rgba(255,194,51,.38); border-radius:12px; padding:18px 20px;}
+  .status .st-head{display:flex; align-items:center; gap:10px; margin-bottom:6px; break-after:avoid;}
+  .status .st-head .badge{font-size:8pt; letter-spacing:.16em; text-transform:uppercase; font-weight:800; color:var(--amber); border:1px solid rgba(255,194,51,.45); padding:3px 9px; border-radius:999px;}
+  .status h2.sec{margin:0; font-size:15.5pt;}
+  .status p.intro{color:var(--ink-dim); font-size:9.5pt; margin:8px 0 12px;}
+  .status ul{margin:0; padding:0; list-style:none;}
+  .status li{position:relative; padding-left:18px; margin-bottom:9px; font-size:9.4pt; color:var(--ink-dim);}
+  .status li::before{content:''; position:absolute; left:0; top:6px; width:8px;height:8px;border-radius:2px; background:var(--amber);}
+  .status li strong{color:var(--ink);}
+
+  /* ---------- TESTER CTA ---------- */
+  .cta{background:radial-gradient(100% 120% at 90% 0%, rgba(61,220,140,.16), transparent 60%), linear-gradient(180deg,#0d1620,#0b1118); border:1px solid var(--green); border-radius:14px; padding:24px 26px;}
+  .cta h2{font-size:21pt; font-weight:800; color:#fff; letter-spacing:-.02em; margin-bottom:6px;}
+  .cta .cta-sub{color:var(--ink-dim); font-size:10pt; margin-bottom:16px; max-width:64ch;}
+  .cta-cols{display:flex; gap:22px;}
+  .cta-col{flex:1;}
+  .cta-col h4{font-size:9pt; letter-spacing:.14em; text-transform:uppercase; color:var(--green); margin:0 0 9px; font-weight:700;}
+  .cta-col ul{margin:0; padding:0; list-style:none;}
+  .cta-col li{font-size:9.1pt; color:var(--ink-dim); margin-bottom:8px; padding-left:16px; position:relative; line-height:1.4;}
+  .cta-col li::before{content:'›'; position:absolute; left:0; top:-1px; color:var(--green); font-weight:800;}
+  .cta-col ol{margin:0; padding-left:18px;}
+  .cta-col ol li{padding-left:4px;} .cta-col ol li::before{content:none;}
+  .cta-col li strong{color:var(--ink);}
+  .badges{display:flex; flex-wrap:wrap; gap:10px; margin-top:18px;}
+  .badge-link{display:flex; flex-direction:column; gap:1px; background:#0a1019; border:1px solid var(--border); border-radius:9px; padding:9px 13px;}
+  .badge-link .bl-k{font-size:7.2pt; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); font-weight:700;}
+  .badge-link .bl-v{font-size:8.8pt; color:var(--green); font-weight:600;}
+  .badge-link.dl{border-color:var(--green); background:rgba(61,220,140,.1);}
+  .badge-link.dl .bl-v{color:#fff;}
+  .closing{margin-top:18px;}
+  .wfd-note{margin-top:14px; font-size:8.6pt; color:var(--ink-faint); font-style:italic; border-top:1px solid var(--border-soft); padding-top:12px;}
+  footer{margin-top:24px; padding-top:14px; border-top:1px solid var(--border); font-size:8.4pt; color:var(--ink-faint); display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+  footer .mono{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<main>
+
+  <header class="hero">
+    <div class="kicker"><span class="dot"></span> Product Brief <span class="beta">Open Beta</span></div>
+    <div class="wordmark">Tempo<span class="tick">.</span></div>
+    <div class="tagline">Off-grid HF text messaging <span class="accent">at the speed of conversation.</span></div>
+    <div class="subtag">Fast, two-way weak-signal text in a genuinely modern messenger — built on new, purpose-designed waveforms. The radio stays first-class; the experience finally feels like this decade.</div>
+  </header>
+
+  <!-- CORE VALUE PROP — the primary highlight -->
+  <section class="pillars">
+    <div class="pillar p1">
+      <div class="pi">Faster two-way</div>
+      <h3>Conversation, not a slideshow</h3>
+      <p>FT1's fast tier runs a <strong>4-second</strong> over — roughly <strong>4× quicker turnaround</strong> than the 15-second cycle behind FT8 and JS8. A keyboard QSO that actually flows back and forth.</p>
+    </div>
+    <div class="pillar p2">
+      <div class="pi">Modern experience</div>
+      <h3>A messenger, not a lab bench</h3>
+      <p>A clean, chat-first window: people, threads, a live decode feed, one-tap controls, and three field themes including a night-vision <strong>Amber</strong>. The radio without the clutter.</p>
+    </div>
+    <div class="pillar p3">
+      <div class="pi">Novel protocols</div>
+      <h3>Built from scratch</h3>
+      <p>Not a reskin of an existing mode. <strong>Two purpose-built waveforms</strong> — a fast coherent tier (FT1) and a fading-robust tier (DX1) — engineered for resilient off-grid text, sharing standard messages.</p>
+    </div>
+  </section>
+
+  <!-- PROOF: the actual UI -->
+  <section class="shot">
+    <figure>
+      <img src="img/app-dark.png" alt="Tempo's chat-first interface — stations, conversation thread, waterfall, and live band activity in one modern window.">
+      <figcaption><strong>One window, everything in view</strong> — stations &amp; presence, a real conversation thread, the live waterfall, and band activity. SNR, offset, dT, band/tier, and T/R timing stay first-class — never hidden behind menus.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="sec-label">Why it exists</div>
+    <h2 class="sec">Weak-signal text got powerful. It never got fast — or friendly.</h2>
+    <p class="lead">Digital HF text today gives you two choices, and neither is a good conversation. <strong>FT8</strong> is a brilliant beacon — a fixed, semi-automated exchange of callsigns and a signal report — but it isn't talking. <strong>JS8Call</strong> is built for real keyboard-to-keyboard chat, and it works — but it rides the same 15-second frame structure (with 10- and 6-second modes that want stronger signals), so a single back-and-forth can stretch past half a minute. You type, you send, you wait.</p>
+    <p>And almost all of it is wrapped in interfaces that feel like test equipment: dense, modal, knobs-and-grids tooling that assumes you already know the jargon.</p>
+    <blockquote>Tempo's bet: weak-signal text should move at the speed of a conversation, and feel like an app you'd actually want to open.</blockquote>
+  </section>
+
+  <section>
+    <div class="sec-label">Meet Tempo</div>
+    <h2 class="sec">A messenger on top, a real radio underneath.</h2>
+    <p class="lead"><strong>Tempo is a modern, chat-first HF text-messaging app for the off-grid / preparedness ham community.</strong> It looks and feels like a messaging app — presence, a live decode feed, a conversation thread — but it never hides the radio. Under that interface sit two purpose-built weak-signal waveforms and a one-tap toggle: <strong>FT1 (Fast)</strong> for conversation and <strong>DX1 (Robust)</strong> for reach. Both carry the same standard 77-bit messages, so Chat, auto-QSO, and Field Day work identically on either.</p>
+    <p>It's free and open source (GPL-3.0), authored by <strong>Seth McCallister, KD9TAW</strong>, who also designed the FT1 and DX1 waveforms.</p>
+    <blockquote class="green">Tempo doesn't replace WSJT-X or JS8Call — it's a different tool for a different job. It runs <em>alongside</em> your existing setup, aimed at fast conversational text and fading-resilient reach for off-grid work.</blockquote>
+  </section>
+
+  <section>
+    <div class="sec-label">The technology</div>
+    <h2 class="sec">Two tiers, one conversation.</h2>
+    <p class="lead">The core isn't the interface — it's the waveforms. Tempo gives you a two-tier system and lets you pick the right one for the path you're on, then keep talking. Both share the same 77-bit message and LDPC(174,91) error correction; only the modem and the clock change.</p>
+    <div class="tcards">
+      <div class="tcard ft1">
+        <div class="role">Fast tier</div>
+        <h3>FT1 — built for conversation</h3>
+        <ul>
+          <li><strong>4-second cycle</strong> (~3.5 s of waveform), ~150 Hz wide.</li>
+          <li><strong>Coherent</strong> 4-CPM modulation — wrings the most information out of every second of air time. That's the speed lever.</li>
+          <li><strong>Incremental-redundancy retransmission (IR-HARQ)</strong> — live and on by default. A failed frame is joint-turbo-combined with its RV1/RV2 resends, accumulating coding gain — unusual for amateur text modes. Measured ~+2.5 dB threshold shift and ~2× QSO completion in the −11…−13 dB zone <span class="sim">(simulation-validated; not yet confirmed on the air)</span>.</li>
+        </ul>
+      </div>
+      <div class="tcard dx1">
+        <div class="role">Robust tier</div>
+        <h3>DX1 — built to survive the path</h3>
+        <ul>
+          <li><strong>Non-coherent 8-FSK</strong>, ~50 Hz wide, 15-second cycle.</li>
+          <li>Never relies on carrier phase, so it <strong>rides through fading</strong> that collapses coherent modes.</li>
+          <li>In simulation it loses only <strong>~3.7 dB</strong> under Rayleigh fading — where FT8-class coherent modes lose 10+ dB.</li>
+        </ul>
+      </div>
+    </div>
+    <blockquote><strong>An honest trade:</strong> FT1 gives up roughly 3 dB of raw sensitivity versus FT8 (a <em>simulated</em> ~−15 dB threshold vs ~−18 to −21 dB) to buy that conversational cycle. You can't have one waveform that's both the fastest <em>and</em> the most sensitive — so Tempo ships both, and you choose.</blockquote>
+  </section>
+
+  <section>
+    <table>
+      <thead><tr><th>&nbsp;</th><th class="c-ft1">FT1 — Fast</th><th class="c-dx1">DX1 — Robust</th></tr></thead>
+      <tbody>
+        <tr><th>Modulation</th><td>Coherent 4-CPM <span class="mono">(h = 1/2, BT = 0.3)</span></td><td>Non-coherent 8-FSK (Gray-coded)</td></tr>
+        <tr><th>T/R cycle</th><td>4 s (~3.5 s of waveform)</td><td>15 s</td></tr>
+        <tr><th>Occupied bandwidth</th><td>~150 Hz</td><td>~50 Hz</td></tr>
+        <tr><th>Error correction</th><td>LDPC(174,91) + turbo equalization, live IR-HARQ</td><td>LDPC(174,91), soft-decision</td></tr>
+        <tr><th>Best for</th><td>Conversational pace on stable regional / national paths</td><td>Fading, disturbed, regional-to-national paths</td></tr>
+        <tr><th>Simulated AWGN threshold</th><td>~−15 dB <span class="sim">(simulation only)</span></td><td>~−18.6 dB <span class="sim">(simulation only)</span></td></tr>
+      </tbody>
+    </table>
+    <p class="sim" style="margin-top:8px">Both tiers carry the same 77-bit, WSJT-X-compatible messages — switching tiers changes the timing and waveform, never the message format or your workflow. The tier is never switched silently: the operator picks Fast or Robust, and the toggle stays visible.</p>
+  </section>
+
+  <section>
+    <div class="cycle">
+      <div class="ct-title">Why "faster" is the headline</div>
+      <div class="ct-sub">Transmit/turnaround cycle per over — context, <strong>not</strong> a sensitivity benchmark. Shorter = a snappier back-and-forth.</div>
+      <div class="bar-row"><div class="bar-name">FT8 round trip ≈</div><div class="bar-track"><div class="bar-fill slow" style="width:100%">~30 s</div></div></div>
+      <div class="bar-row"><div class="bar-name">JS8 Normal</div><div class="bar-track"><div class="bar-fill slow" style="width:50%">15 s</div></div></div>
+      <div class="bar-row"><div class="bar-name">JS8 Fast</div><div class="bar-track"><div class="bar-fill slow" style="width:33%">10 s</div></div></div>
+      <div class="bar-row"><div class="bar-name">JS8 Turbo</div><div class="bar-track"><div class="bar-fill slow" style="width:20%">6 s</div></div></div>
+      <div class="bar-row"><div class="bar-name">Tempo FT1</div><div class="bar-track"><div class="bar-fill tempo" style="width:13.3%">4 s</div></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">What's inside</div>
+    <h2 class="sec">Features at a glance.</h2>
+    <div class="fgrid">
+      <div class="fcard"><h4><span class="ic">◆</span>Chat-first, ham-aware UI</h4><p>A single window with a conversation thread, station presence, and a modernized waterfall. SNR, audio offset, dT, dial/band/sideband, mode/tier, and T/R timing stay visible. Three themes incl. night-vision Amber, plus an adaptive, resizable workspace.</p></div>
+      <div class="fcard"><h4><span class="ic">◆</span>Live decode feed</h4><p>Color-coded by what matters: directed-to-you, worked-before (B4), CQ, new. Each row shows color-graded SNR, frequency, and message — with one-tap Call / Work buttons to start a directed QSO.</p></div>
+      <div class="fcard"><h4><span class="ic">◆</span>Three operating modes</h4><p><strong>Chat</strong> (presence, auto-chunked free text, directed inbox, store-and-forward), <strong>QSO</strong> (Run / Search-&amp;-Pounce auto-sequencer), and <strong>Field Day</strong> (native exchange, dupe-checked log, ADIF/Cabrillo export). Contacts are operator-initiated by design.</p></div>
+      <div class="fcard"><h4><span class="ic">◆</span>Logbook + ecosystem interop</h4><p>ADIF logbook with auto-logging and B4 highlighting; ADIF/Cabrillo export; the WSJT-X UDP API (double-click-to-call from GridTracker/JTAlert) and PSK Reporter spotting.</p></div>
+      <div class="fcard"><h4><span class="ic">◆</span>Rig control + clean band plan</h4><p>Hamlib rigctld (bundled, offline), serial RTS/DTR, or VOX; a 56-model rig dropdown and one-tap band selector. Tempo's calling frequencies sit clear of the FT8/JS8/WSPR watering holes and CW segments.</p></div>
+      <div class="fcard roam"><h4><span class="ic">◆</span>Coordinated QSY ("Roam")</h4><p>Opt-in "move together" that hops channels with the station you're working to dodge interference — announced <strong>in the clear</strong>. Honestly: it's legal anti-QRM + casual obscurity, <strong>not</strong> encryption or privacy. A capable listener can still follow.</p></div>
+      <div class="fcard wide"><h4><span class="ic">◆</span>Safe by default</h4><p>Tempo starts passive (hunt-and-pounce): it listens and decodes but won't transmit until you act. The CQ beacon is opt-in and off by default; Monitor/Muted, Tune, and Stop&nbsp;TX give you instant control, with a transmit watchdog as backstop.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Where it shines</div>
+    <h2 class="sec">Good for real off-grid work.</h2>
+    <div class="usecases">
+      <div class="usecase"><span class="uc-tag">EMCOMM / nets</span><div class="uc-body"><strong>Off-grid and preparedness messaging.</strong> Pass real, free-form text — not just a canned report — across regional and national paths when the grid (and the internet) is gone. Store-and-forward holds traffic for a station until it reappears.</div></div>
+      <div class="usecase"><span class="uc-tag">Ragchew / DX</span><div class="uc-body"><strong>Conversations that flow.</strong> The fast tier makes weak-signal keyboard QSOs feel like chatting; drop to the robust tier when the path gets ugly, without changing how you work.</div></div>
+      <div class="usecase wfd"><span class="uc-tag">Field Day</span><div class="uc-body"><strong>A digital two-way that isn't an FT8 beacon.</strong> Native Field Day exchange + dupe-checked log make it a natural fit for events that reward a genuine, confirmed two-way contact — including <strong>Winter Field Day</strong>. <span class="sim">(Modes/rules vary year to year — verify the current rules before you operate.)</span></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="status">
+      <div class="st-head"><span class="badge">Honest status</span><h2 class="sec">…and why we need you.</h2></div>
+      <p class="intro">We'd rather under-promise. Here's exactly where things stand:</p>
+      <ul>
+        <li><strong>The app is feature-complete and runs on Windows.</strong> The installer is a ~199 MB per-user, <strong>unsigned, cross-compiled</strong> build that bundles WebView2 and Hamlib offline — no admin rights, no internet needed. Expect a SmartScreen warning ("More info → Run anyway"), as with any unsigned beta. macOS / Linux desktop builds are Phase 2.</li>
+        <li><strong>The waveforms are validated by simulation only</strong> — AWGN and Rayleigh-fading sweeps in the test harness. They have <strong>not yet been confirmed on the air.</strong> The simulated thresholds (FT1 ~−15 dB, DX1 ~−18.6 dB) are bench numbers, not field results.</li>
+        <li><strong>On-air decode-rate-vs-SNR validation is the #1 remaining gate</strong> — the single biggest reason the project needs operators.</li>
+        <li><strong>Shipped in v0.2.0 (beta):</strong> <strong>IR-HARQ</strong> joint-turbo soft-combining is now live end-to-end and on by default; <strong>DX1 full-passband acquisition</strong> now decodes every signal across 200–2900 Hz per slot (the tuned RX offset is now just a waterfall marker / TX-pairing hint). The Windows cross-build is validated — modem self-tests, <span class="mono">tempo.exe</span>, and the NSIS installer all cross-build clean, with 5/5 Windows test exes passing. Still simulation- and cross-build-validated only — not yet confirmed on the air.</li>
+        <li><strong>Known limits:</strong> the FT8/FT4 tier is Phase 2 (designed, not yet wired).</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="cta">
+      <h2>Become a tester.</h2>
+      <p class="cta-sub">This is an open invitation to the club. If you have an HF station and a soundcard-mode workflow, you can move this project from "promising in simulation" to a real answer on the air.</p>
+      <div class="cta-cols">
+        <div class="cta-col">
+          <h4>You're a good fit if you</h4>
+          <ul>
+            <li>Run Windows and a CAT- or VOX-controllable HF rig (Hamlib's 56-model dropdown, serial RTS/DTR, or VOX).</li>
+            <li>Are comfortable with WSJT-X / JS8Call-style soundcard operating.</li>
+            <li>Like being early, and don't mind a rough edge in exchange for shaping the result — including reporting the boring failures and the contacts that <em>didn't</em> decode.</li>
+          </ul>
+        </div>
+        <div class="cta-col">
+          <h4>What testers actually do</h4>
+          <ol>
+            <li><strong>Install and run it on your station</strong> — get on a Tempo calling frequency and start decoding.</li>
+            <li><strong>Report on-air decode rate vs. SNR</strong> — the headline data we need.</li>
+            <li><strong>Try a real exchange</strong> — a Chat QSO, an auto-sequenced QSO, or a Field Day exchange; tell us how the 4-second cadence <em>feels</em>.</li>
+            <li><strong>Test the rough edges</strong> — DX1 full-band acquisition, IR-HARQ rescues, Coordinated QSY, store-and-forward, rig control, audio.</li>
+          </ol>
+        </div>
+      </div>
+      <div class="badges">
+        <div class="badge-link dl"><span class="bl-k">Download · Windows</span><span class="bl-v mono">github.com/kd9taw/tempo/releases/latest</span></div>
+        <div class="badge-link"><span class="bl-k">Source · issues · feedback</span><span class="bl-v mono">github.com/kd9taw/tempo</span></div>
+        <div class="badge-link"><span class="bl-k">Contact</span><span class="bl-v mono">kd9taw@protonmail.com</span></div>
+      </div>
+      <p class="closing"><strong>Getting started is quick:</strong> grab the Windows installer, get on a Tempo calling frequency, and start decoding. The best feedback is a GitHub issue with your <strong>rig, band, observed SNR, and decode result</strong> — but an email or a note after the meeting works too.</p>
+      <blockquote class="green" style="margin-bottom:0">If you've ever wished a weak-signal keyboard QSO moved at the speed of an actual conversation — get on the air and help us find out whether FT1 delivers.</blockquote>
+    </div>
+  </section>
+
+  <footer>
+    <span>Tempo — © Seth McCallister, KD9TAW · Free &amp; open source under GPL-3.0-or-later</span>
+    <span class="mono">github.com/kd9taw/tempo</span>
+  </footer>
+
+</main>
+</body>
+</html>

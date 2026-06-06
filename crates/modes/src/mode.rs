@@ -1,0 +1,264 @@
+//! The pluggable [`Mode`] abstraction.
+//!
+//! Everything mode-specific lives behind this one trait: T/R timing, the decode
+//! frame size, waveform synthesis, message decode, the waterfall passband, and
+//! capability flags. FT8, FT4, and FT1 are the concrete implementations shipped
+//! today; a future mode (e.g. CX1) becomes a new `impl Mode` with **no changes**
+//! to the rest of the nerve-center scaffolding (spots, map, log, UI), which talk
+//! to modes only through this interface.
+
+use crate::decode::Decode;
+
+/// Identity of a concrete mode (for selection, serialization, display). Carries
+/// the per-mode timing metadata (slot length, frame size) so callers can size
+/// clocks/buffers without constructing a [`Mode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModeKind {
+    Ft8,
+    Ft4,
+    Ft1,
+}
+
+impl ModeKind {
+    /// All modes shipped today, in display order.
+    pub const ALL: [ModeKind; 3] = [ModeKind::Ft8, ModeKind::Ft4, ModeKind::Ft1];
+
+    /// Short display name, e.g. `"FT8"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModeKind::Ft8 => "FT8",
+            ModeKind::Ft4 => "FT4",
+            ModeKind::Ft1 => "FT1",
+        }
+    }
+
+    /// Transmit/receive slot length in seconds (FT8 = 15, FT4 = 7.5, FT1 = 4).
+    pub fn slot_secs(self) -> f32 {
+        match self {
+            ModeKind::Ft8 => 15.0,
+            ModeKind::Ft4 => 7.5,
+            ModeKind::Ft1 => 4.0,
+        }
+    }
+
+    /// Number of int16 samples in one decode frame at 12 kHz.
+    pub fn frame_samples(self) -> usize {
+        match self {
+            ModeKind::Ft8 => ft8::NMAX,
+            ModeKind::Ft4 => ft4::NMAX,
+            ModeKind::Ft1 => ft1::NMAX,
+        }
+    }
+}
+
+/// Per-mode capability flags. Drives UI affordances and operating logic so the
+/// generic engine need not special-case mode names.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    /// Supports DXpedition Fox/Hound (multi-stream) operation.
+    pub fox_hound: bool,
+    /// Supports incremental-redundancy HARQ (cross-frame joint decode).
+    pub ir_harq: bool,
+    /// Supports free-text messages.
+    pub free_text: bool,
+    /// Has contest sub-modes / exchanges.
+    pub contest: bool,
+}
+
+/// A weak-signal digital mode: the unit of pluggability for the whole app.
+///
+/// Implementors delegate to their modem crate (`ft8`/`ft4`/`ft1`). The trait is
+/// object-safe so the engine can hold a `Box<dyn Mode>` and swap it at runtime.
+pub trait Mode: Send + Sync {
+    /// Which concrete mode this is.
+    fn kind(&self) -> ModeKind;
+
+    /// Short display name (defaults to [`ModeKind::as_str`]).
+    fn name(&self) -> &'static str {
+        self.kind().as_str()
+    }
+
+    /// Transmit/receive slot length in seconds (delegates to [`ModeKind`]).
+    fn slot_secs(&self) -> f32 {
+        self.kind().slot_secs()
+    }
+
+    /// Number of int16 samples in one decode frame at 12 kHz (delegates to
+    /// [`ModeKind`]).
+    fn frame_samples(&self) -> usize {
+        self.kind().frame_samples()
+    }
+
+    /// Audio passband `(lo, hi)` in Hz for the waterfall and decode search.
+    fn passband(&self) -> (f32, f32) {
+        (200.0, 2900.0)
+    }
+
+    /// Capability flags for this mode.
+    fn capabilities(&self) -> Capabilities;
+
+    /// Encode a message (≤ 37 chars) into channel tones; empty on bad input.
+    fn encode(&self, msg: &str) -> Vec<i32>;
+
+    /// Synthesize the TX audio waveform for the given tones at carrier `f0`.
+    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32>;
+
+    /// Decode every signal in a [`frame_samples`](Mode::frame_samples)-long
+    /// int16 frame at 12 kHz. `nfa..=nfb` is the audio search range; `ndepth`
+    /// the decode aggressiveness (≤ 0 ⇒ 3); `mycall`/`hiscall` enable a-priori
+    /// decoding (pass `""` if unknown). `frame_time_ms` is a monotonic timestamp
+    /// for this frame, used by modes with cross-frame IR-HARQ (FT1); modes
+    /// without it ignore the argument.
+    #[allow(clippy::too_many_arguments)] // mirrors the modem decode ABI
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        frame_time_ms: i64,
+    ) -> Vec<Decode>;
+}
+
+/// Build a boxed [`Mode`] from its [`ModeKind`].
+pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
+    match kind {
+        ModeKind::Ft8 => Box::new(Ft8Mode),
+        ModeKind::Ft4 => Box::new(Ft4Mode),
+        ModeKind::Ft1 => Box::new(Ft1Mode),
+    }
+}
+
+/// Standard WSJT-X **FT8** — 15 s T/R, 8-GFSK, the dominant HF digital mode.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ft8Mode;
+
+impl Mode for Ft8Mode {
+    fn kind(&self) -> ModeKind {
+        ModeKind::Ft8
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            fox_hound: true,
+            ir_harq: false,
+            free_text: true,
+            contest: true,
+        }
+    }
+    fn encode(&self, msg: &str) -> Vec<i32> {
+        ft8::encode(msg)
+    }
+    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
+        ft8::gen_wave(itone, fsample, f0)
+    }
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        _frame_time_ms: i64, // FT8 has no cross-frame IR-HARQ
+    ) -> Vec<Decode> {
+        ft8::decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, nqso_progress)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+}
+
+/// Standard WSJT-X **FT4** — 7.5 s T/R, 4-GFSK, the fast contest sibling.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ft4Mode;
+
+impl Mode for Ft4Mode {
+    fn kind(&self) -> ModeKind {
+        ModeKind::Ft4
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            fox_hound: false,
+            ir_harq: false,
+            free_text: true,
+            contest: true,
+        }
+    }
+    fn encode(&self, msg: &str) -> Vec<i32> {
+        ft4::encode(msg)
+    }
+    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
+        ft4::gen_wave(itone, fsample, f0)
+    }
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        _frame_time_ms: i64, // FT4 has no cross-frame IR-HARQ
+    ) -> Vec<Decode> {
+        ft4::decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, nqso_progress)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+}
+
+/// **FT1** (KD9TAW) — 4 s T/R, 4-CPM turbo, with IR-HARQ. Tempo's native mode.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ft1Mode;
+
+impl Mode for Ft1Mode {
+    fn kind(&self) -> ModeKind {
+        ModeKind::Ft1
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            fox_hound: false,
+            ir_harq: true,
+            free_text: true,
+            contest: true,
+        }
+    }
+    fn encode(&self, msg: &str) -> Vec<i32> {
+        ft1::encode(msg)
+    }
+    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
+        ft1::gen_wave(itone, fsample, f0)
+    }
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        frame_time_ms: i64,
+    ) -> Vec<Decode> {
+        // FT1's decoder keys cross-frame IR-HARQ combining off frame_time_ms; the
+        // caller resets HARQ buffers (ft1::harq_reset) on band/QSO change.
+        ft1::decode_frame(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            frame_time_ms,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
+}

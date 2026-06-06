@@ -1,0 +1,613 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { AppSnapshot, BandChannel, ModeRequest, Settings, SourceKind, Tier } from './types'
+import {
+  broadcast as apiBroadcast,
+  callStation as apiCallStation,
+  getBandPlan,
+  getSettings,
+  getSnapshot,
+  peerIsTyping,
+  selectPeer as apiSelectPeer,
+  sendMessage as apiSendMessage,
+  setFrequency as apiSetFrequency,
+  setMode as apiSetMode,
+  setTier as apiSetTier,
+  setSource as apiSetSource,
+  setTxEnabled as apiSetTxEnabled,
+  setTune as apiSetTune,
+  haltTx as apiHaltTx,
+  setTxEven as apiSetTxEven,
+  setRxOffset as apiSetRxOffset,
+  setTxOffset as apiSetTxOffset,
+  setHoldTxFreq as apiSetHoldTxFreq,
+  subscribeSnapshot,
+  isTauri,
+} from './api'
+import { withErrorToast } from './toast'
+import { processDecodes } from './alerts'
+import { useTheme } from './useTheme'
+import { useLayout } from './useLayout'
+import { useScale } from './useScale'
+import { useDensity } from './useDensity'
+import { useMotion } from './useMotion'
+import { useAchievements } from './useAchievements'
+import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
+import { TopBar } from './components/TopBar'
+import { StationList } from './components/StationList'
+import { Conversation } from './components/Conversation'
+import { Waterfall } from './components/Waterfall'
+import { LinkPill } from './components/LinkPill'
+import { ModeNav, type View } from './components/ModeNav'
+import { OperateCockpit } from './components/OperateCockpit'
+import { NowBar } from './components/NowBar'
+import { AwardsView } from './components/AwardsView'
+import { PropagationView } from './components/PropagationView'
+import { MapView } from './components/MapView'
+import { getPropagation } from './api'
+import { setStatus } from './status'
+import type { PropagationSnapshot } from './types'
+import { QsoPanel } from './components/QsoPanel'
+import { FieldDayView } from './components/FieldDayView'
+import { BandFeed } from './components/BandFeed'
+import { DecodeFeed } from './components/DecodeFeed'
+import { Logbook } from './components/Logbook'
+import { LogView } from './components/LogView'
+import { RoamPanel } from './components/RoamPanel'
+import { SettingsPanel } from './components/SettingsPanel'
+import { Toasts } from './components/Toasts'
+import { OnboardingBanner } from './components/OnboardingBanner'
+import { DemoBanner } from './components/DemoBanner'
+
+// Placeholder identity shipped by the mock/default config. Until the operator
+// sets a real callsign we nudge them toward Settings.
+const PLACEHOLDER_CALL = 'KD9TAW'
+const ONBOARD_KEY = 'tempo-onboarded'
+// Synthetic peer key for the open band-activity / broadcast feed.
+const BROADCAST_PEER = '*'
+
+// Macros fall back to these until settings load (keeps chips populated).
+const DEFAULT_MACROS: Settings['macros'] = {
+  chat: ['73', 'QSL', 'Name?', 'QTH?', 'CQ'],
+  qso: ['R-09', 'RRR', 'RR73', '73'],
+  band: ['CQ CQ', 'QRZ?', 'Net check-in', '73 to all'],
+}
+
+export default function App() {
+  const [theme, setTheme] = useTheme()
+  const [wfLayout, setWfLayout] = useLayout()
+  const [scale, setScale] = useScale()
+  // Activates + persists the density + motion attributes (control UI lands later).
+  useDensity()
+  useMotion()
+  useAchievements()
+  const { commitLeft, commitRight, resetWidths } = usePaneWidths()
+  const layoutRef = useRef<HTMLElement>(null)
+  const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  const [view, setView] = useState<View>(() => {
+    const h = typeof window !== 'undefined' ? window.location.hash.slice(1) : ''
+    const valid = ['operate', 'propagation', 'map', 'chat', 'qso', 'fieldDay', 'band', 'roam', 'logbook', 'awards', 'log', 'settings']
+    return (valid.includes(h) ? h : 'operate') as View
+  })
+  const [prop, setProp] = useState<PropagationSnapshot | null>(null)
+  useEffect(() => {
+    let live = true
+    const load = () =>
+      getPropagation()
+        .then((p) => {
+          if (!live) return
+          setProp(p)
+          // Honest-state: surface non-live propagation in the Now-Bar lane.
+          if (p.source === 'demo') {
+            setStatus('prop', {
+              tier: 'warning',
+              message: 'Prop: demo data',
+              detail: 'Propagation is showing the offline demo scene — set your callsign in Settings for live data.',
+            })
+          } else if (p.source === 'cached') {
+            const ageMin = Math.max(0, Math.round((Date.now() / 1000 - p.asOf) / 60))
+            setStatus('prop', {
+              tier: 'warning',
+              message: `Prop: cached ${ageMin}m`,
+              detail: 'Live propagation refetch failed — showing the last-good snapshot.',
+            })
+          } else {
+            setStatus('prop', null)
+          }
+        })
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 30_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [])
+  const [typingTick, setTypingTick] = useState(0)
+  const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [onboardDismissed, setOnboardDismissed] = useState<boolean>(
+    () => localStorage.getItem(ONBOARD_KEY) === '1',
+  )
+
+  // Track how many messages we'd "read" per peer to compute unread counts.
+  const readCounts = useRef<Record<string, number>>({})
+
+  const reloadSettings = useCallback(() => {
+    getSettings().then(setSettings).catch(() => {})
+  }, [])
+
+  // initial load + live subscription
+  useEffect(() => {
+    let mounted = true
+    getSnapshot().then((s) => mounted && setSnap(s))
+    getBandPlan()
+      .then((b) => mounted && setBandPlan(b))
+      .catch(() => {})
+    getSettings()
+      .then((s) => mounted && setSettings(s))
+      .catch(() => {})
+    const unsub = subscribeSnapshot((s) => {
+      if (mounted) setSnap(s)
+    })
+    return () => {
+      mounted = false
+      unsub()
+    }
+  }, [])
+
+  // poll the (mock) typing state so the indicator re-renders smoothly
+  useEffect(() => {
+    const id = window.setInterval(() => setTypingTick((t) => t + 1), 400)
+    return () => window.clearInterval(id)
+  }, [])
+
+  // Fire decode alerts (beep + toast) whenever the decode feed changes, gated
+  // by the user's alert settings. processDecodes dedups internally.
+  useEffect(() => {
+    if (!snap || !settings) return
+    processDecodes(snap.recentDecodes, settings)
+  }, [snap, settings])
+
+  const activePeer = snap?.activePeer ?? null
+
+  // mark the active conversation as read whenever it updates
+  useEffect(() => {
+    if (!snap || !activePeer) return
+    const conv = snap.conversations.find((c) => c.peer === activePeer)
+    if (conv) readCounts.current[activePeer] = conv.messages.length
+  }, [snap, activePeer])
+
+  const unreadByPeer = useMemo(() => {
+    const out: Record<string, number> = {}
+    if (!snap) return out
+    for (const c of snap.conversations) {
+      // the "*" band feed is not a roster peer; don't surface unread badges for it
+      if (c.peer === BROADCAST_PEER) continue
+      const read = readCounts.current[c.peer] ?? 0
+      const inbound = c.messages.filter((m) => !m.outbound).length
+      const readInbound = Math.min(read, c.messages.length)
+      // unread = inbound messages beyond what we've seen
+      const unread = c.messages.slice(readInbound).filter((m) => !m.outbound).length
+      if (c.peer !== activePeer && unread > 0) out[c.peer] = unread
+      void inbound
+    }
+    return out
+  }, [snap, activePeer, typingTick])
+
+  const handleSelect = useCallback((call: string) => {
+    void withErrorToast(() => Promise.resolve(apiSelectPeer(call)), 'Could not select station')
+  }, [])
+
+  // The Map and the roster share ONE selection: the active peer. Clicking a map
+  // dot selects (or, if already selected, clears) that station — and the roster
+  // highlights it too, since StationList already keys its highlight off activePeer.
+  const handleMapSelect = useCallback((call: string | null) => {
+    void withErrorToast(() => Promise.resolve(apiSelectPeer(call)), 'Could not select station')
+  }, [])
+
+  const handleCall = useCallback((call: string) => {
+    void withErrorToast(() => apiCallStation(call), `Could not work ${call}`).then((s) => {
+      if (s) {
+        setSnap(s)
+        setView('qso')
+      }
+    })
+  }, [])
+
+  const handleSend = useCallback(
+    (text: string) => {
+      if (!activePeer) return
+      void withErrorToast(
+        () => Promise.resolve(apiSendMessage(activePeer, text)),
+        'Message could not be sent',
+      )
+    },
+    [activePeer],
+  )
+
+  const handleBroadcast = useCallback((text: string) => {
+    void withErrorToast(() => apiBroadcast(text), 'Broadcast could not be sent').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  const handleSetFrequency = useCallback(
+    (dialMhz: number, band: string, mode: string) => {
+      void withErrorToast(
+        () => apiSetFrequency(dialMhz, band, mode),
+        'Could not set frequency',
+      ).then((s) => {
+        if (s) setSnap(s)
+      })
+    },
+    [],
+  )
+
+  const handleSetTxEnabled = useCallback((enabled: boolean) => {
+    void withErrorToast(
+      () => apiSetTxEnabled(enabled),
+      enabled ? 'Could not enable transmit' : 'Could not mute transmit',
+    ).then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  const handleSetTune = useCallback((on: boolean) => {
+    void withErrorToast(() => apiSetTune(on), 'Could not toggle tune').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  const handleHaltTx = useCallback(() => {
+    void withErrorToast(() => apiHaltTx(), 'Could not stop transmit').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  const handleSetTxEven = useCallback((even: boolean) => {
+    void withErrorToast(() => apiSetTxEven(even), 'Could not set transmit period').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  const handleSetHoldTxFreq = useCallback((on: boolean) => {
+    void withErrorToast(() => apiSetHoldTxFreq(on), 'Could not toggle Hold Tx').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  // Waterfall click: left-click sets the RX offset (green marker); shift-click
+  // sets the TX offset (red marker). TX follows RX unless "Hold Tx" is on.
+  const handleTune = useCallback((hz: number, shift: boolean) => {
+    const call = shift ? () => apiSetTxOffset(hz) : () => apiSetRxOffset(hz)
+    void withErrorToast(call, 'Could not set offset').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  const handleSetMode = useCallback((mode: ModeRequest) => {
+    void withErrorToast(() => apiSetMode(mode), 'Could not switch mode').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  // Selecting a view from the nav. QSO / Field Day also request the backend mode
+  // (defaulting to the "run" / "chat" role); Band / Log / Settings are pure UI
+  // screens that leave the operating mode unchanged.
+  const handleView = useCallback(
+    (next: View) => {
+      setView(next)
+      // Passive-first: entering QSO / Field Day starts in Search-&-Pounce
+      // (listen + answer), never auto-calling CQ. The operator hits "Call CQ" /
+      // "Running" in the panel to start transmitting.
+      if (next === 'chat') handleSetMode('chat')
+      else if (next === 'qso') handleSetMode('qso-monitor')
+      else if (next === 'fieldDay') handleSetMode('fieldday-sp')
+    },
+    [handleSetMode],
+  )
+
+  const handleTier = useCallback((t: Tier) => {
+    void withErrorToast(() => apiSetTier(t), 'Could not change tier').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  const handleSourceChange = useCallback((k: SourceKind) => {
+    // Companion bind can fail (port busy) → withErrorToast surfaces it and the
+    // backend stays on the previous source.
+    void withErrorToast(() => apiSetSource(k), 'Could not switch signal source').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  const handleSettingsSaved = useCallback(() => {
+    getSnapshot().then(setSnap).catch(() => {})
+    reloadSettings()
+  }, [reloadSettings])
+
+  const handleDismissOnboarding = useCallback(() => {
+    localStorage.setItem(ONBOARD_KEY, '1')
+    setOnboardDismissed(true)
+  }, [])
+
+  if (!snap) {
+    return (
+      <div className="app loading">
+        <span>Connecting to Tempo…</span>
+      </div>
+    )
+  }
+
+  const macros = settings?.macros ?? DEFAULT_MACROS
+
+  const activeConversation =
+    snap.conversations.find((c) => c.peer === activePeer) ?? null
+  const broadcastConversation =
+    snap.conversations.find((c) => c.peer === BROADCAST_PEER) ?? null
+  const peerTyping = activePeer ? peerIsTyping(activePeer) : false
+  // typingTick keeps this expression re-evaluated
+  void typingTick
+
+  // displayed tier is the authoritative link tier from the snapshot
+  const tier = snap.link.tier
+
+  // First-run nudge: callsign unset / still the placeholder, and not dismissed.
+  const needsOnboarding =
+    !onboardDismissed &&
+    view !== 'settings' &&
+    (snap.mycall.trim() === '' || snap.mycall.trim().toUpperCase() === PLACEHOLDER_CALL)
+
+  const stationsPanel = (
+    <StationList
+      stations={snap.stations}
+      myGrid={snap.mygrid}
+      currentSlot={snap.radio.slot}
+      activePeer={activePeer}
+      unreadByPeer={unreadByPeer}
+      onSelect={handleSelect}
+      onCall={handleCall}
+    />
+  )
+
+  // Pane resize: dragging a splitter writes the rail-width CSS var directly each
+  // frame (no React re-render), then commits (clamp + persist) on pointer-up.
+  // One Pointer-Events path covers mouse, touch, and pen.
+  const startResize =
+    (side: 'left' | 'right') => (e: React.PointerEvent<HTMLDivElement>) => {
+      const el = layoutRef.current
+      if (!el) return
+      e.preventDefault()
+      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+      const rect = el.getBoundingClientRect()
+      const GAP = 12 // .layout padding; keeps the rail edge under the pointer
+      const root = document.documentElement.style
+      document.body.classList.add('resizing')
+      const widthFor = (clientX: number) =>
+        side === 'right' ? rect.right - GAP - clientX : clientX - rect.left - GAP
+      const move = (ev: PointerEvent) => {
+        const w = widthFor(ev.clientX)
+        root.setProperty(side === 'right' ? '--right-rail-w' : '--left-rail-w', `${
+          side === 'right' ? clampRight(w) : clampLeft(w)
+        }px`)
+      }
+      const up = (ev: PointerEvent) => {
+        if (side === 'right') commitRight(widthFor(ev.clientX))
+        else commitLeft(widthFor(ev.clientX))
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        document.body.classList.remove('resizing')
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+    }
+
+  const waterfallRail = (
+    <aside className="right-rail panel">
+      <Waterfall
+        transmitting={snap.radio.transmitting}
+        rxOffsetHz={snap.radio.rxOffsetHz}
+        txOffsetHz={snap.radio.txOffsetHz}
+        decodes={snap.recentDecodes}
+        theme={theme}
+        onTune={handleTune}
+      />
+      <DecodeFeed decodes={snap.recentDecodes} harqRescues={snap.harqRescues} onCall={handleCall} />
+      <LinkPill link={snap.link} radio={snap.radio} />
+    </aside>
+  )
+
+  // Three-pane workspace: stations | center | waterfall, with drag splitters
+  // between each. CSS (keyed on `data-layout`) places the waterfall on the right
+  // (default) or as a full-width strip on top — same JSX, no remount.
+  const threePane = (center: JSX.Element) => (
+    <main className="layout" data-three-pane ref={layoutRef}>
+      <div className="grid-stations">{stationsPanel}</div>
+      <div
+        className="pane-splitter left"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize stations panel (double-click to reset)"
+        onPointerDown={startResize('left')}
+        onDoubleClick={resetWidths}
+      />
+      <div className="grid-center">{center}</div>
+      <div
+        className="pane-splitter right"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize waterfall pane (double-click to reset)"
+        onPointerDown={startResize('right')}
+        onDoubleClick={resetWidths}
+      />
+      <div className="grid-waterfall">{waterfallRail}</div>
+    </main>
+  )
+
+  let workspace: JSX.Element
+  switch (view) {
+    case 'qso':
+      workspace = threePane(<QsoPanel qso={snap.qso} onSetMode={handleSetMode} />)
+      break
+    case 'fieldDay':
+      workspace = threePane(
+        <FieldDayView fieldDay={snap.fieldDay} onSetMode={handleSetMode} />,
+      )
+      break
+    case 'band':
+      workspace = threePane(
+        <BandFeed
+          conversation={broadcastConversation}
+          mycall={snap.mycall}
+          macros={macros}
+          onBroadcast={handleBroadcast}
+        />,
+      )
+      break
+    case 'logbook':
+      workspace = (
+        <main className="layout single">
+          <Logbook
+            defaultBand={snap.radio.band}
+            defaultFreqMhz={snap.radio.dialMhz}
+            defaultMode={snap.link.tier}
+          />
+        </main>
+      )
+      break
+    case 'awards':
+      workspace = (
+        <main className="layout single">
+          <AwardsView />
+        </main>
+      )
+      break
+    case 'log':
+      workspace = (
+        <main className="layout single">
+          <LogView snap={snap} />
+        </main>
+      )
+      break
+    case 'roam':
+      workspace = (
+        <main className="layout single">
+          <RoamPanel
+            qsy={snap.qsy ?? null}
+            channels={settings?.qsySet ?? []}
+            cadence={settings?.qsyCadence ?? 6}
+            bandPlan={bandPlan}
+            activePeer={activePeer}
+            onSnap={setSnap}
+            onReloadSettings={reloadSettings}
+          />
+        </main>
+      )
+      break
+    case 'settings':
+      workspace = (
+        <main className="layout single">
+          <SettingsPanel
+            onSaved={handleSettingsSaved}
+            radio={snap.radio}
+            layout={wfLayout}
+            onLayoutChange={setWfLayout}
+            scale={scale}
+            onScaleChange={setScale}
+            onResetLayout={resetWidths}
+          />
+        </main>
+      )
+      break
+    case 'operate':
+      workspace = (
+        <OperateCockpit
+          snap={snap}
+          theme={theme}
+          tier={tier}
+          onTierChange={handleTier}
+          onSourceChange={handleSourceChange}
+          onTune={handleTune}
+          onCall={handleCall}
+        />
+      )
+      break
+    case 'propagation':
+      workspace = (
+        <main className="layout single">
+          <PropagationView snap={prop} />
+        </main>
+      )
+      break
+    case 'map':
+      workspace = (
+        <main className="layout single">
+          <MapView
+            myGrid={settings?.mygrid ?? ''}
+            theme={theme}
+            stations={snap?.stations ?? []}
+            prop={prop}
+            selectedCall={activePeer}
+            onSelectCall={handleMapSelect}
+          />
+        </main>
+      )
+      break
+    case 'chat':
+    default:
+      workspace = threePane(
+        <Conversation
+          conversation={activeConversation}
+          peer={activePeer}
+          radio={snap.radio}
+          mode={snap.mode}
+          fieldDay={snap.fieldDay}
+          macros={macros}
+          peerTyping={peerTyping}
+          onSend={handleSend}
+        />,
+      )
+      break
+  }
+
+  return (
+    <div className="app">
+      {!isTauri() && <DemoBanner />}
+      <TopBar
+        mycall={snap.mycall}
+        mygrid={snap.mygrid}
+        radio={snap.radio}
+        link={snap.link}
+        bandPlan={bandPlan}
+        onSetFrequency={handleSetFrequency}
+        onSetTxEnabled={handleSetTxEnabled}
+        onSetTune={handleSetTune}
+        onHaltTx={handleHaltTx}
+        onSetTxEven={handleSetTxEven}
+        onSetHoldTxFreq={handleSetHoldTxFreq}
+        wfLayout={wfLayout}
+        onWfLayoutChange={setWfLayout}
+        tier={tier}
+        onTierChange={handleTier}
+        theme={theme}
+        onThemeChange={setTheme}
+      />
+
+      {needsOnboarding && (
+        <OnboardingBanner
+          onOpenSettings={() => handleView('settings')}
+          onDismiss={handleDismissOnboarding}
+        />
+      )}
+
+      <NowBar snap={snap} prop={prop} onNavigate={handleView} />
+
+      <div className="shell">
+        <ModeNav view={view} mode={snap.mode} onSelect={handleView} />
+        {workspace}
+      </div>
+
+      <Toasts />
+    </div>
+  )
+}
