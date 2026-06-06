@@ -134,6 +134,13 @@ pub struct Settings {
     /// last successful download, passed back as `qso_qslsince`. Empty = full pull.
     /// Reset to empty when `lotw_username` changes (the cursor is query-bound).
     pub lotw_last_qsl: String,
+    /// eQSL account **username** (callsign or account login). The password lives in
+    /// the OS keychain (set via `set_eqsl_password`), never here. Empty = not set.
+    pub eqsl_username: String,
+    /// eQSL incremental-sync cursor: a `YYYYMMDDHHMM` timestamp (this sync's start,
+    /// rolled back by a safety margin) sent as `RcvdSince`. Empty = full pull.
+    /// Reset to empty when `eqsl_username` changes (the cursor is account-bound).
+    pub eqsl_last_sync: String,
 
     /// Editable quick-reply macros per mode (the Composer chips).
     pub macros: Macros,
@@ -203,6 +210,8 @@ impl Default for Settings {
             alert_new: false,
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
+            eqsl_username: String::new(),
+            eqsl_last_sync: String::new(),
             macros: Macros::default(),
         }
     }

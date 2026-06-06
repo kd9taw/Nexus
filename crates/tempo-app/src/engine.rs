@@ -273,6 +273,14 @@ impl Engine {
         self.settings.clone()
     }
 
+    /// Advance the persisted eQSL incremental-sync cursor (`eqsl_last_sync`) WITHOUT
+    /// the side effects of [`Engine::apply_settings`] (see [`Engine::set_lotw_cursor`]).
+    /// Returns the updated [`Settings`] for the caller to persist.
+    pub fn set_eqsl_cursor(&mut self, cursor: String) -> Settings {
+        self.settings.eqsl_last_sync = cursor;
+        self.settings.clone()
+    }
+
     /// Change band / dial frequency / mode **live** — without resetting the
     /// operating mode or queues (unlike [`Engine::apply_settings`]). Updates the
     /// settings + the UI radio readout; the radio loop re-tunes the rig from
@@ -470,6 +478,20 @@ impl Engine {
         if let Some(path) = &self.log_path {
             if let Err(e) = self.logbook.save(path) {
                 eprintln!("tempo: merge_lotw_report save failed: {e}");
+            }
+        }
+        summary
+    }
+
+    /// Merge an eQSL confirmation report into the log. Same generic reconcile path
+    /// as [`Engine::merge_lotw_report`]; the award-grade distinction lives in the
+    /// ADIF (eQSL carries `EQSL_QSL_RCVD`, not `QSL_RCVD`/`LOTW_QSL_RCVD`), so an
+    /// eQSL confirmation lands `confirmed` but NOT `award_confirmed` by construction.
+    pub fn merge_eqsl_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
+        let summary = self.logbook.merge_report(text);
+        if let Some(path) = &self.log_path {
+            if let Err(e) = self.logbook.save(path) {
+                eprintln!("tempo: merge_eqsl_report save failed: {e}");
             }
         }
         summary

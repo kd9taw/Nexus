@@ -452,6 +452,10 @@ fn set_settings(
         if eng.settings().lotw_username.trim() != settings.lotw_username.trim() {
             settings.lotw_last_qsl.clear();
         }
+        // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
+        if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
+            settings.eqsl_last_sync.clear();
+        }
         if let Err(e) = settings.save(&settings_path()) {
             eprintln!("tempo: failed to persist settings: {e}");
         }
@@ -843,10 +847,25 @@ fn sync_lotw_report(
 
 const LOTW_KEYCHAIN_SERVICE: &str = "tempo";
 const LOTW_KEYCHAIN_USER: &str = "lotw-password";
+const EQSL_KEYCHAIN_USER: &str = "eqsl-password";
 
 fn lotw_keychain() -> Result<keyring::Entry, String> {
     keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, LOTW_KEYCHAIN_USER)
         .map_err(|e| format!("couldn't open the system keychain: {e}"))
+}
+
+fn eqsl_keychain() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, EQSL_KEYCHAIN_USER)
+        .map_err(|e| format!("couldn't open the system keychain: {e}"))
+}
+
+/// Delete a keychain entry idempotently — a missing entry counts as success
+/// (nothing to forget). Shared by every credentialed connector's clear command.
+fn clear_keychain_entry(entry: &keyring::Entry) -> Result<(), String> {
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("couldn't clear the system keychain: {e}")),
+    }
 }
 
 /// Store (or, if `password` is empty, clear) the LoTW website password in the OS
@@ -855,26 +874,43 @@ fn lotw_keychain() -> Result<keyring::Entry, String> {
 fn set_lotw_password(password: String) -> Result<(), String> {
     let entry = lotw_keychain()?;
     if password.is_empty() {
-        return clear_lotw_entry(&entry);
+        return clear_keychain_entry(&entry);
     }
     entry
         .set_password(&password)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))
 }
 
-/// Remove the stored LoTW password from the OS keychain. Idempotent: a missing
-/// entry counts as success (nothing to forget).
+/// Remove the stored LoTW password from the OS keychain (idempotent).
 #[tauri::command]
 fn clear_lotw_password() -> Result<(), String> {
-    clear_lotw_entry(&lotw_keychain()?)
+    clear_keychain_entry(&lotw_keychain()?)
 }
 
-fn clear_lotw_entry(entry: &keyring::Entry) -> Result<(), String> {
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("couldn't clear the system keychain: {e}")),
+/// Store (or, if empty, clear) the eQSL website password in the OS keychain.
+/// Write-only, like the LoTW counterpart.
+#[tauri::command]
+fn set_eqsl_password(password: String) -> Result<(), String> {
+    let entry = eqsl_keychain()?;
+    if password.is_empty() {
+        return clear_keychain_entry(&entry);
     }
+    entry
+        .set_password(&password)
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))
 }
+
+/// Remove the stored eQSL password from the OS keychain (idempotent).
+#[tauri::command]
+fn clear_eqsl_password() -> Result<(), String> {
+    clear_keychain_entry(&eqsl_keychain()?)
+}
+
+/// `RcvdSince` safety margin: eQSL does not document the timezone of this filter,
+/// so we roll the cursor back ≥24 h to guarantee the request window overlaps the
+/// server's true boundary regardless of its zone. The idempotent reconcile absorbs
+/// the resulting re-pull overlap.
+const EQSL_RCVD_MARGIN_SECS: i64 = 86_400;
 
 /// Download new LoTW confirmations and reconcile them into the log.
 ///
@@ -939,6 +975,72 @@ fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult
             if let Err(e) = updated.save(&settings_path()) {
                 eprintln!("tempo: failed to persist LoTW cursor: {e}");
             }
+        }
+    }
+    Ok(summary)
+}
+
+/// Download new eQSL confirmations and reconcile them into the log.
+///
+/// Mirrors `download_lotw_report` but for eQSL's two-step InBox flow: reads the
+/// eQSL username + cursor from settings + the password from the keychain, fetches
+/// the InBox (HTML built-page → ephemeral `.adi`), validates it, and merges via the
+/// same reconcile path. eQSL confirmations land `confirmed` but NOT `award_confirmed`
+/// (they carry `EQSL_QSL_RCVD`), so they never credit ARRL DXCC/WAS. The
+/// password-bearing request URL is never logged or surfaced.
+#[tauri::command]
+fn download_eqsl_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
+    let (username, since) = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        let s = eng.settings();
+        (
+            s.eqsl_username.trim().to_string(),
+            s.eqsl_last_sync.trim().to_string(),
+        )
+    };
+    if username.is_empty() {
+        return Err("Set your eQSL username in Settings first.".to_string());
+    }
+    let password = eqsl_keychain()?
+        .get_password()
+        .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
+    let used_username = username.clone();
+    // Candidate next cursor: this sync's start, floored to the minute and rolled
+    // back by the margin (eQSL's RcvdSince timezone is unstated — over-fetch so we
+    // never skip records). Captured BEFORE the fetch so nothing arriving during it
+    // is missed next time.
+    let next_cursor = tempo_core::eqsl::format_rcvd_since(now_unix() - EQSL_RCVD_MARGIN_SECS);
+
+    // Build the URL, fetch (two GETs), and drop the secret-bearing values after.
+    let body = {
+        let query = tempo_core::eqsl::EqslQuery {
+            username,
+            password,
+            rcvd_since: Some(since).filter(|s| !s.is_empty()),
+        };
+        let url = tempo_core::eqsl::build_inbox_url(&query);
+        propagation::live::eqsl::fetch_inbox(&url)?
+    }; // `query` + `url` (both hold the password) dropped here
+
+    if !tempo_core::eqsl::is_eqsl_adif(&body) {
+        return Err(
+            "eQSL returned an unexpected response — check your username/password.".to_string(),
+        );
+    }
+
+    // Merge via the shared reconcile path (eQSL lands confirmed-not-award by
+    // construction). Advance the cursor ONLY if (a) the body is structurally
+    // complete — a truncated download must not skip unreceived records — AND (b) the
+    // username is unchanged since this sync started (an in-flight change already
+    // reset the cursor for the new account).
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let summary: LotwSyncResult = eng.merge_eqsl_report(&body).into();
+    if tempo_core::eqsl::is_complete_eqsl_body(&body)
+        && eng.settings().eqsl_username.trim() == used_username.trim()
+    {
+        let updated = eng.set_eqsl_cursor(next_cursor);
+        if let Err(e) = updated.save(&settings_path()) {
+            eprintln!("tempo: failed to persist eQSL cursor: {e}");
         }
     }
     Ok(summary)
@@ -1118,6 +1220,9 @@ pub fn run() {
             set_lotw_password,
             clear_lotw_password,
             download_lotw_report,
+            set_eqsl_password,
+            clear_eqsl_password,
+            download_eqsl_report,
             get_need_alerts,
             get_propagation,
             get_feed_health,
