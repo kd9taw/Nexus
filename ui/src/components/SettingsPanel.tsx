@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react'
 import type { AudioDevices, BandChannel, CatTestResult, RadioStatus, Settings } from '../types'
 import {
+  clearLotwPassword,
+  downloadLotwReport,
   getAudioDevices,
   getBandPlan,
   getRigModels,
   getSerialPorts,
   getSettings,
+  setLotwPassword,
   setSettings,
   testCat,
 } from '../api'
+import { pushToast, withErrorToast } from '../toast'
 import { FrequencyControl } from './FrequencyControl'
 import { LevelMeter } from './LevelMeter'
 import type { Layout } from '../useLayout'
@@ -95,6 +99,10 @@ export function SettingsPanel({
   const [audioLoading, setAudioLoading] = useState(false)
   const [catTesting, setCatTesting] = useState(false)
   const [catResult, setCatResult] = useState<CatTestResult | null>(null)
+  // LoTW password is write-only (kept in the OS keychain, never read back), so it
+  // lives in local state — not in `form`/Settings.
+  const [lotwPw, setLotwPw] = useState('')
+  const [lotwSyncing, setLotwSyncing] = useState(false)
 
   useEffect(() => {
     let mounted = true
@@ -214,6 +222,50 @@ export function SettingsPanel({
       setCatResult({ ok: false, detail: 'Could not run the CAT test.' })
     } finally {
       setCatTesting(false)
+    }
+  }
+
+  const onSaveLotwPassword = async () => {
+    if (!lotwPw) return
+    const ok = await withErrorToast(async () => {
+      await setLotwPassword(lotwPw)
+      return true
+    }, 'Could not save the LoTW password')
+    if (ok) {
+      setLotwPw('')
+      pushToast('LoTW password saved to the system keychain', 'success')
+    }
+  }
+
+  const onForgetLotwPassword = async () => {
+    const ok = await withErrorToast(async () => {
+      await clearLotwPassword()
+      return true
+    }, 'Could not clear the LoTW password')
+    if (ok) {
+      setLotwPw('')
+      pushToast('LoTW password cleared from the keychain', 'success')
+    }
+  }
+
+  const onSyncLotw = async () => {
+    if (!form) return
+    setLotwSyncing(true)
+    // Persist the form first so the download runs against the username the user
+    // sees — the backend reads SAVED settings, not the in-form draft (and a
+    // username change resets the sync cursor). Mirrors how Test CAT saves first.
+    const r = await withErrorToast(async () => {
+      await setSettings({ ...form, mycall: form.mycall.trim().toUpperCase() })
+      return downloadLotwReport()
+    }, 'LoTW sync failed')
+    setLotwSyncing(false)
+    if (r) {
+      const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
+      pushToast(
+        `LoTW: ${r.newlyConfirmed} newly confirmed, ${r.newlyCredited} credited${orphans}`,
+        r.orphans.length ? 'info' : 'success',
+      )
+      onSaved?.()
     }
   }
 
@@ -943,6 +995,75 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   Surface "new ones" from the Reverse Beacon Network in Propagation → Needs heard now.
                   Takes effect on restart.
+                </span>
+              </div>
+
+              <label className="settings-field">
+                <span className="settings-label">LoTW username</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.lotwUsername}
+                  placeholder="your LoTW account login"
+                  onChange={(e) => update('lotwUsername', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  Often your callsign, but not always — use your LoTW account login. Save settings to apply.
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">LoTW password</span>
+                <div className="settings-input-row">
+                  <input
+                    className="settings-input"
+                    type="password"
+                    value={lotwPw}
+                    placeholder="LoTW website password"
+                    onChange={(e) => setLotwPw(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={onSaveLotwPassword}
+                    disabled={!lotwPw}
+                  >
+                    Set
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={onForgetLotwPassword}
+                    title="Remove the stored password from the system keychain"
+                  >
+                    Forget
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  Your LoTW <strong>website</strong> password (not your TQSL certificate password). Stored in
+                  the OS keychain, never on disk; not shown again after you click Set.
+                </span>
+              </label>
+
+              <div className="settings-field">
+                <span className="settings-label">LoTW confirmations</span>
+                <div className="settings-input-row">
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={onSyncLotw}
+                    disabled={lotwSyncing || !form.lotwUsername.trim()}
+                  >
+                    {lotwSyncing ? 'Syncing…' : 'Sync LoTW now'}
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  Download new confirmations into your log. The first sync pulls your whole history (can be
+                  slow); later syncs are incremental.
                 </span>
               </div>
             </div>

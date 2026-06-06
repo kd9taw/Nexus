@@ -156,6 +156,31 @@ export async function syncLotwReport(text: string): Promise<LotwSyncResult> {
   return mockEngine.syncLotwReport(text)
 }
 
+/** Store the LoTW website password in the OS keychain (write-only; an empty
+ *  string clears it). No-op outside Tauri. */
+export async function setLotwPassword(password: string): Promise<void> {
+  const invoke = tauriInvoke()
+  if (invoke) {
+    await invoke<void>('set_lotw_password', { password })
+  }
+}
+
+/** Remove the stored LoTW password from the OS keychain (idempotent). */
+export async function clearLotwPassword(): Promise<void> {
+  const invoke = tauriInvoke()
+  if (invoke) {
+    await invoke<void>('clear_lotw_password')
+  }
+}
+
+/** Download new LoTW confirmations and reconcile them into the log (uses the
+ *  stored username + keychain password). Outside Tauri returns an empty result. */
+export async function downloadLotwReport(): Promise<LotwSyncResult> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<LotwSyncResult>('download_lotw_report')
+  return { matched: 0, newlyConfirmed: 0, newlyCredited: 0, newlySubmitted: 0, orphans: [] }
+}
+
 /** Need-aware spotting: the stations heard now, ranked by award value. */
 export async function getNeedAlerts(): Promise<NeedAlert[]> {
   const invoke = tauriInvoke()

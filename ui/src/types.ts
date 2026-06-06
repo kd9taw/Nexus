@@ -572,6 +572,13 @@ export interface Settings {
   alertCq: boolean
   /** Alert when a station not heard before this session appears. */
   alertNew: boolean
+  // --- confirmations (LoTW) ---
+  /** LoTW account username (often, but not always, the callsign). The password is
+   *  NOT here — it lives in the OS keychain (set via setLotwPassword). */
+  lotwUsername: string
+  /** Incremental-sync high-water cursor (APP_LoTW_LASTQSL). Managed by the app;
+   *  not user-edited. Empty = next sync is a full pull. */
+  lotwLastQsl: string
   /** Editable quick-reply macros, per context. */
   macros: {
     chat: string[]
