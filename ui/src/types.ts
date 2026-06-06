@@ -43,6 +43,16 @@ export interface OpeningView {
   probability: number
   stations: number
   confidence: string
+  /** Numeric combined confidence in [0,1] (the v2 detector score). */
+  confidenceScore: number
+  /** Far stations confirmed two-way with the operator in the window. */
+  reciprocalPairs: number
+  /** Onset anomaly z-score (how far above the band's own baseline). */
+  anomalyZ: number
+  /** Seconds since onset (stamped by the tracker in the command layer). */
+  onsetSecs: number
+  /** Just opened this poll — drives the one-shot alert. */
+  isNew: boolean
   note: string
 }
 export interface WorkableCard {

@@ -4323,6 +4323,15 @@ select.settings-input {
   color: var(--state-ok);
   letter-spacing: 0.02em;
 }
+.opening-new {
+  font-weight: 800;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: var(--bg);
+  background: var(--state-ok);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
 .opening-mode {
   font-weight: 600;
   color: var(--text);

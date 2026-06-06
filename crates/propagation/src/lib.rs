@@ -1,9 +1,12 @@
 //! Propagation & opening intelligence for the Nexus nerve center.
 //!
 //! Three pillars over a shared spot + space-weather substrate:
-//! - **Opening detection** ([`detector`]) — a faithful Rust port of the author's
-//!   proven `weak-signal-sleuth` 6 m detector (heuristic score + tuned
-//!   logistic-regression ML model + grid-rarity scoring).
+//! - **Opening detection** ([`opening`]) — a rigorous, unit-tested detection core
+//!   (operator-anchored reciprocity, per-band anomaly/onset features, an
+//!   ordered-rule Es/F2-TEP/Aurora/Tropo classifier, and an anti-flap tracker),
+//!   folding in the heuristic from the earlier `weak-signal-sleuth` 6 m port. The
+//!   original [`detector`] (ported heuristic + logistic model + `classify_vhf_mode`)
+//!   is retained for reference but no longer drives the snapshot.
 //! - **Adaptive propagation** (`advisor`, upcoming) — data-driven, plain-language
 //!   "what's open now / point here" from observed spots + space weather, with no
 //!   VOACAP expertise required.
@@ -24,6 +27,7 @@ pub mod geo;
 pub mod likelihood;
 pub mod model;
 pub mod needalert;
+pub mod opening;
 pub mod pskr_mqtt;
 pub mod rarity;
 pub mod space_wx;
@@ -48,6 +52,10 @@ pub use model::{
     SpaceWx,
 };
 pub use needalert::{heard_from_freq, rank as rank_needs, Heard, NeedAlert, NeedTag};
+pub use opening::{
+    classify as classify_opening, detect as detect_openings_v2, reciprocity, BandFeatures,
+    BandSignal, OpeningConfig, OpeningEvent, OpeningTracker,
+};
 pub use pskr_mqtt::{
     mqtt_topics as pskr_mqtt_topics, parse_mqtt_report as parse_pskr_mqtt, LiveSpots,
 };

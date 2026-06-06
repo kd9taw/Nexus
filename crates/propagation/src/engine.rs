@@ -6,15 +6,14 @@
 use serde::Serialize;
 
 use crate::advisor::{PropAdvisor, PropAdvisory};
-use crate::detector::OpeningDetector;
 use crate::dxped::{
     DxpedDashboard, DxpeditionPlan, DxpeditionTracker, Ft8DxpMode, NeedsSet, OperatorNeeds,
 };
-use crate::geo::{bearing_deg, compass_octant, grid_distance_km, maidenhead_to_latlon};
-use crate::model::{classify_vhf_mode, Band, Confidence, PathSpot, SpaceWx};
-use crate::spot::Spot;
+use crate::geo::compass_octant;
+use crate::model::{Band, Confidence, PathSpot, PropMode, SpaceWx};
+use crate::opening::{detect as detect_opening_signals, OpeningConfig};
 
-/// A detected VHF opening, projected for the UI.
+/// A detected opening, projected for the UI.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpeningView {
@@ -23,9 +22,24 @@ pub struct OpeningView {
     pub octant: String,
     pub bearing_deg: f32,
     pub max_km: f32,
+    /// Legacy 0..1 opening-strength score consumed by the map LUT (MapView).
+    /// Currently equals `confidence_score`; kept distinct so the map render path
+    /// is unaffected if the two are given separate meanings later.
     pub probability: f32,
     pub stations: u32,
+    /// Categorical confidence word (derived from `confidence_score`).
     pub confidence: String,
+    /// Numeric confidence in [0, 1] (the v2 detector's combined score).
+    pub confidence_score: f32,
+    /// Far stations confirmed two-way with the operator in the window.
+    pub reciprocal_pairs: u32,
+    /// Onset anomaly z-score (how far above the band's own baseline).
+    pub anomaly_z: f32,
+    /// Seconds since this opening's onset (0 until the stateful tracker stamps it
+    /// in the command layer; the engine is rebuilt per call and can't persist it).
+    pub onset_secs: i64,
+    /// Just opened this poll (tracker-stamped; false at the engine layer).
+    pub is_new: bool,
     /// Extra guidance, e.g. the 6m→2m escalator hint.
     pub note: String,
 }
@@ -61,7 +75,6 @@ pub struct PropagationSnapshot {
 pub struct PropagationEngine {
     me_call: String,
     me_grid: String,
-    detector: OpeningDetector,
     advisor: PropAdvisor,
     tracker: DxpeditionTracker,
 }
@@ -71,7 +84,6 @@ impl PropagationEngine {
         Self {
             me_call: me_call.to_string(),
             me_grid: me_grid.to_string(),
-            detector: OpeningDetector::new(),
             advisor: PropAdvisor::new(me_call, me_grid),
             tracker: DxpeditionTracker::new(me_grid),
         }
@@ -106,96 +118,69 @@ impl PropagationEngine {
         }
     }
 
-    /// Run the ported detector per VHF band and classify any opening's mode.
+    /// Detect openings with the v2 detector (anomaly/onset gate + rule-ordered
+    /// Es/F2-TEP/Aurora/Tropo classifier) across the F2-prone HF + VHF bands, and
+    /// project the open ones. `onset_secs`/`is_new` are stamped by the stateful
+    /// `OpeningTracker` in the command layer (the engine is rebuilt per call and
+    /// cannot persist tracker state), so they default to 0/false here.
     fn detect_openings(&self, now: i64, spots: &[PathSpot], wx: &SpaceWx) -> Vec<OpeningView> {
+        const BANDS: [Band; 7] = [
+            Band::B20,
+            Band::B15,
+            Band::B12,
+            Band::B10,
+            Band::B6,
+            Band::B4,
+            Band::B2,
+        ];
+        let cfg = OpeningConfig::default();
+        let signals =
+            detect_opening_signals(spots, &self.me_call, &self.me_grid, now, wx, &cfg, &BANDS);
+
         let mut out = Vec::new();
-        for band in [Band::B6, Band::B4, Band::B2] {
-            // Far ends (relative to me) of this band's spots → the detector's
-            // single-ended Spot population (matches weak-signal-sleuth's input).
-            let mut det_spots = Vec::new();
-            let mut far_grids: Vec<String> = Vec::new();
-            let mut heard_me = false;
-            let mut i_heard = false;
-            for s in spots.iter().filter(|s| s.band == band) {
-                if let (Some(call), Some(grid)) =
-                    (s.far_call(&self.me_call), s.far_grid(&self.me_call))
-                {
-                    det_spots.push(Spot::new(
-                        s.time,
-                        call,
-                        grid,
-                        s.mode.as_deref().unwrap_or(""),
-                    ));
-                    far_grids.push(grid.to_string());
-                    match s.side(&self.me_call) {
-                        crate::model::Side::HeardMe => heard_me = true,
-                        crate::model::Side::IHeard => i_heard = true,
-                        _ => {}
-                    }
-                }
-            }
-            let st = self.detector.detect(&det_spots, now);
-            if !st.open {
-                continue;
-            }
-
-            // Path geometry from the operator to the far ends.
-            let mut dists: Vec<f64> = far_grids
-                .iter()
-                .filter_map(|g| grid_distance_km(&self.me_grid, g))
-                .collect();
-            dists.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let median = dists.get(dists.len() / 2).copied().unwrap_or(0.0);
-            let max = dists.last().copied().unwrap_or(0.0);
-            let min = dists.first().copied().unwrap_or(0.0);
-
-            let mode = classify_vhf_mode(median, max, wx);
-            let bearing = self.mean_bearing(&far_grids);
-            let stations = st.features.unique_calls as u32;
-            let confidence = Confidence::from_evidence(stations as usize, heard_me && i_heard);
-
-            // 6m→2m escalator: short-skip 6m (high foEs) ⇒ watch the higher bands.
-            let note = if band == Band::B6 && min > 0.0 && min < 1000.0 {
+        for s in signals.into_iter().filter(|s| s.raw_open) {
+            let f = &s.features;
+            // Distinct far stations (union of the two directions; reciprocal ones
+            // are counted on both sides, so subtract the overlap).
+            let stations =
+                (f.unique_far_rx + f.unique_far_tx).saturating_sub(f.reciprocal_pairs) as u32;
+            let note = if s.mode == PropMode::Unknown {
+                "Opening — mode uncertain".to_string()
+            } else if s.band == Band::B6 && f.min_km > 0.0 && f.min_km < 1000.0 {
                 "High-MUF Es — watch 4 m / 2 m next".to_string()
             } else {
                 String::new()
             };
 
             out.push(OpeningView {
-                band: band.label().to_string(),
-                mode: mode.label().to_string(),
-                octant: compass_octant(bearing).to_string(),
-                bearing_deg: bearing as f32,
-                max_km: max as f32,
-                probability: st.probability,
+                band: s.band.label().to_string(),
+                mode: s.mode.label().to_string(),
+                octant: compass_octant(f.bearing_mean_deg).to_string(),
+                bearing_deg: f.bearing_mean_deg as f32,
+                max_km: f.max_km as f32,
+                probability: s.confidence,
                 stations,
-                confidence: confidence.label().to_string(),
+                confidence: confidence_word(s.confidence).label().to_string(),
+                confidence_score: s.confidence,
+                reciprocal_pairs: f.reciprocal_pairs as u32,
+                anomaly_z: f.anomaly_z,
+                onset_secs: 0,
+                is_new: false,
                 note,
             });
         }
         out
     }
+}
 
-    fn mean_bearing(&self, far_grids: &[String]) -> f64 {
-        let Some(me) = maidenhead_to_latlon(&self.me_grid) else {
-            return 0.0;
-        };
-        // Vector mean of bearings (handles wrap).
-        let (mut sx, mut sy) = (0.0f64, 0.0f64);
-        let mut n = 0u32;
-        for g in far_grids {
-            if let Some(dx) = maidenhead_to_latlon(g) {
-                let b = bearing_deg(me, dx).to_radians();
-                sx += b.cos();
-                sy += b.sin();
-                n += 1;
-            }
-        }
-        if n == 0 {
-            0.0
-        } else {
-            (sy.atan2(sx).to_degrees() + 360.0) % 360.0
-        }
+/// Categorical confidence word from the v2 numeric score.
+fn confidence_word(score: f32) -> Confidence {
+    if score >= 0.66 {
+        Confidence::Strong
+    } else if score >= 0.33 {
+        Confidence::Likely
+    } else {
+        Confidence::Marginal
     }
 }
 
@@ -276,7 +261,7 @@ pub fn demo() -> PropagationSnapshot {
     }
 
     let wx = SpaceWx {
-        sfi: 142.0,
+        sfi: 155.0, // high flux — the long-haul 20 m EU run classifies as F2
         kp: 3.0,
         a_index: 9.0,
         xray_long: 3e-7,
@@ -332,6 +317,20 @@ mod tests {
             .expect("6m opening");
         assert_eq!(six.mode, "Sporadic-E");
         assert!(six.note.contains("watch"), "escalator note: {:?}", six.note);
+        // No opening is left "mode uncertain" (the HF widening must classify, not
+        // emit Unknowns); the 20 m long-haul run classifies as F2.
+        assert!(
+            s.openings.iter().all(|o| o.mode != "Unknown"),
+            "no Unknown-mode openings: {:?}",
+            s.openings
+                .iter()
+                .map(|o| (&o.band, &o.mode))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            s.openings.iter().any(|o| o.band == "20m" && o.mode == "F2"),
+            "20m long-haul EU run should classify as F2"
+        );
         // Headline loudly surfaces the 6 m opening.
         assert!(
             s.advisory.headline.contains("6M"),

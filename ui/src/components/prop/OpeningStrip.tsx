@@ -3,23 +3,35 @@
 import { Zap } from 'lucide-react'
 import type { OpeningView } from '../../types'
 
+function agoLabel(secs: number): string {
+  if (secs <= 0) return ''
+  const m = Math.round(secs / 60)
+  return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`
+}
+
 export function OpeningStrip({ openings }: { openings: OpeningView[] }) {
   if (openings.length === 0) return null
   return (
     <div className="opening-strips">
-      {openings.map((o, i) => (
-        <div className="opening-strip" key={i}>
-          <span className="opening-band">
-            <Zap size={15} strokeWidth={2.25} aria-hidden="true" />
-            {o.band} OPEN
-          </span>
-          <span className="opening-mode">{o.mode}</span>
-          <span className="opening-detail">
-            point {o.octant} · ~{Math.round(o.maxKm).toLocaleString()} km · {o.stations} stations · {o.confidence}
-          </span>
-          {o.note && <span className="opening-note">{o.note}</span>}
-        </div>
-      ))}
+      {openings.map((o, i) => {
+        const ago = agoLabel(o.onsetSecs)
+        return (
+          <div className="opening-strip" key={i}>
+            <span className="opening-band">
+              <Zap size={15} strokeWidth={2.25} aria-hidden="true" />
+              {o.band} OPEN
+            </span>
+            {o.isNew && <span className="opening-new">NEW</span>}
+            <span className="opening-mode">{o.mode}</span>
+            <span className="opening-detail">
+              point {o.octant} · ~{Math.round(o.maxKm).toLocaleString()} km · {o.stations} stations
+              {o.reciprocalPairs > 0 && ` (${o.reciprocalPairs} 2-way)`} · {o.confidence}
+              {ago && ` · opened ${ago}`}
+            </span>
+            {o.note && <span className="opening-note">{o.note}</span>}
+          </div>
+        )
+      })}
     </div>
   )
 }
