@@ -408,6 +408,9 @@ pub struct LotwOrphan {
 pub struct LotwSyncResult {
     pub matched: usize,
     pub newly_confirmed: usize,
+    /// Newly confirmed by ANY channel (incl. eQSL) — the headline count for an
+    /// eQSL sync, where `newly_confirmed` (award-grade) is always 0.
+    pub newly_confirmed_any: usize,
     pub newly_credited: usize,
     pub newly_submitted: usize,
     pub orphans: Vec<LotwOrphan>,
@@ -418,6 +421,7 @@ impl From<tempo_core::reconcile::ReconcileSummary> for LotwSyncResult {
         LotwSyncResult {
             matched: s.matched,
             newly_confirmed: s.newly_confirmed,
+            newly_confirmed_any: s.newly_confirmed_any,
             newly_credited: s.newly_credited,
             newly_submitted: s.newly_submitted,
             orphans: s

@@ -293,6 +293,9 @@ export interface LotwOrphan {
 export interface LotwSyncResult {
   matched: number
   newlyConfirmed: number
+  /** Newly confirmed by any channel (incl. eQSL) — the eQSL sync's headline count
+   *  (newlyConfirmed is award-grade and always 0 for eQSL). */
+  newlyConfirmedAny: number
   newlyCredited: number
   newlySubmitted: number
   orphans: LotwOrphan[]

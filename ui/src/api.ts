@@ -178,7 +178,14 @@ export async function clearLotwPassword(): Promise<void> {
 export async function downloadLotwReport(): Promise<LotwSyncResult> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<LotwSyncResult>('download_lotw_report')
-  return { matched: 0, newlyConfirmed: 0, newlyCredited: 0, newlySubmitted: 0, orphans: [] }
+  return {
+    matched: 0,
+    newlyConfirmed: 0,
+    newlyConfirmedAny: 0,
+    newlyCredited: 0,
+    newlySubmitted: 0,
+    orphans: [],
+  }
 }
 
 /** Need-aware spotting: the stations heard now, ranked by award value. */

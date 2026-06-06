@@ -28,6 +28,10 @@ pub struct ReconcileSummary {
     pub matched: usize,
     /// Matched QSOs newly upgraded to award-eligible confirmed (LoTW/paper).
     pub newly_confirmed: usize,
+    /// Matched QSOs newly flipped to confirmed by ANY channel (incl. eQSL). For a
+    /// LoTW/paper confirmation of an unconfirmed QSO this is also counted; for an
+    /// eQSL confirmation it is the only count (eQSL never bumps `newly_confirmed`).
+    pub newly_confirmed_any: usize,
     /// Matched QSOs that gained at least one new granted-credit award.
     pub newly_credited: usize,
     /// Matched QSOs that gained at least one new submitted/applied award.
@@ -114,11 +118,14 @@ pub fn reconcile(local: &mut [QsoRecord], incoming: &[QsoRecord]) -> ReconcileSu
             Some(i) => {
                 sum.matched += 1;
                 let rec = &mut local[i];
-                // Monotonic merge — only ever adds confirmation/credit. A plain
-                // (eQSL-only) confirmation flip is applied but not counted in
-                // `newly_confirmed`, which tracks award-grade (LoTW/paper) upgrades.
-                if inc.confirmed {
+                // Monotonic merge — only ever adds confirmation/credit.
+                // `newly_confirmed_any` counts a plain confirmed flip from any
+                // channel (incl. eQSL); `newly_confirmed` counts only award-grade
+                // (LoTW/paper) upgrades. An award confirmation of a previously
+                // unconfirmed QSO bumps both.
+                if inc.confirmed && !rec.confirmed {
                     rec.confirmed = true;
+                    sum.newly_confirmed_any += 1;
                 }
                 if inc.award_confirmed && !rec.award_confirmed {
                     rec.award_confirmed = true;
@@ -215,6 +222,37 @@ mod tests {
         let s2 = reconcile(&mut log, std::slice::from_ref(&report));
         assert_eq!((s2.newly_confirmed, s2.newly_credited), (0, 0));
         assert_eq!(s2.matched, 1);
+    }
+
+    #[test]
+    fn eqsl_grade_confirmation_counts_any_not_award_and_is_idempotent() {
+        let mut log = vec![rec("DL1ABC", "40m", "FT8", 20_100)];
+        // An eQSL-grade confirmation: confirmed but NOT award-eligible.
+        let mut report = rec("dl1abc", "40M", "FT8", 20_100);
+        report.confirmed = true; // award_confirmed stays false (eQSL)
+
+        let s1 = reconcile(&mut log, std::slice::from_ref(&report));
+        assert_eq!(s1.matched, 1);
+        assert_eq!(
+            s1.newly_confirmed_any, 1,
+            "a new confirmation (eQSL channel)"
+        );
+        assert_eq!(s1.newly_confirmed, 0, "but NOT award-grade");
+        assert!(log[0].confirmed && !log[0].award_confirmed);
+
+        // Idempotent: a re-pulled eQSL card (the inclusive RcvdSince boundary) does
+        // not inflate the count.
+        let s2 = reconcile(&mut log, std::slice::from_ref(&report));
+        assert_eq!((s2.newly_confirmed_any, s2.newly_confirmed), (0, 0));
+
+        // A later LoTW (award) confirmation of the SAME already-confirmed QSO bumps
+        // the award count, not the any-count (it was already confirmed).
+        let mut lotw = rec("dl1abc", "40M", "FT8", 20_100);
+        lotw.confirmed = true;
+        lotw.award_confirmed = true;
+        let s3 = reconcile(&mut log, std::slice::from_ref(&lotw));
+        assert_eq!((s3.newly_confirmed_any, s3.newly_confirmed), (0, 1));
+        assert!(log[0].award_confirmed);
     }
 
     #[test]

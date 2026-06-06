@@ -1077,6 +1077,7 @@ class MockEngine {
     // won't exactly mirror production.
     const calls = [...text.matchAll(/<CALL:\d+>([A-Z0-9/]+)/gi)].map((m) => m[1].toUpperCase())
     let newlyConfirmed = 0
+    let newlyConfirmedAny = 0
     let newlyCredited = 0
     let matched = 0
     const orphans: LotwOrphan[] = []
@@ -1084,6 +1085,10 @@ class MockEngine {
       const hit = this.logbook.find((q) => q.call.toUpperCase() === call)
       if (hit) {
         matched++
+        if (!hit.confirmed) {
+          hit.confirmed = true
+          newlyConfirmedAny++
+        }
         if (!hit.awardConfirmed) {
           hit.awardConfirmed = true
           hit.confirmed = true
@@ -1103,7 +1108,14 @@ class MockEngine {
         })
       }
     }
-    return Promise.resolve({ matched, newlyConfirmed, newlyCredited, newlySubmitted: 0, orphans })
+    return Promise.resolve({
+      matched,
+      newlyConfirmed,
+      newlyConfirmedAny,
+      newlyCredited,
+      newlySubmitted: 0,
+      orphans,
+    })
   }
 
   getNeedAlerts(): Promise<NeedAlert[]> {
