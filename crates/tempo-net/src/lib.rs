@@ -20,6 +20,7 @@
 //! no test ever touches the real network).
 
 pub mod cluster;
+pub mod mqtt;
 pub mod pskreporter;
 pub mod qds;
 pub mod server;
@@ -28,6 +29,7 @@ pub mod wsjtx;
 
 // Convenience re-exports for the common entry points.
 pub use cluster::{parse_dx_spot, ClusterSpot};
+pub use mqtt::subscribe as mqtt_subscribe;
 pub use pskreporter::{PskReporter, Spot};
 pub use server::{WsjtxServer, APP_ID};
 pub use wsjtx::{Decode, Inbound, QsoLogged, Status};
