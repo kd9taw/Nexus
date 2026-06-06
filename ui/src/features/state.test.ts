@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { FEATURES, type FeatureId } from './registry'
 import {
   applyProfile,
+  applyProfiles,
   coerceEnabled,
   defaultState,
   dismissReveal,
@@ -10,6 +11,7 @@ import {
   toggleFeature,
   type FeatureState,
 } from './state'
+import { resolveEnabled } from './profiles'
 
 describe('feature state transitions', () => {
   it('first-run default is Everything (never hide a feature from an upgrading user)', () => {
@@ -47,6 +49,21 @@ describe('feature state transitions', () => {
   it('toggling an unknown feature is a no-op', () => {
     const s = applyProfile('dx')
     expect(toggleFeature(s, 'bogus' as FeatureId)).toBe(s)
+  })
+
+  it('applyProfiles unions bundles (multi-select); single keeps its tag', () => {
+    // single → keeps the profile tag, equals applyProfile.
+    const one = applyProfiles(['dx'])
+    expect(one.profile).toBe('dx')
+    expect(one.enabled).toEqual(resolveEnabled('dx'))
+    // union → custom, and is the OR of both bundles.
+    const both = applyProfiles(['contest', 'vhf'])
+    expect(both.profile).toBe('custom')
+    expect(both.enabled.fieldDay).toBe(true) // from contest
+    expect(both.enabled.propagation).toBe(true) // from vhf
+    expect(both.enabled.logbook).toBe(true) // core
+    // empty → Everything (safe fallback)
+    expect(applyProfiles([]).profile).toBe('everything')
   })
 
   it('applyProfile resolves the right enabled-set and records the profile', () => {

@@ -3495,6 +3495,115 @@ select.settings-input {
   color: var(--text);
 }
 
+/* ---- First-run setup wizard (goal-driven feature presets) ----
+   The overlay/panel chrome comes from the Radix Dialog (.ui-dialog); these style
+   the wizard's inner content. */
+.wizard-title {
+  font-size: 20px;
+  font-weight: 800;
+  margin: 0 0 4px;
+  color: var(--text);
+}
+.wizard-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0 0 18px;
+}
+.wizard-goals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.wizard-goal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  transition: var(--transition);
+}
+.wizard-goal:hover {
+  border-color: var(--accent);
+}
+.wizard-goal.sel {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+.wizard-goal-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.wizard-goal-blurb {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.wizard-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.wizard-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+.wizard-everything {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+}
+.wizard-everything:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.wizard-skip {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  padding: 8px 6px;
+}
+.wizard-skip:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.wizard-go {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 9px 18px;
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+}
+.wizard-go:disabled {
+  opacity: 0.5;
+}
+.settings-linkbtn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  padding: 0;
+  text-decoration: underline;
+}
+
 /* ---- Live-demo banner (browser/mock mode only) ---- */
 .demo-banner {
   flex: 0 0 auto;

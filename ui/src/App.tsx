@@ -60,12 +60,43 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { Toasts } from './components/Toasts'
 import { OnboardingBanner } from './components/OnboardingBanner'
 import { RevealNudge } from './components/RevealNudge'
+import { SetupWizard } from './components/SetupWizard'
+import type { ProfileId } from './features/profiles'
 import { DemoBanner } from './components/DemoBanner'
 
 // Placeholder identity shipped by the mock/default config. Until the operator
 // sets a real callsign we nudge them toward Settings.
 const PLACEHOLDER_CALL = 'KD9TAW'
 const ONBOARD_KEY = 'tempo-onboarded'
+// First-run setup wizard: shown once on a fresh install, re-openable from Settings.
+const WIZARD_KEY = 'nexus.features.wizardSeen'
+function wizardSeen(): boolean {
+  try {
+    return localStorage.getItem(WIZARD_KEY) === '1'
+  } catch {
+    return true // storage blocked → don't nag
+  }
+}
+function markWizardSeen(): void {
+  try {
+    localStorage.setItem(WIZARD_KEY, '1')
+  } catch {
+    /* storage blocked — wizard simply won't persist as seen */
+  }
+}
+// Read-only storage (e.g. Safari private mode): writes throw while reads succeed,
+// so "seen" can't persist. Suppress the wizard there so it can't re-nag on every
+// reload — it'd be shown forever otherwise.
+function storageWritable(): boolean {
+  try {
+    const k = 'nexus.__probe'
+    localStorage.setItem(k, '1')
+    localStorage.removeItem(k)
+    return true
+  } catch {
+    return false
+  }
+}
 // Synthetic peer key for the open band-activity / broadcast feed.
 const BROADCAST_PEER = '*'
 
@@ -88,6 +119,10 @@ export default function App() {
   const features = useFeatures()
   useAchievements(features.isOn('gamification'))
   const reveal = useReveals(features)
+  // First-run setup wizard (goal-driven). Only on a genuinely fresh install.
+  const [showWizard, setShowWizard] = useState<boolean>(
+    () => features.firstRun && storageWritable() && !wizardSeen(),
+  )
   const { commitLeft, commitRight, resetWidths } = usePaneWidths()
   const layoutRef = useRef<HTMLElement>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
@@ -344,6 +379,21 @@ export default function App() {
     setOnboardDismissed(true)
   }, [])
 
+  const handleWizardApply = useCallback(
+    (ids: ProfileId[], landing: View) => {
+      features.applyProfiles(ids)
+      setView(landing)
+      markWizardSeen()
+      setShowWizard(false)
+    },
+    [features.applyProfiles],
+  )
+
+  const handleWizardSkip = useCallback(() => {
+    markWizardSeen()
+    setShowWizard(false)
+  }, [])
+
   if (!snap) {
     return (
       <div className="app loading">
@@ -534,6 +584,7 @@ export default function App() {
             onScaleChange={setScale}
             onResetLayout={resetWidths}
             features={features}
+            onRerunWizard={() => setShowWizard(true)}
           />
         </main>
       )
@@ -646,6 +697,8 @@ export default function App() {
       </div>
 
       <Toasts />
+
+      {showWizard && <SetupWizard onApply={handleWizardApply} onSkip={handleWizardSkip} />}
     </div>
   )
 }

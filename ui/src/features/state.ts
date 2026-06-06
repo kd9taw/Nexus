@@ -43,6 +43,21 @@ export function applyProfile(profileId: ProfileId, dismissedReveals: string[] = 
   return { profile: profileId, enabled: resolveEnabled(profileId), dismissedReveals }
 }
 
+/** State for a UNION of profiles (the wizard's multi-select). One selection keeps
+ * its profile tag; multiple → 'custom' (a blended set). Empty → Everything. */
+export function applyProfiles(ids: ProfileId[], dismissedReveals: string[] = []): FeatureState {
+  if (ids.length === 0) return { ...defaultState(), dismissedReveals }
+  if (ids.length === 1) return applyProfile(ids[0], dismissedReveals)
+  const on = new Set<FeatureId>()
+  for (const id of ids) {
+    const e = resolveEnabled(id)
+    for (const f of FEATURES) if (e[f.id]) on.add(f.id)
+  }
+  const enabled = {} as Record<FeatureId, boolean>
+  for (const f of FEATURES) enabled[f.id] = f.core ? true : on.has(f.id)
+  return { profile: 'custom', enabled, dismissedReveals }
+}
+
 /** Record that the operator dismissed the reveal nudge for `achievementId`. */
 export function dismissReveal(state: FeatureState, achievementId: string): FeatureState {
   if (state.dismissedReveals.includes(achievementId)) return state

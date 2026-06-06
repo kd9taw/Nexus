@@ -31,6 +31,8 @@ interface Props {
   onResetLayout: () => void
   /** Modular-features API (toggles + profiles). */
   features: FeaturesApi
+  /** Re-open the first-run setup wizard. */
+  onRerunWizard?: () => void
 }
 
 /** Display order for the Features section's category groups. */
@@ -80,6 +82,7 @@ export function SettingsPanel({
   onScaleChange,
   onResetLayout,
   features,
+  onRerunWizard,
 }: Props) {
   const [form, setForm] = useState<Settings | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'saved'>('loading')
@@ -378,15 +381,23 @@ export function SettingsPanel({
                   </button>
                 ))}
                 {features.profile === 'custom' && (
-                  <span className="theme-chip active" aria-disabled="true" title="Custom — you've toggled individual features">
+                  <span className="theme-chip active" aria-disabled="true" title="Custom — a blended feature set (manual toggles or multiple goals)">
                     Custom
                   </span>
                 )}
               </div>
               <span className="settings-hint">
                 {features.profile === 'custom'
-                  ? "Custom — you've toggled individual features. Pick a goal above to reset to its defaults."
+                  ? 'Custom — a blended feature set. Pick a single goal above to reset to its defaults.'
                   : 'Pick a goal to set sensible defaults — every feature stays toggleable below. Switching profiles re-applies its set.'}
+                {onRerunWizard && (
+                  <>
+                    {' '}
+                    <button type="button" className="settings-linkbtn" onClick={onRerunWizard}>
+                      Re-run setup…
+                    </button>
+                  </>
+                )}
               </span>
             </div>
 

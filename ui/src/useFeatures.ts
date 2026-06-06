@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import type { FeatureId, View } from './features/registry'
 import {
   applyProfile as applyProfileState,
+  applyProfiles as applyProfilesState,
   defaultState,
   dismissReveal as dismissRevealState,
   landingFor,
@@ -44,8 +45,13 @@ export interface FeaturesApi {
   toggle: (id: FeatureId) => void
   /** Switch to a goal profile (re-applies its bundle). */
   applyProfile: (id: ProfileId) => void
+  /** Apply a UNION of profiles (wizard multi-select). */
+  applyProfiles: (ids: ProfileId[]) => void
   /** The active profile's landing view (custom → operate). */
   landing: View
+  /** True when there was no persisted feature state at startup (a fresh install
+   * — gates the first-run wizard so existing users aren't shown it). */
+  firstRun: boolean
   /** Reveal nudges the operator has dismissed (by triggering achievement id). */
   dismissedReveals: string[]
   /** Permanently dismiss the reveal nudge for an achievement id. */
@@ -59,6 +65,16 @@ export interface FeaturesApi {
  */
 export function useFeatures(): FeaturesApi {
   const [state, setState] = useState<FeatureState>(readInitial)
+  // Captured once on first render, before any persist() — true only for a
+  // genuinely fresh install. Lazy so the storage read happens exactly once.
+  const firstRunRef = useRef<boolean | null>(null)
+  if (firstRunRef.current === null) {
+    try {
+      firstRunRef.current = window.localStorage.getItem(STORAGE_KEY) == null
+    } catch {
+      firstRunRef.current = false
+    }
+  }
 
   const toggle = useCallback(
     (id: FeatureId) => setState((s) => {
@@ -73,6 +89,15 @@ export function useFeatures(): FeaturesApi {
     // Preserve prior reveal dismissals across a profile switch.
     (id: ProfileId) => setState((s) => {
       const next = applyProfileState(id, s.dismissedReveals)
+      persist(next)
+      return next
+    }),
+    [],
+  )
+
+  const applyProfiles = useCallback(
+    (ids: ProfileId[]) => setState((s) => {
+      const next = applyProfilesState(ids, s.dismissedReveals)
       persist(next)
       return next
     }),
@@ -98,7 +123,9 @@ export function useFeatures(): FeaturesApi {
     isOn,
     toggle,
     applyProfile,
+    applyProfiles,
     landing,
+    firstRun: firstRunRef.current ?? false,
     dismissedReveals: state.dismissedReveals,
     dismissReveal,
   }
