@@ -312,6 +312,25 @@ export interface Achievement {
 }
 
 /** DXCC-first award progress, computed from the logbook (cty.dat-resolved). */
+/** DXCC Honor Roll standing — current-entity, confirmed. (ARRL: confirmed ≥
+ * currentTotal − 9 = Honor Roll; all current entities = #1 Honor Roll.) */
+export interface HonorRollProgress {
+  /** Current DXCC entities (denominator) — derived from cty.dat (non-WAE). */
+  currentTotal: number
+  /** Confirmed current DXCC entities (numerator). */
+  confirmed: number
+  /** Entry threshold = currentTotal − 9. */
+  threshold: number
+  /** True once confirmed ≥ threshold. */
+  achieved: boolean
+  /** Confirmed entities still needed to reach Honor Roll entry (0 if achieved). */
+  needed: number
+  /** True once every current entity is confirmed (#1 Honor Roll). */
+  numberOne: boolean
+  /** Confirmed entities still needed for #1 Honor Roll (0 if achieved). */
+  numberOneNeeded: number
+}
+
 export interface AwardSummary {
   qsos: number
   confirmedQsos: number
@@ -338,6 +357,8 @@ export interface AwardSummary {
   /** Worked All Zones (CQ WAZ): distinct CQ zones worked / confirmed, out of 40. */
   wazWorked: number
   wazConfirmed: number
+  /** DXCC Honor Roll standing (current-entity, confirmed). */
+  honorRoll: HonorRollProgress
   /** WORK chase: entities worked on most award bands but missing a few — the
    * listed bands are ones to WORK (a new contact). Closest-to-complete first. */
   bandTargets: EntityNeed[]

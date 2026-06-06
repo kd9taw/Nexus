@@ -87,6 +87,30 @@ pub struct EntityNeed {
     pub bands: Vec<String>,
 }
 
+/// DXCC Honor Roll standing — the elite chaser's headline metric. Honor Roll is
+/// **current-entities-only** (deleted entities never count) and uses **confirmed**
+/// (award-eligible) entities. ARRL rule: you make Honor Roll in the "numerical top
+/// ten", i.e. confirmed ≥ `current_total − 9`; #1 Honor Roll is every current
+/// entity confirmed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HonorRollProgress {
+    /// Current DXCC entities (the denominator) — derived from cty.dat (non-WAE).
+    pub current_total: usize,
+    /// Confirmed current DXCC entities (the numerator).
+    pub confirmed: usize,
+    /// Entry threshold = `current_total − 9` ("numerical top ten").
+    pub threshold: usize,
+    /// True once `confirmed ≥ threshold`.
+    pub achieved: bool,
+    /// Confirmed entities still needed to reach Honor Roll entry (0 if achieved).
+    pub needed: usize,
+    /// True once every current entity is confirmed (#1 Honor Roll).
+    pub number_one: bool,
+    /// Confirmed entities still needed for #1 Honor Roll (0 if achieved).
+    pub number_one_needed: usize,
+}
+
 /// DXCC-first award summary for the dashboard.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -120,6 +144,8 @@ pub struct AwardSummary {
     /// Worked All Zones (CQ WAZ): distinct CQ zones worked / confirmed, out of 40.
     pub waz_worked: usize,
     pub waz_confirmed: usize,
+    /// DXCC Honor Roll standing (current-entity, confirmed).
+    pub honor_roll: HonorRollProgress,
     /// The WORK chase (elite "every-band" tracker): entities already worked on
     /// most award bands but NOT yet on a few — the bands listed are ones to WORK
     /// (a new contact, not just a confirmation). Closest-to-complete first.
@@ -163,17 +189,26 @@ impl Awards {
         let Some(info) = dxcc::resolve(call) else {
             return;
         };
-        let entity = info.entity; // &'static str (cty.dat is leaked once)
-        self.worked_entity.insert(entity);
-        if confirmed {
-            self.confirmed_entity.insert(entity);
-        }
         // WAZ: CQ zones 1..=40 (0 = cty.dat couldn't supply a zone — skip it).
+        // The zone is valid even on a non-DXCC (WAE) entity — Sicily, African
+        // Italy etc. are real CQ-zone contacts — so this is OUTSIDE the DXCC gate.
         if (1..=40).contains(&info.cq_zone) {
             self.worked_zones.insert(info.cq_zone);
             if confirmed {
                 self.confirmed_zones.insert(info.cq_zone);
             }
+        }
+        // DXCC awards credit ARRL DXCC entities only. WAE/CQ-only entities
+        // (Sicily, European Turkey, African Italy, Shetland, Bear Island, Vienna)
+        // are NOT DXCC, so they earn no entity / slot / band / mode credit. (They
+        // still counted for the QSO total + WAZ above.)
+        if !info.is_dxcc {
+            return;
+        }
+        let entity = info.entity; // &'static str (cty.dat is leaked once)
+        self.worked_entity.insert(entity);
+        if confirmed {
+            self.confirmed_entity.insert(entity);
         }
         // Per-mode DXCC (CW/Phone/Digital are separate awards).
         let pm = self.per_mode.entry(ModeClass::from_adif(mode)).or_default();
@@ -326,14 +361,31 @@ impl Awards {
             .iter()
             .filter(|e| most_wanted.contains(*e))
             .count();
+
+        // DXCC Honor Roll (current-entity, confirmed). Denominator derived from
+        // cty.dat (non-WAE entities); ARRL "numerical top ten" ⇒ threshold = N−9.
+        let current_total = dxcc::current_dxcc_entities();
+        let confirmed_dxcc = self.confirmed_entity.len();
+        let threshold = current_total.saturating_sub(9);
+        let honor_roll = HonorRollProgress {
+            current_total,
+            confirmed: confirmed_dxcc,
+            threshold,
+            achieved: confirmed_dxcc >= threshold && current_total > 0,
+            needed: threshold.saturating_sub(confirmed_dxcc),
+            number_one: confirmed_dxcc >= current_total && current_total > 0,
+            number_one_needed: current_total.saturating_sub(confirmed_dxcc),
+        };
+
         let achievements = achievements::evaluate(&AchievementStats {
             qsos: self.qsos as u32,
             confirmed_qsos: self.confirmed_qsos as u32,
             dxcc_worked: self.worked_entity.len() as u32,
-            dxcc_confirmed: self.confirmed_entity.len() as u32,
+            dxcc_confirmed: confirmed_dxcc as u32,
             slots_confirmed: self.confirmed_slot.len() as u32,
             rare_worked: rare_worked as u32,
             zones_confirmed: self.confirmed_zones.len() as u32,
+            dxcc_current_total: current_total as u32,
         });
 
         AwardSummary {
@@ -352,6 +404,7 @@ impl Awards {
             five_band_confirmed,
             waz_worked: self.worked_zones.len(),
             waz_confirmed: self.confirmed_zones.len(),
+            honor_roll,
             band_targets,
         }
     }
@@ -447,6 +500,45 @@ mod tests {
         );
         // Japan is complete → not a target.
         assert!(!s.band_targets.iter().any(|t| t.entity == japan));
+    }
+
+    #[test]
+    fn wae_entity_excluded_from_dxcc_but_counts_for_waz_and_qsos() {
+        // Sicily (IT9) is a WAE/CQ-only entity, NOT ARRL DXCC.
+        assert!(!dxcc::resolve("IT9ABC").unwrap().is_dxcc);
+        let mut a = Awards::new();
+        a.add("IT9ABC", "20m", "FT8", true);
+        let s = a.summary();
+        assert_eq!(s.qsos, 1, "the QSO still counts");
+        assert_eq!(s.dxcc_worked, 0, "Sicily is not a DXCC entity");
+        assert_eq!(s.dxcc_confirmed, 0);
+        assert_eq!(s.slots_worked, 0, "no DXCC band slot either");
+        assert_eq!(s.waz_worked, 1, "but CQ zone 15 counts for WAZ");
+        assert_eq!(s.waz_confirmed, 1);
+        assert!(
+            s.bands.is_empty(),
+            "no DXCC-by-band entry for a non-DXCC entity"
+        );
+    }
+
+    #[test]
+    fn honor_roll_progress_against_current_total() {
+        let s = Awards::new().summary();
+        let total = s.honor_roll.current_total;
+        assert_eq!(total, 340, "current DXCC entities (cty.dat non-WAE)");
+        assert_eq!(s.honor_roll.threshold, total - 9, "top ten ⇒ 331");
+        assert!(!s.honor_roll.achieved && !s.honor_roll.number_one);
+        // From an empty log: need the whole threshold for HR, the whole total for #1.
+        assert_eq!(s.honor_roll.needed, total - 9);
+        assert_eq!(s.honor_roll.number_one_needed, total);
+
+        // One confirmed DXCC entity decrements both "needed" counts by one.
+        let mut a = Awards::new();
+        a.add("W1AW", "20m", "CW", true);
+        let s = a.summary();
+        assert_eq!(s.honor_roll.confirmed, 1);
+        assert_eq!(s.honor_roll.needed, total - 9 - 1);
+        assert_eq!(s.honor_roll.number_one_needed, total - 1);
     }
 
     #[test]

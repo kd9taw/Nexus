@@ -4319,6 +4319,11 @@ select.settings-input {
   flex-direction: column;
   gap: 4px;
 }
+/* Honor Roll, once achieved, is the elite badge — give it a subtle gold edge. */
+.aw-card-elite {
+  border-color: var(--state-good);
+  box-shadow: inset 0 0 0 1px var(--state-good);
+}
 .aw-k {
   display: inline-flex;
   align-items: center;

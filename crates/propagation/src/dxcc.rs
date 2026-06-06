@@ -26,6 +26,12 @@ pub struct DxccInfo {
     pub lat: f64,
     pub lon: f64,
     pub cq_zone: u8,
+    /// `true` for ARRL DXCC entities; `false` for WAE/CQ-only entities (Sicily,
+    /// European Turkey, African Italy, Shetland, Bear Island, Vienna Intl Ctr —
+    /// valid contest multipliers but NOT DXCC). The CQ zone is still valid for
+    /// WAZ on a non-DXCC entity, so callers gate DXCC credit on this flag while
+    /// still using `cq_zone`.
+    pub is_dxcc: bool,
 }
 
 struct Entity {
@@ -34,6 +40,8 @@ struct Entity {
     lon: f64,
     /// Default CQ zone (cty.dat header field 2); 0 if unparsed.
     cq_zone: u8,
+    /// `false` if the primary-prefix field is `*`-marked (WAE/CQ-only, non-DXCC).
+    is_dxcc: bool,
 }
 
 struct Resolver {
@@ -78,11 +86,19 @@ fn parse_cty(text: &str) -> Resolver {
             let lat = parts[4].trim().parse::<f64>().unwrap_or(0.0);
             // cty.dat longitude is West-positive → negate to East-positive.
             let lon = -parts[5].trim().parse::<f64>().unwrap_or(0.0);
+            // A `*` on the primary-prefix field (field 8) marks a WAE/CQ-only
+            // entity: a valid CQWW/WAE contest multiplier the AD1C format says a
+            // logging program "will ignore" otherwise — i.e. NOT an ARRL DXCC
+            // entity (Sicily, European Turkey, African Italy, Shetland, Bear
+            // Island, Vienna Intl Ctr). 346 cty.dat entities − 6 of these = the
+            // 340 current DXCC entities.
+            let is_dxcc = !parts[7].trim().starts_with('*');
             entities.push(Entity {
                 name,
                 lat,
                 lon,
                 cq_zone,
+                is_dxcc,
             });
             cur = Some((entities.len() - 1) as u32);
             buf.clear();
@@ -179,7 +195,17 @@ fn info(r: &'static Resolver, i: u32, zone_override: Option<u8>) -> DxccInfo {
         lat: e.lat,
         lon: e.lon,
         cq_zone: zone_override.unwrap_or(e.cq_zone),
+        is_dxcc: e.is_dxcc,
     }
+}
+
+/// The number of **current ARRL DXCC entities** — the count of non-WAE entities
+/// in cty.dat. This is the DXCC Honor Roll denominator. cty.dat carries only
+/// current entities (the 62 deleted ones are absent), so this is the live
+/// current total (340 in the vendored file) and updates automatically when
+/// cty.dat is refreshed.
+pub fn current_dxcc_entities() -> usize {
+    resolver().entities.iter().filter(|e| e.is_dxcc).count()
 }
 
 #[cfg(test)]
@@ -247,5 +273,36 @@ mod zone_tests {
             let z = resolve(c).unwrap().cq_zone;
             assert!((1..=40).contains(&z), "{c} → zone {z} out of range");
         }
+    }
+
+    #[test]
+    fn marks_wae_entities_non_dxcc() {
+        // Prefix-registered WAE entities shadow their DXCC parent but are NOT
+        // ARRL DXCC themselves.
+        assert!(
+            !resolve("IT9ABC").unwrap().is_dxcc,
+            "Sicily is WAE, not DXCC"
+        );
+        assert!(
+            !resolve("TA1ABC").unwrap().is_dxcc,
+            "European Turkey is WAE, not DXCC"
+        );
+        // Mainland / parent entities are DXCC.
+        assert!(resolve("W1AW").unwrap().is_dxcc, "USA is DXCC");
+        assert!(resolve("I1ABC").unwrap().is_dxcc, "Italy is DXCC");
+        // African Italy keeps its own CQ zone (33) for WAZ even though it is not
+        // a DXCC entity — proves we do NOT fall through to Italy's zone (15).
+        let ig9 = resolve("IG9ABC").unwrap();
+        assert!(!ig9.is_dxcc, "African Italy is WAE, not DXCC");
+        assert_eq!(
+            ig9.cq_zone, 33,
+            "African Italy CQ zone is 33, not Italy's 15"
+        );
+        // The Honor Roll denominator = current DXCC entities (346 − 6 WAE).
+        assert_eq!(
+            current_dxcc_entities(),
+            340,
+            "current ARRL DXCC entities (matches ARRL 2026)"
+        );
     }
 }

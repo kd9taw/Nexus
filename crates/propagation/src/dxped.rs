@@ -154,6 +154,12 @@ impl LogNeeds {
         let Some(info) = dxcc::resolve(call) else {
             return;
         };
+        // The needs model is DXCC-oriented (a "new one" = a new DXCC entity), and
+        // DXpeditions are never to WAE/CQ-only entities — skip them so this bucket
+        // stays consistent with the awards engine.
+        if !info.is_dxcc {
+            return;
+        }
         let entity = info.entity.to_string();
         self.worked_entity.insert(entity.clone());
         self.worked_mode
@@ -312,8 +318,16 @@ impl DxpeditionTracker {
             // *resolver* entity (cty.dat canonical) so it lines up with the
             // log-derived needs, not NG3K's free-text name. Nexus operates
             // digital, so evaluate the Digital mode-class.
+            let resolved = dxcc::resolve(&p.call);
+            // A call resolving to a WAE/CQ-only entity (e.g. an IG9/IT9 IOTA op)
+            // is not a DXCC "new one", and `LogNeeds` never tracks such entities —
+            // so it could never be satisfied and would stick as a permanent ATNO.
+            // Skip it, mirroring the `is_dxcc` gate in `LogNeeds::add`.
+            if matches!(&resolved, Some(i) if !i.is_dxcc) {
+                continue;
+            }
             active.push(p.call.clone());
-            let match_entity = dxcc::resolve(&p.call)
+            let match_entity = resolved
                 .map(|i| i.entity.to_string())
                 .unwrap_or_else(|| p.entity.clone());
             for &band in &p.bands {
@@ -502,6 +516,42 @@ mod tests {
         );
         assert!(card.how_to_call.contains("Hound"));
         assert!(card.distance_km > 10000.0); // WI → Mozambique
+    }
+
+    #[test]
+    fn wae_call_plan_produces_no_card_even_with_empty_log() {
+        // A plan whose CALL resolves to a WAE/CQ-only entity (African Italy, IG9)
+        // must be skipped: it's not a DXCC "new one" and LogNeeds never tracks it,
+        // so without the gate it would stick as a permanently-unclearable ATNO.
+        assert!(
+            !dxcc::resolve("IG9A").unwrap().is_dxcc,
+            "African Italy is WAE"
+        );
+        let plan = DxpeditionPlan {
+            call: "IG9A".to_string(),
+            entity: "Italy".to_string(), // NG3K free-text might even say "Italy"
+            grid: Some("JM56".to_string()),
+            start_unix: NOW - 3600,
+            end_unix: NOW + 3600,
+            bands: vec![Band::B20],
+            modes: vec![],
+            ft8_mode: None,
+            most_wanted_rank: None,
+        };
+        let needs = LogNeeds::new(); // empty log → every DXCC entity is ATNO
+        let advisory = PropAdvisor::new("KD9TAW", "EN52").advise(NOW, &[], &SpaceWx::default());
+        let dash = DxpeditionTracker::new("EN52").dashboard(
+            NOW,
+            &[plan],
+            &needs,
+            &advisory,
+            &SpaceWx::default(),
+        );
+        assert!(dash.active.is_empty(), "WAE op is not listed as active");
+        assert!(
+            dash.workable_now.is_empty(),
+            "WAE op never becomes a workable/ATNO card"
+        );
     }
 
     #[test]

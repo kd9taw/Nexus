@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2 } from 'lucide-react'
+import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award } from 'lucide-react'
 import type { AwardSummary, EntityNeed } from '../types'
 import { getAwards } from '../api'
 import { StateBlock } from './StateBlock'
@@ -80,6 +80,13 @@ export function AwardsView() {
   }
 
   const confRate = Math.round((aw.confirmedQsos / aw.qsos) * 100)
+  const hr = aw.honorRoll
+  const hrPct = hr.currentTotal > 0 ? Math.min(100, (hr.confirmed / hr.currentTotal) * 100) : 0
+  const hrNote = hr.numberOne
+    ? `#1 Honor Roll ✓ — all ${hr.currentTotal} entities`
+    : hr.achieved
+      ? `Honor Roll ✓ · ${hr.numberOneNeeded} to #1`
+      : `${hr.needed} confirmed to Honor Roll (${hr.threshold})`
   const dxccPct = Math.min(100, Math.round((aw.dxccConfirmed / DXCC_BASIC) * 100))
   const challengePct = Math.min(100, Math.round((aw.slotsConfirmed / CHALLENGE_AWARD) * 100))
   const bandMax = Math.max(1, ...aw.bands.map((b) => b.worked))
@@ -112,6 +119,20 @@ export function AwardsView() {
               : `${DXCC_BASIC - aw.dxccConfirmed} confirmed to go`}{' '}
             · {aw.dxccWorked} worked
           </span>
+        </div>
+
+        <div className={`aw-card${hr.achieved ? ' aw-card-elite' : ''}`}>
+          <span className="aw-k">
+            <Award size={13} aria-hidden="true" /> Honor Roll
+          </span>
+          <span className="aw-v">
+            {hr.confirmed}
+            <span className="aw-of"> / {hr.currentTotal}</span>
+          </span>
+          <div className="aw-bar">
+            <div className="aw-fill good" style={{ width: `${hrPct}%` }} />
+          </div>
+          <span className="aw-note">{hrNote}</span>
         </div>
 
         <div className="aw-card">

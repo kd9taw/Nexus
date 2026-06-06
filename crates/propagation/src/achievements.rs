@@ -40,6 +40,9 @@ pub struct AchievementStats {
     pub rare_worked: u32,
     /// CQ zones confirmed (toward Worked All Zones — 40 zones).
     pub zones_confirmed: u32,
+    /// Current ARRL DXCC entities (the Honor Roll denominator; derived from
+    /// cty.dat). Honor Roll entry = confirm `dxcc_current_total − 9`.
+    pub dxcc_current_total: u32,
 }
 
 fn mk(
@@ -56,7 +59,9 @@ fn mk(
         title: title.to_string(),
         detail: detail.to_string(),
         category: category.to_string(),
-        unlocked: current >= target,
+        // A 0-target milestone is degenerate (e.g. an unknown Honor Roll
+        // denominator) — never treat it as unlocked.
+        unlocked: target > 0 && current >= target,
         current,
         target,
         critical,
@@ -72,6 +77,9 @@ pub fn evaluate(s: &AchievementStats) -> Vec<Achievement> {
     let sl = s.slots_confirmed;
     let rw = s.rare_worked;
     let zc = s.zones_confirmed;
+    // Honor Roll thresholds, derived from the live current-entity total.
+    let hr_total = s.dxcc_current_total;
+    let hr_entry = hr_total.saturating_sub(9);
     vec![
         // --- QSOs ---
         mk(
@@ -176,6 +184,24 @@ pub fn evaluate(s: &AchievementStats) -> Vec<Achievement> {
             100,
             true,
         ),
+        mk(
+            "honor-roll",
+            "DXCC Honor Roll",
+            "Confirm all but 9 of the current DXCC entities",
+            "DXCC",
+            dc,
+            hr_entry,
+            true,
+        ),
+        mk(
+            "honor-roll-1",
+            "#1 Honor Roll",
+            "Confirm every current DXCC entity — the top of the list",
+            "DXCC",
+            dc,
+            hr_total,
+            true,
+        ),
         // --- DXCC Challenge (confirmed band slots) ---
         mk(
             "chal-100",
@@ -240,6 +266,7 @@ mod tests {
             slots_confirmed: 150,
             rare_worked: 3,
             zones_confirmed: 22,
+            dxcc_current_total: 340,
         };
         let a = evaluate(&s);
         let by = |id: &str| a.iter().find(|x| x.id == id).unwrap();
@@ -251,6 +278,11 @@ mod tests {
         assert!(by("rare-1").unlocked && by("rare-1").critical && !by("rare-5").unlocked);
         assert!(by("waz-half").unlocked && !by("waz-40").unlocked);
         assert!(by("waz-40").critical && !by("waz-half").critical);
+        // Honor Roll: 45 confirmed is far from 331 entry / 340 #1 → both locked.
+        assert_eq!(by("honor-roll").target, 331, "340 − 9");
+        assert_eq!(by("honor-roll-1").target, 340);
+        assert!(!by("honor-roll").unlocked && !by("honor-roll-1").unlocked);
+        assert!(by("honor-roll").critical && by("honor-roll-1").critical);
 
         // critical flags = the big moments only
         assert!(by("qso-1").critical && by("dxcc-100").critical && by("chal-1000").critical);
@@ -271,8 +303,33 @@ mod tests {
             slots_confirmed: 0,
             rare_worked: 0,
             zones_confirmed: 0,
+            dxcc_current_total: 0,
         });
         assert!(a.iter().all(|x| !x.unlocked));
         assert!(!a.is_empty(), "catalog still lists locked achievements");
+    }
+
+    #[test]
+    fn honor_roll_unlocks_at_thresholds() {
+        let stats = |dc: u32| AchievementStats {
+            qsos: 5000,
+            confirmed_qsos: 5000,
+            dxcc_worked: dc,
+            dxcc_confirmed: dc,
+            slots_confirmed: 0,
+            rare_worked: 0,
+            zones_confirmed: 0,
+            dxcc_current_total: 340,
+        };
+        let by = |a: &[Achievement], id: &str| a.iter().find(|x| x.id == id).unwrap().unlocked;
+        // 330 confirmed: not yet Honor Roll (needs 331).
+        let a = evaluate(&stats(330));
+        assert!(!by(&a, "honor-roll") && !by(&a, "honor-roll-1"));
+        // 331: Honor Roll entry, but not #1.
+        let a = evaluate(&stats(331));
+        assert!(by(&a, "honor-roll") && !by(&a, "honor-roll-1"));
+        // 340: #1 Honor Roll.
+        let a = evaluate(&stats(340));
+        assert!(by(&a, "honor-roll") && by(&a, "honor-roll-1"));
     }
 }
