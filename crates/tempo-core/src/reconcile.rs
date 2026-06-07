@@ -198,6 +198,7 @@ mod tests {
             award_confirmed: false,
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
+            upload: Default::default(),
         }
     }
 

@@ -539,6 +539,56 @@ impl Engine {
         )
     }
 
+    /// Log indices (oldest-first) of QSOs not yet sent to LoTW: award-unconfirmed
+    /// AND either never uploaded or a prior bounce. `UploadState` IS the per-QSO
+    /// cursor — Pending/Accepted/Duplicate are excluded (don't re-send).
+    pub fn lotw_unsent_indices(&self) -> Vec<usize> {
+        self.logbook
+            .records()
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !r.award_confirmed)
+            .filter(|(_, r)| r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent()))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Build the ADIF upload payload (header + the records at `indices`) for TQSL.
+    pub fn lotw_upload_adif(&self, indices: &[usize]) -> String {
+        let recs = self.logbook.records();
+        let mut out = tempo_core::logbook::adif_header();
+        for &i in indices {
+            if let Some(r) = recs.get(i) {
+                out.push_str(&tempo_core::logbook::adif_record(r));
+            }
+        }
+        out
+    }
+
+    /// Stamp `upload.lotw` on the given records after an upload attempt, then save.
+    pub fn stamp_lotw_upload(
+        &mut self,
+        indices: &[usize],
+        outcome: tempo_core::logbook::UploadOutcome,
+        when_unix: i64,
+        detail: Option<String>,
+    ) {
+        for &i in indices {
+            if let Some(r) = self.logbook.records_mut().get_mut(i) {
+                r.upload.lotw = Some(tempo_core::logbook::UploadStatus {
+                    outcome,
+                    when_unix,
+                    detail: detail.clone(),
+                });
+            }
+        }
+        if let Some(path) = &self.log_path {
+            if let Err(e) = self.logbook.save(path) {
+                eprintln!("tempo: lotw upload stamp save failed: {e}");
+            }
+        }
+    }
+
     /// Set the operating mode. `spec`: `chat` | `qso-run` | `qso-monitor` |
     /// `fieldday-run` | `fieldday-sp`.
     pub fn set_mode(&mut self, spec: &str) -> Result<(), String> {
@@ -1256,6 +1306,7 @@ impl Engine {
             award_confirmed: false,
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
+            upload: Default::default(),
         }
     }
 

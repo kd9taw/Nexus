@@ -40,6 +40,75 @@ pub struct QsoRecord {
     /// Awards credit **applied/submitted** but not yet granted (ADIF
     /// `CREDIT_SUBMITTED`).
     pub credit_submitted: Vec<String>,
+    /// Per-source OUTBOUND upload state (distinct from the inbound `confirmed`/
+    /// `credit_*`): what WE pushed, so diagnostics can tell "never uploaded" from
+    /// "uploaded, partner hasn't confirmed". Set by the LoTW/QRZ/ClubLog upload
+    /// paths; round-trips via `APP_TEMPO_UL_*` ADIF app-fields. Default all-`None`.
+    pub upload: UploadState,
+}
+
+/// Outbound upload outcome for one source (e.g. LoTW via TQSL).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadOutcome {
+    /// Dispatched (signed+sent), but not yet confirmed on file (no per-QSO ack).
+    Pending,
+    /// Confirmed on file at the service (e.g. echoed back in a LoTW download).
+    Accepted,
+    /// The service reports it was already uploaded (benign).
+    Duplicate,
+    /// The upload bounced (bad record / server rejection) — fix and re-send.
+    Rejected,
+    /// Credentials/cert/station-location rejected — re-authenticate, then re-send.
+    AuthFail,
+}
+
+impl UploadOutcome {
+    /// Lowercase wire/ADIF tag.
+    pub fn code(self) -> &'static str {
+        match self {
+            UploadOutcome::Pending => "pending",
+            UploadOutcome::Accepted => "accepted",
+            UploadOutcome::Duplicate => "duplicate",
+            UploadOutcome::Rejected => "rejected",
+            UploadOutcome::AuthFail => "authfail",
+        }
+    }
+    pub fn from_code(s: &str) -> Option<UploadOutcome> {
+        Some(match s {
+            "pending" => UploadOutcome::Pending,
+            "accepted" => UploadOutcome::Accepted,
+            "duplicate" => UploadOutcome::Duplicate,
+            "rejected" => UploadOutcome::Rejected,
+            "authfail" => UploadOutcome::AuthFail,
+            _ => return None,
+        })
+    }
+    /// Is this terminal "already sent" (excluded from the re-upload batch)?
+    /// `Rejected`/`AuthFail` are re-sendable; the rest are not.
+    pub fn is_sent(self) -> bool {
+        matches!(
+            self,
+            UploadOutcome::Pending | UploadOutcome::Accepted | UploadOutcome::Duplicate
+        )
+    }
+}
+
+/// One source's last upload status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadStatus {
+    pub outcome: UploadOutcome,
+    pub when_unix: i64,
+    /// Sanitized service/tool message (bounce reason); never a raw path/secret.
+    pub detail: Option<String>,
+}
+
+/// Per-source outbound upload state. Absent (`None`) = never attempted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UploadState {
+    pub lotw: Option<UploadStatus>,
+    pub eqsl: Option<UploadStatus>,
+    pub qrz: Option<UploadStatus>,
+    pub clublog: Option<UploadStatus>,
 }
 
 /// An in-memory logbook backed by an ADIF file.
@@ -55,6 +124,10 @@ impl Logbook {
 
     pub fn records(&self) -> &[QsoRecord] {
         &self.records
+    }
+    /// Mutable access to the records (for in-place upload-state stamping).
+    pub fn records_mut(&mut self) -> &mut [QsoRecord] {
+        &mut self.records
     }
     pub fn len(&self) -> usize {
         self.records.len()
@@ -187,13 +260,33 @@ impl Logbook {
     }
 }
 
-fn adif_header() -> String {
+/// ADIF file header (`<EOH>`-terminated) — `pub` so an upload payload can be built
+/// as `adif_header()` + N×`adif_record()` (TQSL needs a full ADIF file, not bare
+/// records).
+pub fn adif_header() -> String {
     "Tempo logbook\n<ADIF_VER:5>3.1.4\n<PROGRAMID:5>Tempo\n<EOH>\n".to_string()
 }
 
 /// One `<FIELD:len>value` tag.
 fn field(name: &str, val: &str) -> String {
     format!("<{}:{}>{}", name, val.len(), val)
+}
+
+/// A `APP_TEMPO_UL_*` upload-state field as `"{outcome}|{when}|{detail}"` (or empty
+/// if `None`). Length-prefixed, so a `|` in `detail` is fine; parsed via splitn(3).
+fn upload_field(name: &str, st: &Option<UploadStatus>) -> String {
+    match st {
+        Some(s) => field(
+            name,
+            &format!(
+                "{}|{}|{}",
+                s.outcome.code(),
+                s.when_unix,
+                s.detail.as_deref().unwrap_or("")
+            ),
+        ),
+        None => String::new(),
+    }
 }
 
 /// Serialize a single QSO as one ADIF record (ending in `<eor>`) — used by the
@@ -234,6 +327,11 @@ pub fn adif_record(r: &QsoRecord) -> String {
     if !r.credit_submitted.is_empty() {
         out.push_str(&field("CREDIT_SUBMITTED", &r.credit_submitted.join(",")));
     }
+    // Outbound upload state (APP_-namespaced; other loggers ignore it).
+    out.push_str(&upload_field("APP_TEMPO_UL_LOTW", &r.upload.lotw));
+    out.push_str(&upload_field("APP_TEMPO_UL_EQSL", &r.upload.eqsl));
+    out.push_str(&upload_field("APP_TEMPO_UL_QRZ", &r.upload.qrz));
+    out.push_str(&upload_field("APP_TEMPO_UL_CLUBLOG", &r.upload.clublog));
     out.push_str("<EOR>\n");
     out
 }
@@ -340,6 +438,26 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         .get("CREDIT_SUBMITTED")
         .map(|s| parse_credit(s))
         .unwrap_or_default();
+    // Outbound upload state: "{outcome}|{when}|{detail}" — splitn(3) so a detail
+    // containing '|' survives intact.
+    let parse_ul = |k: &str| -> Option<UploadStatus> {
+        let v = f.get(k)?;
+        let mut it = v.splitn(3, '|');
+        let outcome = UploadOutcome::from_code(it.next()?)?;
+        let when_unix = it.next()?.parse::<i64>().ok()?;
+        let detail = it.next().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        Some(UploadStatus {
+            outcome,
+            when_unix,
+            detail,
+        })
+    };
+    let upload = UploadState {
+        lotw: parse_ul("APP_TEMPO_UL_LOTW"),
+        eqsl: parse_ul("APP_TEMPO_UL_EQSL"),
+        qrz: parse_ul("APP_TEMPO_UL_QRZ"),
+        clublog: parse_ul("APP_TEMPO_UL_CLUBLOG"),
+    };
     Some(QsoRecord {
         call,
         grid: f.get("GRIDSQUARE").cloned(),
@@ -357,6 +475,7 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         award_confirmed,
         credit_granted,
         credit_submitted,
+        upload,
     })
 }
 
@@ -436,7 +555,30 @@ mod tests {
             award_confirmed: false,
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
+            upload: Default::default(),
         }
+    }
+
+    #[test]
+    fn upload_state_round_trips_through_adif() {
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.upload.lotw = Some(UploadStatus {
+            outcome: UploadOutcome::Rejected,
+            when_unix: 1_700_000_500,
+            detail: Some("bad record | line 3".into()), // detail with an embedded '|'
+        });
+        let adif = adif_header() + &adif_record(&r);
+        let back = parse_adif(&adif);
+        assert_eq!(back.len(), 1);
+        let u = back[0]
+            .upload
+            .lotw
+            .as_ref()
+            .expect("lotw upload state survived");
+        assert_eq!(u.outcome, UploadOutcome::Rejected);
+        assert_eq!(u.when_unix, 1_700_000_500);
+        assert_eq!(u.detail.as_deref(), Some("bad record | line 3")); // splitn(3) kept the '|'
+        assert!(back[0].upload.eqsl.is_none());
     }
 
     #[test]

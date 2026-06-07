@@ -288,6 +288,29 @@ export interface LoggedQso {
   creditGranted?: string[]
   /** Awards credit applied/submitted but not yet granted. */
   creditSubmitted?: string[]
+  /** Per-source outbound upload state (drives the "Upload to LoTW" count). */
+  upload?: UploadState
+}
+
+/** Per-source upload status (mirror of the Rust UploadStatusDto). */
+export interface UploadStatus {
+  /** "pending" | "accepted" | "duplicate" | "rejected" | "authfail". */
+  outcome: string
+  whenUnix: number
+  detail?: string | null
+}
+export interface UploadState {
+  lotw?: UploadStatus
+  eqsl?: UploadStatus
+  qrz?: UploadStatus
+  clublog?: UploadStatus
+}
+/** Result of a LoTW upload (TQSL sign+upload). */
+export interface UploadReport {
+  dispatched: number
+  /** "pending" | "duplicate" | "rejected" | "authfail" | "retry" | "none". */
+  outcome: string
+  detail?: string | null
 }
 
 /** A confirmation in a synced report with no matching logged QSO (diagnostic). */
@@ -661,6 +684,11 @@ export interface Settings {
   /** Incremental-sync high-water cursor (APP_LoTW_LASTQSL). Managed by the app;
    *  not user-edited. Empty = next sync is a full pull. */
   lotwLastQsl: string
+  /** LoTW upload Station Location name (the TQSL -l arg). Non-secret. Empty =
+   *  upload not configured. */
+  lotwStationLocation: string
+  /** Optional path to the tqsl binary (overrides auto-detect). */
+  tqslPath: string
   /** eQSL account username (callsign or login). Password is in the OS keychain
    *  (set via setEqslPassword). */
   eqslUsername: string

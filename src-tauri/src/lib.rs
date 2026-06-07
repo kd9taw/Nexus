@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use tauri::State;
 use tempo_app::dto::{
     AppSnapshot, DiagnosticsReportDto, ImportStats, LoggedQso, LotwSyncResult, SourceKind,
-    Spectrum, Tier,
+    Spectrum, Tier, UploadReportDto,
 };
 use tempo_app::engine::Engine;
 use tempo_app::settings::Settings;
@@ -1204,6 +1204,104 @@ fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult
     Ok(summary)
 }
 
+/// Locate the `tqsl` binary: a non-empty Settings override that exists, else the
+/// first existing OS-default candidate, else the bare name on PATH (Command
+/// resolves it; an ENOENT then drives the friendly "install TQSL" error).
+fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
+    let op = override_path.trim();
+    if !op.is_empty() {
+        let p = std::path::PathBuf::from(op);
+        if p.exists() {
+            return p;
+        }
+    }
+    for cand in tempo_core::lotw_upload::tqsl_candidate_paths() {
+        if cand.exists() {
+            return cand;
+        }
+    }
+    std::path::PathBuf::from(if cfg!(windows) { "tqsl.exe" } else { "tqsl" })
+}
+
+/// Sign + upload QSOs to LoTW via the operator's installed TQSL. `indices` selects
+/// specific log rows; `None` = the default unsent-unconfirmed batch. No secret is
+/// handled here — TQSL owns the Callsign Certificate; we pass only the non-secret
+/// Station Location. Pre-flight (station location set, batch non-empty, TQSL
+/// resolvable) BEFORE any state is stamped, so a missing tool never corrupts
+/// upload state. The QSOs are stamped per the TQSL exit code (Pending/Duplicate/
+/// Rejected/AuthFail; a network error leaves state untouched for a clean retry).
+#[tauri::command]
+fn upload_lotw_report(
+    state: State<'_, SharedEngine>,
+    indices: Option<Vec<usize>>,
+) -> Result<UploadReportDto, String> {
+    // Brief lock: read config + build the batch + ADIF, then release before spawn.
+    let (batch, adif, location, tqsl_path) = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        let location = eng.settings().lotw_station_location.trim().to_string();
+        if location.is_empty() {
+            return Err("Set your LoTW Station Location in Settings before uploading.".into());
+        }
+        let batch = indices.unwrap_or_else(|| eng.lotw_unsent_indices());
+        if batch.is_empty() {
+            return Ok(UploadReportDto {
+                dispatched: 0,
+                outcome: "none".into(),
+                detail: None,
+            });
+        }
+        let adif = eng.lotw_upload_adif(&batch);
+        let tqsl_path = eng.settings().tqsl_path.clone();
+        (batch, adif, location, tqsl_path)
+    };
+
+    // Write the batch ADIF to a temp file for TQSL to sign.
+    let path = std::env::temp_dir().join("nexus_lotw_upload.adi");
+    std::fs::write(&path, adif).map_err(|e| format!("Couldn't write the upload file: {e}"))?;
+    let path_str = path.to_string_lossy().to_string();
+
+    // Resolve + run TQSL one-shot, capturing its result.
+    let tqsl = resolve_tqsl(&tqsl_path);
+    let args = tempo_core::lotw_upload::tqsl_args(&location, &path_str);
+    let mut cmd = std::process::Command::new(&tqsl);
+    cmd.args(&args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW (TQSL is GUI-linked)
+    }
+    let output = cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            "TQSL isn't installed (or its path is wrong). LoTW uploads are signed locally by TQSL — install it from lotw.arrl.org, or set the TQSL path in Settings.".to_string()
+        } else {
+            format!("Couldn't run TQSL: {e}")
+        }
+    })?;
+    let code = output.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = tempo_core::lotw_upload::sanitize_detail(&stderr);
+
+    match tempo_core::lotw_upload::classify_tqsl_exit(code, &stderr) {
+        // Network error → leave state untouched so the next attempt retries cleanly.
+        None => Ok(UploadReportDto {
+            dispatched: batch.len(),
+            outcome: "retry".into(),
+            detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
+        }),
+        Some(outcome) => {
+            {
+                let mut eng = state.lock().map_err(|e| e.to_string())?;
+                eng.stamp_lotw_upload(&batch, outcome, now_unix(), detail.clone());
+            }
+            Ok(UploadReportDto {
+                dispatched: batch.len(),
+                outcome: outcome.code().to_string(),
+                detail,
+            })
+        }
+    }
+}
+
 /// Download new eQSL confirmations and reconcile them into the log.
 ///
 /// Mirrors `download_lotw_report` but for eQSL's two-step InBox flow: reads the
@@ -1666,6 +1764,7 @@ pub fn run() {
             set_lotw_password,
             clear_lotw_password,
             download_lotw_report,
+            upload_lotw_report,
             set_eqsl_password,
             clear_eqsl_password,
             download_eqsl_report,

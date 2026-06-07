@@ -1215,6 +1215,40 @@ export function SettingsPanel({
               </div>
 
               <label className="settings-field">
+                <span className="settings-label">LoTW Station Location</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.lotwStationLocation}
+                  placeholder="exact TQSL Station Location name"
+                  onChange={(e) => update('lotwStationLocation', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  For <strong>uploading</strong> to LoTW (the "Upload to LoTW" button in the Logbook). Signing is
+                  done by your installed <strong>TQSL</strong> against this named Station Location — set it up in
+                  TQSL first; the name must match exactly. No certificate or password is stored by Nexus.
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">TQSL path (optional)</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.tqslPath}
+                  placeholder="auto-detect (leave blank)"
+                  onChange={(e) => update('tqslPath', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  Only if TQSL is installed somewhere non-standard; otherwise leave blank to auto-detect.
+                </span>
+              </label>
+
+              <label className="settings-field">
                 <span className="settings-label">eQSL username</span>
                 <input
                   className="settings-input"

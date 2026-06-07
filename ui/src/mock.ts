@@ -351,6 +351,8 @@ function defaultSettings(): Settings {
     alertNew: false,
     lotwUsername: '',
     lotwLastQsl: '',
+    lotwStationLocation: '',
+    tqslPath: '',
     eqslUsername: '',
     eqslLastSync: '',
     qrzUsername: '',

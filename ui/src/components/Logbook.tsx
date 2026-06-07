@@ -8,6 +8,7 @@ import {
   qrzLookup,
   qrzPushQso,
   syncLotwReport,
+  uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 
@@ -66,6 +67,7 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
   }))
   const [err, setErr] = useState<string | null>(null)
   const [qrzBusy, setQrzBusy] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const syncRef = useRef<HTMLInputElement>(null)
 
@@ -126,6 +128,32 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
       )
       load()
     }
+  }
+
+  // QSOs not yet sent to LoTW: award-unconfirmed + never uploaded or a prior bounce.
+  const unsentLotw = log.filter(
+    (q) =>
+      !q.awardConfirmed &&
+      (!q.upload?.lotw || ['rejected', 'authfail'].includes(q.upload.lotw.outcome)),
+  ).length
+
+  // Sign + upload the unsent batch to LoTW via the operator's TQSL.
+  const onUploadLotw = async () => {
+    setUploading(true)
+    const r = await withErrorToast(() => uploadLotwReport(), 'LoTW upload failed')
+    setUploading(false)
+    if (!r) return
+    const n = r.dispatched
+    const s = n === 1 ? '' : 's'
+    if (r.outcome === 'none') pushToast('Nothing new to upload to LoTW', 'info')
+    else if (r.outcome === 'pending')
+      pushToast(`Signed + uploaded ${n} QSO${s} to LoTW — they'll confirm as partners upload`, 'success')
+    else if (r.outcome === 'duplicate') pushToast(`${n} QSO${s} were already on LoTW`, 'info')
+    else if (r.outcome === 'retry') pushToast(r.detail || 'LoTW unreachable — try again shortly', 'error')
+    else if (r.outcome === 'authfail')
+      pushToast(`LoTW rejected your certificate/Station Location${r.detail ? `: ${r.detail}` : ''}`, 'error')
+    else pushToast(`LoTW upload failed${r.detail ? `: ${r.detail}` : ''}`, 'error')
+    load()
   }
 
   const setField = (k: keyof DraftQso, v: string) => {
@@ -229,6 +257,15 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
             title="Reconcile a LoTW ADIF export into the log — upgrades confirmations + credit on existing QSOs"
           >
             Sync confirmations
+          </button>
+          <button
+            type="button"
+            className="export-btn"
+            onClick={onUploadLotw}
+            disabled={uploading || unsentLotw === 0}
+            title="Sign + upload your un-uploaded QSOs to LoTW via TQSL (set your Station Location in Settings)"
+          >
+            {uploading ? 'Uploading…' : `Upload to LoTW${unsentLotw ? ` (${unsentLotw})` : ''}`}
           </button>
           <button type="button" className="export-btn" onClick={() => setShowForm((v) => !v)}>
             {showForm ? 'Close' : 'Log QSO'}

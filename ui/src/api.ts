@@ -17,6 +17,7 @@ import type {
   ImportStats,
   LoggedQso,
   LotwSyncResult,
+  UploadReport,
   ModeRequest,
   NeedAlert,
   QrzLookup,
@@ -196,6 +197,14 @@ export async function downloadLotwReport(): Promise<LotwSyncResult> {
     newlySubmitted: 0,
     orphans: [],
   }
+}
+
+/** Sign + upload QSOs to LoTW via the operator's installed TQSL. `indices` =
+ *  specific log rows, or omit for the default unsent-unconfirmed batch. */
+export async function uploadLotwReport(indices?: number[]): Promise<UploadReport> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<UploadReport>('upload_lotw_report', { indices: indices ?? null })
+  return { dispatched: 0, outcome: 'none', detail: null }
 }
 
 /** Store the eQSL password in the OS keychain (write-only; empty clears it). */

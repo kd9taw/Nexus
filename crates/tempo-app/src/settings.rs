@@ -134,6 +134,12 @@ pub struct Settings {
     /// last successful download, passed back as `qso_qslsince`. Empty = full pull.
     /// Reset to empty when `lotw_username` changes (the cursor is query-bound).
     pub lotw_last_qsl: String,
+    /// LoTW **upload** Station Location name (the `-l` arg passed to TQSL). Non-
+    /// secret; TQSL owns the certificate. Empty = upload not configured.
+    pub lotw_station_location: String,
+    /// Optional path to the `tqsl` binary (overrides auto-detect). Empty = search
+    /// the OS default locations + PATH.
+    pub tqsl_path: String,
     /// eQSL account **username** (callsign or account login). The password lives in
     /// the OS keychain (set via `set_eqsl_password`), never here. Empty = not set.
     pub eqsl_username: String,
@@ -234,6 +240,8 @@ impl Default for Settings {
             alert_new: false,
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
+            lotw_station_location: String::new(),
+            tqsl_path: String::new(),
             eqsl_username: String::new(),
             eqsl_last_sync: String::new(),
             qrz_username: String::new(),

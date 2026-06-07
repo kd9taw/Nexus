@@ -308,6 +308,70 @@ pub struct FieldDayStatus {
     pub log: Vec<FieldDayQso>,
 }
 
+/// Serializable per-source upload status (mirror of `tempo_core` `UploadStatus`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadStatusDto {
+    /// "pending" | "accepted" | "duplicate" | "rejected" | "authfail".
+    pub outcome: String,
+    pub when_unix: i64,
+    pub detail: Option<String>,
+}
+
+/// Serializable per-source outbound upload state (mirror of `UploadState`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadStateDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lotw: Option<UploadStatusDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eqsl: Option<UploadStatusDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qrz: Option<UploadStatusDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clublog: Option<UploadStatusDto>,
+}
+
+impl From<tempo_core::logbook::UploadStatus> for UploadStatusDto {
+    fn from(s: tempo_core::logbook::UploadStatus) -> Self {
+        UploadStatusDto {
+            outcome: s.outcome.code().to_string(),
+            when_unix: s.when_unix,
+            detail: s.detail,
+        }
+    }
+}
+impl From<UploadStatusDto> for tempo_core::logbook::UploadStatus {
+    fn from(s: UploadStatusDto) -> Self {
+        tempo_core::logbook::UploadStatus {
+            outcome: tempo_core::logbook::UploadOutcome::from_code(&s.outcome)
+                .unwrap_or(tempo_core::logbook::UploadOutcome::Rejected),
+            when_unix: s.when_unix,
+            detail: s.detail,
+        }
+    }
+}
+impl From<tempo_core::logbook::UploadState> for UploadStateDto {
+    fn from(u: tempo_core::logbook::UploadState) -> Self {
+        UploadStateDto {
+            lotw: u.lotw.map(Into::into),
+            eqsl: u.eqsl.map(Into::into),
+            qrz: u.qrz.map(Into::into),
+            clublog: u.clublog.map(Into::into),
+        }
+    }
+}
+impl From<UploadStateDto> for tempo_core::logbook::UploadState {
+    fn from(u: UploadStateDto) -> Self {
+        tempo_core::logbook::UploadState {
+            lotw: u.lotw.map(Into::into),
+            eqsl: u.eqsl.map(Into::into),
+            qrz: u.qrz.map(Into::into),
+            clublog: u.clublog.map(Into::into),
+        }
+    }
+}
+
 /// A single logged contact from the general logbook (Chat/QSO contacts; Field
 /// Day keeps its own contest log). The serializable mirror of
 /// `tempo_core::logbook::QsoRecord`.
@@ -340,6 +404,10 @@ pub struct LoggedQso {
     /// Awards credit applied/submitted but not yet granted.
     #[serde(default)]
     pub credit_submitted: Vec<String>,
+    /// Per-source outbound upload state (drives the "Upload to LoTW (N)" count +
+    /// the diagnostics R1/R9/R2 reasons).
+    #[serde(default)]
+    pub upload: UploadStateDto,
 }
 
 impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
@@ -358,6 +426,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             award_confirmed: r.award_confirmed,
             credit_granted: r.credit_granted,
             credit_submitted: r.credit_submitted,
+            upload: r.upload.into(),
         }
     }
 }
@@ -378,8 +447,23 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             award_confirmed: q.award_confirmed,
             credit_granted: q.credit_granted,
             credit_submitted: q.credit_submitted,
+            upload: q.upload.into(),
         }
     }
+}
+
+/// Result of a LoTW upload attempt (a TQSL batch sign+upload).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadReportDto {
+    /// QSOs in the batch dispatched to TQSL.
+    pub dispatched: usize,
+    /// Outcome tag (lowercase): "pending" (signed+sent) | "duplicate" (all already
+    /// on file) | "rejected" | "authfail" | "retry" (network — try again) | "none"
+    /// (nothing to upload).
+    pub outcome: String,
+    /// Sanitized TQSL message on a non-success outcome.
+    pub detail: Option<String>,
 }
 
 /// Result of importing an external ADIF logbook (deduped merge).
