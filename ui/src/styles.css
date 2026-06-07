@@ -3616,13 +3616,16 @@ select.settings-input {
 .od-clear {
   margin-left: 4px;
 }
+/* WSJT-X coloring conventions: a decode with YOUR call (someone answering you)
+   is the loudest — red. CQ calls are green. New-DXCC/new-grid get their own
+   highlights below; worked recedes. */
 .decode-row.cq {
-  border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-left-color: var(--state-good);
+  background: color-mix(in srgb, var(--state-good) 13%, transparent);
 }
 .decode-row.directed {
-  border-left-color: var(--state-good);
-  background: color-mix(in srgb, var(--state-good) 16%, transparent);
+  border-left-color: var(--tx, #e5484d);
+  background: color-mix(in srgb, var(--tx, #e5484d) 22%, transparent);
 }
 .decode-row.worked {
   opacity: 0.55;
@@ -3637,17 +3640,17 @@ select.settings-input {
 }
 /* New-DXCC "new one" — the highest-value chase; a bright, can't-miss highlight. */
 .decode-row.newdxcc {
-  border-left-color: #ff5d8f;
-  background: color-mix(in srgb, #ff5d8f 15%, transparent);
+  border-left: 3px solid #ff5d8f;
+  background: color-mix(in srgb, #ff5d8f 24%, transparent);
 }
 .decode-row.newdxcc .decode-msg {
-  color: #ff86ab;
+  color: #ff9bba;
   font-weight: 800;
 }
 /* New grid — a softer amber highlight, a notch below new-DXCC. */
 .decode-row.newgrid {
-  border-left-color: #f5a524;
-  background: color-mix(in srgb, #f5a524 11%, transparent);
+  border-left: 3px solid #f5a524;
+  background: color-mix(in srgb, #f5a524 18%, transparent);
 }
 .decode-row.newgrid .decode-msg {
   color: #f5b53f;
@@ -3698,11 +3701,11 @@ select.settings-input {
   gap: 6px;
 }
 .decode-row.cq .decode-msg {
-  color: var(--accent);
+  color: var(--state-good);
   font-weight: 700;
 }
 .decode-row.directed .decode-msg {
-  color: var(--state-good);
+  color: var(--tx, #e5484d);
   font-weight: 800;
 }
 .decode-tag {
@@ -3728,16 +3731,21 @@ select.settings-input {
   color: #1a1205;
   background: #f5a524;
 }
-/* DXCC entity (country) on a decode row — DX chasers scan by country. */
+/* DXCC entity (country) on a decode row — DX chasers scan by country. Pushed to
+   the right edge of the message line so it fills the otherwise-empty space next
+   to the callsign/message. */
 .decode-country {
-  font-size: 10px;
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 11px;
   font-weight: 600;
-  color: var(--text-faint);
+  color: var(--accent);
   font-family: var(--font-sans, inherit);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 11ch;
+  max-width: 16ch;
+  flex: none;
 }
 .decode-work {
   flex: 0 0 auto;

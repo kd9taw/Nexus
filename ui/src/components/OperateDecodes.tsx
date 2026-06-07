@@ -207,7 +207,6 @@ export function OperateDecodes({
             <span className="decode-freq">{Math.round(d.freqHz)}</span>
             <span className="decode-msg" title={d.country ? `${d.message} · ${d.country}` : d.message}>
               {d.message}
-              {d.country && <span className="decode-country">{d.country}</span>}
               {d.newDxcc && (
                 <span className="decode-tag newdxcc" title="New DXCC entity — a new one!">
                   DXCC
@@ -226,6 +225,7 @@ export function OperateDecodes({
                   HARQ·RV{d.rv}
                 </span>
               )}
+              {d.country && <span className="decode-country">{d.country}</span>}
             </span>
             {d.from && (
               <button
