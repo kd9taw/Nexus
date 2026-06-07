@@ -3301,12 +3301,35 @@ select.settings-input {
 }
 .decode-row {
   display: grid;
-  grid-template-columns: auto 36px 44px 1fr auto;
+  /* tier · UTC · dB · DT · Freq · message · work */
+  grid-template-columns: auto 52px 34px 38px 42px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 5px 12px;
   font-size: 12px;
   border-left: 3px solid transparent;
+}
+.decode-utc {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.decode-dt {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+.decode-dt.ok {
+  color: var(--text-faint);
+}
+.decode-dt.warn {
+  color: var(--band-marginal, #d8a657);
+}
+.decode-dt.bad {
+  color: var(--state-bad, #e5484d);
+  font-weight: 700;
+}
+.od-clear {
+  margin-left: 4px;
 }
 .decode-row.cq {
   border-left-color: var(--accent);

@@ -108,6 +108,7 @@ export function OperateCockpit({
           <OperateDecodes
             decodes={snap.recentDecodes}
             slot={snap.radio.slot}
+            rxOffsetHz={snap.radio.rxOffsetHz}
             harqRescues={snap.harqRescues}
             onCall={onCall}
           />

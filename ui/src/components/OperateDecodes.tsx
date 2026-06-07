@@ -7,22 +7,28 @@ interface Props {
   decodes: DecodeRow[]
   /** Current slot index — used to age/sort accumulated history. */
   slot: number
+  /** Current RX audio offset (Hz), for the "On RX freq" filter. */
+  rxOffsetHz: number
   /** Session count of IR-HARQ rescues (decodes recovered by combining). */
   harqRescues: number
   /** Work / answer a decoded station. */
   onCall: (call: string) => void
 }
 
-/** A decode plus the slot it was last heard on (history bookkeeping). */
+/** A decode plus the slot + wall-clock time it was last heard (history bookkeeping). */
 interface Entry extends DecodeRow {
   slot: number
+  /** Epoch ms when last (re)heard — drives the per-row UTC column. */
+  at: number
 }
 
-type Filter = 'all' | 'cq' | 'me' | 'b4' | 'new'
+type Filter = 'all' | 'cq' | 'me' | 'rx' | 'b4' | 'new'
 type Sort = 'time' | 'snr' | 'freq'
 
 /** Newest-first history cap. */
 const MAX_HISTORY = 300
+/** "On RX freq" tolerance (Hz) — decodes within this of the RX marker. */
+const RX_TOL_HZ = 50
 
 /**
  * Band Activity that ACCUMULATES across slots and freezes while you read it —
@@ -35,7 +41,7 @@ const MAX_HISTORY = 300
  *   you can read/scroll/click; it resumes (and back-fills) on mouse-out.
  * - Filter (All / CQ / To me / B4 / New) and sort (time / SNR / freq).
  */
-export function OperateDecodes({ decodes, slot, harqRescues, onCall }: Props) {
+export function OperateDecodes({ decodes, slot, rxOffsetHz, harqRescues, onCall }: Props) {
   const histRef = useRef<Map<string, Entry>>(new Map())
   const frozenRef = useRef<Entry[]>([])
   const [, setTick] = useState(0)
@@ -47,10 +53,11 @@ export function OperateDecodes({ decodes, slot, harqRescues, onCall }: Props) {
   // message + ~freq) move to the newest position with their latest SNR.
   useEffect(() => {
     const m = histRef.current
+    const now = Date.now()
     for (const d of decodes) {
       const key = `${d.message}|${Math.round(d.freqHz / 5)}`
       m.delete(key) // re-insert so Map order = recency
-      m.set(key, { ...d, slot })
+      m.set(key, { ...d, slot, at: now })
     }
     if (m.size > MAX_HISTORY) {
       const drop = m.size - MAX_HISTORY
@@ -70,6 +77,8 @@ export function OperateDecodes({ decodes, slot, harqRescues, onCall }: Props) {
           return d.isCq
         case 'me':
           return d.directedToMe
+        case 'rx':
+          return Math.abs(d.freqHz - rxOffsetHz) <= RX_TOL_HZ
         case 'b4':
           return d.worked
         case 'new':
@@ -99,13 +108,21 @@ export function OperateDecodes({ decodes, slot, harqRescues, onCall }: Props) {
   }
   const onLeave = () => setFrozen(false)
 
+  // Wipe accumulated activity to read the current period clean (WSJT-X "Erase").
+  const clearHistory = () => {
+    histRef.current.clear()
+    frozenRef.current = []
+    setFrozen(false)
+    setTick((t) => t + 1)
+  }
+
   return (
     <section className="operate-decodes">
       <div className="od-head">
         <h2>Band Activity</h2>
         <div className="od-controls">
           <div className="od-filters" role="group" aria-label="Filter decodes">
-            {(['all', 'cq', 'me', 'b4', 'new'] as Filter[]).map((f) => (
+            {(['all', 'cq', 'me', 'rx', 'b4', 'new'] as Filter[]).map((f) => (
               <button
                 key={f}
                 type="button"
@@ -126,6 +143,9 @@ export function OperateDecodes({ decodes, slot, harqRescues, onCall }: Props) {
               <option value="freq">Freq</option>
             </select>
           </label>
+          <button type="button" className="od-chip od-clear" onClick={clearHistory} title="Clear accumulated decodes">
+            Clear
+          </button>
         </div>
       </div>
 
@@ -153,7 +173,11 @@ export function OperateDecodes({ decodes, slot, harqRescues, onCall }: Props) {
             <span className={`decode-tier ${d.tier.toLowerCase()}`} title={`Decoded by ${d.tier}`}>
               {d.tier}
             </span>
+            <span className="decode-utc" title="UTC heard">{fmtUtc(d.at)}</span>
             <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
+            <span className={`decode-dt ${dtClass(d.dtSec)}`} title="DT — time offset (s); large = clock/sync skew">
+              {fmtDt(d.dtSec)}
+            </span>
             <span className="decode-freq">{Math.round(d.freqHz)}</span>
             <span className="decode-msg" title={d.message}>
               {d.message}
@@ -187,6 +211,7 @@ const FILTER_LABEL: Record<Filter, string> = {
   all: 'All',
   cq: 'CQ',
   me: 'To me',
+  rx: 'On RX',
   b4: 'B4',
   new: 'New',
 }
@@ -194,8 +219,24 @@ const FILTER_TITLE: Record<Filter, string> = {
   all: 'All decodes',
   cq: 'CQ calls only',
   me: 'Directed to my callsign',
+  rx: 'On my RX frequency (±50 Hz) — follow a QSO without clutter',
   b4: 'Worked before',
   new: 'Not worked before',
+}
+
+/** UTC HHMMSS for the per-row time column (matches WSJT-X's compact time). */
+function fmtUtc(at: number): string {
+  const d = new Date(at)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`
+}
+
+/** DT (time offset, s) with sign; flags large skew. */
+function fmtDt(dt: number): string {
+  return `${dt >= 0 ? '+' : ''}${dt.toFixed(1)}`
+}
+function dtClass(dt: number): string {
+  return Math.abs(dt) > 1.0 ? 'bad' : Math.abs(dt) > 0.5 ? 'warn' : 'ok'
 }
 
 function rowClass(d: DecodeRow): string {
