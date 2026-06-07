@@ -335,7 +335,10 @@ export default function App() {
     void withErrorToast(() => apiCallStation(call, grid), `Could not work ${call}`).then((s) => {
       if (s) {
         setSnap(s)
-        setView('qso')
+        // Work the station on the single-screen Operate cockpit — the QSO
+        // sequences inline there while the waterfall + decodes stay visible.
+        // (Never bounce to the chat-style 'qso' view and lose the band.)
+        setView('operate')
       }
     })
   }, [])
@@ -727,6 +730,10 @@ export default function App() {
           onTune={handleTune}
           onCall={handleCall}
           onSetTxLevel={handleSetTxLevel}
+          onSetMode={handleSetMode}
+          onResend={handleQsoResend}
+          onFreetext={handleQsoFreetext}
+          roster={stationsPanel}
         />
       )
       break

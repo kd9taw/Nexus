@@ -43,7 +43,13 @@ export function DecodeFeed({ decodes, harqRescues, onCall }: Props) {
         {decodes.map((d, i) => {
           const cls = rowClass(d)
           return (
-            <div className={`decode-row ${cls}`} role="listitem" key={`${d.from}-${d.message}-${i}`}>
+            <div
+              className={`decode-row ${cls}`}
+              role="listitem"
+              key={`${d.from}-${d.message}-${i}`}
+              onDoubleClick={() => d.from && onCall(d.from)}
+              title={d.from ? `Double-click to work ${d.from}` : undefined}
+            >
               <span className={`decode-tier ${d.tier.toLowerCase()}`} title={`Decoded by ${d.tier}`}>
                 {d.tier}
               </span>

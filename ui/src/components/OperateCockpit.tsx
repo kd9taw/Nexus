@@ -1,6 +1,8 @@
-import type { AppSnapshot, SourceKind, Tier } from '../types'
+import type { AppSnapshot, ModeRequest, SourceKind, Tier } from '../types'
+import type { ReactNode } from 'react'
 import { Waterfall } from './Waterfall'
 import { OperateDecodes } from './OperateDecodes'
+import { OperateQsoStrip } from './OperateQsoStrip'
 import { LinkPill } from './LinkPill'
 
 interface Props {
@@ -13,10 +15,18 @@ interface Props {
   onSourceChange: (k: SourceKind) => void
   /** Click-to-tune on the waterfall (`shift` sets TX offset, else RX). */
   onTune: (freqHz: number, shift: boolean) => void
-  /** Work / answer a decoded station. */
+  /** Work / answer a decoded station (double-click a decode or roster row). */
   onCall: (call: string) => void
   /** Set the TX audio drive level (0.0–1.0) — the Pwr slider. */
   onSetTxLevel: (level: number) => void
+  /** Switch the QSO sequencer role (Call CQ / Monitor). */
+  onSetMode: (mode: ModeRequest) => void
+  /** Re-arm the current QSO message. */
+  onResend: () => void
+  /** Send in-QSO free text (Tx5). */
+  onFreetext: (text: string) => void
+  /** The Call Roster (a wired StationList), placed in the cockpit side column. */
+  roster: ReactNode
 }
 
 /** Mode chips, in the order the cockpit presents them (popular modes first). */
@@ -43,6 +53,10 @@ export function OperateCockpit({
   onTune,
   onCall,
   onSetTxLevel,
+  onSetMode,
+  onResend,
+  onFreetext,
+  roster,
 }: Props) {
   const source = snap.radio.source
   const catOk = snap.radio.catOk
@@ -129,14 +143,23 @@ export function OperateCockpit({
           />
           <LinkPill link={snap.link} radio={snap.radio} />
         </section>
-        <aside className="cockpit-side panel">
-          <OperateDecodes
-            decodes={snap.recentDecodes}
-            slot={snap.radio.slot}
-            rxOffsetHz={snap.radio.rxOffsetHz}
-            harqRescues={snap.harqRescues}
-            onCall={onCall}
+        <aside className="cockpit-side">
+          <OperateQsoStrip
+            qso={snap.qso}
+            onSetMode={onSetMode}
+            onResend={onResend}
+            onFreetext={onFreetext}
           />
+          <div className="cockpit-decodes panel">
+            <OperateDecodes
+              decodes={snap.recentDecodes}
+              slot={snap.radio.slot}
+              rxOffsetHz={snap.radio.rxOffsetHz}
+              harqRescues={snap.harqRescues}
+              onCall={onCall}
+            />
+          </div>
+          <div className="cockpit-roster panel">{roster}</div>
         </aside>
       </div>
     </main>

@@ -169,7 +169,13 @@ export function OperateDecodes({ decodes, slot, rxOffsetHz, harqRescues, onCall 
           />
         )}
         {list.map((d, i) => (
-          <div className={`decode-row ${rowClass(d)}`} role="listitem" key={`${d.message}-${d.freqHz}-${i}`}>
+          <div
+            className={`decode-row ${rowClass(d)}`}
+            role="listitem"
+            key={`${d.message}-${d.freqHz}-${i}`}
+            onDoubleClick={() => d.from && onCall(d.from)}
+            title={d.from ? `Double-click to work ${d.from}` : undefined}
+          >
             <span className={`decode-tier ${d.tier.toLowerCase()}`} title={`Decoded by ${d.tier}`}>
               {d.tier}
             </span>

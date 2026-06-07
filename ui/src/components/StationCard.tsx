@@ -49,6 +49,8 @@ export function StationCard({
       className={`station-card${selected ? ' selected' : ''}${station.worked ? ' worked' : ''}${
         chip ? ` needed need-${chip.cls}` : ''
       }`}
+      onDoubleClick={() => onCall(station.call)}
+      title={`Double-click to work ${station.call}`}
     >
       <button
         type="button"

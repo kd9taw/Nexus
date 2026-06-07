@@ -3593,17 +3593,22 @@ select.settings-input {
 }
 .decode-row.cq {
   border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .decode-row.directed {
   border-left-color: var(--state-good);
-  background: color-mix(in srgb, var(--state-good) 12%, transparent);
+  background: color-mix(in srgb, var(--state-good) 16%, transparent);
 }
 .decode-row.worked {
-  opacity: 0.6;
+  opacity: 0.55;
   border-left-color: var(--text-faint);
 }
+/* Unworked-but-not-otherwise-flagged: a faint tint so it's visibly "fresh",
+   distinct from the dimmed worked rows. (new-DXCC/new-grid rows get their own
+   bright highlight above; this is the catch-all for the rest.) */
 .decode-row.new {
-  border-left-color: var(--border);
+  border-left-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
 }
 /* New-DXCC "new one" — the highest-value chase; a bright, can't-miss highlight. */
 .decode-row.newdxcc {
@@ -4637,6 +4642,164 @@ select.settings-input {
 .cockpit-waterfall > :first-child {
   flex: 1;
   min-height: 0;
+}
+
+/* Side column: compact QSO strip on top, Band Activity (the big scroller), then
+   the Call Roster — all visible at once, single-screen Operate. */
+.cockpit-qso {
+  flex: none;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cockpit-decodes {
+  flex: 1 1 58%;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  padding: 8px 10px;
+}
+.cockpit-decodes > .operate-decodes {
+  flex: 1;
+  min-width: 0;
+}
+.cockpit-roster {
+  flex: 1 1 30%;
+  min-height: 110px;
+  display: flex;
+  overflow: hidden;
+  padding: 8px 10px;
+}
+.cockpit-roster > * {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --- compact inline QSO sequencer strip --- */
+.cq-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cq-title {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.cq-state {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.cq-state.running {
+  color: var(--tx);
+}
+.cq-dx {
+  font-weight: 800;
+  color: var(--state-good);
+}
+.cq-rpt {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.cq-spacer {
+  flex: 1;
+}
+.cq-roles {
+  display: inline-flex;
+  gap: 2px;
+}
+.cq-role {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  font-weight: 800;
+  border-radius: var(--radius-sm);
+}
+.cq-role.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.cq-now {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-soft);
+}
+.cq-now.stalled {
+  border-color: var(--state-bad, #e5484d);
+  background: color-mix(in srgb, var(--state-bad, #e5484d) 10%, var(--bg-elev-2));
+}
+.cq-now-label {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+.cq-now.stalled .cq-now-label {
+  color: var(--state-bad, #e5484d);
+}
+.cq-now-msg {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  color: var(--tx);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cq-resend {
+  flex: none;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-1);
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+}
+.cq-resend:disabled {
+  opacity: 0.4;
+}
+.cq-free {
+  display: flex;
+  gap: 6px;
+}
+.cq-free input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-1);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+.cq-free input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.cq-free button {
+  flex: none;
+  padding: 5px 12px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--radius-sm);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+.cq-free button:disabled {
+  opacity: 0.4;
 }
 
 /* --- enhanced Band Activity (history + freeze-on-hover + filter + sort) --- */
