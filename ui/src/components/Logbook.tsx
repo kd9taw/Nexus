@@ -4,6 +4,7 @@ import {
   clublogPushQso,
   deleteQso,
   editQso,
+  eqslPushQso,
   getLog,
   importAdif,
   logQso,
@@ -23,6 +24,8 @@ interface Props {
   qrzUpload?: boolean
   /** When true, push each logged QSO to ClubLog (Settings → ClubLog auto-upload). */
   clublogUpload?: boolean
+  /** When true, upload each logged QSO to eQSL.cc (Settings → eQSL auto-upload). */
+  eqslUpload?: boolean
 }
 
 interface DraftQso {
@@ -55,7 +58,14 @@ function parseReport(s: string): number | null {
   return Number.isNaN(n) ? null : n
 }
 
-export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, clublogUpload }: Props) {
+export function Logbook({
+  defaultBand,
+  defaultFreqMhz,
+  defaultMode,
+  qrzUpload,
+  clublogUpload,
+  eqslUpload,
+}: Props) {
   const [log, setLog] = useState<LoggedQso[]>([])
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
@@ -281,6 +291,24 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
                     ? 'ClubLog busy — try again later'
                     : `ClubLog: ${c.message ?? 'rejected'}`
           const ok = c.result === 'ok' || c.result === 'modified' || c.result === 'duplicate'
+          pushToast(msg, ok ? 'success' : 'error')
+        }
+      }
+      // Auto-upload to eQSL.cc (independent; also best-effort).
+      if (eqslUpload) {
+        const e = await withErrorToast(() => eqslPushQso(record), 'eQSL upload failed')
+        if (e) {
+          const msg =
+            e.outcome === 'accepted'
+              ? `Uploaded ${record.call} to eQSL`
+              : e.outcome === 'duplicate'
+                ? `${record.call} already on eQSL`
+                : e.outcome === 'authfail'
+                  ? 'eQSL login invalid — check Settings'
+                  : e.outcome === 'retry'
+                    ? 'eQSL unavailable — try again later'
+                    : `eQSL upload rejected${e.detail ? `: ${e.detail}` : ''}`
+          const ok = e.outcome === 'accepted' || e.outcome === 'duplicate'
           pushToast(msg, ok ? 'success' : 'error')
         }
       }

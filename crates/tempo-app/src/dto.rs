@@ -577,6 +577,7 @@ impl From<tempo_core::diagnostics::Action> for ActionDto {
         match a {
             A::UploadToLotw => d.kind = "uploadToLotw".into(),
             A::UploadToQrz => d.kind = "uploadToQrz".into(),
+            A::UploadToEqsl => d.kind = "uploadToEqsl".into(),
             A::UploadToClublog => d.kind = "uploadToClublog".into(),
             A::ReUpload { source, detail } => {
                 d.kind = "reUpload".into();

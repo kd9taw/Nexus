@@ -224,6 +224,71 @@ pub fn format_rcvd_since(unix_secs: i64) -> String {
     format!("{y:04}{mo:02}{d:02}{h:02}{mi:02}")
 }
 
+// ----- eQSL ADIF UPLOAD (ImportADIF.cfm) -----------------------------------
+
+/// The eQSL ADIF-upload endpoint (POST). Hard-coded https constant so the
+/// credential-bearing body can only ever go to eQSL over TLS.
+pub const EQSL_IMPORT_URL: &str = "https://www.eqsl.cc/qslcard/ImportADIF.cfm";
+
+/// Build the `application/x-www-form-urlencoded` POST body to upload ONE QSO via
+/// `ADIFData`. Per the eQSL spec the credentials travel as ADIF header tags
+/// (`EQSL_USER`/`EQSL_PSWD`) inside the payload; the whole thing is percent-encoded
+/// into the `ADIFData` field. `record_adif` is a single `<…>…<eor>` record (e.g.
+/// from [`crate::logbook::adif_record`]). The body carries the password — never log
+/// it. ADIF length prefixes are BYTE lengths (ASCII calls/passwords).
+pub fn build_upload_body(user: &str, pswd: &str, record_adif: &str) -> String {
+    let payload = format!(
+        "Nexus eQSL upload\n<EQSL_USER:{}>{}\n<EQSL_PSWD:{}>{}\n<EOH>\n{}\n",
+        user.len(),
+        user,
+        pswd.len(),
+        pswd,
+        record_adif.trim_end(),
+    );
+    format!("ADIFData={}", pct(&payload))
+}
+
+/// Classify an `ImportADIF.cfm` response by its documented markers. `None` for a
+/// transient "system is down" (leave the QSO unstamped for a clean retry, matching
+/// the LoTW/ClubLog convention). Order matters: auth + transient are checked before
+/// the duplicate/added markers.
+pub fn classify_upload(html: &str) -> Option<crate::logbook::UploadOutcome> {
+    use crate::logbook::UploadOutcome as U;
+    let s = html.to_ascii_lowercase();
+    // Auth failures (fatal): bad/missing credentials.
+    if s.contains("no match on eqsl_user")
+        || s.contains("missing eqsl_user")
+        || s.contains("missing eqsl_pswd")
+    {
+        return Some(U::AuthFail);
+    }
+    // System down → transient; don't stamp so the next attempt retries cleanly.
+    if s.contains("system is down") || (s.contains("error:") && s.contains("down")) {
+        return None;
+    }
+    // Duplicate (benign — already on file at eQSL).
+    if s.contains("duplicate") {
+        return Some(U::Duplicate);
+    }
+    // "Result: x out of y records added" — accepted iff x > 0.
+    if let Some(added) = parse_added_count(&s) {
+        return Some(if added > 0 { U::Accepted } else { U::Rejected });
+    }
+    // Any other "Error:" or unrecognized body → a definitive bounce.
+    Some(U::Rejected)
+}
+
+/// Pull the leading integer out of a lowercased `result: <x> out of …` line.
+fn parse_added_count(lower: &str) -> Option<u32> {
+    let after = &lower[lower.find("result:")? + "result:".len()..];
+    let digits: String = after
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +430,45 @@ mod tests {
         assert!(!is_complete_eqsl_body(truncated));
         // No header at all → not complete.
         assert!(!is_complete_eqsl_body("<html>error</html>"));
+    }
+
+    #[test]
+    fn upload_body_carries_creds_in_header_and_encodes() {
+        let body = build_upload_body("KD9TAW", "p@ss&1", "<CALL:5>W1AW/4 <BAND:3>20m <EOR>");
+        assert!(body.starts_with("ADIFData="));
+        // Credentials are inside the encoded ADIF header (length-prefixed), never raw.
+        assert!(body.contains("EQSL_USER%3A6%3EKD9TAW"));
+        assert!(!body.contains("p@ss&1"), "password must be percent-encoded");
+        assert!(body.contains("p%40ss%261"));
+        // The record + EOH survive (encoded).
+        assert!(body.contains("%3CEOH%3E"));
+        assert!(body.to_uppercase().contains("W1AW")); // call present (unreserved)
+    }
+
+    #[test]
+    fn classify_upload_covers_documented_markers() {
+        use crate::logbook::UploadOutcome as U;
+        assert_eq!(
+            classify_upload("Result: 1 out of 1 records added"),
+            Some(U::Accepted)
+        );
+        assert_eq!(
+            classify_upload("Result: 0 out of 1 records added"),
+            Some(U::Rejected)
+        );
+        assert_eq!(
+            classify_upload("Warning: Y=2026 M=06 D=07 Bad record: Duplicate"),
+            Some(U::Duplicate)
+        );
+        assert_eq!(
+            classify_upload("Error: No match on eQSL_User/eQSL_Pswd"),
+            Some(U::AuthFail)
+        );
+        assert_eq!(classify_upload("Error: Missing eQSL_Pswd"), Some(U::AuthFail));
+        // System down → transient, no stamp.
+        assert_eq!(classify_upload("Error: The system is down until 1200Z"), None);
+        // Unrecognized → a definitive bounce.
+        assert_eq!(classify_upload("Error: something odd"), Some(U::Rejected));
     }
 
     #[test]

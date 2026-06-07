@@ -340,6 +340,14 @@ export async function clublogPushQso(record: LoggedQso): Promise<ClubLogPushResu
   return { result: 'ok', message: null }
 }
 
+/** Upload one logged QSO to eQSL.cc (ImportADIF). Outside Tauri returns a canned
+ *  accepted result. */
+export async function eqslPushQso(record: LoggedQso): Promise<UploadReport> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<UploadReport>('eqsl_push_qso', { record })
+  return { dispatched: 1, outcome: 'accepted', detail: null }
+}
+
 /** Need-aware spotting: the stations heard now, ranked by award value. */
 export async function getNeedAlerts(): Promise<NeedAlert[]> {
   const invoke = tauriInvoke()

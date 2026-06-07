@@ -599,6 +599,7 @@ export default function App() {
             defaultMode={snap.link.tier}
             qrzUpload={settings?.qrzLogbookUpload ?? false}
             clublogUpload={settings?.clublogUpload ?? false}
+            eqslUpload={settings?.eqslUpload ?? false}
           />
         </main>
       )

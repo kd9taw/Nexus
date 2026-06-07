@@ -1663,6 +1663,56 @@ fn clublog_push_qso(
     Ok(push.into())
 }
 
+// ----- eQSL ADIF QSO upload --------------------------------------------------
+
+/// Upload one logged QSO to eQSL.cc (ImportADIF.cfm, per-QSO `ADIFData`). Reads the
+/// eQSL username from Settings + the password from the keychain, posts the record,
+/// classifies the response, and stamps `upload.eqsl`. Returns the outcome string for
+/// the UI ("accepted"|"duplicate"|"rejected"|"authfail"|"retry"). No lock held over
+/// the network. eQSL is non-award (like QRZ) — it never credits ARRL DXCC/WAS.
+#[tauri::command]
+fn eqsl_push_qso(
+    record: LoggedQso,
+    state: State<'_, SharedEngine>,
+) -> Result<UploadReportDto, String> {
+    let user = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        eng.settings().eqsl_username.trim().to_string()
+    };
+    if user.is_empty() {
+        return Err("Set your eQSL username in Settings first.".to_string());
+    }
+    let password = eqsl_keychain()?
+        .get_password()
+        .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
+    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let adif = tempo_core::logbook::adif_record(&rec);
+
+    // Build + POST without the lock; the body carries the password — never logged.
+    let resp = {
+        let body = tempo_core::eqsl::build_upload_body(&user, &password, &adif);
+        propagation::live::qrz::post_form(tempo_core::eqsl::EQSL_IMPORT_URL, body)?
+    }; // `body` (holds the password) dropped here
+
+    match tempo_core::eqsl::classify_upload(&resp) {
+        // Transient (system down) → leave unstamped for a clean retry.
+        None => Ok(UploadReportDto {
+            dispatched: 1,
+            outcome: "retry".into(),
+            detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
+        }),
+        Some(outcome) => {
+            let mut eng = state.lock().map_err(|e| e.to_string())?;
+            eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
+            Ok(UploadReportDto {
+                dispatched: 1,
+                outcome: outcome.code().to_string(),
+                detail: None,
+            })
+        }
+    }
+}
+
 // ----- coordinated QSY ("move together") — a separate, opt-in feature ------
 //
 // All no-ops while disabled. Enabling/disabling + the channel set/cadence are
@@ -1864,6 +1914,7 @@ pub fn run() {
             set_clublog_password,
             clear_clublog_password,
             clublog_push_qso,
+            eqsl_push_qso,
             get_need_alerts,
             get_propagation,
             get_feed_health,

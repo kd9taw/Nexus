@@ -361,6 +361,7 @@ function defaultSettings(): Settings {
     clublogCallsign: '',
     clublogApiKey: '',
     clublogUpload: false,
+    eqslUpload: false,
     openingRegional: true,
     macros: {
       chat: ['73', 'QSL', 'Name?', 'QTH?', 'CQ'],

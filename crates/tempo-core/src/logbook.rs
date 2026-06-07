@@ -310,6 +310,18 @@ impl Logbook {
         }
     }
 
+    /// Stamp an eQSL ADIF-upload outcome onto the newest matching QSO. Returns
+    /// whether a record was stamped. Pure — call `save` to persist.
+    pub fn stamp_eqsl_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
+        match self.newest_match_index(pushed) {
+            Some(i) => {
+                self.records[i].upload.eqsl = Some(status);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// UTC date (`YYYY-MM-DD`) of the oldest QSO whose LoTW upload is awaiting the
     /// echo (`Pending`) — the lower bound for an own-QSO (`qso_qsl=no`) pull so a
     /// sync never scans the whole log. `None` when nothing is in flight (the caller

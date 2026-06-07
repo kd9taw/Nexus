@@ -713,6 +713,9 @@ export interface Settings {
   clublogApiKey: string
   /** Auto-upload each logged QSO to ClubLog (realtime push). */
   clublogUpload: boolean
+  /** Auto-upload each logged QSO to eQSL.cc (ImportADIF). eQSL username is
+   *  `eqslUsername`; the password is in the keychain. */
+  eqslUpload: boolean
   /** Watch near-region spots (not just your own paths) so opening detection can
    *  flag "a band is open around you" before you've worked anyone. */
   openingRegional: boolean

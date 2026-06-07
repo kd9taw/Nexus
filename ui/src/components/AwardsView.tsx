@@ -104,6 +104,7 @@ function RowAction({
   if (a.kind === 'reUpload') return <span className="conf-act">Re-push to {a.source}</span>
   if (a.kind === 'uploadToQrz') return <span className="conf-act">Push to QRZ</span>
   if (a.kind === 'uploadToClublog') return <span className="conf-act">Push to ClubLog</span>
+  if (a.kind === 'uploadToEqsl') return <span className="conf-act">Push to eQSL</span>
   if (a.kind === 'reauthenticate')
     return (
       <span className="conf-act">

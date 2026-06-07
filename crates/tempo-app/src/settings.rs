@@ -166,6 +166,9 @@ pub struct Settings {
     pub clublog_api_key: String,
     /// Auto-upload each logged QSO to ClubLog (realtime push). Off by default.
     pub clublog_upload: bool,
+    /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
+    /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
+    pub eqsl_upload: bool,
 
     /// Watch near-region spots (not just your own paths) so opening detection can
     /// flag "a band is open around you" before you've worked anyone. On by default;
@@ -250,6 +253,7 @@ impl Default for Settings {
             clublog_callsign: String::new(),
             clublog_api_key: String::new(),
             clublog_upload: false,
+            eqsl_upload: false,
             opening_regional: true,
             macros: Macros::default(),
         }

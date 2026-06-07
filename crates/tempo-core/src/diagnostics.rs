@@ -82,6 +82,7 @@ pub enum Action {
     UploadToLotw,
     UploadToQrz,
     UploadToClublog,
+    UploadToEqsl,
     ReUpload {
         source: String,
         detail: Option<String>,
@@ -163,6 +164,7 @@ fn action_source(a: &Action) -> &str {
         Action::UploadToLotw => "LoTW",
         Action::UploadToQrz => "QRZ",
         Action::UploadToClublog => "ClubLog",
+        Action::UploadToEqsl => "eQSL",
         Action::ReUpload { source, .. }
         | Action::Reauthenticate { source }
         | Action::NudgePartner { source, .. } => source,
@@ -175,7 +177,7 @@ fn action_source(a: &Action) -> &str {
 fn is_lotw_action(a: &Action) -> bool {
     match a {
         Action::UploadToLotw => true,
-        Action::UploadToQrz | Action::UploadToClublog => false,
+        Action::UploadToQrz | Action::UploadToClublog | Action::UploadToEqsl => false,
         Action::ReUpload { source, .. }
         | Action::Reauthenticate { source }
         | Action::NudgePartner { source, .. } => source.eq_ignore_ascii_case("LoTW"),
@@ -404,6 +406,7 @@ pub fn diagnose(
     // so a non-user never sees "never pushed to QRZ" noise.
     let track_qrz = records.iter().any(|r| r.upload.qrz.is_some());
     let track_clublog = records.iter().any(|r| r.upload.clublog.is_some());
+    let track_eqsl = records.iter().any(|r| r.upload.eqsl.is_some());
     let mut waiting_on_partner = 0usize;
     for (i, r) in records.iter().enumerate() {
         if r.award_confirmed {
@@ -513,6 +516,12 @@ pub fn diagnose(
                 "ClubLog",
                 Action::UploadToClublog,
                 track_clublog,
+            ),
+            (
+                r.upload.eqsl.as_ref(),
+                "eQSL",
+                Action::UploadToEqsl,
+                track_eqsl,
             ),
         ] {
             match status.map(|s| (s.outcome, s.detail.clone())) {
@@ -784,6 +793,7 @@ fn bucket_kind(reason: &Reason) -> &'static str {
         R1NeverUploaded => match reason.action {
             Action::UploadToQrz => "Logged but never uploaded to QRZ",
             Action::UploadToClublog => "Logged but never uploaded to ClubLog",
+            Action::UploadToEqsl => "Logged but never uploaded to eQSL",
             _ => "Logged but never uploaded to LoTW",
         },
         // R9 carries different fixes (re-upload vs re-auth) across targets — keep each
@@ -793,11 +803,13 @@ fn bucket_kind(reason: &Reason) -> &'static str {
             Action::Reauthenticate { source } => match source.as_str() {
                 "QRZ" => "QRZ login rejected — fix it in Settings",
                 "ClubLog" => "ClubLog login rejected — fix it in Settings",
+                "eQSL" => "eQSL login rejected — fix it in Settings",
                 _ => "LoTW rejected your certificate — fix it in TQSL",
             },
             Action::ReUpload { source, .. } => match source.as_str() {
                 "QRZ" => "QRZ upload bounced — fix & re-upload",
                 "ClubLog" => "ClubLog upload bounced — fix & re-upload",
+                "eQSL" => "eQSL upload bounced — fix & re-upload",
                 _ => "LoTW upload bounced — fix & re-upload",
             },
             _ => "LoTW upload bounced — fix & re-upload",
@@ -1208,6 +1220,14 @@ mod tests {
         });
         r
     }
+    fn with_eqsl(mut r: QsoRecord, outcome: UploadOutcome) -> QsoRecord {
+        r.upload.eqsl = Some(UploadStatus {
+            outcome,
+            when_unix: NOW,
+            detail: None,
+        });
+        r
+    }
 
     #[test]
     fn qrz_bounce_shows_r9_in_its_own_bucket() {
@@ -1220,6 +1240,19 @@ mod tests {
             .buckets
             .iter()
             .any(|b| b.kind == "QRZ upload bounced — fix & re-upload"));
+    }
+
+    #[test]
+    fn eqsl_bounce_shows_r9_in_its_own_bucket() {
+        let r = with_eqsl(rec("W1AW", "20m", "FT8", 20_000), UploadOutcome::Rejected);
+        let rep = diag(&[r], &[None], vec![]);
+        let top = &rep.diagnoses[0].reasons[0];
+        assert_eq!(top.code, ReasonCode::R9UploadBounced);
+        assert!(matches!(&top.action, Action::ReUpload { source, .. } if source == "eQSL"));
+        assert!(rep
+            .buckets
+            .iter()
+            .any(|b| b.kind == "eQSL upload bounced — fix & re-upload"));
     }
 
     #[test]

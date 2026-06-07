@@ -1318,6 +1318,24 @@ export function SettingsPanel({
                 </span>
               </div>
 
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Auto-upload QSOs to eQSL</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.eqslUpload}
+                    className={`toggle${form.eqslUpload ? ' on' : ''}`}
+                    onClick={() => updateBool('eqslUpload', !form.eqslUpload)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Upload each logged QSO to eQSL.cc as you log it (needs the eQSL username + password above).
+                </span>
+              </div>
+
               <label className="settings-field">
                 <span className="settings-label">QRZ username</span>
                 <input

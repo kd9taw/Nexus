@@ -598,6 +598,31 @@ impl Engine {
         changed
     }
 
+    /// Record an eQSL ADIF-upload outcome on the just-pushed QSO (`upload.eqsl`).
+    /// Persists on change. Returns whether a record was stamped.
+    pub fn stamp_eqsl_upload(
+        &mut self,
+        pushed: &QsoRecord,
+        outcome: tempo_core::logbook::UploadOutcome,
+        when_unix: i64,
+        detail: Option<String>,
+    ) -> bool {
+        let status = tempo_core::logbook::UploadStatus {
+            outcome,
+            when_unix,
+            detail,
+        };
+        let changed = self.logbook.stamp_eqsl_upload(pushed, status);
+        if changed {
+            if let Some(path) = &self.log_path {
+                if let Err(e) = self.logbook.save(path) {
+                    eprintln!("tempo: stamp_eqsl_upload save failed: {e}");
+                }
+            }
+        }
+        changed
+    }
+
     /// Merge an eQSL confirmation report into the log. Same generic reconcile path
     /// as [`Engine::merge_lotw_report`]; the award-grade distinction lives in the
     /// ADIF (eQSL carries `EQSL_QSL_RCVD`, not `QSL_RCVD`/`LOTW_QSL_RCVD`), so an
