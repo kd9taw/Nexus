@@ -143,6 +143,14 @@ export async function discardPendingLog(): Promise<AppSnapshot> {
   return mockEngine.discardPendingLog()
 }
 
+/** Switch the top-level operating area: 'dx' (FT8/FT4) or 'msg' (FT1/DX1 chat).
+ * Atomically sets the area's tier + mode. Returns the fresh snapshot. */
+export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('set_area', { area })
+  return mockEngine.setArea(area)
+}
+
 /** Operator "Resend": re-arm the current QSO message (re-transmit a stalled or
  * uncopied step). No-op outside a QSO. Returns the fresh snapshot. */
 export async function qsoResend(): Promise<AppSnapshot> {

@@ -55,6 +55,10 @@ export interface FeatureDef {
   intents: Intent[]
   /** For `section` features, the View this renders (=== id). */
   view?: View
+  /** Top-level operating area this section belongs to. `'dx'` = FT8/FT4 structured
+   * DX; `'msg'` = FT1/DX1 free-text. Omitted = shown in BOTH areas (Logbook,
+   * Settings). Drives the workspace pill-tab nav filter. */
+  workspace?: 'dx' | 'msg'
   /** Achievement id whose unlock *suggests* enabling this (adaptive reveal —
    * a follow-on; recorded here so the data model is ready). */
   revealOn?: string
@@ -79,6 +83,7 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: [],
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
     view: 'operate',
+    workspace: 'dx',
     oneLine: 'The waterfall-first cockpit — decode, tune, and work stations.',
   },
   {
@@ -125,6 +130,7 @@ export const FEATURES: FeatureDef[] = [
     // Activity feed is broadly useful — surfaced in every goal profile (spec §4.2).
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
     view: 'band',
+    workspace: 'msg',
     oneLine: 'Open broadcasts / activity feed.',
   },
   {
@@ -136,6 +142,7 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: [],
     intents: ['casual'],
     view: 'chat',
+    workspace: 'msg',
     oneLine: 'Free-form QSO text (FT1/DX1).',
   },
   {
@@ -150,6 +157,7 @@ export const FEATURES: FeatureDef[] = [
     // goal profile — disabling it would strand that primary workflow.
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
     view: 'qso',
+    workspace: 'dx',
     oneLine: '1:1 sequenced contact workflow (where “work this station” lands).',
   },
   {
@@ -162,6 +170,7 @@ export const FEATURES: FeatureDef[] = [
     // Coordinated-QSY section — niche; Everything or manual opt-in.
     intents: [],
     view: 'roam',
+    workspace: 'msg',
     oneLine: 'Coordinated QSY — move together off QRM (announced in the clear).',
   },
   {
@@ -173,6 +182,7 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: [],
     intents: ['contest'],
     view: 'fieldDay',
+    workspace: 'dx',
     oneLine: 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',
   },
   {
@@ -184,6 +194,7 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: ['logbook'],
     intents: ['contest', 'pota'],
     view: 'log',
+    workspace: 'dx',
     oneLine: 'Field Day / activity export view.',
   },
   {
@@ -195,6 +206,7 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: [],
     intents: ['dx', 'vhf'],
     view: 'propagation',
+    workspace: 'dx',
     oneLine: "What's open now, 6m openings, and DXpedition windows.",
   },
   {
@@ -206,6 +218,7 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: [],
     intents: ['dx', 'vhf', 'pota'],
     view: 'map',
+    workspace: 'dx',
     oneLine: 'Azimuthal beam map — headings, range rings, openings, DXpeditions.',
   },
   {
@@ -217,6 +230,7 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: ['logbook'],
     intents: ['dx'],
     view: 'awards',
+    workspace: 'dx',
     revealOn: 'dx-first',
     oneLine: 'DXCC / Challenge / Honor Roll / WAZ progress and the confirmation chase.',
   },
@@ -229,6 +243,7 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: ['logbook'],
     intents: ['pota'],
     view: 'pota',
+    workspace: 'dx',
     oneLine: 'Parks/Summits on the air — who’s on now (hunt) + tag your activation.',
   },
 

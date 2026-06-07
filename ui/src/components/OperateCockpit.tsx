@@ -36,11 +36,11 @@ interface Props {
 }
 
 /** Mode chips, in the order the cockpit presents them (popular modes first). */
+// The DX-area cockpit operates the structured WSJT-X modes only. FT1/DX1 live in
+// the MSG (Chat) area — no mixed tier picker.
 const MODES: { tier: Tier; label: string; slot: string; title: string }[] = [
   { tier: 'FT8', label: 'FT8', slot: '15s', title: 'Standard WSJT-X FT8 — 15 s T/R' },
   { tier: 'FT4', label: 'FT4', slot: '7.5s', title: 'Standard WSJT-X FT4 — 7.5 s T/R' },
-  { tier: 'FT1', label: 'FT1', slot: '4s', title: 'FT1 — fast 4 s coherent, IR-HARQ' },
-  { tier: 'DX1', label: 'DX1', slot: '15s', title: 'DX1 — robust non-coherent, 15 s' },
 ]
 
 /**

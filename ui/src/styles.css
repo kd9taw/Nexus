@@ -1344,6 +1344,36 @@ body.resizing {
   flex-direction: column;
   gap: 6px;
 }
+/* Workspace pill tabs (DX / MSG) — the top-level area switch. */
+.mode-nav-areas {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.area-pill {
+  flex: 1;
+  padding: 5px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.area-pill:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.area-pill.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
 .mode-btn {
   display: flex;
   flex-direction: column;

@@ -3,6 +3,7 @@ import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, Source
 import {
   broadcast as apiBroadcast,
   callStation as apiCallStation,
+  setArea as apiSetArea,
   qsoResend as apiQsoResend,
   qsoFreetext as apiQsoFreetext,
   logCurrentQso as apiLogCurrentQso,
@@ -164,6 +165,38 @@ export default function App() {
     } catch {
       /* ignore persist failure */
     }
+  }, [])
+
+  // Top-level operating AREA: 'dx' (FT8/FT4 structured) vs 'msg' (FT1/DX1 chat).
+  // The pill tabs swap the nav + lock the tier set. Default DX (the 80% case).
+  const [area, setArea] = useState<'dx' | 'msg'>(() => {
+    try {
+      const v = localStorage.getItem('nexus.workspace')
+      if (v === 'dx' || v === 'msg') return v
+    } catch {
+      /* unreadable — fall through */
+    }
+    return 'dx'
+  })
+  // Sync the engine to the persisted area once on load (atomic tier+mode).
+  const areaSyncedRef = useRef(false)
+  useEffect(() => {
+    if (areaSyncedRef.current || !snap) return
+    areaSyncedRef.current = true
+    void apiSetArea(area).then((s) => s && setSnap(s))
+  }, [snap, area])
+
+  const handleWorkspace = useCallback((w: 'dx' | 'msg') => {
+    setArea(w)
+    try {
+      localStorage.setItem('nexus.workspace', w)
+    } catch {
+      /* ignore */
+    }
+    setView(w === 'dx' ? 'operate' : 'chat')
+    void withErrorToast(() => apiSetArea(w), 'Could not switch area').then((s) => {
+      if (s) setSnap(s)
+    })
   }, [])
   // Per-(band,mode) last-alert time so a band coming alive toasts once, not every
   // poll (defence in depth — the backend tracker already flags `isNew` once).
@@ -863,6 +896,8 @@ export default function App() {
           mode={snap.mode}
           enabled={features.enabled}
           onSelect={handleView}
+          workspace={area}
+          onWorkspace={handleWorkspace}
         />
         {workspace}
       </div>

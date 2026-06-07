@@ -926,6 +926,35 @@ impl Engine {
         Ok(())
     }
 
+    /// Switch the top-level operating AREA atomically (avoids a set_tier+set_mode
+    /// command race). `"dx"` = FT8/FT4 structured operating; `"msg"` = FT1/DX1
+    /// free-text (Chat). Idempotent + non-disruptive: it only changes the tier or
+    /// mode when they're incompatible with the area, so re-entering an area never
+    /// resets a live QSO or chat.
+    pub fn set_area(&mut self, area: &str) {
+        match area {
+            "msg" => {
+                // MSG = FT1/DX1 free-text paradigm. Default FT1; keep DX1 if there.
+                if !matches!(self.app.tier(), Tier::Ft1 | Tier::Dx1) {
+                    self.set_tier(Tier::Ft1);
+                }
+                if !matches!(self.mode, Mode::Chat) {
+                    let _ = self.set_mode("chat");
+                }
+            }
+            _ => {
+                // DX = FT8/FT4 structured. Default FT8; keep FT4 if there. Only pull
+                // out of Chat — leave a running QSO alone.
+                if !matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4) {
+                    self.set_tier(Tier::Ft8);
+                }
+                if matches!(self.mode, Mode::Chat) {
+                    let _ = self.set_mode("qso-monitor");
+                }
+            }
+        }
+    }
+
     /// Initiate a directed QSO with a **specific** station (e.g. the operator
     /// double-clicked a heard station to work them, or a logger sent a WSJT-X
     /// Reply). Enters QSO mode answering `dxcall`, resets the TX watchdog, clears
@@ -2452,6 +2481,27 @@ mod tests {
         let log = e.get_log();
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].mode, "FT8", "FT8 contacts log as FT8 (award eligibility)");
+    }
+
+    #[test]
+    fn set_area_binds_tier_and_mode_per_area() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        // MSG → FT1 + Chat.
+        e.set_area("msg");
+        assert_eq!(e.tier(), Tier::Ft1);
+        assert_eq!(e.snapshot().mode, OpMode::Chat);
+        // DX → FT8 + out of Chat.
+        e.set_area("dx");
+        assert_eq!(e.tier(), Tier::Ft8);
+        assert_ne!(e.snapshot().mode, OpMode::Chat);
+        // Idempotent / non-disruptive: keep FT4 if already there on re-entering DX.
+        e.set_tier(Tier::Ft4);
+        e.set_area("dx");
+        assert_eq!(e.tier(), Tier::Ft4, "DX keeps an already-structured tier");
+        // MSG keeps DX1 if already there.
+        e.set_tier(Tier::Dx1);
+        e.set_area("msg");
+        assert_eq!(e.tier(), Tier::Dx1, "MSG keeps an already-chat-capable tier");
     }
 
     #[test]

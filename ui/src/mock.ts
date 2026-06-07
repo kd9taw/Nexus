@@ -1083,6 +1083,19 @@ class MockEngine {
     return this.snap
   }
 
+  /** Switch the operating area (mock: set the area's tier + mode). */
+  setArea(area: 'dx' | 'msg'): AppSnapshot {
+    if (area === 'msg') {
+      const tier = this.snap.link.tier === 'DX1' ? 'DX1' : 'FT1'
+      this.snap = { ...this.snap, mode: 'chat', link: { ...this.snap.link, tier } }
+    } else {
+      const tier = this.snap.link.tier === 'FT4' ? 'FT4' : 'FT8'
+      this.snap = { ...this.snap, mode: this.snap.mode === 'chat' ? 'qso' : this.snap.mode, link: { ...this.snap.link, tier } }
+    }
+    this.emit()
+    return this.snap
+  }
+
   /** Operator "Resend": re-arm the current QSO message (mock no-op beyond echo). */
   qsoResend(): AppSnapshot {
     if (this.snap.qso) {

@@ -15,7 +15,7 @@ import {
   Settings,
 } from 'lucide-react'
 import { Tooltip, TooltipProvider } from './ui/Tooltip'
-import type { FeatureId, View } from '../features/registry'
+import { featureById, type FeatureId, type View } from '../features/registry'
 
 // `View` now lives in the feature registry (features ARE the views); re-export so
 // existing `import { type View } from './ModeNav'` call-sites keep working.
@@ -29,6 +29,9 @@ interface Props {
   /** Enabled-set from the feature system — disabled sections are hidden. */
   enabled: Record<FeatureId, boolean>
   onSelect: (view: View) => void
+  /** Active top-level area: 'dx' (FT8/FT4) or 'msg' (FT1/DX1). Filters the nav. */
+  workspace: 'dx' | 'msg'
+  onWorkspace: (w: 'dx' | 'msg') => void
 }
 
 interface Item {
@@ -61,12 +64,39 @@ const MODE_LABEL: Record<OpMode, string> = {
   fieldDay: 'FIELD DAY',
 }
 
-export function ModeNav({ view, mode, enabled, onSelect }: Props) {
-  // Only show enabled sections; core ones (Operate/Logbook) are always enabled.
-  const items = ITEMS.filter((it) => enabled[it.id] !== false)
+export function ModeNav({ view, mode, enabled, onSelect, workspace, onWorkspace }: Props) {
+  // Show a section when it's enabled AND belongs to the active area (or to both,
+  // i.e. no workspace tag — e.g. Logbook). The pill tabs swap the area.
+  const items = ITEMS.filter((it) => {
+    if (enabled[it.id] === false) return false
+    const ws = featureById(it.id)?.workspace
+    return ws === undefined || ws === workspace
+  })
   return (
     <TooltipProvider>
       <nav className="mode-nav" aria-label="Operating mode">
+        <div className="mode-nav-areas" role="tablist" aria-label="Operating area">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={workspace === 'dx'}
+            className={`area-pill${workspace === 'dx' ? ' active' : ''}`}
+            onClick={() => onWorkspace('dx')}
+            title="DX — FT8 / FT4 structured operating"
+          >
+            DX
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={workspace === 'msg'}
+            className={`area-pill${workspace === 'msg' ? ' active' : ''}`}
+            onClick={() => onWorkspace('msg')}
+            title="MSG — FT1 / DX1 free-text messaging"
+          >
+            MSG
+          </button>
+        </div>
         <div className="mode-nav-top">
           {items.map((it) => {
             const Icon = it.icon

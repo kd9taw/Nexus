@@ -949,6 +949,18 @@ fn call_station(
     Ok(eng.snapshot())
 }
 
+/// Switch the top-level operating area: "dx" (FT8/FT4 structured) or "msg"
+/// (FT1/DX1 free-text chat). Atomically sets the area-appropriate tier + mode.
+#[tauri::command]
+fn set_area(state: State<'_, SharedEngine>, area: String) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_area(&area);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: set_area save failed: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Operator "Resend": re-arm the current QSO message so a stalled/uncopied step
 /// transmits again on the next TX slot. No-op outside a QSO.
 #[tauri::command]
@@ -2199,6 +2211,7 @@ pub fn run() {
             set_tx_offset,
             set_hold_tx_freq,
             call_station,
+            set_area,
             qso_resend,
             qso_freetext,
             log_current_qso,
