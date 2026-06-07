@@ -461,6 +461,37 @@ impl Engine {
         self.logbook.add(rec);
     }
 
+    /// Edit an existing logbook entry (a correction — busted call, wrong band, etc).
+    /// Sync-derived state is preserved by `Logbook::update_record`. Persists by
+    /// rewriting the whole ADIF (an edit can't be an append). Returns false if
+    /// `index` is out of range.
+    pub fn update_qso(&mut self, index: usize, rec: QsoRecord) -> bool {
+        let ok = self.logbook.update_record(index, rec);
+        if ok {
+            if let Some(path) = &self.log_path {
+                if let Err(e) = self.logbook.save(path) {
+                    eprintln!("tempo: update_qso save failed: {e}");
+                }
+            }
+        }
+        ok
+    }
+
+    /// Delete a logbook entry (a mis-logged contact). Persists by rewriting the
+    /// ADIF. Returns false if `index` is out of range. Shifts later indices — the
+    /// caller must reload the log afterward.
+    pub fn delete_qso(&mut self, index: usize) -> bool {
+        let ok = self.logbook.delete(index);
+        if ok {
+            if let Some(path) = &self.log_path {
+                if let Err(e) = self.logbook.save(path) {
+                    eprintln!("tempo: delete_qso save failed: {e}");
+                }
+            }
+        }
+        ok
+    }
+
     /// Import an external ADIF logbook: merge (deduped) into the persistent log,
     /// append the newly-added records to the ADIF file, and return
     /// `(added, skipped, total)`. The next propagation snapshot derives real

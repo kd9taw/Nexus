@@ -132,11 +132,26 @@ export async function logQso(record: LoggedQso): Promise<AppSnapshot> {
   return mockEngine.logQso(record)
 }
 
-/** Read the general ADIF logbook (most-recent first). */
+/** Read the general ADIF logbook. */
 export async function getLog(): Promise<LoggedQso[]> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<LoggedQso[]>('get_log')
   return mockEngine.getLog()
+}
+
+/** Edit logbook entry `index` (a correction). `index` is the position in the
+ *  `getLog()` array. Confirmation/credit/upload state is preserved server-side. */
+export async function editQso(index: number, record: LoggedQso): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('edit_qso', { index, record })
+  return mockEngine.editQso(index, record)
+}
+
+/** Delete logbook entry `index` (the position in the `getLog()` array). */
+export async function deleteQso(index: number): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('delete_qso', { index })
+  return mockEngine.deleteQso(index)
 }
 
 /** DXCC-first award progress computed from the logbook (cty.dat-resolved). */

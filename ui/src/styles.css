@@ -3409,7 +3409,66 @@ select.settings-input {
   margin-top: 12px;
 }
 .logbook-row {
-  grid-template-columns: 1fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.7fr;
+  grid-template-columns: 1fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.7fr 0.8fr;
+}
+.logbook-row.editing {
+  outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: -1px;
+}
+.log-rowactions {
+  display: inline-flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.log-rowbtn {
+  cursor: pointer;
+  border: 1px solid var(--border-soft);
+  background: var(--bg);
+  color: var(--text-dim);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  font-size: 0.8rem;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.logbook-row:hover .log-rowbtn,
+.logbook-row:focus-within .log-rowbtn {
+  opacity: 1;
+}
+.log-rowbtn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.log-rowbtn.danger:hover {
+  color: var(--state-bad, #e5484d);
+  border-color: var(--state-bad, #e5484d);
+}
+.log-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-2) var(--space-3);
+}
+.log-search {
+  flex: 1 1 auto;
+  max-width: 360px;
+}
+.log-search-clear {
+  cursor: pointer;
+  border: 1px solid var(--border-soft);
+  background: var(--bg);
+  color: var(--text-dim);
+  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  line-height: 1;
+}
+.logbook-editing-note {
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+  margin-right: auto;
 }
 .log-qsl {
   font-size: var(--fs-micro);
@@ -3428,13 +3487,17 @@ select.settings-input {
 
 @media (max-width: 900px) {
   .logbook-row {
-    grid-template-columns: 1fr 0.7fr 0.8fr 1.4fr;
+    grid-template-columns: 1fr 0.7fr 0.8fr 1.2fr 0.7fr;
   }
   .logbook-row .log-cell:nth-child(5),
   .logbook-row .log-cell:nth-child(6),
   .logbook-row .log-cell:nth-child(7),
   .logbook-row .log-cell:nth-child(8) {
     display: none;
+  }
+  /* keep edit/delete reachable on touch (no hover) */
+  .logbook-row .log-rowbtn {
+    opacity: 1;
   }
 }
 

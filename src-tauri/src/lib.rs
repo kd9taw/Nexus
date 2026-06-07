@@ -866,6 +866,33 @@ fn get_log(state: State<'_, SharedEngine>) -> Result<Vec<LoggedQso>, String> {
     Ok(eng.get_log().into_iter().map(LoggedQso::from).collect())
 }
 
+/// Edit logbook entry `index` (oldest-first, as returned by `get_log`) — a
+/// correction. Confirmation/credit/upload state is preserved by the engine.
+/// Returns the refreshed snapshot.
+#[tauri::command]
+fn edit_qso(
+    state: State<'_, SharedEngine>,
+    index: usize,
+    record: LoggedQso,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    if !eng.update_qso(index, record.into()) {
+        return Err("That contact no longer exists — reload the log and try again.".into());
+    }
+    Ok(eng.snapshot())
+}
+
+/// Delete logbook entry `index` (oldest-first, as returned by `get_log`). Returns
+/// the refreshed snapshot. Indices shift after a delete — the UI reloads the log.
+#[tauri::command]
+fn delete_qso(state: State<'_, SharedEngine>, index: usize) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    if !eng.delete_qso(index) {
+        return Err("That contact no longer exists — reload the log and try again.".into());
+    }
+    Ok(eng.snapshot())
+}
+
 /// DXCC-first award progress from the logbook (cty.dat-resolved): entities +
 /// entity×band "Challenge" slots worked/confirmed, the per-band breakdown, and
 /// the worked-but-unconfirmed "new one" chase. Pure/offline — online LoTW/eQSL/
@@ -1815,6 +1842,8 @@ pub fn run() {
             call_station,
             log_qso,
             get_log,
+            edit_qso,
+            delete_qso,
             get_awards,
             get_confirmation_diagnostics,
             import_adif,

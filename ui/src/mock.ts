@@ -980,6 +980,29 @@ class MockEngine {
     return Promise.resolve(this.logbook.map((q) => ({ ...q })))
   }
 
+  /** Edit entry `index`, preserving sync-derived state (mirrors the engine). */
+  editQso(index: number, record: LoggedQso): AppSnapshot {
+    if (index >= 0 && index < this.logbook.length) {
+      const old = this.logbook[index]
+      this.logbook = this.logbook.map((q, i) =>
+        i === index
+          ? { ...record, confirmed: old.confirmed, awardConfirmed: old.awardConfirmed, upload: old.upload }
+          : q,
+      )
+    }
+    this.emit()
+    return this.snap
+  }
+
+  /** Delete entry `index`. */
+  deleteQso(index: number): AppSnapshot {
+    if (index >= 0 && index < this.logbook.length) {
+      this.logbook = this.logbook.filter((_, i) => i !== index)
+    }
+    this.emit()
+    return this.snap
+  }
+
   // A mid-level DXer's award progress (past the 100-entity DXCC milestone,
   // chasing the rest + Challenge band slots), so the demo dashboard is alive.
   getAwards(): Promise<AwardSummary> {

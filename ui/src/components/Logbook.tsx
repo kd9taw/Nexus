@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LoggedQso } from '../types'
 import {
   clublogPushQso,
+  deleteQso,
+  editQso,
   getLog,
   importAdif,
   logQso,
@@ -68,6 +70,9 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
   const [err, setErr] = useState<string | null>(null)
   const [qrzBusy, setQrzBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [search, setSearch] = useState('')
+  // Index (in the loaded `log` array) being edited; null = the form logs a NEW QSO.
+  const [editIndex, setEditIndex] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const syncRef = useRef<HTMLInputElement>(null)
 
@@ -161,6 +166,49 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
     setDraft((prev) => ({ ...prev, [k]: v }))
   }
 
+  // Open the form pre-filled to correct an existing entry (busted call, wrong band…).
+  const startEdit = (q: LoggedQso, i: number) => {
+    setErr(null)
+    setEditIndex(i)
+    setDraft({
+      call: q.call,
+      grid: q.grid ?? '',
+      band: q.band,
+      freq: q.freqMhz.toFixed(4),
+      mode: q.mode,
+      rstSent: q.rstSent != null ? String(q.rstSent) : '',
+      rstRcvd: q.rstRcvd != null ? String(q.rstRcvd) : '',
+    })
+    setShowForm(true)
+  }
+
+  const cancelForm = () => {
+    setShowForm(false)
+    setEditIndex(null)
+    setErr(null)
+  }
+
+  const onDelete = async (q: LoggedQso, i: number) => {
+    if (!window.confirm(`Delete the QSO with ${q.call} on ${q.band}? This can't be undone.`)) return
+    const snap = await withErrorToast(() => deleteQso(i), 'Could not delete the QSO')
+    if (snap) {
+      pushToast(`Deleted ${q.call}`, 'success')
+      if (editIndex === i) cancelForm()
+      load()
+    }
+  }
+
+  const matchesSearch = (q: LoggedQso): boolean => {
+    const t = search.trim().toLowerCase()
+    if (!t) return true
+    return (
+      q.call.toLowerCase().includes(t) ||
+      q.band.toLowerCase().includes(t) ||
+      q.mode.toLowerCase().includes(t) ||
+      fmtUtc(q.whenUnix).toLowerCase().includes(t)
+    )
+  }
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     const call = draft.call.trim().toUpperCase()
@@ -169,6 +217,7 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
       return
     }
     const freq = Number(draft.freq)
+    const existing = editIndex !== null ? log[editIndex] : undefined
     const record: LoggedQso = {
       call,
       grid: draft.grid.trim() || null,
@@ -177,9 +226,23 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
       mode: draft.mode.trim(),
       rstSent: parseReport(draft.rstSent),
       rstRcvd: parseReport(draft.rstRcvd),
-      whenUnix: Math.floor(Date.now() / 1000),
-      confirmed: false,
-      awardConfirmed: false,
+      // Editing preserves the original time + confirmation/upload state (the engine
+      // re-applies the latter regardless); a new entry is stamped now.
+      whenUnix: existing ? existing.whenUnix : Math.floor(Date.now() / 1000),
+      confirmed: existing ? existing.confirmed : false,
+      awardConfirmed: existing ? existing.awardConfirmed : false,
+      upload: existing?.upload,
+    }
+    if (editIndex !== null) {
+      const idx = editIndex
+      const snap = await withErrorToast(() => editQso(idx, record), 'Could not save the edit')
+      if (snap) {
+        pushToast(`Updated ${record.call}`, 'success')
+        cancelForm()
+        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '' }))
+        load()
+      }
+      return
     }
     const snap = await withErrorToast(() => logQso(record), 'Could not log QSO')
     if (snap) {
@@ -267,10 +330,30 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
           >
             {uploading ? 'Uploading…' : `Upload to LoTW${unsentLotw ? ` (${unsentLotw})` : ''}`}
           </button>
-          <button type="button" className="export-btn" onClick={() => setShowForm((v) => !v)}>
+          <button
+            type="button"
+            className="export-btn"
+            onClick={() => (showForm ? cancelForm() : setShowForm(true))}
+          >
             {showForm ? 'Close' : 'Log QSO'}
           </button>
         </div>
+      </div>
+
+      <div className="log-searchbar">
+        <input
+          className="settings-input log-search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search call / band / mode / date…"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {search.trim() && (
+          <button type="button" className="log-search-clear" onClick={() => setSearch('')} title="Clear">
+            ✕
+          </button>
+        )}
       </div>
 
       {showForm && (
@@ -325,8 +408,11 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
           </div>
           <div className="logbook-form-actions">
             {err && <span className="settings-error" role="alert">{err}</span>}
+            {editIndex !== null && (
+              <span className="logbook-editing-note">Editing — confirmation/upload state is kept.</span>
+            )}
             <button type="submit" className="settings-save" disabled={!draft.call.trim()}>
-              Log
+              {editIndex !== null ? 'Save' : 'Log'}
             </button>
           </div>
         </form>
@@ -342,35 +428,65 @@ export function Logbook({ defaultBand, defaultFreqMhz, defaultMode, qrzUpload, c
           <span className="log-cell" role="columnheader">Rcvd</span>
           <span className="log-cell" role="columnheader">Time (UTC)</span>
           <span className="log-cell" role="columnheader">QSL</span>
+          <span className="log-cell" role="columnheader" aria-label="Edit / delete"></span>
         </div>
         <div className="log-scroll">
           {log.length === 0 && <p className="empty">No logged contacts yet.</p>}
-          {log.map((q, i) => (
-            <div className="log-row logbook-row" role="row" key={`${q.call}-${q.whenUnix}-${i}`}>
-              <span className="log-cell mono">{q.call}</span>
-              <span className="log-cell">{q.band}</span>
-              <span className="log-cell mono">{q.freqMhz.toFixed(4)}</span>
-              <span className="log-cell">{q.mode}</span>
-              <span className="log-cell mono">{fmtReport(q.rstSent)}</span>
-              <span className="log-cell mono">{fmtReport(q.rstRcvd)}</span>
-              <span className="log-cell mono">{fmtUtc(q.whenUnix)}</span>
-              <span className="log-cell">
-                {q.awardConfirmed ? (
-                  <span className="log-qsl ok" title="LoTW / paper — award-eligible">
-                    ✓
-                  </span>
-                ) : q.confirmed ? (
-                  <span className="log-qsl eqsl" title="eQSL only — not accepted for DXCC/WAZ/WAS">
-                    eQSL
-                  </span>
-                ) : (
-                  <span className="log-qsl none" title="Not confirmed">
-                    —
-                  </span>
-                )}
-              </span>
-            </div>
-          ))}
+          {(() => {
+            const rows = log.map((q, i) => ({ q, i })).filter(({ q }) => matchesSearch(q))
+            if (log.length > 0 && rows.length === 0)
+              return <p className="empty">No contacts match “{search.trim()}”.</p>
+            return rows.map(({ q, i }) => (
+              <div
+                className={`log-row logbook-row${editIndex === i ? ' editing' : ''}`}
+                role="row"
+                key={`${q.call}-${q.whenUnix}-${i}`}
+              >
+                <span className="log-cell mono">{q.call}</span>
+                <span className="log-cell">{q.band}</span>
+                <span className="log-cell mono">{q.freqMhz.toFixed(4)}</span>
+                <span className="log-cell">{q.mode}</span>
+                <span className="log-cell mono">{fmtReport(q.rstSent)}</span>
+                <span className="log-cell mono">{fmtReport(q.rstRcvd)}</span>
+                <span className="log-cell mono">{fmtUtc(q.whenUnix)}</span>
+                <span className="log-cell">
+                  {q.awardConfirmed ? (
+                    <span className="log-qsl ok" title="LoTW / paper — award-eligible">
+                      ✓
+                    </span>
+                  ) : q.confirmed ? (
+                    <span className="log-qsl eqsl" title="eQSL only — not accepted for DXCC/WAZ/WAS">
+                      eQSL
+                    </span>
+                  ) : (
+                    <span className="log-qsl none" title="Not confirmed">
+                      —
+                    </span>
+                  )}
+                </span>
+                <span className="log-cell log-rowactions">
+                  <button
+                    type="button"
+                    className="log-rowbtn"
+                    onClick={() => startEdit(q, i)}
+                    title={`Edit ${q.call}`}
+                    aria-label={`Edit ${q.call}`}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    type="button"
+                    className="log-rowbtn danger"
+                    onClick={() => onDelete(q, i)}
+                    title={`Delete ${q.call}`}
+                    aria-label={`Delete ${q.call}`}
+                  >
+                    ✕
+                  </button>
+                </span>
+              </div>
+            ))
+          })()}
         </div>
       </div>
     </section>

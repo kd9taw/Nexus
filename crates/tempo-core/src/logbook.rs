@@ -141,6 +141,38 @@ impl Logbook {
         self.records.push(rec);
     }
 
+    /// Replace the human-entered fields of the record at `index` (a correction —
+    /// e.g. a busted call or wrong band). The sync-DERIVED state (confirmed /
+    /// award_confirmed / credit / upload) is preserved from the existing record so
+    /// an edit can never fabricate a confirmation; the next reconcile re-validates
+    /// it against the corrected key. Returns false if `index` is out of range.
+    pub fn update_record(&mut self, index: usize, mut rec: QsoRecord) -> bool {
+        match self.records.get(index) {
+            Some(old) => {
+                rec.confirmed = old.confirmed;
+                rec.award_confirmed = old.award_confirmed;
+                rec.credit_granted = old.credit_granted.clone();
+                rec.credit_submitted = old.credit_submitted.clone();
+                rec.upload = old.upload.clone();
+                self.records[index] = rec;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Remove the record at `index` (a mis-logged contact). Returns false if out of
+    /// range. NOTE: this shifts the indices of all later records — callers that hold
+    /// indices must reload after a delete.
+    pub fn delete(&mut self, index: usize) -> bool {
+        if index < self.records.len() {
+            self.records.remove(index);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Merge external ADIF `text` into the log, skipping records already present
     /// (deduped by call+band+mode+UTC-day). Returns the newly-added records (so
     /// the caller can persist exactly those) and the count skipped as dupes.
@@ -630,6 +662,52 @@ mod tests {
             credit_submitted: Vec::new(),
             upload: Default::default(),
         }
+    }
+
+    #[test]
+    fn update_record_fixes_human_fields_but_preserves_derived_state() {
+        let mut lb = Logbook::new();
+        let mut original = rec("W1AX", "20m", 1_700_000_000); // busted call: should be W1AW
+        original.confirmed = true;
+        original.award_confirmed = true;
+        original.credit_granted = vec!["DXCC".into()];
+        original.upload.lotw = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 1,
+            detail: None,
+        });
+        lb.add(original);
+
+        // Correct the call (and clear the derived fields in the edit payload — they
+        // must NOT be honored).
+        let mut fixed = rec("W1AW", "40m", 1_700_000_000);
+        fixed.confirmed = false;
+        fixed.award_confirmed = false;
+        assert!(lb.update_record(0, fixed));
+
+        let r = &lb.records()[0];
+        assert_eq!(r.call, "W1AW", "human field corrected");
+        assert_eq!(r.band, "40m");
+        assert!(r.confirmed && r.award_confirmed, "derived confirmation preserved");
+        assert_eq!(r.credit_granted, vec!["DXCC".to_string()], "credit preserved");
+        assert_eq!(
+            r.upload.lotw.as_ref().map(|s| s.outcome),
+            Some(UploadOutcome::Accepted),
+            "upload state preserved"
+        );
+        assert!(!lb.update_record(9, rec("X", "20m", 1)), "out-of-range is false");
+    }
+
+    #[test]
+    fn delete_removes_and_shifts() {
+        let mut lb = Logbook::new();
+        lb.add(rec("A", "20m", 1));
+        lb.add(rec("B", "20m", 2));
+        lb.add(rec("C", "20m", 3));
+        assert!(lb.delete(1)); // remove B
+        let calls: Vec<_> = lb.records().iter().map(|r| r.call.as_str()).collect();
+        assert_eq!(calls, vec!["A", "C"], "B removed, C shifted down");
+        assert!(!lb.delete(5), "out-of-range is false");
     }
 
     #[test]
