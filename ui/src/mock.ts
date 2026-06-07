@@ -1270,6 +1270,7 @@ class MockEngine {
       newlyConfirmedAny,
       newlyCredited,
       newlySubmitted: 0,
+      promoted: 0, // own-echo promotion runs only on the online sync, not a paste
       orphans,
     })
   }

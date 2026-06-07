@@ -98,9 +98,11 @@ pub fn build_report_url(q: &LotwQuery) -> String {
 /// now genuinely "waiting on the other operator" (R2) rather than never-sent (R1).
 ///
 /// `qso_qslsince` is deliberately omitted: that cursor tracks confirmation *match*
-/// dates and does not apply to a `qso_qsl=no` query, so this is a full own-pull
-/// (bounded by your log size). The returned URL carries the password — never log it.
-pub fn build_own_report_url(q: &LotwQuery) -> String {
+/// dates and does not apply to a `qso_qsl=no` query. Instead `start_date` (a
+/// `YYYY-MM-DD` lower bound, e.g. the oldest in-flight upload's date) keeps the pull
+/// from scanning the whole log every sync. The returned URL carries the password —
+/// never log it.
+pub fn build_own_report_url(q: &LotwQuery, start_date: Option<&str>) -> String {
     let mut url = format!(
         "{LOTW_REPORT_URL}?login={}&password={}&qso_query=1&qso_qsl=no",
         pct(&q.username),
@@ -111,6 +113,13 @@ pub fn build_own_report_url(q: &LotwQuery) -> String {
         if !call.is_empty() {
             url.push_str("&qso_owncall=");
             url.push_str(&pct(call));
+        }
+    }
+    if let Some(start) = start_date {
+        let start = start.trim();
+        if !start.is_empty() {
+            url.push_str("&qso_startdate=");
+            url.push_str(&pct(start));
         }
     }
     url
@@ -217,17 +226,29 @@ mod tests {
 
     #[test]
     fn own_report_url_requests_unmatched_own_qsos() {
-        let url = build_own_report_url(&LotwQuery {
-            owncall: Some("KD9TAW".into()),
-            ..q()
-        });
+        let url = build_own_report_url(
+            &LotwQuery {
+                owncall: Some("KD9TAW".into()),
+                ..q()
+            },
+            Some("2026-03-01"),
+        );
         assert!(url.contains("qso_query=1"));
         assert!(url.contains("qso_qsl=no"), "own-echo asks for unmatched records");
         assert!(!url.contains("qso_qsl=yes"));
         assert!(url.contains("qso_owncall=KD9TAW"));
-        // No match-date cursor on an own-QSO pull, and the password is still encoded.
+        // Bounded by the start date; no match-date cursor; password still encoded.
+        assert!(url.contains("qso_startdate=2026-03-01"));
         assert!(!url.contains("qso_qslsince="));
         assert!(url.contains("password=p%40ss%20w%26rd%3D1"));
+    }
+
+    #[test]
+    fn own_report_url_omits_blank_start_date() {
+        let url = build_own_report_url(&q(), None);
+        assert!(!url.contains("qso_startdate="));
+        let url2 = build_own_report_url(&q(), Some("  "));
+        assert!(!url2.contains("qso_startdate="));
     }
 
     #[test]

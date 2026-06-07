@@ -1164,13 +1164,15 @@ fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult
         .get_password()
         .map_err(|_| "No LoTW password stored — set it in Settings.".to_string())?;
     let used_username = username.clone(); // for the post-fetch cursor-binding guard
+    let owncall = Some(owncall).filter(|c| !c.is_empty());
 
-    // Build the URL, fetch, and drop the secret-bearing values immediately after.
+    // --- Pull 1: confirmations (qso_qsl=yes, incremental via the cursor). ---
+    // The password stays in scope for the second (own-echo) pull below; never log it.
     let body = {
         let query = tempo_core::lotw::LotwQuery {
-            username,
-            password,
-            owncall: Some(owncall).filter(|c| !c.is_empty()),
+            username: username.clone(),
+            password: password.clone(),
+            owncall: owncall.clone(),
             qsl_since: Some(since).filter(|c| !c.is_empty()),
         };
         let url = tempo_core::lotw::build_report_url(&query);
@@ -1184,24 +1186,54 @@ fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult
     }
 
     // Merge via the shared reconcile path, then advance the cursor only on a real
-    // high-water (re-lock: the fetch ran without the engine lock held).
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
-    let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
-    if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
-        // Only advance the cursor if the username is still the one this download
-        // used. If `set_settings` changed it during the (lock-free) fetch, it
-        // already reset the cursor to a full pull for the new identity — this
-        // high-water belongs to the old query, so binding it would risk skipping
-        // records on the next incremental pull. Persist via a narrow setter so the
-        // sync never disturbs live operation (no mode reset / TX-queue clear).
-        if eng.settings().lotw_username.trim() == used_username.trim() {
-            let updated = eng.set_lotw_cursor(high_water);
-            if let Err(e) = updated.save(&settings_path()) {
-                eprintln!("tempo: failed to persist LoTW cursor: {e}");
+    // high-water (re-lock: the fetch ran without the engine lock held). Capture the
+    // own-echo lower bound (oldest in-flight upload) in the same lock, then release.
+    let (mut result, own_start): (LotwSyncResult, Option<String>) = {
+        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
+        if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
+            // Only advance the cursor if the username is still the one this download
+            // used. If `set_settings` changed it during the (lock-free) fetch, it
+            // already reset the cursor to a full pull for the new identity — this
+            // high-water belongs to the old query, so binding it would risk skipping
+            // records on the next incremental pull. Persist via a narrow setter so the
+            // sync never disturbs live operation (no mode reset / TX-queue clear).
+            if eng.settings().lotw_username.trim() == used_username.trim() {
+                let updated = eng.set_lotw_cursor(high_water);
+                if let Err(e) = updated.save(&settings_path()) {
+                    eprintln!("tempo: failed to persist LoTW cursor: {e}");
+                }
             }
         }
+        let own_start = eng.oldest_pending_lotw_date();
+        (summary, own_start)
+    }; // engine lock released before the second network fetch
+
+    // --- Pull 2: own-echo (qso_qsl=no) — promote in-flight uploads to Accepted. ---
+    // Best-effort: only run when something is actually in flight, and never fail the
+    // whole sync (the confirmations above already merged) on an own-echo hiccup.
+    if let Some(start) = own_start {
+        let own_body = {
+            let query = tempo_core::lotw::LotwQuery {
+                username,
+                password,
+                owncall,
+                qsl_since: None,
+            };
+            let url = tempo_core::lotw::build_own_report_url(&query, Some(&start));
+            propagation::live::lotw::fetch_report(&url)
+        };
+        match own_body {
+            Ok(b) if tempo_core::lotw::is_lotw_adif(&b) => {
+                let mut eng = state.lock().map_err(|e| e.to_string())?;
+                result.promoted = eng.merge_lotw_own_echo(&b, now_unix());
+            }
+            Ok(_) => eprintln!("tempo: LoTW own-echo pull returned a non-ADIF body; skipped"),
+            Err(e) => eprintln!("tempo: LoTW own-echo pull failed (confirmations still synced): {e}"),
+        }
     }
-    Ok(summary)
+
+    Ok(result)
 }
 
 /// Locate the `tqsl` binary: a non-empty Settings override that exists, else the

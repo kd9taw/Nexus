@@ -509,6 +509,13 @@ impl Engine {
         promoted
     }
 
+    /// UTC date (`YYYY-MM-DD`) of the oldest QSO with an in-flight (Pending) LoTW
+    /// upload — the lower bound for the own-QSO pull. `None` → nothing in flight, so
+    /// the sync skips the own-echo step.
+    pub fn oldest_pending_lotw_date(&self) -> Option<String> {
+        self.logbook.oldest_pending_lotw_date()
+    }
+
     /// Merge an eQSL confirmation report into the log. Same generic reconcile path
     /// as [`Engine::merge_lotw_report`]; the award-grade distinction lives in the
     /// ADIF (eQSL carries `EQSL_QSL_RCVD`, not `QSL_RCVD`/`LOTW_QSL_RCVD`), so an

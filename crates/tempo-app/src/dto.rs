@@ -497,6 +497,9 @@ pub struct LotwSyncResult {
     pub newly_confirmed_any: usize,
     pub newly_credited: usize,
     pub newly_submitted: usize,
+    /// QSOs whose own LoTW upload was promoted Pending→Accepted by the own-echo
+    /// pull this sync (your side is now confirmed on file). 0 for a paste-reconcile.
+    pub promoted: usize,
     pub orphans: Vec<LotwOrphan>,
 }
 
@@ -508,6 +511,8 @@ impl From<tempo_core::reconcile::ReconcileSummary> for LotwSyncResult {
             newly_confirmed_any: s.newly_confirmed_any,
             newly_credited: s.newly_credited,
             newly_submitted: s.newly_submitted,
+            promoted: 0, // set by the online sync after the own-echo pull
+
             orphans: s
                 .orphans
                 .into_iter()

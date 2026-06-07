@@ -184,8 +184,9 @@ export async function clearLotwPassword(): Promise<void> {
   }
 }
 
-/** Download new LoTW confirmations and reconcile them into the log (uses the
- *  stored username + keychain password). Outside Tauri returns an empty result. */
+/** Sync your LoTW state into the log: pull new confirmations AND mark which of your
+ *  uploads LoTW now holds on file (own-echo → Pending becomes Accepted). Uses the
+ *  stored username + keychain password. Outside Tauri returns an empty result. */
 export async function downloadLotwReport(): Promise<LotwSyncResult> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<LotwSyncResult>('download_lotw_report')
@@ -195,6 +196,7 @@ export async function downloadLotwReport(): Promise<LotwSyncResult> {
     newlyConfirmedAny: 0,
     newlyCredited: 0,
     newlySubmitted: 0,
+    promoted: 0,
     orphans: [],
   }
 }
@@ -235,6 +237,7 @@ export async function downloadEqslReport(): Promise<LotwSyncResult> {
     newlyConfirmedAny: 0,
     newlyCredited: 0,
     newlySubmitted: 0,
+    promoted: 0,
     orphans: [],
   }
 }

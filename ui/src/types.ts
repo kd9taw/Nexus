@@ -331,6 +331,9 @@ export interface LotwSyncResult {
   newlyConfirmedAny: number
   newlyCredited: number
   newlySubmitted: number
+  /** Uploads the own-echo pull promoted Pending→Accepted (your side now on file).
+   *  0 for a paste-reconcile (only the online sync runs the own-echo pull). */
+  promoted: number
   orphans: LotwOrphan[]
 }
 

@@ -235,6 +235,27 @@ impl Logbook {
         crate::reconcile::promote_own_echo(&mut self.records, &own, when_unix)
     }
 
+    /// UTC date (`YYYY-MM-DD`) of the oldest QSO whose LoTW upload is awaiting the
+    /// echo (`Pending`) — the lower bound for an own-QSO (`qso_qsl=no`) pull so a
+    /// sync never scans the whole log. `None` when nothing is in flight (the caller
+    /// then skips the own-pull entirely).
+    pub fn oldest_pending_lotw_date(&self) -> Option<String> {
+        self.records
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.upload.lotw.as_ref().map(|s| s.outcome),
+                    Some(UploadOutcome::Pending)
+                )
+            })
+            .map(|r| r.when_unix)
+            .min()
+            .map(|unix| {
+                let (y, m, d, ..) = datetime_utc(unix);
+                format!("{y:04}-{m:02}-{d:02}")
+            })
+    }
+
     /// The whole logbook as ADIF text (header + records).
     pub fn adif(&self) -> String {
         let mut s = adif_header();

@@ -275,8 +275,9 @@ export function SettingsPanel({
     setLotwSyncing(false)
     if (r) {
       const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
+      const promoted = r.promoted ? ` · ${r.promoted} upload${r.promoted === 1 ? '' : 's'} now on file` : ''
       pushToast(
-        `LoTW: ${r.newlyConfirmed} newly confirmed, ${r.newlyCredited} credited${orphans}`,
+        `LoTW: ${r.newlyConfirmed} newly confirmed, ${r.newlyCredited} credited${promoted}${orphans}`,
         r.orphans.length ? 'info' : 'success',
       )
       onSaved?.()
@@ -1197,7 +1198,7 @@ export function SettingsPanel({
               </label>
 
               <div className="settings-field">
-                <span className="settings-label">LoTW confirmations</span>
+                <span className="settings-label">LoTW sync</span>
                 <div className="settings-input-row">
                   <button
                     type="button"
@@ -1209,8 +1210,9 @@ export function SettingsPanel({
                   </button>
                 </div>
                 <span className="settings-hint">
-                  Download new confirmations into your log. The first sync pulls your whole history (can be
-                  slow); later syncs are incremental.
+                  Pulls new confirmations into your log and marks which of your uploads LoTW now holds on file
+                  (so they read “waiting on the other op,” not “never uploaded”). The first sync pulls your whole
+                  history (can be slow); later syncs are incremental.
                 </span>
               </div>
 
