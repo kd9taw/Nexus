@@ -34,6 +34,7 @@ import type {
   Station,
   Tier,
   AwardSummary,
+  DiagnosticsReport,
 } from './types'
 
 /** A deterministic Propagation nowcast for the demo (mirrors the Rust
@@ -1065,6 +1066,61 @@ class MockEngine {
         { entity: 'Mongolia', bands: ['80m', '10m'] },
         { entity: 'Bhutan', bands: ['15m', '10m'] },
       ],
+    })
+  }
+
+  // A small sample so the Confirmations panel is alive in mock/browser mode.
+  getConfirmationDiagnostics(): Promise<DiagnosticsReport> {
+    return Promise.resolve({
+      diagnoses: [
+        {
+          index: 12,
+          award: 'DXCC/WAS',
+          status: 'confirmedWrongSource',
+          reasons: [
+            {
+              code: 'r3',
+              confidence: 'confident',
+              explanation:
+                'JA1XYZ is confirmed on a non-award source (eQSL/QRZ) only — that does NOT count for ARRL DXCC/WAS.',
+              action: { kind: 'uploadToLotw' },
+            },
+          ],
+        },
+        {
+          index: 47,
+          award: 'DXCC/WAS',
+          status: 'needsAction',
+          reasons: [
+            {
+              code: 'r4a',
+              confidence: 'confident',
+              explanation: 'DL5ABC confirmed on a different band than your log — fix the band so it matches.',
+              action: { kind: 'fixField', field: 'BAND', found: '20m', expected: '40m' },
+            },
+          ],
+        },
+        {
+          index: 88,
+          award: 'DXCC/WAS',
+          status: 'confirmed',
+          reasons: [
+            {
+              code: 'r4d',
+              confidence: 'confident',
+              explanation: 'W7ABC is confirmed for DXCC but has no STATE — WAS can’t credit it. Set the state.',
+              action: { kind: 'fixField', field: 'STATE', found: '', expected: 'the worked station’s US state' },
+            },
+          ],
+        },
+      ],
+      buckets: [
+        { kind: 'Confirmed elsewhere — not ARRL-eligible (get LoTW/paper)', count: 1, qsoIndices: [12] },
+        { kind: 'Field mismatch blocking a confirmation', count: 1, qsoIndices: [47] },
+        { kind: 'Missing STATE for WAS', count: 1, qsoIndices: [88] },
+      ],
+      waitingOnPartner: 0,
+      pendingLag: 9,
     })
   }
 

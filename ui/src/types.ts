@@ -440,6 +440,46 @@ export interface HonorRollProgress {
   numberOneNeeded: number
 }
 
+/** A structured fix-action for a confirmation diagnostic (only the fields
+ * relevant to `kind` are present). */
+export interface DiagAction {
+  kind: string
+  source?: string
+  detail?: string
+  field?: string
+  found?: string
+  expected?: string
+  logged?: string
+  suggested?: string
+  call?: string
+  otherIndex?: number
+  untilUnix?: number
+}
+export interface DiagReason {
+  code: string
+  confidence: string
+  explanation: string
+  action: DiagAction
+}
+export interface QsoDiagnosis {
+  index: number
+  award: string
+  status: string
+  reasons: DiagReason[]
+}
+export interface DiagActionBucket {
+  kind: string
+  count: number
+  qsoIndices: number[]
+}
+/** "Why isn't this QSO confirmed" diagnostics report (Phase 1a). */
+export interface DiagnosticsReport {
+  diagnoses: QsoDiagnosis[]
+  buckets: DiagActionBucket[]
+  waitingOnPartner: number
+  pendingLag: number
+}
+
 export interface AwardSummary {
   qsos: number
   confirmedQsos: number

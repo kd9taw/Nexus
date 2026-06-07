@@ -439,6 +439,207 @@ impl From<tempo_core::reconcile::ReconcileSummary> for LotwSyncResult {
     }
 }
 
+// --- Confirmation diagnostics ("why isn't this QSO confirmed?") ---------------
+
+/// A structured, operator-facing action, flattened for the UI (only the fields
+/// relevant to `kind` are populated).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionDto {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub found: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logged: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until_unix: Option<i64>,
+}
+
+impl From<tempo_core::diagnostics::Action> for ActionDto {
+    fn from(a: tempo_core::diagnostics::Action) -> Self {
+        use tempo_core::diagnostics::Action as A;
+        let mut d = ActionDto {
+            kind: String::new(),
+            source: None,
+            detail: None,
+            field: None,
+            found: None,
+            expected: None,
+            logged: None,
+            suggested: None,
+            call: None,
+            other_index: None,
+            until_unix: None,
+        };
+        match a {
+            A::UploadToLotw => d.kind = "uploadToLotw".into(),
+            A::UploadToQrz => d.kind = "uploadToQrz".into(),
+            A::UploadToClublog => d.kind = "uploadToClublog".into(),
+            A::ReUpload { source, detail } => {
+                d.kind = "reUpload".into();
+                d.source = Some(source);
+                d.detail = detail;
+            }
+            A::Reauthenticate { source } => {
+                d.kind = "reauthenticate".into();
+                d.source = Some(source);
+            }
+            A::NudgePartner { call, source } => {
+                d.kind = "nudgePartner".into();
+                d.call = Some(call);
+                d.source = Some(source);
+            }
+            A::FixField {
+                field,
+                found,
+                expected,
+            } => {
+                d.kind = "fixField".into();
+                d.field = Some(field);
+                d.found = Some(found);
+                d.expected = Some(expected);
+            }
+            A::CorrectBustedCall { logged, suggested } => {
+                d.kind = "correctBustedCall".into();
+                d.logged = Some(logged);
+                d.suggested = Some(suggested);
+            }
+            A::MergeDuplicate { other_index } => {
+                d.kind = "mergeDuplicate".into();
+                d.other_index = Some(other_index);
+            }
+            A::Wait { until_unix } => {
+                d.kind = "wait".into();
+                d.until_unix = Some(until_unix);
+            }
+            A::None => d.kind = "none".into(),
+        }
+        d
+    }
+}
+
+/// One ranked reason a QSO isn't confirmed (+ the suggested fix).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasonDto {
+    pub code: String,
+    pub confidence: String,
+    pub explanation: String,
+    pub action: ActionDto,
+}
+
+fn reason_code_str(c: tempo_core::diagnostics::ReasonCode) -> &'static str {
+    use tempo_core::diagnostics::ReasonCode as R;
+    match c {
+        R::R1NeverUploaded => "r1",
+        R::R2PartnerHasnt => "r2",
+        R::R3WrongSource => "r3",
+        R::R4aBandMismatch => "r4a",
+        R::R4bModeMismatch => "r4b",
+        R::R4cDateMismatch => "r4c",
+        R::R4dMissingState => "r4d",
+        R::R5Lag => "r5",
+        R::R6BustedCall => "r6",
+        R::R7Duplicate => "r7",
+        R::R9UploadBounced => "r9",
+    }
+}
+
+impl From<tempo_core::diagnostics::Reason> for ReasonDto {
+    fn from(r: tempo_core::diagnostics::Reason) -> Self {
+        use tempo_core::diagnostics::Confidence as C;
+        ReasonDto {
+            code: reason_code_str(r.code).into(),
+            confidence: match r.confidence {
+                C::Confident => "confident".into(),
+                C::Likely => "likely".into(),
+            },
+            explanation: r.explanation,
+            action: r.action.into(),
+        }
+    }
+}
+
+/// A per-QSO diagnosis row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QsoDiagnosisDto {
+    pub index: usize,
+    pub award: String,
+    pub status: String,
+    pub reasons: Vec<ReasonDto>,
+}
+
+impl From<tempo_core::diagnostics::QsoDiagnosis> for QsoDiagnosisDto {
+    fn from(d: tempo_core::diagnostics::QsoDiagnosis) -> Self {
+        use tempo_core::diagnostics::QsoAwardStatus as S;
+        QsoDiagnosisDto {
+            index: d.index,
+            award: d.award,
+            status: match d.status {
+                S::Credited => "credited".into(),
+                S::Confirmed => "confirmed".into(),
+                S::ConfirmedWrongSource => "confirmedWrongSource".into(),
+                S::NeedsAction => "needsAction".into(),
+                S::PendingLag => "pendingLag".into(),
+            },
+            reasons: d.reasons.into_iter().map(ReasonDto::from).collect(),
+        }
+    }
+}
+
+/// A rollup bucket ("12 QSOs need a LoTW confirmation").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionBucketDto {
+    pub kind: String,
+    pub count: usize,
+    pub qso_indices: Vec<usize>,
+}
+
+/// The whole confirmation-diagnostics report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsReportDto {
+    pub diagnoses: Vec<QsoDiagnosisDto>,
+    pub buckets: Vec<ActionBucketDto>,
+    pub waiting_on_partner: usize,
+    pub pending_lag: usize,
+}
+
+impl From<tempo_core::diagnostics::DiagnosticsReport> for DiagnosticsReportDto {
+    fn from(r: tempo_core::diagnostics::DiagnosticsReport) -> Self {
+        DiagnosticsReportDto {
+            diagnoses: r.diagnoses.into_iter().map(QsoDiagnosisDto::from).collect(),
+            buckets: r
+                .buckets
+                .into_iter()
+                .map(|b| ActionBucketDto {
+                    kind: b.kind,
+                    count: b.count,
+                    qso_indices: b.qso_indices,
+                })
+                .collect(),
+            waiting_on_partner: r.waiting_on_partner,
+            pending_lag: r.pending_lag,
+        }
+    }
+}
+
 /// A QRZ.com callsign-lookup result (the serde DTO over the pure
 /// [`tempo_core::qrz::QrzLookup`]). `grid`/`state` are subscriber-only and are
 /// routinely `None` for free QRZ accounts.

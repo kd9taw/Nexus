@@ -4644,6 +4644,84 @@ select.settings-input {
   margin: 0 0 var(--space-3);
   font-size: var(--fs-label);
 }
+
+/* Confirmations diagnostics panel */
+.conf-buckets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: var(--space-3);
+}
+.conf-bucket {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  font-size: 0.82rem;
+}
+.conf-bucket-count {
+  font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.conf-bucket-kind {
+  color: var(--text-dim);
+}
+.conf-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.conf-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+.conf-code {
+  flex: 0 0 auto;
+  font-weight: 800;
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.conf-expl {
+  flex: 1 1 auto;
+  color: var(--text);
+}
+.conf-likely {
+  flex: 0 0 auto;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.conf-act {
+  flex: 0 0 auto;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.conf-muted {
+  margin: var(--space-3) 0 0;
+  font-size: 0.82rem;
+  color: var(--text-faint);
+}
 .aw-bandrow {
   display: grid;
   grid-template-columns: 44px 1fr 64px;

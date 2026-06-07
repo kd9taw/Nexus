@@ -13,6 +13,7 @@
 
 pub mod channel;
 pub mod clublog;
+pub mod diagnostics;
 pub mod eqsl;
 pub mod fieldday;
 pub mod inbox;

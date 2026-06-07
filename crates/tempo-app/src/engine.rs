@@ -136,6 +136,12 @@ pub struct Engine {
     /// function. Fully inert unless `settings.qsy_enabled` is true, so the primary
     /// Chat/QSO/Field-Day paths are unaffected when the operator hasn't enabled it.
     qsy: Roamer,
+    /// The latest reconcile summary from the last LoTW / eQSL sync (in-memory,
+    /// this session) — its `orphans` drive the confirmation diagnostics. Per source
+    /// so a later eQSL sync doesn't clobber the LoTW orphans. Resets on restart
+    /// until the next sync.
+    last_lotw_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
+    last_eqsl_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
 }
 
 /// Samples of recent audio kept for the live waterfall spectrum (~0.34 s at
@@ -221,6 +227,8 @@ impl Engine {
             cat_reprobe: false,
             audio_error: None,
             qsy,
+            last_lotw_reconcile: None,
+            last_eqsl_reconcile: None,
         }
     }
 
@@ -475,6 +483,7 @@ impl Engine {
     /// return the reconcile summary (newly confirmed/credited + unmatched orphans).
     pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
         let summary = self.logbook.merge_report(text);
+        self.last_lotw_reconcile = Some(summary.clone());
         if let Some(path) = &self.log_path {
             if let Err(e) = self.logbook.save(path) {
                 eprintln!("tempo: merge_lotw_report save failed: {e}");
@@ -489,6 +498,7 @@ impl Engine {
     /// eQSL confirmation lands `confirmed` but NOT `award_confirmed` by construction.
     pub fn merge_eqsl_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
         let summary = self.logbook.merge_report(text);
+        self.last_eqsl_reconcile = Some(summary.clone());
         if let Some(path) = &self.log_path {
             if let Err(e) = self.logbook.save(path) {
                 eprintln!("tempo: merge_eqsl_report save failed: {e}");
@@ -500,6 +510,33 @@ impl Engine {
     /// A clone of all logbook records (oldest-first / newest-last).
     pub fn get_log(&self) -> Vec<QsoRecord> {
         self.logbook.records().to_vec()
+    }
+
+    /// Run the silent match-failure diagnostics over the log (Phase 1a). `resolve`
+    /// maps a callsign to its DXCC entity name (for R4d's US-family gate) — the
+    /// command layer passes `propagation::dxcc::resolve`, keeping the entity table
+    /// out of tempo-app. Reads the last LoTW + eQSL reconcile orphans (this session).
+    pub fn confirmation_diagnostics(
+        &self,
+        now: i64,
+        resolve: impl Fn(&str) -> Option<String>,
+    ) -> tempo_core::diagnostics::DiagnosticsReport {
+        let records = self.logbook.records();
+        let entities: Vec<Option<String>> = records.iter().map(|r| resolve(&r.call)).collect();
+        let mut recents: Vec<&tempo_core::reconcile::ReconcileSummary> = Vec::new();
+        if let Some(s) = &self.last_lotw_reconcile {
+            recents.push(s);
+        }
+        if let Some(s) = &self.last_eqsl_reconcile {
+            recents.push(s);
+        }
+        tempo_core::diagnostics::diagnose(
+            records,
+            &entities,
+            &recents,
+            now,
+            &tempo_core::diagnostics::DiagCfg::default(),
+        )
     }
 
     /// Set the operating mode. `spec`: `chat` | `qso-run` | `qso-monitor` |

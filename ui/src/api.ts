@@ -12,6 +12,7 @@ import type {
   BandChannel,
   CatTestResult,
   ClubLogPushResult,
+  DiagnosticsReport,
   FeedHealth,
   ImportStats,
   LoggedQso,
@@ -142,6 +143,12 @@ export async function getAwards(): Promise<AwardSummary> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<AwardSummary>('get_awards')
   return mockEngine.getAwards()
+}
+
+export async function getConfirmationDiagnostics(): Promise<DiagnosticsReport> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<DiagnosticsReport>('get_confirmation_diagnostics')
+  return mockEngine.getConfirmationDiagnostics()
 }
 
 /** Import an external ADIF logbook (deduped merge → real "needs" + B4). */

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag } from 'lucide-react'
-import type { AwardSummary, EntityNeed } from '../types'
-import { getAwards } from '../api'
+import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction } from '../types'
+import { getAwards, getConfirmationDiagnostics } from '../api'
 import { StateBlock } from './StateBlock'
 
 /** Confirmed entities for the basic DXCC award. */
@@ -44,14 +44,28 @@ function NeedList({ items, empty }: { items: EntityNeed[]; empty: string }) {
  */
 /** `showGamification` (the `gamification` feature) gates the celebratory badge
  * grid; the award math + tables always render. */
+/** A small non-interactive guidance chip for a diagnostic's top action. Phase 1a
+ * is diagnosis + guidance; the one-click upload/resubmit affordances land in 1b. */
+function actionHint(a?: DiagAction) {
+  if (!a) return null
+  if (a.kind === 'uploadToLotw') return <span className="conf-act">Upload to LoTW</span>
+  if (a.kind === 'mergeDuplicate') return <span className="conf-act">Review dup #{(a.otherIndex ?? 0) + 1}</span>
+  if (a.kind === 'reauthenticate') return <span className="conf-act">Re-auth {a.source}</span>
+  return null
+}
+
 export function AwardsView({ showGamification = true }: { showGamification?: boolean }) {
   const [aw, setAw] = useState<AwardSummary | null>(null)
+  const [diag, setDiag] = useState<DiagnosticsReport | null>(null)
   const [err, setErr] = useState(false)
   useEffect(() => {
     let live = true
     getAwards()
       .then((a) => live && setAw(a))
       .catch(() => live && setErr(true))
+    getConfirmationDiagnostics()
+      .then((d) => live && setDiag(d))
+      .catch(() => {}) // diagnostics are a best-effort add-on; never block the dashboard
     return () => {
       live = false
     }
@@ -312,6 +326,45 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
           </div>
         </div>
       </div>
+
+      {diag && (diag.diagnoses.length > 0 || diag.pendingLag > 0) && (
+        <div className="aw-panel conf-panel">
+          <h3>
+            <CheckCircle2 size={14} aria-hidden="true" /> Confirmations — why isn't this credited?
+          </h3>
+          {diag.buckets.length > 0 && (
+            <div className="conf-buckets">
+              {diag.buckets.map((b, i) => (
+                <div className="conf-bucket" key={i}>
+                  <span className="conf-bucket-count">{b.count}</span>
+                  <span className="conf-bucket-kind">{b.kind}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {diag.diagnoses.length > 0 && (
+            <ul className="conf-list">
+              {diag.diagnoses.slice(0, 50).map((d) => {
+                const r = d.reasons[0]
+                return (
+                  <li className="conf-row" key={d.index}>
+                    <span className={`conf-code conf-${r?.code ?? 'x'}`}>{(r?.code ?? '').toUpperCase()}</span>
+                    <span className="conf-expl">{r?.explanation}</span>
+                    {r?.confidence === 'likely' && <span className="conf-likely">likely</span>}
+                    {actionHint(r?.action)}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+          {diag.pendingLag > 0 && (
+            <p className="conf-muted">
+              {diag.pendingLag} recently-worked QSO{diag.pendingLag === 1 ? '' : 's'} still awaiting a
+              confirmation — not a problem, just give it time.
+            </p>
+          )}
+        </div>
+      )}
 
       {showGamification && (
       <div className="aw-panel aw-achievements">

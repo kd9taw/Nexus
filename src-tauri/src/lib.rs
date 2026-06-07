@@ -31,7 +31,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::State;
 use tempo_app::dto::{
-    AppSnapshot, ImportStats, LoggedQso, LotwSyncResult, SourceKind, Spectrum, Tier,
+    AppSnapshot, DiagnosticsReportDto, ImportStats, LoggedQso, LotwSyncResult, SourceKind, Spectrum,
+    Tier,
 };
 use tempo_app::engine::Engine;
 use tempo_app::settings::Settings;
@@ -788,6 +789,21 @@ fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummar
     Ok(awards.summary())
 }
 
+/// Silent match-failure diagnostics: per-QSO "why isn't this confirmed, and what's
+/// the one fix?" + a leverage-ranked rollup, from the log + the last LoTW/eQSL
+/// reconcile orphans (this session). Pure/offline; cty.dat resolves each call's
+/// DXCC entity for the WAS (R4d) US-family gate.
+#[tauri::command]
+fn get_confirmation_diagnostics(
+    state: State<'_, SharedEngine>,
+) -> Result<DiagnosticsReportDto, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    let report = eng.confirmation_diagnostics(now_unix(), |call| {
+        propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+    });
+    Ok(report.into())
+}
+
 /// Need-aware spotting: rank the stations the operator is hearing right now (the
 /// roster, on the current band) by award value — new DXCC entity / CQ zone / band
 /// slot / mode — so "new ones" surface from the live decodes. Offline (native
@@ -1533,6 +1549,7 @@ pub fn run() {
             log_qso,
             get_log,
             get_awards,
+            get_confirmation_diagnostics,
             import_adif,
             sync_lotw_report,
             set_lotw_password,
