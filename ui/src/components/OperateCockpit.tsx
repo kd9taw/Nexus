@@ -25,6 +25,8 @@ interface Props {
   onResend: () => void
   /** Send in-QSO free text (Tx5). */
   onFreetext: (text: string) => void
+  /** Log the active QSO now (inline button). */
+  onLog: () => void
   /** The Call Roster (a wired StationList), placed in the cockpit side column. */
   roster: ReactNode
   /** Side-column layout: 'classic' (WSJT-X — Band Activity dominant) or 'roster'
@@ -60,6 +62,7 @@ export function OperateCockpit({
   onSetMode,
   onResend,
   onFreetext,
+  onLog,
   roster,
   layoutMode,
   onLayoutMode,
@@ -209,6 +212,7 @@ export function OperateCockpit({
             onSetMode={onSetMode}
             onResend={onResend}
             onFreetext={onFreetext}
+            onLog={onLog}
           />
           <div className="cockpit-rxfreq panel">
             <OperateDecodes

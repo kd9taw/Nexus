@@ -972,6 +972,24 @@ impl Engine {
         }
     }
 
+    /// Operator "Log QSO" (the inline cockpit button / WSJT-X Log QSO): log the
+    /// active QSO's DX contact now, from the sequencer's captured call/grid/report,
+    /// even if the sequence hasn't reached the final 73. Marks the QSO logged so it
+    /// isn't also auto-logged on completion. Returns false outside a QSO / no DX.
+    pub fn log_current_qso(&mut self) -> bool {
+        let (dxcall, dxgrid, rx_report) = match &self.mode {
+            Mode::Qso { station, .. } => match &station.dxcall {
+                Some(c) => (c.clone(), station.dxgrid.clone(), station.rx_report),
+                None => return false,
+            },
+            _ => return false,
+        };
+        let rec = self.qso_record(dxcall, dxgrid, rx_report);
+        self.qso_logged = true;
+        self.log_qso(rec);
+        true
+    }
+
     /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
     /// `text`, addressed to the current DX station if one is known (`<DX> <ME>
     /// <text>`) else sent verbatim. No-op outside an active QSO or for empty text.

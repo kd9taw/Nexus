@@ -159,6 +159,13 @@ export async function qsoFreetext(text: string): Promise<AppSnapshot> {
   return mockEngine.qsoFreetext(text)
 }
 
+/** Operator "Log QSO": log the active QSO's contact now. Returns fresh snapshot. */
+export async function logCurrentQso(): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('log_current_qso', {})
+  return mockEngine.logCurrentQso()
+}
+
 /** Append a contact to the ADIF logbook. Returns the fresh snapshot. */
 export async function logQso(record: LoggedQso): Promise<AppSnapshot> {
   const invoke = tauriInvoke()

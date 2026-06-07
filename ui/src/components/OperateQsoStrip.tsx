@@ -9,6 +9,8 @@ interface Props {
   onResend: () => void
   /** Send in-QSO free text (WSJT-X Tx5). */
   onFreetext: (text: string) => void
+  /** Log the active QSO now (inline "Log QSO" button). */
+  onLog: () => void
 }
 
 function reportLabel(rx: number | null | undefined): string | null {
@@ -22,7 +24,7 @@ function reportLabel(rx: number | null | undefined): string | null {
  * Resend), the Call-CQ / Monitor role toggle, and an in-QSO free-text field —
  * so you work a station and watch it sequence WITHOUT leaving the waterfall.
  */
-export function OperateQsoStrip({ qso, onSetMode, onResend, onFreetext }: Props) {
+export function OperateQsoStrip({ qso, onSetMode, onResend, onFreetext, onLog }: Props) {
   const running = qso?.running ?? false
   const dxcall = qso?.dxcall ?? null
   const state = qso?.state ?? 'Idle'
@@ -99,6 +101,15 @@ export function OperateQsoStrip({ qso, onSetMode, onResend, onFreetext }: Props)
         />
         <button type="submit" disabled={!free.trim()} title="Send on the next over">
           Send
+        </button>
+        <button
+          type="button"
+          className="cq-log"
+          onClick={onLog}
+          disabled={!dxcall}
+          title="Log this QSO now"
+        >
+          Log
         </button>
       </form>
     </section>

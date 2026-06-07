@@ -5,6 +5,7 @@ import {
   callStation as apiCallStation,
   qsoResend as apiQsoResend,
   qsoFreetext as apiQsoFreetext,
+  logCurrentQso as apiLogCurrentQso,
   confirmPendingLog as apiConfirmPendingLog,
   discardPendingLog as apiDiscardPendingLog,
   getBandPlan,
@@ -472,6 +473,15 @@ export default function App() {
     })
   }, [])
 
+  const handleLogCurrent = useCallback(() => {
+    void withErrorToast(() => apiLogCurrentQso(), 'Could not log QSO').then((s) => {
+      if (s) {
+        setSnap(s)
+        pushToast('Logged QSO', 'success', 2500)
+      }
+    })
+  }, [])
+
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Band / Log / Settings are pure UI
   // screens that leave the operating mode unchanged.
@@ -755,6 +765,7 @@ export default function App() {
           onSetMode={handleSetMode}
           onResend={handleQsoResend}
           onFreetext={handleQsoFreetext}
+          onLog={handleLogCurrent}
           roster={stationsPanel}
           layoutMode={operateLayout}
           onLayoutMode={handleOperateLayout}

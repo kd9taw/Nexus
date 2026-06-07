@@ -4923,6 +4923,19 @@ select.settings-input {
 .cq-free button:disabled {
   opacity: 0.4;
 }
+.cq-log {
+  flex: none;
+  padding: 5px 12px;
+  border: 1px solid var(--state-good, #29c281) !important;
+  background: color-mix(in srgb, var(--state-good, #29c281) 18%, transparent) !important;
+  color: var(--state-good, #29c281) !important;
+  border-radius: var(--radius-sm);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+.cq-log:disabled {
+  opacity: 0.4;
+}
 
 /* --- enhanced Band Activity (history + freeze-on-hover + filter + sort) --- */
 .operate-decodes {

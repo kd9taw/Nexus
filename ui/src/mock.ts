@@ -1037,6 +1037,34 @@ class MockEngine {
     return this.snap
   }
 
+  /** Operator "Log QSO": log the active QSO's contact now. */
+  logCurrentQso(): AppSnapshot {
+    const dx = this.snap.qso?.dxcall
+    if (dx) {
+      const rec: LoggedQso = {
+        call: dx,
+        grid: this.dxGrid,
+        country: null,
+        state: null,
+        band: this.settings.band,
+        freqMhz: this.settings.dialMhz,
+        mode: this.snap.link.tier,
+        rstSent: -7,
+        rstRcvd: this.snap.qso?.rxReport ?? null,
+        whenUnix: Math.floor(Date.now() / 1000),
+        confirmed: false,
+        awardConfirmed: false,
+        creditGranted: [],
+        creditSubmitted: [],
+      }
+      this.logbook = [rec, ...this.logbook]
+      const stations = this.snap.stations.map((s) => (s.call === dx ? { ...s, worked: true } : s))
+      this.snap = { ...this.snap, stations }
+      this.emit()
+    }
+    return this.snap
+  }
+
   /** Confirm-and-log a QSO held by the prompt-to-log popup. */
   confirmPendingLog(record: LoggedQso): AppSnapshot {
     this.logbook = [record, ...this.logbook]

@@ -967,6 +967,14 @@ fn qso_freetext(state: State<'_, SharedEngine>, text: String) -> Result<AppSnaps
     Ok(eng.snapshot())
 }
 
+/// Operator "Log QSO": log the active QSO's contact now (inline cockpit button).
+#[tauri::command]
+fn log_current_qso(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.log_current_qso();
+    Ok(eng.snapshot())
+}
+
 /// Confirm-and-log a QSO held by the prompt-to-log popup. `record` is the
 /// (possibly edited) contact. Returns the refreshed snapshot.
 #[tauri::command]
@@ -2193,6 +2201,7 @@ pub fn run() {
             call_station,
             qso_resend,
             qso_freetext,
+            log_current_qso,
             confirm_pending_log,
             discard_pending_log,
             log_qso,
