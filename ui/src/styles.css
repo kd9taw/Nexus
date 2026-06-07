@@ -4653,6 +4653,25 @@ select.settings-input {
   flex-direction: column;
   gap: 6px;
 }
+.cockpit-rxfreq {
+  flex: 0 0 auto;
+  max-height: 26%;
+  min-height: 92px;
+  display: flex;
+  overflow: hidden;
+  padding: 6px 10px;
+}
+.cockpit-rxfreq > .operate-decodes {
+  flex: 1;
+  min-width: 0;
+}
+/* Compact OperateDecodes (the Rx-Frequency pane): tighter header, no controls. */
+.operate-decodes.compact .od-head {
+  padding-bottom: 4px;
+}
+.operate-decodes.compact .od-head h2 {
+  font-size: 0.78rem;
+}
 .cockpit-decodes {
   flex: 3 1 0;
   min-height: 0;

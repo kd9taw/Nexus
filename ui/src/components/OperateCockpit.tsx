@@ -1,5 +1,5 @@
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { AppSnapshot, ModeRequest, SourceKind, Tier } from '../types'
-import type { ReactNode } from 'react'
 import { Waterfall } from './Waterfall'
 import { OperateDecodes } from './OperateDecodes'
 import { OperateQsoStrip } from './OperateQsoStrip'
@@ -60,6 +60,24 @@ export function OperateCockpit({
 }: Props) {
   const source = snap.radio.source
   const catOk = snap.radio.catOk
+
+  // Live next-slot countdown: the snapshot's nextSlotMs only updates each poll,
+  // so anchor it to wall-clock on each new value and tick locally for a smooth
+  // 1-second cadence (the WSJT-X period clock operators watch).
+  const slotBase = useRef({ ms: snap.radio.nextSlotMs, at: Date.now() })
+  useEffect(() => {
+    slotBase.current = { ms: snap.radio.nextSlotMs, at: Date.now() }
+  }, [snap.radio.nextSlotMs])
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => tick((t) => (t + 1) % 1000), 250)
+    return () => window.clearInterval(id)
+  }, [])
+  const nextSlotSec = Math.max(
+    0,
+    Math.ceil((slotBase.current.ms - (Date.now() - slotBase.current.at)) / 1000),
+  )
+
   return (
     <main className="layout single operate-cockpit">
       <div className="cockpit-bar">
@@ -143,7 +161,7 @@ export function OperateCockpit({
           {snap.radio.txEven ? 'EVEN / 1st' : 'ODD / 2nd'}
         </span>
         <span className="cs-next" title="Time to the next slot">
-          next {Math.max(0, Math.ceil(snap.radio.nextSlotMs / 1000))}s
+          next {nextSlotSec}s
         </span>
       </div>
 
@@ -166,6 +184,18 @@ export function OperateCockpit({
             onResend={onResend}
             onFreetext={onFreetext}
           />
+          <div className="cockpit-rxfreq panel">
+            <OperateDecodes
+              decodes={snap.recentDecodes}
+              slot={snap.radio.slot}
+              rxOffsetHz={snap.radio.rxOffsetHz}
+              harqRescues={snap.harqRescues}
+              onCall={onCall}
+              lockedFilter="rx"
+              compact
+              title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
+            />
+          </div>
           <div className="cockpit-decodes panel">
             <OperateDecodes
               decodes={snap.recentDecodes}

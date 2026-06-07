@@ -5,7 +5,6 @@ import {
   Sun,
   Globe,
   MessageSquare,
-  Target,
   Tent,
   RadioTower,
   ArrowLeftRight,
@@ -43,7 +42,9 @@ const ITEMS: Item[] = [
   { id: 'propagation', label: 'Prop', icon: Sun, title: 'Propagation & opening intelligence — what’s open now, 6m openings, DXpeditions' },
   { id: 'map', label: 'Map', icon: Globe, title: 'Map — azimuthal beam map: great-circle headings, range rings, openings, DXpeditions' },
   { id: 'chat', label: 'Chat', icon: MessageSquare, title: 'Chat — free-form QSO' },
-  { id: 'qso', label: 'QSO', icon: Target, title: 'QSO — 1:1 sequenced contact' },
+  // 'qso' retired from the nav: the Operate cockpit now sequences the QSO inline
+  // (waterfall + decodes stay visible), so the separate chat-style QSO screen is
+  // redundant. The route still resolves if reached, but it's no longer surfaced.
   { id: 'fieldDay', label: 'Field Day', icon: Tent, title: 'Field Day — contest rate workspace' },
   { id: 'band', label: 'Band', icon: RadioTower, title: 'Band — open broadcasts / activity feed' },
   { id: 'roam', label: 'Roam', icon: ArrowLeftRight, title: 'Coordinated QSY — move together off QRM (announced in the clear)' },

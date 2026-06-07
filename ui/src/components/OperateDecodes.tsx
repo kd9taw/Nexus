@@ -13,6 +13,14 @@ interface Props {
   harqRescues: number
   /** Work / answer a decoded station. */
   onCall: (call: string) => void
+  /** Force a fixed filter and hide the filter chips (e.g. the Rx-Frequency pane
+   * is a Band Activity locked to the 'rx' filter). */
+  lockedFilter?: Filter
+  /** Compact variant: hide the sort/clear controls + HARQ chip (for a small
+   * secondary pane like Rx Frequency). */
+  compact?: boolean
+  /** Header title (default "Band Activity"). */
+  title?: string
 }
 
 /** A decode plus the slot + wall-clock time it was last heard (history bookkeeping). */
@@ -41,12 +49,22 @@ const RX_TOL_HZ = 50
  *   you can read/scroll/click; it resumes (and back-fills) on mouse-out.
  * - Filter (All / CQ / To me / B4 / New) and sort (time / SNR / freq).
  */
-export function OperateDecodes({ decodes, slot, rxOffsetHz, harqRescues, onCall }: Props) {
+export function OperateDecodes({
+  decodes,
+  slot,
+  rxOffsetHz,
+  harqRescues,
+  onCall,
+  lockedFilter,
+  compact = false,
+  title = 'Band Activity',
+}: Props) {
   const histRef = useRef<Map<string, Entry>>(new Map())
   const frozenRef = useRef<Entry[]>([])
   const [, setTick] = useState(0)
   const [frozen, setFrozen] = useState(false)
-  const [filter, setFilter] = useState<Filter>('all')
+  const [filterState, setFilter] = useState<Filter>('all')
+  const filter = lockedFilter ?? filterState
   const [sort, setSort] = useState<Sort>('time')
 
   // Ingest this slot's decodes into the rolling history. Re-heard signals (same
@@ -117,36 +135,38 @@ export function OperateDecodes({ decodes, slot, rxOffsetHz, harqRescues, onCall 
   }
 
   return (
-    <section className="operate-decodes">
+    <section className={`operate-decodes${compact ? ' compact' : ''}`}>
       <div className="od-head">
-        <h2>Band Activity</h2>
-        <div className="od-controls">
-          <div className="od-filters" role="group" aria-label="Filter decodes">
-            {(['all', 'cq', 'me', 'rx', 'b4', 'new'] as Filter[]).map((f) => (
-              <button
-                key={f}
-                type="button"
-                className={`od-chip${filter === f ? ' active' : ''}`}
-                aria-pressed={filter === f}
-                onClick={() => setFilter(f)}
-                title={FILTER_TITLE[f]}
-              >
-                {FILTER_LABEL[f]}
-              </button>
-            ))}
+        <h2>{title}</h2>
+        {!compact && (
+          <div className="od-controls">
+            <div className="od-filters" role="group" aria-label="Filter decodes">
+              {(['all', 'cq', 'me', 'rx', 'b4', 'new'] as Filter[]).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  className={`od-chip${filter === f ? ' active' : ''}`}
+                  aria-pressed={filter === f}
+                  onClick={() => setFilter(f)}
+                  title={FILTER_TITLE[f]}
+                >
+                  {FILTER_LABEL[f]}
+                </button>
+              ))}
+            </div>
+            <label className="od-sort">
+              <span className="od-sort-label">sort</span>
+              <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
+                <option value="time">Time</option>
+                <option value="snr">SNR</option>
+                <option value="freq">Freq</option>
+              </select>
+            </label>
+            <button type="button" className="od-chip od-clear" onClick={clearHistory} title="Clear accumulated decodes">
+              Clear
+            </button>
           </div>
-          <label className="od-sort">
-            <span className="od-sort-label">sort</span>
-            <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
-              <option value="time">Time</option>
-              <option value="snr">SNR</option>
-              <option value="freq">Freq</option>
-            </select>
-          </label>
-          <button type="button" className="od-chip od-clear" onClick={clearHistory} title="Clear accumulated decodes">
-            Clear
-          </button>
-        </div>
+        )}
       </div>
 
       <div className="od-status">
