@@ -756,6 +756,7 @@ export default function App() {
             prop={prop}
             selectedCall={activePeer}
             onSelectCall={handleMapSelect}
+            needByCall={needByCall}
           />
         </main>
       )

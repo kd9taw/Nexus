@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { geoPath } from 'd3-geo'
 import { RotateCcw } from 'lucide-react'
-import type { PropagationSnapshot, Station, WorkableCard } from '../types'
+import type { NeedTag, PropagationSnapshot, Station, WorkableCard } from '../types'
 import type { Theme } from '../useTheme'
 import { gridToLatLon, haversineKm, bearingDeg, type LatLon } from '../grid'
 import {
@@ -30,6 +30,27 @@ interface Props {
   prop: PropagationSnapshot | null
   selectedCall: string | null
   onSelectCall: (call: string | null) => void
+  /** Top award-need tier per heard callsign (uppercased) — colors the map dots
+   * the same way the roster/decodes do, so the map shows WHAT you need WHERE. */
+  needByCall: Map<string, NeedTag>
+}
+
+/** Need tier → a dot color (matches the decode/roster palette). `null` = no
+ * specific need (fall back to worked/SNR coloring). */
+function needColor(tag: NeedTag | undefined): string | null {
+  switch (tag) {
+    case 'NewEntity':
+      return '#ff5d8f' // new DXCC — the loud "new one"
+    case 'NewBand':
+      return '#f5a524' // new band-slot
+    case 'NewZone':
+    case 'NewMode':
+      return '#b07cff'
+    case 'Confirm':
+      return '#4ea3ff' // worked, needs a confirmation
+    default:
+      return null
+  }
 }
 
 type LayerKey = 'coast' | 'grid' | 'rings' | 'stations' | 'paths' | 'openings' | 'dxped'
@@ -39,9 +60,9 @@ interface Layer {
   opacity: number
 }
 const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
-  coast: { label: 'Coastlines', visible: true, opacity: 0.55 },
-  grid: { label: 'Grid (20°×10°)', visible: true, opacity: 0.3 },
-  rings: { label: 'Range rings', visible: true, opacity: 0.5 },
+  coast: { label: 'Coastlines', visible: true, opacity: 0.85 },
+  grid: { label: 'Grid (20°×10°)', visible: true, opacity: 0.5 },
+  rings: { label: 'Range rings', visible: true, opacity: 0.55 },
   stations: { label: 'Spots', visible: true, opacity: 1 },
   paths: { label: 'Selected path', visible: true, opacity: 1 },
   openings: { label: 'Openings', visible: true, opacity: 0.7 },
@@ -58,7 +79,7 @@ function snrToken(snr: number): { v: string; r: number } {
   return { v: '--snr-weak', r: 3 }
 }
 
-export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectCall }: Props) {
+export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectCall, needByCall }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const [kind, setKind] = useState<Projection>('aeqd')
@@ -125,7 +146,8 @@ export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectC
       ctx.globalAlpha = layers.coast.opacity
       ctx.beginPath()
       path(basemap())
-      ctx.strokeStyle = cssVar('--border')
+      // --text-faint reads far better than --border for coastlines in dark themes.
+      ctx.strokeStyle = cssVar('--text-faint')
       ctx.lineWidth = 1
       ctx.stroke()
     }
@@ -164,7 +186,7 @@ export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectC
           if (p) ctx.lineTo(p[0], p[1])
         }
         ctx.closePath()
-        ctx.globalAlpha = layers.openings.opacity * 0.35
+        ctx.globalAlpha = layers.openings.opacity * 0.5
         ctx.fill()
         ctx.globalAlpha = 1
       }
@@ -182,21 +204,39 @@ export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectC
       }
     }
 
-    // Station dots (color = SNR token, size = SNR — CVD-safe redundant channel).
+    // Station dots: COLOR = award need (new DXCC / band / confirm — same palette
+    // as the roster & decodes), else worked = dim / unworked = neutral; SIZE = SNR
+    // (redundant CVD-safe channel). Needed + selected stations get a callsign
+    // label so the map shows WHO is workable WHERE — not just anonymous dots.
     if (layers.stations.visible) {
       ctx.globalAlpha = layers.stations.opacity
+      ctx.font = '10px system-ui'
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'middle'
       for (const { s, xy } of placed) {
-        const { v, r } = snrToken(s.snr)
+        const { v, r: baseR } = snrToken(s.snr)
+        const need = needByCall.get(s.call.toUpperCase())
+        const nc = needColor(need)
+        const isSel = s.call === selectedCall
+        const r = nc ? baseR + 1 : baseR
+        const fill = nc ?? (s.worked ? cssVar('--text-faint') : cssVar(v))
+        // Dim worked-and-not-needed stations so the ones worth working pop.
+        ctx.globalAlpha = s.worked && !nc ? layers.stations.opacity * 0.5 : layers.stations.opacity
         ctx.beginPath()
         ctx.arc(xy[0], xy[1], r, 0, Math.PI * 2)
-        ctx.fillStyle = cssVar(v)
+        ctx.fillStyle = fill
         ctx.fill()
-        if (s.call === selectedCall) {
+        ctx.globalAlpha = layers.stations.opacity
+        if (nc || isSel) {
+          // bright ring on the valuable / selected ones
           ctx.beginPath()
-          ctx.arc(xy[0], xy[1], r + 3, 0, Math.PI * 2)
-          ctx.strokeStyle = cssVar('--accent')
-          ctx.lineWidth = 2
+          ctx.arc(xy[0], xy[1], r + 2.5, 0, Math.PI * 2)
+          ctx.strokeStyle = isSel ? cssVar('--accent') : fill
+          ctx.lineWidth = isSel ? 2 : 1.25
           ctx.stroke()
+          // callsign label
+          ctx.fillStyle = isSel ? cssVar('--accent') : fill
+          ctx.fillText(s.call, xy[0] + r + 4, xy[1])
         }
       }
       ctx.globalAlpha = 1
@@ -229,7 +269,7 @@ export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectC
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, size, layers, placed, prop, dxCards, selStation, selectedCall, theme])
+  }, [me, kind, size, layers, placed, prop, dxCards, selStation, selectedCall, needByCall, theme])
 
   if (!me) {
     return (
@@ -252,7 +292,11 @@ export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectC
       const d = Math.hypot(xy[0] - mx, xy[1] - my)
       if (d < 9 && (!best || d < best.d)) {
         const km = Math.round(haversineKm(me, ll))
-        best = { d, text: `${s.call} · ${s.grid} · ${s.snr} dB · ${bearingDeg(me, ll)}° ${km.toLocaleString()} km` }
+        const where = s.country ? `${s.country} · ` : ''
+        best = {
+          d,
+          text: `${s.call} · ${where}${s.grid} · ${s.snr} dB · ${bearingDeg(me, ll)}° ${km.toLocaleString()} km`,
+        }
       }
     }
     setHover(best ? { x: mx, y: my, text: best.text } : null)
@@ -303,6 +347,12 @@ export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectC
               {hover.text}
             </div>
           )}
+          {placed.length === 0 && (
+            <div className="map-empty-hint">
+              No located stations yet — decoded stations with a grid appear here, centered on {myGrid},
+              colored by what you still need.
+            </div>
+          )}
           <MapLegend />
         </div>
 
@@ -344,11 +394,14 @@ function MapLegend() {
   }, [])
   return (
     <div className="map-legend" aria-hidden="true">
-      <span>SNR ▂</span>
-      <span className="snr-key weak" />
-      <span className="snr-key marginal" />
-      <span className="snr-key strong" />
-      <span>▇</span>
+      <span className="map-legend-dot" style={{ background: '#ff5d8f' }} />
+      <span>new DXCC</span>
+      <span className="map-legend-dot" style={{ background: '#f5a524' }} />
+      <span>new band</span>
+      <span className="map-legend-dot" style={{ background: '#4ea3ff' }} />
+      <span>confirm</span>
+      <span className="map-legend-dot worked" />
+      <span>worked</span>
       <span className="map-legend-sep" />
       <span>opening</span>
       <span className="map-legend-bar" style={{ background: `linear-gradient(90deg, ${stops})` }} />
