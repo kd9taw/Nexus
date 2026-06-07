@@ -39,6 +39,10 @@ export function coerceEnabled(partial: Partial<Record<FeatureId, boolean>>): Rec
 export function defaultState(): FeatureState {
   const s = applyProfile('everything')
   s.enabled.fieldDay = false
+  // It's everything-EXCEPT-Field-Day, so it's a curated set, not the pure
+  // 'everything' preset — tag it 'custom' so the Settings profile selector
+  // doesn't misleadingly show "Everything" as active while Field Day is off.
+  s.profile = 'custom'
   return s
 }
 

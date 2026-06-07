@@ -398,6 +398,8 @@ function MapLegend() {
       <span>new DXCC</span>
       <span className="map-legend-dot" style={{ background: '#f5a524' }} />
       <span>new band</span>
+      <span className="map-legend-dot" style={{ background: '#b07cff' }} />
+      <span>zone/mode</span>
       <span className="map-legend-dot" style={{ background: '#4ea3ff' }} />
       <span>confirm</span>
       <span className="map-legend-dot worked" />

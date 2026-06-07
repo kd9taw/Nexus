@@ -977,6 +977,11 @@ impl Engine {
     /// even if the sequence hasn't reached the final 73. Marks the QSO logged so it
     /// isn't also auto-logged on completion. Returns false outside a QSO / no DX.
     pub fn log_current_qso(&mut self) -> bool {
+        // Write-once: if this contact was already logged (manual double-click, or
+        // it auto-logged on completion), don't log it again.
+        if self.qso_logged {
+            return false;
+        }
         let (dxcall, dxgrid, rx_report) = match &self.mode {
             Mode::Qso { station, .. } => match &station.dxcall {
                 Some(c) => (c.clone(), station.dxgrid.clone(), station.rx_report),
@@ -986,7 +991,13 @@ impl Engine {
         };
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
-        self.log_qso(rec);
+        // Respect prompt-to-log just like auto-log: hold for the confirm popup
+        // instead of writing silently, so manual + auto behave the same.
+        if self.settings.prompt_to_log {
+            self.pending_log = Some(rec);
+        } else {
+            self.log_qso(rec);
+        }
         true
     }
 
@@ -2423,6 +2434,36 @@ mod tests {
         let log = e.get_log();
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].mode, "FT8", "FT8 contacts log as FT8 (award eligibility)");
+    }
+
+    #[test]
+    fn manual_log_then_completion_does_not_double_log() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        // Operator clicks "Log" mid-sequence.
+        assert!(e.log_current_qso(), "manual log writes the contact");
+        assert_eq!(e.get_log().len(), 1);
+        // A second click is a no-op (write-once).
+        assert!(!e.log_current_qso(), "second manual log is a no-op");
+        assert_eq!(e.get_log().len(), 1);
+        // The QSO then completes naturally — must NOT auto-log a duplicate.
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+        assert_eq!(e.get_log().len(), 1, "completion does not double-log");
+    }
+
+    #[test]
+    fn manual_log_respects_prompt_to_log() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        assert!(e.log_current_qso());
+        // Held for confirm, not written, like auto-log.
+        assert!(e.get_log().is_empty(), "prompt-to-log holds the manual log too");
+        let pending = e.snapshot().pending_log.expect("a QSO awaits confirm");
+        e.confirm_pending_log(pending.into());
+        assert_eq!(e.get_log().len(), 1);
     }
 
     #[test]

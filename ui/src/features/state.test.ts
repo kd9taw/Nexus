@@ -14,14 +14,23 @@ import {
 import { resolveEnabled } from './profiles'
 
 describe('feature state transitions', () => {
-  it('first-run default is Everything except opt-in Field Day', () => {
+  it('first-run default is everything-except-Field-Day, tagged custom', () => {
     const s = defaultState()
-    expect(s.profile).toBe('everything')
+    // Tagged 'custom' (not 'everything') so the profile selector isn't misleading
+    // while Field Day is off.
+    expect(s.profile).toBe('custom')
     for (const f of FEATURES) {
       // Field Day is the one carve-out — opt-in (most operators don't contest);
       // every other feature defaults on so upgrades never lose one.
       expect(s.enabled[f.id]).toBe(f.id === 'fieldDay' ? false : true)
     }
+  })
+
+  it('existing users keep Field Day on (default-off only affects first run)', () => {
+    // A persisted state from before the default-off change: profile everything,
+    // fieldDay explicitly on. normalizeState must preserve it (no re-derive).
+    const s = normalizeState({ profile: 'everything', enabled: { fieldDay: true }, dismissedReveals: [] })
+    expect(s.enabled.fieldDay).toBe(true)
   })
 
   it('coerceEnabled forces core on and defaults unknown/missing to on', () => {
@@ -66,8 +75,8 @@ describe('feature state transitions', () => {
     expect(both.enabled.fieldDay).toBe(true) // from contest
     expect(both.enabled.propagation).toBe(true) // from vhf
     expect(both.enabled.logbook).toBe(true) // core
-    // empty → Everything (safe fallback)
-    expect(applyProfiles([]).profile).toBe('everything')
+    // empty → the safe default (everything-except-Field-Day, tagged custom)
+    expect(applyProfiles([]).profile).toBe('custom')
   })
 
   it('applyProfile resolves the right enabled-set and records the profile', () => {
@@ -80,9 +89,10 @@ describe('feature state transitions', () => {
   })
 
   it('normalizeState repairs garbage to the default', () => {
-    expect(normalizeState(null).profile).toBe('everything')
-    expect(normalizeState(42).profile).toBe('everything')
-    expect(normalizeState('nope').profile).toBe('everything')
+    // The safe default is everything-except-Field-Day (tagged custom).
+    expect(normalizeState(null).profile).toBe('custom')
+    expect(normalizeState(42).profile).toBe('custom')
+    expect(normalizeState('nope').profile).toBe('custom')
   })
 
   it('normalizeState coerces core-on and keeps a valid profile tag', () => {
