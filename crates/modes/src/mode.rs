@@ -116,9 +116,11 @@ pub trait Mode: Send + Sync {
     /// Decode every signal in a [`frame_samples`](Mode::frame_samples)-long
     /// int16 frame at 12 kHz. `nfa..=nfb` is the audio search range; `ndepth`
     /// the decode aggressiveness (≤ 0 ⇒ 3); `mycall`/`hiscall` enable a-priori
-    /// decoding (pass `""` if unknown). `frame_time_ms` is a monotonic timestamp
-    /// for this frame, used by modes with cross-frame IR-HARQ (FT1); modes
-    /// without it ignore the argument.
+    /// decoding (pass `""` if unknown). `nfqso` is the QSO/RX audio frequency
+    /// (Hz) being worked — WSJT-X's nfqso, which centers the deep AP passes and
+    /// sync (FT8/FT4); pass 0 / out-of-band for band-center. `frame_time_ms` is a
+    /// monotonic timestamp for this frame, used by modes with cross-frame IR-HARQ
+    /// (FT1); modes without these ignore the respective argument.
     #[allow(clippy::too_many_arguments)] // mirrors the modem decode ABI
     fn decode_frame(
         &self,
@@ -129,6 +131,7 @@ pub trait Mode: Send + Sync {
         mycall: &str,
         hiscall: &str,
         nqso_progress: i32,
+        nfqso: i32,
         frame_time_ms: i64,
     ) -> Vec<Decode>;
 }
@@ -173,9 +176,10 @@ impl Mode for Ft8Mode {
         mycall: &str,
         hiscall: &str,
         nqso_progress: i32,
+        nfqso: i32,
         _frame_time_ms: i64, // FT8 has no cross-frame IR-HARQ
     ) -> Vec<Decode> {
-        ft8::decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, nqso_progress)
+        ft8::decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, nqso_progress, nfqso)
             .into_iter()
             .map(Into::into)
             .collect()
@@ -213,9 +217,10 @@ impl Mode for Ft4Mode {
         mycall: &str,
         hiscall: &str,
         nqso_progress: i32,
+        nfqso: i32,
         _frame_time_ms: i64, // FT4 has no cross-frame IR-HARQ
     ) -> Vec<Decode> {
-        ft4::decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, nqso_progress)
+        ft4::decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, nqso_progress, nfqso)
             .into_iter()
             .map(Into::into)
             .collect()
@@ -253,6 +258,7 @@ impl Mode for Ft1Mode {
         mycall: &str,
         hiscall: &str,
         nqso_progress: i32,
+        _nfqso: i32, // FT1 uses IR-HARQ, not WSJT-X nfqso-windowed AP
         frame_time_ms: i64,
     ) -> Vec<Decode> {
         // FT1's decoder keys cross-frame IR-HARQ combining off frame_time_ms; the

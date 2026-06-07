@@ -1753,6 +1753,10 @@ impl Engine {
                 mycall: &ap_mycall,
                 hiscall: &ap_hiscall,
                 nqso_progress: ap_progress,
+                // WSJT-X nfqso = the freq we're working/listening on. Centers the
+                // deep AP passes + sync there so the gain follows the worked
+                // station across the band, not just band-center.
+                nfqso: self.rx_offset_hz as i32,
                 frame_time_ms,
             };
             self.source.decode(&req)

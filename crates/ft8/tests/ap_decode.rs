@@ -1,6 +1,6 @@
 //! Behavioural proof that a-priori (AP) decoding actually fires and recovers
 //! frames the no-context path misses — exercising the SAME golden WSJT-X decoder
-//! the engine now feeds real MyCall/DxCall/nQSOProgress into.
+//! the engine feeds real MyCall/DxCall/nQSOProgress/nfqso into.
 
 use ft8::{decode_frame, encode, gen_wave, NMAX, SAMPLE_RATE};
 
@@ -38,8 +38,13 @@ fn snr_to_scale(snr_db: f32, fs: f32) -> f32 {
 /// Build a noisy 15 s int16 frame containing `msg` at carrier 1500 Hz, SNR
 /// `snr_db`, AWGN seed `seed`.
 fn noisy_frame(msg: &str, snr_db: f32, seed: u64) -> Vec<i16> {
+    noisy_frame_at(msg, snr_db, seed, 1500.0)
+}
+
+/// As [`noisy_frame`] but at an explicit audio carrier `f0`.
+fn noisy_frame_at(msg: &str, snr_db: f32, seed: u64, f0: f32) -> Vec<i16> {
     let tones = encode(msg);
-    let wave = gen_wave(&tones, SAMPLE_RATE, 1500.0);
+    let wave = gen_wave(&tones, SAMPLE_RATE, f0);
     let sig = snr_to_scale(snr_db, SAMPLE_RATE);
     let mut noise = Awgn::new(seed);
     let noff = 6_000usize; // FT8 TX starts 0.5 s into the slot
@@ -64,7 +69,8 @@ fn noisy_frame(msg: &str, snr_db: f32, seed: u64) -> Vec<i16> {
 ///
 /// Operating point −22 dB (see `explore_ap_margin`): on this RR73-addressed-to-me
 /// message the deepest AP case (iaptype 6, all 77 bits known) recovers ~every
-/// seed while the no-context path recovers none — a several-dB gain.
+/// seed while the no-context path recovers none — a several-dB gain. Carrier is
+/// 1500 Hz with nfqso = 1500, so the deep AP window is centred on it.
 #[test]
 fn ap_recovers_frames_the_no_context_path_cannot() {
     let msg = "KD9TAW W1AW RR73"; // RR73 to me → iaptype 6 (all 77 ap bits)
@@ -72,16 +78,15 @@ fn ap_recovers_frames_the_no_context_path_cannot() {
     let (mut ap, mut ap_via_ap_pass, mut noap) = (0u32, 0u32, 0u32);
     for seed in 0..seeds {
         let iwave = noisy_frame(msg, -22.0, seed);
-        // AP context: responder awaiting RR73 → nQSOProgress = 3 (matches
-        // State::AwaitRoger/AwaitRr73 territory the engine now supplies).
-        let decs = decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3);
+        // AP context: responder awaiting RR73 → nQSOProgress = 3; nfqso on carrier.
+        let decs = decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500);
         if let Some(d) = decs.iter().find(|d| d.message == msg) {
             ap += 1;
             if d.nap > 0 {
                 ap_via_ap_pass += 1; // recovery explicitly credited to an AP pass
             }
         }
-        if decode_frame(&iwave, 200, 2900, 3, "", "", 0)
+        if decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0)
             .iter()
             .any(|d| d.message == msg)
         {
@@ -102,9 +107,82 @@ fn ap_recovers_frames_the_no_context_path_cannot() {
     );
 }
 
+/// The deep AP passes (iaptype>=3 — the MyCall+DxCall masks that give the big
+/// gain) only fire within ~napwid (75 Hz) of nfqso. So nfqso MUST track the
+/// worked station's carrier, or the gain is stuck at band-center. Proof at a
+/// carrier 850 Hz off centre: nfqso-on-carrier recovers it; nfqso-at-band-center
+/// (0 → ~1550) does not. This is the behavioural proof of the nfqso plumbing.
+#[test]
+fn nfqso_steers_deep_ap_to_an_off_center_carrier() {
+    let msg = "KD9TAW W1AW RR73";
+    let f0 = 2400.0f32; // ~850 Hz above band center (~1550)
+    let seeds = 12u64;
+    let (mut steered, mut centered) = (0u32, 0u32);
+    for seed in 0..seeds {
+        let iwave = noisy_frame_at(msg, -22.0, seed, f0);
+        // nfqso ON the carrier → deep AP fires there.
+        if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, f0 as i32)
+            .iter()
+            .any(|d| d.message == msg)
+        {
+            steered += 1;
+        }
+        // nfqso = 0 → C-ABI falls back to band center; the off-center station is
+        // outside the deep-AP window, so iaptype>=3 never fires for it.
+        if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 0)
+            .iter()
+            .any(|d| d.message == msg)
+        {
+            centered += 1;
+        }
+    }
+    assert!(
+        steered >= 9,
+        "nfqso on the carrier must recover the off-center frame ({steered}/{seeds})"
+    );
+    assert!(
+        centered <= 1,
+        "band-center nfqso must NOT deep-AP an 850 Hz-off station ({centered}/{seeds})"
+    );
+    assert!(
+        steered > centered,
+        "steering nfqso must strictly out-recover band-center ({steered} vs {centered})"
+    );
+}
+
+/// EXPLORATION ONLY (ignored): with nfqso left at band center (0), does deep AP
+/// fire across the band? Demonstrates the limitation the nfqso plumbing fixes —
+/// recovery should peak near ~1550 Hz and fall off away from it. Run with:
+///   cargo test -p ft8 --test ap_decode explore_ap_vs_frequency -- --ignored --nocapture
+#[test]
+#[ignore]
+fn explore_ap_vs_frequency() {
+    let msg = "KD9TAW W1AW RR73"; // needs iaptype 6 (gated by napwid around nfqso)
+    let seeds = 12u64;
+    for &f0 in &[700.0f32, 1100.0, 1500.0, 1900.0, 2300.0, 2600.0] {
+        let (mut centered, mut steered) = (0u32, 0u32);
+        for seed in 0..seeds {
+            let iwave = noisy_frame_at(msg, -22.0, seed, f0);
+            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 0)
+                .iter()
+                .any(|d| d.message == msg)
+            {
+                centered += 1;
+            }
+            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, f0 as i32)
+                .iter()
+                .any(|d| d.message == msg)
+            {
+                steered += 1;
+            }
+        }
+        println!("carrier {f0:>6} Hz:  nfqso=center {centered:2}/{seeds}   nfqso=carrier {steered:2}/{seeds}");
+    }
+}
+
 /// EXPLORATION ONLY (ignored): print AP-vs-no-AP recovery across an SNR band so we
 /// can pick a marginal operating point. Run with:
-///   cargo test -p ft8 --test ap_decode explore -- --ignored --nocapture
+///   cargo test -p ft8 --test ap_decode explore_ap_margin -- --ignored --nocapture
 #[test]
 #[ignore]
 fn explore_ap_margin() {
@@ -114,15 +192,13 @@ fn explore_ap_margin() {
         let seeds = 12u64;
         for seed in 0..seeds {
             let iwave = noisy_frame(msg, snr, seed);
-            // With AP context (responder awaiting RR73 → nQSOProgress = 3).
-            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3)
+            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500)
                 .iter()
                 .any(|d| d.message == msg)
             {
                 ap += 1;
             }
-            // Without AP context.
-            if decode_frame(&iwave, 200, 2900, 3, "", "", 0)
+            if decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0)
                 .iter()
                 .any(|d| d.message == msg)
             {

@@ -301,6 +301,7 @@ extern "C" {
         mycall: *const c_char,
         hiscall: *const c_char,
         nqso_progress: c_int,
+        nfqso: c_int, // QSO/RX freq (Hz); deep AP + sync center; 0/oob ⇒ band mid
         out: *mut Ft8DecodeT,
         max_out: c_int,
     ) -> c_int;
@@ -338,6 +339,7 @@ extern "C" {
         mycall: *const c_char,
         hiscall: *const c_char,
         nqso_progress: c_int,
+        nfqso: c_int, // QSO/RX freq (Hz); deep AP center; 0/oob ⇒ band mid
         out: *mut Ft4DecodeT,
         max_out: c_int,
     ) -> c_int;

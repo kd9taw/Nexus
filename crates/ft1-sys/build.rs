@@ -187,10 +187,15 @@ fn mingw_gcc_lib_dir() -> Option<String> {
 fn emit_rerun(libft1_src: &std::path::Path) {
     println!("cargo:rerun-if-changed=build.rs");
 
-    // Tempo-side libft1 sources (the C-ABI shim, DX1, headers, build config).
+    // Tempo-side libft1 sources (the C-ABI shims, DX1, headers, build config).
+    // Every *_cabi.f90 MUST be listed: a content edit to one that is NOT watched
+    // silently links a STALE libft1.a (Cargo never re-runs CMake).
     for rel in [
         "CMakeLists.txt",
         "ft1_cabi.f90",
+        "ft8_cabi.f90",
+        "ft8_stdcall.f90",
+        "ft4_cabi.f90",
         "mingw-w64.cmake",
         "include",
         "dx1",

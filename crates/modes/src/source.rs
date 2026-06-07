@@ -31,6 +31,9 @@ pub struct DecodeRequest<'a> {
     pub hiscall: &'a str,
     /// QSO progress index (AP pass schedule).
     pub nqso_progress: i32,
+    /// QSO/RX audio frequency (Hz) being worked — WSJT-X's nfqso; centers the
+    /// deep AP passes + sync for FT8/FT4. 0 / out-of-band ⇒ band center.
+    pub nfqso: i32,
     /// Monotonic ms timestamp for this frame (cross-frame IR-HARQ keying; FT1).
     /// 0 disables cross-frame combining.
     pub frame_time_ms: i64,
@@ -47,6 +50,7 @@ impl<'a> DecodeRequest<'a> {
             mycall: "",
             hiscall: "",
             nqso_progress: 0,
+            nfqso: 0, // band center (no QSO freq)
             frame_time_ms: 0,
         }
     }
@@ -113,6 +117,7 @@ impl SignalSource for NativeSource {
             req.mycall,
             req.hiscall,
             req.nqso_progress,
+            req.nfqso,
             req.frame_time_ms,
         );
         // Tag each decode with the mode that produced it (the conversion can't

@@ -91,6 +91,9 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
 ///
 /// `nfa..=nfb` is the audio search range (Hz); `ndepth` is decode aggressiveness
 /// (≤ 0 ⇒ 3); `mycall`/`hiscall` enable a-priori decoding (pass `""` if unknown).
+/// `nfqso` is the QSO/RX audio frequency (Hz) being worked — WSJT-X's nfqso:
+/// the deep AP passes (MyCall+DxCall masks) only fire within ~75 Hz of it and
+/// sync prioritizes near it; pass 0 (or out of `nfa..=nfb`) for band-center.
 ///
 /// # Panics
 /// Panics if `iwave.len() < NMAX`.
@@ -102,6 +105,7 @@ pub fn decode_frame(
     mycall: &str,
     hiscall: &str,
     nqso_progress: i32,
+    nfqso: i32,
 ) -> Vec<Decode> {
     assert!(
         iwave.len() >= NMAX,
@@ -123,6 +127,7 @@ pub fn decode_frame(
                 myc.as_ptr(),
                 hisc.as_ptr(),
                 nqso_progress,
+                nfqso,
                 out.as_mut_ptr(),
                 out.len() as i32,
             )
@@ -175,7 +180,7 @@ mod tests {
             }
         }
 
-        let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0);
+        let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0);
         assert!(
             decs.iter().any(|d| d.message == msg),
             "FT8 must decode its own clean signal; got {decs:?}"

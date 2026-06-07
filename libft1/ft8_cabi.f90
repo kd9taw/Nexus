@@ -125,6 +125,10 @@ contains
   !   ndepth        : 1..3 (3 = full bp+osd, 3 passes; <=0 defaults to 3)
   !   mycall,hiscall: NUL/space-terminated callsigns for AP (may be empty)
   !   nqso_progress : QSO progress index (AP pass schedule)
+  !   nfqso_in      : QSO/RX audio freq (Hz) the operator is working — WSJT-X's
+  !                   nfqso. The deep a-priori passes (iaptype>=3, the MyCall+
+  !                   DxCall masks) only fire within napwid of this, and sync8
+  !                   prioritizes near it. Pass 0 / out-of-band ⇒ band center.
   !   out           : caller array of ft8_decode_t (capacity max_out)
   !   max_out       : capacity of out
   !
@@ -133,9 +137,9 @@ contains
   ! NOT thread-safe (the modem keeps process-global SAVE state + FFTW plans).
   !-------------------------------------------------------------------------
   function ft8_decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, &
-       nqso_progress, out, max_out) result(ndec) bind(C, name="ft8_decode_frame")
+       nqso_progress, nfqso_in, out, max_out) result(ndec) bind(C, name="ft8_decode_frame")
     integer(c_int16_t),     intent(in)  :: iwave(F8_NMAX)
-    integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, max_out
+    integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in, max_out
     character(kind=c_char), intent(in)  :: mycall(*)
     character(kind=c_char), intent(in)  :: hiscall(*)
     type(ft8_decode_t),     intent(out) :: out(*)
@@ -166,7 +170,13 @@ contains
     ndepth_l = ndepth
     if (ndepth_l <= 0) ndepth_l = 3
     ncontest  = 0
-    nfqso     = (nfa + nfb) / 2
+    ! Center deep AP + sync on the operator's QSO/RX freq when supplied; else the
+    ! band midpoint (legacy behavior). nftx mirrors it (no separate TX freq here).
+    if (nfqso_in >= nfa .and. nfqso_in <= nfb) then
+       nfqso = nfqso_in
+    else
+       nfqso = (nfa + nfb) / 2
+    end if
     nftx      = nfqso
     lft8apon  = .true.
     lapcqonly = .false.

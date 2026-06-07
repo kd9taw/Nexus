@@ -5,7 +5,7 @@
  *   for each of 3 known FT4 messages:
  *     ft4_encode -> ft4_gen_wave at a distinct f0 (full NMAX frame) -> scale
  *   sum the signals, add AWGN, convert to int16 ->
- *   ft4_decode_frame(iwave, nfa=200, nfb=2900, ndepth=3, "","",0, ...)
+ *   ft4_decode_frame(iwave, nfa=200, nfb=2900, ndepth=3, "","",0, nfqso=0, ...)
  *
  * PASS if all three transmitted messages are recovered.
  */
@@ -75,7 +75,7 @@ int main(void) {
         iwave[i] = (int16_t)lrintf(v);
     }
 
-    int ndec = ft4_decode_frame(iwave, 200, 2900, 3, "", "", 0, out, MAXOUT);
+    int ndec = ft4_decode_frame(iwave, 200, 2900, 3, "", "", 0, 0, out, MAXOUT);
     printf("ft4_decode_frame returned %d decode(s)\n", ndec);
     if (ndec < 0) {
         printf("RESULT: FAIL (decoder error, ndec=%d)\n", ndec);

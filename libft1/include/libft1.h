@@ -221,6 +221,8 @@ typedef struct {
  *   ndepth        : 1..3 (3 = full bp+osd, 3 passes; <=0 defaults to 3)
  *   mycall/hiscall: NUL/space-terminated callsigns for AP (may be "")
  *   nqso_progress : QSO progress index (AP pass schedule)
+ *   nfqso         : QSO/RX audio freq (Hz) being worked (WSJT-X nfqso); the deep
+ *                   AP passes + sync center on it. 0 / out of [nfa,nfb] = band mid
  *   out           : caller array of ft8_decode_t (capacity max_out)
  *   max_out       : capacity of out
  *
@@ -230,7 +232,8 @@ typedef struct {
 int ft8_decode_frame(const int16_t *iwave /*[FT8_NMAX]*/,
                      int nfa, int nfb, int ndepth,
                      const char *mycall, const char *hiscall,
-                     int nqso_progress, ft8_decode_t *out, int max_out);
+                     int nqso_progress, int nfqso,
+                     ft8_decode_t *out, int max_out);
 
 /*===========================================================================
  * FT4: native decode/encode of the standard WSJT-X FT4 mode (7.5 s T/R,
@@ -283,6 +286,8 @@ typedef struct {
  *   ndepth        : 1..3 (3 = full bp+osd; <=0 defaults to 3)
  *   mycall/hiscall: NUL/space-terminated callsigns for AP (may be "")
  *   nqso_progress : QSO progress index (AP pass schedule)
+ *   nfqso         : QSO/RX audio freq (Hz) being worked (WSJT-X nfqso); the deep
+ *                   AP passes center on it. 0 / out of [nfa,nfb] = band mid
  *   out           : caller array of ft4_decode_t (capacity max_out)
  *   max_out       : capacity of out
  *
@@ -292,7 +297,8 @@ typedef struct {
 int ft4_decode_frame(const int16_t *iwave /*[FT4_NMAX]*/,
                      int nfa, int nfb, int ndepth,
                      const char *mycall, const char *hiscall,
-                     int nqso_progress, ft4_decode_t *out, int max_out);
+                     int nqso_progress, int nfqso,
+                     ft4_decode_t *out, int max_out);
 
 /*===========================================================================
  * DX1-S: non-coherent M-FSK + soft-LDPC robust tier (fading-resilient).

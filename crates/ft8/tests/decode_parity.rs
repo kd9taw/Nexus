@@ -66,7 +66,7 @@ fn frame_with(msg: &str, f0: f32, snr_db: f32, seed: u64) -> Vec<i16> {
 }
 
 fn full_range(iwave: &[i16], ndepth: i32) -> Vec<ft8::Decode> {
-    decode_frame(iwave, 200, 2900, ndepth, "", "", 0)
+    decode_frame(iwave, 200, 2900, ndepth, "", "", 0, 0)
 }
 
 // ---- tests -----------------------------------------------------------------
