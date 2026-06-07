@@ -174,6 +174,15 @@ impl Logbook {
                 rec.credit_granted = old.credit_granted.clone();
                 rec.credit_submitted = old.credit_submitted.clone();
                 rec.upload = old.upload.clone();
+                // Never clobber a known country/state to None on edit (the edit
+                // form doesn't carry them) — preserve the old value when the
+                // incoming record left them empty.
+                if rec.country.is_none() {
+                    rec.country = old.country.clone();
+                }
+                if rec.state.is_none() {
+                    rec.state = old.state.clone();
+                }
                 self.records[index] = rec;
                 true
             }
@@ -810,6 +819,32 @@ mod tests {
             "upload state preserved"
         );
         assert!(!lb.update_record(9, rec("X", "20m", 1)), "out-of-range is false");
+    }
+
+    #[test]
+    fn update_record_preserves_country_and_state_when_edit_omits_them() {
+        let mut lb = Logbook::new();
+        let mut original = rec("DL1XYZ", "20m", 1_700_000_000);
+        original.country = Some("Germany".into());
+        original.state = Some("NY".into());
+        lb.add(original);
+
+        // Edit payload (from the UI form) carries neither country nor state.
+        let mut edit = rec("DL1XYZ", "40m", 1_700_000_000);
+        edit.country = None;
+        edit.state = None;
+        assert!(lb.update_record(0, edit));
+
+        let r = &lb.records()[0];
+        assert_eq!(r.band, "40m", "human field edited");
+        assert_eq!(r.country.as_deref(), Some("Germany"), "country preserved, not clobbered");
+        assert_eq!(r.state.as_deref(), Some("NY"), "state preserved, not clobbered");
+
+        // An edit that DOES carry a new country overrides it.
+        let mut edit2 = rec("DL1XYZ", "40m", 1_700_000_000);
+        edit2.country = Some("Fed. Rep. of Germany".into());
+        assert!(lb.update_record(0, edit2));
+        assert_eq!(lb.records()[0].country.as_deref(), Some("Fed. Rep. of Germany"));
     }
 
     #[test]

@@ -472,6 +472,7 @@ impl Engine {
     pub fn set_log_path(&mut self, path: PathBuf) {
         self.logbook = Logbook::load(&path);
         self.log_path = Some(path);
+        self.backfill_country();
         self.refresh_worked_index();
     }
 
@@ -483,7 +484,35 @@ impl Engine {
         resolve: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) {
         self.dxcc_resolve = Some(Box::new(resolve));
+        self.backfill_country();
         self.refresh_worked_index();
+    }
+
+    /// Resolve a DXCC country for any logged record that lacks one (e.g. a log
+    /// loaded/imported from an ADIF without `COUNTRY`, or older Nexus records).
+    /// No-op without a resolver; persists the log if anything changed. Run after
+    /// load / import / resolver-set so the logbook + awards are country-complete.
+    fn backfill_country(&mut self) {
+        let Some(resolve) = self.dxcc_resolve.take() else {
+            return;
+        };
+        let mut changed = false;
+        for r in self.logbook.records_mut() {
+            if r.country.is_none() {
+                if let Some(c) = resolve(&r.call) {
+                    r.country = Some(c);
+                    changed = true;
+                }
+            }
+        }
+        self.dxcc_resolve = Some(resolve);
+        if changed {
+            if let Some(path) = &self.log_path {
+                if let Err(e) = self.logbook.save(path) {
+                    eprintln!("tempo: backfill_country save failed: {e}");
+                }
+            }
+        }
     }
 
     /// Recompute the worked-entity and worked-grid sets from the logbook. Cheap
@@ -627,6 +656,7 @@ impl Engine {
                 }
             }
         }
+        self.backfill_country();
         self.refresh_worked_index();
         (added.len(), skipped, self.logbook.len())
     }
@@ -2309,6 +2339,34 @@ mod tests {
         assert!(!row("W1AW").new_grid && !row("W1AW").new_dxcc, "all worked");
         assert!(row("W4ABC").new_grid && !row("W4ABC").new_dxcc, "new grid only");
         assert!(row("DL1XYZ").new_grid && row("DL1XYZ").new_dxcc, "new grid + new entity");
+    }
+
+    #[test]
+    fn import_backfills_missing_country_via_resolver() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(|call| {
+            if call.starts_with("DL") {
+                Some("Germany".to_string())
+            } else if call.starts_with("F") {
+                Some("France".to_string())
+            } else {
+                None
+            }
+        });
+        // Import an ADIF that has NO COUNTRY fields (a typical old logbook export).
+        let adif = "<EOH>\n\
+            <CALL:6>DL1XYZ<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>120000<EOR>\n\
+            <CALL:5>F5RXL<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>120100<EOR>\n";
+        let (added, _skipped, _total) = e.import_adif(adif);
+        assert_eq!(added, 2);
+        let log = e.get_log();
+        let country = |call: &str| {
+            log.iter()
+                .find(|r| r.call == call)
+                .and_then(|r| r.country.clone())
+        };
+        assert_eq!(country("DL1XYZ").as_deref(), Some("Germany"), "country backfilled on import");
+        assert_eq!(country("F5RXL").as_deref(), Some("France"));
     }
 
     #[test]

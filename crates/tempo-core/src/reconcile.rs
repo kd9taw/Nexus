@@ -152,6 +152,13 @@ pub fn reconcile(local: &mut [QsoRecord], incoming: &[QsoRecord]) -> ReconcileSu
                         rec.state = Some(st.clone());
                     }
                 }
+                // Same for COUNTRY (DXCC entity) — fill a missing country from the
+                // report. Monotonic: never overwrites an existing country.
+                if rec.country.is_none() {
+                    if let Some(c) = &inc.country {
+                        rec.country = Some(c.clone());
+                    }
+                }
             }
             // Only a row that actually carries a confirmation/credit is a
             // meaningful "missing" diagnostic; a plain unconfirmed QSO row is not.
@@ -479,6 +486,25 @@ mod tests {
             Some("TX"),
             "existing state preserved"
         );
+    }
+
+    #[test]
+    fn report_fills_missing_country_but_never_overwrites() {
+        let a = rec("DL1XYZ", "20m", "FT8", 20_000); // logged without country
+        let mut b = rec("F5RXL", "20m", "FT8", 20_000);
+        b.country = Some("France".into()); // logged WITH country
+        let mut log = vec![a, b];
+
+        let mut r1 = rec("DL1XYZ", "20m", "FT8", 20_000);
+        r1.award_confirmed = true;
+        r1.country = Some("Germany".into()); // report supplies the missing country
+        let mut r2 = rec("F5RXL", "20m", "FT8", 20_000);
+        r2.award_confirmed = true;
+        r2.country = Some("Wrong".into()); // report DISAGREES — must not overwrite
+
+        reconcile(&mut log, &[r1, r2]);
+        assert_eq!(log[0].country.as_deref(), Some("Germany"), "missing country filled");
+        assert_eq!(log[1].country.as_deref(), Some("France"), "existing country preserved");
     }
 
     #[test]

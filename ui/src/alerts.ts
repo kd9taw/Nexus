@@ -83,7 +83,16 @@ export function processDecodes(decodes: DecodeRow[], settings: Settings): void {
     else if (settings.alertCq && d.isCq) kind = 'cq'
     if (!kind) continue
 
-    const key = decodeKey(d)
+    // Dedup scope per kind: a new DXCC alerts once per ENTITY (not again as the
+    // same station's message evolves through the QSO), a new grid once per
+    // station; mycall/cq dedup on the exact decode (they may legitimately repeat
+    // as the exchange advances).
+    const key =
+      kind === 'newdxcc'
+        ? `dxcc:${d.country ?? d.from ?? '?'}`
+        : kind === 'newgrid'
+          ? `grid:${d.from ?? '?'}`
+          : `${kind}:${decodeKey(d)}`
     if (alertedDecodes.has(key)) continue
     alertedDecodes.add(key)
 
@@ -105,6 +114,16 @@ export function processDecodes(decodes: DecodeRow[], settings: Settings): void {
     pushToast(text, kind === 'mycall' ? 'success' : 'info', 3500)
   }
 
-  // Keep the dedup set from growing unbounded over a long session.
-  if (alertedDecodes.size > 400) alertedDecodes.clear()
+  // Keep the dedup set bounded over a long session (Field Day / contests) WITHOUT
+  // a wholesale clear — that would re-alert every familiar station. Evict the
+  // oldest entries (Set preserves insertion order) so recent dedups survive.
+  const CAP = 2000
+  if (alertedDecodes.size > CAP) {
+    const drop = Math.floor(CAP * 0.2)
+    let i = 0
+    for (const k of alertedDecodes) {
+      alertedDecodes.delete(k)
+      if (++i >= drop) break
+    }
+  }
 }
