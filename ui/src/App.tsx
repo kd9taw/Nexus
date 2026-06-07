@@ -23,7 +23,7 @@ import {
   subscribeSnapshot,
   isTauri,
 } from './api'
-import { withErrorToast } from './toast'
+import { withErrorToast, pushToast } from './toast'
 import { processDecodes } from './alerts'
 import { useTheme } from './useTheme'
 import { useLayout } from './useLayout'
@@ -137,13 +137,31 @@ export default function App() {
     return features.landing
   })
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
+  // Per-(band,mode) last-alert time so a band coming alive toasts once, not every
+  // poll (defence in depth — the backend tracker already flags `isNew` once).
+  const openingAlertRef = useRef<Map<string, number>>(new Map())
   useEffect(() => {
     let live = true
+    const OPENING_ALERT_COOLDOWN_MS = 10 * 60_000
     const load = () =>
       getPropagation()
         .then((p) => {
           if (!live) return
           setProp(p)
+          // Loud one-shot alert when a band comes alive (the flagship moment).
+          const tnow = Date.now()
+          for (const o of p.openings) {
+            if (!o.isNew) continue
+            const key = `${o.band}|${o.mode}`
+            const last = openingAlertRef.current.get(key) ?? 0
+            if (tnow - last < OPENING_ALERT_COOLDOWN_MS) continue
+            openingAlertRef.current.set(key, tnow)
+            pushToast(
+              `⚡ ${o.band} open — ${o.mode} · point ${o.octant} · ${o.stations} stns`,
+              'success',
+              8000,
+            )
+          }
           // Honest-state: surface non-live propagation in the Now-Bar lane.
           if (p.source === 'demo') {
             setStatus('prop', {

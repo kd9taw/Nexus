@@ -45,7 +45,10 @@ pub use dxped::{
     CalendarEntry, DxpedDashboard, DxpeditionPlan, DxpeditionTracker, Ft8DxpMode, LogNeeds,
     NeedKind, NeedsSet, OperatorNeeds, WorkStatus, WorkableCard,
 };
-pub use engine::{demo, OpeningView, PropagationEngine, PropagationSnapshot, SpaceWxView};
+pub use engine::{
+    demo, detect_openings_tracked, OpeningView, PropagationEngine, PropagationSnapshot,
+    SpaceWxView, OPENING_BANDS,
+};
 pub use likelihood::{BandOutlook, PathModel, PropParams, Workability};
 pub use model::{
     classify_vhf_mode, ActivityTier, Band, Confidence, ModeClass, PathSpot, PropMode, Region, Side,

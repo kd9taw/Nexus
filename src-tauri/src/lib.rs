@@ -59,6 +59,11 @@ static CLUSTER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 /// fed by the background MQTT thread and merged into the propagation nowcast.
 type SharedLivePaths = Arc<Mutex<propagation::LiveSpots>>;
 
+/// Persistent opening-detection tracker (anomaly/onset hysteresis + onset
+/// stamping) across successive `get_propagation` polls. Stateful so it can flag a
+/// genuine onset (`is_new`) exactly once and keep a sustained opening latched.
+type SharedOpeningTracker = Arc<Mutex<propagation::OpeningTracker>>;
+
 /// Lifetime stop flag for the PSK Reporter MQTT daemon thread (see CLUSTER_STOP).
 static PSKR_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -344,6 +349,7 @@ fn get_propagation(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
     live_paths: State<'_, SharedLivePaths>,
+    opening_tracker: State<'_, SharedOpeningTracker>,
 ) -> Result<propagation::PropagationSnapshot, String> {
     let (mycall, mygrid, needs) = {
         let eng = state.lock().map_err(|e| e.to_string())?;
@@ -359,51 +365,77 @@ fn get_propagation(
         (mycall, mygrid, needs)
     };
 
-    // Serve a fresh cached nowcast without re-querying PSK Reporter.
-    {
-        let guard = cache.lock().map_err(|e| e.to_string())?;
-        if let Some((when, snap)) = guard.as_ref() {
-            if when.elapsed().as_secs() < PROP_TTL_SECS {
-                return Ok(snap.clone());
-            }
-        }
-    }
+    let now = now_unix();
 
-    // No callsign yet → can't query "who hears me"; show the demo scene.
+    // No callsign → can't query "who hears me"; show the demo scene (which keeps
+    // its own openings). Checked BEFORE the cache so a cleared callsign can't keep
+    // serving the previous identity's live-labeled openings from a warm cache.
     if mycall.trim().is_empty() {
         return Ok(propagation::demo());
     }
 
-    // Live PSK Reporter MQTT spots accumulated since the last rebuild — merged
-    // with the rate-limited XML query so "who hears me / who I hear" reflects the
-    // firehose, not just one query.
-    let extra = live_paths
-        .lock()
-        .map(|b| b.recent(now_unix(), 1800))
-        .unwrap_or_default();
+    // --- base snapshot: fresh cache, else a live refetch, else last-good/demo ---
+    let cached = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        guard
+            .as_ref()
+            .filter(|(when, _)| when.elapsed().as_secs() < PROP_TTL_SECS)
+            .map(|(_, snap)| snap.clone())
+    };
 
-    // Refetch live (blocking HTTP); on failure keep the last good snapshot, else demo.
-    match propagation::live::snapshot_with_spots(&mycall, &mygrid, 1800, &needs, &extra) {
-        Ok(snap) => {
-            if let Ok(mut guard) = cache.lock() {
-                *guard = Some((std::time::Instant::now(), snap.clone()));
+    let mut snap = if let Some(s) = cached {
+        s
+    } else {
+        // Live PSK Reporter MQTT spots since the last rebuild, merged with the
+        // rate-limited XML query. Refetch (blocking HTTP); on failure keep the
+        // last good snapshot (marked stale), else demo.
+        let extra = live_paths
+            .lock()
+            .map(|b| b.recent(now, 1800))
+            .unwrap_or_default();
+        match propagation::live::snapshot_with_spots(&mycall, &mygrid, 1800, &needs, &extra) {
+            Ok(snap) => {
+                if let Ok(mut guard) = cache.lock() {
+                    *guard = Some((std::time::Instant::now(), snap.clone()));
+                }
+                snap
             }
-            Ok(snap)
+            Err(_) => {
+                let guard = cache.lock().map_err(|e| e.to_string())?;
+                guard
+                    .as_ref()
+                    .map(|(_, s)| {
+                        let mut s = s.clone();
+                        s.source = "cached".to_string();
+                        s
+                    })
+                    .unwrap_or_else(propagation::demo)
+            }
         }
-        Err(_) => {
-            let guard = cache.lock().map_err(|e| e.to_string())?;
-            Ok(guard
-                .as_ref()
-                .map(|(_, s)| {
-                    // Last-good snapshot after a failed refetch — mark it stale
-                    // so the UI shows a "cached" chip instead of pretending live.
-                    let mut s = s.clone();
-                    s.source = "cached".to_string();
-                    s
-                })
-                .unwrap_or_else(propagation::demo))
-        }
+    };
+
+    // --- opening detection + tracker: run on EVERY poll (incl. cache hits) ---
+    // Decoupled from the snapshot's 300 s HTTP cache so onset/`is_new` advance at
+    // the UI poll cadence ("alert the moment a band comes alive"). Reads a WIDE
+    // live-spot window (the detector's full baseline) and replaces the snapshot's
+    // openings with the tracker-stamped set (hysteresis-entered, onset-timed).
+    let cfg = propagation::OpeningConfig::default();
+    let wx = propagation::SpaceWx {
+        sfi: snap.space_wx.sfi,
+        kp: snap.space_wx.kp,
+        a_index: snap.space_wx.a_index,
+        xray_long: if snap.space_wx.flare { 1e-5 } else { 1e-7 },
+    };
+    let wide = live_paths
+        .lock()
+        .map(|b| b.recent(now, cfg.base_w))
+        .unwrap_or_default();
+    if let Ok(mut tr) = opening_tracker.lock() {
+        snap.openings =
+            propagation::detect_openings_tracked(&mycall, &mygrid, now, &wide, &wx, &mut tr);
     }
+
+    Ok(snap)
 }
 
 /// One waterfall row (Goertzel power spectrum of the last received frame).
@@ -1469,6 +1501,7 @@ pub fn run() {
         .manage(spots)
         .manage(live_paths)
         .manage(health)
+        .manage(SharedOpeningTracker::default())
         .manage(SharedQrzSession::default())
         .invoke_handler(tauri::generate_handler![
             get_snapshot,

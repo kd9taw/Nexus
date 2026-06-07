@@ -11,7 +11,20 @@ use crate::dxped::{
 };
 use crate::geo::compass_octant;
 use crate::model::{Band, Confidence, PathSpot, PropMode, SpaceWx};
-use crate::opening::{detect as detect_opening_signals, OpeningConfig};
+use crate::opening::{
+    detect as detect_opening_signals, BandFeatures, OpeningConfig, OpeningTracker,
+};
+
+/// The bands the opening detector evaluates: the F2-prone upper HF + VHF.
+pub const OPENING_BANDS: [Band; 7] = [
+    Band::B20,
+    Band::B15,
+    Band::B12,
+    Band::B10,
+    Band::B6,
+    Band::B4,
+    Band::B2,
+];
 
 /// A detected opening, projected for the UI.
 #[derive(Debug, Clone, Serialize)]
@@ -124,53 +137,94 @@ impl PropagationEngine {
     /// `OpeningTracker` in the command layer (the engine is rebuilt per call and
     /// cannot persist tracker state), so they default to 0/false here.
     fn detect_openings(&self, now: i64, spots: &[PathSpot], wx: &SpaceWx) -> Vec<OpeningView> {
-        const BANDS: [Band; 7] = [
-            Band::B20,
-            Band::B15,
-            Band::B12,
-            Band::B10,
-            Band::B6,
-            Band::B4,
-            Band::B2,
-        ];
         let cfg = OpeningConfig::default();
-        let signals =
-            detect_opening_signals(spots, &self.me_call, &self.me_grid, now, wx, &cfg, &BANDS);
-
-        let mut out = Vec::new();
-        for s in signals.into_iter().filter(|s| s.raw_open) {
-            let f = &s.features;
-            // Distinct far stations (union of the two directions; reciprocal ones
-            // are counted on both sides, so subtract the overlap).
-            let stations =
-                (f.unique_far_rx + f.unique_far_tx).saturating_sub(f.reciprocal_pairs) as u32;
-            let note = if s.mode == PropMode::Unknown {
-                "Opening — mode uncertain".to_string()
-            } else if s.band == Band::B6 && f.min_km > 0.0 && f.min_km < 1000.0 {
-                "High-MUF Es — watch 4 m / 2 m next".to_string()
-            } else {
-                String::new()
-            };
-
-            out.push(OpeningView {
-                band: s.band.label().to_string(),
-                mode: s.mode.label().to_string(),
-                octant: compass_octant(f.bearing_mean_deg).to_string(),
-                bearing_deg: f.bearing_mean_deg as f32,
-                max_km: f.max_km as f32,
-                probability: s.confidence,
-                stations,
-                confidence: confidence_word(s.confidence).label().to_string(),
-                confidence_score: s.confidence,
-                reciprocal_pairs: f.reciprocal_pairs as u32,
-                anomaly_z: f.anomaly_z,
-                onset_secs: 0,
-                is_new: false,
-                note,
-            });
-        }
-        out
+        let signals = detect_opening_signals(
+            spots,
+            &self.me_call,
+            &self.me_grid,
+            now,
+            wx,
+            &cfg,
+            &OPENING_BANDS,
+        );
+        // Stateless engine path (demo / non-tracked callers): project the raw-open
+        // bands without onset/is_new (those need the persistent tracker, stamped
+        // by the command layer via `detect_openings_tracked`).
+        signals
+            .into_iter()
+            .filter(|s| s.raw_open)
+            .map(|s| project_opening(s.band, &s.features, s.mode, s.confidence, 0, false))
+            .collect()
     }
+}
+
+/// Project one detected opening to the UI DTO. Shared by the stateless engine path
+/// and the tracker-stamped command path.
+fn project_opening(
+    band: Band,
+    f: &BandFeatures,
+    mode: PropMode,
+    confidence: f32,
+    onset_secs: i64,
+    is_new: bool,
+) -> OpeningView {
+    // Distinct far stations (union of both directions; reciprocal ones are counted
+    // on both sides, so subtract the overlap).
+    let stations = (f.unique_far_rx + f.unique_far_tx).saturating_sub(f.reciprocal_pairs) as u32;
+    let note = if mode == PropMode::Unknown {
+        "Opening — mode uncertain".to_string()
+    } else if band == Band::B6 && f.min_km > 0.0 && f.min_km < 1000.0 {
+        "High-MUF Es — watch 4 m / 2 m next".to_string()
+    } else {
+        String::new()
+    };
+    OpeningView {
+        band: band.label().to_string(),
+        mode: mode.label().to_string(),
+        octant: compass_octant(f.bearing_mean_deg).to_string(),
+        bearing_deg: f.bearing_mean_deg as f32,
+        max_km: f.max_km as f32,
+        probability: confidence,
+        stations,
+        confidence: confidence_word(confidence).label().to_string(),
+        confidence_score: confidence,
+        reciprocal_pairs: f.reciprocal_pairs as u32,
+        anomaly_z: f.anomaly_z,
+        onset_secs,
+        is_new,
+        note,
+    }
+}
+
+/// Detect openings AND advance the stateful [`OpeningTracker`] (hysteresis +
+/// onset stamping). Returns the UI views for currently-OPEN bands with
+/// `onset_secs`/`is_new` filled. Run this from the command layer once per poll
+/// (even on a cache hit) against a wide live-spot window so onset/alerting
+/// advances at the poll cadence, not the snapshot cache TTL.
+pub fn detect_openings_tracked(
+    me_call: &str,
+    me_grid: &str,
+    now: i64,
+    spots: &[PathSpot],
+    wx: &SpaceWx,
+    tracker: &mut OpeningTracker,
+) -> Vec<OpeningView> {
+    let cfg = OpeningConfig::default();
+    let signals = detect_opening_signals(spots, me_call, me_grid, now, wx, &cfg, &OPENING_BANDS);
+    tracker
+        .update(now, &signals)
+        .into_iter()
+        .map(|e| {
+            project_opening(
+                e.band,
+                &e.features,
+                e.mode,
+                e.confidence,
+                e.onset_secs,
+                e.is_new,
+            )
+        })
+        .collect()
 }
 
 /// Categorical confidence word from the v2 numeric score.
