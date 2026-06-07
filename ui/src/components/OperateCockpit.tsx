@@ -3,7 +3,6 @@ import type { AppSnapshot, ModeRequest, SourceKind, Tier } from '../types'
 import { Waterfall } from './Waterfall'
 import { OperateDecodes } from './OperateDecodes'
 import { OperateQsoStrip } from './OperateQsoStrip'
-import { LinkPill } from './LinkPill'
 
 interface Props {
   snap: AppSnapshot
@@ -195,6 +194,8 @@ export function OperateCockpit({
       </div>
 
       <div className="cockpit-body">
+        {/* Waterfall: a short full-width strip (not a tall column) — the spectrum
+            is a glance tool; the real estate goes to the decode lists + roster. */}
         <section className="cockpit-waterfall panel">
           <Waterfall
             transmitting={snap.radio.transmitting}
@@ -203,28 +204,18 @@ export function OperateCockpit({
             theme={theme}
             onTune={onTune}
           />
-          <LinkPill link={snap.link} radio={snap.radio} />
         </section>
-        <aside className={`cockpit-side ${layoutMode}`}>
-          <OperateQsoStrip
-            qso={snap.qso}
-            onSetMode={onSetMode}
-            onResend={onResend}
-            onFreetext={onFreetext}
-            onLog={onLog}
-          />
-          <div className="cockpit-rxfreq panel">
-            <OperateDecodes
-              decodes={snap.recentDecodes}
-              slot={snap.radio.slot}
-              rxOffsetHz={snap.radio.rxOffsetHz}
-              harqRescues={snap.harqRescues}
-              onCall={onCall}
-              lockedFilter="rx"
-              compact
-              title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
-            />
-          </div>
+
+        {/* Prominent operating bar: Call CQ / S&P / Now-sending / Resend / Tx5. */}
+        <OperateQsoStrip
+          qso={snap.qso}
+          onSetMode={onSetMode}
+          onResend={onResend}
+          onFreetext={onFreetext}
+          onLog={onLog}
+        />
+
+        <div className={`cockpit-lower ${layoutMode}`}>
           <div className="cockpit-decodes panel">
             <OperateDecodes
               decodes={snap.recentDecodes}
@@ -234,8 +225,22 @@ export function OperateCockpit({
               onCall={onCall}
             />
           </div>
-          <div className="cockpit-roster panel">{roster}</div>
-        </aside>
+          <aside className="cockpit-side">
+            <div className="cockpit-rxfreq panel">
+              <OperateDecodes
+                decodes={snap.recentDecodes}
+                slot={snap.radio.slot}
+                rxOffsetHz={snap.radio.rxOffsetHz}
+                harqRescues={snap.harqRescues}
+                onCall={onCall}
+                lockedFilter="rx"
+                compact
+                title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
+              />
+            </div>
+            <div className="cockpit-roster panel">{roster}</div>
+          </aside>
+        </div>
       </div>
     </main>
   )

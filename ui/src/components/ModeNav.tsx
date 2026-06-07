@@ -42,7 +42,7 @@ interface Item {
 }
 
 const ITEMS: Item[] = [
-  { id: 'operate', label: 'Operate', icon: Radio, title: 'Operate — waterfall-first cockpit (FT8/FT4/FT1/DX1)' },
+  { id: 'operate', label: 'FT8/FT4', icon: Radio, title: 'FT8/FT4 Operations — waterfall-first cockpit' },
   { id: 'propagation', label: 'Prop', icon: Sun, title: 'Propagation & opening intelligence — what’s open now, 6m openings, DXpeditions' },
   { id: 'map', label: 'Map', icon: Globe, title: 'Map — azimuthal beam map: great-circle headings, range rings, openings, DXpeditions' },
   { id: 'chat', label: 'Chat', icon: MessageSquare, title: 'Chat — free-form QSO' },

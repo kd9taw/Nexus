@@ -52,12 +52,12 @@ export function OperateQsoStrip({ qso, onSetMode, onResend, onFreetext, onLog }:
         <div className="cq-roles" role="group" aria-label="Sequencer role">
           <button
             type="button"
-            className={`cq-role${running ? ' active' : ''}`}
+            className={`cq-role cq-call${running ? ' active' : ''}`}
             aria-pressed={running}
             onClick={() => onSetMode('qso-run')}
             title="Call CQ (run)"
           >
-            CQ
+            Call CQ
           </button>
           <button
             type="button"

@@ -1344,35 +1344,36 @@ body.resizing {
   flex-direction: column;
   gap: 6px;
 }
-/* Workspace pill tabs (DX / MSG) — the top-level area switch. */
+/* Workspace pill tabs (DX / MSG) — the top-level area switch. Made prominent so
+   it reads as a primary control, not a subtle toggle. */
 .mode-nav-areas {
   display: flex;
-  gap: 4px;
-  margin-bottom: 10px;
-  padding-bottom: 10px;
+  gap: 5px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--border);
 }
 .area-pill {
   flex: 1;
-  padding: 5px 0;
-  border: 1px solid var(--border);
+  padding: 9px 0;
+  border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--bg-elev-2);
-  color: var(--text-dim);
-  font-size: 0.72rem;
+  color: var(--text);
+  font-size: 0.84rem;
   font-weight: 800;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   cursor: pointer;
   transition: var(--transition);
 }
 .area-pill:hover {
-  color: var(--text);
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .area-pill.active {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 .mode-btn {
   display: flex;
@@ -4682,18 +4683,35 @@ select.settings-input {
 .cockpit-body {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: var(--gap);
 }
-@media (max-width: 900px) {
-  .cockpit-body {
-    grid-template-columns: 1fr;
-    grid-auto-rows: minmax(0, 1fr);
-  }
+/* Waterfall: a SHORT full-width strip (a glance tool), not a tall column — the
+   real estate goes to the decode lists + roster below. */
+.cockpit-waterfall {
+  flex: 0 0 22%;
+  max-height: 190px;
+  min-height: 88px;
+  display: flex;
+  overflow: hidden;
 }
-
-.cockpit-waterfall,
+.cockpit-waterfall > :first-child {
+  flex: 1;
+  min-height: 0;
+}
+/* Lower region: Band Activity (main) beside the Rx-Freq + Roster column. */
+.cockpit-lower {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: var(--gap);
+}
+/* Roster mode (GridTracker-style): the Call Roster column becomes dominant. */
+.cockpit-lower.roster {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 1.7fr);
+}
 .cockpit-side {
   display: flex;
   flex-direction: column;
@@ -4701,10 +4719,12 @@ select.settings-input {
   gap: 8px;
   overflow: hidden;
 }
-/* The waterfall canvas fills the panel above the link pill. */
-.cockpit-waterfall > :first-child {
-  flex: 1;
-  min-height: 0;
+@media (max-width: 900px) {
+  .cockpit-lower,
+  .cockpit-lower.roster {
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(0, 1fr);
+  }
 }
 
 /* Side column: compact QSO strip on top, Band Activity (the big scroller), then
@@ -4718,8 +4738,8 @@ select.settings-input {
 }
 .cockpit-rxfreq {
   flex: 0 0 auto;
-  max-height: 26%;
-  min-height: 92px;
+  max-height: 42%;
+  min-height: 96px;
   display: flex;
   overflow: hidden;
   padding: 6px 10px;
@@ -4736,7 +4756,6 @@ select.settings-input {
   font-size: 0.78rem;
 }
 .cockpit-decodes {
-  flex: 3 1 0;
   min-height: 0;
   display: flex;
   overflow: hidden;
@@ -4753,30 +4772,30 @@ select.settings-input {
   overflow: hidden;
   padding: 8px 10px;
 }
-/* Roster mode (GridTracker-style): Call Roster dominant, Band Activity recedes.
-   Classic mode keeps the defaults above (Band Activity 3:1). */
-.cockpit-side.roster .cockpit-decodes {
-  flex: 1 1 0;
-}
-.cockpit-side.roster .cockpit-roster {
-  flex: 3 1 0;
-}
 .cockpit-layout-toggle {
   display: inline-flex;
-  gap: 2px;
+  gap: 0;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
 }
 .clt-opt {
-  padding: 2px 9px;
-  border: 1px solid var(--border);
+  padding: 5px 14px;
+  border: none;
   background: var(--bg-elev-2);
-  color: var(--text-dim);
-  font-size: 0.7rem;
+  color: var(--text);
+  font-size: 0.78rem;
   font-weight: 800;
-  border-radius: var(--radius-sm);
+  letter-spacing: 0.02em;
+}
+.clt-opt + .clt-opt {
+  border-left: 1px solid var(--accent);
+}
+.clt-opt:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 .clt-opt.active {
   background: var(--accent);
-  border-color: var(--accent);
   color: var(--accent-ink);
 }
 .cockpit-roster > * {
@@ -4870,16 +4889,29 @@ select.settings-input {
 }
 .cq-roles {
   display: inline-flex;
-  gap: 2px;
+  gap: 6px;
 }
 .cq-role {
-  padding: 2px 9px;
-  border: 1px solid var(--border);
+  padding: 6px 16px;
+  border: 1px solid var(--accent);
   background: var(--bg-elev-2);
-  color: var(--text-dim);
-  font-size: 0.7rem;
+  color: var(--text);
+  font-size: 0.84rem;
   font-weight: 800;
+  letter-spacing: 0.02em;
   border-radius: var(--radius-sm);
+}
+.cq-role:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+/* Call CQ is the primary action — give it the accent fill so it's easy to find. */
+.cq-role.cq-call {
+  border-color: var(--tx);
+}
+.cq-role.cq-call.active {
+  background: var(--tx);
+  border-color: var(--tx);
+  color: #fff;
 }
 .cq-role.active {
   background: var(--accent);
