@@ -42,6 +42,38 @@ pub enum State {
     Done,
 }
 
+impl State {
+    /// Map to WSJT-X `nQSOProgress` (0..5) — the a-priori (AP) pass-schedule
+    /// index the golden FT8/FT4 decoder (`ft8b`/`ft4_decode`) keys off via
+    /// `naptypes`/`nappasses`. WSJT-X's index is the Tx stage you *last sent*
+    /// (its enum `CALLING, REPLYING, REPORT, ROGER_REPORT, ROGERS, SIGNOFF`),
+    /// which the decoder uses to predict the partner's *incoming* message and
+    /// freeze the known fields (MyCall/DxCall/RRR/73/RR73) in the AP mask.
+    ///
+    /// Our 7 sequencer states bijection cleanly onto WSJT-X's 6 levels — the
+    /// two pre-QSO states (`Listening`/`CallingCq`) both sit at CALLING(0):
+    ///
+    /// | `State`       | sent (Tx) | nQSOProgress |
+    /// |---------------|-----------|--------------|
+    /// | Listening     | —         | 0 CALLING    |
+    /// | CallingCq     | CQ (Tx6)  | 0 CALLING    |
+    /// | AwaitReport   | grid (T1) | 1 REPLYING   |
+    /// | AwaitRoger    | rpt (T2)  | 2 REPORT     |
+    /// | AwaitRr73     | R+rpt(T3) | 3 ROGER_RPT  |
+    /// | Confirming    | RR73 (T4) | 4 ROGERS     |
+    /// | Done          | 73 (T5)   | 5 SIGNOFF    |
+    pub fn nqso_progress(self) -> i32 {
+        match self {
+            State::Listening | State::CallingCq => 0,
+            State::AwaitReport => 1,
+            State::AwaitRoger => 2,
+            State::AwaitRr73 => 3,
+            State::Confirming => 4,
+            State::Done => 5,
+        }
+    }
+}
+
 /// One station's auto-sequencer.
 #[derive(Debug, Clone)]
 pub struct Station {
@@ -363,6 +395,42 @@ pub fn run_loopback_qso(
         }
     }
     log
+}
+
+#[cfg(test)]
+mod nqso_progress_tests {
+    use super::*;
+
+    #[test]
+    fn maps_states_to_wsjtx_nqso_progress_bijectively() {
+        // The two pre-QSO states both sit at CALLING(0); the rest map 1:1 onto
+        // WSJT-X's CALLING..SIGNOFF (0..5), which selects the AP pass schedule.
+        assert_eq!(State::Listening.nqso_progress(), 0);
+        assert_eq!(State::CallingCq.nqso_progress(), 0);
+        assert_eq!(State::AwaitReport.nqso_progress(), 1);
+        assert_eq!(State::AwaitRoger.nqso_progress(), 2);
+        assert_eq!(State::AwaitRr73.nqso_progress(), 3);
+        assert_eq!(State::Confirming.nqso_progress(), 4);
+        assert_eq!(State::Done.nqso_progress(), 5);
+    }
+
+    #[test]
+    fn nqso_progress_is_always_in_decoder_range() {
+        // naptypes/nappasses in ft8b/ft4_decode are dimensioned (0:5); an
+        // out-of-range index is an out-of-bounds read in the Fortran. Guard it.
+        for st in [
+            State::Listening,
+            State::CallingCq,
+            State::AwaitReport,
+            State::AwaitRoger,
+            State::AwaitRr73,
+            State::Confirming,
+            State::Done,
+        ] {
+            let p = st.nqso_progress();
+            assert!((0..=5).contains(&p), "{st:?} -> {p} out of 0..=5");
+        }
+    }
 }
 
 #[cfg(test)]

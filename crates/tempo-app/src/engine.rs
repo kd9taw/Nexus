@@ -1726,15 +1726,33 @@ impl Engine {
             // counter at the active slot period suffices.
             let frame_time_ms =
                 (slot as i64).wrapping_mul((self.active_slot_secs() * 1000.0) as i64);
+            // A-priori (AP) context for the golden WSJT-X FT8/FT4 decoder: our
+            // callsign, the station we're working, and the QSO-progress index
+            // (0..5) that selects the decoder's AP pass schedule (naptypes/
+            // nappasses in ft8b/ft4_decode). This is exactly what WSJT-X supplies
+            // at this point in a QSO — the decoder itself is unmodified; we only
+            // feed it the inputs that let it predict messages addressed to us and
+            // recover them ~1-2 dB deeper. Only FT8/FT4 use WSJT-X AP; FT1 has its
+            // own IR-HARQ sensitivity lever and ignores these, so it stays on the
+            // empty/0 path (no behavioural change to the proven FT1 decode).
+            let (ap_mycall, ap_hiscall, ap_progress) = match (&self.mode, self.app.tier())
+            {
+                (Mode::Qso { station, .. }, Tier::Ft8 | Tier::Ft4) => (
+                    self.settings.mycall.clone(),
+                    station.dxcall.clone().unwrap_or_default(),
+                    station.state.nqso_progress(),
+                ),
+                _ => (String::new(), String::new(), 0),
+            };
             let iwave = channel::to_i16(frame);
             let req = modes::DecodeRequest {
                 iwave: &iwave,
                 nfa: 200,
                 nfb: 2900,
                 ndepth: 3,
-                mycall: "",
-                hiscall: "",
-                nqso_progress: 0,
+                mycall: &ap_mycall,
+                hiscall: &ap_hiscall,
+                nqso_progress: ap_progress,
                 frame_time_ms,
             };
             self.source.decode(&req)
@@ -2836,6 +2854,82 @@ mod tests {
                 .any(|d| d.message == "CQ KD9TAW EN52"),
             "FT8 live ingest must recover the message; got {:?}",
             e.last_decodes()
+        );
+    }
+
+    /// Like [`native_frame_for`] but at a target SNR with seeded AWGN (the repo
+    /// channel convention: `snr_to_scale` signal scale + unit-variance noise).
+    fn noisy_frame_for(
+        kind: modes::ModeKind,
+        msg: &str,
+        f0: f32,
+        snr_db: f32,
+        seed: u64,
+    ) -> Vec<f32> {
+        let mode = modes::make_mode(kind);
+        let tones = mode.encode(msg);
+        assert!(!tones.is_empty(), "{} encode failed", kind.as_str());
+        let wave = mode.gen_wave(&tones, ft1::SAMPLE_RATE, f0);
+        let n = mode.frame_samples();
+        let off = if kind == modes::ModeKind::Ft8 { 6_000 } else { 0 };
+        let sig = tempo_core::channel::snr_to_scale(snr_db, ft1::SAMPLE_RATE);
+        let mut noise = tempo_core::channel::Awgn::new(seed);
+        let mut frame = vec![0f32; n];
+        for (i, &s) in wave.iter().enumerate() {
+            if off + i < n {
+                frame[off + i] = sig * s;
+            }
+        }
+        for s in frame.iter_mut() {
+            *s += noise.sample();
+        }
+        frame
+    }
+
+    /// End-to-end proof that the LIVE engine feeds a-priori (AP) context from the
+    /// active QSO into the golden FT8 decoder. At −22 dB the no-context FT8
+    /// decoder recovers an RR73 0% of the time (see ft8's `ap_decode` tests), so
+    /// recovery here can ONLY come from `ingest` passing our call + the worked
+    /// station + nQSOProgress. The blanked-call control runs the identical path
+    /// with AP disabled, isolating the wiring as the cause.
+    #[test]
+    fn engine_qso_feeds_ap_context_to_recover_marginal_frames() {
+        let msg = "KD9TAW W1AW RR73"; // RR73 to me → iaptype 6 (all 77 ap bits)
+        let seeds = 6u64;
+        let (mut recovered, mut control) = (0u32, 0u32);
+        for seed in 0..seeds {
+            let frame = noisy_frame_for(modes::ModeKind::Ft8, msg, 1500.0, -22.0, seed);
+
+            // AP path: FT8 QSO, our call KD9TAW, working W1AW, awaiting RR73.
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.call_station_with_grid("W1AW", Some("FN31"));
+            if let Mode::Qso { station, .. } = &mut e.mode {
+                station.state = QsoState::AwaitRr73; // → nQSOProgress 3 (deep AP)
+            }
+            e.ingest(&frame, 100);
+            if e.last_decodes().iter().any(|d| d.message == msg) {
+                recovered += 1;
+            }
+
+            // Control: identical engine/QSO, but blank MyCall → no AP possible.
+            let mut c = Engine::new("KD9TAW", "EN52", 0);
+            c.call_station_with_grid("W1AW", Some("FN31"));
+            if let Mode::Qso { station, .. } = &mut c.mode {
+                station.state = QsoState::AwaitRr73;
+            }
+            c.settings.mycall.clear();
+            c.ingest(&frame, 100);
+            if c.last_decodes().iter().any(|d| d.message == msg) {
+                control += 1;
+            }
+        }
+        assert_eq!(
+            control, 0,
+            "no operator call → no AP; the frame must stay undecoded ({control}/{seeds})"
+        );
+        assert!(
+            recovered >= 4,
+            "the QSO engine must feed AP context and recover the marginal frame ({recovered}/{seeds})"
         );
     }
 
