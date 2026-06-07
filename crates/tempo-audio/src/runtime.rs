@@ -143,7 +143,8 @@ mod tests {
     #[test]
     fn receive_slot_ingests_and_updates_roster() {
         // Station transmits on odd slots (parity 1), so slot 2 is a RECEIVE slot.
-        let eng = Engine::new("W9XYZ", "EN37", 1);
+        let mut eng = Engine::new("W9XYZ", "EN37", 1);
+        eng.set_tier(tempo_app::dto::Tier::Ft1); // FT1-modem runtime test (default is FT8)
         let mut backend = MockBackend::new();
         backend.queue_capture(cq_rx_frame("N0XYZ", "EN52"));
         let mut trx = Transceiver::new(eng, backend, Rig::vox());

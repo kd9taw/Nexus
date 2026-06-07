@@ -620,7 +620,6 @@ export default function App() {
         transmitting={snap.radio.transmitting}
         rxOffsetHz={snap.radio.rxOffsetHz}
         txOffsetHz={snap.radio.txOffsetHz}
-        decodes={snap.recentDecodes}
         theme={theme}
         onTune={handleTune}
       />

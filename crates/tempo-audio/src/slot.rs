@@ -98,6 +98,7 @@ mod tests {
     fn rx_slot_decodes_without_keying() {
         // Idle engine → nothing to send even on its TX slot → receive path.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tier(tempo_app::dto::Tier::Ft1); // FT1-modem slot test (default is FT8)
         let mut rig = Rig::vox();
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();

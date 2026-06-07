@@ -6,6 +6,7 @@
 //! Mirrors `engine_loopback.rs`, but exercises `Engine::broadcast` instead of
 //! directed `send_message` — the broadcast sends unconditionally on TX slots.
 
+use tempo_app::dto::Tier;
 use tempo_app::engine::Engine;
 use tempo_core::channel::{VirtualAir, ON_TIME_OFFSET};
 use tempo_core::ft1;
@@ -14,6 +15,10 @@ use tempo_core::ft1;
 fn two_engines_exchange_an_open_broadcast() {
     let mut a = Engine::new("W9XYZ", "EN37", 0); // transmits on even slots
     let mut b = Engine::new("K2DEF", "FN31", 1); // transmits on odd slots
+    // Open broadcast / free-text chat is an FT1-native feature (long free text);
+    // the default tier is now FT8, so pin both ends to FT1 for this exchange.
+    a.set_tier(Tier::Ft1);
+    b.set_tier(Tier::Ft1);
     let mut air_a2b = VirtualAir::new(ft1::SAMPLE_RATE, 1);
     let mut air_b2a = VirtualAir::new(ft1::SAMPLE_RATE, 2);
 

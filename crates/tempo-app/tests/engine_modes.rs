@@ -2,6 +2,7 @@
 //! two engines over a virtual channel complete a ragchew QSO and a Field Day
 //! exchange, and the results surface in each engine's snapshot (the UI contract).
 
+use tempo_app::dto::Tier;
 use tempo_app::engine::Engine;
 use tempo_core::channel::{VirtualAir, ON_TIME_OFFSET};
 use tempo_core::ft1;
@@ -33,6 +34,8 @@ fn run(a: &mut Engine, b: &mut Engine, slots: u64, done: impl Fn(&Engine, &Engin
 fn qso_mode_completes_through_the_engine() {
     let mut a = Engine::new("W9XYZ", "EN37", 0);
     let mut b = Engine::new("K2DEF", "FN31", 1);
+    a.set_tier(Tier::Ft1); // FT1-modem loopback (default tier is now FT8)
+    b.set_tier(Tier::Ft1);
     a.set_mode("qso-run").unwrap();
     b.set_mode("qso-monitor").unwrap();
 
@@ -51,6 +54,8 @@ fn qso_mode_completes_through_the_engine() {
 fn field_day_mode_logs_through_the_engine() {
     let mut run_st = Engine::new("W9XYZ", "EN37", 0);
     let mut sp = Engine::new("K2DEF", "FN31", 1);
+    run_st.set_tier(Tier::Ft1); // FT1-modem loopback (default tier is now FT8)
+    sp.set_tier(Tier::Ft1);
     // Configure exchanges via settings, then enter Field Day mode.
     {
         let mut s = run_st.settings().clone();

@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { getSpectrumRow } from '../api'
-import type { DecodeRow } from '../types'
 import { sampleLut } from '../colormaps'
 import { agcRange, bakeLut, normalize, themeColormap, MIN_SPAN } from '../waterfall'
 
@@ -10,8 +9,6 @@ interface Props {
   rxOffsetHz: number
   /** Transmit audio offset (Hz) — the red marker (where we transmit). */
   txOffsetHz: number
-  /** Recently decoded signals, marked at their real audio offsets. */
-  decodes: DecodeRow[]
   theme: string
   /** Click to tune: `shift` = set TX offset, otherwise set RX offset. */
   onTune?: (freqHz: number, shift: boolean) => void
@@ -35,7 +32,7 @@ function xToFreq(x: number, width: number): number {
   return F_MIN + (x / width) * (F_MAX - F_MIN)
 }
 
-export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, decodes, theme, onTune }: Props) {
+export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef<number | null>(null)
   // refs so the animation loop always reads current props without re-subscribing
@@ -43,7 +40,6 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, decodes, theme
   const themeRef = useRef(theme)
   const rxOffRef = useRef(rxOffsetHz)
   const txOffRef = useRef(txOffsetHz)
-  const decodesRef = useRef(decodes)
   // pre-baked colormap LUT (256×RGBA) for the render hot path; rebuilt on theme.
   const lutRef = useRef<Uint8ClampedArray>(bakeLut(themeColormap(theme)))
   // live legend readout (updated directly, no React re-render at 8 Hz)
@@ -53,7 +49,6 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, decodes, theme
   themeRef.current = theme
   rxOffRef.current = rxOffsetHz
   txOffRef.current = txOffsetHz
-  decodesRef.current = decodes
 
   // Rebuild the LUT synchronously before paint (useLayoutEffect, not useEffect)
   // so it changes atomically with the legend gradient (a sync useMemo below) on
@@ -245,31 +240,9 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, decodes, theme
         ctx.fillText(`${f}`, Math.min(W - 26, x + 2), wfH + AXIS_H / 2)
       }
 
-      // --- decoded-signal markers at their REAL audio offsets ---
-      ctx.font = '10px system-ui, sans-serif'
-      const seen = new Set<string>()
-      decodesRef.current
-        .filter((d) => d.freqHz > 0)
-        .slice(0, 8)
-        .forEach((d) => {
-          const call = d.from ?? d.message.split(' ')[0]
-          if (seen.has(call)) return
-          seen.add(call)
-          const x = freqToX(d.freqHz, W)
-          // thin tick at the signal's offset
-          ctx.fillStyle =
-            th === 'light' ? 'rgba(40,50,70,0.5)' : 'rgba(190,205,230,0.45)'
-          ctx.fillRect(x, 0, 1, wfH)
-          // call label, colored by SNR
-          const rows = wfH < 90 ? 2 : 4 // fewer label rows in a short strip
-          const y = 16 + (seen.size % rows) * 13
-          const w = ctx.measureText(call).width + 8
-          ctx.fillStyle =
-            th === 'amber' ? 'rgba(40,26,0,0.8)' : th === 'light' ? 'rgba(255,255,255,0.82)' : 'rgba(10,16,28,0.78)'
-          ctx.fillRect(Math.min(W - w - 2, x + 1), y - 7, w, 14)
-          ctx.fillStyle = d.snr >= -12 ? '#3ddc8c' : d.snr >= -18 ? '#e0b020' : '#9aa6b8'
-          ctx.fillText(call, Math.min(W - w + 2, x + 5), y)
-        })
+      // (No per-decode callsign labels on the waterfall — WSJT-X keeps the
+      // spectrum clean; callsigns live in the Band Activity list. Only the
+      // Rx/Tx markers are drawn.)
 
       // --- TX marker (red) then RX marker (green), drawn last so they're on top ---
       const txx = freqToX(txOffRef.current, W)

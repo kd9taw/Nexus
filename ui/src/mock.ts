@@ -316,7 +316,7 @@ function defaultSettings(): Settings {
     mycall: MYCALL,
     mygrid: MYGRID,
     band: '20m',
-    dialMhz: 14.0905,
+    dialMhz: 14.074,
     sideband: 'USB',
     fdClass: '1D',
     fdSection: 'WI',
@@ -448,7 +448,7 @@ function baseSnapshot(settings: Settings): AppSnapshot {
       sourceLabel: 'Native (FT1)',
     },
     link: {
-      tier: 'FT1',
+      tier: 'FT8',
       snrDb: -9,
       dtSec: 0.1,
       freqHz: 1500,

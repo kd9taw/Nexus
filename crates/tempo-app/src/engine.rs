@@ -228,7 +228,8 @@ impl Engine {
             last_rx: None,
             last_decodes: Vec::new(),
             harq_rescues: 0,
-            source: Box::new(NativeSource::from_kind(modes::ModeKind::Ft1)),
+            // Default native source = FT8 (matches the default link tier).
+            source: Box::new(NativeSource::from_kind(modes::ModeKind::Ft8)),
             source_kind: SourceKind::Native,
             mode: Mode::Chat,
             tx_enabled: true,
@@ -2246,6 +2247,7 @@ mod tests {
     #[test]
     fn tier_switch_keeps_message_layer() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft1); // default is now FT8; this test compares FT1 vs DX1
         e.set_beacon(true); // beacon off by default; this test compares beacon waveforms
         let ft1_wave = e.poll_tx(0);
         e.set_tier(Tier::Dx1);
@@ -2284,6 +2286,7 @@ mod tests {
     #[test]
     fn completed_qso_auto_logs_one_record() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Ft1); // this test asserts the FT1 path (default is now FT8)
         assert!(e.settings().auto_log, "auto_log on by default");
         assert!(e.get_log().is_empty(), "log starts empty");
 

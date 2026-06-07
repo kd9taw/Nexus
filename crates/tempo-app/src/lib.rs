@@ -68,7 +68,7 @@ impl AppState {
             slot: 0,
             active_peer: None,
             radio: RadioStatus {
-                dial_mhz: 14.0905,
+                dial_mhz: 14.074, // FT8 20m (default mode)
                 band: "20m".to_string(),
                 sideband: "USB".to_string(),
                 transmitting: false,
@@ -94,7 +94,10 @@ impl AppState {
                 source_label: String::new(),
             },
             link: LinkState {
-                tier: Tier::Ft1,
+                // Default to FT8 on startup — the mode the overwhelming majority of
+                // operators use. (Tier is runtime state, not persisted, so every
+                // launch starts on FT8.)
+                tier: Tier::Ft8,
                 snr_db: 0.0,
                 dt_sec: 0.0,
                 freq_hz: 0.0,
@@ -530,7 +533,7 @@ mod tests {
         for key in ["tier", "snrDb", "dtSec", "freqHz", "rv", "state", "quality"] {
             assert!(link.get(key).is_some(), "missing link.{key}: {link}");
         }
-        assert_eq!(link["tier"], "FT1");
+        assert_eq!(link["tier"], "FT8"); // default mode is FT8
 
         // Station camelCase keys + presence enum value.
         let station = &v["stations"][0];
@@ -569,7 +572,7 @@ mod tests {
             assert!(msg.get(key).is_some(), "missing message.{key}: {msg}");
         }
         assert_eq!(msg["outbound"], true);
-        assert_eq!(msg["tier"], "FT1");
+        assert_eq!(msg["tier"], "FT8"); // default mode is FT8
 
         // Full round-trip back into the typed snapshot.
         let back: AppSnapshot = serde_json::from_value(v).expect("round-trips");
