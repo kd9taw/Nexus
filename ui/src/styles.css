@@ -2413,6 +2413,48 @@ body.resizing {
   font-family: var(--font-mono);
 }
 
+.qso-work {
+  display: flex;
+  gap: 8px;
+}
+.qso-work-call {
+  flex: 2;
+  min-width: 0;
+}
+.qso-work-grid {
+  flex: 1;
+  min-width: 0;
+}
+.qso-work input {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elev-1);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.03em;
+}
+.qso-work input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.qso-work button {
+  flex: none;
+  padding: 8px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--tx);
+  background: var(--tx);
+  color: #fff;
+  font-weight: 800;
+  font-size: 13px;
+  transition: var(--transition);
+}
+.qso-work button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .qso-now {
   display: flex;
   align-items: center;
@@ -2545,6 +2587,105 @@ body.resizing {
   font-size: 12px;
   color: var(--text-faint);
   line-height: 1.5;
+}
+
+/* ===========================================================================
+   Prompt-to-log confirm popup (WSJT-X "Prompt me to log QSO")
+   =========================================================================== */
+.logconfirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, #000 55%, transparent);
+  backdrop-filter: blur(2px);
+}
+.logconfirm {
+  width: min(420px, 92vw);
+  padding: 20px;
+  border-radius: var(--radius-md, 12px);
+  border: 1px solid var(--border);
+  background: var(--bg-elev-1);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+.logconfirm-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.logconfirm-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+}
+.logconfirm-sub {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.logconfirm-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.logconfirm-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.logconfirm-grid label span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.logconfirm-grid input {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font-size: 14px;
+}
+.logconfirm-grid input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.logconfirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+.logconfirm-discard,
+.logconfirm-log {
+  padding: 9px 20px;
+  border-radius: var(--radius-sm);
+  font-weight: 800;
+  font-size: 13px;
+  transition: var(--transition);
+}
+.logconfirm-discard {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+}
+.logconfirm-discard:hover {
+  border-color: var(--state-bad, #e5484d);
+  color: var(--state-bad, #e5484d);
+}
+.logconfirm-log {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.logconfirm-log:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* ===========================================================================

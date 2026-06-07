@@ -8,6 +8,8 @@ interface Props {
   onResend: () => void
   /** Send in-QSO free text (WSJT-X Tx5) as the next transmission. */
   onFreetext: (text: string) => void
+  /** Start a directed QSO with a typed call (+ optional DX grid for the log). */
+  onWork: (call: string, grid?: string) => void
 }
 
 function reportLabel(rxReport: number | null): string {
@@ -15,7 +17,7 @@ function reportLabel(rxReport: number | null): string {
   return `${rxReport > 0 ? '+' : ''}${rxReport} dB`
 }
 
-export function QsoPanel({ qso, onSetMode, onResend, onFreetext }: Props) {
+export function QsoPanel({ qso, onSetMode, onResend, onFreetext, onWork }: Props) {
   // Default to Search-&-Pounce (listen first), never an implied "Calling CQ".
   const running = qso?.running ?? false
   const dxcall = qso?.dxcall ?? null
@@ -29,6 +31,16 @@ export function QsoPanel({ qso, onSetMode, onResend, onFreetext }: Props) {
     if (!t) return
     onFreetext(t)
     setFreeText('')
+  }
+
+  const [dxCall, setDxCall] = useState('')
+  const [dxGrid, setDxGrid] = useState('')
+  const work = () => {
+    const c = dxCall.trim()
+    if (!c) return
+    onWork(c, dxGrid.trim() || undefined)
+    setDxCall('')
+    setDxGrid('')
   }
 
   // Human-readable status banner.
@@ -48,6 +60,35 @@ export function QsoPanel({ qso, onSetMode, onResend, onFreetext }: Props) {
       </div>
 
       <div className="qso-body">
+        <form
+          className="qso-work"
+          onSubmit={(e) => {
+            e.preventDefault()
+            work()
+          }}
+        >
+          <input
+            className="qso-work-call"
+            type="text"
+            value={dxCall}
+            placeholder="DX call"
+            aria-label="DX callsign to work"
+            onChange={(e) => setDxCall(e.target.value.toUpperCase())}
+          />
+          <input
+            className="qso-work-grid"
+            type="text"
+            value={dxGrid}
+            maxLength={6}
+            placeholder="Grid"
+            aria-label="DX grid (optional, for the log)"
+            onChange={(e) => setDxGrid(e.target.value.toUpperCase())}
+          />
+          <button type="submit" disabled={!dxCall.trim()} title="Start a directed QSO with this station">
+            Work
+          </button>
+        </form>
+
         <div className={`qso-status-banner ${running ? 'running' : 'sp'}`}>
           <span className="qso-status-dot" aria-hidden />
           <span className="qso-status-text">{banner}</span>

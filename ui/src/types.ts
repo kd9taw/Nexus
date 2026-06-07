@@ -803,4 +803,7 @@ export interface AppSnapshot {
   /** Session count of IR-HARQ rescues (decodes recovered by combining
    * retransmissions). Drives the HARQ stats readout. */
   harqRescues: number
+  /** A completed QSO awaiting confirm-before-log (WSJT-X "Prompt me to log
+   * QSO"). Present only with promptToLog on; drives the confirm popup. */
+  pendingLog?: LoggedQso | null
 }

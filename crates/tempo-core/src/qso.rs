@@ -48,6 +48,9 @@ pub struct Station {
     pub mycall: String,
     pub mygrid: String,
     pub dxcall: Option<String>,
+    /// The DX station's Maidenhead grid, captured from their CQ/grid message (or
+    /// pre-seeded by the operator when starting a directed call). For the log.
+    pub dxgrid: Option<String>,
     pub state: State,
     /// Message transmitted on each of my TX slots (None = stay silent / listen).
     pub pending: Option<Msg>,
@@ -75,6 +78,7 @@ impl Station {
             mycall: mycall.into(),
             mygrid: mygrid.into(),
             dxcall: None,
+            dxgrid: None,
             state: State::CallingCq,
             pending: Some(Msg::Cq {
                 de: mycall.into(),
@@ -94,6 +98,7 @@ impl Station {
             mycall: mycall.into(),
             mygrid: mygrid.into(),
             dxcall: None,
+            dxgrid: None,
             state: State::Listening,
             pending: None,
             rx_report: None,
@@ -113,6 +118,7 @@ impl Station {
             mycall: mycall.into(),
             mygrid: mygrid.into(),
             dxcall: Some(dxcall.into()),
+            dxgrid: None,
             state: State::AwaitReport,
             pending: Some(Msg::Grid {
                 to: dxcall.into(),
@@ -208,8 +214,9 @@ impl Station {
             let m = Msg::parse(&d.message);
             let rpt = d.snr.clamp(-30, 30);
             match (self.state, &m) {
-                (State::Listening, Msg::Cq { de, .. }) => {
+                (State::Listening, Msg::Cq { de, grid }) => {
                     self.dxcall = Some(de.clone());
+                    self.dxgrid = Some(grid.clone());
                     self.pending = Some(Msg::Grid {
                         to: de.clone(),
                         de: self.mycall.clone(),
@@ -218,8 +225,9 @@ impl Station {
                     self.state = State::AwaitReport;
                     self.log(format!("heard CQ {de} → answering with grid"));
                 }
-                (State::CallingCq, Msg::Grid { to, de, .. }) if to == &self.mycall => {
+                (State::CallingCq, Msg::Grid { to, de, grid }) if to == &self.mycall => {
                     self.dxcall = Some(de.clone());
+                    self.dxgrid = Some(grid.clone());
                     self.pending = Some(Msg::Report {
                         to: de.clone(),
                         de: self.mycall.clone(),

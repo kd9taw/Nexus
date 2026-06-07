@@ -866,4 +866,10 @@ pub struct AppSnapshot {
     /// retransmissions, rv > 0). For the HARQ stats readout.
     #[serde(default)]
     pub harq_rescues: u32,
+    /// A completed QSO awaiting the operator's confirm-before-log (WSJT-X "Prompt
+    /// me to log QSO"). Present only when `prompt_to_log` is on and a QSO just
+    /// finished; the UI shows a confirm popup, then calls `confirm_pending_log` /
+    /// `discard_pending_log`.
+    #[serde(default)]
+    pub pending_log: Option<LoggedQso>,
 }

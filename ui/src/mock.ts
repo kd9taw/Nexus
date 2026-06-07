@@ -461,6 +461,7 @@ function baseSnapshot(settings: Settings): AppSnapshot {
     recentDecodes: recentDecodes.map((d) => ({ ...d })),
     qsy: qsyState.enabled ? { ...qsyState } : null,
     harqRescues: 2,
+    pendingLog: null,
   }
 }
 
@@ -644,6 +645,8 @@ class MockEngine {
   private qsoStep = 0
   /** running vs S&P role for the QSO sequencer */
   private qsoRunning = true
+  /** DX grid for the active directed call (operator-typed or from the roster) */
+  private dxGrid: string | null = null
   /** general ADIF logbook (most-recent first) */
   private logbook: LoggedQso[] = logbook.map((q) => ({ ...q }))
   private activation: Activation = { program: null, reference: null, qsoCount: 0 }
@@ -1008,10 +1011,11 @@ class MockEngine {
   }
 
   /** Answer a station: enter QSO (S&P) mode targeting that DX call. */
-  callStation(call: string): AppSnapshot {
+  callStation(call: string, grid?: string): AppSnapshot {
     this.qsoRunning = false
     this.qsoStep = 1
     const station = this.snap.stations.find((s) => s.call === call)
+    this.dxGrid = grid?.trim().toUpperCase() || station?.grid || null
     this.snap = {
       ...this.snap,
       mode: 'qso',
@@ -1026,6 +1030,24 @@ class MockEngine {
       },
       fieldDay: null,
     }
+    this.emit()
+    return this.snap
+  }
+
+  /** Confirm-and-log a QSO held by the prompt-to-log popup. */
+  confirmPendingLog(record: LoggedQso): AppSnapshot {
+    this.logbook = [record, ...this.logbook]
+    const stations = this.snap.stations.map((s) =>
+      s.call === record.call ? { ...s, worked: true } : s,
+    )
+    this.snap = { ...this.snap, stations, pendingLog: null }
+    this.emit()
+    return this.snap
+  }
+
+  /** Discard a held QSO without logging it. */
+  discardPendingLog(): AppSnapshot {
+    this.snap = { ...this.snap, pendingLog: null }
     this.emit()
     return this.snap
   }
@@ -1542,14 +1564,34 @@ class MockEngine {
     // --- advance the active mode's sequencer / scoreboard ---
     let qso = this.snap.qso
     let fieldDay = this.snap.fieldDay
+    let pendingLog = this.snap.pendingLog ?? null
     if (slotRolled && this.snap.mode === 'qso' && qso) {
       qso = this.advanceQso(qso)
+      // Prompt-to-log demo: when a contact reaches "Logged" and the operator
+      // asked to confirm first, surface a pending record instead of silent log.
+      if (qso.state === 'Logged' && this.settings.promptToLog && qso.dxcall && !pendingLog) {
+        pendingLog = {
+          call: qso.dxcall,
+          grid: this.dxGrid,
+          state: null,
+          band: this.settings.band,
+          freqMhz: this.settings.dialMhz,
+          mode: this.snap.link.tier,
+          rstSent: -7,
+          rstRcvd: qso.rxReport ?? null,
+          whenUnix: Math.floor(Date.now() / 1000),
+          confirmed: false,
+          awardConfirmed: false,
+          creditGranted: [],
+          creditSubmitted: [],
+        }
+      }
     }
     if (slotRolled && this.snap.mode === 'fieldDay' && fieldDay) {
       fieldDay = this.advanceFieldDay(fieldDay)
     }
 
-    this.snap = { ...this.snap, radio, link, stations, conversations, qso, fieldDay, recentDecodes }
+    this.snap = { ...this.snap, radio, link, stations, conversations, qso, fieldDay, recentDecodes, pendingLog }
     this.emit()
   }
 

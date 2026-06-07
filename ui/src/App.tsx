@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AppSnapshot, BandChannel, ModeRequest, Settings, SourceKind, Tier } from './types'
+import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import {
   broadcast as apiBroadcast,
   callStation as apiCallStation,
   qsoResend as apiQsoResend,
   qsoFreetext as apiQsoFreetext,
+  confirmPendingLog as apiConfirmPendingLog,
+  discardPendingLog as apiDiscardPendingLog,
   getBandPlan,
   getSettings,
   getSnapshot,
@@ -54,6 +56,7 @@ import { getPropagation, getFeedHealth, getNeedAlerts } from './api'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedTag } from './types'
 import { QsoPanel } from './components/QsoPanel'
+import { LogConfirm } from './components/LogConfirm'
 import { FieldDayView } from './components/FieldDayView'
 import { BandFeed } from './components/BandFeed'
 import { DecodeFeed } from './components/DecodeFeed'
@@ -328,12 +331,24 @@ export default function App() {
     void withErrorToast(() => Promise.resolve(apiSelectPeer(call)), 'Could not select station')
   }, [])
 
-  const handleCall = useCallback((call: string) => {
-    void withErrorToast(() => apiCallStation(call), `Could not work ${call}`).then((s) => {
+  const handleCall = useCallback((call: string, grid?: string) => {
+    void withErrorToast(() => apiCallStation(call, grid), `Could not work ${call}`).then((s) => {
       if (s) {
         setSnap(s)
         setView('qso')
       }
+    })
+  }, [])
+
+  const handleConfirmLog = useCallback((record: LoggedQso) => {
+    void withErrorToast(() => apiConfirmPendingLog(record), 'Could not log QSO').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  const handleDiscardLog = useCallback(() => {
+    void withErrorToast(() => apiDiscardPendingLog(), 'Could not discard QSO').then((s) => {
+      if (s) setSnap(s)
     })
   }, [])
 
@@ -615,6 +630,7 @@ export default function App() {
           onSetMode={handleSetMode}
           onResend={handleQsoResend}
           onFreetext={handleQsoFreetext}
+          onWork={handleCall}
         />,
       )
       break
@@ -812,6 +828,14 @@ export default function App() {
       <Toasts />
 
       {showWizard && <SetupWizard onApply={handleWizardApply} onSkip={handleWizardSkip} />}
+
+      {snap.pendingLog && (
+        <LogConfirm
+          record={snap.pendingLog}
+          onConfirm={handleConfirmLog}
+          onDiscard={handleDiscardLog}
+        />
+      )}
     </div>
   )
 }

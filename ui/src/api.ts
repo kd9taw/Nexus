@@ -122,10 +122,25 @@ export async function selectPeer(peer: string | null): Promise<void> {
  * Answer / work a station by callsign: enters QSO mode targeting that DX.
  * Returns the fresh snapshot.
  */
-export async function callStation(call: string): Promise<AppSnapshot> {
+export async function callStation(call: string, grid?: string): Promise<AppSnapshot> {
   const invoke = tauriInvoke()
-  if (invoke) return invoke<AppSnapshot>('call_station', { call })
-  return mockEngine.callStation(call)
+  if (invoke) return invoke<AppSnapshot>('call_station', { call, grid: grid ?? null })
+  return mockEngine.callStation(call, grid)
+}
+
+/** Confirm-and-log a QSO held by the prompt-to-log popup (the possibly-edited
+ * record). Returns the fresh snapshot. */
+export async function confirmPendingLog(record: LoggedQso): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('confirm_pending_log', { record })
+  return mockEngine.confirmPendingLog(record)
+}
+
+/** Discard a QSO held by the prompt-to-log popup without logging it. */
+export async function discardPendingLog(): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('discard_pending_log', {})
+  return mockEngine.discardPendingLog()
 }
 
 /** Operator "Resend": re-arm the current QSO message (re-transmit a stalled or

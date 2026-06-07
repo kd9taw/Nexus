@@ -929,9 +929,14 @@ fn set_hold_tx_freq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnaps
 /// Initiate a directed QSO with a specific station (the UI "work this station"
 /// action). Enters QSO mode answering `call`. Returns the refreshed snapshot.
 #[tauri::command]
-fn call_station(state: State<'_, SharedEngine>, call: String) -> Result<AppSnapshot, String> {
+fn call_station(
+    state: State<'_, SharedEngine>,
+    call: String,
+    grid: Option<String>,
+) -> Result<AppSnapshot, String> {
     let mut eng = state.lock().map_err(|e| e.to_string())?;
-    eng.call_station(&call);
+    let g = grid.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    eng.call_station_with_grid(&call, g);
     Ok(eng.snapshot())
 }
 
@@ -950,6 +955,26 @@ fn qso_resend(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 fn qso_freetext(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
     let mut eng = state.lock().map_err(|e| e.to_string())?;
     eng.qso_freetext(&text);
+    Ok(eng.snapshot())
+}
+
+/// Confirm-and-log a QSO held by the prompt-to-log popup. `record` is the
+/// (possibly edited) contact. Returns the refreshed snapshot.
+#[tauri::command]
+fn confirm_pending_log(
+    state: State<'_, SharedEngine>,
+    record: LoggedQso,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.confirm_pending_log(record.into());
+    Ok(eng.snapshot())
+}
+
+/// Discard a QSO held by the prompt-to-log popup without logging it.
+#[tauri::command]
+fn discard_pending_log(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.discard_pending_log();
     Ok(eng.snapshot())
 }
 
@@ -2153,6 +2178,8 @@ pub fn run() {
             call_station,
             qso_resend,
             qso_freetext,
+            confirm_pending_log,
+            discard_pending_log,
             log_qso,
             get_log,
             edit_qso,

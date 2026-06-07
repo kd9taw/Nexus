@@ -353,6 +353,8 @@ impl AppState {
             qsy: None,
             // Filled by the engine from its session HARQ tally; 0 at this layer.
             harq_rescues: 0,
+            // Filled by the engine when a QSO awaits confirm-before-log; None here.
+            pending_log: None,
         }
     }
 

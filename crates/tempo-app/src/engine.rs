@@ -115,6 +115,10 @@ pub struct Engine {
     /// The signal report I last sent the current QSO's DX station (RST sent),
     /// captured from the sequencer's outgoing (R)Report. Reset per QSO.
     qso_report_sent: Option<i32>,
+    /// A completed QSO held for the operator to confirm before it is logged
+    /// (WSJT-X "Prompt me to log QSO"). `Some` only while `prompt_to_log` is on
+    /// and a finished contact is awaiting confirm/discard.
+    pending_log: Option<QsoRecord>,
     /// Whether the active QSO has already been auto-logged (so it logs exactly
     /// once when the sequencer reaches `Done`). Reset when a new QSO starts.
     qso_logged: bool,
@@ -225,6 +229,7 @@ impl Engine {
             logbook: Logbook::new(),
             log_path: None,
             qso_report_sent: None,
+            pending_log: None,
             qso_logged: false,
             spectrum_audio: Vec::new(),
             cat_status: (None, String::new()),
@@ -826,10 +831,20 @@ impl Engine {
     /// queues, and opens a fresh auto-log window (so the contact logs once when
     /// the sequence completes).
     pub fn call_station(&mut self, dxcall: &str) {
+        self.call_station_with_grid(dxcall, None);
+    }
+
+    /// As [`call_station`], but pre-seeds the DX station's grid (e.g. the operator
+    /// typed it into the directed-call entry, or it came from a roster/spot) so
+    /// the contact logs with a grid even when we never decode the DX's own grid.
+    ///
+    /// [`call_station`]: Engine::call_station
+    pub fn call_station_with_grid(&mut self, dxcall: &str, dxgrid: Option<&str>) {
         let mycall = self.settings.mycall.clone();
         let mygrid = self.settings.mygrid.clone();
         let mut station = QsoStation::answering(&mycall, &mygrid, dxcall);
         station.confirm_with_rrr = self.settings.prefer_rrr;
+        station.dxgrid = dxgrid.map(|g| g.trim().to_uppercase()).filter(|g| !g.is_empty());
         self.mode = Mode::Qso {
             station: Box::new(station),
             running: true,
@@ -840,6 +855,18 @@ impl Engine {
         self.qso_logged = false;
         self.qso_report_sent = None;
         ft1::harq_reset(); // fresh exchange: drop stale receive-side IR-HARQ state
+    }
+
+    /// Confirm-and-log a QSO held by the prompt-to-log popup. `rec` is the
+    /// (possibly operator-edited) record; logs it and clears the pending hold.
+    pub fn confirm_pending_log(&mut self, rec: QsoRecord) {
+        self.pending_log = None;
+        self.log_qso(rec);
+    }
+
+    /// Discard a QSO held by the prompt-to-log popup without logging it.
+    pub fn discard_pending_log(&mut self) {
+        self.pending_log = None;
     }
 
     /// Operator "Resend": re-arm the current QSO message so a stalled (or just
@@ -1276,6 +1303,7 @@ impl Engine {
             })
             .collect();
         s.harq_rescues = self.harq_rescues;
+        s.pending_log = self.pending_log.clone().map(Into::into);
         s
     }
 
@@ -1485,7 +1513,7 @@ impl Engine {
         // The completed contact to auto-log, gathered while `self.mode` is
         // borrowed and committed after (so building the record doesn't conflict
         // with the mutable borrow of the sequencer).
-        let mut completed: Option<(String, Option<i32>)> = None;
+        let mut completed: Option<(String, Option<String>, Option<i32>)> = None;
         match &mut self.mode {
             Mode::Chat => {}
             Mode::Qso { station, .. } => {
@@ -1501,31 +1529,42 @@ impl Engine {
                     self.qso_logged = true;
                     completed = Some((
                         station.dxcall.clone().unwrap_or_default(),
+                        station.dxgrid.clone(),
                         station.rx_report,
                     ));
                 }
             }
             Mode::FieldDay { station, .. } => station.observe(decodes, slot),
         }
-        if let Some((dxcall, rx_report)) = completed {
+        if let Some((dxcall, dxgrid, rx_report)) = completed {
             if self.settings.auto_log {
-                let rec = self.qso_record(dxcall, rx_report);
-                self.log_qso(rec);
+                let rec = self.qso_record(dxcall, dxgrid, rx_report);
+                if self.settings.prompt_to_log {
+                    // Hold for the operator's confirm-before-log popup instead of
+                    // writing it silently.
+                    self.pending_log = Some(rec);
+                } else {
+                    self.log_qso(rec);
+                }
             }
         }
     }
 
     /// Build a [`QsoRecord`] for a completed auto-sequenced QSO from the current
     /// settings (band / dial / tier) and the station's exchanged reports.
-    fn qso_record(&self, dxcall: String, rx_report: Option<i32>) -> QsoRecord {
+    fn qso_record(&self, dxcall: String, dxgrid: Option<String>, rx_report: Option<i32>) -> QsoRecord {
+        // ADIF mode must reflect the tier actually used — FT8/FT4 contacts log as
+        // FT8/FT4 (award eligibility depends on it), not the native FT1 path.
         let mode = match self.app.tier() {
             Tier::Dx1 => "DX1",
-            _ => "FT1",
+            Tier::Ft8 => "FT8",
+            Tier::Ft4 => "FT4",
+            Tier::Ft1 => "FT1",
         }
         .to_string();
         QsoRecord {
             call: dxcall,
-            grid: None,
+            grid: dxgrid,
             state: None,
             band: self.settings.band.clone(),
             freq_mhz: self.settings.dial_mhz,
@@ -2097,6 +2136,53 @@ mod tests {
         // Idempotent: re-observing in the Done state does not double-log.
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 5);
         assert_eq!(e.get_log().len(), 1, "auto-log fires exactly once per QSO");
+    }
+
+    #[test]
+    fn prompt_to_log_holds_then_confirms() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        // Seed a DX grid so the held record carries it (operator-typed call+grid).
+        e.call_station_with_grid("W9XYZ", Some("en37"));
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+
+        // Held, not logged.
+        assert!(e.get_log().is_empty(), "prompt-to-log withholds the write");
+        let snap = e.snapshot();
+        let pending = snap.pending_log.expect("a QSO awaits confirm");
+        assert_eq!(pending.call, "W9XYZ");
+        assert_eq!(pending.grid.as_deref(), Some("EN37"), "DX grid captured + normalized");
+
+        // Confirm logs it and clears the hold.
+        e.confirm_pending_log(pending.into());
+        assert_eq!(e.get_log().len(), 1, "confirm writes exactly one record");
+        assert!(e.snapshot().pending_log.is_none(), "hold cleared after confirm");
+    }
+
+    #[test]
+    fn prompt_to_log_discard_drops_the_contact() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+        assert!(e.snapshot().pending_log.is_some());
+        e.discard_pending_log();
+        assert!(e.get_log().is_empty(), "discard logs nothing");
+        assert!(e.snapshot().pending_log.is_none());
+    }
+
+    #[test]
+    fn ft8_tier_logs_as_ft8_mode() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Ft8);
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+        let log = e.get_log();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].mode, "FT8", "FT8 contacts log as FT8 (award eligibility)");
     }
 
     /// Engine-level coordinated-QSY end-to-end: an initiator engine announces a

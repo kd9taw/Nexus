@@ -1065,6 +1065,44 @@ export function SettingsPanel({
 
               <div className="settings-field">
                 <label className="settings-toggle">
+                  <span className="settings-label">Prompt before logging</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!!form.promptToLog}
+                    className={`toggle${form.promptToLog ? ' on' : ''}`}
+                    onClick={() => updateBool('promptToLog', !form.promptToLog)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Show a confirm-and-edit popup when a QSO completes instead of logging silently
+                  (WSJT-X “Prompt me to log QSO”). No effect unless Auto-log is on.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Roger with RRR (not RR73)</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!!form.preferRrr}
+                    className={`toggle${form.preferRrr ? ' on' : ''}`}
+                    onClick={() => updateBool('preferRrr', !form.preferRrr)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Acknowledge the final report with a bare RRR (partner still owes a 73) instead of
+                  the combined RR73. Off = RR73 (modern FT8 practice).
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
                   <span className="settings-label">Clock check (NTP)</span>
                   <button
                     type="button"
