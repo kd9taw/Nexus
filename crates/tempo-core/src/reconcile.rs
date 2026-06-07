@@ -259,6 +259,7 @@ mod tests {
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: Default::default(),
+            ota: Default::default(),
         }
     }
 

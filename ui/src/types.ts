@@ -148,6 +148,27 @@ export interface AudioDevices {
   output: string[]
 }
 
+/** A Parks/Summits On The Air activator currently on the air (hunter feed). */
+export interface OtaSpot {
+  program: string
+  reference: string
+  name: string
+  activator: string
+  freqKhz: number
+  mode: string
+  spotter: string | null
+  comment: string | null
+  grid: string | null
+}
+
+/** The operator's current activation state (POTA/SOTA). */
+export interface Activation {
+  /** "POTA" | "SOTA", or null when not activating. */
+  program: string | null
+  reference: string | null
+  qsoCount: number
+}
+
 /** A zero-config auto-detected USB radio (from `detect_rigs`). */
 export interface DetectedRig {
   portName: string

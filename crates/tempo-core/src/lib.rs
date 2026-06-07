@@ -21,6 +21,7 @@ pub mod logbook;
 pub mod lotw;
 pub mod lotw_upload;
 pub mod message;
+pub mod pota;
 pub mod qrz;
 pub mod qso;
 pub mod qsy;

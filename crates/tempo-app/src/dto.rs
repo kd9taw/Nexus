@@ -448,6 +448,7 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             credit_granted: q.credit_granted,
             credit_submitted: q.credit_submitted,
             upload: q.upload.into(),
+            ota: Default::default(),
         }
     }
 }

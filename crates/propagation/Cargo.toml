@@ -8,18 +8,20 @@ description = "Propagation & opening intelligence: 6m/VHF opening detection (por
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+# Used by the pure POTA/SOTA spot parsers (always available so they're unit-testable
+# offline); also by the live feed adapters.
+serde_json = { version = "1" }
 
 # Live feed adapters (NOAA SWPC + PSK Reporter) are opt-in so the pure-logic
 # intelligence stays dependency-light and unit-testable without a network.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"], optional = true }
 quick-xml = { version = "0.39", optional = true }
-serde_json = { version = "1", optional = true }
 # Pure eQSL URL/page/href/validate helpers, used only by the live eQSL transport.
 tempo-core = { path = "../tempo-core", optional = true }
 
 [features]
 default = []
-live = ["dep:reqwest", "dep:quick-xml", "dep:serde_json", "dep:tempo-core"]
+live = ["dep:reqwest", "dep:quick-xml", "dep:tempo-core"]
 
 [[example]]
 name = "live_snapshot"

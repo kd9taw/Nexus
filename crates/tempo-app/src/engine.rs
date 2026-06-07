@@ -142,6 +142,10 @@ pub struct Engine {
     /// until the next sync.
     last_lotw_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
     last_eqsl_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
+    /// Current Parks/Summits On The Air activation `(program, reference)` — when set,
+    /// each logged QSO is tagged as your activation (POTA/SOTA). Transient (an
+    /// activation ends), so not persisted. `None` = not activating.
+    activation: Option<(String, String)>,
 }
 
 /// Samples of recent audio kept for the live waterfall spectrum (~0.34 s at
@@ -229,6 +233,7 @@ impl Engine {
             qsy,
             last_lotw_reconcile: None,
             last_eqsl_reconcile: None,
+            activation: None,
         }
     }
 
@@ -452,13 +457,63 @@ impl Engine {
 
     /// Manually add a contact to the logbook (the UI "Log QSO" button). Adds in
     /// memory and appends to the ADIF file if a log path is set.
-    pub fn log_qso(&mut self, rec: QsoRecord) {
+    pub fn log_qso(&mut self, mut rec: QsoRecord) {
+        // Tag with the current POTA/SOTA activation (your side) if one is set and the
+        // record doesn't already carry one — so the contact exports with the right
+        // MY_SIG/MY_SOTA_REF and counts toward your activation.
+        if let Some((program, reference)) = &self.activation {
+            if rec.ota.my_ref.is_none() {
+                rec.ota.my_program = Some(program.clone());
+                rec.ota.my_ref = Some(reference.clone());
+            }
+        }
         if let Some(path) = &self.log_path {
             if let Err(e) = Logbook::append(path, &rec) {
                 eprintln!("tempo: failed to append to logbook: {e}");
             }
         }
         self.logbook.add(rec);
+    }
+
+    /// Begin a Parks/Summits On The Air activation — every QSO logged afterward is
+    /// tagged as your activation until [`clear_activation`](Self::clear_activation).
+    /// Validates + normalizes the reference; returns the normalized `(program, ref)`
+    /// or an error string for an unknown program / malformed reference.
+    pub fn set_activation(
+        &mut self,
+        program: &str,
+        reference: &str,
+    ) -> Result<(String, String), String> {
+        let prog = tempo_core::pota::OtaProgram::from_code(program)
+            .ok_or_else(|| format!("Unknown program '{program}' — use POTA or SOTA."))?;
+        let normalized = tempo_core::pota::normalize_ref(prog, reference)
+            .ok_or_else(|| format!("'{reference}' isn't a valid {} reference.", prog.code()))?;
+        self.activation = Some((prog.code().to_string(), normalized.clone()));
+        Ok((prog.code().to_string(), normalized))
+    }
+
+    /// End the current activation (subsequent QSOs are untagged).
+    pub fn clear_activation(&mut self) {
+        self.activation = None;
+    }
+
+    /// The current activation `(program, reference)`, if any.
+    pub fn activation(&self) -> Option<(String, String)> {
+        self.activation.clone()
+    }
+
+    /// How many logged QSOs carry the current activation reference (the live count
+    /// for the activation panel). 0 when not activating.
+    pub fn activation_qso_count(&self) -> usize {
+        match &self.activation {
+            Some((_, reference)) => self
+                .logbook
+                .records()
+                .iter()
+                .filter(|r| r.ota.my_ref.as_deref() == Some(reference.as_str()))
+                .count(),
+            None => 0,
+        }
     }
 
     /// Edit an existing logbook entry (a correction — busted call, wrong band, etc).
@@ -1438,6 +1493,7 @@ impl Engine {
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: Default::default(),
+            ota: Default::default(),
         }
     }
 

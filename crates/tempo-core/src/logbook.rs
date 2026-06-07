@@ -45,6 +45,22 @@ pub struct QsoRecord {
     /// "uploaded, partner hasn't confirmed". Set by the LoTW/QRZ/ClubLog upload
     /// paths; round-trips via `APP_TEMPO_UL_*` ADIF app-fields. Default all-`None`.
     pub upload: UploadState,
+    /// Parks/Summits On The Air context — your activation and/or the activator you
+    /// hunted. Round-trips via standard ADIF (`MY_SIG`/`MY_SIG_INFO`/`SIG`/`SIG_INFO`
+    /// for POTA, `MY_SOTA_REF`/`SOTA_REF` for SOTA), so exports upload cleanly to
+    /// pota.app / the SOTA database. Default all-`None`.
+    pub ota: Ota,
+}
+
+/// Parks/Summits On The Air tags on a contact: your activation (`my_*`) and/or the
+/// activator you worked (hunter side). `program` is "POTA"/"SOTA"; `reference` is the
+/// park/summit id (e.g. "K-1234" / "W7A/MN-001"). All-`None` = an ordinary contact.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Ota {
+    pub my_program: Option<String>,
+    pub my_ref: Option<String>,
+    pub their_program: Option<String>,
+    pub their_ref: Option<String>,
 }
 
 /// Outbound upload outcome for one source (e.g. LoTW via TQSL).
@@ -449,8 +465,29 @@ pub fn adif_record(r: &QsoRecord) -> String {
     out.push_str(&upload_field("APP_TEMPO_UL_EQSL", &r.upload.eqsl));
     out.push_str(&upload_field("APP_TEMPO_UL_QRZ", &r.upload.qrz));
     out.push_str(&upload_field("APP_TEMPO_UL_CLUBLOG", &r.upload.clublog));
+    // Parks/Summits On The Air — standard ADIF so pota.app / the SOTA DB accept the
+    // export. POTA (and WWFF) → SIG/SIG_INFO; SOTA → its dedicated *_SOTA_REF fields.
+    out.push_str(&ota_fields("MY_SIG", "MY_SIG_INFO", "MY_SOTA_REF", &r.ota.my_program, &r.ota.my_ref));
+    out.push_str(&ota_fields("SIG", "SIG_INFO", "SOTA_REF", &r.ota.their_program, &r.ota.their_ref));
     out.push_str("<EOR>\n");
     out
+}
+
+/// Emit the ADIF fields for one OTA side. SOTA uses its dedicated `*_SOTA_REF` field;
+/// every other program (POTA, WWFF) uses the generic `SIG`/`SIG_INFO` pair. Empty
+/// when not activating/hunting that side.
+fn ota_fields(
+    sig: &str,
+    sig_info: &str,
+    sota: &str,
+    program: &Option<String>,
+    reference: &Option<String>,
+) -> String {
+    match (program.as_deref(), reference.as_deref()) {
+        (Some(p), Some(r)) if p.eq_ignore_ascii_case("SOTA") => field(sota, r),
+        (Some(p), Some(r)) => field(sig, p) + &field(sig_info, r),
+        _ => String::new(),
+    }
 }
 
 /// One RFC-4180 CSV cell (quote if it contains a comma, quote, or newline).
@@ -575,6 +612,25 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         qrz: parse_ul("APP_TEMPO_UL_QRZ"),
         clublog: parse_ul("APP_TEMPO_UL_CLUBLOG"),
     };
+    // Parks/Summits On The Air: a SOTA ref (dedicated field) takes precedence; else a
+    // SIG=POTA/WWFF pair. `parse_ota` reads one side (my_* or their_*).
+    let parse_ota = |sig: &str, sig_info: &str, sota: &str| -> (Option<String>, Option<String>) {
+        if let Some(r) = f.get(sota).filter(|s| !s.is_empty()) {
+            (Some("SOTA".to_string()), Some(r.to_ascii_uppercase()))
+        } else if let (Some(p), Some(r)) = (f.get(sig), f.get(sig_info)) {
+            (Some(p.to_ascii_uppercase()), Some(r.to_ascii_uppercase()))
+        } else {
+            (None, None)
+        }
+    };
+    let (my_program, my_ref) = parse_ota("MY_SIG", "MY_SIG_INFO", "MY_SOTA_REF");
+    let (their_program, their_ref) = parse_ota("SIG", "SIG_INFO", "SOTA_REF");
+    let ota = Ota {
+        my_program,
+        my_ref,
+        their_program,
+        their_ref,
+    };
     Some(QsoRecord {
         call,
         grid: f.get("GRIDSQUARE").cloned(),
@@ -593,6 +649,7 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         credit_granted,
         credit_submitted,
         upload,
+        ota,
     })
 }
 
@@ -673,7 +730,40 @@ mod tests {
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: Default::default(),
+            ota: Default::default(),
         }
+    }
+
+    #[test]
+    fn ota_round_trips_through_adif() {
+        // POTA hunter contact while activating a SOTA summit (a P2P-ish mixed case):
+        // my side = SOTA (dedicated ref field), their side = POTA (SIG/SIG_INFO).
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.ota = Ota {
+            my_program: Some("SOTA".into()),
+            my_ref: Some("W7A/MN-001".into()),
+            their_program: Some("POTA".into()),
+            their_ref: Some("K-1234".into()),
+        };
+        let adif = adif_header() + &adif_record(&r);
+        // Standard ADIF tags (so pota.app / SOTA DB accept the export), not APP_-fields.
+        assert!(adif.contains("<MY_SOTA_REF:10>W7A/MN-001"));
+        assert!(adif.contains("<SIG:4>POTA"));
+        assert!(adif.contains("<SIG_INFO:6>K-1234"));
+        let back = &parse_adif(&adif)[0];
+        assert_eq!(back.ota, r.ota, "OTA context survives the ADIF round-trip");
+
+        // A pure POTA activation (my side POTA via SIG, no hunter side).
+        let mut p = rec("K2DEF", "40m", 1_700_000_100);
+        p.ota.my_program = Some("POTA".into());
+        p.ota.my_ref = Some("K-5678".into());
+        let padif = adif_header() + &adif_record(&p);
+        assert!(padif.contains("<MY_SIG:4>POTA"));
+        assert!(padif.contains("<MY_SIG_INFO:6>K-5678"));
+        let pback = &parse_adif(&padif)[0];
+        assert_eq!(pback.ota.my_program.as_deref(), Some("POTA"));
+        assert_eq!(pback.ota.my_ref.as_deref(), Some("K-5678"));
+        assert_eq!(pback.ota.their_program, None);
     }
 
     #[test]

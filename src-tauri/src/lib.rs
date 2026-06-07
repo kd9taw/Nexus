@@ -1783,6 +1783,77 @@ fn eqsl_push_qso(
     }
 }
 
+// ----- Parks / Summits On The Air -------------------------------------------
+
+/// Current activation state for the POTA/SOTA panel.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivationDto {
+    /// "POTA" | "SOTA", or null when not activating.
+    program: Option<String>,
+    /// Normalized park/summit reference, or null.
+    reference: Option<String>,
+    /// Logged QSOs carrying this activation's reference so far.
+    qso_count: usize,
+}
+
+/// Activators currently on the air for `program` ("POTA" | "SOTA") — the hunter
+/// feed. Network fetch (no auth); empty/Err only on a feed problem.
+#[tauri::command]
+fn get_ota_spots(program: String) -> Result<Vec<propagation::OtaSpot>, String> {
+    match program.to_ascii_uppercase().as_str() {
+        "POTA" => propagation::live::pota::fetch_pota_spots(),
+        "SOTA" => propagation::live::pota::fetch_sota_spots(30),
+        other => Err(format!("Unknown program '{other}' — use POTA or SOTA.")),
+    }
+}
+
+/// Begin an activation — subsequent logged QSOs are tagged (your side). Validates +
+/// normalizes the reference; returns the activation state.
+#[tauri::command]
+fn set_activation(
+    state: State<'_, SharedEngine>,
+    program: String,
+    reference: String,
+) -> Result<ActivationDto, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let (program, reference) = eng.set_activation(&program, &reference)?;
+    let qso_count = eng.activation_qso_count();
+    Ok(ActivationDto {
+        program: Some(program),
+        reference: Some(reference),
+        qso_count,
+    })
+}
+
+/// End the current activation (subsequent QSOs untagged).
+#[tauri::command]
+fn clear_activation(state: State<'_, SharedEngine>) -> Result<ActivationDto, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.clear_activation();
+    Ok(ActivationDto {
+        program: None,
+        reference: None,
+        qso_count: 0,
+    })
+}
+
+/// The current activation state (for the panel on load / after logging).
+#[tauri::command]
+fn get_activation(state: State<'_, SharedEngine>) -> Result<ActivationDto, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    let (program, reference) = match eng.activation() {
+        Some((p, r)) => (Some(p), Some(r)),
+        None => (None, None),
+    };
+    let qso_count = eng.activation_qso_count();
+    Ok(ActivationDto {
+        program,
+        reference,
+        qso_count,
+    })
+}
+
 // ----- coordinated QSY ("move together") — a separate, opt-in feature ------
 //
 // All no-ops while disabled. Enabling/disabling + the channel set/cadence are
@@ -1986,6 +2057,10 @@ pub fn run() {
             clear_clublog_password,
             clublog_push_qso,
             eqsl_push_qso,
+            get_ota_spots,
+            set_activation,
+            clear_activation,
+            get_activation,
             get_need_alerts,
             get_propagation,
             get_feed_health,

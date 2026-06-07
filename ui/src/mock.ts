@@ -11,10 +11,12 @@
 
 import type {
   AppSnapshot,
+  Activation,
   AudioDevices,
   BandChannel,
   ChatMessage,
   DetectedRig,
+  OtaSpot,
   Conversation,
   DecodeRow,
   FieldDayQso,
@@ -639,6 +641,7 @@ class MockEngine {
   private qsoRunning = true
   /** general ADIF logbook (most-recent first) */
   private logbook: LoggedQso[] = logbook.map((q) => ({ ...q }))
+  private activation: Activation = { program: null, reference: null, qsoCount: 0 }
   /** rolling counter so injected decode rows look fresh */
   private decodeSeq = 0
 
@@ -678,6 +681,31 @@ class MockEngine {
 
   getRigModels(): Promise<[number, string][]> {
     return Promise.resolve(RIG_MODELS.map((m) => [m[0], m[1]] as [number, string]))
+  }
+
+  getOtaSpots(program: string): Promise<OtaSpot[]> {
+    const pota: OtaSpot[] = [
+      { program: 'POTA', reference: 'K-1234', name: 'Acadia National Park', activator: 'K1ABC', freqKhz: 14074, mode: 'FT8', spotter: 'W9XYZ', comment: 'QRP', grid: 'FN44' },
+      { program: 'POTA', reference: 'VE-0789', name: 'Banff National Park', activator: 'VA6DEF', freqKhz: 7035, mode: 'CW', spotter: 'RBN', comment: 'RBN 8 dB', grid: 'DO31' },
+    ]
+    const sota: OtaSpot[] = [
+      { program: 'SOTA', reference: 'W7A/MN-001', name: 'Humphreys Peak, 3850m, 10 points', activator: 'K7SO', freqKhz: 14062, mode: 'CW', spotter: 'NA6N', comment: 'S2S welcome', grid: 'DM45' },
+    ]
+    return Promise.resolve(program.toUpperCase() === 'SOTA' ? sota : pota)
+  }
+
+  setActivation(program: string, reference: string): Promise<Activation> {
+    this.activation = { program: program.toUpperCase(), reference: reference.toUpperCase(), qsoCount: 0 }
+    return Promise.resolve({ ...this.activation })
+  }
+
+  clearActivation(): Promise<Activation> {
+    this.activation = { program: null, reference: null, qsoCount: 0 }
+    return Promise.resolve({ ...this.activation })
+  }
+
+  getActivation(): Promise<Activation> {
+    return Promise.resolve({ ...this.activation })
   }
 
   detectRigs(): Promise<DetectedRig[]> {

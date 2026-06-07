@@ -12,7 +12,9 @@ import type {
   BandChannel,
   CatTestResult,
   ClubLogPushResult,
+  Activation,
   DetectedRig,
+  OtaSpot,
   DiagnosticsReport,
   FeedHealth,
   ImportStats,
@@ -534,6 +536,34 @@ export async function detectRigs(): Promise<DetectedRig[]> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<DetectedRig[]>('detect_rigs')
   return mockEngine.detectRigs()
+}
+
+/** Activators on the air now for the program ("POTA" | "SOTA") — the hunter feed. */
+export async function getOtaSpots(program: string): Promise<OtaSpot[]> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<OtaSpot[]>('get_ota_spots', { program })
+  return mockEngine.getOtaSpots(program)
+}
+
+/** Begin an activation (validates + normalizes the reference); returns the state. */
+export async function setActivation(program: string, reference: string): Promise<Activation> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<Activation>('set_activation', { program, reference })
+  return mockEngine.setActivation(program, reference)
+}
+
+/** End the current activation. */
+export async function clearActivation(): Promise<Activation> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<Activation>('clear_activation')
+  return mockEngine.clearActivation()
+}
+
+/** Read the current activation state. */
+export async function getActivation(): Promise<Activation> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<Activation>('get_activation')
+  return mockEngine.getActivation()
 }
 
 /**

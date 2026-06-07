@@ -9,6 +9,7 @@ pub mod clublog;
 pub mod dxped;
 pub mod eqsl;
 pub mod lotw;
+pub mod pota;
 pub mod pskreporter;
 pub mod qrz;
 pub mod swpc;

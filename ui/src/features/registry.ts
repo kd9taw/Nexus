@@ -21,6 +21,7 @@ export type View =
   | 'roam'
   | 'logbook'
   | 'awards'
+  | 'pota'
   | 'log'
   | 'settings'
 
@@ -218,6 +219,17 @@ export const FEATURES: FeatureDef[] = [
     view: 'awards',
     revealOn: 'dx-first',
     oneLine: 'DXCC / Challenge / Honor Roll / WAZ progress and the confirmation chase.',
+  },
+  {
+    id: 'pota',
+    label: 'POTA / SOTA',
+    kind: 'section',
+    category: 'POTA/SOTA',
+    core: false,
+    dependsOn: ['logbook'],
+    intents: ['pota'],
+    view: 'pota',
+    oneLine: 'Parks/Summits on the air — who’s on now (hunt) + tag your activation.',
   },
 
   // ---- Optional capabilities ----

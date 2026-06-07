@@ -28,6 +28,7 @@ pub mod likelihood;
 pub mod model;
 pub mod needalert;
 pub mod opening;
+pub mod pota;
 pub mod pskr_mqtt;
 pub mod rarity;
 pub mod space_wx;
@@ -55,6 +56,7 @@ pub use model::{
     SpaceWx,
 };
 pub use needalert::{heard_from_freq, rank as rank_needs, Heard, NeedAlert, NeedTag};
+pub use pota::{parse_pota_spots, parse_sota_spots, OtaSpot};
 pub use opening::{
     classify as classify_opening, detect as detect_openings_v2, reciprocity, BandFeatures,
     BandSignal, OpeningConfig, OpeningEvent, OpeningTracker,

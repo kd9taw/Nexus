@@ -840,6 +840,7 @@ mod tests {
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: Default::default(),
+            ota: Default::default(),
         }
     }
     fn orphan(call: &str, band: &str, mode_cls: &str, day: u64) -> OrphanConfirmation {
