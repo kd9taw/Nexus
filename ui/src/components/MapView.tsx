@@ -70,16 +70,19 @@ const INTENT_PRESETS: Record<
 /** Need tier → a dot color (matches the decode/roster palette). `null` = no
  * specific need (fall back to worked/SNR coloring). */
 function needColor(tag: NeedTag | undefined): string | null {
+  // Matches the shared --need-* palette (styles.css) so the map, roster, and
+  // decode feed speak ONE color language for what's needed.
   switch (tag) {
     case 'NewEntity':
-      return '#ff5d8f' // new DXCC — the loud "new one"
-    case 'NewBand':
-      return '#f5a524' // new band-slot
+      return '#f23ec0' // magenta — all-time-new one (ATNO)
     case 'NewZone':
+      return '#c084fc' // violet — new zone
+    case 'NewBand':
+      return '#f59e0b' // orange — new band-slot
     case 'NewMode':
-      return '#b07cff'
+      return '#22d3ee' // cyan — new mode
     case 'Confirm':
-      return '#4ea3ff' // worked, needs a confirmation
+      return '#9ca3af' // grey — worked, needs a confirmation
     default:
       return null
   }
@@ -554,7 +557,8 @@ export function MapView({
         // Recency fade — heard recently pops, going stale fades toward the noise.
         const ageF = s.presence === 'active' ? 1 : s.presence === 'idle' ? 0.6 : 0.32
         const ringed = (byNeed && nc) || isSel
-        const r = byNeed && nc ? baseR + 1 : baseR
+        // Needed stations are drawn larger so they pop out of the field.
+        const r = byNeed && nc ? baseR + 2.5 : baseR
         const fill = byNeed ? (nc ?? (s.worked ? cssVar('--text-faint') : cssVar(v))) : cssVar(v)
         // In Need mode, dim worked-and-not-needed so the ones worth working pop.
         const dim = byNeed && s.worked && !nc ? 0.5 : 1
