@@ -11,7 +11,8 @@ interface Props {
   txOffsetHz: number
   theme: string
   /** Click to tune: `shift` = set TX offset, otherwise set RX offset. */
-  onTune?: (freqHz: number, shift: boolean) => void
+  /** Tune from a waterfall click: set the TX offset, the RX offset, or both. */
+  onTune?: (freqHz: number, target: 'tx' | 'rx' | 'both') => void
 }
 
 // Audio passband shown on the waterfall (matches the engine's 200–2900 Hz band).
@@ -342,25 +343,32 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  // Left-click = TX, right-click = RX, both buttons together = set both (RX=TX) —
+  // resolved on mousedown so the right button works (its contextmenu is suppressed).
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!onTune) return
     const rect = canvasRef.current!.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    onTune(Math.round(xToFreq(x, rect.width)), e.shiftKey)
+    const hz = Math.round(xToFreq(e.clientX - rect.left, rect.width))
+    // e.buttons bitmask: 1=left, 2=right, 3=both.
+    const target: 'tx' | 'rx' | 'both' =
+      e.buttons === 3 ? 'both' : e.button === 2 ? 'rx' : 'tx'
+    e.preventDefault()
+    onTune(hz, target)
   }
 
   return (
     <div className="waterfall-wrap">
       <div className="panel-header">
         <h2>Waterfall</h2>
-        <span className="wf-hint">click = RX · shift-click = TX</span>
+        <span className="wf-hint">left = TX · right = RX · both = TX+RX</span>
       </div>
       <div className="wf-stage">
         <canvas
           ref={canvasRef}
           className="waterfall-canvas"
-          onClick={handleClick}
-          title="Click to set RX offset; Shift-click to set TX offset"
+          onMouseDown={handleMouseDown}
+          onContextMenu={(e) => e.preventDefault()}
+          title="Left-click sets TX · right-click sets RX · both buttons set both"
         />
         <div
           className="wf-legend"

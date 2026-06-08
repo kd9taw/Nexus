@@ -497,8 +497,14 @@ export default function App() {
 
   // Waterfall click: left-click sets the RX offset (green marker); shift-click
   // sets the TX offset (red marker). TX follows RX unless "Hold Tx" is on.
-  const handleTune = useCallback((hz: number, shift: boolean) => {
-    const call = shift ? () => apiSetTxOffset(hz) : () => apiSetRxOffset(hz)
+  const handleTune = useCallback((hz: number, target: 'tx' | 'rx' | 'both') => {
+    // Left-click = TX, right-click = RX, both buttons = set both (call on their freq).
+    const call =
+      target === 'rx'
+        ? () => apiSetRxOffset(hz)
+        : target === 'tx'
+          ? () => apiSetTxOffset(hz)
+          : () => apiSetTxOffset(hz).then(() => apiSetRxOffset(hz))
     void withErrorToast(call, 'Could not set offset').then((s) => {
       if (s) setSnap(s)
     })
