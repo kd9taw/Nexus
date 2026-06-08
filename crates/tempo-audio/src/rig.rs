@@ -187,8 +187,13 @@ impl Rig {
         self.command(&freq_line(hz)).map(|_| ())
     }
 
-    /// Set the operating mode (e.g. "USB") + passband. No-op unless under rigctld CAT.
+    /// Set the operating mode (e.g. "USB") + passband. A BLANK mode is a no-op —
+    /// the caller is choosing to OBEY the radio's current mode (max compatibility),
+    /// so Nexus sends no `M` command. Also a no-op unless under rigctld CAT.
     pub fn set_mode(&mut self, mode: &str, passband_hz: u32) -> std::io::Result<()> {
+        if mode.trim().is_empty() {
+            return Ok(());
+        }
         if !matches!(self.mode, PttMode::Rigctld { .. }) {
             return Ok(());
         }

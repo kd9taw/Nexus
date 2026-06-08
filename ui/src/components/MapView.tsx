@@ -22,6 +22,7 @@ import {
   mufCells,
   mufMhz,
   type Projection,
+  type MapView3,
 } from '../mapGeo'
 import { sampleLut } from '../colormaps'
 import { needMeta } from '../propViz'
@@ -56,14 +57,14 @@ const INTENT_PRESETS: Record<
   MapIntent,
   { kind: Projection; colorBy: 'need' | 'snr'; layers: Partial<Record<LayerKey, boolean>> }
 > = {
-  // Chase DX: beam map, need-colored, openings + DXpeditions + rings on.
-  dx: { kind: 'aeqd', colorBy: 'need', layers: { openings: true, dxped: true, rings: true } },
+  // Chase DX: spinnable globe, need-colored, openings + DXpeditions + rings on.
+  dx: { kind: 'globe', colorBy: 'need', layers: { openings: true, dxped: true, rings: true } },
   // POTA/SOTA: world view, need-colored activators; de-emphasize openings/rings.
   pota: { kind: 'world', colorBy: 'need', layers: { openings: false, dxped: false, rings: false } },
-  // Ragchew: beam map, who-can-I-hear (signal), calm — openings/dxped off.
-  casual: { kind: 'aeqd', colorBy: 'snr', layers: { openings: false, dxped: false, rings: true } },
-  // 6m/VHF: beam map, signal-colored, openings ON (the whole point).
-  vhf: { kind: 'aeqd', colorBy: 'snr', layers: { openings: true, dxped: false, rings: true } },
+  // Ragchew: globe, who-can-I-hear (signal), calm — openings/dxped off.
+  casual: { kind: 'globe', colorBy: 'snr', layers: { openings: false, dxped: false, rings: true } },
+  // 6m/VHF: globe, signal-colored, openings ON (the whole point).
+  vhf: { kind: 'globe', colorBy: 'snr', layers: { openings: true, dxped: false, rings: true } },
 }
 
 /** Need tier → a dot color (matches the decode/roster palette). `null` = no
@@ -167,12 +168,18 @@ export function MapView({
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
-  const [kind, setKind] = useState<Projection>('aeqd')
+  const [kind, setKind] = useState<Projection>('globe')
   const [colorBy, setColorBy] = useState<'need' | 'snr'>('need')
   const [pathMode, setPathMode] = useState<'sp' | 'lp'>('sp')
   const [layers, setLayers] = useState(DEFAULT_LAYERS)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null)
+  // Interactive view: zoom (wheel), Globe rotation + flat-map pan (drag). Reset
+  // when the projection changes (rotation/pan don't carry across projections).
+  const DEFAULT_VIEW: MapView3 = { zoom: 1, rotate: null, panX: 0, panY: 0 }
+  const [view, setView] = useState<MapView3>(DEFAULT_VIEW)
+  const dragRef = useRef<{ x: number; y: number; base: MapView3; moved: boolean } | null>(null)
+  useEffect(() => setView(DEFAULT_VIEW), [kind]) // eslint-disable-line react-hooks/exhaustive-deps
   // Shaded-relief basemap image (loaded once, drawn behind the World view).
   const reliefRef = useRef<HTMLImageElement | null>(null)
   const [reliefReady, setReliefReady] = useState(false)
@@ -208,6 +215,19 @@ export function MapView({
   }, [intent])
 
   const me = useMemo(() => gridToLatLon(myGrid), [myGrid])
+  // Wheel-zoom — a NON-passive native listener so we can preventDefault (React's
+  // onWheel is passive). Re-attaches once the canvas mounts (keyed on `me`).
+  useEffect(() => {
+    const el = canvasRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
+      setView((v) => ({ ...v, zoom: Math.max(0.5, Math.min(10, v.zoom * factor)) }))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [me])
   const dxCards: WorkableCard[] = useMemo(() => {
     const seen = new Set<string>()
     return (prop?.dxpeditions.workableNow ?? []).filter((c) => {
@@ -250,7 +270,7 @@ export function MapView({
   // Project all stations once per draw input (also used for hit-testing).
   const placed = useMemo(() => {
     if (!me || size.w === 0) return [] as Array<{ s: Station; ll: LatLon; xy: [number, number] }>
-    const proj = makeProjection(kind, me, size.w, size.h)
+    const proj = makeProjection(kind, me, size.w, size.h, view)
     const out: Array<{ s: Station; ll: LatLon; xy: [number, number] }> = []
     for (const s of stations) {
       if (!s.grid) continue
@@ -260,7 +280,7 @@ export function MapView({
       if (xy) out.push({ s, ll, xy })
     }
     return out
-  }, [me, kind, size, stations])
+  }, [me, kind, size, stations, view])
 
   // Static MUF grid cells (geometry never changes; colors recomputed per draw).
   const mufGrid = useMemo(() => mufCells(), [])
@@ -299,7 +319,7 @@ export function MapView({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
 
-    const proj = makeProjection(kind, me, w, h)
+    const proj = makeProjection(kind, me, w, h, view)
     const path = geoPath(proj, ctx)
     const c = project(proj, me)
 
@@ -357,7 +377,7 @@ export function MapView({
       ctx.lineWidth = 0.5
       ctx.stroke()
     }
-    if (layers.rings.visible && kind === 'aeqd') {
+    if (layers.rings.visible && kind !== 'world') {
       ctx.globalAlpha = layers.rings.opacity
       ctx.strokeStyle = cssVar('--border')
       ctx.setLineDash([3, 3])
@@ -586,7 +606,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, colorBy, pathMode, size, layers, placed, mufGrid, auroraPts, reliefReady, prop, dxCards, selStation, selectedCall, needByCall, theme, nowMs])
+  }, [me, kind, colorBy, pathMode, view, size, layers, placed, mufGrid, auroraPts, reliefReady, prop, dxCards, selStation, selectedCall, needByCall, theme, nowMs])
 
   if (!me) {
     return (
@@ -600,34 +620,61 @@ export function MapView({
     )
   }
 
-  const onMove = (e: React.MouseEvent) => {
-    const rect = canvasRef.current!.getBoundingClientRect()
-    const mx = e.clientX - rect.left
-    const my = e.clientY - rect.top
-    let best: { d: number; text: string } | null = null
+  // Nearest plotted station to a screen point (within the hit radius).
+  const hitTest = (mx: number, my: number) => {
+    let best: { d: number; s: Station; ll: LatLon } | null = null
     for (const { s, ll, xy } of placed) {
       const d = Math.hypot(xy[0] - mx, xy[1] - my)
-      if (d < 9 && (!best || d < best.d)) {
-        const km = Math.round(haversineKm(me, ll))
-        const where = s.country ? `${s.country} · ` : ''
-        best = {
-          d,
-          text: `${s.call} · ${where}${s.grid} · ${s.snr} dB · ${bearingDeg(me, ll)}° ${km.toLocaleString()} km`,
-        }
-      }
+      if (d < 9 && (!best || d < best.d)) best = { d, s, ll }
     }
-    setHover(best ? { x: mx, y: my, text: best.text } : null)
+    return best
   }
-  const onClick = (e: React.MouseEvent) => {
-    const rect = canvasRef.current!.getBoundingClientRect()
-    const mx = e.clientX - rect.left
-    const my = e.clientY - rect.top
-    let best: { d: number; call: string } | null = null
-    for (const { s, xy } of placed) {
-      const d = Math.hypot(xy[0] - mx, xy[1] - my)
-      if (d < 9 && (!best || d < best.d)) best = { d, call: s.call }
+  // Drag = spin the Globe / pan the flat maps; a press that doesn't move = a
+  // click (select a station). Wheel zooms (the native listener, below).
+  const onPointerDown = (e: React.PointerEvent) => {
+    ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+    dragRef.current = { x: e.clientX, y: e.clientY, base: view, moved: false }
+  }
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current
+    if (!d) {
+      const rect = canvasRef.current!.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+      const hit = hitTest(mx, my)
+      setHover(
+        hit
+          ? {
+              x: mx,
+              y: my,
+              text: `${hit.s.call} · ${hit.s.country ? hit.s.country + ' · ' : ''}${hit.s.grid} · ${hit.s.snr} dB · ${bearingDeg(me, hit.ll)}° ${Math.round(haversineKm(me, hit.ll)).toLocaleString()} km`,
+            }
+          : null,
+      )
+      return
     }
-    onSelectCall(best ? (best.call === selectedCall ? null : best.call) : null)
+    const dx = e.clientX - d.x
+    const dy = e.clientY - d.y
+    if (!d.moved && Math.abs(dx) + Math.abs(dy) > 3) d.moved = true
+    if (!d.moved) return
+    setHover(null)
+    if (kind === 'globe') {
+      const k = 0.32 / (d.base.zoom || 1) // deg per px, slower when zoomed in
+      const base = d.base.rotate ?? (me ? [-me.lon, -me.lat] : [0, 0])
+      const rot: [number, number] = [base[0] + dx * k, Math.max(-90, Math.min(90, base[1] - dy * k))]
+      setView({ ...d.base, rotate: rot })
+    } else {
+      setView({ ...d.base, panX: d.base.panX + dx, panY: d.base.panY + dy })
+    }
+  }
+  const onPointerUp = (e: React.PointerEvent) => {
+    const d = dragRef.current
+    dragRef.current = null
+    if (d && !d.moved) {
+      const rect = canvasRef.current!.getBoundingClientRect()
+      const hit = hitTest(e.clientX - rect.left, e.clientY - rect.top)
+      onSelectCall(hit ? (hit.s.call === selectedCall ? null : hit.s.call) : null)
+    }
   }
 
   const prov = prop?.source ?? 'demo'
@@ -636,11 +683,22 @@ export function MapView({
     <div className="map-view">
       <div className="map-toolbar">
         <div className="map-proj" role="group" aria-label="Projection">
-          <button className={kind === 'aeqd' ? 'active' : ''} onClick={() => setKind('aeqd')}>
-            Beam (AEQD)
+          <button className={kind === 'globe' ? 'active' : ''} onClick={() => setKind('globe')} title="3-D globe — drag to spin, wheel to zoom">
+            Globe
           </button>
-          <button className={kind === 'world' ? 'active' : ''} onClick={() => setKind('world')}>
+          <button className={kind === 'aeqd' ? 'active' : ''} onClick={() => setKind('aeqd')} title="Beam map — true headings + range rings from your QTH">
+            Beam
+          </button>
+          <button className={kind === 'world' ? 'active' : ''} onClick={() => setKind('world')} title="Flat world map with shaded relief">
             World
+          </button>
+        </div>
+        <div className="map-proj" role="group" aria-label="Zoom">
+          <button onClick={() => setView((v) => ({ ...v, zoom: Math.min(10, v.zoom * 1.3) }))} title="Zoom in" aria-label="Zoom in">
+            +
+          </button>
+          <button onClick={() => setView((v) => ({ ...v, zoom: Math.max(0.5, v.zoom / 1.3) }))} title="Zoom out" aria-label="Zoom out">
+            −
           </button>
         </div>
         <div className="map-proj" role="group" aria-label="Color spots by">
@@ -653,7 +711,14 @@ export function MapView({
         </div>
         <span className="map-center">◎ {myGrid}</span>
         <span className={`map-prov prov-${prov}`}>{prov === 'live' ? 'LIVE' : prov === 'cached' ? 'CACHED' : 'DEMO'}</span>
-        <button className="map-reset" onClick={() => setLayers(DEFAULT_LAYERS)} title="Reset layers">
+        <button
+          className="map-reset"
+          onClick={() => {
+            setLayers(DEFAULT_LAYERS)
+            setView(DEFAULT_VIEW)
+          }}
+          title="Reset view + layers"
+        >
           <RotateCcw size={13} /> Reset
         </button>
       </div>
@@ -662,10 +727,16 @@ export function MapView({
         <div className="map-canvas-wrap" ref={wrapRef}>
           <canvas
             ref={canvasRef}
-            style={{ width: '100%', height: '100%' }}
-            onMouseMove={onMove}
-            onMouseLeave={() => setHover(null)}
-            onClick={onClick}
+            style={{
+              width: '100%',
+              height: '100%',
+              cursor: kind === 'world' ? 'move' : 'grab',
+              touchAction: 'none',
+            }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerLeave={() => setHover(null)}
           />
           {hover && (
             <div className="map-hover" style={{ left: hover.x + 12, top: hover.y + 12 }}>

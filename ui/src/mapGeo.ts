@@ -7,6 +7,7 @@
 import {
   geoAzimuthalEquidistant,
   geoEquirectangular,
+  geoOrthographic,
   geoCircle,
   geoGraticule,
   type GeoProjection,
@@ -16,7 +17,17 @@ import { feature } from 'topojson-client'
 import countriesTopo from 'world-atlas/countries-50m.json'
 import type { LatLon } from './grid'
 
-export type Projection = 'aeqd' | 'world'
+export type Projection = 'globe' | 'aeqd' | 'world'
+
+/** Interactive view controls: zoom (scale multiplier), orthographic rotation
+ * `[λ, φ]` in degrees (Globe only; null = centered on the operator), and a screen
+ * pan offset. Drag rotates the globe / pans the flat maps; the wheel zooms. */
+export interface MapView3 {
+  zoom: number
+  rotate: [number, number] | null
+  panX: number
+  panY: number
+}
 
 const KM_PER_DEG = 111.195 // great-circle km per degree
 
@@ -37,25 +48,53 @@ export function graticule(): GeoPermissibleObjects {
 }
 
 /**
- * Build a fitted d3 projection. AEQD is rotated to put `center` at the screen
- * centre (NOT `.center` — `.rotate`, so beam headings are correct), with the
- * antipode near the disc rim. World is a fitted equirectangular.
+ * Build a d3 projection for the chosen view. Globe = orthographic (a real 3-D
+ * sphere you can spin); AEQD = azimuthal-equidistant disc rotated to put `center`
+ * at the screen centre (true beam headings + range rings); World = equirectangular.
+ * `view` applies zoom (scale), Globe rotation, and a pan offset.
  */
 export function makeProjection(
   kind: Projection,
   center: LatLon | null,
   width: number,
   height: number,
+  view?: MapView3,
 ): GeoProjection {
-  if (kind === 'world') {
-    return geoEquirectangular().fitSize([width, height], { type: 'Sphere' })
-  }
+  const zoom = view?.zoom ?? 1
+  const panX = view?.panX ?? 0
+  const panY = view?.panY ?? 0
   const c = center ?? { lat: 0, lon: 0 }
-  const radius = (Math.min(width, height) / 2) * 0.94
+
+  if (kind === 'globe') {
+    // A spinnable 3-D globe. Default orientation centers the operator; dragging
+    // sets an explicit rotation. clipAngle(90) hides the far hemisphere.
+    const radius = (Math.min(width, height) / 2) * 0.92 * zoom
+    const rot = view?.rotate ?? [-c.lon, -c.lat]
+    return geoOrthographic()
+      .rotate(rot)
+      .clipAngle(90)
+      .translate([width / 2 + panX, height / 2 + panY])
+      .scale(radius)
+  }
+
+  if (kind === 'world') {
+    const p = geoEquirectangular().fitSize([width, height], { type: 'Sphere' })
+    if (zoom !== 1 || panX || panY) {
+      const s0 = p.scale()
+      const [tx, ty] = p.translate()
+      p.scale(s0 * zoom)
+      // Zoom about the canvas centre, then apply pan.
+      p.translate([width / 2 + (tx - width / 2) * zoom + panX, height / 2 + (ty - height / 2) * zoom + panY])
+    }
+    return p
+  }
+
+  // AEQD beam map.
+  const radius = (Math.min(width, height) / 2) * 0.94 * zoom
   return geoAzimuthalEquidistant()
     .rotate([-c.lon, -c.lat])
     .clipAngle(180)
-    .translate([width / 2, height / 2])
+    .translate([width / 2 + panX, height / 2 + panY])
     .scale(radius / Math.PI) // antipode (π rad) → disc rim
 }
 

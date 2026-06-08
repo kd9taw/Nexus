@@ -2180,9 +2180,24 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
             .unwrap_or(0)
     }
     fn mode(&self) -> (String, u32) {
-        // Report the actual CAT mode (DATA submode when data_mode is on), so a
-        // foreign app sharing the radio sees what Nexus has the rig in.
-        let m = self.0.lock().map(|e| e.settings().rig_mode()).unwrap_or_else(|_| "USB".into());
+        // Report the CAT mode to a foreign app sharing the radio. When Nexus sets
+        // the mode, report that; when it's obeying the radio (rig_mode empty),
+        // best-effort report the sideband.
+        let m = self
+            .0
+            .lock()
+            .map(|e| {
+                let s = e.settings();
+                let rm = s.rig_mode();
+                if !rm.is_empty() {
+                    rm
+                } else if s.sideband.trim().is_empty() {
+                    "USB".into()
+                } else {
+                    s.sideband.clone()
+                }
+            })
+            .unwrap_or_else(|_| "USB".into());
         (m, 2700)
     }
     fn ptt(&self) -> bool {

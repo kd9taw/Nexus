@@ -46,6 +46,30 @@ describe('mapGeo (AEQD beam map)', () => {
     expect(d.lon).toBeGreaterThan(EN52.lon) // east
   })
 
+  it('globe centers the operator and zoom magnifies', () => {
+    const proj = makeProjection('globe', EN52, W, H)
+    const c = project(proj, EN52)!
+    expect(c[0]).toBeCloseTo(W / 2, 0)
+    expect(c[1]).toBeCloseTo(H / 2, 0)
+    const near = destinationPoint(EN52, 90, 1500)
+    const r = (zoom: number) => {
+      const p = project(makeProjection('globe', EN52, W, H, { zoom, rotate: null, panX: 0, panY: 0 }), near)!
+      return Math.hypot(p[0] - W / 2, p[1] - H / 2)
+    }
+    expect(r(2)).toBeGreaterThan(r(1)) // zoomed in → further from center
+  })
+
+  it('globe rotation moves the operator off-center', () => {
+    const centered = makeProjection('globe', EN52, W, H)
+    const spun = makeProjection('globe', EN52, W, H, { zoom: 1, rotate: [0, 0], panX: 0, panY: 0 })
+    const a = project(centered, EN52)!
+    const b = project(spun, EN52)
+    // With an explicit (0,0) rotation EN52 is no longer at screen center (and may
+    // even rotate to the hidden hemisphere → null).
+    if (b) expect(Math.hypot(b[0] - W / 2, b[1] - H / 2)).toBeGreaterThan(20)
+    expect(Math.hypot(a[0] - W / 2, a[1] - H / 2)).toBeLessThan(2)
+  })
+
   it('recenters when the operator grid changes', () => {
     const here = makeProjection('aeqd', EN52, W, H)
     const jn58 = gridToLatLon('JN58')!

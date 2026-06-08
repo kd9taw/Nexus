@@ -861,21 +861,21 @@ export function SettingsPanel({
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Data mode (FT8/FT4)</span>
+                  <span className="settings-label">Let Nexus set the rig's mode</span>
                   <button
                     type="button"
                     role="switch"
-                    aria-checked={form.dataMode}
-                    className={`toggle${form.dataMode ? ' on' : ''}`}
-                    onClick={() => updateBool('dataMode', !form.dataMode)}
+                    aria-checked={form.setRigMode}
+                    className={`toggle${form.setRigMode ? ' on' : ''}`}
+                    onClick={() => updateBool('setRigMode', !form.setRigMode)}
                   >
                     <span className="toggle-knob" />
                   </button>
                 </label>
                 <span className="settings-hint">
-                  Put the rig in its DATA submode (Yaesu DATA-U / Icom USB-D / Kenwood DATA) for
-                  digital — correct filters + data-port audio. Leave on for FT8/FT4; turn off only
-                  for phone (plain USB/LSB).
+                  Off (recommended): Nexus OBEYS whatever mode your radio is in (e.g. DATA-U) and
+                  never changes it — maximum compatibility. On: Nexus forces the rig's DATA submode
+                  (Yaesu DATA-U / Icom USB-D / Kenwood DATA) for digital.
                 </span>
               </div>
 
