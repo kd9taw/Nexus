@@ -29,6 +29,7 @@ pub mod model;
 pub mod needalert;
 pub mod opening;
 pub mod pota;
+pub mod predict;
 pub mod pskr_mqtt;
 pub mod rarity;
 pub mod space_wx;
@@ -51,6 +52,7 @@ pub use engine::{
     SpaceWxView, OPENING_BANDS,
 };
 pub use likelihood::{BandOutlook, PathModel, PropParams, Workability};
+pub use predict::{HeuristicEngine, PathPredictor, PathPrediction};
 pub use model::{
     classify_vhf_mode, ActivityTier, Band, Confidence, ModeClass, PathSpot, PropMode, Region, Side,
     SpaceWx,
