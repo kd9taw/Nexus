@@ -18,9 +18,11 @@ describe('propViz', () => {
     expect(workabilityVar('Closed')).toBe('var(--band-closed)')
   })
 
-  it('maps activity tiers to tokens', () => {
+  it('maps activity tiers to tokens (Quiet/Closed are calm neutrals, not red)', () => {
     expect(tierVar('Active')).toBe('var(--band-open)')
-    expect(tierVar('Closed')).toBe('var(--band-closed)')
+    expect(tierVar('Moderate')).toBe('var(--band-marginal)')
+    expect(tierVar('Quiet')).toBe('var(--text-dim)')
+    expect(tierVar('Closed')).toBe('var(--text-faint)')
   })
 
   it('maps need tiers to a glyph + token (color + glyph, never color alone)', () => {

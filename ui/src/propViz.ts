@@ -21,17 +21,19 @@ export function workabilityVar(word: string): string {
   }
 }
 
-/** Activity tier → a semantic color token. */
+/** Activity tier → a semantic color token. Quiet/Closed are calm neutrals (NOT
+ * red): red reads as an alert, but a quiet-yet-workable band is fine, and a
+ * closed band should simply recede. Green/amber are reserved for real activity. */
 export function tierVar(tier: ActivityTier): string {
   switch (tier) {
     case 'Active':
-      return 'var(--band-open)'
+      return 'var(--band-open)' // green — real activity
     case 'Moderate':
-      return 'var(--band-marginal)'
+      return 'var(--band-marginal)' // amber — some activity
     case 'Quiet':
-      return 'var(--snr-weak)'
+      return 'var(--text-dim)' // neutral — open but quiet (gradient prior)
     default: // Closed
-      return 'var(--band-closed)'
+      return 'var(--text-faint)' // faint — recedes
   }
 }
 

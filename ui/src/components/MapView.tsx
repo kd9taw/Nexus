@@ -111,6 +111,14 @@ const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
 }
 const RINGS_KM = [1000, 3000, 5000, 10000]
 
+// Cartographic palette — a map should read as a MAP (filled land + ocean), not a
+// wireframe. Deliberately theme-agnostic and dark (like HamClock/Geochron), so it
+// looks intentional in any UI theme. Tuned for the dark dashboard.
+const MAP_OCEAN = '#0f2334' // deep sea
+const MAP_LAND = '#364a3c' // muted continental green
+const MAP_COAST = '#6f8a98' // coastline / borders, visible but quiet
+const MAP_RIM = '#2a4254' // the globe's edge (AEQD reads as a sphere)
+
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888'
 }
@@ -258,14 +266,29 @@ export function MapView({
     const path = geoPath(proj, ctx)
     const c = project(proj, me)
 
+    // Ocean: fill the globe/sphere body so the map has substance (and AEQD reads
+    // as a globe, not floating coastlines). A soft rim defines the disc edge.
+    ctx.globalAlpha = 1
+    ctx.beginPath()
+    path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
+    ctx.fillStyle = MAP_OCEAN
+    ctx.fill()
+    ctx.strokeStyle = MAP_RIM
+    ctx.lineWidth = 1
+    ctx.stroke()
+
+    // Land: filled continents (the #1 fix vs the old wireframe), with coastlines/
+    // borders stroked on top (gated by the Coastlines layer).
+    ctx.beginPath()
+    path(basemap())
+    ctx.fillStyle = MAP_LAND
+    ctx.fill()
     if (layers.coast.visible) {
       ctx.globalAlpha = layers.coast.opacity
-      ctx.beginPath()
-      path(basemap())
-      // --text-faint reads far better than --border for coastlines in dark themes.
-      ctx.strokeStyle = cssVar('--text-faint')
-      ctx.lineWidth = 1
+      ctx.strokeStyle = MAP_COAST
+      ctx.lineWidth = 0.6
       ctx.stroke()
+      ctx.globalAlpha = 1
     }
     if (layers.grid.visible) {
       ctx.globalAlpha = layers.grid.opacity
@@ -296,14 +319,14 @@ export function MapView({
     // spots/openings so stations stay bright on the dark side.
     if (layers.daynight.visible) {
       const term = terminator(nowMs)
-      ctx.fillStyle = 'rgb(10, 18, 42)' // deep navy "night"
+      ctx.fillStyle = 'rgb(4, 8, 20)' // near-black night
       for (const cap of term.caps) {
-        ctx.globalAlpha = layers.daynight.opacity * 0.12 // stacks: ~0.12 twilight → ~0.4 core
+        ctx.globalAlpha = layers.daynight.opacity * 0.2 // stacks: ~0.2 twilight → ~0.6 core
         ctx.beginPath()
         path(cap)
         ctx.fill()
       }
-      ctx.globalAlpha = layers.daynight.opacity * 0.7
+      ctx.globalAlpha = layers.daynight.opacity * 0.85
       ctx.beginPath()
       path(term.line)
       ctx.strokeStyle = 'rgba(255, 200, 110, 0.9)' // greyline glow (prime DX zone)
