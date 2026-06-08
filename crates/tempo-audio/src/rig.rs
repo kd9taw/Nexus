@@ -57,6 +57,39 @@ pub fn freq_line(hz: u64) -> String {
 pub fn mode_line(mode: &str, passband_hz: u32) -> String {
     format!("M {mode} {passband_hz}\n")
 }
+/// rigctld `S` — split on/off + which VFO transmits (e.g. `S 1 VFOB`).
+pub fn split_line(on: bool, tx_vfo: &str) -> String {
+    format!("S {} {}\n", on as u8, tx_vfo)
+}
+/// rigctld `I` — the split (TX) frequency in Hz.
+pub fn split_freq_line(hz: u64) -> String {
+    format!("I {hz}\n")
+}
+/// rigctld `V` — select the active VFO (e.g. `VFOA`, `VFOB`, `Main`, `Sub`).
+pub fn vfo_line(vfo: &str) -> String {
+    format!("V {vfo}\n")
+}
+/// rigctld `U` — toggle a function (RIT/XIT must be enabled this way before `J`/`Z`).
+pub fn func_line(func: &str, on: bool) -> String {
+    format!("U {} {}\n", func, on as u8)
+}
+/// rigctld `J` — RIT offset in Hz (receive incremental tuning).
+pub fn rit_line(hz: i32) -> String {
+    format!("J {hz}\n")
+}
+/// rigctld `Z` — XIT offset in Hz (transmit incremental tuning).
+pub fn xit_line(hz: i32) -> String {
+    format!("Z {hz}\n")
+}
+/// rigctld `L` — set a level by name (e.g. `RFPOWER 0.5` 0..1, `KEYSPD 25` WPM).
+pub fn level_line(name: &str, value: &str) -> String {
+    format!("L {name} {value}\n")
+}
+/// rigctld `b` — send_morse: the rig keys CW from this text (rest of the line).
+pub fn morse_line(text: &str) -> String {
+    format!("b {text}\n")
+}
+
 /// True if a rigctld reply indicates success (`RPRT 0`).
 pub fn reply_ok(reply: &str) -> bool {
     reply.lines().any(|l| l.trim() == "RPRT 0")
@@ -222,6 +255,78 @@ impl Rig {
                 ))
             })
     }
+
+    /// Read the rig's current mode (e.g. "USB"/"CW"). `None` if not a CAT rig or the
+    /// rig didn't answer. The `m` reply is the mode on one line, passband on the next.
+    pub fn read_mode(&mut self) -> Option<String> {
+        if !matches!(self.mode, PttMode::Rigctld { .. }) {
+            return None;
+        }
+        let reply = self.command("m\n").ok()?;
+        reply
+            .lines()
+            .map(|l| l.trim())
+            .find(|l| !l.is_empty() && !l.starts_with("RPRT") && l.parse::<i64>().is_err())
+            .map(|s| s.to_string())
+    }
+
+    // --- the all-mode (phone/CW) control surface. All CAT-only (no-op otherwise). ---
+
+    /// Set split on/off and which VFO transmits (DX pileups). `tx_vfo` e.g. "VFOB".
+    pub fn set_split(&mut self, on: bool, tx_vfo: &str) -> std::io::Result<()> {
+        self.cat(&split_line(on, tx_vfo))
+    }
+    /// Set the split (TX) frequency in Hz.
+    pub fn set_split_freq(&mut self, hz: u64) -> std::io::Result<()> {
+        self.cat(&split_freq_line(hz))
+    }
+    /// Select the active VFO (e.g. "VFOA"/"VFOB").
+    pub fn set_vfo(&mut self, vfo: &str) -> std::io::Result<()> {
+        self.cat(&vfo_line(vfo))
+    }
+    /// Set RIT (receive incremental tuning) offset in Hz; enabling RIT first (0 = off).
+    pub fn set_rit(&mut self, hz: i32) -> std::io::Result<()> {
+        self.cat(&func_line("RIT", hz != 0))?;
+        self.cat(&rit_line(hz))
+    }
+    /// Set XIT (transmit incremental tuning) offset in Hz (0 = off).
+    pub fn set_xit(&mut self, hz: i32) -> std::io::Result<()> {
+        self.cat(&func_line("XIT", hz != 0))?;
+        self.cat(&xit_line(hz))
+    }
+    /// Set RF output power as a 0.0–1.0 fraction (Hamlib `RFPOWER`).
+    pub fn set_power(&mut self, frac: f32) -> std::io::Result<()> {
+        self.cat(&level_line("RFPOWER", &format!("{:.3}", frac.clamp(0.0, 1.0))))
+    }
+    /// Set the rig's internal CW keyer speed in WPM (Hamlib `KEYSPD`).
+    pub fn set_keyspd(&mut self, wpm: u32) -> std::io::Result<()> {
+        self.cat(&level_line("KEYSPD", &wpm.to_string()))
+    }
+    /// Key CW from text via the rig's own keyer (Hamlib `send_morse`). Set the speed
+    /// first with [`set_keyspd`](Self::set_keyspd). Best for canned/keyboard macros;
+    /// CAT latency makes it poor for live paddle feel (use WinKeyer for that).
+    pub fn send_morse(&mut self, text: &str) -> std::io::Result<()> {
+        self.cat(&morse_line(text))
+    }
+    /// Abort CW in progress. Newer Hamlib exposes `\stop_morse`; older builds vary by
+    /// manufacturer (the WinKeyer path has a reliable Clear-Buffer abort instead).
+    pub fn stop_morse(&mut self) -> std::io::Result<()> {
+        self.cat("\\stop_morse\n")
+    }
+
+    /// Send a rigctld command, succeeding on `RPRT 0` (or an empty reply); no-op when
+    /// not under CAT. Shared by the all-mode control verbs above.
+    fn cat(&mut self, line: &str) -> std::io::Result<()> {
+        if !matches!(self.mode, PttMode::Rigctld { .. }) {
+            return Ok(());
+        }
+        let reply = self.command(line)?;
+        if reply_ok(&reply) || reply.is_empty() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!("rigctld error for {line:?}: {reply:?}")))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -236,6 +341,38 @@ mod tests {
         assert_eq!(mode_line("USB", 0), "M USB 0\n");
         assert!(reply_ok("RPRT 0\n"));
         assert!(!reply_ok("RPRT -1\n"));
+    }
+
+    #[test]
+    fn all_mode_control_lines_match_rigctld_protocol() {
+        assert_eq!(split_line(true, "VFOB"), "S 1 VFOB\n");
+        assert_eq!(split_line(false, "VFOA"), "S 0 VFOA\n");
+        assert_eq!(split_freq_line(14_205_000), "I 14205000\n");
+        assert_eq!(vfo_line("VFOA"), "V VFOA\n");
+        assert_eq!(func_line("RIT", true), "U RIT 1\n");
+        assert_eq!(func_line("XIT", false), "U XIT 0\n");
+        assert_eq!(rit_line(-200), "J -200\n");
+        assert_eq!(xit_line(500), "Z 500\n");
+        assert_eq!(level_line("RFPOWER", "0.500"), "L RFPOWER 0.500\n");
+        assert_eq!(level_line("KEYSPD", "25"), "L KEYSPD 25\n");
+        // send_morse takes the rest of the line as the CW text (spaces preserved).
+        assert_eq!(morse_line("CQ CQ DE W9XYZ"), "b CQ CQ DE W9XYZ\n");
+    }
+
+    #[test]
+    fn all_mode_control_is_a_no_op_under_vox() {
+        // Every new verb is CAT-only — under VOX they must not attempt a connection.
+        let mut rig = Rig::vox();
+        rig.set_split(true, "VFOB").unwrap();
+        rig.set_split_freq(14_205_000).unwrap();
+        rig.set_vfo("VFOA").unwrap();
+        rig.set_rit(-200).unwrap();
+        rig.set_xit(0).unwrap();
+        rig.set_power(0.5).unwrap();
+        rig.set_keyspd(25).unwrap();
+        rig.send_morse("TEST").unwrap();
+        rig.stop_morse().unwrap();
+        assert_eq!(rig.read_mode(), None);
     }
 
     #[test]
