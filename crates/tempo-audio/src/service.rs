@@ -222,6 +222,12 @@ struct RadioLoop {
     clock: SlotClock,
     rx: RxRing,
     last_slot: Option<u64>,
+    /// Whether the slot we just finished was one we TRANSMITTED in. Gates the RX
+    /// decode: we decode the slot that just ended UNLESS we transmitted in it (the
+    /// capture ring then holds our own carrier). Tying the decode to the *previous*
+    /// slot — not whether we're about to TX in the new one — is what lets stations
+    /// in the RX slots BETWEEN our transmissions get decoded while calling CQ.
+    prev_slot_was_tx: bool,
     tx_until_ms: Option<f64>,
     tuning_keyed: bool,
     tune_phase: f32,
@@ -246,6 +252,7 @@ impl RadioLoop {
             clock: SlotClock::ft1(),
             rx: RxRing::new(),
             last_slot: None,
+            prev_slot_was_tx: false,
             tx_until_ms: None,
             tuning_keyed: false,
             tune_phase: 0.0,
@@ -403,6 +410,7 @@ impl RadioLoop {
             self.tuning_keyed = false;
             self.tune_started_ms = None;
             self.last_slot = None;
+            self.prev_slot_was_tx = false;
         }
 
         // Hard Stop TX: if transmit was disabled mid-over (the UI "Stop TX" button
@@ -453,6 +461,7 @@ impl RadioLoop {
             self.clock = SlotClock::with_period_secs(eng.active_slot_secs());
             self.rx = RxRing::with_capacity(eng.active_capture_samples());
             self.last_slot = None;
+            self.prev_slot_was_tx = false;
         }
 
         if Some(slot) != self.last_slot {
@@ -467,11 +476,16 @@ impl RadioLoop {
                 slot,
                 now,
                 self.tx_until_ms.is_some(),
+                self.prev_slot_was_tx,
             );
             if let Some(t) = action.tx_until_ms {
                 self.tx_until_ms = Some(t);
             }
+            // Remember whether THIS slot was a transmit slot so the next boundary
+            // knows not to decode our own carrier (and to decode it otherwise).
+            self.prev_slot_was_tx = action.tx_this_slot;
             let did_rx = action.did_rx;
+            let tx_this_slot = action.tx_this_slot;
 
             // --- network emission (WSJT-X UDP API + PSK Reporter) ---
             if sinks.wsjtx.is_some() || sinks.psk.is_some() {
@@ -514,7 +528,10 @@ impl RadioLoop {
                         tx_mode: tier,
                         tx_enabled: false,
                         transmitting: snap.radio.transmitting,
-                        decoding: did_rx,
+                        // `decoding` and `transmitting` are disjoint phases in
+                        // WSJT-X: when we decode the prior RX slot AND transmit in
+                        // this one (calling CQ), report the transmit phase only.
+                        decoding: did_rx && !tx_this_slot,
                         rx_df: 1500,
                         tx_df: 1500,
                         de_call: &snap.mycall,
