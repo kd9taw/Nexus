@@ -29,7 +29,6 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use propagation::PathPredictor as _; // brings `predict` into scope for HeuristicEngine
 use tauri::Manager;
 use tauri::State;
 use tempo_app::dto::{
@@ -1290,15 +1289,19 @@ fn get_confirmation_diagnostics(
     Ok(report.into())
 }
 
-/// Need-aware spotting: rank the stations the operator is hearing right now (the
-/// roster, on the current band) by award value — new DXCC entity / CQ zone / band
-/// slot / mode — so "new ones" surface from the live decodes. Offline (native
-/// roster); a telnet-cluster / RBN / PSK-Reporter feed is a later increment.
+/// Need-aware spotting: rank the stations WORKABLE FROM HERE RIGHT NOW by award
+/// value (new DXCC / CQ zone / band-slot / mode). Crucially, the value is the bands
+/// you're NOT tuned to — so the evidence is EMPIRICAL near-me reception, not a
+/// model: a station counts if a receiver NEAR YOU (PSK Reporter / near-region feed,
+/// band-aware radius) is hearing it, plus whatever your own radio is decoding on the
+/// current band. (Weak-signal-sleuth: someone local to you actually copied the DX,
+/// so the path is open from your QTH too — not "someone in Spain heard the Spanish
+/// station.")
 #[tauri::command]
 async fn get_need_alerts(
     state: State<'_, SharedEngine>,
-    spots: State<'_, SharedSpots>,
-    cache: State<'_, PropCache>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
 ) -> Result<Vec<propagation::NeedAlert>, String> {
     let eng = state.lock().map_err(|e| e.to_string())?;
     let mut needs = propagation::LogNeeds::new();
@@ -1306,9 +1309,9 @@ async fn get_need_alerts(
         needs.add(&q.call, &q.band, &q.mode, q.award_confirmed);
     }
     let snap = eng.snapshot();
-    drop(eng); // nothing below needs the engine — don't hold the hot lock across spots
+    drop(eng); // nothing below needs the engine — don't hold the hot lock
     let band = snap.radio.band.clone();
-    // Stations heard natively on the current band...
+    // Your own radio's decodes on the CURRENT band (you are the receiver).
     let mut heard: Vec<propagation::Heard> = snap
         .stations
         .iter()
@@ -1318,93 +1321,20 @@ async fn get_need_alerts(
             mode: "FT8".to_string(), // FT-family → Digital class; the band is what varies
         })
         .collect();
-    // Workability gate for SPOTTED stations (below): a cluster/RBN spot existing
-    // somewhere doesn't mean the operator can work it. Cross-check each against the
-    // propagation path FROM the operator's QTH so we don't surface 80m/160m DX at
-    // midday or 6m DX with no opening. (The operator's OWN roster above is always
-    // kept — they're hearing it, so it's workable by definition.)
-    let me_ll = propagation::geo::maidenhead_to_latlon(snap.mygrid.trim());
-    let now_i = now_unix() as i64;
-    let hour = (((now_i / 3600) % 24 + 24) % 24) as usize;
-    // Live space weather from the propagation cache's last snapshot (the same
-    // SWPC-fed SFI/Kp get_propagation uses); benign mid-cycle defaults if cold.
-    let wx = cache
-        .lock()
-        .ok()
-        .and_then(|g| {
-            g.as_ref().map(|(_, s)| propagation::SpaceWx {
-                sfi: s.space_wx.sfi,
-                kp: s.space_wx.kp,
-                a_index: s.space_wx.a_index,
-                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
-            })
-        })
-        .unwrap_or_default();
-    let predictor = propagation::HeuristicEngine::new(me_ll);
-    let workable_from_me = |call: &str, band: &str| -> bool {
-        // No grid set → can't predict; don't hide anything.
-        if me_ll.is_none() {
-            return true;
+    // The real value: stations a receiver NEAR YOU is hearing on bands you're not
+    // on — from the PSK Reporter firehose + the near-region feed, gated by a
+    // band-aware "local to me" radius (Es footprint on VHF is tighter than F2 on
+    // HF). No propagation model, no bare cluster spots — empirical evidence only.
+    if let Some(me) = propagation::geo::maidenhead_to_latlon(snap.mygrid.trim()) {
+        let now = now_unix() as i64;
+        if let Ok(buf) = live_paths.lock() {
+            heard.extend(propagation::heard_near_me(&buf.recent(now, 900), me));
         }
-        let Some(info) = propagation::dxcc::resolve(call) else {
-            return true; // unresolvable → don't hide
-        };
-        // VHF (6m/2m) DX from the spotting network needs a local opening to be
-        // workable — which surfaces via the operator's OWN decodes (kept above).
-        // A far cluster spot is not workable from here, so drop it.
-        if propagation::model::Band::from_label(band).is_some_and(|b| b.is_vhf()) {
-            return false;
-        }
-        let pred = predictor.predict((info.lat, info.lon), now_i, &wx);
-        pred.bands
-            .iter()
-            .find(|o| o.band.eq_ignore_ascii_case(band))
-            .and_then(|o| o.hourly.get(hour).copied())
-            .is_some_and(|p| p >= 0.12)
-    };
-    // ...plus recent DX-cluster / RBN spots (each on its own band, derived from
-    // freq). Only the last 15 min — "heard now" must mean recent.
-    if let Ok(buf) = spots.lock() {
-        for cs in buf.recent_within(
-            std::time::Instant::now(),
-            std::time::Duration::from_secs(900),
-        ) {
-            // Pick a real mode keyword out of the comment (RBN leads with it;
-            // human spots may lead with "up 2" etc.) rather than the first token.
-            let mode = cs
-                .comment
-                .split_whitespace()
-                .find(|t| {
-                    matches!(
-                        t.to_ascii_uppercase().as_str(),
-                        "CW" | "SSB"
-                            | "USB"
-                            | "LSB"
-                            | "AM"
-                            | "FM"
-                            | "RTTY"
-                            | "PSK"
-                            | "FT8"
-                            | "FT4"
-                            | "JT65"
-                            | "JT9"
-                            | "MFSK"
-                    )
-                })
-                .unwrap_or("FT8");
-            if let Some(h) = propagation::heard_from_freq(&cs.dx_call, cs.freq_mhz(), mode) {
-                // Only surface spots the operator actually has a propagation path to.
-                if workable_from_me(&h.call, &h.band) {
-                    heard.push(h);
-                }
-            }
+        if let Ok(buf) = region_paths.0.lock() {
+            heard.extend(propagation::heard_near_me(&buf.recent(now, 900), me));
         }
     }
-    Ok(propagation::rank_needs(
-        &heard,
-        &needs,
-        needs.worked_zones(),
-    ))
+    Ok(propagation::rank_needs(&heard, &needs, needs.worked_zones()))
 }
 
 /// Import an external ADIF logbook (deduped merge → real "needs"). Takes the

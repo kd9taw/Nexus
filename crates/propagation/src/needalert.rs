@@ -8,7 +8,8 @@
 
 use crate::dxcc;
 use crate::dxped::{NeedKind, OperatorNeeds};
-use crate::model::{Band, ModeClass};
+use crate::geo::{haversine_km, maidenhead_to_latlon};
+use crate::model::{Band, ModeClass, PathSpot};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -164,6 +165,44 @@ pub fn rank(
         .collect()
 }
 
+/// Band-aware "local to me" radius (km). An Es footprint (VHF) is far tighter than
+/// an F2 footprint (HF): a receiver this close to you, hearing a station, means the
+/// path to that station is very likely open from YOUR QTH too.
+pub fn near_me_radius_km(band: Band) -> f64 {
+    if band.is_vhf() {
+        400.0
+    } else {
+        1500.0
+    }
+}
+
+/// The stations a receiver NEAR the operator (`me` lat/lon) is hearing, drawn from
+/// reception reports (PSK Reporter / RBN). THIS is the needed board's real value:
+/// it surfaces what's workable from your region on bands you're NOT tuned to —
+/// empirical "someone near me actually copied the DX" evidence (weak-signal-sleuth),
+/// not a propagation-model guess. A report counts when its RECEIVER is within the
+/// band-aware radius of you. Deduped by (call, band).
+pub fn heard_near_me(reports: &[PathSpot], me: (f64, f64)) -> Vec<Heard> {
+    let mut out = Vec::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    for p in reports {
+        let Some(rx) = p.rx_grid.as_deref().and_then(maidenhead_to_latlon) else {
+            continue; // no receiver location → can't judge "near me"
+        };
+        if haversine_km(me, rx) <= near_me_radius_km(p.band) {
+            let band = p.band.label().to_string();
+            if seen.insert((p.tx_call.to_ascii_uppercase(), band.clone())) {
+                out.push(Heard {
+                    call: p.tx_call.clone(),
+                    band,
+                    mode: p.mode.clone().unwrap_or_else(|| "FT8".to_string()),
+                });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,6 +214,33 @@ mod tests {
             band: band.into(),
             mode: "FT8".into(),
         }
+    }
+
+    #[test]
+    fn heard_near_me_filters_by_receiver_proximity_and_band() {
+        let me = maidenhead_to_latlon("EN61").unwrap(); // Chicago area
+        let report = |tx: &str, rx_grid: &str, band: &str| PathSpot {
+            time: 0,
+            tx_call: tx.into(),
+            tx_grid: None,
+            rx_call: "RX".into(),
+            rx_grid: Some(rx_grid.into()),
+            band: Band::from_label(band).unwrap(),
+            mode: Some("FT8".into()),
+            snr: None,
+        };
+        let reports = vec![
+            report("EA1ABC", "EN52", "20m"), // HF DX, receiver ~near (Iowa) → keep
+            report("EA1XYZ", "JN58", "20m"), // HF DX, receiver in Europe (~7000km) → drop
+            report("K6SIX", "EM38", "6m"),   // 6m, receiver ~700km → beyond VHF radius → drop
+            report("W0HF", "EM38", "20m"),   // same receiver, 20m → within HF radius → keep
+        ];
+        let out = heard_near_me(&reports, me);
+        let calls: Vec<&str> = out.iter().map(|h| h.call.as_str()).collect();
+        assert!(calls.contains(&"EA1ABC"), "near HF receiver kept: {calls:?}");
+        assert!(!calls.contains(&"EA1XYZ"), "far HF receiver dropped");
+        assert!(!calls.contains(&"K6SIX"), "6m beyond the tighter VHF radius dropped");
+        assert!(calls.contains(&"W0HF"), "same distance on 20m kept (band-aware)");
     }
 
     #[test]

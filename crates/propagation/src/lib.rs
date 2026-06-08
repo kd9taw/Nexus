@@ -61,7 +61,9 @@ pub use model::{
     classify_vhf_mode, ActivityTier, Band, Confidence, ModeClass, PathSpot, PropMode, Region, Side,
     SpaceWx,
 };
-pub use needalert::{heard_from_freq, rank as rank_needs, Heard, NeedAlert, NeedTag};
+pub use needalert::{
+    heard_from_freq, heard_near_me, near_me_radius_km, rank as rank_needs, Heard, NeedAlert, NeedTag,
+};
 pub use pota::{parse_pota_spots, parse_sota_spots, OtaSpot};
 pub use opening::{
     classify as classify_opening, detect as detect_openings_v2, reciprocity, BandFeatures,
