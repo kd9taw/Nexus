@@ -608,6 +608,11 @@ fn get_propagation(
         snap.advisory = propagation::PropAdvisor::new(&mycall, &mygrid).advise(now, &wide, &wx);
     }
 
+    // Locate the merged window for the map (grid or DXCC centroid), so the map
+    // fills with the cluster/RBN/PSKR firehose + own decodes, not just the native
+    // roster. Capped so a busy RBN window can't flood the canvas.
+    snap.spots = propagation::build_map_spots(now, &mycall, &wide, 400);
+
     Ok(snap)
 }
 

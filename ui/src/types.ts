@@ -150,6 +150,19 @@ export interface PropagationSnapshot {
   source: 'live' | 'cached' | 'demo'
   /** When this data was produced (Unix seconds, UTC). */
   asOf: number
+  /** Located spots for the map (own-call + region + cluster/RBN + own decodes). */
+  spots?: MapSpot[]
+}
+
+/** One located spot for the map (placed by grid, or DXCC centroid if grid-less). */
+export interface MapSpot {
+  call: string
+  lat: number
+  lon: number
+  band: string
+  heardMe: boolean
+  ageSecs: number
+  approx: boolean
 }
 
 /** Top-level operating mode reflected in the snapshot. */

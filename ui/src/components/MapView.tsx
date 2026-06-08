@@ -88,6 +88,7 @@ type LayerKey =
   | 'coast'
   | 'grid'
   | 'rings'
+  | 'liveSpots'
   | 'stations'
   | 'paths'
   | 'openings'
@@ -104,7 +105,8 @@ const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   coast: { label: 'Coastlines', visible: true, opacity: 0.85 },
   grid: { label: 'Grid (20°×10°)', visible: true, opacity: 0.5 },
   rings: { label: 'Range rings', visible: true, opacity: 0.55 },
-  stations: { label: 'Spots', visible: true, opacity: 1 },
+  liveSpots: { label: 'Live spots (cluster/RBN)', visible: true, opacity: 0.9 },
+  stations: { label: 'My decodes', visible: true, opacity: 1 },
   paths: { label: 'Selected path', visible: true, opacity: 1 },
   openings: { label: 'Openings', visible: true, opacity: 0.7 },
   dxped: { label: 'DXpeditions', visible: true, opacity: 1 },
@@ -118,6 +120,25 @@ const MAP_OCEAN = '#0f2334' // deep sea
 const MAP_LAND = '#364a3c' // muted continental green
 const MAP_COAST = '#6f8a98' // coastline / borders, visible but quiet
 const MAP_RIM = '#2a4254' // the globe's edge (AEQD reads as a sphere)
+
+// Per-band spot colors (low bands cool → high bands warm), so the live-spot
+// firehose reads by band at a glance. "Heard me" spots override to green.
+const BAND_COLOR: Record<string, string> = {
+  '160m': '#7c5cff',
+  '80m': '#5c7cff',
+  '40m': '#3aa0ff',
+  '30m': '#2bd4c0',
+  '20m': '#3ddc6a',
+  '17m': '#9bdc3d',
+  '15m': '#ffcc44',
+  '12m': '#ff9d3d',
+  '10m': '#ff6d3d',
+  '6m': '#ff4d6d',
+  '4m': '#ff4da6',
+  '2m': '#d24dff',
+}
+const bandColor = (b: string): string => BAND_COLOR[b] ?? '#8aa0b0'
+const GETTING_OUT = '#3ddc6a' // a station that heard ME
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888'
@@ -391,6 +412,33 @@ export function MapView({
         ctx.fill()
         ctx.globalAlpha = 1
       }
+    }
+
+    // Live spots — the cluster/RBN/PSKR firehose + own decodes, placed by grid or
+    // DXCC centroid. Colored by band; green = a station that heard ME ("getting
+    // out"); faded by age; centroid-placed (approx) spots dimmer. This is what
+    // fills the map with real activity (HamClock-style), under the operator's own
+    // decode roster + needed/selected stations.
+    if (layers.liveSpots.visible && prop?.spots) {
+      for (const sp of prop.spots) {
+        const p = project(proj, { lat: sp.lat, lon: sp.lon })
+        if (!p) continue
+        const ageMin = sp.ageSecs / 60
+        const fade = ageMin < 10 ? 1 : ageMin < 30 ? 0.6 : 0.35
+        ctx.globalAlpha = layers.liveSpots.opacity * fade * (sp.approx ? 0.7 : 1)
+        ctx.beginPath()
+        ctx.arc(p[0], p[1], sp.heardMe ? 3 : 2.2, 0, Math.PI * 2)
+        ctx.fillStyle = sp.heardMe ? GETTING_OUT : bandColor(sp.band)
+        ctx.fill()
+        if (sp.heardMe) {
+          ctx.beginPath()
+          ctx.arc(p[0], p[1], 4.5, 0, Math.PI * 2)
+          ctx.strokeStyle = GETTING_OUT
+          ctx.lineWidth = 1
+          ctx.stroke()
+        }
+      }
+      ctx.globalAlpha = 1
     }
 
     // Selected path: short-path = the geodesic (geoPath clips it cleanly); long-

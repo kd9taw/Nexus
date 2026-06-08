@@ -82,6 +82,11 @@ pub struct PropagationSnapshot {
     pub source: String,
     /// When this snapshot's data was produced (Unix seconds, UTC).
     pub as_of: i64,
+    /// Located spots for the map (own-call + region + cluster/RBN + own decodes),
+    /// placed by grid or DXCC centroid. Populated by the command layer (which owns
+    /// the merged spot window); empty in the pure-engine assembly + demo.
+    #[serde(default)]
+    pub spots: Vec<crate::mapspots::MapSpot>,
 }
 
 /// Ties the three pillars to one operator identity.
@@ -128,6 +133,7 @@ impl PropagationEngine {
             // Default provenance; live/cached callers override `source`.
             source: "live".to_string(),
             as_of: now,
+            spots: Vec::new(), // command layer fills this from the merged window
         }
     }
 
