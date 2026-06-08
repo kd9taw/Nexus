@@ -1295,9 +1295,10 @@ fn get_confirmation_diagnostics(
 /// slot / mode — so "new ones" surface from the live decodes. Offline (native
 /// roster); a telnet-cluster / RBN / PSK-Reporter feed is a later increment.
 #[tauri::command]
-fn get_need_alerts(
+async fn get_need_alerts(
     state: State<'_, SharedEngine>,
     spots: State<'_, SharedSpots>,
+    cache: State<'_, PropCache>,
 ) -> Result<Vec<propagation::NeedAlert>, String> {
     let eng = state.lock().map_err(|e| e.to_string())?;
     let mut needs = propagation::LogNeeds::new();
@@ -1325,7 +1326,20 @@ fn get_need_alerts(
     let me_ll = propagation::geo::maidenhead_to_latlon(snap.mygrid.trim());
     let now_i = now_unix() as i64;
     let hour = (((now_i / 3600) % 24 + 24) % 24) as usize;
-    let wx = propagation::model::SpaceWx::default(); // day/night/MUF physics dominates the gate
+    // Live space weather from the propagation cache's last snapshot (the same
+    // SWPC-fed SFI/Kp get_propagation uses); benign mid-cycle defaults if cold.
+    let wx = cache
+        .lock()
+        .ok()
+        .and_then(|g| {
+            g.as_ref().map(|(_, s)| propagation::SpaceWx {
+                sfi: s.space_wx.sfi,
+                kp: s.space_wx.kp,
+                a_index: s.space_wx.a_index,
+                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
+            })
+        })
+        .unwrap_or_default();
     let predictor = propagation::HeuristicEngine::new(me_ll);
     let workable_from_me = |call: &str, band: &str| -> bool {
         // No grid set → can't predict; don't hide anything.
@@ -2512,6 +2526,20 @@ pub fn run() {
             qsy_pause,
             qsy_stop
         ])
+        .on_window_event(|window, event| {
+            // Closing the MAIN window tears down the whole app: close any torn-off
+            // panel windows too, so they don't linger (and keep the process alive).
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                let app = window.app_handle();
+                for (label, w) in app.webview_windows() {
+                    if label != "main" {
+                        let _ = w.close();
+                    }
+                }
+            }
+        })
         .run(tauri::generate_context!())
-        .expect("error while running the Tempo application");
+        .expect("error while running the Nexus application");
 }

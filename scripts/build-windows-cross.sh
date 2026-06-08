@@ -2,13 +2,13 @@
 # Tempo — cross-build the Windows app from Linux / WSL2 (no MSYS2 needed).
 #
 # Uses the MinGW-w64 cross toolchain to produce Windows .exe files right here:
-#   • src-tauri/target/x86_64-pc-windows-gnu/release/tempo.exe        (the GUI app)
+#   • src-tauri/target/x86_64-pc-windows-gnu/release/Nexus.exe        (the GUI app)
 #   • target/x86_64-pc-windows-gnu/release/examples/win_smoke.exe     (static modem self-test)
 #   • libft1/build-win/{dx1_test_standalone,roundtrip,ft1_test_standalone,acquire}.exe
 #
 #   ./scripts/build-windows-cross.sh            # everything (modem exes + GUI)
 #   ./scripts/build-windows-cross.sh --modem    # only the modem exes (fast, fully static)
-#   ./scripts/build-windows-cross.sh --no-gui   # modem + win_smoke, skip tempo.exe
+#   ./scripts/build-windows-cross.sh --no-gui   # modem + win_smoke, skip Nexus.exe
 #
 # Prereqs (Debian/Ubuntu pkg names) — the script checks and reports what's missing:
 #   gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gfortran-mingw-w64-x86-64
@@ -87,7 +87,7 @@ if [ "$MODEM_ONLY" = 1 ]; then bold "Modem exes done (--modem)."; exit 0; fi
 
 # 5 — the GUI app + offline installer (tempo.exe + NSIS) ---------------------
 if [ "$GUI" = 1 ]; then
-  bold "5/5  GUI app + installer (tempo.exe, NSIS)"
+  bold "5/5  GUI app + installer (Nexus.exe, NSIS)"
   command -v npm >/dev/null || die "npm not found — install Node.js LTS to build the UI."
   command -v makensis >/dev/null || warn "makensis not found — the NSIS step needs it (Debian/Ubuntu: sudo apt install nsis)."
   cargo tauri --version >/dev/null 2>&1 || { warn "installing tauri-cli…"; cargo install tauri-cli --version "^2" --locked; }
@@ -97,12 +97,12 @@ if [ "$GUI" = 1 ]; then
   # cargo tauri build enables asset embedding (custom-protocol — the fix for the
   # blank "page cannot be displayed" screen) and bundles the offline installer.
   ( cd "$REPO/src-tauri" && cargo tauri build --target "$TARGET" --features radio,custom-protocol --bundles nsis )
-  ok "tempo.exe + installer"
+  ok "Nexus.exe + installer"
 fi
 
 bold "Done ✓  Windows artifacts:"
-echo "  installer (run this): src-tauri/target/$TARGET/release/bundle/nsis/Tempo_*_x64-setup.exe"
-echo "  GUI app             : src-tauri/target/$TARGET/release/tempo.exe"
+echo "  installer (run this): src-tauri/target/$TARGET/release/bundle/nsis/Nexus_*_x64-setup.exe"
+echo "  GUI app             : src-tauri/target/$TARGET/release/Nexus.exe"
 echo "  modem self-test     : target/$TARGET/release/examples/win_smoke.exe   (fully static — runs anywhere)"
 echo "  modem test exes     : libft1/build-win/*.exe"
 echo
