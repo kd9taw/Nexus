@@ -585,6 +585,27 @@ fn get_path_outlook(
     Ok(eng.predict(dx, now_unix(), &wx))
 }
 
+/// "Am I getting out?" — who is hearing the operator right now, from the live PSK
+/// Reporter / RBN firehose (spots where the operator is the TX side). Pure
+/// observed data — the most reassuring live answer a station can get.
+#[tauri::command]
+fn get_getting_out(
+    state: State<'_, SharedEngine>,
+    live_paths: State<'_, SharedLivePaths>,
+) -> Result<propagation::GettingOut, String> {
+    let (mycall, mygrid) = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        let s = eng.settings();
+        (s.mycall.clone(), s.mygrid.clone())
+    };
+    let now = now_unix();
+    let spots = live_paths
+        .lock()
+        .map(|b| b.recent(now, 1800))
+        .unwrap_or_default();
+    Ok(propagation::getting_out(&mycall, &mygrid, &spots, now))
+}
+
 /// One waterfall row (Goertzel power spectrum of the last received frame).
 #[tauri::command]
 fn get_spectrum_row(state: State<'_, SharedEngine>) -> Result<Spectrum, String> {
@@ -2290,6 +2311,7 @@ pub fn run() {
             get_need_alerts,
             get_propagation,
             get_path_outlook,
+            get_getting_out,
             get_feed_health,
             qsy_set_enabled,
             qsy_configure,

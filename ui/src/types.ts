@@ -89,6 +89,23 @@ export interface PathPrediction {
   engine: string
   bands: BandOutlook[]
 }
+/** One receiver who decoded the operator ("getting out"). */
+export interface HeardMe {
+  call: string
+  grid: string | null
+  band: string
+  snr: number | null
+  bearingDeg: number
+  km: number
+  octant: string
+  ageSecs: number
+}
+/** "Am I getting out?" — who is hearing the operator now (observed). */
+export interface GettingOut {
+  count: number
+  maxKm: number
+  reports: HeardMe[]
+}
 /** A forward-calendar entry — an announced DXpedition to plan for. */
 export interface CalendarEntry {
   call: string

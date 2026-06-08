@@ -31,7 +31,7 @@ import type {
   Tier,
 } from './types'
 import { mockEngine, nextSpectrumRow, demoPropagation } from './mock'
-import type { PropagationSnapshot, PathPrediction } from './types'
+import type { PropagationSnapshot, PathPrediction, GettingOut } from './types'
 
 interface TauriInvoke {
   invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>
@@ -94,6 +94,13 @@ export async function getPathOutlook(grid: string): Promise<PathPrediction> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<PathPrediction>('get_path_outlook', { grid })
   return { engine: 'demo', bands: [] }
+}
+
+/** "Am I getting out?" — who is hearing the operator now (observed). */
+export async function getGettingOut(): Promise<GettingOut> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<GettingOut>('get_getting_out')
+  return { count: 0, maxKm: 0, reports: [] }
 }
 
 export async function sendMessage(peer: string, text: string): Promise<void> {

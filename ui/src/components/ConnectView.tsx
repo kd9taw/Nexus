@@ -6,9 +6,9 @@
 // point, what do I need" at a glance. Map deep-dive + full Propagation panel
 // remain available as their own sections within the Connect area.
 import { useState, useEffect, useMemo } from 'react'
-import type { NeedTag, PathPrediction, PropagationSnapshot, Station } from '../types'
+import type { GettingOut, NeedTag, PathPrediction, PropagationSnapshot, Station } from '../types'
 import type { Theme } from '../useTheme'
-import { getPathOutlook } from '../api'
+import { getPathOutlook, getGettingOut } from '../api'
 import { MapView, type MapIntent } from './MapView'
 import { StateBlock } from './StateBlock'
 import { SpaceWxGauges } from './prop/SpaceWxGauges'
@@ -106,6 +106,22 @@ export function ConnectView({
     }
   }, [selGrid])
   const pathOpen = pathPred?.bands.filter((b) => b.workability !== 'Closed') ?? []
+  // "Am I getting out?" — who is hearing me now (observed). Polled on the prop
+  // cadence; the backend reads the live PSK Reporter / RBN firehose each call.
+  const [getout, setGetout] = useState<GettingOut | null>(null)
+  useEffect(() => {
+    let live = true
+    const load = () =>
+      getGettingOut()
+        .then((g) => live && setGetout(g))
+        .catch(() => {})
+    load()
+    const id = window.setInterval(load, 30_000)
+    return () => {
+      live = false
+      window.clearInterval(id)
+    }
+  }, [])
   return (
     <main className="layout single">
       <div className="connect-shell">
@@ -184,6 +200,30 @@ export function ConnectView({
                   )}
                 </section>
               )}
+              <section className="connect-getout panel">
+                <h3>Am I getting out?</h3>
+                {!getout || getout.count === 0 ? (
+                  <p className="cp-none">No reception reports yet — call CQ, then watch who hears you.</p>
+                ) : (
+                  <>
+                    <p className="getout-summary">
+                      <strong>{getout.count}</strong> hearing you · furthest{' '}
+                      <strong>{getout.maxKm.toLocaleString()} km</strong>
+                    </p>
+                    <ul className="getout-list">
+                      {getout.reports.slice(0, 6).map((r) => (
+                        <li key={r.call}>
+                          <span className="go-call">{r.call}</span>
+                          <span className="go-where">
+                            {r.octant} {r.km.toLocaleString()} km
+                          </span>
+                          <span className="go-band">{r.band}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </section>
               <OpeningStrip openings={prop.openings} />
               <SpaceWxGauges wx={prop.spaceWx} gloss={!expert} />
               <BandAdvisor bands={prop.advisory.bands} />

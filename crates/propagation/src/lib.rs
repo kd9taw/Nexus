@@ -24,6 +24,7 @@ pub mod dxcc;
 pub mod dxped;
 pub mod engine;
 pub mod geo;
+pub mod gettingout;
 pub mod likelihood;
 pub mod model;
 pub mod needalert;
@@ -53,6 +54,7 @@ pub use engine::{
 };
 pub use likelihood::{BandOutlook, PathModel, PropParams, Workability};
 pub use predict::{HeuristicEngine, PathPredictor, PathPrediction};
+pub use gettingout::{getting_out, GettingOut, HeardMe};
 pub use model::{
     classify_vhf_mode, ActivityTier, Band, Confidence, ModeClass, PathSpot, PropMode, Region, Side,
     SpaceWx,
