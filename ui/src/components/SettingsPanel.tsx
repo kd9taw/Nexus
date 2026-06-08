@@ -1047,6 +1047,59 @@ export function SettingsPanel({
             <legend>Operating</legend>
             <div className="settings-grid">
               <div className="settings-field">
+                <label className="settings-label" htmlFor="station-power">
+                  Station power (W)
+                </label>
+                <input
+                  id="station-power"
+                  className="settings-input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="decimal"
+                  value={form.stationPowerW ?? ''}
+                  placeholder="e.g. 100"
+                  onChange={(e) => {
+                    markDirty()
+                    const raw = e.target.value.trim()
+                    const num = raw === '' ? null : Number(raw)
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            stationPowerW:
+                              num !== null && Number.isNaN(num) ? prev.stationPowerW : num,
+                          }
+                        : prev,
+                    )
+                  }}
+                />
+                <span className="settings-hint">
+                  Your transmit power in watts — unlocks the Journey miles-per-watt &amp; QRP feats.
+                  Leave blank if unknown.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Journey — track a weekly streak</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!!form.journeyStreakEnabled}
+                    className={`toggle${form.journeyStreakEnabled ? ' on' : ''}`}
+                    onClick={() => updateBool('journeyStreakEnabled', !form.journeyStreakEnabled)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Off by default. A gentle &ldquo;weeks on the air&rdquo; counter on the Journey
+                  board — never a daily streak, never a penalty for a break.
+                </span>
+              </div>
+
+              <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">Beacon — announce presence (CQ)</span>
                   <button

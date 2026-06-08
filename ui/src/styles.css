@@ -3076,6 +3076,48 @@ body.resizing {
   --jy-tier: var(--jy-legendary);
 }
 
+/* Board "comes alive" on open — a calm staggered rise (NOT confetti). The per-unlock
+   celebration is the toast; this is just the ambient polish. Reduced-motion safe. */
+@keyframes jy-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.journey-view > .jy-hero,
+.journey-view > .jy-section {
+  animation: jy-rise 320ms ease both;
+}
+.journey-view > .jy-section:nth-child(2) {
+  animation-delay: 40ms;
+}
+.journey-view > .jy-section:nth-child(3) {
+  animation-delay: 80ms;
+}
+.journey-view > .jy-section:nth-child(4) {
+  animation-delay: 120ms;
+}
+.journey-view > .jy-section:nth-child(5) {
+  animation-delay: 160ms;
+}
+.journey-view > .jy-section:nth-child(6) {
+  animation-delay: 200ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .journey-view > .jy-hero,
+  .journey-view > .jy-section {
+    animation: none;
+  }
+}
+[data-motion='reduce'] .journey-view > .jy-hero,
+[data-motion='reduce'] .journey-view > .jy-section {
+  animation: none;
+}
+
 /* Shared bar (XP, ladders, feats). */
 .jy-bar {
   position: relative;

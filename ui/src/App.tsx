@@ -39,6 +39,7 @@ import { useScale } from './useScale'
 import { useDensity } from './useDensity'
 import { useMotion } from './useMotion'
 import { useAchievements } from './useAchievements'
+import { useJourneyUnlocks } from './useJourneyUnlocks'
 import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, type FeatureId } from './features/registry'
@@ -131,6 +132,7 @@ export default function App() {
   // gamification/achievements layer.
   const features = useFeatures()
   useAchievements(features.isOn('gamification'))
+  useJourneyUnlocks(features.isOn('gamification'))
   const reveal = useReveals(features)
   // First-run setup wizard (goal-driven). Only on a genuinely fresh install.
   const [showWizard, setShowWizard] = useState<boolean>(

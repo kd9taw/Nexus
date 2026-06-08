@@ -1,58 +1,11 @@
 import { useEffect, useRef } from 'react'
 import { getAwards } from './api'
 import { pushToast } from './toast'
+import { readSeen, writeSeen } from './seenSet'
 
 const STORAGE_KEY = 'tempo-achievements-seen'
 /** How often to re-evaluate award progress for new milestones (ms). */
 const POLL_MS = 60_000
-
-/** Available web-storage backends (guarded — access itself can throw in some
- * private modes). We persist to BOTH and read their UNION, so a write that fails
- * in one store (e.g. localStorage quota) can't leave a stale set that re-toasts
- * an already-celebrated achievement on reload. */
-function stores(): Storage[] {
-  const out: Storage[] = []
-  try {
-    if (window.localStorage) out.push(window.localStorage)
-  } catch {
-    /* localStorage access blocked */
-  }
-  try {
-    if (window.sessionStorage) out.push(window.sessionStorage)
-  } catch {
-    /* sessionStorage access blocked */
-  }
-  return out
-}
-
-/** The set of achievement ids already celebrated, merged across backends.
- * `null` = never baselined anywhere (first ever run → baseline silently). */
-function readSeen(): Set<string> | null {
-  const ids = new Set<string>()
-  let found = false
-  for (const store of stores()) {
-    try {
-      const raw = store.getItem(STORAGE_KEY)
-      if (raw != null) {
-        found = true
-        for (const id of JSON.parse(raw) as string[]) ids.add(id)
-      }
-    } catch {
-      /* unreadable / malformed — skip this store */
-    }
-  }
-  return found ? ids : null
-}
-function writeSeen(seen: Set<string>): void {
-  const raw = JSON.stringify([...seen])
-  for (const store of stores()) {
-    try {
-      store.setItem(STORAGE_KEY, raw)
-    } catch {
-      /* full/unavailable — the other store (and the in-session ref) still hold */
-    }
-  }
-}
 
 /**
  * Watches award progress and celebrates **newly-unlocked critical** achievements
@@ -84,12 +37,12 @@ export function useAchievements(enabled = true): void {
 
       let seen = seenRef.current
       if (seen == null) {
-        const stored = readSeen()
+        const stored = readSeen(STORAGE_KEY)
         if (stored == null) {
           // First ever run: baseline silently — no celebration for history.
           const baseline = new Set(unlocked.map((a) => a.id))
           seenRef.current = baseline
-          writeSeen(baseline)
+          writeSeen(STORAGE_KEY, baseline)
           return
         }
         seen = stored
@@ -103,7 +56,7 @@ export function useAchievements(enabled = true): void {
         // Celebrate big moments only; the rest just appear in the Awards view.
         if (a.critical) pushToast(`🏆 ${a.title} — ${a.detail}`, 'success', 6000)
       }
-      writeSeen(seen)
+      writeSeen(STORAGE_KEY, seen)
     }
 
     void check()

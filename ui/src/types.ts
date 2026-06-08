@@ -853,6 +853,11 @@ export interface Settings {
   audioOut: string
   /** Transmit drive level, 0–1 (default 0.9). */
   txLevel: number
+  /** Station transmit power in WATTS (RF out) — unlocks the Journey miles-per-watt
+   * + QRP feats. `null` until set (those feats stay gated). */
+  stationPowerW?: number | null
+  /** Opt-in: track a gentle weekly "on the air" streak on the Journey board. */
+  journeyStreakEnabled?: boolean
   /** TX watchdog timeout in minutes (default 6, 0 = disabled). */
   txWatchdogMin: number
   // --- timing & tuning ---
