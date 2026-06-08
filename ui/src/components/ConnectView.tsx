@@ -141,7 +141,7 @@ export function ConnectView({
                 </div>
               ))}
               <OpeningStrip openings={prop.openings} />
-              <SpaceWxGauges wx={prop.spaceWx} />
+              <SpaceWxGauges wx={prop.spaceWx} gloss={!expert} />
               <BandAdvisor bands={prop.advisory.bands} />
             </>
           )}

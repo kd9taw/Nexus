@@ -518,6 +518,12 @@ button.nb-chip:hover {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+/* Simple-mode gloss: a dotted underline cues "hover/tap me for what this means". */
+.swx-k.gloss {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+}
 .swx-v {
   font-family: var(--font-mono);
   font-size: var(--fs-display);
