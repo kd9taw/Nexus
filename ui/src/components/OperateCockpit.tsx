@@ -13,8 +13,8 @@ interface Props {
   onTierChange: (t: Tier) => void
   /** Switch the RX signal source (native engine vs WSJT-X companion over UDP). */
   onSourceChange: (k: SourceKind) => void
-  /** Click-to-tune on the waterfall (`shift` sets TX offset, else RX). */
-  onTune: (freqHz: number, shift: boolean) => void
+  /** Click-to-tune on the waterfall: left=TX, right=RX, both buttons=TX+RX. */
+  onTune: (freqHz: number, target: 'tx' | 'rx' | 'both') => void
   /** Work / answer a decoded station (double-click a decode or roster row). */
   onCall: (call: string) => void
   /** Set the TX audio drive level (0.0–1.0) — the Pwr slider. */
