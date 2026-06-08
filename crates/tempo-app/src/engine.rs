@@ -151,6 +151,10 @@ pub struct Engine {
     /// The slot index of the most recent decoded frame — used to set TX parity to
     /// the OPPOSITE period when working a clicked station (WSJT-X double-click).
     last_decode_slot: Option<u64>,
+    /// Set when a directed call is armed (double-click): the radio loop should key
+    /// the CURRENT period immediately if it's our TX parity and the over still
+    /// fits, instead of waiting a full T/R cycle for the next boundary. One-shot.
+    immediate_tx: bool,
     /// Rolling window of the most recent captured audio, fed continuously by the
     /// radio loop (independent of the decoder) so the waterfall reflects LIVE
     /// sound-card input — not just the once-per-slot decoded frame.
@@ -267,6 +271,7 @@ impl Engine {
             qso_logged: false,
             cq_running: false,
             last_decode_slot: None,
+            immediate_tx: false,
             spectrum_audio: Vec::new(),
             cat_status: (None, String::new()),
             cat_reprobe: false,
@@ -1073,6 +1078,9 @@ impl Engine {
         // watchdog + resets the continuous-TX count, like the Monitor toggle) so
         // the auto-sequencer actually keys even if TX was toggled off.
         self.set_tx_enabled(true);
+        // Key the current period immediately (if it's our parity and the over
+        // fits) instead of waiting a full cycle for the next boundary.
+        self.immediate_tx = true;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
         self.qso_logged = false;
@@ -1327,6 +1335,25 @@ impl Engine {
     /// Whether normal slot TX is currently enabled.
     pub fn tx_enabled(&self) -> bool {
         self.tx_enabled
+    }
+
+    /// Consume the one-shot "key the current period now" request set by a directed
+    /// call (double-click). The radio loop honors it only if the current slot is
+    /// our TX parity and the whole over still fits before the next boundary.
+    pub fn take_immediate_tx(&mut self) -> bool {
+        let v = self.immediate_tx;
+        self.immediate_tx = false;
+        v
+    }
+
+    /// Approximate on-air duration of one transmit over for the active tier (s) —
+    /// used to decide whether a late (mid-slot) first over still fits the slot.
+    pub fn tx_over_secs(&self) -> f64 {
+        match self.app.tier() {
+            Tier::Ft8 | Tier::Dx1 => 12.64,
+            Tier::Ft4 => 4.48,
+            Tier::Ft1 => 3.55,
+        }
     }
 
     /// Hold (or release) a steady tune carrier. While tuning, normal slot TX is

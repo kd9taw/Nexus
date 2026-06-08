@@ -13,7 +13,7 @@ use crate::rig::Rig;
 
 /// PTT-hold tail after the transmitted audio plays out (ms) — covers ring
 /// drain + relay release so the start of RX isn't clipped by our own carrier.
-const TX_TAIL_MS: f64 = 250.0;
+pub const TX_TAIL_MS: f64 = 250.0;
 
 /// What a slot did, for the caller to thread back into loop state + reporting.
 pub struct SlotAction {

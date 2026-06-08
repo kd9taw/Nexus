@@ -454,6 +454,33 @@ impl RadioLoop {
             }
         }
 
+        // Immediate first over: a just-armed directed call (double-click) keys on
+        // the CURRENT period if it's our TX parity AND the whole over still fits
+        // before the next boundary — instead of waiting a full T/R cycle for the
+        // next boundary (the "a few cycles go by" lag). If it doesn't fit / wrong
+        // parity, the normal boundary path transmits at the next valid period.
+        if self.tx_until_ms.is_none() && eng.take_immediate_tx() {
+            let slot_now = self.clock.slot_index(now);
+            let on_our_parity = (slot_now % 2 == 0) == eng.tx_even();
+            let room_ms = self.clock.ms_to_next_slot(now) as f64;
+            let need_ms = eng.tx_over_secs() * 1000.0 + crate::slot::TX_TAIL_MS;
+            if on_our_parity && room_ms >= need_ms {
+                let waves = eng.poll_tx(slot_now);
+                if !waves.is_empty() {
+                    let _ = rig.ptt(true);
+                    let mut secs = 0.0f32;
+                    for w in &waves {
+                        secs += w.len() as f32 / ft1::SAMPLE_RATE;
+                        backend.play(w);
+                    }
+                    self.rx.clear(); // our just-started carrier must not be decoded
+                    self.tx_until_ms = Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
+                    self.last_slot = Some(slot_now); // this slot is handled; skip the boundary
+                    self.prev_slot_was_tx = true;
+                }
+            }
+        }
+
         // Rebuild the slot clock + capture ring if the operator switched tier.
         let tier_now = eng.tier();
         if tier_now != self.cur_tier {
