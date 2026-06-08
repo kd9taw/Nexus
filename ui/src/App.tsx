@@ -54,6 +54,7 @@ import { AwardsView } from './components/AwardsView'
 import { PotaSotaView } from './components/PotaSotaView'
 import { PropagationView } from './components/PropagationView'
 import { MapView } from './components/MapView'
+import { ConnectView } from './components/ConnectView'
 import { getPropagation, getFeedHealth, getNeedAlerts } from './api'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedTag } from './types'
@@ -167,33 +168,38 @@ export default function App() {
     }
   }, [])
 
-  // Top-level operating AREA: 'dx' (FT8/FT4 structured) vs 'msg' (FT1/DX1 chat).
-  // The pill tabs swap the nav + lock the tier set. Default DX (the 80% case).
-  const [area, setArea] = useState<'dx' | 'msg'>(() => {
+  // Top-level operating AREA: 'dx' (FT8/FT4 structured), 'msg' (FT1/DX1 chat), or
+  // 'connect' (the situational-awareness map + propagation surface). The pill tabs
+  // swap the nav. DX/MSG also bind the radio tier+mode; 'connect' is awareness-only
+  // and must NOT retune the radio. Default DX (the 80% case).
+  const [area, setArea] = useState<'dx' | 'msg' | 'connect'>(() => {
     try {
       const v = localStorage.getItem('nexus.workspace')
-      if (v === 'dx' || v === 'msg') return v
+      if (v === 'dx' || v === 'msg' || v === 'connect') return v
     } catch {
       /* unreadable — fall through */
     }
     return 'dx'
   })
-  // Sync the engine to the persisted area once on load (atomic tier+mode).
+  // Sync the engine to the persisted area once on load (atomic tier+mode). Connect
+  // doesn't bind a tier, so never push it to the engine.
   const areaSyncedRef = useRef(false)
   useEffect(() => {
     if (areaSyncedRef.current || !snap) return
     areaSyncedRef.current = true
-    void apiSetArea(area).then((s) => s && setSnap(s))
+    if (area !== 'connect') void apiSetArea(area).then((s) => s && setSnap(s))
   }, [snap, area])
 
-  const handleWorkspace = useCallback((w: 'dx' | 'msg') => {
+  const handleWorkspace = useCallback((w: 'dx' | 'msg' | 'connect') => {
     setArea(w)
     try {
       localStorage.setItem('nexus.workspace', w)
     } catch {
       /* ignore */
     }
-    setView(w === 'dx' ? 'operate' : 'chat')
+    setView(w === 'connect' ? 'connect' : w === 'dx' ? 'operate' : 'chat')
+    // Connect is awareness-only: leave the radio on whatever tier it was.
+    if (w === 'connect') return
     void withErrorToast(() => apiSetArea(w), 'Could not switch area').then((s) => {
       if (s) setSnap(s)
     })
@@ -801,6 +807,19 @@ export default function App() {
           roster={stationsPanel}
           layoutMode={operateLayout}
           onLayoutMode={handleOperateLayout}
+        />
+      )
+      break
+    case 'connect':
+      workspace = (
+        <ConnectView
+          myGrid={settings?.mygrid ?? ''}
+          theme={theme}
+          stations={snap?.stations ?? []}
+          prop={prop}
+          selectedCall={activePeer}
+          onSelectCall={handleMapSelect}
+          needByCall={needByCall}
         />
       )
       break

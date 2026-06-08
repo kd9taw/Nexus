@@ -2,6 +2,7 @@ import type { OpMode } from '../types'
 import type { LucideIcon } from 'lucide-react'
 import {
   Radio,
+  Radar,
   Sun,
   Globe,
   MessageSquare,
@@ -29,9 +30,10 @@ interface Props {
   /** Enabled-set from the feature system — disabled sections are hidden. */
   enabled: Record<FeatureId, boolean>
   onSelect: (view: View) => void
-  /** Active top-level area: 'dx' (FT8/FT4) or 'msg' (FT1/DX1). Filters the nav. */
-  workspace: 'dx' | 'msg'
-  onWorkspace: (w: 'dx' | 'msg') => void
+  /** Active top-level area: 'dx' (FT8/FT4), 'msg' (FT1/DX1), or 'connect'
+   * (map + propagation situational awareness). Filters the nav. */
+  workspace: 'dx' | 'msg' | 'connect'
+  onWorkspace: (w: 'dx' | 'msg' | 'connect') => void
 }
 
 interface Item {
@@ -43,6 +45,7 @@ interface Item {
 
 const ITEMS: Item[] = [
   { id: 'operate', label: 'FT8/FT4', icon: Radio, title: 'FT8/FT4 Operations — waterfall-first cockpit' },
+  { id: 'connect', label: 'Connect', icon: Radar, title: 'Connect — situational awareness: grayline map + live propagation in one view' },
   { id: 'propagation', label: 'Prop', icon: Sun, title: 'Propagation & opening intelligence — what’s open now, 6m openings, DXpeditions' },
   { id: 'map', label: 'Map', icon: Globe, title: 'Map — azimuthal beam map: great-circle headings, range rings, openings, DXpeditions' },
   { id: 'chat', label: 'Chat', icon: MessageSquare, title: 'Chat — free-form QSO' },
@@ -95,6 +98,16 @@ export function ModeNav({ view, mode, enabled, onSelect, workspace, onWorkspace 
             title="MSG — FT1 / DX1 free-text messaging"
           >
             MSG
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={workspace === 'connect'}
+            className={`area-pill${workspace === 'connect' ? ' active' : ''}`}
+            onClick={() => onWorkspace('connect')}
+            title="Connect — grayline map + live propagation situational awareness"
+          >
+            CONNECT
           </button>
         </div>
         <div className="mode-nav-top">

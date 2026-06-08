@@ -15,6 +15,7 @@ import {
 // adding a View without a registry entry (or vice versa) trips this test.
 const EXPECTED_SECTIONS: FeatureId[] = [
   'operate',
+  'connect',
   'logbook',
   'settings',
   'band',
@@ -36,7 +37,7 @@ describe('feature registry', () => {
 
   it('lists exactly the known core spine', () => {
     const core = FEATURES.filter((f) => f.core).map((f) => f.id).sort()
-    expect(core).toEqual(['logbook', 'nowBar', 'operate', 'settings'])
+    expect(core).toEqual(['connect', 'logbook', 'nowBar', 'operate', 'settings'])
   })
 
   it('section features correspond 1:1 with the views', () => {

@@ -12,6 +12,7 @@
  * `ModeNav` and `App` import it from here. */
 export type View =
   | 'operate'
+  | 'connect'
   | 'propagation'
   | 'map'
   | 'chat'
@@ -58,7 +59,7 @@ export interface FeatureDef {
   /** Top-level operating area this section belongs to. `'dx'` = FT8/FT4 structured
    * DX; `'msg'` = FT1/DX1 free-text. Omitted = shown in BOTH areas (Logbook,
    * Settings). Drives the workspace pill-tab nav filter. */
-  workspace?: 'dx' | 'msg'
+  workspace?: 'dx' | 'msg' | 'connect'
   /** Achievement id whose unlock *suggests* enabling this (adaptive reveal —
    * a follow-on; recorded here so the data model is ready). */
   revealOn?: string
@@ -198,6 +199,18 @@ export const FEATURES: FeatureDef[] = [
     oneLine: 'Field Day / activity export view.',
   },
   {
+    id: 'connect',
+    label: 'Connect',
+    kind: 'section',
+    category: 'Propagation',
+    core: true, // the spine of the Connect area — always available
+    dependsOn: [],
+    intents: ['casual', 'dx', 'vhf', 'pota'],
+    view: 'connect',
+    workspace: 'connect',
+    oneLine: 'Situational awareness — the grayline map + live propagation in one view.',
+  },
+  {
     id: 'propagation',
     label: 'Propagation',
     kind: 'section',
@@ -206,7 +219,7 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: [],
     intents: ['dx', 'vhf'],
     view: 'propagation',
-    workspace: 'dx',
+    workspace: 'connect',
     oneLine: "What's open now, 6m openings, and DXpedition windows.",
   },
   {
@@ -218,7 +231,7 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: [],
     intents: ['dx', 'vhf', 'pota'],
     view: 'map',
-    workspace: 'dx',
+    workspace: 'connect',
     oneLine: 'Azimuthal beam map — headings, range rings, openings, DXpeditions.',
   },
   {
