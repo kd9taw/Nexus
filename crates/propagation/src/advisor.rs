@@ -55,12 +55,20 @@ pub struct PropAdvisory {
     pub banners: Vec<String>,
 }
 
-/// Advisor tuning.
+/// Advisor tuning (the expert knobs behind the gradient model).
 pub struct AdvisorConfig {
     /// Sliding observation window (seconds).
     pub window_secs: i64,
     /// Saturation constant for observed→[0,1] (stations for ~63%).
     pub saturate_k: f32,
+    /// Ceiling on the physics prior's contribution to a *silent* band's score.
+    /// Kept below the Moderate tier threshold (0.25) so a spotless-but-eligible
+    /// band reads as a gradient (Quiet) — never Active/Moderate on physics alone,
+    /// and never outranking an actually-observed band.
+    pub prior_cap: f32,
+    /// Unique-station count at which observation is fully trusted (the blend
+    /// weight `w` reaches 1). Below it, the physics prior fills in.
+    pub obs_full: f32,
 }
 
 impl Default for AdvisorConfig {
@@ -68,6 +76,8 @@ impl Default for AdvisorConfig {
         Self {
             window_secs: 900,
             saturate_k: 6.0,
+            prior_cap: 0.2,
+            obs_full: 4.0,
         }
     }
 }
@@ -180,7 +190,6 @@ impl PropAdvisor {
         // paths + regional census), so bands the operator isn't personally on still
         // read open when there's activity around them.
         let observed = activity.len();
-        let observed_norm = 1.0 - (-(observed as f32) / self.config.saturate_k).exp();
 
         let best_region = self.best_region(&by_region, &region_pts);
         let polar = best_region
@@ -188,7 +197,21 @@ impl PropAdvisor {
             .map(|r| !(45.0..=315.0).contains(&r.bearing_deg)) // northerly heading
             .unwrap_or(false);
 
-        let score = observed_norm * g_sfi(band, wx.sfi) * g_kp(wx.kp, polar);
+        // Gradient fusion: score = w·observation + (1−w)·physics-prior.
+        // - obs: evidence strength, saturating with the unique-station count. A
+        //   decoded spot PROVES the path, so observation is taken at face value
+        //   (NOT gated by space weather — a real opening shows even at low SFI).
+        // - prior: what space weather says the band should do with no evidence,
+        //   discounted by `prior_cap` so a silent-but-eligible band reads as a
+        //   gradient (Quiet, not a flat "Closed") yet never outranks an observed
+        //   band nor alone drives the "best band" headline.
+        // - w: rises with spot count — trust observation as spots accumulate, lean
+        //   on the prior when silent. Replaces the old `obs·g_sfi·g_kp`, which read
+        //   every spotless band as dead (the binary open/closed complaint).
+        let obs = 1.0 - (-(observed as f32) / self.config.saturate_k).exp();
+        let prior = self.config.prior_cap * g_sfi(band, wx.sfi) * g_kp(wx.kp, polar);
+        let w = (observed as f32 / self.config.obs_full).clamp(0.0, 1.0);
+        let score = w * obs + (1.0 - w) * prior;
         let tier = ActivityTier::from_score(score);
         let bidirectional = best_region
             .as_ref()
@@ -196,10 +219,14 @@ impl PropAdvisor {
             .unwrap_or(false);
         let confidence = Confidence::from_evidence(observed, bidirectional);
 
-        let reason = if observed == 0 {
-            sfi_closed_reason(band, wx.sfi).unwrap_or_else(|| "no activity heard".to_string())
-        } else {
+        let reason = if observed > 0 {
             format!("{observed} station{}", if observed == 1 { "" } else { "s" })
+        } else if let Some(r) = sfi_closed_reason(band, wx.sfi) {
+            r // physically suppressed (e.g. high band, low flux)
+        } else if score > 0.03 {
+            "no spots yet — physics says workable".to_string() // the gradient prior
+        } else {
+            "no activity heard".to_string()
         };
 
         BandReport {
@@ -396,6 +423,34 @@ mod tests {
             fifteen.tier,
             fifteen.score
         );
+    }
+
+    #[test]
+    fn silent_eligible_band_is_a_gradient_not_binary_closed() {
+        // The gradient fix: with NO spots and benign conditions, 40m (always
+        // physically eligible) must read as a soft "Quiet" — not a flat "Closed" —
+        // because absence of spots ≠ band dead. It must NOT masquerade as
+        // Active/Moderate (no real activity), so the headline still says quiet.
+        let wx = SpaceWx {
+            sfi: 120.0,
+            kp: 2.0,
+            ..Default::default()
+        };
+        let adv = PropAdvisor::new("KD9TAW", "EN52").advise(NOW, &[], &wx);
+        let forty = adv.bands.iter().find(|b| b.band == "40m").unwrap();
+        assert!(
+            matches!(forty.tier, ActivityTier::Quiet),
+            "silent eligible 40m should be a gradient (Quiet), got {:?} (score {})",
+            forty.tier,
+            forty.score
+        );
+        assert!(adv.headline.contains("quiet"), "got: {}", adv.headline);
+        // A flux-starved high band sits at/below the low band's prior, and its
+        // reason explains the physics (not just "no activity").
+        let ten = adv.bands.iter().find(|b| b.band == "10m").unwrap();
+        assert!(ten.score <= forty.score);
+        // 40m's reason should reflect the gradient prior, not a dead-air message.
+        assert!(forty.reason.contains("physics") || forty.reason.contains("station"));
     }
 
     #[test]
