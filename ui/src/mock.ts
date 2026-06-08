@@ -347,6 +347,8 @@ function defaultSettings(): Settings {
     // network integrations
     wsjtxUdp: false,
     wsjtxUdpAddr: '127.0.0.1:2237',
+    hrdLogging: false,
+    hrdUdpAddr: '127.0.0.1:2333',
     pskreporter: false,
     // off = passive (hunt & pounce); the only auto-TX path when enabled
     beacon: false,

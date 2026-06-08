@@ -590,8 +590,42 @@ impl Engine {
                 eprintln!("tempo: failed to append to logbook: {e}");
             }
         }
+        self.push_to_hrd(&rec);
         self.logbook.add(rec);
         self.refresh_worked_index();
+    }
+
+    /// Push a logged QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP
+    /// listener — one raw ADIF record per datagram, with the operator's station
+    /// fields appended (HRD attributes the contact with these). This is the same
+    /// standard network path WSJT-X / JTAlert / N1MM use (HRD's default port 2333);
+    /// we deliberately use it rather than writing HRD's database. Best-effort and
+    /// fire-and-forget — HRD need not be running, and a failed send is ignored.
+    fn push_to_hrd(&self, rec: &QsoRecord) {
+        if !self.settings.hrd_logging {
+            return;
+        }
+        let mut adif = tempo_core::logbook::adif_record(rec);
+        let tag = |name: &str, val: &str| -> String {
+            let v = val.trim();
+            if v.is_empty() {
+                String::new()
+            } else {
+                format!("<{}:{}>{} ", name, v.len(), v)
+            }
+        };
+        let station = format!(
+            "{}{}",
+            tag("STATION_CALLSIGN", &self.settings.mycall),
+            tag("MY_GRIDSQUARE", &self.settings.mygrid),
+        );
+        // Insert the station fields before the record terminator.
+        if let Some(pos) = adif.find("<EOR>") {
+            adif.insert_str(pos, &station);
+        }
+        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            let _ = sock.send_to(adif.as_bytes(), self.settings.hrd_udp_addr.trim());
+        }
     }
 
     /// Begin a Parks/Summits On The Air activation — every QSO logged afterward is

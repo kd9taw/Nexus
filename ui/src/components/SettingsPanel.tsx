@@ -1338,6 +1338,40 @@ export function SettingsPanel({
 
               <div className="settings-field">
                 <label className="settings-toggle">
+                  <span className="settings-label">Ham Radio Deluxe logging</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.hrdLogging}
+                    className={`toggle${form.hrdLogging ? ' on' : ''}`}
+                    onClick={() => updateBool('hrdLogging', !form.hrdLogging)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  push each QSO to HRD Logbook over its QSO-Forwarding UDP port (HRD must be running;
+                  don't also run JTAlert/QSO Relay into HRD or you'll double-log)
+                </span>
+              </div>
+
+              <label className="settings-field">
+                <span className="settings-label">HRD UDP Address</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.hrdUdpAddr}
+                  placeholder="127.0.0.1:2333"
+                  onChange={(e) => update('hrdUdpAddr', e.target.value)}
+                  disabled={!form.hrdLogging}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">HRD QSO-Forwarding host:port (default 127.0.0.1:2333)</span>
+              </label>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
                   <span className="settings-label">PSK Reporter</span>
                   <button
                     type="button"

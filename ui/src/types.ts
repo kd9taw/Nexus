@@ -763,6 +763,10 @@ export interface Settings {
   wsjtxUdp: boolean
   /** Address:port for the WSJT-X UDP API. */
   wsjtxUdpAddr: string
+  /** Log each QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP port. */
+  hrdLogging: boolean
+  /** HRD Logbook QSO-Forwarding address (UDP); HRD default 127.0.0.1:2333. */
+  hrdUdpAddr: string
   /** Upload spots to PSK Reporter's global map. */
   pskreporter: boolean
   /** Connect to a DX cluster / RBN for need-aware spots (opt-in; needs restart). */

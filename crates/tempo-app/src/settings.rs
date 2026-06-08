@@ -65,6 +65,12 @@ pub struct Settings {
     pub wsjtx_udp: bool,
     /// UDP address to send WSJT-X messages to (WSJT-X default is 127.0.0.1:2237).
     pub wsjtx_udp_addr: String,
+    /// Push each logged QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP
+    /// listener (one raw ADIF record per datagram — the same standard WSJT-X/JTAlert
+    /// use). Off by default. HRD Logbook must be running.
+    pub hrd_logging: bool,
+    /// HRD Logbook QSO-Forwarding address (UDP). HRD's default is 127.0.0.1:2333.
+    pub hrd_udp_addr: String,
     /// UDP address to *listen* on for an upstream WSJT-X/JTDX/MSHV decode stream
     /// when the signal source is Companion (the sink those apps transmit to;
     /// WSJT-X default 127.0.0.1:2237).
@@ -249,6 +255,8 @@ impl Default for Settings {
             cat_broker_port: 4532,
             wsjtx_udp: false,
             wsjtx_udp_addr: "127.0.0.1:2237".to_string(),
+            hrd_logging: false,
+            hrd_udp_addr: "127.0.0.1:2333".to_string(),
             companion_addr: "127.0.0.1:2237".to_string(),
             source: SourceKind::Native,
             // Live by default (once a real call is set) — a ham dashboard should
