@@ -85,6 +85,7 @@ export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectC
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const [kind, setKind] = useState<Projection>('aeqd')
+  const [colorBy, setColorBy] = useState<'need' | 'snr'>('need')
   const [layers, setLayers] = useState(DEFAULT_LAYERS)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null)
@@ -235,30 +236,37 @@ export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectC
       }
     }
 
-    // Station dots: COLOR = award need (new DXCC / band / confirm — same palette
-    // as the roster & decodes), else worked = dim / unworked = neutral; SIZE = SNR
-    // (redundant CVD-safe channel). Needed + selected stations get a callsign
-    // label so the map shows WHO is workable WHERE — not just anonymous dots.
+    // Station dots. COLOR-BY (toolbar): "Need" = award need (new DXCC / band /
+    // confirm — same palette as roster & decodes), else worked=dim/unworked=neutral;
+    // "Signal" = SNR strength heatmap. SIZE always = SNR (redundant CVD-safe
+    // channel). AGE-FADE: active=full, idle/stale fade out, so the map shows LIVE
+    // activity, not a flat field of identical dots. Needed/selected get a callsign
+    // label so the map shows WHO is workable WHERE.
     if (layers.stations.visible) {
       ctx.globalAlpha = layers.stations.opacity
       ctx.font = '10px system-ui'
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
+      const byNeed = colorBy === 'need'
       for (const { s, xy } of placed) {
         const { v, r: baseR } = snrToken(s.snr)
         const need = needByCall.get(s.call.toUpperCase())
         const nc = needColor(need)
         const isSel = s.call === selectedCall
-        const r = nc ? baseR + 1 : baseR
-        const fill = nc ?? (s.worked ? cssVar('--text-faint') : cssVar(v))
-        // Dim worked-and-not-needed stations so the ones worth working pop.
-        ctx.globalAlpha = s.worked && !nc ? layers.stations.opacity * 0.5 : layers.stations.opacity
+        // Recency fade — heard recently pops, going stale fades toward the noise.
+        const ageF = s.presence === 'active' ? 1 : s.presence === 'idle' ? 0.6 : 0.32
+        const ringed = (byNeed && nc) || isSel
+        const r = byNeed && nc ? baseR + 1 : baseR
+        const fill = byNeed ? (nc ?? (s.worked ? cssVar('--text-faint') : cssVar(v))) : cssVar(v)
+        // In Need mode, dim worked-and-not-needed so the ones worth working pop.
+        const dim = byNeed && s.worked && !nc ? 0.5 : 1
+        ctx.globalAlpha = layers.stations.opacity * ageF * dim
         ctx.beginPath()
         ctx.arc(xy[0], xy[1], r, 0, Math.PI * 2)
         ctx.fillStyle = fill
         ctx.fill()
-        ctx.globalAlpha = layers.stations.opacity
-        if (nc || isSel) {
+        ctx.globalAlpha = layers.stations.opacity * ageF
+        if (ringed) {
           // bright ring on the valuable / selected ones
           ctx.beginPath()
           ctx.arc(xy[0], xy[1], r + 2.5, 0, Math.PI * 2)
@@ -300,7 +308,7 @@ export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectC
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, size, layers, placed, prop, dxCards, selStation, selectedCall, needByCall, theme, nowMs])
+  }, [me, kind, colorBy, size, layers, placed, prop, dxCards, selStation, selectedCall, needByCall, theme, nowMs])
 
   if (!me) {
     return (
@@ -355,6 +363,14 @@ export function MapView({ myGrid, theme, stations, prop, selectedCall, onSelectC
           </button>
           <button className={kind === 'world' ? 'active' : ''} onClick={() => setKind('world')}>
             World
+          </button>
+        </div>
+        <div className="map-proj" role="group" aria-label="Color spots by">
+          <button className={colorBy === 'need' ? 'active' : ''} onClick={() => setColorBy('need')} title="Color spots by what you still need">
+            Need
+          </button>
+          <button className={colorBy === 'snr' ? 'active' : ''} onClick={() => setColorBy('snr')} title="Color spots by signal strength">
+            Signal
           </button>
         </div>
         <span className="map-center">◎ {myGrid}</span>
