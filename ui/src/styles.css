@@ -3555,10 +3555,16 @@ select.settings-input {
   min-height: 0;
   display: flex;
 }
+/* Absolutely fill the (position:relative) .wf-stage. Taking the canvas OUT of
+   flow means its intrinsic/attribute size can never feed back into layout, so the
+   ResizeObserver can't oscillate — its display size is driven purely by the stage.
+   (Was `flex:1` in-flow, which let the device-px attribute height grow the parent
+   and re-fire the observer = flicker.) */
 .waterfall-canvas {
-  flex: 1;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  min-height: 0;
+  height: 100%;
   display: block;
   background: var(--bg);
   cursor: crosshair;
@@ -4790,11 +4796,18 @@ select.settings-input {
 /* ===========================================================================
    Operate cockpit — the nerve center's waterfall-first operating surface.
    =========================================================================== */
-.operate-cockpit {
+/* The cockpit is `<main class="layout single operate-cockpit">`. `.layout.single`
+   (specificity 0,2,0) sets `display:block; overflow-y:auto`, which would OVERRIDE
+   a bare `.operate-cockpit` (0,1,0) and collapse the flex height chain — leaving
+   the waterfall canvas ~0px tall (and its attribute-size feeding the auto-height
+   parent → a ResizeObserver re-clear loop = the flicker). Match all three classes
+   (0,3,0) so the cockpit stays a definite-height flex column with no scroll. */
+.layout.single.operate-cockpit {
   display: flex;
   flex-direction: column;
   gap: var(--gap);
   min-height: 0;
+  overflow: hidden;
 }
 
 .cockpit-bar {
