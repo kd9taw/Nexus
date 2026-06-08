@@ -24,9 +24,11 @@ interface Props {
   onQsy: (band: string) => void
   /** Select/highlight a station (also lit on the map). */
   onSelect: (call: string) => void
+  /** Pop this board out into its own window (omit when already standalone). */
+  onPopOut?: () => void
 }
 
-export function NeededPanel({ alerts, bandPlan, selectedCall, onQsy, onSelect }: Props) {
+export function NeededPanel({ alerts, bandPlan, selectedCall, onQsy, onSelect, onPopOut }: Props) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'priority',
     dir: 'desc',
@@ -81,6 +83,16 @@ export function NeededPanel({ alerts, bandPlan, selectedCall, onQsy, onSelect }:
         <h2>Needed now</h2>
         <span className="np-count">{alerts.length}</span>
         <span className="np-hint">single-click a row to QSY the radio to that band and listen</span>
+        {onPopOut && (
+          <button
+            type="button"
+            className="np-popout"
+            onClick={onPopOut}
+            title="Open this board in its own window (for a second monitor)"
+          >
+            ⧉ Pop out
+          </button>
+        )}
       </div>
       <div className="np-grid" role="table">
         <div className="np-row np-header" role="row">

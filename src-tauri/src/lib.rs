@@ -29,6 +29,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tauri::Manager;
 use tauri::State;
 use tempo_app::dto::{
     AppSnapshot, DiagnosticsReportDto, ImportStats, LoggedQso, LotwSyncResult, SourceKind,
@@ -1097,6 +1098,34 @@ fn set_hold_tx_freq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnaps
         eprintln!("tempo: failed to persist hold-tx: {e}");
     }
     Ok(eng.snapshot())
+}
+
+/// Open (or focus) a standalone OS window showing one panel — multi-monitor
+/// tear-off. The detached window loads the app at `?panel=<panel>` and renders just
+/// that panel against the same shared engine the main window uses.
+#[tauri::command]
+async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), String> {
+    let slug: String = panel.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    if slug.is_empty() {
+        return Err("invalid panel".into());
+    }
+    let label = format!("panel-{slug}");
+    // Already open → just focus it (one window per panel).
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::App(format!("index.html?panel={slug}").into()),
+    )
+    .title(format!("Nexus — {slug}"))
+    .inner_size(760.0, 660.0)
+    .min_inner_size(420.0, 360.0)
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Initiate a directed QSO with a specific station (the UI "work this station"
@@ -2400,6 +2429,7 @@ pub fn run() {
             set_tx_offset,
             set_hold_tx_freq,
             call_station,
+            open_panel_window,
             set_area,
             qso_resend,
             qso_freetext,

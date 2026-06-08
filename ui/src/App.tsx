@@ -4,6 +4,7 @@ import {
   broadcast as apiBroadcast,
   callStation as apiCallStation,
   setArea as apiSetArea,
+  openPanelWindow,
   qsoResend as apiQsoResend,
   qsoFreetext as apiQsoFreetext,
   logCurrentQso as apiLogCurrentQso,
@@ -794,6 +795,7 @@ export default function App() {
           selectedCall={activePeer}
           onQsy={handleQsy}
           onSelect={handleSelect}
+          onPopOut={() => void openPanelWindow('needed')}
         />
       )
       break

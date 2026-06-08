@@ -179,6 +179,17 @@ export async function discardPendingLog(): Promise<AppSnapshot> {
   return mockEngine.discardPendingLog()
 }
 
+/** Open (or focus) a standalone OS window for one panel — multi-monitor tear-off.
+ * In the browser/demo (no Tauri) it falls back to a popup tab. */
+export async function openPanelWindow(panel: string): Promise<void> {
+  const invoke = tauriInvoke()
+  if (invoke) {
+    await invoke('open_panel_window', { panel })
+    return
+  }
+  window.open(`${window.location.pathname}?panel=${encodeURIComponent(panel)}`, '_blank', 'width=760,height=660')
+}
+
 /** Switch the Operate mode: 'dx' (FT8/FT4) or 'msg' (Tempo two-way calling).
  * Atomically sets the mode's tier + mode. Returns the fresh snapshot. */
 export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {

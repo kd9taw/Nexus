@@ -5133,6 +5133,32 @@ select.settings-input {
   font-size: 0.78rem;
   color: var(--text-dim);
 }
+.np-popout {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.np-popout:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* A torn-off panel window: fill the OS window, no app chrome. */
+.app.detached {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.app.detached .needed-panel {
+  flex: 1;
+  min-height: 0;
+}
 .np-grid {
   flex: 1;
   min-height: 0;
