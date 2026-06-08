@@ -46,6 +46,13 @@ pub struct Settings {
     pub serial_port: String,
     /// Serial baud rate for CAT.
     pub baud: u32,
+    /// Set the rig to its DATA submode (Hamlib PKTUSB/PKTLSB → Yaesu DATA-U /
+    /// Icom USB-D / Kenwood DATA) instead of plain phone USB/LSB. **On by
+    /// default** — this is an FT8/FT4 digital app, so the radio belongs in data
+    /// mode (correct filters + data-port routing), and the rig-control loop
+    /// would otherwise keep forcing voice USB. (Container `#[serde(default)]`
+    /// fills this from `Default` — `true` — for older settings files.)
+    pub data_mode: bool,
     /// Local TCP port Tempo uses for rigctld (it spawns rigctld on this port).
     pub rigctld_port: u16,
     /// Run the rigctld-compatible CAT **broker** so other apps (WSJT-X / N1MM /
@@ -237,6 +244,7 @@ impl Default for Settings {
             rig_model_name: "None / VOX".to_string(),
             serial_port: String::new(),
             baud: 38400,
+            data_mode: true, // FT8/FT4 → the rig's DATA submode, not voice USB
             rigctld_port: 4532,
             cat_broker: false,
             cat_broker_port: 4532,
@@ -310,6 +318,28 @@ impl Settings {
     /// Dial frequency in Hz (for the rig / PSK Reporter).
     pub fn dial_hz(&self) -> u64 {
         (self.dial_mhz * 1_000_000.0).round() as u64
+    }
+
+    /// The CAT mode string to send to the rig. With `data_mode` (default), the
+    /// DATA submode — Hamlib `PKTUSB`/`PKTLSB`, which maps across rigs (Yaesu
+    /// DATA-U, Icom USB-D, Kenwood DATA) — so an FT8/FT4 station sits in data
+    /// mode, not voice SSB. Off → the plain sideband. Non-SSB sidebands (CW/FM)
+    /// pass through unchanged.
+    pub fn rig_mode(&self) -> String {
+        let sb = if self.sideband.trim().is_empty() {
+            "USB"
+        } else {
+            self.sideband.trim()
+        };
+        if self.data_mode {
+            match sb.to_ascii_uppercase().as_str() {
+                "USB" => "PKTUSB".to_string(),
+                "LSB" => "PKTLSB".to_string(),
+                other => other.to_string(),
+            }
+        } else {
+            sb.to_string()
+        }
     }
 }
 

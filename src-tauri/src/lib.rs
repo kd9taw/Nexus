@@ -2180,8 +2180,10 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
             .unwrap_or(0)
     }
     fn mode(&self) -> (String, u32) {
-        let m = self.0.lock().map(|e| e.settings().sideband.clone()).unwrap_or_default();
-        (if m.is_empty() { "USB".into() } else { m }, 2700)
+        // Report the actual CAT mode (DATA submode when data_mode is on), so a
+        // foreign app sharing the radio sees what Nexus has the rig in.
+        let m = self.0.lock().map(|e| e.settings().rig_mode()).unwrap_or_else(|_| "USB".into());
+        (m, 2700)
     }
     fn ptt(&self) -> bool {
         self.0.lock().map(|e| e.snapshot().radio.transmitting).unwrap_or(false)
@@ -2242,7 +2244,7 @@ pub fn run() {
             None
         },
         dial_hz: settings.dial_hz(),
-        mode: settings.sideband.clone(),
+        mode: settings.rig_mode(), // DATA submode (PKTUSB/…) for FT8, not voice USB
         wsjtx_udp: settings.wsjtx_udp,
         wsjtx_addr: settings.wsjtx_udp_addr.clone(),
         pskreporter: settings.pskreporter,

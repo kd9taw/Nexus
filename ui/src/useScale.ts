@@ -9,7 +9,9 @@ const STORAGE_KEY = 'tempo-ui-scale'
 
 function readInitial(): Scale {
   const saved = Number(localStorage.getItem(STORAGE_KEY))
-  return (SCALE_STEPS as number[]).includes(saved) ? (saved as Scale) : 100
+  // 125% is the default base level — far more readable than 100% on typical shack
+  // displays. A saved preference (any of SCALE_STEPS) still wins.
+  return (SCALE_STEPS as number[]).includes(saved) ? (saved as Scale) : 125
 }
 
 export function useScale(): [Scale, (s: Scale) => void] {

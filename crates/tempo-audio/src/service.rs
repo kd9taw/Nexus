@@ -301,7 +301,7 @@ impl RadioLoop {
                 (
                     Transport::from_settings(eng.settings()),
                     eng.settings().dial_hz(),
-                    eng.settings().sideband.clone(),
+                    eng.settings().rig_mode(), // DATA submode (PKTUSB/…) when data_mode is on
                     eng.take_cat_reprobe(),
                 )
             };

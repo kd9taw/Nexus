@@ -329,6 +329,7 @@ function defaultSettings(): Settings {
     rigModelName: '',
     serialPort: '',
     baud: 38400,
+    dataMode: true,
     rigctldPort: 4532,
     catBroker: false,
     catBrokerPort: 4532,

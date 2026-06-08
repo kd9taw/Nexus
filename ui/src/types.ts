@@ -729,6 +729,9 @@ export interface Settings {
   serialPort: string
   /** Serial baud rate. */
   baud: number
+  /** Set the rig's DATA submode (PKTUSB/PKTLSB → Yaesu DATA-U / Icom USB-D) for
+   * digital, not voice USB/LSB. On by default (this is an FT8/FT4 app). */
+  dataMode: boolean
   /** TCP port that rigctld listens on / Tempo launches it with. */
   rigctldPort: number
   /** Run the rigctld-compatible CAT broker so other apps share the radio. */

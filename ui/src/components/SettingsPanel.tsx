@@ -859,6 +859,26 @@ export function SettingsPanel({
                 <span className="settings-hint">Serial baud rate.</span>
               </label>
 
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Data mode (FT8/FT4)</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.dataMode}
+                    className={`toggle${form.dataMode ? ' on' : ''}`}
+                    onClick={() => updateBool('dataMode', !form.dataMode)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Put the rig in its DATA submode (Yaesu DATA-U / Icom USB-D / Kenwood DATA) for
+                  digital — correct filters + data-port audio. Leave on for FT8/FT4; turn off only
+                  for phone (plain USB/LSB).
+                </span>
+              </div>
+
               <label className="settings-field">
                 <span className="settings-label">rigctld TCP Port</span>
                 <input
