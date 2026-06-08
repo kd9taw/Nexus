@@ -371,7 +371,7 @@ fn logbook_path() -> PathBuf {
 
 /// Full UI snapshot (`AppSnapshot`) — the UI renders all three zones from this.
 #[tauri::command]
-fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     let eng = state.lock().map_err(|e| e.to_string())?;
     Ok(eng.snapshot())
 }
@@ -433,7 +433,7 @@ fn set_source(state: State<'_, SharedEngine>, kind: String) -> Result<AppSnapsho
 /// to respect PSK Reporter's query cadence; falls back to the last good snapshot
 /// (then a demo scene) if a fetch fails or the operator hasn't set a callsign.
 #[tauri::command]
-fn get_propagation(
+async fn get_propagation(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
     live_paths: State<'_, SharedLivePaths>,
@@ -622,7 +622,7 @@ fn get_propagation(
 /// for a station you may have no live spots on. Empty bands if either grid is
 /// unknown (operator hasn't set a grid, or the station has none).
 #[tauri::command]
-fn get_path_outlook(
+async fn get_path_outlook(
     grid: String,
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
@@ -661,7 +661,7 @@ fn get_path_outlook(
 /// Reporter / RBN firehose (spots where the operator is the TX side). Pure
 /// observed data — the most reassuring live answer a station can get.
 #[tauri::command]
-fn get_getting_out(
+async fn get_getting_out(
     state: State<'_, SharedEngine>,
     live_paths: State<'_, SharedLivePaths>,
 ) -> Result<propagation::GettingOut, String> {
@@ -681,7 +681,7 @@ fn get_getting_out(
 /// The current OVATION aurora oval (downsampled prob ≥ 8 %), for the map overlay.
 /// Cached `AURORA_TTL_SECS`; serves the last-good set on a fetch failure.
 #[tauri::command]
-fn get_aurora(
+async fn get_aurora(
     cache: State<'_, AuroraCache>,
 ) -> Result<Vec<propagation::live::aurora::AuroraPoint>, String> {
     const AURORA_TTL_SECS: u64 = 600;
@@ -818,7 +818,7 @@ fn broadcast(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot
 
 /// Serial ports available for CAT / serial PTT (for the Settings dropdown).
 #[tauri::command]
-fn get_serial_ports() -> Vec<String> {
+async fn get_serial_ports() -> Vec<String> {
     #[cfg(feature = "radio")]
     {
         tempo_audio::ports::available_ports()
@@ -840,7 +840,7 @@ struct AudioDevices {
 /// Enumerate sound-card devices for the Settings audio-device pickers. Empty
 /// lists when built without the `radio` feature (mirrors `get_serial_ports`).
 #[tauri::command]
-fn get_audio_devices() -> AudioDevices {
+async fn get_audio_devices() -> AudioDevices {
     #[cfg(feature = "radio")]
     {
         let (input, output) = tempo_audio::device::available_devices();
@@ -883,7 +883,7 @@ struct DetectedRigDto {
 /// driver guidance, and a paired sound device. Empty without the `radio` feature.
 /// The operator one-click-applies a result (fills rig model + port + audio).
 #[tauri::command]
-fn detect_rigs() -> Vec<DetectedRigDto> {
+async fn detect_rigs() -> Vec<DetectedRigDto> {
     #[cfg(feature = "radio")]
     {
         use tempo_audio::usbrig::UsbSerialChip;
@@ -979,7 +979,7 @@ struct CatTestResult {
 /// settings first, so the loop reconfigures (launching rigctld for CAT) before
 /// this returns. Mirrors WSJT-X's "Test CAT": green + frequency, or a red error.
 #[tauri::command]
-fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, String> {
+async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, String> {
     #[cfg(feature = "radio")]
     {
         {
@@ -1348,7 +1348,7 @@ fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportSta
 /// confirmations that matched no logged QSO. Offline; the live LoTW download is a
 /// later increment that feeds this the same ADIF.
 #[tauri::command]
-fn sync_lotw_report(
+async fn sync_lotw_report(
     state: State<'_, SharedEngine>,
     text: String,
 ) -> Result<LotwSyncResult, String> {
@@ -1617,7 +1617,7 @@ fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
 /// upload state. The QSOs are stamped per the TQSL exit code (Pending/Duplicate/
 /// Rejected/AuthFail; a network error leaves state untouched for a clean retry).
 #[tauri::command]
-fn upload_lotw_report(
+async fn upload_lotw_report(
     state: State<'_, SharedEngine>,
     indices: Option<Vec<usize>>,
 ) -> Result<UploadReportDto, String> {
@@ -1807,7 +1807,7 @@ fn qrz_login(username: &str, password: &str) -> Result<String, String> {
 /// state. Uses the cached session key if valid; on expiry logs in **once** and
 /// retries (bounded — never loops). Network runs without any lock held.
 #[tauri::command]
-fn qrz_lookup(
+async fn qrz_lookup(
     callsign: String,
     state: State<'_, SharedEngine>,
     qrz_session: State<'_, SharedQrzSession>,
@@ -1858,7 +1858,7 @@ fn qrz_lookup(
 /// this after a successful `log_qso` when auto-upload is on. No lock held over the
 /// network call.
 #[tauri::command]
-fn qrz_push_qso(
+async fn qrz_push_qso(
     record: LoggedQso,
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::dto::QrzPushResultDto, String> {
@@ -1915,7 +1915,7 @@ fn clear_clublog_password() -> Result<(), String> {
 /// **suspends** further auto-pushes this session (ClubLog IP-blocks hammering)
 /// until a credential changes. No lock over the network.
 #[tauri::command]
-fn clublog_push_qso(
+async fn clublog_push_qso(
     record: LoggedQso,
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::dto::ClubLogPushResultDto, String> {
@@ -1998,7 +1998,7 @@ fn clublog_push_qso(
 /// the UI ("accepted"|"duplicate"|"rejected"|"authfail"|"retry"). No lock held over
 /// the network. eQSL is non-award (like QRZ) — it never credits ARRL DXCC/WAS.
 #[tauri::command]
-fn eqsl_push_qso(
+async fn eqsl_push_qso(
     record: LoggedQso,
     state: State<'_, SharedEngine>,
 ) -> Result<UploadReportDto, String> {
