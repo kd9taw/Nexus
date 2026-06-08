@@ -26,6 +26,9 @@ import {
 import { sampleLut } from '../colormaps'
 import { needMeta } from '../propViz'
 import { StateBlock } from './StateBlock'
+// Geochron-style shaded-relief basemap (Natural Earth I 50m, public domain),
+// downsampled to 2048x1024 webp. Bundled offline; drawn behind the World view.
+import reliefUrl from '../assets/earth-relief.webp'
 
 /** Connect intent presets — beginner picks a goal once; the map configures
  * itself (projection + default color-by + which layers are on). Soft: the user
@@ -83,6 +86,7 @@ function needColor(tag: NeedTag | undefined): string | null {
 
 type LayerKey =
   | 'daynight'
+  | 'relief'
   | 'muf'
   | 'aurora'
   | 'coast'
@@ -100,6 +104,7 @@ interface Layer {
 }
 const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   daynight: { label: 'Day / night (greyline)', visible: true, opacity: 1 },
+  relief: { label: 'Relief (World view)', visible: true, opacity: 1 },
   muf: { label: 'MUF (modelled)', visible: false, opacity: 0.85 },
   aurora: { label: 'Aurora oval', visible: false, opacity: 0.85 },
   coast: { label: 'Coastlines', visible: true, opacity: 0.85 },
@@ -168,6 +173,17 @@ export function MapView({
   const [layers, setLayers] = useState(DEFAULT_LAYERS)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null)
+  // Shaded-relief basemap image (loaded once, drawn behind the World view).
+  const reliefRef = useRef<HTMLImageElement | null>(null)
+  const [reliefReady, setReliefReady] = useState(false)
+  useEffect(() => {
+    const img = new Image()
+    img.onload = () => {
+      reliefRef.current = img
+      setReliefReady(true)
+    }
+    img.src = reliefUrl
+  }, [])
   // Ticking clock for the greyline (it drifts ~0.25°/min; a 60 s tick is plenty).
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
@@ -298,18 +314,40 @@ export function MapView({
     ctx.lineWidth = 1
     ctx.stroke()
 
-    // Land: filled continents (the #1 fix vs the old wireframe), with coastlines/
-    // borders stroked on top (gated by the Coastlines layer).
-    ctx.beginPath()
-    path(basemap())
-    ctx.fillStyle = MAP_LAND
-    ctx.fill()
-    if (layers.coast.visible) {
-      ctx.globalAlpha = layers.coast.opacity
-      ctx.strokeStyle = MAP_COAST
-      ctx.lineWidth = 0.6
-      ctx.stroke()
-      ctx.globalAlpha = 1
+    const useRelief = kind === 'world' && layers.relief.visible && reliefRef.current
+    if (useRelief) {
+      // Geochron-style shaded relief: a direct stretch-blit to the equirectangular
+      // bounds (lon/lat map linearly here, so no per-pixel reprojection). The
+      // greyline night shading draws on top → a true day/night terrain map. Only
+      // World; AEQD stays on filled vectors (a raster there needs slow inverse-proj).
+      const tl = project(proj, { lat: 90, lon: -180 })
+      const br = project(proj, { lat: -90, lon: 180 })
+      if (tl && br) {
+        ctx.drawImage(reliefRef.current!, tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
+      }
+      if (layers.coast.visible) {
+        // A faint coastline keeps borders crisp over the raster.
+        ctx.globalAlpha = layers.coast.opacity * 0.5
+        ctx.beginPath()
+        path(basemap())
+        ctx.strokeStyle = MAP_COAST
+        ctx.lineWidth = 0.5
+        ctx.stroke()
+        ctx.globalAlpha = 1
+      }
+    } else {
+      // Filled-vector land (the AEQD beam map, or World with relief off).
+      ctx.beginPath()
+      path(basemap())
+      ctx.fillStyle = MAP_LAND
+      ctx.fill()
+      if (layers.coast.visible) {
+        ctx.globalAlpha = layers.coast.opacity
+        ctx.strokeStyle = MAP_COAST
+        ctx.lineWidth = 0.6
+        ctx.stroke()
+        ctx.globalAlpha = 1
+      }
     }
     if (layers.grid.visible) {
       ctx.globalAlpha = layers.grid.opacity
@@ -548,7 +586,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, colorBy, pathMode, size, layers, placed, mufGrid, auroraPts, prop, dxCards, selStation, selectedCall, needByCall, theme, nowMs])
+  }, [me, kind, colorBy, pathMode, size, layers, placed, mufGrid, auroraPts, reliefReady, prop, dxCards, selStation, selectedCall, needByCall, theme, nowMs])
 
   if (!me) {
     return (
