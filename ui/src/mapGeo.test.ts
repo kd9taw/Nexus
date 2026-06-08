@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { makeProjection, project, destinationPoint, subsolarPoint, terminator } from './mapGeo'
+import {
+  makeProjection,
+  project,
+  destinationPoint,
+  subsolarPoint,
+  terminator,
+  solarElevationDeg,
+  mufMhz,
+} from './mapGeo'
 import { gridToLatLon, haversineKm } from './grid'
 
 const W = 800
@@ -77,5 +85,26 @@ describe('mapGeo (greyline / terminator)', () => {
     expect(t.caps).toHaveLength(4)
     expect(t.line).toBeTruthy()
     expect(t.subsolar).toEqual(subsolarPoint(Date.UTC(2024, 2, 20, 12, 0, 0)))
+  })
+})
+
+describe('mapGeo (MUF / solar elevation)', () => {
+  const ms = Date.UTC(2024, 5, 21, 12, 0, 0)
+  const ss = subsolarPoint(ms)
+  const antiLat = -ss.lat
+  const antiLon = ((ss.lon + 180 + 540) % 360) - 180
+
+  it('sun overhead at the subsolar point, below the horizon at the antipode', () => {
+    expect(solarElevationDeg(ss.lat, ss.lon, ms)).toBeGreaterThan(89)
+    expect(solarElevationDeg(antiLat, antiLon, ms)).toBeLessThan(-89)
+  })
+
+  it('MUF rises with SFI in daylight and floors at ~9 MHz at night', () => {
+    const dayLow = mufMhz(ss.lat, ss.lon, ms, 70)
+    const dayHigh = mufMhz(ss.lat, ss.lon, ms, 200)
+    expect(dayHigh).toBeGreaterThan(dayLow) // SFI raises MUF
+    const night = mufMhz(antiLat, antiLon, ms, 200)
+    expect(night).toBeCloseTo(9, 0) // foF2 floor 3 MHz × M3000
+    expect(dayHigh).toBeGreaterThan(night)
   })
 })

@@ -18,6 +18,8 @@ import {
   destinationPoint,
   greatCircle,
   terminator,
+  mufCells,
+  mufMhz,
   type Projection,
 } from '../mapGeo'
 import { sampleLut } from '../colormaps'
@@ -78,7 +80,16 @@ function needColor(tag: NeedTag | undefined): string | null {
   }
 }
 
-type LayerKey = 'daynight' | 'coast' | 'grid' | 'rings' | 'stations' | 'paths' | 'openings' | 'dxped'
+type LayerKey =
+  | 'daynight'
+  | 'muf'
+  | 'coast'
+  | 'grid'
+  | 'rings'
+  | 'stations'
+  | 'paths'
+  | 'openings'
+  | 'dxped'
 interface Layer {
   label: string
   visible: boolean
@@ -86,6 +97,7 @@ interface Layer {
 }
 const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   daynight: { label: 'Day / night (greyline)', visible: true, opacity: 1 },
+  muf: { label: 'MUF (modelled)', visible: false, opacity: 0.85 },
   coast: { label: 'Coastlines', visible: true, opacity: 0.85 },
   grid: { label: 'Grid (20°×10°)', visible: true, opacity: 0.5 },
   rings: { label: 'Range rings', visible: true, opacity: 0.55 },
@@ -202,6 +214,9 @@ export function MapView({
     return out
   }, [me, kind, size, stations])
 
+  // Static MUF grid cells (geometry never changes; colors recomputed per draw).
+  const mufGrid = useMemo(() => mufCells(), [])
+
   // Draw.
   useEffect(() => {
     const canvas = canvasRef.current
@@ -269,6 +284,25 @@ export function MapView({
       ctx.strokeStyle = 'rgba(255, 200, 110, 0.9)' // greyline glow (prime DX zone)
       ctx.lineWidth = 1.1
       ctx.stroke()
+      ctx.globalAlpha = 1
+    }
+
+    // MUF (modelled) — the maximum usable frequency field from our foF2 model +
+    // current SFI, as a coarse heatmap (7→35 MHz on the colormap). It tells you at
+    // a glance which bands the ionosphere supports WHERE. Modelled, not measured —
+    // gated to the Expert layer panel + off by default.
+    if (layers.muf.visible) {
+      const sfi = prop?.spaceWx.sfi ?? 120
+      for (const cell of mufGrid) {
+        const muf = mufMhz(cell.center.lat, cell.center.lon, nowMs, sfi)
+        const t = Math.max(0, Math.min(1, (muf - 7) / (35 - 7)))
+        const [r, g, b] = sampleLut('inferno', t)
+        ctx.globalAlpha = layers.muf.opacity * 0.34
+        ctx.beginPath()
+        path(cell.poly)
+        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
+        ctx.fill()
+      }
       ctx.globalAlpha = 1
     }
 
@@ -398,7 +432,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, colorBy, pathMode, size, layers, placed, prop, dxCards, selStation, selectedCall, needByCall, theme, nowMs])
+  }, [me, kind, colorBy, pathMode, size, layers, placed, mufGrid, prop, dxCards, selStation, selectedCall, needByCall, theme, nowMs])
 
   if (!me) {
     return (

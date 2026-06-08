@@ -152,3 +152,61 @@ export function terminator(nowMs: number): Terminator {
     subsolar: ss,
   }
 }
+
+// ── MUF / foF2 model (the "modelled" overlay) ─────────────────────────────────
+// Solar elevation = 90° − angular distance from the subsolar point. The foF2/MUF
+// formula MIRRORS crates/propagation/src/likelihood.rs (PathModel.fof2 defaults)
+// + the standard MUF(3000) obliquity factor — it's a glanceable modelled field,
+// not a measurement (badge it "modelled"). One source of truth for the *physics*
+// stays in Rust; this is the visual twin, like the greyline.
+const DEG = Math.PI / 180
+const FOF2_A = 4.0
+const FOF2_B = 0.04
+const FOF2_P = 0.25
+const FOF2_FLOOR = 3.0
+const M3000 = 3.0 // foF2 → MUF(3000 km) nominal obliquity factor
+
+/** Solar elevation (deg, −90..+90) at a point — >0 day, ~0 greyline. */
+export function solarElevationDeg(lat: number, lon: number, nowMs: number): number {
+  const ss = subsolarPoint(nowMs)
+  const c =
+    Math.sin(lat * DEG) * Math.sin(ss.lat * DEG) +
+    Math.cos(lat * DEG) * Math.cos(ss.lat * DEG) * Math.cos((lon - ss.lon) * DEG)
+  return 90 - Math.acos(Math.max(-1, Math.min(1, c))) / DEG
+}
+
+/** Modelled MUF(3000 km) in MHz at a point, from SFI + solar elevation. */
+export function mufMhz(lat: number, lon: number, nowMs: number, sfi: number): number {
+  const elev = solarElevationDeg(lat, lon, nowMs)
+  const day = elev > 0 ? (FOF2_A + FOF2_B * sfi) * Math.pow(Math.sin(elev * DEG), FOF2_P) : 0
+  return Math.max(day, FOF2_FLOOR) * M3000
+}
+
+/** A lat/lon grid cell for the MUF heatmap (geometry is static; color recomputed). */
+export interface MufCell {
+  center: LatLon
+  poly: GeoPermissibleObjects
+}
+
+/** Build the static MUF grid cells (default 10°×15°). */
+export function mufCells(stepLat = 10, stepLon = 15): MufCell[] {
+  const cells: MufCell[] = []
+  for (let lat = -90; lat < 90; lat += stepLat) {
+    for (let lon = -180; lon < 180; lon += stepLon) {
+      const poly = {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [lon, lat],
+            [lon + stepLon, lat],
+            [lon + stepLon, lat + stepLat],
+            [lon, lat + stepLat],
+            [lon, lat],
+          ],
+        ],
+      } as unknown as GeoPermissibleObjects
+      cells.push({ center: { lat: lat + stepLat / 2, lon: lon + stepLon / 2 }, poly })
+    }
+  }
+  return cells
+}
