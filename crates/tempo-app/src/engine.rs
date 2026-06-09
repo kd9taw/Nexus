@@ -112,9 +112,11 @@ pub struct Engine {
     tuning: bool,
     /// Whether the transmit watchdog has tripped (auto-halted TX).
     tx_watchdog: bool,
-    /// Count of consecutive TX slots since the last operator action. Compared
-    /// against the watchdog limit (`tx_watchdog_min` minutes) to trip the halt.
-    tx_slot_count: u64,
+    /// Unix-secs when the current unattended-transmit run began (first TX after the
+    /// last operator action), or `None` if not transmitting. The watchdog trips on
+    /// WALL-CLOCK elapsed since this (`tx_watchdog_min` minutes), like WSJT-X — not on
+    /// TX air-time, which fired ~2x too late since FT8/FT4 transmit every other slot.
+    tx_watchdog_start: Option<u64>,
     /// Recent decode `|dt|` magnitudes (seconds), most-recent-last, for the
     /// DT-derived time-sync health estimate.
     recent_dt: VecDeque<f32>,
@@ -145,6 +147,10 @@ pub struct Engine {
     /// Whether the active QSO has already been auto-logged (so it logs exactly
     /// once when the sequencer reaches `Done`). Reset when a new QSO starts.
     qso_logged: bool,
+    /// Unix-secs when the current QSO's exchange began (TIME_ON) — set when answering a
+    /// station or when our CQ first gets a reply; `None` between QSOs. The log records
+    /// this as the contact start, with the completion time as TIME_OFF.
+    qso_start_unix: Option<u64>,
     /// Whether the operator is RUNNING (called CQ) vs answering a specific station.
     /// When running, a completed QSO returns to calling CQ (WSJT-X's run workflow).
     cq_running: bool,
@@ -296,7 +302,7 @@ impl Engine {
             tx_enabled: false,
             tuning: false,
             tx_watchdog: false,
-            tx_slot_count: 0,
+            tx_watchdog_start: None,
             recent_dt: VecDeque::new(),
             seen_decode: false,
             logbook: Logbook::new(),
@@ -307,6 +313,7 @@ impl Engine {
             qso_report_sent: None,
             pending_log: None,
             qso_logged: false,
+            qso_start_unix: None,
             cq_running: false,
             last_decode_slot: None,
             immediate_tx: false,
@@ -1305,6 +1312,7 @@ impl Engine {
         // A new QSO (or mode change) starts a fresh auto-log window.
         self.qso_logged = false;
         self.qso_report_sent = None;
+        self.qso_start_unix = None; // a fresh QSO stamps its own start time
         // Clear stale receive-side IR-HARQ buffers so a new exchange never
         // joint-combines with retransmissions from a previous one.
         ft1::harq_reset();
@@ -1346,7 +1354,7 @@ impl Engine {
     /// queues, and opens a fresh auto-log window (so the contact logs once when
     /// the sequence completes).
     pub fn call_station(&mut self, dxcall: &str) {
-        self.call_station_ctx(dxcall, None, None, None);
+        self.call_station_ctx(dxcall, None, None, None, None);
     }
 
     /// As [`call_station`], but pre-seeds the DX station's grid (e.g. the operator
@@ -1355,7 +1363,7 @@ impl Engine {
     ///
     /// [`call_station`]: Engine::call_station
     pub fn call_station_with_grid(&mut self, dxcall: &str, dxgrid: Option<&str>) {
-        self.call_station_ctx(dxcall, dxgrid, None, None);
+        self.call_station_ctx(dxcall, dxgrid, None, None, None);
     }
 
     /// The faithful WSJT-X "double-click to work" entry point. `reply_msg` is the
@@ -1372,6 +1380,7 @@ impl Engine {
         dxgrid: Option<&str>,
         reply_msg: Option<&str>,
         reply_snr: Option<i32>,
+        dx_freq: Option<f32>,
     ) {
         let mycall = self.settings.mycall.clone();
         let mygrid = self.settings.mygrid.clone();
@@ -1424,6 +1433,13 @@ impl Engine {
         if let Some(s) = self.last_decode_slot {
             self.set_tx_even(s % 2 == 0);
         }
+        // Move our RX onto the DX's audio frequency (and TX with it, unless Hold Tx
+        // Freq is on) — WSJT-X's double-click-to-work behavior. set_rx_offset clamps to
+        // the passband and drags TX along when Hold is off. Ignore a non-positive offset
+        // (absent/malformed) so we don't yank the rig to the band edge.
+        if let Some(hz) = dx_freq.filter(|h| *h > 0.0) {
+            self.set_rx_offset(hz);
+        }
         // Working a station implies transmit: enable TX (also clears a tripped
         // watchdog + resets the continuous-TX count, like the Monitor toggle) so
         // the auto-sequencer actually keys even if TX was toggled off.
@@ -1435,6 +1451,7 @@ impl Engine {
         self.broadcast_queue.clear();
         self.qso_logged = false;
         self.qso_report_sent = None;
+        self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
         ft1::harq_reset(); // fresh exchange: drop stale receive-side IR-HARQ state
     }
 
@@ -1510,8 +1527,15 @@ impl Engine {
             },
             _ => return false,
         };
+        // Don't create a report-LESS record: a QSO isn't a contact until at least one
+        // signal report has been exchanged (WSJT-X only logs after the report exchange).
+        // Refuse a manual log while still calling CQ / awaiting the first report.
+        if rx_report.is_none() && self.qso_report_sent.is_none() {
+            return false;
+        }
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
+        self.qso_start_unix = None; // contact logged — the next QSO stamps a fresh start
         // Respect prompt-to-log just like auto-log: hold for the confirm popup
         // instead of writing silently, so manual + auto behave the same.
         if self.settings.prompt_to_log {
@@ -1688,9 +1712,9 @@ impl Engine {
         self.tx_enabled = on;
         if on {
             // Re-enabling is an operator action: clear a tripped watchdog and
-            // reset the continuous-TX timer.
+            // restart the watchdog timer on the next over.
             self.tx_watchdog = false;
-            self.tx_slot_count = 0;
+            self.tx_watchdog_start = None;
         } else {
             // Muting transmit also drops anything queued.
             self.tx_queue.clear();
@@ -1884,16 +1908,11 @@ impl Engine {
         self.clock_offset_ms
     }
 
-    /// Reset the transmit-watchdog: clear the tripped flag and the consecutive
-    /// TX-slot count. Called on any operator-initiated action.
+    /// Reset the transmit-watchdog: clear the tripped flag and restart the wall-clock
+    /// timer on the next over. Called on any operator-initiated action.
     fn reset_tx_watchdog(&mut self) {
         self.tx_watchdog = false;
-        self.tx_slot_count = 0;
-    }
-
-    /// Seconds of air-time per TX slot for the active tier/mode.
-    fn slot_seconds(&self) -> f64 {
-        self.active_slot_secs()
+        self.tx_watchdog_start = None;
     }
 
     /// T/R slot length (seconds) for the active tier: DX1 = 15 s; the native
@@ -2231,14 +2250,18 @@ impl Engine {
         match text {
             Some(t) => {
                 self.app.set_transmitting(true);
-                // Count this consecutive TX slot; trip the watchdog (and auto-halt
-                // TX) once continuous keying exceeds the configured limit.
-                self.tx_slot_count += 1;
-                let limit_secs = self.settings.tx_watchdog_min as f64 * 60.0;
-                if limit_secs > 0.0 && self.tx_slot_count as f64 * self.slot_seconds() > limit_secs
-                {
-                    self.tx_watchdog = true;
-                    self.tx_enabled = false;
+                // Wall-clock watchdog (WSJT-X): start the timer on the first over after
+                // an operator action, then trip (auto-halt TX) once REAL elapsed time
+                // exceeds the limit — counting the RX slots between overs too, so it
+                // fires at the configured minutes, not 2x late (FT8/FT4 TX every other slot).
+                let limit_secs = self.settings.tx_watchdog_min as u64 * 60;
+                if limit_secs > 0 {
+                    let now = now_unix_secs();
+                    let start = *self.tx_watchdog_start.get_or_insert(now);
+                    if now.saturating_sub(start) >= limit_secs {
+                        self.tx_watchdog = true;
+                        self.tx_enabled = false;
+                    }
                 }
                 // Record this transmission so the decode feed shows our own calls
                 // (one row per cycle — WSJT-X own-TX). Ring-capped to stay bounded.
@@ -2395,15 +2418,32 @@ impl Engine {
                 if let Some(snr) = report_in(station.outgoing()) {
                     self.qso_report_sent = Some(snr);
                 }
-                // Auto-log exactly once when the contact is complete. The responder
-                // reaches Done (it sent the final 73); the INITIATOR reaches
-                // Confirming the moment it rogers with RR73 — and the partner very
-                // often never sends a final 73 back, so waiting for Done dropped
-                // CQ-side QSOs from the log entirely. Both reports are exchanged by
-                // Confirming, so it's loggable. (qso_logged guards the double.)
-                if matches!(station.state, QsoState::Done | QsoState::Confirming)
+                // Stamp the QSO start (TIME_ON) the first time an exchange is actually
+                // under way — when our CQ gets its first reply (answering a station
+                // already stamped it in call_station_ctx). One-shot via the None guard;
+                // skip once logged so a post-log over can't re-stamp a stale start.
+                if self.qso_start_unix.is_none()
                     && !self.qso_logged
+                    && station.dxcall.is_some()
+                    && !matches!(station.state, QsoState::CallingCq | QsoState::Listening)
                 {
+                    self.qso_start_unix = Some(now_unix_secs());
+                }
+                // Auto-log exactly once when the contact is complete. The responder
+                // reaches Done (it sent the final 73); the INITIATOR reaches Confirming
+                // the moment it rogers with RR73 — and the partner very often never
+                // sends a final 73 back, so waiting for Done dropped CQ-side QSOs from
+                // the log entirely. But Confirming alone fires the instant the RR73 is
+                // QUEUED, before it's actually transmitted; require tx_count >= 1 so we
+                // only log once that closing roger has genuinely gone on the air (the
+                // contact isn't real until your RR73 is sent). Done is unconditional —
+                // by then everything has been exchanged. (qso_logged guards the double.)
+                let loggable = match station.state {
+                    QsoState::Done => true,
+                    QsoState::Confirming => station.tx_count >= 1,
+                    _ => false,
+                };
+                if loggable && !self.qso_logged {
                     self.qso_logged = true;
                     completed = Some((
                         station.dxcall.clone().unwrap_or_default(),
@@ -2425,6 +2465,9 @@ impl Engine {
                     self.log_qso(rec);
                 }
             }
+            // Contact closed — the next QSO (incl. a CQ-run's next caller) stamps a
+            // fresh start time.
+            self.qso_start_unix = None;
         }
 
         // Run workflow: after a completed QSO while RUNNING (we called CQ), return
@@ -2451,9 +2494,12 @@ impl Engine {
                 running: true,
             };
             // Fresh auto-log window for the next contact; keep TX enabled so CQ
-            // keeps going out.
+            // keeps going out. Clear the QSO-start stamp too — the NEXT caller stamps
+            // its own TIME_ON; otherwise this QSO's start would leak into the next
+            // contact's logged TIME_ON (e.g. after a manual Log-QSO mid-run).
             self.qso_logged = false;
             self.qso_report_sent = None;
+            self.qso_start_unix = None;
             self.reset_tx_watchdog();
         }
     }
@@ -2501,7 +2547,11 @@ impl Engine {
             comment: None,
             notes: None,
             tx_power: None,
-            when_unix: now_unix_secs(),
+            // TIME_ON = when the exchange began (set on answer / first CQ reply);
+            // TIME_OFF = now (the contact just completed). Fall back to now if we somehow
+            // never stamped a start.
+            when_unix: self.qso_start_unix.unwrap_or_else(now_unix_secs),
+            time_off_unix: Some(now_unix_secs()),
             confirmed: false,
             award_confirmed: false,
             credit_granted: Vec::new(),
@@ -2790,6 +2840,30 @@ mod tests {
         assert!(e.poll_tx(0).is_empty(), "no slot TX in Phone");
         e.set_operating_mode("cw");
         assert!(e.poll_tx(0).is_empty(), "no slot TX in CW");
+    }
+
+    #[test]
+    fn working_a_station_moves_rx_to_its_audio_freq() {
+        // Double-click-to-work with the decode's audio freq → RX moves onto it, and TX
+        // follows unless Hold Tx Freq is set (WSJT-X behavior).
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.call_station_ctx("W1AW", None, None, None, Some(1200.0));
+        assert_eq!(e.rx_offset_hz(), 1200.0, "RX moved to the DX's audio freq");
+        assert_eq!(e.tx_offset_hz(), 1200.0, "TX follows when Hold Tx is off");
+
+        // Hold Tx Freq on → only RX moves; TX stays put.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tx_offset(1500.0);
+        e.set_hold_tx_freq(true);
+        e.call_station_ctx("W1AW", None, None, None, Some(800.0));
+        assert_eq!(e.rx_offset_hz(), 800.0, "RX moves");
+        assert_eq!(e.tx_offset_hz(), 1500.0, "TX held with Hold Tx on");
+
+        // No freq supplied (e.g. a roster click) → offsets unchanged.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_rx_offset(1000.0);
+        e.call_station_ctx("W1AW", None, None, None, None);
+        assert_eq!(e.rx_offset_hz(), 1000.0, "no freq → no move");
     }
 
     #[test]
@@ -3095,44 +3169,39 @@ mod tests {
 
     #[test]
     fn watchdog_trips_after_the_limit_then_clears() {
-        // 1-minute limit on FT1 (4 s slots) → trips once continuous TX exceeds
-        // 60 s, i.e. after the 16th TX slot (16 * 4 = 64 s > 60 s).
+        // WALL-CLOCK watchdog: trips after `tx_watchdog_min` minutes of real elapsed
+        // time since the first over (no real time passes in a test, so we backdate the
+        // timer to simulate the limit being exceeded).
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
-        e.settings.tx_watchdog_min = 1;
-        // Queue enough open-broadcast frames up front (each broadcast resets the
-        // watchdog, so do them all before polling). poll_tx drains one frame per
-        // TX slot unconditionally, giving us a steady stream of TX slots.
-        for _ in 0..6 {
+        e.settings.tx_watchdog_min = 1; // 60 s limit
+        for _ in 0..2 {
             e.broadcast("THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG MANY TIMES TODAY");
         }
+        // First over starts the watchdog clock but doesn't trip it.
+        assert!(!e.poll_tx(0).is_empty(), "an over is produced");
+        assert!(!e.tx_watchdog, "a fresh timer doesn't trip immediately");
+        assert!(e.tx_watchdog_start.is_some(), "the timer started on the first over");
 
-        let mut tripped = false;
-        for k in 0..60u64 {
-            let slot = k * 2; // parity-0 slots: every one is a TX slot
-            e.poll_tx(slot);
-            if e.tx_watchdog {
-                tripped = true;
-                assert!(!e.tx_enabled, "watchdog auto-halts transmit");
-                assert!(e.snapshot().radio.tx_watchdog);
-                break;
-            }
-        }
-        assert!(
-            tripped,
-            "watchdog trips after continuous TX exceeds the limit"
-        );
+        // Backdate the start past the 60 s limit → the next over trips the watchdog.
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(61));
+        e.poll_tx(2);
+        assert!(e.tx_watchdog, "watchdog trips after the wall-clock limit");
+        assert!(!e.tx_enabled, "watchdog auto-halts transmit");
+        assert!(e.snapshot().radio.tx_watchdog);
 
-        // Re-enabling TX is an operator action: it clears the watchdog + count.
+        // Re-enabling TX is an operator action: clears the watchdog + restarts the timer.
         e.set_tx_enabled(true);
         assert!(e.tx_enabled);
         assert!(!e.tx_watchdog, "re-enabling TX clears the watchdog");
+        assert!(e.tx_watchdog_start.is_none(), "the timer restarts on the next over");
         assert!(!e.snapshot().radio.tx_watchdog);
 
-        // And an operator action mid-stream resets the consecutive-TX count so
-        // the watchdog does not trip prematurely.
+        // An operator action also restarts the timer mid-stream.
+        e.poll_tx(4); // re-arm the timer
+        assert!(e.tx_watchdog_start.is_some());
         e.reset_tx_watchdog();
-        assert_eq!(e.tx_slot_count, 0);
+        assert!(e.tx_watchdog_start.is_none(), "operator action restarts the timer");
     }
 
     #[test]
@@ -3383,6 +3452,7 @@ mod tests {
             notes: None,
             tx_power: None,
             when_unix: 0,
+            time_off_unix: None,
             confirmed: false,
             award_confirmed: false,
             credit_granted: vec![],
@@ -3522,16 +3592,50 @@ mod tests {
         e.set_mode("qso-run").unwrap(); // CallingCq
         // K2DEF answers our CQ with a grid → we send a report (AwaitRoger).
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF FN31", -8)], 1);
-        // K2DEF rogers our report → we send RR73 (Confirming). No final 73 ever comes.
+        // K2DEF rogers our report → we queue RR73 (Confirming). No final 73 ever comes.
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF R-12", -8)], 3);
+        // The RR73 is only QUEUED here — the contact must NOT log until it's on the air.
+        assert!(e.get_log().is_empty(), "not logged before the RR73 is transmitted");
 
+        // We send the RR73 on our next TX slot (tx_count → 1)...
+        assert!(!e.poll_tx(4).is_empty(), "RR73 goes out on a TX slot");
+        // ...and the contact auto-logs once that closing roger has actually gone out.
+        e.ingest_decodes_for_test(&[], 5); // an RX slot re-runs the auto-log check
         let log = e.get_log();
-        assert_eq!(log.len(), 1, "CQ-side QSO auto-logs at RR73");
+        assert_eq!(log.len(), 1, "CQ-side QSO auto-logs after RR73 is sent");
         assert_eq!(log[0].call, "K2DEF");
         assert_eq!(log[0].rst_rcvd.as_deref(), Some("-12"), "report they sent us");
         // Idempotent: a later 73 (or re-observe) doesn't double-log.
-        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF 73", -8)], 5);
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF 73", -8)], 7);
         assert_eq!(e.get_log().len(), 1, "no double-log on a late 73");
+    }
+
+    #[test]
+    fn cq_run_does_not_leak_a_qso_start_into_the_next_contact() {
+        // The review's critical catch: in a CQ run, manually logging QSO #1 before it
+        // completes must NOT leave its start time stamped — the next caller stamps its
+        // own TIME_ON. Exercises both the post-log stamp guard and the resume-CQ reset.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_mode("qso-run").unwrap(); // CallingCq, TX armed
+        // QSO1: K2DEF answers our CQ → we report (AwaitRoger); start stamped.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF FN31", -8)], 1);
+        assert!(e.qso_start_unix.is_some(), "QSO1 stamped its start");
+        // Operator manually logs QSO1 early (a report was sent → allowed).
+        assert!(e.log_current_qso(), "manual log succeeds (report exchanged)");
+        assert!(e.qso_start_unix.is_none(), "manual log clears the start");
+        // QSO1 then rogers; we send RR73 (tx_count→1) and resume to CQ.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF R-12", -8)], 3);
+        assert!(e.qso_start_unix.is_none(), "a post-log over must NOT re-stamp a start");
+        assert!(!e.poll_tx(4).is_empty(), "RR73 goes out");
+        e.ingest_decodes_for_test(&[], 5); // resume to CQ
+        assert_eq!(e.snapshot().qso.unwrap().state, "CallingCq", "resumed calling CQ");
+        assert!(
+            e.qso_start_unix.is_none(),
+            "no stale QSO1 start leaks into the next contact"
+        );
+        // The next caller stamps a FRESH start.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ N0XYZ EM48", -8)], 7);
+        assert!(e.qso_start_unix.is_some(), "QSO2 stamps its own start");
     }
 
     #[test]

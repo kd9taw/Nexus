@@ -154,6 +154,7 @@ export async function callStation(
   grid?: string,
   message?: string,
   snr?: number,
+  freq?: number,
 ): Promise<AppSnapshot> {
   const invoke = tauriInvoke()
   if (invoke)
@@ -162,6 +163,8 @@ export async function callStation(
       grid: grid ?? null,
       message: message ?? null,
       snr: snr ?? null,
+      // The decoded station's audio offset (Hz) — moves our RX/TX onto it (WSJT-X).
+      freq: freq ?? null,
     })
   return mockEngine.callStation(call, grid, message, snr)
 }

@@ -704,14 +704,21 @@ impl RadioLoop {
                             eng.broadcast(t);
                         }
                     }
-                    WsjtxInbound::Reply { message, snr, .. } => {
+                    WsjtxInbound::Reply { message, snr, delta_freq, .. } => {
                         // The Reply datagram (a logger/JTAlert/companion double-click)
-                        // carries the exact clicked line + its SNR — pass both so the
-                        // sequencer resumes from that message (WSJT-X double-click
-                        // semantics), not always from the grid.
+                        // carries the exact clicked line, its SNR, and the DX's audio
+                        // offset — pass all three so the sequencer resumes from that
+                        // message (WSJT-X double-click semantics) AND moves our RX/TX
+                        // onto the DX's frequency, not always from the grid at band-center.
                         let parsed = Msg::parse(&message);
                         if let Some(sender) = parsed.sender() {
-                            eng.call_station_ctx(sender, None, Some(&message), Some(snr));
+                            eng.call_station_ctx(
+                                sender,
+                                None,
+                                Some(&message),
+                                Some(snr),
+                                Some(delta_freq as f32),
+                            );
                         }
                     }
                     _ => {}

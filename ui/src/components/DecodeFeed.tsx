@@ -4,8 +4,9 @@ interface Props {
   decodes: DecodeRow[]
   /** Session count of IR-HARQ rescues (decodes recovered by combining). */
   harqRescues: number
-  /** Work / answer a decoded station. */
-  onCall: (call: string, grid?: string, message?: string, snr?: number) => void
+  /** Work / answer a decoded station. `freq` = the decode's audio offset (Hz) so the
+   * rig moves RX/TX onto it (WSJT-X double-click). */
+  onCall: (call: string, grid?: string, message?: string, snr?: number, freq?: number) => void
 }
 
 /** Priority class for color-coding (directedToMe > new-DXCC > new-grid > worked > CQ). */
@@ -48,7 +49,7 @@ export function DecodeFeed({ decodes, harqRescues, onCall }: Props) {
               className={`decode-row ${cls}`}
               role="listitem"
               key={`${d.from}-${d.message}-${i}`}
-              onDoubleClick={() => d.from && onCall(d.from, undefined, d.message, d.snr)}
+              onDoubleClick={() => d.from && onCall(d.from, undefined, d.message, d.snr, d.freqHz)}
               title={d.from ? `Double-click to work ${d.from}` : undefined}
             >
               <span className={`decode-tier ${d.tier.toLowerCase()}`} title={`Decoded by ${d.tier}`}>
@@ -77,7 +78,7 @@ export function DecodeFeed({ decodes, harqRescues, onCall }: Props) {
                 <button
                   type="button"
                   className="decode-work"
-                  onClick={() => onCall(d.from as string, undefined, d.message, d.snr)}
+                  onClick={() => onCall(d.from as string, undefined, d.message, d.snr, d.freqHz)}
                   title={`Answer ${d.from}`}
                 >
                   {d.isCq ? 'Call' : 'Work'}

@@ -441,9 +441,9 @@ export default function App() {
   }, [])
 
   const handleCall = useCallback(
-    (call: string, grid?: string, message?: string, snr?: number) => {
+    (call: string, grid?: string, message?: string, snr?: number, freq?: number) => {
       void withErrorToast(
-        () => apiCallStation(call, grid, message, snr),
+        () => apiCallStation(call, grid, message, snr, freq),
         `Could not work ${call}`,
       ).then((s) => {
         if (s) {

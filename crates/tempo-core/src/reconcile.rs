@@ -267,6 +267,7 @@ mod tests {
             notes: None,
             tx_power: None,
             when_unix: day * 86_400 + 3600,
+            time_off_unix: None,
             confirmed: false,
             award_confirmed: false,
             credit_granted: Vec::new(),

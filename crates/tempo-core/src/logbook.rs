@@ -42,8 +42,11 @@ pub struct QsoRecord {
     pub notes: Option<String>,
     /// Transmit power in watts (ADIF `TX_PWR`), if recorded.
     pub tx_power: Option<f64>,
-    /// Contact time, Unix seconds (UTC).
+    /// Contact START time, Unix seconds (UTC) — ADIF `QSO_DATE`/`TIME_ON`.
     pub when_unix: u64,
+    /// Contact END time, Unix seconds (UTC) — ADIF `QSO_DATE_OFF`/`TIME_OFF` (when the
+    /// closing 73/RR73 completed). `None` for imported/legacy records with no off-time.
+    pub time_off_unix: Option<u64>,
     /// Confirmed by ANY channel — LoTW, eQSL, or paper (`*_QSL_RCVD`). For
     /// general "has a confirmation" display only.
     pub confirmed: bool,
@@ -197,6 +200,11 @@ impl Logbook {
                 }
                 if rec.state.is_none() {
                     rec.state = old.state.clone();
+                }
+                // The edit form doesn't carry the contact end time — preserve the
+                // stored TIME_OFF rather than wiping it on a name/grid edit.
+                if rec.time_off_unix.is_none() {
+                    rec.time_off_unix = old.time_off_unix;
                 }
                 self.records[index] = rec;
                 true
@@ -482,6 +490,12 @@ pub fn adif_record(r: &QsoRecord) -> String {
     out.push_str(&field("MODE", &r.mode));
     out.push_str(&field("QSO_DATE", &format!("{y:04}{mo:02}{d:02}")));
     out.push_str(&field("TIME_ON", &format!("{h:02}{mi:02}{s:02}")));
+    // TIME_OFF / QSO_DATE_OFF — the contact's end (closing 73/RR73), when recorded.
+    if let Some(off) = r.time_off_unix {
+        let (oy, omo, od, oh, omi, os) = datetime_utc(off);
+        out.push_str(&field("QSO_DATE_OFF", &format!("{oy:04}{omo:02}{od:02}")));
+        out.push_str(&field("TIME_OFF", &format!("{oh:02}{omi:02}{os:02}")));
+    }
     if let Some(rs) = &r.rst_sent {
         out.push_str(&field("RST_SENT", rs));
     }
@@ -689,6 +703,27 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         their_program,
         their_ref,
     };
+    // TIME_OFF / QSO_DATE_OFF (optional contact end). Per ADIF, QSO_DATE_OFF falls back
+    // to QSO_DATE when only TIME_OFF is present.
+    let time_off_unix = f.get("TIME_OFF").filter(|t| t.len() >= 6).map(|t| {
+        let (oh, omi, os) = (
+            t[0..2].parse::<u32>().unwrap_or(0),
+            t[2..4].parse::<u32>().unwrap_or(0),
+            t[4..6].parse::<u32>().unwrap_or(0),
+        );
+        let (oy, omo, od) = f
+            .get("QSO_DATE_OFF")
+            .filter(|s| s.len() >= 8)
+            .map(|s| {
+                (
+                    s[0..4].parse::<i32>().unwrap_or(y),
+                    s[4..6].parse::<u32>().unwrap_or(mo),
+                    s[6..8].parse::<u32>().unwrap_or(d),
+                )
+            })
+            .unwrap_or((y, mo, d));
+        unix_from_ymdhms(oy, omo, od, oh, omi, os)
+    });
     Some(QsoRecord {
         call,
         grid: f.get("GRIDSQUARE").cloned(),
@@ -712,6 +747,7 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         notes: f.get("NOTES").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         tx_power: f.get("TX_PWR").and_then(|s| s.trim().parse().ok()),
         when_unix: unix_from_ymdhms(y, mo, d, h, mi, s),
+        time_off_unix,
         confirmed,
         award_confirmed,
         credit_granted,
@@ -799,6 +835,7 @@ mod tests {
             notes: None,
             tx_power: None,
             when_unix: when,
+            time_off_unix: None,
             confirmed: false,
             award_confirmed: false,
             credit_granted: Vec::new(),
@@ -972,6 +1009,33 @@ mod tests {
         assert!((back[0].freq_mhz - 14.0905).abs() < 1e-6);
         // time round-trips to the same unix second
         assert_eq!(back[0].when_unix, 1_700_000_000);
+    }
+
+    #[test]
+    fn time_off_round_trips_through_adif() {
+        // A record with a distinct end time emits TIME_OFF/QSO_DATE_OFF and parses back.
+        let mut r = rec("W9XYZ", "20m", 1_700_000_000);
+        r.time_off_unix = Some(1_700_000_075); // ~75 s later (the contact's end)
+        let mut lb = Logbook::new();
+        lb.add(r);
+        let text = lb.adif();
+        assert!(
+            text.contains("TIME_OFF") && text.contains("QSO_DATE_OFF"),
+            "emits TIME_OFF + QSO_DATE_OFF"
+        );
+        let back = parse_adif(&text);
+        assert_eq!(back[0].when_unix, 1_700_000_000, "TIME_ON = start");
+        assert_eq!(
+            back[0].time_off_unix,
+            Some(1_700_000_075),
+            "TIME_OFF = end, round-trips to the same second"
+        );
+
+        // A record with no end time omits the fields and parses back None.
+        let mut lb2 = Logbook::new();
+        lb2.add(rec("K2DEF", "40m", 1_700_000_000));
+        let back2 = parse_adif(&lb2.adif());
+        assert_eq!(back2[0].time_off_unix, None, "no end time → no TIME_OFF emitted");
     }
 
     #[test]

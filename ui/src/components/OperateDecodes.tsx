@@ -11,8 +11,9 @@ interface Props {
   rxOffsetHz: number
   /** Session count of IR-HARQ rescues (decodes recovered by combining). */
   harqRescues: number
-  /** Work / answer a decoded station. */
-  onCall: (call: string, grid?: string, message?: string, snr?: number) => void
+  /** Work / answer a decoded station. `freq` = the decode's audio offset (Hz) so the
+   * rig moves RX/TX onto it (WSJT-X double-click). */
+  onCall: (call: string, grid?: string, message?: string, snr?: number, freq?: number) => void
   /** Force a fixed filter and hide the filter chips (e.g. the Rx-Frequency pane
    * is a Band Activity locked to the 'rx' filter). */
   lockedFilter?: Filter
@@ -206,7 +207,7 @@ export function OperateDecodes({
             className={`decode-row ${rowClass(d)}`}
             role="listitem"
             key={`${d.message}-${d.freqHz}-${i}`}
-            onDoubleClick={() => d.from && onCall(d.from, undefined, d.message, d.snr)}
+            onDoubleClick={() => d.from && onCall(d.from, undefined, d.message, d.snr, d.freqHz)}
             title={d.from ? `Double-click to work ${d.from}` : undefined}
           >
             <span className={`decode-tier ${d.tier.toLowerCase()}`} title={`Decoded by ${d.tier}`}>
@@ -244,7 +245,7 @@ export function OperateDecodes({
               <button
                 type="button"
                 className="decode-work"
-                onClick={() => onCall(d.from as string, undefined, d.message, d.snr)}
+                onClick={() => onCall(d.from as string, undefined, d.message, d.snr, d.freqHz)}
                 title={`Answer ${d.from}`}
               >
                 {d.isCq ? 'Call' : 'Work'}

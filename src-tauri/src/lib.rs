@@ -1525,6 +1525,7 @@ fn call_station(
     grid: Option<String>,
     message: Option<String>,
     snr: Option<i32>,
+    freq: Option<f32>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = state.lock().map_err(|e| e.to_string())?;
     // Working a station keys a standard FT8/FT4 message (your grid in Tx1) — refuse
@@ -1532,7 +1533,10 @@ fn call_station(
     eng.structured_tx_ready(true)?;
     let g = grid.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let msg = message.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    eng.call_station_ctx(&call, g, msg, snr);
+    // `freq` = the decoded station's audio offset (Hz); move our RX/TX onto it (WSJT-X
+    // double-click). Ignore non-positive values (no usable frequency).
+    let dx_freq = freq.filter(|f| *f > 0.0);
+    eng.call_station_ctx(&call, g, msg, snr, dx_freq);
     Ok(eng.snapshot())
 }
 

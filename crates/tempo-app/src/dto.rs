@@ -530,6 +530,7 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             notes: q.notes,
             tx_power: q.tx_power,
             when_unix: q.when_unix,
+            time_off_unix: None, // not carried on the DTO (like `ota`); set at log time / via ADIF
             confirmed: q.confirmed,
             award_confirmed: q.award_confirmed,
             credit_granted: q.credit_granted,
