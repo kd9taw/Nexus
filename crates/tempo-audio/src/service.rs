@@ -351,13 +351,13 @@ impl RadioLoop {
         // re-open WITHOUT the lock, then publish status. Makes CAT connect on
         // Save with no restart. ---
         {
-            // Only consume the operator's "apply now" flag when we can actually act on it
-            // (not mid-TX) — otherwise a section click during a transmit would be silently
-            // dropped. Left set, it's honored on the first non-keyed loop after TX ends.
-            // `manual_ptt_applied` covers the phone/CW case the slot-based tx_until_ms misses:
-            // we must never command a VFO/mode change while the operator is holding PTT.
-            let can_retune =
-                self.tx_until_ms.is_none() && !self.tuning_keyed && !self.manual_ptt_applied;
+            // Retune (set freq/mode) only while not actively transmitting a slot or tuning —
+            // rigs reject VFO/mode changes mid-TX. We deliberately DON'T gate on manual PTT:
+            // a section/mode change must always reach the rig (the proven behavior), and the
+            // read-back is gated separately, so gating retune on manual PTT here is what made
+            // "the VFO mirrors but modes won't switch" regress. Consume the one-shot "apply
+            // now" flag only when we can act, so a click during a slot-TX is honored after it.
+            let can_retune = self.tx_until_ms.is_none() && !self.tuning_keyed;
             let (want, dial, md, reprobe_req, force_retune) = {
                 let mut eng = engine.lock().map_err(|e| e.to_string())?;
                 (
@@ -412,6 +412,10 @@ impl RadioLoop {
             // Live dial / mode retune — only while not keyed (rigs reject VFO
             // changes mid-TX); retried every loop until it sticks.
             let mut retuned = false;
+            // A human-readable note about what we just commanded the rig to do, surfaced into
+            // the CAT status so the operator (and we) can SEE the mode the rig was told to use
+            // and whether it accepted it — turning "modes won't switch" from a guess into data.
+            let mut retune_note: Option<String> = None;
             if can_retune {
                 if force_retune {
                     // The operator just clicked a section / worked a Needed spot / QSY'd.
@@ -429,14 +433,19 @@ impl RadioLoop {
                         self.last_dial = dial;
                         retuned = true;
                     }
-                    if !md.trim().is_empty() && rig.set_mode(&md, 0).is_ok() {
-                        self.last_mode = md.clone();
-                        retuned = true;
+                    if !md.trim().is_empty() {
+                        match rig.set_mode(&md, 0) {
+                            Ok(()) => {
+                                self.last_mode = md.clone();
+                                retuned = true;
+                                retune_note = Some(format!("rig set to {md}"));
+                            }
+                            // `last_mode` is unchanged, so the steady-state path below re-tries
+                            // on later loops and re-gives-up past the budget — a non-supporting
+                            // rig is still never spammed forever.
+                            Err(e) => retune_note = Some(format!("rig rejected {md}: {e}")),
+                        }
                     }
-                    // If the forced set_mode failed (rig lacks the DATA/PKT submode),
-                    // `last_mode` is unchanged, so the steady-state path below re-tries on
-                    // later loops and re-gives-up past the budget — a non-supporting rig
-                    // is still never spammed forever.
                 } else {
                     if dial != self.last_dial && rig.set_freq(dial).is_ok() {
                         self.last_dial = dial;
@@ -446,26 +455,35 @@ impl RadioLoop {
                     // (rig kept rejecting it). `last_mode` only ever holds a mode actually
                     // applied, so a give-up never masquerades as success.
                     if md != self.last_mode && self.mode_giveup.as_deref() != Some(md.as_str()) {
-                        if rig.set_mode(&md, 0).is_ok() {
-                            self.last_mode = md.clone();
-                            self.mode_fail_count = 0;
-                            self.mode_giveup = None; // a success clears any prior give-up
-                            retuned = true;
-                        } else {
-                            // Retries cover a rig/rigctld still settling; past the budget the
-                            // rig is rejecting this mode (e.g. no DATA/PKT submode) — stop
-                            // retrying THIS mode so we don't spam the CAT link every loop. A
-                            // later section change to a different mode still tries (md flips),
-                            // and once any mode sticks the give-up is cleared.
-                            self.mode_fail_count += 1;
-                            if self.mode_fail_count >= MODE_SET_MAX_TRIES {
-                                eprintln!(
-                                    "tempo-audio: set_mode({md:?}) failed {} times — giving up \
-                                     (the rig may not support this mode).",
-                                    self.mode_fail_count
-                                );
-                                self.mode_giveup = Some(md.clone());
+                        match rig.set_mode(&md, 0) {
+                            Ok(()) => {
+                                self.last_mode = md.clone();
                                 self.mode_fail_count = 0;
+                                self.mode_giveup = None; // a success clears any prior give-up
+                                retuned = true;
+                                retune_note = Some(format!("rig set to {md}"));
+                            }
+                            Err(e) => {
+                                // Retries cover a rig/rigctld still settling; past the budget the
+                                // rig is rejecting this mode (e.g. no DATA/PKT submode) — stop
+                                // retrying THIS mode so we don't spam the CAT link every loop. A
+                                // later section change to a different mode still tries (md flips),
+                                // and once any mode sticks the give-up is cleared.
+                                self.mode_fail_count += 1;
+                                retune_note = Some(format!(
+                                    "rig rejected {md} ({}/{MODE_SET_MAX_TRIES}): {e}",
+                                    self.mode_fail_count
+                                ));
+                                if self.mode_fail_count >= MODE_SET_MAX_TRIES {
+                                    eprintln!(
+                                        "tempo-audio: set_mode({md:?}) failed {} times — giving up \
+                                         (the rig may not support this mode).",
+                                        self.mode_fail_count
+                                    );
+                                    self.mode_giveup = Some(md.clone());
+                                    self.mode_fail_count = 0;
+                                    retune_note = Some(format!("rig has no {md} mode — gave up"));
+                                }
                             }
                         }
                     }
@@ -510,6 +528,16 @@ impl RadioLoop {
                             eng.observe_rig_freq(hz);
                         }
                     }
+                }
+            }
+
+            // Surface the mode-set outcome to the CAT status so the operator can SEE the mode
+            // the rig was commanded into (and any rejection) — emitted only on a real change
+            // or failure, so it never spams. A success implies CAT is alive (Some(true)).
+            if let Some(note) = retune_note {
+                let ok = if note.starts_with("rig set to") { Some(true) } else { self.cat_ok };
+                if let Ok(mut eng) = engine.lock() {
+                    eng.set_cat_status(ok, note);
                 }
             }
         }
