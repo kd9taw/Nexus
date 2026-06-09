@@ -46,8 +46,10 @@ mod tests {
         let tones = mode.encode(msg);
         assert!(!tones.is_empty(), "{} encode failed", mode.name());
         let wave = mode.gen_wave(&tones, FS, f0);
+        // FT8 and FT4 self-position (Mode::gen_wave includes the 0.5 s lead-in); FT1's
+        // bare wave is placed at the proven ~0.4 s acquisition point by this harness.
         let off = match mode.kind() {
-            ModeKind::Ft8 => 6_000,
+            ModeKind::Ft8 => 0,
             ModeKind::Ft4 => 0,
             ModeKind::Ft1 => 4_800,
         };
@@ -108,6 +110,20 @@ mod tests {
     #[test]
     fn native_ft4_through_trait() {
         native_roundtrip(ModeKind::Ft4);
+    }
+
+    #[test]
+    fn ft8_gen_wave_is_slot_positioned_with_lead_in() {
+        // Mode::gen_wave for FT8 must include the 0.5 s lead-in (slot-positioned), so the
+        // radio loop plays it at the slot boundary without going on the air 0.5 s early.
+        let m = make_mode(ModeKind::Ft8);
+        let tones = m.encode("CQ KD9TAW EN52");
+        let wave = m.gen_wave(&tones, FS, 1500.0);
+        let lead = (0.5 * FS).round() as usize;
+        let bare = ft8::gen_wave(&tones, FS, 1500.0);
+        assert_eq!(wave.len(), lead + bare.len(), "FT8 wave includes the 0.5 s lead-in");
+        assert!(wave[..lead].iter().all(|&s| s == 0.0), "lead-in is silence");
+        assert!(wave[lead..].iter().any(|&s| s != 0.0), "tones follow the lead-in");
     }
 
     #[test]

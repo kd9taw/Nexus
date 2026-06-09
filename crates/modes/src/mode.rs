@@ -110,7 +110,10 @@ pub trait Mode: Send + Sync {
     /// Encode a message (≤ 37 chars) into channel tones; empty on bad input.
     fn encode(&self, msg: &str) -> Vec<i32>;
 
-    /// Synthesize the TX audio waveform for the given tones at carrier `f0`.
+    /// Synthesize the TX audio waveform for the given tones at carrier `f0`. The
+    /// returned buffer is **slot-positioned** — it includes the mode's leading silence
+    /// (FT8/FT4 start 0.5 s into the slot) so the radio loop can play it straight at the
+    /// slot boundary without the over going out early.
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32>;
 
     /// Decode every signal in a [`frame_samples`](Mode::frame_samples)-long
@@ -165,7 +168,17 @@ impl Mode for Ft8Mode {
         ft8::encode(msg)
     }
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
-        ft8::gen_wave(itone, fsample, f0)
+        // WSJT-X positions FT8 tones 0.5 s into the slot (the decoder's `xdt = t − 0.5`).
+        // `ft8::gen_wave` returns only the bare 12.64 s tone stream, so we PREPEND the
+        // 0.5 s lead-in here to return a slot-positioned waveform (the same contract FT4
+        // already satisfies). Without it the radio loop plays the tones at the slot
+        // boundary and the whole over goes out 0.5 s early — every receiver sees us at
+        // DT ≈ −0.5 s, off-nominal and at the edge of the decode window.
+        let lead = (0.5 * fsample).round().max(0.0) as usize;
+        let tones = ft8::gen_wave(itone, fsample, f0);
+        let mut wave = vec![0f32; lead + tones.len()];
+        wave[lead..].copy_from_slice(&tones);
+        wave
     }
     fn decode_frame(
         &self,

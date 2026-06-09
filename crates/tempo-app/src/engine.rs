@@ -2470,13 +2470,22 @@ impl Engine {
             .dxcc_resolve
             .as_ref()
             .and_then(|resolve| resolve(&dxcall));
+        // Logged FREQ is the actual on-air RF = dial + the TX audio offset (WSJT-X
+        // convention), sideband-signed: USB adds the offset, LSB subtracts it. Bare
+        // dial alone would log two stations at different audio offsets as identical.
+        let off_mhz = self.tx_offset_hz as f64 / 1e6;
+        let freq_mhz = if self.settings.sideband.eq_ignore_ascii_case("LSB") {
+            self.settings.dial_mhz - off_mhz
+        } else {
+            self.settings.dial_mhz + off_mhz
+        };
         QsoRecord {
             call: dxcall,
             grid: dxgrid,
             country,
             state: None,
             band: self.settings.band.clone(),
-            freq_mhz: self.settings.dial_mhz,
+            freq_mhz,
             mode,
             // Digital dB SNR reports → ADIF string form ("-12").
             rst_sent: self.qso_report_sent.map(|v| v.to_string()),
@@ -3710,7 +3719,9 @@ mod tests {
         assert!(!tones.is_empty(), "{} encode failed", kind.as_str());
         let wave = mode.gen_wave(&tones, ft1::SAMPLE_RATE, f0);
         let n = mode.frame_samples();
-        let off = if kind == modes::ModeKind::Ft8 { 6_000 } else { 0 };
+        // FT8/FT4 gen_wave is now slot-positioned (includes the 0.5 s lead-in), so place
+        // it at the slot start; the wave already carries its own offset.
+        let off = 0;
         let sig = tempo_core::channel::snr_to_scale(snr_db, ft1::SAMPLE_RATE);
         let mut noise = tempo_core::channel::Awgn::new(seed);
         let mut frame = vec![0f32; n];
