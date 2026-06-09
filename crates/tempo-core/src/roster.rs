@@ -36,7 +36,11 @@ impl Roster {
         let m = Msg::parse(&d.message);
         let Some(sender) = m.sender() else { return };
         let grid = match &m {
-            Msg::Cq { grid, .. } | Msg::Grid { grid, .. } => Some(grid.clone()),
+            // A non-empty grid only — an i3=4 compound CQ/call carries none (empty), and
+            // a roster grid of Some("") would be a phantom empty grid.
+            Msg::Cq { grid, .. } | Msg::Grid { grid, .. } if !grid.is_empty() => {
+                Some(grid.clone())
+            }
             _ => None,
         };
         let entry = self

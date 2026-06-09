@@ -214,7 +214,9 @@ impl Station {
             Some((msg, rpt)) if to_me => match msg {
                 // DX answered our CQ with their grid → send them a report.
                 Msg::Grid { de, grid, .. } => {
-                    dxgrid = Some(grid.clone());
+                    if !grid.is_empty() {
+                        dxgrid = Some(grid.clone()); // i3=4 calls carry no grid → keep None
+                    }
                     (
                         State::AwaitRoger,
                         Some(Msg::Report {
@@ -299,9 +301,56 @@ impl Station {
         self.state == State::Done && self.pending.is_none()
     }
 
+    /// True when either party's call is nonstandard/compound, so outgoing messages must
+    /// use the i3=4 form (the compound call in full, the OTHER call wrapped in `<...>`) —
+    /// otherwise the modem silently strips the prefix off a bare compound call.
+    fn is_compound_qso(&self) -> bool {
+        crate::message::is_compound(&self.mycall)
+            || self
+                .dxcall
+                .as_deref()
+                .is_some_and(crate::message::is_compound)
+    }
+
+    /// Rewrite a standard message into its modem-faithful i3=4 form for a compound QSO:
+    /// wrap the ADDRESSEE in `<...>` (the modem hashes it, and the hashed-first Type-1
+    /// path keeps a numeric report) while the sender stays in full; CQ / the first call
+    /// drop the grid (i3=4 carries none). A no-op for an all-standard QSO.
+    fn compound_form(&self, msg: Msg) -> Msg {
+        if !self.is_compound_qso() {
+            return msg;
+        }
+        let brk =
+            |to: &str| format!("<{}>", to.trim().trim_start_matches('<').trim_end_matches('>'));
+        match msg {
+            Msg::Cq { de, .. } => Msg::Cq { de, grid: String::new() },
+            Msg::Grid { to, de, .. } => Msg::Grid { to: brk(&to), de, grid: String::new() },
+            // A numeric report survives i3=4/Type-1 only when the SENDER (`de`) is a
+            // standard 28-bit call — it becomes the c28 carrying the report while the
+            // other party is hashed. If *I* am the compound sender, i3=4 has no report
+            // field (only RRR/RR73/73), so roger instead: the QSO still completes and the
+            // numeric exchange is carried by the standard partner's overs (this is the
+            // protocol's constraint, not a loss of fidelity).
+            Msg::RReport { to, de, .. } if crate::message::is_compound(&de) => {
+                Msg::Rrr { to: brk(&to), de }
+            }
+            // A compound SENDER can't carry a number either — fall back to a grid-less
+            // i3=4 call (the partner, who IS the standard c28, sends the reports).
+            Msg::Report { to, de, .. } if crate::message::is_compound(&de) => {
+                Msg::Grid { to: brk(&to), de, grid: String::new() }
+            }
+            Msg::Report { to, de, snr } => Msg::Report { to: brk(&to), de, snr },
+            Msg::RReport { to, de, snr } => Msg::RReport { to: brk(&to), de, snr },
+            Msg::Rr73 { to, de } => Msg::Rr73 { to: brk(&to), de },
+            Msg::Rrr { to, de } => Msg::Rrr { to: brk(&to), de },
+            Msg::Bye73 { to, de } => Msg::Bye73 { to: brk(&to), de },
+            other => other,
+        }
+    }
+
     /// The message to transmit on my next TX slot, if any (RV-agnostic).
     pub fn outgoing(&self) -> Option<Msg> {
-        self.pending.clone()
+        self.pending.clone().map(|m| self.compound_form(m))
     }
 
     /// The message **and IR-HARQ redundancy version** to transmit on my next TX
@@ -317,7 +366,9 @@ impl Station {
         if self.state == State::CallingCq && self.tx_count >= MAX_TX_PER_STEP {
             return None;
         }
-        self.pending.clone().map(|m| (m, self.rv_count))
+        self.pending
+            .clone()
+            .map(|m| (self.compound_form(m), self.rv_count))
     }
 
     /// True when the current step has hit the retransmission limit without the
@@ -335,7 +386,9 @@ impl Station {
     /// regardless of whether it is currently being withheld by a stall. `None`
     /// when there is nothing queued (listening, or the QSO is complete).
     pub fn pending_text(&self) -> Option<String> {
-        self.pending.as_ref().map(|m| m.to_text())
+        self.pending
+            .as_ref()
+            .map(|m| self.compound_form(m.clone()).to_text())
     }
 
     /// Operator "Resend": re-arm the current step. Clears the retransmission
@@ -403,7 +456,9 @@ impl Station {
                 // a decode, which builds an `answering`/`start(..)` station.
                 (State::CallingCq, Msg::Grid { to, de, grid }) if crate::message::same_call(to, &self.mycall) => {
                     self.dxcall = Some(de.clone());
-                    self.dxgrid = Some(grid.clone());
+                    if !grid.is_empty() {
+                        self.dxgrid = Some(grid.clone()); // i3=4 calls carry no grid
+                    }
                     self.pending = Some(Msg::Report {
                         to: de.clone(),
                         de: self.mycall.clone(),
@@ -527,6 +582,47 @@ impl Station {
                         "{de} answered with a report → R{}",
                         crate::message::fmt_report(rpt)
                     ));
+                }
+                // --- Compound QSO completion: a compound party can't send a numeric
+                // report through i3=4, so the report exchange inverts — the STANDARD
+                // station reports and the compound station rogers. These arms (guarded to
+                // compound QSOs so standard flows are untouched) advance on the grid-less
+                // i3=4 forms the compound partner actually delivers. ---
+                // The compound DX answered my call grid-less (no report possible) → I
+                // send MY report (it survives: I'm the standard c28 sender) and await
+                // their roger.
+                (State::AwaitReport, Msg::Grid { to, de, grid })
+                    if self.is_compound_qso()
+                        && crate::message::same_call(to, &self.mycall)
+                        && self.from_dx(de) =>
+                {
+                    self.dxcall.get_or_insert_with(|| de.clone());
+                    if !grid.is_empty() {
+                        self.dxgrid = Some(grid.clone());
+                    }
+                    self.pending = Some(Msg::Report {
+                        to: de.clone(),
+                        de: self.mycall.clone(),
+                        snr: rpt,
+                    });
+                    self.state = State::AwaitRoger;
+                    self.log(format!(
+                        "compound DX answered grid-less → sending report {rpt}"
+                    ));
+                }
+                // The compound DX rogered my report (RR73/RRR) → QSO complete, send 73.
+                (State::AwaitRoger, Msg::Rr73 { to, de })
+                | (State::AwaitRoger, Msg::Rrr { to, de })
+                    if self.is_compound_qso()
+                        && crate::message::same_call(to, &self.mycall)
+                        && self.from_dx(de) =>
+                {
+                    self.pending = Some(Msg::Bye73 {
+                        to: de.clone(),
+                        de: self.mycall.clone(),
+                    });
+                    self.state = State::Done;
+                    self.log("compound DX rogered → sending 73, QSO complete".into());
                 }
                 _ => {}
             }
@@ -727,13 +823,58 @@ mod start_context_tests {
     }
 
     #[test]
+    fn working_a_compound_dx_completes_with_realistic_i3_4_forms() {
+        // Click a compound DXpedition's CQ and run the QSO with the forms the REAL modem
+        // delivers: a compound party can't send a numeric report (i3=4 has no report
+        // field), so the DX answers/rogers grid-less and I — the standard station — send
+        // the report. Every over is the modem-faithful i3=4 form (compound call in full,
+        // the other call in <...>), never a prefix-strippable bare form.
+        let cq = Msg::parse("CQ PJ4/K1ABC");
+        let mut s = Station::start(ME, MY_GRID, "PJ4/K1ABC", Some((&cq, -10)), false);
+        // Tx1: i3=4 call — DX hashed, my call in full, no grid.
+        assert_eq!(s.pending_text().as_deref(), Some("<PJ4/K1ABC> KD9TAW"));
+        // The compound DX answers grid-less (it cannot send a numeric report).
+        s.observe(&[dec("<KD9TAW> PJ4/K1ABC", -7)]);
+        assert_eq!(s.state, State::AwaitRoger);
+        // I send MY report — it survives because I'm the standard c28 sender.
+        assert_eq!(s.pending_text().as_deref(), Some("<PJ4/K1ABC> KD9TAW -07"));
+        // The DX rogers → I send the final 73; the QSO completes.
+        s.observe(&[dec("<KD9TAW> PJ4/K1ABC RR73", -7)]);
+        assert_eq!(s.state, State::Done);
+        assert_eq!(s.pending_text().as_deref(), Some("<PJ4/K1ABC> KD9TAW 73"));
+        assert_eq!(s.dxcall.as_deref(), Some("PJ4/K1ABC"), "logs the FULL compound call");
+    }
+
+    #[test]
+    fn compound_me_running_cq_completes_against_a_standard_caller() {
+        // I run CQ as a compound station (KD9TAW/P). A standard caller answers + reports
+        // me (a standard sender CAN carry a number); I roger (i3=4 can't carry MY number)
+        // and the QSO completes — never emitting a phantom number the modem would drop.
+        let mut s = Station::calling_cq("KD9TAW/P", MY_GRID);
+        assert_eq!(s.pending_text().as_deref(), Some("CQ KD9TAW/P"), "compound CQ, no grid");
+        // W9XYZ answers with a bare report (me hashed, them the c28 sender → survives).
+        s.observe(&[dec("<KD9TAW/P> W9XYZ -09", -8)]);
+        assert_eq!(s.dxcall.as_deref(), Some("W9XYZ"));
+        assert_eq!(s.rx_report, Some(-9), "captured the standard caller's report");
+        // My roger degrades to RRR (compound sender → no numeric); QSO advances.
+        assert_eq!(s.pending_text().as_deref(), Some("<W9XYZ> KD9TAW/P RRR"));
+        // The caller closes → I'm done.
+        s.observe(&[dec("<KD9TAW/P> W9XYZ RR73", -8)]);
+        assert_eq!(s.state, State::Done);
+    }
+
+    #[test]
     fn portable_mycall_still_matches_a_reply_to_the_base_call() {
-        // I operate as KD9TAW/P; the DX reports my base call KD9TAW. The QSO must
-        // still resume (send R-report), not stall at the grid.
+        // I operate as KD9TAW/P; the DX reports my base call KD9TAW. The QSO must still
+        // resume, not stall at the grid. Because MY call is compound, the over uses the
+        // i3=4 form: my call in full, the DX wrapped in <...>. i3=4 can't carry a numeric
+        // report FROM a compound sender, so the R-report degrades to a roger (RRR) — the
+        // QSO still completes; it never emits a bare "W9XYZ KD9TAW/P R-11" whose prefix
+        // the modem would silently strip.
         let m = Msg::parse("KD9TAW W9XYZ -09");
         let s = Station::start("KD9TAW/P", MY_GRID, DX, Some((&m, -11)), false);
         assert_eq!(s.state, State::AwaitRr73);
-        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW/P R-11"));
+        assert_eq!(s.pending_text().as_deref(), Some("<W9XYZ> KD9TAW/P RRR"));
     }
 
     #[test]

@@ -186,4 +186,41 @@ mod tests {
             "FT8 must decode its own clean signal; got {decs:?}"
         );
     }
+
+    /// The i3=4 nonstandard/compound-call forms Nexus generates must round-trip through
+    /// the real modem INTACT — compound call in full, the hashed call's brackets
+    /// preserved, the prefix NOT silently stripped. (A bare "PJ4/K1ABC W9XYZ -10" would
+    /// strip to "K1ABC …"; these bracketed forms must not.)
+    #[test]
+    fn compound_call_forms_round_trip_intact() {
+        let cases = [
+            "CQ PJ4/K1ABC",          // compound CQ (full call, no grid)
+            "<PJ4/K1ABC> W9XYZ",     // Tx1 to a compound DX (DX hashed)
+            "<PJ4/K1ABC> W9XYZ R-10", // R-report (hashed-first keeps the number)
+            "<PJ4/K1ABC> W9XYZ RR73", // roger
+            "<W9XYZ> KD9TAW/P RRR",  // compound ME rogering a standard DX (i3=4, no number)
+            "<W9XYZ> KD9TAW/P 73",   // compound ME signing off
+            // Forms the OTHER station's modem delivers to us (what our sequencer consumes):
+            "<KD9TAW> PJ4/K1ABC",      // a compound DX's grid-less answer (no report)
+            "<KD9TAW> PJ4/K1ABC RR73", // a compound DX's roger
+            "<KD9TAW/P> W9XYZ -09",    // a standard caller reporting our compound CQ
+        ];
+        for msg in cases {
+            let tones = encode(msg);
+            assert_eq!(tones.len(), NN, "{msg} encodes to 79 tones");
+            let wave = gen_wave(&tones, SAMPLE_RATE, 1500.0);
+            let noff = 6_000usize; // 0.5 s FT8 TX start
+            let mut iwave = vec![0i16; NMAX];
+            for (i, &s) in wave.iter().enumerate() {
+                if noff + i < NMAX {
+                    iwave[noff + i] = (s * 1000.0).clamp(-32768.0, 32767.0) as i16;
+                }
+            }
+            let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0);
+            assert!(
+                decs.iter().any(|d| d.message == msg),
+                "{msg} must round-trip intact (no prefix strip / bracket loss); got {decs:?}"
+            );
+        }
+    }
 }

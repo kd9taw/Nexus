@@ -64,7 +64,14 @@ pub fn fmt_report(snr: i32) -> String {
 /// `Radio::base_callsign`. Used so an "addressed to me" / "from the DX" test still
 /// works under compound/portable operation instead of silently stalling the QSO.
 pub fn base_call(call: &str) -> String {
-    let up = call.trim().to_ascii_uppercase();
+    // Strip an i3=4 hashed-call wrapper (`<W9XYZ>`, or the unresolved `<...>`) first, so
+    // a hashed call matches its plain form in the addressed-to-me / from-the-DX tests.
+    let up = call
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim()
+        .to_ascii_uppercase();
     if !up.contains('/') {
         return up;
     }
@@ -94,11 +101,47 @@ pub fn same_call(a: &str, b: &str) -> bool {
     base_call(a) == base_call(b)
 }
 
+/// True if `call` is a NONSTANDARD/compound call that can't ride the standard 28-bit
+/// field — a slash prefix/suffix form (W9XYZ/P, KH8/W1AW, PJ4/K1ABC, KH1/KH7Z). Such a
+/// call must be transmitted in FULL with the OTHER call wrapped in `<...>` (i3=4), or
+/// the modem silently strips the prefix off a bare compound call. Brackets are ignored.
+/// Requires at least one '/'-segment to be callsign-shaped, so ham free-text slashes
+/// ("5/9", "S/N", "W/L", "2X/3") are NOT mistaken for compound calls.
+pub fn is_compound(call: &str) -> bool {
+    let c = call.trim().trim_start_matches('<').trim_end_matches('>');
+    c.contains('/') && c.split('/').any(is_callsign)
+}
+
+/// The inner text of an i3=4 hashed token (`<W9XYZ>` → `W9XYZ`, `<...>` → `...`).
+fn hashed_inner(s: &str) -> &str {
+    s.trim_start_matches('<').trim_end_matches('>')
+}
+
+/// True for a `<...>`-wrapped token whose inner text is a real call (or the unresolved
+/// `...`) — a genuine i3=4 hash, not arbitrary `<bracketed>` free text.
+fn is_valid_hashed(s: &str) -> bool {
+    s.starts_with('<') && s.ends_with('>') && {
+        let i = hashed_inner(s);
+        i == "..." || is_callsign(i) || is_compound(i)
+    }
+}
+
+/// True if a token reads as a real callsign for parsing a 2-call message — a plain or
+/// compound call, or a valid i3=4 hashed-call token. Guards the 2-token parse forms so
+/// free text (incl. slash shorthand and arbitrary `<...>`) isn't misread as a call pair.
+fn looks_like_call(s: &str) -> bool {
+    is_valid_hashed(s) || is_compound(s) || is_callsign(s)
+}
+
 impl Msg {
     /// Render to the on-air text form.
     pub fn to_text(&self) -> String {
         match self {
+            // An empty grid = the i3=4 compound form (a compound call carries no grid):
+            // render without the trailing grid token.
+            Msg::Cq { de, grid } if grid.is_empty() => format!("CQ {de}"),
             Msg::Cq { de, grid } => format!("CQ {de} {grid}"),
+            Msg::Grid { to, de, grid } if grid.is_empty() => format!("{to} {de}"),
             Msg::Grid { to, de, grid } => format!("{to} {de} {grid}"),
             Msg::Report { to, de, snr } => format!("{to} {de} {}", fmt_report(*snr)),
             Msg::RReport { to, de, snr } => format!("{to} {de} R{}", fmt_report(*snr)),
@@ -132,6 +175,29 @@ impl Msg {
             if is_grid(&grid) {
                 return Msg::Cq { de, grid };
             }
+        }
+        // i3=4 compound CQ: "CQ <compound-call>" with NO grid (a compound call can't
+        // carry one). Only a real COMPOUND call qualifies — "CQ W1AW" (a grid-less plain
+        // call) stays free text, and "CQ <...>" is invalid (the modem rejects it).
+        if t.len() == 2 && t[0] == "CQ" && is_compound(t[1]) {
+            return Msg::Cq { de: t[1].to_string(), grid: String::new() };
+        }
+        // Two-call message with no payload: "<to> <de>" — an i3=4 call (no grid), e.g. a
+        // compound/hashed station answering. A grid-less Grid = "calling <to>". REQUIRE
+        // both tokens to read as real calls, at least one to be hashed/compound, and NOT
+        // both hashed (i3=4 hashes exactly one call) — so free text (incl. slash shorthand
+        // like "5/9 NJ2X" and arbitrary "<x> <y>") is never misread as a call pair.
+        if t.len() == 2
+            && looks_like_call(t[0])
+            && looks_like_call(t[1])
+            && (is_valid_hashed(t[0]) || is_valid_hashed(t[1]) || is_compound(t[0]) || is_compound(t[1]))
+            && !(is_valid_hashed(t[0]) && is_valid_hashed(t[1]))
+        {
+            return Msg::Grid {
+                to: t[0].to_string(),
+                de: t[1].to_string(),
+                grid: String::new(),
+            };
         }
         if t.len() == 3 {
             let to = t[0].to_string();
@@ -311,6 +377,69 @@ mod fidelity_tests {
     }
 
     #[test]
+    fn compound_and_hashed_call_matching() {
+        // base_call strips i3=4 <...> brackets so a hashed call matches its plain form.
+        assert_eq!(base_call("<W9XYZ>"), "W9XYZ");
+        assert!(same_call("<W9XYZ>", "W9XYZ"));
+        assert!(same_call("<W9XYZ>", "w9xyz"));
+        assert_eq!(base_call("<...>"), "...", "an unresolved hash matches nothing real");
+        // Compound detection (slash forms, with or without brackets).
+        assert!(is_compound("PJ4/K1ABC"));
+        assert!(is_compound("KH1/KH7Z"));
+        assert!(is_compound("W9XYZ/P"));
+        assert!(is_compound("<W9XYZ/P>"));
+        assert!(!is_compound("W9XYZ"));
+        assert!(!is_compound("<W9XYZ>"));
+    }
+
+    #[test]
+    fn parses_compound_cq_and_i3_4_call_forms() {
+        assert_eq!(
+            Msg::parse("CQ PJ4/K1ABC"),
+            Msg::Cq { de: "PJ4/K1ABC".into(), grid: String::new() },
+            "compound CQ has no grid"
+        );
+        // Two-call no-payload i3=4 forms (a hashed or compound token present).
+        assert_eq!(
+            Msg::parse("<PJ4/K1ABC> W9XYZ"),
+            Msg::Grid { to: "<PJ4/K1ABC>".into(), de: "W9XYZ".into(), grid: String::new() }
+        );
+        assert_eq!(
+            Msg::parse("PJ4/K1ABC <W9XYZ>"),
+            Msg::Grid { to: "PJ4/K1ABC".into(), de: "<W9XYZ>".into(), grid: String::new() }
+        );
+        // i3=4 reply WITH a report parses via the existing 3-token path (brackets in to/de).
+        assert_eq!(
+            Msg::parse("<PJ4/K1ABC> W9XYZ R-10"),
+            Msg::RReport { to: "<PJ4/K1ABC>".into(), de: "W9XYZ".into(), snr: -10 }
+        );
+        // Plain free text / a bare standard pair is NOT misread as an i3=4 call pair.
+        assert!(matches!(Msg::parse("NET TONIGHT"), Msg::Other(_)));
+        assert!(matches!(Msg::parse("HELLO ALL"), Msg::Other(_)));
+        assert!(matches!(Msg::parse("W9XYZ K2DEF"), Msg::Other(_)));
+        // Ham free-text SLASH shorthand must NOT read as a compound call pair.
+        for s in ["5/9 NJ2X", "W/L 20M", "S/N 10DB", "2X/3 W1AW", "I/O TEST"] {
+            assert!(matches!(Msg::parse(s), Msg::Other(_)), "{s} must be free text");
+        }
+        // Arbitrary bracketed tokens / both-hashed are not a valid i3=4 call pair.
+        assert!(matches!(Msg::parse("<X> <Y>"), Msg::Other(_)));
+        assert!(matches!(Msg::parse("<...> <...>"), Msg::Other(_)));
+        // A grid-less plain CQ and "CQ <...>" stay free text (only a compound CQ is i3=4).
+        assert!(matches!(Msg::parse("CQ W1AW"), Msg::Other(_)));
+        assert!(matches!(Msg::parse("CQ <...>"), Msg::Other(_)));
+        assert!(matches!(Msg::parse("CQ <DX>"), Msg::Other(_)));
+    }
+
+    #[test]
+    fn compound_forms_render_without_a_grid() {
+        assert_eq!(Msg::Cq { de: "PJ4/K1ABC".into(), grid: String::new() }.to_text(), "CQ PJ4/K1ABC");
+        assert_eq!(
+            Msg::Grid { to: "<PJ4/K1ABC>".into(), de: "W9XYZ".into(), grid: String::new() }.to_text(),
+            "<PJ4/K1ABC> W9XYZ"
+        );
+    }
+
+    #[test]
     fn base_call_strips_portable_affixes() {
         assert_eq!(base_call("W9XYZ"), "W9XYZ");
         assert_eq!(base_call("w9xyz"), "W9XYZ");
@@ -467,3 +596,4 @@ mod fidelity_tests {
         assert_eq!(Msg::parse("W9XYZ K2DEF 3A WI").sender(), Some("K2DEF"));
     }
 }
+
