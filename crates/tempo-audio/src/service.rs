@@ -438,7 +438,10 @@ impl RadioLoop {
                             Ok(()) => {
                                 self.last_mode = md.clone();
                                 retuned = true;
-                                retune_note = Some(format!("rig set to {md}"));
+                                // Read the mode straight back FROM the rig to confirm it
+                                // actually applied — rigctld can answer RPRT 0 without the rig
+                                // changing, which is the only way to tell those apart.
+                                retune_note = Some(mode_set_note(rig, &md));
                             }
                             // `last_mode` is unchanged, so the steady-state path below re-tries
                             // on later loops and re-gives-up past the budget — a non-supporting
@@ -461,7 +464,7 @@ impl RadioLoop {
                                 self.mode_fail_count = 0;
                                 self.mode_giveup = None; // a success clears any prior give-up
                                 retuned = true;
-                                retune_note = Some(format!("rig set to {md}"));
+                                retune_note = Some(mode_set_note(rig, &md));
                             }
                             Err(e) => {
                                 // Retries cover a rig/rigctld still settling; past the budget the
@@ -1142,6 +1145,18 @@ impl Transport {
     /// True if the selected sound-card input/output device changed.
     fn audio_differs(&self, o: &Transport) -> bool {
         self.audio_in != o.audio_in || self.audio_out != o.audio_out
+    }
+}
+
+/// After commanding a mode, read it straight back from the rig and describe the outcome —
+/// the ONLY way to distinguish "rigctld answered RPRT 0 AND the rig actually changed" from
+/// "rigctld answered RPRT 0 but the rig is still in the old mode" (a Hamlib/rig no-op). The
+/// note is surfaced into the CAT status so the operator can see it on the rig.
+fn mode_set_note(rig: &mut Rig, md: &str) -> String {
+    match rig.read_mode() {
+        Some(m) if m.eq_ignore_ascii_case(md) => format!("rig confirmed in {md}"),
+        Some(m) => format!("set {md} but rig is still in {m} — rigctld accepted it, rig didn't change"),
+        None => format!("rig set to {md} (mode read-back unavailable)"),
     }
 }
 
