@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AppSnapshot } from '../types'
-import { Waterfall } from './Waterfall'
+import { PhoneScope } from './PhoneScope'
 import { VoiceKeyer } from './VoiceKeyer'
 import { LevelMeter } from './LevelMeter'
 import { LogEntry } from './LogEntry'
@@ -32,12 +32,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap }
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
 
-  // Show the rig's ACTUAL mode when CAT is connected (read back from the rig); otherwise
-  // fall back to the policy intent (LSB <10 MHz, else USB) that the app would command.
-  const guessSideband = snap.radio.dialMhz < 10 ? 'LSB' : 'USB'
-  const sideband = snap.radio.catOk && snap.radio.sideband ? snap.radio.sideband : guessSideband
-  // Whether the app can actually control + read the rig. Without CAT (VOX/serial PTT) the
-  // dial + mode can't be set or read back — surface that so it's clear, not silently broken.
+  // The sideband the rig-mode policy commands in Phone (band-aware: LSB <10 MHz, else USB) —
+  // this is exactly what the app sets the rig to over CAT.
+  const sideband = snap.radio.dialMhz < 10 ? 'LSB' : 'USB'
+  // Whether the app can actually control the rig. Without CAT (VOX/serial PTT) the dial +
+  // mode can't be set or read back — surface that so it's clear, not silently broken.
   const catOk = snap.radio.catOk === true
 
   const key = (on: boolean) => {
@@ -154,13 +153,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap }
         </span>
       </div>
 
-      <section className="ph-waterfall panel">
-        <Waterfall
-          transmitting={snap.radio.transmitting}
-          rxOffsetHz={snap.radio.rxOffsetHz}
-          txOffsetHz={snap.radio.txOffsetHz}
-          theme={theme}
-        />
+      <section className="ph-scope-panel panel">
+        <PhoneScope transmitting={snap.radio.transmitting} theme={theme} />
       </section>
 
       <div className="ph-ptt-row">

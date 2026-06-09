@@ -3906,9 +3906,53 @@ body.resizing {
   font-weight: 700;
   color: var(--text-faint);
 }
-.ph-waterfall {
-  min-height: 130px;
+/* Phone bandscope: a horizontal real-time scope (panadapter trace + fast waterfall) with a
+   rapid colored S-meter. Replaces the FT8 vertical waterfall in the Phone cockpit. */
+.ph-scope-panel {
   flex: 0 0 auto;
+  min-height: 172px;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+}
+.ph-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 150px;
+}
+.ph-scope-smeter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ph-scope-smeter-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text-dim);
+}
+.ph-scope-smeter-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.ph-scope-smeter-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--ok, #2fbf71);
+  transition: width 80ms linear, background 120ms linear;
+}
+.ph-scope-canvas {
+  flex: 1;
+  width: 100%;
+  min-height: 120px;
+  display: block;
+  border-radius: var(--radius-sm);
 }
 .ph-ptt-row {
   display: flex;

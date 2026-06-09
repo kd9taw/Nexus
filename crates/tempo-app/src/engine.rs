@@ -411,19 +411,6 @@ impl Engine {
             .set_radio(self.settings.dial_mhz, &self.settings.band, &self.settings.sideband);
     }
 
-    /// The rig reported its current mode — reflect it in the readout (snapshot sideband) so
-    /// the cockpit shows the rig's ACTUAL mode, not a guess. In Phone/CW the policy forces
-    /// the mode so this just confirms it; in Digital-obey it surfaces the real rig mode.
-    pub fn observe_rig_mode(&mut self, mode: &str) {
-        let m = mode.trim();
-        if m.is_empty() {
-            return;
-        }
-        self.settings.sideband = m.to_string();
-        self.app
-            .set_radio(self.settings.dial_mhz, &self.settings.band, &self.settings.sideband);
-    }
-
     /// Set the per-section operating mode (Digital / Phone / CW) — the rig-mode
     /// policy. Digital OBEYS the rig; Phone forces USB/LSB by band; CW forces CW.
     /// The radio loop re-applies `settings.rig_mode()` from settings each slot, so a
@@ -2613,19 +2600,15 @@ mod tests {
     }
 
     #[test]
-    fn observe_rig_freq_and_mode_mirror_the_knob_into_the_snapshot() {
+    fn observe_rig_freq_mirrors_the_knob_into_the_snapshot() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
-        // Operator turns the physical VFO to 14.213 MHz on the rig.
+        // Operator turns the physical VFO to 14.213 MHz on the rig → the app adopts it.
         e.observe_rig_freq(14_213_000);
         let s = e.snapshot();
         assert!((s.radio.dial_mhz - 14.213).abs() < 1e-6, "dial mirrors the knob");
         assert_eq!(s.radio.band, "20m", "band derived from the observed freq");
-        // The rig reports USB → reflected in the readout (not a guess).
-        e.observe_rig_mode("USB");
-        assert_eq!(e.snapshot().radio.sideband, "USB", "rig mode reflected in the readout");
-        // A blank mode read is ignored (don't wipe the readout).
-        e.observe_rig_mode("");
-        assert_eq!(e.snapshot().radio.sideband, "USB");
+        // The Hz→MHz→Hz round-trip is exact, so the retune block won't fight the knob.
+        assert_eq!(e.settings().dial_hz(), 14_213_000, "dial_hz round-trips exactly");
     }
 
     #[test]

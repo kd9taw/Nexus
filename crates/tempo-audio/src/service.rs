@@ -255,8 +255,11 @@ struct RadioLoop {
     qso_started_ms: Option<f64>,
     psk_spots: Vec<Spot>,
     last_psk_flush: f64,
-    /// Last time we polled the rig's live dial/mode over CAT (ms), for throttling.
+    /// Last time we polled the rig's live dial over CAT (ms), for throttling.
     last_rig_poll: f64,
+    /// Last known CAT health (from connect/Test-CAT): `Some(false)` = configured but failing,
+    /// so we skip the read-back poll to avoid blocking the loop on a dead read every cycle.
+    cat_ok: Option<bool>,
     last_fd_qsos: usize,
     /// Latest measured PC-clock-vs-UTC offset (ms, `local − UTC`), read from the
     /// engine each loop and SUBTRACTED from the system clock so TX/RX slots land
@@ -288,6 +291,7 @@ impl RadioLoop {
             psk_spots: Vec::new(),
             last_psk_flush: now_unix_ms(),
             last_rig_poll: now_unix_ms(),
+            cat_ok: None,
             last_fd_qsos: 0,
             clock_offset_ms: 0,
         }
@@ -344,11 +348,13 @@ impl RadioLoop {
                 self.rigctld_proc = proc;
                 self.last_dial = dial;
                 self.last_mode = md.clone();
+                self.cat_ok = ok;
                 if let Ok(mut eng) = engine.lock() {
                     eng.set_cat_status(ok, detail);
                 }
             } else if reprobe_req {
                 let (ok, detail) = reprobe(rig, &want);
+                self.cat_ok = ok;
                 if let Ok(mut eng) = engine.lock() {
                     eng.set_cat_status(ok, detail);
                 }
@@ -376,23 +382,35 @@ impl RadioLoop {
 
             // Live dial / mode retune — only while not keyed (rigs reject VFO
             // changes mid-TX); retried every loop until it sticks.
+            let mut retuned = false;
             if self.tx_until_ms.is_none() && !self.tuning_keyed {
                 if dial != self.last_dial && rig.set_freq(dial).is_ok() {
                     self.last_dial = dial;
+                    retuned = true;
                 }
                 if md != self.last_mode && rig.set_mode(&md, 0).is_ok() {
                     self.last_mode = md.clone();
+                    retuned = true;
                 }
             }
 
-            // Live READ-BACK: poll the rig's actual dial + mode so a manual VFO knob turn
-            // (or another app on the CAT broker) is mirrored in the UI. CAT-only —
-            // read_freq/read_mode no-op (cheap) on VOX/serial. Throttled (each is a blocking
-            // TCP round-trip) and skipped while transmitting/tuning. The rig is authoritative
-            // for a change it reports: we adopt it AND advance last_dial so the retune block
-            // above doesn't immediately push the operator's knob change back.
-            if self.tx_until_ms.is_none()
+            // Live READ-BACK of the rig's actual dial, so a manual VFO knob turn (or another
+            // app on the CAT broker) is mirrored in the UI. CAT-only — read_freq no-ops
+            // (cheap) on VOX/serial. We adopt a reported change AND advance last_dial so the
+            // retune block above doesn't push it back. Guards:
+            //  - skip on any tick we just pushed an app change (the rig is still settling) and
+            //    defer the next poll a full interval, so a stale read can't revert the QSY;
+            //  - skip while transmitting/tuning;
+            //  - skip when CAT is known-failing, so a connected-but-mute rig doesn't block the
+            //    slot loop on the read timeout every cycle.
+            //  (Mode is NOT read back: in Phone/CW the policy commands it and the cockpit's
+            //   band-aware badge already shows it; reading it risks corrupting the canonical
+            //   sideband — see the App-side invariant.)
+            if retuned {
+                self.last_rig_poll = now;
+            } else if self.tx_until_ms.is_none()
                 && !self.tuning_keyed
+                && self.cat_ok != Some(false)
                 && now - self.last_rig_poll >= RIG_POLL_MS
             {
                 self.last_rig_poll = now;
@@ -402,11 +420,6 @@ impl RadioLoop {
                         if let Ok(mut eng) = engine.lock() {
                             eng.observe_rig_freq(hz);
                         }
-                    }
-                }
-                if let Some(m) = rig.read_mode() {
-                    if let Ok(mut eng) = engine.lock() {
-                        eng.observe_rig_mode(&m);
                     }
                 }
             }
