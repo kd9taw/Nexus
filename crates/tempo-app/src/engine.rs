@@ -355,6 +355,19 @@ impl Engine {
         self.app.set_radio(dial_mhz, band, mode);
     }
 
+    /// Set the per-section operating mode (Digital / Phone / CW) — the rig-mode
+    /// policy. Digital OBEYS the rig; Phone forces USB/LSB by band; CW forces CW.
+    /// The radio loop re-applies `settings.rig_mode()` from settings each slot, so a
+    /// phone/CW section just sets this and the rig follows on the next tune.
+    pub fn set_operating_mode(&mut self, mode: &str) {
+        use crate::settings::OperatingMode;
+        self.settings.operating_mode = match mode.to_ascii_lowercase().as_str() {
+            "phone" => OperatingMode::Phone,
+            "cw" => OperatingMode::Cw,
+            _ => OperatingMode::Digital,
+        };
+    }
+
     // ----- coordinated QSY ("move together") ------------------------------
     //
     // A SEPARATE, opt-in function. Every method here is a no-op while the feature

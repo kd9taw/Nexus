@@ -1055,6 +1055,20 @@ fn set_frequency(
     Ok(eng.snapshot())
 }
 
+/// Set the per-section operating mode — the rig-mode policy. "digital" obeys the rig
+/// (FT8/FT4 default); "phone" forces USB/LSB by band; "cw" forces CW. The phone/CW
+/// operating sections call this so the rig follows; the radio loop applies it on the
+/// next tune. Persists, returns the snapshot.
+#[tauri::command]
+fn set_operating_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_operating_mode(&mode);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist operating mode: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Set the TX-slot period: `true` = transmit on even/"1st" slots, `false` =
 /// odd/"2nd". Two stations must use OPPOSITE periods to complete a QSO. Persists.
 #[tauri::command]
@@ -2478,6 +2492,7 @@ pub fn run() {
             get_rig_models,
             get_band_plan,
             set_frequency,
+            set_operating_mode,
             set_tx_enabled,
             set_tx_level,
             set_tune,

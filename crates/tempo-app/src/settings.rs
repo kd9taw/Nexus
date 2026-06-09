@@ -8,6 +8,21 @@ use crate::dto::SourceKind;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// What kind of operating the active section is doing — the per-section rig-mode
+/// policy. **Digital** OBEYS the rig (max compatibility; FT8/FT4 live in an audio
+/// sub-carrier on USB/Data, so forcing the mode would break the operator's setup).
+/// **Phone** and **CW** actively FORCE the correct mode, because a voice op must be
+/// in USB/LSB and a CW op in CW. The phone/CW operating sections set this; the
+/// digital cockpit leaves it `Digital`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OperatingMode {
+    #[default]
+    Digital,
+    Phone,
+    Cw,
+}
+
 /// Everything the operator configures: identity, band/frequency, Field Day
 /// exchange, rig/PTT control, and network (WSJT-X UDP API + PSK Reporter).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,8 +65,12 @@ pub struct Settings {
     /// compatibility Nexus OBEYS whatever mode the operator has the rig in (e.g.
     /// DATA-U) and never overrides it. Turn on only if you want Nexus to force the
     /// rig into its DATA submode (Hamlib PKTUSB/PKTLSB → Yaesu DATA-U / Icom USB-D
-    /// / Kenwood DATA). When off, Nexus sends NO mode command at all.
+    /// / Kenwood DATA). When off, Nexus sends NO mode command at all. Only consulted
+    /// in `Digital` [`operating_mode`](Self::operating_mode); Phone/CW always force.
     pub set_rig_mode: bool,
+    /// The active operating mode (Digital / Phone / CW) — the per-section rig-mode
+    /// policy. Digital obeys the rig; Phone/CW force USB-LSB / CW. See [`rig_mode`].
+    pub operating_mode: OperatingMode,
     /// Local TCP port Tempo uses for rigctld (it spawns rigctld on this port).
     pub rigctld_port: u16,
     /// Run the rigctld-compatible CAT **broker** so other apps (WSJT-X / N1MM /
@@ -258,6 +277,7 @@ impl Default for Settings {
             serial_port: String::new(),
             baud: 38400,
             set_rig_mode: false, // obey the radio's mode by default (max compat)
+            operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             rigctld_port: 4532,
             cat_broker: false,
             cat_broker_port: 4532,
@@ -343,18 +363,30 @@ impl Settings {
     /// CW/FM pass through. When `set_rig_mode` is off this returns "" — the signal
     /// to send NO mode command and obey the radio's current mode.
     pub fn rig_mode(&self) -> String {
-        if !self.set_rig_mode {
-            return String::new();
-        }
-        let sb = if self.sideband.trim().is_empty() {
-            "USB"
-        } else {
-            self.sideband.trim()
-        };
-        match sb.to_ascii_uppercase().as_str() {
-            "USB" => "PKTUSB".to_string(),
-            "LSB" => "PKTLSB".to_string(),
-            other => other.to_string(),
+        match self.operating_mode {
+            // CW: force the rig into CW.
+            OperatingMode::Cw => "CW".to_string(),
+            // Phone: force the correct sideband for the band — the hard convention is
+            // LSB below 10 MHz (160/80/40 m), USB at 30 m and up. (FM/AM come later
+            // as an explicit choice in the Phone cockpit.)
+            OperatingMode::Phone => if self.dial_mhz < 10.0 { "LSB" } else { "USB" }.to_string(),
+            // Digital: OBEY the rig unless the operator opted into forcing the DATA
+            // submode (PKTUSB/PKTLSB → Yaesu DATA-U / Icom USB-D / Kenwood DATA).
+            OperatingMode::Digital => {
+                if !self.set_rig_mode {
+                    return String::new();
+                }
+                let sb = if self.sideband.trim().is_empty() {
+                    "USB"
+                } else {
+                    self.sideband.trim()
+                };
+                match sb.to_ascii_uppercase().as_str() {
+                    "USB" => "PKTUSB".to_string(),
+                    "LSB" => "PKTLSB".to_string(),
+                    other => other.to_string(),
+                }
+            }
         }
     }
 }
@@ -362,6 +394,32 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rig_mode_policy_obeys_digital_but_forces_phone_and_cw() {
+        let mut s = Settings::default();
+
+        // Digital (default): OBEY the rig — no mode command — unless set_rig_mode.
+        assert_eq!(s.operating_mode, OperatingMode::Digital);
+        assert_eq!(s.rig_mode(), "", "digital obeys the rig by default");
+        s.set_rig_mode = true; // opt into forcing the DATA submode
+        s.sideband = "USB".into();
+        assert_eq!(s.rig_mode(), "PKTUSB", "digital + force → DATA submode");
+
+        // CW: force CW regardless of set_rig_mode.
+        s.set_rig_mode = false;
+        s.operating_mode = OperatingMode::Cw;
+        assert_eq!(s.rig_mode(), "CW");
+
+        // Phone: band-aware sideband — LSB below 10 MHz, USB at/above.
+        s.operating_mode = OperatingMode::Phone;
+        s.dial_mhz = 7.200; // 40 m
+        assert_eq!(s.rig_mode(), "LSB");
+        s.dial_mhz = 14.250; // 20 m
+        assert_eq!(s.rig_mode(), "USB");
+        s.dial_mhz = 3.850; // 80 m
+        assert_eq!(s.rig_mode(), "LSB");
+    }
 
     #[test]
     fn roundtrips_through_json_camelcase() {
