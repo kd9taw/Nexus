@@ -20,15 +20,27 @@ interface Props {
   alerts: NeedAlert[]
   bandPlan: BandChannel[]
   selectedCall: string | null
-  /** QSY the rig to `band` (and listen) — the single-click action. */
+  /** QSY the rig to `band` (and listen) — the single-click action for a digital need. */
   onQsy: (band: string) => void
   /** Select/highlight a station (also lit on the map). */
   onSelect: (call: string) => void
+  /** Click-to-work a VOICE/CW need: QSY to the spot, open the matching cockpit, prefill
+   * the log. Omitted in the popped-out window (no cross-window nav) → those rows fall
+   * back to a plain band QSY. */
+  onWork?: (alert: NeedAlert) => void
   /** Pop this board out into its own window (omit when already standalone). */
   onPopOut?: () => void
 }
 
-export function NeededPanel({ alerts, bandPlan, selectedCall, onQsy, onSelect, onPopOut }: Props) {
+export function NeededPanel({
+  alerts,
+  bandPlan,
+  selectedCall,
+  onQsy,
+  onSelect,
+  onWork,
+  onPopOut,
+}: Props) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'priority',
     dir: 'desc',
@@ -111,17 +123,30 @@ export function NeededPanel({ alerts, bandPlan, selectedCall, onQsy, onSelect, o
         ) : (
           rows.map((a) => {
             const canQsy = knownBands.has(a.band)
+            const isVoiceCw = a.mode === 'CW' || a.mode === 'Phone'
+            const workable = isVoiceCw && !!onWork
             return (
               <div
-                key={`${a.call}|${a.band}`}
+                key={`${a.call}|${a.band}|${a.mode}`}
                 role="row"
                 className={`np-row${a.call === selectedCall ? ' selected' : ''} need-${
                   a.tags[0] ? NEED_CHIP[a.tags[0]].cls : 'confirm'
                 }`}
-                title={canQsy ? `QSY to ${a.band} and listen for ${a.call}` : a.headline}
+                title={
+                  workable
+                    ? `Work ${a.call} — ${a.mode} on ${a.band}${
+                        a.freqMhz ? ` @ ${a.freqMhz.toFixed(3)} MHz` : ''
+                      }`
+                    : isVoiceCw
+                      ? `${a.call} (${a.mode}) — open the main window to work this (pop-out only QSYs the band)`
+                      : canQsy
+                        ? `QSY to ${a.band} and listen for ${a.call}`
+                        : a.headline
+                }
                 onClick={() => {
                   onSelect(a.call)
-                  if (canQsy) onQsy(a.band)
+                  if (workable) onWork(a)
+                  else if (canQsy) onQsy(a.band)
                 }}
               >
                 <span className="np-need">
@@ -133,7 +158,12 @@ export function NeededPanel({ alerts, bandPlan, selectedCall, onQsy, onSelect, o
                 </span>
                 <span className="np-call">{a.call}</span>
                 <span className="np-entity">{a.entity || '—'}</span>
-                <span className="np-band">{a.band}</span>
+                <span className="np-band">
+                  {a.band}
+                  {isVoiceCw && (
+                    <span className={`np-mode np-mode-${a.mode.toLowerCase()}`}>{a.mode}</span>
+                  )}
+                </span>
                 <span className="np-zone">{a.zone > 0 ? a.zone : '—'}</span>
                 <span className="np-why">{a.headline}</span>
               </div>

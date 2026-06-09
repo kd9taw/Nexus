@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { NeedAlert, NeedTag, PropagationSnapshot } from '../types'
 import { getNeedAlerts } from '../api'
+import { visibleNeeds } from '../features/needs'
+import { readEnabledModes } from '../useFeatures'
 import { StateBlock } from './StateBlock'
 import { SpaceWxGauges } from './prop/SpaceWxGauges'
 import { BandAdvisor } from './prop/BandAdvisor'
@@ -43,9 +45,10 @@ export function PropagationView({ snap }: Props) {
   const [needAlerts, setNeedAlerts] = useState<NeedAlert[]>([])
   useEffect(() => {
     let live = true
+    // Gate CW/Phone needs by the operator's enabled modes, matching the Needed board.
     const load = () =>
       getNeedAlerts()
-        .then((a) => live && setNeedAlerts(a))
+        .then((a) => live && setNeedAlerts(visibleNeeds(a, readEnabledModes())))
         .catch(() => {})
     load()
     const id = window.setInterval(load, 30_000)
@@ -113,7 +116,7 @@ export function PropagationView({ snap }: Props) {
             ) : (
               <ul className="need-list">
                 {needAlerts.map((a) => (
-                  <li className="need-row" key={`${a.call}-${a.band}`}>
+                  <li className="need-row" key={`${a.call}-${a.band}-${a.mode}`}>
                     <span className={`need-badge p${a.priority}`}>{TAG_LABEL[a.tags[0]]}</span>
                     <span className="need-call">{a.call}</span>
                     <span className="need-headline">{a.headline}</span>

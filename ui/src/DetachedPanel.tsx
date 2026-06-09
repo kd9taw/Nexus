@@ -7,6 +7,8 @@ import { useEffect, useState } from 'react'
 import type { BandChannel, NeedAlert } from './types'
 import { getBandPlan, getNeedAlerts, selectPeer, setFrequency } from './api'
 import { NeededPanel } from './components/NeededPanel'
+import { visibleNeeds } from './features/needs'
+import { readEnabledModes } from './useFeatures'
 
 export function DetachedPanel({ panel }: { panel: string }) {
   const [alerts, setAlerts] = useState<NeedAlert[]>([])
@@ -15,9 +17,11 @@ export function DetachedPanel({ panel }: { panel: string }) {
 
   useEffect(() => {
     let live = true
+    // Gate CW/Phone rows the same way the docked board does — a digital-only op's
+    // popped-out board must not leak voice/CW needs the main window hides.
     const load = () =>
       getNeedAlerts()
-        .then((a) => live && setAlerts(a))
+        .then((a) => live && setAlerts(visibleNeeds(a, readEnabledModes())))
         .catch(() => {})
     load()
     const id = setInterval(load, 15_000)

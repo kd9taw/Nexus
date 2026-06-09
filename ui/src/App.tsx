@@ -43,6 +43,7 @@ import { useJourneyUnlocks } from './useJourneyUnlocks'
 import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, type FeatureId } from './features/registry'
+import { visibleNeeds, workTarget } from './features/needs'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
 import { StationList } from './components/StationList'
@@ -142,6 +143,14 @@ export default function App() {
   const { commitLeft, commitRight, resetWidths } = usePaneWidths()
   const layoutRef = useRef<HTMLElement>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  // Click-to-work handoff: a Needed-board click on a voice/CW spot seeds this, the
+  // matching cockpit consumes it to prefill the log. `ts` makes a re-click of the same
+  // call refire the cockpit's prefill effect. Cleared once consumed.
+  const [pendingWork, setPendingWork] = useState<{
+    call: string
+    view: 'cw' | 'phone'
+    ts: number
+  } | null>(null)
   const [view, setView] = useState<View>(() => {
     const h = typeof window !== 'undefined' ? window.location.hash.slice(1) : ''
     const sectionIds = sectionFeatures().map((f) => f.id) as string[]
@@ -292,23 +301,13 @@ export default function App() {
       clearInterval(id)
     }
   }, [])
-  // Need-tier per heard call (top tag), so the roster can colour wanted stations.
-  // Same scoring the Propagation "need heard now" list uses (get_need_alerts), keyed
-  // by callsign for the roster; refreshed on the prop cadence.
-  const [needByCall, setNeedByCall] = useState<Map<string, NeedTag>>(new Map())
   const [needAlerts, setNeedAlerts] = useState<NeedAlert[]>([])
   useEffect(() => {
     let live = true
     const load = () =>
       getNeedAlerts()
         .then((alerts) => {
-          if (!live) return
-          setNeedAlerts(alerts)
-          const m = new Map<string, NeedTag>()
-          for (const a of alerts) {
-            if (a.tags.length > 0) m.set(a.call.toUpperCase(), a.tags[0])
-          }
-          setNeedByCall(m)
+          if (live) setNeedAlerts(alerts)
         })
         .catch(() => {})
     load()
@@ -318,6 +317,25 @@ export default function App() {
       clearInterval(id)
     }
   }, [])
+  // Gate CW/Phone needs by the operator's enabled modes — the backend emits voice/CW
+  // needs unconditionally, visibility is the frontend's call. A pure-digital op's board,
+  // roster colouring, and map highlight all derive from THIS gated set, so they stay
+  // exactly as before the feature.
+  const cwEnabled = features.isOn('cw')
+  const phoneEnabled = features.isOn('phone')
+  const visibleAlerts = useMemo(
+    () => visibleNeeds(needAlerts, { cw: cwEnabled, phone: phoneEnabled }),
+    [needAlerts, cwEnabled, phoneEnabled],
+  )
+  // Need-tier per heard call (top tag) for roster/map colouring — from the GATED set so
+  // a disabled mode never colours a station the board hides.
+  const needByCall = useMemo(() => {
+    const m = new Map<string, NeedTag>()
+    for (const a of visibleAlerts) {
+      if (a.tags.length > 0) m.set(a.call.toUpperCase(), a.tags[0])
+    }
+    return m
+  }, [visibleAlerts])
   const [typingTick, setTypingTick] = useState(0)
   const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -549,6 +567,46 @@ export default function App() {
       })
     },
     [bandPlan],
+  )
+
+  // Click-to-work a needed VOICE/CW spot: QSY to the spot's exact frequency, force the
+  // rig into the right operating mode (the policy derives USB/LSB/CW), open the matching
+  // cockpit, and hand it the callsign to prefill the log. A Digital need (or one with no
+  // resolvable frequency) falls back to a plain band QSY.
+  const handleWorkNeeded = useCallback(
+    (alert: NeedAlert) => {
+      const t = workTarget(alert, bandPlan)
+      if (!t) {
+        handleQsy(alert.band)
+        return
+      }
+      // Pass a digital-safe 'USB' as the stored sideband: the rig-mode policy derives the
+      // actual CAT mode (CW, or USB/LSB-by-band for phone) from the operating mode, so the
+      // sideband here only seeds a LATER digital session — where USB→PKTUSB is correct.
+      // (Never write 'CW'/'LSB', which would corrupt that next digital session's mode.)
+      void withErrorToast(
+        () => apiSetFrequency(t.freqMhz, t.band, 'USB'),
+        `Could not QSY to ${t.call}`,
+      ).then(async (s) => {
+        if (!s) return
+        setSnap(s)
+        // The operating-mode write is the one that actually puts the rig in CW/Phone — if
+        // it fails, DON'T navigate, claim success, or poison the guard ref (so the
+        // view-effect can still re-attempt the mode write on a later nav).
+        const s2 = await setOperatingMode(t.view).catch(() => null)
+        if (!s2) {
+          pushToast(`Could not set the rig to ${t.view.toUpperCase()} — check CAT`, 'error', 3500)
+          return
+        }
+        setSnap(s2)
+        // Keep the rig-mode effect's guard in sync so it doesn't re-fire on the nav.
+        lastOpModeRef.current = t.view
+        setPendingWork({ call: t.call, view: t.view, ts: Date.now() })
+        setView(t.view)
+        pushToast(`▶ ${t.call} — ${alert.mode} ${t.band}, ready to log`, 'success', 4000)
+      })
+    },
+    [bandPlan, handleQsy],
   )
 
   const handleSetMode = useCallback((mode: ModeRequest) => {
@@ -807,11 +865,12 @@ export default function App() {
     case 'needed':
       workspace = (
         <NeededPanel
-          alerts={needAlerts}
+          alerts={visibleAlerts}
           bandPlan={bandPlan}
           selectedCall={activePeer}
           onQsy={handleQsy}
           onSelect={handleSelect}
+          onWork={handleWorkNeeded}
           onPopOut={() => void openPanelWindow('needed')}
         />
       )
@@ -821,10 +880,24 @@ export default function App() {
       workspace = <AwardsJourney showGamification={features.isOn('gamification')} />
       break
     case 'cw':
-      workspace = <CwCockpit snap={snap} theme={theme} />
+      workspace = (
+        <CwCockpit
+          snap={snap}
+          theme={theme}
+          pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
+          onConsumeWork={() => setPendingWork(null)}
+        />
+      )
       break
     case 'phone':
-      workspace = <PhoneCockpit snap={snap} theme={theme} />
+      workspace = (
+        <PhoneCockpit
+          snap={snap}
+          theme={theme}
+          pendingWork={pendingWork?.view === 'phone' ? pendingWork : null}
+          onConsumeWork={() => setPendingWork(null)}
+        />
+      )
       break
     case 'pota':
       workspace = (

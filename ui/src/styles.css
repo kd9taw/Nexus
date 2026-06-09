@@ -6197,6 +6197,24 @@ select.settings-input {
   font-family: var(--font-mono);
   font-size: 0.8rem;
 }
+/* Mode badge on a voice/CW need row — a one-glance "this opens the CW/Phone cockpit". */
+.np-mode {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-family: var(--font-sans);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+  color: var(--bg);
+}
+.np-mode-cw {
+  background: var(--accent);
+}
+.np-mode-phone {
+  background: var(--ok, #2fbf71);
+}
 .np-empty {
   padding: 22px 14px;
   color: var(--text-faint);

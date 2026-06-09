@@ -606,6 +606,12 @@ export interface NeedAlert {
   tags: NeedTag[]
   priority: number
   headline: string
+  /** Operating-mode class — 'CW' | 'Phone' | 'Digital'. Routes a click-to-work to the
+   * matching cockpit and drives the row's mode badge. */
+  mode: string
+  /** Exact spot frequency in MHz when known (cluster/RBN), else null (band-level
+   * reception needs). Lets click-to-work QSY to the spot, not just the band default. */
+  freqMhz: number | null
 }
 
 /** A QRZ.com callsign-lookup result. grid/state are subscriber-only and routinely

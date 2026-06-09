@@ -1,0 +1,70 @@
+import { describe, expect, it } from 'vitest'
+import { visibleNeeds, workTarget } from './needs'
+import type { BandChannel, NeedAlert } from '../types'
+
+function alert(call: string, mode: string, band = '20m', freqMhz: number | null = null): NeedAlert {
+  return {
+    call,
+    entity: 'Test',
+    band,
+    zone: 14,
+    tags: ['NewEntity'],
+    priority: 100,
+    headline: 'New one',
+    mode,
+    freqMhz,
+  }
+}
+
+const BAND_PLAN: BandChannel[] = [
+  { band: '20m', group: 'HF', dialMhz: 14.074, mode: 'USB', label: '20m', note: '' },
+  { band: '40m', group: 'HF', dialMhz: 7.074, mode: 'USB', label: '40m', note: '' },
+]
+
+describe('visibleNeeds', () => {
+  const all = [alert('A', 'Digital'), alert('B', 'CW'), alert('C', 'Phone')]
+
+  it('digital op (modes off) sees only digital needs — board unchanged', () => {
+    const v = visibleNeeds(all, { cw: false, phone: false })
+    expect(v.map((a) => a.call)).toEqual(['A'])
+  })
+
+  it('CW enabled surfaces CW needs; Phone still hidden', () => {
+    const v = visibleNeeds(all, { cw: true, phone: false })
+    expect(v.map((a) => a.call)).toEqual(['A', 'B'])
+  })
+
+  it('both modes on shows everything', () => {
+    expect(visibleNeeds(all, { cw: true, phone: true }).length).toBe(3)
+  })
+
+  it('an unknown mode class defaults to visible (fail-open, never hide a need)', () => {
+    const v = visibleNeeds([alert('Z', 'SSTV')], { cw: false, phone: false })
+    expect(v.length).toBe(1)
+  })
+})
+
+describe('workTarget', () => {
+  it('CW need with an exact spot freq → QSY there, cw view', () => {
+    const t = workTarget(alert('3Y0J', 'CW', '20m', 14.025), BAND_PLAN)
+    expect(t).toEqual({ call: '3Y0J', view: 'cw', freqMhz: 14.025, band: '20m' })
+  })
+
+  it('Phone need opens the phone cockpit at the spot frequency', () => {
+    const t = workTarget(alert('EA5DX', 'Phone', '20m', 14.25), BAND_PLAN)
+    expect(t).toEqual({ call: 'EA5DX', view: 'phone', freqMhz: 14.25, band: '20m' })
+  })
+
+  it('no exact freq → falls back to the band default channel', () => {
+    const t = workTarget(alert('JA1XYZ', 'CW', '20m', null), BAND_PLAN)
+    expect(t?.freqMhz).toBe(14.074)
+  })
+
+  it('a Digital need is not a click-to-work target (existing band-QSY path handles it)', () => {
+    expect(workTarget(alert('A', 'Digital', '20m', 14.074), BAND_PLAN)).toBeNull()
+  })
+
+  it('no frequency resolvable (unknown band, no spot freq) → null', () => {
+    expect(workTarget(alert('A', 'CW', '60m', null), BAND_PLAN)).toBeNull()
+  })
+})

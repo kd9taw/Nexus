@@ -26,6 +26,21 @@ function readInitial(): FeatureState {
   return defaultState()
 }
 
+/** Read the persisted enabled operating-mode flags WITHOUT the hook — for standalone
+ * surfaces (the popped-out panel, the propagation view) that fetch needs on their own
+ * cadence and must gate CW/Phone rows the same way the docked Needed board does. Falls
+ * back to the default state (everything-except-Field-Day → CW/Phone on) if unreadable. */
+export function readEnabledModes(): { cw: boolean; phone: boolean } {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const state = raw != null ? normalizeState(JSON.parse(raw)) : defaultState()
+    return { cw: state.enabled.cw !== false, phone: state.enabled.phone !== false }
+  } catch {
+    const d = defaultState()
+    return { cw: d.enabled.cw !== false, phone: d.enabled.phone !== false }
+  }
+}
+
 function persist(state: FeatureState): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))

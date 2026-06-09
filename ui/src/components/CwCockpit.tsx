@@ -7,6 +7,11 @@ import { pushToast, withErrorToast } from '../toast'
 interface Props {
   snap: AppSnapshot
   theme: string
+  /** Click-to-work handoff from the Needed board: the callsign to prefill the log with.
+   * `ts` changes on each click so re-working the same call refires the prefill. */
+  pendingWork?: { call: string; ts: number } | null
+  /** Called once the prefill has been applied, so the parent can clear it. */
+  onConsumeWork?: () => void
 }
 
 /** Default CASUAL/ragchew macro set (no contest serial/exchange), per
@@ -32,13 +37,25 @@ const WPM_MAX = 50
  * strip logs the QSO into the multi-mode logbook (RST 599). Entering the section forces
  * the rig to CW (the rig-mode policy, wired in App). No contest scoring — by design.
  */
-export function CwCockpit({ snap, theme }: Props) {
+export function CwCockpit({ snap, theme, pendingWork, onConsumeWork }: Props) {
   const [wpm, setWpm] = useState(25)
   const [keyer, setKeyer] = useState<'cat' | 'soundcard'>('cat')
   const [text, setText] = useState('')
   const [logCall, setLogCall] = useState('')
   const [logRst, setLogRst] = useState('599')
   const [logName, setLogName] = useState('')
+  const rstRef = useRef<HTMLInputElement>(null)
+
+  // Click-to-work: a Needed-board click prefills the call and drops focus on RST, so the
+  // operator types the report and hits Enter to log. Keyed on `ts` to refire on re-click.
+  useEffect(() => {
+    if (!pendingWork) return
+    setLogCall(pendingWork.call.toUpperCase())
+    rstRef.current?.focus()
+    rstRef.current?.select()
+    onConsumeWork?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingWork?.ts])
 
   const changeWpm = (w: number) => {
     const v = Math.max(WPM_MIN, Math.min(WPM_MAX, Math.round(w)))
@@ -215,9 +232,13 @@ export function CwCockpit({ snap, theme }: Props) {
             spellCheck={false}
           />
           <input
+            ref={rstRef}
             className="settings-input mono cw-log-rst"
             value={logRst}
             onChange={(e) => setLogRst(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void logIt()
+            }}
             placeholder="RST"
             autoComplete="off"
           />
@@ -225,6 +246,9 @@ export function CwCockpit({ snap, theme }: Props) {
             className="settings-input"
             value={logName}
             onChange={(e) => setLogName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void logIt()
+            }}
             placeholder="Name"
             autoComplete="off"
           />

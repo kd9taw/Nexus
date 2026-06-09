@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, LoggedQso } from '../types'
 import { Waterfall } from './Waterfall'
 import { logQso, setPtt, setRfPower } from '../api'
@@ -7,6 +7,11 @@ import { pushToast, withErrorToast } from '../toast'
 interface Props {
   snap: AppSnapshot
   theme: string
+  /** Click-to-work handoff from the Needed board: the callsign to prefill the log with.
+   * `ts` changes on each click so re-working the same call refires the prefill. */
+  pendingWork?: { call: string; ts: number } | null
+  /** Called once the prefill has been applied, so the parent can clear it. */
+  onConsumeWork?: () => void
 }
 
 /**
@@ -15,13 +20,25 @@ interface Props {
  * audio bridge + voice keyer land in P3-b/c). Entering forces USB/LSB by band (the
  * rig-mode keystone, wired in App). See `tasks/specs/phone-operating.md`.
  */
-export function PhoneCockpit({ snap, theme }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   const [keyed, setKeyed] = useState(false)
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [logCall, setLogCall] = useState('')
   const [logRst, setLogRst] = useState('59')
   const [logName, setLogName] = useState('')
+  const rstRef = useRef<HTMLInputElement>(null)
+
+  // Click-to-work: a Needed-board click prefills the call and drops focus on RS, so the
+  // operator types the report and hits Enter to log. Keyed on `ts` to refire on re-click.
+  useEffect(() => {
+    if (!pendingWork) return
+    setLogCall(pendingWork.call.toUpperCase())
+    rstRef.current?.focus()
+    rstRef.current?.select()
+    onConsumeWork?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingWork?.ts])
 
   // Band-aware sideband, mirroring the engine's rig-mode policy (LSB <10 MHz).
   const sideband = snap.radio.dialMhz < 10 ? 'LSB' : 'USB'
@@ -165,9 +182,13 @@ export function PhoneCockpit({ snap, theme }: Props) {
             spellCheck={false}
           />
           <input
+            ref={rstRef}
             className="settings-input mono ph-log-rst"
             value={logRst}
             onChange={(e) => setLogRst(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void logIt()
+            }}
             placeholder="RS"
             autoComplete="off"
           />
@@ -175,6 +196,9 @@ export function PhoneCockpit({ snap, theme }: Props) {
             className="settings-input"
             value={logName}
             onChange={(e) => setLogName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void logIt()
+            }}
             placeholder="Name"
             autoComplete="off"
           />

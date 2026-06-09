@@ -1716,12 +1716,15 @@ class MockEngine {
     // The trailing three share callsigns with the mock roster so the Stations
     // panel shows need-tier colouring (NEW/ZONE/BAND/CFM) on those cards.
     return Promise.resolve([
-      { call: '3Y0J', entity: 'Bouvet', band: '20m', zone: 38, tags: ['NewEntity', 'NewZone'], priority: 100, headline: 'New one — Bouvet' },
-      { call: 'UA9XYZ', entity: 'Asiatic Russia', band: '20m', zone: 17, tags: ['NewZone'], priority: 70, headline: 'New CQ zone 17 — Asiatic Russia' },
-      { call: 'JA3ABC', entity: 'Japan', band: '40m', zone: 25, tags: ['NewBand'], priority: 50, headline: 'New band — Japan 40m' },
-      { call: 'W6PQR', entity: 'United States', band: '20m', zone: 3, tags: ['NewBand'], priority: 50, headline: 'New band — United States 20m' },
-      { call: 'VE3JKL', entity: 'Canada', band: '20m', zone: 4, tags: ['NewZone'], priority: 70, headline: 'New CQ zone 4 — Canada' },
-      { call: 'N0GHI', entity: 'United States', band: '20m', zone: 4, tags: ['Confirm'], priority: 10, headline: 'Confirm — United States' },
+      { call: '3Y0J', entity: 'Bouvet', band: '20m', zone: 38, tags: ['NewEntity', 'NewZone'], priority: 100, headline: 'New one — Bouvet', mode: 'Digital', freqMhz: null },
+      // Voice/CW needs from the cluster — carry an exact freq + a click-to-work cockpit.
+      { call: 'VK0MQ', entity: 'Macquarie Is.', band: '20m', zone: 30, tags: ['NewEntity'], priority: 100, headline: 'New one — Macquarie Is.', mode: 'Phone', freqMhz: 14.255 },
+      { call: 'ZL7DX', entity: 'Chatham Is.', band: '40m', zone: 32, tags: ['NewEntity', 'NewZone'], priority: 100, headline: 'New one — Chatham Is.', mode: 'CW', freqMhz: 7.018 },
+      { call: 'UA9XYZ', entity: 'Asiatic Russia', band: '20m', zone: 17, tags: ['NewZone'], priority: 70, headline: 'New CQ zone 17 — Asiatic Russia', mode: 'Digital', freqMhz: null },
+      { call: 'JA3ABC', entity: 'Japan', band: '40m', zone: 25, tags: ['NewBand'], priority: 50, headline: 'New band — Japan 40m', mode: 'Digital', freqMhz: null },
+      { call: 'W6PQR', entity: 'United States', band: '20m', zone: 3, tags: ['NewBand'], priority: 50, headline: 'New band — United States 20m', mode: 'Digital', freqMhz: null },
+      { call: 'VE3JKL', entity: 'Canada', band: '20m', zone: 4, tags: ['NewZone'], priority: 70, headline: 'New CQ zone 4 — Canada', mode: 'Digital', freqMhz: null },
+      { call: 'N0GHI', entity: 'United States', band: '20m', zone: 4, tags: ['Confirm'], priority: 10, headline: 'Confirm — United States', mode: 'Digital', freqMhz: null },
     ])
   }
 
