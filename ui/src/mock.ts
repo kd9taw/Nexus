@@ -27,6 +27,7 @@ import type {
   LotwSyncResult,
   ModeRequest,
   NeedAlert,
+  VoiceMessage,
   OpMode,
   QsoStatus,
   QsyStatus,
@@ -1725,6 +1726,19 @@ class MockEngine {
       { call: 'W6PQR', entity: 'United States', band: '20m', zone: 3, tags: ['NewBand'], priority: 50, headline: 'New band — United States 20m', mode: 'Digital', freqMhz: null },
       { call: 'VE3JKL', entity: 'Canada', band: '20m', zone: 4, tags: ['NewZone'], priority: 70, headline: 'New CQ zone 4 — Canada', mode: 'Digital', freqMhz: null },
       { call: 'N0GHI', entity: 'United States', band: '20m', zone: 4, tags: ['Confirm'], priority: 10, headline: 'Confirm — United States', mode: 'Digital', freqMhz: null },
+    ])
+  }
+
+  getVoiceMessages(): Promise<VoiceMessage[]> {
+    // Demo: the default casual set, with a couple pre-"recorded" so the keyer strip
+    // shows playable buttons in the browser preview.
+    return Promise.resolve([
+      { slot: 1, label: 'CQ', file: 'demo/cq.wav' },
+      { slot: 2, label: 'My Call', file: '' },
+      { slot: 3, label: 'Report', file: '' },
+      { slot: 4, label: 'QRZ?', file: '' },
+      { slot: 5, label: '73', file: 'demo/73.wav' },
+      { slot: 6, label: 'Again', file: '' },
     ])
   }
 

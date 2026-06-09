@@ -253,6 +253,34 @@ pub struct Settings {
 
     /// Editable quick-reply macros per mode (the Composer chips).
     pub macros: Macros,
+
+    /// Phone voice-keyer message slots (F-key → recorded 12 kHz mono WAV). See
+    /// `tasks/specs/voice-keyer.md`. Defaulted to six labelled-but-empty casual slots.
+    #[serde(default = "default_voice_messages")]
+    pub voice_messages: Vec<VoiceMessage>,
+}
+
+/// One phone voice-keyer slot: an F-key-numbered label bound to a recorded WAV. `file`
+/// is empty until the operator records or imports a message into the slot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceMessage {
+    pub slot: u8,
+    pub label: String,
+    pub file: String,
+}
+
+/// The default six labelled (but empty) voice-keyer slots — a casual phone set (no
+/// contest exchange). The operator records or imports the audio per slot.
+pub fn default_voice_messages() -> Vec<VoiceMessage> {
+    [(1, "CQ"), (2, "My Call"), (3, "Report"), (4, "QRZ?"), (5, "73"), (6, "Again")]
+        .iter()
+        .map(|(slot, label)| VoiceMessage {
+            slot: *slot,
+            label: label.to_string(),
+            file: String::new(),
+        })
+        .collect()
 }
 
 /// Editable quick-reply macro sets per mode (shown as Composer chips). Field Day
@@ -353,6 +381,7 @@ impl Default for Settings {
             eqsl_upload: false,
             opening_regional: true,
             macros: Macros::default(),
+            voice_messages: default_voice_messages(),
         }
     }
 }

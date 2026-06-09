@@ -424,6 +424,34 @@ impl RadioLoop {
             }
         }
 
+        // Voice keyer (phone): play a recorded message to the rig (PTT + 12 kHz mono
+        // samples, drop PTT when played out — same TX path as the soundcard CW keyer),
+        // and, while recording, accumulate the captured frame into the engine's buffer.
+        // One engine lock for both. Gated on `tx_enabled` (Monitor) inside the engine.
+        {
+            let (abort, samples) = {
+                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                if eng.is_recording() {
+                    eng.push_record_samples(&captured);
+                }
+                (eng.take_voice_abort(), eng.poll_voice())
+            };
+            if abort {
+                backend.flush_output(); // dump queued message audio + unkey now
+                let _ = rig.ptt(false);
+                self.tx_until_ms = None;
+            }
+            if let Some(buf) = samples {
+                if !buf.is_empty() {
+                    let secs = buf.len() as f32 / ft1::SAMPLE_RATE;
+                    let _ = rig.ptt(true);
+                    backend.play(&buf);
+                    let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
+                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                }
+            }
+        }
+
         // Manual PTT (live phone) + RF power — applied via the rig on change. Only the
         // Phone section drives these (the FT8 TX path is idle there), so no PTT clash.
         {
@@ -442,10 +470,15 @@ impl RadioLoop {
             }
         }
 
-        // Drop PTT once the transmitted audio has played out (+ a small tail).
+        // Drop PTT once the transmitted audio has played out (+ a small tail). Do NOT
+        // unkey while the operator is holding live PTT — they own the key then, so a
+        // voice/CW message tail ending must not cut a live phone over (the manual-PTT
+        // applier handles unkeying when the operator actually releases).
         if let Some(t) = self.tx_until_ms {
             if now >= t {
-                let _ = rig.ptt(false);
+                if !self.manual_ptt_applied {
+                    let _ = rig.ptt(false);
+                }
                 self.tx_until_ms = None;
             }
         }

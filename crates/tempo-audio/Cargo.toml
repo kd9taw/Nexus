@@ -19,6 +19,8 @@ serial = ["dep:serialport"]
 [dependencies]
 tempo-app = { path = "../tempo-app" }
 tempo-core = { path = "../tempo-core" }
+# Voice-keyer WAV I/O (read/write 12 kHz mono message files). Pure, no audio device.
+hound = "3.5"
 cpal = { version = "0.15", optional = true }
 serialport = { version = "4", optional = true }
 tempo-net = { path = "../tempo-net", optional = true }

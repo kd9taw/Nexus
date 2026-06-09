@@ -3873,6 +3873,140 @@ body.resizing {
   color: var(--text-faint);
 }
 
+/* ---- Phone voice keyer (F-key WAV messages) ------------------------------- */
+.vk {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.vk-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.vk-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+}
+.vk-hint {
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+.vk-note {
+  margin: 0 0 10px;
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+  line-height: 1.4;
+}
+.vk-spacer {
+  flex: 1;
+}
+.vk-stop {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+}
+.vk-stop:hover {
+  border-color: var(--danger, #e5484d);
+  color: var(--danger, #e5484d);
+}
+.vk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+.vk-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.vk-slot.has {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.vk-slot.rec {
+  border-color: var(--danger, #e5484d);
+  box-shadow: inset 0 0 0 1px var(--danger, #e5484d);
+}
+.vk-play {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.vk-play:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.vk-play:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.vk-fkey {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--accent);
+  min-width: 22px;
+}
+.vk-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+}
+.vk-state {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.vk-slot.rec .vk-state {
+  color: var(--danger, #e5484d);
+  font-weight: 800;
+}
+.vk-tools {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.vk-tool {
+  padding: 2px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.vk-tool:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.vk-tool.stop {
+  flex: 1;
+  font-weight: 700;
+  color: var(--danger, #e5484d);
+  border-color: var(--danger, #e5484d);
+}
+.vk-tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* ===========================================================================
    Field Day workspace (center, Field Day mode)
    =========================================================================== */

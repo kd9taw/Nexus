@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, LoggedQso } from '../types'
 import { Waterfall } from './Waterfall'
+import { VoiceKeyer } from './VoiceKeyer'
 import { logQso, setPtt, setRfPower } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 
@@ -166,6 +167,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork }: Props)
         </label>
         <span className="ph-ptt-hint">Hold the button or the Space bar · you talk on the rig's mic</span>
       </div>
+
+      <VoiceKeyer txEnabled={snap.radio.txEnabled} keyed={keyed} />
 
       <div className="ph-log">
         <h2>Log this QSO</h2>

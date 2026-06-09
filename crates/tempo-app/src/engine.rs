@@ -169,6 +169,17 @@ pub struct Engine {
     /// Desired RF output power as a 0.0–1.0 fraction; `None` = leave the rig's power
     /// alone. The radio loop applies it via `rig.set_power` when it changes.
     rf_power: Option<f32>,
+    /// Phone voice-keyer: pending 12 kHz mono samples to transmit. The radio loop drains
+    /// this (gated on `tx_enabled`), keys PTT, plays it, and drops PTT when it's out — the
+    /// same path the soundcard CW keyer uses. Set by `send_voice`.
+    voice_tx: Option<Vec<f32>>,
+    /// One-shot voice-keyer abort: the loop flushes the output ring + unkeys, then clears it.
+    voice_abort: bool,
+    /// True while recording a voice message — the radio loop appends captured audio to
+    /// `record_buf`. Set by `start_recording`, cleared by `stop_recording`.
+    recording: bool,
+    /// Accumulated 12 kHz mono capture for the in-progress recording.
+    record_buf: Vec<f32>,
     /// Rolling window of the most recent captured audio, fed continuously by the
     /// radio loop (independent of the decoder) so the waterfall reflects LIVE
     /// sound-card input — not just the once-per-slot decoded frame.
@@ -295,6 +306,10 @@ impl Engine {
             cw_abort: false,
             manual_ptt: false,
             rf_power: None,
+            voice_tx: None,
+            voice_abort: false,
+            recording: false,
+            record_buf: Vec::new(),
             spectrum_audio: Vec::new(),
             cat_status: (None, String::new()),
             cat_reprobe: false,
@@ -483,6 +498,93 @@ impl Engine {
     /// Desired RF power, if the operator has set one (for the radio loop).
     pub fn rf_power(&self) -> Option<f32> {
         self.rf_power
+    }
+
+    // ----- Phone voice keyer — play recorded WAVs + record, via the radio loop -----
+
+    /// Queue 12 kHz mono samples (a decoded voice-keyer WAV) for transmission. Ignored
+    /// while TX is disabled (Monitor), so a stray F-key never keys unexpectedly. Replaces
+    /// any still-pending message (one voice over at a time).
+    pub fn send_voice(&mut self, samples: Vec<f32>) {
+        if self.tx_enabled && !samples.is_empty() {
+            self.voice_tx = Some(samples);
+        }
+    }
+
+    /// Take the pending voice samples for the radio loop to play (gated on `tx_enabled`).
+    pub fn poll_voice(&mut self) -> Option<Vec<f32>> {
+        if !self.tx_enabled {
+            return None;
+        }
+        self.voice_tx.take()
+    }
+
+    /// Abort voice playback in progress: drop any pending message + raise the one-shot
+    /// abort flag so the loop flushes the output ring and unkeys.
+    pub fn stop_voice(&mut self) {
+        self.voice_tx = None;
+        self.voice_abort = true;
+    }
+
+    /// Take + reset the one-shot voice abort flag (the loop flushes output + unkeys).
+    pub fn take_voice_abort(&mut self) -> bool {
+        std::mem::take(&mut self.voice_abort)
+    }
+
+    /// Begin recording a voice message — the radio loop appends captured audio to the
+    /// record buffer until `stop_recording`. Resets any prior buffer.
+    pub fn start_recording(&mut self) {
+        self.record_buf.clear();
+        self.recording = true;
+    }
+
+    /// Whether a voice-message recording is in progress (read by the radio loop).
+    pub fn is_recording(&self) -> bool {
+        self.recording
+    }
+
+    /// Append captured 12 kHz mono samples to the in-progress recording (radio loop).
+    pub fn push_record_samples(&mut self, samples: &[f32]) {
+        if self.recording {
+            self.record_buf.extend_from_slice(samples);
+        }
+    }
+
+    /// Stop recording and take the captured 12 kHz mono buffer (the command writes the WAV).
+    pub fn stop_recording(&mut self) -> Vec<f32> {
+        self.recording = false;
+        std::mem::take(&mut self.record_buf)
+    }
+
+    /// The configured voice-keyer slots (for the UI list + the play command's path lookup).
+    pub fn voice_messages(&self) -> &[crate::settings::VoiceMessage] {
+        &self.settings.voice_messages
+    }
+
+    /// Bind a voice-keyer slot — set its label and/or file path (creates the slot if new).
+    /// `None` leaves that field unchanged.
+    pub fn set_voice_message(&mut self, slot: u8, label: Option<&str>, file: Option<&str>) {
+        if let Some(m) = self.settings.voice_messages.iter_mut().find(|m| m.slot == slot) {
+            if let Some(l) = label {
+                m.label = l.to_string();
+            }
+            if let Some(f) = file {
+                m.file = f.to_string();
+            }
+        } else {
+            self.settings.voice_messages.push(crate::settings::VoiceMessage {
+                slot,
+                label: label.unwrap_or_default().to_string(),
+                file: file.unwrap_or_default().to_string(),
+            });
+        }
+    }
+
+    /// Clear the recording bound to a slot (keeps its label).
+    pub fn clear_voice_message(&mut self, slot: u8) {
+        if let Some(m) = self.settings.voice_messages.iter_mut().find(|m| m.slot == slot) {
+            m.file.clear();
+        }
     }
 
     // ----- coordinated QSY ("move together") ------------------------------
@@ -1902,6 +2004,14 @@ impl Engine {
             self.app.set_transmitting(false);
             return Vec::new();
         }
+        // Phone / CW sections own the rig: the FT8/FT1 slot sequencer must NOT key the
+        // radio while the operator is on voice or CW (the keyer/PTT drive those modes).
+        // Without this gate a still-armed beacon/QSO would inject digital tones onto a
+        // phone over (shared PTT + output ring) — a wrong-mode/spurious-emission bug.
+        if self.settings.operating_mode != crate::settings::OperatingMode::Digital {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        }
         if slot % 2 != self.tx_parity {
             self.app.set_transmitting(false);
             return Vec::new();
@@ -2388,6 +2498,59 @@ mod tests {
         assert!(e.take_cw_abort());
         assert!(!e.take_cw_abort(), "abort is one-shot");
         assert!(e.poll_cw().is_empty(), "abort cleared the queue");
+    }
+
+    #[test]
+    fn voice_keyer_plays_gated_and_aborts_and_records() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Queue a voice message → the loop drains it once.
+        e.send_voice(vec![0.1, 0.2, 0.3]);
+        assert_eq!(e.poll_voice(), Some(vec![0.1, 0.2, 0.3]));
+        assert!(e.poll_voice().is_none(), "drained");
+
+        // Gated by Monitor: with TX disabled nothing is queued/played.
+        e.set_tx_enabled(false);
+        e.send_voice(vec![0.5]);
+        assert!(e.poll_voice().is_none(), "no voice played while TX is disabled");
+        e.set_tx_enabled(true);
+
+        // Abort drops the pending message + raises the one-shot flag.
+        e.send_voice(vec![0.9; 100]);
+        e.stop_voice();
+        assert!(e.take_voice_abort());
+        assert!(!e.take_voice_abort(), "abort is one-shot");
+        assert!(e.poll_voice().is_none(), "abort dropped the pending message");
+
+        // Recording accumulates captured audio only while recording, and take resets it.
+        assert!(!e.is_recording());
+        e.push_record_samples(&[1.0]); // ignored — not recording
+        e.start_recording();
+        assert!(e.is_recording());
+        e.push_record_samples(&[0.1, 0.2]);
+        e.push_record_samples(&[0.3]);
+        let rec = e.stop_recording();
+        assert_eq!(rec, vec![0.1, 0.2, 0.3], "captured only what arrived while recording");
+        assert!(!e.is_recording());
+        assert!(e.stop_recording().is_empty(), "buffer taken/reset");
+    }
+
+    #[test]
+    fn slot_tx_is_idle_in_phone_and_cw_modes() {
+        // The FT8/FT1 slot sequencer must not key the rig on a phone/CW over, even with
+        // a digital TX source armed — otherwise digital tones ride the voice/CW over.
+        let mut e = Engine::new("W9XYZ", "EN61", 0); // tx_parity 0 → slot 0 is a TX slot
+        e.set_beacon(true); // arm a digital TX source
+        // Digital: the slot path transmits as usual on a TX-parity slot.
+        e.set_operating_mode("digital");
+        assert!(
+            !e.poll_tx(0).is_empty(),
+            "digital slot TX still works with a beacon armed",
+        );
+        // Phone / CW: the slot path is silent (the keyer / PTT own the rig).
+        e.set_operating_mode("phone");
+        assert!(e.poll_tx(0).is_empty(), "no slot TX in Phone");
+        e.set_operating_mode("cw");
+        assert!(e.poll_tx(0).is_empty(), "no slot TX in CW");
     }
 
     #[test]

@@ -32,6 +32,7 @@ pub mod rigmodels;
 pub mod runtime;
 pub mod slot;
 pub mod usbrig;
+pub mod voice;
 
 #[cfg(feature = "device")]
 pub mod device;

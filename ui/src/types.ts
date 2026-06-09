@@ -597,6 +597,14 @@ export interface JourneySummary {
 /** Why a heard station is worth working (need-aware spotting). */
 export type NeedTag = 'NewEntity' | 'NewZone' | 'NewBand' | 'NewMode' | 'Confirm'
 
+/** One phone voice-keyer slot: an F-key-numbered label bound to a recorded WAV.
+ * `file` is empty until the operator records or imports a message. */
+export interface VoiceMessage {
+  slot: number
+  label: string
+  file: string
+}
+
 /** A scored need opportunity for a station heard right now. */
 export interface NeedAlert {
   call: string

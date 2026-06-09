@@ -36,7 +36,7 @@ use tempo_app::dto::{
     Spectrum, Tier, UploadReportDto,
 };
 use tempo_app::engine::Engine;
-use tempo_app::settings::Settings;
+use tempo_app::settings::{Settings, VoiceMessage};
 
 /// The engine, shared between UI commands and the radio loop.
 type SharedEngine = Arc<Mutex<Engine>>;
@@ -368,6 +368,15 @@ fn logbook_path() -> PathBuf {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
         .join("log.adi")
+}
+
+/// Directory for phone voice-keyer recordings: `<settings dir>/voice` (12 kHz mono WAVs).
+fn voice_dir() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("voice")
 }
 
 /// Full UI snapshot (`AppSnapshot`) — the UI renders all three zones from this.
@@ -1126,6 +1135,181 @@ fn set_cw_keyer(
         eprintln!("tempo: failed to persist CW keyer: {e}");
     }
     Ok(eng.snapshot())
+}
+
+// ----- Phone voice keyer: play / record / import recorded WAV messages -----
+
+/// Play a voice-keyer message: read the slot's WAV and queue it for the radio loop to
+/// transmit (PTT + audio). Errors if the slot has no recording.
+#[tauri::command]
+fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSnapshot, String> {
+    let file = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        eng.voice_messages()
+            .iter()
+            .find(|m| m.slot == slot)
+            .map(|m| m.file.clone())
+            .unwrap_or_default()
+    };
+    if file.trim().is_empty() {
+        return Err(format!("No recording in F{slot} yet — record or import one first"));
+    }
+    #[cfg(feature = "radio")]
+    {
+        let samples = tempo_audio::voice::read_wav_12k(&file)
+            .map_err(|e| format!("Could not read voice message: {e}"))?;
+        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        eng.send_voice(samples);
+        Ok(eng.snapshot())
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = file;
+        Err("Voice keyer needs the radio build".to_string())
+    }
+}
+
+/// Stop voice playback in progress (Esc) — flush queued audio + unkey.
+#[tauri::command]
+fn stop_voice(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.stop_voice();
+    Ok(eng.snapshot())
+}
+
+/// Begin recording a voice message — the radio loop captures from the input device into
+/// the engine until `stop_voice_recording`.
+#[tauri::command]
+fn start_voice_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.start_recording();
+    Ok(eng.snapshot())
+}
+
+/// Cancel an in-progress recording, DISCARDING the captured audio (no WAV written). Used
+/// to tear down cleanly when the operator leaves the Phone section mid-record.
+#[tauri::command]
+fn cancel_voice_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let _ = eng.stop_recording(); // take + drop the buffer
+    Ok(eng.snapshot())
+}
+
+/// Stop recording, write the captured audio to the slot's WAV, bind it (+ label), and
+/// return the updated message list.
+#[tauri::command]
+fn stop_voice_recording(
+    state: State<'_, SharedEngine>,
+    slot: u8,
+    label: String,
+) -> Result<Vec<VoiceMessage>, String> {
+    let samples = {
+        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        eng.stop_recording()
+    };
+    if samples.is_empty() {
+        return Err("Nothing was recorded — check your input device".to_string());
+    }
+    #[cfg(feature = "radio")]
+    {
+        let path = voice_dir().join(format!("slot{slot}.wav"));
+        tempo_audio::voice::write_wav_12k_atomic(&path, &samples)
+            .map_err(|e| format!("Could not save recording: {e}"))?;
+        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let lbl = (!label.trim().is_empty()).then_some(label.as_str());
+        eng.set_voice_message(slot, lbl, Some(&path.to_string_lossy()));
+        if let Err(e) = eng.settings().save(&settings_path()) {
+            eprintln!("tempo: failed to persist voice message: {e}");
+        }
+        Ok(eng.voice_messages().to_vec())
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = (state, slot, label, samples);
+        Err("Voice keyer needs the radio build".to_string())
+    }
+}
+
+/// Import a `.wav` file (raw bytes from the UI) into a slot — normalized to 12 kHz mono.
+#[tauri::command]
+fn import_voice_message(
+    state: State<'_, SharedEngine>,
+    slot: u8,
+    label: String,
+    bytes: Vec<u8>,
+) -> Result<Vec<VoiceMessage>, String> {
+    #[cfg(feature = "radio")]
+    {
+        let dir = voice_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let tmp = dir.join(format!("slot{slot}.import.tmp.wav"));
+        std::fs::write(&tmp, &bytes).map_err(|e| format!("Could not stage import: {e}"))?;
+        // Normalize to 12 kHz mono (this also validates it's a readable WAV).
+        let samples = match tempo_audio::voice::read_wav_12k(&tmp) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(format!("Not a readable WAV file: {e}"));
+            }
+        };
+        let _ = std::fs::remove_file(&tmp);
+        if samples.is_empty() {
+            return Err("The imported file had no audio".to_string());
+        }
+        let path = dir.join(format!("slot{slot}.wav"));
+        tempo_audio::voice::write_wav_12k_atomic(&path, &samples)
+            .map_err(|e| format!("Could not save the import: {e}"))?;
+        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let lbl = (!label.trim().is_empty()).then_some(label.as_str());
+        eng.set_voice_message(slot, lbl, Some(&path.to_string_lossy()));
+        if let Err(e) = eng.settings().save(&settings_path()) {
+            eprintln!("tempo: failed to persist voice message: {e}");
+        }
+        Ok(eng.voice_messages().to_vec())
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = (state, slot, label, bytes);
+        Err("Voice keyer needs the radio build".to_string())
+    }
+}
+
+/// Rename a voice-keyer slot's label (no audio change).
+#[tauri::command]
+fn set_voice_label(
+    state: State<'_, SharedEngine>,
+    slot: u8,
+    label: String,
+) -> Result<Vec<VoiceMessage>, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_voice_message(slot, Some(&label), None);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist voice label: {e}");
+    }
+    Ok(eng.voice_messages().to_vec())
+}
+
+/// Clear the recording bound to a slot (keeps the label).
+#[tauri::command]
+fn clear_voice_message(
+    state: State<'_, SharedEngine>,
+    slot: u8,
+) -> Result<Vec<VoiceMessage>, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.clear_voice_message(slot);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist voice clear: {e}");
+    }
+    // Clear means gone: delete the orphaned recording too (best-effort).
+    let _ = std::fs::remove_file(voice_dir().join(format!("slot{slot}.wav")));
+    Ok(eng.voice_messages().to_vec())
+}
+
+/// The configured voice-keyer message slots (for the Phone cockpit's keyer strip).
+#[tauri::command]
+fn get_voice_messages(state: State<'_, SharedEngine>) -> Result<Vec<VoiceMessage>, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(eng.voice_messages().to_vec())
 }
 
 /// Set the TX-slot period: `true` = transmit on even/"1st" slots, `false` =
@@ -2582,6 +2766,15 @@ pub fn run() {
             set_cw_keyer,
             set_ptt,
             set_rf_power,
+            play_voice_message,
+            stop_voice,
+            start_voice_recording,
+            cancel_voice_recording,
+            stop_voice_recording,
+            import_voice_message,
+            set_voice_label,
+            clear_voice_message,
+            get_voice_messages,
             set_tx_enabled,
             set_tx_level,
             set_tune,

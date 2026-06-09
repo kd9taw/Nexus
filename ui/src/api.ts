@@ -30,6 +30,7 @@ import type {
   SourceKind,
   Spectrum,
   Tier,
+  VoiceMessage,
 } from './types'
 import { mockEngine, nextSpectrumRow, demoPropagation } from './mock'
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
@@ -594,6 +595,66 @@ export async function setRfPower(power: number): Promise<AppSnapshot> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<AppSnapshot>('set_rf_power', { power })
   return mockEngine.getSnapshot()
+}
+
+// --- phone voice keyer ---
+/** Play the recorded WAV bound to a voice-keyer slot (PTT + audio via the radio loop). */
+export async function playVoiceMessage(slot: number): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('play_voice_message', { slot })
+  return mockEngine.getSnapshot()
+}
+/** Abort voice playback in progress (Esc). */
+export async function stopVoice(): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('stop_voice')
+  return mockEngine.getSnapshot()
+}
+/** Begin recording a voice message from the input device. */
+export async function startVoiceRecording(): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('start_voice_recording')
+  return mockEngine.getSnapshot()
+}
+/** Cancel an in-progress recording, discarding the captured audio (e.g. on unmount). */
+export async function cancelVoiceRecording(): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('cancel_voice_recording')
+  return mockEngine.getSnapshot()
+}
+/** Stop recording, save the slot's WAV, and return the updated message list. */
+export async function stopVoiceRecording(slot: number, label: string): Promise<VoiceMessage[]> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<VoiceMessage[]>('stop_voice_recording', { slot, label })
+  return mockEngine.getVoiceMessages()
+}
+/** Import a `.wav` (raw bytes) into a slot, normalized to 12 kHz mono. */
+export async function importVoiceMessage(
+  slot: number,
+  label: string,
+  bytes: number[],
+): Promise<VoiceMessage[]> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<VoiceMessage[]>('import_voice_message', { slot, label, bytes })
+  return mockEngine.getVoiceMessages()
+}
+/** Rename a voice-keyer slot's label. */
+export async function setVoiceLabel(slot: number, label: string): Promise<VoiceMessage[]> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<VoiceMessage[]>('set_voice_label', { slot, label })
+  return mockEngine.getVoiceMessages()
+}
+/** Clear the recording bound to a slot (keeps the label). */
+export async function clearVoiceMessage(slot: number): Promise<VoiceMessage[]> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<VoiceMessage[]>('clear_voice_message', { slot })
+  return mockEngine.getVoiceMessages()
+}
+/** The configured voice-keyer message slots. */
+export async function getVoiceMessages(): Promise<VoiceMessage[]> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<VoiceMessage[]>('get_voice_messages')
+  return mockEngine.getVoiceMessages()
 }
 
 /** Enumerate available audio input + output devices. */
