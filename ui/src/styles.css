@@ -3566,6 +3566,154 @@ body.resizing {
 }
 
 /* ===========================================================================
+   CW operating cockpit (casual) — keyboard + macros key the rig
+   =========================================================================== */
+.cw-cockpit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  overflow-y: auto;
+  min-height: 0;
+}
+.cw-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.cw-mode-badge {
+  font-weight: 800;
+  font-size: var(--fs-label);
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+}
+.cw-wpm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.cw-wpm input[type='range'] {
+  width: 160px;
+}
+.cw-wpm-val {
+  font-family: var(--font-mono);
+  color: var(--text);
+  min-width: 56px;
+}
+.cw-spacer {
+  flex: 1;
+}
+.cw-tx {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.cw-tx.on {
+  color: var(--state-weak);
+  font-weight: 800;
+}
+.cw-abort {
+  padding: 6px 16px;
+  border-radius: var(--radius-sm);
+  font-weight: 800;
+  color: var(--state-weak);
+  background: color-mix(in srgb, var(--state-weak) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--state-weak) 50%, transparent);
+}
+.cw-abort:hover {
+  background: color-mix(in srgb, var(--state-weak) 22%, transparent);
+}
+.cw-waterfall {
+  min-height: 130px;
+  flex: 0 0 auto;
+}
+.cw-macros {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--space-2);
+}
+.cw-macro {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  transition: var(--transition);
+}
+.cw-macro:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
+}
+.cw-macro-key {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-faint);
+}
+.cw-macro-label {
+  font-weight: 700;
+  font-size: var(--fs-body);
+}
+.cw-send {
+  display: flex;
+  gap: var(--space-2);
+}
+.cw-type {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+.cw-send-btn,
+.cw-log-btn {
+  padding: 8px 18px;
+  border-radius: var(--radius-sm);
+  font-weight: 800;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+}
+.cw-send-btn:disabled,
+.cw-log-btn:disabled {
+  opacity: 0.4;
+}
+.cw-log {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+}
+.cw-log h2 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-title);
+}
+.cw-log-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.cw-log-row .settings-input {
+  flex: 1;
+}
+.cw-log-rst {
+  max-width: 80px;
+  flex: 0 0 auto !important;
+}
+.cw-log-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+
+/* ===========================================================================
    Field Day workspace (center, Field Day mode)
    =========================================================================== */
 .fieldday {

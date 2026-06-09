@@ -544,6 +544,36 @@ export async function setFrequency(
   return mockEngine.setFrequency(dialMhz, band, mode)
 }
 
+/** Set the per-section operating mode (the rig-mode policy): "digital" obeys the rig,
+ * "phone" forces USB/LSB by band, "cw" forces CW. */
+export async function setOperatingMode(mode: 'digital' | 'phone' | 'cw'): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('set_operating_mode', { mode })
+  return mockEngine.getSnapshot()
+}
+
+/** Queue CW to transmit (CAT keyer). `text` is an F-key macro template or literal
+ * type-ahead — the engine expands the tokens and the rig keys it. */
+export async function sendCw(text: string): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('send_cw', { text })
+  return mockEngine.getSnapshot()
+}
+
+/** Set the CW keyer speed in WPM (5–50). */
+export async function setCwWpm(wpm: number): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('set_cw_wpm', { wpm })
+  return mockEngine.getSnapshot()
+}
+
+/** Abort CW in progress (Esc) — stops the rig keyer + clears the queue. */
+export async function stopCw(): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('stop_cw')
+  return mockEngine.getSnapshot()
+}
+
 /** Enumerate available audio input + output devices. */
 export async function getAudioDevices(): Promise<AudioDevices> {
   const invoke = tauriInvoke()

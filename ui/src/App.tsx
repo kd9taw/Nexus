@@ -53,11 +53,12 @@ import { ModeNav, type View } from './components/ModeNav'
 import { OperateCockpit } from './components/OperateCockpit'
 import { NowBar } from './components/NowBar'
 import { AwardsJourney } from './components/AwardsJourney'
+import { CwCockpit } from './components/CwCockpit'
 import { PotaSotaView } from './components/PotaSotaView'
 import { PropagationView } from './components/PropagationView'
 import { MapView } from './components/MapView'
 import { ConnectView } from './components/ConnectView'
-import { getPropagation, getFeedHealth, getNeedAlerts } from './api'
+import { getPropagation, getFeedHealth, getNeedAlerts, setOperatingMode } from './api'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedTag, NeedAlert } from './types'
 import { NeededPanel } from './components/NeededPanel'
@@ -150,6 +151,18 @@ export default function App() {
     }
     return features.landing
   })
+  // Per-section rig-mode policy: entering the CW section forces the rig to CW; leaving
+  // returns to "digital" (obey the rig). Fires only on an actual transition so it
+  // doesn't write settings on every nav. Phone joins this when its section lands.
+  const lastOpModeRef = useRef<'digital' | 'phone' | 'cw'>('digital')
+  useEffect(() => {
+    const mode = view === 'cw' ? 'cw' : 'digital'
+    if (mode === lastOpModeRef.current) return
+    lastOpModeRef.current = mode
+    void setOperatingMode(mode)
+      .then((s) => s && setSnap(s))
+      .catch(() => {})
+  }, [view])
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
   // Operate layout mode: Classic (WSJT-X — Band Activity dominant) vs Roster
   // (GridTracker — the Call Roster dominant). Persisted UI pref; new hams who
@@ -804,6 +817,9 @@ export default function App() {
     case 'awards':
       // Awards + Journey combined: one section, tabbed (Journey + Official Awards).
       workspace = <AwardsJourney showGamification={features.isOn('gamification')} />
+      break
+    case 'cw':
+      workspace = <CwCockpit snap={snap} theme={theme} />
       break
     case 'pota':
       workspace = (

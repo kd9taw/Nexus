@@ -15,6 +15,7 @@ import {
 // adding a View without a registry entry (or vice versa) trips this test.
 const EXPECTED_SECTIONS: FeatureId[] = [
   'operate',
+  'cw',
   'connect',
   'needed',
   'logbook',

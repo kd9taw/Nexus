@@ -12,6 +12,7 @@
  * `ModeNav` and `App` import it from here. */
 export type View =
   | 'operate'
+  | 'cw'
   | 'connect'
   | 'propagation'
   | 'map'
@@ -88,6 +89,18 @@ export const FEATURES: FeatureDef[] = [
     view: 'operate',
     workspace: 'dx',
     oneLine: 'The waterfall-first cockpit — decode, tune, and work stations.',
+  },
+  {
+    id: 'cw',
+    label: 'CW',
+    kind: 'section',
+    category: 'Operate',
+    core: false, // opt-in: turn on if you operate CW (Settings ▸ Features / wizard)
+    dependsOn: [],
+    intents: ['casual', 'dx'],
+    view: 'cw',
+    // Global (no workspace): the CW operating cockpit — keyboard + macros key the rig.
+    oneLine: 'CW operating — keyboard + F-key macros, WPM, spectrum, casual ragchew.',
   },
   {
     id: 'logbook',
