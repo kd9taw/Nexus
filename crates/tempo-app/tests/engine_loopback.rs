@@ -13,10 +13,13 @@ use tempo_core::ft1;
 fn two_engines_exchange_a_directed_message() {
     let mut a = Engine::new("W9XYZ", "EN37", 0); // transmits on even slots
     let mut b = Engine::new("K2DEF", "FN31", 1); // transmits on odd slots
+    // TX is disarmed by default now (WSJT-X Enable-Tx) — arm both ends.
+    a.set_tx_enabled(true);
+    b.set_tx_enabled(true);
     // Directed free-text chat is FT1-native; default tier is now FT8, so pin FT1.
     a.set_tier(Tier::Ft1);
     b.set_tier(Tier::Ft1);
-                                                 // Presence is established via beacons; enable them (off by default now).
+    // Presence is established via beacons; enable them (off by default now).
     a.set_beacon(true);
     b.set_beacon(true);
     let mut air_a2b = VirtualAir::new(ft1::SAMPLE_RATE, 1);

@@ -79,8 +79,11 @@ fn field_day_mode_logs_through_the_engine() {
         s.fd_section = "IL".into();
         sp.apply_settings(s);
     }
-    run_st.set_mode("fieldday-run").unwrap();
+    run_st.set_mode("fieldday-run").unwrap(); // run mode arms TX itself
     sp.set_mode("fieldday-sp").unwrap();
+    // S&P is passive (no auto-CQ), so it doesn't arm TX — and TX is disarmed by default
+    // now (WSJT-X Enable-Tx). Arm the S&P side so it answers the runner in this loopback.
+    sp.set_tx_enabled(true);
 
     let logged = |e: &Engine| {
         e.snapshot()

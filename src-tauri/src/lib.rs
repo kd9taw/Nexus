@@ -741,6 +741,11 @@ fn get_spectrum_row(state: State<'_, SharedEngine>) -> Result<Spectrum, String> 
 #[tauri::command]
 fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot, String> {
     let mut eng = state.lock().map_err(|e| e.to_string())?;
+    // Calling CQ keys a standard FT8/FT4 message — refuse without a valid callsign +
+    // grid so we never put a grid-less/call-less CQ on the air (WSJT-X's contract).
+    if mode == "qso-run" {
+        eng.structured_tx_ready()?;
+    }
     eng.set_mode(&mode)?;
     Ok(eng.snapshot())
 }
@@ -1518,6 +1523,9 @@ fn call_station(
     snr: Option<i32>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = state.lock().map_err(|e| e.to_string())?;
+    // Working a station keys a standard FT8/FT4 message (your grid in Tx1) — refuse
+    // without a valid callsign + grid so we never emit a grid-less directed call.
+    eng.structured_tx_ready()?;
     let g = grid.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let msg = message.as_deref().map(str::trim).filter(|s| !s.is_empty());
     eng.call_station_ctx(&call, g, msg, snr);

@@ -246,9 +246,64 @@ fn is_grid(s: &str) -> bool {
         && b[3].is_ascii_digit()
 }
 
+/// True if `s` is a grid usable in a standard (FT8/FT4) message: a 4-char field
+/// (`AA00`), optionally with a 6-char subsquare (`AA00aa`). Used to GATE keying —
+/// WSJT-X won't build a CQ/Tx1 without a valid grid, so neither will we (an empty
+/// or malformed grid would otherwise emit a grid-less call on the air).
+pub fn is_valid_grid(s: &str) -> bool {
+    let s = s.trim();
+    let b = s.as_bytes();
+    let four = s.len() >= 4
+        && b[0].is_ascii_uppercase()
+        && b[1].is_ascii_uppercase()
+        && b[2].is_ascii_digit()
+        && b[3].is_ascii_digit();
+    match s.len() {
+        4 => four,
+        6 => four && b[4].is_ascii_alphabetic() && b[5].is_ascii_alphabetic(),
+        _ => false,
+    }
+}
+
+/// True if `s` is plausibly a real amateur callsign (3–10 chars, has a letter AND
+/// a digit, only alphanumerics + `/`). Mirrors the cluster/PSKReporter feed gate;
+/// used to refuse keying a standard message with no/blank callsign.
+pub fn is_callsign(s: &str) -> bool {
+    let c = s.trim();
+    let len = c.chars().count();
+    (3..=10).contains(&len)
+        && c.chars().any(|ch| ch.is_ascii_digit())
+        && c.chars().any(|ch| ch.is_ascii_alphabetic())
+        && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '/')
+}
+
 #[cfg(test)]
 mod fidelity_tests {
     use super::*;
+
+    #[test]
+    fn valid_grid_accepts_4_and_6_char_rejects_blank_and_malformed() {
+        assert!(is_valid_grid("EN52"));
+        assert!(is_valid_grid("EN52aa")); // 6-char subsquare
+        assert!(is_valid_grid(" EN52 ")); // trimmed
+        assert!(!is_valid_grid(""), "blank grid (the bug) is rejected");
+        assert!(!is_valid_grid("EN5")); // too short
+        assert!(!is_valid_grid("E152")); // 2nd char must be a letter
+        assert!(!is_valid_grid("ENXX")); // 3rd/4th must be digits
+        assert!(!is_valid_grid("EN52a")); // 5-char is not a valid form
+        assert!(!is_valid_grid("EN5212")); // subsquare must be letters
+    }
+
+    #[test]
+    fn callsign_validation_matches_the_feed_gate() {
+        assert!(is_callsign("W9XYZ"));
+        assert!(is_callsign("KD9TAW"));
+        assert!(is_callsign("W9XYZ/P"));
+        assert!(!is_callsign(""), "blank call is rejected");
+        assert!(!is_callsign("XYZ"), "no digit");
+        assert!(!is_callsign("12345"), "no letter");
+        assert!(!is_callsign("AB"), "too short");
+    }
 
     #[test]
     fn base_call_strips_portable_affixes() {

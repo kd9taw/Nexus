@@ -286,11 +286,14 @@ impl Engine {
             source: Box::new(NativeSource::from_kind(modes::ModeKind::Ft8)),
             source_kind: SourceKind::Native,
             mode: Mode::Chat,
-            // Transmit is permitted, but nothing is auto-queued at launch: the
-            // beacon is forced off above, and Monitor is PASSIVE (no auto-answer),
-            // so the rig never keys until the operator acts (Call CQ, double-click a
-            // station, or arm the beacon). That's what fixed the launch auto-call.
-            tx_enabled: true,
+            // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
+            // until the operator arms it. Passive monitor + beacon-off were not enough:
+            // any path that leaves a pending message in the sequencer (a CQ-run state, a
+            // restored/forced call) would key immediately if TX were pre-armed. With
+            // this off, the rig can NEVER transmit on launch; Call CQ / double-click a
+            // station / arming Monitor all set it true explicitly. (Fixes the reported
+            // unsolicited call on open.)
+            tx_enabled: false,
             tuning: false,
             tx_watchdog: false,
             tx_slot_count: 0,
@@ -1633,6 +1636,28 @@ impl Engine {
         self.app.tier()
     }
 
+    /// Whether the operator's identity is sufficient to transmit a STANDARD (FT8/FT4)
+    /// message — a real callsign AND a valid Maidenhead grid, exactly what WSJT-X
+    /// requires to build a CQ/Tx1. The command layer calls this before entering a
+    /// keying FT8/FT4 mode (Call CQ / work a station) so the operator gets a concrete
+    /// reason instead of a grid-less call or a silently-suppressed over. FT1/DX1
+    /// free-text isn't grid-bound, so it returns `Ok`.
+    pub fn structured_tx_ready(&self) -> Result<(), String> {
+        if !matches!(self.tier(), Tier::Ft8 | Tier::Ft4) {
+            return Ok(());
+        }
+        if !tempo_core::message::is_callsign(&self.settings.mycall) {
+            return Err("Set your callsign in Settings before transmitting FT8/FT4.".into());
+        }
+        if !tempo_core::message::is_valid_grid(&self.settings.mygrid) {
+            return Err(
+                "Set your Maidenhead grid (e.g. EN52) in Settings before transmitting FT8/FT4."
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
     /// Update the next-slot-boundary countdown (ms) shown in the UI TopBar.
     pub fn set_slot_timing(&mut self, next_slot_ms: u64) {
         self.app.set_slot_timing(next_slot_ms);
@@ -2113,6 +2138,20 @@ impl Engine {
             self.app.set_transmitting(false);
             return Vec::new();
         }
+        // Identity backstop for STANDARD (FT8/FT4) messages: never put a frame on the
+        // air without the callsign + grid those messages require. WSJT-X refuses to
+        // build a CQ/Tx1 without them; an empty/invalid grid here would otherwise emit a
+        // grid-less call (the reported bug). FT1/DX1 free-text isn't grid-bound, so it's
+        // exempt. This is the last line of defense — the command layer also blocks
+        // entering a keying FT8/FT4 mode without a valid identity (with a clear message).
+        if matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4)
+            && !(tempo_core::message::is_callsign(&self.settings.mycall)
+                && tempo_core::message::is_valid_grid(&self.settings.mygrid))
+        {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        }
+
         if slot % 2 != self.tx_parity {
             self.app.set_transmitting(false);
             return Vec::new();
@@ -2576,6 +2615,7 @@ mod tests {
     #[test]
     fn cw_queue_expands_gates_and_aborts() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         e.set_cw_wpm(28);
         assert_eq!(e.cw_wpm(), 28);
         e.set_cw_wpm(999); // out of range → clamps to 50
@@ -2604,6 +2644,7 @@ mod tests {
     #[test]
     fn voice_keyer_plays_gated_and_aborts_and_records() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         // Queue a voice message → the loop drains it once.
         e.send_voice(vec![0.1, 0.2, 0.3]);
         assert_eq!(e.poll_voice(), Some(vec![0.1, 0.2, 0.3]));
@@ -2668,6 +2709,7 @@ mod tests {
     #[test]
     fn tx_lockout_blocks_all_paths_outside_license_privileges() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         e.set_beacon(true);
         // Default Open → no lockout, even on an Extra-only bottom + in any mode.
         e.set_frequency(14.005, "20m", "USB");
@@ -2720,6 +2762,7 @@ mod tests {
         // The FT8/FT1 slot sequencer must not key the rig on a phone/CW over, even with
         // a digital TX source armed — otherwise digital tones ride the voice/CW over.
         let mut e = Engine::new("W9XYZ", "EN61", 0); // tx_parity 0 → slot 0 is a TX slot
+        e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         e.set_beacon(true); // arm a digital TX source
         // Digital: the slot path transmits as usual on a TX-parity slot.
         e.set_operating_mode("digital");
@@ -2735,8 +2778,41 @@ mod tests {
     }
 
     #[test]
+    fn ft8_tx_requires_callsign_and_grid() {
+        // The reported bug: a standard FT8 message must NEVER go on the air without the
+        // operator's callsign AND a valid grid (a grid-less call). The QSO sequencer
+        // (Call CQ) is the real FT8 keying path.
+        // No grid → Call CQ refused at the command boundary + the slot backstop blocks.
+        let mut e = Engine::new("W9XYZ", "", 0);
+        e.set_tier(Tier::Ft8);
+        assert!(e.structured_tx_ready().is_err(), "FT8 not ready without a grid");
+        e.set_mode("qso-run").unwrap(); // engine set_mode doesn't gate; arms TX + CallingCq
+        assert!(e.poll_tx(0).is_empty(), "backstop: no FT8 CQ without a grid");
+
+        // No callsign → blocked too.
+        let mut e = Engine::new("", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        assert!(e.structured_tx_ready().is_err(), "FT8 not ready without a call");
+        e.set_mode("qso-run").unwrap();
+        assert!(e.poll_tx(0).is_empty(), "backstop: no FT8 CQ without a call");
+
+        // Valid identity → ready, and the CQ keys.
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        assert!(e.structured_tx_ready().is_ok(), "valid call+grid → ready");
+        e.set_mode("qso-run").unwrap();
+        assert!(!e.poll_tx(0).is_empty(), "FT8 CQ keys with a valid call+grid");
+
+        // FT1 free-text is exempt from the standard-message grid contract.
+        let mut e = Engine::new("W9XYZ", "", 0);
+        e.set_tier(Tier::Ft1);
+        assert!(e.structured_tx_ready().is_ok(), "FT1 is not grid-bound");
+    }
+
+    #[test]
     fn poll_tx_empty_when_tx_disabled() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         e.set_beacon(true); // there would be a beacon to send on slot 0
         assert!(!e.poll_tx(0).is_empty(), "baseline: a beacon is produced");
 
@@ -2902,8 +2978,12 @@ mod tests {
     fn launches_passive_even_if_beacon_persisted_on() {
         // A saved settings file with beacon=true must NOT auto-call CQ at launch:
         // the app boots listen-only until the operator arms the beacon this session.
+        // Valid identity so the "fires once armed" leg isn't blocked by the standard-
+        // message identity backstop (this test is about passivity, not identity).
         let s = Settings {
             beacon: true,
+            mycall: "W9XYZ".into(),
+            mygrid: "EN37".into(),
             ..Settings::default()
         };
         let mut e = Engine::with_settings(s);
@@ -2915,11 +2995,18 @@ mod tests {
             e.poll_tx(0).is_empty(),
             "no auto-CQ on a TX beacon slot at launch"
         );
-        // The operator arms it this session → now it beacons.
+        // The operator arms it this session → now it beacons. TX is ALSO disarmed at
+        // launch (WSJT-X Enable-Tx), so arming the beacon alone isn't enough — enabling
+        // transmit is the second, deliberate gate.
         e.set_beacon(true);
         assert!(
+            e.poll_tx(0).is_empty(),
+            "beacon armed but TX still disarmed → still silent"
+        );
+        e.set_tx_enabled(true);
+        assert!(
             !e.poll_tx(0).is_empty(),
-            "beacon fires once the operator enables it"
+            "beacon fires once the operator enables it AND arms transmit"
         );
     }
 
@@ -2927,6 +3014,7 @@ mod tests {
     fn tx_even_gates_opposite_slots() {
         // Tx-1st (even parity): beacons on an even TX slot, silent on odd slots.
         let mut a = Engine::new("W9XYZ", "EN37", 0);
+        a.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         a.set_beacon(true);
         assert!(a.tx_even());
         assert!(!a.poll_tx(0).is_empty(), "Tx-1st transmits on even slot 0");
@@ -2975,6 +3063,7 @@ mod tests {
         // 1-minute limit on FT1 (4 s slots) → trips once continuous TX exceeds
         // 60 s, i.e. after the 16th TX slot (16 * 4 = 64 s > 60 s).
         let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         e.settings.tx_watchdog_min = 1;
         // Queue enough open-broadcast frames up front (each broadcast resets the
         // watchdog, so do them all before polling). poll_tx drains one frame per
@@ -3044,6 +3133,7 @@ mod tests {
     #[test]
     fn engine_dx1_tier_beacon_roundtrip() {
         let mut a = Engine::new("W9XYZ", "EN37", 0);
+        a.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         a.set_tier(Tier::Dx1);
         a.set_beacon(true); // beacon is off by default; this test exercises it
 
@@ -3126,6 +3216,7 @@ mod tests {
     #[test]
     fn tier_switch_keeps_message_layer() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         e.set_tier(Tier::Ft1); // default is now FT8; this test compares FT1 vs DX1
         e.set_beacon(true); // beacon off by default; this test compares beacon waveforms
         let ft1_wave = e.poll_tx(0);
@@ -3473,6 +3564,7 @@ mod tests {
         let mut a = Engine::new("KA9AAA", "EN52", 0);
         let mut b = Engine::new("KB9BBB", "EN52", 1);
         for e in [&mut a, &mut b] {
+            e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
             e.qsy_configure(vec!["20m".into(), "40m".into()], 1); // hop every over
         }
         a.select_peer("KB9BBB");
