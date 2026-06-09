@@ -19,6 +19,9 @@ interface Props {
   onHaltTx: () => void
   onSetTxEven: (even: boolean) => void
   onSetHoldTxFreq: (on: boolean) => void
+  /** Stop the in-progress QSO recording (audio bridge). The REC badge only shows while
+   * `radio.qsoRecording` is true, giving a persistent, mode-independent stop. */
+  onStopRecording?: () => void
   wfLayout: Layout
   onWfLayoutChange: (l: Layout) => void
   tier: Tier
@@ -77,6 +80,7 @@ export function TopBar({
   onHaltTx,
   onSetTxEven,
   onSetHoldTxFreq,
+  onStopRecording,
   wfLayout,
   onWfLayoutChange,
   tier,
@@ -115,6 +119,17 @@ export function TopBar({
           <span className="rx-level-label">RX</span>
           <LevelMeter value={radio.rxLevel} label="RX audio level" variant="compact" />
         </div>
+
+        {radio.qsoRecording && (
+          <button
+            type="button"
+            className="topbar-rec"
+            onClick={() => onStopRecording?.()}
+            title="Recording this QSO to a WAV — click to stop"
+          >
+            ● REC
+          </button>
+        )}
 
         <div className="op-controls" role="group" aria-label="Transmit controls">
           <button

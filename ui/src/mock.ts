@@ -443,6 +443,7 @@ function baseSnapshot(settings: Settings): AppSnapshot {
       txEnabled: true,
       tuning: false,
       txWatchdog: false,
+      qsoRecording: false,
       catOk: null,
       catDetail: 'VOX — no CAT (demo)',
       audioError: null,
@@ -1727,6 +1728,16 @@ class MockEngine {
       { call: 'VE3JKL', entity: 'Canada', band: '20m', zone: 4, tags: ['NewZone'], priority: 70, headline: 'New CQ zone 4 — Canada', mode: 'Digital', freqMhz: null },
       { call: 'N0GHI', entity: 'United States', band: '20m', zone: 4, tags: ['Confirm'], priority: 10, headline: 'Confirm — United States', mode: 'Digital', freqMhz: null },
     ])
+  }
+
+  startQsoRecording(): Promise<AppSnapshot> {
+    this.snap = { ...this.snap, radio: { ...this.snap.radio, qsoRecording: true } }
+    return Promise.resolve(this.snap)
+  }
+
+  stopQsoRecording(): Promise<AppSnapshot> {
+    this.snap = { ...this.snap, radio: { ...this.snap.radio, qsoRecording: false } }
+    return Promise.resolve(this.snap)
   }
 
   getVoiceMessages(): Promise<VoiceMessage[]> {

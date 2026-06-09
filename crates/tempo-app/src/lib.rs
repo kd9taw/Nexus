@@ -82,6 +82,7 @@ impl AppState {
                 tx_enabled: true,
                 tuning: false,
                 tx_watchdog: false,
+                qso_recording: false,
                 cat_ok: None,
                 cat_detail: String::new(),
                 audio_error: None,

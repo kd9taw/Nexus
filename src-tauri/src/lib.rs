@@ -379,6 +379,15 @@ fn voice_dir() -> PathBuf {
         .join("voice")
 }
 
+/// Directory for QSO recordings (audio bridge): `<settings dir>/recordings` (12 kHz mono WAVs).
+fn recordings_dir() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("recordings")
+}
+
 /// Full UI snapshot (`AppSnapshot`) — the UI renders all three zones from this.
 #[tauri::command]
 async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
@@ -1310,6 +1319,53 @@ fn clear_voice_message(
 fn get_voice_messages(state: State<'_, SharedEngine>) -> Result<Vec<VoiceMessage>, String> {
     let eng = state.lock().map_err(|e| e.to_string())?;
     Ok(eng.voice_messages().to_vec())
+}
+
+// ----- QSO recording (audio bridge): stream live RX capture to a WAV on disk -----
+
+/// Start recording the live RX audio to a timestamped WAV under `recordings/`. The radio
+/// loop streams capture to the file (no RAM buffer); recording persists across UI nav until
+/// `stop_qso_recording`. Only flips engine state — the loop (radio build) owns the file I/O.
+#[tauri::command]
+fn start_qso_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    #[cfg(feature = "radio")]
+    {
+        let dir = recordings_dir();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return Err(format!("Could not create the recordings folder: {e}"));
+        }
+        // Millisecond stamp so a quick stop→start in the same second can't clobber the file.
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let path = dir.join(format!("qso-{ms}.wav"));
+        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        eng.start_qso_recording(&path.to_string_lossy());
+        Ok(eng.snapshot())
+    }
+    // No radio loop = nothing to stream the file; don't light a REC badge that can't record.
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = state;
+        Err("Recording needs the radio build".to_string())
+    }
+}
+
+/// Stop the in-progress QSO recording — the radio loop finalizes the WAV on its next pass.
+#[tauri::command]
+fn stop_qso_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    #[cfg(feature = "radio")]
+    {
+        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        eng.stop_qso_recording();
+        Ok(eng.snapshot())
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = state;
+        Err("Recording needs the radio build".to_string())
+    }
 }
 
 /// Set the TX-slot period: `true` = transmit on even/"1st" slots, `false` =
@@ -2775,6 +2831,8 @@ pub fn run() {
             set_voice_label,
             clear_voice_message,
             get_voice_messages,
+            start_qso_recording,
+            stop_qso_recording,
             set_tx_enabled,
             set_tx_level,
             set_tune,

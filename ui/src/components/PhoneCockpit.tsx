@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, LoggedQso } from '../types'
 import { Waterfall } from './Waterfall'
 import { VoiceKeyer } from './VoiceKeyer'
-import { logQso, setPtt, setRfPower } from '../api'
+import { LevelMeter } from './LevelMeter'
+import { logQso, setPtt, setRfPower, startQsoRecording, stopQsoRecording } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 
 interface Props {
@@ -13,6 +14,9 @@ interface Props {
   pendingWork?: { call: string; ts: number } | null
   /** Called once the prefill has been applied, so the parent can clear it. */
   onConsumeWork?: () => void
+  /** Apply a fresh snapshot returned by a command (so the REC toggle updates instantly
+   * instead of waiting for the next poll). */
+  onSnap?: (snap: AppSnapshot) => void
 }
 
 /**
@@ -21,10 +25,11 @@ interface Props {
  * audio bridge + voice keyer land in P3-b/c). Entering forces USB/LSB by band (the
  * rig-mode keystone, wired in App). See `tasks/specs/phone-operating.md`.
  */
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   const [keyed, setKeyed] = useState(false)
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
+  const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
   const [logCall, setLogCall] = useState('')
   const [logRst, setLogRst] = useState('59')
   const [logName, setLogName] = useState('')
@@ -61,6 +66,20 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork }: Props)
   const changePower = (pct: number) => {
     setPower(pct)
     void setRfPower(pct / 100)
+  }
+
+  // QSO recording (audio bridge): a session-level toggle driven by the snapshot (so the REC
+  // badge survives nav + multi-window). Apply the returned snapshot immediately (no ~300 ms
+  // poll lag) and guard re-entry so a rapid double-click can't double-fire.
+  const recording = snap.radio.qsoRecording
+  const toggleRecord = () => {
+    if (recBusy) return
+    setRecBusy(true)
+    const fn = recording ? stopQsoRecording : startQsoRecording
+    fn()
+      .then((s) => onSnap?.(s))
+      .catch(() => pushToast(`Could not ${recording ? 'stop' : 'start'} recording`, 'error'))
+      .finally(() => setRecBusy(false))
   }
 
   // Spacebar = push-to-talk (hold), unless typing in a field.
@@ -136,6 +155,23 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork }: Props)
           <span className="ph-power-val">{power}%</span>
         </label>
         <span className="ph-spacer" />
+        <button
+          type="button"
+          className={`ph-rec${recording ? ' on' : ''}`}
+          onClick={toggleRecord}
+          disabled={recBusy}
+          title={
+            recording
+              ? 'Stop recording this QSO'
+              : 'Record the received audio to a WAV in the recordings folder'
+          }
+        >
+          {recording ? '■ Recording' : '● Record QSO'}
+        </button>
+        <label className="ph-rxmeter" title="RX audio level">
+          <span>RX</span>
+          <LevelMeter value={snap.radio.rxLevel} label="RX audio level" variant="compact" />
+        </label>
         <span className={`ph-tx ${snap.radio.transmitting ? 'on' : ''}`}>
           {snap.radio.transmitting ? '▲ TX' : snap.radio.txEnabled ? '▼ RX' : '■ TX off'}
         </span>

@@ -299,6 +299,9 @@ export interface RadioStatus {
   tuning: boolean
   /** True if the TX watchdog has auto-halted transmit (needs a re-enable). */
   txWatchdog: boolean
+  /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
+   * nav — drives the Phone cockpit's REC badge. */
+  qsoRecording: boolean
   /** Rig/CAT health: null/undefined = N/A (VOX); true = connected; false = failing. */
   catOk?: boolean | null
   /** Human-readable rig/CAT status (read frequency, or a specific error). */

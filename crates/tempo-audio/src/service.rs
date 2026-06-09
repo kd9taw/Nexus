@@ -49,6 +49,9 @@ const TUNE_CHUNK_MS: f32 = 40.0;
 /// Safety auto-release for the tune carrier: never hold PTT + carrier longer
 /// than this, in case a "tune off" click is lost.
 const MAX_TUNE_MS: f64 = 12_000.0;
+/// Safety auto-stop for a forgotten QSO recording: cap a single recording at 2 hours so a
+/// recording the operator forgot to stop can't fill the disk unbounded (~86 MB/hour).
+const MAX_QSO_REC_MS: f64 = 2.0 * 60.0 * 60.0 * 1000.0;
 
 /// Station configuration for the radio loop.
 ///
@@ -242,6 +245,11 @@ struct RadioLoop {
     manual_ptt_applied: bool,
     /// Last RF power fraction we pushed to the rig — only set on change.
     last_rf_power: Option<f32>,
+    /// Open WAV sink while a QSO recording is streaming live RX capture to disk (audio
+    /// bridge). The loop owns the file handle so the audio never has to live in RAM.
+    qso_sink: Option<crate::voice::WavSink>,
+    /// When the in-progress QSO recording started (loop ms), for the max-duration auto-stop.
+    qso_started_ms: Option<f64>,
     psk_spots: Vec<Spot>,
     last_psk_flush: f64,
     last_fd_qsos: usize,
@@ -270,6 +278,8 @@ impl RadioLoop {
             last_cw_wpm: 0, // 0 = unset → first send pushes the speed
             manual_ptt_applied: false,
             last_rf_power: None,
+            qso_sink: None,
+            qso_started_ms: None,
             psk_spots: Vec::new(),
             last_psk_flush: now_unix_ms(),
             last_fd_qsos: 0,
@@ -429,12 +439,17 @@ impl RadioLoop {
         // and, while recording, accumulate the captured frame into the engine's buffer.
         // One engine lock for both. Gated on `tx_enabled` (Monitor) inside the engine.
         {
-            let (abort, samples) = {
+            let (abort, samples, qso_rec, qso_path) = {
                 let mut eng = engine.lock().map_err(|e| e.to_string())?;
                 if eng.is_recording() {
                     eng.push_record_samples(&captured);
                 }
-                (eng.take_voice_abort(), eng.poll_voice())
+                (
+                    eng.take_voice_abort(),
+                    eng.poll_voice(),
+                    eng.is_qso_recording(),
+                    eng.qso_record_path(),
+                )
             };
             if abort {
                 backend.flush_output(); // dump queued message audio + unkey now
@@ -449,6 +464,53 @@ impl RadioLoop {
                     let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
                     self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                 }
+            }
+            // QSO recording (audio bridge): stream the live RX capture straight to a WAV on
+            // disk — open the sink on start, append each captured frame (the sink checkpoints
+            // the header ~1×/s so an abnormal exit still leaves a readable file), finalize on
+            // stop. No RAM buffer, so a multi-hour QSO stays bounded.
+            match (qso_rec, self.qso_sink.is_some()) {
+                (true, false) => {
+                    if let Some(p) = qso_path {
+                        match crate::voice::WavSink::create(&p) {
+                            Ok(s) => {
+                                self.qso_sink = Some(s);
+                                self.qso_started_ms = Some(now);
+                            }
+                            // Don't spin re-trying every 20 ms: clear the engine flag (so the
+                            // REC badge stops lying) and surface why via the audio-error chip.
+                            Err(e) => {
+                                if let Ok(mut eng) = engine.lock() {
+                                    eng.stop_qso_recording();
+                                    eng.set_audio_error(Some(format!(
+                                        "Could not start QSO recording: {e}"
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+                (true, true) => {
+                    if let Some(s) = self.qso_sink.as_mut() {
+                        let _ = s.write(&captured);
+                    }
+                    // Safety auto-stop for a forgotten recording (mirrors the tune-carrier
+                    // cap): the (false,true) arm next pass finalizes the file.
+                    if let Some(start) = self.qso_started_ms {
+                        if now - start > MAX_QSO_REC_MS {
+                            if let Ok(mut eng) = engine.lock() {
+                                eng.stop_qso_recording();
+                            }
+                        }
+                    }
+                }
+                (false, true) => {
+                    if let Some(s) = self.qso_sink.take() {
+                        let _ = s.finish();
+                    }
+                    self.qso_started_ms = None;
+                }
+                (false, false) => {}
             }
         }
 

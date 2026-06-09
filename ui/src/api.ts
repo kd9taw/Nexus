@@ -657,6 +657,20 @@ export async function getVoiceMessages(): Promise<VoiceMessage[]> {
   return mockEngine.getVoiceMessages()
 }
 
+// --- QSO recording (audio bridge) ---
+/** Start streaming the live RX audio to a timestamped WAV on disk. */
+export async function startQsoRecording(): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('start_qso_recording')
+  return mockEngine.startQsoRecording()
+}
+/** Stop the in-progress QSO recording (finalizes the WAV). */
+export async function stopQsoRecording(): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('stop_qso_recording')
+  return mockEngine.stopQsoRecording()
+}
+
 /** Enumerate available audio input + output devices. */
 export async function getAudioDevices(): Promise<AudioDevices> {
   const invoke = tauriInvoke()

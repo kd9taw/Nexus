@@ -1969,6 +1969,21 @@ body.resizing {
   font-weight: 700;
   color: var(--text-faint);
 }
+/* Global QSO-recording badge — visible from any view while recording; click to stop. */
+.topbar-rec {
+  padding: 2px 9px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--danger, #e5484d);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--danger, #e5484d);
+  animation: ph-rec-pulse 1.4s ease-in-out infinite;
+}
+.topbar-rec:hover {
+  background: color-mix(in srgb, var(--danger, #e5484d) 15%, transparent);
+}
 
 /* ---- Operating (TX) controls ---- */
 .op-controls {
@@ -3788,6 +3803,40 @@ body.resizing {
 .ph-tx.on {
   color: var(--state-weak);
   font-weight: 800;
+}
+.ph-rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-dim);
+}
+.ph-rec:hover {
+  border-color: var(--danger, #e5484d);
+  color: var(--danger, #e5484d);
+}
+.ph-rec.on {
+  border-color: var(--danger, #e5484d);
+  color: var(--danger, #e5484d);
+  font-weight: 800;
+  animation: ph-rec-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ph-rec-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.ph-rxmeter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-faint);
 }
 .ph-waterfall {
   min-height: 130px;

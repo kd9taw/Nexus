@@ -204,6 +204,10 @@ pub struct RadioStatus {
     /// and auto-halted transmit. Cleared by re-enabling TX.
     #[serde(default)]
     pub tx_watchdog: bool,
+    /// Whether a QSO recording (audio bridge) is streaming live RX to disk. Drives the
+    /// Phone cockpit's REC badge; persists across UI nav (it's loop-owned, not per-view).
+    #[serde(default)]
+    pub qso_recording: bool,
     /// Rig/CAT connection health: `None` = not applicable (VOX, no CAT),
     /// `Some(true)` = CAT connected (or serial port opened), `Some(false)` =
     /// CAT configured but failing. Drives the Test-CAT result + a status chip.

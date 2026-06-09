@@ -60,7 +60,13 @@ import { PotaSotaView } from './components/PotaSotaView'
 import { PropagationView } from './components/PropagationView'
 import { MapView } from './components/MapView'
 import { ConnectView } from './components/ConnectView'
-import { getPropagation, getFeedHealth, getNeedAlerts, setOperatingMode } from './api'
+import {
+  getPropagation,
+  getFeedHealth,
+  getNeedAlerts,
+  setOperatingMode,
+  stopQsoRecording,
+} from './api'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedTag, NeedAlert } from './types'
 import { NeededPanel } from './components/NeededPanel'
@@ -609,6 +615,14 @@ export default function App() {
     [bandPlan, handleQsy],
   )
 
+  // Stop a QSO recording from anywhere (the global REC badge in the TopBar), so an active
+  // recording started in the Phone cockpit can be stopped without navigating back.
+  const handleStopRecording = useCallback(() => {
+    void stopQsoRecording()
+      .then((s) => s && setSnap(s))
+      .catch(() => {})
+  }, [])
+
   const handleSetMode = useCallback((mode: ModeRequest) => {
     void withErrorToast(() => apiSetMode(mode), 'Could not switch mode').then((s) => {
       if (s) setSnap(s)
@@ -896,6 +910,7 @@ export default function App() {
           theme={theme}
           pendingWork={pendingWork?.view === 'phone' ? pendingWork : null}
           onConsumeWork={() => setPendingWork(null)}
+          onSnap={setSnap}
         />
       )
       break
@@ -1018,6 +1033,7 @@ export default function App() {
         onHaltTx={handleHaltTx}
         onSetTxEven={handleSetTxEven}
         onSetHoldTxFreq={handleSetHoldTxFreq}
+        onStopRecording={handleStopRecording}
         wfLayout={wfLayout}
         onWfLayoutChange={setWfLayout}
         tier={tier}

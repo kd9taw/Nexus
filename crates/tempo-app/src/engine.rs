@@ -180,6 +180,12 @@ pub struct Engine {
     recording: bool,
     /// Accumulated 12 kHz mono capture for the in-progress recording.
     record_buf: Vec<f32>,
+    /// QSO recording (audio bridge): while true the radio loop STREAMS live RX capture to
+    /// the WAV at `qso_record_path` (no RAM buffer — the loop owns the file sink). Set by
+    /// `start_qso_recording`. Unlike the voice-keyer record, this persists across UI nav.
+    qso_recording: bool,
+    /// Target WAV path for the in-progress QSO recording (set by `start_qso_recording`).
+    qso_record_path: Option<String>,
     /// Rolling window of the most recent captured audio, fed continuously by the
     /// radio loop (independent of the decoder) so the waterfall reflects LIVE
     /// sound-card input — not just the once-per-slot decoded frame.
@@ -310,6 +316,8 @@ impl Engine {
             voice_abort: false,
             recording: false,
             record_buf: Vec::new(),
+            qso_recording: false,
+            qso_record_path: None,
             spectrum_audio: Vec::new(),
             cat_status: (None, String::new()),
             cat_reprobe: false,
@@ -585,6 +593,30 @@ impl Engine {
         if let Some(m) = self.settings.voice_messages.iter_mut().find(|m| m.slot == slot) {
             m.file.clear();
         }
+    }
+
+    // ----- QSO recording (audio bridge) — stream live RX capture to disk via the loop -----
+
+    /// Begin streaming the live RX capture to `path` (a WAV the radio loop opens + writes).
+    pub fn start_qso_recording(&mut self, path: &str) {
+        self.qso_record_path = Some(path.to_string());
+        self.qso_recording = true;
+    }
+
+    /// Stop QSO recording — the radio loop finalizes the WAV on its next iteration.
+    pub fn stop_qso_recording(&mut self) {
+        self.qso_recording = false;
+        self.qso_record_path = None;
+    }
+
+    /// Whether a QSO recording is in progress (radio loop + snapshot REC badge).
+    pub fn is_qso_recording(&self) -> bool {
+        self.qso_recording
+    }
+
+    /// The target WAV path for the in-progress QSO recording (for the radio loop's sink).
+    pub fn qso_record_path(&self) -> Option<String> {
+        self.qso_record_path.clone()
     }
 
     // ----- coordinated QSY ("move together") ------------------------------
@@ -1841,6 +1873,7 @@ impl Engine {
         // Reflect transmit-enable / tuning / watchdog and the DT-derived
         // time-sync health into the radio status the UI renders.
         s.radio.tx_enabled = self.tx_enabled;
+        s.radio.qso_recording = self.qso_recording;
         s.radio.tuning = self.tuning;
         s.radio.tx_watchdog = self.tx_watchdog;
         s.radio.time_sync_ok = self.time_sync_ok();
@@ -2532,6 +2565,24 @@ mod tests {
         assert_eq!(rec, vec![0.1, 0.2, 0.3], "captured only what arrived while recording");
         assert!(!e.is_recording());
         assert!(e.stop_recording().is_empty(), "buffer taken/reset");
+    }
+
+    #[test]
+    fn qso_recording_signals_path_and_persists_in_snapshot() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(!e.is_qso_recording());
+        assert!(e.qso_record_path().is_none());
+        assert!(!e.snapshot().radio.qso_recording);
+
+        e.start_qso_recording("/tmp/nexus/recordings/qso-1.wav");
+        assert!(e.is_qso_recording());
+        assert_eq!(e.qso_record_path().as_deref(), Some("/tmp/nexus/recordings/qso-1.wav"));
+        assert!(e.snapshot().radio.qso_recording, "REC badge rides the snapshot");
+
+        e.stop_qso_recording();
+        assert!(!e.is_qso_recording());
+        assert!(e.qso_record_path().is_none(), "path cleared on stop");
+        assert!(!e.snapshot().radio.qso_recording);
     }
 
     #[test]
