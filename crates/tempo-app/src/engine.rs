@@ -405,6 +405,19 @@ impl Engine {
         self.cw_wpm = wpm.clamp(5, 50);
     }
 
+    /// Choose the CW keyer back-end ("cat" or "soundcard") + tone pitch (Hz; ignored
+    /// if <= 0). Soundcard flips the CW rig-mode to USB; the radio loop re-applies it.
+    pub fn set_cw_keyer(&mut self, backend: &str, pitch_hz: f32) {
+        use crate::settings::CwKeyerBackend;
+        self.settings.cw_keyer = match backend.to_ascii_lowercase().as_str() {
+            "soundcard" => CwKeyerBackend::Soundcard,
+            _ => CwKeyerBackend::Cat,
+        };
+        if pitch_hz > 0.0 {
+            self.settings.cw_pitch_hz = pitch_hz.clamp(300.0, 1200.0);
+        }
+    }
+
     /// Abort CW in progress: the radio loop stops the rig and the queue is cleared.
     pub fn stop_cw(&mut self) {
         self.cw_queue.clear();
@@ -428,6 +441,17 @@ impl Engine {
     /// Current CW keyer speed (WPM) — for the radio loop's `set_keyspd` + the snapshot.
     pub fn cw_wpm(&self) -> u32 {
         self.cw_wpm
+    }
+
+    /// True if CW uses the SOUNDCARD keyer (the loop generates a keyed tone + PTT,
+    /// rig in USB) vs the CAT keyer (`rig.send_morse`, rig in CW).
+    pub fn cw_soundcard(&self) -> bool {
+        matches!(self.settings.cw_keyer, crate::settings::CwKeyerBackend::Soundcard)
+    }
+
+    /// CW tone pitch (Hz) for the soundcard keyer.
+    pub fn cw_pitch_hz(&self) -> f32 {
+        self.settings.cw_pitch_hz
     }
 
     // ----- coordinated QSY ("move together") ------------------------------

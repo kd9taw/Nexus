@@ -574,6 +574,14 @@ export async function stopCw(): Promise<AppSnapshot> {
   return mockEngine.getSnapshot()
 }
 
+/** Choose the CW keyer back-end ("cat" = rig send_morse / "soundcard" = keyed tone)
+ * and tone pitch in Hz (<=0 keeps the current pitch). */
+export async function setCwKeyer(backend: 'cat' | 'soundcard', pitch = 0): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('set_cw_keyer', { backend, pitch })
+  return mockEngine.getSnapshot()
+}
+
 /** Enumerate available audio input + output devices. */
 export async function getAudioDevices(): Promise<AudioDevices> {
   const invoke = tauriInvoke()

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, LoggedQso } from '../types'
 import { Waterfall } from './Waterfall'
-import { logQso, sendCw, setCwWpm, stopCw } from '../api'
+import { logQso, sendCw, setCwKeyer, setCwWpm, stopCw } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 
 interface Props {
@@ -34,6 +34,7 @@ const WPM_MAX = 50
  */
 export function CwCockpit({ snap, theme }: Props) {
   const [wpm, setWpm] = useState(25)
+  const [keyer, setKeyer] = useState<'cat' | 'soundcard'>('cat')
   const [text, setText] = useState('')
   const [logCall, setLogCall] = useState('')
   const [logRst, setLogRst] = useState('599')
@@ -53,6 +54,10 @@ export function CwCockpit({ snap, theme }: Props) {
   }
   const abort = () => {
     void stopCw()
+  }
+  const changeKeyer = (k: 'cat' | 'soundcard') => {
+    setKeyer(k)
+    void setCwKeyer(k)
   }
 
   // Keyboard: F1–F8 fire macros; Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4).
@@ -124,6 +129,24 @@ export function CwCockpit({ snap, theme }: Props) {
           />
           <span className="cw-wpm-val">{wpm} WPM</span>
         </label>
+        <div className="cw-keyer" role="group" aria-label="CW keyer back-end">
+          <button
+            type="button"
+            className={`cw-keyer-opt${keyer === 'cat' ? ' active' : ''}`}
+            onClick={() => changeKeyer('cat')}
+            title="CAT keyer — the rig generates CW (rig in CW). Zero extra hardware."
+          >
+            CAT
+          </button>
+          <button
+            type="button"
+            className={`cw-keyer-opt${keyer === 'soundcard' ? ' active' : ''}`}
+            onClick={() => changeKeyer('soundcard')}
+            title="Soundcard keyer — a keyed audio tone (rig in USB). Works on any rig."
+          >
+            Soundcard
+          </button>
+        </div>
         <span className="cw-spacer" />
         <span className={`cw-tx ${snap.radio.transmitting ? 'on' : ''}`}>
           {snap.radio.transmitting ? '▲ KEYING' : snap.radio.txEnabled ? '▼ RX' : '■ TX off'}

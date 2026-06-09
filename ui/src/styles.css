@@ -3607,6 +3607,24 @@ body.resizing {
   color: var(--text);
   min-width: 56px;
 }
+.cw-keyer {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.cw-keyer-opt {
+  padding: 5px 12px;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+}
+.cw-keyer-opt.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
 .cw-spacer {
   flex: 1;
 }

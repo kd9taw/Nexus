@@ -368,18 +368,53 @@ impl RadioLoop {
         // the rig. Honor a one-shot abort and push the keyer speed only when it changes.
         // Operator-initiated; the engine gates `poll_cw` on `tx_enabled` (Monitor).
         {
-            let (abort, wpm, items) = {
+            let (abort, wpm, items, soundcard, pitch) = {
                 let mut eng = engine.lock().map_err(|e| e.to_string())?;
-                (eng.take_cw_abort(), eng.cw_wpm(), eng.poll_cw())
+                (
+                    eng.take_cw_abort(),
+                    eng.cw_wpm(),
+                    eng.poll_cw(),
+                    eng.cw_soundcard(),
+                    eng.cw_pitch_hz(),
+                )
             };
             if abort {
-                let _ = rig.stop_morse();
+                let _ = rig.stop_morse(); // CAT keyer abort (rig CW buffer)
+                if soundcard {
+                    // Soundcard abort: dump the queued tone audio + unkey now.
+                    backend.flush_output();
+                    let _ = rig.ptt(false);
+                    self.tx_until_ms = None;
+                }
             }
-            if !items.is_empty() && wpm != self.last_cw_wpm && rig.set_keyspd(wpm).is_ok() {
-                self.last_cw_wpm = wpm;
-            }
-            for text in items {
-                let _ = rig.send_morse(&text);
+            if !items.is_empty() {
+                if soundcard {
+                    // Key a generated tone (rig in USB): PTT + play, drop PTT after.
+                    let mut buf: Vec<f32> = Vec::new();
+                    for text in &items {
+                        buf.extend(tempo_core::cw::morse_samples(
+                            text,
+                            wpm,
+                            pitch,
+                            ft1::SAMPLE_RATE as u32,
+                        ));
+                    }
+                    if !buf.is_empty() {
+                        let secs = buf.len() as f32 / ft1::SAMPLE_RATE;
+                        let _ = rig.ptt(true);
+                        backend.play(&buf);
+                        let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                } else {
+                    // CAT keyer: the rig generates CW from text via send_morse.
+                    if wpm != self.last_cw_wpm && rig.set_keyspd(wpm).is_ok() {
+                        self.last_cw_wpm = wpm;
+                    }
+                    for text in &items {
+                        let _ = rig.send_morse(text);
+                    }
+                }
             }
         }
 

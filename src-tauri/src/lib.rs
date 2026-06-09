@@ -1095,6 +1095,22 @@ fn stop_cw(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     Ok(eng.snapshot())
 }
 
+/// Choose the CW keyer back-end ("cat" = rig send_morse / "soundcard" = keyed tone)
+/// and tone pitch (Hz; <=0 keeps the current pitch). Soundcard moves the rig to USB.
+#[tauri::command]
+fn set_cw_keyer(
+    state: State<'_, SharedEngine>,
+    backend: String,
+    pitch: f32,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_cw_keyer(&backend, pitch);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist CW keyer: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Set the TX-slot period: `true` = transmit on even/"1st" slots, `false` =
 /// odd/"2nd". Two stations must use OPPOSITE periods to complete a QSO. Persists.
 #[tauri::command]
@@ -2522,6 +2538,7 @@ pub fn run() {
             send_cw,
             set_cw_wpm,
             stop_cw,
+            set_cw_keyer,
             set_tx_enabled,
             set_tx_level,
             set_tune,

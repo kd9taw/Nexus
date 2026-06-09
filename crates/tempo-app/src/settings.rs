@@ -23,6 +23,18 @@ pub enum OperatingMode {
     Cw,
 }
 
+/// How CW is transmitted. **Cat** = the rig's own keyer via Hamlib `send_morse` (rig
+/// in CW; zero extra hardware, but CAT-latency feel). **Soundcard** = the app keys an
+/// audio tone via the sound card (rig in USB; works on any rig). WinKeyer (a hardware
+/// keyer) comes later. See `tasks/specs/cw-operating.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CwKeyerBackend {
+    #[default]
+    Cat,
+    Soundcard,
+}
+
 /// Everything the operator configures: identity, band/frequency, Field Day
 /// exchange, rig/PTT control, and network (WSJT-X UDP API + PSK Reporter).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,6 +86,11 @@ pub struct Settings {
     /// The active operating mode (Digital / Phone / CW) — the per-section rig-mode
     /// policy. Digital obeys the rig; Phone/CW force USB-LSB / CW. See [`rig_mode`].
     pub operating_mode: OperatingMode,
+    /// How CW is keyed (CAT `send_morse` vs soundcard tone). Also picks the CW
+    /// rig-mode: CAT → CW, Soundcard → USB (audio tone). See [`rig_mode`].
+    pub cw_keyer: CwKeyerBackend,
+    /// CW sidetone / keyed-tone pitch in Hz (soundcard keyer + UI marker). Default 600.
+    pub cw_pitch_hz: f32,
     /// Local TCP port Tempo uses for rigctld (it spawns rigctld on this port).
     pub rigctld_port: u16,
     /// Run the rigctld-compatible CAT **broker** so other apps (WSJT-X / N1MM /
@@ -282,6 +299,8 @@ impl Default for Settings {
             baud: 38400,
             set_rig_mode: false, // obey the radio's mode by default (max compat)
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
+            cw_keyer: CwKeyerBackend::Cat, // rig keyer via send_morse (zero hardware)
+            cw_pitch_hz: 600.0,
             rigctld_port: 4532,
             cat_broker: false,
             cat_broker_port: 4532,
@@ -368,8 +387,12 @@ impl Settings {
     /// to send NO mode command and obey the radio's current mode.
     pub fn rig_mode(&self) -> String {
         match self.operating_mode {
-            // CW: force the rig into CW.
-            OperatingMode::Cw => "CW".to_string(),
+            // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be
+            // in USB so it transmits the keyed audio tone (band-aware: LSB <10 MHz).
+            OperatingMode::Cw => match self.cw_keyer {
+                CwKeyerBackend::Cat => "CW".to_string(),
+                CwKeyerBackend::Soundcard => if self.dial_mhz < 10.0 { "LSB" } else { "USB" }.to_string(),
+            },
             // Phone: force the correct sideband for the band — the hard convention is
             // LSB below 10 MHz (160/80/40 m), USB at 30 m and up. (FM/AM come later
             // as an explicit choice in the Phone cockpit.)
@@ -410,10 +433,17 @@ mod tests {
         s.sideband = "USB".into();
         assert_eq!(s.rig_mode(), "PKTUSB", "digital + force → DATA submode");
 
-        // CW: force CW regardless of set_rig_mode.
+        // CW with the CAT keyer: force CW regardless of set_rig_mode.
         s.set_rig_mode = false;
         s.operating_mode = OperatingMode::Cw;
         assert_eq!(s.rig_mode(), "CW");
+        // CW with the SOUNDCARD keyer: the rig must be in USB/LSB to send the tone.
+        s.cw_keyer = CwKeyerBackend::Soundcard;
+        s.dial_mhz = 14.050;
+        assert_eq!(s.rig_mode(), "USB");
+        s.dial_mhz = 7.030;
+        assert_eq!(s.rig_mode(), "LSB");
+        s.cw_keyer = CwKeyerBackend::Cat;
 
         // Phone: band-aware sideband — LSB below 10 MHz, USB at/above.
         s.operating_mode = OperatingMode::Phone;
