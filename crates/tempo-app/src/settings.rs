@@ -92,13 +92,11 @@ pub struct Settings {
     pub serial_port: String,
     /// Serial baud rate for CAT.
     pub baud: u32,
-    /// Let Nexus set the rig into its DATA submode for digital. **On by default** —
-    /// so moving between sections puts the rig in the right mode (FT8/FT4 → DATA, the
-    /// counterpart to Phone forcing SSB and CW forcing CW). Sets Hamlib PKTUSB/PKTLSB
-    /// → Yaesu DATA-U / Icom USB-D / Kenwood DATA. Turn OFF to have Nexus obey whatever
-    /// mode you've set the rig in (no `M` command) — for rigs without a DATA submode.
-    /// Only consulted in `Digital` [`operating_mode`](Self::operating_mode); Phone/CW
-    /// always force their mode regardless.
+    /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
+    /// force their mode), so this opt-out is no longer consulted by
+    /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
+    /// (A rig without a DATA submode is handled by the radio loop's bounded set_mode
+    /// retry — it tries once, the rig rejects it, and it gives up.)
     pub set_rig_mode: bool,
     /// The active operating mode (Digital / Phone / CW) — the per-section rig-mode
     /// policy. Digital obeys the rig; Phone/CW force USB-LSB / CW. See [`rig_mode`].
@@ -449,22 +447,17 @@ impl Settings {
             // LSB below 10 MHz (160/80/40 m), USB at 30 m and up. (FM/AM come later
             // as an explicit choice in the Phone cockpit.)
             OperatingMode::Phone => if self.dial_mhz < 10.0 { "LSB" } else { "USB" }.to_string(),
-            // Digital: force the DATA submode (PKTUSB/PKTLSB → Yaesu DATA-U / Icom
-            // USB-D / Kenwood DATA) so FT8/FT4 sets the rig like Phone/CW do — unless
-            // the operator opted OUT (rigs without a DATA submode), where we obey ("").
+            // Digital: force the DATA submode (PKTUSB/PKTLSB → Yaesu DATA-U / Icom USB-D
+            // / Kenwood DATA), USB-side by default — UNCONDITIONALLY, like Phone forces
+            // SSB and CW forces CW. (No opt-out: FT8/FT4 are a data mode, and a rig
+            // without a DATA submode is handled by the radio loop's bounded set_mode
+            // retry — it tries once, the rig rejects it, and it gives up, rather than
+            // leaving the rig stuck in the previous section's SSB/CW mode.) Any non-LSB
+            // sideband (incl. empty/garbled) maps to the USB-side PKTUSB that FT8 uses.
             OperatingMode::Digital => {
-                if !self.set_rig_mode {
-                    return String::new();
-                }
-                let sb = if self.sideband.trim().is_empty() {
-                    "USB"
-                } else {
-                    self.sideband.trim()
-                };
-                match sb.to_ascii_uppercase().as_str() {
-                    "USB" => "PKTUSB".to_string(),
+                match self.sideband.trim().to_ascii_uppercase().as_str() {
                     "LSB" => "PKTLSB".to_string(),
-                    other => other.to_string(),
+                    _ => "PKTUSB".to_string(),
                 }
             }
         }
@@ -479,22 +472,22 @@ mod tests {
     fn rig_mode_policy_obeys_digital_but_forces_phone_and_cw() {
         let mut s = Settings::default();
 
-        // Digital (default): FORCE the DATA submode so FT8/FT4 sets the rig (like
-        // Phone/CW). The default sideband ("") is treated as USB → PKTUSB.
+        // Digital: ALWAYS force the DATA submode so FT8/FT4 sets the rig (like Phone/CW).
+        // USB-side by default (FT8/FT4 are USB-side); the default empty sideband → PKTUSB.
         assert_eq!(s.operating_mode, OperatingMode::Digital);
-        assert!(s.set_rig_mode, "digital forces the DATA submode by default");
-        assert_eq!(s.rig_mode(), "PKTUSB", "digital default → DATA submode");
+        assert_eq!(s.rig_mode(), "PKTUSB", "digital default → DATA submode (USB-side)");
         s.sideband = "LSB".into();
         assert_eq!(s.rig_mode(), "PKTLSB", "digital LSB-side → PKTLSB");
-        // Opt OUT (rig without a DATA submode): obey the rig — no `M` command.
+        // Forced regardless of set_rig_mode (the old opt-out is gone) and robust against
+        // a garbled sideband (anything non-LSB → USB-side PKTUSB).
         s.set_rig_mode = false;
-        assert_eq!(s.rig_mode(), "", "digital + opt-out obeys the rig");
-        s.set_rig_mode = true;
         s.sideband = "USB".into();
-        assert_eq!(s.rig_mode(), "PKTUSB", "digital + force + USB-side → PKTUSB");
+        assert_eq!(s.rig_mode(), "PKTUSB", "digital always forces DATA, opt-out ignored");
+        s.sideband = "CW".into(); // corrupted sideband must not leak into the mode
+        assert_eq!(s.rig_mode(), "PKTUSB", "garbled sideband → USB-side PKTUSB, never CW");
+        s.sideband = "USB".into();
 
-        // CW with the CAT keyer: force CW regardless of set_rig_mode.
-        s.set_rig_mode = false;
+        // CW with the CAT keyer: force CW.
         s.operating_mode = OperatingMode::Cw;
         assert_eq!(s.rig_mode(), "CW");
         // CW with the SOUNDCARD keyer: the rig must be in USB/LSB to send the tone.

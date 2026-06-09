@@ -427,11 +427,20 @@ impl Engine {
     /// phone/CW section just sets this and the rig follows on the next tune.
     pub fn set_operating_mode(&mut self, mode: &str) {
         use crate::settings::OperatingMode;
-        self.settings.operating_mode = match mode.to_ascii_lowercase().as_str() {
+        let om = match mode.to_ascii_lowercase().as_str() {
             "phone" => OperatingMode::Phone,
             "cw" => OperatingMode::Cw,
             _ => OperatingMode::Digital,
         };
+        self.settings.operating_mode = om;
+        // Phone and CW are MANUAL modes — there's no auto-sequencer (poll_tx is gated off
+        // for non-Digital), and the operator keys TX explicitly via PTT / the voice keyer
+        // / CW. Arm transmit on entry so those work, like a rig's live mic/key. (Digital
+        // is NOT auto-armed: the FT8 slot TX stays behind the Monitor / double-click /
+        // Call-CQ gate, so the app never auto-keys FT8 on launch — the safety invariant.)
+        if matches!(om, OperatingMode::Phone | OperatingMode::Cw) {
+            self.set_tx_enabled(true);
+        }
     }
 
     /// Set the operator's amateur license class (drives the TX-privilege lockout + the

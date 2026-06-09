@@ -229,6 +229,18 @@ export default function App() {
     )
   }, [snap, area])
 
+  // Pop the Needed board out into its own window on every app load (the operator can
+  // close it). Once per launch, after the app is up + only if the feature is enabled;
+  // a no-op in the browser/mock (the Tauri command isn't there) and in a detached
+  // panel window (that renders DetachedPanel, not App).
+  const neededPoppedRef = useRef(false)
+  useEffect(() => {
+    if (neededPoppedRef.current || !snap) return
+    if (features.enabled.needed === false) return
+    neededPoppedRef.current = true
+    void openPanelWindow('needed').catch(() => {})
+  }, [snap, features.enabled])
+
   const handleWorkspace = useCallback((w: 'dx' | 'msg') => {
     setArea(w)
     try {

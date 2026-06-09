@@ -105,6 +105,7 @@ mod tests {
     fn tx_slot_keys_ptt_plays_audio_and_sets_hold() {
         // Engine with tx_parity 0 transmits on EVEN slots; queue a broadcast.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         eng.broadcast("CQ TEST W9XYZ EN37");
         let mut rig = Rig::vox();
         let mut backend = MockBackend::new();
@@ -167,6 +168,7 @@ mod tests {
         // cleared away unheard. prev_was_tx=false means the slot that just ended was
         // a receive slot, so its audio (in the ring) is the other stations.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         eng.set_tier(tempo_app::dto::Tier::Ft1);
         eng.broadcast("CQ TEST W9XYZ EN37"); // something to send on our TX slot
         let mut rig = Rig::vox();

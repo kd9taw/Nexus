@@ -3571,7 +3571,10 @@ body.resizing {
 /* ===========================================================================
    CW operating cockpit (casual) — keyboard + macros key the rig
    =========================================================================== */
-.cw-cockpit {
+/* Triple-class (0,3,0) so `.layout.single` can't collapse the flex chain — same fix
+   as `.layout.single.phone-cockpit`. The CW cockpit now uses the wide/short
+   `.ph-scope-panel` bandscope, identical to Phone. */
+.layout.single.cw-cockpit {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -3650,10 +3653,6 @@ body.resizing {
 }
 .cw-abort:hover {
   background: color-mix(in srgb, var(--state-weak) 22%, transparent);
-}
-.cw-waterfall {
-  min-height: 130px;
-  flex: 0 0 auto;
 }
 .cw-macros {
   display: grid;

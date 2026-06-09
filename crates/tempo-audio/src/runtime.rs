@@ -125,6 +125,7 @@ mod tests {
     fn transmit_slot_keys_ptt_and_plays_audio() {
         // Station transmits on even slots (parity 0); slot 0 is a beacon slot.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         eng.set_beacon(true); // beacon is off by default (passive startup)
         let mut trx = Transceiver::new(eng, MockBackend::new(), Rig::vox());
 

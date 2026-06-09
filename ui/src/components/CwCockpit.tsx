@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot } from '../types'
-import { Waterfall } from './Waterfall'
+import { PhoneScope } from './PhoneScope'
 import { BandPicker } from './BandPicker'
 import { LogEntry } from './LogEntry'
 import { sendCw, setCwKeyer, setCwWpm, stopCw } from '../api'
@@ -144,13 +144,8 @@ export function CwCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap }: P
         </button>
       </div>
 
-      <section className="cw-waterfall panel">
-        <Waterfall
-          transmitting={snap.radio.transmitting}
-          rxOffsetHz={snap.radio.rxOffsetHz}
-          txOffsetHz={snap.radio.txOffsetHz}
-          theme={theme}
-        />
+      <section className="ph-scope-panel">
+        <PhoneScope transmitting={snap.radio.transmitting} theme={theme} />
       </section>
 
       <div className="cw-macros" role="group" aria-label="CW macros">

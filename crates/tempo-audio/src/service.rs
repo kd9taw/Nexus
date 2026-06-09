@@ -452,6 +452,17 @@ impl RadioLoop {
             //   sideband — see the App-side invariant.)
             if retuned {
                 self.last_rig_poll = now;
+                // A CAT command (set_freq/set_mode) just SUCCEEDED, so CAT is alive — clear
+                // a stale `cat_ok=Some(false)` (e.g. a transient read_freq failure at the
+                // initial probe). Otherwise the dial read-back stays disabled even though
+                // mode-switching works, and the VFO knob never mirrors into the UI. Also
+                // clear the matching "no rig control" UI warning, once, on the flip.
+                if self.cat_ok != Some(true) {
+                    self.cat_ok = Some(true);
+                    if let Ok(mut eng) = engine.lock() {
+                        eng.set_cat_status(Some(true), "CAT confirmed — rig accepted a command".to_string());
+                    }
+                }
             } else if self.tx_until_ms.is_none()
                 && !self.tuning_keyed
                 && self.cat_ok != Some(false)
