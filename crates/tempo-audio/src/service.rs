@@ -277,6 +277,12 @@ struct RadioLoop {
     /// Slot index whose WSJT-X-style EARLY decode pass already ran (once per
     /// RX slot; the boundary decode then ingests only the stragglers).
     early_done_slot: Option<u64>,
+    /// Fake-It split moved the VFO for the playing over — restore THIS dial
+    /// (Hz) when the over ends (PTT drop / hard stop).
+    fake_it_restore: Option<u64>,
+    /// An audio Rig-mode split engaged VFO B for an over — tear the rig split
+    /// down once no over is pending (unless the cluster split owns VFO B).
+    audio_rig_split: bool,
     /// Last time we polled the rig's live dial over CAT (ms), for throttling.
     last_rig_poll: f64,
     /// Last known CAT health (from connect/Test-CAT): `Some(false)` = configured but failing,
@@ -314,6 +320,8 @@ impl RadioLoop {
             qso_started_ms: None,
             psk_spots: Vec::new(),
             early_done_slot: None,
+            fake_it_restore: None,
+            audio_rig_split: false,
             last_psk_flush: now_unix_ms(),
             last_rig_poll: now_unix_ms(),
             cat_ok: None,
@@ -746,11 +754,37 @@ impl RadioLoop {
                     let _ = rig.ptt(false);
                 }
                 self.tx_until_ms = None;
+                // Split restore happens in the catch-all below (single drain
+                // point — per-site restores leaked through HaltTx/tune paths).
             }
         }
 
         let slot = self.clock.slot_index(now);
         let mut eng = engine.lock().map_err(|e| e.to_string())?;
+        // Split-Operation teardown catch-all: the moment NO over is pending,
+        // restore a Fake-It-shifted VFO and drop an audio Rig-split. ONE drain
+        // point, deliberately not per-exit-path: expiry, hard stop, UDP HaltTx
+        // and a tune supersede all just clear tx_until_ms, and per-site
+        // restores provably leaked (review: stranded shifted dial = every
+        // subsequent decode/spot/log on a wrong frequency). Deferred while the
+        // operator holds live phone PTT — never move the VFO under a live over.
+        if self.tx_until_ms.is_none() && !self.manual_ptt_applied {
+            if let Some(hz) = self.fake_it_restore.take() {
+                let _ = rig.set_freq(hz);
+                // Settle the poll guards so the knob-QSY detector can't adopt
+                // a not-yet-restored read-back as an operator QSY.
+                self.last_dial = hz;
+                self.last_rig_poll = now;
+            }
+            if self.audio_rig_split {
+                self.audio_rig_split = false;
+                // The cluster SPLIT-on-Work owns VFO B when active — leave it.
+                if !eng.cluster_split_active() {
+                    let _ = rig.set_split(false, "VFOA");
+                }
+            }
+        }
+
         // Deferred "Disable Tx after sending 73": only once the final over has
         // fully played out (tx_until cleared) — disabling mid-over would trip
         // the hard-stop path above and cut the 73 itself.
@@ -899,6 +933,16 @@ impl RadioLoop {
                         .map(|w| trim_samples < w.len())
                         .unwrap_or(false);
                     if trimmable {
+                        // Split Operation: the engine reduced this over's audio —
+                        // move the TX dial before the carrier keys (same as the
+                        // boundary path).
+                        let split = crate::slot::apply_tx_dial_shift(&mut eng, rig);
+                        if split.fake_it_restore.is_some() {
+                            self.fake_it_restore = split.fake_it_restore;
+                        }
+                        if split.rig_split_engaged {
+                            self.audio_rig_split = true;
+                        }
                         let _ = rig.ptt(true);
                         let mut secs = 0.0f32;
                         let last = waves.len() - 1;
@@ -1001,6 +1045,12 @@ impl RadioLoop {
             if let Some(t) = action.tx_until_ms {
                 self.tx_until_ms = Some(t);
             }
+            if action.fake_it_restore.is_some() {
+                self.fake_it_restore = action.fake_it_restore;
+            }
+            if action.rig_split_engaged {
+                self.audio_rig_split = true;
+            }
             // Remember whether THIS slot was a transmit slot so the next boundary
             // knows not to decode our own carrier (and to decode it otherwise).
             self.prev_slot_was_tx = action.tx_this_slot;
@@ -1038,8 +1088,10 @@ impl RadioLoop {
                         // WSJT-X: when we decode the prior RX slot AND transmit in
                         // this one (calling CQ), report the transmit phase only.
                         decoding: did_rx && !tx_this_slot,
-                        rx_df: 1500,
-                        tx_df: 1500,
+                        // REAL audio offsets (GridTracker/JTAlert show these) —
+                        // hardcoded 1500s confused every cooperating logger.
+                        rx_df: snap.radio.rx_offset_hz.max(0.0) as u32,
+                        tx_df: snap.radio.tx_offset_hz.max(0.0) as u32,
                         de_call: &snap.mycall,
                         de_grid: &snap.mygrid,
                         dx_grid: "",

@@ -90,6 +90,48 @@ const PTT_METHODS: { value: string; label: string }[] = [
 
 const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs']
 
+/** WSJT-X Split Operation choices (Settings ▸ Radio parity). */
+const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'rig', label: 'Rig' },
+  { value: 'fakeit', label: 'Fake It' },
+]
+
+/** One operator override of the working-frequency table. */
+type WorkingFrequency = NonNullable<Settings['workingFrequencies']>[number]
+
+/** The stock WSJT-X working-frequency table, shown read-only for reference.
+ * An override replaces the matching band+mode row; no overrides = stock. */
+const STOCK_WORKING_FREQUENCIES: WorkingFrequency[] = [
+  { band: '160m', mode: 'FT8', mhz: 1.84 },
+  { band: '80m', mode: 'FT8', mhz: 3.573 },
+  { band: '60m', mode: 'FT8', mhz: 5.357 },
+  { band: '40m', mode: 'FT8', mhz: 7.074 },
+  { band: '30m', mode: 'FT8', mhz: 10.136 },
+  { band: '20m', mode: 'FT8', mhz: 14.074 },
+  { band: '17m', mode: 'FT8', mhz: 18.1 },
+  { band: '15m', mode: 'FT8', mhz: 21.074 },
+  { band: '12m', mode: 'FT8', mhz: 24.915 },
+  { band: '10m', mode: 'FT8', mhz: 28.074 },
+  { band: '6m', mode: 'FT8', mhz: 50.313 },
+  { band: '2m', mode: 'FT8', mhz: 144.174 },
+  { band: '70cm', mode: 'FT8', mhz: 432.065 },
+  { band: '80m', mode: 'FT4', mhz: 3.575 },
+  { band: '40m', mode: 'FT4', mhz: 7.0475 },
+  { band: '30m', mode: 'FT4', mhz: 10.14 },
+  { band: '20m', mode: 'FT4', mhz: 14.08 },
+  { band: '17m', mode: 'FT4', mhz: 18.104 },
+  { band: '15m', mode: 'FT4', mhz: 21.14 },
+  { band: '12m', mode: 'FT4', mhz: 24.919 },
+  { band: '10m', mode: 'FT4', mhz: 28.18 },
+  { band: '6m', mode: 'FT4', mhz: 50.318 },
+  { band: '2m', mode: 'FT4', mhz: 144.17 },
+]
+
+/** Bands/modes offered in the override editor (the stock table's coverage). */
+const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '2m', '70cm']
+const FREQ_MODES = ['FT8', 'FT4']
+
 /** Settings is split into tabbed sections: only the active one renders, so a
  * keystroke re-renders ~one section's worth of inputs instead of the whole panel
  * (fixes typing lag) — and it tames the single-giant-scroll wall. */
@@ -98,6 +140,7 @@ type SettingsTab =
   | 'rig'
   | 'audio'
   | 'operating'
+  | 'frequencies'
   | 'alerts'
   | 'connections'
   | 'confirmations'
@@ -109,6 +152,7 @@ const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'rig', label: 'Rig / CAT' },
   { id: 'audio', label: 'Audio' },
   { id: 'operating', label: 'Operating' },
+  { id: 'frequencies', label: 'Frequencies' },
   { id: 'alerts', label: 'Alerts' },
   { id: 'connections', label: 'Connections' },
   { id: 'confirmations', label: 'Confirmations' },
@@ -173,6 +217,9 @@ export function SettingsPanel({
   const [qrzKey, setQrzKey] = useState('')
   const [clublogPw, setClublogPw] = useState('')
   const [tab, setTab] = useState<SettingsTab>('station')
+  // In-progress MHz text for the override row being edited — committed only when
+  // it parses as a positive number, so a half-typed "14." never corrupts the form.
+  const [mhzDraft, setMhzDraft] = useState<{ idx: number; text: string } | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -265,6 +312,67 @@ export function SettingsPanel({
     setForm((prev) =>
       prev ? { ...prev, macros: { ...prev.macros, [ctx]: list } } : prev,
     )
+  }
+
+  /** WSJT-X Split Operation (none | rig | fakeit). */
+  const setSplitMode = (m: NonNullable<Settings['splitMode']>) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, splitMode: m } : prev))
+  }
+
+  // --- working-frequency overrides (Frequencies tab) ---
+  const updateOverride = (idx: number, patch: Partial<WorkingFrequency>) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const list = [...(prev.workingFrequencies ?? [])]
+      if (!list[idx]) return prev
+      list[idx] = { ...list[idx], ...patch }
+      return { ...prev, workingFrequencies: list }
+    })
+  }
+
+  const addOverride = () => {
+    markDirty()
+    setForm((prev) =>
+      prev
+        ? {
+            ...prev,
+            workingFrequencies: [
+              ...(prev.workingFrequencies ?? []),
+              { band: '20m', mode: 'FT8', mhz: 14.074 },
+            ],
+          }
+        : prev,
+    )
+  }
+
+  const removeOverride = (idx: number) => {
+    markDirty()
+    setMhzDraft(null)
+    setForm((prev) =>
+      prev
+        ? { ...prev, workingFrequencies: (prev.workingFrequencies ?? []).filter((_, i) => i !== idx) }
+        : prev,
+    )
+  }
+
+  const resetOverrides = () => {
+    if (
+      (form?.workingFrequencies?.length ?? 0) > 0 &&
+      !window.confirm('Clear all working-frequency overrides and go back to the stock WSJT-X table?')
+    ) {
+      return
+    }
+    markDirty()
+    setMhzDraft(null)
+    setForm((prev) => (prev ? { ...prev, workingFrequencies: [] } : prev))
+  }
+
+  /** Commit a typed MHz only when valid (positive, finite); otherwise keep prior. */
+  const commitMhz = (idx: number, raw: string) => {
+    const num = Number(raw)
+    if (raw.trim() !== '' && Number.isFinite(num) && num > 0) updateOverride(idx, { mhz: num })
   }
 
   const selectRig = (modelNum: number) => {
@@ -570,6 +678,17 @@ export function SettingsPanel({
   const audioOutOptions = form.audioOut && !audio.output.includes(form.audioOut)
     ? [form.audioOut, ...audio.output]
     : audio.output
+
+  // Frequencies tab: last-wins override lookup for the stock table, plus
+  // duplicate band+mode keys (flagged in the editor — the last row wins).
+  const overrides = form.workingFrequencies ?? []
+  const overrideByKey = new Map<string, number>()
+  const dupKeys = new Set<string>()
+  for (const o of overrides) {
+    const k = `${o.band}|${o.mode}`
+    if (overrideByKey.has(k)) dupKeys.add(k)
+    overrideByKey.set(k, o.mhz)
+  }
 
   return (
     <section className="panel settings-panel">
@@ -925,6 +1044,29 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">Port Nexus launches rigctld on.</span>
               </label>
+
+              <div className="settings-field">
+                <span className="settings-label">Split operation</span>
+                <div className="theme-switcher" role="group" aria-label="Split operation">
+                  {SPLIT_MODES.map((m) => (
+                    <button
+                      key={m.value}
+                      type="button"
+                      className={`theme-chip${(form.splitMode ?? 'none') === m.value ? ' active' : ''}`}
+                      aria-pressed={(form.splitMode ?? 'none') === m.value}
+                      onClick={() => setSplitMode(m.value)}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="settings-hint">
+                  Keeps your transmitted audio between 1500–2000 Hz by shifting the TX dial in
+                  500 Hz steps, so audio harmonics fall outside the transmit filter — cleaner
+                  signal. Rig = uses VFO B split. Fake It = retunes the VFO around each over (works
+                  on any CAT rig). None = stock WSJT-X default, transmits at the raw audio offset.
+                </span>
+              </div>
 
               <div className="settings-field">
                 <label className="settings-toggle">
@@ -1378,6 +1520,136 @@ export function SettingsPanel({
                   off-grid: GPS). Turn off for fully-offline operation (no network calls).
                 </span>
               </div>
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- Frequencies (working-frequency table overrides) ---- */}
+          {tab === 'frequencies' && (
+          <fieldset className="settings-section">
+            <legend>Working Frequencies</legend>
+            <p className="settings-note">
+              The dial frequency used when a band/mode is selected. These are{' '}
+              <strong>overrides</strong> of the stock WSJT-X working-frequency table — leave the
+              list empty to use stock everywhere. An override replaces the stock row for its
+              band + mode (e.g. to move FT8 to an alternate sub-band).
+            </p>
+
+            <div className="settings-field">
+              <span className="settings-label">Standard table (read-only)</span>
+              <div className="freq-table">
+                <div className="freq-row head">
+                  <span className="freq-cell">Band</span>
+                  <span className="freq-cell">Mode</span>
+                  <span className="freq-cell">Dial (MHz)</span>
+                </div>
+                {STOCK_WORKING_FREQUENCIES.map((r) => {
+                  const ov = overrideByKey.get(`${r.band}|${r.mode}`)
+                  return (
+                    <div className="freq-row" key={`${r.band}-${r.mode}`}>
+                      <span className="freq-cell mono">{r.band}</span>
+                      <span className="freq-cell">{r.mode}</span>
+                      {ov != null ? (
+                        <span
+                          className="freq-cell mono freq-override"
+                          title={`Your override — stock is ${r.mhz.toFixed(6)} MHz`}
+                        >
+                          {ov.toFixed(6)}
+                          <span className="freq-override-tag">override</span>
+                        </span>
+                      ) : (
+                        <span className="freq-cell mono">{r.mhz.toFixed(6)}</span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+              <span className="settings-hint">
+                WSJT-X stock dial frequencies. A row with an active override shows your value
+                (highlighted) instead of the stock one.
+              </span>
+            </div>
+
+            <div className="settings-field">
+              <span className="settings-label">Your overrides</span>
+              {overrides.length === 0 && (
+                <span className="settings-hint">None — the stock table is in effect.</span>
+              )}
+              {overrides.map((o, i) => {
+                const dup = dupKeys.has(`${o.band}|${o.mode}`)
+                return (
+                  <div className={`freq-edit-row${dup ? ' dup' : ''}`} key={i}>
+                    <select
+                      className="settings-input"
+                      value={o.band}
+                      aria-label={`Override ${i + 1} band`}
+                      onChange={(e) => updateOverride(i, { band: e.target.value })}
+                    >
+                      {FREQ_BANDS.map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="settings-input"
+                      value={o.mode}
+                      aria-label={`Override ${i + 1} mode`}
+                      onChange={(e) => updateOverride(i, { mode: e.target.value })}
+                    >
+                      {FREQ_MODES.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      className="settings-input"
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.0001"
+                      aria-label={`Override ${i + 1} dial frequency in MHz`}
+                      value={mhzDraft && mhzDraft.idx === i ? mhzDraft.text : o.mhz.toFixed(6)}
+                      onChange={(e) => {
+                        setMhzDraft({ idx: i, text: e.target.value })
+                        commitMhz(i, e.target.value)
+                      }}
+                      onBlur={() => setMhzDraft(null)}
+                      autoComplete="off"
+                    />
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={() => removeOverride(i)}
+                      aria-label={`Remove the ${o.band} ${o.mode} override`}
+                      title="Remove this override"
+                    >
+                      ✕
+                    </button>
+                    {dup && (
+                      <span className="freq-dup-tag">duplicate band + mode — the last row wins</span>
+                    )}
+                  </div>
+                )
+              })}
+              <div className="settings-input-row freq-actions">
+                <button type="button" className="settings-refresh" onClick={addOverride}>
+                  Add override
+                </button>
+                <button
+                  type="button"
+                  className="settings-refresh"
+                  onClick={resetOverrides}
+                  disabled={overrides.length === 0}
+                >
+                  Reset to standard
+                </button>
+              </div>
+              <span className="settings-hint">
+                MHz is the dial (suppressed-carrier) frequency. Save to apply — band switches
+                then use your value for that band + mode.
+              </span>
             </div>
           </fieldset>
           )}

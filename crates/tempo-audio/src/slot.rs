@@ -24,6 +24,46 @@ pub struct SlotAction {
     /// True when we transmitted this slot — the next boundary uses this as
     /// `prev_was_tx` so it knows the capture ring then holds our own carrier.
     pub tx_this_slot: bool,
+    /// Fake-It split moved the VFO for this over — restore it to this dial
+    /// (Hz) once the over finishes playing (the loop owns the PTT deadline).
+    pub fake_it_restore: Option<u64>,
+    /// Rig-mode split engaged VFO B for this over — the loop tears the rig
+    /// split down once the over ends (it would otherwise stay latched and a
+    /// later in-window over would TX on a stale VFO B frequency).
+    pub rig_split_engaged: bool,
+}
+
+/// What the Split-Operation pre-key step did, for the loop's teardown.
+pub(crate) struct SplitApply {
+    pub fake_it_restore: Option<u64>,
+    pub rig_split_engaged: bool,
+}
+
+/// Apply the WSJT-X Split-Operation dial shift for the over about to key (must
+/// run BEFORE PTT): `Rig` = shifted TX dial on VFO B (rig split); `FakeIt` =
+/// retune the single VFO. Reports what engaged so the loop restores/tears down
+/// at over end. No-op when the engine left shift = 0.
+pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply {
+    use tempo_app::settings::SplitMode;
+    let none = SplitApply { fake_it_restore: None, rig_split_engaged: false };
+    let shift = eng.take_tx_dial_shift();
+    if shift == 0 {
+        return none;
+    }
+    let dial = eng.settings().dial_hz();
+    let tx_dial = (dial as i64 + shift).max(0) as u64;
+    match eng.settings().split_mode {
+        SplitMode::Rig => {
+            let _ = rig.set_split(true, "VFOB");
+            let _ = rig.set_split_freq(tx_dial);
+            SplitApply { fake_it_restore: None, rig_split_engaged: true }
+        }
+        SplitMode::FakeIt => {
+            let _ = rig.set_freq(tx_dial);
+            SplitApply { fake_it_restore: Some(dial), rig_split_engaged: false }
+        }
+        SplitMode::None => none, // shift can't be non-zero here, but stay total
+    }
 }
 
 /// Run one slot boundary.
@@ -73,6 +113,9 @@ pub fn run_slot(
     // 2. Transmit decision for the NEW slot (now informed by the decode above).
     let waves = eng.poll_tx(slot);
     if !waves.is_empty() {
+        // Split Operation: move the TX dial (if the engine reduced the audio)
+        // BEFORE the carrier keys.
+        let split = apply_tx_dial_shift(eng, rig);
         let _ = rig.ptt(true);
         let mut secs = 0.0f32;
         for w in &waves {
@@ -84,6 +127,8 @@ pub fn run_slot(
             tx_until_ms: Some(now_ms + secs as f64 * 1000.0 + TX_TAIL_MS),
             did_rx,
             tx_this_slot: true,
+            fake_it_restore: split.fake_it_restore,
+            rig_split_engaged: split.rig_split_engaged,
         }
     } else {
         // Receive slot: keep the rolling capture window (no clear) so the next
@@ -92,6 +137,8 @@ pub fn run_slot(
             tx_until_ms: None,
             did_rx,
             tx_this_slot: false,
+            fake_it_restore: None,
+            rig_split_engaged: false,
         }
     }
 }
@@ -100,6 +147,33 @@ pub fn run_slot(
 mod tests {
     use super::*;
     use crate::backend::MockBackend;
+
+    #[test]
+    fn fake_it_split_reports_the_restore_dial() {
+        // FakeIt: an out-of-window TX offset shifts the dial for the over and
+        // the action carries the dial to RESTORE once the over finishes — the
+        // loop applies it at PTT drop. Rig/None report nothing to restore.
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tier(tempo_app::dto::Tier::Ft8);
+        let mut st = eng.settings().clone();
+        st.split_mode = tempo_app::settings::SplitMode::FakeIt;
+        eng.apply_settings(st);
+        eng.set_tx_enabled(true);
+        eng.set_tx_offset(750.0); // f0 1750, dial -1000
+        eng.broadcast("CQ W9XYZ EN37");
+        let mut rig = Rig::vox();
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
+
+        let act = run_slot(&mut eng, &mut rig, &mut backend, &mut rx, 0, 1000.0, false, false);
+
+        assert!(act.tx_this_slot, "the CQ keyed");
+        assert_eq!(
+            act.fake_it_restore,
+            Some(eng.settings().dial_hz()),
+            "restore dial = the RX dial the over shifted away from"
+        );
+    }
 
     #[test]
     fn tx_slot_keys_ptt_plays_audio_and_sets_hold() {

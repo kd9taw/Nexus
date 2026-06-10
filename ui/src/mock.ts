@@ -350,6 +350,9 @@ function defaultSettings(): Settings {
     txOffsetHz: 1500,
     holdTxFreq: false,
     clockCheck: true,
+    // WSJT-X parity: Split Operation + working-frequency overrides
+    splitMode: 'none',
+    workingFrequencies: [],
     // network integrations
     wsjtxUdp: false,
     wsjtxUdpAddr: '127.0.0.1:2237',

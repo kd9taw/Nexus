@@ -997,6 +997,10 @@ export interface Settings {
   doubleClickSetsTx?: boolean
   /** Tune carrier auto-release (seconds). */
   tuneTimeoutSecs?: number
+  /** WSJT-X Split Operation: keep TX audio 1500-2000 Hz via dial shifts. */
+  splitMode?: 'none' | 'rig' | 'fakeit'
+  /** Operator overrides of the working-frequency table (empty = stock). */
+  workingFrequencies?: { band: string; mode: string; mhz: number }[]
   // --- coordinated QSY ("move together") — separate, opt-in, off by default ---
   /** Master opt-in for coordinated QSY (announced-in-the-clear roaming). */
   qsyEnabled: boolean

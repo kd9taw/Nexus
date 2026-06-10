@@ -1244,9 +1244,10 @@ fn get_rig_models() -> Vec<(u32, String)> {
 /// selector. Each entry is General-legal + clear of the existing watering holes.
 #[tauri::command]
 fn get_band_plan(state: State<'_, SharedEngine>) -> Result<Vec<tempo_app::bandplan::BandChannel>, String> {
-    // Tier-aware: FT8/FT4 → the standard WSJT-X watering holes; FT1/DX1 → native plan.
-    let tier = state.lock().map_err(|e| e.to_string())?.tier();
-    Ok(tempo_app::bandplan::band_plan_for(tier))
+    // Tier-aware (FT8/FT4 → the standard WSJT-X watering holes; FT1/DX1 →
+    // native plan) WITH the operator's Settings ▸ Frequencies overrides applied
+    // — the band picker must show the dials the engine will actually QSY to.
+    Ok(state.lock().map_err(|e| e.to_string())?.band_plan())
 }
 
 /// Set the operator's amateur license class (Technician/General/Extra/Open) — drives the

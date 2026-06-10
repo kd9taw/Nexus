@@ -182,6 +182,10 @@ pub struct Engine {
     /// radio loop consumes it AFTER tx_until expires; disabling immediately
     /// would trip the hard-stop path and cut the 73 itself mid-over.
     pending_tx_disable: bool,
+    /// TX dial shift (Hz) for the over poll_tx just generated under WSJT-X
+    /// Split Operation — the audio was reduced into 1500–2000 Hz and the loop
+    /// must move the TX dial by this much before keying. 0 = no shift.
+    tx_dial_shift_hz: i64,
     /// Desired rig SPLIT state: `Some(tx_dial_mhz)` = split on with that TX dial;
     /// `None` = simplex. Set by work_spot (pile-up "UP n" spots) and cleared by any
     /// plain QSY/work; the loop applies it via `split_dirty` (one-shot).
@@ -348,6 +352,7 @@ impl Engine {
             decode_history: std::collections::VecDeque::new(),
             early_seen: None,
             pending_tx_disable: false,
+            tx_dial_shift_hz: 0,
             split_tx_mhz: None,
             split_dirty: false,
             cw_queue: VecDeque::new(),
@@ -472,6 +477,42 @@ impl Engine {
             .set_radio(self.settings.dial_mhz, &self.settings.band, &self.settings.sideband);
     }
 
+    /// The active tier's band plan with the operator's working-frequency
+    /// overrides applied (WSJT-X Settings ▸ Frequencies): an override replaces
+    /// the dial of the matching (band, mode) row; a band the stock table lacks
+    /// is appended. Empty overrides = stock.
+    pub fn band_plan(&self) -> Vec<crate::bandplan::BandChannel> {
+        let tier = self.app.tier();
+        let mode_name = match tier {
+            Tier::Ft8 => "FT8",
+            Tier::Ft4 => "FT4",
+            _ => "",
+        };
+        let mut plan = crate::bandplan::band_plan_for(tier);
+        if !mode_name.is_empty() {
+            for wf in &self.settings.working_frequencies {
+                if !wf.mode.eq_ignore_ascii_case(mode_name) || wf.mhz <= 0.0 {
+                    continue;
+                }
+                if let Some(c) = plan.iter_mut().find(|c| c.band.eq_ignore_ascii_case(&wf.band)) {
+                    c.dial_mhz = wf.mhz;
+                } else {
+                    // A band the stock table lacks (e.g. 60 m FT4): append it —
+                    // silently dropping a saved override is a lie to the operator.
+                    plan.push(crate::bandplan::BandChannel {
+                        band: wf.band.clone(),
+                        group: if wf.mhz >= 30.0 { "VHF" } else { "HF" }.into(),
+                        dial_mhz: wf.mhz,
+                        mode: "USB".into(),
+                        label: format!("{} · {} (custom)", wf.band, mode_name),
+                        note: "operator working-frequency override".into(),
+                    });
+                }
+            }
+        }
+        plan
+    }
+
     /// The "home" dial + sideband for `om` on the CURRENT band: Digital → the active tier's
     /// watering hole (FT8 14.074 / FT4 14.080 / FT1 native); Phone → the lowest phone freq the
     /// operator is licensed for; CW → the lowest CW freq. `None` when the operator has no
@@ -489,7 +530,7 @@ impl Engine {
         match om {
             OperatingMode::Digital => {
                 let off = self.tx_offset_hz as f64 / 1_000_000.0;
-                crate::bandplan::band_plan_for(self.app.tier())
+                self.band_plan()
                     .into_iter()
                     .find(|c| c.band == band)
                     // FT8/FT4 are USB, so the emission sits `off` ABOVE the dial. Only adopt the
@@ -2212,6 +2253,39 @@ impl Engine {
         self.immediate_tx = true;
     }
 
+    /// WSJT-X Split Operation: reduce a TX audio offset into the clean
+    /// 1500–2000 Hz window (audio harmonics land outside the TX filter) and
+    /// return the matching 500 Hz-step dial shift that keeps the RF frequency
+    /// identical: `f0 = 1500 + (tx − 1500) mod 500`, `shift = tx − f0`.
+    /// Inactive (raw offset, shift 0) when split is off, the tier isn't
+    /// FT8/FT4, the offset is already in-window, or a cluster SPLIT-on-Work
+    /// already owns the TX dial.
+    fn split_reduce(&self, tx_hz: f32) -> (f32, i64) {
+        use crate::settings::SplitMode;
+        let t = tx_hz.round() as i64;
+        if self.settings.split_mode == SplitMode::None
+            || self.split_tx_mhz.is_some()
+            || !matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4)
+            || (1500..=2000).contains(&t)
+        {
+            return (tx_hz, 0);
+        }
+        let f0 = 1500 + (t - 1500).rem_euclid(500);
+        (f0 as f32, t - f0)
+    }
+
+    /// True while a cluster SPLIT-on-Work owns the TX dial (VFO B) — the audio
+    /// split's teardown must not clear the rig split out from under it.
+    pub fn cluster_split_active(&self) -> bool {
+        self.split_tx_mhz.is_some()
+    }
+
+    /// Consume the dial shift for the over just generated (0 = none). The slot
+    /// core applies it via the rig BEFORE keying PTT.
+    pub fn take_tx_dial_shift(&mut self) -> i64 {
+        std::mem::take(&mut self.tx_dial_shift_hz)
+    }
+
     /// Consume the deferred "Disable Tx after sending 73" request — the radio
     /// loop calls this once the final over has fully played out (never mid-over).
     pub fn take_pending_tx_disable(&mut self) -> bool {
@@ -2609,11 +2683,16 @@ impl Engine {
                     // retransmissions; Chat/Field Day keep tx_rv = 0 (RV0 = tx::build).
                     Tier::Ft1 => tx::build_rv(&t, ft1::SAMPLE_RATE, self.tx_offset_hz, tx_rv).wave,
                     // FT8 / FT4: encode + synthesize via the active mode (no IR-HARQ).
+                    // Split Operation reduces the audio into 1500–2000 Hz and
+                    // leaves the matching dial shift for the slot core to apply
+                    // before PTT — the on-air RF frequency is unchanged.
                     native => {
                         let kind = native.mode_kind().unwrap_or(modes::ModeKind::Ft1);
                         let mode = modes::make_mode(kind);
                         let tones = mode.encode(&t);
-                        mode.gen_wave(&tones, ft1::SAMPLE_RATE, self.tx_offset_hz)
+                        let (f0, shift) = self.split_reduce(self.tx_offset_hz);
+                        self.tx_dial_shift_hz = shift;
+                        mode.gen_wave(&tones, ft1::SAMPLE_RATE, f0)
                     }
                 };
                 vec![wave]
@@ -4066,6 +4145,69 @@ mod tests {
             "the new arm cancels the stale one-shot"
         );
         assert!(e.tx_enabled(), "the CQ run stays armed");
+    }
+
+    #[test]
+    fn split_operation_reduces_audio_and_reports_the_dial_shift() {
+        // WSJT-X Split: f0 = 1500 + (tx-1500) mod 500; shift = tx - f0 (500-Hz
+        // steps), RF identical. Verified through poll_tx's side channel.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.split_mode = crate::settings::SplitMode::FakeIt;
+        e.set_tx_enabled(true);
+        // 750 Hz: audio must come up to 1750, dial down 1000.
+        e.set_tx_offset(750.0);
+        e.broadcast("CQ W9XYZ EN37");
+        assert!(!e.poll_tx(0).is_empty());
+        assert_eq!(e.take_tx_dial_shift(), -1000, "750 -> f0 1750, dial -1000");
+        // 2600 Hz: f0 1600, dial +1000.
+        e.set_tx_offset(2600.0);
+        e.broadcast("CQ W9XYZ EN37");
+        assert!(!e.poll_tx(2).is_empty());
+        assert_eq!(e.take_tx_dial_shift(), 1000, "2600 -> f0 1600, dial +1000");
+        // Already in the clean window: untouched.
+        e.set_tx_offset(1700.0);
+        e.broadcast("CQ W9XYZ EN37");
+        assert!(!e.poll_tx(4).is_empty());
+        assert_eq!(e.take_tx_dial_shift(), 0, "1500-2000 Hz needs no shift");
+        // Extremes + the exact window edge.
+        e.set_tx_offset(200.0); // passband floor → f0 1700, dial -1500
+        e.broadcast("CQ W9XYZ EN37");
+        assert!(!e.poll_tx(6).is_empty());
+        assert_eq!(e.take_tx_dial_shift(), -1500, "200 -> f0 1700, dial -1500");
+        e.set_tx_offset(2900.0); // ceiling → f0 1900, dial +1000
+        e.broadcast("CQ W9XYZ EN37");
+        assert!(!e.poll_tx(8).is_empty());
+        assert_eq!(e.take_tx_dial_shift(), 1000, "2900 -> f0 1900, dial +1000");
+        e.set_tx_offset(2000.0); // window edge is INCLUSIVE — no spurious hop
+        e.broadcast("CQ W9XYZ EN37");
+        assert!(!e.poll_tx(10).is_empty());
+        assert_eq!(e.take_tx_dial_shift(), 0, "2000 Hz is in-window");
+        // Split off (stock default): raw offset, no shift.
+        e.settings.split_mode = crate::settings::SplitMode::None;
+        e.set_tx_offset(750.0);
+        e.broadcast("CQ W9XYZ EN37");
+        assert!(!e.poll_tx(12).is_empty());
+        assert_eq!(e.take_tx_dial_shift(), 0, "None = stock raw-offset TX");
+    }
+
+    #[test]
+    fn working_frequency_override_moves_the_watering_hole() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        // Stock 20 m FT8 = 14.074; the operator overrides to 14.071.
+        e.settings.working_frequencies = vec![crate::settings::WorkingFreq {
+            band: "20m".into(),
+            mode: "FT8".into(),
+            mhz: 14.071,
+        }];
+        let plan = e.band_plan();
+        let c = plan.iter().find(|c| c.band == "20m").unwrap();
+        assert!((c.dial_mhz - 14.071).abs() < 1e-9, "override applied");
+        // FT4 untouched by an FT8 override.
+        e.set_tier(Tier::Ft4);
+        let c = e.band_plan().into_iter().find(|c| c.band == "20m").unwrap();
+        assert!((c.dial_mhz - 14.080).abs() < 1e-9, "FT4 stock kept");
     }
 
     fn dec_snr(msg: &str, snr: i32) -> Decode {

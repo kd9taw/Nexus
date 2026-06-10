@@ -221,6 +221,19 @@ pub struct Settings {
     /// after t s". Default matches the loop's long-standing 12 s safety cap.
     #[serde(default = "default_tune_timeout")]
     pub tune_timeout_secs: u32,
+    /// WSJT-X Split Operation (Settings ▸ Radio): keep the TRANSMITTED audio in
+    /// 1500–2000 Hz (harmonics land outside the TX filter) by shifting the TX
+    /// dial in 500 Hz steps. `None` = stock default (transmit at the raw audio
+    /// offset); `Rig` = shifted dial on VFO B (rig split); `FakeIt` = retune the
+    /// single VFO for the over and restore after (works on any CAT rig).
+    #[serde(default)]
+    pub split_mode: SplitMode,
+    /// Operator overrides of the working-frequency table (WSJT-X Settings ▸
+    /// Frequencies). Empty = the stock WSJT-X table built into the band plan.
+    /// An entry replaces the dial of the matching (band, mode) row; an entry
+    /// for a band the built-in table lacks is appended.
+    #[serde(default)]
+    pub working_frequencies: Vec<WorkingFreq>,
 
     // --- coordinated QSY ("move together") — a SEPARATE, opt-in function ---
     /// Master opt-in for coordinated QSY. **Off by default** and fully isolated:
@@ -314,6 +327,27 @@ pub struct VoiceMessage {
 
 /// The default six labelled (but empty) voice-keyer slots — a casual phone set (no
 /// contest exchange). The operator records or imports the audio per slot.
+/// WSJT-X Split Operation choices. Serialized lowercase for the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SplitMode {
+    #[default]
+    None,
+    Rig,
+    #[serde(rename = "fakeit")]
+    FakeIt,
+}
+
+/// One operator-edited working-frequency row (band + mode + dial MHz).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkingFreq {
+    pub band: String,
+    /// "FT8" | "FT4" (matched case-insensitively against the tier).
+    pub mode: String,
+    pub mhz: f64,
+}
+
 fn default_on() -> bool {
     true
 }
@@ -414,6 +448,8 @@ impl Default for Settings {
             clear_dx_after_log: false,
             double_click_sets_tx: true,
             tune_timeout_secs: 12,
+            split_mode: SplitMode::None,
+            working_frequencies: Vec::new(),
             qsy_enabled: false,
             qsy_set: vec!["20m".to_string(), "40m".to_string(), "30m".to_string()],
             qsy_cadence: tempo_core::qsy::DEFAULT_CADENCE,
