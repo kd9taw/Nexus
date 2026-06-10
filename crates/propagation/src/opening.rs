@@ -72,6 +72,13 @@ pub struct OpeningConfig {
     pub min_regional_stations: usize,
     /// Min two-way pairs for a regional open — rejects one loud station heard by many.
     pub min_regional_reciprocal: usize,
+    /// Min DISTINCT near-the-operator receivers for a regional open. The
+    /// anti-superstation rule: one tall-tower station hearing twelve DX is a
+    /// single endpoint, not a regional opening — the gate demands a collection
+    /// of spots across MULTIPLE local endpoints before believing the band.
+    pub min_regional_near_rx: usize,
+    /// "Near the operator" radius (km) for the endpoint census above.
+    pub region_near_km: f64,
     /// Min cross-band share for a regional open — rejects a uniform contest/Es surge
     /// lifting every band (a real opening is band-specific).
     pub min_regional_cross_band_share: f32,
@@ -109,6 +116,8 @@ impl Default for OpeningConfig {
             min_regional_stations: 12,
             min_regional_reciprocal: 2,
             min_regional_cross_band_share: 0.3,
+            min_regional_near_rx: 3,
+            region_near_km: 800.0,
             gap_bins: 3, // hold out the recent ~30 min (the episode + rising edge)
             max_dwell_secs: 6 * 3600, // 6 h backstop
         }
@@ -133,6 +142,9 @@ pub struct BandFeatures {
     /// Distinct unordered call-pairs {A,B} confirmed both ways (regional two-way),
     /// not just those involving the operator (Phase 2). Superset of `reciprocal_pairs`.
     pub reciprocal_pairs_regional: usize,
+    /// Distinct RECEIVER endpoints within `region_near_km` of the operator among
+    /// far↔far spots — the anti-superstation census (multiple local ears).
+    pub unique_near_rx: usize,
     pub median_km: f64,
     pub max_km: f64,
     pub min_km: f64,
@@ -177,6 +189,7 @@ impl BandFeatures {
             reciprocal_pairs: 0,
             unique_stations: 0,
             reciprocal_pairs_regional: 0,
+            unique_near_rx: 0,
             median_km: 0.0,
             max_km: 0.0,
             min_km: 0.0,
@@ -228,6 +241,7 @@ impl BandFeatures {
         // threshold relax — relaxing it here would defeat contest rejection.
         let regional_gate = cfg.regional_scope
             && self.unique_stations >= cfg.min_regional_stations
+            && self.unique_near_rx >= cfg.min_regional_near_rx
             && self.reciprocal_pairs_regional >= cfg.min_regional_reciprocal
             && self.cross_band_share >= cfg.min_regional_cross_band_share;
         op_gate || regional_gate
@@ -431,6 +445,7 @@ pub fn band_features(
 
     let mut far_rx: HashSet<String> = HashSet::new();
     let mut far_tx: HashSet<String> = HashSet::new();
+    let mut near_rx: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut all_stations: HashSet<String> = HashSet::new();
     let mut dists: Vec<f64> = Vec::new();
     let mut bearings: Vec<f64> = Vec::new();
@@ -463,7 +478,18 @@ pub fn band_features(
                 }
                 s.tx_grid.as_deref()
             }
-            Side::Neither => farther_grid(me_grid, s.tx_grid.as_deref(), s.rx_grid.as_deref()),
+            Side::Neither => {
+                // Anti-superstation census: which DISTINCT local receivers (within
+                // region_near_km) are independently copying this band?
+                if let Some(rxg) = s.rx_grid.as_deref() {
+                    if let Some(d) = grid_distance_km(me_grid, rxg) {
+                        if d <= cfg.region_near_km {
+                            near_rx.insert(s.rx_call.to_ascii_uppercase());
+                        }
+                    }
+                }
+                farther_grid(me_grid, s.tx_grid.as_deref(), s.rx_grid.as_deref())
+            }
         };
         if let Some(fg) = geo_grid {
             if let Some(d) = grid_distance_km(me_grid, fg) {
@@ -487,6 +513,7 @@ pub fn band_features(
 
     bf.unique_far_rx = far_rx.len();
     bf.unique_far_tx = far_tx.len();
+    bf.unique_near_rx = near_rx.len();
     bf.unique_stations = all_stations.len();
     let owned: Vec<PathSpot> = band_spots.iter().map(|s| (*s).clone()).collect();
     bf.reciprocal_pairs = reciprocity(&owned, me_call, now, cfg.base_w);
@@ -575,10 +602,16 @@ pub fn classify(
     }
 
     // AURORA — VHF, Kp-gated, far ends in the auroral zone (poleward scatter).
+    // skip_hole discriminates: aurora is oval SCATTER (no skip zone), while Es has
+    // one — a strong poleward Es opening during a Kp≥6 storm must classify Es, not
+    // aurora (the Phase-2 SNR/decode-quality signature isn't available yet, so the
+    // geometry signature carries the discrimination). auroral_frac 0.55: nearly
+    // half the far ends sub-auroral is not an aurora picture.
     if matches!(band, Band::B6 | Band::B4 | Band::B2)
         && kp >= kp_au
-        && bf.auroral_frac >= 0.4
+        && bf.auroral_frac >= 0.55
         && bf.max_km <= 2200.0
+        && !bf.skip_hole
     {
         let geom = clamp01(bf.auroral_frac as f32);
         let sw = clamp01((kp - kp_au + 1.0) / 3.0);
@@ -1111,6 +1144,26 @@ mod tests {
     }
 
     #[test]
+    fn skip_hole_discriminates_es_from_aurora_during_a_storm() {
+        // A poleward 6m opening WITH a skip zone during Kp 7 is sporadic-E, not
+        // aurora — aurora is oval scatter and produces no skip hole. (The Phase-2
+        // SNR/decode-quality signature isn't available; geometry carries this.)
+        let cfg = OpeningConfig::default();
+        let mut f = feats(Band::B6);
+        f.median_km = 1400.0;
+        f.max_km = 1700.0;
+        f.auroral_frac = 0.8;
+        f.skip_hole = true; // the Es signature
+        let storm = SpaceWx {
+            sfi: 110.0,
+            kp: 7.0,
+            ..Default::default()
+        };
+        let (mode, _, _) = classify(&f, Band::B6, &storm, &cfg);
+        assert_ne!(mode, PropMode::Aurora, "skip hole ⇒ not aurora, got {mode:?}");
+    }
+
+    #[test]
     fn classifies_tropo_on_2m_capped_marginal() {
         let cfg = OpeningConfig::default();
         let mut f = feats(Band::B2);
@@ -1468,6 +1521,7 @@ mod tests {
         let mut f = BandFeatures::empty(Band::B6);
         f.anomaly_z = 6.0;
         f.unique_stations = 15;
+        f.unique_near_rx = 4; // a real collection of local endpoints
         f.reciprocal_pairs_regional = 4;
         f.cross_band_share = 0.7;
         // v1 default (regional_scope off): regional spots can't open (no op far counts).
@@ -1490,6 +1544,14 @@ mod tests {
         assert!(
             !contest.raw_open(&cfg),
             "uniform multi-band surge must not open"
+        );
+        // SUPERSTATION: one tall-tower receiver hearing 14 DX — plenty of
+        // "stations", but a single local endpoint. Must NOT open.
+        let mut superstation = f.clone();
+        superstation.unique_near_rx = 1;
+        assert!(
+            !superstation.raw_open(&cfg),
+            "one big local receiver must not fabricate a regional opening"
         );
     }
 }

@@ -140,6 +140,8 @@ impl PropAdvisor {
         // operator (the regional census). Drives the "is the band alive" score so
         // a band reads open from activity around you, not only your own contacts.
         let mut activity: HashSet<String> = HashSet::new();
+        // Distinct far↔far RECEIVER endpoints — the anti-superstation census.
+        let mut neither_rx: HashSet<String> = HashSet::new();
 
         for s in spots {
             if s.band != band || s.time < cutoff {
@@ -153,6 +155,7 @@ impl PropAdvisor {
                 // do MY signals go").
                 activity.insert(s.tx_call.to_uppercase());
                 activity.insert(s.rx_call.to_uppercase());
+                neither_rx.insert(s.rx_call.to_uppercase());
                 continue;
             }
             let Some(far) = s.far_call(&self.me_call) else {
@@ -188,8 +191,20 @@ impl PropAdvisor {
 
         // Band liveness counts ALL distinct stations active on the band (operator
         // paths + regional census), so bands the operator isn't personally on still
-        // read open when there's activity around them.
-        let observed = activity.len();
+        // read open when there's activity around them. VHF anti-superstation rule:
+        // with NO operator-anchored evidence, regional census only counts when it
+        // spans MULTIPLE distinct receiver endpoints — one tall tower hearing
+        // twenty DX is one endpoint, and must not light 6 m/2 m "Active" for an
+        // operator who can't hear any of it (weak-signal-sleuth principle).
+        let observed = if band.is_vhf()
+            && hear_me.is_empty()
+            && i_hear.is_empty()
+            && neither_rx.len() < 2
+        {
+            0
+        } else {
+            activity.len()
+        };
 
         let best_region = self.best_region(&by_region, &region_pts);
         let polar = best_region
@@ -350,6 +365,38 @@ mod tests {
             snr: Some(-12.0),
             freq_mhz: None,
         }
+    }
+
+    #[test]
+    fn vhf_superstation_alone_does_not_light_the_band_ladder() {
+        // One tall-tower receiver (K9BIG, ~100 km away) hearing TEN 6m DX is a
+        // single local endpoint — 6m must stay Quiet for the operator. Add a
+        // second distinct local receiver and the same activity counts.
+        let wx = SpaceWx { sfi: 120.0, kp: 2.0, ..Default::default() };
+        let mut one_ear: Vec<PathSpot> = Vec::new();
+        for i in 0..10 {
+            one_ear.push(path(&format!("XE{i}DX"), "EK09", "K9BIG", "EN52", Band::B6));
+        }
+        let adv = PropAdvisor::new("KD9TAW", "EN61").advise(NOW, &one_ear, &wx);
+        let b6 = adv.bands.iter().find(|b| b.band == "6m").unwrap();
+        assert!(
+            matches!(b6.tier, ActivityTier::Quiet | ActivityTier::Closed),
+            "one superstation endpoint must not light 6m, got {:?}",
+            b6.tier
+        );
+
+        let mut two_ears = one_ear.clone();
+        for i in 0..10 {
+            two_ears.push(path(&format!("XE{i}DX"), "EK09", "W9EAR", "EN62", Band::B6));
+        }
+        let adv2 = PropAdvisor::new("KD9TAW", "EN61").advise(NOW, &two_ears, &wx);
+        let b6b = adv2.bands.iter().find(|b| b.band == "6m").unwrap();
+        assert!(
+            b6b.score > b6.score,
+            "two distinct local endpoints make the census count: {} > {}",
+            b6b.score,
+            b6.score
+        );
     }
 
     #[test]

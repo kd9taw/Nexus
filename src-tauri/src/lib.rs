@@ -89,10 +89,14 @@ static PSKR_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 static PSKR_REGION_STARTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// Keep a near-region spot only if an end is within this many km of the operator
-/// (~one Es hop — "openings I could plausibly join"). The per-band global stream
-/// is gated to this radius client-side (the broker can't filter by region).
-const REGION_RADIUS_KM: f64 = 2000.0;
+/// Keep a near-region spot only if an end is within this many km of the operator.
+/// 800 km — a station within ~strong-tropo / short-Es-hop range, i.e. "activity
+/// genuinely touching my region". The old 2000 km ("one full Es hop") admitted
+/// far↔far paths a continent away that polluted the operator-anchored opening
+/// detector + advisor with activity the operator could NOT hear (the phantom-6m
+/// complaint). The per-band global stream is gated client-side (the broker can't
+/// filter by region).
+const REGION_RADIUS_KM: f64 = 800.0;
 
 /// Liveness of the background live feeds, updated from their daemon threads and
 /// read by `get_feed_health` for the Now-Bar connector pills. Timestamps are Unix
@@ -607,6 +611,7 @@ async fn get_propagation(
     // geolocate each skimmer via the real RBN skimmer→grid table so its reception
     // carries true near/far geometry into the opening detector + advisor. Skimmers
     // not in the table still light up band LIVENESS (no grid → activity census only).
+    let me_ll_for_gate = propagation::geo::maidenhead_to_latlon(mygrid.trim());
     if let Ok(buf) = spots.lock() {
         let cluster = buf.recent_within(
             std::time::Instant::now(),
@@ -614,12 +619,31 @@ async fn get_propagation(
         );
         for cs in cluster {
             if let Some(band) = propagation::model::Band::from_mhz(cs.freq_mhz()) {
+                let rx_grid = propagation::skimmer_grid(&cs.spotter).map(str::to_string);
+                // VHF locality gate (weak-signal-sleuth principle): on 6m/4m/2m a
+                // continent-wide RBN spot says NOTHING about the operator's band —
+                // Es is patchy; a Florida skimmer hearing 6 m must not light the
+                // band ladder / opening detector for Wisconsin. Admit a VHF cluster
+                // spot only when the SKIMMER itself is within the region radius of
+                // the operator (skimmers without a known grid can't prove locality
+                // → dropped on VHF). HF keeps the continent-wide census: F2
+                // footprints genuinely span it.
+                if band.is_vhf() {
+                    let near = match (&rx_grid, me_ll_for_gate) {
+                        (Some(g), Some(me)) => propagation::geo::maidenhead_to_latlon(g)
+                            .is_some_and(|rx| propagation::geo::haversine_km(me, rx) <= REGION_RADIUS_KM),
+                        _ => false,
+                    };
+                    if !near {
+                        continue;
+                    }
+                }
                 wide.push(propagation::PathSpot {
                     time: now,
                     tx_call: cs.dx_call.to_uppercase(),
                     tx_grid: None,
                     rx_call: cs.spotter.to_uppercase(),
-                    rx_grid: propagation::skimmer_grid(&cs.spotter).map(str::to_string),
+                    rx_grid,
                     band,
                     // Cluster/RBN carry the goods the band-level feeds lack: the EXACT
                     // spot frequency + (usually) the mode — what map click-to-work needs.
@@ -627,7 +651,10 @@ async fn get_propagation(
                     snr: None,
                     freq_mhz: Some(cs.freq_mhz()),
                 });
-                regional_scope = true; // we now have wide-area data → advisor uses it
+                // NOTE: cluster data deliberately does NOT set `regional_scope`.
+                // RBN is a one-directional skimmer network — it can't satisfy the
+                // Phase-2 regional gate's reciprocity premise; only the PSK Reporter
+                // near-region feed (a true two-way census near the operator) does.
             }
         }
     }
@@ -1871,14 +1898,34 @@ async fn get_need_alerts(
         );
         for cs in recent {
             let freq = cs.freq_mhz();
-            let Some(band_lbl) = propagation::Band::from_mhz(freq).map(|b| b.label()) else {
+            let Some(band) = propagation::Band::from_mhz(freq) else {
                 continue; // off the band plan → skip
             };
+            // VHF locality gate (weak-signal-sleuth principle): a 6m/4m/2m cluster
+            // spot is only WORKABLE-FROM-HERE evidence when the SPOTTER is inside
+            // the operator's Es-patch radius — a Florida skimmer hearing a 6 m CW
+            // beacon must never become a Wisconsin "contact to work". Applied
+            // BEFORE the mode-class filter so CW and SSB spots gate identically;
+            // spotters with no known grid can't prove locality → dropped on VHF.
+            // HF keeps the continent-wide cluster (F2 footprints span it).
+            if band.is_vhf() {
+                let near = match (propagation::skimmer_grid(&cs.spotter), me_ll) {
+                    (Some(g), Some(me)) => propagation::geo::maidenhead_to_latlon(g)
+                        .is_some_and(|rx| {
+                            propagation::geo::haversine_km(me, rx)
+                                <= propagation::near_me_radius_km(band)
+                        }),
+                    _ => false,
+                };
+                if !near {
+                    continue;
+                }
+            }
             let class = propagation::classify_spot_mode(freq, &cs.comment);
             if matches!(class, propagation::ModeClass::Cw | propagation::ModeClass::Phone) {
                 heard.push(propagation::Heard {
                     call: cs.dx_call.to_ascii_uppercase(),
-                    band: band_lbl.to_string(),
+                    band: band.label().to_string(),
                     mode: class.label().to_string(),
                     freq_mhz: Some(freq),
                 });
@@ -1886,6 +1933,10 @@ async fn get_need_alerts(
         }
     }
     let mut alerts = propagation::rank_needs(&heard, &needs, needs.worked_zones());
+    // Never alert on the operator's own call (their PSKR "heard me" echoes can
+    // otherwise surface it as a phantom row).
+    let me_up = snap.mycall.to_uppercase();
+    alerts.retain(|a| a.call != me_up);
     // DXpedition tagging: a heard call that belongs to an ACTIVE announced
     // expedition gets the Dxped chip + a priority nudge — limited-time windows
     // must be findable at a glance on the board. APPENDED (never tags[0]) so the

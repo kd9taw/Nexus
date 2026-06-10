@@ -210,15 +210,20 @@ pub fn rank(
 }
 
 /// Band-aware "local to me" radius (km). An Es footprint (VHF) is far tighter than
-/// an F2 footprint (HF): a receiver this close to you, hearing a station, means the
-/// path to that station is very likely open from YOUR QTH too.
+/// an F2 footprint (HF). 250 km on VHF: Es patches run ~100–400 km, so a receiver
+/// must be INSIDE the same patch footprint as the operator before its reception
+/// implies "you can likely hear this too" — likely, not certain (patches can be
+/// disjoint), which is why VHF additionally requires corroboration (see
+/// [`heard_near_me`]). HF F2 footprints are continent-scale; 1500 km holds.
 pub fn near_me_radius_km(band: Band) -> f64 {
     if band.is_vhf() {
-        400.0
+        250.0
     } else {
         1500.0
     }
 }
+
+
 
 /// The stations a receiver NEAR the operator (`me` lat/lon) is hearing, drawn from
 /// reception reports (PSK Reporter / RBN). THIS is the needed board's real value:
@@ -227,22 +232,48 @@ pub fn near_me_radius_km(band: Band) -> f64 {
 /// not a propagation-model guess. A report counts when its RECEIVER is within the
 /// band-aware radius of you. Deduped by (call, band).
 pub fn heard_near_me(reports: &[PathSpot], me: (f64, f64)) -> Vec<Heard> {
-    let mut out = Vec::new();
-    let mut seen: HashSet<(String, String)> = HashSet::new();
+    // Per (tx, band): the distinct NEAR receivers copying it. VHF needs ≥2 — a
+    // single receiver during patchy Es (and especially a single tall-tower
+    // superstation) was exactly how unhearable 6 m "contacts to work" reached
+    // the board. Multiple independent local endpoints, or it doesn't count.
+    struct Ev {
+        mode: Option<String>,
+        band: Band,
+        rx_calls: HashSet<String>,
+    }
+    let mut by_key: std::collections::HashMap<(String, String), Ev> =
+        std::collections::HashMap::new();
     for p in reports {
         let Some(rx) = p.rx_grid.as_deref().and_then(maidenhead_to_latlon) else {
             continue; // no receiver location → can't judge "near me"
         };
-        if haversine_km(me, rx) <= near_me_radius_km(p.band) {
-            let band = p.band.label().to_string();
-            if seen.insert((p.tx_call.to_ascii_uppercase(), band.clone())) {
-                out.push(Heard {
-                    call: p.tx_call.clone(),
-                    band,
-                    mode: p.mode.clone().unwrap_or_else(|| "FT8".to_string()),
-                    freq_mhz: None, // reception geometry is band-level, not freq-precise
-                });
-            }
+        if haversine_km(me, rx) > near_me_radius_km(p.band) {
+            continue;
+        }
+        let key = (p.tx_call.to_ascii_uppercase(), p.band.label().to_string());
+        let e = by_key.entry(key).or_insert(Ev {
+            mode: p.mode.clone(),
+            band: p.band,
+            rx_calls: HashSet::new(),
+        });
+        e.rx_calls.insert(p.rx_call.to_ascii_uppercase());
+        if e.mode.is_none() {
+            e.mode = p.mode.clone();
+        }
+    }
+    let mut out = Vec::new();
+    for ((call, band), e) in by_key {
+        // VHF: a collection of spots across MULTIPLE local endpoints, full stop.
+        // No single-receiver exception — one big station on a tall tower hears
+        // things the operator's QTH never will (the false-positive machine).
+        let corroborated = !e.band.is_vhf() || e.rx_calls.len() >= 2;
+        if corroborated {
+            out.push(Heard {
+                call,
+                band,
+                mode: e.mode.unwrap_or_else(|| "FT8".to_string()),
+                freq_mhz: None, // reception geometry is band-level, not freq-precise
+            });
         }
     }
     out
@@ -273,6 +304,14 @@ pub fn workable_by_getting_out(reports: &[PathSpot], my_call: &str) -> Vec<Heard
     for p in reports {
         // Only DX a THIRD party is hearing (HeardMe = me TX; IHeard = I already hear).
         if p.side(my_call) != Side::Neither {
+            continue;
+        }
+        // NOT on VHF: "my signal reaches region A, and someone near my reach hears X"
+        // assumes the opening is spatially continuous — true for F2 (footprints span
+        // hundreds of km), FALSE for sporadic-E, whose disjoint ~100–400 km patches
+        // make reach-adjacency meaningless. On 6 m/4 m/2 m only direct near-me
+        // reception ([`heard_near_me`]) counts. (weak-signal-sleuth principle)
+        if p.band.is_vhf() {
             continue;
         }
         let Some(dx) = p
@@ -427,6 +466,91 @@ mod tests {
         assert!(!calls.contains(&"EA1XYZ"), "far HF receiver dropped");
         assert!(!calls.contains(&"K6SIX"), "6m beyond the tighter VHF radius dropped");
         assert!(calls.contains(&"W0HF"), "same distance on 20m kept (band-aware)");
+    }
+
+    #[test]
+    fn vhf_needs_require_corroboration_not_one_edge_receiver() {
+        // THE phantom-6m fix: one receiver at the edge of the Es radius is not
+        // workable-from-here evidence; two near receivers (or one essentially
+        // co-located) are.
+        let me = maidenhead_to_latlon("EN61").unwrap();
+        let mk = |tx: &str, rx: &str, rx_grid: &str| PathSpot {
+            time: 0,
+            tx_call: tx.into(),
+            tx_grid: None,
+            rx_call: rx.into(),
+            rx_grid: Some(rx_grid.into()),
+            band: Band::B6,
+            mode: Some("FT8".into()),
+            snr: None,
+            freq_mhz: None,
+        };
+        // Single receiver ~200 km away (inside 250 km, outside the 100 km own-ears
+        // ring) → NOT corroborated → dropped.
+        let single = vec![mk("K6ONE", "RX1", "EN52")];
+        assert!(
+            heard_near_me(&single, me).is_empty(),
+            "one edge-of-radius receiver must not surface a 6m need"
+        );
+        // Two DISTINCT near receivers hearing the same DX → corroborated → kept.
+        let two = vec![mk("K6TWO", "RX1", "EN52"), mk("K6TWO", "RX2", "EN62")];
+        let out = heard_near_me(&two, me);
+        assert!(
+            out.iter().any(|h| h.call == "K6TWO"),
+            "two near receivers corroborate a 6m need: {out:?}"
+        );
+        // Even a receiver in MY grid square doesn't solo-vouch on VHF: a tall-tower
+        // superstation 30 km away hears things my QTH never will.
+        let own_ears = vec![mk("K6NEAR", "RX1", "EN61")];
+        assert!(
+            heard_near_me(&own_ears, me).is_empty(),
+            "a single co-located receiver must not solo-vouch a 6m need"
+        );
+        // HF is unchanged: a single near receiver still suffices on 20 m.
+        let hf = vec![PathSpot {
+            time: 0,
+            tx_call: "EA1HF".into(),
+            tx_grid: None,
+            rx_call: "RX1".into(),
+            rx_grid: Some("EN52".into()),
+            band: Band::B20,
+            mode: Some("FT8".into()),
+            snr: None,
+            freq_mhz: None,
+        }];
+        assert!(
+            heard_near_me(&hf, me).iter().any(|h| h.call == "EA1HF"),
+            "HF single-receiver behavior unchanged"
+        );
+    }
+
+    #[test]
+    fn getting_out_never_promotes_on_vhf_es_patches_are_disjoint() {
+        // My 6m signal reaching Texas does NOT make a 6m DX near my reach workable —
+        // Es patches are disjoint clouds (weak-signal-sleuth principle).
+        let mk = |tx: &str, tx_grid: Option<&str>, rx: &str, rx_grid: &str, band: Band| PathSpot {
+            time: 0,
+            tx_call: tx.into(),
+            tx_grid: tx_grid.map(Into::into),
+            rx_call: rx.into(),
+            rx_grid: Some(rx_grid.into()),
+            band,
+            mode: Some("FT8".into()),
+            snr: None,
+            freq_mhz: None,
+        };
+        let reports = vec![
+            // I'm getting out on 6m to EM12 (Texas).
+            mk("KD9TAW", None, "K5RX", "EM12", Band::B6),
+            // A 6m DX a third party right next to my reach is hearing — on HF this
+            // would promote; on 6m it must NOT.
+            mk("XE1DX", Some("EK09"), "K5TX", "EM13", Band::B6),
+        ];
+        let out = workable_by_getting_out(&reports, "KD9TAW");
+        assert!(
+            out.is_empty(),
+            "no VHF getting-out promotion (Es disjointness): {out:?}"
+        );
     }
 
     #[test]
