@@ -21,6 +21,7 @@ import {
   setQrzPassword,
   setSettings,
   testCat,
+  qrzTestConnection,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 import { getConnectionLog, getCredentialsStatus } from '../api'
@@ -188,6 +189,15 @@ export function SettingsPanel({
   // the answer to "I hit save and couldn't tell anything happened".
   const [creds, setCreds] = useState<CredStatus[]>([])
   // "Saved" must not linger forever (it read as a stale artifact) — fade it out.
+  // QRZ connection test: a real STATUS round-trip (validates the Logbook API
+  // key without inserting anything). idle | testing | the result line.
+  const [qrzTest, setQrzTest] = useState<{ state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ state: 'idle', msg: '' })
+  const runQrzTest = () => {
+    setQrzTest({ state: 'testing', msg: 'testing…' })
+    qrzTestConnection()
+      .then((msg) => setQrzTest({ state: 'ok', msg }))
+      .catch((e) => setQrzTest({ state: 'fail', msg: String(e) }))
+  }
   useEffect(() => {
     if (status !== 'saved') return
     const id = window.setTimeout(() => setStatus('idle'), 2500)
@@ -2055,9 +2065,33 @@ export function SettingsPanel({
                   <span className={`conn-state ${c.stored ? 'on' : 'off'}`}>
                     {c.stored ? 'credential stored' : 'no credential'}
                   </span>
+                  {c.connector === 'QRZ Logbook' && (
+                    <button
+                      type="button"
+                      className="settings-test-btn"
+                      onClick={runQrzTest}
+                      disabled={qrzTest.state === 'testing'}
+                      title="Round-trips the QRZ Logbook API (ACTION=STATUS) — proves the key works without logging anything"
+                    >
+                      {qrzTest.state === 'testing' ? 'Testing…' : 'Test'}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
+            {qrzTest.state !== 'idle' && qrzTest.state !== 'testing' && (
+              <p className={`conn-test-result ${qrzTest.state}`}>
+                {qrzTest.state === 'ok' ? '✓ QRZ Logbook reachable: ' : '✗ QRZ test failed: '}
+                {qrzTest.msg}
+                {qrzTest.state === 'fail' && (
+                  <>
+                    {' '}
+                    (Uploads need the per-logbook <strong>API key</strong> from
+                    logbook.qrz.com ▸ Settings ▸ API — not your QRZ password.)
+                  </>
+                )}
+              </p>
+            )}
             <div className="conn-log">
               <div className="conn-log-head">
                 <span>Connection log</span>

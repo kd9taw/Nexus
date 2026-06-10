@@ -267,6 +267,51 @@ pub fn build_insert_body(api_key: &str, adif_record: &str, replace: bool) -> Str
     body
 }
 
+/// Build the body of a QRZ Logbook **STATUS** request — validates the API key
+/// with a real round-trip WITHOUT inserting anything (the Test button).
+pub fn build_status_body(api_key: &str) -> String {
+    format!("KEY={}&ACTION=STATUS", pct(api_key.trim()))
+}
+
+/// What a STATUS round-trip proved about the logbook the key unlocks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QrzStatus {
+    pub ok: bool,
+    /// Logbook owner callsign (QRZ `OWNER`), when reported.
+    pub owner: Option<String>,
+    /// Logbook name (QRZ `BOOK_NAME`/`BOOKID`), when reported.
+    pub book: Option<String>,
+    /// QSO count in the logbook (QRZ `COUNT`).
+    pub count: u32,
+    /// Failure reason (auth errors etc.).
+    pub reason: Option<String>,
+}
+
+/// Parse a QRZ Logbook STATUS `name=value` response.
+pub fn parse_status_response(body: &str) -> QrzStatus {
+    let mut ok = false;
+    let mut owner = None;
+    let mut book = None;
+    let mut count = 0u32;
+    let mut reason = None;
+    for pair in body.split('&') {
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        let val = urldecode(v.trim());
+        match k.trim().to_ascii_uppercase().as_str() {
+            "RESULT" => ok = val.eq_ignore_ascii_case("OK"),
+            "OWNER" if !val.is_empty() => owner = Some(val),
+            "BOOK_NAME" if !val.is_empty() => book = Some(val),
+            "BOOKID" if book.is_none() && !val.is_empty() => book = Some(format!("book {val}")),
+            "COUNT" => count = val.parse().unwrap_or(0),
+            "REASON" if !val.is_empty() => reason = Some(val),
+            _ => {}
+        }
+    }
+    QrzStatus { ok, owner, book, count, reason }
+}
+
 /// Parse a QRZ Logbook `name=value` response. A `RESULT=FAIL` whose `REASON`
 /// mentions "duplicate" maps to [`QrzPushResult::Duplicate`] (benign).
 pub fn parse_push_response(body: &str) -> QrzPush {
@@ -505,6 +550,19 @@ mod tests {
     fn insert_body_encodes_adif_and_key() {
         let body = build_insert_body("AB-12-CD", "<call:4>W1AW<eor>", false);
         assert!(body.starts_with("KEY=AB-12-CD&ACTION=INSERT&ADIF="));
+        assert_eq!(build_status_body(" AB-12-CD "), "KEY=AB-12-CD&ACTION=STATUS");
+        // STATUS parse: the success shape QRZ actually returns.
+        let st = parse_status_response(
+            "RESULT=OK&OWNER=KD9TAW&BOOK_NAME=My+Logbook&COUNT=1234&ACTION=STATUS",
+        );
+        assert!(st.ok);
+        assert_eq!(st.owner.as_deref(), Some("KD9TAW"));
+        assert_eq!(st.book.as_deref(), Some("My Logbook"));
+        assert_eq!(st.count, 1234);
+        // Auth failure carries the reason through.
+        let st = parse_status_response("RESULT=AUTH&REASON=invalid+api+key");
+        assert!(!st.ok);
+        assert_eq!(st.reason.as_deref(), Some("invalid api key"));
         // ADIF tag delimiters must be percent-encoded into the form value.
         assert!(body.contains("ADIF=%3Ccall%3A4%3EW1AW%3Ceor%3E"));
         assert!(!body.contains("&OPTION="));

@@ -940,6 +940,22 @@ button.nb-chip:hover {
 .conn-id { color: var(--text-dim); min-width: 14ch; overflow: hidden; text-overflow: ellipsis; }
 .conn-state.on { color: var(--state-good); }
 .conn-state.off { color: var(--text-faint); }
+.settings-test-btn {
+  margin-left: auto;
+  padding: 2px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--text);
+  cursor: pointer;
+}
+.settings-test-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.settings-test-btn:disabled { opacity: 0.6; cursor: default; }
+.conn-test-result { margin: 6px 0 0; font-size: 12.5px; }
+.conn-test-result.ok { color: var(--state-good, #4caf50); }
+.conn-test-result.fail { color: var(--state-weak, #e57373); }
+
 .conn-log-head {
   display: flex;
   align-items: baseline;

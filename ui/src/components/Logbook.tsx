@@ -13,6 +13,7 @@ import {
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 import { autoPushQso } from '../features/autopush'
+import { qrzPushQso } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -214,6 +215,24 @@ export function Logbook({
     setShowForm(false)
     setEditIndex(null)
     setErr(null)
+  }
+
+  // Manual (re-)push of one logged QSO to QRZ — the VERIFICATION path: push a
+  // real contact you already made and check it lands on logbook.qrz.com. A
+  // "duplicate" answer is the benign proof it was already there.
+  const onPushQrz = async (q: LoggedQso) => {
+    try {
+      const r = await qrzPushQso(q)
+      if (r.result === 'ok' || r.result === 'replace') {
+        pushToast(`✓ ${q.call} pushed to QRZ logbook`, 'success', 4000)
+      } else if (r.result === 'duplicate') {
+        pushToast(`✓ ${q.call} already in your QRZ logbook (duplicate) — upload chain works`, 'success', 5000)
+      } else {
+        pushToast(`✗ QRZ rejected ${q.call}: ${r.reason ?? r.result}`, 'error', 6000)
+      }
+    } catch (e) {
+      pushToast(`✗ QRZ push failed: ${String(e)}`, 'error', 6000)
+    }
   }
 
   const onDelete = async (q: LoggedQso, i: number) => {
@@ -519,6 +538,15 @@ export function Logbook({
                   )}
                 </span>
                 <span className="log-cell log-rowactions">
+                  <button
+                    type="button"
+                    className="log-rowbtn"
+                    onClick={() => void onPushQrz(q)}
+                    title={`Push ${q.call} to your QRZ logbook (re-push is safe — duplicates are detected)`}
+                    aria-label={`Push ${q.call} to QRZ`}
+                  >
+                    ↥
+                  </button>
                   <button
                     type="button"
                     className="log-rowbtn"

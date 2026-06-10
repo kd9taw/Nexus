@@ -479,6 +479,15 @@ export async function clearQrzLogbookKey(): Promise<void> {
 
 /** Push one logged QSO to the operator's QRZ logbook. Outside Tauri returns a
  *  canned OK. */
+/** Validate the QRZ Logbook API key with a real STATUS round-trip (no insert).
+ * Resolves to a human summary ("KD9TAW (My Logbook) — 1234 QSOs…") or rejects
+ * with the failure reason. */
+export async function qrzTestConnection(): Promise<string> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<string>('qrz_test_connection', {})
+  return 'demo — no live QRZ in the browser'
+}
+
 export async function qrzPushQso(record: LoggedQso): Promise<QrzPushResult> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<QrzPushResult>('qrz_push_qso', { record })

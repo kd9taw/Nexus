@@ -2919,6 +2919,39 @@ async fn qrz_push_qso(
     )
 }
 
+/// Test the QRZ Logbook connection: a real STATUS round-trip that validates
+/// the API key (and shows which logbook it unlocks) WITHOUT inserting anything.
+/// This is the verification the operator runs after entering credentials.
+#[tauri::command]
+async fn qrz_test_connection() -> Result<String, String> {
+    conn_logged(
+        "QRZ Logbook",
+        |s: &String| format!("connection test OK — {s}"),
+        qrz_test_connection_impl().await,
+    )
+}
+
+async fn qrz_test_connection_impl() -> Result<String, String> {
+    let key = qrz_logbook_keychain()?
+        .get_password()
+        .map_err(|_| {
+            "No QRZ Logbook API key stored — note this is the per-logbook key from              logbook.qrz.com (Settings ▸ Logbook ▸ API), NOT your QRZ password."
+                .to_string()
+        })?;
+    let body = tempo_core::qrz::build_status_body(&key);
+    let resp = propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?;
+    let st = tempo_core::qrz::parse_status_response(&resp);
+    if st.ok {
+        let owner = st.owner.unwrap_or_else(|| "your account".into());
+        let book = st.book.map(|b| format!(" ({b})")).unwrap_or_default();
+        Ok(format!("{owner}{book} — {} QSOs in the online logbook", st.count))
+    } else {
+        Err(st
+            .reason
+            .unwrap_or_else(|| "QRZ rejected the API key".into()))
+    }
+}
+
 async fn qrz_push_qso_impl(
     record: LoggedQso,
     state: State<'_, SharedEngine>,
@@ -3558,6 +3591,7 @@ pub fn run() {
             redecode,
             start_cq,
             notify_erase,
+            qrz_test_connection,
             set_hold_tx_freq,
             call_station,
             open_panel_window,
