@@ -155,6 +155,14 @@ export function OperateCockpit({
           <span className="cockpit-offsets" title="Receive / transmit audio offsets (Hz)">
             RX {Math.round(snap.radio.rxOffsetHz)} · TX {Math.round(snap.radio.txOffsetHz)} Hz
           </span>
+          {snap.radio.splitTxMhz != null && (
+            <span
+              className="cockpit-cat ok"
+              title={`Rig split active — TX ${snap.radio.splitTxMhz.toFixed(4)} MHz (pile-up). Any QSY returns to simplex.`}
+            >
+              SPLIT ▲
+            </span>
+          )}
           {catOk != null && (
             <span
               className={`cockpit-cat ${catOk ? 'ok' : 'bad'}`}

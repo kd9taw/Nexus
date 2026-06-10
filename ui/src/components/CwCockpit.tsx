@@ -156,6 +156,11 @@ export function CwCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap }: P
         </div>
         <BandPicker snap={snap} mode="cw" onSnap={onSnap} />
         <span className="cw-spacer" />
+        {snap.radio.splitTxMhz != null && (
+          <span className="cw-mode-badge" title={`Split — TX ${snap.radio.splitTxMhz.toFixed(4)} MHz`}>
+            SPLIT ▲
+          </span>
+        )}
         <span className={`cw-tx ${snap.radio.transmitting ? 'on' : ''}`}>
           {snap.radio.transmitting ? '▲ KEYING' : snap.radio.txEnabled ? '▼ RX' : '■ TX off'}
         </span>

@@ -328,6 +328,9 @@ export interface RadioStatus {
   /** The keyer speed (WPM) the engine is actually using — the cockpit slider's
    * source of truth across navigation. */
   cwWpm?: number
+  /** Rig split TX dial (MHz) when a pile-up spot configured split; null/absent =
+   * simplex. Drives the SPLIT badge. */
+  splitTxMhz?: number | null
   /** Set when the sound card failed to open (explains a blank waterfall). */
   audioError?: string | null
   /** Transmit on even/"1st" slots (true) or odd/"2nd" (false). */

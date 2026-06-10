@@ -358,7 +358,7 @@ impl RadioLoop {
             // "the VFO mirrors but modes won't switch" regress. Consume the one-shot "apply
             // now" flag only when we can act, so a click during a slot-TX is honored after it.
             let can_retune = self.tx_until_ms.is_none() && !self.tuning_keyed;
-            let (want, dial, md, reprobe_req, force_retune) = {
+            let (want, dial, md, reprobe_req, force_retune, split_req) = {
                 let mut eng = engine.lock().map_err(|e| e.to_string())?;
                 (
                     Transport::from_settings(eng.settings()),
@@ -366,6 +366,9 @@ impl RadioLoop {
                     eng.settings().rig_mode(), // DATA submode (PKTUSB/…) when data_mode is on
                     eng.take_cat_reprobe(),
                     if can_retune { eng.take_immediate_retune() } else { false },
+                    // Split is a retune-class command — same mid-TX guard, same
+                    // leave-it-pending semantics when keyed.
+                    if can_retune { eng.take_split_request() } else { None },
                 )
             };
             if want.rig_differs(&self.applied) {
@@ -529,6 +532,31 @@ impl RadioLoop {
                         self.last_dial = hz;
                         if let Ok(mut eng) = engine.lock() {
                             eng.observe_rig_freq(hz);
+                        }
+                    }
+                }
+            }
+
+            // Apply a pending SPLIT request (after the dial/mode retune so the TX
+            // VFO programs against the fresh dial). Pile-up spots ("UP 2") set it;
+            // any plain QSY clears it back to simplex.
+            if can_retune {
+                if let Some(req) = split_req {
+                    match req {
+                        Some(tx_mhz) => {
+                            let tx_hz = (tx_mhz * 1_000_000.0).round() as u64;
+                            let ok = rig.set_split(true, "VFOB").is_ok()
+                                && rig.set_split_freq(tx_hz).is_ok();
+                            retune_note = Some(if ok {
+                                format!("split ON — TX {tx_mhz:.4} MHz (VFO B)")
+                            } else {
+                                "rig rejected split — work the pile-up manually".to_string()
+                            });
+                        }
+                        None => {
+                            let _ = rig.set_split(false, "VFOB");
+                            // Quiet: returning to simplex isn't worth a status line
+                            // unless a set just happened (covered above).
                         }
                     }
                 }

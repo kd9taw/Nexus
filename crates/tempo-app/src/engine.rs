@@ -166,6 +166,12 @@ pub struct Engine {
     /// `mode_giveup` so a click is never ignored — even if a prior attempt gave up on
     /// that mode. One-shot, drained by the loop.
     immediate_retune: bool,
+    /// Desired rig SPLIT state: `Some(tx_dial_mhz)` = split on with that TX dial;
+    /// `None` = simplex. Set by work_spot (pile-up "UP n" spots) and cleared by any
+    /// plain QSY/work; the loop applies it via `split_dirty` (one-shot).
+    split_tx_mhz: Option<f64>,
+    /// One-shot "apply the split state now" flag for the radio loop.
+    split_dirty: bool,
     /// CW transmit queue (CAT keyer path): expanded CW text the radio loop drains and
     /// keys via `rig.send_morse`. Operator-initiated; gated by `tx_enabled` (Monitor).
     cw_queue: VecDeque<String>,
@@ -323,6 +329,8 @@ impl Engine {
             last_decode_slot: None,
             immediate_tx: false,
             immediate_retune: false,
+            split_tx_mhz: None,
+            split_dirty: false,
             cw_queue: VecDeque::new(),
             cw_wpm: 25,
             cw_abort: false,
@@ -414,6 +422,11 @@ impl Engine {
         // Operator QSY → the radio loop must follow on the very next iteration, not
         // when it happens to notice the dial changed. (Single-click precision.)
         self.immediate_retune = true;
+        // A plain QSY always returns the rig to SIMPLEX — leftover split from a
+        // pile-up must never silently shift TX on the next frequency.
+        if self.split_tx_mhz.take().is_some() {
+            self.split_dirty = true;
+        }
     }
 
     /// The rig reported a dial frequency we did NOT set — the operator turned the VFO knob
@@ -527,8 +540,43 @@ impl Engine {
     /// frequency, which is authoritative. Sideband is always "USB" here (→ PKTUSB for digital;
     /// ignored by the CW/phone policy).
     pub fn work_spot(&mut self, mode: &str, freq_mhz: f64, band: &str) {
+        self.work_spot_split(mode, freq_mhz, band, None);
+    }
+
+    /// As [`work_spot`], optionally configuring rig SPLIT for a pile-up spot whose
+    /// comment named a listening offset ("UP 2" → TX dial = spot + 2 kHz). The
+    /// N1MM behavior: click the spot, the rig lands on the DX's frequency with TX
+    /// already split to where they're listening. `None` = simplex (and clears any
+    /// prior split — handled inside set_frequency).
+    pub fn work_spot_split(
+        &mut self,
+        mode: &str,
+        freq_mhz: f64,
+        band: &str,
+        split_up_khz: Option<f64>,
+    ) {
         self.set_operating_mode(mode, false);
-        self.set_frequency(freq_mhz, band, "USB");
+        self.set_frequency(freq_mhz, band, "USB"); // clears split + arms the retune
+        if let Some(up) = split_up_khz {
+            self.split_tx_mhz = Some(freq_mhz + up / 1000.0);
+            self.split_dirty = true;
+        }
+    }
+
+    /// Consume the one-shot split request: `Some(Some(tx))` = set split TX dial,
+    /// `Some(None)` = back to simplex, `None` = nothing to apply.
+    pub fn take_split_request(&mut self) -> Option<Option<f64>> {
+        if self.split_dirty {
+            self.split_dirty = false;
+            Some(self.split_tx_mhz)
+        } else {
+            None
+        }
+    }
+
+    /// The desired split TX dial (MHz), `None` = simplex — the UI's SPLIT badge.
+    pub fn split_tx_mhz(&self) -> Option<f64> {
+        self.split_tx_mhz
     }
 
     /// Set the operator's amateur license class (drives the TX-privilege lockout + the
@@ -2108,6 +2156,7 @@ impl Engine {
         s.radio.cat_ok = self.cat_status.0;
         s.radio.cat_detail = self.cat_status.1.clone();
         s.radio.cw_wpm = self.cw_wpm;
+        s.radio.split_tx_mhz = self.split_tx_mhz;
         s.radio.cw_keyer = match self.settings.cw_keyer {
             crate::settings::CwKeyerBackend::Cat => "cat",
             crate::settings::CwKeyerBackend::Soundcard => "soundcard",
@@ -3068,6 +3117,34 @@ mod tests {
             "Tech digital on 10 m snaps to the FT8 watering hole, got {}",
             e.settings().dial_mhz
         );
+    }
+
+    #[test]
+    fn split_set_by_pileup_work_and_cleared_by_any_qsy() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        // Work a CW pile-up spot at 14.023 listening UP 2.
+        e.work_spot_split("cw", 14.023, "20m", Some(2.0));
+        assert_eq!(e.split_tx_mhz(), Some(14.025), "TX dial = spot + 2 kHz");
+        assert_eq!(
+            e.take_split_request(),
+            Some(Some(14.025)),
+            "loop gets a one-shot set-split request"
+        );
+        assert_eq!(e.take_split_request(), None, "one-shot consumed");
+        // ANY plain QSY returns to simplex — leftover split must never shift TX
+        // silently on the next frequency.
+        e.set_frequency(7.074, "40m", "USB");
+        assert_eq!(e.split_tx_mhz(), None);
+        assert_eq!(
+            e.take_split_request(),
+            Some(None),
+            "loop gets a one-shot split-OFF request"
+        );
+        // Already simplex → a simplex work issues NO redundant split-off command.
+        e.work_spot_split("cw", 7.025, "40m", None);
+        assert_eq!(e.split_tx_mhz(), None);
+        assert_eq!(e.take_split_request(), None, "no-op when already simplex");
     }
 
     #[test]

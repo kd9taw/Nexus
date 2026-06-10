@@ -1320,12 +1320,35 @@ fn set_operating_mode(
 #[tauri::command]
 fn work_spot(
     state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
     mode: String,
     freq_mhz: f64,
     band: String,
+    call: Option<String>,
 ) -> Result<AppSnapshot, String> {
+    // Pile-up SPLIT: if the freshest cluster spot for this call names a listening
+    // offset ("UP 2" / "QSX …"), configure rig split so TX lands where the DX is
+    // listening — the N1MM behavior, using the spot we already hold. Tolerant
+    // lookup (3Y0J/MM matches 3Y0J); no spot or no offset → simplex.
+    let split_up_khz = call.as_deref().and_then(|c| {
+        let c = c.to_uppercase();
+        spots.lock().ok().and_then(|buf| {
+            buf.recent_within(
+                std::time::Instant::now(),
+                std::time::Duration::from_secs(1800),
+            )
+            .into_iter()
+            .filter(|cs| {
+                propagation::live::dxped::call_matches(&cs.dx_call.to_uppercase(), &c)
+                    // The spot must be for THIS frequency neighborhood — a 20 m CW
+                    // spot's split must not apply to the same call worked on 40 m.
+                    && (cs.freq_mhz() - freq_mhz).abs() < 0.05
+            })
+            .find_map(|cs| cs.split_up_khz())
+        })
+    });
     let mut eng = state.lock().map_err(|e| e.to_string())?;
-    eng.work_spot(&mode, freq_mhz, &band);
+    eng.work_spot_split(&mode, freq_mhz, &band, split_up_khz);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist worked spot: {e}");
     }

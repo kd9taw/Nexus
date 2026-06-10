@@ -33,6 +33,55 @@ impl ClusterSpot {
         self.freq_khz / 1000.0
     }
 
+    /// Split/QSX listening offset named in the spot comment, in kHz RELATIVE to
+    /// the spot frequency: "UP 2" → +2.0, "DN 1.5" → −1.5, bare "UP"/"U" → +1.0
+    /// (the pile-up convention), "QSX 14025.5" → the absolute kHz mapped to an
+    /// offset. `None` when the comment names no split — the rig stays simplex.
+    pub fn split_up_khz(&self) -> Option<f64> {
+        let toks: Vec<&str> = self.comment.split_whitespace().collect();
+        for (i, t) in toks.iter().enumerate() {
+            let tl = t.to_ascii_uppercase();
+            let (dir, bare) = match tl.as_str() {
+                "UP" | "U" => (1.0, true),
+                "DN" | "DOWN" | "D" => (-1.0, true),
+                _ => {
+                    // Glued forms: "UP2", "UP1.5", "DN2".
+                    if let Some(rest) = tl.strip_prefix("UP") {
+                        if let Ok(k) = rest.parse::<f64>() {
+                            return Some(k).filter(|k| (0.1..=20.0).contains(k));
+                        }
+                    }
+                    if let Some(rest) = tl.strip_prefix("DN") {
+                        if let Ok(k) = rest.parse::<f64>() {
+                            return Some(-k).filter(|k| (-20.0..=-0.1).contains(k));
+                        }
+                    }
+                    if tl == "QSX" {
+                        // "QSX 14025.5" — absolute listen frequency in kHz.
+                        if let Some(abs) = toks.get(i + 1).and_then(|n| n.parse::<f64>().ok()) {
+                            let off = abs - self.freq_khz;
+                            if (0.1..=20.0).contains(&off.abs()) {
+                                return Some(off);
+                            }
+                        }
+                    }
+                    continue;
+                }
+            };
+            // "UP 2" / "DN 1.5" — number in the next token; bare → ±1 kHz convention.
+            if let Some(k) = toks.get(i + 1).and_then(|n| n.parse::<f64>().ok()) {
+                let off = dir * k;
+                // An EXPLICIT but absurd offset (UP 50) is a typo/unknown — safer to
+                // stay simplex than to move TX a guessed kilohertz.
+                return Some(off).filter(|o| (0.1..=20.0).contains(&o.abs()));
+            }
+            if bare {
+                return Some(dir * 1.0);
+            }
+        }
+        None
+    }
+
     /// The operating mode named in the spot comment, when one is ("CW 599", "FT8
     /// -6 dB", "RTTY", "SSB 59"…). RBN comments lead with the mode; human spots
     /// often carry one too. `None` when the comment doesn't say — callers fall
@@ -382,6 +431,25 @@ mod tests {
             matches!(&again[..], [Action::Send(s)] if s == "W9XYZ\r\n"),
             "re-prompt must be re-answered, got {again:?}"
         );
+    }
+
+    #[test]
+    fn split_parses_pileup_conventions() {
+        let mk = |comment: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: "3Y0J".into(),
+            freq_khz: 14023.0,
+            comment: comment.into(),
+            time_utc: None,
+        };
+        assert_eq!(mk("CW UP 2").split_up_khz(), Some(2.0));
+        assert_eq!(mk("UP2 big pile").split_up_khz(), Some(2.0));
+        assert_eq!(mk("DN 1.5").split_up_khz(), Some(-1.5));
+        assert_eq!(mk("CW UP").split_up_khz(), Some(1.0), "bare UP → +1 convention");
+        assert_eq!(mk("QSX 14025.5").split_up_khz(), Some(2.5));
+        assert_eq!(mk("loud in NJ").split_up_khz(), None);
+        assert_eq!(mk("UP 50").split_up_khz(), None, "absurd explicit offset → stay simplex");
+        assert_eq!(mk("5UP9").split_up_khz(), None, "report fragments don't parse");
     }
 
     #[test]

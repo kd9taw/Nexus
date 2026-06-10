@@ -621,7 +621,7 @@ export default function App() {
       // 'operate' is the digital cockpit, so its operating mode is 'digital'.
       const opMode: 'digital' | 'phone' | 'cw' = t.view === 'operate' ? 'digital' : t.view
       void withErrorToast(
-        () => workSpot(opMode, t.freqMhz, t.band),
+        () => workSpot(opMode, t.freqMhz, t.band, t.call),
         `Could not work ${t.call} — check CAT`,
       ).then((s) => {
         // On failure DON'T navigate or poison the guard ref — the backend made no change

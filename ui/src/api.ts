@@ -569,9 +569,12 @@ export async function workSpot(
   mode: 'digital' | 'phone' | 'cw',
   freqMhz: number,
   band: string,
+  call?: string,
 ): Promise<AppSnapshot> {
   const invoke = tauriInvoke()
-  if (invoke) return invoke<AppSnapshot>('work_spot', { mode, freqMhz, band })
+  // `call` lets the backend look up the spot's pile-up split ("UP 2") and
+  // configure rig split automatically — the N1MM behavior.
+  if (invoke) return invoke<AppSnapshot>('work_spot', { mode, freqMhz, band, call: call ?? null })
   // Browser demo: at least QSY the mock dial so the gesture is visible.
   return mockEngine.setFrequency(freqMhz, band, 'USB')
 }

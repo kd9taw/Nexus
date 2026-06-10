@@ -232,6 +232,10 @@ pub struct RadioStatus {
     /// cockpit's slider doesn't silently reset to 25 on every mount.
     #[serde(default)]
     pub cw_wpm: u32,
+    /// Rig split: the TX dial (MHz) when split is configured (pile-up "UP n"
+    /// spots), `None` = simplex. Drives the SPLIT badge.
+    #[serde(default)]
+    pub split_tx_mhz: Option<f64>,
     /// Set when the sound-card input/output failed to open, so the UI can show
     /// why the waterfall is blank instead of failing silently.
     #[serde(default)]
