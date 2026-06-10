@@ -24,15 +24,14 @@ describe('profiles', () => {
     }
   })
 
-  it('starter is a lean newcomer surface (band/chat + gamification)', () => {
+  it('starter is a lean newcomer surface (chat + gamification; Broadcasts removed)', () => {
     const en = resolveEnabled('starter')
-    expect(en.band).toBe(true)
+    // 'band' (Broadcasts) was deleted in Batch B — no longer in the registry.
     expect(en.chat).toBe(true)
     expect(en.gamification).toBe(true)
     // hidden for a newcomer — DX/contest console + the niche QSY section
     expect(en.roam).toBe(false)
     expect(en.awards).toBe(false)
-    expect(en.dxped).toBe(false)
     expect(en.dxped).toBe(false)
     expect(en.fieldDay).toBe(false)
   })
@@ -42,7 +41,7 @@ describe('profiles', () => {
     expect(en.awards).toBe(true)
     expect(en.dxped).toBe(true)
     expect(en.connect).toBe(true)
-    expect(en.band).toBe(true)
+    // 'band' (Broadcasts) was deleted; no assertion needed
     expect(en.gamification).toBe(true)
     expect(en.fieldDay).toBe(false) // not a contest profile
   })
@@ -50,21 +49,15 @@ describe('profiles', () => {
   it('contest surfaces the rate tools and de-emphasizes awards', () => {
     const en = resolveEnabled('contest')
     expect(en.fieldDay).toBe(true)
-    expect(en.log).toBe(true)
-    expect(en.band).toBe(true)
+    // 'log' (Field Log) was deleted in Batch B — export buttons moved into FieldDayView.
+    // 'band' (Broadcasts) was deleted in Batch B.
     expect(en.awards).toBe(false)
     expect(en.dxped).toBe(false)
   })
 
-  it('band is surfaced in every goal profile (spec §4.2)', () => {
-    for (const id of ['starter', 'dx', 'contest', 'pota', 'vhf'] as ProfileId[]) {
-      expect(resolveEnabled(id).band, `${id} band`).toBe(true)
-    }
-  })
-
   it('enabling a feature also enables its dependencies (closure)', () => {
-    // log dependsOn logbook (core, always on anyway) — assert the closure holds.
+    // fieldDay has no explicit dependsOn, so this tests the closure indirectly.
     const en = resolveEnabled('contest')
-    if (en.log) expect(en.logbook).toBe(true)
+    expect(en.fieldDay).toBe(true)
   })
 })

@@ -35,6 +35,11 @@ pub struct LoggedQso {
     pub section: String,
     pub band: String,
     pub slot: u64,
+    /// Unix seconds when the contact was logged — Cabrillo requires a real
+    /// `yyyy-mm-dd hhmm` per QSO line (the old `----------` placeholder would
+    /// FAIL ARRL submission). 0 in legacy/test paths = falls back to the
+    /// placeholder rather than inventing a date.
+    pub when_unix: u64,
 }
 
 /// A dupe-checked Field Day log with scoring.
@@ -65,6 +70,18 @@ impl FieldDayLog {
 
     /// Log a contact. Returns false (and logs nothing) if it's a dupe.
     pub fn log(&mut self, call: &str, class: &str, section: &str, slot: u64) -> bool {
+        self.log_at(call, class, section, slot, now_unix())
+    }
+
+    /// As [`log`](Self::log) with an explicit timestamp (tests / replays).
+    pub fn log_at(
+        &mut self,
+        call: &str,
+        class: &str,
+        section: &str,
+        slot: u64,
+        when_unix: u64,
+    ) -> bool {
         if self.is_dupe(call) {
             return false;
         }
@@ -75,6 +92,7 @@ impl FieldDayLog {
             section: section.to_string(),
             band: self.band.clone(),
             slot,
+            when_unix,
         });
         true
     }
@@ -123,15 +141,49 @@ impl FieldDayLog {
         s.push_str("CONTEST: ARRL-FIELD-DAY\n");
         s.push_str(&format!("CALLSIGN: {}\n", self.mycall));
         for q in &self.qsos {
-            // QSO: freq mo date time mycall myexch call exch
+            // QSO: freq mo date time mycall myexch call exch — ARRL requires a
+            // REAL `yyyy-mm-dd hhmm`; the old `----------` placeholder failed
+            // submission. Legacy rows without a stamp keep the placeholder so
+            // we never invent a time.
+            let (date, time) = if q.when_unix > 0 {
+                cabrillo_datetime(q.when_unix)
+            } else {
+                ("----------".to_string(), "----".to_string()) // HHMM is 4 chars
+            };
             s.push_str(&format!(
-                "QSO: {freq_khz} DG ---------- ----- {} {} {} {} {} {}\n",
+                "QSO: {freq_khz} DG {date} {time} {} {} {} {} {} {}\n",
                 self.mycall, self.myexch.class, self.myexch.section, q.call, q.class, q.section
             ));
         }
         s.push_str("END-OF-LOG:\n");
         s
     }
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Unix seconds → ("yyyy-mm-dd", "hhmm") in UTC (Howard Hinnant's civil-from-days;
+/// no external date crate needed for two Cabrillo fields).
+fn cabrillo_datetime(unix: u64) -> (String, String) {
+    let secs_of_day = unix % 86_400;
+    let days = (unix / 86_400) as i64;
+    let (h, m) = ((secs_of_day / 3600) as u32, ((secs_of_day % 3600) / 60) as u32);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if mo <= 2 { y + 1 } else { y };
+    (format!("{y:04}-{mo:02}-{d:02}"), format!("{h:02}{m:02}"))
 }
 
 fn adif_field(name: &str, value: &str) -> String {
@@ -347,6 +399,25 @@ pub fn run_loopback_fieldday(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cabrillo_lines_carry_real_utc_timestamps() {
+        // 2026-06-27 18:05:00 UTC (Field Day Saturday) = 1782583500.
+        let (d, t) = cabrillo_datetime(1_782_583_500);
+        assert_eq!((d.as_str(), t.as_str()), ("2026-06-27", "1805"));
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            Exchange { class: "3A".into(), section: "WI".into() },
+            "20m",
+        );
+        assert!(log.log_at("K1ABC", "2A", "CT", 4, 1_782_583_500));
+        let cab = log.cabrillo(14074);
+        assert!(
+            cab.contains("QSO: 14074 DG 2026-06-27 1805 W9XYZ 3A WI K1ABC 2A CT"),
+            "real date/time on the QSO line (ARRL submission requires it): {cab}"
+        );
+        assert!(!cab.contains("----------"), "no placeholder when stamped");
+    }
+
     use super::*;
 
     fn dec(msg: &str) -> Decode {

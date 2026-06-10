@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FieldDayQso, FieldDayStatus, ModeRequest } from '../types'
+import { exportLog } from '../api'
 
 interface Props {
   fieldDay: FieldDayStatus | null
@@ -12,6 +13,22 @@ interface LogRowMeta {
   isNewSection: boolean
   /** the same call appears more than once in the log = a dupe */
   isDupe: boolean
+}
+
+type ExportFormat = 'cabrillo' | 'adif'
+const EXT: Record<ExportFormat, string> = { cabrillo: 'cbr', adif: 'adi' }
+const MIME: Record<ExportFormat, string> = { cabrillo: 'text/plain', adif: 'text/plain' }
+
+function downloadText(filename: string, text: string, mime: string): void {
+  const blob = new Blob([text], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 /**
@@ -38,6 +55,8 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const running = fieldDay?.running ?? false
   const log = fieldDay?.log ?? []
+  const [exportError, setExportError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<ExportFormat | null>(null)
 
   const rows = useMemo(() => annotate(log), [log])
 
@@ -46,6 +65,20 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [log.length])
+
+  const handleExport = async (format: ExportFormat) => {
+    setExportError(null)
+    setBusy(format)
+    try {
+      const text = await exportLog(format)
+      const stamp = new Date().toISOString().slice(0, 10)
+      downloadText(`fd-log-${stamp}.${EXT[format]}`, text, MIME[format])
+    } catch (err) {
+      setExportError(typeof err === 'string' ? err : err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(null)
+    }
+  }
 
   return (
     <section className="conversation panel fieldday">
@@ -73,6 +106,30 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
             onClick={() => onSetMode('fieldday-sp')}
           >
             S&amp;P
+          </button>
+        </div>
+        {/* Export buttons — moved here from the deleted LogView */}
+        <div className="fd-export">
+          {exportError && (
+            <span className="log-export-error" role="alert">{exportError}</span>
+          )}
+          <button
+            type="button"
+            className="export-btn"
+            disabled={busy !== null}
+            onClick={() => handleExport('cabrillo')}
+            title="Export Field Day log as Cabrillo (.cbr) for ARRL submission"
+          >
+            {busy === 'cabrillo' ? 'Exporting…' : 'Export Cabrillo'}
+          </button>
+          <button
+            type="button"
+            className="export-btn"
+            disabled={busy !== null}
+            onClick={() => handleExport('adif')}
+            title="Export Field Day log as ADIF (.adi)"
+          >
+            {busy === 'adif' ? 'Exporting…' : 'Export ADIF'}
           </button>
         </div>
       </div>

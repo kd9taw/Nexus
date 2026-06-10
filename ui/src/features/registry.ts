@@ -19,12 +19,10 @@ export type View =
   | 'needed'
   | 'chat'
   | 'fieldDay'
-  | 'band'
   | 'roam'
   | 'logbook'
   | 'awards'
   | 'pota'
-  | 'log'
   | 'settings'
 
 /** Every section id is a `View`; capabilities add a few cross-cutting ids. */
@@ -152,19 +150,6 @@ export const FEATURES: FeatureDef[] = [
 
   // ---- Optional sections ----
   {
-    id: 'band',
-    label: 'Band',
-    kind: 'section',
-    category: 'Operate',
-    core: false,
-    dependsOn: [],
-    // Activity feed is broadly useful — surfaced in every goal profile (spec §4.2).
-    intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
-    view: 'band',
-    workspace: 'msg',
-    oneLine: 'Open broadcasts / activity feed.',
-  },
-  {
     id: 'chat',
     label: 'Chat',
     kind: 'section',
@@ -200,18 +185,6 @@ export const FEATURES: FeatureDef[] = [
     view: 'fieldDay',
     workspace: 'dx',
     oneLine: 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',
-  },
-  {
-    id: 'log',
-    label: 'Field Log',
-    kind: 'section',
-    category: 'Logging',
-    core: false,
-    dependsOn: ['logbook'],
-    intents: ['contest', 'pota'],
-    view: 'log',
-    workspace: 'dx',
-    oneLine: 'Field Day / activity export view.',
   },
   {
     id: 'connect',
@@ -276,7 +249,7 @@ export const FEATURES: FeatureDef[] = [
     intents: ['pota'],
     view: 'pota',
     workspace: 'dx',
-    oneLine: 'Parks/Summits on the air — who’s on now (hunt) + tag your activation.',
+    oneLine: 'Parks/Summits on the air — who\'s on now (hunt) + tag your activation.',
   },
 
   // ---- Optional capabilities ----

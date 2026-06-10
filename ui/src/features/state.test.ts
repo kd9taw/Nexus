@@ -101,7 +101,7 @@ describe('feature state transitions', () => {
     expect(s.profile).toBe('starter')
     expect(s.enabled.awards).toBe(false)
     expect(s.enabled.chat).toBe(true)
-    expect(s.enabled.band).toBe(true)
+    // 'band' (Broadcasts) removed in Batch B — no longer in the registry
     expect(s.enabled.roam).toBe(false) // niche QSY section — not in the starter bundle
   })
 
@@ -166,11 +166,12 @@ describe('feature state transitions', () => {
     expect(defaultState().dismissedReveals).toEqual([])
   })
 
-  it('normalizeState restores dependency closure (enabled feature implies its deps)', () => {
-    // log dependsOn logbook; a store with log on but logbook off must repair to
+  it('normalizeState restores dependency closure (awards dependsOn logbook)', () => {
+    // awards dependsOn logbook; a store with awards on but logbook off must repair
     // logbook on (logbook is core anyway, but this locks the closure behavior).
-    const n = normalizeState({ profile: 'custom', enabled: { log: true, logbook: false } } as never)
-    expect(n.enabled.log).toBe(true)
+    // ('log' was deleted in Batch B — using 'awards' as the canonical test case.)
+    const n = normalizeState({ profile: 'custom', enabled: { awards: true, logbook: false } } as never)
+    expect(n.enabled.awards).toBe(true)
     expect(n.enabled.logbook).toBe(true)
   })
 })

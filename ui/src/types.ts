@@ -652,6 +652,10 @@ export interface NeedAlert {
   /** Exact spot frequency in MHz when known (cluster/RBN), else null (band-level
    * reception needs). Lets click-to-work QSY to the spot, not just the band default. */
   freqMhz: number | null
+  /** Unix seconds of the most recent admitting evidence — drives "N min ago". */
+  admittedAt?: number | null
+  /** The board shows its work: "heard by K9LC (EN52, 26 km) + N9CO (62 km)". */
+  evidence?: string | null
 }
 
 /** A QRZ.com callsign-lookup result. grid/state are subscriber-only and routinely

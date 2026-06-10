@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import {
-  broadcast as apiBroadcast,
   callStation as apiCallStation,
   overrideNextTx as apiOverrideNextTx,
   setArea as apiSetArea,
@@ -76,10 +75,8 @@ import type { PropagationSnapshot, FeedHealth, NeedTag, NeedAlert } from './type
 import { NeededPanel } from './components/NeededPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { FieldDayView } from './components/FieldDayView'
-import { BandFeed } from './components/BandFeed'
 import { DecodeFeed } from './components/DecodeFeed'
 import { Logbook } from './components/Logbook'
-import { LogView } from './components/LogView'
 import { RoamPanel } from './components/RoamPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Toasts } from './components/Toasts'
@@ -119,8 +116,6 @@ function storageWritable(): boolean {
     return false
   }
 }
-// Synthetic peer key for the open band-activity / broadcast feed.
-const BROADCAST_PEER = '*'
 
 // Macros fall back to these until settings load (keeps chips populated).
 const DEFAULT_MACROS: Settings['macros'] = {
@@ -460,8 +455,8 @@ export default function App() {
     const out: Record<string, number> = {}
     if (!snap) return out
     for (const c of snap.conversations) {
-      // the "*" band feed is not a roster peer; don't surface unread badges for it
-      if (c.peer === BROADCAST_PEER) continue
+      // the "*" broadcast peer is an engine-internal bus; skip unread badges
+      if (c.peer === '*') continue
       const read = readCounts.current[c.peer] ?? 0
       const inbound = c.messages.filter((m) => !m.outbound).length
       const readInbound = Math.min(read, c.messages.length)
@@ -558,12 +553,6 @@ export default function App() {
     },
     [activePeer],
   )
-
-  const handleBroadcast = useCallback((text: string) => {
-    void withErrorToast(() => apiBroadcast(text), 'Broadcast could not be sent').then((s) => {
-      if (s) setSnap(s)
-    })
-  }, [])
 
   const handleSetFrequency = useCallback(
     (dialMhz: number, band: string, mode: string) => {
@@ -784,7 +773,7 @@ export default function App() {
   }, [settings, noteLoggedForDxClear])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
-  // (defaulting to the "run" / "chat" role); Band / Log / Settings are pure UI
+  // (defaulting to the "run" / "chat" role); Settings are pure UI
   // screens that leave the operating mode unchanged.
   const handleView = useCallback(
     (next: View) => {
@@ -906,8 +895,6 @@ export default function App() {
 
   const activeConversation =
     snap.conversations.find((c) => c.peer === activePeer) ?? null
-  const broadcastConversation =
-    snap.conversations.find((c) => c.peer === BROADCAST_PEER) ?? null
   const peerTyping = activePeer ? peerIsTyping(activePeer) : false
   // typingTick keeps this expression re-evaluated
   void typingTick
@@ -1019,16 +1006,6 @@ export default function App() {
         <FieldDayView fieldDay={snap.fieldDay} onSetMode={handleSetMode} />,
       )
       break
-    case 'band':
-      workspace = threePane(
-        <BandFeed
-          conversation={broadcastConversation}
-          mycall={snap.mycall}
-          macros={macros}
-          onBroadcast={handleBroadcast}
-        />,
-      )
-      break
     case 'logbook':
       workspace = (
         <main className="layout single">
@@ -1087,13 +1064,6 @@ export default function App() {
       workspace = (
         <main className="layout single">
           <PotaSotaView />
-        </main>
-      )
-      break
-    case 'log':
-      workspace = (
-        <main className="layout single">
-          <LogView snap={snap} />
         </main>
       )
       break

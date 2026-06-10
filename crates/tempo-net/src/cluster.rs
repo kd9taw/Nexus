@@ -25,6 +25,15 @@ pub struct ClusterSpot {
     pub comment: String,
     /// UTC time token ("1234Z") if the line carried one.
     pub time_utc: Option<String>,
+    /// Unix seconds when WE received this spot (stamped at buffer insertion;
+    /// 0 in raw-parse/test paths). Drives the honest "N min ago" evidence age —
+    /// stamping poll-time made every cluster row read "just now" forever.
+    pub received_unix: u64,
+    /// OTHER spotters whose earlier spots of this DX were replaced in the
+    /// buffer (dedup keeps the newest spot per DX but must not erase the
+    /// corroboration evidence — VHF admission requires multiple independent
+    /// near spotters). Capped small; excludes `spotter` itself.
+    pub corroborators: Vec<String>,
 }
 
 impl ClusterSpot {
@@ -148,6 +157,8 @@ pub fn parse_dx_spot(line: &str) -> Option<ClusterSpot> {
         freq_khz,
         comment: comment_tokens.join(" "),
         time_utc,
+        received_unix: 0, // stamped at buffer insertion
+        corroborators: Vec::new(),
     })
 }
 
@@ -241,11 +252,41 @@ impl SpotBuffer {
         }
     }
     /// Add a spot stamped now; a prior spot of the same DX call is replaced.
-    pub fn push(&mut self, spot: ClusterSpot) {
+    pub fn push(&mut self, mut spot: ClusterSpot) {
+        if spot.received_unix == 0 {
+            spot.received_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+        }
         self.push_at(Instant::now(), spot);
     }
     /// As [`push`](Self::push) with an explicit timestamp (for tests).
-    pub fn push_at(&mut self, at: Instant, spot: ClusterSpot) {
+    pub fn push_at(&mut self, at: Instant, mut spot: ClusterSpot) {
+        // Carry the replaced spot's spotter (and ITS corroborators) forward —
+        // "who else reported this DX" is the multi-endpoint evidence the VHF
+        // gate needs; plain replacement silently reduced every DX to one voice.
+        if let Some((_, old)) = self
+            .spots
+            .iter()
+            .find(|(_, s)| s.dx_call == spot.dx_call)
+        {
+            let mut set: Vec<String> = old
+                .corroborators
+                .iter()
+                .cloned()
+                .chain(std::iter::once(old.spotter.clone()))
+                .filter(|c| {
+                    !c.eq_ignore_ascii_case(&spot.spotter)
+                        && !spot
+                            .corroborators
+                            .iter()
+                            .any(|x| x.eq_ignore_ascii_case(c))
+                })
+                .collect();
+            spot.corroborators.append(&mut set);
+            spot.corroborators.truncate(8);
+        }
         self.spots.retain(|(_, s)| s.dx_call != spot.dx_call);
         self.spots.push_back((at, spot));
         while self.spots.len() > self.cap {
@@ -409,6 +450,8 @@ mod tests {
             freq_khz: 14025.0,
             comment: comment.into(),
             time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
         };
         assert_eq!(mk("CW 599").mode(), Some("CW"));
         assert_eq!(mk("FT8  -6 dB  25 WPM").mode(), Some("FT8"));
@@ -442,6 +485,8 @@ mod tests {
             freq_khz: 14023.0,
             comment: comment.into(),
             time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
         };
         assert_eq!(mk("CW UP 2").split_offset_khz(), Some(2.0));
         assert_eq!(mk("UP2 big pile").split_offset_khz(), Some(2.0));
@@ -534,6 +579,8 @@ mod tests {
             freq_khz: 14074.0,
             comment: String::new(),
             time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
         };
         let mut b = SpotBuffer::new(10);
         b.push_at(base, sp("OLD")); // stamped at base
@@ -563,6 +610,46 @@ mod tests {
     }
 
     #[test]
+    fn dedup_replacement_carries_corroborating_spotters() {
+        // VHF needs >= 2 independent near spotters — the buffer's newest-wins
+        // dedup must carry the replaced spot's spotter forward as evidence,
+        // not silently reduce every DX to one voice.
+        let mut b = SpotBuffer::new(10);
+        let mk = |spotter: &str| ClusterSpot {
+            spotter: spotter.into(),
+            dx_call: "4U1UN".into(),
+            freq_khz: 50313.0,
+            comment: "CW".into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+        };
+        b.push(mk("K9LC"));
+        b.push(mk("N9CO"));
+        b.push(mk("K9IMM"));
+        let spots = b.recent();
+        assert_eq!(spots.len(), 1, "still deduped to one row per DX");
+        let s = &spots[0];
+        assert_eq!(s.spotter, "K9IMM", "newest spot wins");
+        assert!(
+            s.corroborators.contains(&"K9LC".to_string())
+                && s.corroborators.contains(&"N9CO".to_string()),
+            "replaced spotters carried as corroborators: {:?}",
+            s.corroborators
+        );
+        // Re-spot by an existing voice must not duplicate it.
+        b.push(mk("K9LC"));
+        let s = &b.recent()[0];
+        let n = s
+            .corroborators
+            .iter()
+            .filter(|c| *c == "K9IMM" || *c == "N9CO")
+            .count();
+        assert_eq!(n, 2, "no dupes, prior voices kept: {:?}", s.corroborators);
+        assert!(!s.corroborators.contains(&"K9LC".to_string()), "self excluded");
+    }
+
+    #[test]
     fn spot_buffer_dedups_by_call_and_caps() {
         let sp = |call: &str| ClusterSpot {
             spotter: "X".into(),
@@ -570,6 +657,8 @@ mod tests {
             freq_khz: 14074.0,
             comment: String::new(),
             time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
         };
         let mut b = SpotBuffer::new(2);
         b.push(sp("A"));

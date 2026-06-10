@@ -13,6 +13,7 @@ import {
 
 // The actual nav-destination views — must stay 1:1 with the section features, so
 // adding a View without a registry entry (or vice versa) trips this test.
+// 'band' (Broadcasts) and 'log' (Field Log) removed in Batch B cleanup.
 const EXPECTED_SECTIONS: FeatureId[] = [
   'operate',
   'cw',
@@ -21,12 +22,10 @@ const EXPECTED_SECTIONS: FeatureId[] = [
   'needed',
   'logbook',
   'settings',
-  'band',
   'chat',
   'roam',
   'fieldDay',
   'pota',
-  'log',
   'dxped',
   'awards',
 ]
@@ -63,13 +62,12 @@ describe('feature registry', () => {
   })
 
   it('removeWithDependents cascades to everything depending on the removed id', () => {
-    // logbook ← awards, log, pota all depend on it.
-    expect(directDependents('logbook').sort()).toEqual(['awards', 'log', 'pota'])
-    const set = new Set<FeatureId>(['logbook', 'awards', 'log', 'pota', 'operate'])
+    // logbook ← awards, pota both depend on it ('log' was removed in Batch B).
+    expect(directDependents('logbook').sort()).toEqual(['awards', 'pota'])
+    const set = new Set<FeatureId>(['logbook', 'awards', 'pota', 'operate'])
     removeWithDependents(set, 'logbook')
     expect(set.has('logbook')).toBe(false)
     expect(set.has('awards')).toBe(false)
-    expect(set.has('log')).toBe(false)
     expect(set.has('pota')).toBe(false)
     expect(set.has('operate')).toBe(true) // unrelated, untouched
   })

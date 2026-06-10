@@ -8,13 +8,11 @@ import {
   Target,
   MessageSquare,
   Tent,
-  RadioTower,
   Trees,
   ArrowLeftRight,
   BookOpen,
   Trophy,
   Zap,
-  ClipboardList,
   Settings,
 } from 'lucide-react'
 import { Tooltip, TooltipProvider } from './ui/Tooltip'
@@ -108,16 +106,15 @@ const CW: Item = {
 // extras (all `core: false`, so they appear only when enabled in Settings ▸ Features).
 // `operate` and `chat` are NOT here — they live in the Digital group above as FT8/FT4
 // and Tempo. ('qso' stays retired from the nav; the Digital cockpit sequences inline.)
+// 'band' (Broadcasts) and 'log' (Field Log) have been removed — deleted sections.
 const ITEMS: Item[] = [
   { id: 'connect', label: 'Connect', icon: Radar, title: 'Connect — THE map: grayline globe + live spots + openings + propagation, with click-to-work' },
-  { id: 'needed', label: 'Needed', icon: Target, title: 'Needed — what you still need that’s on the air now; single-click to QSY' },
+  { id: 'needed', label: 'Needed', icon: Target, title: 'Needed — what you still need that\'s on the air now; single-click to QSY' },
   { id: 'dxped', label: 'DXped', icon: Plane, title: 'DXpeditions — active now, the forward calendar, and what you need from each' },
   { id: 'logbook', label: 'Logbook', icon: BookOpen, title: 'Logbook — your ADIF contacts' },
   { id: 'awards', label: 'Awards', icon: Trophy, title: 'Awards — your Journey (firsts, ladders, milestones) + official DXCC/WAS/WAZ progress' },
   { id: 'fieldDay', label: 'Field Day', icon: Tent, title: 'Field Day — contest rate workspace' },
-  { id: 'band', label: 'Broadcasts', icon: RadioTower, title: 'Broadcasts — the open Tempo activity feed (CQs + announcements to everyone on frequency)' },
-  { id: 'pota', label: 'POTA/SOTA', icon: Trees, title: 'POTA / SOTA — parks & summits: who’s on now (hunt) + tag your activation' },
-  { id: 'log', label: 'Field Log', icon: ClipboardList, title: 'Field Log — Field Day / activity export' },
+  { id: 'pota', label: 'POTA/SOTA', icon: Trees, title: 'POTA / SOTA — parks & summits: who\'s on now (hunt) + tag your activation' },
 ]
 
 // Roam rides WITH the Digital/Tempo cluster (it's Tempo's coordinated-QSY

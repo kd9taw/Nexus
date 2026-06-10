@@ -4495,6 +4495,20 @@ body.resizing {
   color: var(--accent-ink);
 }
 
+/* Export buttons in the Field Day header (moved from deleted LogView). */
+.fd-export {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.log-export-error {
+  font-size: 0.75rem;
+  color: var(--critical, #e05252);
+}
+
+
 .fd-scoreboard {
   flex: 0 0 auto;
   display: flex;
@@ -7192,6 +7206,106 @@ select.settings-input {
   color: var(--text-faint);
   text-align: center;
 }
+
+/* ── NeededPanel: filter bar + evidence line ───────────────────────────────── */
+/* Filter toggle button (funnel icon) in the panel header. */
+.np-filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.73rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+.np-filter-toggle:hover,
+.np-filter-toggle.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* A filtered count badge alongside the main count. */
+.np-count-filtered {
+  background: transparent;
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 0;
+}
+/* Filter bar container — wraps chip groups compactly. */
+.np-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 2px;
+  font-size: 0.73rem;
+}
+/* Thin vertical separator between chip groups. */
+.np-filter-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+/* A horizontal chip group (need-type / bands / mode). */
+.np-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+/* Smaller band chips don't need to wrap as eagerly. */
+.np-filter-bands {
+  flex-shrink: 1;
+}
+/* Individual filter chip. */
+.np-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 0.71rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+  white-space: nowrap;
+}
+.np-chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.np-chip.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+/* Clear all filters chip — visually distinct (danger-muted). */
+.np-chip-clear {
+  border-color: var(--warning, #e8b04b);
+  color: var(--warning, #e8b04b);
+}
+.np-chip-clear:hover {
+  background: color-mix(in srgb, var(--warning, #e8b04b) 12%, transparent);
+  border-color: var(--warning, #e8b04b);
+  color: var(--warning, #e8b04b);
+}
+/* Evidence sub-line under the headline in the Why column.
+   This is the trust feature: the board shows its work. */
+.np-evidence {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-faint);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 
 /* ── Call Roster (the GridTracker-style sortable table) ─────────────────────── */
 .operate-roster {

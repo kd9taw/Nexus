@@ -1879,18 +1879,6 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">Chips for sequenced QSOs.</span>
               </label>
-              <label className="settings-field">
-                <span className="settings-label">Band (broadcast)</span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.macros.band.join(', ')}
-                  onChange={(e) => updateMacros('band', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <span className="settings-hint">Chips for open broadcasts. (Field Day exchange stays automatic.)</span>
-              </label>
             </div>
           </fieldset>
           </>

@@ -3,8 +3,18 @@
 // ranked by priority and boldly colored by the shared need palette. Single-click a
 // row to QSY the radio to that band and listen. The same stations light up on the
 // Connect map (shared needByCall), so this is the list half of "list + map".
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import type { BandChannel, NeedAlert, NeedTag } from '../types'
+import {
+  filterAlerts,
+  ageLabel,
+  DEFAULT_FILTERS,
+  type NeededFilters,
+  type NeedTypeFilter,
+  type ModeFilter,
+  NEED_TYPE_VALUES,
+  MODE_FILTER_VALUES,
+} from '../neededFilters'
 
 const NEED_CHIP: Record<NeedTag, { label: string; cls: string; title: string }> = {
   NewEntity: { label: 'NEW ONE', cls: 'entity', title: 'All-time-new DXCC entity (ATNO)' },
@@ -20,6 +30,62 @@ function chipFor(t: NeedTag): { label: string; cls: string; title: string } {
 }
 
 type SortKey = 'priority' | 'call' | 'band' | 'entity'
+
+// Persisted filter state key.
+const FILTER_KEY = 'neededFilters'
+
+function loadFilters(): NeededFilters {
+  try {
+    const raw = localStorage.getItem(FILTER_KEY)
+    if (!raw) return { ...DEFAULT_FILTERS }
+    const parsed = JSON.parse(raw) as Partial<NeededFilters>
+    // Sanitize against the KNOWN enum values — a stale bucket name from an
+    // older build must fall back to 'all', not silently empty the board with
+    // no active chip to explain why.
+    const needType = NEED_TYPE_VALUES.includes(parsed.needType as NeedTypeFilter)
+      ? (parsed.needType as NeedTypeFilter)
+      : DEFAULT_FILTERS.needType
+    const mode = (MODE_FILTER_VALUES as readonly string[]).includes(parsed.mode as string)
+      ? (parsed.mode as NeededFilters['mode'])
+      : DEFAULT_FILTERS.mode
+    return {
+      needType,
+      bands: Array.isArray(parsed.bands) ? parsed.bands.filter((b) => typeof b === 'string') : [],
+      mode,
+    }
+  } catch {
+    return { ...DEFAULT_FILTERS }
+  }
+}
+
+function saveFilters(f: NeededFilters): void {
+  try {
+    localStorage.setItem(FILTER_KEY, JSON.stringify(f))
+  } catch {
+    /* storage blocked — filters just won't persist */
+  }
+}
+
+// Band list shown in the filter bar: common HF + VHF bands (always present).
+// In the rendered bar these are augmented with bands from current alerts.
+const COMMON_BANDS = ['160m', '80m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m']
+
+const NEED_TYPE_OPTS: { value: NeedTypeFilter; label: string }[] = [
+  // (DXped restores the old "DXped only" toggle as a need-type chip.)
+  { value: 'all', label: 'All' },
+  { value: 'atno', label: 'ATNO' },
+  { value: 'newBand', label: 'New band' },
+  { value: 'newMode', label: 'New mode' },
+  { value: 'newGrid', label: 'New grid' },
+  { value: 'dxped', label: 'DXped' },
+]
+
+const MODE_OPTS: { value: ModeFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'Digital', label: 'Digital' },
+  { value: 'CW', label: 'CW' },
+  { value: 'Phone', label: 'Phone' },
+]
 
 interface Props {
   alerts: NeedAlert[]
@@ -50,14 +116,51 @@ export function NeededPanel({
     key: 'priority',
     dir: 'desc',
   })
-  // DXpedition filter — expedition chasers narrow the board to limited-time windows.
-  const [dxpedOnly, setDxpedOnly] = useState(false)
+  const [filters, setFilters] = useState<NeededFilters>(loadFilters)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+
   const knownBands = useMemo(() => new Set(bandPlan.map((b) => b.band)), [bandPlan])
 
+  // All distinct bands present in the current alerts, merged with the common list.
+  const availableBands = useMemo(() => {
+    const alertBands = new Set(alerts.map((a) => a.band))
+    // Preserve COMMON_BANDS order, then append any alert bands not in the common list.
+    const result: string[] = []
+    for (const b of COMMON_BANDS) {
+      result.push(b)
+    }
+    for (const b of alertBands) {
+      if (!result.includes(b)) result.push(b)
+    }
+    return result
+  }, [alerts])
+
+  const updateFilters = useCallback((next: NeededFilters) => {
+    setFilters(next)
+    saveFilters(next)
+  }, [])
+
+  const toggleBand = useCallback((band: string) => {
+    setFilters((prev) => {
+      const next: NeededFilters = prev.bands.includes(band)
+        ? { ...prev, bands: prev.bands.filter((b) => b !== band) }
+        : { ...prev, bands: [...prev.bands, band] }
+      saveFilters(next)
+      return next
+    })
+  }, [])
+
+  const clearFilters = useCallback(() => {
+    updateFilters({ ...DEFAULT_FILTERS })
+  }, [updateFilters])
+
+  const hasActiveFilters =
+    filters.needType !== 'all' || filters.bands.length > 0 || filters.mode !== 'all'
+
   const rows = useMemo(() => {
-    const r = dxpedOnly ? alerts.filter((a) => a.tags.includes('Dxped')) : [...alerts]
+    const filtered = filterAlerts(alerts, filters)
     const dir = sort.dir === 'asc' ? 1 : -1
-    r.sort((a, b) => {
+    filtered.sort((a, b) => {
       let c = 0
       switch (sort.key) {
         case 'priority':
@@ -76,8 +179,8 @@ export function NeededPanel({
       if (c === 0) c = b.priority - a.priority // tiebreak: hottest first
       return c * dir
     })
-    return r
-  }, [alerts, sort, dxpedOnly])
+    return filtered
+  }, [alerts, sort, filters])
 
   const th = (key: SortKey, label: string) => (
     <button
@@ -100,15 +203,24 @@ export function NeededPanel({
     <main className="layout single needed-panel">
       <div className="np-head">
         <h2>Needed now</h2>
-        <span className="np-count">{alerts.length}</span>
+        <span className="np-count">{rows.length}</span>
+        {alerts.length !== rows.length && (
+          <span className="np-count np-count-filtered">of {alerts.length}</span>
+        )}
         <span className="np-hint">single-click a row to QSY the radio to that band and listen</span>
+        {/* Filter toggle button */}
         <button
           type="button"
-          className={`np-filter${dxpedOnly ? ' active' : ''}`}
-          onClick={() => setDxpedOnly((v) => !v)}
-          title="Show only active-DXpedition needs (limited-time windows)"
+          className={`np-filter-toggle${filtersOpen || hasActiveFilters ? ' active' : ''}`}
+          onClick={() => setFiltersOpen((v) => !v)}
+          title="Filter the board by need type, band, or mode"
+          aria-expanded={filtersOpen}
         >
-          ✈ DXped only
+          {/* funnel icon as inline SVG */}
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M1 2.5A.5.5 0 0 1 1.5 2h13a.5.5 0 0 1 .354.854L10 8.707V14.5a.5.5 0 0 1-.724.447l-4-2A.5.5 0 0 1 5 12.5V8.707L1.146 2.854A.5.5 0 0 1 1 2.5z"/>
+          </svg>
+          {hasActiveFilters ? ' Filtered' : ' Filter'}
         </button>
         {onPopOut && (
           <button
@@ -121,6 +233,69 @@ export function NeededPanel({
           </button>
         )}
       </div>
+
+      {/* Filter bar — visible when toggled open or when any filter is active */}
+      {(filtersOpen || hasActiveFilters) && (
+        <div className="np-filters" role="group" aria-label="Filter needed alerts">
+          {/* Need type chips */}
+          <div className="np-filter-group">
+            {NEED_TYPE_OPTS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={`np-chip${filters.needType === opt.value ? ' active' : ''}`}
+                onClick={() => updateFilters({ ...filters, needType: opt.value })}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="np-filter-sep" aria-hidden="true" />
+
+          {/* Band multi-select chips */}
+          <div className="np-filter-group np-filter-bands">
+            {availableBands.map((band) => (
+              <button
+                key={band}
+                type="button"
+                className={`np-chip${filters.bands.includes(band) ? ' active' : ''}`}
+                onClick={() => toggleBand(band)}
+              >
+                {band}
+              </button>
+            ))}
+          </div>
+
+          <div className="np-filter-sep" aria-hidden="true" />
+
+          {/* Mode chips */}
+          <div className="np-filter-group">
+            {MODE_OPTS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={`np-chip${filters.mode === opt.value ? ' active' : ''}`}
+                onClick={() => updateFilters({ ...filters, mode: opt.value })}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {hasActiveFilters && (
+            <button
+              type="button"
+              className="np-chip np-chip-clear"
+              onClick={clearFilters}
+              title="Clear all filters"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="np-grid" role="table">
         <div className="np-row np-header" role="row">
           {th('priority', 'Need')}
@@ -132,14 +307,31 @@ export function NeededPanel({
         </div>
         {rows.length === 0 ? (
           <div className="np-empty">
-            Nothing needed on the air right now — needed stations (new ones, band-slots, modes,
-            grids, POTA/SOTA) appear here as they're heard or spotted.
+            {hasActiveFilters
+              ? 'No alerts match the current filters — clear to see all.'
+              : 'Nothing needed on the air right now — needed stations (new ones, band-slots, modes, grids, POTA/SOTA) appear here as they\'re heard or spotted.'}
           </div>
         ) : (
           rows.map((a) => {
             const canQsy = knownBands.has(a.band)
             const isVoiceCw = a.mode === 'CW' || a.mode === 'Phone'
             const workable = isVoiceCw && !!onWork
+            const age = ageLabel(a.admittedAt)
+            const evidenceLine = a.evidence
+              ? (age ? `${a.evidence} · ${age}` : a.evidence)
+              : null
+            const tooltipBody = workable
+              ? `Work ${a.call} — ${a.mode} on ${a.band}${
+                  a.freqMhz ? ` @ ${a.freqMhz.toFixed(3)} MHz` : ''
+                }`
+              : isVoiceCw
+                ? `${a.call} (${a.mode}) — open the main window to work this (pop-out only QSYs the band)`
+                : canQsy
+                  ? `QSY to ${a.band} and listen for ${a.call}`
+                  : a.headline
+            const fullTooltip = evidenceLine
+              ? `${tooltipBody}\n${evidenceLine}`
+              : tooltipBody
             return (
               <div
                 key={`${a.call}|${a.band}|${a.mode}`}
@@ -147,17 +339,7 @@ export function NeededPanel({
                 className={`np-row${a.call === selectedCall ? ' selected' : ''} need-${
                   a.tags[0] ? chipFor(a.tags[0]).cls : 'confirm'
                 }`}
-                title={
-                  workable
-                    ? `Work ${a.call} — ${a.mode} on ${a.band}${
-                        a.freqMhz ? ` @ ${a.freqMhz.toFixed(3)} MHz` : ''
-                      }`
-                    : isVoiceCw
-                      ? `${a.call} (${a.mode}) — open the main window to work this (pop-out only QSYs the band)`
-                      : canQsy
-                        ? `QSY to ${a.band} and listen for ${a.call}`
-                        : a.headline
-                }
+                title={fullTooltip}
                 onClick={() => {
                   onSelect(a.call)
                   if (workable) onWork(a)
@@ -180,7 +362,12 @@ export function NeededPanel({
                   )}
                 </span>
                 <span className="np-zone">{a.zone > 0 ? a.zone : '—'}</span>
-                <span className="np-why">{a.headline}</span>
+                <span className="np-why">
+                  {a.headline}
+                  {evidenceLine && (
+                    <span className="np-evidence">{evidenceLine}</span>
+                  )}
+                </span>
               </div>
             )
           })

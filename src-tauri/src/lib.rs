@@ -2059,6 +2059,8 @@ async fn get_need_alerts(
             band: band.clone(),
             mode: tier_mode.clone(),
             freq_mhz: None, // own decodes are band-level here
+            admitted_at: None,
+            evidence: Some("decoded by YOUR radio on this band".to_string()),
         })
         .collect();
     // The real value (empirical evidence, not a model): two complementary signals
@@ -2107,15 +2109,27 @@ async fn get_need_alerts(
             // spotters with no known grid can't prove locality → dropped on VHF.
             // HF keeps the continent-wide cluster (F2 footprints span it).
             if band.is_vhf() {
-                let near = match (propagation::skimmer_grid(&cs.spotter), me_ll) {
-                    (Some(g), Some(me)) => propagation::geo::maidenhead_to_latlon(g)
-                        .is_some_and(|rx| {
-                            propagation::geo::haversine_km(me, rx)
-                                <= propagation::near_me_radius_km(band)
-                        }),
-                    _ => false,
-                };
-                if !near {
+                // ALL independent voices for this DX (current spotter + the
+                // spotters whose earlier reports the buffer's dedup replaced):
+                // count how many are inside the Es-patch radius. VHF needs >= 2
+                // — the PSKR path has required two near receivers all along,
+                // but a single near RBN skimmer could still sneak a 6 m CW spot
+                // through here (the last uncorroborated hole, the 4U1UN case).
+                let near_spotters: Vec<&str> = std::iter::once(cs.spotter.as_str())
+                    .chain(cs.corroborators.iter().map(|c| c.as_str()))
+                    .filter(|sp| {
+                        match (propagation::skimmer_grid(sp), me_ll) {
+                            (Some(g), Some(me)) => {
+                                propagation::geo::maidenhead_to_latlon(g).is_some_and(|rx| {
+                                    propagation::geo::haversine_km(me, rx)
+                                        <= propagation::near_me_radius_km(band)
+                                })
+                            }
+                            _ => false,
+                        }
+                    })
+                    .collect();
+                if near_spotters.len() < 2 {
                     continue;
                 }
                 // …and the DX must be propagation-FAR, not a groundwave local (the
@@ -2140,11 +2154,28 @@ async fn get_need_alerts(
             }
             let class = propagation::classify_spot_mode(freq, &cs.comment);
             if matches!(class, propagation::ModeClass::Cw | propagation::ModeClass::Phone) {
+                // Evidence line: who spotted it (RBN/cluster path). Cluster
+                // lines age out of the buffer at 15 min, so "recently" is the
+                // honest stamp without per-spot wall-clock plumbing.
+                // push_at's filter guarantees spotter ∉ corroborators (and no
+                // dupes within) — no re-dedup needed here.
+                let spotters: Vec<&str> = std::iter::once(cs.spotter.as_str())
+                    .chain(cs.corroborators.iter().map(|c| c.as_str()))
+                    .take(3)
+                    .collect();
                 heard.push(propagation::Heard {
                     call: cs.dx_call.to_ascii_uppercase(),
                     band: band.label().to_string(),
                     mode: class.label().to_string(),
                     freq_mhz: Some(freq),
+                    // The spot's REAL receive time — stamping poll-time made
+                    // every cluster row read "just now" forever.
+                    admitted_at: (cs.received_unix > 0)
+                        .then_some(cs.received_unix as i64),
+                    evidence: Some(format!(
+                        "spotted by {} via cluster/RBN",
+                        spotters.join(" + ")
+                    )),
                 });
             }
         }

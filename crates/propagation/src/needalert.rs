@@ -71,6 +71,11 @@ pub struct Heard {
     /// Exact spot frequency in MHz, when the source carried one (cluster/RBN). `None`
     /// for band-level reception-report needs (near-me / getting-out).
     pub freq_mhz: Option<f64>,
+    /// Unix seconds of the most recent admitting evidence (drives "N min ago").
+    pub admitted_at: Option<i64>,
+    /// Human evidence line: WHO heard/spotted this and from where — the board
+    /// shows its work so the operator never has to wonder if a row is real.
+    pub evidence: Option<String>,
 }
 
 /// A scored need opportunity for a heard station.
@@ -94,6 +99,10 @@ pub struct NeedAlert {
     /// Exact spot frequency in MHz, when known (cluster/RBN) — lets click-to-work QSY to
     /// the spot, not just the band's default. `None` for band-level reception needs.
     pub freq_mhz: Option<f64>,
+    /// Unix seconds of the most recent admitting evidence.
+    pub admitted_at: Option<i64>,
+    /// "heard by K9LC (EN52, 26 km) + N9CO (62 km)" / "spotted by K9IMM via RBN".
+    pub evidence: Option<String>,
 }
 
 /// Build a [`Heard`] from a spot frequency (MHz) — maps the frequency to a band
@@ -106,6 +115,8 @@ pub fn heard_from_freq(call: &str, freq_mhz: f64, mode: &str) -> Option<Heard> {
         band: band.label().to_string(),
         mode: mode.to_string(),
         freq_mhz: Some(freq_mhz),
+        admitted_at: None, // the caller (cluster path) stamps these
+        evidence: None,
     })
 }
 
@@ -169,6 +180,8 @@ pub fn score(
         tags,
         priority,
         headline,
+        admitted_at: None, // rank() fills from the Heard
+        evidence: None,
         // The operating-mode class for routing/badging. `rank` attaches the exact
         // frequency from the Heard (score is frequency-agnostic award logic).
         mode: ModeClass::from_adif(mode).label().to_string(),
@@ -190,6 +203,8 @@ pub fn rank(
             // (when this Heard carried one) so click-to-work can QSY to the spot.
             score(&s.call, &s.band, &s.mode, needs, worked_zones).map(|mut a| {
                 a.freq_mhz = s.freq_mhz;
+                a.admitted_at = s.admitted_at;
+                a.evidence = s.evidence.clone();
                 a
             })
         })
@@ -247,6 +262,9 @@ pub fn heard_near_me(reports: &[PathSpot], me: (f64, f64)) -> Vec<Heard> {
         mode: Option<String>,
         band: Band,
         rx_calls: HashSet<String>,
+        /// (call, grid, km-from-me) per distinct receiver — the evidence line.
+        rx_detail: Vec<(String, String, u32)>,
+        latest: i64,
     }
     let mut by_key: std::collections::HashMap<(String, String), Ev> =
         std::collections::HashMap::new();
@@ -271,8 +289,17 @@ pub fn heard_near_me(reports: &[PathSpot], me: (f64, f64)) -> Vec<Heard> {
             mode: p.mode.clone(),
             band: p.band,
             rx_calls: HashSet::new(),
+            rx_detail: Vec::new(),
+            latest: 0,
         });
-        e.rx_calls.insert(p.rx_call.to_ascii_uppercase());
+        if e.rx_calls.insert(p.rx_call.to_ascii_uppercase()) {
+            e.rx_detail.push((
+                p.rx_call.to_ascii_uppercase(),
+                p.rx_grid.clone().unwrap_or_default(),
+                haversine_km(me, rx).round() as u32,
+            ));
+        }
+        e.latest = e.latest.max(p.time);
         if e.mode.is_none() {
             e.mode = p.mode.clone();
         }
@@ -284,11 +311,33 @@ pub fn heard_near_me(reports: &[PathSpot], me: (f64, f64)) -> Vec<Heard> {
         // things the operator's QTH never will (the false-positive machine).
         let corroborated = !e.band.is_vhf() || e.rx_calls.len() >= 2;
         if corroborated {
+            // "heard by K9LC (EN52, 26 km) + N9CO (EN52, 62 km)" — nearest first,
+            // capped at 3 so the line stays readable in the panel.
+            let mut detail = e.rx_detail;
+            detail.sort_by_key(|(_, _, km)| *km);
+            let shown: Vec<String> = detail
+                .iter()
+                .take(3)
+                .map(|(c, g, km)| {
+                    if g.is_empty() {
+                        format!("{c} ({km} km)")
+                    } else {
+                        format!("{c} ({g}, {km} km)")
+                    }
+                })
+                .collect();
+            let extra = detail.len().saturating_sub(3);
+            let mut ev = format!("heard by {}", shown.join(" + "));
+            if extra > 0 {
+                ev.push_str(&format!(" +{extra} more"));
+            }
             out.push(Heard {
                 call,
                 band,
                 mode: e.mode.unwrap_or_else(|| "FT8".to_string()),
                 freq_mhz: None, // reception geometry is band-level, not freq-precise
+                admitted_at: (e.latest > 0).then_some(e.latest),
+                evidence: Some(ev),
             });
         }
     }
@@ -350,6 +399,11 @@ pub fn workable_by_getting_out(reports: &[PathSpot], my_call: &str) -> Vec<Heard
                     band,
                     mode: p.mode.clone().unwrap_or_else(|| "FT8".to_string()),
                     freq_mhz: None, // reception geometry is band-level, not freq-precise
+                    admitted_at: Some(p.time),
+                    evidence: Some(format!(
+                        "your signal reaches their area (via {})",
+                        p.rx_call
+                    )),
                 });
             }
         }
@@ -399,6 +453,8 @@ mod tests {
             band: band.into(),
             mode: "FT8".into(),
             freq_mhz: None,
+            admitted_at: None,
+            evidence: None,
         }
     }
 
@@ -694,6 +750,8 @@ mod tests {
             band: "20m".into(),
             mode: "CW".into(),
             freq_mhz: Some(14.025),
+            admitted_at: None,
+            evidence: None,
         }];
         let ranked = rank(&spots, &needs, &HashSet::new());
         assert_eq!(ranked.len(), 1);
@@ -711,8 +769,22 @@ mod tests {
         // same band via two modes is two distinct opportunities (different cockpits).
         let needs = LogNeeds::new(); // empty log → any DX is a new one
         let spots = vec![
-            Heard { call: "3Y0J".into(), band: "20m".into(), mode: "CW".into(), freq_mhz: Some(14.025) },
-            Heard { call: "3Y0J".into(), band: "20m".into(), mode: "FT8".into(), freq_mhz: None },
+            Heard {
+                call: "3Y0J".into(),
+                band: "20m".into(),
+                mode: "CW".into(),
+                freq_mhz: Some(14.025),
+                admitted_at: None,
+                evidence: None,
+            },
+            Heard {
+                call: "3Y0J".into(),
+                band: "20m".into(),
+                mode: "FT8".into(),
+                freq_mhz: None,
+                admitted_at: None,
+                evidence: None,
+            },
         ];
         let ranked = rank(&spots, &needs, &HashSet::new());
         assert_eq!(ranked.len(), 2, "same call+band, two modes → two rows");
