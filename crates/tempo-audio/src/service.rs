@@ -840,24 +840,68 @@ impl RadioLoop {
         // before the next boundary — instead of waiting a full T/R cycle for the
         // next boundary (the "a few cycles go by" lag). If it doesn't fit / wrong
         // parity, the normal boundary path transmits at the next valid period.
-        if self.tx_until_ms.is_none() && eng.take_immediate_tx() {
+        if self.tx_until_ms.is_none() && eng.peek_immediate_tx() {
             let slot_now = self.clock.slot_index(now);
             let on_our_parity = (slot_now % 2 == 0) == eng.tx_even();
             let room_ms = self.clock.ms_to_next_slot(now) as f64;
-            let need_ms = eng.tx_over_secs() * 1000.0 + crate::slot::TX_TAIL_MS;
-            if on_our_parity && room_ms >= need_ms {
+            // Fit on AUDIO length only — TX_TAIL is PTT hold after the audio ends
+            // and may bleed into the next slot (it does at boundary starts too).
+            // Counting it here inflated the deficit by up to 250 ms and trimmed
+            // silence we didn't need to, starting the signal early (dt shift).
+            let need_ms = eng.tx_over_secs() * 1000.0;
+            // Late-start window (WSJT-X behavior): the generated wave begins with a
+            // 0.5 s SILENCE lead-in — when we're up to that much short of a full
+            // fit, trim the silence we're late by and key anyway. Decoders sync on
+            // dt; half a second of lateness is well inside tolerance.
+            const LEAD_IN_MS: f64 = 500.0;
+            // Late-start only on tiers whose generated wave is KNOWN to begin with
+            // the 0.5 s silence lead-in (FT8/FT4; verified by modes' unit tests) —
+            // other tiers require a full fit so we never risk trimming signal.
+            let allowed_deficit = match eng.tier() {
+                tempo_app::dto::Tier::Ft8 | tempo_app::dto::Tier::Ft4 => LEAD_IN_MS,
+                _ => 0.0,
+            };
+            let deficit_ms = (need_ms - room_ms).max(0.0);
+            if on_our_parity && deficit_ms <= allowed_deficit {
+                // CONSUME the request only now that it actually fires — a click
+                // outside the window used to be swallowed here and then wait an
+                // EXTRA full cycle past the boundary it should have keyed at.
+                let _ = eng.take_immediate_tx();
                 let waves = eng.poll_tx(slot_now);
                 if !waves.is_empty() {
-                    let _ = rig.ptt(true);
-                    let mut secs = 0.0f32;
-                    for w in &waves {
-                        secs += w.len() as f32 / ft1::SAMPLE_RATE;
-                        backend.play(w);
+                    let trim_samples =
+                        ((deficit_ms / 1000.0) * ft1::SAMPLE_RATE as f64) as usize;
+                    // Only ever trim SILENCE: verify the samples we'd drop are the
+                    // lead-in zeros (FT8/FT4 self-position with one; other tiers
+                    // may not) — if they're signal, fall through to the boundary.
+                    let trimmable = trim_samples == 0
+                        || waves
+                            .first()
+                            .map(|w| {
+                                trim_samples < w.len()
+                                    && w[..trim_samples].iter().all(|&x| x == 0.0)
+                            })
+                            .unwrap_or(false);
+                    if trimmable {
+                        let _ = rig.ptt(true);
+                        let mut secs = 0.0f32;
+                        let mut first = true;
+                        for w in &waves {
+                            let w2: &[f32] = if first && trim_samples > 0 {
+                                &w[trim_samples..]
+                            } else {
+                                w
+                            };
+                            first = false;
+                            secs += w2.len() as f32 / ft1::SAMPLE_RATE;
+                            backend.play(w2);
+                        }
+                        self.rx.clear(); // our just-started carrier must not be decoded
+                        self.tx_until_ms =
+                            Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
+                        self.last_slot = Some(slot_now); // slot handled; skip the boundary
+                        self.prev_slot_was_tx = true;
                     }
-                    self.rx.clear(); // our just-started carrier must not be decoded
-                    self.tx_until_ms = Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
-                    self.last_slot = Some(slot_now); // this slot is handled; skip the boundary
-                    self.prev_slot_was_tx = true;
                 }
             }
         }
@@ -892,6 +936,10 @@ impl RadioLoop {
             // Remember whether THIS slot was a transmit slot so the next boundary
             // knows not to decode our own carrier (and to decode it otherwise).
             self.prev_slot_was_tx = action.tx_this_slot;
+            // The boundary owns the slot now — drain any still-pending immediate-TX
+            // request (it either just fired via the slot core's parity path, or its
+            // moment passed; leaving it set would key mid-slot LATER, off-cycle).
+            let _ = eng.take_immediate_tx();
             let did_rx = action.did_rx;
             let tx_this_slot = action.tx_this_slot;
 

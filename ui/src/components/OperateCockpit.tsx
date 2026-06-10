@@ -16,7 +16,7 @@ interface Props {
   /** Click-to-tune on the waterfall: left=TX, right=RX, both buttons=TX+RX. */
   onTune: (freqHz: number, target: 'tx' | 'rx' | 'both') => void
   /** Work / answer a decoded station (double-click a decode or roster row). */
-  onCall: (call: string) => void
+  onCall: (call: string, grid?: string, message?: string, snr?: number, freq?: number) => void
   /** Set the TX audio drive level (0.0–1.0) — the Pwr slider. */
   onSetTxLevel: (level: number) => void
   /** Switch the QSO sequencer role (Call CQ / Monitor). */

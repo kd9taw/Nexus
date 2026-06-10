@@ -166,6 +166,13 @@ pub struct Engine {
     /// `mode_giveup` so a click is never ignored — even if a prior attempt gave up on
     /// that mode. One-shot, drained by the loop.
     immediate_retune: bool,
+    /// Rolling received-decode history (slot, row) across the last several T/R
+    /// cycles — NOT just the last slot. This is what makes a roster/late click on
+    /// a caller resolve to the RIGHT QSO step: `last_decodes` is replaced on every
+    /// ingest, so by the time the operator clicks, the caller's message was gone
+    /// and the sequencer silently fell back to Tx1 (the "sent my grid instead of a
+    /// report" on-air bug). Also the source for answer parity.
+    decode_history: std::collections::VecDeque<(u64, modes::Decode)>,
     /// Desired rig SPLIT state: `Some(tx_dial_mhz)` = split on with that TX dial;
     /// `None` = simplex. Set by work_spot (pile-up "UP n" spots) and cleared by any
     /// plain QSY/work; the loop applies it via `split_dirty` (one-shot).
@@ -329,6 +336,7 @@ impl Engine {
             last_decode_slot: None,
             immediate_tx: false,
             immediate_retune: false,
+            decode_history: std::collections::VecDeque::new(),
             split_tx_mhz: None,
             split_dirty: false,
             cw_queue: VecDeque::new(),
@@ -415,6 +423,12 @@ impl Engine {
     /// settings + the UI radio readout; the radio loop re-tunes the rig from
     /// settings each slot. `mode` is "USB" (weak-signal) or "FM" (simplex).
     pub fn set_frequency(&mut self, dial_mhz: f64, band: &str, mode: &str) {
+        // Band change invalidates the decode context: answering a HISTORY row from
+        // the old band would target a station that isn't here and derive parity
+        // from the old band's slots. (In-band QSY keeps it — same activity.)
+        if !self.settings.band.eq_ignore_ascii_case(band) {
+            self.clear_decode_context();
+        }
         self.settings.dial_mhz = dial_mhz;
         self.settings.band = band.to_string();
         self.settings.sideband = mode.to_string();
@@ -437,6 +451,10 @@ impl Engine {
         let mhz = hz as f64 / 1_000_000.0;
         self.settings.dial_mhz = mhz;
         if let Some(band) = crate::bandplan::band_for_dial(mhz) {
+            // Knob QSY across bands invalidates the decode context too.
+            if !self.settings.band.eq_ignore_ascii_case(band) {
+                self.clear_decode_context();
+            }
             self.settings.band = band.to_string();
         }
         self.app
@@ -1457,6 +1475,11 @@ impl Engine {
         self.cq_running = matches!(spec, "qso-run" | "fieldday-run");
         if self.cq_running {
             self.set_tx_enabled(true);
+            // WSJT-X-snappy: Call CQ keys the CURRENT period when the over still
+            // fits (the radio loop's immediate path owns the room/parity checks) —
+            // without this a CQ clicked 1 s into your own period silently waited a
+            // full T/R cycle.
+            self.immediate_tx = true;
         }
         self.reset_tx_watchdog();
         self.tx_queue.clear();
@@ -1542,20 +1565,33 @@ impl Engine {
         // the SNR we decoded the DX at). Prefer the clicked line; recover its SNR
         // from this slot's decodes if the caller didn't pass one; else fall back to
         // the latest decode from dxcall addressed to me.
+        let mut context_slot: Option<u64> = None;
         let context: Option<(Msg, i32)> = match reply_msg {
             Some(text) if !text.trim().is_empty() => {
+                // Recover SNR (and the decode's SLOT, for answer parity) from the
+                // rolling history — newest matching row wins.
+                let hist = self
+                    .decode_history
+                    .iter()
+                    .rev()
+                    .find(|(_, d)| d.message.eq_ignore_ascii_case(text.trim()));
+                context_slot = hist.map(|(s, _)| *s);
                 let snr = reply_snr
-                    .or_else(|| {
-                        self.last_decodes
-                            .iter()
-                            .find(|d| d.message.eq_ignore_ascii_case(text.trim()))
-                            .map(|d| d.snr)
-                    })
+                    .or_else(|| hist.map(|(_, d)| d.snr))
                     .unwrap_or(0)
                     .clamp(-30, 49);
+                // Clicked text already aged out of the ring? The latest reply from
+                // this station still beats the unrelated `last_decode_slot` below.
+                if context_slot.is_none() {
+                    context_slot =
+                        self.latest_reply_from(dxcall, &mycall).map(|(_, _, s)| s);
+                }
                 Some((Msg::parse(text), snr))
             }
-            _ => self.latest_reply_from(dxcall, &mycall),
+            _ => self.latest_reply_from(dxcall, &mycall).map(|(m, snr, slot)| {
+                context_slot = Some(slot);
+                (m, snr)
+            }),
         };
 
         let mut station = QsoStation::start(
@@ -1581,9 +1617,13 @@ impl Engine {
         self.cq_running = false;
         // Set our TX period to the OPPOSITE of the period the DX was decoded in, so
         // we transmit while they listen — WSJT-X's auto-Tx-1st/2nd on double-click.
-        // (The decode's audio is from the slot before `last_decode_slot`, so the
-        // opposite of the DX's period is exactly `last_decode_slot % 2`.)
-        if let Some(s) = self.last_decode_slot {
+        // Use the ANSWERED decode's slot (the history row we resolved context
+        // from); `last_decode_slot` is whatever slot decoded most recently and is
+        // 50/50 WRONG for a click on an older row — a wrong parity transmits while
+        // the DX transmits: never heard, and reads as "waits multiple cycles".
+        // (A decode's audio is from the slot before its ingest slot, so the
+        // opposite of the DX's period is exactly `ingest_slot % 2`.)
+        if let Some(s) = context_slot.or(self.last_decode_slot) {
             self.set_tx_even(s % 2 == 0);
         }
         // Move our RX onto the DX's audio frequency (and TX with it, unless Hold Tx
@@ -1608,6 +1648,14 @@ impl Engine {
         ft1::harq_reset(); // fresh exchange: drop stale receive-side IR-HARQ state
     }
 
+    /// Drop everything answer-context derives from: the decode history (message
+    /// match + report SNR) and the parity slot. Called on band QSY / tier switch,
+    /// where stale rows would answer a station that isn't in this activity.
+    fn clear_decode_context(&mut self) {
+        self.decode_history.clear();
+        self.last_decode_slot = None;
+    }
+
     /// The best resume point from `dxcall` addressed to `mycall` in this slot, for
     /// a roster/spot/typed call that carried no specific clicked line. Among this
     /// slot's decodes from the DX to me, pick the FURTHEST-progressed one (grid <
@@ -1615,7 +1663,7 @@ impl Engine {
     /// IGNORE terminal messages (RRR/RR73/73): a roster click on a station that
     /// just signed off is a fresh call (grid start), not a lone 73. Matching is
     /// base-call/case-insensitive so portable calls still resolve.
-    fn latest_reply_from(&self, dxcall: &str, mycall: &str) -> Option<(Msg, i32)> {
+    fn latest_reply_from(&self, dxcall: &str, mycall: &str) -> Option<(Msg, i32, u64)> {
         // Resume rank — only the non-terminal, addressed-to-me steps qualify.
         fn resume_rank(m: &Msg) -> Option<u8> {
             match m {
@@ -1625,20 +1673,24 @@ impl Engine {
                 _ => None, // CQ / RRR / RR73 / 73 / other → not a resume point
             }
         }
-        self.last_decodes
+        // Search the HISTORY (several T/R cycles), not just the last slot's
+        // decodes — the on-air bug: a roster click moments after the caller's
+        // message scrolled out fell back to Tx1 and re-sent the grid.
+        self.decode_history
             .iter()
-            .filter_map(|d| {
+            .filter_map(|(slot, d)| {
                 let m = Msg::parse(&d.message);
                 let from_dx = m.sender().map(|s| same_call(s, dxcall)).unwrap_or(false);
                 let to_me = m.addressee().map(|a| same_call(a, mycall)).unwrap_or(false);
                 if from_dx && to_me {
-                    resume_rank(&m).map(|r| (r, m, d.snr.clamp(-30, 49)))
+                    resume_rank(&m).map(|r| (r, m, d.snr.clamp(-30, 49), *slot))
                 } else {
                     None
                 }
             })
-            .max_by_key(|(r, _, _)| *r)
-            .map(|(_, m, snr)| (m, snr))
+            // Newest first, then highest resume rank within the same slot.
+            .max_by_key(|(r, _, _, slot)| (*slot, *r))
+            .map(|(_, m, snr, slot)| (m, snr, slot))
     }
 
     /// Confirm-and-log a QSO held by the prompt-to-log popup. `rec` is the
@@ -1749,6 +1801,9 @@ impl Engine {
         self.app.clear_peer();
     }
     pub fn set_tier(&mut self, tier: Tier) {
+        // Tier switch changes the slot period (FT8 15 s / FT4 7.5 s) — slot indices
+        // from the old tier are meaningless for answer parity. Flush the context.
+        self.clear_decode_context();
         self.app.set_tier(tier);
         // Point the native signal source at the selected mode (FT1/FT8/FT4). DX1
         // decodes via its own robust path in `ingest`, so the source is left as-is.
@@ -1855,6 +1910,9 @@ impl Engine {
         // unchecks Enable Tx). Drop any tune carrier and queued audio too.
         self.tx_enabled = false;
         self.tuning = false;
+        // A pending snappy-TX request dies with the halt — otherwise the loop
+        // consumes it against a disabled TX and a later re-arm has lost it.
+        self.immediate_tx = false;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
         self.own_tx.clear();
@@ -1899,6 +1957,14 @@ impl Engine {
         let v = self.immediate_tx;
         self.immediate_tx = false;
         v
+    }
+
+    /// Non-consuming check of the one-shot immediate-TX request — the radio loop
+    /// peeks first and only TAKES when the over actually fits the current slot,
+    /// so a click outside the fit window isn't silently swallowed (it then fires
+    /// at the next boundary instead of waiting an extra full cycle).
+    pub fn peek_immediate_tx(&self) -> bool {
+        self.immediate_tx
     }
 
     /// Consume the one-shot "apply dial + mode right now" request set whenever the
@@ -2569,6 +2635,12 @@ impl Engine {
             self.qsy.on_rx_slot(slot);
         }
         self.last_rx = Some(frame.to_vec());
+        for d in &decodes {
+            self.decode_history.push_back((slot, d.clone()));
+        }
+        while self.decode_history.len() > 240 {
+            self.decode_history.pop_front();
+        }
         self.last_decodes = decodes;
         self.last_decode_slot = Some(slot);
         n
@@ -2764,7 +2836,14 @@ impl Engine {
             }
             self.qsy.on_rx_slot(slot);
         }
-        // Mirror the live `ingest`: the projected feed reads from `last_decodes`.
+        // Mirror the live `ingest`: the projected feed + the reply-context history
+        // read from the same stores the live path fills.
+        for d in decodes.iter() {
+            self.decode_history.push_back((slot, d.clone()));
+        }
+        while self.decode_history.len() > 240 {
+            self.decode_history.pop_front();
+        }
         self.last_decodes = decodes.to_vec();
     }
 
@@ -3662,6 +3741,81 @@ mod tests {
         assert_eq!(ft1_wave[0].len(), ft1::NMAX); // 4 s FT1 frame
         assert_eq!(dx1_wave[0].len(), ft1::dx1::frame_len()); // ~9.9 s DX1 frame
         assert_ne!(ft1_wave[0].len(), dx1_wave[0].len());
+    }
+
+    #[test]
+    fn cq_run_auto_answers_a_caller_on_the_next_over() {
+        // THE on-air complaint: "I called CQ over and over; someone was calling me
+        // and the CQ just kept going." A caller's grid reply observed mid-run MUST
+        // flip the next over to the report — WSJT-X auto-sequencing.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_mode("qso-run").unwrap();
+        let cq = e.poll_tx(0);
+        assert!(!cq.is_empty(), "CQ goes out on our slot");
+        // A caller answers in the next (their) slot with a grid, addressed to us.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        // Our next over must be the REPORT to K1ABC, not another CQ.
+        let qso = e.snapshot().qso.expect("QSO state after a caller");
+        assert_eq!(qso.dxcall.as_deref(), Some("K1ABC"), "answering the caller");
+        let next = e.snapshot().qso.unwrap().tx_now.unwrap_or_default();
+        assert!(
+            next.contains("K1ABC") && !next.to_uppercase().starts_with("CQ"),
+            "next over answers the caller (report), got {next:?}"
+        );
+    }
+
+    #[test]
+    fn roster_click_long_after_the_decode_still_resumes_at_the_report() {
+        // THE double-click bug: the caller's grid line decoded SLOTS ago (the
+        // per-slot last_decodes was since replaced); a roster click passes no
+        // message text. The HISTORY must still resolve the context → Tx2, never
+        // re-send our grid.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 5);
+        // Later slots decode other traffic — last_decodes no longer holds K1ABC.
+        e.ingest_decodes_for_test(&[dec_snr("CQ N0OTH EM48", -3)], 7);
+        e.ingest_decodes_for_test(&[dec_snr("CQ W5MORE EM12", -1)], 9);
+        // Roster click: call with NO message context.
+        e.call_station("K1ABC");
+        let qso = e.snapshot().qso.expect("QSO started");
+        let next = qso.tx_now.unwrap_or_default();
+        assert!(
+            !next.contains("EN37"),
+            "must NOT fall back to Tx1/grid, got {next:?}"
+        );
+        assert!(
+            next.contains("K1ABC"),
+            "answers the caller, got {next:?}"
+        );
+        // Parity derives from the ANSWERED decode's slot (5 → odd ingest → their
+        // audio slot 4/even → we TX on odd), not from the unrelated slot-9 decode.
+        assert!(!e.tx_even(), "TX parity opposite the CALLER's period");
+    }
+
+    #[test]
+    fn call_cq_arms_the_immediate_path() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        assert!(!e.peek_immediate_tx());
+        e.set_mode("qso-run").unwrap();
+        assert!(
+            e.peek_immediate_tx(),
+            "Call CQ requests the current period (WSJT-X-snappy)"
+        );
+    }
+
+    #[test]
+    fn band_qsy_forgets_the_old_bands_callers() {
+        // A caller decoded on 20 m must NOT be auto-answered after a QSY to 40 m —
+        // they aren't in this activity, and their slot parity belongs to the old run.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 5);
+        e.set_frequency(7.074, "40m", "USB");
+        e.call_station("K1ABC");
+        let next = e.snapshot().qso.unwrap().tx_now.unwrap_or_default();
+        assert!(
+            next.contains("EN37"),
+            "no stale context → fresh grid start, got {next:?}"
+        );
     }
 
     fn dec_snr(msg: &str, snr: i32) -> Decode {

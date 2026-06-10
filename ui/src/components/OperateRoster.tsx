@@ -14,7 +14,7 @@ interface Props {
   needByCall: Map<string, NeedTag>
   selectedCall: string | null
   onSelect: (call: string) => void
-  onCall: (call: string) => void
+  onCall: (call: string, grid?: string) => void
 }
 
 type SortKey = 'need' | 'call' | 'country' | 'dist' | 'bearing' | 'snr' | 'age'
@@ -159,7 +159,7 @@ export function OperateRoster({
                   chip ? ` need-${chip.cls}` : ''
                 }`}
                 onClick={() => onSelect(s.call)}
-                onDoubleClick={() => onCall(s.call)}
+                onDoubleClick={() => onCall(s.call, s.grid ?? undefined)}
                 title={`Double-click to work ${s.call}`}
               >
                 <span className="or-need">
