@@ -323,6 +323,7 @@ function defaultSettings(): Settings {
     opName: '',
     clusterHost: 'telnet.reversebeacon.net:7000',
     companionAddr: '127.0.0.1:2237',
+    cwPitchHz: 600,
     band: '20m',
     dialMhz: 14.074,
     sideband: 'USB',

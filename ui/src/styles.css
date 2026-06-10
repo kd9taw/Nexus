@@ -3779,6 +3779,11 @@ body.resizing {
 .cw-wpm input[type='range'] {
   width: 160px;
 }
+.cw-pitch {
+  width: 5.5ch;
+  padding: 2px 6px;
+  font-variant-numeric: tabular-nums;
+}
 .cw-wpm-val {
   font-family: var(--font-mono);
   color: var(--text);

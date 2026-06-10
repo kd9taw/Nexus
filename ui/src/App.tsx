@@ -977,6 +977,7 @@ export default function App() {
     case 'cw':
       workspace = (
         <CwCockpit
+          pitchHz={settings?.cwPitchHz ?? 600}
           snap={snap}
           theme={theme}
           pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}

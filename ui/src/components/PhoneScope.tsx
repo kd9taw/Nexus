@@ -9,6 +9,14 @@ interface Props {
   /** Pause the fetch/draw loop when the cockpit is hidden (kept for parity; Phone unmounts
    * on nav today so it's effectively always true). */
   active?: boolean
+  /** Displayed audio window (Hz) within the captured 200–2900 row. Defaults = the
+   * full voice passband; the CW cockpit narrows to ~300–1100 so individual carriers
+   * are readable for tone placement. */
+  viewLoHz?: number
+  viewHiHz?: number
+  /** Draw a hairline at this audio frequency (the CW pitch) — tune a signal onto
+   * the marker and you're zero-beat. Omitted = no marker. */
+  markerHz?: number | null
 }
 
 /**
@@ -18,7 +26,14 @@ interface Props {
  * a snappy AGC, so a voice op gets the live, fast, colored scope they expect. Reuses the shared
  * AGC/LUT/colormap helpers; never touches the FT8 Operate waterfall.
  */
-export function PhoneScope({ transmitting, theme, active = true }: Props) {
+export function PhoneScope({
+  transmitting,
+  theme,
+  active = true,
+  viewLoHz = 200,
+  viewHiHz = 2900,
+  markerHz = null,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const meterRef = useRef<HTMLDivElement>(null)
   const rafRef = useRef<number | null>(null)
@@ -145,8 +160,14 @@ export function PhoneScope({ transmitting, theme, active = true }: Props) {
       const nBins = row.length
       let peak = 0
       // normalized magnitude per device column (shared by waterfall + trace), reused buffer
+      // The captured row spans ROW_LO..ROW_HI; project only the view window.
+      const ROW_LO = 200
+      const ROW_HI = 2900
+      const lo = Math.max(ROW_LO, viewLoHz)
+      const hi = Math.min(ROW_HI, Math.max(viewHiHz, lo + 50))
       for (let x = 0; x < Wd; x++) {
-        const bin = (x / Wd) * (nBins - 1)
+        const hz = lo + (x / Wd) * (hi - lo)
+        const bin = ((hz - ROW_LO) / (ROW_HI - ROW_LO)) * (nBins - 1)
         const b0 = Math.floor(bin)
         const b1 = Math.min(nBins - 1, b0 + 1)
         const frac = bin - b0
@@ -190,6 +211,19 @@ export function PhoneScope({ transmitting, theme, active = true }: Props) {
       ctx.strokeStyle = `rgb(${c2[0]},${c2[1]},${c2[2]})`
       ctx.lineWidth = Math.max(1, scaleY)
       ctx.stroke()
+
+      // ---- Pitch marker (CW): tune a carrier onto the hairline = zero-beat ----
+      if (markerHz != null && markerHz > lo && markerHz < hi) {
+        const mx = Math.round(((markerHz - lo) / (hi - lo)) * Wd)
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)'
+        ctx.setLineDash([4 * scaleY, 3 * scaleY])
+        ctx.lineWidth = Math.max(1, scaleY)
+        ctx.beginPath()
+        ctx.moveTo(mx, 0)
+        ctx.lineTo(mx, devH)
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
 
       // ---- Rapid colored S-meter (raw peak magnitude, 0..1) ----
       if (meterRef.current) {

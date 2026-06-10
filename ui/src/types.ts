@@ -882,6 +882,8 @@ export interface Settings {
   clusterHost: string
   /** Companion-mode UDP listen address (WSJT-X/JTDX). */
   companionAddr: string
+  /** CW sidetone/tone pitch (Hz) — the soundcard keyer tone + the CW scope marker. */
+  cwPitchHz: number
   band: string
   dialMhz: number
   sideband: string

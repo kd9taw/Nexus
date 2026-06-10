@@ -9,6 +9,8 @@ import { pushToast, withErrorToast } from '../toast'
 interface Props {
   snap: AppSnapshot
   theme: string
+  /** CW sidetone pitch (Hz) — the scope's zero-beat marker. */
+  pitchHz?: number
   /** Click-to-work handoff from the Needed board: the callsign to prefill the log with.
    * `ts` changes on each click so re-working the same call refires the prefill. */
   pendingWork?: { call: string; ts: number } | null
@@ -41,7 +43,7 @@ const WPM_MAX = 50
  * strip logs the QSO into the multi-mode logbook (RST 599). Entering the section forces
  * the rig to CW (the rig-mode policy, wired in App). No contest scoring — by design.
  */
-export function CwCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap }: Props) {
+export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWork, onSnap }: Props) {
   // Source of truth = the engine's actual keyer speed (survives navigation; the
   // old hard-coded 25 silently re-keyed at the wrong speed after a nav round-trip).
   const [wpm, setWpm] = useState(() => snap.radio.cwWpm ?? 25)
@@ -59,6 +61,14 @@ export function CwCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap }: P
     setKeyer(snap.radio.cwKeyer === 'soundcard' ? 'soundcard' : 'cat')
   }, [snap.radio.cwKeyer])
   const [text, setText] = useState('')
+  // Sidetone pitch — local for instant marker response; persisted via set_cw_keyer.
+  const [pitch, setPitch] = useState(pitchHz)
+  useEffect(() => setPitch(pitchHz), [pitchHz])
+  const changePitch = (v: number) => {
+    const p = Math.max(300, Math.min(1200, Math.round(v)))
+    setPitch(p)
+    void setCwKeyer(keyer, p)
+  }
 
   const changeWpm = (w: number) => {
     const v = Math.max(WPM_MIN, Math.min(WPM_MAX, Math.round(w)))
@@ -154,6 +164,19 @@ export function CwCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap }: P
             Soundcard
           </button>
         </div>
+        <label className="cw-wpm" title="Sidetone / zero-beat pitch (Hz) — the scope's dashed marker">
+          <span>Pitch</span>
+          <input
+            type="number"
+            className="settings-input cw-pitch"
+            min={300}
+            max={1200}
+            step={10}
+            value={pitch}
+            onChange={(e) => changePitch(Number(e.target.value))}
+            aria-label="CW pitch (Hz)"
+          />
+        </label>
         <BandPicker snap={snap} mode="cw" onSnap={onSnap} />
         <span className="cw-spacer" />
         {snap.radio.splitTxMhz != null && (
@@ -170,7 +193,15 @@ export function CwCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap }: P
       </div>
 
       <section className="ph-scope-panel">
-        <PhoneScope transmitting={snap.radio.transmitting} theme={theme} />
+        {/* CW-narrow view: ~300–1100 Hz so individual carriers are readable; the
+            dashed hairline is YOUR pitch — tune a signal onto it = zero-beat. */}
+        <PhoneScope
+          transmitting={snap.radio.transmitting}
+          theme={theme}
+          viewLoHz={300}
+          viewHiHz={1100}
+          markerHz={pitch}
+        />
       </section>
 
       <div className="cw-macros" role="group" aria-label="CW macros">
