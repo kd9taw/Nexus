@@ -76,6 +76,20 @@ export const isTauri = (): boolean => tauriInvoke() !== null
 // Public API
 // ---------------------------------------------------------------------------
 
+/** The rolling connectivity log (newest first) — Settings ▸ Connections. */
+export async function getConnectionLog(): Promise<import('./types').ConnEvent[]> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke('get_connection_log')
+  return []
+}
+
+/** Which connector credentials are stored (never the secrets). */
+export async function getCredentialsStatus(): Promise<import('./types').CredStatus[]> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke('get_credentials_status')
+  return []
+}
+
 export async function getSnapshot(): Promise<AppSnapshot> {
   const invoke = tauriInvoke()
   if (invoke) return invoke<AppSnapshot>('get_snapshot')

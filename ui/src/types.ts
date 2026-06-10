@@ -693,6 +693,21 @@ export interface FeedStatus {
   state: 'off' | 'connecting' | 'connected' | 'live' | 'idle' | 'reconnecting' | 'waiting'
 }
 
+/** One connectivity event for the Settings ▸ Connections log. */
+export interface ConnEvent {
+  tsUnix: number
+  connector: string
+  level: 'ok' | 'info' | 'error' | string
+  message: string
+}
+
+/** Whether a secret is stored for a connector (never the secret itself). */
+export interface CredStatus {
+  connector: string
+  stored: boolean
+  identity: string
+}
+
 /** Liveness of both background live feeds (DX cluster/RBN + PSK Reporter MQTT). */
 export interface FeedHealth {
   cluster: FeedStatus

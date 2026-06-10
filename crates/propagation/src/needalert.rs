@@ -223,6 +223,13 @@ pub fn near_me_radius_km(band: Band) -> f64 {
     }
 }
 
+/// On VHF the TRANSMITTER must also be FAR — beyond groundwave/local-tropo range —
+/// before its reception near the operator means "the band is open". Without this,
+/// the local 6 m station 50 km away (heard by every nearby receiver via groundwave,
+/// opening or not) lives on the Needed board forever. Es skip starts ~500 km; 400
+/// keeps strong short-skip while rejecting locals.
+pub const VHF_MIN_DX_KM: f64 = 400.0;
+
 
 
 /// The stations a receiver NEAR the operator (`me` lat/lon) is hearing, drawn from
@@ -249,6 +256,15 @@ pub fn heard_near_me(reports: &[PathSpot], me: (f64, f64)) -> Vec<Heard> {
         };
         if haversine_km(me, rx) > near_me_radius_km(p.band) {
             continue;
+        }
+        // VHF: the DX must be PROPAGATION-far, not a groundwave local — and it must
+        // prove it with a grid (a 6 m FT8 spot virtually always carries one; no
+        // grid = no proof = no row, on VHF only).
+        if p.band.is_vhf() {
+            match p.tx_grid.as_deref().and_then(maidenhead_to_latlon) {
+                Some(tx) if haversine_km(me, tx) >= VHF_MIN_DX_KM => {}
+                _ => continue,
+            }
         }
         let key = (p.tx_call.to_ascii_uppercase(), p.band.label().to_string());
         let e = by_key.entry(key).or_insert(Ev {
@@ -474,10 +490,12 @@ mod tests {
         // workable-from-here evidence; two near receivers (or one essentially
         // co-located) are.
         let me = maidenhead_to_latlon("EN61").unwrap();
+        // TX carries a FAR grid (EM12, ~1300 km) so these fixtures isolate the
+        // RECEIVER-corroboration rule from the separate far-DX gate.
         let mk = |tx: &str, rx: &str, rx_grid: &str| PathSpot {
             time: 0,
             tx_call: tx.into(),
-            tx_grid: None,
+            tx_grid: Some("EM12".into()),
             rx_call: rx.into(),
             rx_grid: Some(rx_grid.into()),
             band: Band::B6,
@@ -521,6 +539,47 @@ mod tests {
         assert!(
             heard_near_me(&hf, me).iter().any(|h| h.call == "EA1HF"),
             "HF single-receiver behavior unchanged"
+        );
+    }
+
+    #[test]
+    fn vhf_needs_reject_groundwave_locals_even_with_corroboration() {
+        // THE persistent-6m-rows fix: a LOCAL 6 m station (80 km away) is copied by
+        // two nearby receivers around the clock via groundwave — that is NOT an
+        // opening and must never be a "contact to work". A genuinely FAR station
+        // with the same corroboration is.
+        let me = maidenhead_to_latlon("EN61").unwrap();
+        let mk = |tx: &str, txg: &str, rx: &str, rxg: &str| PathSpot {
+            time: 0,
+            tx_call: tx.into(),
+            tx_grid: Some(txg.into()),
+            rx_call: rx.into(),
+            rx_grid: Some(rxg.into()),
+            band: Band::B6,
+            mode: Some("FT8".into()),
+            snr: None,
+            freq_mhz: None,
+        };
+        // Local (EN52 ≈ 200 km — inside the groundwave/local-tropo rejection):
+        let local = vec![mk("K9LOC", "EN52", "RX1", "EN61"), mk("K9LOC", "EN52", "RX2", "EN62")];
+        assert!(
+            heard_near_me(&local, me).is_empty(),
+            "a local 6m station must not surface, opening or not"
+        );
+        // Far Es DX (EM12, Texas ≈ 1300 km), same two near receivers → real row.
+        let far = vec![mk("K5DX", "EM12", "RX1", "EN61"), mk("K5DX", "EM12", "RX2", "EN62")];
+        assert!(
+            heard_near_me(&far, me).iter().any(|h| h.call == "K5DX"),
+            "far Es DX with corroboration surfaces"
+        );
+        // No TX grid on VHF → can't prove distance → dropped.
+        let mut nogrid = mk("K0MYS", "EN52", "RX1", "EN61");
+        nogrid.tx_grid = None;
+        let mut nogrid2 = mk("K0MYS", "EN52", "RX2", "EN62");
+        nogrid2.tx_grid = None;
+        assert!(
+            heard_near_me(&[nogrid, nogrid2], me).is_empty(),
+            "grid-less VHF spots can't prove propagation"
         );
     }
 

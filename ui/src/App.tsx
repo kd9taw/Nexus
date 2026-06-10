@@ -44,6 +44,7 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { visibleNeeds, workTarget, modeClassOf } from './features/needs'
+import { autoPushQso } from './features/autopush'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
 import { StationList } from './components/StationList'
@@ -60,6 +61,7 @@ import { PotaSotaView } from './components/PotaSotaView'
 import { DxpeditionsView } from './components/DxpeditionsView'
 import { ConnectView } from './components/ConnectView'
 import {
+  getLog,
   getPropagation,
   getFeedHealth,
   getNeedAlerts,
@@ -499,11 +501,23 @@ export default function App() {
     [],
   )
 
-  const handleConfirmLog = useCallback((record: LoggedQso) => {
-    void withErrorToast(() => apiConfirmPendingLog(record), 'Could not log QSO').then((s) => {
-      if (s) setSnap(s)
-    })
-  }, [])
+  const handleConfirmLog = useCallback(
+    (record: LoggedQso) => {
+      void withErrorToast(() => apiConfirmPendingLog(record), 'Could not log QSO').then((s) => {
+        if (s) {
+          setSnap(s)
+          // The Settings auto-upload toggles apply to EVERY log path — this
+          // (prompt-to-log) used to silently skip QRZ/ClubLog/eQSL.
+          void autoPushQso(record, {
+            qrz: settings?.qrzLogbookUpload ?? false,
+            clublog: settings?.clublogUpload ?? false,
+            eqsl: settings?.eqslUpload ?? false,
+          })
+        }
+      })
+    },
+    [settings],
+  )
 
   const handleDiscardLog = useCallback(() => {
     void withErrorToast(() => apiDiscardPendingLog(), 'Could not discard QSO').then((s) => {
@@ -699,13 +713,32 @@ export default function App() {
   }, [])
 
   const handleLogCurrent = useCallback(() => {
-    void withErrorToast(() => apiLogCurrentQso(), 'Could not log QSO').then((s) => {
+    void withErrorToast(() => apiLogCurrentQso(), 'Could not log QSO').then(async (s) => {
       if (s) {
         setSnap(s)
         pushToast('Logged QSO', 'success', 2500)
+        // Auto-upload the JUST-logged QSO (the newest log row) — the cockpit
+        // path used to silently skip QRZ/ClubLog/eQSL regardless of Settings.
+        const anyPush =
+          (settings?.qrzLogbookUpload || settings?.clublogUpload || settings?.eqslUpload) ?? false
+        if (anyPush) {
+          try {
+            const log = await getLog()
+            const newest = log[log.length - 1]
+            if (newest) {
+              void autoPushQso(newest, {
+                qrz: settings?.qrzLogbookUpload ?? false,
+                clublog: settings?.clublogUpload ?? false,
+                eqsl: settings?.eqslUpload ?? false,
+              })
+            }
+          } catch {
+            /* log fetch failed — local log is intact; push next time */
+          }
+        }
       }
     })
-  }, [])
+  }, [settings])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Band / Log / Settings are pure UI

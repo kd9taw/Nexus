@@ -1,20 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LoggedQso } from '../types'
 import {
-  clublogPushQso,
   deleteQso,
   editQso,
-  eqslPushQso,
   getLog,
   importAdif,
   logQso,
   purgeLog,
   qrzLookup,
-  qrzPushQso,
   syncLotwReport,
   uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import { autoPushQso } from '../features/autopush'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -304,59 +302,9 @@ export function Logbook({
       load()
       setShowForm(false)
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '' }))
-      // Auto-upload to QRZ (best-effort; the QSO is already logged locally).
-      if (qrzUpload) {
-        const r = await withErrorToast(() => qrzPushQso(record), 'QRZ upload failed')
-        if (r) {
-          const msg =
-            r.result === 'ok'
-              ? `Uploaded ${record.call} to QRZ`
-              : r.result === 'replace'
-                ? `Updated existing ${record.call} in your QRZ logbook`
-                : r.result === 'duplicate'
-                  ? `${record.call} already in your QRZ logbook`
-                  : r.result === 'authFail'
-                    ? 'QRZ Logbook key invalid — check Settings'
-                    : `QRZ upload: ${r.reason ?? 'failed'}`
-          pushToast(msg, r.result === 'fail' || r.result === 'authFail' ? 'error' : 'success')
-        }
-      }
-      // Auto-upload to ClubLog (independent of QRZ; also best-effort).
-      if (clublogUpload) {
-        const c = await withErrorToast(() => clublogPushQso(record), 'ClubLog upload failed')
-        if (c) {
-          const msg =
-            c.result === 'ok' || c.result === 'modified'
-              ? `Uploaded ${record.call} to ClubLog`
-              : c.result === 'duplicate'
-                ? `${record.call} already on ClubLog`
-                : c.result === 'authFail'
-                  ? 'ClubLog credentials invalid — auto-upload paused; fix in Settings'
-                  : c.result === 'serverError'
-                    ? 'ClubLog busy — try again later'
-                    : `ClubLog: ${c.message ?? 'rejected'}`
-          const ok = c.result === 'ok' || c.result === 'modified' || c.result === 'duplicate'
-          pushToast(msg, ok ? 'success' : 'error')
-        }
-      }
-      // Auto-upload to eQSL.cc (independent; also best-effort).
-      if (eqslUpload) {
-        const e = await withErrorToast(() => eqslPushQso(record), 'eQSL upload failed')
-        if (e) {
-          const msg =
-            e.outcome === 'accepted'
-              ? `Uploaded ${record.call} to eQSL`
-              : e.outcome === 'duplicate'
-                ? `${record.call} already on eQSL`
-                : e.outcome === 'authfail'
-                  ? 'eQSL login invalid — check Settings'
-                  : e.outcome === 'retry'
-                    ? 'eQSL unavailable — try again later'
-                    : `eQSL upload rejected${e.detail ? `: ${e.detail}` : ''}`
-          const ok = e.outcome === 'accepted' || e.outcome === 'duplicate'
-          pushToast(msg, ok ? 'success' : 'error')
-        }
-      }
+      // Auto-upload (QRZ/ClubLog/eQSL) — the SHARED path used by every log
+      // surface (cockpit + prompt-to-log use the same helper).
+      void autoPushQso(record, { qrz: !!qrzUpload, clublog: !!clublogUpload, eqsl: !!eqslUpload })
     }
   }
 

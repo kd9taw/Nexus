@@ -23,6 +23,8 @@ import {
   testCat,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import { getConnectionLog, getCredentialsStatus } from '../api'
+import type { ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
 import { LevelMeter } from './LevelMeter'
 import type { Layout } from '../useLayout'
@@ -138,6 +140,29 @@ export function SettingsPanel({
   const [detecting, setDetecting] = useState(false)
   const [catTesting, setCatTesting] = useState(false)
   const [catResult, setCatResult] = useState<CatTestResult | null>(null)
+  // Connections visibility: stored-credential status + the rolling event log —
+  // the answer to "I hit save and couldn't tell anything happened".
+  const [creds, setCreds] = useState<CredStatus[]>([])
+  // "Saved" must not linger forever (it read as a stale artifact) — fade it out.
+  useEffect(() => {
+    if (status !== 'saved') return
+    const id = window.setTimeout(() => setStatus('idle'), 2500)
+    return () => window.clearTimeout(id)
+  }, [status])
+  const [connLog, setConnLog] = useState<ConnEvent[]>([])
+  useEffect(() => {
+    let live = true
+    const load = () => {
+      getCredentialsStatus().then((c) => live && setCreds(c)).catch(() => {})
+      getConnectionLog().then((l) => live && setConnLog(l)).catch(() => {})
+    }
+    load()
+    const id = window.setInterval(load, 5_000)
+    return () => {
+      live = false
+      window.clearInterval(id)
+    }
+  }, [])
   // LoTW/eQSL passwords are write-only (kept in the OS keychain, never read back),
   // so they live in local state — not in `form`/Settings.
   const [lotwPw, setLotwPw] = useState('')
@@ -1508,6 +1533,45 @@ export function SettingsPanel({
 
           {/* ---- Confirmations (LoTW / eQSL / QRZ / ClubLog accounts) ---- */}
           {tab === 'confirmations' && (
+          <>
+          <fieldset className="settings-section">
+            <legend>Connections</legend>
+            <div className="conn-status-grid">
+              {creds.map((c) => (
+                <div key={c.connector} className="conn-status-row">
+                  <span className={`conn-dot ${c.stored ? 'on' : 'off'}`} aria-hidden="true" />
+                  <span className="conn-name">{c.connector}</span>
+                  <span className="conn-id">{c.identity || '—'}</span>
+                  <span className={`conn-state ${c.stored ? 'on' : 'off'}`}>
+                    {c.stored ? 'credential stored' : 'no credential'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="conn-log">
+              <div className="conn-log-head">
+                <span>Connection log</span>
+                <span className="settings-hint">every save, sync, push, and failure lands here</span>
+              </div>
+              {connLog.length === 0 ? (
+                <p className="conn-log-empty">
+                  No events yet this session — save a credential or run a sync and it shows here.
+                </p>
+              ) : (
+                <ul className="conn-log-list">
+                  {connLog.slice(0, 40).map((e, i) => (
+                    <li key={`${e.tsUnix}-${i}`} className={`conn-ev ${e.level}`}>
+                      <span className="conn-ev-time">
+                        {new Date(e.tsUnix * 1000).toLocaleTimeString([], { hour12: false })}
+                      </span>
+                      <span className="conn-ev-name">{e.connector}</span>
+                      <span className="conn-ev-msg">{e.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </fieldset>
           <fieldset className="settings-section">
             <legend>Confirmations</legend>
             <div className="settings-grid">
@@ -1904,6 +1968,7 @@ export function SettingsPanel({
               </div>
             </div>
           </fieldset>
+          </>
           )}
         </div>
 

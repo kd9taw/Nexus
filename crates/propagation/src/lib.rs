@@ -65,7 +65,7 @@ pub use model::{
 };
 pub use needalert::{
     heard_from_freq, heard_near_me, near_me_radius_km, rank as rank_needs, skimmer_grid,
-    workable_by_getting_out, Heard, NeedAlert, NeedTag,
+    workable_by_getting_out, Heard, NeedAlert, NeedTag, VHF_MIN_DX_KM,
 };
 pub use pota::{parse_pota_spots, parse_sota_spots, OtaSpot};
 pub use opening::{

@@ -168,6 +168,11 @@ fn start_cluster_feed(
     if !is_real_call(mycall) || CLUSTER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
+    conn_log(
+        "Cluster",
+        "info",
+        format!("connecting to {} as {}", cluster_host, mycall.trim().to_uppercase()),
+    );
     let buf = spots.clone();
     let hp = health.clone();
     let hp_conn = health.clone();
@@ -200,6 +205,11 @@ fn start_pskr_feed(live_paths: &SharedLivePaths, mycall: &str, health: &SharedHe
     if !is_real_call(mycall) || PSKR_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
+    conn_log(
+        "PSKR MQTT",
+        "info",
+        format!("subscribing for {}", mycall.trim().to_uppercase()),
+    );
     let buf = live_paths.clone();
     let hp = health.clone();
     let hp_conn = health.clone();
@@ -934,6 +944,11 @@ fn restart_live_feeds(
     health: SharedHealth,
 ) {
     use std::sync::atomic::Ordering::SeqCst;
+    conn_log(
+        "Feeds",
+        "info",
+        "callsign changed — restarting cluster + PSK Reporter feeds under the new call",
+    );
     CLUSTER_STOP.store(true, SeqCst);
     PSKR_STOP.store(true, SeqCst);
     std::thread::spawn(move || {
@@ -2061,6 +2076,25 @@ async fn get_need_alerts(
                 if !near {
                     continue;
                 }
+                // …and the DX must be propagation-FAR, not a groundwave local (the
+                // 6 m CQ machine 50 km away is spotted by every nearby skimmer,
+                // opening or not). Cluster spots carry no grid, so judge by DXCC:
+                // a different entity is DX by definition; same-entity falls back to
+                // the centroid distance (coarse, but US locals resolve to the same
+                // ~country centroid as the operator and correctly read "near").
+                let dx_far = match (propagation::dxcc::resolve(&cs.dx_call), me_ll) {
+                    (Some(info), Some(me)) => {
+                        let my_entity =
+                            propagation::dxcc::resolve(&snap.mycall).map(|i| i.entity);
+                        my_entity != Some(info.entity)
+                            || propagation::geo::haversine_km(me, (info.lat, info.lon))
+                                >= propagation::VHF_MIN_DX_KM
+                    }
+                    _ => false,
+                };
+                if !dx_far {
+                    continue;
+                }
             }
             let class = propagation::classify_spot_mode(freq, &cs.comment);
             if matches!(class, propagation::ModeClass::Cw | propagation::ModeClass::Phone) {
@@ -2129,8 +2163,19 @@ async fn sync_lotw_report(
     state: State<'_, SharedEngine>,
     text: String,
 ) -> Result<LotwSyncResult, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
-    Ok(eng.merge_lotw_report(&text).into())
+    conn_logged(
+        "LoTW",
+        |r: &LotwSyncResult| {
+            format!(
+                "file sync OK — {} newly confirmed, {} credited",
+                r.newly_confirmed, r.newly_credited
+            )
+        },
+        (|| {
+            let mut eng = state.lock().map_err(|e| e.to_string())?;
+            Ok(eng.merge_lotw_report(&text).into())
+        })(),
+    )
 }
 
 // ----- LoTW credential vault + authenticated download -----------------------
@@ -2150,6 +2195,119 @@ const CLUBLOG_KEYCHAIN_USER: &str = "clublog-password";
 /// stop re-POSTing every QSO (ClubLog IP-blocks repeated auth failures); reset when
 /// the operator changes a ClubLog credential.
 static CLUBLOG_SUSPENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// One connectivity event for the Settings ▸ Connections log — the answer to
+/// "I hit save / it synced / it failed and I couldn't tell". Every connector
+/// action (credential save, login, download, push, feed start/stop, rejection)
+/// records one of these; the UI shows the rolling tail.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnEvent {
+    ts_unix: i64,
+    connector: String,
+    /// "ok" | "info" | "error"
+    level: String,
+    message: String,
+}
+
+static CONN_LOG: Mutex<std::collections::VecDeque<ConnEvent>> =
+    Mutex::new(std::collections::VecDeque::new());
+const CONN_LOG_CAP: usize = 200;
+
+/// Record a connectivity event (and mirror it to stderr for dev logs).
+fn conn_log(connector: &str, level: &str, message: impl Into<String>) {
+    let message = message.into();
+    eprintln!("conn[{connector}/{level}]: {message}");
+    let mut log = CONN_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    log.push_back(ConnEvent {
+        ts_unix: now_unix() as i64,
+        connector: connector.to_string(),
+        level: level.to_string(),
+        message,
+    });
+    while log.len() > CONN_LOG_CAP {
+        log.pop_front();
+    }
+}
+
+/// Wrap a connector operation result into the connection log: success and
+/// failure BOTH become visible events (the operator could previously tell
+/// neither). Returns the result unchanged.
+fn conn_logged<T>(
+    connector: &str,
+    ok_msg: impl FnOnce(&T) -> String,
+    r: Result<T, String>,
+) -> Result<T, String> {
+    match &r {
+        Ok(v) => conn_log(connector, "ok", ok_msg(v)),
+        Err(e) => conn_log(connector, "error", e.clone()),
+    }
+    r
+}
+
+/// The rolling connectivity log, newest first.
+#[tauri::command]
+fn get_connection_log() -> Vec<ConnEvent> {
+    let log = CONN_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    log.iter().rev().cloned().collect()
+}
+
+/// Which credentials are PRESENT (stored) per connector — so the operator can
+/// finally SEE that a save took. Never returns the secrets themselves.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CredStatus {
+    connector: String,
+    /// A secret exists in the OS keychain (or key field) for this connector.
+    stored: bool,
+    /// The associated non-secret identity (username/email), for display.
+    identity: String,
+}
+
+#[tauri::command]
+fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStatus>, String> {
+    let (lotw_user, eqsl_user, qrz_user, clublog_email, clublog_key) = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        let st = eng.settings();
+        (
+            st.lotw_username.clone(),
+            st.eqsl_username.clone(),
+            st.qrz_username.clone(),
+            st.clublog_email.clone(),
+            !st.clublog_api_key.trim().is_empty(),
+        )
+    };
+    let has = |entry: Result<keyring::Entry, String>| {
+        entry.and_then(|e| e.get_password().map_err(|er| er.to_string())).is_ok()
+    };
+    Ok(vec![
+        CredStatus {
+            connector: "LoTW".into(),
+            stored: has(lotw_keychain()),
+            identity: lotw_user,
+        },
+        CredStatus {
+            connector: "QRZ XML".into(),
+            stored: has(qrz_keychain()),
+            identity: qrz_user.clone(),
+        },
+        CredStatus {
+            connector: "QRZ Logbook".into(),
+            stored: has(qrz_logbook_keychain()),
+            identity: qrz_user,
+        },
+        CredStatus {
+            connector: "eQSL".into(),
+            stored: has(eqsl_keychain()),
+            identity: eqsl_user,
+        },
+        CredStatus {
+            connector: "ClubLog".into(),
+            stored: has(clublog_keychain()) && clublog_key,
+            identity: clublog_email,
+        },
+    ])
+}
 
 fn lotw_keychain() -> Result<keyring::Entry, String> {
     keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, LOTW_KEYCHAIN_USER)
@@ -2191,17 +2349,25 @@ fn clear_keychain_entry(entry: &keyring::Entry) -> Result<(), String> {
 fn set_lotw_password(password: String) -> Result<(), String> {
     let entry = lotw_keychain()?;
     if password.is_empty() {
-        return clear_keychain_entry(&entry);
+        clear_keychain_entry(&entry)?;
+        conn_log("LoTW", "info", "password cleared from the OS keychain");
+        return Ok(());
     }
     entry
         .set_password(&password)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+    conn_log("LoTW", "ok", "password saved to the OS keychain");
+    Ok(())
 }
 
 /// Remove the stored LoTW password from the OS keychain (idempotent).
 #[tauri::command]
 fn clear_lotw_password() -> Result<(), String> {
-    clear_keychain_entry(&lotw_keychain()?)
+    let r = clear_keychain_entry(&lotw_keychain()?);
+    if r.is_ok() {
+        conn_log("LoTW", "info", "password cleared from the OS keychain");
+    }
+    r
 }
 
 /// Store (or, if empty, clear) the eQSL website password in the OS keychain.
@@ -2210,36 +2376,60 @@ fn clear_lotw_password() -> Result<(), String> {
 fn set_eqsl_password(password: String) -> Result<(), String> {
     let entry = eqsl_keychain()?;
     if password.is_empty() {
-        return clear_keychain_entry(&entry);
+        clear_keychain_entry(&entry)?;
+        conn_log("eQSL", "info", "password cleared from the OS keychain");
+        return Ok(());
     }
     entry
         .set_password(&password)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+    conn_log("eQSL", "ok", "password saved to the OS keychain");
+    Ok(())
 }
 
 /// Remove the stored eQSL password from the OS keychain (idempotent).
 #[tauri::command]
 fn clear_eqsl_password() -> Result<(), String> {
-    clear_keychain_entry(&eqsl_keychain()?)
+    let r = clear_keychain_entry(&eqsl_keychain()?);
+    if r.is_ok() {
+        conn_log("eQSL", "info", "password cleared from the OS keychain");
+    }
+    r
 }
 
 /// Store (or, if empty, clear) the QRZ.com account password in the OS keychain.
 /// Write-only, like the LoTW/eQSL counterparts.
 #[tauri::command]
-fn set_qrz_password(password: String) -> Result<(), String> {
+fn set_qrz_password(
+    password: String,
+    qrz_session: State<'_, SharedQrzSession>,
+) -> Result<(), String> {
+    // A credential change invalidates the cached XML session key — a stale key
+    // kept working under the OLD identity until it expired server-side.
+    if let Ok(mut g) = qrz_session.lock() {
+        *g = None;
+    }
     let entry = qrz_keychain()?;
     if password.is_empty() {
-        return clear_keychain_entry(&entry);
+        clear_keychain_entry(&entry)?;
+        conn_log("QRZ XML", "info", "password cleared from the OS keychain");
+        return Ok(());
     }
     entry
         .set_password(&password)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+    conn_log("QRZ XML", "ok", "password saved to the OS keychain");
+    Ok(())
 }
 
 /// Remove the stored QRZ password from the OS keychain (idempotent).
 #[tauri::command]
 fn clear_qrz_password() -> Result<(), String> {
-    clear_keychain_entry(&qrz_keychain()?)
+    let r = clear_keychain_entry(&qrz_keychain()?);
+    if r.is_ok() {
+        conn_log("QRZ XML", "info", "password cleared from the OS keychain");
+    }
+    r
 }
 
 /// Store (or, if empty, clear) the QRZ **Logbook API key** (distinct from the XML
@@ -2248,17 +2438,25 @@ fn clear_qrz_password() -> Result<(), String> {
 fn set_qrz_logbook_key(key: String) -> Result<(), String> {
     let entry = qrz_logbook_keychain()?;
     if key.is_empty() {
-        return clear_keychain_entry(&entry);
+        clear_keychain_entry(&entry)?;
+        conn_log("QRZ Logbook", "info", "API key cleared from the OS keychain");
+        return Ok(());
     }
     entry
         .set_password(&key)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+    conn_log("QRZ Logbook", "ok", "API key saved to the OS keychain");
+    Ok(())
 }
 
 /// Remove the stored QRZ Logbook API key from the OS keychain (idempotent).
 #[tauri::command]
 fn clear_qrz_logbook_key() -> Result<(), String> {
-    clear_keychain_entry(&qrz_logbook_keychain()?)
+    let r = clear_keychain_entry(&qrz_logbook_keychain()?);
+    if r.is_ok() {
+        conn_log("QRZ Logbook", "info", "API key cleared from the OS keychain");
+    }
+    r
 }
 
 /// `RcvdSince` safety margin: eQSL does not document the timezone of this filter,
@@ -2277,6 +2475,19 @@ const EQSL_RCVD_MARGIN_SECS: i64 = 86_400;
 /// password-bearing request URL is never logged or surfaced.
 #[tauri::command]
 fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
+    conn_logged(
+        "LoTW",
+        |r| {
+            format!(
+                "sync OK — {} newly confirmed, {} credited, {} promoted",
+                r.newly_confirmed, r.newly_credited, r.promoted
+            )
+        },
+        download_lotw_report_impl(state),
+    )
+}
+
+fn download_lotw_report_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
     // Read username + cursor (non-secret) under a brief lock; the network fetch
     // below must NOT hold the engine lock (it can block for up to 60 s).
     let (username, owncall, since) = {
@@ -2332,7 +2543,7 @@ fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult
             if eng.settings().lotw_username.trim() == used_username.trim() {
                 let updated = eng.set_lotw_cursor(high_water);
                 if let Err(e) = updated.save(&settings_path()) {
-                    eprintln!("tempo: failed to persist LoTW cursor: {e}");
+                    conn_log("LoTW", "error", format!("failed to persist the sync cursor: {e}"));
                 }
             }
         }
@@ -2359,8 +2570,8 @@ fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult
                 let mut eng = state.lock().map_err(|e| e.to_string())?;
                 result.promoted = eng.merge_lotw_own_echo(&b, now_unix());
             }
-            Ok(_) => eprintln!("tempo: LoTW own-echo pull returned a non-ADIF body; skipped"),
-            Err(e) => eprintln!("tempo: LoTW own-echo pull failed (confirmations still synced): {e}"),
+            Ok(_) => conn_log("LoTW", "error", "own-echo pull returned a non-ADIF body; skipped"),
+            Err(e) => conn_log("LoTW", "error", format!("own-echo pull failed (confirmations still synced): {e}")),
         }
     }
 
@@ -2395,6 +2606,17 @@ fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
 /// Rejected/AuthFail; a network error leaves state untouched for a clean retry).
 #[tauri::command]
 async fn upload_lotw_report(
+    state: State<'_, SharedEngine>,
+    indices: Option<Vec<usize>>,
+) -> Result<UploadReportDto, String> {
+    conn_logged(
+        "LoTW",
+        |r| format!("upload — {} QSO(s), outcome: {}", r.dispatched, r.outcome),
+        upload_lotw_report_impl(state, indices).await,
+    )
+}
+
+async fn upload_lotw_report_impl(
     state: State<'_, SharedEngine>,
     indices: Option<Vec<usize>>,
 ) -> Result<UploadReportDto, String> {
@@ -2475,6 +2697,14 @@ async fn upload_lotw_report(
 /// password-bearing request URL is never logged or surfaced.
 #[tauri::command]
 fn download_eqsl_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
+    conn_logged(
+        "eQSL",
+        |r| format!("inbox sync OK — {} newly confirmed", r.newly_confirmed),
+        download_eqsl_report_impl(state),
+    )
+}
+
+fn download_eqsl_report_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
     let (username, since) = {
         let eng = state.lock().map_err(|e| e.to_string())?;
         let s = eng.settings();
@@ -2639,6 +2869,18 @@ async fn qrz_push_qso(
     record: LoggedQso,
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::dto::QrzPushResultDto, String> {
+    let who = record.call.clone();
+    conn_logged(
+        "QRZ Logbook",
+        |r| format!("pushed {} — {}", who, r.result),
+        qrz_push_qso_impl(record, state).await,
+    )
+}
+
+async fn qrz_push_qso_impl(
+    record: LoggedQso,
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::QrzPushResultDto, String> {
     let key = qrz_logbook_keychain()?
         .get_password()
         .map_err(|_| "No QRZ Logbook API key stored — set it in Settings.".to_string())?;
@@ -2671,11 +2913,15 @@ fn set_clublog_password(password: String) -> Result<(), String> {
     CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
     let entry = clublog_keychain()?;
     if password.is_empty() {
-        return clear_keychain_entry(&entry);
+        clear_keychain_entry(&entry)?;
+        conn_log("ClubLog", "info", "app-password cleared from the OS keychain");
+        return Ok(());
     }
     entry
         .set_password(&password)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+    conn_log("ClubLog", "ok", "app-password saved to the OS keychain");
+    Ok(())
 }
 
 /// Remove the stored ClubLog app-password from the OS keychain (idempotent); also
@@ -2683,7 +2929,9 @@ fn set_clublog_password(password: String) -> Result<(), String> {
 #[tauri::command]
 fn clear_clublog_password() -> Result<(), String> {
     CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
-    clear_keychain_entry(&clublog_keychain()?)
+    clear_keychain_entry(&clublog_keychain()?)?;
+    conn_log("ClubLog", "info", "app-password cleared from the OS keychain");
+    Ok(())
 }
 
 /// Push one logged QSO to ClubLog (realtime). Resolves the 4 credentials (email +
@@ -2693,6 +2941,18 @@ fn clear_clublog_password() -> Result<(), String> {
 /// until a credential changes. No lock over the network.
 #[tauri::command]
 async fn clublog_push_qso(
+    record: LoggedQso,
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::ClubLogPushResultDto, String> {
+    let who = record.call.clone();
+    conn_logged(
+        "ClubLog",
+        |r| format!("pushed {} — {}", who, r.result),
+        clublog_push_qso_impl(record, state).await,
+    )
+}
+
+async fn clublog_push_qso_impl(
     record: LoggedQso,
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::dto::ClubLogPushResultDto, String> {
@@ -2751,7 +3011,14 @@ async fn clublog_push_qso(
     let push = tempo_core::clublog::classify_response(status, &resp);
     if push.result == tempo_core::clublog::ClubLogResult::AuthFail {
         // Halt further auto-pushes until a credential changes (IP-block guard).
+        {
+        conn_log(
+            "ClubLog",
+            "error",
+            "auth failed — auto-push SUSPENDED until credentials change in Settings",
+        );
         CLUBLOG_SUSPENDED.store(true, Ordering::Relaxed);
+    }
     }
     // Record the outcome on the just-pushed QSO so diagnostics can surface R1 (never
     // pushed to ClubLog) / R9 (bounced). Transient results (ServerError/Unknown) map
@@ -2776,6 +3043,18 @@ async fn clublog_push_qso(
 /// the network. eQSL is non-award (like QRZ) — it never credits ARRL DXCC/WAS.
 #[tauri::command]
 async fn eqsl_push_qso(
+    record: LoggedQso,
+    state: State<'_, SharedEngine>,
+) -> Result<UploadReportDto, String> {
+    let who = record.call.clone();
+    conn_logged(
+        "eQSL",
+        |r| format!("pushed {} — outcome: {}", who, r.outcome),
+        eqsl_push_qso_impl(record, state).await,
+    )
+}
+
+async fn eqsl_push_qso_impl(
     record: LoggedQso,
     state: State<'_, SharedEngine>,
 ) -> Result<UploadReportDto, String> {
@@ -3159,7 +3438,7 @@ pub fn run() {
             std::thread::spawn(move || {
                 match std::net::TcpListener::bind(("127.0.0.1", broker_port)) {
                     Ok(l) => tempo_audio::rigctld_server::serve(l, backend),
-                    Err(e) => eprintln!("tempo: CAT broker couldn't bind 127.0.0.1:{broker_port}: {e}"),
+                    Err(e) => conn_log("CAT broker", "error", format!("couldn't bind 127.0.0.1:{broker_port}: {e}")),
                 }
             });
         }
@@ -3201,6 +3480,8 @@ pub fn run() {
             set_frequency,
             set_operating_mode,
             work_spot,
+            get_connection_log,
+            get_credentials_status,
             send_cw,
             set_cw_wpm,
             stop_cw,

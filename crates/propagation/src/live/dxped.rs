@@ -150,7 +150,11 @@ fn most_wanted(c: &reqwest::blocking::Client) -> HashMap<String, u32> {
             }
         }
     }
-    let key = CLUBLOG_KEY.lock().map(|k| k.clone()).unwrap_or_default();
+    let mut key = CLUBLOG_KEY.lock().map(|k| k.clone()).unwrap_or_default();
+    if key.is_empty() {
+        // Parity with the upload path: a build-time key works there too.
+        key = option_env!("CLUBLOG_API_KEY").unwrap_or("").to_string();
+    }
     if key.is_empty() {
         return HashMap::new();
     }
