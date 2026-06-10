@@ -88,7 +88,7 @@ const PTT_METHODS: { value: string; label: string }[] = [
   { value: 'vox', label: 'VOX (no keying)' },
 ]
 
-const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort']
+const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs']
 
 /** Settings is split into tabbed sections: only the active one renders, so a
  * keystroke re-renders ~one section's worth of inputs instead of the whole panel
@@ -1275,6 +1275,87 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   Blank = WSJT-X behavior: CQ repeats until you stop it (the TX watchdog is the
                   backstop). Set a number to auto-stop an unanswered CQ run after that many calls.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Disable TX after sending 73</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.disableTxAfter73 !== false}
+                    className={`toggle${form.disableTxAfter73 !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('disableTxAfter73', form.disableTxAfter73 === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  After your final 73 goes out, Enable TX drops — working the next station is a
+                  deliberate arm (WSJT-X default). A CQ run is unaffected: it returns to CQ.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Double-click arms TX</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.doubleClickSetsTx !== false}
+                    className={`toggle${form.doubleClickSetsTx !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('doubleClickSetsTx', form.doubleClickSetsTx === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Double-clicking a station enables TX so the answer goes straight out (WSJT-X
+                  "double-click on call sets Tx enable"). Off = you arm TX yourself each time.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Clear DX call after logging</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!!form.clearDxAfterLog}
+                    className={`toggle${form.clearDxAfterLog ? ' on' : ''}`}
+                    onClick={() => updateBool('clearDxAfterLog', !form.clearDxAfterLog)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Wipe the DX Call / DX Grid fields once a contact is logged (WSJT-X option,
+                  off by default).
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label>
+                  <span className="settings-label">Tune timeout (s)</span>
+                  <input
+                    className="settings-input"
+                    type="number"
+                    min={1}
+                    max={120}
+                    value={form.tuneTimeoutSecs || 12}
+                    onChange={(e) => {
+                      // '' must mean "back to the 12 s default" — the generic
+                      // numeric coercion turned a cleared field into a saved 0.
+                      markDirty()
+                      const n = e.target.value === '' ? 12 : Math.max(1, Number(e.target.value) || 12)
+                      setForm((prev) => (prev ? { ...prev, tuneTimeoutSecs: n } : prev))
+                    }}
+                  />
+                </label>
+                <span className="settings-hint">
+                  Auto-release the tune carrier after this many seconds — never leave a key-down
+                  unattended.
                 </span>
               </div>
 

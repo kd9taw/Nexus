@@ -3,6 +3,7 @@ import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, Source
 import {
   broadcast as apiBroadcast,
   callStation as apiCallStation,
+  overrideNextTx as apiOverrideNextTx,
   setArea as apiSetArea,
   openPanelWindow,
   qsoResend as apiQsoResend,
@@ -515,11 +516,19 @@ export default function App() {
     [],
   )
 
+  // Bumps when a QSO is logged AND "Clear DX call after logging" is on — the
+  // cockpit watches it and wipes its DX Call/Grid fields (stock WSJT-X option).
+  const [dxClearTick, setDxClearTick] = useState(0)
+  const noteLoggedForDxClear = useCallback(() => {
+    if (settings?.clearDxAfterLog) setDxClearTick((t) => t + 1)
+  }, [settings?.clearDxAfterLog])
+
   const handleConfirmLog = useCallback(
     (record: LoggedQso) => {
       void withErrorToast(() => apiConfirmPendingLog(record), 'Could not log QSO').then((s) => {
         if (s) {
           setSnap(s)
+          noteLoggedForDxClear()
           // The Settings auto-upload toggles apply to EVERY log path — this
           // (prompt-to-log) used to silently skip QRZ/ClubLog/eQSL.
           void autoPushQso(record, {
@@ -530,7 +539,7 @@ export default function App() {
         }
       })
     },
-    [settings],
+    [settings, noteLoggedForDxClear],
   )
 
   const handleDiscardLog = useCallback(() => {
@@ -595,6 +604,25 @@ export default function App() {
     })
   }, [])
 
+  // WSJT-X Tx-slot click (Tx1–Tx5 buttons / Alt+N): force the row's text as the
+  // next transmission to the DX. The backend starts/retargets the QSO + arms TX;
+  // applying the returned snapshot makes the Tx panel's "next" dot land at once.
+  const handleOverrideTx = useCallback((call: string, grid: string | null, text: string) => {
+    // Same own-call guard as handleCall — the engine no-ops on a self-target
+    // but returns a normal snapshot, which read as silent success here.
+    const me = mycallRef.current.trim().toUpperCase()
+    if (me && call.trim().toUpperCase().split('/')[0] === me.split('/')[0]) {
+      pushToast(`${call} is your own call`, 'info', 2500)
+      return
+    }
+    void withErrorToast(
+      () => apiOverrideNextTx(call, grid, text),
+      `Could not queue TX to ${call}`,
+    ).then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
   const handleSetTxEven = useCallback((even: boolean) => {
     void withErrorToast(() => apiSetTxEven(even), 'Could not set transmit period').then((s) => {
       if (s) setSnap(s)
@@ -610,7 +638,7 @@ export default function App() {
   // Waterfall click: left-click sets the RX offset (green marker); shift-click
   // sets the TX offset (red marker). TX follows RX unless "Hold Tx" is on.
   const handleTune = useCallback((hz: number, target: 'tx' | 'rx' | 'both') => {
-    // Left-click = TX, right-click = RX, both buttons = set both (call on their freq).
+    // Stock WSJT-X gestures (Waterfall dispatches): 'rx' = click, 'tx' = Shift, 'both' = Ctrl.
     const call =
       target === 'rx'
         ? () => apiSetRxOffset(hz)
@@ -731,6 +759,7 @@ export default function App() {
       if (s) {
         setSnap(s)
         pushToast('Logged QSO', 'success', 2500)
+        noteLoggedForDxClear()
         // Auto-upload the JUST-logged QSO (the newest log row) — the cockpit
         // path used to silently skip QRZ/ClubLog/eQSL regardless of Settings.
         const anyPush =
@@ -752,7 +781,7 @@ export default function App() {
         }
       }
     })
-  }, [settings])
+  }, [settings, noteLoggedForDxClear])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Band / Log / Settings are pure UI
@@ -1232,6 +1261,11 @@ export default function App() {
             onResend={handleQsoResend}
             onFreetext={handleQsoFreetext}
             onLog={handleLogCurrent}
+            onOverrideTx={handleOverrideTx}
+            onHaltTx={handleHaltTx}
+            dxClearTick={dxClearTick}
+            preferRrr={settings?.preferRrr ?? false}
+            qsoMacros={macros.qso}
             roster={stationsPanel}
             needByCall={needByCall}
             selectedCall={activePeer}

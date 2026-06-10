@@ -1551,6 +1551,30 @@ button.nb-chip:hover {
   --shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
 }
 
+/* Stock WSJT-X decode highlight swatches (Settings ▸ Colors), per theme. The
+   light theme uses the literal stock backgrounds (#ffd0d7 my-call pink /
+   #d9ffd9 CQ green); dark + amber translate them to theme-safe tints with
+   readable ink so the semantics stay stock without searing the night vision. */
+:root,
+[data-theme='dark'] {
+  --decode-me-bg: rgba(229, 67, 67, 0.24);
+  --decode-me-ink: #ff93a4;
+  --decode-cq-bg: rgba(105, 217, 141, 0.15);
+  --decode-cq-ink: #8fe3a8;
+}
+[data-theme='light'] {
+  --decode-me-bg: #ffd0d7;
+  --decode-me-ink: #8c0011;
+  --decode-cq-bg: #d9ffd9;
+  --decode-cq-ink: #00611f;
+}
+[data-theme='amber'] {
+  --decode-me-bg: rgba(193, 63, 41, 0.28);
+  --decode-me-ink: #ff8a5e;
+  --decode-cq-bg: rgba(225, 195, 75, 0.15);
+  --decode-cq-ink: #e1c34b;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -5344,11 +5368,11 @@ select.settings-input {
 }
 .decode-row.cq {
   border-left-color: var(--state-good);
-  background: color-mix(in srgb, var(--state-good) 13%, transparent);
+  background: var(--decode-cq-bg, color-mix(in srgb, var(--state-good) 13%, transparent));
 }
 .decode-row.directed {
   border-left-color: var(--tx, #e5484d);
-  background: color-mix(in srgb, var(--tx, #e5484d) 22%, transparent);
+  background: var(--decode-me-bg, color-mix(in srgb, var(--tx, #e5484d) 22%, transparent));
 }
 .decode-row.worked {
   opacity: 0.55;
@@ -5424,12 +5448,24 @@ select.settings-input {
   gap: 6px;
 }
 .decode-row.cq .decode-msg {
-  color: var(--state-good);
+  color: var(--decode-cq-ink, var(--state-good));
   font-weight: 700;
 }
 .decode-row.directed .decode-msg {
-  color: var(--tx, #e5484d);
+  color: var(--decode-me-ink, var(--tx, #e5484d));
   font-weight: 800;
+}
+/* Single-click SELECTED decode (the Tx panel's DX) — an accent ring on top of
+   whatever semantic color the row already carries. */
+.decode-row.selected {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+/* Session-ignored call (Alt-double-click) — recedes hard in every theme but
+   stays readable enough to Alt-double-click back. */
+.decode-row.ignored {
+  opacity: 0.3;
+  filter: grayscale(0.8);
 }
 .decode-tag {
   font-size: 10px;
@@ -6402,7 +6438,40 @@ select.settings-input {
   white-space: nowrap;
 }
 .cockpit-offsets {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-family: var(--font-mono);
+  color: var(--text-faint);
+}
+/* DF readout/entry: a compact labeled Hz input (WSJT-X Rx/Tx spinners). */
+.df-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.df-label {
+  font-weight: 700;
+}
+.df-field input {
+  width: 56px;
+  padding: 2px 4px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.df-field input:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+}
+.df-unit {
   color: var(--text-faint);
 }
 .cockpit-cat {
@@ -6499,6 +6568,145 @@ select.settings-input {
   flex-direction: column;
   gap: 6px;
 }
+/* WSJT-X Tx1–Tx6 standard-message panel (Classic layout): DX Call/Grid +
+   Generate on the left, the six message rows (next-dot · text · Tx button)
+   stacked on the right — stock semantics, modern skin. */
+.tx-panel {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 10px;
+}
+.txp-dx {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.txp-field {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.txp-field input {
+  min-width: 0;
+  padding: 3px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.txp-field input:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+}
+.txp-dx-actions {
+  display: flex;
+  gap: 6px;
+}
+.txp-dx-actions button {
+  flex: 1;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.txp-dx-actions button:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.txp-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.txp-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+/* The "next transmission" radio dot — lit when the row is queued. */
+.txp-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+}
+.txp-dot.on {
+  background: var(--tx, #e5484d);
+  border-color: var(--tx, #e5484d);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--tx, #e5484d) 60%, transparent);
+}
+.txp-msg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.txp-row.next .txp-msg {
+  color: var(--text);
+  font-weight: 700;
+}
+.txp-free {
+  padding: 2px 6px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.txp-free:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+}
+.txp-btn {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.txp-btn:hover:not(:disabled) {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.txp-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.txp-btn.txp-cq:hover:not(:disabled) {
+  background: var(--state-good);
+  border-color: var(--state-good);
+}
+@media (max-width: 900px) {
+  .tx-panel {
+    grid-template-columns: 1fr;
+  }
+}
+
 .cockpit-rxfreq {
   flex: 0 0 auto;
   max-height: 42%;
@@ -6860,6 +7068,10 @@ select.settings-input {
 .or-row.selected {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+.or-row.ignored {
+  opacity: 0.3;
+  filter: grayscale(0.8);
 }
 .or-row.worked {
   opacity: 0.72;

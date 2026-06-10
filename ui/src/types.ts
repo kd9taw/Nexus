@@ -991,6 +991,12 @@ export interface Settings {
   /** Stop a CQ run after N unanswered calls; null/undefined = stock WSJT-X
    * (CQ repeats until you stop it — the Tx watchdog is the backstop). */
   cqMaxCalls?: number | null
+  /** WSJT-X Settings ▸ Behavior parity. */
+  disableTxAfter73?: boolean
+  clearDxAfterLog?: boolean
+  doubleClickSetsTx?: boolean
+  /** Tune carrier auto-release (seconds). */
+  tuneTimeoutSecs?: number
   // --- coordinated QSY ("move together") — separate, opt-in, off by default ---
   /** Master opt-in for coordinated QSY (announced-in-the-clear roaming). */
   qsyEnabled: boolean

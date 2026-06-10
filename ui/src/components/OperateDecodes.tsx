@@ -9,6 +9,7 @@ import {
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
+import { gridFromMessage, isIgnored } from '../txMessages'
 import { StateBlock } from './StateBlock'
 
 interface Props {
@@ -29,6 +30,17 @@ interface Props {
   /** Work / answer a decoded station. `freq` = the decode's audio offset (Hz) so the
    * rig moves RX/TX onto it (WSJT-X double-click). */
   onCall: (call: string, grid?: string, message?: string, snr?: number, freq?: number) => void
+  /** WSJT-X single-click SELECT: populate the Tx panel's DX Call/Grid from this
+   * decode — no RF action, no TX. Grid is parsed from a trailing 4-char grid. */
+  onSelectDecode?: (call: string, grid?: string, message?: string, snr?: number) => void
+  /** Move RX onto a signal (Hz) WITHOUT starting a QSO — ctrl-double-click. */
+  onSetRx?: (freqHz: number) => void
+  /** The Tx panel's current DX call — its rows get the selected highlight. */
+  selectedCall?: string | null
+  /** Session-only ignore set (Alt-double-click) — ignored calls render dimmed. */
+  ignoredCalls?: ReadonlySet<string>
+  /** Toggle a call in/out of the session ignore set (Alt-double-click). */
+  onToggleIgnore?: (call: string) => void
   /** Force a fixed filter and hide the filter chips (e.g. the Rx-Frequency pane
    * is a Band Activity locked to the 'rx' filter). */
   lockedFilter?: DecodeFilter
@@ -44,6 +56,9 @@ interface Props {
  * further than this to pause and read; scroll back down to resume). */
 const PIN_SLOP_PX = 40
 
+/** Shared empty set so the ignore checks stay allocation-free per render. */
+const NO_IGNORES: ReadonlySet<string> = new Set()
+
 /**
  * Band Activity / Rx Frequency pane with stock WSJT-X flow: oldest at the top,
  * each period's decodes APPENDED at the bottom under a dim UTC+band separator
@@ -51,8 +66,11 @@ const PIN_SLOP_PX = 40
  * pauses the auto-scroll so you can read back; scrolling back near the bottom
  * resumes it. New rows never yank the view while you're reading.
  *
- * On top of the stock flow: filter chips (All / CQ / To me / On RX / B4 / New),
- * sort, and a per-pane Erase (WSJT-X term).
+ * Click model is stock WSJT-X: single-click SELECTS (populates DX Call/Grid,
+ * no RF action), double-click WORKS the station, ctrl-double-click moves RX
+ * onto the signal without transmitting, Alt-double-click toggles a session
+ * ignore. On top of the stock flow: filter chips (All / CQ / To me / On RX /
+ * B4 / New), sort, and a per-pane Erase (WSJT-X term).
  */
 export function OperateDecodes({
   decodes,
@@ -62,6 +80,11 @@ export function OperateDecodes({
   tier,
   harqRescues,
   onCall,
+  onSelectDecode,
+  onSetRx,
+  selectedCall,
+  ignoredCalls,
+  onToggleIgnore,
   lockedFilter,
   compact = false,
   title = 'Band Activity',
@@ -120,6 +143,25 @@ export function OperateDecodes({
     pinnedRef.current = true
     setPinned(true)
     setTick((t) => t + 1)
+  }
+
+  const ignores = ignoredCalls ?? NO_IGNORES
+  const selectedUp = selectedCall?.trim().toUpperCase() || null
+
+  // WSJT-X double-click dispatch: Alt = toggle session ignore; Ctrl = populate
+  // DX fields + move RX onto the signal (no QSO start, no TX arm); plain = work.
+  const handleDouble = (e: React.MouseEvent, d: DecodeRow) => {
+    if (!d.from) return
+    if (e.altKey) {
+      onToggleIgnore?.(d.from)
+      return
+    }
+    if (e.ctrlKey || e.metaKey) {
+      onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+      onSetRx?.(d.freqHz)
+      return
+    }
+    onCall(d.from, undefined, d.message, d.snr, d.freqHz)
   }
 
   const eraseBtn = (
@@ -182,69 +224,86 @@ export function OperateDecodes({
             detail="Waiting for the next slot — decoded signals will appear here as they arrive."
           />
         )}
-        {list.map((d, i) => (
-          <Fragment key={d.id}>
-            {/* WSJT-X period separator: a dim bar with the period's UTC start +
-                band, whenever the T/R period changes (time-sorted view only).
-                A decode ingested at boundary slot s carries AUDIO from slot s-1 —
-                the separator stamps the RX period the signals were ON AIR in
-                (WSJT-X labels the audio period, not the decode moment). */}
-            {sort === 'time' && i > 0 && d.slot !== list[i - 1].slot && (
-              <div className="od-period-sep" role="separator" aria-label={`Period ${fmtUtc(periodStartMs(d.slot - 1, tier))} UTC`}>
-                <span className="od-sep-utc">{fmtUtc(periodStartMs(d.slot - 1, tier))}</span>
-                <span className="od-sep-band">{band}</span>
-              </div>
-            )}
-            <div
-              className={`decode-row ${rowClass(d)}`}
-              role="listitem"
-              onDoubleClick={() => d.from && onCall(d.from, undefined, d.message, d.snr, d.freqHz)}
-              title={d.from ? `Double-click to work ${d.from}` : undefined}
-            >
-              <span className={`decode-tier ${d.tier.toLowerCase()}`} title={`Decoded by ${d.tier}`}>
-                {d.tier}
-              </span>
-              <span className="decode-utc" title="UTC heard">{fmtUtc(d.at)}</span>
-              <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
-              <span className={`decode-dt ${dtClass(d.dtSec)}`} title="DT — time offset (s); large = clock/sync skew">
-                {fmtDt(d.dtSec)}
-              </span>
-              <span className="decode-freq">{Math.round(d.freqHz)}</span>
-              <span className="decode-msg" title={d.country ? `${d.message} · ${d.country}` : d.message}>
-                {d.message}
-                {d.newDxcc && (
-                  <span className="decode-tag newdxcc" title="New DXCC entity — a new one!">
-                    DXCC
-                  </span>
-                )}
-                {d.newGrid && !d.newDxcc && (
-                  <span className="decode-tag newgrid" title="New grid square">
-                    GRID
-                  </span>
-                )}
-                {d.worked && <span className="b4-chip" title="Worked before">B4</span>}
-                {d.isCq && !d.directedToMe && <span className="decode-tag cq">CQ</span>}
-                {d.directedToMe && <span className="decode-tag me">YOU</span>}
-                {d.rv > 0 && (
-                  <span className="harq-chip" title={`Recovered by IR-HARQ (RV0–RV${d.rv})`}>
-                    HARQ·RV{d.rv}
-                  </span>
-                )}
-                {d.country && <span className="decode-country">{d.country}</span>}
-              </span>
-              {d.from && (
-                <button
-                  type="button"
-                  className="decode-work"
-                  onClick={() => onCall(d.from as string, undefined, d.message, d.snr, d.freqHz)}
-                  title={`Answer ${d.from}`}
-                >
-                  {d.isCq ? 'Call' : 'Work'}
-                </button>
+        {list.map((d, i) => {
+          const ignoredRow = isIgnored(ignores, d.from)
+          const selectedRow = !!d.from && !!selectedUp && d.from.toUpperCase() === selectedUp
+          return (
+            <Fragment key={d.id}>
+              {/* WSJT-X period separator: a dim bar with the period's UTC start +
+                  band, whenever the T/R period changes (time-sorted view only).
+                  A decode ingested at boundary slot s carries AUDIO from slot s-1 —
+                  the separator stamps the RX period the signals were ON AIR in
+                  (WSJT-X labels the audio period, not the decode moment). */}
+              {sort === 'time' && i > 0 && d.slot !== list[i - 1].slot && (
+                <div className="od-period-sep" role="separator" aria-label={`Period ${fmtUtc(periodStartMs(d.slot - 1, tier))} UTC`}>
+                  <span className="od-sep-utc">{fmtUtc(periodStartMs(d.slot - 1, tier))}</span>
+                  <span className="od-sep-band">{band}</span>
+                </div>
               )}
-            </div>
-          </Fragment>
-        ))}
+              <div
+                className={`decode-row ${rowClass(d)}${selectedRow ? ' selected' : ''}${ignoredRow ? ' ignored' : ''}`}
+                role="listitem"
+                onClick={() =>
+                  d.from && onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+                }
+                onDoubleClick={(e) => handleDouble(e, d)}
+                title={
+                  ignoredRow
+                    ? 'Ignored this session (Alt-double-click to restore)'
+                    : d.from
+                      ? `Click to select ${d.from} · double-click to work`
+                      : undefined
+                }
+              >
+                <span className={`decode-tier ${d.tier.toLowerCase()}`} title={`Decoded by ${d.tier}`}>
+                  {d.tier}
+                </span>
+                <span className="decode-utc" title="UTC heard">{fmtUtc(d.at)}</span>
+                <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
+                <span className={`decode-dt ${dtClass(d.dtSec)}`} title="DT — time offset (s); large = clock/sync skew">
+                  {fmtDt(d.dtSec)}
+                </span>
+                <span className="decode-freq">{Math.round(d.freqHz)}</span>
+                <span className="decode-msg" title={d.country ? `${d.message} · ${d.country}` : d.message}>
+                  {d.message}
+                  {d.newDxcc && (
+                    <span className="decode-tag newdxcc" title="New DXCC entity — a new one!">
+                      DXCC
+                    </span>
+                  )}
+                  {d.newGrid && !d.newDxcc && (
+                    <span className="decode-tag newgrid" title="New grid square">
+                      GRID
+                    </span>
+                  )}
+                  {d.worked && <span className="b4-chip" title="Worked before">B4</span>}
+                  {d.isCq && !d.directedToMe && <span className="decode-tag cq">CQ</span>}
+                  {d.directedToMe && <span className="decode-tag me">YOU</span>}
+                  {d.rv > 0 && (
+                    <span className="harq-chip" title={`Recovered by IR-HARQ (RV0–RV${d.rv})`}>
+                      HARQ·RV{d.rv}
+                    </span>
+                  )}
+                  {d.country && <span className="decode-country">{d.country}</span>}
+                </span>
+                {d.from && (
+                  <button
+                    type="button"
+                    className="decode-work"
+                    onClick={(e) => {
+                      // Don't let the work button's click double as a row select.
+                      e.stopPropagation()
+                      onCall(d.from as string, undefined, d.message, d.snr, d.freqHz)
+                    }}
+                    title={`Answer ${d.from}`}
+                  >
+                    {d.isCq ? 'Call' : 'Work'}
+                  </button>
+                )}
+              </div>
+            </Fragment>
+          )
+        })}
       </div>
     </section>
   )
@@ -275,13 +334,16 @@ function dtClass(dt: number): string {
   return Math.abs(dt) > 1.0 ? 'bad' : Math.abs(dt) > 0.5 ? 'warn' : 'ok'
 }
 
+/** Stock WSJT-X highlight priority: own TX (yellow) > directed to me (pink) >
+ * new-DXCC/new-grid (the "new one" chase outranks a plain CQ, as in the stock
+ * Colors list) > CQ (green) > worked-before B4 (dimmed). */
 function rowClass(d: DecodeRow): string {
   if (d.mine) return 'mine own-tx' // our own transmitted message — WSJT-X yellow
   if (d.directedToMe) return 'directed'
   if (d.newDxcc) return 'newdxcc'
   if (d.newGrid) return 'newgrid'
-  if (d.worked) return 'worked'
   if (d.isCq) return 'cq'
+  if (d.worked) return 'worked'
   return 'new'
 }
 

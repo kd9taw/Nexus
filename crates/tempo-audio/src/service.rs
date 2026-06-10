@@ -48,6 +48,8 @@ const TUNE_FREQ_HZ: f32 = 1500.0;
 const TUNE_CHUNK_MS: f32 = 40.0;
 /// Safety auto-release for the tune carrier: never hold PTT + carrier longer
 /// than this, in case a "tune off" click is lost.
+/// Default tune auto-release — now settings.tune_timeout_secs (same 12 s).
+#[allow(dead_code)]
 const MAX_TUNE_MS: f64 = 12_000.0;
 /// Safety auto-stop for a forgotten QSO recording: cap a single recording at 2 hours so a
 /// recording the operator forgot to stop can't fill the disk unbounded (~86 MB/hour).
@@ -749,6 +751,12 @@ impl RadioLoop {
 
         let slot = self.clock.slot_index(now);
         let mut eng = engine.lock().map_err(|e| e.to_string())?;
+        // Deferred "Disable Tx after sending 73": only once the final over has
+        // fully played out (tx_until cleared) — disabling mid-over would trip
+        // the hard-stop path above and cut the 73 itself.
+        if self.tx_until_ms.is_none() && eng.take_pending_tx_disable() {
+            eng.set_tx_enabled(false);
+        }
         // Pick up the latest measured clock offset for the NEXT iteration's UTC
         // steering (the NTP probe thread writes it onto the engine).
         self.clock_offset_ms = eng.clock_offset_ms().unwrap_or(0);
@@ -763,7 +771,10 @@ impl RadioLoop {
         let mut is_tuning = eng.tuning();
         if is_tuning {
             if let Some(start) = self.tune_started_ms {
-                if now - start > MAX_TUNE_MS {
+                // Operator-configurable auto-release (WSJT-X "Tune after t s");
+                // the old fixed MAX_TUNE_MS is the default value.
+                let max_ms = (eng.settings().tune_timeout_secs.max(1) as f64) * 1000.0;
+                if now - start > max_ms {
                     eng.set_tune(false);
                     is_tuning = false;
                 }
@@ -832,6 +843,10 @@ impl RadioLoop {
                                 Some(snr),
                                 Some(delta_freq as f32),
                             );
+                            // Stock parity: "double-click sets Tx enable" governs
+                            // only OUR OWN UI clicks — an inbound UDP Reply
+                            // (JTAlert/GridTracker) always arms TX in WSJT-X.
+                            eng.set_tx_enabled(true);
                         }
                     }
                     _ => {}

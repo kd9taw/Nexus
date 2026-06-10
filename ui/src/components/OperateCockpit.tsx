@@ -1,9 +1,17 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AppSnapshot, ModeRequest, NeedTag, SourceKind, Tier } from '../types'
+import {
+  clampOffsetHz,
+  genStdMessages,
+  snrForCall,
+  stdMessageList,
+  toggleIgnored,
+} from '../txMessages'
 import { Waterfall } from './Waterfall'
 import { OperateDecodes } from './OperateDecodes'
 import { OperateQsoStrip } from './OperateQsoStrip'
 import { OperateRoster } from './OperateRoster'
+import { TxPanel } from './TxPanel'
 
 interface Props {
   snap: AppSnapshot
@@ -29,6 +37,17 @@ interface Props {
   onFreetext: (text: string) => void
   /** Log the active QSO now (inline button). */
   onLog: () => void
+  /** WSJT-X Tx-slot click: force `text` as the next transmission to `call`. */
+  onOverrideTx: (call: string, grid: string | null, text: string) => void
+  /** Halt TX immediately (the Esc key — same api as the Stop TX button). */
+  onHaltTx: () => void
+  /** Roger the final with RRR instead of RR73 (Settings preferRrr). */
+  preferRrr?: boolean
+  /** Bumps when a QSO was logged with "Clear DX call after logging" on — the
+   * panel's DX fields wipe (stock WSJT-X option). */
+  dxClearTick?: number
+  /** Operator QSO macros — the Tx5 free-text datalist suggestions. */
+  qsoMacros?: string[]
   /** The compact Call Roster (a wired StationList) shown in the Classic side column. */
   roster: ReactNode
   /** Award-need tier per call — drives the Roster layout's Need column + sort. */
@@ -55,12 +74,15 @@ const MODES: { tier: Tier; label: string; slot: string; title: string }[] = [
   { tier: 'FT4', label: 'FT4', slot: '7.5s', title: 'Standard WSJT-X FT4 — 7.5 s T/R' },
 ]
 
+const NO_MACROS: string[] = []
+
 /**
  * The Operate cockpit — the nerve center's primary operating surface. The
  * waterfall is the centerpiece (not a detached rail); a prominent mode selector
  * drives the live native decoder (FT8/FT4/FT1/DX1); the Band Activity table
  * accumulates, freezes-on-hover, filters and sorts. Click the waterfall to tune
- * RX (or shift-click for TX); click a decode to work the station.
+ * RX (or shift-click for TX); single-click a decode to select it into the Tx
+ * panel; double-click to work the station (stock WSJT-X click model).
  */
 export function OperateCockpit({
   snap,
@@ -76,6 +98,11 @@ export function OperateCockpit({
   onResend,
   onFreetext,
   onLog,
+  onOverrideTx,
+  onHaltTx,
+  preferRrr = false,
+  dxClearTick = 0,
+  qsoMacros = NO_MACROS,
   roster,
   needByCall,
   selectedCall,
@@ -103,6 +130,149 @@ export function OperateCockpit({
     0,
     Math.ceil((slotBase.current.ms - (Date.now() - slotBase.current.at)) / 1000),
   )
+
+  // --- WSJT-X Tx1–Tx6 message machine (the Classic layout's Tx panel) ---
+  const [dxCall, setDxCall] = useState('')
+  const [dxGrid, setDxGrid] = useState('')
+  // Tx5 free text: auto-tracks the generated baseline until the operator edits
+  // it; Generate Std Msgs resets the edit and re-baselines (stock behavior).
+  const [tx5, setTx5] = useState('')
+  const tx5Edited = useRef(false)
+  // Locally picked "next" row (0-based) until qso.txNow confirms one.
+  const [localNext, setLocalNext] = useState<number | null>(null)
+  // Session-only ignore set (Alt-double-click a decode/roster row).
+  const [ignored, setIgnored] = useState<ReadonlySet<string>>(() => new Set())
+
+  // RPT = the DX's current heard SNR (case-insensitive), −10 when unheard.
+  const dxSnr = snrForCall(snap.stations, dxCall)
+  const msgs = useMemo(
+    () =>
+      genStdMessages({
+        dxCall,
+        myCall: snap.mycall,
+        myGrid: snap.mygrid,
+        snr: dxSnr,
+        preferRrr,
+      }),
+    [dxCall, snap.mycall, snap.mygrid, dxSnr, preferRrr],
+  )
+  useEffect(() => {
+    if (!tx5Edited.current) setTx5(msgs.tx5)
+  }, [msgs.tx5])
+
+  const handleTx5 = (v: string) => {
+    tx5Edited.current = true
+    setTx5(v)
+  }
+  const handleGenerate = () => {
+    tx5Edited.current = false
+    setTx5(msgs.tx5)
+  }
+  const clearDx = useCallback(() => {
+    setDxCall('')
+    setDxGrid('')
+    tx5Edited.current = false
+    setTx5('')
+    setLocalNext(null)
+  }, [])
+
+  // Stock "Clear DX call and grid after logging": App bumps the tick when a
+  // QSO is logged with the option on. Skip the mount tick.
+  const dxClearSeen = useRef(dxClearTick)
+  useEffect(() => {
+    if (dxClearTick !== dxClearSeen.current) {
+      dxClearSeen.current = dxClearTick
+      clearDx()
+    }
+  }, [dxClearTick, clearDx])
+
+  // A retarget/abandon makes a remembered Tx-slot pick meaningless — without
+  // this the next-dot stayed lit on a stale row of the NEW station's panel.
+  const lastDx = useRef<string | null>(null)
+  useEffect(() => {
+    const dx = snap.qso?.dxcall ?? null
+    if (dx !== lastDx.current) {
+      lastDx.current = dx
+      setLocalNext(null)
+    }
+  }, [snap.qso?.dxcall])
+
+  // The six panel rows (Tx5 = the live editable text). The "next" dot follows
+  // qso.txNow when it matches a row, else the operator's local pick.
+  const rowTexts = stdMessageList({ ...msgs, tx5 })
+  const txNow = snap.qso?.txNow ?? null
+  const liveNext = txNow ? rowTexts.indexOf(txNow) : -1
+  const nextIndex = liveNext >= 0 ? liveNext : localNext
+
+  /** Fire Tx row n (1-based). Tx6 = the existing Call-CQ path; Tx1–Tx5 force
+   * the row's text as the next transmission to the DX (overrideNextTx). */
+  const doTx = (n: number) => {
+    if (n === 6) {
+      setLocalNext(5)
+      onSetMode('qso-run')
+      return
+    }
+    const call = dxCall.trim().toUpperCase()
+    const text = rowTexts[n - 1]?.trim()
+    if (!call || !text) return
+    setLocalNext(n - 1)
+    onOverrideTx(call, dxGrid.trim().toUpperCase() || null, text)
+  }
+
+  /** Single-click SELECT from a decode: populate DX Call/Grid only — no RF
+   * action, no TX (stock WSJT-X). A decoded grid wins; otherwise a stale grid
+   * from a previous DX is cleared. */
+  const selectDecode = (call: string, grid?: string) => {
+    const up = call.trim().toUpperCase()
+    if (grid) setDxGrid(grid.toUpperCase())
+    else if (up !== dxCall) setDxGrid('')
+    setDxCall(up)
+  }
+
+  const handleToggleIgnore = (call: string) => setIgnored((prev) => toggleIgnored(prev, call))
+  const handleSetRx = (hz: number) => onTune(hz, 'rx')
+
+  // Cockpit keyboard (stock WSJT-X): Esc = halt TX, F4 = clear DX, Alt+1…6 =
+  // the Tx buttons. Window-level, active-view only, and never while typing in
+  // an input/textarea. Handlers ride a ref so the listener binds once per
+  // activation without re-subscribing on every keystroke of state.
+  const keyRef = useRef({ doTx, clearDx, halt: onHaltTx })
+  keyRef.current = { doTx, clearDx, halt: onHaltTx }
+  useEffect(() => {
+    if (!active) return
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      const tag = t?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        keyRef.current.halt()
+        return
+      }
+      if (e.key === 'F4') {
+        e.preventDefault()
+        keyRef.current.clearDx()
+        return
+      }
+      const m = e.altKey && !e.ctrlKey && !e.metaKey ? /^Digit([1-6])$/.exec(e.code) : null
+      if (m) {
+        e.preventDefault()
+        keyRef.current.doTx(Number(m[1]))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [active])
+
+  // Click-model props shared by every decode pane (Band Activity + Rx Freq in
+  // both layouts) so select/ignore behave identically everywhere.
+  const decodeClickProps = {
+    onSelectDecode: selectDecode,
+    onSetRx: handleSetRx,
+    selectedCall: dxCall || null,
+    ignoredCalls: ignored,
+    onToggleIgnore: handleToggleIgnore,
+  }
 
   return (
     <main className="layout single operate-cockpit">
@@ -152,9 +322,12 @@ export function OperateCockpit({
             {snap.radio.sourceLabel || 'Native'}
             {source === 'companion' && ' · listening :2237'}
           </span>
-          <span className="cockpit-offsets" title="Receive / transmit audio offsets (Hz)">
-            RX {Math.round(snap.radio.rxOffsetHz)} · TX {Math.round(snap.radio.txOffsetHz)} Hz
-          </span>
+          {/* DF readouts: type an exact audio offset and commit on Enter/blur
+              (clamped to the 200–2900 Hz passband) — WSJT-X's Rx/Tx Hz spinners. */}
+          <div className="cockpit-offsets" role="group" aria-label="Audio offsets (Hz)">
+            <DfField label="Rx" hz={snap.radio.rxOffsetHz} onCommit={(hz) => onTune(hz, 'rx')} />
+            <DfField label="Tx" hz={snap.radio.txOffsetHz} onCommit={(hz) => onTune(hz, 'tx')} />
+          </div>
           {snap.radio.splitTxMhz != null && (
             <span
               className="cockpit-cat ok"
@@ -251,6 +424,25 @@ export function OperateCockpit({
           onLog={onLog}
         />
 
+        {/* The WSJT-X Tx1–Tx6 message machine — Classic layout only (the Roster
+            layout keeps its GridTracker focus). */}
+        {layoutMode === 'classic' && (
+          <TxPanel
+            dxCall={dxCall}
+            dxGrid={dxGrid}
+            onDxCall={setDxCall}
+            onDxGrid={setDxGrid}
+            messages={msgs}
+            tx5={tx5}
+            onTx5={handleTx5}
+            nextIndex={nextIndex}
+            onTx={doTx}
+            onGenerate={handleGenerate}
+            onClear={clearDx}
+            qsoMacros={qsoMacros}
+          />
+        )}
+
         <div className={`cockpit-lower ${layoutMode}`}>
           {layoutMode === 'roster' ? (
             <>
@@ -265,6 +457,8 @@ export function OperateCockpit({
                   selectedCall={selectedCall}
                   onSelect={onSelect}
                   onCall={onCall}
+                  ignoredCalls={ignored}
+                  onToggleIgnore={handleToggleIgnore}
                 />
               </div>
               <aside className="cockpit-side">
@@ -277,6 +471,7 @@ export function OperateCockpit({
                     tier={tier}
                     harqRescues={snap.harqRescues}
                     onCall={onCall}
+                    {...decodeClickProps}
                     compact
                     title="Band Activity"
                   />
@@ -290,6 +485,7 @@ export function OperateCockpit({
                     tier={tier}
                     harqRescues={snap.harqRescues}
                     onCall={onCall}
+                    {...decodeClickProps}
                     lockedFilter="rx"
                     compact
                     title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
@@ -310,6 +506,7 @@ export function OperateCockpit({
                   tier={tier}
                   harqRescues={snap.harqRescues}
                   onCall={onCall}
+                  {...decodeClickProps}
                 />
               </div>
               <aside className="cockpit-side">
@@ -322,6 +519,7 @@ export function OperateCockpit({
                     tier={tier}
                     harqRescues={snap.harqRescues}
                     onCall={onCall}
+                    {...decodeClickProps}
                     lockedFilter="rx"
                     compact
                     title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
@@ -334,5 +532,66 @@ export function OperateCockpit({
         </div>
       </div>
     </main>
+  )
+}
+
+/**
+ * A compact labeled DF (audio offset) entry: tracks the snapshot value while
+ * idle, commits on Enter/blur (rounded + clamped 200–2900 Hz), and reverts on
+ * garbage input. Enter just blurs — the single commit happens in onBlur.
+ */
+function DfField({
+  label,
+  hz,
+  onCommit,
+}: {
+  label: string
+  hz: number
+  onCommit: (hz: number) => void
+}) {
+  const [text, setText] = useState(() => String(Math.round(hz)))
+  const [editing, setEditing] = useState(false)
+  const editingRef = useRef(editing)
+  editingRef.current = editing
+  // Track the live prop ONLY when it actually changes — keying the effect on
+  // `editing` too made the blur's clamped value flash back to the stale prop
+  // for the IPC round-trip (commit sets text + editing in the same render).
+  useEffect(() => {
+    if (!editingRef.current) setText(String(Math.round(hz)))
+  }, [hz])
+  const commit = () => {
+    setEditing(false)
+    const n = Number(text)
+    if (text.trim() !== '' && Number.isFinite(n)) {
+      const clamped = clampOffsetHz(n)
+      setText(String(clamped))
+      if (clamped !== Math.round(hz)) onCommit(clamped)
+    } else {
+      setText(String(Math.round(hz))) // revert garbage
+    }
+  }
+  return (
+    <label className="df-field" title={`${label} audio offset (Hz) — Enter/blur commits, clamped 200–2900`}>
+      <span className="df-label">{label}</span>
+      <input
+        type="number"
+        inputMode="numeric"
+        min={200}
+        max={2900}
+        step={1}
+        value={text}
+        aria-label={`${label} offset in Hz`}
+        onFocus={() => setEditing(true)}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            ;(e.target as HTMLInputElement).blur()
+          }
+        }}
+      />
+      <span className="df-unit">Hz</span>
+    </label>
   )
 }

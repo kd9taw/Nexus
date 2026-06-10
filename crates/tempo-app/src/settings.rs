@@ -203,6 +203,24 @@ pub struct Settings {
     /// The earlier always-on 6-call cap is preserved as this opt-in.
     #[serde(default)]
     pub cq_max_calls: Option<u32>,
+    /// WSJT-X Settings ▸ Behavior: "Disable Tx after sending 73" (stock default
+    /// ON). After OUR final 73 of an S&P contact goes out, Enable-Tx drops —
+    /// the next station is a deliberate arm. A CQ run is unaffected (it returns
+    /// to CQ, stock Run behavior).
+    #[serde(default = "default_on")]
+    pub disable_tx_after_73: bool,
+    /// WSJT-X: "Clear DX call and grid after logging" (stock default off).
+    /// Consumed by the UI's DX-target fields.
+    #[serde(default)]
+    pub clear_dx_after_log: bool,
+    /// WSJT-X: "Double-click on call sets Tx enable" (stock default ON). Off =
+    /// a double-click sets everything up but the operator arms TX themselves.
+    #[serde(default = "default_on")]
+    pub double_click_sets_tx: bool,
+    /// Tune carrier auto-release (seconds) — WSJT-X Settings ▸ General "Tune
+    /// after t s". Default matches the loop's long-standing 12 s safety cap.
+    #[serde(default = "default_tune_timeout")]
+    pub tune_timeout_secs: u32,
 
     // --- coordinated QSY ("move together") — a SEPARATE, opt-in function ---
     /// Master opt-in for coordinated QSY. **Off by default** and fully isolated:
@@ -296,6 +314,14 @@ pub struct VoiceMessage {
 
 /// The default six labelled (but empty) voice-keyer slots — a casual phone set (no
 /// contest exchange). The operator records or imports the audio per slot.
+fn default_on() -> bool {
+    true
+}
+
+fn default_tune_timeout() -> u32 {
+    12
+}
+
 pub fn default_voice_messages() -> Vec<VoiceMessage> {
     [(1, "CQ"), (2, "My Call"), (3, "Report"), (4, "QRZ?"), (5, "73"), (6, "Again")]
         .iter()
@@ -384,6 +410,10 @@ impl Default for Settings {
             prompt_to_log: false,
             prefer_rrr: false,
             cq_max_calls: None,
+            disable_tx_after_73: true,
+            clear_dx_after_log: false,
+            double_click_sets_tx: true,
+            tune_timeout_secs: 12,
             qsy_enabled: false,
             qsy_set: vec!["20m".to_string(), "40m".to_string(), "30m".to_string()],
             qsy_cadence: tempo_core::qsy::DEFAULT_CADENCE,

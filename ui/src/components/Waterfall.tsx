@@ -366,15 +366,15 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Left-click = TX, right-click = RX, both buttons together = set both (RX=TX) —
-  // resolved on mousedown so the right button works (its contextmenu is suppressed).
+  // STOCK WSJT-X wide-graph gestures: click = RX (green), Shift+click = TX
+  // (red), Ctrl+click = both. (The old left=TX/right=RX mapping was ours alone
+  // — a WSJT-X operator's muscle memory moved the WRONG marker.)
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!onTune) return
+    if (e.button !== 0) return // stock has no right-button action
     const rect = canvasRef.current!.getBoundingClientRect()
     const hz = Math.round(xToFreq(e.clientX - rect.left, rect.width))
-    // e.buttons bitmask: 1=left, 2=right, 3=both.
-    const target: 'tx' | 'rx' | 'both' =
-      e.buttons === 3 ? 'both' : e.button === 2 ? 'rx' : 'tx'
+    const target: 'tx' | 'rx' | 'both' = e.ctrlKey ? 'both' : e.shiftKey ? 'tx' : 'rx'
     e.preventDefault()
     onTune(hz, target)
   }
@@ -383,7 +383,7 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
     <div className="waterfall-wrap">
       <div className="panel-header">
         <h2>Waterfall</h2>
-        <span className="wf-hint">left = TX · right = RX · both = TX+RX</span>
+        <span className="wf-hint">click = RX · Shift = TX · Ctrl = both</span>
       </div>
       <div className="wf-stage">
         <canvas
@@ -391,7 +391,7 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
           className="waterfall-canvas"
           onMouseDown={handleMouseDown}
           onContextMenu={(e) => e.preventDefault()}
-          title="Left-click sets TX · right-click sets RX · both buttons set both"
+          title="Click sets RX (WSJT-X) · Shift+click sets TX · Ctrl+click sets both"
         />
         <div
           className="wf-legend"

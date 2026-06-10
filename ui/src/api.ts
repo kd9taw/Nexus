@@ -183,6 +183,20 @@ export async function callStation(
   return mockEngine.callStation(call, grid, message, snr)
 }
 
+/** WSJT-X Tx-slot click: force `text` as the next transmission to `call`
+ * (starts/retargets the QSO if needed, arms per the double-click-sets-Tx
+ * behavior option, fires this period when it still fits). The auto-sequencer
+ * resumes normally from whatever step the partner's reply matches. */
+export async function overrideNextTx(
+  call: string,
+  grid: string | null,
+  text: string,
+): Promise<AppSnapshot> {
+  const invoke = tauriInvoke()
+  if (invoke) return invoke<AppSnapshot>('override_next_tx', { call, grid, text })
+  return mockEngine.overrideNextTx(call, text, grid ?? undefined)
+}
+
 /** Confirm-and-log a QSO held by the prompt-to-log popup (the possibly-edited
  * record). Returns the fresh snapshot. */
 export async function confirmPendingLog(record: LoggedQso): Promise<AppSnapshot> {

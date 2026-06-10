@@ -1687,6 +1687,20 @@ fn set_tx_even(state: State<'_, SharedEngine>, even: bool) -> Result<AppSnapshot
     Ok(eng.snapshot())
 }
 
+/// WSJT-X Tx-slot click: force `text` as the next transmission to `call`
+/// (starts/retargets the QSO, arms per the double-click behavior option).
+#[tauri::command]
+fn override_next_tx(
+    state: State<'_, SharedEngine>,
+    call: String,
+    grid: Option<String>,
+    text: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.override_next_tx(&call, grid.as_deref(), &text);
+    Ok(eng.snapshot())
+}
+
 /// Set the receive audio offset (Hz) — the green waterfall marker. The TX offset
 /// follows unless "Hold Tx Freq" is on. Persists.
 #[tauri::command]
@@ -3507,6 +3521,7 @@ pub fn run() {
             set_tx_even,
             set_rx_offset,
             set_tx_offset,
+            override_next_tx,
             set_hold_tx_freq,
             call_station,
             open_panel_window,

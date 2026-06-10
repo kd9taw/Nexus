@@ -1028,6 +1028,14 @@ class MockEngine {
   }
 
   /** Answer a station: enter QSO (S&P) mode targeting that DX call. */
+  overrideNextTx(call: string, text: string, grid?: string): AppSnapshot {
+    // Browser-dev stub of the WSJT-X Tx-slot click: target the station and
+    // show `text` as the queued over.
+    if (!this.snap.qso || this.snap.qso.dxcall !== call) this.callStation(call, grid)
+    if (this.snap.qso) this.snap.qso.txNow = text
+    return this.getSnapshot()
+  }
+
   callStation(call: string, grid?: string, message?: string, snr?: number): AppSnapshot {
     this.qsoRunning = false
     this.qsoStep = 1

@@ -6,6 +6,7 @@
 import { useMemo, useState } from 'react'
 import type { NeedTag, Station } from '../types'
 import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel } from '../grid'
+import { isIgnored } from '../txMessages'
 
 interface Props {
   stations: Station[]
@@ -15,6 +16,10 @@ interface Props {
   selectedCall: string | null
   onSelect: (call: string) => void
   onCall: (call: string, grid?: string) => void
+  /** Session-only ignore set (Alt-double-click) — ignored calls render dimmed. */
+  ignoredCalls?: ReadonlySet<string>
+  /** Toggle a call in/out of the session ignore set (Alt-double-click). */
+  onToggleIgnore?: (call: string) => void
 }
 
 type SortKey = 'need' | 'call' | 'country' | 'dist' | 'bearing' | 'snr' | 'age'
@@ -37,6 +42,8 @@ const NEED_CHIP: Record<NeedTag, { label: string; cls: string }> = {
 }
 
 const snrClass = (snr: number) => (snr >= -10 ? 'good' : snr >= -18 ? 'ok' : 'weak')
+/** Shared empty set so the ignore checks stay allocation-free per render. */
+const EMPTY_IGNORES: ReadonlySet<string> = new Set()
 function ageLabel(slots: number): string {
   if (slots <= 0) return 'now'
   if (slots < 60) return `${slots} sl`
@@ -51,6 +58,8 @@ export function OperateRoster({
   selectedCall,
   onSelect,
   onCall,
+  ignoredCalls,
+  onToggleIgnore,
 }: Props) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'need', dir: 'desc' })
   const [neededOnly, setNeededOnly] = useState(false)
@@ -151,16 +160,24 @@ export function OperateRoster({
         ) : (
           rows.map(({ s, need, age }) => {
             const chip = need ? NEED_CHIP[need] : null
+            const ignoredRow = isIgnored(ignoredCalls ?? EMPTY_IGNORES, s.call)
             return (
               <div
                 key={s.call}
                 role="row"
                 className={`or-row${s.call === selectedCall ? ' selected' : ''}${s.worked ? ' worked' : ''}${
                   chip ? ` need-${chip.cls}` : ''
-                }`}
+                }${ignoredRow ? ' ignored' : ''}`}
                 onClick={() => onSelect(s.call)}
-                onDoubleClick={() => onCall(s.call, s.grid ?? undefined)}
-                title={`Double-click to work ${s.call}`}
+                onDoubleClick={(e) =>
+                  // Alt-double-click toggles the session ignore (stock WSJT-X).
+                  e.altKey && onToggleIgnore ? onToggleIgnore(s.call) : onCall(s.call, s.grid ?? undefined)
+                }
+                title={
+                  ignoredRow
+                    ? 'Ignored this session (Alt-double-click to restore)'
+                    : `Double-click to work ${s.call}`
+                }
               >
                 <span className="or-need">
                   {chip && <span className={`need-chip need-${chip.cls}`}>{chip.label}</span>}

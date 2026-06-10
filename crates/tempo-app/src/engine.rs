@@ -177,6 +177,11 @@ pub struct Engine {
     /// upcoming boundary slot, so the boundary's full-window decode ingests only
     /// the stragglers it newly found (no double rows / double observe).
     early_seen: Option<(u64, std::collections::HashSet<String>)>,
+    /// One-shot: drop Enable-Tx once the CURRENT over finishes playing — set
+    /// when our final 73 goes out with "Disable Tx after sending 73" on. The
+    /// radio loop consumes it AFTER tx_until expires; disabling immediately
+    /// would trip the hard-stop path and cut the 73 itself mid-over.
+    pending_tx_disable: bool,
     /// Desired rig SPLIT state: `Some(tx_dial_mhz)` = split on with that TX dial;
     /// `None` = simplex. Set by work_spot (pile-up "UP n" spots) and cleared by any
     /// plain QSY/work; the loop applies it via `split_dirty` (one-shot).
@@ -342,6 +347,7 @@ impl Engine {
             immediate_retune: false,
             decode_history: std::collections::VecDeque::new(),
             early_seen: None,
+            pending_tx_disable: false,
             split_tx_mhz: None,
             split_dirty: false,
             cw_queue: VecDeque::new(),
@@ -1649,10 +1655,16 @@ impl Engine {
         if let Some(hz) = dx_freq.filter(|h| *h > 0.0) {
             self.set_rx_offset(hz);
         }
-        // Working a station implies transmit: enable TX (also clears a tripped
-        // watchdog + resets the continuous-TX count, like the Monitor toggle) so
-        // the auto-sequencer actually keys even if TX was toggled off.
-        self.set_tx_enabled(true);
+        // Working a station implies transmit (stock "Double-click on call sets
+        // Tx enable", default on): enable TX (also clears a tripped watchdog +
+        // resets the continuous-TX count) so the auto-sequencer actually keys
+        // even if TX was toggled off. Option off = the operator arms manually.
+        if self.settings.double_click_sets_tx {
+            self.set_tx_enabled(true);
+        }
+        // Any working click cancels a deferred after-73 disable from the
+        // PREVIOUS contact — it must not disarm the new one a tick later.
+        self.pending_tx_disable = false;
         // Key the current period immediately (if it's our parity and the over
         // fits) instead of waiting a full cycle for the next boundary.
         self.immediate_tx = true;
@@ -1934,6 +1946,8 @@ impl Engine {
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;
+        // So does a deferred after-73 disable: TX is already off.
+        self.pending_tx_disable = false;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
         self.own_tx.clear();
@@ -1945,6 +1959,14 @@ impl Engine {
     /// `true` is an operator action: it clears a tripped watchdog and resets the
     /// continuous-TX count.
     pub fn set_tx_enabled(&mut self, on: bool) {
+        // ANY operator arm cancels a deferred after-73 disable from the PREVIOUS
+        // contact — every arm path funnels here (Enable-Tx button, Call CQ,
+        // double-click, Tx-slot click, UDP Reply). Without this the stale
+        // one-shot fired on the next loop tick and silently undid the arm
+        // (worst case: a CQ run started right after an S&P contact never keyed).
+        if on {
+            self.pending_tx_disable = false;
+        }
         self.tx_enabled = on;
         if on {
             // Re-enabling is an operator action: clear a tripped watchdog and
@@ -2164,6 +2186,36 @@ impl Engine {
     /// true UTC grid even when the OS clock is skewed.
     pub fn clock_offset_ms(&self) -> Option<i64> {
         self.clock_offset_ms
+    }
+
+    /// WSJT-X Tx-slot click: force `text` as the next transmission to `dxcall`.
+    /// Starts (or retargets) the QSO when needed; the auto-sequencer's observe
+    /// still advances on the partner's matching reply, so a forced message
+    /// rejoins the normal flow (Station::override_next semantics).
+    pub fn override_next_tx(&mut self, dxcall: &str, dxgrid: Option<&str>, text: &str) {
+        if tempo_core::message::same_call(dxcall, &self.settings.mycall) {
+            return; // never a self-QSO
+        }
+        let on_dx = matches!(&self.mode, Mode::Qso { station, .. }
+            if station.dxcall.as_deref().map(|c| tempo_core::message::same_call(c, dxcall)).unwrap_or(false));
+        if !on_dx {
+            self.call_station_ctx(dxcall, dxgrid, None, None, None);
+        }
+        if let Mode::Qso { station, .. } = &mut self.mode {
+            station.override_next(Msg::parse(text));
+        }
+        self.reset_tx_watchdog();
+        if self.settings.double_click_sets_tx {
+            self.set_tx_enabled(true);
+        }
+        // Fire this period when it still fits (the snappy path).
+        self.immediate_tx = true;
+    }
+
+    /// Consume the deferred "Disable Tx after sending 73" request — the radio
+    /// loop calls this once the final over has fully played out (never mid-over).
+    pub fn take_pending_tx_disable(&mut self) -> bool {
+        std::mem::take(&mut self.pending_tx_disable)
     }
 
     /// Reset the transmit-watchdog: clear the tripped flag and restart the wall-clock
@@ -2493,6 +2545,15 @@ impl Engine {
                 match station.outgoing_rv() {
                     Some((m, rv)) => {
                         station.after_tx();
+                        // Stock "Disable Tx after sending 73": the over leaving
+                        // NOW is our final 73 (after_tx just cleared pending at
+                        // Done). S&P only — a CQ run returns to CQ instead.
+                        if station.state == QsoState::Done
+                            && !self.cq_running
+                            && self.settings.disable_tx_after_73
+                        {
+                            self.pending_tx_disable = true;
+                        }
                         // IR-HARQ off: always transmit RV0 (no redundancy escalation).
                         tx_rv = if self.settings.harq_enabled {
                             rv as i32
@@ -3942,6 +4003,69 @@ mod tests {
         );
         // Default (None) stays stock-uncapped — pinned in tempo-core's
         // uncapped_cq_repeats_indefinitely_like_stock_wsjtx.
+    }
+
+    #[test]
+    fn disable_tx_after_73_is_deferred_and_snp_only() {
+        // Stock behavior option (default ON): after OUR final 73 of an S&P
+        // contact goes out, Enable-Tx drops — but only via the DEFERRED flag
+        // (an immediate drop would hard-stop the playing 73 mid-over).
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ"); // S&P: we answer them (arms TX)
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+        // Our final 73 goes out on the next own-parity slot.
+        assert!(!e.poll_tx(4).is_empty(), "the closing 73 transmits");
+        assert!(e.tx_enabled(), "NOT disabled mid-over (deferred)");
+        assert!(e.take_pending_tx_disable(), "deferral armed for the loop");
+        // A CQ run must NOT arm it (Run returns to CQ instead).
+        let mut r = Engine::new("W9XYZ", "EN37", 0);
+        r.set_mode("qso-run").unwrap();
+        let _ = r.poll_tx(0);
+        r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        let _ = r.poll_tx(2); // report
+        r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-05", -8)], 3);
+        let _ = r.poll_tx(4); // RR73 → resume CQ
+        assert!(!r.take_pending_tx_disable(), "a run never self-disarms");
+    }
+
+    #[test]
+    fn override_next_tx_forces_the_slot_and_rejoins_the_sequence() {
+        // The WSJT-X Tx-slot click: force a specific message; the sequencer
+        // resumes normally from the partner's matching reply.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.override_next_tx("K1ABC", Some("FN42"), "K1ABC W9XYZ -12");
+        let qso = e.snapshot().qso.expect("QSO targeted");
+        assert_eq!(qso.dxcall.as_deref(), Some("K1ABC"));
+        assert_eq!(qso.tx_now.as_deref(), Some("K1ABC W9XYZ -12"), "forced Tx2");
+        assert!(e.tx_enabled(), "Tx-slot click arms (stock default)");
+        // Their R-report advances the forced flow exactly like a natural one.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-08", -8)], 5);
+        let next = e.snapshot().qso.unwrap().tx_now.unwrap_or_default();
+        assert!(next.contains("RR73"), "sequence rejoined, got {next:?}");
+        // Own call is guarded here too.
+        let before = e.snapshot().qso;
+        e.override_next_tx("W9XYZ", None, "W9XYZ W9XYZ 73");
+        assert_eq!(e.snapshot().qso, before, "self-override ignored");
+    }
+
+    #[test]
+    fn stale_after_73_disable_cannot_kill_the_next_arm() {
+        // The review-found leak: the deferred disable armed by contact A's 73
+        // must die the moment ANY new arm happens (Call CQ / Enable-Tx /
+        // Tx-slot click) — otherwise the loop's consume tick silently disarmed
+        // the brand-new run.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+        assert!(!e.poll_tx(4).is_empty(), "the 73 goes out, one-shot armed");
+        e.set_mode("qso-run").unwrap(); // operator: Call CQ right away
+        assert!(
+            !e.take_pending_tx_disable(),
+            "the new arm cancels the stale one-shot"
+        );
+        assert!(e.tx_enabled(), "the CQ run stays armed");
     }
 
     fn dec_snr(msg: &str, snr: i32) -> Decode {
