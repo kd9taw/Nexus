@@ -91,6 +91,17 @@ pub struct Engine {
     /// Session count of IR-HARQ rescues: decodes recovered by joint-combining
     /// retransmissions (rv > 0). Surfaced as a stats readout.
     harq_rescues: u32,
+    /// Freshly-logged QSOs awaiting the shell's connector auto-upload worker
+    /// (QRZ / ClubLog / eQSL). EVERY [`Engine::log_qso`] path queues here — the
+    /// engine auto-log included — so "logged locally but never uploaded" can't
+    /// happen for any log path. Drained by [`Engine::take_pending_uploads`];
+    /// bounded so a worker outage can't grow it without limit.
+    pending_uploads: VecDeque<tempo_core::logbook::QsoRecord>,
+    /// Last connector-upload outcome (operator-facing toast text) + whether it
+    /// succeeded; `upload_tick` bumps on every note so the UI can toast changes.
+    upload_note: Option<String>,
+    upload_ok: bool,
+    upload_tick: u32,
     /// Active RX signal source — the user-selectable native-vs-companion switch.
     /// For native tiers (FT1/FT8/FT4) this is a [`NativeSource`] whose mode tracks
     /// the selected [`Tier`]; DX1 decodes via its own robust path (see [`ingest`]).
@@ -366,6 +377,10 @@ impl Engine {
             last_rx: None,
             last_decodes: Vec::new(),
             harq_rescues: 0,
+            pending_uploads: VecDeque::new(),
+            upload_note: None,
+            upload_ok: false,
+            upload_tick: 0,
             // Default native source = FT8 (matches the default link tier).
             source: Box::new(NativeSource::from_kind(modes::ModeKind::Ft8)),
             source_kind: SourceKind::Native,
@@ -486,6 +501,28 @@ impl Engine {
     /// Returns the updated [`Settings`] for the caller to persist.
     pub fn set_eqsl_cursor(&mut self, cursor: String) -> Settings {
         self.settings.eqsl_last_sync = cursor;
+        self.settings.clone()
+    }
+
+    /// Flip one connector auto-upload toggle (`Some(on)`) WITHOUT the side
+    /// effects of [`Engine::apply_settings`] — saving a credential mid-QSO must
+    /// not reset the operating mode or drop queued TX. `None` leaves a toggle
+    /// unchanged. Returns the updated [`Settings`] for the caller to persist.
+    pub fn set_upload_toggles(
+        &mut self,
+        qrz: Option<bool>,
+        clublog: Option<bool>,
+        eqsl: Option<bool>,
+    ) -> Settings {
+        if let Some(v) = qrz {
+            self.settings.qrz_logbook_upload = v;
+        }
+        if let Some(v) = clublog {
+            self.settings.clublog_upload = v;
+        }
+        if let Some(v) = eqsl {
+            self.settings.eqsl_upload = v;
+        }
         self.settings.clone()
     }
 
@@ -1290,8 +1327,30 @@ impl Engine {
             }
         }
         self.push_to_hrd(&rec);
+        // Queue for the shell's connector auto-upload worker (QRZ/ClubLog/eQSL).
+        // This is THE funnel: auto-logged FT8 QSOs, cockpit logs, and manual
+        // Logbook entries all pass through here, so the Settings auto-upload
+        // toggles can never be dead for one path again.
+        if self.pending_uploads.len() >= 256 {
+            self.pending_uploads.pop_front();
+        }
+        self.pending_uploads.push_back(rec.clone());
         self.logbook.add(rec);
         self.refresh_worked_index();
+    }
+
+    /// Drain the freshly-logged QSOs awaiting connector auto-upload (FIFO).
+    /// Called by the shell's upload worker; empty when nothing was logged.
+    pub fn take_pending_uploads(&mut self) -> Vec<tempo_core::logbook::QsoRecord> {
+        self.pending_uploads.drain(..).collect()
+    }
+
+    /// Record a connector-upload outcome for the operator (toast text + level).
+    /// Bumps `upload_tick` so the UI's snapshot poll notices the change.
+    pub fn note_upload(&mut self, note: impl Into<String>, ok: bool) {
+        self.upload_note = Some(note.into());
+        self.upload_ok = ok;
+        self.upload_tick = self.upload_tick.wrapping_add(1);
     }
 
     /// Push a logged QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP
@@ -2845,6 +2904,9 @@ impl Engine {
                 call,
             });
         s.harq_rescues = self.harq_rescues;
+        s.upload_note = self.upload_note.clone();
+        s.upload_ok = self.upload_ok;
+        s.upload_tick = self.upload_tick;
         s.pending_log = self.pending_log.clone().map(Into::into);
         s
     }
@@ -4960,6 +5022,64 @@ mod tests {
         // Idempotent: re-observing in the Done state does not double-log.
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 5);
         assert_eq!(e.get_log().len(), 1, "auto-log fires exactly once per QSO");
+    }
+
+    /// THE connector-upload funnel: every log_qso path — the engine auto-log
+    /// included — queues the record for the shell's QRZ/ClubLog/eQSL worker.
+    /// (The original bug: auto-logged FT8 QSOs never reached any connector
+    /// because pushes were wired only to UI-initiated log paths.)
+    #[test]
+    fn every_log_path_queues_a_pending_upload() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Ft1);
+
+        // Auto-logged QSO (the engine path that used to skip connectors).
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+        let pending = e.take_pending_uploads();
+        assert_eq!(pending.len(), 1, "auto-logged QSO queues for upload");
+        assert_eq!(pending[0].call, "W9XYZ");
+
+        // Drain is a real drain.
+        assert!(e.take_pending_uploads().is_empty(), "queue empties on take");
+
+        // Manual log path queues too.
+        e.log_qso(QsoRecord {
+            call: "N0CALL".into(),
+            grid: Some("EN52".into()),
+            country: None,
+            state: None,
+            band: "20m".into(),
+            freq_mhz: 14.074,
+            mode: "FT8".into(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            qth: None,
+            comment: None,
+            notes: None,
+            tx_power: None,
+            when_unix: 0,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            credit_granted: vec![],
+            credit_submitted: vec![],
+            upload: Default::default(),
+            ota: Default::default(),
+        });
+        let pending = e.take_pending_uploads();
+        assert_eq!(pending.len(), 1, "manual log_qso queues for upload");
+        assert_eq!(pending[0].call, "N0CALL");
+
+        // The upload note bumps the tick for the UI toast.
+        let t0 = e.snapshot().upload_tick;
+        e.note_upload("Uploaded N0CALL to QRZ", true);
+        let snap = e.snapshot();
+        assert_eq!(snap.upload_tick, t0 + 1, "note bumps the tick");
+        assert_eq!(snap.upload_note.as_deref(), Some("Uploaded N0CALL to QRZ"));
+        assert!(snap.upload_ok);
     }
 
     #[test]

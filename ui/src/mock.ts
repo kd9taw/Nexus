@@ -492,6 +492,9 @@ function baseSnapshot(settings: Settings): AppSnapshot {
     recentDecodes: recentDecodes.map((d) => ({ ...d })),
     qsy: qsyState.enabled ? { ...qsyState } : null,
     harqRescues: 2,
+    uploadNote: null,
+    uploadOk: false,
+    uploadTick: 0,
     pendingLog: null,
   }
 }

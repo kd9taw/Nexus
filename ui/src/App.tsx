@@ -44,7 +44,6 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { visibleNeeds, workTarget, modeClassOf } from './features/needs'
-import { autoPushQso } from './features/autopush'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
 import { StationList } from './components/StationList'
@@ -280,6 +279,21 @@ export default function App() {
       setStatus('audio', null)
     }
   }, [snap?.radio.audioError])
+
+  // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend
+  // log funnel; the engine bumps uploadTick per outcome and we toast it here —
+  // the operator SEES every upload land (or fail) regardless of which path
+  // logged the QSO (the auto-logged FT8 path included).
+  const uploadTickRef = useRef(0)
+  useEffect(() => {
+    const tick = snap?.uploadTick ?? 0
+    if (tick !== uploadTickRef.current) {
+      uploadTickRef.current = tick
+      if (snap?.uploadNote) {
+        pushToast(snap.uploadNote, snap.uploadOk ? 'success' : 'error')
+      }
+    }
+  }, [snap?.uploadTick, snap?.uploadNote, snap?.uploadOk])
 
   // Per-(band,mode) last-alert time so a band coming alive toasts once, not every
   // poll (defence in depth — the backend tracker already flags `isNew` once).
@@ -524,17 +538,12 @@ export default function App() {
         if (s) {
           setSnap(s)
           noteLoggedForDxClear()
-          // The Settings auto-upload toggles apply to EVERY log path — this
-          // (prompt-to-log) used to silently skip QRZ/ClubLog/eQSL.
-          void autoPushQso(record, {
-            qrz: settings?.qrzLogbookUpload ?? false,
-            clublog: settings?.clublogUpload ?? false,
-            eqsl: settings?.eqslUpload ?? false,
-          })
+          // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
+          // (every log path, auto-log included); outcomes toast via uploadTick.
         }
       })
     },
-    [settings, noteLoggedForDxClear],
+    [noteLoggedForDxClear],
   )
 
   const handleDiscardLog = useCallback(() => {
@@ -768,33 +777,16 @@ export default function App() {
   }, [])
 
   const handleLogCurrent = useCallback(() => {
-    void withErrorToast(() => apiLogCurrentQso(), 'Could not log QSO').then(async (s) => {
+    void withErrorToast(() => apiLogCurrentQso(), 'Could not log QSO').then((s) => {
       if (s) {
         setSnap(s)
         pushToast('Logged QSO', 'success', 2500)
         noteLoggedForDxClear()
-        // Auto-upload the JUST-logged QSO (the newest log row) — the cockpit
-        // path used to silently skip QRZ/ClubLog/eQSL regardless of Settings.
-        const anyPush =
-          (settings?.qrzLogbookUpload || settings?.clublogUpload || settings?.eqslUpload) ?? false
-        if (anyPush) {
-          try {
-            const log = await getLog()
-            const newest = log[log.length - 1]
-            if (newest) {
-              void autoPushQso(newest, {
-                qrz: settings?.qrzLogbookUpload ?? false,
-                clublog: settings?.clublogUpload ?? false,
-                eqsl: settings?.eqslUpload ?? false,
-              })
-            }
-          } catch {
-            /* log fetch failed — local log is intact; push next time */
-          }
-        }
+        // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
+        // (every log path, auto-log included); outcomes toast via uploadTick.
       }
     })
-  }, [settings, noteLoggedForDxClear])
+  }, [noteLoggedForDxClear])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Settings are pure UI
@@ -1037,9 +1029,6 @@ export default function App() {
             defaultBand={snap.radio.band}
             defaultFreqMhz={snap.radio.dialMhz}
             defaultMode={snap.link.tier}
-            qrzUpload={settings?.qrzLogbookUpload ?? false}
-            clublogUpload={settings?.clublogUpload ?? false}
-            eqslUpload={settings?.eqslUpload ?? false}
           />
         </main>
       )

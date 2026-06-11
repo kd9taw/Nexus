@@ -1009,4 +1009,12 @@ pub struct AppSnapshot {
     /// `discard_pending_log`.
     #[serde(default)]
     pub pending_log: Option<LoggedQso>,
+    /// Last connector auto-upload outcome (QRZ/ClubLog/eQSL) — operator-facing
+    /// toast text; `upload_tick` bumps on each new outcome so the UI toasts it.
+    #[serde(default)]
+    pub upload_note: Option<String>,
+    #[serde(default)]
+    pub upload_ok: bool,
+    #[serde(default)]
+    pub upload_tick: u32,
 }

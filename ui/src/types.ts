@@ -1133,4 +1133,9 @@ export interface AppSnapshot {
   /** A completed QSO awaiting confirm-before-log (WSJT-X "Prompt me to log
    * QSO"). Present only with promptToLog on; drives the confirm popup. */
   pendingLog?: LoggedQso | null
+  /** Last connector auto-upload outcome (QRZ/ClubLog/eQSL) from the backend
+   * upload funnel; uploadTick bumps per outcome so the UI toasts it. */
+  uploadNote?: string | null
+  uploadOk?: boolean
+  uploadTick?: number
 }

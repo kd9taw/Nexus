@@ -12,7 +12,6 @@ import {
   uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { autoPushQso } from '../features/autopush'
 import { qrzPushQso } from '../api'
 
 interface Props {
@@ -20,12 +19,6 @@ interface Props {
   defaultBand: string
   defaultFreqMhz: number
   defaultMode: string
-  /** When true, push each logged QSO to QRZ.com (Settings → QRZ auto-upload). */
-  qrzUpload?: boolean
-  /** When true, push each logged QSO to ClubLog (Settings → ClubLog auto-upload). */
-  clublogUpload?: boolean
-  /** When true, upload each logged QSO to eQSL.cc (Settings → eQSL auto-upload). */
-  eqslUpload?: boolean
 }
 
 interface DraftQso {
@@ -67,9 +60,6 @@ export function Logbook({
   defaultBand,
   defaultFreqMhz,
   defaultMode,
-  qrzUpload,
-  clublogUpload,
-  eqslUpload,
 }: Props) {
   const [log, setLog] = useState<LoggedQso[]>([])
   const [showForm, setShowForm] = useState(false)
@@ -321,9 +311,9 @@ export function Logbook({
       load()
       setShowForm(false)
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '' }))
-      // Auto-upload (QRZ/ClubLog/eQSL) — the SHARED path used by every log
-      // surface (cockpit + prompt-to-log use the same helper).
-      void autoPushQso(record, { qrz: !!qrzUpload, clublog: !!clublogUpload, eqsl: !!eqslUpload })
+      // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
+      // (every log path, the engine auto-log included); outcomes toast via the
+      // snapshot uploadTick.
     }
   }
 

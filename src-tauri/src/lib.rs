@@ -879,8 +879,11 @@ fn set_settings(
         {
             CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
         }
-        // Keep the live DXpedition layer's most-wanted key current.
-        propagation::live::dxped::set_clublog_key(&settings.clublog_api_key);
+        // Keep the live DXpedition layer's most-wanted key current (Settings
+        // override, else the build's baked application key).
+        propagation::live::dxped::set_clublog_key(&effective_clublog_key(
+            &settings.clublog_api_key,
+        ));
         if let Err(e) = settings.save(&settings_path()) {
             eprintln!("tempo: failed to persist settings: {e}");
         }
@@ -2385,7 +2388,11 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             st.eqsl_username.clone(),
             st.qrz_username.clone(),
             st.clublog_email.clone(),
-            !st.clublog_api_key.trim().is_empty(),
+            // The API key is an APPLICATION (developer) credential, not a user
+            // one: a Settings override OR the key baked into official installer
+            // builds (CLUBLOG_API_KEY at build time) both satisfy it. The user's
+            // own credentials are only email + app-password.
+            !effective_clublog_key(&st.clublog_api_key).is_empty(),
         )
     };
     let has = |entry: Result<keyring::Entry, String>| {
@@ -2418,6 +2425,18 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             identity: clublog_email,
         },
     ])
+}
+
+/// The effective ClubLog **application** key: the Settings override when set,
+/// else the key baked into official installer builds at compile time
+/// (`CLUBLOG_API_KEY`, see build.rs). Empty = this build has no key (source
+/// build without the env var) and ClubLog features that need one are off.
+fn effective_clublog_key(settings_key: &str) -> String {
+    let k = settings_key.trim();
+    if !k.is_empty() {
+        return k.to_string();
+    }
+    option_env!("CLUBLOG_API_KEY").unwrap_or("").trim().to_string()
 }
 
 fn lotw_keychain() -> Result<keyring::Entry, String> {
@@ -2482,28 +2501,32 @@ fn clear_lotw_password() -> Result<(), String> {
 }
 
 /// Store (or, if empty, clear) the eQSL website password in the OS keychain.
-/// Write-only, like the LoTW counterpart.
+/// Write-only, like the LoTW counterpart. Saving also switches eQSL auto-upload
+/// ON (entering the credential is the intent).
 #[tauri::command]
-fn set_eqsl_password(password: String) -> Result<(), String> {
+fn set_eqsl_password(password: String, state: State<'_, SharedEngine>) -> Result<(), String> {
     let entry = eqsl_keychain()?;
     if password.is_empty() {
         clear_keychain_entry(&entry)?;
         conn_log("eQSL", "info", "password cleared from the OS keychain");
+        set_upload_toggle(&state, UploadToggle::Eqsl, false);
         return Ok(());
     }
     entry
         .set_password(&password)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("eQSL", "ok", "password saved to the OS keychain");
+    set_upload_toggle(&state, UploadToggle::Eqsl, true);
     Ok(())
 }
 
 /// Remove the stored eQSL password from the OS keychain (idempotent).
 #[tauri::command]
-fn clear_eqsl_password() -> Result<(), String> {
+fn clear_eqsl_password(state: State<'_, SharedEngine>) -> Result<(), String> {
     let r = clear_keychain_entry(&eqsl_keychain()?);
     if r.is_ok() {
         conn_log("eQSL", "info", "password cleared from the OS keychain");
+        set_upload_toggle(&state, UploadToggle::Eqsl, false);
     }
     r
 }
@@ -2544,28 +2567,82 @@ fn clear_qrz_password() -> Result<(), String> {
 }
 
 /// Store (or, if empty, clear) the QRZ **Logbook API key** (distinct from the XML
-/// password) in the OS keychain. Write-only.
+/// password) in the OS keychain. Write-only. Saving a key also switches QRZ
+/// auto-upload ON: entering the key IS the intent ("upload my QSOs to QRZ") —
+/// previously the separate toggle silently stayed off and nothing uploaded.
 #[tauri::command]
-fn set_qrz_logbook_key(key: String) -> Result<(), String> {
+fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<(), String> {
     let entry = qrz_logbook_keychain()?;
     if key.is_empty() {
         clear_keychain_entry(&entry)?;
         conn_log("QRZ Logbook", "info", "API key cleared from the OS keychain");
+        set_upload_toggle(&state, UploadToggle::Qrz, false);
         return Ok(());
     }
     entry
         .set_password(&key)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("QRZ Logbook", "ok", "API key saved to the OS keychain");
+    set_upload_toggle(&state, UploadToggle::Qrz, true);
     Ok(())
+}
+
+/// Which connector's auto-upload toggle to flip alongside its credential.
+#[derive(Clone, Copy)]
+enum UploadToggle {
+    Qrz,
+    Clublog,
+    Eqsl,
+}
+
+/// Flip a connector's auto-upload toggle (persisted) when its credential
+/// changes: saving turns it ON (entering the credential IS the intent — a dead
+/// toggle was exactly how "creds in place but nothing uploads" happened);
+/// clearing turns it OFF (so the upload worker doesn't error-toast every QSO
+/// against a credential that's gone). Uses the lightweight settings mutation,
+/// NEVER `apply_settings` — that resets the operating mode and drops queued TX,
+/// and a credential save mid-QSO must not kill the QSO. No-op when already in
+/// the requested state.
+fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: bool) {
+    if let Ok(mut eng) = state.lock() {
+        let (connector, already) = {
+            let s = eng.settings();
+            match which {
+                UploadToggle::Qrz => ("QRZ Logbook", s.qrz_logbook_upload),
+                UploadToggle::Clublog => ("ClubLog", s.clublog_upload),
+                UploadToggle::Eqsl => ("eQSL", s.eqsl_upload),
+            }
+        };
+        if already == on {
+            return;
+        }
+        let updated = match which {
+            UploadToggle::Qrz => eng.set_upload_toggles(Some(on), None, None),
+            UploadToggle::Clublog => eng.set_upload_toggles(None, Some(on), None),
+            UploadToggle::Eqsl => eng.set_upload_toggles(None, None, Some(on)),
+        };
+        if let Err(e) = updated.save(&settings_path()) {
+            eprintln!("tempo: couldn't persist settings: {e}");
+        }
+        conn_log(
+            connector,
+            "info",
+            if on {
+                "auto-upload on log ENABLED (credential saved — turn off in Settings if unwanted)"
+            } else {
+                "auto-upload on log disabled (credential cleared)"
+            },
+        );
+    }
 }
 
 /// Remove the stored QRZ Logbook API key from the OS keychain (idempotent).
 #[tauri::command]
-fn clear_qrz_logbook_key() -> Result<(), String> {
+fn clear_qrz_logbook_key(state: State<'_, SharedEngine>) -> Result<(), String> {
     let r = clear_keychain_entry(&qrz_logbook_keychain()?);
     if r.is_ok() {
         conn_log("QRZ Logbook", "info", "API key cleared from the OS keychain");
+        set_upload_toggle(&state, UploadToggle::Qrz, false);
     }
     r
 }
@@ -2981,11 +3058,13 @@ async fn qrz_push_qso(
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::dto::QrzPushResultDto, String> {
     let who = record.call.clone();
-    conn_logged(
-        "QRZ Logbook",
-        |r| format!("pushed {} — {}", who, r.result),
-        qrz_push_qso_impl(record, state).await,
-    )
+    // The impl does blocking HTTP (20 s timeout) — keep it off the async
+    // executor so a slow QRZ can't stall every other Tauri command.
+    let engine = state.inner().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || qrz_push_qso_impl(record, &engine))
+        .await
+        .map_err(|e| format!("upload task failed: {e}"))?;
+    conn_logged("QRZ Logbook", |r| format!("pushed {} — {}", who, r.result), res)
 }
 
 /// Test the N3FJP connection: handshake `<CMD><PROGRAM></CMD>` and report
@@ -3041,9 +3120,9 @@ async fn qrz_test_connection_impl() -> Result<String, String> {
     }
 }
 
-async fn qrz_push_qso_impl(
+fn qrz_push_qso_impl(
     record: LoggedQso,
-    state: State<'_, SharedEngine>,
+    engine: &SharedEngine,
 ) -> Result<tempo_app::dto::QrzPushResultDto, String> {
     let key = qrz_logbook_keychain()?
         .get_password()
@@ -3061,7 +3140,7 @@ async fn qrz_push_qso_impl(
             .reason
             .as_deref()
             .and_then(tempo_core::lotw_upload::sanitize_detail);
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine.lock().map_err(|e| e.to_string())?;
         eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
     }
     Ok(push.into())
@@ -3071,30 +3150,37 @@ async fn qrz_push_qso_impl(
 
 /// Store (or, if empty, clear) the ClubLog **Application Password** in the OS
 /// keychain. Also re-arms ClubLog auto-push (a credential change clears the 403
-/// suspend latch). Write-only.
+/// suspend latch). Write-only. Saving also switches ClubLog auto-upload ON
+/// (entering the credential is the intent).
 #[tauri::command]
-fn set_clublog_password(password: String) -> Result<(), String> {
-    CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+fn set_clublog_password(password: String, state: State<'_, SharedEngine>) -> Result<(), String> {
     let entry = clublog_keychain()?;
     if password.is_empty() {
+        // Clearing = "turn ClubLog off": drop the credential AND the toggle. The
+        // suspend latch is deliberately NOT touched here — re-arming with no
+        // password would only make the worker error on every QSO.
         clear_keychain_entry(&entry)?;
         conn_log("ClubLog", "info", "app-password cleared from the OS keychain");
+        set_upload_toggle(&state, UploadToggle::Clublog, false);
         return Ok(());
     }
+    // A real credential change re-arms auto-push (clears the 403 suspend latch).
+    CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
     entry
         .set_password(&password)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("ClubLog", "ok", "app-password saved to the OS keychain");
+    set_upload_toggle(&state, UploadToggle::Clublog, true);
     Ok(())
 }
 
-/// Remove the stored ClubLog app-password from the OS keychain (idempotent); also
-/// re-arms auto-push.
+/// Remove the stored ClubLog app-password from the OS keychain (idempotent);
+/// also turns ClubLog auto-upload off (no credential to push with).
 #[tauri::command]
-fn clear_clublog_password() -> Result<(), String> {
-    CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+fn clear_clublog_password(state: State<'_, SharedEngine>) -> Result<(), String> {
     clear_keychain_entry(&clublog_keychain()?)?;
     conn_log("ClubLog", "info", "app-password cleared from the OS keychain");
+    set_upload_toggle(&state, UploadToggle::Clublog, false);
     Ok(())
 }
 
@@ -3109,16 +3195,17 @@ async fn clublog_push_qso(
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::dto::ClubLogPushResultDto, String> {
     let who = record.call.clone();
-    conn_logged(
-        "ClubLog",
-        |r| format!("pushed {} — {}", who, r.result),
-        clublog_push_qso_impl(record, state).await,
-    )
+    // Blocking HTTP off the async executor (see qrz_push_qso).
+    let engine = state.inner().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || clublog_push_qso_impl(record, &engine))
+        .await
+        .map_err(|e| format!("upload task failed: {e}"))?;
+    conn_logged("ClubLog", |r| format!("pushed {} — {}", who, r.result), res)
 }
 
-async fn clublog_push_qso_impl(
+fn clublog_push_qso_impl(
     record: LoggedQso,
-    state: State<'_, SharedEngine>,
+    engine: &SharedEngine,
 ) -> Result<tempo_app::dto::ClubLogPushResultDto, String> {
     use std::sync::atomic::Ordering;
     if CLUBLOG_SUSPENDED.load(Ordering::Relaxed) {
@@ -3128,7 +3215,7 @@ async fn clublog_push_qso_impl(
         );
     }
     let (email, callsign_setting, api_setting, mycall) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine.lock().map_err(|e| e.to_string())?;
         let s = eng.settings();
         (
             s.clublog_email.trim().to_string(),
@@ -3138,13 +3225,9 @@ async fn clublog_push_qso_impl(
         )
     };
     // API key: Settings first, else the build-time baked key (official installer).
-    let api_key = if !api_setting.is_empty() {
-        api_setting
-    } else {
-        option_env!("CLUBLOG_API_KEY").unwrap_or("").to_string()
-    };
+    let api_key = effective_clublog_key(&api_setting);
     if api_key.is_empty() {
-        return Err("No ClubLog API key set — Nexus ships none (open-source). Get a free key at clublog.org/requestapikey.php and add it in Settings.".to_string());
+        return Err("This build has no ClubLog application key. Official installers bundle one; building from source, get a free key at clublog.org/requestapikey.php and add it in Settings ▸ Confirmations.".to_string());
     }
     if email.is_empty() {
         return Err("Set your ClubLog email in Settings first.".to_string());
@@ -3192,7 +3275,7 @@ async fn clublog_push_qso_impl(
             .message
             .as_deref()
             .and_then(tempo_core::lotw_upload::sanitize_detail);
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine.lock().map_err(|e| e.to_string())?;
         eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
     }
     Ok(push.into())
@@ -3211,19 +3294,20 @@ async fn eqsl_push_qso(
     state: State<'_, SharedEngine>,
 ) -> Result<UploadReportDto, String> {
     let who = record.call.clone();
-    conn_logged(
-        "eQSL",
-        |r| format!("pushed {} — outcome: {}", who, r.outcome),
-        eqsl_push_qso_impl(record, state).await,
-    )
+    // Blocking HTTP off the async executor (see qrz_push_qso).
+    let engine = state.inner().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine))
+        .await
+        .map_err(|e| format!("upload task failed: {e}"))?;
+    conn_logged("eQSL", |r| format!("pushed {} — outcome: {}", who, r.outcome), res)
 }
 
-async fn eqsl_push_qso_impl(
+fn eqsl_push_qso_impl(
     record: LoggedQso,
-    state: State<'_, SharedEngine>,
+    engine: &SharedEngine,
 ) -> Result<UploadReportDto, String> {
     let user = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine.lock().map_err(|e| e.to_string())?;
         eng.settings().eqsl_username.trim().to_string()
     };
     if user.is_empty() {
@@ -3249,7 +3333,7 @@ async fn eqsl_push_qso_impl(
             detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
         }),
         Some(outcome) => {
-            let mut eng = state.lock().map_err(|e| e.to_string())?;
+            let mut eng = engine.lock().map_err(|e| e.to_string())?;
             eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
             Ok(UploadReportDto {
                 dispatched: 1,
@@ -3257,6 +3341,121 @@ async fn eqsl_push_qso_impl(
                 detail: None,
             })
         }
+    }
+}
+
+// ----- Connector auto-upload (the log_qso funnel's worker side) --------------
+
+/// Record an operator-facing upload note on the engine (UI toasts it on the
+/// next snapshot poll — `upload_tick` bumps).
+fn note_upload_shared(engine: &SharedEngine, msg: String, ok: bool) {
+    if let Ok(mut eng) = engine.lock() {
+        eng.note_upload(msg, ok);
+    }
+}
+
+/// Push one freshly-logged QSO to every enabled connector. Each service gets a
+/// connectivity-log line, and the QSO gets ONE combined operator-facing note
+/// ("W9XYZ → QRZ ✓ · ClubLog dup · eQSL ✗ login invalid") — a single toast per
+/// QSO, so a fast multi-connector push can't overwrite its own outcomes between
+/// two snapshot polls. Outcomes are stamped on the QSO by the underlying
+/// `*_push_qso_impl` (per-QSO upload state machine).
+fn auto_push_one(
+    engine: &SharedEngine,
+    dto: LoggedQso,
+    qrz_on: bool,
+    clublog_on: bool,
+    eqsl_on: bool,
+) {
+    let call = dto.call.clone();
+    let mut parts: Vec<String> = Vec::new();
+    let mut all_ok = true;
+    if qrz_on {
+        let (part, ok) = match qrz_push_qso_impl(dto.clone(), engine) {
+            Ok(r) => {
+                let ok = matches!(r.result.as_str(), "ok" | "replace" | "duplicate");
+                conn_log(
+                    "QRZ Logbook",
+                    if ok { "ok" } else { "error" },
+                    format!("auto-push {call} — {}", r.result),
+                );
+                let part = match r.result.as_str() {
+                    "ok" => "QRZ ✓".to_string(),
+                    "replace" => "QRZ ✓ (updated)".to_string(),
+                    "duplicate" => "QRZ dup".to_string(),
+                    "authFail" => "QRZ ✗ key invalid — check Settings".to_string(),
+                    _ => format!("QRZ ✗ {}", r.reason.as_deref().unwrap_or("failed")),
+                };
+                (part, ok)
+            }
+            Err(e) => {
+                conn_log("QRZ Logbook", "error", format!("auto-push {call} — {e}"));
+                (format!("QRZ ✗ {e}"), false)
+            }
+        };
+        parts.push(part);
+        all_ok &= ok;
+    }
+    if clublog_on {
+        let (part, ok) = match clublog_push_qso_impl(dto.clone(), engine) {
+            Ok(r) => {
+                let ok = matches!(r.result.as_str(), "ok" | "modified" | "duplicate");
+                conn_log(
+                    "ClubLog",
+                    if ok { "ok" } else { "error" },
+                    format!("auto-push {call} — {}", r.result),
+                );
+                let part = match r.result.as_str() {
+                    "ok" | "modified" => "ClubLog ✓".to_string(),
+                    "duplicate" => "ClubLog dup".to_string(),
+                    "authFail" => "ClubLog ✗ auth — auto-upload paused".to_string(),
+                    "serverError" => "ClubLog ✗ busy".to_string(),
+                    _ => format!("ClubLog ✗ {}", r.message.as_deref().unwrap_or("rejected")),
+                };
+                (part, ok)
+            }
+            Err(e) => {
+                conn_log("ClubLog", "error", format!("auto-push {call} — {e}"));
+                (format!("ClubLog ✗ {e}"), false)
+            }
+        };
+        parts.push(part);
+        all_ok &= ok;
+    }
+    if eqsl_on {
+        let (part, ok) = match eqsl_push_qso_impl(dto, engine) {
+            Ok(r) => {
+                let ok = matches!(r.outcome.as_str(), "accepted" | "duplicate");
+                conn_log(
+                    "eQSL",
+                    if ok { "ok" } else { "error" },
+                    format!("auto-push {call} — {}", r.outcome),
+                );
+                let part = match r.outcome.as_str() {
+                    "accepted" => "eQSL ✓".to_string(),
+                    "duplicate" => "eQSL dup".to_string(),
+                    "authfail" => "eQSL ✗ login invalid — check Settings".to_string(),
+                    "retry" => "eQSL ✗ unavailable".to_string(),
+                    _ => format!(
+                        "eQSL ✗ rejected{}",
+                        r.detail
+                            .as_deref()
+                            .map(|d| format!(": {d}"))
+                            .unwrap_or_default()
+                    ),
+                };
+                (part, ok)
+            }
+            Err(e) => {
+                conn_log("eQSL", "error", format!("auto-push {call} — {e}"));
+                (format!("eQSL ✗ {e}"), false)
+            }
+        };
+        parts.push(part);
+        all_ok &= ok;
+    }
+    if !parts.is_empty() {
+        note_upload_shared(engine, format!("{call} → {}", parts.join(" · ")), all_ok);
     }
 }
 
@@ -3634,7 +3833,9 @@ pub fn run() {
     // Feed the live DXpedition layer the ClubLog key (most-wanted ranks). Pushed,
     // not pulled — keeps the propagation crate decoupled from settings IO.
     if let Ok(eng) = engine.lock() {
-        propagation::live::dxped::set_clublog_key(&eng.settings().clublog_api_key);
+        propagation::live::dxped::set_clublog_key(&effective_clublog_key(
+            &eng.settings().clublog_api_key,
+        ));
     }
     // Warm the DXpedition plan cache in the background so the Needed board's
     // expedition tagging works from launch — without it the cache stays cold until
@@ -3659,6 +3860,42 @@ pub fn run() {
                 eprintln!("tempo: could not restore Companion source ({e}); using native");
             }
         }
+    }
+
+    // Connector auto-upload worker — THE single funnel for QRZ / ClubLog / eQSL
+    // pushes. Every `Engine::log_qso` path queues its record (the engine
+    // auto-log included — the path that used to silently skip every connector);
+    // this thread drains the queue and pushes per the Settings toggles, stamping
+    // the per-QSO upload state and an operator-facing upload note (UI toast).
+    // Runs regardless of the `radio` feature: Companion-sourced QSOs upload too.
+    {
+        let push_engine = engine.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let (recs, qrz_on, clublog_on, eqsl_on) = {
+                // Recover a poisoned lock (conn_log pattern) — a panicked command
+                // holding the engine must not silently kill auto-upload forever.
+                let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                let (q, c, e) = {
+                    let s = eng.settings();
+                    (s.qrz_logbook_upload, s.clublog_upload, s.eqsl_upload)
+                };
+                if !(q || c || e) {
+                    // Nothing enabled: LEAVE the queue intact (bounded at 256) so
+                    // flipping a toggle on later still uploads this session's
+                    // recent QSOs — log-first-configure-later must not lose them.
+                    continue;
+                }
+                (eng.take_pending_uploads(), q, c, e)
+            };
+            // ClubLog suspended (403 latch): skip that leg instead of erroring
+            // per QSO — the suspension was announced once; re-push covers later.
+            let clublog_live = clublog_on
+                && !CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed);
+            for rec in recs {
+                auto_push_one(&push_engine, LoggedQso::from(rec), qrz_on, clublog_live, eqsl_on);
+            }
+        });
     }
 
     // With the `radio` feature, drive the real sound card + rig (and the WSJT-X

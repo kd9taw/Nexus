@@ -516,7 +516,8 @@ export function SettingsPanel({
     }, 'Could not save the eQSL password')
     if (ok) {
       setEqslPw('')
-      pushToast('eQSL password saved to the system keychain', 'success')
+      updateBool('eqslUpload', true)
+      pushToast('eQSL password saved — auto-upload to eQSL is ON', 'success')
     }
   }
 
@@ -527,7 +528,8 @@ export function SettingsPanel({
     }, 'Could not clear the eQSL password')
     if (ok) {
       setEqslPw('')
-      pushToast('eQSL password cleared from the keychain', 'success')
+      updateBool('eqslUpload', false)
+      pushToast('eQSL password cleared — auto-upload to eQSL is off', 'success')
     }
   }
 
@@ -584,7 +586,8 @@ export function SettingsPanel({
     }, 'Could not save the QRZ Logbook key')
     if (ok) {
       setQrzKey('')
-      pushToast('QRZ Logbook key saved to the system keychain', 'success')
+      updateBool('qrzLogbookUpload', true)
+      pushToast('QRZ Logbook key saved — auto-upload to QRZ is ON', 'success')
     }
   }
 
@@ -595,7 +598,8 @@ export function SettingsPanel({
     }, 'Could not clear the QRZ Logbook key')
     if (ok) {
       setQrzKey('')
-      pushToast('QRZ Logbook key cleared from the keychain', 'success')
+      updateBool('qrzLogbookUpload', false)
+      pushToast('QRZ Logbook key cleared — auto-upload to QRZ is off', 'success')
     }
   }
 
@@ -607,7 +611,8 @@ export function SettingsPanel({
     }, 'Could not save the ClubLog password')
     if (ok) {
       setClublogPw('')
-      pushToast('ClubLog app-password saved to the system keychain', 'success')
+      updateBool('clublogUpload', true)
+      pushToast('ClubLog app-password saved — auto-upload to ClubLog is ON', 'success')
     }
   }
 
@@ -618,7 +623,8 @@ export function SettingsPanel({
     }, 'Could not clear the ClubLog password')
     if (ok) {
       setClublogPw('')
-      pushToast('ClubLog password cleared from the keychain', 'success')
+      updateBool('clublogUpload', false)
+      pushToast('ClubLog password cleared — auto-upload to ClubLog is off', 'success')
     }
   }
 
@@ -2473,19 +2479,21 @@ export function SettingsPanel({
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">ClubLog API key</span>
+                <span className="settings-label">ClubLog API key (application-level)</span>
                 <input
                   className="settings-input"
                   type="text"
                   value={form.clublogApiKey}
-                  placeholder="get a free key at clublog.org/requestapikey.php"
+                  placeholder="blank = use the key bundled with this build (if any)"
                   onChange={(e) => update('clublogApiKey', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
                 />
                 <span className="settings-hint">
-                  Nexus ships no ClubLog key (open-source — ClubLog auto-revokes published keys); request a free
-                  one and paste it here.
+                  This is the <strong>application</strong> credential, not yours — official installer builds
+                  bundle one, and you only need email + app-password above. Building from source? Request a
+                  free key at clublog.org/requestapikey.php and paste it here (open-source can't ship one —
+                  ClubLog auto-revokes published keys).
                 </span>
               </label>
 
