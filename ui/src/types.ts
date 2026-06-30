@@ -1156,6 +1156,8 @@ export interface Settings {
   wsjtxUdp: boolean
   /** Address:port for the WSJT-X UDP API. */
   wsjtxUdpAddr: string
+  /** Append every decode to a WSJT-X-format ALL.TXT decode log (loggers/GridTracker tail it). */
+  writeAllTxt: boolean
   /** Log each QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP port. */
   hrdLogging: boolean
   /** HRD Logbook QSO-Forwarding address (UDP); HRD default 127.0.0.1:2333. */

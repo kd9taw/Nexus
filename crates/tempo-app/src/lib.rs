@@ -12,6 +12,7 @@
 //! and reads [`AppState::snapshot`] out; here those edges are exercised by unit
 //! tests over synthetic decodes.
 
+pub mod alltxt;
 pub mod bandplan;
 pub mod dto;
 pub mod engine;

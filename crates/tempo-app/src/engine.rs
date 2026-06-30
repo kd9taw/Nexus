@@ -95,6 +95,11 @@ pub struct Engine {
     /// Session count of IR-HARQ rescues: decodes recovered by joint-combining
     /// retransmissions (rv > 0). Surfaced as a stats readout.
     harq_rescues: u32,
+    /// WSJT-X-format ALL.TXT decode lines pending flush to disk (when
+    /// `settings.write_all_txt`). The engine is I/O-free, so the shell drains this via
+    /// [`Self::take_all_txt_pending`] and appends to the log file. Capped so a
+    /// never-draining shell can't grow it without bound.
+    all_txt_pending: Vec<String>,
     /// Freshly-logged QSOs awaiting the shell's connector auto-upload worker
     /// (QRZ / ClubLog / eQSL). EVERY [`Engine::log_qso`] path queues here — the
     /// engine auto-log included — so "logged locally but never uploaded" can't
@@ -382,6 +387,7 @@ impl Engine {
             last_rx: None,
             last_decodes: Vec::new(),
             harq_rescues: 0,
+            all_txt_pending: Vec::new(),
             pending_uploads: VecDeque::new(),
             upload_note: None,
             upload_ok: false,
@@ -3536,6 +3542,25 @@ impl Engine {
             .iter()
             .filter(|d| matches!(d.rv, Some(rv) if rv > 0))
             .count() as u32;
+        // ALL.TXT decode log (off by default): append each decode in WSJT-X format for
+        // loggers/GridTracker to tail. `process_decodes` is the single per-decode
+        // chokepoint (early-vs-boundary dupes already dropped), so each logs once. The
+        // engine is I/O-free → buffer here; the shell drains + writes.
+        if self.settings.write_all_txt {
+            let dial = self.settings.dial_mhz;
+            let mode = format!("{:?}", self.app.tier()).to_uppercase();
+            let now = now_unix_secs();
+            for d in &decodes {
+                self.all_txt_pending.push(crate::alltxt::all_txt_line(
+                    now, dial, false, &mode, d.snr, d.dt, d.freq, &d.message,
+                ));
+            }
+            // Bound memory if the shell never drains (e.g. headless): keep newest 5000.
+            let len = self.all_txt_pending.len();
+            if len > 5000 {
+                self.all_txt_pending.drain(0..len - 5000);
+            }
+        }
         // Track recent decode DT magnitudes for the time-sync health estimate.
         for d in &decodes {
             self.seen_decode = true;
@@ -3844,6 +3869,11 @@ impl Engine {
     /// Decodes from the most recent [`Engine::ingest`] (for the network layer).
     pub fn last_decodes(&self) -> &[modes::Decode] {
         &self.last_decodes
+    }
+    /// Drain the WSJT-X-format ALL.TXT lines buffered since the last call (the shell
+    /// appends them to the on-disk log). Empty when ALL.TXT logging is off.
+    pub fn take_all_txt_pending(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.all_txt_pending)
     }
     /// The last ingest's decodes as transmitted ON AIR (pre hound rewriting) —
     /// the only form that may leave over UDP.
@@ -5959,6 +5989,32 @@ mod tests {
             "FT8 live ingest must recover the message; got {:?}",
             e.last_decodes()
         );
+    }
+
+    /// ALL.TXT decode log: off by default (nothing buffered), and when enabled the
+    /// live ingest path buffers one WSJT-X-format line per decode, drained by the shell.
+    #[test]
+    fn all_txt_log_buffers_one_line_per_decode_when_enabled() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let frame = native_frame_for(modes::ModeKind::Ft8, "CQ W1ABC FN42", 1500.0);
+        e.ingest(&frame, 2);
+        assert!(
+            e.take_all_txt_pending().is_empty(),
+            "off by default → no ALL.TXT lines"
+        );
+
+        e.settings.write_all_txt = true;
+        let frame2 = native_frame_for(modes::ModeKind::Ft8, "CQ W1ABC FN42", 1500.0);
+        e.ingest(&frame2, 3);
+        let lines = e.take_all_txt_pending();
+        assert_eq!(lines.len(), 1, "one decode → one ALL.TXT line: {lines:?}");
+        assert!(
+            lines[0].contains("Rx FT8") && lines[0].contains("CQ W1ABC FN42"),
+            "line carries Rx/mode + message: {}",
+            lines[0]
+        );
+        assert!(e.take_all_txt_pending().is_empty(), "drained after take");
     }
 
     /// The WSJT-X-style early pass: a period truncated at ~11.8 s (the capture

@@ -582,6 +582,32 @@ fn logbook_path() -> PathBuf {
         .join("log.adi")
 }
 
+/// The WSJT-X-format decode log (`ALL.TXT`), in the same base dir as the logbook —
+/// loggers/GridTracker tail it. Written only when `settings.write_all_txt` is on.
+fn all_txt_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ALL.TXT")
+}
+
+/// Append the engine's buffered WSJT-X-format decode lines to `ALL.TXT` (best-effort:
+/// a write hiccup must never disturb the snapshot the UI is waiting on).
+fn flush_all_txt(lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(all_txt_path())
+    {
+        let _ = writeln!(f, "{}", lines.join("\n"));
+    }
+}
+
 /// Where Tempo conversation threads persist (so chat history survives a restart):
 /// `<config dir>/conversations.json`, beside settings.json + the logbook.
 fn conversations_path() -> PathBuf {
@@ -638,8 +664,14 @@ fn recordings_dir() -> PathBuf {
 /// Full UI snapshot (`AppSnapshot`) — the UI renders all three zones from this.
 #[tauri::command]
 async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
-    Ok(eng.snapshot())
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    // Drain any buffered ALL.TXT decode lines (the engine is I/O-free) and snapshot,
+    // then release the lock before the file append so the UI poll never waits on disk.
+    let all_txt = eng.take_all_txt_pending();
+    let snap = eng.snapshot();
+    drop(eng);
+    flush_all_txt(&all_txt);
+    Ok(snap)
 }
 
 /// Queue an outbound free-text message to `peer` (auto-chunked + presence-gated

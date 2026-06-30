@@ -143,6 +143,9 @@ pub struct Settings {
     pub wsjtx_udp: bool,
     /// UDP address to send WSJT-X messages to (WSJT-X default is 127.0.0.1:2237).
     pub wsjtx_udp_addr: String,
+    /// Append every decode to a WSJT-X-format `ALL.TXT` decode log in the app data dir —
+    /// the running record loggers/GridTracker tail. Off by default.
+    pub write_all_txt: bool,
     /// Push each logged QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP
     /// listener (one raw ADIF record per datagram — the same standard WSJT-X/JTAlert
     /// use). Off by default. HRD Logbook must be running.
@@ -511,6 +514,7 @@ impl Default for Settings {
             cat_broker_port: 4532,
             wsjtx_udp: false,
             wsjtx_udp_addr: "127.0.0.1:2237".to_string(),
+            write_all_txt: false,
             hrd_logging: false,
             hrd_udp_addr: "127.0.0.1:2333".to_string(),
             companion_addr: "127.0.0.1:2237".to_string(),

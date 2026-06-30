@@ -1966,6 +1966,22 @@ export function SettingsPanel({
 
               <div className="settings-field">
                 <label className="settings-toggle">
+                  <span className="settings-label">Write ALL.TXT decode log</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.writeAllTxt}
+                    className={`toggle${form.writeAllTxt ? ' on' : ''}`}
+                    onClick={() => updateBool('writeAllTxt', !form.writeAllTxt)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">WSJT-X-format ALL.TXT for GridTracker / loggers to tail</span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
                   <span className="settings-label">Ham Radio Deluxe logging</span>
                   <button
                     type="button"

@@ -778,8 +778,9 @@ fn parse_credit(s: &str) -> Vec<String> {
 }
 
 /// Unix seconds → (year, month, day, hour, min, sec) UTC, via Howard Hinnant's
-/// civil-from-days algorithm (no external crates).
-pub(crate) fn datetime_utc(unix: u64) -> (i32, u32, u32, u32, u32, u32) {
+/// civil-from-days algorithm (no external crates). `pub` so the ALL.TXT decode log
+/// (tempo-app) can format WSJT-X-style UTC timestamps without a date dependency.
+pub fn datetime_utc(unix: u64) -> (i32, u32, u32, u32, u32, u32) {
     let secs = unix as i64;
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
