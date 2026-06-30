@@ -12,6 +12,7 @@ import type {
   BandChannel,
   CatTestResult,
   CatProbeResult,
+  CwDecodeResult,
   ClubLogPushResult,
   Activation,
   DetectedRig,
@@ -684,6 +685,11 @@ export async function pointRotatorAtCall(call: string): Promise<number> {
 /** Current rotator azimuth (degrees), or null if rotctld is unset/unreachable. */
 export async function readRotator(): Promise<number | null> {
   return invoke<number | null>('read_rotator')
+}
+
+/** Single-signal CW decode of the recent RX audio (live readout: text + estimated WPM). */
+export async function cwDecode(): Promise<CwDecodeResult> {
+  return invoke<CwDecodeResult>('cw_decode')
 }
 
 /** Set the TX period: true = even/"1st" slots, false = odd/"2nd". */

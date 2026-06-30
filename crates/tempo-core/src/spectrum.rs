@@ -23,6 +23,12 @@ fn goertzel(samples: &[f32], sr: f32, f: f32) -> f32 {
     (s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0)
 }
 
+/// Raw (uncompressed) Goertzel power at a single frequency `f` (Hz) — the CW decoder's
+/// envelope detector taps this at the operator's pitch.
+pub fn tone_power(samples: &[f32], sr: f32, f: f32) -> f32 {
+    goertzel(samples, sr, f)
+}
+
 /// Estimate a `bins`-point power spectrum over `[f_lo, f_hi]` Hz, normalized to
 /// 0..1 (sqrt-compressed). Bin `i` is centered at `f_lo + (i+0.5)*(f_hi-f_lo)/bins`.
 pub fn power_spectrum(samples: &[f32], sr: f32, f_lo: f32, f_hi: f32, bins: usize) -> Vec<f32> {

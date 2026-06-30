@@ -1779,6 +1779,26 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
     }
 }
 
+/// A single-signal CW decode of the recent receive audio (text + estimated WPM).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CwDecodeResult {
+    text: String,
+    wpm: u32,
+}
+
+/// Decode CW from the recent RX audio at the operator's pitch — a live readout for the
+/// CW cockpit. Empty text unless there's a clear keyed signal under the marker.
+#[tauri::command]
+fn cw_decode(state: State<'_, SharedEngine>) -> Result<CwDecodeResult, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    let d = eng.cw_decode();
+    Ok(CwDecodeResult {
+        text: d.text,
+        wpm: d.wpm,
+    })
+}
+
 /// Enable/disable normal slot transmit ("Monitor"). `false` mutes transmit and
 /// clears anything queued; `true` re-enables it and clears a tripped watchdog.
 #[tauri::command]
@@ -4783,6 +4803,7 @@ pub fn run() {
             point_rotator,
             point_rotator_at_call,
             read_rotator,
+            cw_decode,
             get_rig_models,
             get_band_plan,
             set_license_class,

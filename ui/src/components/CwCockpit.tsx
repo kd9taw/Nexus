@@ -3,7 +3,7 @@ import type { AppSnapshot, FieldDayStatus } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { BandPicker } from './BandPicker'
 import { LogEntry } from './LogEntry'
-import { sendCw, setCwKeyer, setCwWpm, stopCw } from '../api'
+import { sendCw, setCwKeyer, setCwWpm, stopCw, cwDecode } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 
 interface Props {
@@ -52,6 +52,24 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
   useEffect(() => {
     if (snap.radio.cwWpm != null) setWpm(snap.radio.cwWpm)
   }, [snap.radio.cwWpm])
+  // Live single-signal CW decode of the receive audio at the marker pitch — poll the
+  // engine ~1.4 Hz (the decode reads a multi-second ring, so faster adds no detail).
+  const [decoded, setDecoded] = useState<{ text: string; wpm: number }>({ text: '', wpm: 0 })
+  useEffect(() => {
+    let alive = true
+    const tick = () =>
+      cwDecode()
+        .then((d) => {
+          if (alive) setDecoded(d)
+        })
+        .catch(() => {})
+    tick()
+    const id = window.setInterval(tick, 700)
+    return () => {
+      alive = false
+      window.clearInterval(id)
+    }
+  }, [])
   // Initialize the keyer toggle from the engine's ACTUAL setting (the snapshot is the source
   // of truth) — not a hard-coded 'cat'. A stale local default showed CAT while the backend was
   // on Soundcard, so CW silently went to USB (Soundcard keying = rig in SSB) with no clue why.
@@ -205,6 +223,18 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
           markerHz={pitch}
         />
       </section>
+
+      <div className="cw-decode" title="Live CW decode of the receive audio at your pitch">
+        <span className="cw-decode-label">DECODE</span>
+        <span className="cw-decode-text">
+          {decoded.text ? (
+            decoded.text.slice(-72) // newest chars (the ~6 s ring can hold more than fits)
+          ) : (
+            <span className="cw-decode-idle">listening…</span>
+          )}
+        </span>
+        {decoded.wpm > 0 && <span className="cw-decode-wpm">{decoded.wpm} WPM</span>}
+      </div>
 
       <div className="cw-macros" role="group" aria-label="CW macros">
         {MACROS.map((m) => (

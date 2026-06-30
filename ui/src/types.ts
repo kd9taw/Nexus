@@ -495,6 +495,12 @@ export interface CatTestResult {
   detail: string
 }
 
+/** A single-signal CW decode of the recent RX audio (live readout). */
+export interface CwDecodeResult {
+  text: string
+  wpm: number
+}
+
 /** Result of "Auto-test ports": the working (port, baud, Hamlib model) the prober
  * auto-selected, or found=false with a detail message. */
 export interface CatProbeResult {

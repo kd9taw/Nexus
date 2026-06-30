@@ -278,6 +278,9 @@ pub struct Engine {
     /// radio loop (independent of the decoder) so the waterfall reflects LIVE
     /// sound-card input — not just the once-per-slot decoded frame.
     spectrum_audio: Vec<f32>,
+    /// A longer rolling RX-audio ring (several seconds) for the single-signal CW decoder
+    /// — the 4096-sample waterfall window is far too short for Morse.
+    cw_audio: Vec<f32>,
     /// Rig/CAT connection status surfaced to the UI: `(ok, detail)`. `ok` is
     /// `None` for VOX (no CAT), `Some(true/false)` for a CAT/serial rig. Written
     /// by the radio loop when it (re)opens or probes the rig.
@@ -307,6 +310,9 @@ pub struct Engine {
 /// Samples of recent audio kept for the live waterfall spectrum (~0.34 s at
 /// 12 kHz) — enough for a responsive, reasonably-resolved Goertzel bank.
 const SPECTRUM_WINDOW: usize = 4096;
+/// CW-decode RX ring: ~6 s at 12 kHz — long enough for a full callsign exchange at the
+/// speeds an operator reads, short enough that the per-poll decode stays cheap.
+const CW_WINDOW: usize = 72_000;
 
 /// Window of recent decode DT samples used for the time-sync health median.
 /// Snap a stored power multiplier to the LEGAL ARRL FD tiers {1, 2, 5} — a
@@ -448,6 +454,7 @@ impl Engine {
             qso_recording: false,
             qso_record_path: None,
             spectrum_audio: Vec::new(),
+            cw_audio: Vec::new(),
             cat_status: (None, String::new()),
             cat_reprobe: false,
             audio_error: None,
@@ -2566,6 +2573,19 @@ impl Engine {
             let drop = self.spectrum_audio.len() - SPECTRUM_WINDOW;
             self.spectrum_audio.drain(0..drop);
         }
+        // Also feed the longer CW-decode ring (the 4096-sample waterfall window is far too
+        // short for Morse — CW_WINDOW holds several seconds so a callsign fits).
+        self.cw_audio.extend_from_slice(samples);
+        if self.cw_audio.len() > CW_WINDOW {
+            let drop = self.cw_audio.len() - CW_WINDOW;
+            self.cw_audio.drain(0..drop);
+        }
+    }
+
+    /// Decode CW from the recent receive audio at the operator's pitch — a live readout
+    /// of the signal under the marker. Empty unless there's a clear keyed signal.
+    pub fn cw_decode(&self) -> tempo_core::cw_decode::CwDecode {
+        tempo_core::cw_decode::decode_cw(&self.cw_audio, ft1::SAMPLE_RATE, self.settings.cw_pitch_hz)
     }
 
     /// Set the rig/CAT connection status the UI renders (and the Test-CAT result

@@ -4704,6 +4704,41 @@ body.resizing {
 .cw-abort:hover {
   background: color-mix(in srgb, var(--state-weak) 22%, transparent);
 }
+/* Live CW decode strip — a monospace readout of the signal under the marker. */
+.cw-decode {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-2);
+  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.cw-decode-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+.cw-decode-text {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cw-decode-idle {
+  color: var(--text-faint);
+  font-style: italic;
+}
+.cw-decode-wpm {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
 .cw-macros {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));

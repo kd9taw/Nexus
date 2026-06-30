@@ -14,6 +14,7 @@
 pub mod channel;
 pub mod clublog;
 pub mod cw;
+pub mod cw_decode;
 pub mod diagnostics;
 pub mod eqsl;
 pub mod fieldday;
