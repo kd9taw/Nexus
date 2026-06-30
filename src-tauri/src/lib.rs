@@ -1617,6 +1617,78 @@ async fn detect_rigs() -> Vec<DetectedRigDto> {
     }
 }
 
+/// Result of "Auto-test ports": the working (port, baud, Hamlib model) the prober
+/// auto-selected, plus a human-readable detail line. The UI applies the fields to the
+/// CAT settings and saves (the normal apply path), so this command stays side-effect-free.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatProbeResult {
+    found: bool,
+    port_name: String,
+    baud: u32,
+    model: u32,
+    model_name: String,
+    freq_mhz: f64,
+    detail: String,
+}
+
+/// Auto-test which serial port actually drives the rig: probe each USB port (read-only,
+/// never TX) and return the first that reads back a plausible dial frequency. The
+/// fallback Hamlib model is the operator's configured rig (for ports whose USB descriptor
+/// doesn't name a model). Run it when CAT isn't already connected (the setup wizard, or a
+/// not-working CAT) — a live daemon holding the real port blocks that one port's probe.
+#[tauri::command]
+async fn probe_cat_ports(state: State<'_, SharedEngine>) -> Result<CatProbeResult, String> {
+    #[cfg(feature = "radio")]
+    {
+        // Read the configured model, then release the lock for the seconds-long probe so
+        // the UI's snapshot polling never blocks on it.
+        let model = {
+            let eng = state.lock().map_err(|e| e.to_string())?;
+            eng.settings().rig_model
+        };
+        // 4599: a private TCP port for the throwaway rigctld, distinct from the live one.
+        let hit = tauri::async_runtime::spawn_blocking(move || {
+            tempo_audio::port_prober::probe_cat_ports(model, 4599)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(match hit {
+            Some(h) => {
+                let mhz = h.freq_hz as f64 / 1.0e6;
+                CatProbeResult {
+                    found: true,
+                    detail: format!(
+                        "{} on {} @ {} baud — reads {:.3} MHz",
+                        h.model_name, h.port_name, h.baud, mhz
+                    ),
+                    port_name: h.port_name,
+                    baud: h.baud,
+                    model: h.model,
+                    model_name: h.model_name,
+                    freq_mhz: mhz,
+                }
+            }
+            None => CatProbeResult {
+                found: false,
+                port_name: String::new(),
+                baud: 0,
+                model: 0,
+                model_name: String::new(),
+                freq_mhz: 0.0,
+                detail: "No rig answered on any USB port. Check the cable and that the rig is on \
+                         (and not already connected elsewhere), then retry."
+                    .to_string(),
+            },
+        })
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = state;
+        Err("radio support is not built into this binary".to_string())
+    }
+}
+
 /// Enable/disable normal slot transmit ("Monitor"). `false` mutes transmit and
 /// clears anything queued; `true` re-enables it and clears a tripped watchdog.
 #[tauri::command]
@@ -4617,6 +4689,7 @@ pub fn run() {
             get_serial_ports,
             get_audio_devices,
             detect_rigs,
+            probe_cat_ports,
             get_rig_models,
             get_band_plan,
             set_license_class,

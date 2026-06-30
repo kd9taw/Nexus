@@ -23,6 +23,7 @@
 
 pub mod backend;
 pub mod frames;
+pub mod port_prober;
 pub mod ports;
 pub mod resample;
 pub mod rig;

@@ -21,6 +21,7 @@ import {
   setQrzPassword,
   setSettings,
   testCat,
+  probeCatPorts,
   qrzTestConnection,
   n3fjpTestConnection,
 } from '../api'
@@ -476,6 +477,39 @@ export function SettingsPanel({
       setCatResult(result)
     } catch {
       setCatResult({ ok: false, detail: 'Could not run the CAT test.' })
+    } finally {
+      setCatTesting(false)
+    }
+  }
+
+  // Auto-test ports: probe each USB port (read-only) for the one that actually drives
+  // the rig, then auto-fill + save the winning port/baud/model so CAT just works — no
+  // guessing which COM port among a rig's several is the control port.
+  const handleAutoTestPorts = async () => {
+    if (!form) return
+    setCatTesting(true)
+    setCatResult(null)
+    setError(null)
+    try {
+      const r = await probeCatPorts()
+      if (r.found) {
+        const next = {
+          ...form,
+          serialPort: r.portName,
+          baud: r.baud,
+          rigModel: r.model,
+          rigModelName: r.modelName,
+          pttMethod: 'cat',
+        }
+        setForm(next)
+        await setSettings(next)
+        onSaved?.()
+        setCatResult({ ok: true, detail: `✓ ${r.detail}` })
+      } else {
+        setCatResult({ ok: false, detail: r.detail })
+      }
+    } catch {
+      setCatResult({ ok: false, detail: 'Could not run the port auto-test.' })
     } finally {
       setCatTesting(false)
     }
@@ -1055,8 +1089,19 @@ export function SettingsPanel({
                   >
                     {portsLoading ? '…' : 'Refresh'}
                   </button>
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={handleAutoTestPorts}
+                    disabled={catTesting}
+                    title="Probe each USB port (read-only — never transmits) and auto-select the one that drives your rig"
+                  >
+                    {catTesting ? '…' : 'Auto-test'}
+                  </button>
                 </div>
-                <span className="settings-hint">COM / tty device for rig control.</span>
+                <span className="settings-hint">
+                  COM / tty device for rig control — or Auto-test to find it.
+                </span>
               </label>
 
               <label className="settings-field">

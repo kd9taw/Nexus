@@ -11,6 +11,7 @@ import type {
   AwardSummary,
   BandChannel,
   CatTestResult,
+  CatProbeResult,
   ClubLogPushResult,
   Activation,
   DetectedRig,
@@ -662,6 +663,12 @@ export async function haltTx(): Promise<AppSnapshot> {
  */
 export async function testCat(): Promise<CatTestResult> {
   return invoke<CatTestResult>('test_cat')
+}
+
+/** Auto-test which serial port drives the rig: probes each USB port read-only and
+ * returns the working (port, baud, model) to auto-select, or found=false. */
+export async function probeCatPorts(): Promise<CatProbeResult> {
+  return invoke<CatProbeResult>('probe_cat_ports')
 }
 
 /** Set the TX period: true = even/"1st" slots, false = odd/"2nd". */

@@ -495,6 +495,18 @@ export interface CatTestResult {
   detail: string
 }
 
+/** Result of "Auto-test ports": the working (port, baud, Hamlib model) the prober
+ * auto-selected, or found=false with a detail message. */
+export interface CatProbeResult {
+  found: boolean
+  portName: string
+  baud: number
+  model: number
+  modelName: string
+  freqMhz: number
+  detail: string
+}
+
 export interface Spectrum {
   // one waterfall row, 0..1 magnitudes, ~120 bins
   row: number[]
