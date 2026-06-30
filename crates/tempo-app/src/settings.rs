@@ -65,6 +65,13 @@ pub struct Settings {
     pub band: String,
     pub dial_mhz: f64,
     pub sideband: String,
+    /// Phone sub-mode: "ssb" (default — sideband by band) or "fm" (FM voice; drives the
+    /// rig to FM + the repeater shift / CTCSS below). VHF/UHF FM simplex + repeaters.
+    pub phone_mode: String,
+    /// FM repeater shift: "simplex" (no shift) | "plus" | "minus". Only when phone_mode=fm.
+    pub rptr_shift: String,
+    /// FM CTCSS (PL) tone in Hz for repeater access, e.g. 100.0; 0.0 = off.
+    pub ctcss_tone_hz: f32,
     /// ARRL Field Day class, e.g. "1D", "3A".
     pub fd_class: String,
     /// Which Field Day event: "arrlfd" (June) | "wfd" (Winter Field Day).
@@ -489,6 +496,9 @@ impl Default for Settings {
             band: "20m".to_string(),
             dial_mhz: 14.074, // FT8 20m — the default mode/band
             sideband: "USB".to_string(),
+            phone_mode: "ssb".to_string(),
+            rptr_shift: "simplex".to_string(),
+            ctcss_tone_hz: 0.0,
             fd_class: "1D".to_string(),
             fd_event: String::new(), // "" = arrlfd
             fd_power_mult: 2,
@@ -658,6 +668,29 @@ impl Settings {
     /// Icom USB-D / Kenwood DATA) so FT8/FT4 sits in data mode. Returns "" — meaning
     /// "send NO `M` command, obey the rig" — only for Digital when the operator has
     /// turned [`set_rig_mode`](Self::set_rig_mode) OFF (rigs without a DATA submode).
+    /// Standard FM repeater offset MAGNITUDE (Hz) for the current dial frequency — the
+    /// band convention (10 m 100 k, 6 m 1 M, 2 m 600 k, 1.25 m 1.6 M, 70 cm 5 M, 23 cm
+    /// 12 M). The shift DIRECTION comes from [`Self::rptr_shift`]; 0 below 28 MHz (no FM
+    /// repeaters there).
+    pub fn rptr_offset_hz(&self) -> i64 {
+        let f = self.dial_mhz;
+        if f >= 1240.0 {
+            12_000_000
+        } else if f >= 420.0 {
+            5_000_000
+        } else if f >= 222.0 {
+            1_600_000
+        } else if f >= 144.0 {
+            600_000
+        } else if f >= 50.0 {
+            1_000_000
+        } else if f >= 28.0 {
+            100_000
+        } else {
+            0
+        }
+    }
+
     pub fn rig_mode(&self) -> String {
         match self.operating_mode {
             // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be
@@ -669,7 +702,15 @@ impl Settings {
             // Phone: force the correct sideband for the band — the hard convention is
             // LSB below 10 MHz (160/80/40 m), USB at 30 m and up. (FM/AM come later
             // as an explicit choice in the Phone cockpit.)
-            OperatingMode::Phone => if self.dial_mhz < 10.0 { "LSB" } else { "USB" }.to_string(),
+            OperatingMode::Phone => {
+                if self.phone_mode.eq_ignore_ascii_case("fm") {
+                    "FM".to_string() // FM voice (VHF/UHF simplex + repeaters)
+                } else if self.dial_mhz < 10.0 {
+                    "LSB".to_string()
+                } else {
+                    "USB".to_string()
+                }
+            }
             // Digital: force the DATA submode (PKTUSB/PKTLSB → Yaesu DATA-U / Icom USB-D
             // / Kenwood DATA), USB-side by default — UNCONDITIONALLY, like Phone forces
             // SSB and CW forces CW. (No opt-out: FT8/FT4 are a data mode, and a rig
@@ -690,6 +731,39 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phone_fm_forces_fm_mode_else_sideband_by_band() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Phone;
+        // FM sub-mode → FM regardless of band.
+        s.phone_mode = "fm".into();
+        s.dial_mhz = 146.520;
+        assert_eq!(s.rig_mode(), "FM");
+        // SSB sub-mode → sideband by band (LSB <10 MHz, USB above).
+        s.phone_mode = "ssb".into();
+        s.dial_mhz = 14.250;
+        assert_eq!(s.rig_mode(), "USB");
+        s.dial_mhz = 7.200;
+        assert_eq!(s.rig_mode(), "LSB");
+    }
+
+    #[test]
+    fn rptr_offset_follows_band_conventions() {
+        let mut s = Settings::default();
+        for (mhz, off) in [
+            (29.6, 100_000),
+            (52.5, 1_000_000),
+            (146.5, 600_000),
+            (223.5, 1_600_000),
+            (446.0, 5_000_000),
+        ] {
+            s.dial_mhz = mhz;
+            assert_eq!(s.rptr_offset_hz(), off, "{mhz} MHz offset");
+        }
+        s.dial_mhz = 14.250; // no FM repeaters on HF SSB bands
+        assert_eq!(s.rptr_offset_hz(), 0);
+    }
 
     #[test]
     fn rig_mode_policy_obeys_digital_but_forces_phone_and_cw() {

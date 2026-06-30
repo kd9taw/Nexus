@@ -85,7 +85,8 @@ pub struct RadioConfig {
     pub broker_self_port: Option<u16>,
     /// Dial frequency to set on the rig (Hz).
     pub dial_hz: u64,
-    /// Operating mode to set on the rig (e.g. "USB").
+    /// Operating mode to set on the rig (e.g. "USB", "FM"). FM repeater shift / offset /
+    /// CTCSS are read LIVE from the engine settings in the loop (not carried here).
     pub mode: String,
     /// Emit the WSJT-X-compatible UDP protocol (loggers / JTAlert / GridTracker).
     pub wsjtx_udp: bool,
@@ -263,6 +264,9 @@ struct RadioLoop {
     mode_giveup: Option<String>,
     /// Last CW keyer speed (WPM) pushed to the rig, so we only `set_keyspd` on change.
     last_cw_wpm: u32,
+    /// Last FM repeater config (shift, offset Hz, CTCSS Hz) applied — so the shift/offset/
+    /// CTCSS commands only fire on change, not every loop. `None` when not in FM.
+    last_fm: Option<(String, i64, f32)>,
     /// Last manual-PTT (live phone) state we applied to the rig — only key on change.
     manual_ptt_applied: bool,
     /// Last RF power fraction we pushed to the rig — only set on change.
@@ -314,6 +318,7 @@ impl RadioLoop {
             mode_fail_count: 0,
             mode_giveup: None,
             last_cw_wpm: 0, // 0 = unset → first send pushes the speed
+            last_fm: None,
             manual_ptt_applied: false,
             last_rf_power: None,
             qso_sink: None,
@@ -372,8 +377,16 @@ impl RadioLoop {
             // "the VFO mirrors but modes won't switch" regress. Consume the one-shot "apply
             // now" flag only when we can act, so a click during a slot-TX is honored after it.
             let can_retune = self.tx_until_ms.is_none() && !self.tuning_keyed;
-            let (want, dial, md, reprobe_req, force_retune, split_req) = {
+            let (want, dial, md, reprobe_req, force_retune, split_req, fm) = {
                 let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                // FM repeater config (shift, band-offset magnitude, CTCSS) — applied below
+                // only when the mode policy resolves to FM. Computed first (owned) so the
+                // mutable take_* calls that follow don't fight the settings borrow.
+                let fm = (
+                    eng.settings().rptr_shift.clone(),
+                    eng.settings().rptr_offset_hz(),
+                    eng.settings().ctcss_tone_hz,
+                );
                 (
                     Transport::from_settings(eng.settings()),
                     eng.settings().dial_hz(),
@@ -383,6 +396,7 @@ impl RadioLoop {
                     // Split is a retune-class command — same mid-TX guard, same
                     // leave-it-pending semantics when keyed.
                     if can_retune { eng.take_split_request() } else { None },
+                    fm,
                 )
             };
             if want.rig_differs(&self.applied) {
@@ -508,6 +522,21 @@ impl RadioLoop {
                         }
                     }
                 }
+            }
+
+            // FM repeater: once the mode policy is FM, push the shift / offset / CTCSS —
+            // ON CHANGE only, so the CAT link isn't spammed every loop. Leaving FM clears
+            // the tracker so the next FM entry re-applies. Best-effort (a rig without
+            // repeater or CTCSS support no-ops the unsupported command). Same mid-TX guard
+            // as the retune above.
+            if can_retune && md == "FM" {
+                if self.last_fm.as_ref() != Some(&fm) {
+                    let _ = rig.set_fm_repeater(&fm.0, fm.1, fm.2);
+                    self.last_fm = Some(fm);
+                    retuned = true;
+                }
+            } else if md != "FM" {
+                self.last_fm = None;
             }
 
             // Live READ-BACK of the rig's actual dial, so a manual VFO knob turn (or another

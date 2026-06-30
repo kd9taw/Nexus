@@ -89,6 +89,13 @@ const PTT_METHODS: { value: string; label: string }[] = [
   { value: 'vox', label: 'VOX (no keying)' },
 ]
 
+// Standard EIA CTCSS (PL) tones, Hz — for the FM repeater-access tone picker.
+const CTCSS_TONES = [
+  67.0, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5, 91.5, 94.8, 97.4, 100.0, 103.5, 107.2,
+  110.9, 114.8, 118.8, 123.0, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7, 162.2,
+  167.9, 173.8, 179.9, 186.2, 192.8, 203.5, 210.7, 218.1, 225.7, 233.6, 241.8, 250.3,
+]
+
 const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs']
 
 /** WSJT-X Split Operation choices (Settings ▸ Radio parity). */
@@ -992,6 +999,56 @@ export function SettingsPanel({
                 </select>
                 <span className="settings-hint">How transmit is keyed.</span>
               </label>
+
+              <label className="settings-field">
+                <span className="settings-label">Phone mode</span>
+                <select
+                  className="settings-input"
+                  value={form.phoneMode}
+                  onChange={(e) => update('phoneMode', e.target.value)}
+                >
+                  <option value="ssb">SSB (USB/LSB by band)</option>
+                  <option value="fm">FM (VHF/UHF + repeaters)</option>
+                </select>
+                <span className="settings-hint">FM drives the rig to FM + the shift/tone below.</span>
+              </label>
+
+              {form.phoneMode === 'fm' && (
+                <>
+                  <label className="settings-field">
+                    <span className="settings-label">Repeater shift</span>
+                    <select
+                      className="settings-input"
+                      value={form.rptrShift}
+                      onChange={(e) => update('rptrShift', e.target.value)}
+                    >
+                      <option value="simplex">Simplex (no shift)</option>
+                      <option value="plus">Plus (+)</option>
+                      <option value="minus">Minus (−)</option>
+                    </select>
+                    <span className="settings-hint">Offset is the band standard (2 m 600 k, 70 cm 5 M…).</span>
+                  </label>
+
+                  <label className="settings-field">
+                    <span className="settings-label">CTCSS (PL) tone</span>
+                    <select
+                      className="settings-input"
+                      value={String(form.ctcssToneHz)}
+                      onChange={(e) =>
+                        setForm((p) => (p ? { ...p, ctcssToneHz: Number(e.target.value) } : p))
+                      }
+                    >
+                      <option value="0">Off</option>
+                      {CTCSS_TONES.map((t) => (
+                        <option key={t} value={String(t)}>
+                          {t.toFixed(1)} Hz
+                        </option>
+                      ))}
+                    </select>
+                    <span className="settings-hint">Repeater access tone (PL).</span>
+                  </label>
+                </>
+              )}
 
               <div className="settings-field">
                 <span className="settings-label">Zero-config setup</span>

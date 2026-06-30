@@ -1110,6 +1110,12 @@ export interface Settings {
   band: string
   dialMhz: number
   sideband: string
+  /** Phone sub-mode: 'ssb' (sideband by band) or 'fm' (FM voice + repeater shift/CTCSS). */
+  phoneMode: string
+  /** FM repeater shift: 'simplex' | 'plus' | 'minus'. */
+  rptrShift: string
+  /** FM CTCSS (PL) tone in Hz; 0 = off. */
+  ctcssToneHz: number
   fdClass: string
   fdSection: string
   /** Amateur license class: 'technician' | 'general' | 'extra' | 'open' (no TX limits). */
