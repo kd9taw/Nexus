@@ -870,6 +870,10 @@ export interface FeedHealth {
   /** The configured human DX-cluster host (e.g. "ve7cc.net:23") for the phone-source
    * label; null when no human node is configured. */
   phoneClusterHost: string | null
+  /** PHONE-classed spots received from human nodes this session — for the Needed board's
+   * "N SSB spots" diagnostic (0 = SSB not arriving; >0 with no phone rows = arriving but
+   * not a need). */
+  phoneSpotsSeen: number
 }
 
 /** Worked All States progress (50 US states; LoTW/paper confirmed). */

@@ -116,7 +116,7 @@ interface Props {
    * board can say "Phone source: ve7cc.net:23 · live" right where phone needs appear. This
    * is the ONLY source of Phone needs (RBN has no phone), so an empty board reads correctly:
    * "source up, nothing I need is spotted" vs "source down". Omitted in the pop-out window. */
-  phoneSource?: { status: FeedStatus; host: string | null } | null
+  phoneSource?: { status: FeedStatus; host: string | null; spotsSeen: number } | null
 }
 
 /** Compact phone-source descriptor for the board header: [css class, short text, tooltip]. */
@@ -290,9 +290,14 @@ export function NeededPanel({
         (phoneSource.status.enabled ? (
           (() => {
             const [cls, text, title] = phoneSourceLabel(phoneSource)
+            // Diagnostic split: SSB spots actually received vs how many became needs.
+            // 0 spots → SSB isn't reaching the app; spots>0 but needs=0 → arriving, but
+            // none are a need for your log (so an empty Phone column is correct, not a bug).
+            const ssb = phoneSource.spotsSeen
+            const phoneNeeds = alerts.filter((a) => a.mode === 'Phone').length
             return (
               <div className={`np-phone-src ${cls}`} title={title}>
-                {text}
+                {text} · {ssb} SSB spot{ssb === 1 ? '' : 's'} → {phoneNeeds} need{phoneNeeds === 1 ? '' : 's'}
               </div>
             )
           })()

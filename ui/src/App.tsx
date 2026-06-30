@@ -1168,7 +1168,11 @@ export default function App() {
           onPopOut={() => void openPanelWindow('needed')}
           phoneSource={
             feedHealth
-              ? { status: feedHealth.phoneCluster, host: feedHealth.phoneClusterHost }
+              ? {
+                  status: feedHealth.phoneCluster,
+                  host: feedHealth.phoneClusterHost,
+                  spotsSeen: feedHealth.phoneSpotsSeen,
+                }
               : null
           }
         />

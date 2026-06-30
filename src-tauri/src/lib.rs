@@ -144,12 +144,15 @@ struct FeedHealthState {
     cluster_connected: std::sync::atomic::AtomicBool,
     /// PSK Reporter MQTT session currently up (set on accepted CONNACK, cleared on drop).
     pskr_connected: std::sync::atomic::AtomicBool,
-    /// Last parsed spot from ANY HUMAN DX-cluster node — the SSB/phone source. The RBN
-    /// skimmer firehoses (CW/digital) do NOT stamp this, so it answers "is my phone source
-    /// actually up?" independently of the always-busy RBN feeds (whose traffic otherwise
-    /// keeps `cluster_last` green even when every human node is down). Per-node connected
-    /// state lives in [`PHONE_NODE_CONNS`]; this is the shared aggregate freshness.
+    /// Last parsed PHONE-CLASSED spot from any human DX-cluster node — the true "is SSB
+    /// actually arriving?" signal. Stamped ONLY when a human-node spot classifies as Phone
+    /// (a human node's feed is mostly CW; stamping on every spot made the pill read live off
+    /// CW traffic and masked a phone drought). Per-node connected state lives in
+    /// [`PHONE_NODE_CONNS`].
     phone_cluster_last: std::sync::atomic::AtomicI64,
+    /// Running count of PHONE-classed spots seen from human nodes this session — the
+    /// diagnostic number behind "N SSB spots" on the Needed board. Reset on a feed restart.
+    phone_spots_seen: std::sync::atomic::AtomicI64,
 }
 type SharedHealth = Arc<FeedHealthState>;
 
@@ -294,8 +297,19 @@ fn start_human_cluster_feed(spots: &SharedSpots, host: &str, mycall: &str, healt
                 let ts = now_unix();
                 hp.cluster_last
                     .store(ts, std::sync::atomic::Ordering::Relaxed);
-                hp.phone_cluster_last
-                    .store(ts, std::sync::atomic::Ordering::Relaxed);
+                // Only a PHONE-classed spot proves SSB is actually reaching us — a human
+                // node's feed is mostly CW (RBN relay + human CW), which would otherwise keep
+                // the Phone pill green and hide a phone drought. Classify the same way the
+                // need-matcher does.
+                if matches!(
+                    propagation::classify_spot_mode(sp.freq_mhz(), &sp.comment),
+                    propagation::ModeClass::Phone
+                ) {
+                    hp.phone_cluster_last
+                        .store(ts, std::sync::atomic::Ordering::Relaxed);
+                    hp.phone_spots_seen
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 if let Ok(mut b) = buf.lock() {
                     b.push(sp.clone());
                 }
@@ -438,6 +452,10 @@ struct FeedHealth {
     /// Compact phone-source label: the host for one node, "host +N" for several, `None` for
     /// none (RBN-only operator).
     phone_cluster_host: Option<String>,
+    /// Count of PHONE-classed spots received from human nodes this session — lets the Needed
+    /// board show "N SSB spots", splitting "SSB isn't arriving" (0) from "arriving but not a
+    /// need" (>0 with no phone rows).
+    phone_spots_seen: i64,
 }
 
 fn feed_status(started: bool, connected: bool, last: i64, now: i64) -> FeedStatus {
@@ -526,6 +544,7 @@ fn get_feed_health(health: State<'_, SharedHealth>) -> FeedHealth {
             now,
         ),
         phone_cluster_host: summarize_hosts(&human_hosts),
+        phone_spots_seen: health.phone_spots_seen.load(Relaxed),
     }
 }
 
@@ -1387,6 +1406,7 @@ fn restart_live_feeds(
         health.cluster_connected.store(false, SeqCst);
         health.pskr_connected.store(false, SeqCst);
         health.phone_cluster_last.store(0, SeqCst);
+        health.phone_spots_seen.store(0, SeqCst);
         // Re-arm: clear stops + release the once-latches, then start fresh threads
         // from the LATEST persisted settings (NOT spawn-time captures — a second
         // save during the drain must win). An emptied/invalid callsign simply
