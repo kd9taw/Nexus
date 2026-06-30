@@ -158,10 +158,14 @@ pub struct Settings {
     pub source: SourceKind,
     /// Upload heard stations to PSK Reporter.
     pub pskreporter: bool,
-    /// Connect to a DX cluster / RBN for need-aware spots (opt-in network; takes
-    /// effect at startup). Off by default.
+    /// Connect to spot networks for need-aware spots (takes effect at startup). When on,
+    /// the RBN CW (7000) + RBN digital (7001) skimmer firehoses are connected for the big
+    /// CW + digital evidence, PLUS the human DX-cluster node in `cluster_host` for SSB/phone
+    /// (which RBN doesn't carry). SpotCollector-style multi-source aggregation.
     pub cluster_enabled: bool,
-    /// DX cluster / RBN telnet endpoint ("host:port").
+    /// An ADDITIONAL human DX-cluster (DXSpider/CC-Cluster) telnet endpoint ("host:port") for
+    /// SSB/phone + human spots — the RBN CW/digital skimmer feeds are connected automatically.
+    /// Empty = RBN only (no phone). Telnet logs in with your callsign.
     pub cluster_host: String,
 
     // --- audio I/O ---
@@ -509,7 +513,10 @@ impl Default for Settings {
             // feeds; cluster_host is the RBN endpoint, so this gives RBN spots free.
             pskreporter: true,
             cluster_enabled: true,
-            cluster_host: "telnet.reversebeacon.net:7001".to_string(),
+            // A public human DX-cluster node for SSB/phone + human spots (the RBN CW +
+            // digital skimmer feeds are wired automatically). Configurable; pick your
+            // favorite node. RBN-only operators can blank this.
+            cluster_host: "dxc.nc7j.com:7373".to_string(),
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -581,6 +588,13 @@ impl Settings {
         s.macros
             .chat
             .retain(|m| !matches!(m.trim().to_uppercase().as_str(), "CQ" | "CQ CQ"));
+        // Migration: cluster_host used to BE the RBN endpoint (digital-only, port 7001),
+        // which is why CW/Phone needs never appeared. RBN CW+digital are now wired
+        // automatically, so cluster_host is repurposed as the human node for SSB/phone —
+        // reset an existing RBN value to the human default so those needs start flowing.
+        if s.cluster_host.contains("reversebeacon.net") {
+            s.cluster_host = "dxc.nc7j.com:7373".to_string();
+        }
         s
     }
 
@@ -735,6 +749,27 @@ mod tests {
         assert!(back.macros.band.iter().any(|m| m == "QRZ?"), "custom band macro kept");
         assert!(!back.macros.chat.iter().any(|m| m == "CQ"), "stale chat CQ dropped");
         assert!(back.macros.chat.iter().any(|m| m == "73"), "custom chat macro kept");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_migrates_old_rbn_cluster_host_to_a_human_node() {
+        // cluster_host used to BE the RBN endpoint (digital-only) — that's why CW/Phone
+        // needs never appeared. RBN is now wired automatically; an old RBN value must
+        // migrate to a human node so SSB/phone spots start flowing.
+        let path = std::env::temp_dir()
+            .join("tempo_settings_clustermig")
+            .join("settings.json");
+        let mut s = Settings::default();
+        s.cluster_host = "telnet.reversebeacon.net:7001".into();
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert!(
+            !back.cluster_host.contains("reversebeacon.net"),
+            "old RBN cluster_host migrated to a human node, got {:?}",
+            back.cluster_host
+        );
+        assert!(!back.cluster_host.is_empty(), "migrated to a real node, not blank");
         let _ = std::fs::remove_file(&path);
     }
 }

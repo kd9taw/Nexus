@@ -6,19 +6,25 @@ import type { NeedAlert, NeedTag } from './types'
 /** Need-type filter buckets surfaced in the filter bar. */
 export type NeedTypeFilter = 'all' | 'atno' | 'newBand' | 'newMode' | 'newGrid' | 'dxped' | 'pota' | 'sota'
 
-/** Mode-class filter surfaced in the filter bar. */
-export type ModeFilter = 'all' | 'Digital' | 'CW' | 'Phone'
+/** The operating-mode classes a need can carry. */
+export type ModeClass = 'Digital' | 'CW' | 'Phone'
+export const MODE_CLASSES: readonly ModeClass[] = ['Digital', 'CW', 'Phone']
+
+/** Per-mode visibility — the operator ticks the modes they actually operate. Independent
+ * per mode (multi-select), so a non-CW op can show Phone+Digital and hide CW. */
+export type ModeSet = Record<ModeClass, boolean>
+export const ALL_MODES_ON: ModeSet = { Digital: true, CW: true, Phone: true }
 
 export interface NeededFilters {
   needType: NeedTypeFilter
   bands: string[]      // empty = All
-  mode: ModeFilter
+  modes: ModeSet       // each mode independently on/off; default all on
 }
 
 export const DEFAULT_FILTERS: NeededFilters = {
   needType: 'all',
   bands: [],
-  mode: 'all',
+  modes: { ...ALL_MODES_ON },
 }
 
 /** NeedTag → filter bucket mapping. */
@@ -37,7 +43,6 @@ const TAG_TO_BUCKET: Partial<Record<NeedTag, NeedTypeFilter>> = {
 export const NEED_TYPE_VALUES: readonly NeedTypeFilter[] = [
   'all', 'atno', 'newBand', 'newMode', 'newGrid', 'dxped', 'pota', 'sota',
 ]
-export const MODE_FILTER_VALUES = ['all', 'Digital', 'CW', 'Phone'] as const
 
 /** True when the alert matches the given filter set (all filters AND together). */
 export function filterAlerts(alerts: NeedAlert[], filters: NeededFilters): NeedAlert[] {
@@ -57,10 +62,10 @@ export function filterAlerts(alerts: NeedAlert[], filters: NeededFilters): NeedA
       if (!filters.bands.includes(a.band)) return false
     }
 
-    // ---- Mode filter ----
-    if (filters.mode !== 'all') {
-      if (a.mode !== filters.mode) return false
-    }
+    // ---- Mode multi-select: keep only the operator's enabled modes (an unknown mode
+    // class always shows, so the board never silently swallows a need it can't classify) ----
+    const cls = a.mode as ModeClass
+    if (MODE_CLASSES.includes(cls) && !filters.modes[cls]) return false
 
     return true
   })

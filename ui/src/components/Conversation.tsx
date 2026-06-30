@@ -22,6 +22,10 @@ interface Props {
   /** Call CQ — sends ONE structured `CQ <call> <grid>` frame + arms TX (NOT a chunked
    * free-text broadcast). Distinct from onBroadcast so the CQ goes out clean. */
   onCallCq: () => void
+  /** Presence heartbeat state + toggle — periodically beacons so listening stations can
+   * receive your store-and-forward messages. */
+  beaconOn: boolean
+  onToggleBeacon: () => void
   mycall: string
   mygrid: string
 }
@@ -38,15 +42,22 @@ function deliveryStage(
 ): DeliveryStage | undefined {
   const m = conv.messages[index]
   if (!m.outbound) return undefined
+  // A real RR73 ACK came back → genuinely delivered (not a heuristic).
+  if (m.delivered) return 'delivered'
   const isLastOutbound =
     conv.messages.slice(index + 1).every((x) => !x.outbound)
+  // The "a later inbound implies they heard us" guess only holds for a DIRECTED thread.
+  // In the open band feed ('*') every other station's broadcast lands inbound here, so it
+  // must NOT flip our broadcast to a false "confirmed".
+  const isBroadcast = conv.peer === '*' || m.to == null
   const hasLaterInbound = conv.messages
     .slice(index + 1)
     .some((x) => !x.outbound)
-  if (hasLaterInbound) return 'confirmed'
+  if (hasLaterInbound && !isBroadcast) return 'confirmed'
   if (isLastOutbound && transmitting) return 'on-air'
-  if (isLastOutbound) return 'sent'
-  return 'confirmed'
+  // Sent but unacknowledged (incl. open broadcasts, which never get an ACK) — show a
+  // single ✓ rather than a misleading "confirmed".
+  return 'sent'
 }
 
 export function Conversation({
@@ -59,6 +70,8 @@ export function Conversation({
   onSend,
   onBroadcast,
   onCallCq,
+  beaconOn,
+  onToggleBeacon,
   mycall,
   mygrid,
 }: Props) {
@@ -84,6 +97,15 @@ export function Conversation({
           <p className="cq-onair">
             Transmits the standard <strong>{cqText}</strong> and arms TX.
           </p>
+          <button
+            type="button"
+            className={`heartbeat-btn${beaconOn ? ' on' : ''}`}
+            onClick={onToggleBeacon}
+            aria-pressed={beaconOn}
+            title="Periodically beacon your presence so other Tempo stations can hear you and deliver queued messages — turn off to stay silent"
+          >
+            {beaconOn ? '💓 Heartbeat on' : '🤍 Heartbeat off'}
+          </button>
           <div className="quick-replies band-quickbar" aria-label="Band broadcasts">
             {macros.band.map((q, i) => (
               <button
@@ -111,6 +133,15 @@ export function Conversation({
         <span className="conv-sub">
           {isBand ? `You broadcast as DE ${mycall || 'YOURCALL'}` : `${messages.length} messages`}
         </span>
+        <button
+          type="button"
+          className={`heartbeat-chip${beaconOn ? ' on' : ''}`}
+          onClick={onToggleBeacon}
+          aria-pressed={beaconOn}
+          title="Presence heartbeat — periodically beacon so other Tempo stations can hear you and deliver queued messages"
+        >
+          {beaconOn ? '💓 Heartbeat' : '🤍 Heartbeat'}
+        </button>
       </div>
 
       <div className="message-scroll" ref={scrollRef}>

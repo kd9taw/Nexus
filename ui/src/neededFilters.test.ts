@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { filterAlerts, ageLabel, DEFAULT_FILTERS, type NeededFilters } from './neededFilters'
+import {
+  filterAlerts,
+  ageLabel,
+  DEFAULT_FILTERS,
+  ALL_MODES_ON,
+  type NeededFilters,
+  type ModeClass,
+  type ModeSet,
+} from './neededFilters'
 import type { NeedAlert } from './types'
 
 function a(call: string, tags: NeedAlert['tags'], band: string, mode: string): NeedAlert {
@@ -15,7 +23,7 @@ const ALERTS: NeedAlert[] = [
   a('VK2AB', ['NewMode'],            '15m', 'CW'),
   a('W1AW',  ['Confirm'],            '20m', 'Phone'),
   a('K7RX',  ['NewEntity', 'Dxped'], '10m', 'CW'),
-  a('K1ABC', ['Pota'],               '20m', 'SSB'),
+  a('K1ABC', ['Pota'],               '20m', 'Phone'), // backend emits Phone (not raw "SSB")
   a('W7B',   ['Sota'],               '40m', 'CW'),
 ]
 
@@ -70,49 +78,69 @@ describe('filterAlerts — band', () => {
   })
 })
 
-describe('filterAlerts — mode', () => {
-  it('Digital filter', () => {
-    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, mode: 'Digital' })
+const only = (m: ModeClass): ModeSet => ({
+  Digital: m === 'Digital',
+  CW: m === 'CW',
+  Phone: m === 'Phone',
+})
+
+describe('filterAlerts — mode (multi-select)', () => {
+  it('Digital only', () => {
+    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, modes: only('Digital') })
     expect(r.map((a) => a.call)).toEqual(['3Y0J', 'JA1X'])
   })
 
-  it('CW filter', () => {
-    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, mode: 'CW' })
+  it('CW only', () => {
+    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, modes: only('CW') })
     expect(r.map((a) => a.call)).toEqual(['VK2AB', 'K7RX', 'W7B'])
   })
 
-  it('Phone filter', () => {
-    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, mode: 'Phone' })
-    expect(r.map((a) => a.call)).toEqual(['W1AW'])
+  it('Phone only', () => {
+    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, modes: only('Phone') })
+    expect(r.map((a) => a.call)).toEqual(['W1AW', 'K1ABC'])
+  })
+
+  it('default (all modes on) shows every mode', () => {
+    expect(filterAlerts(ALERTS, DEFAULT_FILTERS)).toHaveLength(ALERTS.length)
+  })
+
+  it('Phone+Digital (CW hidden) drops only CW needs', () => {
+    const r = filterAlerts(ALERTS, {
+      ...DEFAULT_FILTERS,
+      modes: { Digital: true, CW: false, Phone: true },
+    })
+    expect(r.some((x) => x.mode === 'CW')).toBe(false)
+    expect(r.some((x) => x.mode === 'Phone')).toBe(true)
+    expect(r.some((x) => x.mode === 'Digital')).toBe(true)
   })
 })
 
 describe('filterAlerts — AND composition', () => {
   it('atno + 20m', () => {
-    const f: NeededFilters = { needType: 'atno', bands: ['20m'], mode: 'all' }
+    const f: NeededFilters = { needType: 'atno', bands: ['20m'], modes: ALL_MODES_ON }
     const r = filterAlerts(ALERTS, f)
     expect(r.map((a) => a.call)).toEqual(['3Y0J'])
   })
 
   it('atno + CW', () => {
-    const f: NeededFilters = { needType: 'atno', bands: [], mode: 'CW' }
+    const f: NeededFilters = { needType: 'atno', bands: [], modes: only('CW') }
     const r = filterAlerts(ALERTS, f)
     expect(r.map((a) => a.call)).toEqual(['K7RX'])
   })
 
   it('newMode + CW + 40m = empty (VK2AB is on 15m)', () => {
-    const f: NeededFilters = { needType: 'newMode', bands: ['40m'], mode: 'CW' }
+    const f: NeededFilters = { needType: 'newMode', bands: ['40m'], modes: only('CW') }
     expect(filterAlerts(ALERTS, f)).toHaveLength(0)
   })
 
   it('pota + 20m = K1ABC', () => {
-    const f: NeededFilters = { needType: 'pota', bands: ['20m'], mode: 'all' }
+    const f: NeededFilters = { needType: 'pota', bands: ['20m'], modes: ALL_MODES_ON }
     const r = filterAlerts(ALERTS, f)
     expect(r.map((a) => a.call)).toEqual(['K1ABC'])
   })
 
   it('sota + 20m = empty (W7B is on 40m)', () => {
-    const f: NeededFilters = { needType: 'sota', bands: ['20m'], mode: 'all' }
+    const f: NeededFilters = { needType: 'sota', bands: ['20m'], modes: ALL_MODES_ON }
     expect(filterAlerts(ALERTS, f)).toHaveLength(0)
   })
 })

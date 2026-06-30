@@ -331,6 +331,9 @@ export interface Station {
   worked: boolean
   /** DXCC entity name (country), resolved from the callsign. */
   country?: string | null
+  /** Tier/protocol last heard on — 'FT1' = Tempo, 'FT8'/'FT4' = digital ops. The Tempo
+   * roster shows only Tempo (FT1) stations; Operate shows all. */
+  tier?: Tier | null
 }
 
 export interface ChatMessage {
@@ -344,6 +347,9 @@ export interface ChatMessage {
   freqHz: number | null
   dtSec: number | null
   tier: Tier | null
+  /** Outbound directed message the recipient acknowledged (an RR73 ACK came back) —
+   * a REAL delivery confirmation, not the "a later reply implies they heard us" guess. */
+  delivered?: boolean
 }
 
 export interface Conversation {
@@ -406,6 +412,9 @@ export interface RadioStatus {
   /** Active T/R period (s) — FT1 4s, FT8 15s, FT4 7.5s — so the UI labels the cycle
    * with the real period. */
   trPeriodSecs?: number
+  /** Presence heartbeat on — a periodic beacon so listening stations are deliverable
+   * (drives the Tempo Heartbeat toggle). */
+  beacon?: boolean
   /** Receive audio offset (Hz) — the green waterfall marker. */
   rxOffsetHz: number
   /** Transmit audio offset (Hz) — the red waterfall marker. */

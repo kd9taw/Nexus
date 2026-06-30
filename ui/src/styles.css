@@ -3271,6 +3271,42 @@ body.resizing {
   color: var(--state-good);
   opacity: 1;
 }
+/* A real on-air RR73 ACK — strongest delivery affirmation. */
+/* Presence heartbeat toggle — launchpad button + compact header chip. */
+.heartbeat-btn {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 13px;
+}
+.heartbeat-btn.on {
+  border-color: var(--state-good);
+  color: var(--state-good);
+}
+.heartbeat-chip {
+  margin-left: auto;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.heartbeat-chip.on {
+  border-color: var(--state-good);
+  color: var(--state-good);
+}
+.delivery.delivered {
+  color: var(--state-good);
+  opacity: 1;
+  font-weight: 600;
+}
 
 /* typing indicator */
 .bubble.typing {
@@ -7832,6 +7868,26 @@ select.settings-input {
   cursor: pointer;
 }
 .np-popout:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* Pop-out buttons on Connect + DXpeditions + Operate headers (multi-monitor tear-off). */
+.connect-popout,
+.dxped-popout,
+.cockpit-popout {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.connect-popout:hover,
+.dxped-popout:hover {
   border-color: var(--accent);
   color: var(--accent);
 }

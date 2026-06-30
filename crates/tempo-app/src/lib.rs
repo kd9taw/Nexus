@@ -35,6 +35,25 @@ const ACTIVE_WINDOW: u64 = 4;
 /// Slots within this many (but past [`ACTIVE_WINDOW`]) count as [`Presence::Idle`].
 const IDLE_WINDOW: u64 = 16;
 
+/// Max store-and-forward send attempts before a message is purged (so a message to a
+/// station that never rogers doesn't resend forever — the resend-loop backstop).
+const MAX_SEND_ATTEMPTS: u32 = 8;
+
+/// If `msg` is a directed roger (RR73 / RRR) addressed to `mycall`, return the SENDER's
+/// call — it's a delivery ACK for any message we queued to them (Tempo-to-Tempo chat).
+fn ack_sender_for(msg: &str, mycall: &str) -> Option<String> {
+    use tempo_core::message::{same_call, Msg};
+    let (to, de) = match Msg::parse(msg) {
+        Msg::Rr73 { to, de } | Msg::Rrr { to, de } => (to, de),
+        _ => return None,
+    };
+    if !de.is_empty() && same_call(&to, mycall) {
+        Some(de.to_uppercase())
+    } else {
+        None
+    }
+}
+
 /// The whole application's mutable state, owned by the shell on one thread.
 pub struct AppState {
     mycall: String,
@@ -55,6 +74,12 @@ pub struct AppState {
     link: LinkState,
     /// Number of inbound messages already drained from the inbox into threads.
     drained: usize,
+    /// Senders of directed messages we just fully received and owe an ACK (a 1-frame
+    /// RR73), each tagged with the slot we incurred it. The engine drains this each poll
+    /// and queues the ACK frames (dropping any past their TTL, so ACKs banked while TX was
+    /// off don't all flush as a stale burst minutes later). Closes the delivery loop so
+    /// the sender stops resending.
+    pending_acks: Vec<(String, u64)>,
 }
 
 impl AppState {
@@ -175,6 +200,7 @@ impl AppState {
                 tx_even: true,
                 tx_cycle_auto: true,
                 tr_period_secs: 0.0,
+                beacon: false,
                 rx_offset_hz: 1500.0,
                 tx_offset_hz: 1500.0,
                 hold_tx_freq: false,
@@ -195,6 +221,7 @@ impl AppState {
                 quality: 0.0,
             },
             drained: 0,
+            pending_acks: Vec::new(),
         }
     }
 
@@ -227,6 +254,7 @@ impl AppState {
             freq_hz: None,
             dt_sec: None,
             tier: Some(self.link.tier),
+            delivered: false, // flips true when the recipient's RR73 ACK arrives
         };
         self.conversation_mut(peer).messages.push(msg);
     }
@@ -249,6 +277,7 @@ impl AppState {
             freq_hz: None,
             dt_sec: None,
             tier: Some(tier),
+            delivered: false, // broadcasts have no per-recipient ACK
         };
         self.conversation_mut("*").messages.push(msg);
     }
@@ -292,14 +321,22 @@ impl AppState {
     /// On-air text frames the store-and-forward queue wants to send now: for any
     /// undelivered message whose recipient is present (heard within `window`) and
     /// out of `backoff`, the identify frame + free-text chunks. Marks attempts.
-    pub fn due_frames(&mut self, slot: u64, window: u64, backoff: u64) -> Vec<String> {
+    /// Frames to transmit now PLUS the logical bodies of any messages released for the
+    /// FIRST time this call — the engine records one own-TX band-activity row per released
+    /// message (so a store-and-forward message shows when it actually goes on the air, not
+    /// at compose time, and not once per resend).
+    pub fn due_frames(&mut self, slot: u64, window: u64, backoff: u64) -> (Vec<String>, Vec<String>) {
         // `self.store` and `self.inbox.roster` are disjoint fields, so this
         // mutable/immutable split borrow is sound.
-        self.store
-            .due(&self.inbox.roster, slot, window, backoff)
-            .into_iter()
-            .flat_map(|(_to, frames)| frames)
-            .collect()
+        let mut frames = Vec::new();
+        let mut bodies = Vec::new();
+        for (_to, body, fs) in self.store.due(&self.inbox.roster, slot, window, backoff) {
+            if let Some(b) = body {
+                bodies.push(b);
+            }
+            frames.extend(fs);
+        }
+        (frames, bodies)
     }
 
     /// Mark all queued messages for `peer` delivered (e.g. on an ack).
@@ -356,6 +393,27 @@ impl AppState {
         }
 
         self.inbox.observe(decodes, slot);
+        // ACK-in: a directed roger (RR73/RRR) addressed to us confirms a message we
+        // queued to that sender arrived → mark it delivered (stops the resend) and stamp
+        // the conversation for a real "Delivered ✓". Chat (FT1) only; then drop spent
+        // queue entries. (Receiving an ACK does NOT itself trigger another ACK — only
+        // free-text directed messages do, so there's no ACK loop.)
+        if self.link.tier == Tier::Ft1 {
+            let mut acked: Vec<String> = decodes
+                .iter()
+                .filter_map(|d| ack_sender_for(&d.message, &self.mycall))
+                .collect();
+            // One RR73 can be decoded more than once in a slot; collapse same-slot
+            // duplicates so a single ACK clears exactly one queued message (FIFO).
+            acked.sort();
+            acked.dedup();
+            for from in acked {
+                if self.store.mark_one_delivered(&from) {
+                    self.mark_conversation_delivered(&from);
+                }
+            }
+            self.store.purge(MAX_SEND_ATTEMPTS);
+        }
         // Conversation threads are a Tempo (FT1) feature. FT8 / FT4 / DX1 decodes are
         // QSO traffic — folding their CQ/exchange/free-text fragments into per-peer
         // threads turned the recents list into a feed of phantom "chats" the operator
@@ -367,6 +425,23 @@ impl AppState {
             self.drain_inbox();
         } else {
             self.drained = self.inbox.messages.len();
+        }
+    }
+
+    /// Drain the ACKs we owe (senders whose directed messages we fully received). The
+    /// engine queues a 1-frame RR73 to each. Cleared so each is sent once.
+    pub fn take_pending_acks(&mut self) -> Vec<(String, u64)> {
+        std::mem::take(&mut self.pending_acks)
+    }
+
+    /// Stamp the OLDEST still-undelivered outbound message to `peer` as delivered (one
+    /// RR73 ACK confirms one message, FIFO) — drives the real "Delivered ✓". Marking the
+    /// whole thread would falsely confirm later messages the peer may not have received.
+    fn mark_conversation_delivered(&mut self, peer: &str) {
+        if let Some(conv) = self.conversations.get_mut(peer) {
+            if let Some(m) = conv.messages.iter_mut().find(|m| m.outbound && !m.delivered) {
+                m.delivered = true;
+            }
         }
     }
 
@@ -388,6 +463,19 @@ impl AppState {
                     .unwrap_or_else(|| "*".to_string()),
                 None => "*".to_string(),
             };
+            // A directed message addressed to US → owe the sender ONE delivery ACK per
+            // distinct message (the inbox resend-dedup already collapses retransmits, so
+            // each genuine message lands here once). Bounded so a long monitor session
+            // can't grow the owed-ACK list without limit.
+            if m.directed_to_me {
+                if let Some(from) = m.from.as_ref() {
+                    const MAX_PENDING_ACKS: usize = 16;
+                    self.pending_acks.push((from.to_uppercase(), self.slot));
+                    if self.pending_acks.len() > MAX_PENDING_ACKS {
+                        self.pending_acks.remove(0);
+                    }
+                }
+            }
             let msg = ChatMessage {
                 from: m.from,
                 to: m.to,
@@ -399,6 +487,7 @@ impl AppState {
                 freq_hz: None,
                 dt_sec: None,
                 tier: Some(self.link.tier),
+                delivered: false,
             };
             self.conversation_mut(&peer).messages.push(msg);
         }
@@ -428,6 +517,7 @@ impl AppState {
             worked: false,
             // Resolved by the engine from the DXCC resolver; None at this layer.
             country: None,
+            tier: h.mode.map(Tier::from_mode_kind),
         }
     }
 
@@ -680,6 +770,7 @@ mod tests {
             freq_hz: None,
             dt_sec: None,
             tier: Some(tier),
+            delivered: false,
         };
         let outbound = ChatMessage { outbound: true, ..inbound(Tier::Ft1) };
         app.load_conversations(vec![

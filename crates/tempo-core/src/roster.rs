@@ -6,7 +6,7 @@
 //! "who's out there" view.
 
 use crate::message::Msg;
-use modes::Decode;
+use modes::{Decode, ModeKind};
 use std::collections::HashMap;
 
 /// A station we have heard.
@@ -18,6 +18,10 @@ pub struct HeardStation {
     /// Slot index when last heard (monotonic; avoids wall-clock for testability).
     pub last_heard_slot: u64,
     pub heard_count: u32,
+    /// The protocol/mode this station was LAST heard on (`Decode.mode`): `Some(Ft1)` etc.,
+    /// `None` for DX1's robust path or an unknown companion mode. Lets the UI show only
+    /// Tempo-protocol (FT1) stations in the Tempo roster while Operate shows all.
+    pub mode: Option<ModeKind>,
 }
 
 /// Roster of heard stations, keyed by callsign.
@@ -52,10 +56,12 @@ impl Roster {
                 snr: d.snr,
                 last_heard_slot: slot,
                 heard_count: 0,
+                mode: d.mode,
             });
         entry.snr = d.snr;
         entry.last_heard_slot = slot;
         entry.heard_count += 1;
+        entry.mode = d.mode; // last-heard protocol wins (FT8→FT1 re-tags as Tempo)
         if grid.is_some() {
             entry.grid = grid;
         }
@@ -113,6 +119,22 @@ mod tests {
             rv: None,
             mode: None,
         }
+    }
+
+    #[test]
+    fn records_and_retags_the_heard_mode() {
+        // The roster tags each station with the protocol it was last heard on, so the UI
+        // can show only Tempo (FT1) stations in the Tempo roster.
+        let mut r = Roster::new();
+        let mut d = dec("CQ W9XYZ EN37", -5);
+        d.mode = Some(ModeKind::Ft8);
+        r.observe(&d, 1);
+        assert_eq!(r.get("W9XYZ").unwrap().mode, Some(ModeKind::Ft8));
+        // Heard again on FT1 → re-tagged (last-heard protocol wins).
+        let mut d2 = dec("CQ W9XYZ EN37", -5);
+        d2.mode = Some(ModeKind::Ft1);
+        r.observe(&d2, 2);
+        assert_eq!(r.get("W9XYZ").unwrap().mode, Some(ModeKind::Ft1));
     }
 
     #[test]

@@ -34,6 +34,11 @@ pub struct Station {
     /// the roster by country. `None` unless a DXCC resolver is wired.
     #[serde(default)]
     pub country: Option<String>,
+    /// The tier/protocol this station was last heard on (FT1 = Tempo, FT8/FT4 = digital
+    /// ops). `None` for DX1/unknown. The Tempo roster shows only FT1 stations; Operate
+    /// shows all.
+    #[serde(default)]
+    pub tier: Option<Tier>,
 }
 
 /// A single decoded signal from the most recent RX slot, for the live decode
@@ -168,6 +173,10 @@ pub struct ChatMessage {
     pub freq_hz: Option<f32>,
     pub dt_sec: Option<f32>,
     pub tier: Option<Tier>,
+    /// For an OUTBOUND directed message: the recipient acknowledged receipt (a 1-frame
+    /// RR73 ACK came back). Drives a REAL "Delivered ✓" instead of the old heuristic.
+    #[serde(default)]
+    pub delivered: bool,
 }
 
 /// A per-peer thread of chat messages.
@@ -276,6 +285,11 @@ pub struct RadioStatus {
     /// UI label "1st/2nd" with the real period instead of assuming 15 s.
     #[serde(default)]
     pub tr_period_secs: f64,
+    /// Heartbeat on: periodically announce presence (a low-cadence beacon) so listening
+    /// stations enter each other's rosters and store-and-forward can deliver. Operator
+    /// toggles it from the Tempo main screen.
+    #[serde(default)]
+    pub beacon: bool,
     /// Receive audio offset (Hz) — the green waterfall marker.
     #[serde(default = "default_offset")]
     pub rx_offset_hz: f32,

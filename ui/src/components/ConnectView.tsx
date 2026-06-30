@@ -82,6 +82,8 @@ interface Props {
   /** The ranked needed-now alerts (App's shared 30 s poll) — the compact at-a-glance
    * list that lived in the old Propagation section; the full board stays in Needed. */
   needAlerts?: NeedAlert[]
+  /** Open Connect in its own window (omit when already standalone). */
+  onPopOut?: () => void
 }
 
 function provLabel(source: PropagationSnapshot['source'], asOf: number): { label: string; cls: string } {
@@ -104,6 +106,7 @@ export function ConnectView({
   onWorkSpot,
   needByCall,
   needAlerts,
+  onPopOut,
 }: Props) {
   const prov = prop ? provLabel(prop.source, prop.asOf) : null
   const [intent, setIntent] = useState<MapIntent>(() =>
@@ -242,6 +245,16 @@ export function ConnectView({
               Expert
             </button>
           </div>
+          {onPopOut && (
+            <button
+              type="button"
+              className="connect-popout"
+              onClick={onPopOut}
+              title="Open Connect in its own window (for a second monitor)"
+            >
+              ⧉ Pop out
+            </button>
+          )}
         </div>
         <div className="connect">
         <div className="connect-map">

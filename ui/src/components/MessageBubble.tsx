@@ -6,7 +6,7 @@ interface Props {
   delivery?: DeliveryStage
 }
 
-export type DeliveryStage = 'sent' | 'on-air' | 'confirmed'
+export type DeliveryStage = 'sent' | 'on-air' | 'confirmed' | 'delivered'
 
 function techSubline(m: ChatMessage): string {
   const parts: string[] = []
@@ -19,12 +19,19 @@ function techSubline(m: ChatMessage): string {
 
 function DeliveryTicks({ stage }: { stage: DeliveryStage }) {
   const label =
-    stage === 'sent' ? 'Sent' : stage === 'on-air' ? 'On air' : 'Confirmed'
+    stage === 'sent'
+      ? 'Sent'
+      : stage === 'on-air'
+        ? 'On air'
+        : stage === 'delivered'
+          ? 'Delivered' // a real RR73 ACK came back
+          : 'Confirmed' // inferred from a later reply
   return (
     <span className={`delivery ${stage}`} title={label} aria-label={label}>
       {stage === 'sent' && '✓'}
       {stage === 'on-air' && '✓✓'}
       {stage === 'confirmed' && '✓✓'}
+      {stage === 'delivered' && '✓✓'}
     </span>
   )
 }

@@ -71,16 +71,18 @@ impl StoreForward {
     }
 
     /// Frames to transmit *now*: for each undelivered message whose recipient is
-    /// active (heard within `window` slots) and out of `backoff`, build the
-    /// on-air burst `[identify, chunk…]` and record the attempt. Returns
-    /// `(recipient, frames)` per releasable message.
+    /// active (heard within `window` slots) and out of `backoff`, build the on-air burst
+    /// `[identify, chunk…]` and record the attempt. Returns `(recipient, body, frames)`
+    /// per releasable message — `body` is `Some` ONLY on the message's FIRST release, so
+    /// the engine can record one own-TX band-activity row when the message actually goes
+    /// on the air (not at compose time, and not once per resend).
     pub fn due(
         &mut self,
         roster: &Roster,
         slot: u64,
         window: u64,
         backoff: u64,
-    ) -> Vec<(String, Vec<String>)> {
+    ) -> Vec<(String, Option<String>, Vec<String>)> {
         let mut out = Vec::new();
         for p in self.queue.iter_mut().filter(|p| !p.delivered) {
             if !roster.is_active(&p.to, slot, window) {
@@ -100,7 +102,8 @@ impl StoreForward {
             frames.extend(text::chunk(&p.text, p.id));
             p.attempts += 1;
             p.last_attempt_slot = Some(slot);
-            out.push((p.to.clone(), frames));
+            let body = if p.attempts == 1 { Some(p.text.clone()) } else { None };
+            out.push((p.to.clone(), body, frames));
         }
         out
     }
@@ -109,6 +112,19 @@ impl StoreForward {
     pub fn mark_delivered(&mut self, to: &str) {
         for p in self.queue.iter_mut().filter(|p| p.to == to) {
             p.delivered = true;
+        }
+    }
+
+    /// Mark the OLDEST still-undelivered message for `to` delivered, returning whether one
+    /// was marked. An RR73 ACK carries no message id, so each received ACK clears exactly
+    /// ONE message FIFO — never the whole peer queue (which would silently drop a
+    /// still-in-flight later message and falsely show it "delivered").
+    pub fn mark_one_delivered(&mut self, to: &str) -> bool {
+        if let Some(p) = self.queue.iter_mut().find(|p| !p.delivered && p.to == to) {
+            p.delivered = true;
+            true
+        } else {
+            false
         }
     }
 
@@ -155,14 +171,18 @@ mod tests {
         let due = sf.due(&roster, 6, 10, 3);
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].0, "N0XYZ");
+        assert_eq!(due[0].1.as_deref(), Some("QSY TO 40M AT 0200Z PSE"), "body on first release");
         // identify frame + at least one chunk.
-        assert!(due[0].1.len() >= 2);
-        assert!(due[0].1[0].contains("N0XYZ") && due[0].1[0].contains("W9XYZ"));
+        assert!(due[0].2.len() >= 2);
+        assert!(due[0].2[0].contains("N0XYZ") && due[0].2[0].contains("W9XYZ"));
 
         // Within backoff → not resent.
         assert!(sf.due(&roster, 7, 10, 3).is_empty());
-        // After backoff and still undelivered → resent.
-        assert_eq!(sf.due(&roster, 9, 10, 3).len(), 1);
+        // After backoff and still undelivered → resent, but NO body this time (the own-TX
+        // row was already recorded on the first release — resends mustn't spam it).
+        let resend = sf.due(&roster, 9, 10, 3);
+        assert_eq!(resend.len(), 1);
+        assert_eq!(resend[0].1, None, "no body on a resend");
 
         // Delivered → no longer due, pending drops.
         sf.mark_delivered("N0XYZ");
@@ -180,6 +200,22 @@ mod tests {
         assert!(sf.due(&roster, 100, 10, 3).is_empty());
         // Within window → due.
         assert_eq!(sf.due(&roster, 12, 10, 3).len(), 1);
+    }
+
+    #[test]
+    fn one_ack_clears_only_the_oldest_message() {
+        // Regression: an RR73 ACK has no message id, so it must clear exactly ONE queued
+        // message FIFO — never the whole peer queue (which silently dropped a later
+        // still-in-flight message and falsely marked it delivered).
+        let mut sf = StoreForward::new("W9XYZ", "EN37");
+        sf.queue("N0XYZ", "FIRST", 0);
+        sf.queue("N0XYZ", "SECOND", 1);
+        assert_eq!(sf.pending(), 2);
+        assert!(sf.mark_one_delivered("N0XYZ"));
+        assert_eq!(sf.pending(), 1, "one ACK clears exactly one message");
+        assert!(sf.mark_one_delivered("N0XYZ"));
+        assert_eq!(sf.pending(), 0);
+        assert!(!sf.mark_one_delivered("N0XYZ"), "nothing left to clear");
     }
 
     #[test]

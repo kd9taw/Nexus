@@ -28,6 +28,7 @@ import {
   haltTx as apiHaltTx,
   setTxEven as apiSetTxEven,
   setTxCycleAuto as apiSetTxCycleAuto,
+  setBeacon as apiSetBeacon,
   setRxOffset as apiSetRxOffset,
   setTxOffset as apiSetTxOffset,
   setHoldTxFreq as apiSetHoldTxFreq,
@@ -642,6 +643,13 @@ export default function App() {
     void withErrorToast(() => apiCallCq(null), 'Could not call CQ').then(surfaceBandFeed)
   }, [surfaceBandFeed])
 
+  const handleToggleBeacon = useCallback(() => {
+    const next = !(snap?.radio.beacon ?? false)
+    void withErrorToast(() => apiSetBeacon(next), 'Could not toggle the heartbeat').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [snap?.radio.beacon])
+
   const handleSetFrequency = useCallback(
     (dialMhz: number, band: string, mode: string) => {
       void withErrorToast(
@@ -769,6 +777,13 @@ export default function App() {
         handleQsy(alert.band)
         return
       }
+      // The Needed board now lists ALL modes (W1), but the CW/Phone cockpits are opt-in
+      // features. If the target cockpit is disabled, don't navigate into a hidden view
+      // (that dumped the operator on the landing page) — just QSY the rig to the spot.
+      if ((t.view === 'cw' && !cwEnabled) || (t.view === 'phone' && !phoneEnabled)) {
+        handleQsy(alert.band)
+        return
+      }
       // 'operate' is the digital cockpit, so its operating mode is 'digital'.
       const opMode: 'digital' | 'phone' | 'cw' = t.view === 'operate' ? 'digital' : t.view
       void withErrorToast(
@@ -790,7 +805,7 @@ export default function App() {
         pushToast(`▶ ${t.call} — ${alert.mode} ${t.band}, ready to log`, 'success', 4000)
       })
     },
-    [bandPlan, handleQsy],
+    [bandPlan, handleQsy, cwEnabled, phoneEnabled],
   )
 
   // Work a spot double-clicked on the MAP — the same atomic path as the Needed
@@ -1013,9 +1028,14 @@ export default function App() {
     effectiveView !== 'settings' &&
     snap.mycall.trim() === '' // fresh install (the default callsign is empty)
 
+  // The Tempo (chat) roster represents who's on the TEMPO protocol — so it shows only
+  // stations last heard on FT1, not the FT8/FT4 stations that share the engine's single
+  // roster. Every other view (Operate, Field Day) shows the full roster.
+  const rosterStations =
+    effectiveView === 'chat' ? snap.stations.filter((s) => s.tier === 'FT1') : snap.stations
   const stationsPanel = (
     <StationList
-      stations={snap.stations}
+      stations={rosterStations}
       myGrid={snap.mygrid}
       currentSlot={snap.radio.slot}
       activePeer={activePeer}
@@ -1136,7 +1156,10 @@ export default function App() {
     case 'needed':
       workspace = (
         <NeededPanel
-          alerts={visibleAlerts}
+          // FULL un-gated list: the board's own per-mode toggles decide what shows, so a
+          // disabled CW/Phone *feature* no longer hides those needs here (the operator
+          // controls mode visibility in the Needed filter bar instead).
+          alerts={needAlerts}
           bandPlan={bandPlan}
           selectedCall={activePeer}
           onQsy={handleQsy}
@@ -1236,6 +1259,7 @@ export default function App() {
           needByCall={needByCall}
           onWorkSpot={handleWorkMapSpot}
           needAlerts={visibleAlerts}
+          onPopOut={() => void openPanelWindow('connect')}
         />
       )
       break
@@ -1250,6 +1274,7 @@ export default function App() {
               handleMapSelect(call)
               setView('connect')
             }}
+            onPopOut={() => void openPanelWindow('dxped')}
           />
         </main>
       )
@@ -1267,6 +1292,8 @@ export default function App() {
           onSend={handleSend}
           onBroadcast={handleBroadcast}
           onCallCq={handleCallCq}
+          beaconOn={snap.radio.beacon ?? false}
+          onToggleBeacon={handleToggleBeacon}
           mycall={snap.mycall}
           mygrid={snap.mygrid}
         />,
@@ -1367,6 +1394,7 @@ export default function App() {
             onSelect={handleSelect}
             layoutMode={operateLayout}
             onLayoutMode={handleOperateLayout}
+            onPopOut={() => void openPanelWindow('operate')}
             active={effectiveView === 'operate'}
           />
         </div>

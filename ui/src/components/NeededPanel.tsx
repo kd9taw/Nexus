@@ -9,11 +9,13 @@ import {
   filterAlerts,
   ageLabel,
   DEFAULT_FILTERS,
+  ALL_MODES_ON,
+  MODE_CLASSES,
   type NeededFilters,
   type NeedTypeFilter,
-  type ModeFilter,
+  type ModeClass,
+  type ModeSet,
   NEED_TYPE_VALUES,
-  MODE_FILTER_VALUES,
 } from '../neededFilters'
 
 const NEED_CHIP: Record<NeedTag, { label: string; cls: string; title: string }> = {
@@ -47,13 +49,19 @@ function loadFilters(): NeededFilters {
     const needType = NEED_TYPE_VALUES.includes(parsed.needType as NeedTypeFilter)
       ? (parsed.needType as NeedTypeFilter)
       : DEFAULT_FILTERS.needType
-    const mode = (MODE_FILTER_VALUES as readonly string[]).includes(parsed.mode as string)
-      ? (parsed.mode as NeededFilters['mode'])
-      : DEFAULT_FILTERS.mode
+    // Modes: each class independently on/off; missing/old persisted shapes default ON so
+    // the board never silently hides a mode (the old single-select 'mode' is ignored —
+    // upgrading users get all modes back, which is the point of this change).
+    const pm = (parsed.modes ?? {}) as Partial<ModeSet>
+    const modes: ModeSet = {
+      Digital: typeof pm.Digital === 'boolean' ? pm.Digital : true,
+      CW: typeof pm.CW === 'boolean' ? pm.CW : true,
+      Phone: typeof pm.Phone === 'boolean' ? pm.Phone : true,
+    }
     return {
       needType,
       bands: Array.isArray(parsed.bands) ? parsed.bands.filter((b) => typeof b === 'string') : [],
-      mode,
+      modes,
     }
   } catch {
     return { ...DEFAULT_FILTERS }
@@ -84,8 +92,7 @@ const NEED_TYPE_OPTS: { value: NeedTypeFilter; label: string }[] = [
   { value: 'sota', label: 'SOTA' },
 ]
 
-const MODE_OPTS: { value: ModeFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
+const MODE_OPTS: { value: ModeClass; label: string }[] = [
   { value: 'Digital', label: 'Digital' },
   { value: 'CW', label: 'CW' },
   { value: 'Phone', label: 'Phone' },
@@ -154,12 +161,25 @@ export function NeededPanel({
     })
   }, [])
 
+  const toggleMode = useCallback((mode: ModeClass) => {
+    setFilters((prev) => {
+      const next: NeededFilters = {
+        ...prev,
+        modes: { ...prev.modes, [mode]: !prev.modes[mode] },
+      }
+      saveFilters(next)
+      return next
+    })
+  }, [])
+
   const clearFilters = useCallback(() => {
-    updateFilters({ ...DEFAULT_FILTERS })
+    updateFilters({ ...DEFAULT_FILTERS, modes: { ...ALL_MODES_ON } })
   }, [updateFilters])
 
   const hasActiveFilters =
-    filters.needType !== 'all' || filters.bands.length > 0 || filters.mode !== 'all'
+    filters.needType !== 'all' ||
+    filters.bands.length > 0 ||
+    MODE_CLASSES.some((c) => !filters.modes[c])
 
   const rows = useMemo(() => {
     const filtered = filterAlerts(alerts, filters)
@@ -273,14 +293,17 @@ export function NeededPanel({
 
           <div className="np-filter-sep" aria-hidden="true" />
 
-          {/* Mode chips */}
-          <div className="np-filter-group">
+          {/* Mode chips — multi-select: tick the modes you operate (a non-CW op hides CW).
+              Independent toggles, not exclusive; an "off" mode is dimmed. */}
+          <div className="np-filter-group" role="group" aria-label="Modes shown">
             {MODE_OPTS.map((opt) => (
               <button
                 key={opt.value}
                 type="button"
-                className={`np-chip${filters.mode === opt.value ? ' active' : ''}`}
-                onClick={() => updateFilters({ ...filters, mode: opt.value })}
+                className={`np-chip${filters.modes[opt.value] ? ' active' : ''}`}
+                aria-pressed={filters.modes[opt.value]}
+                onClick={() => toggleMode(opt.value)}
+                title={`${filters.modes[opt.value] ? 'Hide' : 'Show'} ${opt.label} needs`}
               >
                 {opt.label}
               </button>

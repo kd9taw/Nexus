@@ -87,3 +87,54 @@ fn two_engines_exchange_a_directed_message() {
 
     eprintln!("B received from W9XYZ: \"{text}\"");
 }
+
+/// The full delivery loop: A sends a directed message to B; B reassembles it and
+/// auto-sends a 1-frame RR73 ACK; A hears the ACK and marks the message delivered —
+/// proving the resend stops and "Delivered ✓" becomes real (not a heuristic).
+#[test]
+fn directed_message_is_acked_and_marked_delivered() {
+    let mut a = Engine::new("W9XYZ", "EN37", 0); // Tx 1st (even)
+    let mut b = Engine::new("K2DEF", "FN31", 1); // Tx 2nd (odd)
+    a.set_tx_enabled(true);
+    b.set_tx_enabled(true);
+    a.set_tier(Tier::Ft1);
+    b.set_tier(Tier::Ft1);
+    // This loopback ingests a decode in the SAME slot it was TXed (real radio decodes one
+    // slot later), so pin the static parities and let the modem carry the exchange.
+    a.set_tx_cycle_auto(false);
+    b.set_tx_cycle_auto(false);
+    a.set_beacon(true);
+    b.set_beacon(true); // both announce presence so the queued message releases
+    let mut air_a2b = VirtualAir::new(ft1::SAMPLE_RATE, 1);
+    let mut air_b2a = VirtualAir::new(ft1::SAMPLE_RATE, 2);
+
+    let mut sent = false;
+    let mut delivered = false;
+    for slot in 0..240u64 {
+        if slot == 10 && !sent {
+            a.send_message("K2DEF", "MEET AT NOON ES 73");
+            sent = true;
+        }
+        if slot % 2 == 0 {
+            for wave in a.poll_tx(slot) {
+                let rx = air_a2b.receive(&wave, ON_TIME_OFFSET, 15.0);
+                b.ingest(&rx, slot);
+            }
+        } else {
+            for wave in b.poll_tx(slot) {
+                let rx = air_b2a.receive(&wave, ON_TIME_OFFSET, 15.0);
+                a.ingest(&rx, slot);
+            }
+        }
+        if let Some(conv) = a.app.conversation("K2DEF") {
+            if conv.messages.iter().any(|m| m.outbound && m.delivered) {
+                delivered = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        delivered,
+        "A's directed message should be ACKed by B and marked delivered"
+    );
+}

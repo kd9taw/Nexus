@@ -61,9 +61,18 @@ type SharedWxHistory = Arc<Mutex<propagation::SpaceWxHistory>>;
 /// this stop flag exists only so `cluster::run`'s signature is satisfied.
 static CLUSTER_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// One-shot latch: the cluster daemon thread is spawned at most once per process,
+/// One-shot latch: the human-cluster daemon thread is spawned at most once per process,
 /// whether at startup or lazily when a real callsign is first entered in Settings.
 static CLUSTER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The RBN skimmer firehoses (connected automatically when cluster spotting is on): CW/RTTY
+/// on 7000, FT8/FT4 digital on 7001. Huge volume + exact frequencies → the CW + digital need
+/// evidence. SSB/phone has no skimmer network, so it comes from the human node (cluster_host).
+const RBN_CW_HOST: &str = "telnet.reversebeacon.net:7000";
+const RBN_DIGITAL_HOST: &str = "telnet.reversebeacon.net:7001";
+static RBN_CW_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RBN_DIGITAL_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Recent live PSK Reporter MQTT reception reports (the "getting out" firehose),
 /// fed by the background MQTT thread and merged into the propagation nowcast.
@@ -167,13 +176,34 @@ fn is_real_call(call: &str) -> bool {
 /// `set_settings`). No-op unless `mycall` is a [`is_real_call`]; the caller is
 /// responsible for the `cluster_enabled` gate. Parsed spots flow into `spots`, and
 /// each one stamps `health.cluster_last` for the Now-Bar liveness pill.
-fn start_cluster_feed(
+/// Connect ALL enabled spot sources (SpotCollector-style aggregation): RBN CW + RBN digital
+/// skimmer firehoses, plus the operator's human DX-cluster node for SSB/phone. Each spawns
+/// at most once per process. All push into the one shared `spots` buffer the need-matcher
+/// reads.
+fn start_cluster_feeds(
     spots: &SharedSpots,
     cluster_host: &str,
     mycall: &str,
     health: &SharedHealth,
 ) {
-    if !is_real_call(mycall) || CLUSTER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+    start_cluster_feed(spots, RBN_CW_HOST, mycall, health, &RBN_CW_STARTED);
+    start_cluster_feed(spots, RBN_DIGITAL_HOST, mycall, health, &RBN_DIGITAL_STARTED);
+    // The configurable human node (SSB/phone + human spots). Skip an RBN endpoint here —
+    // RBN is already wired above — so an old RBN cluster_host can't double-connect.
+    let h = cluster_host.trim();
+    if !h.is_empty() && !h.contains("reversebeacon.net") {
+        start_cluster_feed(spots, h, mycall, health, &CLUSTER_STARTED);
+    }
+}
+
+fn start_cluster_feed(
+    spots: &SharedSpots,
+    cluster_host: &str,
+    mycall: &str,
+    health: &SharedHealth,
+    started: &std::sync::atomic::AtomicBool,
+) {
+    if !is_real_call(mycall) || started.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
     conn_log(
@@ -373,7 +403,10 @@ fn get_feed_health(health: State<'_, SharedHealth>) -> FeedHealth {
     let now = now_unix();
     FeedHealth {
         cluster: feed_status(
-            CLUSTER_STARTED.load(Relaxed),
+            // Any of the cluster sources spawned (RBN CW/digital firehoses + human node).
+            RBN_CW_STARTED.load(Relaxed)
+                || RBN_DIGITAL_STARTED.load(Relaxed)
+                || CLUSTER_STARTED.load(Relaxed),
             health.cluster_connected.load(Relaxed),
             health.cluster_last.load(Relaxed),
             now,
@@ -1104,7 +1137,7 @@ fn set_settings(
     }
 
     if cluster_enabled {
-        start_cluster_feed(spots.inner(), &cluster_host, &mycall, health.inner());
+        start_cluster_feeds(spots.inner(), &cluster_host, &mycall, health.inner());
     }
     start_pskr_feed(live_paths.inner(), &mycall, health.inner());
     if opening_regional {
@@ -1185,7 +1218,7 @@ fn restart_live_feeds(
                 Err(_) => return,
             };
         if cluster_enabled {
-            start_cluster_feed(&spots, &cluster_host, &mycall, &health);
+            start_cluster_feeds(&spots, &cluster_host, &mycall, &health);
         }
         start_pskr_feed(&live_paths, &mycall, &health);
         if opening_regional {
@@ -1888,6 +1921,18 @@ fn set_tx_cycle_auto(state: State<'_, SharedEngine>, auto: bool) -> Result<AppSn
     Ok(eng.snapshot())
 }
 
+/// Toggle the presence heartbeat — a periodic low-cadence beacon so listening Tempo
+/// stations enter each other's rosters and store-and-forward can deliver. Persisted.
+#[tauri::command]
+fn set_beacon(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_beacon(on);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist heartbeat setting: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// The operator erased a decode pane — queue the WSJT-X UDP Clear so
 /// cooperating apps (JTAlert/GridTracker) mirror it. 0 = Band, 1 = Rx, 2 = both.
 #[tauri::command]
@@ -1989,13 +2034,28 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
         let _ = w.set_focus();
         return Ok(());
     }
+    // Friendly window title so multi-monitor users can tell torn-off windows apart.
+    let title = match slug.as_str() {
+        "connect" => "Nexus — Connect".to_string(),
+        "dxped" => "Nexus — DXpeditions".to_string(),
+        "needed" => "Nexus — Needed".to_string(),
+        "operate" => "Nexus — Operate".to_string(),
+        other => format!("Nexus — {other}"),
+    };
+    // The Operate cockpit (waterfall + Band Activity + roster) needs more room than the
+    // narrower insight panels.
+    let (w, h) = if slug == "operate" {
+        (1140.0, 760.0)
+    } else {
+        (760.0, 660.0)
+    };
     tauri::WebviewWindowBuilder::new(
         &app,
         &label,
         tauri::WebviewUrl::App(format!("index.html?panel={slug}").into()),
     )
-    .title(format!("Nexus — {slug}"))
-    .inner_size(760.0, 660.0)
+    .title(title)
+    .inner_size(w, h)
     .min_inner_size(420.0, 360.0)
     .build()
     .map_err(|e| e.to_string())?;
@@ -4033,7 +4093,7 @@ pub fn run() {
     ))));
     let health: SharedHealth = Arc::new(FeedHealthState::default());
     if cluster_enabled {
-        start_cluster_feed(&spots, &cluster_host, &cluster_call, &health);
+        start_cluster_feeds(&spots, &cluster_host, &cluster_call, &health);
     }
     start_pskr_feed(&live_paths, &cluster_call, &health);
     if region_enabled {
@@ -4256,6 +4316,7 @@ pub fn run() {
             test_cat,
             set_tx_even,
             set_tx_cycle_auto,
+            set_beacon,
             set_rx_offset,
             set_tx_offset,
             override_next_tx,

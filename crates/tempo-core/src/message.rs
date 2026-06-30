@@ -144,7 +144,7 @@ fn is_valid_hashed(s: &str) -> bool {
 /// True if a token reads as a real callsign for parsing a 2-call message — a plain or
 /// compound call, or a valid i3=4 hashed-call token. Guards the 2-token parse forms so
 /// free text (incl. slash shorthand and arbitrary `<...>`) isn't misread as a call pair.
-fn looks_like_call(s: &str) -> bool {
+pub fn looks_like_call(s: &str) -> bool {
     is_valid_hashed(s) || is_compound(s) || is_callsign(s)
 }
 

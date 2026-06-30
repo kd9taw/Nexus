@@ -652,6 +652,10 @@ export async function setTxCycleAuto(auto: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_tx_cycle_auto', { auto })
 }
 
+export async function setBeacon(on: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_beacon', { on })
+}
+
 export async function setTxEven(even: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_tx_even', { even })
 }

@@ -77,6 +77,8 @@ interface Props {
    * 'roster' (GridTracker — the full sortable Call Roster dominant). */
   layoutMode: 'classic' | 'roster'
   onLayoutMode: (m: 'classic' | 'roster') => void
+  /** Open Operate in its own window (omit when already standalone). */
+  onPopOut?: () => void
   /** True when the cockpit is the active view. The cockpit stays MOUNTED across
    * navigation (so Band Activity keeps accumulating in the background); this flag
    * pauses the waterfall's render loop while it's hidden. */
@@ -147,6 +149,7 @@ export function OperateCockpit({
   onSelect,
   layoutMode,
   onLayoutMode,
+  onPopOut,
   active = true,
 }: Props) {
   const source = snap.radio.source
@@ -515,6 +518,16 @@ export function OperateCockpit({
               Roster
             </button>
           </div>
+          {onPopOut && (
+            <button
+              type="button"
+              className="cockpit-popout"
+              onClick={onPopOut}
+              title="Open Operate in its own window (for a second monitor)"
+            >
+              ⧉ Pop out
+            </button>
+          )}
           <label className="cockpit-pwr" title="TX drive (Pwr) — trim down until your rig's ALC is just zero">
             <span>Pwr</span>
             <input

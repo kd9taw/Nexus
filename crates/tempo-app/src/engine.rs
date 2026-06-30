@@ -2114,6 +2114,9 @@ impl Engine {
             };
             station.override_next(msg);
             self.reset_tx_watchdog();
+            // No record_own_tx here: QSO free text goes out as a SINGLE non-chunk frame,
+            // which poll_tx already records (parse_chunk is None) — recording it here too
+            // double-showed the row.
         }
     }
 
@@ -2131,6 +2134,10 @@ impl Engine {
             }
         }
         self.app.send_message(peer, text);
+        // NOTE: the own-TX band-activity row is recorded when the message is actually
+        // RELEASED on the air (poll_tx, via due_frames' first-release body) — not here at
+        // compose time, which showed a phantom row for a store-and-forward message held for
+        // an absent peer. The outbound conversation bubble still appears immediately.
     }
 
     /// Queue an open broadcast (FT8-style "to all") of `text`. Unlike directed
@@ -2138,16 +2145,71 @@ impl Engine {
     /// *without* requiring any present recipient. The free text is prefixed
     /// `DE <MYCALL> ` and chunked so receivers can attribute it to us. Also
     /// echoed into the band-activity feed (conversation `*`) as outbound.
+    /// Record a clean own-TX row for the band-activity decode feed — the LOGICAL chat
+    /// message, NOT the raw wire chunk frames. Ring-capped. (poll_tx skips own-TX for
+    /// free-text frames so they don't double / show "A13DE KD9TAW".)
+    fn record_own_tx(&mut self, text: String) {
+        const OWN_TX_RING: usize = 30;
+        self.own_tx.push_back(OwnTx {
+            text,
+            freq_hz: self.tx_offset_hz,
+            when_unix: now_unix_secs(),
+        });
+        if self.own_tx.len() > OWN_TX_RING {
+            self.own_tx.pop_front();
+        }
+    }
+
+    /// Send the delivery ACKs we owe: a 1-frame RR73 to each sender whose directed
+    /// message we just fully received. Queued onto the chat broadcast path; the receiver
+    /// (the original sender) sees it and marks the message delivered, ending the resend.
+    fn send_pending_acks(&mut self, slot: u64) {
+        // An ACK owed more than this many slots ago is stale — the sender has long since
+        // moved on or purged the message (resend caps at ~8 attempts). Skip it so ACKs
+        // banked while TX was off don't all flush as a rude burst when TX comes on.
+        const ACK_TTL_SLOTS: u64 = 30;
+        let mycall = self.settings.mycall.trim().to_uppercase();
+        let owed = self.app.take_pending_acks();
+        if mycall.is_empty() {
+            return; // can't form a roger without our own call; drop (won't recur)
+        }
+        for (peer, incurred) in owed {
+            if slot.saturating_sub(incurred) > ACK_TTL_SLOTS {
+                continue; // stale — don't ack a conversation that's long over
+            }
+            let ack = Msg::Rr73 {
+                to: peer,
+                de: mycall.clone(),
+            }
+            .to_text(); // "<peer> <mycall> RR73"
+            self.broadcast_queue.push_back(ack);
+        }
+    }
+
     pub fn broadcast(&mut self, text: &str) {
+        if text.trim().is_empty() {
+            return; // nothing to say — never put a bare "DE <MYCALL>" carrier on the air
+        }
         self.reset_tx_watchdog();
         let mycall = self.settings.mycall.clone();
         let full = tempo_core::inbox::broadcast_text(&mycall, text);
-        let id = (b'A' + self.broadcast_id) as char;
-        self.broadcast_id = (self.broadcast_id + 1) % 26;
-        for f in tempo_core::text::chunk(&full, id) {
-            self.broadcast_queue.push_back(f);
+        let sane = tempo_core::text::sanitize(&full);
+        if sane.chars().count() <= tempo_core::text::FREETEXT_MAX {
+            // Fast-path: a short line ("DE <CALL> 73"-length) fits ONE native free-text
+            // frame — no chunk header, so it goes out in a single cycle (half the latency
+            // of the 2-chunk path) and reads clean. The receiver's reassembler passes a
+            // non-chunk frame straight through; poll_tx skips its own-TX record for
+            // broadcast frames (the clean body is recorded once below).
+            self.broadcast_queue.push_back(sane);
+        } else {
+            let id = (b'A' + self.broadcast_id) as char;
+            self.broadcast_id = (self.broadcast_id + 1) % 26;
+            for f in tempo_core::text::chunk(&full, id) {
+                self.broadcast_queue.push_back(f);
+            }
         }
         self.app.note_broadcast(text);
+        self.record_own_tx(text.to_string()); // band activity shows the clean message
         // Broadcasting IS an explicit "put this on the air" action — arm TX so the
         // canned band macros key on the next over without a separate Enable-Tx click.
         self.arm_tx_now();
@@ -2848,6 +2910,7 @@ impl Engine {
         s.radio.tx_even = self.tx_even();
         s.radio.tx_cycle_auto = self.tx_cycle_auto;
         s.radio.tr_period_secs = self.active_slot_secs();
+        s.radio.beacon = self.beacon_enabled();
         s.radio.tx_offset_hz = self.tx_offset_hz;
         s.radio.rx_offset_hz = self.rx_offset_hz;
         s.radio.tx_level = self.settings.tx_level;
@@ -3057,6 +3120,15 @@ impl Engine {
             self.app.set_transmitting(false);
             return Vec::new();
         }
+        // Delivery ACKs we now owe (heard a directed message addressed to us) ride out on
+        // the chat broadcast path — closing the store-and-forward loop. Only reached when
+        // TX is enabled (never unsolicited), and ONLY in Chat mode — that's the only arm
+        // that drains broadcast_queue, so queuing an ACK in QSO/Field Day would strand it
+        // (and a later set_mode would wipe it). take_pending_acks preserves the owed ACKs
+        // until we're back in Chat.
+        if matches!(self.mode, Mode::Chat) {
+            self.send_pending_acks(slot);
+        }
         // Identity backstop for STANDARD (FT8/FT4) messages: never put a frame on the
         // air without the callsign + grid those messages require. WSJT-X refuses to
         // build a CQ/Tx1 without them; an empty/invalid grid here would otherwise emit a
@@ -3096,8 +3168,14 @@ impl Engine {
                     Some(f)
                 } else {
                     if self.tx_queue.is_empty() {
-                        for f in self.app.due_frames(slot, 30, 4) {
+                        let (frames, bodies) = self.app.due_frames(slot, 30, 4);
+                        for f in frames {
                             self.tx_queue.push_back(f);
+                        }
+                        // A directed message shows in band activity when it actually goes
+                        // on the air (first release), not at compose time.
+                        for b in bodies {
+                            self.record_own_tx(b);
                         }
                         // Presence beacon ("CQ <call> <grid>") only when the
                         // operator has enabled it. Default off → the app starts
@@ -3167,15 +3245,17 @@ impl Engine {
                     }
                 }
                 // Record this transmission so the decode feed shows our own calls
-                // (one row per cycle — WSJT-X own-TX). Ring-capped to stay bounded.
-                const OWN_TX_RING: usize = 30;
-                self.own_tx.push_back(OwnTx {
-                    text: t.clone(),
-                    freq_hz: self.tx_offset_hz,
-                    when_unix: now_unix_secs(),
-                });
-                if self.own_tx.len() > OWN_TX_RING {
-                    self.own_tx.pop_front();
+                // (WSJT-X own-TX). STRUCTURED frames (CQ, QSO exchanges, beacon) are
+                // clean single overs → record as-is. CHUNK frames of a free-text chat
+                // message are recorded ONCE as the LOGICAL message by broadcast()/
+                // send_message()/qso_freetext() — showing the raw wire chunks here
+                // ("A13DE KD9TAW") was the band-activity garble bug. Also skip a SINGLE
+                // bare broadcast frame ("DE <CALL> 73", the S3 fast-path) — likewise
+                // recorded once at source as the clean body.
+                let is_chunk = tempo_core::text::parse_chunk(&t).is_some();
+                let is_broadcast = tempo_core::inbox::parse_broadcast(&t).is_some();
+                if !is_chunk && !is_broadcast {
+                    self.record_own_tx(t.clone());
                 }
                 // Robust tier (DX1) modulates 8-FSK; fast tier (FT1) uses 4-CPM.
                 // Both place the signal at the operator's TX audio offset.
@@ -4405,6 +4485,59 @@ mod tests {
         assert!(!e.tx_enabled());
         e.broadcast("QRZ?");
         assert!(e.tx_enabled(), "an explicit broadcast arms TX too");
+    }
+
+    #[test]
+    fn band_activity_shows_logical_message_not_raw_chunks() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft1);
+        e.broadcast("testing 123"); // -> "DE KD9TAW testing 123", chunked into wire frames
+        for slot in [0u64, 2, 4, 6] {
+            let _ = e.poll_tx(slot); // transmit the chunk frames over several TX slots
+        }
+        let mine: Vec<String> = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            mine.iter().any(|m| m.contains("testing 123")),
+            "band activity shows the clean message, got {mine:?}"
+        );
+        assert!(
+            !mine.iter().any(|m| tempo_core::text::parse_chunk(m).is_some()),
+            "no raw 'A13…' chunk frames in band activity, got {mine:?}"
+        );
+    }
+
+    #[test]
+    fn short_broadcast_uses_one_bare_frame() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft1);
+        e.broadcast("73"); // "DE KD9TAW 73" = 12 chars ≤ 13 → ONE bare frame (no header)
+        assert_eq!(e.broadcast_queue.len(), 1, "single frame, not chunked");
+        assert!(
+            tempo_core::text::parse_chunk(&e.broadcast_queue[0]).is_none(),
+            "fast-path frame carries no chunk header: {:?}",
+            e.broadcast_queue[0]
+        );
+        for slot in [0u64, 2] {
+            let _ = e.poll_tx(slot);
+        }
+        let mine: Vec<String> = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .map(|d| d.message.clone())
+            .collect();
+        assert_eq!(
+            mine.iter().filter(|m| m.contains("73")).count(),
+            1,
+            "exactly one clean own-TX row (the bare frame isn't double-recorded): {mine:?}"
+        );
     }
 
     fn cq_decode_from(call: &str) -> modes::Decode {

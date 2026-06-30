@@ -15,6 +15,8 @@ interface Props {
   onWorkSpot?: (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => void
   /** "Show on map" — navigate to Connect with this call selected. */
   onShowOnMap: (call: string) => void
+  /** Open DXpeditions in its own window (omit when already standalone). */
+  onPopOut?: () => void
 }
 
 /** Announced modes → the work-routing mode (mirrors MapView/ConnectView's rule). */
@@ -38,7 +40,7 @@ function provenance(source: PropagationSnapshot['source'], asOf: number): { labe
   return { label: 'NO LIVE DATA', cls: 'offline' }
 }
 
-export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap }: Props) {
+export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Props) {
   if (!snap) {
     return (
       <div className="prop">
@@ -70,6 +72,16 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap }: Props) {
         <span className={`prop-prov prov-${prov.cls}`} title="Data provenance">
           {prov.label}
         </span>
+        {onPopOut && (
+          <button
+            type="button"
+            className="dxped-popout"
+            onClick={onPopOut}
+            title="Open DXpeditions in its own window (for a second monitor)"
+          >
+            ⧉ Pop out
+          </button>
+        )}
       </div>
 
       <section className="dx-section" aria-label="Workable now">
