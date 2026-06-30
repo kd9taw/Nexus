@@ -1,11 +1,13 @@
 # Tempo CI — headless Rust workspace tests/clippy + the web UI build.
 #
-# Scope: this runs the SIMULATION-ONLY checks that gate the repo on Linux.
-# It does NOT build the Windows desktop app or the NSIS installer. Those are
-# produced out-of-band by scripts/build-windows.sh (native MSYS2 UCRT64),
-# scripts/build-windows.ps1 (PowerShell wrapper), and
-# scripts/build-windows-cross.sh (Linux/WSL2 cross-compile) — see WINDOWS.md.
-# Published Windows binaries are cross-compiled beta and are not built here.
+# Scope: Linux-hosted gates — the simulation-only Rust tests/clippy, the web UI
+# build + Vitest, AND a Windows cross-COMPILE of the desktop app (compile/link
+# only, to catch src-tauri breakage the Linux tests can't see). It does NOT bundle
+# the NSIS installer or download the WebView2/Hamlib runtimes — that full packaging
+# is produced out-of-band by scripts/build-windows.sh (native MSYS2 UCRT64),
+# scripts/build-windows.ps1 (PowerShell wrapper), and scripts/build-windows-cross.sh
+# (the same Linux/WSL2 cross toolchain, with --bundles nsis) — see WINDOWS.md.
+# Published Windows binaries are cross-compiled beta and are not bundled here.
 
 name: CI
 
@@ -171,3 +173,80 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories bans sources licenses
+
+  # Job 5 — Windows cross-compile. The desktop shell (src-tauri) is outside the
+  # workspace and needs a WebView/MinGW toolchain the Linux test job lacks, so
+  # `cargo test` never touches it. This job cross-compiles it to
+  # x86_64-pc-windows-gnu with the MinGW-w64 toolchain — proving the Tauri command
+  # surface, the feature-gated `radio` audio/CAT path, and the libft1 Fortran/C/C++
+  # modem all still LINK for Windows. It is a compile/link check, not the shipping
+  # installer: no NSIS bundle, no WebView2/Hamlib download (those run out-of-band
+  # via scripts/build-windows-cross.sh, which adds --bundles nsis).
+  windows-cross:
+    name: Windows cross-compile (src-tauri)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # MinGW-w64 cross toolchain: gcc/g++/gfortran for the Fortran/C/C++ modem,
+      # cmake/ninja to drive the libft1 CMake project, and a host build-essential
+      # (cc/make) to cross-build FFTW3f for MinGW.
+      - name: Install MinGW-w64 cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 \
+            g++-mingw-w64-x86-64 \
+            gfortran-mingw-w64-x86-64 \
+            cmake \
+            ninja-build \
+            build-essential
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Rust stable toolchain (+ windows-gnu target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Cache cargo, FFTW, and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            src-tauri/target
+            target/fftw-mingw
+          key: ${{ runner.os }}-wincross-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-wincross-
+
+      # Cross-build FFTW3f for MinGW + the libft1 modem self-test exes (win_smoke,
+      # roundtrip, …). Proves the native modem chain links for Windows and produces
+      # target/fftw-mingw, which ft1-sys/build.rs reads on the src-tauri step below.
+      - name: Cross-build FFTW + libft1 modem exes
+        run: bash scripts/build-windows-cross.sh --no-gui
+
+      # src-tauri embeds the web UI via the custom-protocol feature. `cargo build`
+      # does NOT run Tauri's beforeBuildCommand, so build the dist explicitly first
+      # or the asset embed fails ("frontendDist does not exist").
+      - name: Build web UI (embedded assets)
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+
+      # Compile/link the desktop app for Windows. NOT `cargo tauri build` — no NSIS
+      # bundle, no WebView2/Hamlib download — just prove src-tauri compiles clean.
+      - name: Cross-compile src-tauri (x86_64-pc-windows-gnu)
+        env:
+          FFTW_MINGW_PREFIX: ${{ github.workspace }}/target/fftw-mingw
+        run: >
+          cargo build --release
+          --manifest-path src-tauri/Cargo.toml
+          --target x86_64-pc-windows-gnu
+          --features radio,custom-protocol
