@@ -25,8 +25,13 @@ export function LikelihoodHeatmap({ outlook }: { outlook: BandOutlook[] }) {
         </div>
         {outlook.map((o) => (
           <div className="heatmap-row" key={o.band}>
-            <span className="heatmap-band" style={{ color: workabilityVar(o.workability) }}>
+            <span
+              className="heatmap-band"
+              style={{ color: workabilityVar(o.workability) }}
+              title={`${o.band} — ${o.workability} · ${Math.round(o.reliability)}% of the day usable (modelled)`}
+            >
               {o.band}
+              <span className="heatmap-rel">{Math.round(o.reliability)}%</span>
             </span>
             {HOURS.map((h) => {
               const s = o.hourly[h] ?? 0

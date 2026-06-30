@@ -818,6 +818,15 @@ button.nb-chip:hover {
   font-family: var(--font-mono);
   font-weight: 600;
   font-size: var(--fs-micro);
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+/* Modelled circuit reliability (% of day usable), under the band label. */
+.heatmap-rel {
+  font-weight: 400;
+  font-size: 8px;
+  color: var(--text-faint);
 }
 .heatmap-cell {
   height: 14px;

@@ -145,6 +145,11 @@ pub struct BandOutlook {
     /// Per-UTC-hour likelihood (24 values, hour 0..23) for the day containing the
     /// scan — drives the band×hour calendar heatmap in the UI.
     pub hourly: Vec<f32>,
+    /// Circuit reliability: the fraction of the 24 h scan (0–100) the band clears the
+    /// usable (≥ Fair) threshold — a VOACAP-style coverage metric derived from the model's
+    /// per-time scores. Day coverage, NOT a per-hour SNR-based reliability (that needs the
+    /// CCIR-coefficient + statistical-SNR port — a separate effort).
+    pub reliability: f32,
 }
 
 /// The contact-likelihood model, anchored at one operator location.
@@ -271,6 +276,11 @@ impl PathModel {
             .map(|h| self.score(dx, band, day0 + h * 3600, wx))
             .collect();
 
+        // Circuit reliability = the fraction of the scan the band is usable (≥ Fair) — a
+        // VOACAP-style coverage metric over the same 30-min steps the window uses.
+        let usable = scores.iter().filter(|&&s| s >= 0.30).count();
+        let reliability = (usable as f32 / N as f32) * 100.0;
+
         BandOutlook {
             band: band.label().to_string(),
             workability: workability.label().to_string(),
@@ -278,6 +288,7 @@ impl PathModel {
             window,
             grayline,
             hourly,
+            reliability,
         }
     }
 

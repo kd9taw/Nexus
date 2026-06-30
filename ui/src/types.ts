@@ -182,6 +182,8 @@ export interface BandOutlook {
   grayline: boolean
   /** Per-UTC-hour likelihood (24 values, hour 0..23) — the heatmap row. */
   hourly: number[]
+  /** Circuit reliability: % of the 24 h the band is usable (≥ Fair) — a coverage metric. */
+  reliability: number
 }
 /** Per-path HF prediction (the PathPredictor seam): operator↔DX, best-first. */
 export interface PathPrediction {
