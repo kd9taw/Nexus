@@ -26,6 +26,7 @@ import {
   n3fjpTestConnection,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import { loadProfiles, saveProfile, deleteProfile, type Profile } from '../profiles'
 import { getConnectionLog, getCredentialsStatus } from '../api'
 import type { ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
@@ -197,6 +198,9 @@ export function SettingsPanel({
   const [error, setError] = useState<string | null>(null)
   const [rigModels, setRigModels] = useState<[number, string][]>([])
   const [serialPorts, setSerialPorts] = useState<string[]>([])
+  const [profiles, setProfiles] = useState<Profile[]>(() => loadProfiles())
+  const [selectedProfile, setSelectedProfile] = useState('')
+  const [newProfileName, setNewProfileName] = useState('')
   const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
   const [audio, setAudio] = useState<AudioDevices>({ input: [], output: [] })
   const [portsLoading, setPortsLoading] = useState(false)
@@ -520,6 +524,28 @@ export function SettingsPanel({
     } finally {
       setCatTesting(false)
     }
+  }
+
+  // Config profiles: snapshot the current settings under a name, then switch the whole
+  // rig/antenna/CAT/band setup in one move (loading applies via the normal Save path).
+  const handleSaveProfile = () => {
+    if (!form || !newProfileName.trim()) return
+    setProfiles(saveProfile(newProfileName, form))
+    pushToast(`Profile "${newProfileName.trim()}" saved`, 'success')
+    setNewProfileName('')
+  }
+  const handleLoadProfile = async () => {
+    const p = profiles.find((x) => x.name === selectedProfile)
+    if (!p) return
+    setForm(p.settings)
+    await setSettings(p.settings)
+    onSaved?.()
+    pushToast(`Loaded profile "${p.name}"`, 'success')
+  }
+  const handleDeleteProfile = () => {
+    if (!selectedProfile) return
+    setProfiles(deleteProfile(selectedProfile))
+    setSelectedProfile('')
   }
 
   const onSaveLotwPassword = async () => {
@@ -981,6 +1007,74 @@ export function SettingsPanel({
 
           {/* ---- Rig control ---- */}
           {tab === 'rig' && (
+          <>
+          <fieldset className="settings-section">
+            <legend>Profiles</legend>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">Saved profiles</span>
+                <div className="settings-input-row">
+                  <select
+                    className="settings-input"
+                    value={selectedProfile}
+                    onChange={(e) => setSelectedProfile(e.target.value)}
+                  >
+                    <option value="">— Select a profile —</option>
+                    {profiles.map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={handleLoadProfile}
+                    disabled={!selectedProfile}
+                    title="Apply this profile (saves it as the active settings)"
+                  >
+                    Load
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={handleDeleteProfile}
+                    disabled={!selectedProfile}
+                  >
+                    Delete
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  Switch a whole rig / antenna / CAT / band setup in one move.
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">Save current as</span>
+                <div className="settings-input-row">
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={newProfileName}
+                    placeholder="e.g. Portable VHF"
+                    onChange={(e) => setNewProfileName(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={handleSaveProfile}
+                    disabled={!newProfileName.trim()}
+                  >
+                    Save
+                  </button>
+                </div>
+                <span className="settings-hint">Snapshots the current settings under a name.</span>
+              </label>
+            </div>
+          </fieldset>
+
           <fieldset className="settings-section">
             <legend>Rig Control</legend>
             <div className="settings-grid">
@@ -1279,6 +1373,7 @@ export function SettingsPanel({
               your <em>Rig Model</em> and <em>Serial Port</em>; serial RTS/DTR and VOX need no model.
             </p>
           </fieldset>
+          </>
           )}
 
           {/* ---- Audio ---- */}
