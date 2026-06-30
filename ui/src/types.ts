@@ -1113,6 +1113,8 @@ export interface Settings {
   companionAddr: string
   /** CW sidetone/tone pitch (Hz) — the soundcard keyer tone + the CW scope marker. */
   cwPitchHz: number
+  /** Serial port for the K1EL WinKeyer (when the CW keyer backend is WinKeyer). */
+  winkeyerPort: string
   band: string
   dialMhz: number
   sideband: string

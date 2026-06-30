@@ -1299,6 +1299,22 @@ export function SettingsPanel({
                 </span>
               </label>
 
+              <label className="settings-field">
+                <span className="settings-label">WinKeyer port</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.winkeyerPort}
+                  placeholder="COM6 — K1EL WinKeyer serial port"
+                  onChange={(e) => update('winkeyerPort', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  For the WinKeyer CW keyer (select it in the CW cockpit). 1200 baud.
+                </span>
+              </label>
+
               <div className="settings-field">
                 <span className="settings-label">Split operation</span>
                 <div className="theme-switcher" role="group" aria-label="Split operation">

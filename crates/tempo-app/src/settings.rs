@@ -49,6 +49,8 @@ pub enum CwKeyerBackend {
     #[default]
     Cat,
     Soundcard,
+    /// K1EL WinKeyer hardware keyer over serial (see `settings.winkeyer_port`).
+    WinKeyer,
 }
 
 /// Everything the operator configures: identity, band/frequency, Field Day
@@ -135,6 +137,8 @@ pub struct Settings {
     /// How CW is keyed (CAT `send_morse` vs soundcard tone). Also picks the CW
     /// rig-mode: CAT → CW, Soundcard → USB (audio tone). See [`rig_mode`].
     pub cw_keyer: CwKeyerBackend,
+    /// Serial port for the K1EL WinKeyer (when `cw_keyer == WinKeyer`), e.g. "COM6".
+    pub winkeyer_port: String,
     /// CW sidetone / keyed-tone pitch in Hz (soundcard keyer + UI marker). Default 600.
     pub cw_pitch_hz: f32,
     /// Local TCP port Tempo uses for rigctld (it spawns rigctld on this port).
@@ -521,6 +525,7 @@ impl Default for Settings {
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class
             cw_keyer: CwKeyerBackend::Cat, // rig keyer via send_morse (zero hardware)
+            winkeyer_port: String::new(),
             cw_pitch_hz: 600.0,
             rigctld_port: 4532,
             rotator_host: String::new(),
@@ -700,7 +705,9 @@ impl Settings {
             // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be
             // in USB so it transmits the keyed audio tone (band-aware: LSB <10 MHz).
             OperatingMode::Cw => match self.cw_keyer {
-                CwKeyerBackend::Cat => "CW".to_string(),
+                // CAT + WinKeyer both key the rig in CW mode; the soundcard keyer keys an
+                // audio tone, so the rig must be in SSB (band-aware sideband).
+                CwKeyerBackend::Cat | CwKeyerBackend::WinKeyer => "CW".to_string(),
                 CwKeyerBackend::Soundcard => if self.dial_mhz < 10.0 { "LSB" } else { "USB" }.to_string(),
             },
             // Phone: force the correct sideband for the band — the hard convention is

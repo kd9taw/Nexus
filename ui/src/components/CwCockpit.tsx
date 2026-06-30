@@ -73,12 +73,12 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
   // Initialize the keyer toggle from the engine's ACTUAL setting (the snapshot is the source
   // of truth) — not a hard-coded 'cat'. A stale local default showed CAT while the backend was
   // on Soundcard, so CW silently went to USB (Soundcard keying = rig in SSB) with no clue why.
-  const [keyer, setKeyer] = useState<'cat' | 'soundcard'>(
-    snap.radio.cwKeyer === 'soundcard' ? 'soundcard' : 'cat',
+  const [keyer, setKeyer] = useState<'cat' | 'soundcard' | 'winkeyer'>(
+    () => (snap.radio.cwKeyer as 'cat' | 'soundcard' | 'winkeyer') || 'cat',
   )
   // Keep it in sync if the backend value changes (or arrives after first render).
   useEffect(() => {
-    setKeyer(snap.radio.cwKeyer === 'soundcard' ? 'soundcard' : 'cat')
+    if (snap.radio.cwKeyer) setKeyer(snap.radio.cwKeyer as 'cat' | 'soundcard' | 'winkeyer')
   }, [snap.radio.cwKeyer])
   const [text, setText] = useState('')
   // Sidetone pitch — local for instant marker response; persisted via set_cw_keyer.
@@ -111,7 +111,7 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
   const abort = () => {
     void stopCw()
   }
-  const changeKeyer = (k: 'cat' | 'soundcard') => {
+  const changeKeyer = (k: 'cat' | 'soundcard' | 'winkeyer') => {
     setKeyer(k)
     void setCwKeyer(k).then((s) => s && onSnap?.(s))
   }
@@ -182,6 +182,14 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
             title="Soundcard keyer — a keyed audio tone (rig in USB). Works on any rig."
           >
             Soundcard
+          </button>
+          <button
+            type="button"
+            className={`cw-keyer-opt${keyer === 'winkeyer' ? ' active' : ''}`}
+            onClick={() => changeKeyer('winkeyer')}
+            title="K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings."
+          >
+            WinKeyer
           </button>
         </div>
         <label className="cw-wpm" title="Sidetone / zero-beat pitch (Hz) — the scope's dashed marker">

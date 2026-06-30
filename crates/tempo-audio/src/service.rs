@@ -267,6 +267,10 @@ struct RadioLoop {
     /// Last FM repeater config (shift, offset Hz, CTCSS Hz) applied — so the shift/offset/
     /// CTCSS commands only fire on change, not every loop. `None` when not in FM.
     last_fm: Option<(String, i64, f32)>,
+    /// The open WinKeyer keyer (port + handle) when the CW backend is WinKeyer — opened
+    /// on demand, reopened if the configured port changes.
+    #[cfg(feature = "serial")]
+    winkeyer: Option<(String, crate::winkeyer::WinKeyer)>,
     /// Last manual-PTT (live phone) state we applied to the rig — only key on change.
     manual_ptt_applied: bool,
     /// Last RF power fraction we pushed to the rig — only set on change.
@@ -319,6 +323,8 @@ impl RadioLoop {
             mode_giveup: None,
             last_cw_wpm: 0, // 0 = unset → first send pushes the speed
             last_fm: None,
+            #[cfg(feature = "serial")]
+            winkeyer: None,
             manual_ptt_applied: false,
             last_rf_power: None,
             qso_sink: None,
@@ -625,7 +631,7 @@ impl RadioLoop {
         // the rig. Honor a one-shot abort and push the keyer speed only when it changes.
         // Operator-initiated; the engine gates `poll_cw` on `tx_enabled` (Monitor).
         {
-            let (abort, wpm, items, soundcard, pitch) = {
+            let (abort, wpm, items, soundcard, pitch, winkeyer_port) = {
                 let mut eng = engine.lock().map_err(|e| e.to_string())?;
                 (
                     eng.take_cw_abort(),
@@ -633,8 +639,16 @@ impl RadioLoop {
                     eng.poll_cw(),
                     eng.cw_soundcard(),
                     eng.cw_pitch_hz(),
+                    eng.cw_winkeyer_port(),
                 )
             };
+            #[cfg(not(feature = "serial"))]
+            let _ = &winkeyer_port; // only the serial build keys a WinKeyer
+            // Switched away from the WinKeyer backend → release its serial port.
+            #[cfg(feature = "serial")]
+            if winkeyer_port.is_none() {
+                self.winkeyer = None;
+            }
             if abort {
                 let _ = rig.stop_morse(); // CAT keyer abort (rig CW buffer)
                 if soundcard {
@@ -645,6 +659,29 @@ impl RadioLoop {
                 }
             }
             if !items.is_empty() {
+                let mut handled = false;
+                // WinKeyer hardware keyer: open the serial port on demand (reopen if the
+                // configured port changed) and stream the text to it. On open failure,
+                // fall through to the CAT keyer so CW still goes out.
+                #[cfg(feature = "serial")]
+                if let Some(port) = &winkeyer_port {
+                    let reopen = self.winkeyer.as_ref().map(|(p, _)| p != port).unwrap_or(true);
+                    if reopen {
+                        self.winkeyer = crate::winkeyer::WinKeyer::open(port)
+                            .ok()
+                            .map(|(wk, _rev)| (port.clone(), wk));
+                    }
+                    if let Some((_, wk)) = self.winkeyer.as_mut() {
+                        if wpm != self.last_cw_wpm && wk.set_wpm(wpm).is_ok() {
+                            self.last_cw_wpm = wpm;
+                        }
+                        for text in &items {
+                            let _ = wk.send(text);
+                        }
+                        handled = true;
+                    }
+                }
+                if !handled {
                 if soundcard {
                     // Key a generated tone (rig in USB): PTT + play, drop PTT after.
                     let mut buf: Vec<f32> = Vec::new();
@@ -671,6 +708,7 @@ impl RadioLoop {
                     for text in &items {
                         let _ = rig.send_morse(text);
                     }
+                }
                 }
             }
         }

@@ -28,6 +28,7 @@ pub mod ports;
 pub mod resample;
 pub mod rig;
 pub mod rotator;
+pub mod winkeyer;
 pub mod rigctld_proc;
 pub mod rigctld_server;
 pub mod rigmodels;

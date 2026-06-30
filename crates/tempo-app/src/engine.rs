@@ -827,6 +827,7 @@ impl Engine {
         use crate::settings::CwKeyerBackend;
         self.settings.cw_keyer = match backend.to_ascii_lowercase().as_str() {
             "soundcard" => CwKeyerBackend::Soundcard,
+            "winkeyer" => CwKeyerBackend::WinKeyer,
             _ => CwKeyerBackend::Cat,
         };
         if pitch_hz > 0.0 {
@@ -863,6 +864,17 @@ impl Engine {
     /// rig in USB) vs the CAT keyer (`rig.send_morse`, rig in CW).
     pub fn cw_soundcard(&self) -> bool {
         matches!(self.settings.cw_keyer, crate::settings::CwKeyerBackend::Soundcard)
+    }
+
+    /// The WinKeyer serial port when the CW keyer backend is WinKeyer and a port is set —
+    /// the radio loop opens/keys it. `None` for the CAT/soundcard keyers.
+    pub fn cw_winkeyer_port(&self) -> Option<String> {
+        if matches!(self.settings.cw_keyer, crate::settings::CwKeyerBackend::WinKeyer) {
+            let p = self.settings.winkeyer_port.trim();
+            (!p.is_empty()).then(|| p.to_string())
+        } else {
+            None
+        }
     }
 
     /// CW tone pitch (Hz) for the soundcard keyer.
@@ -2957,6 +2969,7 @@ impl Engine {
         s.radio.cw_keyer = match self.settings.cw_keyer {
             crate::settings::CwKeyerBackend::Cat => "cat",
             crate::settings::CwKeyerBackend::Soundcard => "soundcard",
+            crate::settings::CwKeyerBackend::WinKeyer => "winkeyer",
         }
         .to_string();
         s.radio.audio_error = self.audio_error.clone();
