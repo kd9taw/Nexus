@@ -281,6 +281,9 @@ pub struct Engine {
     /// A longer rolling RX-audio ring (several seconds) for the single-signal CW decoder
     /// — the 4096-sample waterfall window is far too short for Morse.
     cw_audio: Vec<f32>,
+    /// The per-QSO WAV ring — the last ~60 s of RX audio, written to a file on log when
+    /// `settings.save_qso_wav` is on (an automatic archive of each contact).
+    qso_audio: Vec<f32>,
     /// Rig/CAT connection status surfaced to the UI: `(ok, detail)`. `ok` is
     /// `None` for VOX (no CAT), `Some(true/false)` for a CAT/serial rig. Written
     /// by the radio loop when it (re)opens or probes the rig.
@@ -313,6 +316,8 @@ const SPECTRUM_WINDOW: usize = 4096;
 /// CW-decode RX ring: ~6 s at 12 kHz — long enough for a full callsign exchange at the
 /// speeds an operator reads, short enough that the per-poll decode stays cheap.
 const CW_WINDOW: usize = 72_000;
+/// Per-QSO WAV ring: ~60 s at 12 kHz — captures the exchange around a logged contact.
+const QSO_WAV_WINDOW: usize = 720_000;
 
 /// Window of recent decode DT samples used for the time-sync health median.
 /// Snap a stored power multiplier to the LEGAL ARRL FD tiers {1, 2, 5} — a
@@ -455,6 +460,7 @@ impl Engine {
             qso_record_path: None,
             spectrum_audio: Vec::new(),
             cw_audio: Vec::new(),
+            qso_audio: Vec::new(),
             cat_status: (None, String::new()),
             cat_reprobe: false,
             audio_error: None,
@@ -2592,6 +2598,21 @@ impl Engine {
             let drop = self.cw_audio.len() - CW_WINDOW;
             self.cw_audio.drain(0..drop);
         }
+        // And the per-QSO WAV ring — the last ~60 s of RX, captured on log when enabled.
+        self.qso_audio.extend_from_slice(samples);
+        if self.qso_audio.len() > QSO_WAV_WINDOW {
+            let drop = self.qso_audio.len() - QSO_WAV_WINDOW;
+            self.qso_audio.drain(0..drop);
+        }
+    }
+
+    /// The recent receive audio (the per-QSO WAV ring) as 16-bit PCM, for writing a WAV
+    /// of a logged contact. Empty before any audio has arrived.
+    pub fn recent_rx_pcm(&self) -> Vec<i16> {
+        self.qso_audio
+            .iter()
+            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .collect()
     }
 
     /// Decode CW from the recent receive audio at the operator's pitch — a live readout

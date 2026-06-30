@@ -240,6 +240,10 @@ pub struct Settings {
     /// Off by default (silent auto-log). Has no effect unless `auto_log`.
     #[serde(default)]
     pub prompt_to_log: bool,
+    /// Auto-save a WAV of the recent receive audio when a QSO is logged — an automatic
+    /// per-contact recording, written to the recordings folder. Off by default.
+    #[serde(default)]
+    pub save_qso_wav: bool,
 
     // --- QSO behaviour ---
     /// Roger the final report with a bare `RRR` (partner still owes a 73) instead
@@ -569,6 +573,7 @@ impl Default for Settings {
             clock_check: true,
             auto_log: true,
             prompt_to_log: false,
+            save_qso_wav: false,
             prefer_rrr: false,
             cq_max_calls: None,
             disable_tx_after_73: true,

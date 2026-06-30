@@ -2211,6 +2211,22 @@ export function SettingsPanel({
 
               <div className="settings-field">
                 <label className="settings-toggle">
+                  <span className="settings-label">Save a WAV per logged QSO</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.saveQsoWav}
+                    className={`toggle${form.saveQsoWav ? ' on' : ''}`}
+                    onClick={() => updateBool('saveQsoWav', !form.saveQsoWav)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">Auto-records the last ~60 s of RX audio to the recordings folder on log</span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
                   <span className="settings-label">Ham Radio Deluxe logging</span>
                   <button
                     type="button"

@@ -2588,9 +2588,30 @@ fn discard_pending_log(state: State<'_, SharedEngine>) -> Result<AppSnapshot, St
 /// memory and persists to the log file. Returns the refreshed snapshot.
 #[tauri::command]
 fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
-    eng.log_qso(record.into());
-    Ok(eng.snapshot())
+    let call = record.call.clone();
+    let (snap, wav) = {
+        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        eng.log_qso(record.into());
+        // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
+        // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
+        let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
+        (eng.snapshot(), wav)
+    };
+    if let Some(pcm) = wav {
+        if !pcm.is_empty() {
+            let dir = recordings_dir();
+            let _ = std::fs::create_dir_all(&dir);
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let safe: String = call.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+            let path = dir.join(format!("qso-{safe}-{ms}.wav"));
+            // 12 kHz: the engine's RX-audio rate (ft1::SAMPLE_RATE).
+            let _ = tempo_core::wavfile::write_wav_i16(&path, &pcm, 12_000);
+        }
+    }
+    Ok(snap)
 }
 
 /// The full logbook as serializable contacts (for the UI log view).
