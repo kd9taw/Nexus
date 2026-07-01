@@ -9,6 +9,7 @@ import { nextTerminatorMs } from '../../mapGeo'
 import { gridToLatLon, haversineKm } from '../../grid'
 import { dualStateLabel, kpImpact, sortInsights } from '../../propViz'
 import { buildChaseTargets, chaseSummaryLine } from '../../features/chase'
+import { getoutSummary } from '../../features/getout'
 import type { NeedTag, PropagationSnapshot } from '../../types'
 import type { PaneContext } from './paneContext'
 
@@ -120,8 +121,8 @@ export function spaceWxLine(c: PaneContext): string {
 export function getoutLine(c: PaneContext): string {
   const g = c.getout
   if (!g || g.count === 0) return 'No reception reports yet — call CQ, then watch who hears you.'
-  const far = g.reports[0]
-  return `${g.count} hearing you — furthest ${g.maxKm.toLocaleString()} km${far ? ` ${far.octant}` : ''}.`
+  const dir = getoutSummary(g.reports)
+  return `${g.count} hearing you — ${dir || `furthest ${g.maxKm.toLocaleString()} km`}.`
 }
 
 // ---- B2 Tier-1 pane projections ----

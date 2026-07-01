@@ -18,6 +18,8 @@ import { ActivityMatrix } from '../prop/ActivityMatrix'
 import { BeaconMonitor } from '../prop/BeaconMonitor'
 import { InsightFeed } from '../prop/InsightFeed'
 import { ChasePane } from '../prop/ChasePane'
+import { GetoutCompass } from '../prop/GetoutCompass'
+import { getoutSummary } from '../../features/getout'
 import { GreylineWindow } from '../prop/GreylineWindow'
 import { ScalesAnnunciator } from '../prop/ScalesAnnunciator'
 import { MeasuredMuf } from '../prop/MeasuredMuf'
@@ -232,6 +234,10 @@ function renderGetout(c: PaneContext): ReactNode {
             <strong>{g.count}</strong> hearing you · furthest{' '}
             <strong>{g.maxKm.toLocaleString()} km</strong>
           </p>
+          <div className="getout-rose-wrap">
+            <GetoutCompass reports={g.reports} maxKm={g.maxKm} />
+            <p className="getout-dir">{getoutSummary(g.reports)}</p>
+          </div>
           <ul className="getout-list">
             {g.reports.slice(0, 6).map((r) => (
               <li

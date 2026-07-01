@@ -1401,6 +1401,41 @@ button.nb-chip:hover {
   border-color: var(--accent);
 }
 
+/* Getting-out compass rose (Phase D) — where the operator's signal lands, by octant. */
+.getout-rose-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.getout-rose {
+  width: 108px;
+  height: 108px;
+  flex-shrink: 0;
+}
+.getout-rose .rose-ring {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+.getout-rose .rose-spoke {
+  stroke: var(--band-open);
+  stroke-linecap: round;
+}
+.getout-rose .rose-label {
+  font-size: 9px;
+  fill: var(--text-faint);
+}
+.getout-rose .rose-label.is-live {
+  fill: var(--text);
+  font-weight: 600;
+}
+.getout-dir {
+  margin: 0;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
 /* "Am I getting out?" — observed who-hears-me panel. */
 .connect-getout h3 {
   margin: 0 0 var(--space-2);
