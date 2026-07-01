@@ -9,6 +9,7 @@ import { RotateCcw } from 'lucide-react'
 import type {
   AuroraPoint,
   MapSpot,
+  MufStation,
   NeedTag,
   PathPrediction,
   PropagationSnapshot,
@@ -72,6 +73,35 @@ interface Props {
   onFocusBand?: (band: string) => void
   /** Current path / general modelled outlook, for the overlay's MUF ceiling + heatmap. */
   outlook?: PathPrediction | null
+  /** Live measured ionosonde MUF fixes (KC2G). When present, the MUF overlay is anchored
+   * to real data near each sonde and only falls back to the model out over the oceans. */
+  muf?: MufStation[]
+}
+
+/** How far a measured ionosonde still meaningfully anchors the MUF field (km). Beyond this
+ * from every sonde, the overlay uses the solar model. */
+const MUF_STATION_CUTOFF_KM = 3000
+
+/** MUF (MHz) at a point: an inverse-distance blend of the measured sondes within range,
+ * else the modelled foF2 field — so the overlay reads "live where we can see, modelled
+ * over the oceans", never a bare guess dressed as data. */
+function blendedMuf(
+  lat: number,
+  lon: number,
+  nowMs: number,
+  sfi: number,
+  stations: { lat: number; lon: number; muf: number }[],
+): number {
+  let wsum = 0
+  let msum = 0
+  for (const s of stations) {
+    const d = haversineKm({ lat, lon }, { lat: s.lat, lon: s.lon })
+    if (d > MUF_STATION_CUTOFF_KM) continue
+    const w = 1 / (d * d + 1)
+    wsum += w
+    msum += w * s.muf
+  }
+  return wsum > 0 ? msum / wsum : mufMhz(lat, lon, nowMs, sfi)
 }
 
 const INTENT_PRESETS: Record<
@@ -145,7 +175,7 @@ interface Layer {
 const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   daynight: { label: 'Day / night (greyline)', visible: true, opacity: 1 },
   relief: { label: 'Relief (World view)', visible: true, opacity: 1 },
-  muf: { label: 'MUF (modelled)', visible: false, opacity: 0.85 },
+  muf: { label: 'MUF (live + model)', visible: false, opacity: 0.85 },
   aurora: { label: 'Aurora oval', visible: false, opacity: 0.85 },
   coast: { label: 'Coastlines', visible: true, opacity: 0.85 },
   grid: { label: 'Grid (20°×10°)', visible: true, opacity: 0.5 },
@@ -226,9 +256,18 @@ export function MapView({
   focusBand = null,
   onFocusBand,
   outlook = null,
+  muf,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
+  // Measured ionosonde fixes with a usable MUF → the MUF overlay's live anchor.
+  const mufStations = useMemo(
+    () =>
+      (muf ?? [])
+        .filter((s) => s.mufMhz != null)
+        .map((s) => ({ lat: s.lat, lon: s.lon, muf: s.mufMhz as number })),
+    [muf],
+  )
   // Restore the operator's persisted projection (so a detached window shows the same
   // globe/beam/world); fall back to the intent preset, then the globe.
   const [kind, setKind] = useState<Projection>(
@@ -617,14 +656,14 @@ export function MapView({
       ctx.globalAlpha = 1
     }
 
-    // MUF (modelled) — the maximum usable frequency field from our foF2 model +
-    // current SFI, as a coarse heatmap (7→35 MHz on the colormap). It tells you at
-    // a glance which bands the ionosphere supports WHERE. Modelled, not measured —
-    // gated to the Expert layer panel + off by default.
+    // MUF field — the maximum usable frequency WHERE, as a coarse heatmap (7→35 MHz on
+    // the colormap): live where an ionosonde is within range (IDW-blended), the foF2 model
+    // out over the oceans. Tells you at a glance which bands the ionosphere supports where.
+    // Gated to the Expert layer panel + off by default; the on-map legend maps color→band.
     if (layers.muf.visible) {
       const sfi = prop?.spaceWx.sfi ?? 120
       for (const cell of mufGrid) {
-        const muf = mufMhz(cell.center.lat, cell.center.lon, nowMs, sfi)
+        const muf = blendedMuf(cell.center.lat, cell.center.lon, nowMs, sfi, mufStations)
         const t = Math.max(0, Math.min(1, (muf - 7) / (35 - 7)))
         const [r, g, b] = sampleLut('inferno', t)
         ctx.globalAlpha = layers.muf.opacity * 0.34
@@ -848,7 +887,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufGrid, auroraPts, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick])
+  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufGrid, mufStations, auroraPts, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick])
 
   if (!me) {
     return (
@@ -1103,6 +1142,7 @@ export function MapView({
             </div>
           )}
           <MapLegend />
+          {layers.muf.visible && <MufLegend />}
           {prop && (
             <MapInsightRail
               prop={prop}
@@ -1170,6 +1210,28 @@ function MapLegend() {
       <span className="map-legend-sep" />
       <span title="Colored auras = live spot density per band; pulsing = a detected opening">
         heat = band activity
+      </span>
+    </div>
+  )
+}
+
+/** Legend for the MUF overlay — maps the inferno color scale (7→35 MHz) to the band it
+ * opens, so "orange over Africa" reads as "15m is open there". Shown only with the layer. */
+function MufLegend() {
+  const stops = Array.from({ length: 6 }, (_, i) => {
+    const t = i / 5
+    const [r, g, b] = sampleLut('inferno', t)
+    return `rgb(${r},${g},${b}) ${Math.round(t * 100)}%`
+  }).join(', ')
+  return (
+    <div className="muf-legend" aria-hidden="true">
+      <span className="muf-legend-title">MUF — top band open</span>
+      <span className="muf-legend-bar" style={{ background: `linear-gradient(90deg, ${stops})` }} />
+      <span className="muf-legend-ticks">
+        <span>40m</span>
+        <span>20m</span>
+        <span>15m</span>
+        <span>10m</span>
       </span>
     </div>
   )

@@ -311,6 +311,7 @@ export function ConnectView({
               focusBand={focusBand}
               onFocusBand={toggleFocusBand}
               outlook={selectedCall ? pathPred : bandOutlook}
+              muf={muf}
             />
           </div>
           {railFrame('right1')}

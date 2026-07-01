@@ -2088,6 +2088,35 @@ button.nb-chip:hover {
 .snr-key.weak {
   background: var(--snr-weak);
 }
+/* MUF overlay legend (Phase E2) — color scale → band, bottom-left so it clears the
+   center spot legend. Shown only while the MUF layer is on. */
+.muf-legend {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 128px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: 9px;
+  color: var(--text-faint);
+}
+.muf-legend-title {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.muf-legend-bar {
+  height: 6px;
+  border-radius: 2px;
+}
+.muf-legend-ticks {
+  display: flex;
+  justify-content: space-between;
+}
 .map-legend-dot {
   width: 9px;
   height: 9px;
