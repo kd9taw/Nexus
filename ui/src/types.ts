@@ -1197,6 +1197,11 @@ export interface Settings {
   serialPort: string
   /** Serial baud rate. */
   baud: number
+  /** Rig connection: "serial" (default) or "network" (rigctld → rigAddr over TCP, e.g. a
+   * FlexRadio via SmartSDR). */
+  rigConn: string
+  /** Network rig address host:port when rigConn === "network" (e.g. "192.168.1.50:4992"). */
+  rigAddr: string
   /** Let Nexus set the rig's mode (forces the DATA submode). Off by default —
    * Nexus obeys whatever mode the rig is already in (max compatibility). */
   /** TCP port that rigctld listens on / Tempo launches it with. */

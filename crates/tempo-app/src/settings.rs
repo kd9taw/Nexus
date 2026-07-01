@@ -121,6 +121,15 @@ pub struct Settings {
     pub serial_port: String,
     /// Serial baud rate for CAT.
     pub baud: u32,
+    /// Rig connection type: "serial" (default; rigctld talks to `serial_port`/`baud`) or
+    /// "network" (rigctld talks to `rig_addr` over TCP — e.g. a FlexRadio via SmartSDR).
+    /// Empty is treated as "serial". `#[serde(default)]` so older settings files still load.
+    #[serde(default)]
+    pub rig_conn: String,
+    /// Network rig address `host:port` when `rig_conn == "network"` (e.g. a Flex's SmartSDR
+    /// IP `192.168.1.50:4992`). Ignored for serial.
+    #[serde(default)]
+    pub rig_addr: String,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
     /// force their mode), so this opt-out is no longer consulted by
     /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
@@ -532,6 +541,8 @@ impl Default for Settings {
             rig_model_name: "None / VOX".to_string(),
             serial_port: String::new(),
             baud: 38400,
+            rig_conn: "serial".to_string(),
+            rig_addr: String::new(),
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class

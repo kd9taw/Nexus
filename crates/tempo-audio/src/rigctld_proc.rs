@@ -12,16 +12,27 @@ use std::process::{Child, Command};
 ///
 /// Produces e.g. `["-m", "3073", "-r", "COM5", "-s", "38400", "-t", "4532"]`:
 /// - `-m <model>` Hamlib rig model number.
-/// - `-r <port>` serial device (omitted when `serial_port` is empty, e.g. for the Dummy/NET rigs that need no port).
-/// - `-s <baud>` serial speed (omitted when `serial_port` is empty).
+/// - `-r <addr>` the radio: a serial device (COM5, /dev/ttyUSB0) OR, when `network`, a
+///   `host:port` (e.g. a FlexRadio's SmartSDR IP:4992) — Hamlib's network backends take the
+///   host:port on `-r`. Omitted when `addr` is empty (Dummy / NET rigs that need no port).
+/// - `-s <baud>` serial speed — omitted for a network rig (`network`) or an empty addr, since
+///   a TCP rig has no baud rate.
 /// - `-t <tcp_port>` TCP port for the daemon to listen on.
-pub fn rigctld_args(model: u32, serial_port: &str, baud: u32, tcp_port: u16) -> Vec<String> {
+pub fn rigctld_args(
+    model: u32,
+    addr: &str,
+    baud: u32,
+    tcp_port: u16,
+    network: bool,
+) -> Vec<String> {
     let mut args = vec!["-m".to_string(), model.to_string()];
-    if !serial_port.is_empty() {
+    if !addr.is_empty() {
         args.push("-r".to_string());
-        args.push(serial_port.to_string());
-        args.push("-s".to_string());
-        args.push(baud.to_string());
+        args.push(addr.to_string());
+        if !network {
+            args.push("-s".to_string());
+            args.push(baud.to_string());
+        }
     }
     args.push("-t".to_string());
     args.push(tcp_port.to_string());
@@ -129,11 +140,12 @@ fn resolve_rigctld() -> std::ffi::OsString {
 /// (see [`resolve_rigctld`]), otherwise a `rigctld` on `PATH`.
 pub fn spawn_rigctld(
     model: u32,
-    serial_port: &str,
+    addr: &str,
     baud: u32,
     tcp_port: u16,
+    network: bool,
 ) -> std::io::Result<RigctldProc> {
-    let args = rigctld_args(model, serial_port, baud, tcp_port);
+    let args = rigctld_args(model, addr, baud, tcp_port, network);
     let mut cmd = Command::new(resolve_rigctld());
     cmd.args(&args);
     // On Windows, don't pop a console window for the daemon (Tempo is a GUI app).
@@ -161,7 +173,7 @@ mod tests {
 
     #[test]
     fn args_with_serial_port() {
-        let args = rigctld_args(3073, "COM5", 38400, 4532);
+        let args = rigctld_args(3073, "COM5", 38400, 4532, false);
         assert_eq!(
             args,
             vec!["-m", "3073", "-r", "COM5", "-s", "38400", "-t", "4532"]
@@ -169,8 +181,18 @@ mod tests {
     }
 
     #[test]
+    fn args_for_network_rig_omit_baud() {
+        // A FlexRadio over SmartSDR (or any TCP rig): host:port on -r, no baud.
+        let args = rigctld_args(23005, "192.168.1.50:4992", 38400, 4532, true);
+        assert_eq!(
+            args,
+            vec!["-m", "23005", "-r", "192.168.1.50:4992", "-t", "4532"]
+        );
+    }
+
+    #[test]
     fn args_for_unix_serial_device() {
-        let args = rigctld_args(1042, "/dev/ttyUSB0", 19200, 4533);
+        let args = rigctld_args(1042, "/dev/ttyUSB0", 19200, 4533, false);
         assert_eq!(
             args,
             vec![
@@ -189,7 +211,7 @@ mod tests {
     #[test]
     fn args_without_serial_port_omit_port_and_baud() {
         // Dummy / NET rigs need no serial device.
-        let args = rigctld_args(1, "", 38400, 4532);
+        let args = rigctld_args(1, "", 38400, 4532, false);
         assert_eq!(args, vec!["-m", "1", "-t", "4532"]);
     }
 }

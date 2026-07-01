@@ -78,6 +78,10 @@ pub struct RadioConfig {
     pub serial_port: String,
     /// Serial baud for CAT.
     pub baud: u32,
+    /// "network" → rigctld connects to `rig_addr` over TCP (Flex/SmartSDR); else serial.
+    pub rig_conn: String,
+    /// host:port for a network rig (when `rig_conn == "network"`).
+    pub rig_addr: String,
     /// Local TCP port Tempo runs rigctld on (and connects to).
     pub rigctld_port: u16,
     /// The port our OWN CAT broker serves on (if enabled), so auto-coexist never
@@ -109,6 +113,8 @@ impl Default for RadioConfig {
             rig_model: 0,
             serial_port: String::new(),
             baud: 38400,
+            rig_conn: "serial".to_string(),
+            rig_addr: String::new(),
             rigctld_port: 4532,
             broker_self_port: None,
             dial_hz: 14_090_500,
@@ -1592,6 +1598,10 @@ struct Transport {
     rig_model: u32,
     serial_port: String,
     baud: u32,
+    /// "network" → rigctld talks to `rig_addr` over TCP (Flex/SmartSDR); else serial.
+    rig_conn: String,
+    /// host:port for a network rig (when `rig_conn == "network"`).
+    rig_addr: String,
     rigctld_port: u16,
     /// The port our OWN CAT broker is serving on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
@@ -1608,6 +1618,8 @@ impl Transport {
             rig_model: c.rig_model,
             serial_port: c.serial_port.clone(),
             baud: c.baud,
+            rig_conn: c.rig_conn.clone(),
+            rig_addr: c.rig_addr.clone(),
             rigctld_port: c.rigctld_port,
             broker_self_port: c.broker_self_port,
             audio_in: c.audio_in.clone(),
@@ -1622,6 +1634,8 @@ impl Transport {
             rig_model: s.rig_model,
             serial_port: s.serial_port.clone(),
             baud: s.baud,
+            rig_conn: s.rig_conn.clone(),
+            rig_addr: s.rig_addr.clone(),
             rigctld_port: s.rigctld_port,
             broker_self_port: if s.cat_broker {
                 Some(s.cat_broker_port)
@@ -1641,8 +1655,16 @@ impl Transport {
             || self.rig_model != o.rig_model
             || self.serial_port != o.serial_port
             || self.baud != o.baud
+            || self.rig_conn != o.rig_conn
+            || self.rig_addr != o.rig_addr
             || self.rigctld_port != o.rigctld_port
             || self.broker_self_port != o.broker_self_port
+    }
+
+    /// A networked rig (FlexRadio/SmartSDR or a remote rigctld): rigctld connects to
+    /// `rig_addr` over TCP instead of a serial port. Requires a non-empty address.
+    fn is_network(&self) -> bool {
+        self.rig_conn == "network" && !self.rig_addr.is_empty()
     }
 
     /// True if the selected sound-card input/output device changed.
@@ -1760,7 +1782,14 @@ fn open_cat(t: &Transport, dial_hz: u64, mode: &str, ptt_mode: PttMode) -> RigOp
             ),
         );
     }
-    match spawn_rigctld(t.rig_model, &t.serial_port, t.baud, t.rigctld_port) {
+    // A network rig (Flex/SmartSDR or a remote rig) → point rigctld at host:port over TCP
+    // (no serial device, no baud); else the serial port + baud as before.
+    let (rig_target, network) = if t.is_network() {
+        (t.rig_addr.as_str(), true)
+    } else {
+        (t.serial_port.as_str(), false)
+    };
+    match spawn_rigctld(t.rig_model, rig_target, t.baud, t.rigctld_port, network) {
         Ok(proc) => {
             // Give the daemon a moment to bind its TCP port before connecting.
             std::thread::sleep(Duration::from_millis(700));

@@ -1217,6 +1217,42 @@ export function SettingsPanel({
               </label>
 
               <label className="settings-field">
+                <span className="settings-label">Connection</span>
+                <select
+                  className="settings-input"
+                  value={form.rigConn || 'serial'}
+                  onChange={(e) => update('rigConn', e.target.value)}
+                >
+                  <option value="serial">Serial (USB / COM)</option>
+                  <option value="network">Network (FlexRadio / remote)</option>
+                </select>
+                <span className="settings-hint">
+                  Serial for a USB/COM rig (most, incl. Xiegu); Network for a FlexRadio via
+                  SmartSDR or a remote rigctld over TCP.
+                </span>
+              </label>
+
+              {form.rigConn === 'network' && (
+                <label className="settings-field">
+                  <span className="settings-label">Network Address</span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.rigAddr}
+                    placeholder="192.168.1.50:4992"
+                    onChange={(e) => update('rigAddr', e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">
+                    host:port of the radio — a FlexRadio's IP on SmartSDR's port 4992, or a
+                    remote rigctld. Pick the DAX audio devices under Audio.
+                  </span>
+                </label>
+              )}
+
+              {form.rigConn !== 'network' && (
+              <label className="settings-field">
                 <span className="settings-label">Serial Port</span>
                 <div className="settings-input-row">
                   <select
@@ -1268,6 +1304,7 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">Serial baud rate.</span>
               </label>
+              )}
 
               <label className="settings-field">
                 <span className="settings-label">rigctld TCP Port</span>

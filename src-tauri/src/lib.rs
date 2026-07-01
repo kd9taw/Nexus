@@ -4747,6 +4747,8 @@ pub fn run() {
         rig_model: settings.rig_model,
         serial_port: settings.serial_port.clone(),
         baud: settings.baud,
+        rig_conn: settings.rig_conn.clone(),
+        rig_addr: settings.rig_addr.clone(),
         rigctld_port: settings.rigctld_port,
         broker_self_port: if settings.cat_broker {
             Some(settings.cat_broker_port)
