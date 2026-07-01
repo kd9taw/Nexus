@@ -263,14 +263,8 @@ mod tests {
         assert_eq!(lines[0], "0", "protocol version 0 (skips proto-1 trailer)");
         assert_eq!(lines[2], "1", "ITU region");
         // Range rows are 7 fields; terminators are all-zero.
-        assert!(
-            lines.iter().any(|l| *l == "0 0 0 0 0 0 0"),
-            "range terminator present"
-        );
-        assert!(
-            lines.iter().any(|l| *l == "0 0"),
-            "ts/filter terminator present"
-        );
+        assert!(lines.contains(&"0 0 0 0 0 0 0"), "range terminator present");
+        assert!(lines.contains(&"0 0"), "ts/filter terminator present");
         // Every line parses as the expected token shape (no stray text).
         assert!(lines[3].split_whitespace().count() == 7);
     }

@@ -97,6 +97,7 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
 ///
 /// # Panics
 /// Panics if `iwave.len() < NMAX`.
+#[allow(clippy::too_many_arguments)]
 pub fn decode_frame(
     iwave: &[i16],
     nfa: i32,

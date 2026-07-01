@@ -96,8 +96,7 @@ pub fn base_call(call: &str) -> String {
     // VP2E/AA9A) the home call comes last; for suffix-portable (W9XYZ/P, /4) the
     // affix isn't full-looking so the home call (first) still wins.
     up.split('/')
-        .filter(|s| looks_full(s))
-        .last()
+        .rfind(|s| looks_full(s))
         .or_else(|| {
             up.split('/')
                 .filter(|s| !s.is_empty())

@@ -174,7 +174,7 @@ impl SpaceWxHistory {
             .collect();
         let latest = self.buf.back();
         let scalar = |get: &dyn Fn(&SpaceWxSample) -> f32, eps: f32| -> ScalarTrend {
-            let now_v = latest.map(|s| get(s)).unwrap_or(0.0);
+            let now_v = latest.map(get).unwrap_or(0.0);
             if win.len() < 2 {
                 return ScalarTrend {
                     now: now_v,

@@ -91,6 +91,7 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
 /// ever decoding it — stations between our transmissions were never heard.)
 /// `currently_tx` is the caller's `tx_until_ms.is_some()` (a TX tail crossing the
 /// boundary), which also suppresses the decode.
+#[allow(clippy::too_many_arguments)]
 pub fn run_slot(
     eng: &mut Engine,
     rig: &mut Rig,

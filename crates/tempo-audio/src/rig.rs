@@ -25,12 +25,13 @@ pub enum SerialLine {
 /// How transmit keying is performed — INDEPENDENT of CAT control. The WSJT-X model:
 /// a rig can have full CAT freq/mode control while keying via VOX or a serial line,
 /// so PTT and control are separate concerns (see [`Rig`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum PttMode {
     /// Key via the CAT control channel (rigctld `T`). Requires a control channel;
     /// with none configured this no-ops (like VOX).
     Cat,
     /// No CAT keying — rely on the rig's VOX (audio-triggered TX).
+    #[default]
     Vox,
     /// Key directly by asserting a serial control line (RTS or DTR) on `port`.
     ///
@@ -38,12 +39,6 @@ pub enum PttMode {
     /// it the keying is logged and otherwise a no-op (the build has no serial
     /// backend), so the engine still runs and can fall back to VOX.
     Serial { port: String, line: SerialLine },
-}
-
-impl Default for PttMode {
-    fn default() -> Self {
-        PttMode::Vox
-    }
 }
 
 /// rigctld command line for PTT.
@@ -338,9 +333,7 @@ impl Rig {
     /// Read the rig's current mode (e.g. "USB"/"CW"). `None` if not a CAT rig or the
     /// rig didn't answer. The `m` reply is the mode on one line, passband on the next.
     pub fn read_mode(&mut self) -> Option<String> {
-        if self.control.is_none() {
-            return None;
-        }
+        self.control.as_ref()?;
         let reply = self.command("m\n").ok()?;
         reply
             .lines()
@@ -355,9 +348,7 @@ impl Rig {
     /// rig never moved, whereas e.g. raw Yaesu `MD0;` returns the rig's TRUE current mode code
     /// off the wire. Diagnostic-only; `None` if not a CAT rig or no reply.
     pub fn send_raw(&mut self, raw: &str) -> Option<String> {
-        if self.control.is_none() {
-            return None;
-        }
+        self.control.as_ref()?;
         let reply = self.command(&format!("w {raw}\n")).ok()?;
         let trimmed = reply.trim();
         if trimmed.is_empty() {

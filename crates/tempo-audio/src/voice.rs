@@ -75,7 +75,7 @@ pub fn read_wav_12k(path: impl AsRef<Path>) -> std::io::Result<Vec<f32>> {
 }
 
 fn to_io(e: hound::Error) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, e)
+    std::io::Error::other(e)
 }
 
 /// A streaming WAV sink for LONG recordings (a whole QSO) — writes 12 kHz mono 16-bit PCM

@@ -8,6 +8,7 @@
 //! - DATA/RTTY (FT8/FT4 etc.) is allowed only in the no-phone lower segments on HF, but
 //!   band-wide above 50 MHz (and on 30 m, all-data).
 //! - PHONE/image is allowed only in the phone segments.
+//!
 //! `Open` = no restrictions (non-US operators); `tx_allowed` short-circuits to true.
 
 use crate::settings::{LicenseClass, OperatingMode};

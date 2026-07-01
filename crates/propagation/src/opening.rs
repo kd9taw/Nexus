@@ -1061,7 +1061,7 @@ mod tests {
     #[test]
     fn band_features_leaves_snr_none_without_payload_snrs() {
         let cfg = OpeningConfig::default();
-        let spots = vec![heard_me("W0XX", "FN42", Band::B20, 5)]; // snr None (topic-only)
+        let spots = [heard_me("W0XX", "FN42", Band::B20, 5)]; // snr None (topic-only)
         let bs: Vec<&PathSpot> = spots.iter().collect();
         let bf = band_features(Band::B20, &bs, ME, ME_GRID, NOW, &cfg);
         assert_eq!(bf.median_snr, None);

@@ -472,10 +472,11 @@ impl Station {
     /// messages FROM the worked DX — a reply from a different station must not
     /// hijack the sequence (WSJT-X checks the sender against DX Call). Compared on
     /// base calls so a portable suffix still matches.
+    #[allow(clippy::wrong_self_convention)]
     fn from_dx(&self, sender: &str) -> bool {
         self.dxcall
             .as_deref()
-            .map_or(true, |dx| crate::message::same_call(sender, dx))
+            .is_none_or(|dx| crate::message::same_call(sender, dx))
     }
 
     /// Process the signals decoded this RX slot and advance the sequence.

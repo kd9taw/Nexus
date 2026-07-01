@@ -143,12 +143,7 @@ impl AppState {
             .filter(|c| c.peer != "*")
             .collect();
         directed.sort_by_key(|c| std::cmp::Reverse(c.messages.last().map(|m| m.slot).unwrap_or(0)));
-        out.extend(
-            directed
-                .into_iter()
-                .take(MAX_PERSIST_THREADS)
-                .map(|c| trim(c)),
-        );
+        out.extend(directed.into_iter().take(MAX_PERSIST_THREADS).map(trim));
         out
     }
 
@@ -614,6 +609,39 @@ impl AppState {
     }
 }
 
+/// The Field Day bonus menu (id, label, points) — ARRL FD's ~100-pt bonuses.
+/// Claimed ids live in `Settings::fd_bonuses`; the UI renders this as a
+/// checklist and the engine sums claimed points into the score.
+pub const FD_BONUSES: &[(&str, &str, u32)] = &[
+    ("emergency-power", "100% emergency power", 100),
+    ("media-publicity", "Media publicity", 100),
+    ("public-location", "Public location", 100),
+    ("public-info-table", "Public information table", 100),
+    ("nts-message", "Message to ARRL SM/SEC", 100),
+    ("w1aw-bulletin", "W1AW bulletin copied", 100),
+    ("natural-power", "Natural power QSOs", 100),
+    ("site-visit-official", "Site visit: elected official", 100),
+    (
+        "site-visit-agency",
+        "Site visit: agency representative",
+        100,
+    ),
+    ("gota", "GOTA station max", 100),
+    ("youth", "Youth participation", 100),
+    ("web-submission", "Web submission", 50),
+    ("safety-officer", "Safety officer", 100),
+    ("social-media", "Social media", 100),
+    ("educational", "Educational activity", 100),
+];
+
+/// Points for one claimed bonus id (None = unknown id, scores nothing).
+pub fn fd_bonus_points(id: &str) -> Option<u32> {
+    FD_BONUSES
+        .iter()
+        .find(|(bid, _, _)| *bid == id)
+        .map(|(_, _, pts)| *pts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -983,37 +1011,4 @@ mod tests {
         assert_eq!(back.mycall, "K2DEF");
         assert_eq!(back.active_peer.as_deref(), Some("W9XYZ"));
     }
-}
-
-/// The Field Day bonus menu (id, label, points) — ARRL FD's ~100-pt bonuses.
-/// Claimed ids live in `Settings::fd_bonuses`; the UI renders this as a
-/// checklist and the engine sums claimed points into the score.
-pub const FD_BONUSES: &[(&str, &str, u32)] = &[
-    ("emergency-power", "100% emergency power", 100),
-    ("media-publicity", "Media publicity", 100),
-    ("public-location", "Public location", 100),
-    ("public-info-table", "Public information table", 100),
-    ("nts-message", "Message to ARRL SM/SEC", 100),
-    ("w1aw-bulletin", "W1AW bulletin copied", 100),
-    ("natural-power", "Natural power QSOs", 100),
-    ("site-visit-official", "Site visit: elected official", 100),
-    (
-        "site-visit-agency",
-        "Site visit: agency representative",
-        100,
-    ),
-    ("gota", "GOTA station max", 100),
-    ("youth", "Youth participation", 100),
-    ("web-submission", "Web submission", 50),
-    ("safety-officer", "Safety officer", 100),
-    ("social-media", "Social media", 100),
-    ("educational", "Educational activity", 100),
-];
-
-/// Points for one claimed bonus id (None = unknown id, scores nothing).
-pub fn fd_bonus_points(id: &str) -> Option<u32> {
-    FD_BONUSES
-        .iter()
-        .find(|(bid, _, _)| *bid == id)
-        .map(|(_, _, pts)| *pts)
 }

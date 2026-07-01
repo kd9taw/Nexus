@@ -128,7 +128,7 @@ pub fn morse_samples(text: &str, wpm: u32, pitch_hz: f32, sample_rate: u32) -> V
 }
 
 fn append_gap(out: &mut Vec<f32>, n: usize) {
-    out.extend(std::iter::repeat(0.0).take(n));
+    out.extend(std::iter::repeat_n(0.0, n));
 }
 
 fn append_tone(out: &mut Vec<f32>, n: usize, ramp_n: usize, step: f32, phase: &mut f32) {

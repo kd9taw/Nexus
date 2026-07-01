@@ -148,6 +148,7 @@ impl Decoder {
 /// Drive an MQTT subscriber session over a connected duplex: CONNECT → on CONNACK
 /// SUBSCRIBE → deliver each PUBLISH to `on_publish`, with keepalive PINGREQs.
 /// Generic over Read/Write so it's unit-testable without a socket.
+#[allow(clippy::too_many_arguments)]
 fn run_session<R: Read, W: Write>(
     mut reader: R,
     mut writer: W,

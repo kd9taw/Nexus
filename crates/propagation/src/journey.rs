@@ -287,7 +287,7 @@ fn derive<'a>(
             let us_state = info
                 .as_ref()
                 .filter(|i| is_us_family(i.entity))
-                .and_then(|_| q.state.as_deref())
+                .and(q.state.as_deref())
                 .and_then(valid_state);
             Derived {
                 q,
@@ -1197,11 +1197,12 @@ mod tests {
 
     #[test]
     fn band_and_mode_slam_feats() {
-        let mut qsos = Vec::new();
         // All three modes on 20 m.
-        qsos.push(qso("A1A", Band::B20, ModeClass::Cw, 1));
-        qsos.push(qso("A2A", Band::B20, ModeClass::Phone, 2));
-        qsos.push(qso("A3A", Band::B20, ModeClass::Digital, 3));
+        let qsos = vec![
+            qso("A1A", Band::B20, ModeClass::Cw, 1),
+            qso("A2A", Band::B20, ModeClass::Phone, 2),
+            qso("A3A", Band::B20, ModeClass::Digital, 3),
+        ];
         let j = compute(&qsos, "W9XYZ", None, None, false, 1000);
         let mode = j.feats.iter().find(|f| f.id == "mode-slam").unwrap();
         assert!(mode.unlocked, "CW+Phone+Digital = mode slam");
@@ -1217,7 +1218,14 @@ mod tests {
             grid: Some("RE66".into()), // ZL3 grid
             ..qso("ZL3ABC", Band::B20, ModeClass::Digital, 1)
         };
-        let no_power = compute(&[q.clone()], "W9XYZ", Some("EN61"), None, false, 1000);
+        let no_power = compute(
+            std::slice::from_ref(&q),
+            "W9XYZ",
+            Some("EN61"),
+            None,
+            false,
+            1000,
+        );
         let mpw = no_power
             .feats
             .iter()

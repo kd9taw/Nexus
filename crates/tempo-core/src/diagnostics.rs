@@ -946,7 +946,7 @@ mod tests {
         // fire R4b (it's the same class) — only a true class diff (e.g. "Phone").
         let r = rec("W1AW", "20m", "FT8", 20_000);
         let same = diag(
-            &[r.clone()],
+            std::slice::from_ref(&r),
             &[None],
             vec![orphan("W1AW", "20m", "Digital", 20_000)],
         );

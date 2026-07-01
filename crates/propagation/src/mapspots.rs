@@ -1,5 +1,5 @@
-//! Locate spots for the map. Turns the merged spot window (own-call PSKR + region
-//! + DX-cluster/RBN + the operator's own decodes) into plottable points: each
+//! Locate spots for the map. Turns the merged spot window (own-call PSKR, region,
+//! DX-cluster/RBN, and the operator's own decodes) into plottable points: each
 //! station placed by its Maidenhead grid when known (precise), else by its DXCC
 //! entity centroid (approximate) so the grid-less RBN/cluster firehose still fills
 //! the map HamClock-style. Deduped per call (most-recent kept) and capped.

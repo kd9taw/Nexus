@@ -11,6 +11,7 @@ use tempo_core::logbook::datetime_utc;
 
 /// One ALL.TXT line for a decode (`is_tx=false`) or a transmission (`is_tx=true`).
 /// `dial_mhz` is the VFO dial frequency; `audio_hz` the in-passband carrier offset.
+#[allow(clippy::too_many_arguments)]
 pub fn all_txt_line(
     unix: u64,
     dial_mhz: f64,

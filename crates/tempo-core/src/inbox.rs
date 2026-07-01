@@ -103,8 +103,8 @@ impl Inbox {
             // else (bare broadcast, plain line) to push_text, which sorts a "DE <CALL>
             // <body>" broadcast from a directed line.
             let is_standard = !matches!(m, Msg::Other(_))
-                && m.sender().map_or(true, looks_like_call)
-                && m.addressee().map_or(true, looks_like_call);
+                && m.sender().is_none_or(looks_like_call)
+                && m.addressee().is_none_or(looks_like_call);
             if !is_standard {
                 if let Some((id, ..)) = text::parse_chunk(&d.message) {
                     if let Some(full) = self.reasm.accept(&d.message) {

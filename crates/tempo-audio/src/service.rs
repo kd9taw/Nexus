@@ -1027,8 +1027,8 @@ impl RadioLoop {
         // parity, the normal boundary path transmits at the next valid period.
         if self.tx_until_ms.is_none() && eng.peek_immediate_tx() {
             let slot_now = self.clock.slot_index(now);
-            let on_our_parity = (slot_now % 2 == 0) == eng.tx_even();
-            let room_ms = self.clock.ms_to_next_slot(now) as f64;
+            let on_our_parity = slot_now.is_multiple_of(2) == eng.tx_even();
+            let room_ms = self.clock.ms_to_next_slot(now);
             // Fit on AUDIO length only — TX_TAIL is PTT hold after the audio ends
             // and may bleed into the next slot (it does at boundary starts too).
             // Counting it here inflated the deficit by up to 250 ms and trimmed
@@ -1133,7 +1133,7 @@ impl RadioLoop {
             };
             if let Some(at) = early_at_ms {
                 let slot_ms = eng.active_slot_secs() * 1000.0;
-                let elapsed_ms = slot_ms - self.clock.ms_to_next_slot(now) as f64;
+                let elapsed_ms = slot_ms - self.clock.ms_to_next_slot(now);
                 // `< slot_ms` guards the exact-boundary tick (ms_to_next_slot
                 // returns 0 there, which would read as a FULL slot elapsed and
                 // early-decode the PREVIOUS slot's audio under the wrong index).
@@ -1191,7 +1191,7 @@ impl RadioLoop {
             if sinks.wsjtx.is_some() || sinks.psk.is_some() {
                 let snap = eng.snapshot();
                 let tier = tier_mode(snap.link.tier);
-                let ms_mid = (now as u64 % 86_400_000) as u32;
+                let _ms_mid = (now as u64 % 86_400_000) as u32;
                 let now_secs = (now / 1000.0) as i64;
                 if did_rx {
                     emit_rx_decodes(sinks, &eng, &mut self.psk_spots, now, cur_dial);

@@ -156,7 +156,7 @@ mod tests {
         let lead = SLOT - NMAX; // 17424 = the head an NMAX ring drops
                                 // Mark the leading sync (2.0) distinctly from the signal body (1.0).
         let mut sig = vec![2.0f32; lead];
-        sig.extend(std::iter::repeat(1.0f32).take(SLOT - lead));
+        sig.extend(std::iter::repeat_n(1.0f32, SLOT - lead));
 
         // Full-slot ring (the fix): the leading sync is retained at the head.
         let mut good = RxRing::with_capacity(SLOT);
@@ -171,7 +171,7 @@ mod tests {
         buggy.push(&sig);
         assert_eq!(buggy.frame()[0], 1.0, "NMAX ring starts mid-signal");
         assert!(
-            !buggy.frame().iter().any(|&x| x == 2.0),
+            !buggy.frame().contains(&2.0),
             "NMAX ring has dropped the leading sync entirely (the bug)"
         );
     }
