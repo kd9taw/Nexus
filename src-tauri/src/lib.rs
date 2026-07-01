@@ -3083,6 +3083,53 @@ async fn get_need_alerts(
             }
         }
     }
+    // Feed LIVE POTA/SOTA activators onto the board as chase opportunities in their OWN
+    // right — not merely as chips on a coincidentally-cluster-spotted station. Most park
+    // activators live on the POTA/SOTA networks and never hit the DX cluster, so without
+    // this they'd only ever appear in the dedicated hunter panel. Each currently-active
+    // activator (fresh poller + recent spot time) that isn't already a row for the same
+    // (call, band, mode) is scored via `activation_alert` (any DX award it also satisfies
+    // is merged, so a new-entity park outranks a domestic one) and appended.
+    const OTA_ACTIVE_SECS: i64 = 3600; // an activation counts as "current" for ~1 h
+    if let Ok(cache) = ota_cache.lock() {
+        let now = now_unix();
+        let fresh: Vec<propagation::OtaSpot> = cache
+            .values()
+            // Cache STAMP proves the poller is alive; per-spot TIME proves the activation
+            // itself is current (SOTA's count-based feed can carry stale rows).
+            .filter(|(stamp, _)| now.saturating_sub(*stamp) <= 900)
+            .flat_map(|(_, v)| v.iter().cloned())
+            .filter(|sp| {
+                sp.spot_time_unix
+                    .is_none_or(|t| now.saturating_sub(t) <= OTA_ACTIVE_SECS)
+            })
+            .collect();
+        drop(cache);
+        for sp in &fresh {
+            let Some(alert) = propagation::activation_alert(
+                sp,
+                &needs,
+                needs.worked_zones(),
+                needs.worked_grids(),
+            ) else {
+                continue;
+            };
+            if alert.call == me_up {
+                continue; // never chase yourself
+            }
+            // Skip if the cluster path already produced this row — the tag loop above has
+            // decorated it with the P/S chip + reference.
+            if alerts
+                .iter()
+                .any(|a| a.call == alert.call && a.band == alert.band && a.mode == alert.mode)
+            {
+                continue;
+            }
+            alerts.push(alert);
+        }
+        // Re-sort: an activation that is ALSO a new one must land among the new ones.
+        alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
+    }
     Ok(alerts)
 }
 
@@ -4646,6 +4693,10 @@ pub fn run() {
     // mirrors the nowcast's existing PSK Reporter use, so it has no extra toggle.
     let spots: SharedSpots = Arc::new(Mutex::new(tempo_net::cluster::SpotBuffer::default()));
     let live_paths: SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+    // Live POTA/SOTA activator cache — warmed by a background poller (below) so the Needed
+    // board's park/summit chase rows appear from launch, and read by both the hunter panel
+    // and the need scorer. Created here (not inline at `.manage`) so the poller can share it.
+    let ota_spots: SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let region_paths = SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::new(
         propagation::REGION_SPOT_CAP,
     ))));
@@ -4675,6 +4726,28 @@ pub fn run() {
     std::thread::spawn(|| {
         let _ = propagation::live::dxped::fetch_plans();
     });
+    // Warm the POTA/SOTA activator cache in the background on a slow cadence (~3 min;
+    // activations run minutes-to-hours), so the Needed board surfaces live park/summit
+    // chase rows from launch — without waiting for the operator to open the POTA/SOTA
+    // panel. Both programs each cycle; failures are ignored (transient feed hiccup) and
+    // retried next tick. Lock-only writes to the same per-program cache the panel + the
+    // need scorer read. SOTA fetches a wider window (50) since it's sparse and count-based.
+    {
+        let ota = ota_spots.clone();
+        std::thread::spawn(move || loop {
+            for (prog, fetched) in [
+                ("POTA", propagation::live::pota::fetch_pota_spots()),
+                ("SOTA", propagation::live::pota::fetch_sota_spots(50)),
+            ] {
+                if let Ok(v) = fetched {
+                    if let Ok(mut c) = ota.lock() {
+                        c.insert(prog.to_string(), (now_unix(), v));
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(180));
+        });
+    }
 
     // Point the logbook at its ADIF file and load prior contacts (so worked-
     // before highlighting and the log view reflect previous sessions), and
@@ -4822,7 +4895,7 @@ pub fn run() {
         .manage(scales_cache)
         .manage(spots)
         .manage(live_paths)
-        .manage(SharedOtaSpots::new(Mutex::new(std::collections::HashMap::new())))
+        .manage(ota_spots)
         .manage(region_paths)
         .manage(health)
         .manage(SharedOpeningTracker::default())

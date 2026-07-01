@@ -22,6 +22,11 @@ pub struct OtaSpot {
     pub spotter: Option<String>,
     pub comment: Option<String>,
     pub grid: Option<String>,
+    /// Spot time (unix seconds, UTC) from the feed's timestamp — POTA `spotTime`,
+    /// SOTA `timeStamp`. `None` if absent/unparseable. Lets a consumer drop STALE
+    /// activations, which matters for SOTA: its `spots/<n>/all` returns the last `n`
+    /// spots by COUNT, not by recency, so an old summit can ride along on a quiet day.
+    pub spot_time_unix: Option<i64>,
 }
 
 fn s(v: &serde_json::Value, k: &str) -> Option<String> {
@@ -52,6 +57,7 @@ pub fn parse_pota_spots(json: &str) -> Vec<OtaSpot> {
                 spotter: s(v, "spotter"),
                 comment: s(v, "comments"),
                 grid: s(v, "grid6").or_else(|| s(v, "grid4")),
+                spot_time_unix: time_field(v, "spotTime"),
             })
         })
         .collect()
@@ -80,9 +86,19 @@ pub fn parse_sota_spots(json: &str) -> Vec<OtaSpot> {
                 spotter: s(v, "callsign"),
                 comment: s(v, "comments"),
                 grid: None,
+                spot_time_unix: time_field(v, "timeStamp"),
             })
         })
         .collect()
+}
+
+/// Parse a naive-UTC ISO timestamp field (POTA `spotTime` / SOTA `timeStamp`, both
+/// UTC) to unix seconds. Reuses the crate's tolerant parser (handles the `Z` suffix +
+/// fractional seconds SOTA sometimes emits). `None` if absent/unparseable.
+fn time_field(v: &serde_json::Value, k: &str) -> Option<i64> {
+    v.get(k)
+        .and_then(|x| x.as_str())
+        .and_then(crate::kc2g::parse_naive_utc_unix)
 }
 
 /// Read a frequency that may be a JSON string or number.
@@ -120,6 +136,10 @@ mod tests {
         // Empty comments → None.
         assert_eq!(spots[1].comment, None);
         assert_eq!(spots[1].reference, "K-1234");
+        // spotTime → unix (2026-06-07T05:34:30 UTC).
+        assert!(spots[0]
+            .spot_time_unix
+            .is_some_and(|t| (1_767_000_000..1_800_000_000).contains(&t)));
     }
 
     #[test]
@@ -141,6 +161,10 @@ mod tests {
         assert_eq!(s.mode, "CW");
         assert_eq!(s.spotter.as_deref(), Some("VK3HN"));
         assert!(s.name.contains("Mt Mitchell"));
+        // timeStamp → unix (recency filtering for sparse SOTA).
+        assert!(s
+            .spot_time_unix
+            .is_some_and(|t| (1_767_000_000..1_800_000_000).contains(&t)));
     }
 
     #[test]

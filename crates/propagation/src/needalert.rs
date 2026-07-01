@@ -278,6 +278,105 @@ pub fn rank(
         .collect()
 }
 
+/// Priority floor for a POTA/SOTA activation that carries no DX award (domestic park,
+/// entity already worked). Above [`NeedTag::Confirm`] (10) so a live activator outranks
+/// a mere confirmation, below the real award tiers (NewMode 30 …) so genuine DX still
+/// sorts on top. An activation that ALSO satisfies an award keeps the higher award tier.
+const OTA_ACTIVATION_PRIORITY: u32 = 20;
+
+/// The operating-mode class of a POTA/SOTA activator spot. Unlike a free-text DX-cluster
+/// comment, the OTA feeds carry a STRUCTURED `mode` field, so `USB`/`LSB`/`FM`/`AM`/`DV`
+/// unambiguously mean voice here (whereas [`crate::model::classify_spot_mode`] must ignore
+/// them in prose). Empty/unknown ("Other") falls back to the band-plan segment.
+fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
+    match mode.trim().to_ascii_uppercase().as_str() {
+        "CW" => ModeClass::Cw,
+        "SSB" | "USB" | "LSB" | "PHONE" | "AM" | "FM" | "DV" => ModeClass::Phone,
+        "FT8" | "FT4" | "FT1" | "RTTY" | "PSK" | "PSK31" | "PSK63" | "JT65" | "JT9" | "JS8"
+        | "MFSK" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
+        _ => crate::model::classify_spot_mode(freq_mhz, ""),
+    }
+}
+
+/// Build a Needed-board alert for a LIVE POTA/SOTA activator. Unlike [`score`] (which
+/// returns `None` unless the station advances a DXCC/zone/grid award), an active
+/// park/summit is ITSELF the opportunity a chaser wants — so this ALWAYS yields an alert
+/// (when the frequency is on a band), carrying the program tag PLUS any award the
+/// activator also satisfies, so a new-entity park outranks a domestic one. The caller
+/// dedups these against cluster-sourced alerts by `(call, band, mode)`. `None` only when
+/// the spot frequency is off the band plan.
+pub fn activation_alert(
+    spot: &crate::pota::OtaSpot,
+    needs: &dyn OperatorNeeds,
+    worked_zones: &HashSet<u8>,
+    worked_grids: &HashSet<String>,
+) -> Option<NeedAlert> {
+    let freq_mhz = spot.freq_khz / 1000.0;
+    let band = Band::from_mhz(freq_mhz)?;
+    let mode = ota_mode_class(&spot.mode, freq_mhz);
+    let is_sota = spot.program.eq_ignore_ascii_case("SOTA");
+    let program_tag = if is_sota {
+        NeedTag::Sota
+    } else {
+        NeedTag::Pota
+    };
+    let prog = if is_sota { "SOTA" } else { "POTA" };
+
+    // Any DX award this activator ALSO satisfies (ATNO / new band / zone / grid).
+    let award = score(
+        &spot.activator,
+        band.label(),
+        mode.label(),
+        spot.grid.as_deref(),
+        needs,
+        worked_zones,
+        worked_grids,
+    );
+    let had_award = award.is_some();
+    let info = dxcc::resolve(&spot.activator);
+    let mut alert = award.unwrap_or_else(|| NeedAlert {
+        call: spot.activator.to_ascii_uppercase(),
+        entity: info
+            .as_ref()
+            .map(|i| i.entity.to_string())
+            .unwrap_or_default(),
+        band: band.label().to_string(),
+        zone: info.as_ref().map(|i| i.cq_zone).unwrap_or(0),
+        tags: Vec::new(),
+        priority: 0,
+        headline: String::new(),
+        mode: mode.label().to_string(),
+        freq_mhz: None,
+        admitted_at: None,
+        evidence: None,
+    });
+    if !alert.tags.contains(&program_tag) {
+        alert.tags.push(program_tag);
+    }
+    // Headline: an activation that's also a DX award keeps the award line + the reference
+    // appended; a bare activation names the park/summit itself.
+    let name = if spot.name.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", spot.name.trim())
+    };
+    alert.headline = if had_award {
+        format!("{} · {} {}", alert.headline, prog, spot.reference)
+    } else {
+        format!("{} {}{}", prog, spot.reference, name)
+    };
+    alert.priority = alert.priority.max(OTA_ACTIVATION_PRIORITY);
+    alert.freq_mhz = Some(freq_mhz);
+    alert.admitted_at = spot.spot_time_unix;
+    alert.evidence = Some(format!(
+        "{} {} — {} on the air",
+        prog,
+        spot.reference,
+        spot.activator.to_ascii_uppercase()
+    ));
+    Some(alert)
+}
+
 /// Band-aware "local to me" radius (km). An Es footprint (VHF) is far tighter than
 /// an F2 footprint (HF). 250 km on VHF: Es patches run ~100–400 km, so a receiver
 /// must be INSIDE the same patch footprint as the operator before its reception
@@ -1009,5 +1108,110 @@ mod tests {
         ) {
             assert!(!c.tags.contains(&NeedTag::NewGrid));
         }
+    }
+
+    fn ota(
+        program: &str,
+        reference: &str,
+        activator: &str,
+        freq_khz: f64,
+        mode: &str,
+    ) -> crate::pota::OtaSpot {
+        crate::pota::OtaSpot {
+            program: program.into(),
+            reference: reference.into(),
+            name: "Test Park".into(),
+            activator: activator.into(),
+            freq_khz,
+            mode: mode.into(),
+            spotter: None,
+            comment: None,
+            grid: None,
+            spot_time_unix: Some(1_780_000_000),
+        }
+    }
+
+    #[test]
+    fn activation_alert_merges_a_dx_award_with_the_program_tag() {
+        // A park that IS also a new one keeps the award tier + gains the program chip.
+        let needs = LogNeeds::new(); // empty log → every entity is ATNO
+        let a = activation_alert(
+            &ota("POTA", "K-1234", "K1ABC", 14_250.0, "SSB"),
+            &needs,
+            needs.worked_zones(),
+            needs.worked_grids(),
+        )
+        .unwrap();
+        assert!(
+            a.tags.contains(&NeedTag::NewEntity),
+            "still a new one: {:?}",
+            a.tags
+        );
+        assert!(
+            a.tags.contains(&NeedTag::Pota),
+            "carries the POTA chip: {:?}",
+            a.tags
+        );
+        assert_eq!(
+            a.priority, 100,
+            "award tier drives priority, not the program floor"
+        );
+        assert_eq!(a.mode, "Phone"); // SSB → Phone (structured OTA mode field)
+        assert!(
+            a.headline.contains("POTA K-1234"),
+            "reference in headline: {}",
+            a.headline
+        );
+        assert_eq!(a.freq_mhz, Some(14.25));
+    }
+
+    #[test]
+    fn activation_alert_surfaces_a_domestic_park_with_no_dx_award() {
+        // Option A: an active park is a chase opportunity even when it advances NO DX award.
+        let mut n = LogNeeds::new();
+        n.add("W1AW", "20m", "SSB", None, true); // USA/20m/Phone + CQ zone 5 worked & confirmed
+        let a = activation_alert(
+            &ota("POTA", "K-1234", "W1ABC", 14_250.0, "SSB"),
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+        )
+        .unwrap();
+        assert_eq!(
+            a.tags,
+            vec![NeedTag::Pota],
+            "no DX award left → just the program chip"
+        );
+        assert_eq!(
+            a.priority, 20,
+            "bare-activation floor: above Confirm, below awards"
+        );
+        assert!(
+            a.headline.contains("POTA K-1234"),
+            "names the park: {}",
+            a.headline
+        );
+    }
+
+    #[test]
+    fn activation_alert_reads_sota_cw_and_rejects_off_band() {
+        let needs = LogNeeds::new();
+        let s = activation_alert(
+            &ota("SOTA", "VK3/VN-012", "VK3KR", 7_033.0, "CW"),
+            &needs,
+            needs.worked_zones(),
+            needs.worked_grids(),
+        )
+        .unwrap();
+        assert!(s.tags.contains(&NeedTag::Sota), "SOTA chip: {:?}", s.tags);
+        assert_eq!(s.mode, "CW");
+        // 2.5 MHz is off the amateur band plan → no alert (never a bogus row).
+        assert!(activation_alert(
+            &ota("POTA", "K-1", "K1ABC", 2_500.0, "SSB"),
+            &needs,
+            needs.worked_zones(),
+            needs.worked_grids(),
+        )
+        .is_none());
     }
 }
