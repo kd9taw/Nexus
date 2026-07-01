@@ -1252,6 +1252,7 @@ export function SettingsPanel({
               )}
 
               {form.rigConn !== 'network' && (
+                <>
               <label className="settings-field">
                 <span className="settings-label">Serial Port</span>
                 <div className="settings-input-row">
@@ -1304,6 +1305,7 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">Serial baud rate.</span>
               </label>
+                </>
               )}
 
               <label className="settings-field">
