@@ -7,25 +7,18 @@ import {
   bakeLut,
   normalize,
   resolveColormap,
-  WATERFALL_PALETTES,
   WATERFALL_ZOOMS,
   zoomRange,
   MIN_SPAN,
 } from '../waterfall'
+import { useWaterfallPalette } from '../waterfallPalette'
+import { PalettePicker } from './PalettePicker'
 
-/** Persist the operator's waterfall display preferences (palette + manual gain/zero,
- * like the theme) in localStorage; palette 'auto' rides the theme, gain/zero 0 = auto. */
-const PALETTE_KEY = 'nexus.waterfall.palette'
+/** Persist the operator's manual waterfall contrast (gain/zero) in localStorage; 0 = auto.
+ * The palette lives in the shared master store (see `waterfallPalette.ts`). */
 const GAIN_KEY = 'nexus.waterfall.gain'
 const ZERO_KEY = 'nexus.waterfall.zero'
 const ZOOM_KEY = 'nexus.waterfall.zoom'
-function loadPalette(): string {
-  try {
-    return localStorage.getItem(PALETTE_KEY) ?? 'auto'
-  } catch {
-    return 'auto'
-  }
-}
 /** Load a persisted [-1,1] slider value (gain/zero); missing/blocked → 0 (= auto). */
 function loadKnob(key: string): number {
   try {
@@ -84,9 +77,9 @@ function xToFreq(x: number, width: number, lo = F_MIN, hi = F_MAX): number {
 export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune, active = true }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef<number | null>(null)
-  // Operator's chosen palette ('auto' = theme-driven) + manual contrast (gain/zero,
-  // 0 = pure auto-AGC). Display-only → localStorage.
-  const [palette, setPalette] = useState<string>(loadPalette)
+  // Master palette ('auto' = theme-driven), shared across every scope; changing it in any
+  // mode recolors them all. Manual contrast (gain/zero, 0 = pure auto-AGC) stays local.
+  const [palette] = useWaterfallPalette()
   const [gain, setGain] = useState<number>(() => loadKnob(GAIN_KEY))
   const [zero, setZero] = useState<number>(() => loadKnob(ZERO_KEY))
   // Span/zoom: a sub-window of the audio band centered (at pick time) on the RX marker.
@@ -481,27 +474,7 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
       <div className="panel-header">
         <h2>Waterfall</h2>
         <span className="wf-hint">click = RX · Shift = TX · Ctrl = both</span>
-        <select
-          className="wf-palette"
-          value={palette}
-          aria-label="Waterfall color palette"
-          title="Waterfall color palette"
-          onChange={(e) => {
-            const v = e.target.value
-            setPalette(v)
-            try {
-              localStorage.setItem(PALETTE_KEY, v)
-            } catch {
-              /* storage blocked — palette still applies this session */
-            }
-          }}
-        >
-          {WATERFALL_PALETTES.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
-            </option>
-          ))}
-        </select>
+        <PalettePicker />
         <select
           className="wf-palette"
           value={zoomSpan}

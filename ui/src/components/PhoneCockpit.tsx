@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import { PhoneScope } from './PhoneScope'
+import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
 import { LevelMeter } from './LevelMeter'
@@ -163,6 +164,10 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       </div>
 
       <section className="ph-scope-panel">
+        <div className="ph-scope-head">
+          <span className="ph-scope-head-label">Colors</span>
+          <PalettePicker />
+        </div>
         <PhoneScope transmitting={snap.radio.transmitting} theme={theme} />
       </section>
 

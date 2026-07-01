@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { getSpectrumRow } from '../api'
 import { sampleLut } from '../colormaps'
-import { agcRange, bakeLut, normalize, themeColormap } from '../waterfall'
+import { agcRange, bakeLut, normalize, resolveColormap } from '../waterfall'
+import { useWaterfallPalette } from '../waterfallPalette'
 
 interface Props {
   transmitting: boolean
@@ -34,21 +35,25 @@ export function PhoneScope({
   viewHiHz = 2900,
   markerHz = null,
 }: Props) {
+  // Master palette shared with the FT8 waterfall + all scopes ('auto' = theme-driven).
+  const [palette] = useWaterfallPalette()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const meterRef = useRef<HTMLDivElement>(null)
   const rafRef = useRef<number | null>(null)
   const txRef = useRef(transmitting)
   const themeRef = useRef(theme)
+  const paletteRef = useRef(palette)
   const activeRef = useRef(active)
-  const lutRef = useRef<Uint8ClampedArray>(bakeLut(themeColormap(theme)))
+  const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme)))
 
   txRef.current = transmitting
   themeRef.current = theme
+  paletteRef.current = palette
   activeRef.current = active
 
   useLayoutEffect(() => {
-    lutRef.current = bakeLut(themeColormap(theme))
-  }, [theme])
+    lutRef.current = bakeLut(resolveColormap(palette, theme))
+  }, [palette, theme])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -193,7 +198,7 @@ export function PhoneScope({
       // ---- Panadapter trace (top region): instantaneous filled spectrum, colored ----
       ctx.fillStyle = `rgb(${lut[0]},${lut[1]},${lut[2]})` // clear trace region to floor color
       ctx.fillRect(0, 0, Wd, traceHd)
-      const name = themeColormap(themeRef.current)
+      const name = resolveColormap(paletteRef.current, themeRef.current)
       const c0 = sampleLut(name, 0.3)
       const c1 = sampleLut(name, 0.7)
       const c2 = sampleLut(name, 1.0)

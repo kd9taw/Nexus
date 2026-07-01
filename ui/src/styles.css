@@ -4815,7 +4815,7 @@ body.resizing {
 }
 .cw-copilot-mode button {
   font-size: 10px;
-  padding: 1px 8px;
+  padding: 1px var(--space-2);
   color: var(--text-dim);
   background: transparent;
   border: 1px solid var(--border);
@@ -4867,7 +4867,7 @@ body.resizing {
 .cw-chip {
   font-family: var(--font-mono);
   font-size: 13px;
-  padding: 2px 8px;
+  padding: 2px var(--space-2);
   color: var(--text);
   background: var(--surface-3, rgba(255, 255, 255, 0.06));
   border: 1px solid var(--border);
@@ -6380,6 +6380,21 @@ select.settings-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   cursor: pointer;
+}
+/* Master-palette picker header on the CW/Phone scope panels (the picker reuses .wf-palette,
+   whose margin-left:auto floats it to the right; the label sits at the left). */
+.ph-scope-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+.ph-scope-head-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-faint);
 }
 /* Gain/Zero contrast knobs next to the palette (double-click to recenter = auto). */
 .wf-knob {

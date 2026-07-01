@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, SkimHit } from '../types'
 import { PhoneScope } from './PhoneScope'
+import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { LogEntry } from './LogEntry'
 import {
@@ -344,6 +345,10 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
       )}
 
       <section className="ph-scope-panel">
+        <div className="ph-scope-head">
+          <span className="ph-scope-head-label">Colors</span>
+          <PalettePicker />
+        </div>
         {/* CW-narrow view: ~300–1100 Hz so individual carriers are readable; the
             dashed hairline is YOUR pitch — tune a signal onto it = zero-beat. */}
         <PhoneScope

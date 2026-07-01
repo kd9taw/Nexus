@@ -162,6 +162,21 @@ export const WATERFALL_PALETTES: { value: ColormapName | 'auto'; label: string }
   { value: 'negative', label: 'Negative' },
 ]
 
+/** The curated MASTER palette set shown in the per-mode pickers — one clean choice of ~8
+ * that rides across every scope (FT8, CW, Phone). A perceptual default set plus the most
+ * familiar SDR/retro looks; `resolveColormap` still accepts any value in `WATERFALL_PALETTES`
+ * so a legacy stored palette keeps working even if it's not offered here. */
+export const MASTER_PALETTES: { value: ColormapName | 'auto'; label: string }[] = [
+  { value: 'auto', label: 'Auto (theme)' },
+  { value: 'inferno', label: 'Inferno' },
+  { value: 'viridis', label: 'Viridis' },
+  { value: 'turbo', label: 'Turbo' },
+  { value: 'sdr-green', label: 'SDR Green' },
+  { value: 'amber-crt', label: 'Amber CRT' },
+  { value: 'blue', label: 'Blue' },
+  { value: 'grayscale', label: 'Grayscale' },
+]
+
 /** Resolve the waterfall colormap: an explicit palette choice wins; `'auto'` (or an
  * unknown/stale value) falls back to the theme's default map. */
 export function resolveColormap(palette: string, theme: string): ColormapName {
