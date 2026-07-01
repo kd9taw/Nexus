@@ -50,6 +50,12 @@ pub enum InsightKind {
     Flare,
     Greyline,
     EsWatch,
+    /// Which band sits at today's MUF ceiling + how close the next one is to opening.
+    BandHeadroom,
+    /// A fresh/accelerating opening — the "go now" moment.
+    OpeningMomentum,
+    /// Whether the strongest opening is two-way, or a one-way path to stop calling into.
+    Reciprocity,
 }
 
 /// One predictive insight line.
@@ -211,6 +217,68 @@ pub fn generate_insights(
         }
     }
 
+    // 3b. Band headroom — the persistent "what's my top open band, and what's about to
+    // open next" readout. Only on a STEADY MUF: when the MUF is moving, 3 above already
+    // tells that story (avoids two MUF lines competing for the 6-line cap).
+    if let Some(t) = trend {
+        let muf = t.muf.now;
+        if muf > 0.0 && t.muf.dir == TrendDir::Steady {
+            let at = ladder().filter(|b| b.center_mhz() as f32 <= muf).last();
+            let next = ladder().find(|b| b.center_mhz() as f32 > muf);
+            match (at, next) {
+                (Some(at), Some(nb)) => {
+                    let gap = nb.center_mhz() as f32 - muf;
+                    let close = gap <= 3.0;
+                    out.push(Insight {
+                        kind: InsightKind::BandHeadroom,
+                        level: if close {
+                            InsightLevel::Good
+                        } else {
+                            InsightLevel::Info
+                        },
+                        plain: if close {
+                            format!(
+                                "{} is your top open band — and {} is on the edge of opening; check it shortly",
+                                at.label(),
+                                nb.label()
+                            )
+                        } else {
+                            format!(
+                                "{} is your top open band right now; {} needs the bands to lift before it opens",
+                                at.label(),
+                                nb.label()
+                            )
+                        },
+                        technical: format!(
+                            "controlling MUF {:.1} MHz; next band {} ({:.1} MHz) is {:.1} MHz above the ceiling",
+                            muf,
+                            nb.label(),
+                            nb.center_mhz(),
+                            gap
+                        ),
+                        band: Some(if close { nb.label() } else { at.label() }.to_string()),
+                    });
+                }
+                (Some(at), None) => {
+                    out.push(Insight {
+                        kind: InsightKind::BandHeadroom,
+                        level: InsightLevel::Good,
+                        plain: format!(
+                            "The bands are open all the way up to {} — take your pick up high",
+                            at.label()
+                        ),
+                        technical: format!(
+                            "controlling MUF {muf:.1} MHz (above the {} ceiling)",
+                            at.label()
+                        ),
+                        band: Some(at.label().to_string()),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
     // 4. Solar flux level (+ trend suffix when known).
     let sfi_dir = trend.map(|t| t.sfi.dir).unwrap_or(TrendDir::Steady);
     let flux = if wx.sfi >= 150.0 {
@@ -285,6 +353,81 @@ pub fn generate_insights(
                 "boreal Es season (solar declination > 15°); Es is minutes-long, 500–2500 km"
                     .to_string(),
             band: Some("6m".to_string()),
+        });
+    }
+
+    // 7. Opening momentum — a FRESH opening is a "go now" moment the static openings card
+    // doesn't convey. Newest strong opening only (avoid feed spam); two-way status folded in.
+    if let Some(o) = openings
+        .iter()
+        .filter(|o| o.is_new || o.onset_secs < 600)
+        .max_by(|a, b| {
+            a.confidence_score
+                .partial_cmp(&b.confidence_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    {
+        let two_way = o.reciprocal_pairs > 0;
+        let s = if o.stations == 1 { "" } else { "s" };
+        let plain = if o.is_new {
+            format!(
+                "{} just opened toward your {} — jump on it now{}",
+                o.band,
+                o.octant,
+                if two_way {
+                    "; stations there can hear you back"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            format!(
+                "{} to your {} is building — {} station{} in the last few min{}",
+                o.band,
+                o.octant,
+                o.stations,
+                s,
+                if two_way { ", and it's two-way" } else { "" }
+            )
+        };
+        out.push(Insight {
+            kind: InsightKind::OpeningMomentum,
+            level: InsightLevel::Good,
+            plain,
+            technical: format!(
+                "onset {} s, anomaly z {:.1}, {} station{}, {} reciprocal pair{}",
+                o.onset_secs,
+                o.anomaly_z,
+                o.stations,
+                s,
+                o.reciprocal_pairs,
+                if o.reciprocal_pairs == 1 { "" } else { "s" }
+            ),
+            band: Some(o.band.clone()),
+        });
+    }
+
+    // 8. Reciprocity — warn when an ESTABLISHED opening is one-way (nobody's confirmed to
+    // hear the operator): change something, don't keep calling into a dead path. A fresh
+    // opening is covered by 7 above; a two-way opening needs no warning.
+    if let Some(o) = openings
+        .iter()
+        .filter(|o| !o.is_new && o.onset_secs >= 600 && o.stations > 0 && o.reciprocal_pairs == 0)
+        .max_by_key(|o| o.stations)
+    {
+        let s = if o.stations == 1 { "" } else { "s" };
+        out.push(Insight {
+            kind: InsightKind::Reciprocity,
+            level: InsightLevel::Caution,
+            plain: format!(
+                "{} to your {} looks one-way — you're hearing them, but no one's confirmed hearing you. Try more power or another band.",
+                o.band, o.octant
+            ),
+            technical: format!(
+                "{} station{} heard, 0 confirmed reciprocal (my↔far) over the window — likely one-way now",
+                o.stations, s
+            ),
+            band: Some(o.band.clone()),
         });
     }
 
@@ -409,5 +552,86 @@ mod tests {
         assert!(ins
             .iter()
             .all(|i| !i.plain.is_empty() && !i.technical.is_empty()));
+    }
+
+    fn steady_muf(now_mhz: f32) -> WxTrend {
+        WxTrend {
+            muf: ScalarTrend {
+                now: now_mhz,
+                start: now_mhz,
+                delta_per_hr: 0.0,
+                dir: TrendDir::Steady,
+            },
+            window_secs: 3 * 3600,
+            samples: 3,
+            ..Default::default()
+        }
+    }
+
+    fn opening(
+        band: &str,
+        stations: u32,
+        reciprocal_pairs: u32,
+        onset_secs: i64,
+        is_new: bool,
+    ) -> OpeningView {
+        OpeningView {
+            band: band.to_string(),
+            mode: "F2".to_string(),
+            octant: "NE".to_string(),
+            bearing_deg: 45.0,
+            max_km: 8000.0,
+            probability: 0.7,
+            stations,
+            confidence: "likely".to_string(),
+            confidence_score: 0.7,
+            reciprocal_pairs,
+            anomaly_z: 3.0,
+            onset_secs,
+            is_new,
+            note: String::new(),
+        }
+    }
+
+    #[test]
+    fn band_headroom_flags_the_next_band_to_open() {
+        // Steady MUF 16 MHz → 20m is the ceiling; 17m (~18 MHz) is ~2 MHz off = on the edge.
+        let t = steady_muf(16.0);
+        let ins = generate_insights(NOW, &wx(120.0, 2.0, 1e-7), Some(&t), &[], &[], None);
+        let h = ins
+            .iter()
+            .find(|i| i.kind == InsightKind::BandHeadroom)
+            .expect("headroom insight on a steady MUF");
+        assert_eq!(h.band.as_deref(), Some("17m"));
+        assert!(h.plain.contains("20m") && h.plain.contains("17m"));
+        assert!(!h.plain.is_empty() && !h.technical.is_empty());
+    }
+
+    #[test]
+    fn fresh_opening_emits_go_now_momentum() {
+        let o = opening("10m", 5, 2, 30, true);
+        let ins = generate_insights(NOW, &wx(150.0, 2.0, 1e-7), None, &[], &[o], None);
+        let m = ins
+            .iter()
+            .find(|i| i.kind == InsightKind::OpeningMomentum)
+            .expect("momentum insight for a fresh opening");
+        assert_eq!(m.level, InsightLevel::Good);
+        assert!(m.plain.contains("just opened") && m.plain.contains("10m"));
+        // A fresh two-way opening isn't a one-way warning.
+        assert!(!ins.iter().any(|i| i.kind == InsightKind::Reciprocity));
+    }
+
+    #[test]
+    fn established_one_way_opening_warns() {
+        let o = opening("20m", 6, 0, 1800, false);
+        let ins = generate_insights(NOW, &wx(150.0, 2.0, 1e-7), None, &[], &[o], None);
+        let r = ins
+            .iter()
+            .find(|i| i.kind == InsightKind::Reciprocity)
+            .expect("one-way warning for an established no-reciprocal opening");
+        assert_eq!(r.level, InsightLevel::Caution);
+        assert!(r.plain.contains("one-way"));
+        // An established (not fresh) opening isn't a "go now" momentum line.
+        assert!(!ins.iter().any(|i| i.kind == InsightKind::OpeningMomentum));
     }
 }

@@ -11,6 +11,9 @@ import {
   Sunrise,
   Radio,
   ChevronDown,
+  Gauge,
+  Rocket,
+  ArrowLeftRight,
   type LucideIcon,
 } from 'lucide-react'
 import type { Insight, InsightKind } from '../../types'
@@ -23,6 +26,9 @@ const KIND_ICON: Record<InsightKind, LucideIcon> = {
   flare: Zap,
   greyline: Sunrise,
   esWatch: Radio,
+  bandHeadroom: Gauge,
+  openingMomentum: Rocket,
+  reciprocity: ArrowLeftRight,
 }
 
 export function InsightFeed({

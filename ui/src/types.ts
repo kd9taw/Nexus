@@ -114,7 +114,16 @@ export interface WxTrend {
 export type InsightLevel = 'good' | 'info' | 'caution' | 'alert'
 
 /** What a predictive insight is about (drives the icon). */
-export type InsightKind = 'mufTrend' | 'solarFlux' | 'geomagnetic' | 'flare' | 'greyline' | 'esWatch'
+export type InsightKind =
+  | 'mufTrend'
+  | 'solarFlux'
+  | 'geomagnetic'
+  | 'flare'
+  | 'greyline'
+  | 'esWatch'
+  | 'bandHeadroom'
+  | 'openingMomentum'
+  | 'reciprocity'
 
 /** One plain-language predictive insight line (dual-audience: plain + technical). */
 export interface Insight {
