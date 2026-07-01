@@ -29,8 +29,6 @@ import {
   destinationPoint,
   greatCircle,
   terminator,
-  mufCells,
-  mufMhz,
   type Projection,
   type MapView3,
 } from '../mapGeo'
@@ -78,30 +76,13 @@ interface Props {
   muf?: MufStation[]
 }
 
-/** How far a measured ionosonde still meaningfully anchors the MUF field (km). Beyond this
- * from every sonde, the overlay uses the solar model. */
-const MUF_STATION_CUTOFF_KM = 3000
-
-/** MUF (MHz) at a point: an inverse-distance blend of the measured sondes within range,
- * else the modelled foF2 field — so the overlay reads "live where we can see, modelled
- * over the oceans", never a bare guess dressed as data. */
-function blendedMuf(
-  lat: number,
-  lon: number,
-  nowMs: number,
-  sfi: number,
-  stations: { lat: number; lon: number; muf: number }[],
-): number {
-  let wsum = 0
-  let msum = 0
-  for (const s of stations) {
-    const d = haversineKm({ lat, lon }, { lat: s.lat, lon: s.lon })
-    if (d > MUF_STATION_CUTOFF_KM) continue
-    const w = 1 / (d * d + 1)
-    wsum += w
-    msum += w * s.muf
-  }
-  return wsum > 0 ? msum / wsum : mufMhz(lat, lon, nowMs, sfi)
+/** Color for an ionosonde's measured MUF (MHz): a cold→hot scale (blue low → red high)
+ * that stays legible as a dot on the dark map — higher MUF = higher band open. Mapped over
+ * ~7–30 MHz (40m → 10m), so a green/yellow dot ≈ 20/17m, orange/red ≈ 15/10m. */
+function mufDotColor(mhz: number): string {
+  const t = Math.max(0, Math.min(1, (mhz - 7) / (30 - 7)))
+  const hue = 210 - 210 * t // 210° blue (low) → 0° red (high)
+  return `hsl(${hue.toFixed(0)}, 85%, 55%)`
 }
 
 const INTENT_PRESETS: Record<
@@ -175,7 +156,7 @@ interface Layer {
 const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   daynight: { label: 'Day / night (greyline)', visible: true, opacity: 1 },
   relief: { label: 'Relief (World view)', visible: true, opacity: 1 },
-  muf: { label: 'MUF (live + model)', visible: true, opacity: 0.6 },
+  muf: { label: 'Ionosonde MUF', visible: true, opacity: 0.9 },
   aurora: { label: 'Aurora oval', visible: false, opacity: 0.85 },
   coast: { label: 'Coastlines', visible: true, opacity: 0.85 },
   grid: { label: 'Grid (20°×10°)', visible: true, opacity: 0.5 },
@@ -464,9 +445,6 @@ export function MapView({
     return out
   }, [me, kind, size, view, dxCards])
 
-  // Static MUF grid cells (geometry never changes; colors recomputed per draw).
-  const mufGrid = useMemo(() => mufCells(), [])
-
   // Aurora oval — fetched only while the layer is on (polite; OVATION updates
   // ~30–45 min, so a 10-min refresh is ample). Cleared when the layer is off.
   const [auroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
@@ -661,21 +639,20 @@ export function MapView({
     // out over the oceans. Tells you at a glance which bands the ionosphere supports where.
     // Gated to the Expert layer panel + off by default; the on-map legend maps color→band.
     if (layers.muf.visible) {
-      const sfi = prop?.spaceWx.sfi ?? 120
-      ctx.globalAlpha = layers.muf.opacity * 0.4
-      for (const cell of mufGrid) {
-        const muf = blendedMuf(cell.center.lat, cell.center.lon, nowMs, sfi, mufStations)
-        // Only shade where a HIGH band (≥ 20 m / 14 MHz) is open. Below that it's the
-        // near-permanent low-band floor — shading it just washes the whole globe pink and
-        // makes the opacity feel on/off. Map the useful 14→30 MHz window across the ramp so
-        // the day-side gradient reads (7→35 compressed everything into inferno's pink middle).
-        if (muf < 14) continue
-        const t = Math.max(0, Math.min(1, (muf - 14) / (30 - 14)))
-        const [r, g, b] = sampleLut('inferno', t)
+      // Live ionosonde MUF as DOTS colored by band (blue = low band, red = high band open) —
+      // real measured points, not an interpolated field, so it never washes the map. A
+      // back-facing globe point returns null from project() and is skipped.
+      ctx.globalAlpha = layers.muf.opacity
+      for (const s of mufStations) {
+        const p = project(proj, { lat: s.lat, lon: s.lon })
+        if (!p) continue
         ctx.beginPath()
-        path(cell.poly)
-        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
+        ctx.arc(p[0], p[1], 3.2, 0, Math.PI * 2)
+        ctx.fillStyle = mufDotColor(s.muf)
         ctx.fill()
+        ctx.lineWidth = 1
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)'
+        ctx.stroke()
       }
       ctx.globalAlpha = 1
     }
@@ -892,7 +869,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufGrid, mufStations, auroraPts, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick])
+  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick])
 
   if (!me) {
     return (
@@ -1220,22 +1197,22 @@ function MapLegend() {
   )
 }
 
-/** Legend for the MUF overlay — maps the inferno color scale (7→35 MHz) to the band it
- * opens, so "orange over Africa" reads as "15m is open there". Shown only with the layer. */
+/** Legend for the ionosonde-MUF dots — the blue→red scale (low band → high band open),
+ * matching `mufDotColor`, so a red dot reads as "10m is open at that sonde". */
 function MufLegend() {
   const stops = Array.from({ length: 6 }, (_, i) => {
     const t = i / 5
-    const [r, g, b] = sampleLut('inferno', t)
-    return `rgb(${r},${g},${b}) ${Math.round(t * 100)}%`
+    return `hsl(${(210 - 210 * t).toFixed(0)}, 85%, 55%) ${Math.round(t * 100)}%`
   }).join(', ')
   return (
     <div className="muf-legend" aria-hidden="true">
-      <span className="muf-legend-title">MUF — highest band open</span>
+      <span className="muf-legend-title">Ionosonde MUF → band</span>
       <span className="muf-legend-bar" style={{ background: `linear-gradient(90deg, ${stops})` }} />
       <span className="muf-legend-ticks">
+        <span>40m</span>
         <span>20m</span>
         <span>15m</span>
-        <span>10m+</span>
+        <span>10m</span>
       </span>
     </div>
   )
