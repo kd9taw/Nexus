@@ -3,7 +3,7 @@ import type { AppSnapshot, FieldDayStatus, SkimHit } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { BandPicker } from './BandPicker'
 import { LogEntry } from './LogEntry'
-import { sendCw, setCwKeyer, setCwWpm, stopCw, cwDecode, cwClear, cwSkim } from '../api'
+import { sendCw, setCwKeyer, setCwWpm, stopCw, cwDecode, cwClear, cwSkim, selectPeer } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 
 interface Props {
@@ -70,6 +70,41 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
   }, [sent])
   // A CW-keyer failure surfaced by the radio loop (e.g. the rig rejected CAT send_morse).
   const [keyerError, setKeyerError] = useState<string | null>(null)
+  // --- CW copilot: decoded-call chips + guided next-step (configurable Guided/Expert) ---
+  const [assistMode, setAssistMode] = useState<'guided' | 'expert'>(
+    () => (localStorage.getItem('nexus.cwAssist') as 'guided' | 'expert') || 'guided',
+  )
+  const setAssist = (m: 'guided' | 'expert') => {
+    setAssistMode(m)
+    localStorage.setItem('nexus.cwAssist', m)
+  }
+  const [cand, setCand] = useState<{ call: string; best: boolean }[]>([])
+  const [guide, setGuide] = useState<{
+    state: string
+    headline: string
+    prompt: string
+    recommended: string | null
+    workedCall: string | null
+    rst: string | null
+    name: string | null
+  }>({
+    state: 'listening',
+    headline: '',
+    prompt: '',
+    recommended: null,
+    workedCall: null,
+    rst: null,
+    name: null,
+  })
+  // True once the operator sets WPM by hand → stop auto-matching to the decoded speed.
+  const wpmTouched = useRef(false)
+  // One-shot log prefill (call/RST/name) fired when the operator confirms a worked station.
+  const [cwPrefill, setCwPrefill] = useState<{
+    call: string
+    rst?: string
+    name?: string
+    ts: number
+  } | null>(null)
   // Wideband skimmer: every CW signal across the band (refreshed a bit slower than the
   // single decode — a full-band scan is heavier than one channel).
   const [skim, setSkim] = useState<SkimHit[]>([])
@@ -83,6 +118,16 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
             setDecoded({ text: d.text, wpm: d.wpm })
             setSent(d.sent)
             setKeyerError(d.keyerError)
+            setCand(d.candidates)
+            setGuide({
+              state: d.state,
+              headline: d.headline,
+              prompt: d.prompt,
+              recommended: d.recommended,
+              workedCall: d.workedCall,
+              rst: d.rst,
+              name: d.name,
+            })
           }
         })
         .catch(() => {})
@@ -148,6 +193,16 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
     setKeyer(k)
     void setCwKeyer(k).then((s) => s && onSnap?.(s))
   }
+  // Confirm a decoded station as the one we're working: make it the macro/log peer (so the
+  // `!` token + logging use it), match our speed to theirs (unless WPM was set by hand), and
+  // prefill the log with the read call/RST/name. Never transmits — the operator still keys.
+  const workCall = (call: string) => {
+    void selectPeer(call)
+      .then((s) => s && onSnap?.(s))
+      .catch(() => {})
+    if (!wpmTouched.current && decoded.wpm >= WPM_MIN) changeWpm(decoded.wpm)
+    setCwPrefill({ call, rst: guide.rst ?? undefined, name: guide.name ?? undefined, ts: Date.now() })
+  }
 
   // Keyboard: F1–F8 fire macros; Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4).
   // Live ref so the document listener (bound once) always reads current state.
@@ -164,9 +219,11 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
         abort()
       } else if (e.key === 'PageUp') {
         e.preventDefault()
+        wpmTouched.current = true
         changeWpm(stateRef.current.wpm + (e.shiftKey ? 4 : 2))
       } else if (e.key === 'PageDown') {
         e.preventDefault()
+        wpmTouched.current = true
         changeWpm(stateRef.current.wpm - (e.shiftKey ? 4 : 2))
       }
     }
@@ -194,7 +251,10 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
             min={WPM_MIN}
             max={WPM_MAX}
             value={wpm}
-            onChange={(e) => changeWpm(Number(e.target.value))}
+            onChange={(e) => {
+              wpmTouched.current = true
+              changeWpm(Number(e.target.value))
+            }}
             aria-label="CW keyer speed (WPM)"
           />
           <span className="cw-wpm-val">{wpm} WPM</span>
@@ -271,6 +331,65 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
         />
       </section>
 
+      {/* CW copilot — decoded-call chips + (Guided) the next-step prompt. Configurable for
+          new hams (Guided: plain-English prompts + the next key highlighted) vs experienced
+          ops (Expert: just the chips). Nothing here transmits — the operator always keys. */}
+      <div className={`cw-copilot ${assistMode}`}>
+        <div className="cw-copilot-mode" role="group" aria-label="CW assist mode">
+          <button
+            type="button"
+            className={assistMode === 'guided' ? 'active' : ''}
+            onClick={() => setAssist('guided')}
+            title="Guided: plain-English prompts + the next key highlighted — great if you don't know CW"
+          >
+            Guided
+          </button>
+          <button
+            type="button"
+            className={assistMode === 'expert' ? 'active' : ''}
+            onClick={() => setAssist('expert')}
+            title="Expert: just the decoded-call chips, no prompts"
+          >
+            Expert
+          </button>
+        </div>
+        {assistMode === 'guided' && guide.headline && (
+          <div className="cw-copilot-guide">
+            <span className="cw-copilot-state">{guide.headline}</span>
+            {guide.prompt && <span className="cw-copilot-prompt">{guide.prompt}</span>}
+          </div>
+        )}
+        <div className="cw-copilot-chips">
+          {guide.workedCall ? (
+            <span className="cw-copilot-label">Working</span>
+          ) : cand.length > 0 ? (
+            <span className="cw-copilot-label">Heard</span>
+          ) : (
+            <span className="cw-copilot-label dim">Decoded calls appear here…</span>
+          )}
+          {guide.workedCall && (
+            <span className="cw-chip worked" title="The station you're working — the F-keys + log use this">
+              {guide.workedCall}
+              {guide.rst ? ` · ${guide.rst}` : ''}
+              {guide.name ? ` · ${guide.name}` : ''}
+            </span>
+          )}
+          {cand
+            .filter((c) => c.call !== guide.workedCall)
+            .map((c) => (
+              <button
+                key={c.call}
+                type="button"
+                className={`cw-chip${c.best ? ' best' : ''}`}
+                onClick={() => workCall(c.call)}
+                title={`Work ${c.call} — set it for the F-keys + log`}
+              >
+                {c.call}
+              </button>
+            ))}
+        </div>
+      </div>
+
       <div
         className="cw-decode"
         title="Live CW decode at your pitch — a running transcript that persists as text scrolls by"
@@ -333,7 +452,7 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
           <button
             key={m.key}
             type="button"
-            className="cw-macro"
+            className={`cw-macro${assistMode === 'guided' && guide.recommended === m.key ? ' recommended' : ''}`}
             onClick={() => send(m.text)}
             title={m.text}
           >
@@ -369,6 +488,7 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
         defaultRst="599"
         pendingWork={pendingWork}
         onConsumeWork={onConsumeWork}
+        cwPrefill={cwPrefill}
         fieldDay={fieldDay}
         fdMode="CW"
       />

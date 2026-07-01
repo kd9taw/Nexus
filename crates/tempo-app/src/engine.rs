@@ -2322,6 +2322,11 @@ impl Engine {
                                               // canned band macros key on the next over without a separate Enable-Tx click.
         self.arm_tx_now();
     }
+    /// The current worked/active peer — drives the `!` CW macro + logging. `None` if unset.
+    pub fn active_peer(&self) -> Option<String> {
+        self.app.active_peer().map(str::to_string)
+    }
+
     pub fn select_peer(&mut self, peer: &str) {
         self.app.select_peer(peer);
     }

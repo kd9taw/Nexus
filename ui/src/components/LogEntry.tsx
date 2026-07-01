@@ -15,6 +15,9 @@ interface Props {
   pendingWork?: { call: string; ts: number } | null
   /** Called once the prefill has been applied, so the parent can clear it. */
   onConsumeWork?: () => void
+  /** CW copilot prefill: the confirmed worked call + the decoder's read of their RST/name.
+   * `ts` refires the fill; RST/name fill only BLANK fields so they never clobber typing. */
+  cwPrefill?: { call: string; rst?: string; name?: string; ts: number } | null
   /**
    * When provided, the component enters FD mode: contacts go to fdLogManual()
    * instead of the general logbook.  The `mode` prop determines the FD mode
@@ -44,7 +47,16 @@ function fmtUtc(whenUnix: number): string {
  *
  * When fieldDay is null/undefined, behaviour is the standard logbook path.
  */
-export function LogEntry({ snap, mode, defaultRst, pendingWork, onConsumeWork, fieldDay, fdMode }: Props) {
+export function LogEntry({
+  snap,
+  mode,
+  defaultRst,
+  pendingWork,
+  onConsumeWork,
+  cwPrefill,
+  fieldDay,
+  fdMode,
+}: Props) {
   const fdActive = fieldDay != null
 
   const [logCall, setLogCall] = useState('')
@@ -106,6 +118,17 @@ export function LogEntry({ snap, mode, defaultRst, pendingWork, onConsumeWork, f
     onConsumeWork?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingWork?.ts])
+
+  // CW copilot prefill: on confirming a decoded station, land the call + the decoder's read
+  // of their RST/name. RST/name fill only blank/default fields so they never clobber typing.
+  useEffect(() => {
+    if (!cwPrefill) return
+    const { call, rst, name } = cwPrefill
+    setLogCall(call.toUpperCase())
+    if (rst) setLogRst((v) => (v.trim() === '' || v === defaultRst ? rst : v))
+    if (name) setLogName((v) => (v.trim() ? v : name))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cwPrefill?.ts])
 
   const hist = useMemo(
     () => callHistory(allLog, logCall, snap.radio.band),

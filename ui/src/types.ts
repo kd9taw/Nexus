@@ -505,6 +505,22 @@ export interface CwDecodeResult {
   sent: string[]
   /** A CW-keyer failure to surface (e.g. the rig rejected CAT keying), else null. */
   keyerError: string | null
+  /** CW copilot: ranked worked-station callsign candidates from the decode (click to confirm). */
+  candidates: { call: string; best: boolean }[]
+  /** RST they sent us, read from the decode (e.g. "599"), else null. */
+  rst: string | null
+  /** The other station's name, read from the decode (e.g. "BOB"), else null. */
+  name: string | null
+  /** Guided QSO-state tag: "listening" | "cq" | "answered" | "report" | "73". */
+  state: string
+  /** Plain-English state, e.g. "W1ABC is calling CQ". */
+  headline: string
+  /** Guided instruction, e.g. "Press Answer (F2) to call them". */
+  prompt: string
+  /** Recommended action id to highlight: "F2" | "F3" | "log", or null. */
+  recommended: string | null
+  /** The operator-confirmed worked callsign (active peer), if any. */
+  workedCall: string | null
 }
 
 /** One signal found by the wideband CW skimmer (audio pitch + text + WPM). */

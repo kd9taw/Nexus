@@ -4797,6 +4797,91 @@ body.resizing {
   border: 1px solid var(--danger, #ff6b6b);
   border-radius: var(--radius-sm);
 }
+/* CW copilot — decoded-call chips + (Guided) next-step prompt + the Guided/Expert toggle. */
+.cw-copilot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-2);
+  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.cw-copilot-mode {
+  display: inline-flex;
+  gap: 2px;
+}
+.cw-copilot-mode button {
+  font-size: 10px;
+  padding: 1px 8px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.cw-copilot-mode button.active {
+  color: var(--bg, #0b0f14);
+  background: var(--accent, #4ea1ff);
+  border-color: var(--accent, #4ea1ff);
+}
+.cw-copilot-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 180px;
+}
+.cw-copilot-state {
+  font-weight: 600;
+  color: var(--text);
+}
+.cw-copilot-prompt {
+  font-size: 12px;
+  color: var(--accent, #4ea1ff);
+}
+.cw-copilot-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.cw-copilot-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+.cw-copilot-label.dim {
+  font-weight: 400;
+  font-style: italic;
+}
+.cw-chip {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 2px 8px;
+  color: var(--text);
+  background: var(--surface-3, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.cw-chip.best {
+  border-color: var(--accent, #4ea1ff);
+}
+.cw-chip.worked {
+  color: var(--bg, #0b0f14);
+  background: var(--accent, #4ea1ff);
+  border-color: var(--accent, #4ea1ff);
+  cursor: default;
+}
+/* Guided mode: the single recommended next key glows so a non-CW op just follows it. */
+.cw-macro.recommended {
+  border-color: var(--accent, #4ea1ff);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4ea1ff) 45%, transparent);
+}
 /* Wideband CW skimmer list — every signal on the band (freq · text · wpm). */
 .cw-skim {
   display: flex;

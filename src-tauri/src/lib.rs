@@ -1779,7 +1779,16 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
     }
 }
 
-/// A single-signal CW decode of the recent receive audio (text + estimated WPM).
+/// A worked-station callsign candidate parsed from the CW decode (the "copilot" chips).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CwCandidateDto {
+    call: String,
+    best: bool,
+}
+
+/// A single-signal CW decode of the recent receive audio (text + estimated WPM) plus the
+/// "CW copilot" analysis: worked-call candidates, the read exchange, and guided next-step.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CwDecodeResult {
@@ -1790,6 +1799,22 @@ struct CwDecodeResult {
     sent: Vec<String>,
     /// A CW-keyer failure to surface (e.g. the rig rejected CAT `send_morse`), else null.
     keyer_error: Option<String>,
+    /// Ranked worked-station callsign candidates from the decode (click to confirm).
+    candidates: Vec<CwCandidateDto>,
+    /// The RST they sent us, read from the decode (e.g. "599"), else null.
+    rst: Option<String>,
+    /// The other station's name, read from the decode (e.g. "BOB"), else null.
+    name: Option<String>,
+    /// Guided QSO-state tag: "listening" | "cq" | "answered" | "report" | "73".
+    state: String,
+    /// Plain-English state, e.g. "W1ABC is calling CQ".
+    headline: String,
+    /// The guided instruction, e.g. "Press Answer (F2) to call them".
+    prompt: String,
+    /// Recommended action id to highlight: "F2" | "F3" | "log", or null.
+    recommended: Option<String>,
+    /// The operator-confirmed worked callsign (the active peer), if any.
+    worked_call: Option<String>,
 }
 
 /// Decode CW from the recent RX audio at the operator's pitch — a live readout for the
@@ -1798,11 +1823,34 @@ struct CwDecodeResult {
 fn cw_decode(state: State<'_, SharedEngine>) -> Result<CwDecodeResult, String> {
     let eng = state.lock().map_err(|e| e.to_string())?;
     let d = eng.cw_decode();
+    let sent = eng.cw_sent();
+    let worked = eng.active_peer();
+    let mycall = eng.settings().mycall.clone();
+    // Parse the decode into copilot context. The DXCC resolver (src-tauri has it; tempo-core
+    // doesn't) supplies the real-prefix check that filters CW misdecodes out of the chips.
+    let assist = tempo_core::cw_parse::analyze(&d.text, &sent, &mycall, worked.as_deref(), |b| {
+        propagation::dxcc::resolve(b).is_some()
+    });
     Ok(CwDecodeResult {
         text: d.text,
         wpm: d.wpm,
-        sent: eng.cw_sent(),
+        sent,
         keyer_error: eng.cw_keyer_error(),
+        candidates: assist
+            .candidates
+            .into_iter()
+            .map(|c| CwCandidateDto {
+                call: c.call,
+                best: c.best,
+            })
+            .collect(),
+        rst: assist.exchange.rst,
+        name: assist.exchange.name,
+        state: assist.guidance.state,
+        headline: assist.guidance.headline,
+        prompt: assist.guidance.prompt,
+        recommended: assist.guidance.recommended,
+        worked_call: worked,
     })
 }
 
