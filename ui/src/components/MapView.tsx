@@ -175,7 +175,7 @@ interface Layer {
 const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   daynight: { label: 'Day / night (greyline)', visible: true, opacity: 1 },
   relief: { label: 'Relief (World view)', visible: true, opacity: 1 },
-  muf: { label: 'MUF (live + model)', visible: false, opacity: 0.85 },
+  muf: { label: 'MUF (live + model)', visible: true, opacity: 0.85 },
   aurora: { label: 'Aurora oval', visible: false, opacity: 0.85 },
   coast: { label: 'Coastlines', visible: true, opacity: 0.85 },
   grid: { label: 'Grid (20°×10°)', visible: true, opacity: 0.5 },

@@ -27,7 +27,7 @@ export function isPaneId(v: unknown): v is PaneId {
 export const DEFAULT_SLOTS: Record<SlotId, PaneId> = {
   left1: 'advisory',
   left2: 'bandAdvisor',
-  right1: 'selection',
+  right1: 'chase', // flagship "work THIS now" — Selection stays one dropdown-click away
   right2: 'outlook',
   bottom1: 'openings',
   bottom2: 'spacewx',
@@ -101,14 +101,37 @@ export function normalizeConfig(raw: unknown): ConnectConfig {
   return { mode, slots: coerceSlots(obj.slots), overlays: coerceOverlays(obj.overlays) }
 }
 
+/** Flag so the one-time Chase promotion runs exactly once (persisted, survives edits). */
+const CHASE_DEFAULT_KEY = 'nexus.connect.chaseDefault.v1'
+
+/** One-time: give the flagship Chase pane a home for operators whose layout predates it.
+ * A persisted config fully overrides DEFAULT_SLOTS, so a newly-defaulted pane never appears
+ * otherwise. Chase takes the Selection slot (Selection stays available in the picker); the
+ * migrated layout is persisted so the swap sticks even before the operator touches anything. */
+function migrateChaseDefault(cfg: ConnectConfig): ConnectConfig {
+  try {
+    if (localStorage.getItem(CHASE_DEFAULT_KEY)) return cfg
+    localStorage.setItem(CHASE_DEFAULT_KEY, '1')
+  } catch {
+    return cfg // storage blocked — leave the layout untouched
+  }
+  if (SLOT_IDS.some((s) => cfg.slots[s] === 'chase')) return cfg // already placed (fresh default)
+  const slots = { ...cfg.slots }
+  const target = SLOT_IDS.find((s) => slots[s] === 'selection') ?? 'right1'
+  slots[target] = 'chase'
+  const next = { ...cfg, slots }
+  saveConnectConfig(next)
+  return next
+}
+
 export function loadConnectConfig(): ConnectConfig {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (raw != null) return normalizeConfig(JSON.parse(raw))
+    if (raw != null) return migrateChaseDefault(normalizeConfig(JSON.parse(raw)))
   } catch {
     /* malformed — fall through (matches useFeatures.readInitial) */
   }
-  return { ...defaultConnectConfig(), mode: migrateLegacyMode() }
+  return migrateChaseDefault({ ...defaultConnectConfig(), mode: migrateLegacyMode() })
 }
 
 export function saveConnectConfig(c: ConnectConfig): void {
