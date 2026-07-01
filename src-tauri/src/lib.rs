@@ -1785,6 +1785,11 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
 struct CwDecodeResult {
     text: String,
     wpm: u32,
+    /// TX echo: recent EXPANDED CW transmissions (oldest→newest) so the cockpit shows
+    /// exactly what was sent (macro tokens resolved).
+    sent: Vec<String>,
+    /// A CW-keyer failure to surface (e.g. the rig rejected CAT `send_morse`), else null.
+    keyer_error: Option<String>,
 }
 
 /// Decode CW from the recent RX audio at the operator's pitch — a live readout for the
@@ -1796,6 +1801,8 @@ fn cw_decode(state: State<'_, SharedEngine>) -> Result<CwDecodeResult, String> {
     Ok(CwDecodeResult {
         text: d.text,
         wpm: d.wpm,
+        sent: eng.cw_sent(),
+        keyer_error: eng.cw_keyer_error(),
     })
 }
 

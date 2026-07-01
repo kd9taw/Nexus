@@ -4770,6 +4770,33 @@ body.resizing {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
+/* SENT (TX) echo — mirrors the DECODE panel, tinted so it reads as YOUR transmissions
+   (each expanded macro on its own line, newest at the bottom). */
+.cw-sent-panel {
+  border-left: 3px solid var(--accent, #4ea1ff);
+}
+.cw-sent-panel .cw-decode-label {
+  color: var(--accent, #4ea1ff);
+}
+.cw-sent-panel .cw-decode-text {
+  height: 4em;
+}
+.cw-sent-line {
+  color: var(--text);
+}
+.cw-sent-line + .cw-sent-line {
+  margin-top: 2px;
+}
+/* CW-keyer failure banner — e.g. the rig rejected CAT send_morse (use Soundcard). */
+.cw-keyer-warn {
+  margin-bottom: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  font-size: 12px;
+  color: var(--danger, #ff6b6b);
+  background: color-mix(in srgb, var(--danger, #ff6b6b) 12%, transparent);
+  border: 1px solid var(--danger, #ff6b6b);
+  border-radius: var(--radius-sm);
+}
 /* Wideband CW skimmer list — every signal on the band (freq · text · wpm). */
 .cw-skim {
   display: flex;

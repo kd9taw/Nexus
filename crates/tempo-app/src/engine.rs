@@ -246,6 +246,12 @@ pub struct Engine {
     /// CW transmit queue (CAT keyer path): expanded CW text the radio loop drains and
     /// keys via `rig.send_morse`. Operator-initiated; gated by `tx_enabled` (Monitor).
     cw_queue: VecDeque<String>,
+    /// Recent EXPANDED CW transmissions (macros resolved) — a TX echo the cockpit shows
+    /// so the operator sees exactly what went out. Capped; cleared with the RX transcript.
+    cw_sent: VecDeque<String>,
+    /// A CW-keyer failure to surface (e.g. the rig rejected CAT send_morse), else None.
+    /// Set by the radio loop; cleared when the operator switches keyer back-end.
+    cw_keyer_error: Option<String>,
     /// CW keyer speed in WPM (drives the rig's `KEYSPD`). Default 25.
     cw_wpm: u32,
     /// One-shot: the operator hit Abort — the radio loop calls `rig.stop_morse` and
@@ -452,6 +458,8 @@ impl Engine {
             split_tx_mhz: None,
             split_dirty: false,
             cw_queue: VecDeque::new(),
+            cw_sent: VecDeque::new(),
+            cw_keyer_error: None,
             cw_wpm: 25,
             cw_abort: false,
             manual_ptt: false,
@@ -842,8 +850,28 @@ impl Engine {
         };
         let expanded = tempo_core::cw::expand(text, &ctx);
         if !expanded.trim().is_empty() {
+            // TX echo: show the operator what actually went out (tokens resolved).
+            self.cw_sent.push_back(expanded.clone());
+            while self.cw_sent.len() > 50 {
+                self.cw_sent.pop_front();
+            }
             self.cw_queue.push_back(expanded);
         }
+    }
+
+    /// Recent expanded CW transmissions (oldest→newest) — the cockpit's SENT echo.
+    pub fn cw_sent(&self) -> Vec<String> {
+        self.cw_sent.iter().cloned().collect()
+    }
+
+    /// A CW-keyer failure to surface in the cockpit (rig rejected CAT keying), else None.
+    pub fn cw_keyer_error(&self) -> Option<String> {
+        self.cw_keyer_error.clone()
+    }
+
+    /// Record (or clear) a CW-keyer failure — the radio loop calls this after a send.
+    pub fn set_cw_keyer_error(&mut self, e: Option<String>) {
+        self.cw_keyer_error = e;
     }
 
     /// Set the CW keyer speed in WPM (clamped 5..=50).
@@ -855,6 +883,7 @@ impl Engine {
     /// if <= 0). Soundcard flips the CW rig-mode to USB; the radio loop re-applies it.
     pub fn set_cw_keyer(&mut self, backend: &str, pitch_hz: f32) {
         use crate::settings::CwKeyerBackend;
+        self.cw_keyer_error = None; // a keyer change invalidates a prior keyer error
         self.settings.cw_keyer = match backend.to_ascii_lowercase().as_str() {
             "soundcard" => CwKeyerBackend::Soundcard,
             "winkeyer" => CwKeyerBackend::WinKeyer,
@@ -2670,6 +2699,7 @@ impl Engine {
     /// Clear the streaming CW decoder's accumulated transcript (the cockpit's Clear button).
     pub fn cw_clear(&mut self) {
         self.cw_stream.clear();
+        self.cw_sent.clear();
     }
 
     /// Wideband CW skim of the recent receive audio: every distinct keyed signal across

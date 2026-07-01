@@ -61,6 +61,15 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
     const el = decodeRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [decoded.text])
+  // TX echo — what we've actually transmitted (macros expanded), polled alongside the decode.
+  const [sent, setSent] = useState<string[]>([])
+  const sentRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = sentRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [sent])
+  // A CW-keyer failure surfaced by the radio loop (e.g. the rig rejected CAT send_morse).
+  const [keyerError, setKeyerError] = useState<string | null>(null)
   // Wideband skimmer: every CW signal across the band (refreshed a bit slower than the
   // single decode — a full-band scan is heavier than one channel).
   const [skim, setSkim] = useState<SkimHit[]>([])
@@ -70,7 +79,11 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
     const tick = () => {
       cwDecode()
         .then((d) => {
-          if (alive) setDecoded(d)
+          if (alive) {
+            setDecoded({ text: d.text, wpm: d.wpm })
+            setSent(d.sent)
+            setKeyerError(d.keyerError)
+          }
         })
         .catch(() => {})
       // Skim every other tick (~1.4 s) — the full-band scan is the heavier call.
@@ -240,6 +253,12 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
         </button>
       </div>
 
+      {keyerError && (
+        <div className="cw-keyer-warn" role="alert">
+          ⚠ {keyerError}
+        </div>
+      )}
+
       <section className="ph-scope-panel">
         {/* CW-narrow view: ~300–1100 Hz so individual carriers are readable; the
             dashed hairline is YOUR pitch — tune a signal onto it = zero-beat. */}
@@ -264,8 +283,9 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
             onClick={() => {
               void cwClear()
               setDecoded({ text: '', wpm: 0 })
+              setSent([])
             }}
-            title="Clear the decoded transcript"
+            title="Clear the decoded + sent transcript"
           >
             Clear
           </button>
@@ -274,6 +294,24 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
           {decoded.text ? decoded.text : <span className="cw-decode-idle">listening…</span>}
         </div>
       </div>
+
+      {sent.length > 0 && (
+        <div
+          className="cw-decode cw-sent-panel"
+          title="What you've transmitted (F-key macros expanded to the real text)"
+        >
+          <div className="cw-decode-head">
+            <span className="cw-decode-label">SENT ▲</span>
+          </div>
+          <div className="cw-decode-text" ref={sentRef}>
+            {sent.map((line, i) => (
+              <div key={i} className="cw-sent-line">
+                {line}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {skim.length > 0 && (
         <div className="cw-skim" title="Wideband CW skimmer — every signal across the band">

@@ -501,6 +501,10 @@ export interface CatTestResult {
 export interface CwDecodeResult {
   text: string
   wpm: number
+  /** TX echo: recent expanded CW transmissions (oldest→newest) — what actually went out. */
+  sent: string[]
+  /** A CW-keyer failure to surface (e.g. the rig rejected CAT keying), else null. */
+  keyerError: string | null
 }
 
 /** One signal found by the wideband CW skimmer (audio pitch + text + WPM). */

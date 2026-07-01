@@ -721,12 +721,25 @@ impl RadioLoop {
                                 Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                         }
                     } else {
-                        // CAT keyer: the rig generates CW from text via send_morse.
+                        // CAT keyer: the rig generates CW from text via send_morse. Many
+                        // Hamlib backends accept freq/mode/PTT but NOT send_morse (`b`), so
+                        // capture the result and SURFACE a failure instead of keying into
+                        // the void — point the operator at the Soundcard keyer.
                         if wpm != self.last_cw_wpm && rig.set_keyspd(wpm).is_ok() {
                             self.last_cw_wpm = wpm;
                         }
+                        let mut cw_err = false;
                         for text in &items {
-                            let _ = rig.send_morse(text);
+                            if rig.send_morse(text).is_err() {
+                                cw_err = true;
+                            }
+                        }
+                        if let Ok(mut eng) = engine.lock() {
+                            eng.set_cw_keyer_error(cw_err.then(|| {
+                                "Your rig didn't accept CAT CW keying (Hamlib send_morse). \
+                                 Switch the keyer to Soundcard."
+                                    .to_string()
+                            }));
                         }
                     }
                 }
