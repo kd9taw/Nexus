@@ -57,7 +57,8 @@ pub fn normalize_sota_ref(s: &str) -> Option<String> {
     let (region, number) = rest.split_once('-')?;
     let assoc_ok =
         (1..=8).contains(&assoc.len()) && assoc.bytes().all(|b| b.is_ascii_alphanumeric());
-    let region_ok = (1..=2).contains(&region.len()) && region.bytes().all(|b| b.is_ascii_alphabetic());
+    let region_ok =
+        (1..=2).contains(&region.len()) && region.bytes().all(|b| b.is_ascii_alphabetic());
     let number_ok = number.len() == 3 && number.bytes().all(|b| b.is_ascii_digit());
     (assoc_ok && region_ok && number_ok).then_some(t)
 }
@@ -87,7 +88,7 @@ mod tests {
         assert_eq!(normalize_pota_ref("k-1234").as_deref(), Some("K-1234"));
         assert_eq!(normalize_pota_ref("VE-5678").as_deref(), Some("VE-5678"));
         assert_eq!(normalize_pota_ref("US-12345").as_deref(), Some("US-12345")); // 5-digit
-        // Rejects junk.
+                                                                                 // Rejects junk.
         assert_eq!(normalize_pota_ref("K1234"), None); // no hyphen
         assert_eq!(normalize_pota_ref("K-12"), None); // too few digits
         assert_eq!(normalize_pota_ref("LONGPFX-1234"), None); // prefix too long
@@ -97,9 +98,15 @@ mod tests {
 
     #[test]
     fn sota_refs_validate_and_normalize() {
-        assert_eq!(normalize_sota_ref("w7a/mn-001").as_deref(), Some("W7A/MN-001"));
+        assert_eq!(
+            normalize_sota_ref("w7a/mn-001").as_deref(),
+            Some("W7A/MN-001")
+        );
         assert_eq!(normalize_sota_ref("G/LD-001").as_deref(), Some("G/LD-001"));
-        assert_eq!(normalize_sota_ref("VK3/VN-012").as_deref(), Some("VK3/VN-012"));
+        assert_eq!(
+            normalize_sota_ref("VK3/VN-012").as_deref(),
+            Some("VK3/VN-012")
+        );
         // Rejects junk.
         assert_eq!(normalize_sota_ref("W7A-MN-001"), None); // no slash
         assert_eq!(normalize_sota_ref("W7A/MN-01"), None); // 2-digit number
@@ -110,7 +117,13 @@ mod tests {
     #[test]
     fn normalize_ref_dispatches_by_program() {
         assert_eq!(normalize_ref(OtaProgram::Pota, "k-1").as_deref(), None);
-        assert_eq!(normalize_ref(OtaProgram::Pota, "k-1234").as_deref(), Some("K-1234"));
-        assert_eq!(normalize_ref(OtaProgram::Sota, "g/ld-001").as_deref(), Some("G/LD-001"));
+        assert_eq!(
+            normalize_ref(OtaProgram::Pota, "k-1234").as_deref(),
+            Some("K-1234")
+        );
+        assert_eq!(
+            normalize_ref(OtaProgram::Sota, "g/ld-001").as_deref(),
+            Some("G/LD-001")
+        );
     }
 }

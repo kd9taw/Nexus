@@ -309,7 +309,13 @@ pub fn parse_status_response(body: &str) -> QrzStatus {
             _ => {}
         }
     }
-    QrzStatus { ok, owner, book, count, reason }
+    QrzStatus {
+        ok,
+        owner,
+        book,
+        count,
+        reason,
+    }
 }
 
 /// Parse a QRZ Logbook `name=value` response. A `RESULT=FAIL` whose `REASON`
@@ -550,7 +556,10 @@ mod tests {
     fn insert_body_encodes_adif_and_key() {
         let body = build_insert_body("AB-12-CD", "<call:4>W1AW<eor>", false);
         assert!(body.starts_with("KEY=AB-12-CD&ACTION=INSERT&ADIF="));
-        assert_eq!(build_status_body(" AB-12-CD "), "KEY=AB-12-CD&ACTION=STATUS");
+        assert_eq!(
+            build_status_body(" AB-12-CD "),
+            "KEY=AB-12-CD&ACTION=STATUS"
+        );
         // STATUS parse: the success shape QRZ actually returns.
         let st = parse_status_response(
             "RESULT=OK&OWNER=KD9TAW&BOOK_NAME=My+Logbook&COUNT=1234&ACTION=STATUS",

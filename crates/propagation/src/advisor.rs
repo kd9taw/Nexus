@@ -400,7 +400,8 @@ impl PropAdvisor {
             if side == Side::Neither {
                 continue; // anchored only — never the far↔far census (superstation guard)
             }
-            let (Some(far), Some(g)) = (s.far_call(&self.me_call), s.far_grid(&self.me_call)) else {
+            let (Some(far), Some(g)) = (s.far_call(&self.me_call), s.far_grid(&self.me_call))
+            else {
                 continue;
             };
             let region = Region::from_grid(g);
@@ -455,7 +456,11 @@ impl PropAdvisor {
         for (region, bands) in &per_region {
             let Some(&(band, stations, bidirectional)) = bands.iter().max_by(|a, b| {
                 a.1.cmp(&b.1)
-                    .then_with(|| score_of(&a.0).partial_cmp(&score_of(&b.0)).unwrap_or(std::cmp::Ordering::Equal))
+                    .then_with(|| {
+                        score_of(&a.0)
+                            .partial_cmp(&score_of(&b.0))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     // Deterministic final tiebreak (HashMap order otherwise): on an exact
                     // station+score tie prefer the HIGHER band, the better DX bet.
                     .then_with(|| {
@@ -466,17 +471,20 @@ impl PropAdvisor {
             }) else {
                 continue;
             };
-            let (tier, modeled, score) = by_label
-                .get(band.label())
-                .copied()
-                .unwrap_or((ActivityTier::Closed, "Closed", 0.0));
+            let (tier, modeled, score) = by_label.get(band.label()).copied().unwrap_or((
+                ActivityTier::Closed,
+                "Closed",
+                0.0,
+            ));
             // Bearing = the region's ALL-band anchored centroid (deliberately band-
             // independent — a continent's heading doesn't vary by band; cf. best_region's
             // per-band centroid).
             let bearing = self
                 .me_latlon
                 .zip(region_pts.get(region).filter(|p| p.2 > 0))
-                .map(|(me, (lat, lon, n))| bearing_deg(me, (lat / *n as f64, lon / *n as f64)) as f32)
+                .map(|(me, (lat, lon, n))| {
+                    bearing_deg(me, (lat / *n as f64, lon / *n as f64)) as f32
+                })
                 .unwrap_or(0.0);
             best.push(RegionBest {
                 region: region.label().to_string(),
@@ -494,7 +502,11 @@ impl PropAdvisor {
         best.sort_by(|a, b| {
             b.stations
                 .cmp(&a.stations)
-                .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .then_with(|| a.region.cmp(&b.region)) // deterministic on an exact tie
         });
 
@@ -595,7 +607,11 @@ mod tests {
         // One tall-tower receiver (K9BIG, ~100 km away) hearing TEN 6m DX is a
         // single local endpoint — 6m must stay Quiet for the operator. Add a
         // second distinct local receiver and the same activity counts.
-        let wx = SpaceWx { sfi: 120.0, kp: 2.0, ..Default::default() };
+        let wx = SpaceWx {
+            sfi: 120.0,
+            kp: 2.0,
+            ..Default::default()
+        };
         let mut one_ear: Vec<PathSpot> = Vec::new();
         for i in 0..10 {
             one_ear.push(path(&format!("XE{i}DX"), "EK09", "K9BIG", "EN52", Band::B6));
@@ -624,7 +640,11 @@ mod tests {
 
     #[test]
     fn region_band_is_operator_anchored_with_best_band_per_region() {
-        let wx = SpaceWx { sfi: 150.0, kp: 2.0, ..Default::default() };
+        let wx = SpaceWx {
+            sfi: 150.0,
+            kp: 2.0,
+            ..Default::default()
+        };
         let me = "KD9TAW";
         let spots = vec![
             // I hear two Asia stations on 15m, one Europe station on 20m (anchored).
@@ -639,11 +659,28 @@ mod tests {
         let rb = advisor.region_band(NOW, &spots, &advisory.bands);
 
         // The far↔far 10m spot never enters the anchored matrix or recommender.
-        assert!(rb.cells.iter().all(|c| c.band != "10m"), "Neither spot leaked in");
+        assert!(
+            rb.cells.iter().all(|c| c.band != "10m"),
+            "Neither spot leaked in"
+        );
         assert!(rb.best_to_region.iter().all(|r| r.band != "10m"));
         // 15m carries 2 distinct anchored stations, 20m carries 1.
-        assert_eq!(rb.cells.iter().find(|c| c.band == "15m").expect("15m cell").stations, 2);
-        assert_eq!(rb.cells.iter().find(|c| c.band == "20m").expect("20m cell").stations, 1);
+        assert_eq!(
+            rb.cells
+                .iter()
+                .find(|c| c.band == "15m")
+                .expect("15m cell")
+                .stations,
+            2
+        );
+        assert_eq!(
+            rb.cells
+                .iter()
+                .find(|c| c.band == "20m")
+                .expect("20m cell")
+                .stations,
+            1
+        );
         // Hero = the region with the most anchored stations → its best band is 15m (2 stns).
         let top = rb.best_to_region.first().expect("a recommended region");
         assert_eq!(top.band, "15m");
@@ -653,7 +690,11 @@ mod tests {
     #[test]
     fn region_band_excludes_a_pure_far_far_census() {
         // No operator-anchored path → nothing in the matrix (anti-superstation by design).
-        let wx = SpaceWx { sfi: 150.0, kp: 2.0, ..Default::default() };
+        let wx = SpaceWx {
+            sfi: 150.0,
+            kp: 2.0,
+            ..Default::default()
+        };
         let spots = vec![
             path("XE1DX", "EK09", "K9BIG", "FN20", Band::B10),
             path("JA1ABC", "PM95", "W9EAR", "EN62", Band::B15),
@@ -661,7 +702,10 @@ mod tests {
         let advisor = PropAdvisor::new("KD9TAW", "EN52");
         let advisory = advisor.advise(NOW, &spots, &wx);
         let rb = advisor.region_band(NOW, &spots, &advisory.bands);
-        assert!(rb.cells.is_empty(), "far↔far census must not enter the anchored matrix");
+        assert!(
+            rb.cells.is_empty(),
+            "far↔far census must not enter the anchored matrix"
+        );
         assert!(rb.best_to_region.is_empty());
     }
 
@@ -678,7 +722,13 @@ mod tests {
         };
         let mut one_ear: Vec<PathSpot> = Vec::new();
         for i in 0..20 {
-            one_ear.push(path(&format!("XE{i}DX"), "EK09", "K9BIG", "EN52", Band::B10));
+            one_ear.push(path(
+                &format!("XE{i}DX"),
+                "EK09",
+                "K9BIG",
+                "EN52",
+                Band::B10,
+            ));
         }
         let adv = PropAdvisor::new("KD9TAW", "EN61").advise(NOW, &one_ear, &wx);
         let b10 = adv.bands.iter().find(|b| b.band == "10m").unwrap();
@@ -690,7 +740,13 @@ mod tests {
 
         let mut two_ears = one_ear.clone();
         for i in 0..20 {
-            two_ears.push(path(&format!("XE{i}DX"), "EK09", "W9EAR", "EN62", Band::B10));
+            two_ears.push(path(
+                &format!("XE{i}DX"),
+                "EK09",
+                "W9EAR",
+                "EN62",
+                Band::B10,
+            ));
         }
         let adv2 = PropAdvisor::new("KD9TAW", "EN61").advise(NOW, &two_ears, &wx);
         let b10b = adv2.bands.iter().find(|b| b.band == "10m").unwrap();
@@ -723,7 +779,13 @@ mod tests {
             }
         }
         for i in 0..30 {
-            spots.push(path(&format!("XE{i}DX"), "EK09", "K9BIG", "EN52", Band::B10));
+            spots.push(path(
+                &format!("XE{i}DX"),
+                "EK09",
+                "K9BIG",
+                "EN52",
+                Band::B10,
+            ));
         }
         let adv = PropAdvisor::new("KD9TAW", "EN52").advise(NOW, &spots, &wx);
         assert_eq!(
@@ -906,8 +968,20 @@ mod tests {
         };
         let mut spots = Vec::new();
         for i in 0..8 {
-            spots.push(path("KD9TAW", "EN52", &format!("VE{i}AA"), "FN20", Band::B30));
-            spots.push(path(&format!("VE{i}AA"), "FN20", "KD9TAW", "EN52", Band::B30));
+            spots.push(path(
+                "KD9TAW",
+                "EN52",
+                &format!("VE{i}AA"),
+                "FN20",
+                Band::B30,
+            ));
+            spots.push(path(
+                &format!("VE{i}AA"),
+                "FN20",
+                "KD9TAW",
+                "EN52",
+                Band::B30,
+            ));
         }
         let adv = PropAdvisor::new("KD9TAW", "EN52").advise(NOW, &spots, &wx);
         let thirty = adv.bands.iter().find(|b| b.band == "30m").unwrap();

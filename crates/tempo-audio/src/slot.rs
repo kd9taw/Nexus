@@ -45,7 +45,10 @@ pub(crate) struct SplitApply {
 /// at over end. No-op when the engine left shift = 0.
 pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply {
     use tempo_app::settings::SplitMode;
-    let none = SplitApply { fake_it_restore: None, rig_split_engaged: false };
+    let none = SplitApply {
+        fake_it_restore: None,
+        rig_split_engaged: false,
+    };
     let shift = eng.take_tx_dial_shift();
     if shift == 0 {
         return none;
@@ -56,11 +59,17 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
         SplitMode::Rig => {
             let _ = rig.set_split(true, "VFOB");
             let _ = rig.set_split_freq(tx_dial);
-            SplitApply { fake_it_restore: None, rig_split_engaged: true }
+            SplitApply {
+                fake_it_restore: None,
+                rig_split_engaged: true,
+            }
         }
         SplitMode::FakeIt => {
             let _ = rig.set_freq(tx_dial);
-            SplitApply { fake_it_restore: Some(dial), rig_split_engaged: false }
+            SplitApply {
+                fake_it_restore: Some(dial),
+                rig_split_engaged: false,
+            }
         }
         SplitMode::None => none, // shift can't be non-zero here, but stay total
     }
@@ -165,7 +174,16 @@ mod tests {
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
 
-        let act = run_slot(&mut eng, &mut rig, &mut backend, &mut rx, 0, 1000.0, false, false);
+        let act = run_slot(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            1000.0,
+            false,
+            false,
+        );
 
         assert!(act.tx_this_slot, "the CQ keyed");
         assert_eq!(
@@ -185,7 +203,16 @@ mod tests {
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
 
-        let act = run_slot(&mut eng, &mut rig, &mut backend, &mut rx, 0, 1000.0, false, false);
+        let act = run_slot(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            1000.0,
+            false,
+            false,
+        );
 
         assert!(rig.keyed, "PTT keyed for the TX over");
         assert!(
@@ -210,7 +237,16 @@ mod tests {
         let mut rx = RxRing::new();
         rx.push(&vec![0.0; 4096]); // a captured RX slot sits in the ring
 
-        let act = run_slot(&mut eng, &mut rig, &mut backend, &mut rx, 0, 1000.0, false, false);
+        let act = run_slot(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            1000.0,
+            false,
+            false,
+        );
 
         assert!(!rig.keyed, "no PTT on a receive slot");
         assert!(backend.played.is_empty(), "no audio played on RX");
@@ -228,7 +264,16 @@ mod tests {
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
 
-        let act = run_slot(&mut eng, &mut rig, &mut backend, &mut rx, 0, 1000.0, true, false);
+        let act = run_slot(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            1000.0,
+            true,
+            false,
+        );
 
         assert!(!act.did_rx, "no RX decode mid-transmit");
         assert!(act.tx_until_ms.is_none());
@@ -251,7 +296,16 @@ mod tests {
         rx.push(&vec![0.0; 4096]); // the RX slot we just finished, captured
 
         // Even (TX) slot boundary, prior slot was RX (prev_was_tx=false).
-        let act = run_slot(&mut eng, &mut rig, &mut backend, &mut rx, 2, 1000.0, false, false);
+        let act = run_slot(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            2,
+            1000.0,
+            false,
+            false,
+        );
 
         assert!(
             act.did_rx,
@@ -273,7 +327,16 @@ mod tests {
         rx.push(&vec![0.0; 4096]); // our own transmission's captured audio
 
         // Odd (RX) slot boundary; the slot that just ended was our TX.
-        let act = run_slot(&mut eng, &mut rig, &mut backend, &mut rx, 1, 1000.0, false, true);
+        let act = run_slot(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            1,
+            1000.0,
+            false,
+            true,
+        );
 
         assert!(!act.did_rx, "must not decode our own transmission");
         assert!(!act.tx_this_slot);

@@ -160,7 +160,13 @@ impl Rig {
     /// Serial-line PTT (RTS/DTR) with NO CAT control. For serial PTT alongside CAT,
     /// use [`with_control`](Self::with_control) and pass a control address.
     pub fn serial(port: &str, line: SerialLine) -> Self {
-        Self::with_control(None, PttMode::Serial { port: port.to_string(), line })
+        Self::with_control(
+            None,
+            PttMode::Serial {
+                port: port.to_string(),
+                line,
+            },
+        )
     }
 
     fn ensure_connected(&mut self) -> std::io::Result<&mut TcpStream> {
@@ -272,7 +278,9 @@ impl Rig {
         if reply_ok(&reply) || reply.is_empty() {
             Ok(())
         } else {
-            Err(std::io::Error::other(format!("rigctld mode error: {reply:?}")))
+            Err(std::io::Error::other(format!(
+                "rigctld mode error: {reply:?}"
+            )))
         }
     }
 
@@ -281,7 +289,12 @@ impl Rig {
     /// repeater support) rejects individual commands harmlessly, so each is sent and its
     /// per-command error swallowed. No-op without a CAT control channel; `tone_hz` 0
     /// disables CTCSS. Call after a successful FM `set_mode` (the connection is live).
-    pub fn set_fm_repeater(&mut self, shift: &str, offset_hz: i64, tone_hz: f32) -> std::io::Result<()> {
+    pub fn set_fm_repeater(
+        &mut self,
+        shift: &str,
+        offset_hz: i64,
+        tone_hz: f32,
+    ) -> std::io::Result<()> {
         if self.control.is_none() {
             return Ok(());
         }
@@ -380,7 +393,10 @@ impl Rig {
     }
     /// Set RF output power as a 0.0–1.0 fraction (Hamlib `RFPOWER`).
     pub fn set_power(&mut self, frac: f32) -> std::io::Result<()> {
-        self.cat(&level_line("RFPOWER", &format!("{:.3}", frac.clamp(0.0, 1.0))))
+        self.cat(&level_line(
+            "RFPOWER",
+            &format!("{:.3}", frac.clamp(0.0, 1.0)),
+        ))
     }
     /// Set the rig's internal CW keyer speed in WPM (Hamlib `KEYSPD`).
     pub fn set_keyspd(&mut self, wpm: u32) -> std::io::Result<()> {
@@ -408,7 +424,9 @@ impl Rig {
         if reply_ok(&reply) || reply.is_empty() {
             Ok(())
         } else {
-            Err(std::io::Error::other(format!("rigctld error for {line:?}: {reply:?}")))
+            Err(std::io::Error::other(format!(
+                "rigctld error for {line:?}: {reply:?}"
+            )))
         }
     }
 }

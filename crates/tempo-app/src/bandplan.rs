@@ -213,7 +213,10 @@ mod tests {
             .into_iter()
             .find(|c| c.band == "20m")
             .unwrap();
-        assert!((ft1_20.dial_mhz - 14.0905).abs() < 1e-9, "FT1 20m stays native .0905");
+        assert!(
+            (ft1_20.dial_mhz - 14.0905).abs() < 1e-9,
+            "FT1 20m stays native .0905"
+        );
         // The full standard set is present.
         assert_eq!(ft8_band_plan().len(), 13);
         assert!(ft8_band_plan().iter().all(|c| c.mode == "USB"));

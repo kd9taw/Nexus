@@ -461,14 +461,21 @@ fn default_decode_fhigh() -> u32 {
 }
 
 pub fn default_voice_messages() -> Vec<VoiceMessage> {
-    [(1, "CQ"), (2, "My Call"), (3, "Report"), (4, "QRZ?"), (5, "73"), (6, "Again")]
-        .iter()
-        .map(|(slot, label)| VoiceMessage {
-            slot: *slot,
-            label: label.to_string(),
-            file: String::new(),
-        })
-        .collect()
+    [
+        (1, "CQ"),
+        (2, "My Call"),
+        (3, "Report"),
+        (4, "QRZ?"),
+        (5, "73"),
+        (6, "Again"),
+    ]
+    .iter()
+    .map(|(slot, label)| VoiceMessage {
+        slot: *slot,
+        label: label.to_string(),
+        file: String::new(),
+    })
+    .collect()
 }
 
 /// Editable quick-reply macro sets per mode (shown as Composer chips). Field Day
@@ -559,7 +566,10 @@ impl Default for Settings {
             // networks/ISPs block outbound port 23 (which would silently kill phone while RBN
             // on 7000/7001 keeps working). The operator adds more in Settings ▸ Connections.
             // (RBN endpoints don't belong here — they're auto-wired; `load` strips any.)
-            cluster_hosts: vec!["ve7cc.net:23".to_string(), "dxc.wa9pie.net:8000".to_string()],
+            cluster_hosts: vec![
+                "ve7cc.net:23".to_string(),
+                "dxc.wa9pie.net:8000".to_string(),
+            ],
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -713,7 +723,9 @@ impl Settings {
                 // CAT + WinKeyer both key the rig in CW mode; the soundcard keyer keys an
                 // audio tone, so the rig must be in SSB (band-aware sideband).
                 CwKeyerBackend::Cat | CwKeyerBackend::WinKeyer => "CW".to_string(),
-                CwKeyerBackend::Soundcard => if self.dial_mhz < 10.0 { "LSB" } else { "USB" }.to_string(),
+                CwKeyerBackend::Soundcard => {
+                    if self.dial_mhz < 10.0 { "LSB" } else { "USB" }.to_string()
+                }
             },
             // Phone: force the correct sideband for the band — the hard convention is
             // LSB below 10 MHz (160/80/40 m), USB at 30 m and up. (FM/AM come later
@@ -734,12 +746,10 @@ impl Settings {
             // retry — it tries once, the rig rejects it, and it gives up, rather than
             // leaving the rig stuck in the previous section's SSB/CW mode.) Any non-LSB
             // sideband (incl. empty/garbled) maps to the USB-side PKTUSB that FT8 uses.
-            OperatingMode::Digital => {
-                match self.sideband.trim().to_ascii_uppercase().as_str() {
-                    "LSB" => "PKTLSB".to_string(),
-                    _ => "PKTUSB".to_string(),
-                }
-            }
+            OperatingMode::Digital => match self.sideband.trim().to_ascii_uppercase().as_str() {
+                "LSB" => "PKTLSB".to_string(),
+                _ => "PKTUSB".to_string(),
+            },
         }
     }
 }
@@ -788,16 +798,28 @@ mod tests {
         // Digital: ALWAYS force the DATA submode so FT8/FT4 sets the rig (like Phone/CW).
         // USB-side by default (FT8/FT4 are USB-side); the default empty sideband → PKTUSB.
         assert_eq!(s.operating_mode, OperatingMode::Digital);
-        assert_eq!(s.rig_mode(), "PKTUSB", "digital default → DATA submode (USB-side)");
+        assert_eq!(
+            s.rig_mode(),
+            "PKTUSB",
+            "digital default → DATA submode (USB-side)"
+        );
         s.sideband = "LSB".into();
         assert_eq!(s.rig_mode(), "PKTLSB", "digital LSB-side → PKTLSB");
         // Forced regardless of set_rig_mode (the old opt-out is gone) and robust against
         // a garbled sideband (anything non-LSB → USB-side PKTUSB).
         s.set_rig_mode = false;
         s.sideband = "USB".into();
-        assert_eq!(s.rig_mode(), "PKTUSB", "digital always forces DATA, opt-out ignored");
+        assert_eq!(
+            s.rig_mode(),
+            "PKTUSB",
+            "digital always forces DATA, opt-out ignored"
+        );
         s.sideband = "CW".into(); // corrupted sideband must not leak into the mode
-        assert_eq!(s.rig_mode(), "PKTUSB", "garbled sideband → USB-side PKTUSB, never CW");
+        assert_eq!(
+            s.rig_mode(),
+            "PKTUSB",
+            "garbled sideband → USB-side PKTUSB, never CW"
+        );
         s.sideband = "USB".into();
 
         // CW with the CAT keyer: force CW.
@@ -875,10 +897,22 @@ mod tests {
         s.macros.chat = vec!["73".into(), "CQ".into(), "QSL".into()];
         s.save(&path).unwrap();
         let back = Settings::load(&path);
-        assert!(!back.macros.band.iter().any(|m| m == "CQ CQ"), "stale CQ CQ dropped");
-        assert!(back.macros.band.iter().any(|m| m == "QRZ?"), "custom band macro kept");
-        assert!(!back.macros.chat.iter().any(|m| m == "CQ"), "stale chat CQ dropped");
-        assert!(back.macros.chat.iter().any(|m| m == "73"), "custom chat macro kept");
+        assert!(
+            !back.macros.band.iter().any(|m| m == "CQ CQ"),
+            "stale CQ CQ dropped"
+        );
+        assert!(
+            back.macros.band.iter().any(|m| m == "QRZ?"),
+            "custom band macro kept"
+        );
+        assert!(
+            !back.macros.chat.iter().any(|m| m == "CQ"),
+            "stale chat CQ dropped"
+        );
+        assert!(
+            back.macros.chat.iter().any(|m| m == "73"),
+            "custom chat macro kept"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -899,7 +933,10 @@ mod tests {
             "old RBN cluster_host migrated to a human node, got {:?}",
             back.cluster_host
         );
-        assert!(!back.cluster_host.is_empty(), "migrated to a real node, not blank");
+        assert!(
+            !back.cluster_host.is_empty(),
+            "migrated to a real node, not blank"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -929,17 +966,20 @@ mod tests {
             .join("settings.json");
         let mut s = Settings::default();
         s.cluster_hosts = vec![
-            " ve7cc.net:23 ".into(),                  // trimmed
-            "telnet.reversebeacon.net:7000".into(),   // RBN → dropped
-            "VE7CC.NET:23".into(),                    // case-insensitive dup → dropped
-            "".into(),                                // blank → dropped
+            " ve7cc.net:23 ".into(),                // trimmed
+            "telnet.reversebeacon.net:7000".into(), // RBN → dropped
+            "VE7CC.NET:23".into(),                  // case-insensitive dup → dropped
+            "".into(),                              // blank → dropped
             "dxc.example.net:7300".into(),
         ];
         s.save(&path).unwrap();
         let back = Settings::load(&path);
         assert_eq!(
             back.cluster_hosts,
-            vec!["ve7cc.net:23".to_string(), "dxc.example.net:7300".to_string()]
+            vec![
+                "ve7cc.net:23".to_string(),
+                "dxc.example.net:7300".to_string()
+            ]
         );
         let _ = std::fs::remove_file(&path);
     }

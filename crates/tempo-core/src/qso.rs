@@ -328,14 +328,26 @@ impl Station {
         if !self.is_compound_qso() {
             return msg;
         }
-        let brk =
-            |to: &str| format!("<{}>", to.trim().trim_start_matches('<').trim_end_matches('>'));
+        let brk = |to: &str| {
+            format!(
+                "<{}>",
+                to.trim().trim_start_matches('<').trim_end_matches('>')
+            )
+        };
         match msg {
             // i3=4 has NO directed-CQ slot: keeping the dir would make the
             // packer fall through to TRUNCATED free text ("CQ DX PJ4/K1A").
             // Drop it — the panel's compound preview shows the same plain form.
-            Msg::Cq { de, .. } => Msg::Cq { de, grid: String::new(), dir: String::new() },
-            Msg::Grid { to, de, .. } => Msg::Grid { to: brk(&to), de, grid: String::new() },
+            Msg::Cq { de, .. } => Msg::Cq {
+                de,
+                grid: String::new(),
+                dir: String::new(),
+            },
+            Msg::Grid { to, de, .. } => Msg::Grid {
+                to: brk(&to),
+                de,
+                grid: String::new(),
+            },
             // A numeric report survives i3=4/Type-1 only when the SENDER (`de`) is a
             // standard 28-bit call — it becomes the c28 carrying the report while the
             // other party is hashed. If *I* am the compound sender, i3=4 has no report
@@ -347,11 +359,21 @@ impl Station {
             }
             // A compound SENDER can't carry a number either — fall back to a grid-less
             // i3=4 call (the partner, who IS the standard c28, sends the reports).
-            Msg::Report { to, de, .. } if crate::message::is_compound(&de) => {
-                Msg::Grid { to: brk(&to), de, grid: String::new() }
-            }
-            Msg::Report { to, de, snr } => Msg::Report { to: brk(&to), de, snr },
-            Msg::RReport { to, de, snr } => Msg::RReport { to: brk(&to), de, snr },
+            Msg::Report { to, de, .. } if crate::message::is_compound(&de) => Msg::Grid {
+                to: brk(&to),
+                de,
+                grid: String::new(),
+            },
+            Msg::Report { to, de, snr } => Msg::Report {
+                to: brk(&to),
+                de,
+                snr,
+            },
+            Msg::RReport { to, de, snr } => Msg::RReport {
+                to: brk(&to),
+                de,
+                snr,
+            },
             Msg::Rr73 { to, de } => Msg::Rr73 { to: brk(&to), de },
             Msg::Rrr { to, de } => Msg::Rrr { to: brk(&to), de },
             Msg::Bye73 { to, de } => Msg::Bye73 { to: brk(&to), de },
@@ -468,7 +490,9 @@ impl Station {
                 // unsolicited transmission is unacceptable, and it's not how WSJT-X
                 // works). The operator works a station explicitly by double-clicking
                 // a decode, which builds an `answering`/`start(..)` station.
-                (State::CallingCq, Msg::Grid { to, de, grid }) if crate::message::same_call(to, &self.mycall) => {
+                (State::CallingCq, Msg::Grid { to, de, grid })
+                    if crate::message::same_call(to, &self.mycall) =>
+                {
                     self.dxcall = Some(de.clone());
                     if !grid.is_empty() {
                         self.dxgrid = Some(grid.clone()); // i3=4 calls carry no grid
@@ -547,9 +571,15 @@ impl Station {
                 {
                     self.rx_report = Some(*snr);
                     self.pending = Some(if self.confirm_with_rrr {
-                        Msg::Rrr { to: de.clone(), de: self.mycall.clone() }
+                        Msg::Rrr {
+                            to: de.clone(),
+                            de: self.mycall.clone(),
+                        }
                     } else {
-                        Msg::Rr73 { to: de.clone(), de: self.mycall.clone() }
+                        Msg::Rr73 {
+                            to: de.clone(),
+                            de: self.mycall.clone(),
+                        }
                     });
                     self.state = State::Confirming;
                     self.log(format!(
@@ -856,7 +886,11 @@ mod start_context_tests {
         s.observe(&[dec("<KD9TAW> PJ4/K1ABC RR73", -7)]);
         assert_eq!(s.state, State::Done);
         assert_eq!(s.pending_text().as_deref(), Some("<PJ4/K1ABC> KD9TAW 73"));
-        assert_eq!(s.dxcall.as_deref(), Some("PJ4/K1ABC"), "logs the FULL compound call");
+        assert_eq!(
+            s.dxcall.as_deref(),
+            Some("PJ4/K1ABC"),
+            "logs the FULL compound call"
+        );
     }
 
     #[test]
@@ -865,11 +899,19 @@ mod start_context_tests {
         // me (a standard sender CAN carry a number); I roger (i3=4 can't carry MY number)
         // and the QSO completes — never emitting a phantom number the modem would drop.
         let mut s = Station::calling_cq("KD9TAW/P", MY_GRID);
-        assert_eq!(s.pending_text().as_deref(), Some("CQ KD9TAW/P"), "compound CQ, no grid");
+        assert_eq!(
+            s.pending_text().as_deref(),
+            Some("CQ KD9TAW/P"),
+            "compound CQ, no grid"
+        );
         // W9XYZ answers with a bare report (me hashed, them the c28 sender → survives).
         s.observe(&[dec("<KD9TAW/P> W9XYZ -09", -8)]);
         assert_eq!(s.dxcall.as_deref(), Some("W9XYZ"));
-        assert_eq!(s.rx_report, Some(-9), "captured the standard caller's report");
+        assert_eq!(
+            s.rx_report,
+            Some(-9),
+            "captured the standard caller's report"
+        );
         // My roger degrades to RRR (compound sender → no numeric); QSO advances.
         assert_eq!(s.pending_text().as_deref(), Some("<W9XYZ> KD9TAW/P RRR"));
         // The caller closes → I'm done.
@@ -947,9 +989,17 @@ mod start_context_tests {
         let mut s = Station::answering(ME, MY_GRID, DX); // dxcall = W9XYZ, AwaitReport
         assert_eq!(s.state, State::AwaitReport);
         s.observe(&[dec("KD9TAW N0ABC -05", -5)]); // a different station reports us
-        assert_eq!(s.state, State::AwaitReport, "a non-DX reply must not advance");
+        assert_eq!(
+            s.state,
+            State::AwaitReport,
+            "a non-DX reply must not advance"
+        );
         s.observe(&[dec("KD9TAW W9XYZ -12", -8)]); // the worked DX reports us
-        assert_eq!(s.state, State::AwaitRr73, "the worked DX advances the sequence");
+        assert_eq!(
+            s.state,
+            State::AwaitRr73,
+            "the worked DX advances the sequence"
+        );
         assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW R-08"));
     }
 
@@ -1011,7 +1061,10 @@ mod start_context_tests {
             s.after_tx();
         }
         assert!(s.outgoing_rv().is_none(), "CQ stops after its budget");
-        assert!(s.stalled(), "a finished CQ reports stalled (Resend re-arms)");
+        assert!(
+            s.stalled(),
+            "a finished CQ reports stalled (Resend re-arms)"
+        );
     }
 
     #[test]

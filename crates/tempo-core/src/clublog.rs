@@ -221,10 +221,22 @@ mod tests {
     fn result_maps_to_upload_outcome() {
         use crate::logbook::UploadOutcome as U;
         assert_eq!(ClubLogResult::Ok.to_upload_outcome(), Some(U::Accepted));
-        assert_eq!(ClubLogResult::Modified.to_upload_outcome(), Some(U::Accepted));
-        assert_eq!(ClubLogResult::Duplicate.to_upload_outcome(), Some(U::Duplicate));
-        assert_eq!(ClubLogResult::Rejected.to_upload_outcome(), Some(U::Rejected));
-        assert_eq!(ClubLogResult::AuthFail.to_upload_outcome(), Some(U::AuthFail));
+        assert_eq!(
+            ClubLogResult::Modified.to_upload_outcome(),
+            Some(U::Accepted)
+        );
+        assert_eq!(
+            ClubLogResult::Duplicate.to_upload_outcome(),
+            Some(U::Duplicate)
+        );
+        assert_eq!(
+            ClubLogResult::Rejected.to_upload_outcome(),
+            Some(U::Rejected)
+        );
+        assert_eq!(
+            ClubLogResult::AuthFail.to_upload_outcome(),
+            Some(U::AuthFail)
+        );
         // Transient → no stamp (clean retry).
         assert_eq!(ClubLogResult::ServerError.to_upload_outcome(), None);
         assert_eq!(ClubLogResult::Unknown.to_upload_outcome(), None);

@@ -121,7 +121,11 @@ impl StoreForward {
             frames.extend(text::chunk(&p.text, p.id));
             p.attempts += 1;
             p.last_attempt_slot = Some(slot);
-            let body = if p.attempts == 1 { Some(p.text.clone()) } else { None };
+            let body = if p.attempts == 1 {
+                Some(p.text.clone())
+            } else {
+                None
+            };
             out.push((p.to.clone(), body, frames));
         }
         out
@@ -190,7 +194,11 @@ mod tests {
         let due = sf.due(&roster, 6, 10, 3);
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].0, "N0XYZ");
-        assert_eq!(due[0].1.as_deref(), Some("QSY TO 40M AT 0200Z PSE"), "body on first release");
+        assert_eq!(
+            due[0].1.as_deref(),
+            Some("QSY TO 40M AT 0200Z PSE"),
+            "body on first release"
+        );
         // identify frame + at least one chunk.
         assert!(due[0].2.len() >= 2);
         assert!(due[0].2[0].contains("N0XYZ") && due[0].2[0].contains("W9XYZ"));

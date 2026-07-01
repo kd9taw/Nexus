@@ -269,8 +269,7 @@ fn derive<'a>(
     my_entity: Option<&str>,
     my_ll: Option<(f64, f64)>,
 ) -> Vec<Derived<'a>> {
-    qsos
-        .iter()
+    qsos.iter()
         .map(|q| {
             let info = dxcc::resolve(&q.call);
             let entity = info.as_ref().map(|i| i.entity);
@@ -307,7 +306,11 @@ fn derive<'a>(
 }
 
 fn grid4_of(grid: &str) -> String {
-    grid.trim().chars().take(4).collect::<String>().to_uppercase()
+    grid.trim()
+        .chars()
+        .take(4)
+        .collect::<String>()
+        .to_uppercase()
 }
 
 // ---------------------------------------------------------------------------
@@ -510,9 +513,7 @@ fn compute_firsts(d: &[Derived]) -> Vec<First> {
             "First DX",
             "You worked your first foreign country — DXCC entity #1.",
             "Working DX (distant/foreign stations) is the chase at the heart of the hobby.",
-            Box::new(|x: &Derived| {
-                (x.is_dx).then(|| x.entity.unwrap_or("DX").to_string())
-            }),
+            Box::new(|x: &Derived| (x.is_dx).then(|| x.entity.unwrap_or("DX").to_string())),
         ),
         (
             "first-1000mi",
@@ -844,7 +845,8 @@ fn compute_feats(
         id: "band-slam".into(),
         title: "Band Slam".into(),
         meaning: "Make a contact on every HF band, 160 m through 10 m.".into(),
-        heritage: "Working all nine HF bands proves a flexible station and patient operating.".into(),
+        heritage: "Working all nine HF bands proves a flexible station and patient operating."
+            .into(),
         tier: Tier::Gold,
         unlocked: hf >= HF_BANDS.len() as f64,
         current: hf,
@@ -861,7 +863,8 @@ fn compute_feats(
         id: "mode-slam".into(),
         title: "Mode Slam".into(),
         meaning: "Make a contact on CW, Phone and Digital.".into(),
-        heritage: "Each mode is its own craft; working all three is a well-rounded operator.".into(),
+        heritage: "Each mode is its own craft; working all three is a well-rounded operator."
+            .into(),
         tier: Tier::Silver,
         unlocked: modes >= 3.0,
         current: modes,
@@ -892,7 +895,9 @@ fn compute_feats(
         id: "grayline-dx".into(),
         title: "Gray-Line DX".into(),
         meaning: "Work DX along the sunrise/sunset terminator — the gray-line window.".into(),
-        heritage: "For a few minutes at dawn/dusk the gray line gives a striking propagation boost.".into(),
+        heritage:
+            "For a few minutes at dawn/dusk the gray line gives a striking propagation boost."
+                .into(),
         tier: Tier::Gold,
         unlocked: grayline >= 1,
         current: grayline as f64,
@@ -926,7 +931,8 @@ fn compute_feats(
         id: "miles-per-watt".into(),
         title: "1000 Miles-per-Watt".into(),
         meaning: "Cover 1,000 miles for every watt — efficiency over brute power.".into(),
-        heritage: "The QRP-ARCI 1000-MPW award rewards skill and conditions, not a big amplifier.".into(),
+        heritage: "The QRP-ARCI 1000-MPW award rewards skill and conditions, not a big amplifier."
+            .into(),
         tier: Tier::Legendary,
         unlocked: best_mpw >= 1000.0,
         current: best_mpw,
@@ -948,7 +954,8 @@ fn compute_feats(
         id: "qrp-dx".into(),
         title: "QRP DX".into(),
         meaning: "Work a DX entity running 5 watts or less.".into(),
-        heritage: "QRP DX is a point of pride — crossing oceans on the power of a night-light.".into(),
+        heritage: "QRP DX is a point of pride — crossing oceans on the power of a night-light."
+            .into(),
         tier: Tier::Gold,
         unlocked: qrp_dx >= 1.0,
         current: qrp_dx,
@@ -1135,7 +1142,10 @@ mod tests {
         assert_eq!(j.level, 0);
         assert_eq!(j.xp, 0);
         assert_eq!(j.total_qsos, 0);
-        assert!(j.firsts.iter().all(|f| !f.unlocked), "no firsts on empty log");
+        assert!(
+            j.firsts.iter().all(|f| !f.unlocked),
+            "no firsts on empty log"
+        );
         // Every ladder still renders with its rungs + a next rung at the first step.
         let dxcc = j.ladders.iter().find(|l| l.id == "dxcc").unwrap();
         assert_eq!(dxcc.worked, 0);
@@ -1208,15 +1218,27 @@ mod tests {
             ..qso("ZL3ABC", Band::B20, ModeClass::Digital, 1)
         };
         let no_power = compute(&[q.clone()], "W9XYZ", Some("EN61"), None, false, 1000);
-        let mpw = no_power.feats.iter().find(|f| f.id == "miles-per-watt").unwrap();
+        let mpw = no_power
+            .feats
+            .iter()
+            .find(|f| f.id == "miles-per-watt")
+            .unwrap();
         assert!(mpw.gated, "no power → gated, not a misleading zero");
         assert!(mpw.gate_hint.is_some());
 
         // At 5 W, ~8,400 mi / 5 W ≈ 1,680 mi/W → over the 1,000 MPW bar.
         let with_power = compute(&[q], "W9XYZ", Some("EN61"), Some(5.0), false, 1000);
-        let mpw = with_power.feats.iter().find(|f| f.id == "miles-per-watt").unwrap();
+        let mpw = with_power
+            .feats
+            .iter()
+            .find(|f| f.id == "miles-per-watt")
+            .unwrap();
         assert!(!mpw.gated);
-        assert!(mpw.unlocked, "8400 mi at 5 W clears 1000 MPW (got {})", mpw.current);
+        assert!(
+            mpw.unlocked,
+            "8400 mi at 5 W clears 1000 MPW (got {})",
+            mpw.current
+        );
     }
 
     #[test]

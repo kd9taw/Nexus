@@ -83,7 +83,11 @@ pub fn decode_cw(samples: &[f32], sr: f32, pitch_hz: f32) -> CwDecode {
     // Refine the dit length by averaging the whole 1-unit cluster (elements < 2× rough):
     // threshold-crossing trims a hop off each dit but adds it to the adjacent intra-char
     // gap, so the dit-and-gap mean cancels that bias → an accurate WPM.
-    let ones: Vec<usize> = durs.iter().copied().filter(|&d| (d as f32) < 2.0 * rough).collect();
+    let ones: Vec<usize> = durs
+        .iter()
+        .copied()
+        .filter(|&d| (d as f32) < 2.0 * rough)
+        .collect();
     let unit = if ones.is_empty() {
         rough
     } else {
@@ -210,7 +214,10 @@ mod tests {
 
     #[test]
     fn empty_on_silence_and_steady_tone() {
-        assert_eq!(decode_cw(&vec![0.0f32; 48_000], SR, PITCH), CwDecode::default());
+        assert_eq!(
+            decode_cw(&vec![0.0f32; 48_000], SR, PITCH),
+            CwDecode::default()
+        );
         // A steady (un-keyed) carrier — no on/off ratio → nothing to decode.
         let steady: Vec<f32> = (0..48_000)
             .map(|i| (2.0 * std::f32::consts::PI * PITCH * i as f32 / SR).sin())
@@ -224,7 +231,10 @@ mod tests {
         audio.extend(morse_samples("CQ TEST", 22, 600.0, SR as u32));
         let hits = skim_cw(&audio, SR, 300, 1200, 50);
         assert!(!hits.is_empty(), "found the signal");
-        assert!(hits.iter().any(|h| h.text == "CQ TEST"), "decoded the text: {hits:?}");
+        assert!(
+            hits.iter().any(|h| h.text == "CQ TEST"),
+            "decoded the text: {hits:?}"
+        );
         // Decoding channels cluster near the 600 Hz tone — no spurious far-off hits.
         assert!(
             hits.iter().all(|h| (h.pitch_hz as i32 - 600).abs() <= 300),

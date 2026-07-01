@@ -951,7 +951,10 @@ mod tests {
         let mut six = BandFeatures::empty(Band::B6);
         six.anomaly_z = cfg.z_open + 1.0;
         six.unique_far_tx = 2; // I heard 2 far stations on 6m
-        assert!(six.raw_open(&cfg), "6m should open on 2 far stations during an anomaly");
+        assert!(
+            six.raw_open(&cfg),
+            "6m should open on 2 far stations during an anomaly"
+        );
 
         let mut twenty = BandFeatures::empty(Band::B20);
         twenty.anomaly_z = cfg.z_open + 1.0;
@@ -1049,7 +1052,10 @@ mod tests {
         let bf = band_features(Band::B20, &bs, ME, ME_GRID, NOW, &cfg);
         assert_eq!(bf.median_snr, Some(-10.0));
         let var = bf.snr_var.expect("variance present");
-        assert!((var - 66.667).abs() < 0.1, "population variance ~66.67: {var}");
+        assert!(
+            (var - 66.667).abs() < 0.1,
+            "population variance ~66.67: {var}"
+        );
     }
 
     #[test]
@@ -1203,7 +1209,11 @@ mod tests {
             ..Default::default()
         };
         let (mode, _, _) = classify(&f, Band::B6, &storm, &cfg);
-        assert_ne!(mode, PropMode::Aurora, "skip hole ⇒ not aurora, got {mode:?}");
+        assert_ne!(
+            mode,
+            PropMode::Aurora,
+            "skip hole ⇒ not aurora, got {mode:?}"
+        );
     }
 
     #[test]

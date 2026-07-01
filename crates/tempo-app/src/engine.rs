@@ -13,8 +13,8 @@
 //!
 //! [`mode`]: Engine::set_mode
 
-use std::collections::VecDeque;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -604,8 +604,11 @@ impl Engine {
             }
             self.settings.band = band.to_string();
         }
-        self.app
-            .set_radio(self.settings.dial_mhz, &self.settings.band, &self.settings.sideband);
+        self.app.set_radio(
+            self.settings.dial_mhz,
+            &self.settings.band,
+            &self.settings.sideband,
+        );
         self.sync_fd_band();
     }
 
@@ -626,7 +629,10 @@ impl Engine {
                 if !wf.mode.eq_ignore_ascii_case(mode_name) || wf.mhz <= 0.0 {
                     continue;
                 }
-                if let Some(c) = plan.iter_mut().find(|c| c.band.eq_ignore_ascii_case(&wf.band)) {
+                if let Some(c) = plan
+                    .iter_mut()
+                    .find(|c| c.band.eq_ignore_ascii_case(&wf.band))
+                {
                     c.dial_mhz = wf.mhz;
                 } else {
                     // A band the stock table lacks (e.g. 60 m FT4): append it —
@@ -686,7 +692,16 @@ impl Engine {
             OperatingMode::Cw => crate::privileges::segment_start(class, &band, om)
                 // Sideband is inert for CW (the rig-mode policy commands CW or a band-aware tone),
                 // but keep it self-consistent with the band's convention.
-                .map(|lo| (lo, if lo < 10.0 { "LSB".to_string() } else { "USB".to_string() })),
+                .map(|lo| {
+                    (
+                        lo,
+                        if lo < 10.0 {
+                            "LSB".to_string()
+                        } else {
+                            "USB".to_string()
+                        },
+                    )
+                }),
         }
     }
 
@@ -808,7 +823,11 @@ impl Engine {
     /// a 599 report) and the radio loop keys it via `rig.send_morse`. See
     /// `tasks/specs/cw-operating.md`.
     pub fn send_cw(&mut self, text: &str) {
-        let hiscall = self.app.active_peer().map(|s| s.to_string()).unwrap_or_default();
+        let hiscall = self
+            .app
+            .active_peer()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let ctx = tempo_core::cw::CwContext {
             mycall: &self.settings.mycall,
             myname: &self.settings.op_name,
@@ -869,13 +888,19 @@ impl Engine {
     /// True if CW uses the SOUNDCARD keyer (the loop generates a keyed tone + PTT,
     /// rig in USB) vs the CAT keyer (`rig.send_morse`, rig in CW).
     pub fn cw_soundcard(&self) -> bool {
-        matches!(self.settings.cw_keyer, crate::settings::CwKeyerBackend::Soundcard)
+        matches!(
+            self.settings.cw_keyer,
+            crate::settings::CwKeyerBackend::Soundcard
+        )
     }
 
     /// The WinKeyer serial port when the CW keyer backend is WinKeyer and a port is set —
     /// the radio loop opens/keys it. `None` for the CAT/soundcard keyers.
     pub fn cw_winkeyer_port(&self) -> Option<String> {
-        if matches!(self.settings.cw_keyer, crate::settings::CwKeyerBackend::WinKeyer) {
+        if matches!(
+            self.settings.cw_keyer,
+            crate::settings::CwKeyerBackend::WinKeyer
+        ) {
             let p = self.settings.winkeyer_port.trim();
             (!p.is_empty()).then(|| p.to_string())
         } else {
@@ -977,7 +1002,12 @@ impl Engine {
     /// Bind a voice-keyer slot — set its label and/or file path (creates the slot if new).
     /// `None` leaves that field unchanged.
     pub fn set_voice_message(&mut self, slot: u8, label: Option<&str>, file: Option<&str>) {
-        if let Some(m) = self.settings.voice_messages.iter_mut().find(|m| m.slot == slot) {
+        if let Some(m) = self
+            .settings
+            .voice_messages
+            .iter_mut()
+            .find(|m| m.slot == slot)
+        {
             if let Some(l) = label {
                 m.label = l.to_string();
             }
@@ -985,17 +1015,24 @@ impl Engine {
                 m.file = f.to_string();
             }
         } else {
-            self.settings.voice_messages.push(crate::settings::VoiceMessage {
-                slot,
-                label: label.unwrap_or_default().to_string(),
-                file: file.unwrap_or_default().to_string(),
-            });
+            self.settings
+                .voice_messages
+                .push(crate::settings::VoiceMessage {
+                    slot,
+                    label: label.unwrap_or_default().to_string(),
+                    file: file.unwrap_or_default().to_string(),
+                });
         }
     }
 
     /// Clear the recording bound to a slot (keeps its label).
     pub fn clear_voice_message(&mut self, slot: u8) {
-        if let Some(m) = self.settings.voice_messages.iter_mut().find(|m| m.slot == slot) {
+        if let Some(m) = self
+            .settings
+            .voice_messages
+            .iter_mut()
+            .find(|m| m.slot == slot)
+        {
             m.file.clear();
         }
     }
@@ -1229,14 +1266,9 @@ impl Engine {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Field Day mode is not active".into());
         };
-        Ok(station.log.log_mode_at(
-            call,
-            class,
-            section,
-            mode,
-            0,
-            now_unix_secs(),
-        ))
+        Ok(station
+            .log
+            .log_mode_at(call, class, section, mode, 0, now_unix_secs()))
     }
 
     /// Field Day score = QSO points × power multiplier + claimed bonuses.
@@ -1294,8 +1326,7 @@ impl Engine {
 
     /// True when this POTA/SOTA reference is already in the log (hunter side).
     pub fn park_worked(&self, reference: &str) -> bool {
-        self.worked_parks
-            .contains(&reference.trim().to_uppercase())
+        self.worked_parks.contains(&reference.trim().to_uppercase())
     }
 
     /// Recompute the worked-entity and worked-grid sets from the logbook. Cheap
@@ -1353,8 +1384,7 @@ impl Engine {
         if let Some((program, reference, call, at)) = &self.pending_hunt {
             if now_unix_secs().saturating_sub(*at) > HUNT_TTL_SECS {
                 self.pending_hunt = None;
-            } else if tempo_core::message::same_call(&rec.call, call)
-                && rec.ota.their_ref.is_none()
+            } else if tempo_core::message::same_call(&rec.call, call) && rec.ota.their_ref.is_none()
             {
                 rec.ota.their_program = Some(program.clone());
                 rec.ota.their_ref = Some(reference.clone());
@@ -1793,8 +1823,7 @@ impl Engine {
             },
             "fieldday-sp" => Mode::FieldDay {
                 station: Box::new({
-                    let mut st =
-                        FieldDayStation::search_and_pounce(&mycall, &mygrid, exch, &band);
+                    let mut st = FieldDayStation::search_and_pounce(&mycall, &mygrid, exch, &band);
                     st.log.event =
                         tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
                     st
@@ -1835,8 +1864,8 @@ impl Engine {
         self.qso_logged = false;
         self.qso_report_sent = None;
         self.qso_start_unix = None; // a fresh QSO stamps its own start time
-        // Clear stale receive-side IR-HARQ buffers so a new exchange never
-        // joint-combines with retransmissions from a previous one.
+                                    // Clear stale receive-side IR-HARQ buffers so a new exchange never
+                                    // joint-combines with retransmissions from a previous one.
         ft1::harq_reset();
         Ok(())
     }
@@ -1936,15 +1965,16 @@ impl Engine {
                 // Clicked text already aged out of the ring? The latest reply from
                 // this station still beats the unrelated `last_decode_slot` below.
                 if context_slot.is_none() {
-                    context_slot =
-                        self.latest_reply_from(dxcall, &mycall).map(|(_, _, s)| s);
+                    context_slot = self.latest_reply_from(dxcall, &mycall).map(|(_, _, s)| s);
                 }
                 Some((Msg::parse(text), snr))
             }
-            _ => self.latest_reply_from(dxcall, &mycall).map(|(m, snr, slot)| {
-                context_slot = Some(slot);
-                (m, snr)
-            }),
+            _ => self
+                .latest_reply_from(dxcall, &mycall)
+                .map(|(m, snr, slot)| {
+                    context_slot = Some(slot);
+                    (m, snr)
+                }),
         };
 
         let mut station = QsoStation::start(
@@ -1990,8 +2020,10 @@ impl Engine {
         // Hound rule (stock DXpedition mode): initial calls to the Fox must be
         // ABOVE 1000 Hz — the Fox listens there; 300–900 is the Fox's own
         // segment. Spread by callsign so a pileup doesn't stack at one offset.
-        if matches!(self.settings.special_op, crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound)
-            && self.tx_offset_hz < 1000.0
+        if matches!(
+            self.settings.special_op,
+            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
+        ) && self.tx_offset_hz < 1000.0
         {
             // Per-SESSION spread (stock randomizes each launch): salt the call
             // hash so two hounds never collide deterministically every event,
@@ -2001,7 +2033,9 @@ impl Engine {
                 .settings
                 .mycall
                 .bytes()
-                .fold(self.session_salt, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+                .fold(self.session_salt, |a, b| {
+                    a.wrapping_mul(31).wrapping_add(b as u32)
+                });
             self.set_tx_offset(1000.0 + (spread % 1900) as f32);
         }
         // Working a station implies transmit (stock "Double-click on call sets
@@ -2119,8 +2153,8 @@ impl Engine {
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
         self.qso_start_unix = None; // contact logged — the next QSO stamps a fresh start
-        // Respect prompt-to-log just like auto-log: hold for the confirm popup
-        // instead of writing silently, so manual + auto behave the same.
+                                    // Respect prompt-to-log just like auto-log: hold for the confirm popup
+                                    // instead of writing silently, so manual + auto behave the same.
         if self.settings.prompt_to_log {
             self.pending_log = Some(rec);
         } else {
@@ -2250,8 +2284,8 @@ impl Engine {
         }
         self.app.note_broadcast(text);
         self.record_own_tx(text.to_string()); // band activity shows the clean message
-        // Broadcasting IS an explicit "put this on the air" action — arm TX so the
-        // canned band macros key on the next over without a separate Enable-Tx click.
+                                              // Broadcasting IS an explicit "put this on the air" action — arm TX so the
+                                              // canned band macros key on the next over without a separate Enable-Tx click.
         self.arm_tx_now();
     }
     pub fn select_peer(&mut self, peer: &str) {
@@ -2618,7 +2652,11 @@ impl Engine {
     /// Decode CW from the recent receive audio at the operator's pitch — a live readout
     /// of the signal under the marker. Empty unless there's a clear keyed signal.
     pub fn cw_decode(&self) -> tempo_core::cw_decode::CwDecode {
-        tempo_core::cw_decode::decode_cw(&self.cw_audio, ft1::SAMPLE_RATE, self.settings.cw_pitch_hz)
+        tempo_core::cw_decode::decode_cw(
+            &self.cw_audio,
+            ft1::SAMPLE_RATE,
+            self.settings.cw_pitch_hz,
+        )
     }
 
     /// Wideband CW skim of the recent receive audio: every distinct keyed signal across
@@ -3416,7 +3454,10 @@ impl Engine {
         }
         self.early_seen = Some((
             slot,
-            decodes.iter().map(|d| d.message.trim().to_string()).collect(),
+            decodes
+                .iter()
+                .map(|d| d.message.trim().to_string())
+                .collect(),
         ));
         self.process_decodes(frame, decodes, slot)
     }
@@ -3495,11 +3536,7 @@ impl Engine {
     /// Drop decodes the early pass already ingested for this boundary slot.
     /// Always consumes the marker — a leftover from a slot whose boundary never
     /// decoded (we transmitted) must not filter a later slot.
-    fn drop_early_dupes(
-        &mut self,
-        decodes: Vec<modes::Decode>,
-        slot: u64,
-    ) -> Vec<modes::Decode> {
+    fn drop_early_dupes(&mut self, decodes: Vec<modes::Decode>, slot: u64) -> Vec<modes::Decode> {
         match self.early_seen.take() {
             Some((s, seen)) if s == slot => decodes
                 .into_iter()
@@ -3548,8 +3585,7 @@ impl Engine {
             // recover them ~1-2 dB deeper. Only FT8/FT4 use WSJT-X AP; FT1 has its
             // own IR-HARQ sensitivity lever and ignores these, so it stays on the
             // empty/0 path (no behavioural change to the proven FT1 decode).
-            let (ap_mycall, ap_hiscall, ap_progress) = match (&self.mode, self.app.tier())
-            {
+            let (ap_mycall, ap_hiscall, ap_progress) = match (&self.mode, self.app.tier()) {
                 (Mode::Qso { station, .. }, Tier::Ft8 | Tier::Ft4) => (
                     self.settings.mycall.clone(),
                     station.dxcall.clone().unwrap_or_default(),
@@ -3561,7 +3597,11 @@ impl Engine {
             // Operator decode controls (WSJT-X F Low / F High / depth), clamped
             // to the modem's real passband and kept ordered.
             let nfa = self.settings.decode_flow_hz.clamp(200, 2800) as i32;
-            let nfb = self.settings.decode_fhigh_hz.clamp(300, 2900).max(nfa as u32 + 100) as i32;
+            let nfb = self
+                .settings
+                .decode_fhigh_hz
+                .clamp(300, 2900)
+                .max(nfa as u32 + 100) as i32;
             let req = modes::DecodeRequest {
                 iwave: &iwave,
                 nfa,
@@ -3582,20 +3622,14 @@ impl Engine {
 
     /// Fold a slot's decodes into the app/sequencer state (the shared back half
     /// of [`Engine::ingest`] / [`Engine::ingest_early`]).
-    fn process_decodes(
-        &mut self,
-        frame: &[f32],
-        decodes: Vec<modes::Decode>,
-        slot: u64,
-    ) -> usize {
+    fn process_decodes(&mut self, frame: &[f32], decodes: Vec<modes::Decode>, slot: u64) -> usize {
         // Keep the ON-AIR text for UDP consumers BEFORE any hound rewriting —
         // JTAlert/GridTracker must never receive a message the Fox didn't send.
         let hound_active = matches!(
             self.settings.special_op,
             crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
         );
-        let wire_copy: Option<Vec<modes::Decode>> =
-            hound_active.then(|| decodes.clone());
+        let wire_copy: Option<Vec<modes::Decode>> = hound_active.then(|| decodes.clone());
         let decodes = self.hound_split(decodes);
         let n = decodes.len();
         // Tally IR-HARQ rescues (messages recovered by combining retransmissions).
@@ -3665,8 +3699,10 @@ impl Engine {
     /// (the standard sequencer then handles the whole hound exchange). Gated on
     /// Hound so normal operation (where free text may carry ';') is untouched.
     fn hound_split(&self, decodes: Vec<modes::Decode>) -> Vec<modes::Decode> {
-        if !matches!(self.settings.special_op, crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound)
-            || !matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4)
+        if !matches!(
+            self.settings.special_op,
+            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
+        ) || !matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4)
         {
             // Fox multiplexing is an FT8 DXpedition construct — FT1/DX1 free
             // text may legitimately contain ';' and must never be split.
@@ -3683,9 +3719,7 @@ impl Engine {
         let reattach = |m: String| -> String {
             let t: Vec<&str> = m.split_whitespace().collect();
             if let (Some(f), [to, fin]) = (&fox, t.as_slice()) {
-                if matches!(*fin, "RR73" | "RRR" | "73")
-                    && tempo_core::message::is_callsign(to)
-                {
+                if matches!(*fin, "RR73" | "RRR" | "73") && tempo_core::message::is_callsign(to) {
                     return format!("{to} {f} {fin}");
                 }
             }
@@ -3743,7 +3777,10 @@ impl Engine {
                 // stock "your Tx frequency is moved to the Fox's". Find the
                 // advancing decode (the report from the Fox addressed to us).
                 if sequence_advanced
-                    && matches!(self.settings.special_op, crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound)
+                    && matches!(
+                        self.settings.special_op,
+                        crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
+                    )
                     && station.state == QsoState::AwaitRr73
                 {
                     if let Some(dx) = station.dxcall.clone() {
@@ -3872,7 +3909,12 @@ impl Engine {
 
     /// Build a [`QsoRecord`] for a completed auto-sequenced QSO from the current
     /// settings (band / dial / tier) and the station's exchanged reports.
-    fn qso_record(&self, dxcall: String, dxgrid: Option<String>, rx_report: Option<i32>) -> QsoRecord {
+    fn qso_record(
+        &self,
+        dxcall: String,
+        dxgrid: Option<String>,
+        rx_report: Option<i32>,
+    ) -> QsoRecord {
         // ADIF mode must reflect the tier actually used — FT8/FT4 contacts log as
         // FT8/FT4 (award eligibility depends on it), not the native FT1 path.
         let mode = match self.app.tier() {
@@ -3955,7 +3997,6 @@ impl Engine {
             .map(|(_, d)| d.clone())
             .collect()
     }
-
 
     /// Test-only: fold synthetic decodes through the same DT-tracking + observe
     /// path as [`Engine::ingest`], without needing a real audio frame.
@@ -4097,7 +4138,11 @@ mod tests {
         e.send_cw("TEST");
         assert!(e.poll_cw().is_empty(), "no CW keyed while TX is disabled");
         e.set_tx_enabled(true);
-        assert_eq!(e.poll_cw(), vec!["TEST".to_string()], "held until TX re-enabled");
+        assert_eq!(
+            e.poll_cw(),
+            vec!["TEST".to_string()],
+            "held until TX re-enabled"
+        );
 
         // Abort clears the queue and raises the one-shot flag for the loop.
         e.send_cw("A LONG MESSAGE");
@@ -4111,7 +4156,7 @@ mod tests {
     fn voice_keyer_plays_gated_and_aborts_and_records() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
-        // Queue a voice message → the loop drains it once.
+                                // Queue a voice message → the loop drains it once.
         e.send_voice(vec![0.1, 0.2, 0.3]);
         assert_eq!(e.poll_voice(), Some(vec![0.1, 0.2, 0.3]));
         assert!(e.poll_voice().is_none(), "drained");
@@ -4119,7 +4164,10 @@ mod tests {
         // Gated by Monitor: with TX disabled nothing is queued/played.
         e.set_tx_enabled(false);
         e.send_voice(vec![0.5]);
-        assert!(e.poll_voice().is_none(), "no voice played while TX is disabled");
+        assert!(
+            e.poll_voice().is_none(),
+            "no voice played while TX is disabled"
+        );
         e.set_tx_enabled(true);
 
         // Abort drops the pending message + raises the one-shot flag.
@@ -4127,7 +4175,10 @@ mod tests {
         e.stop_voice();
         assert!(e.take_voice_abort());
         assert!(!e.take_voice_abort(), "abort is one-shot");
-        assert!(e.poll_voice().is_none(), "abort dropped the pending message");
+        assert!(
+            e.poll_voice().is_none(),
+            "abort dropped the pending message"
+        );
 
         // Recording accumulates captured audio only while recording, and take resets it.
         assert!(!e.is_recording());
@@ -4137,7 +4188,11 @@ mod tests {
         e.push_record_samples(&[0.1, 0.2]);
         e.push_record_samples(&[0.3]);
         let rec = e.stop_recording();
-        assert_eq!(rec, vec![0.1, 0.2, 0.3], "captured only what arrived while recording");
+        assert_eq!(
+            rec,
+            vec![0.1, 0.2, 0.3],
+            "captured only what arrived while recording"
+        );
         assert!(!e.is_recording());
         assert!(e.stop_recording().is_empty(), "buffer taken/reset");
     }
@@ -4151,8 +4206,14 @@ mod tests {
 
         e.start_qso_recording("/tmp/nexus/recordings/qso-1.wav");
         assert!(e.is_qso_recording());
-        assert_eq!(e.qso_record_path().as_deref(), Some("/tmp/nexus/recordings/qso-1.wav"));
-        assert!(e.snapshot().radio.qso_recording, "REC badge rides the snapshot");
+        assert_eq!(
+            e.qso_record_path().as_deref(),
+            Some("/tmp/nexus/recordings/qso-1.wav")
+        );
+        assert!(
+            e.snapshot().radio.qso_recording,
+            "REC badge rides the snapshot"
+        );
 
         e.stop_qso_recording();
         assert!(!e.is_qso_recording());
@@ -4166,10 +4227,17 @@ mod tests {
         // Operator turns the physical VFO to 14.213 MHz on the rig → the app adopts it.
         e.observe_rig_freq(14_213_000);
         let s = e.snapshot();
-        assert!((s.radio.dial_mhz - 14.213).abs() < 1e-6, "dial mirrors the knob");
+        assert!(
+            (s.radio.dial_mhz - 14.213).abs() < 1e-6,
+            "dial mirrors the knob"
+        );
         assert_eq!(s.radio.band, "20m", "band derived from the observed freq");
         // The Hz→MHz→Hz round-trip is exact, so the retune block won't fight the knob.
-        assert_eq!(e.settings().dial_hz(), 14_213_000, "dial_hz round-trips exactly");
+        assert_eq!(
+            e.settings().dial_hz(),
+            14_213_000,
+            "dial_hz round-trips exactly"
+        );
     }
 
     #[test]
@@ -4210,7 +4278,10 @@ mod tests {
         // emits ABOVE it → blocked; mid-segment is fine.
         e.set_operating_mode("phone", false);
         e.set_frequency(14.349, "20m", "USB");
-        assert!(!e.tx_allowed(), "USB phone bleeding over the band top is blocked");
+        assert!(
+            !e.tx_allowed(),
+            "USB phone bleeding over the band top is blocked"
+        );
         e.set_frequency(14.250, "20m", "USB");
         assert!(e.tx_allowed(), "mid-segment phone is fine");
 
@@ -4218,9 +4289,15 @@ mod tests {
         // (3.600), USB emits ABOVE (blocked) but LSB emits BELOW, back inside the segment.
         e.set_operating_mode("digital", false);
         e.set_frequency(3.601, "80m", "USB");
-        assert!(!e.tx_allowed(), "USB digital above the data ceiling is blocked");
+        assert!(
+            !e.tx_allowed(),
+            "USB digital above the data ceiling is blocked"
+        );
         e.set_frequency(3.601, "80m", "LSB");
-        assert!(e.tx_allowed(), "LSB digital emits below the dial → back in the data segment");
+        assert!(
+            e.tx_allowed(),
+            "LSB digital emits below the dial → back in the data segment"
+        );
     }
 
     #[test]
@@ -4230,7 +4307,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0); // tx_parity 0 → slot 0 is a TX slot
         e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         e.set_beacon(true); // arm a digital TX source
-        // Digital: the slot path transmits as usual on a TX-parity slot.
+                            // Digital: the slot path transmits as usual on a TX-parity slot.
         e.set_operating_mode("digital", false);
         assert!(
             !e.poll_tx(0).is_empty(),
@@ -4262,7 +4339,10 @@ mod tests {
             "Phone dropped to the phone segment, got {}",
             e.settings().dial_mhz
         );
-        assert!(e.take_immediate_retune(), "a section switch arms an immediate retune");
+        assert!(
+            e.take_immediate_retune(),
+            "a section switch arms an immediate retune"
+        );
 
         // Digital tab → snap to the FT8 watering hole (default tier).
         e.set_operating_mode("digital", true);
@@ -4282,7 +4362,10 @@ mod tests {
             "CW dropped to the CW segment start, got {}",
             e.settings().dial_mhz
         );
-        assert!(e.take_immediate_retune(), "CW pick arms a retune to command CW");
+        assert!(
+            e.take_immediate_retune(),
+            "CW pick arms a retune to command CW"
+        );
     }
 
     #[test]
@@ -4304,7 +4387,10 @@ mod tests {
             "the exact spot freq is preserved (no QSY), got {}",
             e.settings().dial_mhz
         );
-        assert!(e.take_immediate_retune(), "a mode change still arms a retune");
+        assert!(
+            e.take_immediate_retune(),
+            "a mode change still arms a retune"
+        );
     }
 
     #[test]
@@ -4325,7 +4411,10 @@ mod tests {
             e.settings().dial_mhz
         );
         // ...and at that home freq the operator may actually transmit (the whole point).
-        assert!(e.tx_allowed(), "the LSB phone home freq is inside the privileged segment");
+        assert!(
+            e.tx_allowed(),
+            "the LSB phone home freq is inside the privileged segment"
+        );
     }
 
     #[test]
@@ -4390,7 +4479,7 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_license_class("extra");
         e.set_frequency(14.074, "20m", "USB"); // start on FT8
-        // Work a 20 m phone spot at an arbitrary in-segment freq (NOT the home 14.150).
+                                               // Work a 20 m phone spot at an arbitrary in-segment freq (NOT the home 14.150).
         e.work_spot("phone", 14.263, "20m");
         assert_eq!(e.settings().operating_mode, OperatingMode::Phone);
         assert!(
@@ -4398,7 +4487,10 @@ mod tests {
             "work_spot keeps the exact spot freq (no home override), got {}",
             e.settings().dial_mhz
         );
-        assert!(e.take_immediate_retune(), "work_spot arms an immediate retune");
+        assert!(
+            e.take_immediate_retune(),
+            "work_spot arms an immediate retune"
+        );
     }
 
     #[test]
@@ -4433,34 +4525,58 @@ mod tests {
         // No grid → Call CQ refused at the command boundary + the slot backstop blocks.
         let mut e = Engine::new("W9XYZ", "", 0);
         e.set_tier(Tier::Ft8);
-        assert!(e.structured_tx_ready(true).is_err(), "FT8 not ready without a grid");
+        assert!(
+            e.structured_tx_ready(true).is_err(),
+            "FT8 not ready without a grid"
+        );
         e.set_mode("qso-run").unwrap(); // engine set_mode doesn't gate; arms TX + CallingCq
-        assert!(e.poll_tx(0).is_empty(), "backstop: no FT8 CQ without a grid");
+        assert!(
+            e.poll_tx(0).is_empty(),
+            "backstop: no FT8 CQ without a grid"
+        );
 
         // No callsign → blocked too.
         let mut e = Engine::new("", "EN52", 0);
         e.set_tier(Tier::Ft8);
-        assert!(e.structured_tx_ready(true).is_err(), "FT8 not ready without a call");
+        assert!(
+            e.structured_tx_ready(true).is_err(),
+            "FT8 not ready without a call"
+        );
         e.set_mode("qso-run").unwrap();
-        assert!(e.poll_tx(0).is_empty(), "backstop: no FT8 CQ without a call");
+        assert!(
+            e.poll_tx(0).is_empty(),
+            "backstop: no FT8 CQ without a call"
+        );
 
         // Valid identity → ready, and the CQ keys.
         let mut e = Engine::new("W9XYZ", "EN52", 0);
         e.set_tier(Tier::Ft8);
-        assert!(e.structured_tx_ready(true).is_ok(), "valid call+grid → ready");
+        assert!(
+            e.structured_tx_ready(true).is_ok(),
+            "valid call+grid → ready"
+        );
         e.set_mode("qso-run").unwrap();
-        assert!(!e.poll_tx(0).is_empty(), "FT8 CQ keys with a valid call+grid");
+        assert!(
+            !e.poll_tx(0).is_empty(),
+            "FT8 CQ keys with a valid call+grid"
+        );
 
         // A lowercase grid is valid (encoder is case-insensitive) — must NOT be blocked.
         let mut e = Engine::new("W9XYZ", "en52", 0);
         e.set_tier(Tier::Ft8);
-        assert!(e.structured_tx_ready(true).is_ok(), "lowercase grid is accepted");
+        assert!(
+            e.structured_tx_ready(true).is_ok(),
+            "lowercase grid is accepted"
+        );
 
         // Field Day on FT8: the exchange carries NO grid, so a valid call alone is enough
         // — a blank grid must NOT suppress the FD over.
         let mut e = Engine::new("W9XYZ", "", 0);
         e.set_tier(Tier::Ft8);
-        assert!(e.structured_tx_ready(false).is_ok(), "FD needs only a callsign");
+        assert!(
+            e.structured_tx_ready(false).is_ok(),
+            "FD needs only a callsign"
+        );
         {
             let mut s = e.settings().clone();
             s.fd_class = "3A".into();
@@ -4469,7 +4585,10 @@ mod tests {
         }
         e.set_tier(Tier::Ft8);
         e.set_mode("fieldday-run").unwrap(); // arms TX
-        assert!(!e.poll_tx(0).is_empty(), "FT8 Field Day keys without a grid");
+        assert!(
+            !e.poll_tx(0).is_empty(),
+            "FT8 Field Day keys without a grid"
+        );
 
         // FT1 free-text is exempt from the standard-message grid contract.
         let mut e = Engine::new("W9XYZ", "", 0);
@@ -4564,7 +4683,10 @@ mod tests {
         assert_eq!(e.broadcast_queue[0], "CQ KD9TAW EN52");
         // Auto-armed: keys without a separate Enable-Tx click.
         assert!(e.tx_enabled(), "call_cq arms TX");
-        assert!(!e.poll_tx(0).is_empty(), "CQ keys on the next TX-parity slot");
+        assert!(
+            !e.poll_tx(0).is_empty(),
+            "CQ keys on the next TX-parity slot"
+        );
         // Echoed into the band feed as outbound.
         let feed = e.app.conversation("*").expect("band feed");
         assert!(feed
@@ -4580,7 +4702,8 @@ mod tests {
         // allowed to call CQ WITHOUT a grid.
         let mut e = Engine::new("W9XYZ/P", "", 0);
         e.set_tier(Tier::Ft1);
-        e.call_cq(Some("DX")).expect("compound CQ succeeds without a grid");
+        e.call_cq(Some("DX"))
+            .expect("compound CQ succeeds without a grid");
         assert_eq!(e.broadcast_queue.len(), 1);
         assert_eq!(
             e.broadcast_queue[0], "CQ W9XYZ/P",
@@ -4625,7 +4748,9 @@ mod tests {
             "band activity shows the clean message, got {mine:?}"
         );
         assert!(
-            !mine.iter().any(|m| tempo_core::text::parse_chunk(m).is_some()),
+            !mine
+                .iter()
+                .any(|m| tempo_core::text::parse_chunk(m).is_some()),
             "no raw 'A13…' chunk frames in band activity, got {mine:?}"
         );
     }
@@ -4663,7 +4788,7 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft8);
         e.set_frequency(14.074, "20m", "USB"); // 20m FT8 watering hole
-        // FT8→FT4 must move the rig to the FT4 20m dial (14.080), like WSJT-X — not stay.
+                                               // FT8→FT4 must move the rig to the FT4 20m dial (14.080), like WSJT-X — not stay.
         e.set_tier(Tier::Ft4);
         assert!(
             (e.settings().dial_mhz - 14.080).abs() < 0.0005,
@@ -4703,7 +4828,10 @@ mod tests {
         e.decode_history.push_back((7, cq_decode_from("W9XYZ")));
         e.send_message("W9XYZ", "HI");
         assert!(!e.tx_even(), "auto-cycle flipped to the opposite cycle");
-        assert!(e.tx_cycle_auto(), "a reply is not a manual pick — auto stays on");
+        assert!(
+            e.tx_cycle_auto(),
+            "a reply is not a manual pick — auto stays on"
+        );
     }
 
     #[test]
@@ -4949,7 +5077,10 @@ mod tests {
         // First over starts the watchdog clock but doesn't trip it.
         assert!(!e.poll_tx(0).is_empty(), "an over is produced");
         assert!(!e.tx_watchdog, "a fresh timer doesn't trip immediately");
-        assert!(e.tx_watchdog_start.is_some(), "the timer started on the first over");
+        assert!(
+            e.tx_watchdog_start.is_some(),
+            "the timer started on the first over"
+        );
 
         // Backdate the start past the 60 s limit → the next over trips the watchdog.
         e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(61));
@@ -4962,14 +5093,20 @@ mod tests {
         e.set_tx_enabled(true);
         assert!(e.tx_enabled);
         assert!(!e.tx_watchdog, "re-enabling TX clears the watchdog");
-        assert!(e.tx_watchdog_start.is_none(), "the timer restarts on the next over");
+        assert!(
+            e.tx_watchdog_start.is_none(),
+            "the timer restarts on the next over"
+        );
         assert!(!e.snapshot().radio.tx_watchdog);
 
         // An operator action also restarts the timer mid-stream.
         e.poll_tx(4); // re-arm the timer
         assert!(e.tx_watchdog_start.is_some());
         e.reset_tx_watchdog();
-        assert!(e.tx_watchdog_start.is_none(), "operator action restarts the timer");
+        assert!(
+            e.tx_watchdog_start.is_none(),
+            "operator action restarts the timer"
+        );
     }
 
     #[test]
@@ -5140,10 +5277,7 @@ mod tests {
             !next.contains("EN37"),
             "must NOT fall back to Tx1/grid, got {next:?}"
         );
-        assert!(
-            next.contains("K1ABC"),
-            "answers the caller, got {next:?}"
-        );
+        assert!(next.contains("K1ABC"), "answers the caller, got {next:?}");
         // Parity derives from the ANSWERED decode's slot (5 → odd ingest → their
         // audio slot 4/even → we TX on odd), not from the unrelated slot-9 decode.
         assert!(!e.tx_even(), "TX parity opposite the CALLER's period");
@@ -5333,8 +5467,8 @@ mod tests {
         let _ = e.poll_tx(2); // report
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-05", -8)], 3);
         let _ = e.poll_tx(4); // RR73 goes out
-        // Return-to-CQ is evaluated on the NEXT ingest (observe_modes), like a
-        // real period boundary following the RR73 over.
+                              // Return-to-CQ is evaluated on the NEXT ingest (observe_modes), like a
+                              // real period boundary following the RR73 over.
         e.ingest_decodes_for_test(&[dec_snr("CQ N0OTH EM48", -3)], 5);
         let q = e.snapshot().qso.unwrap();
         assert_eq!(
@@ -5387,7 +5521,7 @@ mod tests {
         e.set_tier(Tier::Ft8);
         e.settings.special_op = crate::settings::SpecialOp::Hound;
         e.set_tx_offset(450.0); // operator parked in the Fox's segment
-        // Double-click the Fox's CQ.
+                                // Double-click the Fox's CQ.
         e.ingest_decodes_for_test(&[dec_at("CQ DX PJ4DX", -10, 400.0)], 1);
         e.call_station_ctx("PJ4DX", None, Some("CQ DX PJ4DX"), Some(-10), Some(400.0));
         assert!(
@@ -5396,10 +5530,7 @@ mod tests {
             e.tx_offset_hz()
         );
         // The Fox answers US inside a multi-payload transmission at 320 Hz.
-        e.ingest_decodes_for_test(
-            &[dec_at("K1ABC RR73; W9XYZ PJ4DX -08", -10, 320.0)],
-            3,
-        );
+        e.ingest_decodes_for_test(&[dec_at("K1ABC RR73; W9XYZ PJ4DX -08", -10, 320.0)], 3);
         let q = e.snapshot().qso.expect("hound QSO running");
         let next = q.tx_now.unwrap_or_default();
         assert!(
@@ -5412,10 +5543,7 @@ mod tests {
             e.tx_offset_hz()
         );
         // The Fox confirms us (again multiplexed) — contact complete + logged.
-        e.ingest_decodes_for_test(
-            &[dec_at("W9XYZ RR73; N0CALL PJ4DX +03", -10, 320.0)],
-            5,
-        );
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; N0CALL PJ4DX +03", -10, 320.0)], 5);
         assert!(
             !e.get_log().is_empty(),
             "the hound contact logged on the Fox's RR73"
@@ -5433,10 +5561,7 @@ mod tests {
         e.settings.special_op = crate::settings::SpecialOp::Hound;
         e.ingest_decodes_for_test(&[dec_at("CQ DX PJ4DX", -10, 400.0)], 1);
         e.call_station_ctx("PJ4DX", None, Some("CQ DX PJ4DX"), Some(-10), Some(400.0));
-        e.ingest_decodes_for_test(
-            &[dec_at("K1ABC RR73; W9XYZ PJ4DX -08", -10, 320.0)],
-            3,
-        );
+        e.ingest_decodes_for_test(&[dec_at("K1ABC RR73; W9XYZ PJ4DX -08", -10, 320.0)], 3);
         // A bystander signs a free-text 73 that happens to carry OUR call.
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ 73", -3)], 5);
         assert!(
@@ -5444,10 +5569,7 @@ mod tests {
             "the QSO must NOT complete from a bystander's 73"
         );
         // The REAL multiplexed confirm still completes it.
-        e.ingest_decodes_for_test(
-            &[dec_at("W9XYZ RR73; N0CALL PJ4DX +03", -10, 320.0)],
-            7,
-        );
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; N0CALL PJ4DX +03", -10, 320.0)], 7);
         assert!(!e.get_log().is_empty(), "the Fox's multiplexed RR73 logs");
     }
 
@@ -5456,11 +5578,7 @@ mod tests {
         // Normal operation must never split on ';' (free text could carry it).
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.ingest_decodes_for_test(&[dec_snr("K1ABC RR73; W9XYZ PJ4DX -08", -10)], 1);
-        assert_eq!(
-            e.last_decodes().len(),
-            1,
-            "no split outside Hound mode"
-        );
+        assert_eq!(e.last_decodes().len(), 1, "no split outside Hound mode");
     }
 
     #[test]
@@ -5476,8 +5594,13 @@ mod tests {
         other.when_unix = 1;
         e.log_qso(other);
         let log = e.get_log();
-        assert!(log.iter().any(|r| r.call == "N0OTH" && r.ota.their_ref.is_none()));
-        assert!(e.hunt_target().is_some(), "pend survives a non-matching QSO");
+        assert!(log
+            .iter()
+            .any(|r| r.call == "N0OTH" && r.ota.their_ref.is_none()));
+        assert!(
+            e.hunt_target().is_some(),
+            "pend survives a non-matching QSO"
+        );
         // The activator (portable suffix tolerated) gets tagged; pend clears.
         let mut rec = e.qso_record("K1ABC/P".into(), None, Some(-7));
         rec.when_unix = 2;
@@ -5539,7 +5662,11 @@ mod tests {
         assert_eq!(r.call, "W9XYZ");
         assert_eq!(r.band, "20m");
         assert_eq!(r.mode, "FT1");
-        assert_eq!(r.rst_rcvd.as_deref(), Some("-10"), "report received about our signal");
+        assert_eq!(
+            r.rst_rcvd.as_deref(),
+            Some("-10"),
+            "report received about our signal"
+        );
         assert_eq!(r.rst_sent.as_deref(), Some("-7"), "report we sent the DX");
 
         // worked_before now true (reflected in the snapshot's worked flag).
@@ -5626,12 +5753,19 @@ mod tests {
         let snap = e.snapshot();
         let pending = snap.pending_log.expect("a QSO awaits confirm");
         assert_eq!(pending.call, "W9XYZ");
-        assert_eq!(pending.grid.as_deref(), Some("EN37"), "DX grid captured + normalized");
+        assert_eq!(
+            pending.grid.as_deref(),
+            Some("EN37"),
+            "DX grid captured + normalized"
+        );
 
         // Confirm logs it and clears the hold.
         e.confirm_pending_log(pending.into());
         assert_eq!(e.get_log().len(), 1, "confirm writes exactly one record");
-        assert!(e.snapshot().pending_log.is_none(), "hold cleared after confirm");
+        assert!(
+            e.snapshot().pending_log.is_none(),
+            "hold cleared after confirm"
+        );
     }
 
     #[test]
@@ -5693,8 +5827,14 @@ mod tests {
         let row = |c: &str| rows.iter().find(|r| r.from.as_deref() == Some(c)).unwrap();
 
         assert!(!row("W1AW").new_grid && !row("W1AW").new_dxcc, "all worked");
-        assert!(row("W4ABC").new_grid && !row("W4ABC").new_dxcc, "new grid only");
-        assert!(row("DL1XYZ").new_grid && row("DL1XYZ").new_dxcc, "new grid + new entity");
+        assert!(
+            row("W4ABC").new_grid && !row("W4ABC").new_dxcc,
+            "new grid only"
+        );
+        assert!(
+            row("DL1XYZ").new_grid && row("DL1XYZ").new_dxcc,
+            "new grid + new entity"
+        );
     }
 
     #[test]
@@ -5721,7 +5861,11 @@ mod tests {
                 .find(|r| r.call == call)
                 .and_then(|r| r.country.clone())
         };
-        assert_eq!(country("DL1XYZ").as_deref(), Some("Germany"), "country backfilled on import");
+        assert_eq!(
+            country("DL1XYZ").as_deref(),
+            Some("Germany"),
+            "country backfilled on import"
+        );
         assert_eq!(country("F5RXL").as_deref(), Some("France"));
     }
 
@@ -5734,7 +5878,10 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
         let log = e.get_log();
         assert_eq!(log.len(), 1);
-        assert_eq!(log[0].mode, "FT8", "FT8 contacts log as FT8 (award eligibility)");
+        assert_eq!(
+            log[0].mode, "FT8",
+            "FT8 contacts log as FT8 (award eligibility)"
+        );
     }
 
     #[test]
@@ -5752,14 +5899,22 @@ mod tests {
         // A second over adds a second own-TX row (the repeated-call chronology).
         let _ = e.poll_tx(2);
         assert_eq!(
-            e.snapshot().recent_decodes.iter().filter(|d| d.mine).count(),
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .filter(|d| d.mine)
+                .count(),
             2,
             "each call is its own row"
         );
         // Stop TX clears the own-TX history.
         e.halt_tx();
         assert_eq!(
-            e.snapshot().recent_decodes.iter().filter(|d| d.mine).count(),
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .filter(|d| d.mine)
+                .count(),
             0,
             "halt_tx clears own-TX rows"
         );
@@ -5783,7 +5938,11 @@ mod tests {
         // MSG keeps DX1 if already there.
         e.set_tier(Tier::Dx1);
         e.set_area("msg");
-        assert_eq!(e.tier(), Tier::Dx1, "MSG keeps an already-chat-capable tier");
+        assert_eq!(
+            e.tier(),
+            Tier::Dx1,
+            "MSG keeps an already-chat-capable tier"
+        );
     }
 
     #[test]
@@ -5808,12 +5967,15 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         assert!(e.settings().auto_log);
         e.set_mode("qso-run").unwrap(); // CallingCq
-        // K2DEF answers our CQ with a grid → we send a report (AwaitRoger).
+                                        // K2DEF answers our CQ with a grid → we send a report (AwaitRoger).
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF FN31", -8)], 1);
         // K2DEF rogers our report → we queue RR73 (Confirming). No final 73 ever comes.
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF R-12", -8)], 3);
         // The RR73 is only QUEUED here — the contact must NOT log until it's on the air.
-        assert!(e.get_log().is_empty(), "not logged before the RR73 is transmitted");
+        assert!(
+            e.get_log().is_empty(),
+            "not logged before the RR73 is transmitted"
+        );
 
         // We send the RR73 on our next TX slot (tx_count → 1)...
         assert!(!e.poll_tx(4).is_empty(), "RR73 goes out on a TX slot");
@@ -5822,7 +5984,11 @@ mod tests {
         let log = e.get_log();
         assert_eq!(log.len(), 1, "CQ-side QSO auto-logs after RR73 is sent");
         assert_eq!(log[0].call, "K2DEF");
-        assert_eq!(log[0].rst_rcvd.as_deref(), Some("-12"), "report they sent us");
+        assert_eq!(
+            log[0].rst_rcvd.as_deref(),
+            Some("-12"),
+            "report they sent us"
+        );
         // Idempotent: a later 73 (or re-observe) doesn't double-log.
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF 73", -8)], 7);
         assert_eq!(e.get_log().len(), 1, "no double-log on a late 73");
@@ -5835,18 +6001,28 @@ mod tests {
         // own TIME_ON. Exercises both the post-log stamp guard and the resume-CQ reset.
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.set_mode("qso-run").unwrap(); // CallingCq, TX armed
-        // QSO1: K2DEF answers our CQ → we report (AwaitRoger); start stamped.
+                                        // QSO1: K2DEF answers our CQ → we report (AwaitRoger); start stamped.
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF FN31", -8)], 1);
         assert!(e.qso_start_unix.is_some(), "QSO1 stamped its start");
         // Operator manually logs QSO1 early (a report was sent → allowed).
-        assert!(e.log_current_qso(), "manual log succeeds (report exchanged)");
+        assert!(
+            e.log_current_qso(),
+            "manual log succeeds (report exchanged)"
+        );
         assert!(e.qso_start_unix.is_none(), "manual log clears the start");
         // QSO1 then rogers; we send RR73 (tx_count→1) and resume to CQ.
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF R-12", -8)], 3);
-        assert!(e.qso_start_unix.is_none(), "a post-log over must NOT re-stamp a start");
+        assert!(
+            e.qso_start_unix.is_none(),
+            "a post-log over must NOT re-stamp a start"
+        );
         assert!(!e.poll_tx(4).is_empty(), "RR73 goes out");
         e.ingest_decodes_for_test(&[], 5); // resume to CQ
-        assert_eq!(e.snapshot().qso.unwrap().state, "CallingCq", "resumed calling CQ");
+        assert_eq!(
+            e.snapshot().qso.unwrap().state,
+            "CallingCq",
+            "resumed calling CQ"
+        );
         assert!(
             e.qso_start_unix.is_none(),
             "no stale QSO1 start leaks into the next contact"
@@ -5880,7 +6056,10 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         assert!(e.log_current_qso());
         // Held for confirm, not written, like auto-log.
-        assert!(e.get_log().is_empty(), "prompt-to-log holds the manual log too");
+        assert!(
+            e.get_log().is_empty(),
+            "prompt-to-log holds the manual log too"
+        );
         let pending = e.snapshot().pending_log.expect("a QSO awaits confirm");
         e.confirm_pending_log(pending.into());
         assert_eq!(e.get_log().len(), 1);
@@ -6095,7 +6274,9 @@ mod tests {
         let n_early = e.ingest_early(&early, 3);
         assert!(n_early >= 1, "early (truncated) pass must decode");
         assert!(
-            e.last_decodes().iter().any(|d| d.message == "CQ W1ABC FN42"),
+            e.last_decodes()
+                .iter()
+                .any(|d| d.message == "CQ W1ABC FN42"),
             "early pass recovered the message; got {:?}",
             e.last_decodes()
         );
@@ -6206,8 +6387,15 @@ mod tests {
         // capturing only the frame kept the slot tail and amputated sync.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft4);
-        assert_eq!(e.active_frame_samples(), modes::ModeKind::Ft4.frame_samples());
-        assert_eq!(e.active_capture_samples(), 90_000, "capture the full 7.5 s slot");
+        assert_eq!(
+            e.active_frame_samples(),
+            modes::ModeKind::Ft4.frame_samples()
+        );
+        assert_eq!(
+            e.active_capture_samples(),
+            90_000,
+            "capture the full 7.5 s slot"
+        );
         assert!(
             e.active_capture_samples() > e.active_frame_samples(),
             "FT4 captures more than it decodes (slot > frame)"
@@ -6242,4 +6430,3 @@ mod tests {
         );
     }
 }
-

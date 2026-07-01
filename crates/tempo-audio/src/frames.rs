@@ -154,7 +154,7 @@ mod tests {
         const NMAX: usize = 72_576;
         const SLOT: usize = 90_000;
         let lead = SLOT - NMAX; // 17424 = the head an NMAX ring drops
-        // Mark the leading sync (2.0) distinctly from the signal body (1.0).
+                                // Mark the leading sync (2.0) distinctly from the signal body (1.0).
         let mut sig = vec![2.0f32; lead];
         sig.extend(std::iter::repeat(1.0f32).take(SLOT - lead));
 

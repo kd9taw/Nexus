@@ -43,30 +43,30 @@ pub trait RigBackend: Send + Sync {
 /// protocol-1 `key=value … done` trailer. NOTE: the one part needing live WSJT-X
 /// validation; built to match Hamlib's `netrigctl` field-by-field reader.
 const DUMP_STATE: &str = concat!(
-    "0\n",                                            // protocol version (classic)
-    "2\n",                                            // rig model (NET rigctl)
-    "1\n",                                            // ITU region
-    "135700 1300000000 0xffffffff -1 -1 0x3 0x0\n",   // rx range (all modes)
-    "0 0 0 0 0 0 0\n",                                 // rx range terminator
+    "0\n",                                                // protocol version (classic)
+    "2\n",                                                // rig model (NET rigctl)
+    "1\n",                                                // ITU region
+    "135700 1300000000 0xffffffff -1 -1 0x3 0x0\n",       // rx range (all modes)
+    "0 0 0 0 0 0 0\n",                                    // rx range terminator
     "135700 1300000000 0xffffffff 5000 100000 0x3 0x0\n", // tx range
-    "0 0 0 0 0 0 0\n",                                 // tx range terminator
-    "0xffffffff 1\n",                                 // tuning step: all modes, 1 Hz
-    "0 0\n",                                           // tuning-step terminator
-    "0xffffffff 2700\n",                              // filter: all modes, 2700 Hz
-    "0xffffffff 500\n",                               // filter: all modes, 500 Hz
-    "0 0\n",                                           // filter terminator
-    "0\n",                                             // max_rit
-    "0\n",                                             // max_xit
-    "0\n",                                             // max_ifshift
-    "0\n",                                             // announces
-    "0\n",                                             // preamp list (empty)
-    "0\n",                                             // attenuator list (empty)
-    "0x0\n",                                           // has_get_func
-    "0x0\n",                                           // has_set_func
-    "0x0\n",                                           // has_get_level
-    "0x0\n",                                           // has_set_level
-    "0x0\n",                                           // has_get_parm
-    "0x0\n",                                           // has_set_parm
+    "0 0 0 0 0 0 0\n",                                    // tx range terminator
+    "0xffffffff 1\n",                                     // tuning step: all modes, 1 Hz
+    "0 0\n",                                              // tuning-step terminator
+    "0xffffffff 2700\n",                                  // filter: all modes, 2700 Hz
+    "0xffffffff 500\n",                                   // filter: all modes, 500 Hz
+    "0 0\n",                                              // filter terminator
+    "0\n",                                                // max_rit
+    "0\n",                                                // max_xit
+    "0\n",                                                // max_ifshift
+    "0\n",                                                // announces
+    "0\n",                                                // preamp list (empty)
+    "0\n",                                                // attenuator list (empty)
+    "0x0\n",                                              // has_get_func
+    "0x0\n",                                              // has_set_func
+    "0x0\n",                                              // has_get_level
+    "0x0\n",                                              // has_set_level
+    "0x0\n",                                              // has_get_parm
+    "0x0\n",                                              // has_set_parm
 );
 
 fn rprt(ok: bool) -> String {
@@ -120,11 +120,7 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                 Some("v") => format!("{}\n", backend.vfo()),
                 Some("V") => rprt(p.next().map(|v| backend.set_vfo(v)).unwrap_or(false)),
                 Some("t") => format!("{}\n", backend.ptt() as u8),
-                Some("T") => rprt(
-                    p.next()
-                        .map(|s| backend.set_ptt(s == "1"))
-                        .unwrap_or(false),
-                ),
+                Some("T") => rprt(p.next().map(|s| backend.set_ptt(s == "1")).unwrap_or(false)),
                 Some("s") => format!("{}\n{}\n", backend.split() as u8, backend.vfo()),
                 // Unknown command → Hamlib's "not implemented".
                 _ => "RPRT -11\n".into(),
@@ -267,8 +263,14 @@ mod tests {
         assert_eq!(lines[0], "0", "protocol version 0 (skips proto-1 trailer)");
         assert_eq!(lines[2], "1", "ITU region");
         // Range rows are 7 fields; terminators are all-zero.
-        assert!(lines.iter().any(|l| *l == "0 0 0 0 0 0 0"), "range terminator present");
-        assert!(lines.iter().any(|l| *l == "0 0"), "ts/filter terminator present");
+        assert!(
+            lines.iter().any(|l| *l == "0 0 0 0 0 0 0"),
+            "range terminator present"
+        );
+        assert!(
+            lines.iter().any(|l| *l == "0 0"),
+            "ts/filter terminator present"
+        );
         // Every line parses as the expected token shape (no stray text).
         assert!(lines[3].split_whitespace().count() == 7);
     }
@@ -315,8 +317,14 @@ mod tests {
         let b = Arc::clone(&backend);
         std::thread::spawn(move || serve(listener, b));
         let to = std::time::Duration::from_millis(500);
-        assert!(probe_rigctld(&addr.to_string(), to), "running broker detected");
+        assert!(
+            probe_rigctld(&addr.to_string(), to),
+            "running broker detected"
+        );
         // An unused high port: nothing there.
-        assert!(!probe_rigctld("127.0.0.1:1", to), "no broker on a dead port");
+        assert!(
+            !probe_rigctld("127.0.0.1:1", to),
+            "no broker on a dead port"
+        );
     }
 }

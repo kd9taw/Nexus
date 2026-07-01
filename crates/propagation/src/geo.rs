@@ -92,8 +92,8 @@ pub fn destination_point(origin: (f64, f64), bearing_deg: f64, dist_km: f64) -> 
     let lat1 = origin.0.to_radians();
     let lon1 = origin.1.to_radians();
     let lat2 = (lat1.sin() * ang.cos() + lat1.cos() * ang.sin() * brg.cos()).asin();
-    let lon2 = lon1
-        + (brg.sin() * ang.sin() * lat1.cos()).atan2(ang.cos() - lat1.sin() * lat2.sin());
+    let lon2 =
+        lon1 + (brg.sin() * ang.sin() * lat1.cos()).atan2(ang.cos() - lat1.sin() * lat2.sin());
     let lon_deg = ((lon2.to_degrees() + 540.0).rem_euclid(360.0)) - 180.0;
     (lat2.to_degrees(), lon_deg)
 }

@@ -151,20 +151,32 @@ mod tests {
         let cands = candidates_from(&[usb("COM5", "IC-705", "Icom Inc.")], 1);
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].port_name, "COM5");
-        assert!(cands[0].model > 4, "resolved a real Hamlib model, not a built-in");
+        assert!(
+            cands[0].model > 4,
+            "resolved a real Hamlib model, not a built-in"
+        );
         assert!(cands[0].model_name.contains("705"));
     }
 
     #[test]
     fn bridge_chip_rig_uses_the_fallback_model() {
-        let cands = candidates_from(&[usb("COM3", "CP2102 USB to UART Bridge", "Silicon Labs")], 3073);
+        let cands = candidates_from(
+            &[usb("COM3", "CP2102 USB to UART Bridge", "Silicon Labs")],
+            3073,
+        );
         assert_eq!(cands.len(), 1);
-        assert_eq!(cands[0].model, 3073, "no model in the product → operator's configured model");
+        assert_eq!(
+            cands[0].model, 3073,
+            "no model in the product → operator's configured model"
+        );
     }
 
     #[test]
     fn unmatched_port_with_no_fallback_is_dropped() {
-        let cands = candidates_from(&[usb("COM3", "CP2102 USB to UART Bridge", "Silicon Labs")], 0);
+        let cands = candidates_from(
+            &[usb("COM3", "CP2102 USB to UART Bridge", "Silicon Labs")],
+            0,
+        );
         assert!(cands.is_empty(), "model 0 + no fallback → nothing to probe");
     }
 }

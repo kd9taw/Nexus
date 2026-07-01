@@ -23,7 +23,13 @@ struct Seg {
 }
 
 const fn s(lo: f64, hi: f64, cw: bool, data: bool, phone: bool) -> Seg {
-    Seg { lo, hi, cw, data, phone }
+    Seg {
+        lo,
+        hi,
+        cw,
+        data,
+        phone,
+    }
 }
 
 // VHF/UHF privileges are identical for Technician and above; share them.
@@ -52,11 +58,11 @@ fn technician() -> Vec<Seg> {
     // NOT granted there (§97.301(e); ARRL Volunteer Monitor flags Tech FT8 on these as a
     // violation). 10 m is the ONLY HF band where a Technician may run data (28.0–28.3).
     let mut v = vec![
-        s(3.525, 3.600, true, false, false),  // 80 m CW only (Tech: no data)
-        s(7.025, 7.125, true, false, false),  // 40 m CW only (Tech: no data)
+        s(3.525, 3.600, true, false, false), // 80 m CW only (Tech: no data)
+        s(7.025, 7.125, true, false, false), // 40 m CW only (Tech: no data)
         s(21.025, 21.200, true, false, false), // 15 m CW only (Tech: no data)
-        s(28.000, 28.300, true, true, false),  // 10 m CW/data (Tech DOES get data here)
-        s(28.300, 28.500, true, false, true),  // 10 m phone (Tech capped at 28.500)
+        s(28.000, 28.300, true, true, false), // 10 m CW/data (Tech DOES get data here)
+        s(28.300, 28.500, true, false, true), // 10 m phone (Tech capped at 28.500)
     ];
     v.extend_from_slice(VHF);
     v
@@ -64,22 +70,22 @@ fn technician() -> Vec<Seg> {
 
 fn general() -> Vec<Seg> {
     let mut v = vec![
-        s(1.800, 2.000, true, true, true),     // 160 m all-mode
-        s(3.525, 3.600, true, true, false),    // 80 m CW/data
-        s(3.800, 4.000, true, false, true),    // 80 m phone
-        s(7.025, 7.125, true, true, false),    // 40 m CW/data
-        s(7.175, 7.300, true, false, true),    // 40 m phone
-        s(10.100, 10.150, true, true, false),  // 30 m CW/data (no phone, any class)
-        s(14.025, 14.150, true, true, false),  // 20 m CW/data
-        s(14.225, 14.350, true, false, true),  // 20 m phone
-        s(18.068, 18.110, true, true, false),  // 17 m CW/data
-        s(18.110, 18.168, true, false, true),  // 17 m phone
-        s(21.025, 21.200, true, true, false),  // 15 m CW/data
-        s(21.275, 21.450, true, false, true),  // 15 m phone
-        s(24.890, 24.930, true, true, false),  // 12 m CW/data
-        s(24.930, 24.990, true, false, true),  // 12 m phone
-        s(28.000, 28.300, true, true, false),  // 10 m CW/data
-        s(28.300, 29.700, true, false, true),  // 10 m phone
+        s(1.800, 2.000, true, true, true),    // 160 m all-mode
+        s(3.525, 3.600, true, true, false),   // 80 m CW/data
+        s(3.800, 4.000, true, false, true),   // 80 m phone
+        s(7.025, 7.125, true, true, false),   // 40 m CW/data
+        s(7.175, 7.300, true, false, true),   // 40 m phone
+        s(10.100, 10.150, true, true, false), // 30 m CW/data (no phone, any class)
+        s(14.025, 14.150, true, true, false), // 20 m CW/data
+        s(14.225, 14.350, true, false, true), // 20 m phone
+        s(18.068, 18.110, true, true, false), // 17 m CW/data
+        s(18.110, 18.168, true, false, true), // 17 m phone
+        s(21.025, 21.200, true, true, false), // 15 m CW/data
+        s(21.275, 21.450, true, false, true), // 15 m phone
+        s(24.890, 24.930, true, true, false), // 12 m CW/data
+        s(24.930, 24.990, true, false, true), // 12 m phone
+        s(28.000, 28.300, true, true, false), // 10 m CW/data
+        s(28.300, 29.700, true, false, true), // 10 m phone
     ];
     v.extend_from_slice(SIXTY);
     v.extend_from_slice(VHF);
@@ -88,22 +94,22 @@ fn general() -> Vec<Seg> {
 
 fn extra() -> Vec<Seg> {
     let mut v = vec![
-        s(1.800, 2.000, true, true, true),     // 160 m all-mode
-        s(3.500, 3.600, true, true, false),    // 80 m CW/data (Extra bottom 3.500)
-        s(3.600, 4.000, true, false, true),    // 80 m phone (Extra floor 3.600)
-        s(7.000, 7.125, true, true, false),    // 40 m CW/data (Extra bottom 7.000)
-        s(7.125, 7.300, true, false, true),    // 40 m phone (Extra floor 7.125)
-        s(10.100, 10.150, true, true, false),  // 30 m CW/data
-        s(14.000, 14.150, true, true, false),  // 20 m CW/data (Extra bottom 14.000)
-        s(14.150, 14.350, true, false, true),  // 20 m phone (Extra floor 14.150)
-        s(18.068, 18.110, true, true, false),  // 17 m CW/data
-        s(18.110, 18.168, true, false, true),  // 17 m phone
-        s(21.000, 21.200, true, true, false),  // 15 m CW/data (Extra bottom 21.000)
-        s(21.200, 21.450, true, false, true),  // 15 m phone (Extra floor 21.200)
-        s(24.890, 24.930, true, true, false),  // 12 m CW/data
-        s(24.930, 24.990, true, false, true),  // 12 m phone
-        s(28.000, 28.300, true, true, false),  // 10 m CW/data
-        s(28.300, 29.700, true, false, true),  // 10 m phone
+        s(1.800, 2.000, true, true, true),    // 160 m all-mode
+        s(3.500, 3.600, true, true, false),   // 80 m CW/data (Extra bottom 3.500)
+        s(3.600, 4.000, true, false, true),   // 80 m phone (Extra floor 3.600)
+        s(7.000, 7.125, true, true, false),   // 40 m CW/data (Extra bottom 7.000)
+        s(7.125, 7.300, true, false, true),   // 40 m phone (Extra floor 7.125)
+        s(10.100, 10.150, true, true, false), // 30 m CW/data
+        s(14.000, 14.150, true, true, false), // 20 m CW/data (Extra bottom 14.000)
+        s(14.150, 14.350, true, false, true), // 20 m phone (Extra floor 14.150)
+        s(18.068, 18.110, true, true, false), // 17 m CW/data
+        s(18.110, 18.168, true, false, true), // 17 m phone
+        s(21.000, 21.200, true, true, false), // 15 m CW/data (Extra bottom 21.000)
+        s(21.200, 21.450, true, false, true), // 15 m phone (Extra floor 21.200)
+        s(24.890, 24.930, true, true, false), // 12 m CW/data
+        s(24.930, 24.990, true, false, true), // 12 m phone
+        s(28.000, 28.300, true, true, false), // 10 m CW/data
+        s(28.300, 29.700, true, false, true), // 10 m phone
     ];
     v.extend_from_slice(SIXTY);
     v.extend_from_slice(VHF);
@@ -170,13 +176,13 @@ mod tests {
     #[test]
     fn technician_hf_is_cw_only_on_80_40_15_and_data_only_on_10m() {
         assert!(tx_allowed(Technician, 3.550, Cw)); // 80 m CW ok
-        // 80/40/15 m are CW ONLY for a Technician — FT8/RTTY there is a Part 97 violation.
+                                                    // 80/40/15 m are CW ONLY for a Technician — FT8/RTTY there is a Part 97 violation.
         assert!(!tx_allowed(Technician, 3.573, Digital)); // 80 m FT8 NOT legal for Tech
         assert!(!tx_allowed(Technician, 7.074, Digital)); // 40 m FT8 NOT legal for Tech
         assert!(!tx_allowed(Technician, 21.074, Digital)); // 15 m FT8 NOT legal for Tech
         assert!(!tx_allowed(Technician, 3.850, Phone)); // no 80 m phone for Tech
         assert!(!tx_allowed(Technician, 14.074, Digital)); // no 20 m at all for Tech
-        // 10 m is the only HF band where a Technician may run data.
+                                                           // 10 m is the only HF band where a Technician may run data.
         assert!(tx_allowed(Technician, 28.074, Digital)); // 10 m FT8 ok
         assert!(tx_allowed(Technician, 28.400, Phone)); // 10 m phone ok
         assert!(!tx_allowed(Technician, 28.600, Phone)); // Tech 10 m phone capped at 28.500

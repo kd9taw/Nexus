@@ -50,18 +50,27 @@ mod tests {
     #[test]
     fn rx_line_matches_wsjtx_layout_exactly() {
         let line = all_txt_line(T, 14.074, false, "FT8", -10, 0.2, 1500.0, "CQ W1ABC FN42");
-        assert_eq!(line, "231114_221320    14.074 Rx FT8    -10  0.2 1500 CQ W1ABC FN42");
+        assert_eq!(
+            line,
+            "231114_221320    14.074 Rx FT8    -10  0.2 1500 CQ W1ABC FN42"
+        );
     }
 
     #[test]
     fn tx_line_uses_tx_marker_and_zeroed_metrics() {
         let line = all_txt_line(T, 14.074, true, "FT8", 0, 0.0, 1200.0, "W1ABC KD9TAW R-09");
-        assert_eq!(line, "231114_221320    14.074 Tx FT8      0  0.0 1200 W1ABC KD9TAW R-09");
+        assert_eq!(
+            line,
+            "231114_221320    14.074 Tx FT8      0  0.0 1200 W1ABC KD9TAW R-09"
+        );
     }
 
     #[test]
     fn positive_snr_and_ft4_and_message_trim() {
         let line = all_txt_line(T, 7.074, false, "FT4", 12, -0.3, 800.0, "  CQ DX VK3ABC  ");
-        assert_eq!(line, "231114_221320     7.074 Rx FT4     12 -0.3  800 CQ DX VK3ABC");
+        assert_eq!(
+            line,
+            "231114_221320     7.074 Rx FT4     12 -0.3  800 CQ DX VK3ABC"
+        );
     }
 }

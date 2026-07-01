@@ -192,10 +192,19 @@ impl Mode for Ft8Mode {
         nfqso: i32,
         _frame_time_ms: i64, // FT8 has no cross-frame IR-HARQ
     ) -> Vec<Decode> {
-        ft8::decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, nqso_progress, nfqso)
-            .into_iter()
-            .map(Into::into)
-            .collect()
+        ft8::decode_frame(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
     }
 }
 
@@ -243,10 +252,19 @@ impl Mode for Ft4Mode {
         nfqso: i32,
         _frame_time_ms: i64, // FT4 has no cross-frame IR-HARQ
     ) -> Vec<Decode> {
-        ft4::decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, nqso_progress, nfqso)
-            .into_iter()
-            .map(Into::into)
-            .collect()
+        ft4::decode_frame(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
     }
 }
 

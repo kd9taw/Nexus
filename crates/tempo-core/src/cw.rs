@@ -41,17 +41,54 @@ pub fn expand(template: &str, ctx: &CwContext) -> String {
 /// punctuation a casual op uses (`. , ? / = + - ( ) : ;`).
 pub fn morse_code(ch: char) -> Option<&'static str> {
     Some(match ch.to_ascii_lowercase() {
-        'a' => ".-", 'b' => "-...", 'c' => "-.-.", 'd' => "-..", 'e' => ".",
-        'f' => "..-.", 'g' => "--.", 'h' => "....", 'i' => "..", 'j' => ".---",
-        'k' => "-.-", 'l' => ".-..", 'm' => "--", 'n' => "-.", 'o' => "---",
-        'p' => ".--.", 'q' => "--.-", 'r' => ".-.", 's' => "...", 't' => "-",
-        'u' => "..-", 'v' => "...-", 'w' => ".--", 'x' => "-..-", 'y' => "-.--",
+        'a' => ".-",
+        'b' => "-...",
+        'c' => "-.-.",
+        'd' => "-..",
+        'e' => ".",
+        'f' => "..-.",
+        'g' => "--.",
+        'h' => "....",
+        'i' => "..",
+        'j' => ".---",
+        'k' => "-.-",
+        'l' => ".-..",
+        'm' => "--",
+        'n' => "-.",
+        'o' => "---",
+        'p' => ".--.",
+        'q' => "--.-",
+        'r' => ".-.",
+        's' => "...",
+        't' => "-",
+        'u' => "..-",
+        'v' => "...-",
+        'w' => ".--",
+        'x' => "-..-",
+        'y' => "-.--",
         'z' => "--..",
-        '0' => "-----", '1' => ".----", '2' => "..---", '3' => "...--", '4' => "....-",
-        '5' => ".....", '6' => "-....", '7' => "--...", '8' => "---..", '9' => "----.",
-        '.' => ".-.-.-", ',' => "--..--", '?' => "..--..", '/' => "-..-.", '=' => "-...-",
-        '+' => ".-.-.", '-' => "-....-", '(' => "-.--.", ')' => "-.--.-", ':' => "---...",
-        ';' => "-.-.-.", '@' => ".--.-.",
+        '0' => "-----",
+        '1' => ".----",
+        '2' => "..---",
+        '3' => "...--",
+        '4' => "....-",
+        '5' => ".....",
+        '6' => "-....",
+        '7' => "--...",
+        '8' => "---..",
+        '9' => "----.",
+        '.' => ".-.-.-",
+        ',' => "--..--",
+        '?' => "..--..",
+        '/' => "-..-.",
+        '=' => "-...-",
+        '+' => ".-.-.",
+        '-' => "-....-",
+        '(' => "-.--.",
+        ')' => "-.--.-",
+        ':' => "---...",
+        ';' => "-.-.-.",
+        '@' => ".--.-.",
         _ => return None,
     })
 }
@@ -147,7 +184,10 @@ mod tests {
     #[test]
     fn expands_the_casual_tokens() {
         let c = ctx();
-        assert_eq!(expand("CQ CQ DE {MYCALL} {MYCALL} K", &c), "CQ CQ DE W9XYZ W9XYZ K");
+        assert_eq!(
+            expand("CQ CQ DE {MYCALL} {MYCALL} K", &c),
+            "CQ CQ DE W9XYZ W9XYZ K"
+        );
         assert_eq!(expand("{MYCALL}", &c), "W9XYZ");
         // The default F2 answer macro.
         assert_eq!(
@@ -159,7 +199,10 @@ mod tests {
 
     #[test]
     fn empty_fields_do_not_leave_double_spaces() {
-        let c = CwContext { mycall: "W9XYZ", ..Default::default() };
+        let c = CwContext {
+            mycall: "W9XYZ",
+            ..Default::default()
+        };
         // No worked call yet and no name → tokens collapse cleanly.
         assert_eq!(expand("! DE {MYCALL} NAME {NAME} K", &c), "DE W9XYZ NAME K");
     }
@@ -202,6 +245,9 @@ mod tests {
         assert!(s[s.len() - 1].abs() < 0.1, "soft decay");
 
         assert!(morse_samples("", wpm, 600.0, sr).is_empty());
-        assert!(morse_samples("#", wpm, 600.0, sr).is_empty(), "unsupported char keys nothing");
+        assert!(
+            morse_samples("#", wpm, 600.0, sr).is_empty(),
+            "unsupported char keys nothing"
+        );
     }
 }

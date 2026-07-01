@@ -6,9 +6,7 @@
 use serde::Serialize;
 
 use crate::advisor::{PropAdvisor, PropAdvisory};
-use crate::dxped::{
-    DxpedDashboard, DxpeditionPlan, DxpeditionTracker, NeedsSet, OperatorNeeds,
-};
+use crate::dxped::{DxpedDashboard, DxpeditionPlan, DxpeditionTracker, NeedsSet, OperatorNeeds};
 use crate::geo::compass_octant;
 use crate::model::{Band, Confidence, PathSpot, PropMode, SpaceWx};
 use crate::opening::{
@@ -438,7 +436,10 @@ mod tests {
         assert_eq!(s.source, "offline");
         assert_eq!(s.as_of, 1_700_000_000);
         // Neutral mid-cycle prior, NOT all-zero (zero SFI reads as a dead band).
-        assert_eq!(s.space_wx.sfi, 120.0, "offline uses the neutral SpaceWx default");
+        assert_eq!(
+            s.space_wx.sfi, 120.0,
+            "offline uses the neutral SpaceWx default"
+        );
         assert!(s.openings.is_empty(), "offline must invent no openings");
         assert!(s.spots.is_empty(), "offline must invent no spots");
         assert!(

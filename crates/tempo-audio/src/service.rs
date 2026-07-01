@@ -398,10 +398,18 @@ impl RadioLoop {
                     eng.settings().dial_hz(),
                     eng.settings().rig_mode(), // DATA submode (PKTUSB/…) when data_mode is on
                     eng.take_cat_reprobe(),
-                    if can_retune { eng.take_immediate_retune() } else { false },
+                    if can_retune {
+                        eng.take_immediate_retune()
+                    } else {
+                        false
+                    },
                     // Split is a retune-class command — same mid-TX guard, same
                     // leave-it-pending semantics when keyed.
-                    if can_retune { eng.take_split_request() } else { None },
+                    if can_retune {
+                        eng.take_split_request()
+                    } else {
+                        None
+                    },
                     fm,
                 )
             };
@@ -567,7 +575,10 @@ impl RadioLoop {
                 if self.cat_ok != Some(true) {
                     self.cat_ok = Some(true);
                     if let Ok(mut eng) = engine.lock() {
-                        eng.set_cat_status(Some(true), "CAT confirmed — rig accepted a command".to_string());
+                        eng.set_cat_status(
+                            Some(true),
+                            "CAT confirmed — rig accepted a command".to_string(),
+                        );
                     }
                 }
             } else if self.tx_until_ms.is_none()
@@ -620,7 +631,11 @@ impl RadioLoop {
             // the rig was commanded into (and any rejection) — emitted only on a real change
             // or failure, so it never spams. A success implies CAT is alive (Some(true)).
             if let Some(note) = retune_note {
-                let ok = if note.starts_with("rig set to") { Some(true) } else { self.cat_ok };
+                let ok = if note.starts_with("rig set to") {
+                    Some(true)
+                } else {
+                    self.cat_ok
+                };
                 if let Ok(mut eng) = engine.lock() {
                     eng.set_cat_status(ok, note);
                 }
@@ -644,7 +659,7 @@ impl RadioLoop {
             };
             #[cfg(not(feature = "serial"))]
             let _ = &winkeyer_port; // only the serial build keys a WinKeyer
-            // Switched away from the WinKeyer backend → release its serial port.
+                                    // Switched away from the WinKeyer backend → release its serial port.
             #[cfg(feature = "serial")]
             if winkeyer_port.is_none() {
                 self.winkeyer = None;
@@ -665,7 +680,11 @@ impl RadioLoop {
                 // fall through to the CAT keyer so CW still goes out.
                 #[cfg(feature = "serial")]
                 if let Some(port) = &winkeyer_port {
-                    let reopen = self.winkeyer.as_ref().map(|(p, _)| p != port).unwrap_or(true);
+                    let reopen = self
+                        .winkeyer
+                        .as_ref()
+                        .map(|(p, _)| p != port)
+                        .unwrap_or(true);
                     if reopen {
                         self.winkeyer = crate::winkeyer::WinKeyer::open(port)
                             .ok()
@@ -682,33 +701,34 @@ impl RadioLoop {
                     }
                 }
                 if !handled {
-                if soundcard {
-                    // Key a generated tone (rig in USB): PTT + play, drop PTT after.
-                    let mut buf: Vec<f32> = Vec::new();
-                    for text in &items {
-                        buf.extend(tempo_core::cw::morse_samples(
-                            text,
-                            wpm,
-                            pitch,
-                            ft1::SAMPLE_RATE as u32,
-                        ));
+                    if soundcard {
+                        // Key a generated tone (rig in USB): PTT + play, drop PTT after.
+                        let mut buf: Vec<f32> = Vec::new();
+                        for text in &items {
+                            buf.extend(tempo_core::cw::morse_samples(
+                                text,
+                                wpm,
+                                pitch,
+                                ft1::SAMPLE_RATE as u32,
+                            ));
+                        }
+                        if !buf.is_empty() {
+                            let secs = buf.len() as f32 / ft1::SAMPLE_RATE;
+                            let _ = rig.ptt(true);
+                            backend.play(&buf);
+                            let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
+                            self.tx_until_ms =
+                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        }
+                    } else {
+                        // CAT keyer: the rig generates CW from text via send_morse.
+                        if wpm != self.last_cw_wpm && rig.set_keyspd(wpm).is_ok() {
+                            self.last_cw_wpm = wpm;
+                        }
+                        for text in &items {
+                            let _ = rig.send_morse(text);
+                        }
                     }
-                    if !buf.is_empty() {
-                        let secs = buf.len() as f32 / ft1::SAMPLE_RATE;
-                        let _ = rig.ptt(true);
-                        backend.play(&buf);
-                        let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                    }
-                } else {
-                    // CAT keyer: the rig generates CW from text via send_morse.
-                    if wpm != self.last_cw_wpm && rig.set_keyspd(wpm).is_ok() {
-                        self.last_cw_wpm = wpm;
-                    }
-                    for text in &items {
-                        let _ = rig.send_morse(text);
-                    }
-                }
                 }
             }
         }
@@ -969,7 +989,12 @@ impl RadioLoop {
                             eng.broadcast(t);
                         }
                     }
-                    WsjtxInbound::Reply { message, snr, delta_freq, .. } => {
+                    WsjtxInbound::Reply {
+                        message,
+                        snr,
+                        delta_freq,
+                        ..
+                    } => {
                         // The Reply datagram (a logger/JTAlert/companion double-click)
                         // carries the exact clicked line, its SNR, and the DX's audio
                         // offset — pass all three so the sequencer resumes from that
@@ -1018,9 +1043,7 @@ impl RadioLoop {
             // FT8/FT4 only — their wave layout (lead-in + costas sync) is what
             // makes a head-truncated over decodable; other tiers need a full fit.
             let allowed_deficit = match eng.tier() {
-                tempo_app::dto::Tier::Ft8 | tempo_app::dto::Tier::Ft4 => {
-                    LATE_START_MAX_MS
-                }
+                tempo_app::dto::Tier::Ft8 | tempo_app::dto::Tier::Ft4 => LATE_START_MAX_MS,
                 _ => 0.0,
             };
             let deficit_ms = (need_ms - room_ms).max(0.0);
@@ -1031,8 +1054,7 @@ impl RadioLoop {
                 let _ = eng.take_immediate_tx();
                 let waves = eng.poll_tx(slot_now);
                 if !waves.is_empty() {
-                    let trim_samples =
-                        ((deficit_ms / 1000.0) * ft1::SAMPLE_RATE as f64) as usize;
+                    let trim_samples = ((deficit_ms / 1000.0) * ft1::SAMPLE_RATE as f64) as usize;
                     // Must leave a transmittable remainder (always true within
                     // the 2 s window — FT8 keeps ≥ 10.6 s of signal).
                     let trimmable = waves
@@ -1065,10 +1087,7 @@ impl RadioLoop {
                             // hold PTT past the boundary into the partner's
                             // period. Strip it; it carries nothing.
                             if i == last {
-                                let end = w2
-                                    .iter()
-                                    .rposition(|&x| x != 0.0)
-                                    .map_or(0, |p| p + 1);
+                                let end = w2.iter().rposition(|&x| x != 0.0).map_or(0, |p| p + 1);
                                 w2 = &w2[..end];
                             }
                             secs += w2.len() as f32 / ft1::SAMPLE_RATE;
@@ -1255,7 +1274,11 @@ impl RadioLoop {
                                 fd.log[self.last_fd_qsos.min(fd.log.len())..].to_vec();
                             let mycall = snap.mycall.clone();
                             let myexch = format!("{} {}", fd.my_class, fd.my_section);
-                            let contest = if fd.event == "wfd" { "WFD" } else { "ARRL-FIELD-DAY" };
+                            let contest = if fd.event == "wfd" {
+                                "WFD"
+                            } else {
+                                "ARRL-FIELD-DAY"
+                            };
                             let dial_mhz = cur_dial as f64 / 1e6;
                             let fallback_unix = (now / 1000.0) as u64;
                             std::thread::spawn(move || {
@@ -1267,7 +1290,11 @@ impl RadioLoop {
                                     };
                                     // Per-QSO log time (a multi-contact batch must not
                                     // collapse onto one wall-clock second).
-                                    let when = if q.when_unix > 0 { q.when_unix } else { fallback_unix };
+                                    let when = if q.when_unix > 0 {
+                                        q.when_unix
+                                    } else {
+                                        fallback_unix
+                                    };
                                     if !n3_host.is_empty() {
                                         let push = tempo_net::n3fjp::N3fjpQso {
                                             call: q.call.clone(),
@@ -1312,7 +1339,8 @@ impl RadioLoop {
                                                 })
                                             ),
                                         };
-                                        if let Err(e) = tempo_net::n1mm::send_contact(&n1_addr, &c) {
+                                        if let Err(e) = tempo_net::n1mm::send_contact(&n1_addr, &c)
+                                        {
                                             eprintln!("tempo: N1MM broadcast failed: {e}");
                                         }
                                     }
@@ -1433,9 +1461,7 @@ fn emit_rx_decodes(
             ));
         }
         if sinks.psk.is_some() {
-            if let Some(spot) =
-                build_spot(&d.message, d.snr, d.freq, tier, cur_dial, now_secs)
-            {
+            if let Some(spot) = build_spot(&d.message, d.snr, d.freq, tier, cur_dial, now_secs) {
                 psk_spots.push(spot);
             }
         }
@@ -1702,7 +1728,10 @@ fn open_cat(t: &Transport, dial_hz: u64, mode: &str, ptt_mode: PttMode) -> RigOp
             rig,
             None, // we didn't spawn it — leave the existing daemon alone
             ok,
-            format!("Sharing the rigctld already on :{} — {detail}", t.rigctld_port),
+            format!(
+                "Sharing the rigctld already on :{} — {detail}",
+                t.rigctld_port
+            ),
         );
     }
     match spawn_rigctld(t.rig_model, &t.serial_port, t.baud, t.rigctld_port) {
@@ -2008,9 +2037,29 @@ mod tests {
             let mut state = loop_state();
             let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
             // First step picks the offset up off the engine; second applies it.
-            state.step(&engine, &mut backend, &mut rig, &sinks, now, &mut ra, &mut rr).unwrap();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                )
+                .unwrap();
             assert_eq!(state.clock_offset_ms, offset_ms, "offset read from engine");
-            state.step(&engine, &mut backend, &mut rig, &sinks, now, &mut ra, &mut rr).unwrap();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                )
+                .unwrap();
             // Bind out of the tail expression so the MutexGuard temporary drops
             // before `engine` (the local) does — else the guard outlives its lock.
             let next_slot_ms = engine.lock().unwrap().snapshot().radio.next_slot_ms;
@@ -2018,7 +2067,11 @@ mod tests {
         };
         // A 3 s clock skew shifts the next-slot countdown by 3 s (mod the 4 s slot)
         // — proof the offset reaches the slot clock, not just the UI chip.
-        assert_ne!(next_ms(0), next_ms(3000), "clock offset must move the slot grid");
+        assert_ne!(
+            next_ms(0),
+            next_ms(3000),
+            "clock offset must move the slot grid"
+        );
     }
 
     #[test]
@@ -2036,7 +2089,15 @@ mod tests {
         let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
 
         state
-            .step(&engine, &mut backend, &mut rig, &sinks, 100.0, &mut ra, &mut rr)
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+            )
             .unwrap();
 
         assert!(!rig.keyed, "PTT dropped immediately on Stop TX");
@@ -2164,7 +2225,10 @@ mod tests {
         // open_rig must SHARE it (no spawn), not fight for the serial port.
         let t = cat_transport(port, None);
         let (_rig, proc, ok, detail) = open_rig(&t, 14_074_000, "USB");
-        assert!(proc.is_none(), "shared the existing rigctld — did not spawn one");
+        assert!(
+            proc.is_none(),
+            "shared the existing rigctld — did not spawn one"
+        );
         assert_eq!(ok, Some(true), "connected through it: {detail}");
         assert!(detail.contains("Sharing"), "got: {detail}");
     }

@@ -34,9 +34,9 @@ pub enum UsbSerialChip {
 /// not needed — the vendor id is what selects the driver family.)
 pub fn usb_serial_chip(vid: u16) -> UsbSerialChip {
     match vid {
-        0x10C4 => UsbSerialChip::Cp210x, // Silicon Laboratories
-        0x0403 => UsbSerialChip::Ftdi,   // Future Technology Devices Intl
-        0x1A86 => UsbSerialChip::Ch340,  // QinHeng Electronics (WCH)
+        0x10C4 => UsbSerialChip::Cp210x,   // Silicon Laboratories
+        0x0403 => UsbSerialChip::Ftdi,     // Future Technology Devices Intl
+        0x1A86 => UsbSerialChip::Ch340,    // QinHeng Electronics (WCH)
         0x067B => UsbSerialChip::Prolific, // Prolific Technology
         _ => UsbSerialChip::Other,
     }
@@ -157,8 +157,26 @@ fn normalize(s: &str) -> String {
 /// Manufacturer / non-model words to ignore when extracting a rig's model tokens
 /// from a friendly name (so "Icom" in "Icom IC-705" never matches a product string).
 const MAKER_WORDS: &[&str] = &[
-    "ICOM", "YAESU", "KENWOOD", "ELECRAFT", "FLEXRADIO", "TENTEC", "XIEGU", "QRP", "LABS", "ALINCO",
-    "HAMLIB", "FLRIG", "RIGCTL", "RIGCTLD", "REMOTE", "SAT", "EMUL", "SLICE", "POWERSDR", "SMARTSDR",
+    "ICOM",
+    "YAESU",
+    "KENWOOD",
+    "ELECRAFT",
+    "FLEXRADIO",
+    "TENTEC",
+    "XIEGU",
+    "QRP",
+    "LABS",
+    "ALINCO",
+    "HAMLIB",
+    "FLRIG",
+    "RIGCTL",
+    "RIGCTLD",
+    "REMOTE",
+    "SAT",
+    "EMUL",
+    "SLICE",
+    "POWERSDR",
+    "SMARTSDR",
     "DUMMY",
 ];
 
@@ -219,7 +237,11 @@ pub struct DetectedRig {
 
 /// Join enumerated USB ports + audio device names into per-rig suggestions. Pure, so
 /// the matching/pairing is testable; the command layer supplies the live enumeration.
-pub fn detect_rigs(ports: &[crate::ports::UsbPort], audio: &[String], os: HostOs) -> Vec<DetectedRig> {
+pub fn detect_rigs(
+    ports: &[crate::ports::UsbPort],
+    audio: &[String],
+    os: HostOs,
+) -> Vec<DetectedRig> {
     ports
         .iter()
         .map(|p| {
@@ -283,31 +305,54 @@ mod tests {
         // Windows needs a download; *nix/mac bundle CP210x.
         let w = driver_hint(UsbSerialChip::Cp210x, HostOs::Windows).unwrap();
         assert!(!w.bundled && w.url.contains("silabs"));
-        assert!(driver_hint(UsbSerialChip::Cp210x, HostOs::Linux).unwrap().bundled);
-        assert!(driver_hint(UsbSerialChip::Ftdi, HostOs::MacOs).unwrap().bundled);
+        assert!(
+            driver_hint(UsbSerialChip::Cp210x, HostOs::Linux)
+                .unwrap()
+                .bundled
+        );
+        assert!(
+            driver_hint(UsbSerialChip::Ftdi, HostOs::MacOs)
+                .unwrap()
+                .bundled
+        );
         // A native CDC device needs nothing.
         assert_eq!(driver_hint(UsbSerialChip::Other, HostOs::Windows), None);
     }
 
     #[test]
     fn matches_native_usb_rig_from_product_string() {
-        assert_eq!(match_rig_model("IC-705", "Icom Inc."), Some((3085, "Icom IC-705")));
+        assert_eq!(
+            match_rig_model("IC-705", "Icom Inc."),
+            Some((3085, "Icom IC-705"))
+        );
         assert_eq!(match_rig_model("IC-7300", ""), Some((3073, "Icom IC-7300")));
         // Case / spacing / dash insensitive.
-        assert_eq!(match_rig_model("ft991a", "Yaesu").map(|(m, _)| m), Some(1035));
-        assert_eq!(match_rig_model("TS-590SG", "Kenwood").map(|(m, _)| m), Some(2037));
+        assert_eq!(
+            match_rig_model("ft991a", "Yaesu").map(|(m, _)| m),
+            Some(1035)
+        );
+        assert_eq!(
+            match_rig_model("TS-590SG", "Kenwood").map(|(m, _)| m),
+            Some(2037)
+        );
     }
 
     #[test]
     fn longest_token_wins_for_overlapping_models() {
         // "K3S" must beat "K3" (Elecraft) — the longer, more specific token.
-        assert_eq!(match_rig_model("Elecraft K3S", "").map(|(m, _)| m), Some(2043));
+        assert_eq!(
+            match_rig_model("Elecraft K3S", "").map(|(m, _)| m),
+            Some(2043)
+        );
     }
 
     #[test]
     fn generic_bridge_product_is_no_rig_match() {
         // A generic CP210x descriptor identifies the chip, not the rig.
-        assert_eq!(match_rig_model("CP2102 USB to UART Bridge Controller", "Silicon Labs"), None);
+        assert_eq!(
+            match_rig_model("CP2102 USB to UART Bridge Controller", "Silicon Labs"),
+            None
+        );
         assert_eq!(match_rig_model("USB-Serial Controller", "Prolific"), None);
         assert_eq!(match_rig_model("", ""), None);
     }
@@ -326,7 +371,10 @@ mod tests {
     fn detect_native_usb_rig_full_resolution() {
         // An IC-705 (native USB, Silicon Labs bridge) + its USB-Audio CODEC.
         let ports = vec![port("COM5", 0x10C4, "IC-705", "Icom Inc.")];
-        let audio = vec!["Microphone (USB Audio CODEC)".to_string(), "Realtek HD".to_string()];
+        let audio = vec![
+            "Microphone (USB Audio CODEC)".to_string(),
+            "Realtek HD".to_string(),
+        ];
         let got = detect_rigs(&ports, &audio, HostOs::Windows);
         assert_eq!(got.len(), 1);
         let r = &got[0];
@@ -335,7 +383,10 @@ mod tests {
         assert_eq!(r.chip, UsbSerialChip::Cp210x);
         // Windows → CP210x driver hint present.
         assert!(r.driver.as_ref().is_some_and(|d| !d.bundled));
-        assert_eq!(r.suggested_audio.as_deref(), Some("Microphone (USB Audio CODEC)"));
+        assert_eq!(
+            r.suggested_audio.as_deref(),
+            Some("Microphone (USB Audio CODEC)")
+        );
     }
 
     #[test]
@@ -352,11 +403,11 @@ mod tests {
 
     #[test]
     fn pair_audio_prefers_model_named_device_over_generic() {
-        let audio = vec![
-            "Generic USB Audio".to_string(),
-            "IC-705 Audio".to_string(),
-        ];
-        assert_eq!(pair_audio("IC-705", &audio).as_deref(), Some("IC-705 Audio"));
+        let audio = vec!["Generic USB Audio".to_string(), "IC-705 Audio".to_string()];
+        assert_eq!(
+            pair_audio("IC-705", &audio).as_deref(),
+            Some("IC-705 Audio")
+        );
         // No model-named device → falls back to the generic USB-audio device.
         assert_eq!(
             pair_audio("FT-991A", &["Generic USB Audio".into()]).as_deref(),

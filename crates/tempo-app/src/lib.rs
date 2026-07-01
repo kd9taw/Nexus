@@ -137,10 +137,18 @@ impl AppState {
             out.push(trim(band));
         }
         // Then the most-recently-active directed threads (by last-message slot), capped.
-        let mut directed: Vec<&Conversation> =
-            self.conversations.values().filter(|c| c.peer != "*").collect();
+        let mut directed: Vec<&Conversation> = self
+            .conversations
+            .values()
+            .filter(|c| c.peer != "*")
+            .collect();
         directed.sort_by_key(|c| std::cmp::Reverse(c.messages.last().map(|m| m.slot).unwrap_or(0)));
-        out.extend(directed.into_iter().take(MAX_PERSIST_THREADS).map(|c| trim(c)));
+        out.extend(
+            directed
+                .into_iter()
+                .take(MAX_PERSIST_THREADS)
+                .map(|c| trim(c)),
+        );
         out
     }
 
@@ -328,7 +336,12 @@ impl AppState {
     /// FIRST time this call — the engine records one own-TX band-activity row per released
     /// message (so a store-and-forward message shows when it actually goes on the air, not
     /// at compose time, and not once per resend).
-    pub fn due_frames(&mut self, slot: u64, window: u64, backoff: u64) -> (Vec<String>, Vec<String>) {
+    pub fn due_frames(
+        &mut self,
+        slot: u64,
+        window: u64,
+        backoff: u64,
+    ) -> (Vec<String>, Vec<String>) {
         // `self.store` and `self.inbox.roster` are disjoint fields, so this
         // mutable/immutable split borrow is sound.
         let mut frames = Vec::new();
@@ -449,7 +462,11 @@ impl AppState {
     /// RR73 confirms one message, FIFO) — drives the real "Delivered ✓".
     fn mark_conversation_delivered(&mut self, peer: &str) {
         if let Some(conv) = self.conversations.get_mut(peer) {
-            if let Some(m) = conv.messages.iter_mut().find(|m| m.outbound && !m.delivered) {
+            if let Some(m) = conv
+                .messages
+                .iter_mut()
+                .find(|m| m.outbound && !m.delivered)
+            {
                 m.delivered = true;
             }
         }
@@ -651,10 +668,20 @@ mod tests {
         app.set_identity("K2DEFX", "FN42");
         assert_eq!(app.mycall, "K2DEFX");
         assert_eq!(app.mygrid, "FN42");
-        assert_eq!(app.inbox.mycall, "K2DEFX", "inbox attribution rebound to the new call");
-        assert!(app.conversation("W9XYZ").is_some(), "directed thread preserved");
+        assert_eq!(
+            app.inbox.mycall, "K2DEFX",
+            "inbox attribution rebound to the new call"
+        );
+        assert!(
+            app.conversation("W9XYZ").is_some(),
+            "directed thread preserved"
+        );
         assert!(app.conversation("*").is_some(), "band feed preserved");
-        assert_eq!(app.store.pending(), pending_before, "pending queue preserved");
+        assert_eq!(
+            app.store.pending(),
+            pending_before,
+            "pending queue preserved"
+        );
     }
 
     #[test]
@@ -668,9 +695,15 @@ mod tests {
         // A fresh session (e.g. app restart) restores them.
         let mut restored = AppState::new("K2DEF", "FN31");
         restored.load_conversations(saved);
-        assert!(restored.conversation("W9XYZ").is_some(), "directed thread restored");
+        assert!(
+            restored.conversation("W9XYZ").is_some(),
+            "directed thread restored"
+        );
         assert!(restored.conversation("*").is_some(), "band feed restored");
-        assert_eq!(restored.conversation("W9XYZ").unwrap().messages[0].text, "MEET AT NOON");
+        assert_eq!(
+            restored.conversation("W9XYZ").unwrap().messages[0].text,
+            "MEET AT NOON"
+        );
     }
 
     #[test]
@@ -681,8 +714,15 @@ mod tests {
             app.send_message(&format!("W{i}AA"), "HI");
         }
         let saved = app.export_conversations();
-        assert!(saved.len() <= 201, "thread count bounded (200 directed + band), got {}", saved.len());
-        assert!(saved.iter().any(|c| c.peer == "*"), "band feed is always kept");
+        assert!(
+            saved.len() <= 201,
+            "thread count bounded (200 directed + band), got {}",
+            saved.len()
+        );
+        assert!(
+            saved.iter().any(|c| c.peer == "*"),
+            "band feed is always kept"
+        );
     }
 
     #[test]
@@ -692,9 +732,18 @@ mod tests {
         app.send_message("K7ABC", "HELLO");
         app.select_peer("W9XYZ");
         app.archive_conversation("W9XYZ");
-        assert!(app.conversation("W9XYZ").is_none(), "archived thread removed");
-        assert!(app.conversation("K7ABC").is_some(), "other threads preserved");
-        assert_eq!(app.active_peer, None, "active peer cleared when its thread is archived");
+        assert!(
+            app.conversation("W9XYZ").is_none(),
+            "archived thread removed"
+        );
+        assert!(
+            app.conversation("K7ABC").is_some(),
+            "other threads preserved"
+        );
+        assert_eq!(
+            app.active_peer, None,
+            "active peer cleared when its thread is archived"
+        );
     }
 
     #[test]
@@ -746,15 +795,24 @@ mod tests {
             "FT8 decodes must not create a Tempo conversation"
         );
         // The roster still learns the station (inbox.observe runs for Operate).
-        assert!(app.inbox.roster.get("W9XYZ").is_some(), "roster still updates");
+        assert!(
+            app.inbox.roster.get("W9XYZ").is_some(),
+            "roster still updates"
+        );
         // Switching to FT1 resumes real chat folding (no replay of the FT8 frames).
         app.set_tier(Tier::Ft1);
         app.observe(&[dec("K2DEF N0ABC EM48", -8)], 10);
         for (i, f) in text::chunk("HI SETH", 'B').iter().enumerate() {
             app.observe(&[dec(f, -8)], 11 + i as u64);
         }
-        assert!(app.conversation("N0ABC").is_some(), "FT1 chat still threads");
-        assert!(app.conversation("W9XYZ").is_none(), "no FT8 replay on FT1 switch");
+        assert!(
+            app.conversation("N0ABC").is_some(),
+            "FT1 chat still threads"
+        );
+        assert!(
+            app.conversation("W9XYZ").is_none(),
+            "no FT8 replay on FT1 switch"
+        );
     }
 
     #[test]
@@ -774,20 +832,41 @@ mod tests {
             delivered: false,
             ack_id: None,
         };
-        let outbound = ChatMessage { outbound: true, ..inbound(Tier::Ft1) };
+        let outbound = ChatMessage {
+            outbound: true,
+            ..inbound(Tier::Ft1)
+        };
         app.load_conversations(vec![
             // Phantom: all inbound, FT8 tier → dropped.
-            Conversation { peer: "PHANTOM".into(), messages: vec![inbound(Tier::Ft8)] },
+            Conversation {
+                peer: "PHANTOM".into(),
+                messages: vec![inbound(Tier::Ft8)],
+            },
             // Real FT1 inbound chat → kept.
-            Conversation { peer: "REALRX".into(), messages: vec![inbound(Tier::Ft1)] },
+            Conversation {
+                peer: "REALRX".into(),
+                messages: vec![inbound(Tier::Ft1)],
+            },
             // Operator participated (outbound), even if FT8 tier → kept.
-            Conversation { peer: "REALTX".into(), messages: vec![outbound] },
+            Conversation {
+                peer: "REALTX".into(),
+                messages: vec![outbound],
+            },
             // The band feed is always kept.
-            Conversation { peer: "*".into(), messages: vec![inbound(Tier::Ft8)] },
+            Conversation {
+                peer: "*".into(),
+                messages: vec![inbound(Tier::Ft8)],
+            },
         ]);
         assert!(app.conversation("PHANTOM").is_none(), "FT8 phantom dropped");
-        assert!(app.conversation("REALRX").is_some(), "real FT1 inbound kept");
-        assert!(app.conversation("REALTX").is_some(), "operator-participated kept");
+        assert!(
+            app.conversation("REALRX").is_some(),
+            "real FT1 inbound kept"
+        );
+        assert!(
+            app.conversation("REALTX").is_some(),
+            "operator-participated kept"
+        );
         assert!(app.conversation("*").is_some(), "band feed kept");
     }
 
@@ -918,7 +997,11 @@ pub const FD_BONUSES: &[(&str, &str, u32)] = &[
     ("w1aw-bulletin", "W1AW bulletin copied", 100),
     ("natural-power", "Natural power QSOs", 100),
     ("site-visit-official", "Site visit: elected official", 100),
-    ("site-visit-agency", "Site visit: agency representative", 100),
+    (
+        "site-visit-agency",
+        "Site visit: agency representative",
+        100,
+    ),
     ("gota", "GOTA station max", 100),
     ("youth", "Youth participation", 100),
     ("web-submission", "Web submission", 50),

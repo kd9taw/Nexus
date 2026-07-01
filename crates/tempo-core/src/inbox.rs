@@ -252,7 +252,12 @@ mod tests {
             inbox.observe(&[dec(f)], (i as u64) + 1);
         }
         let mine = inbox.for_me();
-        assert_eq!(mine.len(), 1, "the '...73' message reassembled: {:?}", inbox.messages);
+        assert_eq!(
+            mine.len(),
+            1,
+            "the '...73' message reassembled: {:?}",
+            inbox.messages
+        );
         assert_eq!(mine[0].from.as_deref(), Some("W9XYZ"));
         assert_eq!(mine[0].text, text::normalize("MEET AT NOON ES 73"));
     }
@@ -284,7 +289,11 @@ mod tests {
         for (i, f) in frames.iter().enumerate() {
             inbox.observe(&[dec(f)], (i as u64) + 1);
         }
-        assert_eq!(inbox.take_owed_acks().len(), 1, "owe an ACK on first receipt");
+        assert_eq!(
+            inbox.take_owed_acks().len(),
+            1,
+            "owe an ACK on first receipt"
+        );
         // Sender resends (our ACK was lost). The display dedups, but we MUST re-owe.
         inbox.observe(&[dec(id_frame)], 10);
         for (i, f) in frames.iter().enumerate() {
@@ -348,7 +357,10 @@ mod tests {
         inbox.observe(&[dec("K2DEF W9XYZ RR73")], 0); // roger addressed to me
         inbox.observe(&[dec("GE TNX QSO ALL")], 1); // following courtesy free text
         let last = inbox.messages.last().expect("the courtesy line threaded");
-        assert!(!last.directed_to_me, "sign-off cleared the directed-to-me context");
+        assert!(
+            !last.directed_to_me,
+            "sign-off cleared the directed-to-me context"
+        );
     }
 
     #[test]

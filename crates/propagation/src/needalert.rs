@@ -204,7 +204,11 @@ pub fn score(
             info.entity,
             band
         ),
-        NeedTag::NewGrid => format!("New grid — {} ({})", g4.as_deref().unwrap_or("?"), info.entity),
+        NeedTag::NewGrid => format!(
+            "New grid — {} ({})",
+            g4.as_deref().unwrap_or("?"),
+            info.entity
+        ),
         NeedTag::Confirm => format!("Confirm — {}", info.entity),
         // Dxped/Pota/Sota are appended post-scoring (command layer) — never the
         // headline tag; arms exist only for match exhaustiveness.
@@ -242,7 +246,16 @@ pub fn rank(
         .filter_map(|s| {
             // score() owns the award logic + mode class; attach the exact frequency
             // (when this Heard carried one) so click-to-work can QSY to the spot.
-            score(&s.call, &s.band, &s.mode, s.grid.as_deref(), needs, worked_zones, worked_grids).map(|mut a| {
+            score(
+                &s.call,
+                &s.band,
+                &s.mode,
+                s.grid.as_deref(),
+                needs,
+                worked_zones,
+                worked_grids,
+            )
+            .map(|mut a| {
                 a.freq_mhz = s.freq_mhz;
                 a.admitted_at = s.admitted_at;
                 a.evidence = s.evidence.clone();
@@ -285,8 +298,6 @@ pub fn near_me_radius_km(band: Band) -> f64 {
 /// opening or not) lives on the Needed board forever. Es skip starts ~500 km; 400
 /// keeps strong short-skip while rejecting locals.
 pub const VHF_MIN_DX_KM: f64 = 400.0;
-
-
 
 /// The stations a receiver NEAR the operator (`me` lat/lon) is hearing, drawn from
 /// reception reports (PSK Reporter / RBN). THIS is the needed board's real value:
@@ -514,7 +525,7 @@ mod tests {
         assert_eq!(skimmer_grid("W3LPL"), Some("FM19LG"));
         assert_eq!(skimmer_grid("KM3T"), Some("FN42ET"));
         assert_eq!(skimmer_grid("N6TV"), Some("CM97CF")); // California
-        // RBN reporter suffix is stripped before lookup.
+                                                          // RBN reporter suffix is stripped before lookup.
         assert_eq!(skimmer_grid("W3LPL-#"), Some("FM19LG"));
         // Portable-token skimmers keep their token.
         assert_eq!(skimmer_grid("EA8/DF4UE-#"), Some("IL38BP"));
@@ -557,8 +568,14 @@ mod tests {
         ];
         let out = workable_by_getting_out(&reports, "KD9TAW");
         let calls: Vec<&str> = out.iter().map(|h| h.call.as_str()).collect();
-        assert!(calls.contains(&"EA5DX"), "DX in my reach surfaced: {calls:?}");
-        assert!(!calls.contains(&"JA1ZZ"), "DX outside my reach not surfaced");
+        assert!(
+            calls.contains(&"EA5DX"),
+            "DX in my reach surfaced: {calls:?}"
+        );
+        assert!(
+            !calls.contains(&"JA1ZZ"),
+            "DX outside my reach not surfaced"
+        );
         assert!(!calls.contains(&"KD9TAW"), "never surface myself");
     }
 
@@ -584,10 +601,19 @@ mod tests {
         ];
         let out = heard_near_me(&reports, me);
         let calls: Vec<&str> = out.iter().map(|h| h.call.as_str()).collect();
-        assert!(calls.contains(&"EA1ABC"), "near HF receiver kept: {calls:?}");
+        assert!(
+            calls.contains(&"EA1ABC"),
+            "near HF receiver kept: {calls:?}"
+        );
         assert!(!calls.contains(&"EA1XYZ"), "far HF receiver dropped");
-        assert!(!calls.contains(&"K6SIX"), "6m beyond the tighter VHF radius dropped");
-        assert!(calls.contains(&"W0HF"), "same distance on 20m kept (band-aware)");
+        assert!(
+            !calls.contains(&"K6SIX"),
+            "6m beyond the tighter VHF radius dropped"
+        );
+        assert!(
+            calls.contains(&"W0HF"),
+            "same distance on 20m kept (band-aware)"
+        );
     }
 
     #[test]
@@ -667,13 +693,19 @@ mod tests {
             freq_mhz: None,
         };
         // Local (EN52 ≈ 200 km — inside the groundwave/local-tropo rejection):
-        let local = vec![mk("K9LOC", "EN52", "RX1", "EN61"), mk("K9LOC", "EN52", "RX2", "EN62")];
+        let local = vec![
+            mk("K9LOC", "EN52", "RX1", "EN61"),
+            mk("K9LOC", "EN52", "RX2", "EN62"),
+        ];
         assert!(
             heard_near_me(&local, me).is_empty(),
             "a local 6m station must not surface, opening or not"
         );
         // Far Es DX (EM12, Texas ≈ 1300 km), same two near receivers → real row.
-        let far = vec![mk("K5DX", "EM12", "RX1", "EN61"), mk("K5DX", "EM12", "RX2", "EN62")];
+        let far = vec![
+            mk("K5DX", "EM12", "RX1", "EN61"),
+            mk("K5DX", "EM12", "RX2", "EN62"),
+        ];
         assert!(
             heard_near_me(&far, me).iter().any(|h| h.call == "K5DX"),
             "far Es DX with corroboration surfaces"
@@ -734,7 +766,16 @@ mod tests {
     fn worked_entity_on_a_new_band_is_a_new_band_slot() {
         let mut n = LogNeeds::new();
         n.add("JA1XYZ", "20m", "FT8", None, false); // Japan worked on 20m (zone 25 now worked)
-        let a = score("JA1ABC", "40m", "FT8", None, &n, n.worked_zones(), n.worked_grids()).unwrap();
+        let a = score(
+            "JA1ABC",
+            "40m",
+            "FT8",
+            None,
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+        )
+        .unwrap();
         assert_eq!(a.tags, vec![NeedTag::NewBand]); // zone 25 already worked → no NewZone
         assert_eq!(a.priority, 50);
     }
@@ -743,8 +784,17 @@ mod tests {
     fn worked_entity_in_a_new_zone_is_flagged_independently() {
         let mut n = LogNeeds::new();
         n.add("W1AW", "20m", "FT8", None, false); // USA via W1 → CQ zone 5
-                                            // W6 (California) is the SAME entity (USA) but CQ zone 3 → a new zone.
-        let a = score("W6XX", "20m", "FT8", None, &n, n.worked_zones(), n.worked_grids()).unwrap();
+                                                  // W6 (California) is the SAME entity (USA) but CQ zone 3 → a new zone.
+        let a = score(
+            "W6XX",
+            "20m",
+            "FT8",
+            None,
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+        )
+        .unwrap();
         assert_eq!(a.entity, "United States");
         assert!(a.tags.contains(&NeedTag::NewZone), "zone 3 not worked");
         assert_eq!(a.tags[0], NeedTag::NewZone, "new zone outranks confirm");
@@ -755,13 +805,31 @@ mod tests {
     fn fully_satisfied_spot_yields_no_alert() {
         let mut n = LogNeeds::new();
         n.add("W1AW", "20m", "FT8", None, true); // worked + confirmed, zone 5 worked
-        assert!(score("W1AW", "20m", "FT8", None, &n, n.worked_zones(), n.worked_grids()).is_none());
+        assert!(score(
+            "W1AW",
+            "20m",
+            "FT8",
+            None,
+            &n,
+            n.worked_zones(),
+            n.worked_grids()
+        )
+        .is_none());
     }
 
     #[test]
     fn unresolvable_call_yields_no_alert() {
         let needs = LogNeeds::new();
-        assert!(score("", "20m", "FT8", None, &needs, &HashSet::new(), &HashSet::new()).is_none());
+        assert!(score(
+            "",
+            "20m",
+            "FT8",
+            None,
+            &needs,
+            &HashSet::new(),
+            &HashSet::new()
+        )
+        .is_none());
     }
 
     #[test]
@@ -786,7 +854,7 @@ mod tests {
         assert_eq!(h.band, "20m");
         assert_eq!(h.call, "3Y0J");
         assert_eq!(h.freq_mhz, Some(14.074)); // exact freq carried for click-to-work
-        // A frequency on no known band → None.
+                                              // A frequency on no known band → None.
         assert!(heard_from_freq("X", 0.5, "FT8").is_none());
     }
 
@@ -809,7 +877,16 @@ mod tests {
         assert_eq!(ranked[0].mode, "CW");
         assert_eq!(ranked[0].freq_mhz, Some(14.025));
         // A band-level (geometry) need carries the class but no exact frequency.
-        let a = score("JA1XYZ", "20m", "SSB", None, &needs, &HashSet::new(), &HashSet::new()).unwrap();
+        let a = score(
+            "JA1XYZ",
+            "20m",
+            "SSB",
+            None,
+            &needs,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert_eq!(a.mode, "Phone");
         assert_eq!(a.freq_mhz, None);
     }
@@ -843,21 +920,42 @@ mod tests {
         assert_eq!(ranked.len(), 2, "same call+band, two modes → two rows");
         let modes: Vec<&str> = ranked.iter().map(|a| a.mode.as_str()).collect();
         assert!(modes.contains(&"CW"), "CW opportunity kept: {modes:?}");
-        assert!(modes.contains(&"Digital"), "Digital opportunity kept: {modes:?}");
+        assert!(
+            modes.contains(&"Digital"),
+            "Digital opportunity kept: {modes:?}"
+        );
     }
 
     #[test]
     fn fm_suffixed_band_still_resolves_the_dxcc_tier() {
         // "6m-fm" must strip to "6m" so a new entity on VHF-FM still scores DXCC.
         let needs = LogNeeds::new();
-        let a = score("JA1XYZ", "6m-fm", "FT8", None, &needs, &HashSet::new(), &HashSet::new()).unwrap();
+        let a = score(
+            "JA1XYZ",
+            "6m-fm",
+            "FT8",
+            None,
+            &needs,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert!(a.tags.contains(&NeedTag::NewEntity), "6m-fm resolves to 6m");
     }
 
     #[test]
     fn a_new_entity_that_is_also_a_new_zone_carries_both_tags() {
         let needs = LogNeeds::new(); // nothing worked
-        let a = score("VK0M", "20m", "FT8", None, &needs, &HashSet::new(), &HashSet::new()).unwrap();
+        let a = score(
+            "VK0M",
+            "20m",
+            "FT8",
+            None,
+            &needs,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert!(a.tags.contains(&NeedTag::NewEntity));
         assert!(a.tags.contains(&NeedTag::NewZone));
         assert_eq!(a.tags[0], NeedTag::NewEntity); // entity outranks zone
@@ -867,16 +965,48 @@ mod tests {
     fn unworked_grid_is_a_new_grid_need_independent_of_dxcc() {
         let mut n = LogNeeds::new();
         n.add("W1AW", "20m", "FT8", Some("FN31pr"), false); // FN31 now worked (4-char)
-        // Same worked entity/band/mode, but a NEW grid → NewGrid (outranks the Confirm).
-        let a = score("K1ABC", "20m", "FT8", Some("FN42"), &n, n.worked_zones(), n.worked_grids())
-            .unwrap();
-        assert!(a.tags.contains(&NeedTag::NewGrid), "FN42 unworked → new grid: {:?}", a.tags);
+                                                            // Same worked entity/band/mode, but a NEW grid → NewGrid (outranks the Confirm).
+        let a = score(
+            "K1ABC",
+            "20m",
+            "FT8",
+            Some("FN42"),
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+        )
+        .unwrap();
+        assert!(
+            a.tags.contains(&NeedTag::NewGrid),
+            "FN42 unworked → new grid: {:?}",
+            a.tags
+        );
         // A station in the already-worked grid → never a NewGrid (6-char collapses to FN31).
-        if let Some(b) = score("K1XYZ", "20m", "FT8", Some("FN31aa"), &n, n.worked_zones(), n.worked_grids()) {
-            assert!(!b.tags.contains(&NeedTag::NewGrid), "FN31 worked → not new: {:?}", b.tags);
+        if let Some(b) = score(
+            "K1XYZ",
+            "20m",
+            "FT8",
+            Some("FN31aa"),
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+        ) {
+            assert!(
+                !b.tags.contains(&NeedTag::NewGrid),
+                "FN31 worked → not new: {:?}",
+                b.tags
+            );
         }
         // No grid known (cluster spot) → never a NewGrid.
-        if let Some(c) = score("K2ABC", "20m", "FT8", None, &n, n.worked_zones(), n.worked_grids()) {
+        if let Some(c) = score(
+            "K2ABC",
+            "20m",
+            "FT8",
+            None,
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+        ) {
             assert!(!c.tags.contains(&NeedTag::NewGrid));
         }
     }

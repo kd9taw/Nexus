@@ -188,10 +188,7 @@ impl FieldDayLog {
     /// Per-mode QSO points (phone 1, CW/digital 2) — power multiplier and
     /// bonuses are applied at the score layer (engine), not here.
     pub fn qso_points(&self) -> u32 {
-        self.qsos
-            .iter()
-            .map(|q| qso_points_for_mode(&q.mode))
-            .sum()
+        self.qsos.iter().map(|q| qso_points_for_mode(&q.mode)).sum()
     }
 
     /// Export the log as ADIF records (one `<EOR>` per QSO).
@@ -264,7 +261,10 @@ fn now_unix() -> u64 {
 fn cabrillo_datetime(unix: u64) -> (String, String) {
     let secs_of_day = unix % 86_400;
     let days = (unix / 86_400) as i64;
-    let (h, m) = ((secs_of_day / 3600) as u32, ((secs_of_day % 3600) / 60) as u32);
+    let (h, m) = (
+        (secs_of_day / 3600) as u32,
+        ((secs_of_day % 3600) / 60) as u32,
+    );
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64;
@@ -498,14 +498,26 @@ mod tests {
         // K1ABC on 20m CW and 20m FT8 are two legal contacts).
         let mut log = FieldDayLog::new(
             "W9XYZ",
-            Exchange { class: "3A".into(), section: "WI".into() },
+            Exchange {
+                class: "3A".into(),
+                section: "WI".into(),
+            },
             "20m",
         );
         assert!(log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 100));
-        assert!(log.log_mode_at("K1ABC", "2A", "CT", "CW", 0, 110), "same call, new mode");
+        assert!(
+            log.log_mode_at("K1ABC", "2A", "CT", "CW", 0, 110),
+            "same call, new mode"
+        );
         assert!(log.log_mode_at("K1ABC", "2A", "CT", "PH", 0, 120));
-        assert!(!log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 130), "band+mode dupe");
-        assert!(!log.log_mode_at("k1abc", "2A", "CT", "dig", 0, 140), "case-insensitive dupe");
+        assert!(
+            !log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 130),
+            "band+mode dupe"
+        );
+        assert!(
+            !log.log_mode_at("k1abc", "2A", "CT", "dig", 0, 140),
+            "case-insensitive dupe"
+        );
         assert_eq!(log.qso_count(), 3);
         assert_eq!(log.qso_points(), 2 + 2 + 1, "DIG 2 + CW 2 + PH 1");
         // Cabrillo mode tokens per row.
@@ -526,7 +538,10 @@ mod tests {
         assert_eq!((d.as_str(), t.as_str()), ("2026-06-27", "1805"));
         let mut log = FieldDayLog::new(
             "W9XYZ",
-            Exchange { class: "3A".into(), section: "WI".into() },
+            Exchange {
+                class: "3A".into(),
+                section: "WI".into(),
+            },
             "20m",
         );
         assert!(log.log_at("K1ABC", "2A", "CT", 4, 1_782_583_500));

@@ -81,13 +81,14 @@ pub fn build_map_spots(now: i64, me_call: &str, spots: &[PathSpot], cap: usize) 
             entity: info.as_ref().map(|i| i.entity.to_string()),
             cq_zone: info.as_ref().map(|i| i.cq_zone),
         };
-        best
-            .entry(call)
+        best.entry(call)
             .and_modify(|e| {
                 // Prefer a precise fix, then "heard me", then the fresher spot.
                 let upgrade = (!cand.approx && e.approx)
                     || (cand.approx == e.approx && cand.heard_me && !e.heard_me)
-                    || (cand.approx == e.approx && cand.heard_me == e.heard_me && cand.age_secs < e.age_secs);
+                    || (cand.approx == e.approx
+                        && cand.heard_me == e.heard_me
+                        && cand.age_secs < e.age_secs);
                 if upgrade {
                     // Keep an already-learned freq/mode through a placement upgrade
                     // when the fresher report lacks them (e.g. cluster gave the freq,
@@ -163,7 +164,11 @@ mod tests {
         assert!(!dl.approx, "gridded → precise");
         let ja = out.iter().find(|m| m.call == "JA1XYZ").unwrap();
         assert!(ja.approx, "grid-less → DXCC centroid");
-        assert!(ja.lon > 100.0, "JA centroid is in the Far East, got lon {}", ja.lon);
+        assert!(
+            ja.lon > 100.0,
+            "JA centroid is in the Far East, got lon {}",
+            ja.lon
+        );
     }
 
     #[test]
@@ -210,7 +215,10 @@ mod tests {
         let out = build_map_spots(NOW, "KD9TAW", &[on20, on40], 100);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].band, "20m", "freshest+precise 20 m entry kept");
-        assert_eq!(out[0].freq_mhz, None, "40 m freq NOT fused onto the 20 m entry");
+        assert_eq!(
+            out[0].freq_mhz, None,
+            "40 m freq NOT fused onto the 20 m entry"
+        );
     }
 
     #[test]

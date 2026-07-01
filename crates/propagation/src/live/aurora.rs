@@ -92,9 +92,15 @@ mod tests {
         });
         let pts = parse_aurora(&v, 8.0, 2);
         assert_eq!(pts.len(), 2);
-        assert!(pts.iter().any(|p| (p.lon - 10.0).abs() < 0.1 && (p.lat - 66.0).abs() < 0.1));
+        assert!(pts
+            .iter()
+            .any(|p| (p.lon - 10.0).abs() < 0.1 && (p.lat - 66.0).abs() < 0.1));
         let west = pts.iter().find(|p| p.lon < 0.0).unwrap();
-        assert!((west.lon - (-160.0)).abs() < 0.1, "lon should normalize to -160, got {}", west.lon);
+        assert!(
+            (west.lon - (-160.0)).abs() < 0.1,
+            "lon should normalize to -160, got {}",
+            west.lon
+        );
     }
 
     #[test]

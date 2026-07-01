@@ -178,8 +178,8 @@ fn mode_from_comment(comment: &str) -> Option<ModeClass> {
         let m = match raw.to_ascii_uppercase().as_str() {
             "CW" => ModeClass::Cw,
             "SSB" | "PHONE" => ModeClass::Phone,
-            "FT8" | "FT4" | "FT1" | "RTTY" | "PSK" | "PSK31" | "PSK63" | "JT65" | "JT9"
-            | "JS8" | "MFSK" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
+            "FT8" | "FT4" | "FT1" | "RTTY" | "PSK" | "PSK31" | "PSK63" | "JT65" | "JT9" | "JS8"
+            | "MFSK" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
             _ => continue,
         };
         return Some(m);
@@ -540,7 +540,8 @@ mod tests {
         // "AM"/"USB"/"FM" are ordinary words/jargon, not a mode declaration — fall to freq.
         assert_eq!(classify_spot_mode(14.025, "QRV this AM"), ModeClass::Cw); // 20m CW, not AM-phone
         assert_eq!(classify_spot_mode(14.020, "via USB cable"), ModeClass::Cw); // not USB-sideband
-        assert_eq!(classify_spot_mode(7.025, "loud in FM here"), ModeClass::Cw); // not FM
+        assert_eq!(classify_spot_mode(7.025, "loud in FM here"), ModeClass::Cw);
+        // not FM
     }
 
     #[test]
@@ -554,14 +555,14 @@ mod tests {
         assert_eq!(classify_spot_mode(10.136, ""), ModeClass::Digital); // 30m: no phone, data
         assert_eq!(classify_spot_mode(3.510, ""), ModeClass::Cw); // 80m CW
         assert_eq!(classify_spot_mode(3.800, ""), ModeClass::Phone); // 80m phone
-        // 160m has a real data window now — FT8 at 1.840 is Digital, not CW.
+                                                                     // 160m has a real data window now — FT8 at 1.840 is Digital, not CW.
         assert_eq!(classify_spot_mode(1.805, ""), ModeClass::Cw); // 160m CW
         assert_eq!(classify_spot_mode(1.840, ""), ModeClass::Digital); // 160m FT8 watering hole
-        // VHF freq-only is Digital — FT8/MSK watering holes must NOT become bogus voice needs.
+                                                                       // VHF freq-only is Digital — FT8/MSK watering holes must NOT become bogus voice needs.
         assert_eq!(classify_spot_mode(50.313, ""), ModeClass::Digital); // 6m FT8
         assert_eq!(classify_spot_mode(144.174, ""), ModeClass::Digital); // 2m FT8
         assert_eq!(classify_spot_mode(146.520, "grid"), ModeClass::Digital); // 2m FM simplex → not admitted
-        // Off the band plan → safe Digital default.
+                                                                             // Off the band plan → safe Digital default.
         assert_eq!(classify_spot_mode(5.350, "?"), ModeClass::Digital);
     }
 

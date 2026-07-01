@@ -1102,9 +1102,15 @@ mod tests {
         let mut r = rec("DL1ABC", "20m", "FT8", day);
         r.upload = lotw(UploadOutcome::Accepted);
         let rep = diag(&[r], &[None], vec![]);
-        assert_eq!(rep.waiting_on_partner, 0, "recent acceptance is lag, not waiting");
+        assert_eq!(
+            rep.waiting_on_partner, 0,
+            "recent acceptance is lag, not waiting"
+        );
         assert_eq!(rep.pending_lag, 1);
-        assert!(rep.diagnoses.is_empty(), "recent acceptance is not a nudge row");
+        assert!(
+            rep.diagnoses.is_empty(),
+            "recent acceptance is not a nudge row"
+        );
     }
 
     #[test]
@@ -1125,14 +1131,20 @@ mod tests {
         let rep = diag(&[rej], &[None], vec![]);
         let codes: Vec<_> = rep.diagnoses[0].reasons.iter().map(|x| x.code).collect();
         assert_eq!(codes[0], ReasonCode::R9UploadBounced, "R9 leads, not R3");
-        assert!(codes.contains(&ReasonCode::R3WrongSource), "R3 still present as context");
+        assert!(
+            codes.contains(&ReasonCode::R3WrongSource),
+            "R3 still present as context"
+        );
 
         // The AuthFail variant routes to re-authenticate, again ahead of R3.
         let mut auth = rec("DL1ABC", "20m", "FT8", 20_000);
         auth.confirmed = true;
         auth.upload = lotw(UploadOutcome::AuthFail);
         let rep2 = diag(&[auth], &[None], vec![]);
-        assert_eq!(rep2.diagnoses[0].reasons[0].code, ReasonCode::R9UploadBounced);
+        assert_eq!(
+            rep2.diagnoses[0].reasons[0].code,
+            ReasonCode::R9UploadBounced
+        );
         assert!(matches!(
             &rep2.diagnoses[0].reasons[0].action,
             Action::Reauthenticate { source } if source == "LoTW"
@@ -1155,7 +1167,10 @@ mod tests {
         let r2 = diag(&[acc], &[None], vec![]);
         let codes2: Vec<_> = r2.diagnoses[0].reasons.iter().map(|x| x.code).collect();
         assert_eq!(codes2, vec![ReasonCode::R3WrongSource], "R3 only, no R2");
-        assert_eq!(r2.waiting_on_partner, 0, "eQSL-confirmed accepted is R3's story");
+        assert_eq!(
+            r2.waiting_on_partner, 0,
+            "eQSL-confirmed accepted is R3's story"
+        );
     }
 
     #[test]
@@ -1164,11 +1179,21 @@ mod tests {
         // partner uploaded; this is a data-fix (R4a leads), not a partner-wait.
         let mut r = rec("W1AW", "20m", "FT8", 20_000);
         r.upload = lotw(UploadOutcome::Accepted);
-        let rep = diag(&[r], &[None], vec![orphan("W1AW", "40m", "Digital", 20_000)]);
+        let rep = diag(
+            &[r],
+            &[None],
+            vec![orphan("W1AW", "40m", "Digital", 20_000)],
+        );
         let codes: Vec<_> = rep.diagnoses[0].reasons.iter().map(|x| x.code).collect();
         assert_eq!(codes[0], ReasonCode::R4aBandMismatch, "data-fix leads");
-        assert!(!codes.contains(&ReasonCode::R2PartnerHasnt), "no partner-wait row");
-        assert_eq!(rep.waiting_on_partner, 0, "orphan proves the partner uploaded");
+        assert!(
+            !codes.contains(&ReasonCode::R2PartnerHasnt),
+            "no partner-wait row"
+        );
+        assert_eq!(
+            rep.waiting_on_partner, 0,
+            "orphan proves the partner uploaded"
+        );
     }
 
     #[test]
@@ -1206,10 +1231,17 @@ mod tests {
         // An unconfirmed QSO with a band-mismatch orphan is ALSO never-uploaded, so
         // both R4a and R1 fire — but "fix the band" (R4a) must lead, not "upload it".
         let r = rec("W1AW", "20m", "FT8", 20_000);
-        let rep = diag(&[r], &[None], vec![orphan("W1AW", "40m", "Digital", 20_000)]);
+        let rep = diag(
+            &[r],
+            &[None],
+            vec![orphan("W1AW", "40m", "Digital", 20_000)],
+        );
         let codes: Vec<_> = rep.diagnoses[0].reasons.iter().map(|x| x.code).collect();
         assert_eq!(codes[0], ReasonCode::R4aBandMismatch, "specific fix leads");
-        assert!(codes.contains(&ReasonCode::R1NeverUploaded), "R1 stacks beneath");
+        assert!(
+            codes.contains(&ReasonCode::R1NeverUploaded),
+            "R1 stacks beneath"
+        );
     }
 
     fn with_qrz(mut r: QsoRecord, outcome: UploadOutcome) -> QsoRecord {
@@ -1283,8 +1315,15 @@ mod tests {
         let solo = rec("W1AW", "20m", "FT8", 20_000);
         let rep = diag(&[solo], &[None], vec![]);
         let codes: Vec<_> = rep.diagnoses[0].reasons.iter().map(|x| x.code).collect();
-        assert_eq!(codes, vec![ReasonCode::R1NeverUploaded], "R1-LoTW only, no QRZ");
-        assert!(matches!(rep.diagnoses[0].reasons[0].action, Action::UploadToLotw));
+        assert_eq!(
+            codes,
+            vec![ReasonCode::R1NeverUploaded],
+            "R1-LoTW only, no QRZ"
+        );
+        assert!(matches!(
+            rep.diagnoses[0].reasons[0].action,
+            Action::UploadToLotw
+        ));
 
         // Once ANY QSO carries QRZ state, a never-pushed unconfirmed QSO gets R1-QRZ.
         let user = with_qrz(rec("K2AA", "20m", "FT8", 19_000), UploadOutcome::Accepted);
@@ -1292,11 +1331,15 @@ mod tests {
         let rep2 = diag(&[user, target], &[None, None], vec![]);
         let d = rep2.diagnoses.iter().find(|d| d.index == 1).unwrap();
         assert!(
-            d.reasons.iter().any(|x| matches!(x.action, Action::UploadToQrz)),
+            d.reasons
+                .iter()
+                .any(|x| matches!(x.action, Action::UploadToQrz)),
             "R1-QRZ now fires"
         );
         assert!(
-            d.reasons.iter().any(|x| matches!(x.action, Action::UploadToLotw)),
+            d.reasons
+                .iter()
+                .any(|x| matches!(x.action, Action::UploadToLotw)),
             "R1-LoTW too"
         );
     }
@@ -1309,7 +1352,10 @@ mod tests {
         let target = rec("W1AW", "20m", "FT8", 20_000);
         let rep = diag(&[user, target], &[None, None], vec![]);
         let d = rep.diagnoses.iter().find(|d| d.index == 1).unwrap();
-        assert!(matches!(d.reasons[0].action, Action::UploadToLotw), "LoTW R1 leads QRZ R1");
+        assert!(
+            matches!(d.reasons[0].action, Action::UploadToLotw),
+            "LoTW R1 leads QRZ R1"
+        );
     }
 
     #[test]
@@ -1321,9 +1367,15 @@ mod tests {
         let tracker = with_qrz(rec("K2AA", "20m", "FT8", 19_000), UploadOutcome::Accepted);
         let rep = diag(&[subject, tracker], &[None, None], vec![]);
         let d = rep.diagnoses.iter().find(|d| d.index == 0).unwrap();
-        assert_eq!(d.reasons[0].code, ReasonCode::R2PartnerHasnt, "award wait leads");
+        assert_eq!(
+            d.reasons[0].code,
+            ReasonCode::R2PartnerHasnt,
+            "award wait leads"
+        );
         assert!(
-            d.reasons.iter().any(|x| matches!(x.action, Action::UploadToQrz)),
+            d.reasons
+                .iter()
+                .any(|x| matches!(x.action, Action::UploadToQrz)),
             "QRZ never-pushed stacks beneath"
         );
     }

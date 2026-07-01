@@ -539,8 +539,20 @@ pub fn adif_record(r: &QsoRecord) -> String {
     out.push_str(&upload_field("APP_TEMPO_UL_CLUBLOG", &r.upload.clublog));
     // Parks/Summits On The Air — standard ADIF so pota.app / the SOTA DB accept the
     // export. POTA (and WWFF) → SIG/SIG_INFO; SOTA → its dedicated *_SOTA_REF fields.
-    out.push_str(&ota_fields("MY_SIG", "MY_SIG_INFO", "MY_SOTA_REF", &r.ota.my_program, &r.ota.my_ref));
-    out.push_str(&ota_fields("SIG", "SIG_INFO", "SOTA_REF", &r.ota.their_program, &r.ota.their_ref));
+    out.push_str(&ota_fields(
+        "MY_SIG",
+        "MY_SIG_INFO",
+        "MY_SOTA_REF",
+        &r.ota.my_program,
+        &r.ota.my_ref,
+    ));
+    out.push_str(&ota_fields(
+        "SIG",
+        "SIG_INFO",
+        "SOTA_REF",
+        &r.ota.their_program,
+        &r.ota.their_ref,
+    ));
     out.push_str("<EOR>\n");
     out
 }
@@ -739,12 +751,30 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         freq_mhz: f.get("FREQ").and_then(|s| s.parse().ok()).unwrap_or(0.0),
         mode: f.get("MODE").cloned().unwrap_or_default(),
         // RST is a string (CW "599" / phone "59" / digital "-12") per ADIF.
-        rst_sent: f.get("RST_SENT").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-        rst_rcvd: f.get("RST_RCVD").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-        name: f.get("NAME").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-        qth: f.get("QTH").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-        comment: f.get("COMMENT").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-        notes: f.get("NOTES").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        rst_sent: f
+            .get("RST_SENT")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        rst_rcvd: f
+            .get("RST_RCVD")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        name: f
+            .get("NAME")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        qth: f
+            .get("QTH")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        comment: f
+            .get("COMMENT")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        notes: f
+            .get("NOTES")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         tx_power: f.get("TX_PWR").and_then(|s| s.trim().parse().ok()),
         when_unix: unix_from_ymdhms(y, mo, d, h, mi, s),
         time_off_unix,
@@ -902,14 +932,24 @@ mod tests {
         let r = &lb.records()[0];
         assert_eq!(r.call, "W1AW", "human field corrected");
         assert_eq!(r.band, "40m");
-        assert!(r.confirmed && r.award_confirmed, "derived confirmation preserved");
-        assert_eq!(r.credit_granted, vec!["DXCC".to_string()], "credit preserved");
+        assert!(
+            r.confirmed && r.award_confirmed,
+            "derived confirmation preserved"
+        );
+        assert_eq!(
+            r.credit_granted,
+            vec!["DXCC".to_string()],
+            "credit preserved"
+        );
         assert_eq!(
             r.upload.lotw.as_ref().map(|s| s.outcome),
             Some(UploadOutcome::Accepted),
             "upload state preserved"
         );
-        assert!(!lb.update_record(9, rec("X", "20m", 1)), "out-of-range is false");
+        assert!(
+            !lb.update_record(9, rec("X", "20m", 1)),
+            "out-of-range is false"
+        );
     }
 
     #[test]
@@ -928,14 +968,25 @@ mod tests {
 
         let r = &lb.records()[0];
         assert_eq!(r.band, "40m", "human field edited");
-        assert_eq!(r.country.as_deref(), Some("Germany"), "country preserved, not clobbered");
-        assert_eq!(r.state.as_deref(), Some("NY"), "state preserved, not clobbered");
+        assert_eq!(
+            r.country.as_deref(),
+            Some("Germany"),
+            "country preserved, not clobbered"
+        );
+        assert_eq!(
+            r.state.as_deref(),
+            Some("NY"),
+            "state preserved, not clobbered"
+        );
 
         // An edit that DOES carry a new country overrides it.
         let mut edit2 = rec("DL1XYZ", "40m", 1_700_000_000);
         edit2.country = Some("Fed. Rep. of Germany".into());
         assert!(lb.update_record(0, edit2));
-        assert_eq!(lb.records()[0].country.as_deref(), Some("Fed. Rep. of Germany"));
+        assert_eq!(
+            lb.records()[0].country.as_deref(),
+            Some("Fed. Rep. of Germany")
+        );
     }
 
     #[test]
@@ -959,7 +1010,10 @@ mod tests {
         assert_eq!(lb.clear(), 3, "returns the number removed");
         assert!(lb.is_empty(), "every record gone");
         // ADIF of an empty log is header-only — saving truncates the file cleanly.
-        assert!(!lb.adif().contains("<CALL:"), "no QSO records remain in the ADIF");
+        assert!(
+            !lb.adif().contains("<CALL:"),
+            "no QSO records remain in the ADIF"
+        );
         assert_eq!(lb.clear(), 0, "purging an empty log removes nothing");
     }
 
@@ -1036,7 +1090,10 @@ mod tests {
         let mut lb2 = Logbook::new();
         lb2.add(rec("K2DEF", "40m", 1_700_000_000));
         let back2 = parse_adif(&lb2.adif());
-        assert_eq!(back2[0].time_off_unix, None, "no end time → no TIME_OFF emitted");
+        assert_eq!(
+            back2[0].time_off_unix, None,
+            "no end time → no TIME_OFF emitted"
+        );
     }
 
     #[test]
@@ -1099,7 +1156,10 @@ mod tests {
         let mut lb = Logbook::new();
         lb.add(recs[0].clone());
         let text = lb.adif();
-        assert!(text.contains("<COUNTRY:7>Germany"), "emits the country field");
+        assert!(
+            text.contains("<COUNTRY:7>Germany"),
+            "emits the country field"
+        );
         assert_eq!(parse_adif(&text)[0].country.as_deref(), Some("Germany"));
         // No COUNTRY → no field emitted.
         let none = rec("K2DEF", "40m", 1_700_000_000);
@@ -1206,7 +1266,10 @@ mod tests {
         assert_eq!(b.name.as_deref(), Some("Jim"));
         assert_eq!(b.qth.as_deref(), Some("Dayton, OH"));
         assert_eq!(b.comment.as_deref(), Some("nice signal"));
-        assert_eq!(b.notes.as_deref(), Some("IC-7300, 100W, G5RV — talked antennas"));
+        assert_eq!(
+            b.notes.as_deref(),
+            Some("IC-7300, 100W, G5RV — talked antennas")
+        );
         assert_eq!(b.tx_power, Some(100.0));
     }
 

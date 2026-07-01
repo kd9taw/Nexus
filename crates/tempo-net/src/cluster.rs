@@ -101,8 +101,8 @@ impl ClusterSpot {
         const MODES: &[&str] = &[
             // "AM" is deliberately ABSENT: it false-positives on time-of-day comments
             // ("9 AM EST") far more often than real AM-mode spots occur on HF.
-            "CW", "FT8", "FT4", "RTTY", "SSB", "USB", "LSB", "PSK31", "PSK", "JS8", "FM",
-            "MSK144", "Q65", "JT65", "FT1", "DX1",
+            "CW", "FT8", "FT4", "RTTY", "SSB", "USB", "LSB", "PSK31", "PSK", "JS8", "FM", "MSK144",
+            "Q65", "JT65", "FT1", "DX1",
         ];
         self.comment
             .split_whitespace()
@@ -288,10 +288,7 @@ impl SpotBuffer {
                 .chain(std::iter::once(old.spotter.clone()))
                 .filter(|c| {
                     !c.eq_ignore_ascii_case(&spot.spotter)
-                        && !spot
-                            .corroborators
-                            .iter()
-                            .any(|x| x.eq_ignore_ascii_case(c))
+                        && !spot.corroborators.iter().any(|x| x.eq_ignore_ascii_case(c))
                 })
                 .collect();
             spot.corroborators.append(&mut set);
@@ -481,7 +478,11 @@ mod tests {
         assert_eq!(mk("up 2 big pile").mode(), None, "no mode named");
         // Token match, not substring: a fragment can't read as a mode.
         assert_eq!(mk("CWO net").mode(), None);
-        assert_eq!(mk("ssb 59 nice sig").mode(), Some("SSB"), "case-insensitive");
+        assert_eq!(
+            mk("ssb 59 nice sig").mode(),
+            Some("SSB"),
+            "case-insensitive"
+        );
     }
 
     #[test]
@@ -514,13 +515,33 @@ mod tests {
         assert_eq!(mk("CW UP 2").split_offset_khz(), Some(2.0));
         assert_eq!(mk("UP2 big pile").split_offset_khz(), Some(2.0));
         assert_eq!(mk("DN 1.5").split_offset_khz(), Some(-1.5));
-        assert_eq!(mk("CW UP").split_offset_khz(), Some(1.0), "bare UP → +1 convention");
+        assert_eq!(
+            mk("CW UP").split_offset_khz(),
+            Some(1.0),
+            "bare UP → +1 convention"
+        );
         assert_eq!(mk("QSX 14025.5").split_offset_khz(), Some(2.5));
         assert_eq!(mk("loud in NJ").split_offset_khz(), None);
-        assert_eq!(mk("UP 50").split_offset_khz(), None, "absurd explicit offset → stay simplex");
-        assert_eq!(mk("5UP9").split_offset_khz(), None, "report fragments don't parse");
-        assert_eq!(mk("U 2").split_offset_khz(), None, "single-letter U doesn't count");
-        assert_eq!(mk("59 D").split_offset_khz(), None, "single-letter D doesn't count");
+        assert_eq!(
+            mk("UP 50").split_offset_khz(),
+            None,
+            "absurd explicit offset → stay simplex"
+        );
+        assert_eq!(
+            mk("5UP9").split_offset_khz(),
+            None,
+            "report fragments don't parse"
+        );
+        assert_eq!(
+            mk("U 2").split_offset_khz(),
+            None,
+            "single-letter U doesn't count"
+        );
+        assert_eq!(
+            mk("59 D").split_offset_khz(),
+            None,
+            "single-letter D doesn't count"
+        );
     }
 
     #[test]
@@ -657,14 +678,20 @@ mod tests {
         let mut b = SpotBuffer::new(100);
         let t = Instant::now();
         b.push_at(t, mk_spot("DL1ABC", 14025.0, "CW 599", "W1AAA")); // CW (band bottom)
-        b.push_at(t + Duration::from_secs(1), mk_spot("DL1ABC", 14250.0, "SSB 59", "W2BBB")); // SSB (top)
+        b.push_at(
+            t + Duration::from_secs(1),
+            mk_spot("DL1ABC", 14250.0, "SSB 59", "W2BBB"),
+        ); // SSB (top)
         assert_eq!(
             b.recent().iter().filter(|s| s.dx_call == "DL1ABC").count(),
             2,
             "CW and SSB of the same call are distinct opportunities — both kept"
         );
         // A true repeat (same call, ~same freq within 1 kHz) still collapses.
-        b.push_at(t + Duration::from_secs(2), mk_spot("DL1ABC", 14025.4, "CW 599", "W3CCC"));
+        b.push_at(
+            t + Duration::from_secs(2),
+            mk_spot("DL1ABC", 14025.4, "CW 599", "W3CCC"),
+        );
         assert_eq!(
             b.recent().iter().filter(|s| s.dx_call == "DL1ABC").count(),
             2,
@@ -678,9 +705,15 @@ mod tests {
         let t = Instant::now();
         b.push_at(t, mk_spot("OLD1", 14025.0, "CW", "W1AAA"));
         // A push 1300 s later (> max_age) trims the now-stale OLD1 off the front.
-        b.push_at(t + Duration::from_secs(1300), mk_spot("NEW1", 14026.0, "CW", "W2BBB"));
+        b.push_at(
+            t + Duration::from_secs(1300),
+            mk_spot("NEW1", 14026.0, "CW", "W2BBB"),
+        );
         let calls: Vec<String> = b.recent().into_iter().map(|s| s.dx_call).collect();
-        assert!(!calls.contains(&"OLD1".to_string()), "spot older than max_age trimmed");
+        assert!(
+            !calls.contains(&"OLD1".to_string()),
+            "spot older than max_age trimmed"
+        );
         assert!(calls.contains(&"NEW1".to_string()));
     }
 
@@ -734,7 +767,10 @@ mod tests {
             .filter(|c| *c == "K9IMM" || *c == "N9CO")
             .count();
         assert_eq!(n, 2, "no dupes, prior voices kept: {:?}", s.corroborators);
-        assert!(!s.corroborators.contains(&"K9LC".to_string()), "self excluded");
+        assert!(
+            !s.corroborators.contains(&"K9LC".to_string()),
+            "self excluded"
+        );
     }
 
     #[test]
@@ -801,7 +837,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(writer, b"W9XYZ\r\n", "the callsign was sent at the prompt");
-        assert!(connected.load(Ordering::Relaxed), "answering the login prompt = connected");
+        assert!(
+            connected.load(Ordering::Relaxed),
+            "answering the login prompt = connected"
+        );
         assert_eq!(spots.len(), 1);
         assert_eq!(spots[0].dx_call, "3Y0J");
         assert!((spots[0].freq_mhz() - 14.074).abs() < 1e-9);
@@ -818,6 +857,9 @@ mod tests {
         let connected = AtomicBool::new(false);
         pump(reader, &mut writer, "W9XYZ", &mut |_| {}, &stop, &connected).unwrap();
         assert!(writer.is_empty());
-        assert!(!connected.load(Ordering::Relaxed), "never answered → never connected");
+        assert!(
+            !connected.load(Ordering::Relaxed),
+            "never answered → never connected"
+        );
     }
 }

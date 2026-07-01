@@ -333,7 +333,13 @@ pub fn parse_inbound(bytes: &[u8]) -> Option<Inbound> {
             let bg = r.read_qcolor()?;
             let fg = r.read_qcolor()?;
             let highlight_last = r.read_bool().unwrap_or(false);
-            Some(Inbound::HighlightCallsign { id, call, bg, fg, highlight_last })
+            Some(Inbound::HighlightCallsign {
+                id,
+                call,
+                bg,
+                fg,
+                highlight_last,
+            })
         }
         msg_type::HALT_TX => Some(Inbound::HaltTx {
             id,
@@ -731,7 +737,12 @@ mod tests {
             qcolor(w, 1, 0x0000, 0xffff, 0x0000); // green fg AFTER it
             w.put_u8(1);
         })) {
-            Some(Inbound::HighlightCallsign { bg, fg, highlight_last, .. }) => {
+            Some(Inbound::HighlightCallsign {
+                bg,
+                fg,
+                highlight_last,
+                ..
+            }) => {
                 assert_eq!(bg, None, "non-RGB spec reads as None");
                 assert_eq!(fg.as_deref(), Some("#00ff00"), "stream stayed aligned");
                 assert!(highlight_last);
@@ -744,7 +755,13 @@ mod tests {
             qcolor(w, 0, 0, 0, 0); // Invalid fg = none
             w.put_u8(1);
         })) {
-            Some(Inbound::HighlightCallsign { call, bg, fg, highlight_last, .. }) => {
+            Some(Inbound::HighlightCallsign {
+                call,
+                bg,
+                fg,
+                highlight_last,
+                ..
+            }) => {
                 assert_eq!(call, "K1ABC");
                 assert_eq!(bg.as_deref(), Some("#ff0000"));
                 assert_eq!(fg, None);
@@ -753,5 +770,4 @@ mod tests {
             other => panic!("expected HighlightCallsign, got {other:?}"),
         }
     }
-
 }

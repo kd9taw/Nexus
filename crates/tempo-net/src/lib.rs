@@ -20,9 +20,9 @@
 //! no test ever touches the real network).
 
 pub mod cluster;
+pub mod mqtt;
 pub mod n1mm;
 pub mod n3fjp;
-pub mod mqtt;
 pub mod pskreporter;
 pub mod qds;
 pub mod server;

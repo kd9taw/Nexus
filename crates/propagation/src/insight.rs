@@ -185,7 +185,8 @@ pub fn generate_insights(
                     from,
                     t.muf.now,
                     at,
-                    next.map(|b| format!(", {b} may follow")).unwrap_or_default()
+                    next.map(|b| format!(", {b} may follow"))
+                        .unwrap_or_default()
                 ),
                 technical: format!(
                     "controlling MUF {:.1} MHz, +{:.1} MHz/hr",
@@ -215,7 +216,11 @@ pub fn generate_insights(
     let flux = if wx.sfi >= 150.0 {
         Some((
             InsightLevel::Good,
-            format!("SFI {:.0}{} — 10m/12m open for DX", wx.sfi, dir_suffix(sfi_dir)),
+            format!(
+                "SFI {:.0}{} — 10m/12m open for DX",
+                wx.sfi,
+                dir_suffix(sfi_dir)
+            ),
         ))
     } else if wx.sfi >= 100.0 {
         Some((
@@ -276,8 +281,9 @@ pub fn generate_insights(
             kind: InsightKind::EsWatch,
             level: InsightLevel::Info,
             plain: "6m: watch 50.313 for sudden DX (sporadic-E season)".to_string(),
-            technical: "boreal Es season (solar declination > 15°); Es is minutes-long, 500–2500 km"
-                .to_string(),
+            technical:
+                "boreal Es season (solar declination > 15°); Es is minutes-long, 500–2500 km"
+                    .to_string(),
             band: Some("6m".to_string()),
         });
     }
@@ -323,7 +329,10 @@ mod tests {
         // MUF at 25 MHz rising → 12m (24.9) at the ceiling, 10m (28.5) may follow.
         let t = rising_muf(25.0, 3.0);
         let ins = generate_insights(NOW, &wx(150.0, 2.0, 1e-7), Some(&t), &[], &[], None);
-        let muf = ins.iter().find(|i| i.kind == InsightKind::MufTrend).unwrap();
+        let muf = ins
+            .iter()
+            .find(|i| i.kind == InsightKind::MufTrend)
+            .unwrap();
         assert_eq!(muf.level, InsightLevel::Good);
         assert_eq!(muf.band.as_deref(), Some("10m"));
         assert!(muf.plain.contains("building") && muf.plain.contains("10m may follow"));
@@ -335,7 +344,10 @@ mod tests {
         // MUF ~29 MHz rising → 10m at ceiling, 6m may follow (the magic-band moment).
         let t = rising_muf(29.0, 2.0);
         let ins = generate_insights(NOW, &wx(190.0, 1.0, 1e-7), Some(&t), &[], &[], None);
-        let muf = ins.iter().find(|i| i.kind == InsightKind::MufTrend).unwrap();
+        let muf = ins
+            .iter()
+            .find(|i| i.kind == InsightKind::MufTrend)
+            .unwrap();
         assert_eq!(muf.band.as_deref(), Some("6m"));
     }
 
@@ -354,7 +366,10 @@ mod tests {
     #[test]
     fn storm_kp_raises_an_alert() {
         let ins = generate_insights(NOW, &wx(140.0, 6.0, 1e-7), None, &[], &[], None);
-        let g = ins.iter().find(|i| i.kind == InsightKind::Geomagnetic).unwrap();
+        let g = ins
+            .iter()
+            .find(|i| i.kind == InsightKind::Geomagnetic)
+            .unwrap();
         assert_eq!(g.level, InsightLevel::Alert);
         assert!(g.plain.contains("aurora"));
     }
@@ -391,6 +406,8 @@ mod tests {
         let ins = generate_insights(NOW, &wx(120.0, 2.0, 2e-4), None, &[], &[], None);
         assert!(ins.len() >= 2);
         assert_eq!(ins[0].level, InsightLevel::Alert);
-        assert!(ins.iter().all(|i| !i.plain.is_empty() && !i.technical.is_empty()));
+        assert!(ins
+            .iter()
+            .all(|i| !i.plain.is_empty() && !i.technical.is_empty()));
     }
 }

@@ -67,8 +67,7 @@ pub fn getting_out(me_call: &str, me_grid: &str, spots: &[PathSpot], now: i64) -
             octant: compass_octant(bearing as f64).to_string(),
             age_secs: (now - s.time).max(0),
         };
-        best
-            .entry(call)
+        best.entry(call)
             .and_modify(|e| {
                 if rep.age_secs < e.age_secs {
                     *e = rep.clone();

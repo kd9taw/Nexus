@@ -80,7 +80,9 @@ pub fn snapshot_with_spots(
     // Nothing at all from any source → let the caller fall back to its cache or an
     // honest offline empty-state. Never fabricate.
     if wx_opt.is_none() && spots.is_empty() {
-        return Err("no live propagation data: space weather and spot feeds unreachable".to_string());
+        return Err(
+            "no live propagation data: space weather and spot feeds unreachable".to_string(),
+        );
     }
 
     // Absent space weather degrades to NEUTRAL mid-cycle values (flagged by

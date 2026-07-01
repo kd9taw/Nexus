@@ -22,25 +22,25 @@ const TIMEOUT: Duration = Duration::from_secs(4);
 /// Minimal XML escaping for field values (calls/sections are alnum, but a
 /// comment or park name must never break the stream).
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn connect(host: &str, port: u16) -> std::io::Result<TcpStream> {
     let addr = format!("{host}:{port}");
     let stream = TcpStream::connect_timeout(
-        &addr
-            .parse()
-            .or_else(|_| {
-                // Hostname: resolve via ToSocketAddrs.
-                use std::net::ToSocketAddrs;
-                addr.to_socket_addrs()
-                    .ok()
-                    .and_then(|mut a| a.next())
-                    .ok_or(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "unresolvable host",
-                    ))
-            })?,
+        &addr.parse().or_else(|_| {
+            // Hostname: resolve via ToSocketAddrs.
+            use std::net::ToSocketAddrs;
+            addr.to_socket_addrs()
+                .ok()
+                .and_then(|mut a| a.next())
+                .ok_or(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "unresolvable host",
+                ))
+        })?,
         TIMEOUT,
     )?;
     stream.set_read_timeout(Some(TIMEOUT))?;
@@ -71,7 +71,10 @@ pub struct N3fjpQso {
 fn n3fjp_datetime(unix: u64) -> (String, String) {
     let secs_of_day = unix % 86_400;
     let days = (unix / 86_400) as i64;
-    let (h, m) = ((secs_of_day / 3600) as u32, ((secs_of_day % 3600) / 60) as u32);
+    let (h, m) = (
+        (secs_of_day / 3600) as u32,
+        ((secs_of_day % 3600) / 60) as u32,
+    );
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64;

@@ -167,7 +167,11 @@ impl SpaceWxHistory {
     /// spanning ≥~30 min for a non-Steady verdict; otherwise everything reads Steady.
     pub fn trend(&self, now: i64, window_secs: i64) -> WxTrend {
         let lo = now - window_secs;
-        let win: Vec<&SpaceWxSample> = self.buf.iter().filter(|s| s.t >= lo && s.t <= now).collect();
+        let win: Vec<&SpaceWxSample> = self
+            .buf
+            .iter()
+            .filter(|s| s.t >= lo && s.t <= now)
+            .collect();
         let latest = self.buf.back();
         let scalar = |get: &dyn Fn(&SpaceWxSample) -> f32, eps: f32| -> ScalarTrend {
             let now_v = latest.map(|s| get(s)).unwrap_or(0.0);
@@ -202,12 +206,21 @@ impl SpaceWxHistory {
         let xray = {
             let now_v = latest.map(|s| s.xray_long).unwrap_or(0.0);
             if win.len() < 2 {
-                ScalarTrend { now: now_v, start: now_v, delta_per_hr: 0.0, dir: TrendDir::Steady }
+                ScalarTrend {
+                    now: now_v,
+                    start: now_v,
+                    delta_per_hr: 0.0,
+                    dir: TrendDir::Steady,
+                }
             } else {
                 let oldest = win.first().unwrap();
                 let newest = win.last().unwrap();
                 let hours = (newest.t - oldest.t) as f32 / 3600.0;
-                let ratio = if oldest.xray_long > 0.0 { newest.xray_long / oldest.xray_long } else { 1.0 };
+                let ratio = if oldest.xray_long > 0.0 {
+                    newest.xray_long / oldest.xray_long
+                } else {
+                    1.0
+                };
                 let dir = if ratio > 2.0 {
                     TrendDir::Rising
                 } else if ratio < 0.5 {
@@ -215,8 +228,17 @@ impl SpaceWxHistory {
                 } else {
                     TrendDir::Steady
                 };
-                let delta_per_hr = if hours >= 0.5 { (newest.xray_long - oldest.xray_long) / hours } else { 0.0 };
-                ScalarTrend { now: now_v, start: oldest.xray_long, delta_per_hr, dir }
+                let delta_per_hr = if hours >= 0.5 {
+                    (newest.xray_long - oldest.xray_long) / hours
+                } else {
+                    0.0
+                };
+                ScalarTrend {
+                    now: now_v,
+                    start: oldest.xray_long,
+                    delta_per_hr,
+                    dir,
+                }
             }
         };
         WxTrend {
@@ -250,7 +272,13 @@ mod tests {
     }
 
     fn sample(t: i64, sfi: f32, kp: f32, muf: f32) -> SpaceWxSample {
-        SpaceWxSample { t, sfi, kp, xray_long: 1e-7, muf }
+        SpaceWxSample {
+            t,
+            sfi,
+            kp,
+            xray_long: 1e-7,
+            muf,
+        }
     }
 
     #[test]
@@ -286,7 +314,7 @@ mod tests {
         let mut h = SpaceWxHistory::default();
         h.push(sample(now, 150.0, 2.0, 24.0));
         assert_eq!(h.trend(now, 3 * 3600).sfi.dir, TrendDir::Steady); // single sample
-        // An older second sample OUTSIDE the window leaves only one in-window → Steady.
+                                                                      // An older second sample OUTSIDE the window leaves only one in-window → Steady.
         let mut h2 = SpaceWxHistory::default();
         h2.push(sample(now - 6 * 3600, 100.0, 2.0, 12.0));
         h2.push(sample(now, 150.0, 2.0, 24.0));
@@ -302,7 +330,7 @@ mod tests {
         h.push(sample(now + 10, 151.0, 2.0, 25.0));
         assert_eq!(h.len(), 1);
         assert!((h.trend(now + 10, 3600).muf.now - 25.0).abs() < 1e-3); // replaced
-        // Cap: push far more than CAP distinct samples.
+                                                                        // Cap: push far more than CAP distinct samples.
         let mut h2 = SpaceWxHistory::default();
         for i in 0..200 {
             h2.push(sample(now + i * 600, 120.0, 2.0, 14.0));

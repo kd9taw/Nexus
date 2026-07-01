@@ -34,7 +34,9 @@ pub struct N1mmContact {
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Build the `<contactinfo>` datagram (the mandatory-for-consumers field set

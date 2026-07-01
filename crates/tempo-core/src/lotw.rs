@@ -234,7 +234,10 @@ mod tests {
             Some("2026-03-01"),
         );
         assert!(url.contains("qso_query=1"));
-        assert!(url.contains("qso_qsl=no"), "own-echo asks for unmatched records");
+        assert!(
+            url.contains("qso_qsl=no"),
+            "own-echo asks for unmatched records"
+        );
         assert!(!url.contains("qso_qsl=yes"));
         assert!(url.contains("qso_owncall=KD9TAW"));
         // Bounded by the start date; no match-date cursor; password still encoded.

@@ -464,9 +464,15 @@ mod tests {
             classify_upload("Error: No match on eQSL_User/eQSL_Pswd"),
             Some(U::AuthFail)
         );
-        assert_eq!(classify_upload("Error: Missing eQSL_Pswd"), Some(U::AuthFail));
+        assert_eq!(
+            classify_upload("Error: Missing eQSL_Pswd"),
+            Some(U::AuthFail)
+        );
         // System down → transient, no stamp.
-        assert_eq!(classify_upload("Error: The system is down until 1200Z"), None);
+        assert_eq!(
+            classify_upload("Error: The system is down until 1200Z"),
+            None
+        );
         // Unrecognized → a definitive bounce.
         assert_eq!(classify_upload("Error: something odd"), Some(U::Rejected));
     }

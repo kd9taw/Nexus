@@ -37,8 +37,8 @@ fn qso_mode_completes_through_the_engine() {
     a.set_tier(Tier::Ft1); // FT1-modem loopback (default tier is now FT8)
     b.set_tier(Tier::Ft1);
     a.set_mode("qso-run").unwrap(); // A RUNS (calls CQ)
-    // B works A explicitly (Monitor is now passive — no auto-answer; the operator
-    // double-clicks a decode, which is call_station).
+                                    // B works A explicitly (Monitor is now passive — no auto-answer; the operator
+                                    // double-clicks a decode, which is call_station).
     b.call_station("W9XYZ");
 
     let b_done = |e: &Engine| e.snapshot().qso.map(|q| q.state == "Done").unwrap_or(false);
@@ -53,7 +53,10 @@ fn qso_mode_completes_through_the_engine() {
     // ...and, because it was RUNNING, returns to calling CQ to work the next caller
     // (WSJT-X run workflow) — give it a few more periods to process its own RR73.
     run(&mut a, &mut b, 12, |a, _| {
-        a.snapshot().qso.map(|q| q.state == "CallingCq").unwrap_or(false)
+        a.snapshot()
+            .qso
+            .map(|q| q.state == "CallingCq")
+            .unwrap_or(false)
     });
     assert_eq!(
         a.snapshot().qso.unwrap().state,

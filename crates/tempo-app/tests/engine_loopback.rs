@@ -13,7 +13,7 @@ use tempo_core::ft1;
 fn two_engines_exchange_a_directed_message() {
     let mut a = Engine::new("W9XYZ", "EN37", 0); // transmits on even slots
     let mut b = Engine::new("K2DEF", "FN31", 1); // transmits on odd slots
-    // TX is disarmed by default now (WSJT-X Enable-Tx) — arm both ends.
+                                                 // TX is disarmed by default now (WSJT-X Enable-Tx) — arm both ends.
     a.set_tx_enabled(true);
     b.set_tx_enabled(true);
     // Pin the pre-arranged static parities: this loopback ingests a decode in the SAME

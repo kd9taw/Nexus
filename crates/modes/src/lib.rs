@@ -121,9 +121,16 @@ mod tests {
         let wave = m.gen_wave(&tones, FS, 1500.0);
         let lead = (0.5 * FS).round() as usize;
         let bare = ft8::gen_wave(&tones, FS, 1500.0);
-        assert_eq!(wave.len(), lead + bare.len(), "FT8 wave includes the 0.5 s lead-in");
+        assert_eq!(
+            wave.len(),
+            lead + bare.len(),
+            "FT8 wave includes the 0.5 s lead-in"
+        );
         assert!(wave[..lead].iter().all(|&s| s == 0.0), "lead-in is silence");
-        assert!(wave[lead..].iter().any(|&s| s != 0.0), "tones follow the lead-in");
+        assert!(
+            wave[lead..].iter().any(|&s| s != 0.0),
+            "tones follow the lead-in"
+        );
     }
 
     #[test]

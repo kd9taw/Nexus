@@ -295,7 +295,10 @@ mod tests {
 
     #[test]
     fn own_echo_promotes_pending_to_accepted() {
-        let mut log = vec![with_lotw(rec("W1AW", "20m", "FT8", 20_000), UploadOutcome::Pending)];
+        let mut log = vec![with_lotw(
+            rec("W1AW", "20m", "FT8", 20_000),
+            UploadOutcome::Pending,
+        )];
         // Own-QSO report row (submode differs: MFSK→Digital), ±0 day.
         let own = vec![rec("w1aw", "20M", "MFSK", 20_000)];
         let n = promote_own_echo(&mut log, &own, 99);
@@ -341,7 +344,10 @@ mod tests {
 
     #[test]
     fn own_echo_already_accepted_not_double_counted() {
-        let mut log = vec![with_lotw(rec("W1AW", "20m", "FT8", 20_000), UploadOutcome::Accepted)];
+        let mut log = vec![with_lotw(
+            rec("W1AW", "20m", "FT8", 20_000),
+            UploadOutcome::Accepted,
+        )];
         let own = vec![rec("W1AW", "20m", "FT8", 20_000)];
         let n = promote_own_echo(&mut log, &own, 5);
         assert_eq!(n, 0, "already on file — re-stamp is not a new promotion");
@@ -350,7 +356,10 @@ mod tests {
 
     #[test]
     fn own_echo_no_match_leaves_state_untouched() {
-        let mut log = vec![with_lotw(rec("W1AW", "20m", "FT8", 20_000), UploadOutcome::Pending)];
+        let mut log = vec![with_lotw(
+            rec("W1AW", "20m", "FT8", 20_000),
+            UploadOutcome::Pending,
+        )];
         let own = vec![rec("K9XYZ", "40m", "FT8", 19_000)]; // different QSO
         let n = promote_own_echo(&mut log, &own, 1);
         assert_eq!(n, 0);
@@ -509,8 +518,16 @@ mod tests {
         r2.country = Some("Wrong".into()); // report DISAGREES — must not overwrite
 
         reconcile(&mut log, &[r1, r2]);
-        assert_eq!(log[0].country.as_deref(), Some("Germany"), "missing country filled");
-        assert_eq!(log[1].country.as_deref(), Some("France"), "existing country preserved");
+        assert_eq!(
+            log[0].country.as_deref(),
+            Some("Germany"),
+            "missing country filled"
+        );
+        assert_eq!(
+            log[1].country.as_deref(),
+            Some("France"),
+            "existing country preserved"
+        );
     }
 
     #[test]

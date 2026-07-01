@@ -98,7 +98,11 @@ pub fn base_call(call: &str) -> String {
     up.split('/')
         .filter(|s| looks_full(s))
         .last()
-        .or_else(|| up.split('/').filter(|s| !s.is_empty()).max_by_key(|s| s.len()))
+        .or_else(|| {
+            up.split('/')
+                .filter(|s| !s.is_empty())
+                .max_by_key(|s| s.len())
+        })
         .map(|s| s.to_string())
         .unwrap_or(up)
 }
@@ -171,7 +175,11 @@ impl Msg {
             // An empty grid = the i3=4 compound form (a compound call carries no grid):
             // render without the trailing grid token.
             Msg::Cq { de, grid, dir } => {
-                let d = if dir.is_empty() { String::new() } else { format!("{dir} ") };
+                let d = if dir.is_empty() {
+                    String::new()
+                } else {
+                    format!("{dir} ")
+                };
                 if grid.is_empty() {
                     format!("CQ {d}{de}")
                 } else {
@@ -239,7 +247,11 @@ impl Msg {
         // carry one). Only a real COMPOUND call qualifies — "CQ W1AW" (a grid-less plain
         // call) stays free text, and "CQ <...>" is invalid (the modem rejects it).
         if t.len() == 2 && t[0] == "CQ" && is_compound(t[1]) {
-            return Msg::Cq { de: t[1].to_string(), grid: String::new(), dir: String::new() };
+            return Msg::Cq {
+                de: t[1].to_string(),
+                grid: String::new(),
+                dir: String::new(),
+            };
         }
         // Two-call message with no payload: "<to> <de>" — an i3=4 call (no grid), e.g. a
         // compound/hashed station answering. A grid-less Grid = "calling <to>". REQUIRE
@@ -249,7 +261,10 @@ impl Msg {
         if t.len() == 2
             && looks_like_call(t[0])
             && looks_like_call(t[1])
-            && (is_valid_hashed(t[0]) || is_valid_hashed(t[1]) || is_compound(t[0]) || is_compound(t[1]))
+            && (is_valid_hashed(t[0])
+                || is_valid_hashed(t[1])
+                || is_compound(t[0])
+                || is_compound(t[1]))
             && !(is_valid_hashed(t[0]) && is_valid_hashed(t[1]))
         {
             return Msg::Grid {
@@ -412,7 +427,10 @@ mod fidelity_tests {
     #[test]
     fn valid_grid_accepts_4_and_6_char_rejects_blank_and_malformed() {
         assert!(is_valid_grid("EN52"));
-        assert!(is_valid_grid("en52"), "lowercase field letters are valid (encoder is case-insensitive)");
+        assert!(
+            is_valid_grid("en52"),
+            "lowercase field letters are valid (encoder is case-insensitive)"
+        );
         assert!(is_valid_grid("En52"));
         assert!(is_valid_grid("EN52aa")); // 6-char subsquare
         assert!(is_valid_grid(" EN52 ")); // trimmed
@@ -441,7 +459,11 @@ mod fidelity_tests {
         assert_eq!(base_call("<W9XYZ>"), "W9XYZ");
         assert!(same_call("<W9XYZ>", "W9XYZ"));
         assert!(same_call("<W9XYZ>", "w9xyz"));
-        assert_eq!(base_call("<...>"), "...", "an unresolved hash matches nothing real");
+        assert_eq!(
+            base_call("<...>"),
+            "...",
+            "an unresolved hash matches nothing real"
+        );
         // Compound detection (slash forms, with or without brackets).
         assert!(is_compound("PJ4/K1ABC"));
         assert!(is_compound("KH1/KH7Z"));
@@ -455,22 +477,38 @@ mod fidelity_tests {
     fn parses_compound_cq_and_i3_4_call_forms() {
         assert_eq!(
             Msg::parse("CQ PJ4/K1ABC"),
-            Msg::Cq { de: "PJ4/K1ABC".into(), grid: String::new(), dir: String::new() },
+            Msg::Cq {
+                de: "PJ4/K1ABC".into(),
+                grid: String::new(),
+                dir: String::new()
+            },
             "compound CQ has no grid"
         );
         // Two-call no-payload i3=4 forms (a hashed or compound token present).
         assert_eq!(
             Msg::parse("<PJ4/K1ABC> W9XYZ"),
-            Msg::Grid { to: "<PJ4/K1ABC>".into(), de: "W9XYZ".into(), grid: String::new() }
+            Msg::Grid {
+                to: "<PJ4/K1ABC>".into(),
+                de: "W9XYZ".into(),
+                grid: String::new()
+            }
         );
         assert_eq!(
             Msg::parse("PJ4/K1ABC <W9XYZ>"),
-            Msg::Grid { to: "PJ4/K1ABC".into(), de: "<W9XYZ>".into(), grid: String::new() }
+            Msg::Grid {
+                to: "PJ4/K1ABC".into(),
+                de: "<W9XYZ>".into(),
+                grid: String::new()
+            }
         );
         // i3=4 reply WITH a report parses via the existing 3-token path (brackets in to/de).
         assert_eq!(
             Msg::parse("<PJ4/K1ABC> W9XYZ R-10"),
-            Msg::RReport { to: "<PJ4/K1ABC>".into(), de: "W9XYZ".into(), snr: -10 }
+            Msg::RReport {
+                to: "<PJ4/K1ABC>".into(),
+                de: "W9XYZ".into(),
+                snr: -10
+            }
         );
         // Plain free text / a bare standard pair is NOT misread as an i3=4 call pair.
         assert!(matches!(Msg::parse("NET TONIGHT"), Msg::Other(_)));
@@ -478,7 +516,10 @@ mod fidelity_tests {
         assert!(matches!(Msg::parse("W9XYZ K2DEF"), Msg::Other(_)));
         // Ham free-text SLASH shorthand must NOT read as a compound call pair.
         for s in ["5/9 NJ2X", "W/L 20M", "S/N 10DB", "2X/3 W1AW", "I/O TEST"] {
-            assert!(matches!(Msg::parse(s), Msg::Other(_)), "{s} must be free text");
+            assert!(
+                matches!(Msg::parse(s), Msg::Other(_)),
+                "{s} must be free text"
+            );
         }
         // Arbitrary bracketed tokens / both-hashed are not a valid i3=4 call pair.
         assert!(matches!(Msg::parse("<X> <Y>"), Msg::Other(_)));
@@ -492,11 +533,21 @@ mod fidelity_tests {
     #[test]
     fn compound_forms_render_without_a_grid() {
         assert_eq!(
-            Msg::Cq { de: "PJ4/K1ABC".into(), grid: String::new(), dir: String::new() }.to_text(),
+            Msg::Cq {
+                de: "PJ4/K1ABC".into(),
+                grid: String::new(),
+                dir: String::new()
+            }
+            .to_text(),
             "CQ PJ4/K1ABC"
         );
         assert_eq!(
-            Msg::Grid { to: "<PJ4/K1ABC>".into(), de: "W9XYZ".into(), grid: String::new() }.to_text(),
+            Msg::Grid {
+                to: "<PJ4/K1ABC>".into(),
+                de: "W9XYZ".into(),
+                grid: String::new()
+            }
+            .to_text(),
             "<PJ4/K1ABC> W9XYZ"
         );
     }
@@ -609,11 +660,19 @@ mod fidelity_tests {
         // senders and some band plans; it must be a CQ, not free text.
         assert_eq!(
             Msg::parse("CQ DX K1ABC"),
-            Msg::Cq { de: "K1ABC".into(), grid: String::new(), dir: "DX".into() }
+            Msg::Cq {
+                de: "K1ABC".into(),
+                grid: String::new(),
+                dir: "DX".into()
+            }
         );
         assert_eq!(
             Msg::parse("CQ DX PJ4/K1ABC"),
-            Msg::Cq { de: "PJ4/K1ABC".into(), grid: String::new(), dir: "DX".into() }
+            Msg::Cq {
+                de: "PJ4/K1ABC".into(),
+                grid: String::new(),
+                dir: "DX".into()
+            }
         );
         assert_eq!(Msg::parse("CQ DX K1ABC").to_text(), "CQ DX K1ABC");
         // Free text must NOT misread as a gridless directed CQ ("5" is no
@@ -700,4 +759,3 @@ mod fidelity_tests {
         assert_eq!(Msg::parse("W9XYZ K2DEF 3A WI").sender(), Some("K2DEF"));
     }
 }
-

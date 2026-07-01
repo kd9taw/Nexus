@@ -135,8 +135,7 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir()
-            .join(format!("nexus_voice_{}_{}", std::process::id(), name))
+        std::env::temp_dir().join(format!("nexus_voice_{}_{}", std::process::id(), name))
     }
 
     #[test]
@@ -148,7 +147,10 @@ mod tests {
         let back = read_wav_12k(&p).unwrap();
         assert_eq!(back.len(), samples.len(), "same length at 12 kHz");
         for (a, b) in samples.iter().zip(&back) {
-            assert!((a - b).abs() < 1e-3, "within 16-bit quantization: {a} vs {b}");
+            assert!(
+                (a - b).abs() < 1e-3,
+                "within 16-bit quantization: {a} vs {b}"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -174,7 +176,11 @@ mod tests {
         w.finalize().unwrap();
         let out = read_wav_12k(&p).unwrap();
         // 4800 stereo frames @ 48k → 0.1 s → ~1200 samples @ 12 kHz.
-        assert!((out.len() as i64 - 1200).abs() <= 2, "resampled length ~1200: {}", out.len());
+        assert!(
+            (out.len() as i64 - 1200).abs() <= 2,
+            "resampled length ~1200: {}",
+            out.len()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -185,7 +191,11 @@ mod tests {
         let dir = scratch("sink");
         let p = dir.join("qso.wav");
         let chunks: Vec<Vec<f32>> = (0..5)
-            .map(|c| (0..240).map(|i| ((c * 240 + i) as f32 * 0.03).sin() * 0.4).collect())
+            .map(|c| {
+                (0..240)
+                    .map(|i| ((c * 240 + i) as f32 * 0.03).sin() * 0.4)
+                    .collect()
+            })
             .collect();
         let mut sink = WavSink::create(&p).unwrap();
         for ch in &chunks {
@@ -196,7 +206,10 @@ mod tests {
         let back = read_wav_12k(&p).unwrap();
         assert_eq!(back.len(), flat.len(), "all streamed chunks present");
         for (a, b) in flat.iter().zip(&back) {
-            assert!((a - b).abs() < 1e-3, "within 16-bit quantization: {a} vs {b}");
+            assert!(
+                (a - b).abs() < 1e-3,
+                "within 16-bit quantization: {a} vs {b}"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

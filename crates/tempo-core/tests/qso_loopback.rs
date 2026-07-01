@@ -10,8 +10,8 @@ use tempo_core::qso::{run_loopback_qso, State, Station};
 #[test]
 fn two_stations_complete_a_qso() {
     let mut a = Station::calling_cq("W9XYZ", "EN37"); // initiator
-    // Responder answers A explicitly (Monitor is now passive — it never auto-keys;
-    // the operator works a station by double-clicking, i.e. an `answering` station).
+                                                      // Responder answers A explicitly (Monitor is now passive — it never auto-keys;
+                                                      // the operator works a station by double-clicking, i.e. an `answering` station).
     let mut b = Station::answering("K2DEF", "FN31", "W9XYZ");
 
     let air = run_loopback_qso(&mut a, &mut b, 15.0, 20);

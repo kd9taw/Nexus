@@ -194,16 +194,16 @@ mod tests {
     #[test]
     fn compound_call_forms_round_trip_intact() {
         let cases = [
-            "CQ PJ4/K1ABC",          // compound CQ (full call, no grid)
-            "<PJ4/K1ABC> W9XYZ",     // Tx1 to a compound DX (DX hashed)
+            "CQ PJ4/K1ABC",           // compound CQ (full call, no grid)
+            "<PJ4/K1ABC> W9XYZ",      // Tx1 to a compound DX (DX hashed)
             "<PJ4/K1ABC> W9XYZ R-10", // R-report (hashed-first keeps the number)
             "<PJ4/K1ABC> W9XYZ RR73", // roger
-            "<W9XYZ> KD9TAW/P RRR",  // compound ME rogering a standard DX (i3=4, no number)
-            "<W9XYZ> KD9TAW/P 73",   // compound ME signing off
+            "<W9XYZ> KD9TAW/P RRR",   // compound ME rogering a standard DX (i3=4, no number)
+            "<W9XYZ> KD9TAW/P 73",    // compound ME signing off
             // Forms the OTHER station's modem delivers to us (what our sequencer consumes):
-            "<KD9TAW> PJ4/K1ABC",      // a compound DX's grid-less answer (no report)
+            "<KD9TAW> PJ4/K1ABC", // a compound DX's grid-less answer (no report)
             "<KD9TAW> PJ4/K1ABC RR73", // a compound DX's roger
-            "<KD9TAW/P> W9XYZ -09",    // a standard caller reporting our compound CQ
+            "<KD9TAW/P> W9XYZ -09", // a standard caller reporting our compound CQ
         ];
         for msg in cases {
             let tones = encode(msg);

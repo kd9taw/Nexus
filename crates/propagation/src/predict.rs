@@ -110,7 +110,13 @@ pub struct ModeledNow {
 /// Compute [`ModeledNow`] for the operator at `me` (lat, lon). Reuses
 /// [`PathModel::score`]/[`PathModel::muf`] + [`crate::geo::destination_point`]. HF only
 /// (VHF is Es/aurora-driven — the advisor handles it separately). `n_dirs` clamps to 1..=36.
-pub fn modeled_now(me: (f64, f64), dist_km: f64, n_dirs: usize, now: i64, wx: &SpaceWx) -> ModeledNow {
+pub fn modeled_now(
+    me: (f64, f64),
+    dist_km: f64,
+    n_dirs: usize,
+    now: i64,
+    wx: &SpaceWx,
+) -> ModeledNow {
     use std::collections::HashMap;
     let model = PathModel::new(Some(me));
     let n = n_dirs.clamp(1, 36);
@@ -168,8 +174,7 @@ pub fn band_outlook_ring(
             }
         }
         for bo in p.bands {
-            best
-                .entry(bo.band.clone())
+            best.entry(bo.band.clone())
                 .and_modify(|e| {
                     if bo.score > e.score {
                         *e = bo.clone();
@@ -213,7 +218,10 @@ mod tests {
         assert_eq!(pred.engine, "heuristic");
         assert_eq!(eng.name(), "heuristic");
         // HF bands only — no 6m/4m/2m in the per-path outlook.
-        assert!(pred.bands.iter().all(|b| !matches!(b.band.as_str(), "6m" | "4m" | "2m")));
+        assert!(pred
+            .bands
+            .iter()
+            .all(|b| !matches!(b.band.as_str(), "6m" | "4m" | "2m")));
         assert!(!pred.bands.is_empty());
         // Sorted best-first.
         for w in pred.bands.windows(2) {
@@ -224,17 +232,37 @@ mod tests {
         assert!(
             pred.bands.iter().any(|b| b.score >= 0.3),
             "expected a workable band, got {:?}",
-            pred.bands.iter().map(|b| (&b.band, b.score)).collect::<Vec<_>>()
+            pred.bands
+                .iter()
+                .map(|b| (&b.band, b.score))
+                .collect::<Vec<_>>()
         );
         // MUF ceiling: 24 hourly values, and a real positive ceiling at SFI 150.
         assert_eq!(pred.muf_hourly.len(), 24, "24 hourly MUF values");
-        assert!(pred.muf_hourly.iter().any(|&m| m > 0.0), "a sunlit day has a positive MUF somewhere");
+        assert!(
+            pred.muf_hourly.iter().any(|&m| m > 0.0),
+            "a sunlit day has a positive MUF somewhere"
+        );
         // MUF rises with solar flux: SFI 200 must give a higher midday ceiling than SFI 90.
         let midday = MIDNIGHT_UTC + 12 * 3600;
         let me_ll = me.unwrap();
         let model_hi = crate::likelihood::PathModel::new(Some(me_ll));
-        let lo = model_hi.muf(dx, midday, &SpaceWx { sfi: 90.0, ..Default::default() });
-        let hi = model_hi.muf(dx, midday, &SpaceWx { sfi: 200.0, ..Default::default() });
+        let lo = model_hi.muf(
+            dx,
+            midday,
+            &SpaceWx {
+                sfi: 90.0,
+                ..Default::default()
+            },
+        );
+        let hi = model_hi.muf(
+            dx,
+            midday,
+            &SpaceWx {
+                sfi: 200.0,
+                ..Default::default()
+            },
+        );
         assert!(hi > lo, "MUF must rise with SFI: hi({hi}) > lo({lo})");
     }
 
@@ -286,12 +314,18 @@ mod tests {
         let ring = band_outlook_ring(me, 9000.0, 8, midday, &wx);
         assert!(!ring.bands.is_empty());
         // HF only, sorted best-first, 24 MUF hours, positive ceiling somewhere.
-        assert!(ring.bands.iter().all(|b| !matches!(b.band.as_str(), "6m" | "4m" | "2m")));
+        assert!(ring
+            .bands
+            .iter()
+            .all(|b| !matches!(b.band.as_str(), "6m" | "4m" | "2m")));
         for w in ring.bands.windows(2) {
             assert!(w[0].score >= w[1].score, "ring bands sorted best-first");
         }
         assert_eq!(ring.muf_hourly.len(), 24);
-        assert!(ring.muf_now > 0.0, "ring MUF ceiling positive at SFI 150 midday");
+        assert!(
+            ring.muf_now > 0.0,
+            "ring MUF ceiling positive at SFI 150 midday"
+        );
         // The ring's best-per-band must be >= any single direction's (it's a max).
         let one = HeuristicEngine::new(Some(me)).predict(
             crate::geo::destination_point(me, 90.0, 9000.0),
@@ -300,7 +334,11 @@ mod tests {
         );
         for ob in &one.bands {
             if let Some(rb) = ring.bands.iter().find(|b| b.band == ob.band) {
-                assert!(rb.score >= ob.score - 1e-6, "ring score >= single-direction for {}", ob.band);
+                assert!(
+                    rb.score >= ob.score - 1e-6,
+                    "ring score >= single-direction for {}",
+                    ob.band
+                );
             }
         }
     }

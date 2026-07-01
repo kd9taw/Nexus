@@ -413,9 +413,11 @@ pub struct FieldDayQso {
     pub call: String,
     pub class: String,
     pub section: String,
-    pub band: String,    /// Scoring class: "DIG" | "CW" | "PH".
+    pub band: String,
+    /// Scoring class: "DIG" | "CW" | "PH".
     #[serde(default)]
-    pub mode: String,    /// Unix seconds when logged (drives interop-push timestamps).
+    pub mode: String,
+    /// Unix seconds when logged (drives interop-push timestamps).
     #[serde(default)]
     pub when_unix: u64,
 }

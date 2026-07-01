@@ -15,7 +15,7 @@ use tempo_core::ft1;
 fn two_engines_exchange_an_open_broadcast() {
     let mut a = Engine::new("W9XYZ", "EN37", 0); // transmits on even slots
     let mut b = Engine::new("K2DEF", "FN31", 1); // transmits on odd slots
-    // TX is disarmed by default now (WSJT-X Enable-Tx) — arm both ends to transmit.
+                                                 // TX is disarmed by default now (WSJT-X Enable-Tx) — arm both ends to transmit.
     a.set_tx_enabled(true);
     b.set_tx_enabled(true);
     // Open broadcast / free-text chat is an FT1-native feature (long free text);
