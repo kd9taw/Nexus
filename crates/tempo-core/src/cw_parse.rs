@@ -110,6 +110,46 @@ fn up(s: &str) -> String {
     s.trim().to_ascii_uppercase()
 }
 
+/// Strict amateur-callsign SHAPE — tighter than [`crate::message::is_callsign`], which (by
+/// design, for FT8 free-text) accepts any digit+letter mix and so lets CW cut-number noise
+/// through: "599", "5NN", "5NN37", "TU", "73" all pass is_callsign, and "5NN" even RESOLVES
+/// to a real prefix (5N = Nigeria), so the DXCC check can't catch it either. A real call is
+/// a prefix (1–3 alnum containing a letter) + a call-area digit + a 1–4 letter suffix,
+/// optionally /-compound. We require exactly that shape before a token can become a
+/// candidate, so garbage is never auto-filled into the log.
+fn is_strict_callsign(s: &str) -> bool {
+    s.split('/').any(is_strict_base_call)
+}
+
+fn is_strict_base_call(base: &str) -> bool {
+    if !(3..=8).contains(&base.len()) {
+        return false;
+    }
+    if !base
+        .bytes()
+        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    {
+        return false;
+    }
+    // Suffix = the trailing run of letters (1–4).
+    let suffix = base
+        .bytes()
+        .rev()
+        .take_while(|b| b.is_ascii_uppercase())
+        .count();
+    if !(1..=4).contains(&suffix) {
+        return false;
+    }
+    // Head = prefix + the call-area digit; it must END in that digit.
+    let head = &base[..base.len() - suffix];
+    if !head.bytes().last().is_some_and(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    // Prefix = 1–3 chars before the call-area digit, containing at least one letter.
+    let prefix = &head[..head.len() - 1];
+    (1..=3).contains(&prefix.len()) && prefix.bytes().any(|b| b.is_ascii_uppercase())
+}
+
 /// Rank callsign candidates from the recent tokens. A token right after `DE` is the sender
 /// (strongest cue); repetition + a real DXCC prefix raise confidence; our own call and
 /// bare non-calls are dropped.
@@ -122,7 +162,7 @@ fn call_candidates(
     let mine = base_call(mycall);
     let mut scores: HashMap<String, u32> = HashMap::new();
     for (i, t) in toks.iter().enumerate() {
-        if !is_callsign(t) {
+        if !is_strict_callsign(t) {
             continue;
         }
         let b = base_call(t);
@@ -352,5 +392,34 @@ mod tests {
         // "Q1ABC" is well-formed but not a real prefix; "W1ABC" resolves → ranks higher.
         let a = analyze("DE Q1ABC W1ABC", &[], "KD9TAW", None, real);
         assert_eq!(a.candidates.first().unwrap().call, "W1ABC");
+    }
+
+    #[test]
+    fn rst_and_cut_number_noise_never_becomes_a_candidate() {
+        // RST / prosign noise ("599", "5NN", "5NN37", "TU", "73") must never be a callsign,
+        // even though is_callsign passes some and "5N" resolves to Nigeria — only W1ABC wins.
+        let a = analyze(
+            "CQ CQ DE W1ABC 599 5NN 5NN37 TU 73 K",
+            &[],
+            "KD9TAW",
+            None,
+            real,
+        );
+        let calls: Vec<&str> = a.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert_eq!(calls, vec!["W1ABC"]);
+    }
+
+    #[test]
+    fn strict_shape_accepts_real_calls_rejects_noise() {
+        for good in ["W1AW", "KD9TAW", "2E0ABC", "5N1AB", "VE3AQ"] {
+            assert!(
+                is_strict_base_call(good),
+                "{good} should be a valid callsign"
+            );
+        }
+        assert!(is_strict_callsign("KH6/KD9TAW")); // compound: the call segment wins
+        for bad in ["5NN", "599", "5NN37", "TU", "73", "OP", "SETH1"] {
+            assert!(!is_strict_base_call(bad), "{bad} should NOT be a callsign");
+        }
     }
 }

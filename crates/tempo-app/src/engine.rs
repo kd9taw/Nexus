@@ -891,6 +891,12 @@ impl Engine {
         self.cw_wpm = wpm.clamp(5, 50);
     }
 
+    /// Operator CW decode sensitivity in [0, 1] (0.5 = the original gates; higher catches
+    /// weaker/off-pitch marks like the skimmer, lower rejects more noise).
+    pub fn set_cw_sensitivity(&mut self, s: f32) {
+        self.cw_stream.set_sensitivity(s);
+    }
+
     /// Choose the CW keyer back-end ("cat" or "soundcard") + tone pitch (Hz; ignored
     /// if <= 0). Soundcard flips the CW rig-mode to USB; the radio loop re-applies it.
     pub fn set_cw_keyer(&mut self, backend: &str, pitch_hz: f32) {

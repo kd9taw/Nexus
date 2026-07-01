@@ -1837,8 +1837,9 @@ struct CwDecodeResult {
 /// Decode CW from the recent RX audio at the operator's pitch — a live readout for the
 /// CW cockpit. Empty text unless there's a clear keyed signal under the marker.
 #[tauri::command]
-fn cw_decode(state: State<'_, SharedEngine>) -> Result<CwDecodeResult, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+fn cw_decode(state: State<'_, SharedEngine>, sensitivity: f32) -> Result<CwDecodeResult, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_cw_sensitivity(sensitivity); // operator slider; scales the decode gates
     let d = eng.cw_decode();
     let sent = eng.cw_sent();
     let worked = eng.active_peer();

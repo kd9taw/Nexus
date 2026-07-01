@@ -184,7 +184,8 @@ pub fn skim_cw(samples: &[f32], sr: f32, lo_hz: u32, hi_hz: u32, step_hz: u32) -
 
 const CW_TRANSCRIPT_CAP: usize = 4000; // keep the tail; drop older text
 const CW_SPIKE_FRAC: f32 = 0.4; // reject marks shorter than 0.4·dit as impulse noise
-const CW_MARK_SNR: f32 = 4.0; // a real element's peak must clear the noise floor by this ×
+                                // The per-mark SNR gate (a real element's peak must clear the noise floor) + the presence
+                                // gate are now operator-scaled — see CwStreamDecoder::snr_mult / present_mult (sensitivity).
 
 /// Streaming, stateful CW decoder — the persistent-transcript sibling of [`decode_cw`].
 ///
@@ -220,6 +221,7 @@ pub struct CwStreamDecoder {
     flushed_char: bool, // this gap already flushed its pending character
     flushed_word: bool, // this gap already emitted a word space
     transcript: String,
+    sensitivity: f32, // 0..1 operator control; scales the presence + per-mark SNR gates
 }
 
 impl CwStreamDecoder {
@@ -250,14 +252,35 @@ impl CwStreamDecoder {
             flushed_char: false,
             flushed_word: false,
             transcript: String::new(),
+            sensitivity: 0.5, // 0.5 == the historical fixed gates (SNR ×4, presence ×3)
         }
     }
 
+    /// Operator decode sensitivity in [0, 1]. Higher = catch weaker/off-pitch marks (like the
+    /// wideband skimmer, at the cost of more noise); lower = stricter. 0.5 keeps the original
+    /// gates. Scales the presence gate (×`present_mult`) and the per-mark SNR gate.
+    pub fn set_sensitivity(&mut self, s: f32) {
+        self.sensitivity = s.clamp(0.0, 1.0);
+    }
+
+    /// Per-mark SNR multiplier: 0→×6 (strict) · 0.5→×4 (default) · 1→×2 (loose).
+    fn snr_mult(&self) -> f32 {
+        6.0 - 4.0 * self.sensitivity
+    }
+
+    /// Presence-gate multiplier: 0→×4 · 0.5→×3 (default) · 1→×2.
+    fn present_mult(&self) -> f32 {
+        4.0 - 2.0 * self.sensitivity
+    }
+
     /// Retune to a new marker pitch. No-op if unchanged; otherwise resets all state +
-    /// transcript (the old text belonged to a different signal).
+    /// transcript (the old text belonged to a different signal) but keeps the operator's
+    /// sensitivity setting.
     pub fn retune(&mut self, pitch_hz: f32) {
         if (pitch_hz - self.pitch).abs() > 1.0 {
+            let s = self.sensitivity;
             *self = Self::new(self.sr, pitch_hz);
+            self.sensitivity = s;
         }
     }
 
@@ -303,7 +326,7 @@ impl CwStreamDecoder {
             // warmup dead-zone (a percentile window can't flag a signal until it fills a
             // fifth of the window, which truncated the first character into a dit).
             let span = (self.peak - self.noise).max(0.0);
-            self.present = self.peak >= self.noise * 3.0 && span > 1e-9;
+            self.present = self.peak >= self.noise * self.present_mult() && span > 1e-9;
             self.hi_thresh = self.noise + 0.60 * span; // Schmitt upper rail
             self.lo_thresh = self.noise + 0.40 * span; // Schmitt lower rail (hysteresis band)
             self.step(p);
@@ -350,7 +373,7 @@ impl CwStreamDecoder {
         // Reject a mark that is too SHORT (impulse) OR too WEAK (its peak barely clears the
         // noise floor). The weak case kills the "E E E…" storm the decoder otherwise emits
         // from band noise between signals — a real keyed element sits well above the floor.
-        if (self.run as f32) < spike_min || self.mark_peak < self.noise * CW_MARK_SNR {
+        if (self.run as f32) < spike_min || self.mark_peak < self.noise * self.snr_mult() {
             // Not a keyed element — roll its hops into the surrounding gap so it doesn't
             // reset the character timing.
             self.space_run += self.run;

@@ -69,6 +69,23 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
   // engine ~1.4 Hz (the decode reads a multi-second ring, so faster adds no detail).
   const [decoded, setDecoded] = useState<{ text: string; wpm: number }>({ text: '', wpm: 0 })
   const decodeRef = useRef<HTMLDivElement>(null)
+  // Operator decode sensitivity (0..1; 0.5 = original gates). Higher catches weaker/off-pitch
+  // marks the single-pitch decoder otherwise drops (the skimmer already scans wider). A ref
+  // feeds the fixed-deps poll loop without restarting the interval on every slider nudge.
+  const [sensitivity, setSensitivity] = useState<number>(() => {
+    const v = parseFloat(localStorage.getItem('nexus.cw.sensitivity') ?? '')
+    return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.5
+  })
+  const sensitivityRef = useRef(sensitivity)
+  sensitivityRef.current = sensitivity
+  const changeSensitivity = (v: number) => {
+    setSensitivity(v)
+    try {
+      localStorage.setItem('nexus.cw.sensitivity', String(v))
+    } catch {
+      /* storage blocked — still applies this session */
+    }
+  }
   // Keep the newest decoded text in view as the transcript grows.
   useEffect(() => {
     const el = decodeRef.current
@@ -136,7 +153,7 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
     let alive = true
     let n = 0
     const tick = () => {
-      cwDecode()
+      cwDecode(sensitivityRef.current)
         .then((d) => {
           if (alive) {
             setDecoded({ text: d.text, wpm: d.wpm })
@@ -431,6 +448,21 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
         <div className="cw-decode-head">
           <span className="cw-decode-label">DECODE</span>
           {decoded.wpm > 0 && <span className="cw-decode-wpm">{decoded.wpm} WPM</span>}
+          <label
+            className="cw-sens"
+            title="Decode sensitivity — slide up to catch weaker / off-pitch signals (more noise); down is stricter. Middle = default."
+          >
+            <span>SENS</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={sensitivity}
+              aria-label="CW decode sensitivity"
+              onChange={(e) => changeSensitivity(Number(e.target.value))}
+            />
+          </label>
           <button
             className="cw-decode-clear"
             onClick={() => {
@@ -466,20 +498,24 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
         </div>
       )}
 
-      {skim.length > 0 && (
-        <div className="cw-skim" title="Wideband CW skimmer — every signal across the band">
-          <span className="cw-decode-label">SKIM</span>
-          <ul className="cw-skim-list">
-            {skim.map((h) => (
+      {/* Always rendered at a fixed height so it never pops in/out and shoves the log
+          around; shows a scanning state when the band is quiet. Scrolls past ~9 signals. */}
+      <div className="cw-skim" title="Wideband CW skimmer — every signal across the band">
+        <span className="cw-decode-label">SKIM</span>
+        <ul className="cw-skim-list">
+          {skim.length > 0 ? (
+            skim.map((h) => (
               <li key={h.pitchHz} className="cw-skim-row">
                 <span className="cw-skim-freq">{h.pitchHz} Hz</span>
                 <span className="cw-skim-text">{h.text}</span>
                 <span className="cw-skim-wpm">{h.wpm}</span>
               </li>
-            ))}
-          </ul>
-        </div>
-      )}
+            ))
+          ) : (
+            <li className="cw-skim-idle">scanning the band…</li>
+          )}
+        </ul>
+      </div>
 
       <div className="cw-macros" role="group" aria-label="CW macros">
         {MACROS.map((m) => (

@@ -691,9 +691,10 @@ export async function readRotator(): Promise<number | null> {
   return invoke<number | null>('read_rotator')
 }
 
-/** Single-signal CW decode of the recent RX audio (live readout: text + estimated WPM). */
-export async function cwDecode(): Promise<CwDecodeResult> {
-  return invoke<CwDecodeResult>('cw_decode')
+/** Single-signal CW decode of the recent RX audio (live readout: text + estimated WPM).
+ * `sensitivity` (0..1, 0.5 = default gates) scales the decoder's presence + SNR gates. */
+export async function cwDecode(sensitivity: number): Promise<CwDecodeResult> {
+  return invoke<CwDecodeResult>('cw_decode', { sensitivity })
 }
 
 /** Clear the streaming CW decoder's accumulated transcript. */
