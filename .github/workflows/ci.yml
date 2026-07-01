@@ -8,6 +8,12 @@
 # scripts/build-windows.ps1 (PowerShell wrapper), and scripts/build-windows-cross.sh
 # (the same Linux/WSL2 cross toolchain, with --bundles nsis) — see WINDOWS.md.
 # Published Windows binaries are cross-compiled beta and are not bundled here.
+#
+# Toolchain: the Rust jobs pin an exact stable (dtolnay/rust-toolchain@master with
+# toolchain: 1.93.1) instead of floating @stable. A floating stable silently rolls
+# rustfmt/clippy forward and reformats/re-lints the whole tree the day a new Rust
+# ships — which is exactly what bit this repo. Bump the version below deliberately
+# to adopt newer lints. The MSRV job intentionally stays pinned at 1.87.0.
 
 name: CI
 
@@ -59,9 +65,10 @@ jobs:
             libasound2-dev \
             libudev-dev
 
-      - name: Set up Rust stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust 1.93.1 toolchain (pinned — see header)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.93.1
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
@@ -208,9 +215,10 @@ jobs:
         with:
           node-version: 20
 
-      - name: Set up Rust stable toolchain (+ windows-gnu target)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust 1.93.1 toolchain (pinned) + windows-gnu target
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.93.1
           targets: x86_64-pc-windows-gnu
 
       - name: Cache cargo, FFTW, and build artifacts
