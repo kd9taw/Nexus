@@ -13,8 +13,8 @@ use super::solar::MAX_SSN;
 
 /// P.533 constants (`P533.h`).
 const R0: f64 = geometry::R0;
-const MAX_F2_MODES: usize = 6;
-const MAX_E_MODES: usize = 3;
+pub const MAX_F2_MODES: usize = 6;
+pub const MAX_E_MODES: usize = 3;
 const MIN_ELE_DEG: f64 = 3.0; // MINELEANGLES, short model
 
 /// Season indices (reference `WINTER`/`EQUINOX`/`SUMMER`).
@@ -40,6 +40,15 @@ pub struct Mode {
     pub fprob: f64,
     /// Mirror reflection height (km).
     pub hr: f64,
+    /// E-layer maximum screening frequency (MHz) — F2 modes, ≤4000 km paths.
+    pub fs: f64,
+    /// Elevation angle (rad), set by the field-strength stage.
+    pub ele: f64,
+    /// Basic loss (dB) and median field strength (dB(1 µV/m)).
+    pub lb: f64,
+    pub ew: f64,
+    /// Mode counted into the path field strength (reference `MC`).
+    pub mc: bool,
 }
 
 /// The path state the MUF chain fills (a lean `struct PathData`).
@@ -76,6 +85,9 @@ pub struct MufPath {
     pub opmuf: f64,
     pub opmuf10: f64,
     pub opmuf90: f64,
+    /// Median field strength with E-layer screening (dB(1 µV/m)), ≤7000 km —
+    /// the short model's `Es`; TINY_DB when no mode contributes.
+    pub es: f64,
 }
 
 /// Season index for the path midpoint (reference `WhatSeason()`).
@@ -113,7 +125,7 @@ pub fn elevation_angle(dh: f64, hr: f64) -> f64 {
 
 /// Eqn (6): the intermediate `B`, also setting the control point's foF2/foE
 /// ratio `x` (side effect kept to mirror the reference).
-fn calc_b(cp: &mut ControlPt) -> f64 {
+pub fn calc_b(cp: &mut ControlPt) -> f64 {
     cp.x = if cp.foe != 0.0 {
         (cp.fof2 / cp.foe).max(2.0)
     } else {
@@ -124,7 +136,7 @@ fn calc_b(cp: &mut ControlPt) -> f64 {
 }
 
 /// Eqn (5): dmax (km, may exceed 4000 here; callers clamp where the reference does).
-fn calc_dmax(cp: &mut ControlPt) -> f64 {
+pub fn calc_dmax(cp: &mut ControlPt) -> f64 {
     let b = calc_b(cp);
     4780.0
         + (12610.0 + (2140.0 / cp.x.powi(2)) - (49720.0 / cp.x.powi(4)) + (688900.0 / cp.x.powi(6)))
@@ -141,7 +153,7 @@ fn calc_cd(d: f64, dmax: f64) -> f64 {
 }
 
 /// Eqn (3): F2(d)MUF at a control point for hop `distance`.
-fn calc_f2dmuf(cp: &ControlPt, distance: f64, dmax: f64, b: f64) -> f64 {
+pub fn calc_f2dmuf(cp: &ControlPt, distance: f64, dmax: f64, b: f64) -> f64 {
     let d = distance.min(dmax);
     let cd = calc_cd(d, dmax);
     let c3k = calc_cd(3000.0, dmax);
@@ -198,6 +210,7 @@ pub fn muf_path(
         opmuf: 0.0,
         opmuf10: 0.0,
         opmuf90: 0.0,
+        es: super::fieldstrength::TINY_DB,
     };
     muf_basic(&mut path);
     muf_variability(&mut path);
@@ -334,7 +347,7 @@ fn muf_basic(path: &mut MufPath) {
 /// with the reference's bilinear + rollover behavior. `hour` is the
 /// reference's `CP.ltime` (the hour slot — fed unmodified into the
 /// local-time-indexed table, exactly like the reference).
-fn find_fof2var(season: usize, hour: f64, lat: f64, ssn: f64, decile: usize) -> f64 {
+pub fn find_fof2var(season: usize, hour: f64, lat: f64, ssn: f64, decile: usize) -> f64 {
     let t = super::coeffs::p1239();
     let lat = (lat / 5f64.to_radians()).abs();
     let mut r = lat.fract();

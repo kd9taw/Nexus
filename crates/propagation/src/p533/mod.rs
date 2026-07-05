@@ -15,8 +15,11 @@
 //!   dip/gyrofrequency, and the CCIR numerical-map expansion (foF2, M(3000)F2).
 //! - `muf` / `fieldstrength` / `noise` / `reliability` — the P.533 chain.
 
+pub mod absorption;
 pub mod coeffs;
 pub mod cp;
+pub mod fieldstrength;
+pub mod fieldstrength_long;
 pub mod geometry;
 pub mod ionosphere;
 pub mod magfield;
