@@ -22,6 +22,9 @@ interface Props {
   onSnap?: (snap: AppSnapshot) => void
   /** Field Day status — when non-null the log strip switches to FD mode. */
   fieldDay?: FieldDayStatus | null
+  /** Phone sub-mode from Settings ('ssb' | 'fm') — drives the mode badge, mirroring
+   * the rig-mode policy's Phone arm (FM, else sideband by band). */
+  phoneMode?: string
 }
 
 /**
@@ -30,15 +33,17 @@ interface Props {
  * audio bridge + voice keyer land in P3-b/c). Entering forces USB/LSB by band (the
  * rig-mode keystone, wired in App). See `tasks/specs/phone-operating.md`.
  */
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   const [keyed, setKeyed] = useState(false)
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
 
-  // The sideband the rig-mode policy commands in Phone (band-aware: LSB <10 MHz, else USB) —
-  // this is exactly what the app sets the rig to over CAT.
-  const sideband = snap.radio.dialMhz < 10 ? 'LSB' : 'USB'
+  // The mode the rig-mode policy commands in Phone — FM when the FM sub-mode is
+  // selected, else sideband by band (LSB <10 MHz, USB above). This is exactly what
+  // the app sets the rig to over CAT.
+  const sideband =
+    phoneMode?.toLowerCase() === 'fm' ? 'FM' : snap.radio.dialMhz < 10 ? 'LSB' : 'USB'
   // Whether the app can actually control the rig. Without CAT (VOX/serial PTT) the dial +
   // mode can't be set or read back — surface that so it's clear, not silently broken.
   const catOk = snap.radio.catOk === true
@@ -110,7 +115,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   return (
     <main className="layout single phone-cockpit">
       <div className="ph-bar">
-        <span className="ph-mode-badge" title="The rig is set to this sideband while you're in Phone">
+        <span className="ph-mode-badge" title="The rig is set to this mode while you're in Phone">
           {sideband}
         </span>
         <span className="ph-freq mono">

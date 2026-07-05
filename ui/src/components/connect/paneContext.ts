@@ -50,5 +50,7 @@ export interface PaneContext {
   // callbacks
   onSelectCall: (call: string | null) => void
   onWorkSpot?: (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => void
+  /** Point the rotator at a call (present only when a rotator is configured). */
+  onPoint?: (call: string) => void
   toggleFocusBand: (band: string) => void
 }

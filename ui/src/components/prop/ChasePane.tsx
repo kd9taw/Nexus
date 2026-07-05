@@ -42,6 +42,19 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
                 <div className="chase-head">
                   {chip && <span className={`need-chip need-${chip.cls}`}>{chip.label}</span>}
                   <b className="chase-call">{t.call}</b>
+                  {ctx.onPoint && (
+                    <button
+                      type="button"
+                      className="np-point"
+                      title={`Point the antenna at ${t.call}`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        ctx.onPoint!(t.call)
+                      }}
+                    >
+                      ↗
+                    </button>
+                  )}
                   <span className="chase-entity">{ctx.expert ? t.entity : ''}</span>
                   {t.ageSecs != null && <span className="chase-age">{ageLabel(t.ageSecs)}</span>}
                 </div>

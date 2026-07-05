@@ -17,7 +17,8 @@ import {
   toggleIgnored,
 } from '../txMessages'
 import { getSettings, notifyErase, setSettings } from '../api'
-import { redecode, startCq } from '../api'
+import { redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
+import { pushToast } from '../toast'
 import { Waterfall } from './Waterfall'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { OperateQsoStrip } from './OperateQsoStrip'
@@ -171,6 +172,20 @@ export function OperateCockpit({
     0,
     Math.ceil((slotBase.current.ms - (Date.now() - slotBase.current.at)) / 1000),
   )
+
+  // --- QSO recording (audio bridge) — same toggle as the Phone cockpit; the
+  // global TopBar ● REC badge is the persistent stop once recording is on.
+  const [recBusy, setRecBusy] = useState(false)
+  const recording = snap.radio.qsoRecording
+  const toggleRecord = () => {
+    if (recBusy) return
+    setRecBusy(true)
+    const fn = recording ? stopQsoRecording : startQsoRecording
+    fn()
+      .then((s) => onSnap?.(s))
+      .catch(() => pushToast(`Could not ${recording ? 'stop' : 'start'} recording`, 'error'))
+      .finally(() => setRecBusy(false))
+  }
 
   // --- DXpedition special-op selector ---
   // Fetch once on mount (lightweight — just reads the one field). After the
@@ -481,6 +496,19 @@ export function OperateCockpit({
             title="Re-decode the last period (F6)"
           >
             Decode
+          </button>
+          <button
+            type="button"
+            className={`ph-rec${recording ? ' on' : ''}`}
+            onClick={toggleRecord}
+            disabled={recBusy}
+            title={
+              recording
+                ? 'Stop recording this QSO'
+                : 'Record the received audio to a WAV in the recordings folder'
+            }
+          >
+            {recording ? '■ Recording' : '● Record QSO'}
           </button>
           {snap.radio.splitTxMhz != null && (
             <span

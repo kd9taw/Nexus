@@ -672,6 +672,11 @@ impl RadioLoop {
             }
             if abort {
                 let _ = rig.stop_morse(); // CAT keyer abort (rig CW buffer)
+                                          // WinKeyer abort: one Clear Buffer byte stops keying + flushes its queue.
+                #[cfg(feature = "serial")]
+                if let Some((_, wk)) = self.winkeyer.as_mut() {
+                    let _ = wk.clear();
+                }
                 if soundcard {
                     // Soundcard abort: dump the queued tone audio + unkey now.
                     backend.flush_output();

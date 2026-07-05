@@ -1275,6 +1275,7 @@ export default function App() {
           onConsumeWork={() => setPendingWork(null)}
           onSnap={setSnap}
           fieldDay={snap.fieldDay}
+          phoneMode={settings?.phoneMode}
         />
       )
       break
@@ -1339,6 +1340,7 @@ export default function App() {
           needByCall={needByCall}
           onWorkSpot={handleWorkMapSpot}
           needAlerts={visibleAlerts}
+          onPoint={settings?.rotatorHost?.trim() ? handlePointAntenna : undefined}
           onPopOut={() => void openPanelWindow('connect')}
         />
       )

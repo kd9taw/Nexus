@@ -582,8 +582,8 @@ mod tests {
         assert_eq!(classify_spot_mode(1.840), ModeClass::Digital); // 160m FT8 hole
         assert_eq!(classify_spot_mode(28.320), ModeClass::Phone); // 10m phone
         assert_eq!(classify_spot_mode(21.300), ModeClass::Phone); // 15m phone
-        // Accepted trade-off: 40m DX SSB parked below the US phone edge falls in the data
-        // window and reads Digital (we won't trust an "SSB" comment to rescue it).
+                                                                  // Accepted trade-off: 40m DX SSB parked below the US phone edge falls in the data
+                                                                  // window and reads Digital (we won't trust an "SSB" comment to rescue it).
         assert_eq!(classify_spot_mode(7.085), ModeClass::Digital);
     }
 

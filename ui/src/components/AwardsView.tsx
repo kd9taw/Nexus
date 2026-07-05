@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud } from 'lucide-react'
-import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, QsoDiagnosis, UploadReport } from '../types'
-import { getAwards, getConfirmationDiagnostics, uploadLotwReport } from '../api'
+import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, QsoDiagnosis, UploadReport, LoggedQso } from '../types'
+import {
+  getAwards,
+  getConfirmationDiagnostics,
+  uploadLotwReport,
+  getLog,
+  qrzPushQso,
+  clublogPushQso,
+  eqslPushQso,
+} from '../api'
 import { StateBlock } from './StateBlock'
 
 /** Confirmed entities for the basic DXCC award. */
@@ -119,16 +127,35 @@ function uploadMessage(r: UploadReport): string {
   }
 }
 
-/** Per-QSO action affordance: a live button for the two upload kinds, a static
+/** The per-QSO push targets the diagnostics can drive (each has a single-QSO
+ * push command; LoTW goes through the TQSL by-index upload path instead). */
+type PushService = 'QRZ' | 'ClubLog' | 'eQSL'
+
+/** The push service a row action maps to, or null when it isn't a push. */
+function pushService(a: DiagAction): PushService | null {
+  if (a.kind === 'uploadToQrz') return 'QRZ'
+  if (a.kind === 'uploadToClublog') return 'ClubLog'
+  if (a.kind === 'uploadToEqsl') return 'eQSL'
+  if (a.kind === 'reUpload' && (a.source === 'QRZ' || a.source === 'ClubLog' || a.source === 'eQSL'))
+    return a.source
+  return null
+}
+
+/** Per-QSO action affordance: a live button for the upload/push kinds, a static
  * guidance chip for the rest (field/dup/call fixes + partner-side waits are 1a). */
 function RowAction({
   d,
   busyKey,
   onUpload,
+  onPush,
+  canPush,
 }: {
   d: QsoDiagnosis
   busyKey: string | null
   onUpload: (indices: number[], key: string) => void
+  onPush: (index: number, service: PushService, key: string) => void
+  /** False while the log hasn't loaded — pushes need the QSO record. */
+  canPush: boolean
 }) {
   const a = d.reasons[0]?.action
   if (!a) return null
@@ -145,11 +172,24 @@ function RowAction({
       </button>
     )
   }
-  // QRZ/ClubLog have no bulk path — guide the operator instead of mis-firing LoTW.
-  if (a.kind === 'reUpload') return <span className="conf-act">Re-push to {a.source}</span>
-  if (a.kind === 'uploadToQrz') return <span className="conf-act">Push to QRZ</span>
-  if (a.kind === 'uploadToClublog') return <span className="conf-act">Push to ClubLog</span>
-  if (a.kind === 'uploadToEqsl') return <span className="conf-act">Push to eQSL</span>
+  // QRZ/ClubLog/eQSL: one-click per-row push via the existing single-QSO commands.
+  // Muted styling + tooltip keep the house rule visible: these serve the personal
+  // logbook, NOT ARRL DXCC/WAS credit — only the LoTW button is the award pill.
+  const svc = pushService(a)
+  if (svc) {
+    const label = a.kind === 'reUpload' ? `Re-push to ${svc}` : `Push to ${svc}`
+    if (!canPush) return <span className="conf-act">{label}</span>
+    return (
+      <button
+        className="conf-btn conf-btn-push"
+        disabled={busyKey !== null}
+        title={`Pushes this QSO to your ${svc} logbook — does not count for ARRL DXCC/WAS (LoTW only)`}
+        onClick={() => onPush(d.index, svc, key)}
+      >
+        {busyKey === key ? 'Pushing…' : label}
+      </button>
+    )
+  }
   if (a.kind === 'reauthenticate')
     return (
       <span className="conf-act">
@@ -166,6 +206,9 @@ function RowAction({
 export function AwardsView({ showGamification = true }: { showGamification?: boolean }) {
   const [aw, setAw] = useState<AwardSummary | null>(null)
   const [diag, setDiag] = useState<DiagnosticsReport | null>(null)
+  // The log itself, so a diagnosis row (indexed oldest-first, same order as
+  // get_log) can hand its QsoRecord to the per-QSO QRZ/ClubLog/eQSL push.
+  const [log, setLog] = useState<LoggedQso[] | null>(null)
   const [err, setErr] = useState(false)
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [uploadMsg, setUploadMsg] = useState<string | null>(null)
@@ -181,6 +224,9 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
     getConfirmationDiagnostics()
       .then((d) => live && setDiag(d))
       .catch(() => {}) // diagnostics are a best-effort add-on; never block the dashboard
+    getLog()
+      .then((l) => live && setLog(l))
+      .catch(() => {}) // without it the push buttons degrade to guidance chips
     return () => {
       live = false
       mounted.current = false
@@ -200,6 +246,53 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
       if (fresh) setDiag(fresh)
     } catch (e) {
       if (mounted.current) setUploadMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      if (mounted.current) setBusyKey(null)
+    }
+  }
+
+  /** Push one QSO to QRZ/ClubLog/eQSL (the never-uploaded and bounced-re-push
+   * cases), then re-diagnose so the row reflects the new upload state. */
+  async function push(index: number, service: PushService, key: string) {
+    const q = log?.[index]
+    if (!q) {
+      setUploadMsg('Could not find that QSO in the log — reload Awards and try again.')
+      return
+    }
+    setBusyKey(key)
+    setUploadMsg(null)
+    try {
+      let msg: string
+      if (service === 'QRZ') {
+        const r = await qrzPushQso(q)
+        msg =
+          r.result === 'ok' || r.result === 'replace'
+            ? `✓ ${q.call} pushed to your QRZ logbook.`
+            : r.result === 'duplicate'
+              ? `✓ ${q.call} already in your QRZ logbook (duplicate) — nothing to re-send.`
+              : `✗ QRZ rejected ${q.call}: ${r.reason ?? r.result}`
+      } else if (service === 'ClubLog') {
+        const r = await clublogPushQso(q)
+        msg =
+          r.result === 'ok' || r.result === 'modified' || r.result === 'duplicate'
+            ? `✓ ${q.call} on ClubLog${r.result === 'duplicate' ? ' (already there)' : ''}.`
+            : `✗ ClubLog rejected ${q.call}: ${r.message ?? r.result}`
+      } else {
+        // eQSL's classify_upload returns 'accepted' on success (never 'pending' —
+        // that's the LoTW/TQSL batch convention on the shared DTO).
+        const r = await eqslPushQso(q)
+        msg =
+          r.outcome === 'accepted' || r.outcome === 'duplicate'
+            ? `✓ ${q.call} sent to eQSL${r.outcome === 'duplicate' ? ' (already there)' : ''}.`
+            : `✗ eQSL: ${r.detail ?? r.outcome}`
+      }
+      const fresh = await getConfirmationDiagnostics().catch(() => null)
+      if (!mounted.current) return
+      setUploadMsg(msg)
+      if (fresh) setDiag(fresh)
+    } catch (e) {
+      if (mounted.current)
+        setUploadMsg(`✗ ${service} push failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       if (mounted.current) setBusyKey(null)
     }
@@ -466,6 +559,28 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
           <h3>
             <CheckCircle2 size={14} aria-hidden="true" /> Confirmations — why isn't this credited?
           </h3>
+          {(diag.oneAway ?? []).length > 0 && (
+            <div className="conf-oneaway">
+              <span className="conf-oneaway-label">One fix away:</span>
+              {diag.oneAway.slice(0, 8).map((o) => (
+                <span
+                  key={o.entity}
+                  className={`conf-oneaway-chip${o.newEntity ? ' conf-oneaway-new' : ''}`}
+                  title={`${o.entity} (${o.bands.join(', ')}): one LoTW upload / data fix puts ${
+                    o.newEntity
+                      ? 'a NEW DXCC entity'
+                      : `${o.bands.length} Challenge slot${o.bands.length === 1 ? '' : 's'}`
+                  } in play — the partner's confirmation still decides`}
+                >
+                  {o.newEntity && <span className="conf-oneaway-star">★</span>}
+                  {o.entity} <span className="conf-oneaway-bands">{o.bands.join(' ')}</span>
+                </span>
+              ))}
+              {diag.oneAway.length > 8 && (
+                <span className="conf-muted">+{diag.oneAway.length - 8} more</span>
+              )}
+            </div>
+          )}
           {(() => {
             // Top action per flagged QSO → lets a bucket offer a one-click bulk upload
             // ONLY when every member is a LoTW (re)upload (the one service with an
@@ -512,7 +627,7 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
                     <span className={`conf-code conf-${r?.code ?? 'x'}`}>{(r?.code ?? '').toUpperCase()}</span>
                     <span className="conf-expl">{r?.explanation}</span>
                     {r?.confidence === 'likely' && <span className="conf-likely">likely</span>}
-                    <RowAction d={d} busyKey={busyKey} onUpload={upload} />
+                    <RowAction d={d} busyKey={busyKey} onUpload={upload} onPush={push} canPush={log !== null} />
                   </li>
                 )
               })}

@@ -5353,7 +5353,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.set_mode("qso-run").unwrap();
         e.poll_tx(0); // CQ out on our slot
-        // A caller answers with a grid → we switch to sending the report (AwaitRoger).
+                      // A caller answers with a grid → we switch to sending the report (AwaitRoger).
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
         assert_eq!(
             e.snapshot().qso.unwrap().dxcall.as_deref(),
@@ -5367,7 +5367,10 @@ mod tests {
             e.ingest_decodes_for_test(&[], slot + 1);
         }
         let qso = e.snapshot().qso.expect("still running");
-        assert_eq!(qso.state, "CallingCq", "abandoned the dead caller, back to CQ");
+        assert_eq!(
+            qso.state, "CallingCq",
+            "abandoned the dead caller, back to CQ"
+        );
         assert!(
             qso.dxcall.is_none(),
             "the silent caller was dropped, got {:?}",

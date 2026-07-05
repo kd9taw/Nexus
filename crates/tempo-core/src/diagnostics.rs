@@ -139,10 +139,24 @@ pub struct ActionBucket {
     pub qso_indices: Vec<usize>,
 }
 
+/// One entity a single actionable fix away from new award credit — the leverage
+/// rollup ("N slots one away"). `bands` are the would-be NEW Challenge slots
+/// (entity×band with no award-confirmed QSO yet); `new_entity` marks an entity
+/// with no confirmed slot on ANY band (a would-be new DXCC credit).
+#[derive(Debug, Clone)]
+pub struct OneAway {
+    pub entity: String,
+    pub bands: Vec<String>,
+    pub new_entity: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DiagnosticsReport {
     pub diagnoses: Vec<QsoDiagnosis>,
     pub buckets: Vec<ActionBucket>,
+    /// Entities one self-serve, award-grade fix away from a new slot/entity —
+    /// would-be new entities first, then by slots at stake.
+    pub one_away: Vec<OneAway>,
     /// QSOs you've uploaded but the partner hasn't (Phase 1b — 0 in 1a).
     pub waiting_on_partner: usize,
     /// Recently-worked unconfirmed QSOs (lag, not a failure) — counted, not listed.
@@ -169,6 +183,20 @@ fn action_source(a: &Action) -> &str {
         | Action::Reauthenticate { source }
         | Action::NudgePartner { source, .. } => source,
         _ => "",
+    }
+}
+
+/// Does this action count for the "one away" rollup? It must be something the
+/// operator can do alone AND serve award-grade (LoTW) credit: an upload/re-upload/
+/// re-auth on LoTW, or a data fix that unlocks matching. Waiting on a partner (R2)
+/// and the non-award pushes (QRZ/ClubLog/eQSL) don't qualify.
+fn one_away_action(a: &Action) -> bool {
+    match a {
+        Action::UploadToLotw | Action::FixField { .. } | Action::CorrectBustedCall { .. } => true,
+        Action::ReUpload { source, .. } | Action::Reauthenticate { source } => {
+            source.eq_ignore_ascii_case("LoTW")
+        }
+        _ => false,
     }
 }
 
@@ -646,6 +674,56 @@ pub fn diagnose(
     bs.sort_by(|a, b| b.count.cmp(&a.count).then(a.kind.cmp(&b.kind)));
     report.buckets = bs;
     report.waiting_on_partner = waiting_on_partner;
+
+    // --- The "one away" rollup: entities where a single self-serve, award-grade
+    // fix (the diagnosed QSO's TOP action) would put a NEW Challenge slot in play —
+    // would-be new entities (no confirmed slot anywhere) lead. Slots already
+    // award-confirmed by another QSO are excluded, as are unresolved entities.
+    {
+        use std::collections::{BTreeMap, BTreeSet, HashSet};
+        let mut confirmed_slots: HashSet<(String, String)> = HashSet::new();
+        let mut confirmed_entities: HashSet<String> = HashSet::new();
+        for (i, r) in records.iter().enumerate() {
+            if !r.award_confirmed {
+                continue;
+            }
+            if let Some(e) = entities.get(i).and_then(|e| e.clone()) {
+                confirmed_slots.insert((e.clone(), r.band.to_ascii_lowercase()));
+                confirmed_entities.insert(e);
+            }
+        }
+        let mut by_entity: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for d in &report.diagnoses {
+            let Some(top) = d.reasons.first() else {
+                continue;
+            };
+            if !one_away_action(&top.action) {
+                continue;
+            }
+            let Some(e) = entities.get(d.index).and_then(|e| e.clone()) else {
+                continue;
+            };
+            let band = records[d.index].band.to_ascii_lowercase();
+            if band.is_empty() || confirmed_slots.contains(&(e.clone(), band.clone())) {
+                continue;
+            }
+            by_entity.entry(e).or_default().insert(band);
+        }
+        report.one_away = by_entity
+            .into_iter()
+            .map(|(entity, bands)| OneAway {
+                new_entity: !confirmed_entities.contains(&entity),
+                entity,
+                bands: bands.into_iter().collect(),
+            })
+            .collect();
+        report.one_away.sort_by(|a, b| {
+            b.new_entity
+                .cmp(&a.new_entity)
+                .then(b.bands.len().cmp(&a.bands.len()))
+                .then(a.entity.cmp(&b.entity))
+        });
+    }
     report
 }
 
@@ -1407,5 +1485,50 @@ mod tests {
         assert_eq!(osa_distance("W1AW", "W1AX"), 1); // substitution
         assert_eq!(osa_distance("W1AW", "W1WA"), 1); // transposition
         assert_eq!(osa_distance("K9XYZ", "W1AW"), 5);
+    }
+
+    #[test]
+    fn one_away_rolls_up_award_slots_new_entities_first() {
+        // Germany: two eQSL-only QSOs (R3 → upload to LoTW) on two bands, no
+        // confirmed slot anywhere → would-be NEW entity with 2 slots at stake.
+        let mut de20 = rec("DL1ABC", "20m", "FT8", 20_000);
+        de20.confirmed = true;
+        let mut de40 = rec("DL2XYZ", "40m", "FT8", 20_000);
+        de40.confirmed = true;
+        // Japan: 20m already award-confirmed; the eQSL-only 15m QSO is one fix
+        // away → 1 new slot, NOT a new entity. Its 20m twin must not re-count.
+        let mut ja20 = rec("JA1AAA", "20m", "FT8", 20_000);
+        ja20.award_confirmed = true;
+        let mut ja15 = rec("JA1AAA", "15m", "FT8", 20_000);
+        ja15.confirmed = true;
+        let ents = vec![
+            Some("Germany".to_string()),
+            Some("Germany".to_string()),
+            Some("Japan".to_string()),
+            Some("Japan".to_string()),
+        ];
+        let rep = diag(&[de20, de40, ja20, ja15], &ents, vec![]);
+        let names: Vec<(&str, usize, bool)> = rep
+            .one_away
+            .iter()
+            .map(|o| (o.entity.as_str(), o.bands.len(), o.new_entity))
+            .collect();
+        assert_eq!(names, vec![("Germany", 2, true), ("Japan", 1, false)]);
+    }
+
+    #[test]
+    fn one_away_skips_partner_waits_unresolved_entities_and_confirmed_slots() {
+        // R2 (uploaded, waiting on the partner) is not self-serve → excluded.
+        let mut waiting = rec("F5AAA", "20m", "FT8", 20_000);
+        waiting.upload = lotw(UploadOutcome::Pending);
+        // Unresolved entity → excluded even though R3 is actionable.
+        let mut noent = rec("X9XX", "20m", "FT8", 20_000);
+        noent.confirmed = true;
+        // Already award-confirmed on that band → nothing at stake.
+        let mut done = rec("EA1AA", "20m", "FT8", 20_000);
+        done.award_confirmed = true;
+        let ents = vec![Some("France".to_string()), None, Some("Spain".to_string())];
+        let rep = diag(&[waiting, noent, done], &ents, vec![]);
+        assert!(rep.one_away.is_empty(), "got {:?}", rep.one_away);
     }
 }

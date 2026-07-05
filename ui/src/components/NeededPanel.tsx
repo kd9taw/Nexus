@@ -3,7 +3,7 @@
 // ranked by priority and boldly colored by the shared need palette. Single-click a
 // row to QSY the radio to that band and listen. The same stations light up on the
 // Connect map (shared needByCall), so this is the list half of "list + map".
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { BandChannel, FeedStatus, NeedAlert, NeedTag } from '../types'
 import {
   filterAlerts,
@@ -17,6 +17,8 @@ import {
   type ModeSet,
   NEED_TYPE_VALUES,
 } from '../neededFilters'
+import { pointRotator, readRotator } from '../api'
+import { pushToast } from '../toast'
 
 const NEED_CHIP: Record<NeedTag, { label: string; cls: string; title: string }> = {
   NewEntity: { label: 'NEW ONE', cls: 'entity', title: 'All-time-new DXCC entity (ATNO)' },
@@ -32,6 +34,72 @@ const NEED_CHIP: Record<NeedTag, { label: string; cls: string; title: string }> 
 /** Defensive chip lookup — an unknown future tag renders visibly, never throws. */
 function chipFor(t: NeedTag): { label: string; cls: string; title: string } {
   return NEED_CHIP[t] ?? { label: String(t).toUpperCase(), cls: 'confirm', title: String(t) }
+}
+
+/** Manual rotator control: live heading readout + point-at-azimuth. Rendered only
+ * when a rotator is configured (same gate as the per-row ↗ buttons). */
+function RotatorWidget() {
+  const [az, setAz] = useState<number | null>(null)
+  const [input, setInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let live = true
+    const poll = () =>
+      readRotator()
+        .then((a) => live && setAz(a))
+        .catch(() => {}) // best-effort — rotctld may be down; the readout just shows —
+    poll()
+    const id = window.setInterval(poll, 5000)
+    return () => {
+      live = false
+      window.clearInterval(id)
+    }
+  }, [])
+  const point = async () => {
+    // Mirrors the Go button's disabled gate — the Enter key path must never slew
+    // the rotator on an empty field (Number('') is 0 → due North) or re-enter
+    // while a turn is in flight.
+    if (busy || input.trim() === '') return
+    const deg = Number(input)
+    if (!Number.isFinite(deg)) return
+    const norm = ((deg % 360) + 360) % 360
+    setBusy(true)
+    try {
+      await pointRotator(norm)
+      pushToast(`↗ Rotator → ${Math.round(norm)}°`, 'success', 2500)
+    } catch (e) {
+      pushToast(typeof e === 'string' ? e : 'Rotator command failed', 'error', 4000)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <span className="np-rotator" title="Antenna rotator — live heading + manual point (via rotctld)">
+      <span className="np-rotator-az mono">{az != null ? `${Math.round(az)}°` : '—°'}</span>
+      <input
+        type="number"
+        className="np-rotator-input mono"
+        value={input}
+        min={0}
+        max={360}
+        placeholder="az"
+        aria-label="Rotator azimuth (degrees)"
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') void point()
+        }}
+      />
+      <button
+        type="button"
+        className="np-rotator-go"
+        disabled={busy || input.trim() === ''}
+        onClick={() => void point()}
+        title="Turn the rotator to this azimuth"
+      >
+        ↗
+      </button>
+    </span>
+  )
 }
 
 type SortKey = 'priority' | 'call' | 'band' | 'entity'
@@ -279,6 +347,7 @@ export function NeededPanel({
           </svg>
           {hasActiveFilters ? ' Filtered' : ' Filter'}
         </button>
+        {onPoint && <RotatorWidget />}
         {onPopOut && (
           <button
             type="button"

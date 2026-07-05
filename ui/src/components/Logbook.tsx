@@ -12,7 +12,7 @@ import {
   uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { qrzPushQso } from '../api'
+import { qrzPushQso, clublogPushQso } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -222,6 +222,23 @@ export function Logbook({
       }
     } catch (e) {
       pushToast(`✗ QRZ push failed: ${String(e)}`, 'error', 6000)
+    }
+  }
+
+  // Manual (re-)push of one logged QSO to ClubLog — same verification/bounce-
+  // recovery role as onPushQrz; "duplicate" is the benign already-there answer.
+  const onPushClublog = async (q: LoggedQso) => {
+    try {
+      const r = await clublogPushQso(q)
+      if (r.result === 'ok' || r.result === 'modified') {
+        pushToast(`✓ ${q.call} pushed to ClubLog`, 'success', 4000)
+      } else if (r.result === 'duplicate') {
+        pushToast(`✓ ${q.call} already on ClubLog (duplicate) — upload chain works`, 'success', 5000)
+      } else {
+        pushToast(`✗ ClubLog rejected ${q.call}: ${r.message ?? r.result}`, 'error', 6000)
+      }
+    } catch (e) {
+      pushToast(`✗ ClubLog push failed: ${String(e)}`, 'error', 6000)
     }
   }
 
@@ -536,6 +553,15 @@ export function Logbook({
                     aria-label={`Push ${q.call} to QRZ`}
                   >
                     ↥
+                  </button>
+                  <button
+                    type="button"
+                    className="log-rowbtn"
+                    onClick={() => void onPushClublog(q)}
+                    title={`Push ${q.call} to ClubLog (re-push is safe — duplicates are detected)`}
+                    aria-label={`Push ${q.call} to ClubLog`}
+                  >
+                    CL
                   </button>
                   <button
                     type="button"

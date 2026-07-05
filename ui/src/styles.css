@@ -8868,6 +8868,44 @@ select.settings-input {
   color: var(--accent, #4ea1ff);
   border-color: var(--accent, #4ea1ff);
 }
+/* Manual rotator control in the board header: live heading + point-at-azimuth. */
+.np-rotator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.78rem;
+}
+.np-rotator-az {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.np-rotator-input {
+  width: 52px;
+  padding: 1px var(--space-1);
+  font-size: 0.78rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.np-rotator-go {
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.np-rotator-go:hover:not(:disabled) {
+  color: var(--accent, #4ea1ff);
+  border-color: var(--accent, #4ea1ff);
+}
+.np-rotator-go:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .np-entity,
 .np-why {
   color: var(--text-dim);
@@ -9920,6 +9958,41 @@ select.settings-input {
 }
 
 /* Confirmations diagnostics panel */
+/* "One fix away" leverage strip — entities a single award-grade fix from new credit. */
+.conf-oneaway {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.conf-oneaway-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.conf-oneaway-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: var(--space-1) 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  font-size: 0.82rem;
+}
+.conf-oneaway-new {
+  border-color: var(--accent);
+}
+.conf-oneaway-star {
+  color: var(--accent);
+  font-size: 0.75rem;
+}
+.conf-oneaway-bands {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
 .conf-buckets {
   display: flex;
   flex-wrap: wrap;
@@ -10019,6 +10092,18 @@ select.settings-input {
 }
 .conf-btn-bulk {
   margin-left: 2px;
+}
+/* Non-award pushes (QRZ/ClubLog/eQSL): muted so the accent pill stays LoTW-only —
+   these serve the personal logbook, never ARRL DXCC/WAS credit. */
+.conf-btn-push {
+  background: transparent;
+  border-color: var(--border-soft);
+  color: var(--text-faint);
+}
+.conf-btn-push:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-faint) 12%, transparent);
+  border-color: var(--text-faint);
+  color: var(--text);
 }
 .conf-msg {
   margin: var(--space-3) 0 0;

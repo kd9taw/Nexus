@@ -13,6 +13,8 @@
 pub const HOST_OPEN: [u8; 2] = [0x00, 0x02];
 /// Admin: Host Close — return to standalone mode.
 pub const HOST_CLOSE: [u8; 2] = [0x00, 0x03];
+/// Clear Buffer (`0A`) — immediately stops keying and flushes WK's send buffer.
+pub const CLEAR_BUFFER: [u8; 1] = [0x0A];
 
 /// Set-WPM-speed command bytes (`02 nn`), clamped to the WK range 5–99.
 pub fn wpm_cmd(wpm: u32) -> [u8; 2] {
@@ -33,7 +35,7 @@ pub use imp::WinKeyer;
 
 #[cfg(feature = "serial")]
 mod imp {
-    use super::{encode_text, wpm_cmd, HOST_CLOSE, HOST_OPEN};
+    use super::{encode_text, wpm_cmd, CLEAR_BUFFER, HOST_CLOSE, HOST_OPEN};
     use serialport::SerialPort;
     use std::io::Read;
     use std::time::Duration;
@@ -65,6 +67,12 @@ mod imp {
         /// Set keyer speed (WPM, clamped 5–99).
         pub fn set_wpm(&mut self, wpm: u32) -> std::io::Result<()> {
             self.port.write_all(&wpm_cmd(wpm))?;
+            self.port.flush()
+        }
+
+        /// Abort: stop keying NOW and flush WinKeyer's send buffer (WK Clear Buffer).
+        pub fn clear(&mut self) -> std::io::Result<()> {
+            self.port.write_all(&CLEAR_BUFFER)?;
             self.port.flush()
         }
 
@@ -109,6 +117,7 @@ mod tests {
     fn host_commands_match_the_datasheet() {
         assert_eq!(HOST_OPEN, [0x00, 0x02]);
         assert_eq!(HOST_CLOSE, [0x00, 0x03]);
+        assert_eq!(CLEAR_BUFFER, [0x0A]);
     }
 
     #[test]

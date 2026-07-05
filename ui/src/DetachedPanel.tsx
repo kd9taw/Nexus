@@ -42,6 +42,7 @@ import {
   haltTx,
   setRxOffset,
   setTxOffset,
+  pointRotatorAtCall,
 } from './api'
 import { NeededPanel } from './components/NeededPanel'
 import { ConnectView } from './components/ConnectView'
@@ -213,6 +214,13 @@ export function DetachedPanel({ panel }: { panel: string }) {
           needByCall={needByCall}
           onWorkSpot={onWorkSpot}
           needAlerts={gatedAlerts}
+          onPoint={
+            // Same rotator gate as App; silent fire-and-forget — detached windows
+            // have no toast host.
+            settings?.rotatorHost?.trim()
+              ? (call) => void pointRotatorAtCall(call).catch(() => {})
+              : undefined
+          }
         />
       </div>
     )

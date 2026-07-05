@@ -58,6 +58,8 @@ interface Props {
   /** The ranked needed-now alerts (App's shared 30 s poll) — reserved for the B2
    * best-band/needs cross-ref pane; passed through to the pane context. */
   needAlerts?: NeedAlert[]
+  /** Point the rotator at a call (only passed when a rotator is configured). */
+  onPoint?: (call: string) => void
   /** Open Connect in its own window (omit when already standalone). */
   onPopOut?: () => void
 }
@@ -72,6 +74,7 @@ export function ConnectView({
   onWorkSpot,
   needByCall,
   needAlerts,
+  onPoint,
   onPopOut,
 }: Props) {
   const prov = prop ? provLabel(prop.source, prop.asOf) : null
@@ -233,6 +236,7 @@ export function ConnectView({
     muf,
     onSelectCall,
     onWorkSpot,
+    onPoint,
     toggleFocusBand,
   }
   const railFrame = (s: SlotId) => (

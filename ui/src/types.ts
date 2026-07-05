@@ -1031,10 +1031,17 @@ export interface DiagActionBucket {
   count: number
   qsoIndices: number[]
 }
+/** One entity a single award-grade fix away from a new slot / new entity. */
+export interface OneAway {
+  entity: string
+  bands: string[]
+  newEntity: boolean
+}
 /** "Why isn't this QSO confirmed" diagnostics report (Phase 1a). */
 export interface DiagnosticsReport {
   diagnoses: QsoDiagnosis[]
   buckets: DiagActionBucket[]
+  oneAway: OneAway[]
   waitingOnPartner: number
   pendingLag: number
 }

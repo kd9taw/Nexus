@@ -874,12 +874,23 @@ pub struct ActionBucketDto {
     pub qso_indices: Vec<usize>,
 }
 
+/// One entity a single award-grade fix away from a new slot / new entity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OneAwayDto {
+    pub entity: String,
+    pub bands: Vec<String>,
+    pub new_entity: bool,
+}
+
 /// The whole confirmation-diagnostics report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsReportDto {
     pub diagnoses: Vec<QsoDiagnosisDto>,
     pub buckets: Vec<ActionBucketDto>,
+    #[serde(default)]
+    pub one_away: Vec<OneAwayDto>,
     pub waiting_on_partner: usize,
     pub pending_lag: usize,
 }
@@ -895,6 +906,15 @@ impl From<tempo_core::diagnostics::DiagnosticsReport> for DiagnosticsReportDto {
                     kind: b.kind,
                     count: b.count,
                     qso_indices: b.qso_indices,
+                })
+                .collect(),
+            one_away: r
+                .one_away
+                .into_iter()
+                .map(|o| OneAwayDto {
+                    entity: o.entity,
+                    bands: o.bands,
+                    new_entity: o.new_entity,
                 })
                 .collect(),
             waiting_on_partner: r.waiting_on_partner,

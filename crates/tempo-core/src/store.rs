@@ -68,22 +68,6 @@ impl StoreForward {
         id
     }
 
-    /// Mark the message to `to` carrying chunk-id `id` delivered — the id-bearing ACK
-    /// matched it exactly (no FIFO guessing). Idempotent: a re-ACK of an already-delivered
-    /// message is a no-op. Returns whether a still-undelivered match was found.
-    pub fn mark_delivered_id(&mut self, to: &str, id: char) -> bool {
-        if let Some(p) = self
-            .queue
-            .iter_mut()
-            .find(|p| p.to == to && p.id == id && !p.delivered)
-        {
-            p.delivered = true;
-            true
-        } else {
-            false
-        }
-    }
-
     /// Number of messages still awaiting delivery.
     pub fn pending(&self) -> usize {
         self.queue.iter().filter(|p| !p.delivered).count()
