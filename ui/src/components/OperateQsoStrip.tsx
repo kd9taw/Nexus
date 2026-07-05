@@ -49,6 +49,15 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
     <section className="cockpit-qso panel">
       <div className="cq-head">
         <span className="cq-title">QSO</span>
+        {running && (
+          <span
+            className="cq-autocq"
+            title="Auto CQ is running — calling CQ continuously, working each station that answers, then returning to CQ for the next one. Click S&P to stop."
+          >
+            <span className="cq-autocq-dot" aria-hidden="true" />
+            AUTO&#8288;-&#8288;CQ
+          </span>
+        )}
         <span className={`cq-state${running ? ' running' : ''}`}>{state}</span>
         {dxcall && <span className="cq-dx mono">{dxcall}</span>}
         {rpt && <span className="cq-rpt" title="Report received about your signal">{rpt}</span>}
@@ -59,7 +68,7 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
             className={`cq-role cq-call${running ? ' active' : ''}`}
             aria-pressed={running}
             onClick={() => (onCallCq ? onCallCq() : onSetMode('qso-run'))}
-            title="Call CQ (run)"
+            title="Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically"
           >
             Call CQ
           </button>

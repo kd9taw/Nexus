@@ -9240,6 +9240,40 @@ select.settings-input {
 .cq-state.running {
   color: var(--tx);
 }
+/* Unmistakable "you're in a self-sustaining CQ run" badge: the engine works each answering
+   station then returns to CQ, so make that state obvious with a live pulsing pill. */
+.cq-autocq {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tx) 20%, var(--bg-elev-2));
+  border: 1px solid var(--tx);
+  color: var(--tx);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+.cq-autocq-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tx);
+  animation: cq-autocq-pulse 1.2s ease-in-out infinite;
+}
+@keyframes cq-autocq-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--tx) 55%, transparent);
+  }
+  50% {
+    opacity: 0.45;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--tx) 0%, transparent);
+  }
+}
 .cq-dx {
   font-weight: 800;
   color: var(--state-good);
