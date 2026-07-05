@@ -168,23 +168,28 @@ pub fn classify_spot_mode(freq_mhz: f64, comment: &str) -> ModeClass {
     mode_from_comment(comment).unwrap_or_else(|| mode_from_freq(freq_mhz))
 }
 
-/// An explicit mode token in a cluster comment, if any. Only UNAMBIGUOUS tokens count:
-/// we deliberately don't match "AM"/"USB"/"LSB"/"FM"/"DV" because those are ordinary
-/// words/jargon in free-text comments ("op AM pile up", "via USB", "loud in FM") and
-/// would mislabel a CW/digital spot as phone. A signal report / "CQ" / "UP 2" leaves the
-/// decision to the frequency. Agrees with [`ModeClass::from_adif`] for shared tokens.
+/// An explicit mode token at the FRONT of a cluster comment, if any. The mode — when a spot
+/// names one — conventionally LEADS the comment (RBN: "CW 599 25 WPM", cluster: "SSB 59",
+/// "FT8 -6"). We trust ONLY the leading token: scanning the whole comment returns the first
+/// mode word ANYWHERE, so a stray token ("59 was on CW", "QSY fm SSB", "loud in FM") flipped
+/// the mode — the #1 wrong-mode-tag cause (a phone spot tagged CW and vice-versa). A LEADING
+/// USB/LSB/FM IS the mode (not the "via USB cable" / "9 AM" jargon that only appears
+/// mid-comment); "AM" stays excluded (it false-positives on times far more than it means the
+/// mode). No leading mode token → `None`, and the frequency decides. Agrees with
+/// [`ModeClass::from_adif`] for shared tokens.
 fn mode_from_comment(comment: &str) -> Option<ModeClass> {
-    for raw in comment.split(|c: char| !c.is_ascii_alphanumeric()) {
-        let m = match raw.to_ascii_uppercase().as_str() {
-            "CW" => ModeClass::Cw,
-            "SSB" | "PHONE" => ModeClass::Phone,
-            "FT8" | "FT4" | "FT1" | "RTTY" | "PSK" | "PSK31" | "PSK63" | "JT65" | "JT9" | "JS8"
-            | "MFSK" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
-            _ => continue,
-        };
-        return Some(m);
+    let first = comment
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .find(|t| !t.is_empty())?;
+    match first.to_ascii_uppercase().as_str() {
+        "CW" => Some(ModeClass::Cw),
+        "SSB" | "USB" | "LSB" | "FM" | "PHONE" | "DV" => Some(ModeClass::Phone),
+        "FT8" | "FT4" | "FT1" | "RTTY" | "PSK" | "PSK31" | "PSK63" | "JT65" | "JT9" | "JS8"
+        | "MFSK" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" | "Q65" | "MSK144" | "DX1" => {
+            Some(ModeClass::Digital)
+        }
+        _ => None,
     }
-    None
 }
 
 /// Band-plan segment fallback: below the CW/data line → CW, at/above the phone line →
@@ -542,6 +547,25 @@ mod tests {
         assert_eq!(classify_spot_mode(14.020, "via USB cable"), ModeClass::Cw); // not USB-sideband
         assert_eq!(classify_spot_mode(7.025, "loud in FM here"), ModeClass::Cw);
         // not FM
+    }
+
+    #[test]
+    fn classify_spot_mode_ignores_a_stray_mid_comment_mode() {
+        // THE wrong-tag bug: a mode word LATER in the comment must not flip the spot (a phone
+        // need was routing to the CW cockpit, and vice-versa). Only the leading token counts.
+        // 20m phone spot that happens to mention CW → stays Phone (freq decides).
+        assert_eq!(
+            classify_spot_mode(14.250, "59 QSB was on CW earlier"),
+            ModeClass::Phone
+        );
+        // A CW spot whose comment mentions SSB → stays CW.
+        assert_eq!(
+            classify_spot_mode(14.025, "up 2 then SSB net"),
+            ModeClass::Cw
+        );
+        // A LEADING USB/LSB/FM IS the mode (voice) — unlike the "via USB cable" jargon case.
+        assert_eq!(classify_spot_mode(14.020, "USB 59 cq"), ModeClass::Phone);
+        assert_eq!(classify_spot_mode(7.150, "LSB nice sig"), ModeClass::Phone);
     }
 
     #[test]

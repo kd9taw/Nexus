@@ -80,8 +80,10 @@ describe('modeClassOf (map-spot → cockpit routing)', () => {
     expect(modeClassOf('CW')).toBe('CW')
     expect(modeClassOf('cw')).toBe('CW')
   })
-  it('voice modes route to Phone', () => {
-    for (const m of ['SSB', 'USB', 'LSB', 'FM', 'AM', 'ssb']) {
+  it('voice modes AND the "Phone" class label route to Phone', () => {
+    // Both ADIF tokens and our own class label — a need alert's mode is the LABEL "Phone",
+    // which previously fell through to Digital and routed a phone need to the wrong cockpit.
+    for (const m of ['SSB', 'USB', 'LSB', 'FM', 'AM', 'ssb', 'Phone', 'PHONE']) {
       expect(modeClassOf(m)).toBe('Phone')
     }
   })

@@ -39,7 +39,10 @@ export interface WorkTarget {
 export function modeClassOf(mode: string | null | undefined): 'CW' | 'Phone' | 'Digital' {
   const m = (mode ?? '').trim().toUpperCase()
   if (m === 'CW') return 'CW'
-  if (m === 'SSB' || m === 'USB' || m === 'LSB' || m === 'FM' || m === 'AM') return 'Phone'
+  // Accept both ADIF tokens (SSB/USB/…) AND our own class LABEL ("PHONE") — a spot's mode
+  // can be either, and missing PHONE here silently routed a phone need to the Digital cockpit.
+  if (m === 'SSB' || m === 'USB' || m === 'LSB' || m === 'FM' || m === 'AM' || m === 'PHONE')
+    return 'Phone'
   return 'Digital'
 }
 
