@@ -3943,7 +3943,28 @@ impl Engine {
                 }
                 _ => false,
             };
-        if resume_cq {
+        // Run resilience: a caller who answered but then went silent must not stall the
+        // whole run. After `cq_stall_overs` unanswered overs of an in-QSO step (we keep
+        // re-sending the same grid/report/roger and they never advance), abandon them and
+        // resume CQ so the pileup keeps moving. Default 3 overs; `Some(0)` disables (wait
+        // for the operator, stock WSJT-X). Confirming/Done are handled by `resume_cq` above
+        // (they auto-log); this fires only for the mid-QSO waits, and never for a bare CQ.
+        let stall_cap = self.settings.cq_stall_overs.unwrap_or(3);
+        let abandon_stalled = self.cq_running
+            && !self.qso_logged
+            && stall_cap > 0
+            && match &self.mode {
+                Mode::Qso { station, .. } => {
+                    station.dxcall.is_some()
+                        && matches!(
+                            station.state,
+                            QsoState::AwaitReport | QsoState::AwaitRoger | QsoState::AwaitRr73
+                        )
+                        && station.tx_count >= stall_cap
+                }
+                _ => false,
+            };
+        if resume_cq || abandon_stalled {
             let mycall = self.settings.mycall.clone();
             let mygrid = self.settings.mygrid.clone();
             let mut s = QsoStation::calling_cq(&mycall, &mygrid);
@@ -5321,6 +5342,56 @@ mod tests {
         assert!(
             next.contains("K1ABC") && !next.to_uppercase().starts_with("CQ"),
             "next over answers the caller (report), got {next:?}"
+        );
+    }
+
+    #[test]
+    fn cq_run_abandons_a_silent_caller_and_resumes_cq() {
+        // Run resilience: a caller answers our CQ, then vanishes. After the default 3
+        // unanswered overs of our report, the run must DROP them and return to calling CQ
+        // so a dead caller can't stall the whole run (the `abandon_stalled` path).
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0); // CQ out on our slot
+        // A caller answers with a grid → we switch to sending the report (AwaitRoger).
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        assert_eq!(
+            e.snapshot().qso.unwrap().dxcall.as_deref(),
+            Some("K1ABC"),
+            "answering the caller"
+        );
+        // The caller goes silent. Each of our overs re-sends the report (tx_count++), and
+        // their slots are empty. After 3 unanswered overs → abandon and resume CQ.
+        for slot in [2u64, 4, 6] {
+            e.poll_tx(slot);
+            e.ingest_decodes_for_test(&[], slot + 1);
+        }
+        let qso = e.snapshot().qso.expect("still running");
+        assert_eq!(qso.state, "CallingCq", "abandoned the dead caller, back to CQ");
+        assert!(
+            qso.dxcall.is_none(),
+            "the silent caller was dropped, got {:?}",
+            qso.dxcall
+        );
+    }
+
+    #[test]
+    fn cq_run_stall_abandon_can_be_disabled() {
+        // `cq_stall_overs = Some(0)` disables auto-abandon (stock WSJT-X: wait for the
+        // operator). The run stays locked on the silent caller.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.settings.cq_stall_overs = Some(0);
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0);
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        for slot in [2u64, 4, 6, 8, 10] {
+            e.poll_tx(slot);
+            e.ingest_decodes_for_test(&[], slot + 1);
+        }
+        assert_eq!(
+            e.snapshot().qso.unwrap().dxcall.as_deref(),
+            Some("K1ABC"),
+            "abandon disabled → still working the (silent) caller"
         );
     }
 

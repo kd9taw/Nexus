@@ -264,6 +264,12 @@ pub struct Settings {
     /// The earlier always-on 6-call cap is preserved as this opt-in.
     #[serde(default)]
     pub cq_max_calls: Option<u32>,
+    /// Auto-CQ run resilience: if a caller answers but then goes silent mid-QSO,
+    /// abandon them and resume calling CQ after this many unanswered overs of the
+    /// same in-QSO step (so a dead caller can't stall the run). `None` = the built-in
+    /// default (3); `Some(0)` disables auto-abandon (stock: wait for the operator).
+    #[serde(default)]
+    pub cq_stall_overs: Option<u32>,
     /// WSJT-X Settings ▸ Behavior: "Disable Tx after sending 73" (stock default
     /// ON). After OUR final 73 of an S&P contact goes out, Enable-Tx drops —
     /// the next station is a deliberate arm. A CQ run is unaffected (it returns
@@ -597,6 +603,7 @@ impl Default for Settings {
             save_qso_wav: false,
             prefer_rrr: false,
             cq_max_calls: None,
+            cq_stall_overs: None,
             disable_tx_after_73: true,
             clear_dx_after_log: false,
             double_click_sets_tx: true,

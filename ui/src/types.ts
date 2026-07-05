@@ -1277,6 +1277,9 @@ export interface Settings {
   /** Stop a CQ run after N unanswered calls; null/undefined = stock WSJT-X
    * (CQ repeats until you stop it — the Tx watchdog is the backstop). */
   cqMaxCalls?: number | null
+  /** Auto-CQ run: abandon a caller who answered then went silent, after N unanswered
+   * overs, and resume CQ. null/undefined = default (3); 0 = never abandon (wait for you). */
+  cqStallOvers?: number | null
   /** WSJT-X Settings ▸ Behavior parity. */
   disableTxAfter73?: boolean
   clearDxAfterLog?: boolean

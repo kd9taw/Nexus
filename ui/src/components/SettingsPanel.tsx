@@ -1734,6 +1734,26 @@ export function SettingsPanel({
               </div>
 
               <div className="settings-field">
+                <label>
+                  <span className="settings-label">Auto-CQ: drop a silent caller after N overs</span>
+                  <input
+                    className="settings-input"
+                    type="number"
+                    min={0}
+                    max={99}
+                    value={form.cqStallOvers ?? ''}
+                    placeholder="3"
+                    onChange={(e) => updateNullableNum('cqStallOvers', e.target.value, 0)}
+                  />
+                </label>
+                <span className="settings-hint">
+                  During an Auto-CQ run, if a station answers then goes silent, abandon it and
+                  return to calling CQ after this many unanswered overs. Blank = 3; 0 = never
+                  abandon (wait for you, like stock WSJT-X).
+                </span>
+              </div>
+
+              <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">Disable TX after sending 73</span>
                   <button
