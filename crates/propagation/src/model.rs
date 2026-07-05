@@ -157,15 +157,36 @@ impl ModeClass {
     }
 }
 
-/// Classify the operating-mode CLASS of a raw DX-cluster / RBN spot. Cluster spots
-/// carry no structured mode — it's either named in the free-text comment ("CW",
-/// "SSB", "FT8"…) or implied by where in the band the spot sits. We trust an explicit
-/// comment token first (human spotters and RBN both emit one), then fall back to the
-/// band-plan segment for the frequency (CW at the band bottom, phone at the top, the
-/// data middle → Digital). This is exactly how N1MM / DXLab route an unmoded cluster
-/// spot. Used to send a needed spot to the right operating cockpit (CW / Phone / Digital).
+/// Classify the operating-mode CLASS of a raw DX-cluster / RBN spot for ROUTING (which
+/// cockpit). The FREQUENCY + band plan is the AUTHORITY — a spot at 21.074 is FT8 (Digital)
+/// and one at 14.030 is CW no matter what a mis-spotted / RBN-skimmer comment claims (that's
+/// the bug where FT8 spots landed in the CW cockpit). The comment only REFINES where the band
+/// plan genuinely can't decide: it upgrades a CW-segment spot to a named DIGITAL mode
+/// (RTTY/FT8 sit just above the CW watering holes), upgrades a data-segment spot to Phone
+/// (DX SSB parked below the US phone edge), and — on VHF/UHF or off-plan frequencies, where
+/// the CW/SSB windows are too narrow to encode — is the only signal. A CW tag never overrides
+/// a data/phone frequency, and a voice tag never overrides a CW frequency.
 pub fn classify_spot_mode(freq_mhz: f64, comment: &str) -> ModeClass {
-    mode_from_comment(comment).unwrap_or_else(|| mode_from_freq(freq_mhz))
+    let cm = mode_from_comment(comment);
+    match hf_segment(freq_mhz) {
+        // CW band → CW; a named DIGITAL mode (RTTY/FT8 at the CW/data boundary) upgrades it.
+        Some(ModeClass::Cw) => match cm {
+            Some(ModeClass::Digital) => ModeClass::Digital,
+            _ => ModeClass::Cw,
+        },
+        // Data band (FT8/FT4/RTTY watering holes) → Digital; a named VOICE tag (DX SSB below
+        // the US phone edge) upgrades it to Phone. A "CW" tag is IGNORED — that is exactly
+        // the mis-spot/skimmer artifact that routed 21.074 FT8 spots into the CW cockpit.
+        Some(ModeClass::Digital) => match cm {
+            Some(ModeClass::Phone) => ModeClass::Phone,
+            _ => ModeClass::Digital,
+        },
+        // Voice band → Phone (a CW/digital tag in the phone segment is a mis-spot).
+        Some(ModeClass::Phone) => ModeClass::Phone,
+        // Off the HF plan (VHF/UHF, 60m, gaps): the frequency can't classify — trust the
+        // comment, default Digital (never guess voice from a bare VHF frequency).
+        None => cm.unwrap_or(ModeClass::Digital),
+    }
 }
 
 /// An explicit mode token at the FRONT of a cluster comment, if any. The mode — when a spot
@@ -192,14 +213,11 @@ fn mode_from_comment(comment: &str) -> Option<ModeClass> {
     }
 }
 
-/// Band-plan segment fallback: below the CW/data line → CW, at/above the phone line →
-/// Phone, the data middle → Digital. Coarse but reliable for routing (the comment
-/// handles the exceptions). VHF/UHF is deliberately Digital-by-default here: the SSB DX
-/// windows are narrow and the FT8/MSK watering holes (6m 50.313, 2m 144.174) sit in what
-/// would otherwise be the "phone" region, so on VHF we only trust an explicit comment
-/// token for CW/Phone and never guess voice from the frequency alone — that keeps a 6m
-/// FT8 spot Digital (empirical), not a bogus voice need.
-fn mode_from_freq(freq_mhz: f64) -> ModeClass {
+/// The HF band-plan SECTION for a frequency: `Cw` below the CW/data line, `Digital` in the
+/// RTTY/FT8 data middle, `Phone` at/above the phone line — or `None` when the frequency is off
+/// the HF plan (VHF/UHF, 60m, or a band gap), where the section can't classify the mode. The
+/// lines are the US General edges; DX voice below them is caught by an explicit comment tag.
+fn hf_segment(freq_mhz: f64) -> Option<ModeClass> {
     // (cw_top, phone_bottom) MHz per HF band. 30m has no phone allocation (CW + data).
     let (cw_top, phone_bottom) = match freq_mhz {
         f if (1.8..2.0).contains(&f) => (1.810, 1.843), // CW < .810, data .810–.843 (FT8 1.840)
@@ -211,16 +229,15 @@ fn mode_from_freq(freq_mhz: f64) -> ModeClass {
         f if (21.0..21.45).contains(&f) => (21.070, 21.200),
         f if (24.89..24.99).contains(&f) => (24.915, 24.930),
         f if (28.0..29.7).contains(&f) => (28.070, 28.300),
-        // VHF/UHF (and anything off the HF plan) → Digital unless the comment said otherwise.
-        _ => return ModeClass::Digital,
+        _ => return None, // off the HF plan (VHF/UHF, 60m, gaps) — the comment decides
     };
-    if freq_mhz < cw_top {
+    Some(if freq_mhz < cw_top {
         ModeClass::Cw
     } else if freq_mhz >= phone_bottom {
         ModeClass::Phone
     } else {
         ModeClass::Digital
-    }
+    })
 }
 
 /// Coarse world region (for "point NE at Europe" style guidance).
@@ -529,14 +546,24 @@ mod tests {
     }
 
     #[test]
-    fn classify_spot_mode_trusts_comment_first() {
-        // An explicit comment token wins over the frequency segment — an FT8 spot
-        // parked in a phone segment (6m 50.313) must still classify Digital.
+    fn classify_spot_mode_is_band_authoritative() {
+        // THE bug: an FT8 spot at 21.074 (data section) tagged "CW" in the comment (a mis-spot
+        // or an RBN CW-skimmer artifact) must stay Digital — NOT route to the CW cockpit.
+        assert_eq!(
+            classify_spot_mode(21.074, "CW 12 dB 22 WPM CQ"),
+            ModeClass::Digital
+        );
+        assert_eq!(classify_spot_mode(14.074, "CW"), ModeClass::Digital); // 20m FT8
+                                                                          // A comment that contradicts the band section is a mis-spot: a CW tag on a phone
+                                                                          // frequency stays Phone; a voice tag in the CW section stays CW.
+        assert_eq!(classify_spot_mode(14.250, "CW UP"), ModeClass::Phone);
+        assert_eq!(classify_spot_mode(14.025, "SSB 59"), ModeClass::Cw);
+        // The comment REFINES within the band's family: a named digital mode upgrades a
+        // CW-section spot; a voice tag upgrades a data-section spot (DX SSB below the US edge).
+        assert_eq!(classify_spot_mode(7.030, "RTTY"), ModeClass::Digital); // digital at CW/data edge
+        assert_eq!(classify_spot_mode(7.085, "SSB 59"), ModeClass::Phone); // 40m DX SSB, data window
+                                                                           // Off the HF plan (VHF): the frequency can't classify → trust the comment.
         assert_eq!(classify_spot_mode(50.313, "FT8 +03"), ModeClass::Digital);
-        assert_eq!(classify_spot_mode(14.250, "CW UP"), ModeClass::Cw); // operator typo'd freq, said CW
-        assert_eq!(classify_spot_mode(14.025, "SSB 59"), ModeClass::Phone);
-        assert_eq!(classify_spot_mode(7.030, "RTTY"), ModeClass::Digital);
-        // An explicit SSB token routes a VHF spot to Phone even though VHF freq-only is Digital.
         assert_eq!(classify_spot_mode(50.125, "SSB 59 cq"), ModeClass::Phone);
     }
 
@@ -563,8 +590,9 @@ mod tests {
             classify_spot_mode(14.025, "up 2 then SSB net"),
             ModeClass::Cw
         );
-        // A LEADING USB/LSB/FM IS the mode (voice) — unlike the "via USB cable" jargon case.
-        assert_eq!(classify_spot_mode(14.020, "USB 59 cq"), ModeClass::Phone);
+        // A LEADING USB/LSB IS the mode where the band agrees it's voice (phone section).
+        assert_eq!(classify_spot_mode(14.250, "USB 59"), ModeClass::Phone);
+        assert_eq!(classify_spot_mode(7.185, "LSB nice sig"), ModeClass::Phone);
         assert_eq!(classify_spot_mode(7.150, "LSB nice sig"), ModeClass::Phone);
     }
 
