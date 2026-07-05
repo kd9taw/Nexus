@@ -31,6 +31,7 @@ pub mod mapspots;
 pub mod model;
 pub mod needalert;
 pub mod opening;
+pub mod p533;
 pub mod pota;
 pub mod predict;
 pub mod pskr_mqtt;

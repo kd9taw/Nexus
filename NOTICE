@@ -74,6 +74,19 @@ to this repository** — `scripts/fetch-hamlib.sh` reproduces them from the
 official Hamlib release. Refer to the license files shipped under
 `resources/hamlib/` (and the Hamlib project) for exact terms.
 
+### ITU-R / CCIR propagation coefficient data
+The HF path-prediction engine embeds the CCIR ionospheric numerical-map
+coefficients (foF2, M(3000)F2, foE, sporadic-E) and the Recommendation
+ITU-R P.372 atmospheric-noise coefficient arrays, plus the P.1239-3
+day-to-day variability deciles, copied verbatim from the ITU-R Study Group 3
+reference implementation of Recommendation ITU-R P.533
+(<https://github.com/ITU-R-Study-Group-3/ITU-R-HF>). These are the
+long-published ITU-R/CCIR data that accompany every P.533/VOACAP
+implementation. Files + full provenance note:
+`crates/propagation/data/itu/` (see `itu_copyright.txt`). The P.533 engine
+itself (`crates/propagation/src/p533/`) is an original Rust implementation of
+the published Recommendation methods; no ITU code is included.
+
 ---
 
 ## Linked native libraries
