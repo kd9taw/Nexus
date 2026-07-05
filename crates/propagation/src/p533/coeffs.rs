@@ -186,6 +186,81 @@ fn parse_month(text: &str, m0: usize) -> Result<MonthCoeffs, String> {
     })
 }
 
+/// The P.1239-3 within-the-month foF2 variability decile factors
+/// ("P1239-3 Decile Factors.txt", Tables 2+3): 18 blocks of 19 latitude rows
+/// (90°..0° in 5° steps) × 24 local-time hours, ordered decile (lower, upper)
+/// → season (winter, equinox, summer) → SSN range (<50, 50–100, >100).
+pub struct P1239 {
+    /// Flat `[decile][season][ssn][lat_idx][hour]`, lat_idx 0 = 0°, 18 = 90°.
+    v: Vec<f64>,
+}
+
+impl P1239 {
+    /// Decile factor — indices per the reference `foF2var` array:
+    /// `season` 0..3, `hour` 0..24 (local time), `lat_idx` 0..19 (5° steps),
+    /// `ssn_idx` 0..3, `decile` 0 = lower / 1 = upper.
+    pub fn fof2var(
+        &self,
+        season: usize,
+        hour: usize,
+        lat_idx: usize,
+        ssn_idx: usize,
+        decile: usize,
+    ) -> f64 {
+        self.v[((((decile * 3) + season) * 3 + ssn_idx) * 19 + lat_idx) * 24 + hour]
+    }
+}
+
+/// The parsed P.1239-3 decile table (parsed once on first use).
+pub fn p1239() -> &'static P1239 {
+    static CACHE: OnceLock<P1239> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        // Latin-1 file (degree signs are 0xB0) — lossy conversion keeps the
+        // numeric fields intact.
+        let raw = include_bytes!("../../data/itu/P1239-3_Decile_Factors.txt");
+        let text = String::from_utf8_lossy(raw);
+        // Data rows: a latitude label ("90°") + 24 floats. Header/hour rows
+        // carry no decimal points, so require one in the second token.
+        let mut rows: Vec<(f64, Vec<f64>)> = Vec::new();
+        for line in text.lines() {
+            let toks: Vec<&str> = line.split_whitespace().collect();
+            if toks.len() != 25 || !toks[1].contains('.') {
+                continue;
+            }
+            let lat_deg: f64 = toks[0]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .unwrap_or(-1.0);
+            let vals: Option<Vec<f64>> = toks[1..].iter().map(|t| t.parse().ok()).collect();
+            if let (true, Some(vals)) = (lat_deg >= 0.0, vals) {
+                rows.push((lat_deg, vals));
+            }
+        }
+        assert_eq!(
+            rows.len(),
+            2 * 3 * 3 * 19,
+            "P1239 table: expected 342 data rows, got {}",
+            rows.len()
+        );
+        // File order: blocks of 19 rows from 90° down to 0°; store by
+        // ascending lat_idx (row r in a block → lat_idx 18−r), like the
+        // reference's backward read.
+        let mut v = vec![0.0f64; 2 * 3 * 3 * 19 * 24];
+        for (b, block) in rows.chunks(19).enumerate() {
+            for (r, (lat_deg, vals)) in block.iter().enumerate() {
+                let lat_idx = 18 - r;
+                debug_assert_eq!(*lat_deg as usize, lat_idx * 5);
+                for (h, &val) in vals.iter().enumerate() {
+                    v[(b * 19 + lat_idx) * 24 + h] = val;
+                }
+            }
+        }
+        P1239 { v }
+    })
+}
+
 /// Parse a section label like `xf2(13,76,2)` or `if2(10)` → (name, dims).
 fn parse_label(t: &str) -> Result<(String, Vec<usize>), String> {
     let open = t
