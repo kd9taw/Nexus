@@ -13,6 +13,17 @@ export interface Toast {
   /** Loud/attention styling (filled background + pulse) for the things worth chasing —
    * "someone is calling you", a new DXCC. Routine toasts (QSY, errors) leave it off. */
   prominent?: boolean
+  /** Optional one-click action — e.g. "Work" the station this alert is about. When set,
+   * the toast shows an action button that runs this then dismisses the toast. */
+  action?: () => void
+  /** Button label for `action` (default "Work"). */
+  actionLabel?: string
+}
+
+export interface ToastOptions {
+  prominent?: boolean
+  action?: () => void
+  actionLabel?: string
 }
 
 type Listener = (toasts: Toast[]) => void
@@ -39,10 +50,10 @@ export function pushToast(
   message: string,
   kind: ToastKind = 'error',
   ttlMs = DEFAULT_TTL_MS,
-  prominent = false,
+  opts: ToastOptions = {},
 ): number {
   const id = nextId++
-  toasts = [...toasts, { id, kind, message, prominent }]
+  toasts = [...toasts, { id, kind, message, ...opts }]
   emit()
   if (ttlMs > 0) {
     window.setTimeout(() => dismissToast(id), ttlMs)

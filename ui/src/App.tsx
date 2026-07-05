@@ -494,12 +494,6 @@ export default function App() {
     return () => window.clearInterval(id)
   }, [])
 
-  // Fire decode alerts (beep + toast) whenever the decode feed changes, gated
-  // by the user's alert settings. processDecodes dedups internally.
-  useEffect(() => {
-    if (!snap || !settings) return
-    processDecodes(snap.recentDecodes, settings)
-  }, [snap, settings])
 
   const activePeer = snap?.activePeer ?? null
 
@@ -596,6 +590,17 @@ export default function App() {
     },
     [],
   )
+
+  // Fire decode alerts (beep + toast) whenever the decode feed changes, gated by the
+  // user's alert settings. processDecodes dedups internally. The third arg makes each
+  // alert toast click-to-work — working the station is what you almost always want next
+  // (someone calling you, a new DXCC/grid, a CQ). Placed AFTER handleCall so it's in scope.
+  useEffect(() => {
+    if (!snap || !settings) return
+    processDecodes(snap.recentDecodes, settings, (d) => {
+      if (d.from) handleCall(d.from, undefined, d.message, d.snr, d.freqHz)
+    })
+  }, [snap, settings, handleCall])
 
   // Bumps when a QSO is logged AND "Clear DX call after logging" is on — the
   // cockpit watches it and wipes its DX Call/Grid fields (stock WSJT-X option).

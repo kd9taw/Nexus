@@ -260,6 +260,23 @@
 .ui-toast-close:hover {
   color: var(--text);
 }
+/* One-click action on an alert toast (e.g. "Work →" / "Answer →" the station it's about). */
+.ui-toast-action {
+  flex-shrink: 0;
+  align-self: center;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--radius-sm);
+  padding: 3px var(--space-2);
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ui-toast-action:hover {
+  filter: brightness(1.12);
+}
 /* Slide + fade in so a new toast catches the eye (Radix sets data-state). */
 @keyframes ui-toast-in {
   from {

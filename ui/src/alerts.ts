@@ -70,7 +70,14 @@ function doubleBeep(freq: number): void {
  * someone calling me, a new DXCC entity (aggressive), a new grid, or — if the
  * operator opted in — a plain CQ. Each unique decode alerts at most once.
  */
-export function processDecodes(decodes: DecodeRow[], settings: Settings): void {
+export function processDecodes(
+  decodes: DecodeRow[],
+  settings: Settings,
+  // Click-to-work: when provided, each alert toast gets a button that works the station
+  // the alert is about (identical to double-clicking its decode row). Optional so the
+  // alert path stays usable without a handler.
+  onWork?: (d: DecodeRow) => void,
+): void {
   for (const d of decodes) {
     const call = d.from
 
@@ -98,10 +105,17 @@ export function processDecodes(decodes: DecodeRow[], settings: Settings): void {
 
     const who = call ?? 'station'
     const where = d.country ? ` — ${d.country}` : ''
+    // Every decode alert is "here's a station worth working" — wire the toast's action to
+    // work it (same as double-clicking the decode). Only when we know who (from is set).
+    const workAction = onWork && d.from ? () => onWork(d) : undefined
     if (kind === 'newdxcc') {
       // Aggressive: double tone + a prominent, long-lived toast.
       doubleBeep(BEEP_HZ.newdxcc)
-      pushToast(`🎯 NEW DXCC: ${who}${where}`, 'success', 15000, true)
+      pushToast(`🎯 NEW DXCC: ${who}${where}`, 'success', 15000, {
+        prominent: true,
+        action: workAction,
+        actionLabel: 'Work',
+      })
       continue
     }
     beep(BEEP_HZ[kind])
@@ -109,11 +123,22 @@ export function processDecodes(decodes: DecodeRow[], settings: Settings): void {
     // (the beep was firing but the toast vanished before you could find it). A new grid is
     // prominent too; an opt-in CQ stays a quieter, shorter info toast.
     if (kind === 'mycall') {
-      pushToast(`📢 ${who} is calling you`, 'success', 20000, true)
+      pushToast(`📢 ${who} is calling you`, 'success', 20000, {
+        prominent: true,
+        action: workAction,
+        actionLabel: 'Answer',
+      })
     } else if (kind === 'newgrid') {
-      pushToast(`New grid: ${who}${where}`, 'success', 12000, true)
+      pushToast(`New grid: ${who}${where}`, 'success', 12000, {
+        prominent: true,
+        action: workAction,
+        actionLabel: 'Work',
+      })
     } else {
-      pushToast(`CQ from ${who}${where}`, 'info', 6000)
+      pushToast(`CQ from ${who}${where}`, 'info', 6000, {
+        action: workAction,
+        actionLabel: 'Answer',
+      })
     }
   }
 

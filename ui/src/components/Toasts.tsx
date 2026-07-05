@@ -27,6 +27,20 @@ export function Toasts() {
           }}
         >
           <RToast.Description className="ui-toast-msg">{t.message}</RToast.Description>
+          {t.action && (
+            <RToast.Action asChild altText={t.actionLabel ?? 'Work'}>
+              <button
+                type="button"
+                className="ui-toast-action"
+                onClick={() => {
+                  t.action?.()
+                  dismissToast(t.id)
+                }}
+              >
+                {t.actionLabel ?? 'Work'} →
+              </button>
+            </RToast.Action>
+          )}
           <RToast.Close className="ui-toast-close" aria-label="Dismiss notification">
             ×
           </RToast.Close>
