@@ -128,9 +128,11 @@ export function DetachedPanel({ panel }: { panel: string }) {
     void p.then((s) => s && setSnap(s)).catch(() => {})
   }
 
-  const qsyBand = (band: string) => {
+  // `freqMhz` is the spot's exact frequency (source of truth — DXpeditions run off the
+  // standard dial); fall back to the band's dial only when the spot has no frequency.
+  const qsyBand = (band: string, freqMhz?: number) => {
     const ch = bandPlan.find((c) => c.band === band)
-    if (ch) apply(setFrequency(ch.dialMhz, ch.band, ch.mode))
+    if (ch) apply(setFrequency(freqMhz ?? ch.dialMhz, ch.band, ch.mode))
   }
   const onSelect = (call: string | null) => {
     // Drives the shared engine; `selected` then reflects it via the snapshot.
@@ -191,7 +193,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
           alerts={needAlerts}
           bandPlan={bandPlan}
           selectedCall={selected}
-          onQsy={qsyBand}
+          onQsy={(a) => qsyBand(a.band, a.freqMhz ?? undefined)}
           onSelect={onSelect}
         />
       </div>

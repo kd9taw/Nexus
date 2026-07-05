@@ -302,7 +302,7 @@ fn start_human_cluster_feed(spots: &SharedSpots, host: &str, mycall: &str, healt
                 // the Phone pill green and hide a phone drought. Classify the same way the
                 // need-matcher does.
                 if matches!(
-                    propagation::classify_spot_mode(sp.freq_mhz(), &sp.comment),
+                    propagation::classify_spot_mode(sp.freq_mhz()),
                     propagation::ModeClass::Phone
                 ) {
                     hp.phone_cluster_last
@@ -965,8 +965,9 @@ async fn get_propagation(
                     rx_grid,
                     band,
                     // Cluster/RBN carry the goods the band-level feeds lack: the EXACT
-                    // spot frequency + (usually) the mode — what map click-to-work needs.
-                    mode: cs.mode().map(str::to_string),
+                    // spot frequency. The mode is the band plan's call, NEVER the free-text
+                    // comment (which holds QSY requests / chit-chat / times).
+                    mode: Some(propagation::classify_spot_mode(cs.freq_mhz()).label().to_string()),
                     snr: None,
                     freq_mhz: Some(cs.freq_mhz()),
                 });
@@ -2930,9 +2931,7 @@ fn get_all_spots(spots: State<'_, SharedSpots>) -> Vec<SpotRow> {
                 zone,
                 band,
                 freq_mhz: freq,
-                mode: propagation::classify_spot_mode(freq, &cs.comment)
-                    .label()
-                    .to_string(),
+                mode: propagation::classify_spot_mode(freq).label().to_string(),
                 spotter: cs.spotter.clone(),
                 corroborators: cs.corroborators.clone(),
                 age_secs,
@@ -3078,7 +3077,7 @@ async fn get_need_alerts(
                     continue;
                 }
             }
-            let class = propagation::classify_spot_mode(freq, &cs.comment);
+            let class = propagation::classify_spot_mode(freq);
             // CW/Phone on any band; digital on HF only (the missing HF evidence path
             // for a digital op). The need-matcher is demand-driven, so a busy HF FT8
             // firehose only surfaces the stations the operator actually NEEDS.

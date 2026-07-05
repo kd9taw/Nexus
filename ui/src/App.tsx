@@ -766,19 +766,23 @@ export default function App() {
 
   // QSY from the Needed panel: move the rig to that band's channel and listen.
   const handleQsy = useCallback(
-    (band: string) => {
+    // `freqMhz` is the spot's EXACT frequency from the spotting network — the source of truth
+    // (a DXpedition may be well off the standard FT8/FT4 dial). Fall back to the band's dial
+    // only when the spot carries no frequency (e.g. a PSK Reporter reception report).
+    (band: string, freqMhz?: number) => {
       const ch = bandPlan.find((c) => c.band === band)
       if (!ch) {
         pushToast(`No channel for ${band} in the band plan`, 'error', 3000)
         return
       }
+      const dial = freqMhz ?? ch.dialMhz
       void withErrorToast(
-        () => apiSetFrequency(ch.dialMhz, ch.band, ch.mode),
+        () => apiSetFrequency(dial, ch.band, ch.mode),
         `Could not QSY to ${band}`,
       ).then((s) => {
         if (s) {
           setSnap(s)
-          pushToast(`QSY ${band} — listening`, 'success', 2500)
+          pushToast(`QSY ${dial.toFixed(3)} MHz — listening`, 'success', 2500)
         }
       })
     },
@@ -1212,7 +1216,7 @@ export default function App() {
           alerts={needAlerts}
           bandPlan={bandPlan}
           selectedCall={activePeer}
-          onQsy={handleQsy}
+          onQsy={(a) => handleQsy(a.band, a.freqMhz ?? undefined)}
           onSelect={handleSelect}
           onWork={handleWorkNeeded}
           onPoint={settings?.rotatorHost?.trim() ? handlePointAntenna : undefined}

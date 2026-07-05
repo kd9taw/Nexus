@@ -103,8 +103,10 @@ interface Props {
   alerts: NeedAlert[]
   bandPlan: BandChannel[]
   selectedCall: string | null
-  /** QSY the rig to `band` (and listen) — the single-click action for a digital need. */
-  onQsy: (band: string) => void
+  /** QSY the rig to a digital need — to the SPOT's exact frequency (DXpeditions run off the
+   * standard FT8/FT4 watering hole), falling back to the band's dial only when the spot
+   * carries no frequency. The spotting network's freq/band is the source of truth. */
+  onQsy: (alert: NeedAlert) => void
   /** Select/highlight a station (also lit on the map). */
   onSelect: (call: string) => void
   /** Click-to-work a VOICE/CW need: QSY to the spot, open the matching cockpit, prefill
@@ -412,7 +414,7 @@ export function NeededPanel({
               : isVoiceCw
                 ? `${a.call} (${a.mode}) — open the main window to work this (pop-out only QSYs the band)`
                 : canQsy
-                  ? `QSY to ${a.band} and listen for ${a.call}`
+                  ? `QSY to ${a.freqMhz ? `${a.freqMhz.toFixed(3)} MHz` : a.band} and listen for ${a.call}`
                   : a.headline
             const fullTooltip = evidenceLine
               ? `${tooltipBody}\n${evidenceLine}`
@@ -428,7 +430,7 @@ export function NeededPanel({
                 onClick={() => {
                   onSelect(a.call)
                   if (workable) onWork(a)
-                  else if (canQsy) onQsy(a.band)
+                  else if (canQsy) onQsy(a)
                 }}
               >
                 <span className="np-need">

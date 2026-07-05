@@ -91,23 +91,6 @@ impl ClusterSpot {
         }
         None
     }
-
-    /// The operating mode named in the spot comment, when one is ("CW 599", "FT8
-    /// -6 dB", "RTTY", "SSB 59"…). RBN comments lead with the mode; human spots
-    /// often carry one too. `None` when the comment doesn't say — callers fall
-    /// back to band/frequency heuristics. Token-matched (not substring) so e.g.
-    /// a callsign fragment can't read as a mode.
-    pub fn mode(&self) -> Option<&'static str> {
-        const MODES: &[&str] = &[
-            // "AM" is deliberately ABSENT: it false-positives on time-of-day comments
-            // ("9 AM EST") far more often than real AM-mode spots occur on HF.
-            "CW", "FT8", "FT4", "RTTY", "SSB", "USB", "LSB", "PSK31", "PSK", "JS8", "FM", "MSK144",
-            "Q65", "JT65", "FT1", "DX1",
-        ];
-        self.comment
-            .split_whitespace()
-            .find_map(|tok| MODES.iter().find(|m| tok.eq_ignore_ascii_case(m)).copied())
-    }
 }
 
 /// True for a "1234Z"-style UTC time token.
@@ -460,29 +443,6 @@ mod tests {
         assert_eq!(s.comment, "CW 599");
         assert_eq!(s.time_utc.as_deref(), Some("1234Z"));
         assert!((s.freq_mhz() - 14.025).abs() < 1e-9);
-    }
-
-    #[test]
-    fn comment_mode_is_token_matched() {
-        let mk = |comment: &str| ClusterSpot {
-            spotter: "W3LPL".into(),
-            dx_call: "UA9CDC".into(),
-            freq_khz: 14025.0,
-            comment: comment.into(),
-            time_utc: None,
-            received_unix: 0,
-            corroborators: Vec::new(),
-        };
-        assert_eq!(mk("CW 599").mode(), Some("CW"));
-        assert_eq!(mk("FT8  -6 dB  25 WPM").mode(), Some("FT8"));
-        assert_eq!(mk("up 2 big pile").mode(), None, "no mode named");
-        // Token match, not substring: a fragment can't read as a mode.
-        assert_eq!(mk("CWO net").mode(), None);
-        assert_eq!(
-            mk("ssb 59 nice sig").mode(),
-            Some("SSB"),
-            "case-insensitive"
-        );
     }
 
     #[test]
