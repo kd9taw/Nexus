@@ -56,9 +56,9 @@ interface DigitalSub {
 const DIGITAL_SUBS: DigitalSub[] = [
   {
     mode: 'digital',
-    label: 'Digital',
+    label: 'FT',
     icon: Radio,
-    title: 'Digital weak-signal cockpit — FT8 / FT4 (pick the tier in the top bar)',
+    title: 'FT weak-signal cockpit — FT8 / FT4 (pick the tier in the top bar)',
     active: (v) => v === 'operate',
   },
   {
@@ -77,8 +77,8 @@ interface Item {
   title: string
 }
 
-// The two non-digital operating cockpits — bookends of the operating group. Phone
-// and CW are opt-in (gated by `enabled`); the Digital group sits between them.
+// The two non-digital operating cockpits, first in the rail (operator order:
+// Phone · CW · Digital group). Both opt-in (gated by `enabled`).
 const PHONE: Item = {
   id: 'phone',
   label: 'Phone',
@@ -144,9 +144,10 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode }: 
     <TooltipProvider>
       <nav className="mode-nav" aria-label="Operating mode">
         <div className="mode-nav-top">
-          {/* Operating group: Phone · Digital(Digital/Tempo) · CW. The FT8/FT4
-              pick lives in the top bar's tier pills, not here. */}
+          {/* Operating group order (operator spec): Phone · CW · Digital group
+              (FT + Tempo). The FT8/FT4 pick lives in the top bar's tier pills. */}
           {enabled.phone !== false && navBtn(PHONE)}
+          {enabled.cw !== false && navBtn(CW)}
           <div className="mode-nav-group" role="group" aria-label="Digital modes">
             <span className="mode-nav-group-label">Digital</span>
             {DIGITAL_SUBS.map((s) => {
@@ -170,7 +171,6 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode }: 
               )
             })}
           </div>
-          {enabled.cw !== false && navBtn(CW)}
           {/* Global situational/logging surfaces + opt-in extras. */}
           {items.map((it) => navBtn(it))}
         </div>

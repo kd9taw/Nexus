@@ -118,6 +118,32 @@ export function Conversation({
           >
             {beaconOn ? '💓 Heartbeat on' : '🤍 Heartbeat off'}
           </button>
+          {/* Roam must be reachable from the launchpad too — the conversation
+              header (which also carries these chips) only exists once a peer is
+              selected, and Roam setup usually happens BEFORE the QSO. */}
+          {onToggleRoam && (
+            <div className="empty-conv-roam">
+              <button
+                type="button"
+                className={`heartbeat-btn roam-toggle${roamEnabled ? ' on' : ''}`}
+                onClick={onToggleRoam}
+                aria-pressed={roamEnabled}
+                title="Roam — coordinated QSY: you and your partner move channels together, announced in the clear (never private). Click to enable/disable."
+              >
+                ⇄ Roam {roamEnabled ? `on${roamStatus ? ` · ${roamStatus}` : ''}` : 'off'}
+              </button>
+              {onRoamSettings && (
+                <button
+                  type="button"
+                  className="heartbeat-btn roam-gear"
+                  onClick={onRoamSettings}
+                  title="Roam settings — channel set, hop cadence, move/pause/stop"
+                >
+                  ⚙ Roam settings
+                </button>
+              )}
+            </div>
+          )}
           <div className="quick-replies band-quickbar" aria-label="Band broadcasts">
             {macros.band.map((q, i) => (
               <button
