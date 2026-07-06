@@ -7,8 +7,8 @@
 // (community-measured truth — absent when offline, never guessed). The Connect
 // "Satellite Passes" pane stays as the compact glance view; this is the
 // planning surface. Rotor auto-track arms here when a rotor is configured.
-import { useEffect, useMemo, useState } from 'react'
-import type { SatDetail, SatPass, SatTrackStatus, SatView, Settings } from '../types'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { NeedTag, SatDetail, SatPass, SatTrackStatus, SatView, Settings, Station } from '../types'
 import {
   getSatellites,
   getSatSchedule,
@@ -21,6 +21,8 @@ import {
 import { satChasingSet, toggleSatChasing } from '../features/satChase'
 import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAlarm'
 import { pushToast } from '../toast'
+import { MapView } from './MapView'
+import { useTheme } from '../useTheme'
 
 interface Props {
   /** Bird to select (map click hand-off). The section follows changes. */
@@ -150,6 +152,8 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const [alarms, setAlarms] = useState(() => satAlarmMap())
   const [rotorOn, setRotorOn] = useState(false)
   const [gridSet, setGridSet] = useState(true) // optimistic until settings load
+  const [myGrid, setMyGrid] = useState('') // for the embedded detail globe's center
+  const [theme] = useTheme()
   const [track, setTrack] = useState<SatTrackStatus | null>(null)
   const [search, setSearch] = useState('')
   const [nowTick, setNowTick] = useState(() => Date.now())
@@ -229,6 +233,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         if (!live) return
         setRotorOn((s.rotatorModel ?? 0) > 0 || s.rotatorHost.trim() !== '')
         setGridSet(s.mygrid.trim().length >= 4) // passes need a real locator
+        setMyGrid(s.mygrid)
       })
       .catch(() => {})
     return () => {
@@ -278,6 +283,13 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   }, [view, search])
 
   const tleStale = view != null && view.tleAgeDays > 14
+
+  // Stable empty inputs for the embedded detail globe (it shows only the birds —
+  // no stations, spots, or needs), so MapView's per-tick projections don't rebuild.
+  const noStations = useMemo(() => [] as Station[], [])
+  const noNeeds = useMemo(() => new Map<string, NeedTag>(), [])
+  const noSelectCall = useCallback(() => {}, [])
+  const selectSatInBox = useCallback((n: string) => setSelected(n), [])
 
   const armTrack = (name: string, aosUnix: number) => {
     startSatTrack(name, aosUnix)
@@ -463,6 +475,27 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               {detail.norad != null && <span className="sat-norad"> · NORAD {detail.norad}</span>}
               {detail.status && <span className={`sat-chip ${detail.status === 'alive' ? 'alive' : 'dead'}`}>{detail.status}</span>}
             </h2>
+            <div
+              style={{
+                width: '100%',
+                height: 260,
+                borderRadius: 8,
+                overflow: 'hidden',
+                border: '1px solid var(--border)',
+              }}
+            >
+              <MapView
+                embedded={{ focusSat: detail.name }}
+                myGrid={myGrid}
+                theme={theme}
+                stations={noStations}
+                prop={null}
+                selectedCall={null}
+                onSelectCall={noSelectCall}
+                needByCall={noNeeds}
+                onSelectSat={selectSatInBox}
+              />
+            </div>
             {detail.pass ? (
               <>
                 <div className="sat-passline">

@@ -19,20 +19,21 @@ export interface RotorStripProps {
   onPointAt?: (call: string) => void
 }
 
-const GLYPH = 16
+// Sized for operating distance (operator: the 16 px original was "super small").
+const GLYPH = 22
 const C = GLYPH / 2
 
 // Neutral inline chip — inherits the header's text colour so it reads correctly
 // in every cockpit bar (and in both themes) without a bespoke CSS class.
 const chipStyle: CSSProperties = {
   font: 'inherit',
-  fontSize: '0.8em',
+  fontSize: '0.9em',
   lineHeight: 1,
   color: 'inherit',
   background: 'transparent',
   border: '1px solid currentColor',
   borderRadius: 4,
-  padding: '2px 6px',
+  padding: '3px 8px',
   opacity: 0.7,
   cursor: 'pointer',
 }
@@ -81,6 +82,17 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
       title={mag != null ? `Rotator at ${deg}° true · ${mag}° magnetic (WMM)` : `Rotator at ${deg}° true`}
       style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}
     >
+      <span
+        style={{
+          fontSize: '0.65em',
+          letterSpacing: '0.08em',
+          opacity: 0.55,
+          fontWeight: 600,
+        }}
+        aria-hidden
+      >
+        ROTOR
+      </span>
       {/* Live azimuth needle — north-up, rotated clockwise by the true bearing. */}
       <svg width={GLYPH} height={GLYPH} viewBox={`0 0 ${GLYPH} ${GLYPH}`} aria-hidden style={{ flex: '0 0 auto' }}>
         <circle cx={C} cy={C} r={C - 1} fill="none" stroke="currentColor" strokeOpacity={0.3} />
@@ -89,7 +101,7 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
           <circle cx={C} cy={2} r={1.4} fill="currentColor" />
         </g>
       </svg>
-      <span className="mono" style={{ fontSize: '0.85em', whiteSpace: 'nowrap' }}>
+      <span className="mono" style={{ fontSize: '0.95em', fontWeight: 600, whiteSpace: 'nowrap' }}>
         {deg}°T{mag != null && ` (${mag}°M)`}
       </span>
       {satTrack && (

@@ -30,6 +30,7 @@ import { loadProfiles, saveProfile, deleteProfile, type Profile } from '../profi
 import { getConnectionLog, getCredentialsStatus } from '../api'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { discoverFlex } from '../api'
+import { findDaxDevices } from '../features/dax'
 import type { ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
 import { LevelMeter } from './LevelMeter'
@@ -1303,21 +1304,20 @@ export function SettingsPanel({
                     </button>
                   </div>
                   {(() => {
-                    const daxIn = audio.input.find((d) => /dax.*rx\s*1/i.test(d)) ?? audio.input.find((d) => /dax/i.test(d))
-                    const daxOut = audio.output.find((d) => /dax.*tx/i.test(d)) ?? audio.output.find((d) => /dax/i.test(d))
-                    const paired = form.audioIn === daxIn && form.audioOut === daxOut
-                    return daxIn && daxOut && !paired ? (
+                    const dax = findDaxDevices(audio.input, audio.output)
+                    const paired = dax != null && form.audioIn === dax.input && form.audioOut === dax.output
+                    return dax && !paired ? (
                       <button
                         type="button"
                         className="settings-test-btn"
                         onClick={() => {
-                          update('audioIn', daxIn)
-                          update('audioOut', daxOut)
-                          pushToast(`DAX paired: ${daxIn} → in, ${daxOut} → out`, 'success', 6000)
+                          update('audioIn', dax.input)
+                          update('audioOut', dax.output)
+                          pushToast(`DAX paired: ${dax.input} → in, ${dax.output} → out`, 'success', 6000)
                         }}
                         title="SmartSDR's DAX virtual audio devices were detected — one click sets them as Nexus's audio in/out (bit-clean digital audio, no sound card)"
                       >
-                        ⚡ Pair DAX audio ({daxIn})
+                        ⚡ Pair DAX audio ({dax.input})
                       </button>
                     ) : null
                   })()}

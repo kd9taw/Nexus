@@ -92,6 +92,11 @@ interface Props {
   /** GOES long-band X-ray flux (W/m²) — drives the D-RAP flare-blackout layer.
    * The host merges the 60 s fast lane with the prop snapshot (flareAlert.ts). */
   xrayLong?: number | null
+  /** Embedded detail globe (Satellites section): force a clean, locked GLOBE
+   * showing just the basemap + the birds, centered on `focusSat`. Suppresses the
+   * toolbar, layer panel, and every overlay rail/legend, and never touches the
+   * operator's persisted Connect-map projection. */
+  embedded?: { focusSat?: string }
 }
 
 /** Color for an ionosonde's measured MUF (MHz): a cold→hot scale (blue low → red high)
@@ -236,6 +241,17 @@ const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   // The layer toggle stays for anyone who wants DX-target markers on the map.
   dxped: { label: 'DXpeditions', visible: false, opacity: 1 },
 }
+// The satellite-detail mini-globe (embedded mode) shows JUST the bird on a clean
+// planet: the basemap (day/night + coastline + graticule) plus the sat layer, and
+// nothing else — no spots, stations, MUF, rings, or space-weather overlays.
+const EMBED_LAYERS: Record<LayerKey, Layer> = (() => {
+  const on = new Set<LayerKey>(['daynight', 'relief', 'coast', 'grid', 'sats'])
+  const out = {} as Record<LayerKey, Layer>
+  for (const k of Object.keys(DEFAULT_LAYERS) as LayerKey[]) {
+    out[k] = { ...DEFAULT_LAYERS[k], visible: on.has(k) }
+  }
+  return out
+})()
 const RINGS_KM = [1000, 3000, 5000, 10000]
 
 // Cartographic palette — a map should read as a MAP (filled land + ocean), not a
@@ -307,6 +323,7 @@ export function MapView({
   outlook = null,
   muf,
   xrayLong = null,
+  embedded,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -322,13 +339,15 @@ export function MapView({
     [muf],
   )
   // Restore the operator's persisted projection (so a detached window shows the same
-  // globe/beam/world); fall back to the intent preset, then the globe.
-  const [kind, setKind] = useState<Projection>(
-    () => loadProjection() ?? (intent ? INTENT_PRESETS[intent].kind : 'globe'),
+  // globe/beam/world); fall back to the intent preset, then the globe. The embedded
+  // detail globe force-locks 'globe' and ignores the persisted pick (it's a transient
+  // inset — reading/writing that key would fight the operator's real Connect-map view).
+  const [kind, setKind] = useState<Projection>(() =>
+    embedded ? 'globe' : loadProjection() ?? (intent ? INTENT_PRESETS[intent].kind : 'globe'),
   )
   const [colorBy, setColorBy] = useState<'need' | 'snr'>('need')
   const [pathMode, setPathMode] = useState<'sp' | 'lp'>('sp')
-  const [layers, setLayers] = useState(DEFAULT_LAYERS)
+  const [layers, setLayers] = useState(() => (embedded ? EMBED_LAYERS : DEFAULT_LAYERS))
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<{ x: number; y: number; text: string; info?: boolean } | null>(null)
   // The hovered feature's call — drives the on-canvas hover ring (changes only
@@ -438,6 +457,19 @@ export function MapView({
       clearInterval(id)
     }
   }, [satsOn])
+  // Embedded detail globe: swing the sphere to the focus bird's current subpoint
+  // ONCE per focus change (a ref remembers which bird we centered on) so later
+  // drag-to-spin isn't fought; re-centers only when embedded.focusSat changes.
+  const focusSat = embedded?.focusSat
+  const centeredSatRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!focusSat || !sats) return
+    if (centeredSatRef.current === focusSat) return
+    const bird = sats.birds.find((b) => b.name === focusSat)
+    if (!bird) return
+    centeredSatRef.current = focusSat
+    setView((v) => ({ ...v, rotate: [-bird.lon, -bird.lat] }))
+  }, [focusSat, sats])
   // The 1 s opening/flare-pulse tick — only while something animated is actually
   // visible (an idle map never redraws for an animation nobody can see). The
   // satellite layer joins it: the icons interpolate along their tracks, so a
@@ -477,14 +509,16 @@ export function MapView({
   }, [intent])
 
   // Persist the projection whenever it changes (operator's Globe/Beam/World pick, or a
-  // preset applied on intent switch) so the next window/launch restores it.
+  // preset applied on intent switch) so the next window/launch restores it. The embedded
+  // detail globe is exempt — it force-locks 'globe' and must never clobber that pick.
   useEffect(() => {
+    if (embedded) return
     try {
       localStorage.setItem(PROJECTION_KEY, kind)
     } catch {
       /* storage blocked — projection still applies this session */
     }
-  }, [kind])
+  }, [kind, embedded])
 
   const me = useMemo(() => gridToLatLon(myGrid), [myGrid])
   // Wheel-zoom — a NON-passive native listener so we can preventDefault (React's
@@ -950,7 +984,9 @@ export function MapView({
         ctx.fillRect(-8 * sc, -1.4 * sc, 4.4 * sc, 2.8 * sc) // left panel
         ctx.fillRect(3.6 * sc, -1.4 * sc, 4.4 * sc, 2.8 * sc) // right panel
         ctx.restore()
-        if (b.name === hoverKey) {
+        // Hover ring, plus a persistent ring around the embedded detail's focus
+        // bird so the one being inspected is findable at a glance.
+        if (b.name === hoverKey || b.name === focusSat) {
           ctx.strokeStyle = color
           ctx.lineWidth = 1.5
           ctx.beginPath()
@@ -1365,7 +1401,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey])
+  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -1738,14 +1774,21 @@ export function MapView({
       if (hit?.kind === 'sat') {
         // A sat click opens the bird's passes — it must NOT clear the station
         // selection (the operator may be mid-QSO watching a pass approach).
-        // Deferred ~320 ms so a double-click (★ toggle) can cancel it first.
+        // Deferred ~320 ms so a double-click (★ toggle) can cancel it first — but
+        // that defer only exists to protect the main map's dbl-click-★ from
+        // unmounting mid-gesture; the embedded detail globe unmounts nothing on
+        // select, so there the click lands instantly.
         if (onSelectSat) {
           const name = hit.name
-          if (satNavTimer.current != null) window.clearTimeout(satNavTimer.current)
-          satNavTimer.current = window.setTimeout(() => {
-            satNavTimer.current = null
+          if (embedded) {
             onSelectSat(name)
-          }, 320)
+          } else {
+            if (satNavTimer.current != null) window.clearTimeout(satNavTimer.current)
+            satNavTimer.current = window.setTimeout(() => {
+              satNavTimer.current = null
+              onSelectSat(name)
+            }, 320)
+          }
         }
         return
       }
@@ -1768,7 +1811,10 @@ export function MapView({
         window.clearTimeout(satNavTimer.current)
         satNavTimer.current = null
       }
-      toggleSatChasing(hit.name)
+      // NOT in the embedded detail globe: the Satellites section's own ★/⏰
+      // controls sit beside it and hold their own state — a silent toggle here
+      // would desync them (and disarm alarms with no UI trace).
+      if (!embedded) toggleSatChasing(hit.name)
       return
     }
     if (!onWorkSpot) return
@@ -1795,6 +1841,7 @@ export function MapView({
 
   return (
     <div className="map-view">
+      {!embedded && (
       <div className="map-toolbar">
         <div className="map-proj" role="group" aria-label="Projection">
           <button className={kind === 'globe' ? 'active' : ''} onClick={() => setKind('globe')} title="3-D globe — drag to spin, wheel to zoom">
@@ -1846,6 +1893,7 @@ export function MapView({
           <RotateCcw size={13} /> Reset
         </button>
       </div>
+      )}
 
       <div className="map-body">
         <div className="map-canvas-wrap" ref={wrapRef}>
@@ -1913,13 +1961,13 @@ export function MapView({
               </div>
             </div>
           )}
-          {placed.length === 0 && (
+          {!embedded && placed.length === 0 && (
             <div className="map-empty-hint">
               No located stations yet — decoded stations with a grid appear here, centered on {myGrid},
               colored by what you still need.
             </div>
           )}
-          <MapLegend />
+          {!embedded && <MapLegend />}
           {layers.muf.visible && <MufLegend />}
           {flarePulsing && xrayEff != null && (
             <FlareChip
@@ -1946,7 +1994,7 @@ export function MapView({
           )}
         </div>
 
-        {expert && (
+        {expert && !embedded && (
         <aside className="map-layers">
           <h3>Layers</h3>
           {(Object.keys(layers) as LayerKey[]).map((k) => (

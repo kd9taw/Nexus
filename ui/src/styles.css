@@ -11437,3 +11437,106 @@ select.settings-input {
   grid-column: 1;
   grid-row: auto;
 }
+
+/* ============ Setup wizard: step framework (station → rig → goals) ============ */
+.wizard-dots {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: 14px;
+}
+.wizard-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.wizard-dot.cur {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.wizard-dot.done {
+  color: var(--accent);
+}
+.wizard-dot-n {
+  font-weight: 800;
+}
+.wizard-fields {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.wizard-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 180px;
+  flex: 1;
+}
+.wizard-field > span:first-child {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.wizard-field input,
+.wizard-field select {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+  padding: 6px 10px;
+}
+.wizard-field input.bad {
+  border-color: var(--band-marginal);
+}
+.wizard-field-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.wizard-field-hint.bad {
+  color: var(--band-marginal);
+}
+.wizard-rigconn {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+.wizard-detect {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: 14px;
+  align-items: flex-start;
+}
+.wizard-btn {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+.wizard-btn:hover {
+  border-color: var(--accent);
+}
+.wizard-detect-row {
+  text-align: left;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 6px var(--space-3);
+  cursor: pointer;
+  width: 100%;
+}
+.wizard-detect-row.sel {
+  border-color: var(--accent);
+}

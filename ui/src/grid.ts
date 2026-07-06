@@ -30,6 +30,13 @@ export function gridToLatLon(grid: string): LatLon | null {
 /** Lat/lon → 4-char Maidenhead square (e.g. "EN52") — the inverse of
  * gridToLatLon at square precision. Used to ask the path predictor about a
  * map spot that has coordinates but no reported grid. */
+/** STRICT Maidenhead check: exactly 4 or 6 chars, fields A–R, squares 0–9,
+ * subsquares A–X. `gridToLatLon` deliberately stays permissive (it's a
+ * distance-badge helper) — use THIS for anything that persists a locator. */
+export function isValidGrid(grid: string): boolean {
+  return /^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?$/.test(grid.trim())
+}
+
 export function latLonToGrid(lat: number, lon: number): string {
   const la = Math.min(89.999, Math.max(-90, lat)) + 90
   const lo = (((Math.min(179.999, Math.max(-180, lon)) + 180) % 360) + 360) % 360

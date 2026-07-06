@@ -72,6 +72,8 @@ import {
   getXrayNow,
   getDxpedWindows,
   getSatSchedule,
+  setSettings as apiSetSettings,
+  testCat,
   setOperatingMode,
   workSpot,
   setLicenseClass,
@@ -85,7 +87,7 @@ import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
-import type { PropagationSnapshot, FeedHealth, NeedTag, NeedAlert, SpotRow, DxpedWindow, WorkableCard } from './types'
+import type { PropagationSnapshot, FeedHealth, NeedTag, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult } from './types'
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
@@ -97,7 +99,7 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { Toasts } from './components/Toasts'
 import { OnboardingBanner } from './components/OnboardingBanner'
 import { RevealNudge } from './components/RevealNudge'
-import { SetupWizard } from './components/SetupWizard'
+import { SetupWizard, type WizardDraft } from './components/SetupWizard'
 import { PROFILES, type ProfileId } from './features/profiles'
 
 const ONBOARD_KEY = 'tempo-onboarded'
@@ -195,6 +197,9 @@ export default function App() {
   })
   // Bird handed off from a map satellite click — the Satellites section opens on it.
   const [satFocus, setSatFocus] = useState<string | null>(null)
+  // Bumped when the wizard closes: remounts SettingsPanel so a stale full-struct
+  // form under the modal can't Save over what the wizard just persisted.
+  const [wizardGen, setWizardGen] = useState(0)
   // Per-section rig-mode policy. Only ENTERING an actual operating cockpit changes the rig:
   // the workspace sections (FT8/FT4, Tempo, contest…) + the global CW/Phone cockpits. A
   // global, non-operating view (Map, Logbook, Settings, Propagation, Awards…) leaves the rig
@@ -1178,24 +1183,58 @@ export default function App() {
     setOnboardDismissed(true)
   }, [])
 
+  // Merge the wizard's station/rig draft into settings with ONE set_settings
+  // write (apply_settings is heavyweight — never per-field). No-ops on an
+  // empty draft. Shared by Test-CAT (write, then probe) and the final apply.
+  const applyWizardDraft = useCallback(async (draft: WizardDraft): Promise<void> => {
+    if (Object.keys(draft).length === 0) return
+    const current = await getSettings()
+    const snap = await apiSetSettings({ ...current, ...draft })
+    if (snap) setSnap(snap)
+    setSettings({ ...current, ...draft })
+  }, [])
+
+  const handleWizardTestCat = useCallback(
+    async (draft: WizardDraft): Promise<CatTestResult> => {
+      // The radio loop reconfigures from SAVED settings (same rule as the
+      // Settings Test button) — persist the draft first, then probe.
+      await applyWizardDraft(draft)
+      return testCat()
+    },
+    [applyWizardDraft],
+  )
+
   const handleWizardApply = useCallback(
-    (ids: ProfileId[], landing: View, modes: FeatureId[], license: string) => {
+    (ids: ProfileId[], landing: View, modes: FeatureId[], license: string, draft: WizardDraft) => {
+      // SEQUENCED, not concurrent: set_settings writes the WHOLE struct
+      // (licenseClass included), so a concurrent set_license_class would be
+      // reverted by the stale class riding in the merge (review catch — the
+      // wizard's own TX-lockout promise silently undone). Draft first, class
+      // second; failures surface instead of a false-success close.
+      void applyWizardDraft(draft)
+        .then(() => setLicenseClass(license))
+        .then((s) => s && setSnap(s))
+        .catch((e) =>
+          pushToast(
+            `Setup didn't fully save: ${e instanceof Error ? e.message : e} — check Settings`,
+            'error',
+            0,
+          ),
+        )
       // Goal profiles + the chosen operating modes (CW/Phone) force-enabled on top.
       features.applyProfiles(ids, modes)
-      // Persist the declared license class (drives the TX-privilege lockout).
-      void setLicenseClass(license)
-        .then((s) => s && setSnap(s))
-        .catch(() => {})
       setView(landing)
       markWizardSeen()
       setShowWizard(false)
+      setWizardGen((g) => g + 1)
     },
-    [features.applyProfiles],
+    [features.applyProfiles, applyWizardDraft],
   )
 
   const handleWizardSkip = useCallback(() => {
     markWizardSeen()
     setShowWizard(false)
+    setWizardGen((g) => g + 1)
   }, [])
 
   if (!snap) {
@@ -1447,6 +1486,7 @@ export default function App() {
       workspace = (
         <main className="layout single">
           <SettingsPanel
+            key={`sp-wiz${wizardGen}`}
             onSaved={handleSettingsSaved}
             radio={snap.radio}
             layout={wfLayout}
@@ -1691,7 +1731,17 @@ export default function App() {
 
       <Toasts />
 
-      {showWizard && <SetupWizard onApply={handleWizardApply} onSkip={handleWizardSkip} />}
+      {showWizard && settings && (
+        // Gated on settings: the prefills are one-shot useState initializers,
+        // and mounting against null would turn the whole real config into
+        // "fields the operator cleared" at draft time (review catch).
+        <SetupWizard
+          settings={settings}
+          onApply={handleWizardApply}
+          onTestCat={handleWizardTestCat}
+          onSkip={handleWizardSkip}
+        />
+      )}
 
       {snap.pendingLog && (
         <LogConfirm
