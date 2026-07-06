@@ -1308,6 +1308,24 @@ export function MapView({
   // click (select a station). Wheel zooms (the native listener, below).
   const hitCall = (hit: MapHit | null): string | null =>
     hit ? (hit.kind === 'station' ? hit.s.call : hit.kind === 'dxped' ? hit.card.call : hit.sp.call) : null
+  /** Pointer event → CANVAS LAYOUT coords (the space dots are projected in).
+   * The app's UI scale (`.app { zoom: var(--ui-zoom) }`) makes visual px ≠
+   * layout px: clientX/getBoundingClientRect are VISUAL, while size/clientWidth
+   * (and therefore every projected dot) are LAYOUT — comparing them raw put the
+   * hit up to (zoom−1)·distance away from the cursor (the operator's
+   * "half an inch off" report). The rect ratio undoes any zoom/transform. */
+  const canvasXY = (e: { clientX: number; clientY: number }): [number, number] => {
+    const rect = canvasRef.current!.getBoundingClientRect()
+    const sx = rect.width > 0 ? size.w / rect.width : 1
+    const sy = rect.height > 0 ? size.h / rect.height : 1
+    return [(e.clientX - rect.left) * sx, (e.clientY - rect.top) * sy]
+  }
+  /** Visual→layout scale for drag DELTAS (so pan speed tracks the cursor 1:1
+   * under UI zoom too). */
+  const dragScale = (): number => {
+    const rect = canvasRef.current?.getBoundingClientRect()
+    return rect && rect.width > 0 ? size.w / rect.width : 1
+  }
   const onPointerDown = (e: React.PointerEvent) => {
     ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
     dragRef.current = { x: e.clientX, y: e.clientY, base: view, moved: false }
@@ -1315,16 +1333,15 @@ export function MapView({
   const onPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current
     if (!d) {
-      const rect = canvasRef.current!.getBoundingClientRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
+      const [mx, my] = canvasXY(e)
       const hit = hitTest(mx, my)
       setHover(hit ? { x: mx, y: my, text: hitText(hit) } : null)
       setHoverKey(hitCall(hit)) // state only changes on target enter/leave
       return
     }
-    const dx = e.clientX - d.x
-    const dy = e.clientY - d.y
+    const s = dragScale()
+    const dx = (e.clientX - d.x) * s
+    const dy = (e.clientY - d.y) * s
     // A human click wobbles a few px — 6 px of true distance before a press
     // counts as a drag (the old 3 px Manhattan gate ate clicks as micro-spins).
     if (!d.moved && Math.hypot(dx, dy) > 6) {
@@ -1357,8 +1374,8 @@ export function MapView({
       if (lu && now - lu.t < 350 && Math.hypot(e.clientX - lu.x, e.clientY - lu.y) < 6) {
         return
       }
-      const rect = canvasRef.current!.getBoundingClientRect()
-      const hit = hitTest(e.clientX - rect.left, e.clientY - rect.top)
+      const [mx, my] = canvasXY(e)
+      const hit = hitTest(mx, my)
       const call =
         hit?.kind === 'station' ? hit.s.call : hit?.kind === 'dxped' ? hit.card.call : hit?.kind === 'spot' ? hit.sp.call : null
       onSelectCall(call ? (call === selectedCall ? null : call) : null)
@@ -1369,8 +1386,8 @@ export function MapView({
   // cockpit opens). Stations stay single-click-select (worked from the cockpit).
   const onDoubleClick = (e: React.MouseEvent) => {
     if (!onWorkSpot) return
-    const rect = canvasRef.current!.getBoundingClientRect()
-    const hit = hitTest(e.clientX - rect.left, e.clientY - rect.top)
+    const [mx, my] = canvasXY(e)
+    const hit = hitTest(mx, my)
     if (hit?.kind === 'spot') {
       onWorkSpot({
         call: hit.sp.call,
