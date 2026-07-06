@@ -62,6 +62,8 @@ interface Props {
   needAlerts?: NeedAlert[]
   /** Point the rotator at a call (only passed when a rotator is configured). */
   onPoint?: (call: string) => void
+  /** Click a map satellite → open it in the Satellites section (forwarded to MapView). */
+  onSelectSat?: (name: string) => void
   /** Open Connect in its own window (omit when already standalone). */
   onPopOut?: () => void
 }
@@ -77,6 +79,7 @@ export function ConnectView({
   needByCall,
   needAlerts,
   onPoint,
+  onSelectSat,
   onPopOut,
 }: Props) {
   const prov = prop ? provLabel(prop.source, prop.asOf) : null
@@ -353,6 +356,7 @@ export function ConnectView({
               expert={expert}
               intent={intent}
               onWorkSpot={onWorkSpot}
+              onSelectSat={onSelectSat}
               focusBand={focusBand}
               onFocusBand={toggleFocusBand}
               outlook={selectedCall ? pathPred : bandOutlook}

@@ -324,6 +324,49 @@ export interface SatPass {
   maxElDeg: number
   aosAzDeg: number
   losAzDeg: number
+  /** SatNOGS operational status, stamped on Satellites-section schedule rows
+   * when the weekly cache has this bird; absent on the map's SatView passes
+   * and whenever the cache is empty (offline) — never guessed. */
+  status?: string | null
+}
+
+/** One SatNOGS DB transmitter/transponder entry (data CC-BY-SA 4.0). */
+export interface SatTransmitter {
+  description: string
+  /** SatNOGS's curated "still transmitting" flag — measured community truth. */
+  alive: boolean
+  mode: string | null
+  uplinkLowHz: number | null
+  downlinkLowHz: number | null
+}
+
+/** Per-bird detail (get_sat_detail): SatNOGS data + the current/next pass geometry. */
+export interface SatDetail {
+  name: string
+  /** NORAD catalog number parsed from the TLE; null if unparseable. */
+  norad: number | null
+  /** SatNOGS operational status ("alive"/"dead"/"re-entered"/"future");
+   * null = no data yet (offline since install) — render nothing, never guess. */
+  status: string | null
+  transmitters: SatTransmitter[]
+  /** When the SatNOGS snapshot was fetched (unix secs); null = never. */
+  dataFetchedAt: number | null
+  /** The pass in progress, or the next one over the operator (24 h); null = none/no grid. */
+  pass: SatPass | null
+  /** (unix, az°, el°) samples across `pass` for the polar plot; empty without a pass. */
+  passTrack: [number, number, number][]
+}
+
+/** Live rotor auto-track state (sat_track_status); null = not tracking. */
+export interface SatTrackStatus {
+  name: string
+  /** armed = waiting (no rotor commands until 5 min before AOS);
+   * prepositioning = slewing to the AOS azimuth; tracking = following. */
+  state: 'armed' | 'prepositioning' | 'tracking'
+  azDeg: number
+  elDeg: number
+  aosUnix: number
+  losUnix: number
 }
 
 /** Real-time solar wind (DSCOVR) — the leading geomagnetic indicator (leads Kp/A). */

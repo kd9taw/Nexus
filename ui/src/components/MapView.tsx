@@ -24,7 +24,7 @@ import { getAurora, getDeclination, getPca, getSatellites } from '../api'
 // CQ-zone boundaries (HB9HIL hamradio-zones-geojson, MIT — see NOTICE): bundled
 // as a raw asset and fetched lazily so the 2.7 MB never loads until toggled on.
 import cqzonesUrl from '../data/cqzones.geojson?url'
-import { satChasingSet } from '../features/satChase'
+import { satChasingSet, toggleSatChasing } from '../features/satChase'
 import { gridToLatLon, haversineKm, bearingDeg, magneticDeg, type LatLon } from '../grid'
 import {
   basemap,
@@ -75,6 +75,9 @@ interface Props {
   /** Double-click-to-work a live spot / DXpedition marker: the app's atomic
    * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off. */
   onWorkSpot?: (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => void
+  /** Click a satellite icon → open it in the Satellites section (passes, polar
+   * plot, frequencies). Omitted = sat icons are hover-only. */
+  onSelectSat?: (name: string) => void
   /** Band focus (from the advisor/openings rail): the heat layer + spot dots
    * highlight THIS band and recede the rest — "where IS this opening?". */
   focusBand?: string | null
@@ -298,6 +301,7 @@ export function MapView({
   expert = true,
   intent,
   onWorkSpot,
+  onSelectSat,
   focusBand = null,
   onFocusBand,
   outlook = null,
@@ -403,6 +407,19 @@ export function MapView({
   // Amateur satellites — polled only while the layer is on (subpoints move
   // ~4°/min; 30 s keeps dots honest without hammering the 10-min view cache).
   const [sats, setSats] = useState<SatView | null>(null)
+  // Satellite hitboxes, captured at draw time (positions interpolate every tick,
+  // so hit-testing must read what was actually drawn, not recompute).
+  const placedSatsRef = useRef<Array<{ name: string; x: number; y: number; chased: boolean }>>([])
+  // Sat single-click navigation is DELAYED one double-click window: the first
+  // click of a dbl-click-to-★ would otherwise unmount this map before the
+  // second click could land (review catch — the gesture was unreachable).
+  const satNavTimer = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (satNavTimer.current != null) window.clearTimeout(satNavTimer.current)
+    },
+    [],
+  )
   const satsOn = layers.sats.visible
   useEffect(() => {
     if (!satsOn) {
@@ -842,6 +859,7 @@ export function MapView({
     // position (the track lets the icon actually move between 30 s polls),
     // a fading trail of where the bird just was, and a dashed projection of
     // where it's going. Chased birds add their footprint ring. Null = nothing.
+    placedSatsRef.current = [] // cleared every draw so a hidden layer has no ghost hitboxes
     if (layers.sats.visible && sats) {
       const chasedSet = satChasingSet()
       const nowSecs = Date.now() / 1000
@@ -932,7 +950,15 @@ export function MapView({
         ctx.fillRect(-8 * sc, -1.4 * sc, 4.4 * sc, 2.8 * sc) // left panel
         ctx.fillRect(3.6 * sc, -1.4 * sc, 4.4 * sc, 2.8 * sc) // right panel
         ctx.restore()
+        if (b.name === hoverKey) {
+          ctx.strokeStyle = color
+          ctx.lineWidth = 1.5
+          ctx.beginPath()
+          ctx.arc(p[0], p[1], 11 * sc, 0, Math.PI * 2)
+          ctx.stroke()
+        }
         ctx.fillText(b.name, p[0] + 9 * sc, p[1])
+        placedSatsRef.current.push({ name: b.name, x: p[0], y: p[1], chased: isChased })
       }
       ctx.globalAlpha = 1
     }
@@ -1527,6 +1553,7 @@ export function MapView({
     | { kind: 'station'; d: number; s: Station; ll: LatLon }
     | { kind: 'dxped'; d: number; card: WorkableCard }
     | { kind: 'spot'; d: number; sp: MapSpot }
+    | { kind: 'sat'; d: number; name: string; chased: boolean }
     | { kind: 'muf'; d: number; muf: number }
   const hitTest = (mx: number, my: number): MapHit | null => {
     if (layers.stations.visible) {
@@ -1552,6 +1579,15 @@ export function MapView({
         // Generous 10 px target on a ~3 px dot — small dots were genuinely
         // hard to hit (operator report).
         if (d < 10 && (!best || d < best.d)) best = { kind: 'spot', d, sp }
+      }
+      if (best) return best
+    }
+    if (layers.sats.visible) {
+      // Sat icons span ~10 px with panels — 12 px target, same generosity as dots.
+      let best: MapHit | null = null
+      for (const { name, x, y, chased } of placedSatsRef.current) {
+        const d = Math.hypot(x - mx, y - my)
+        if (d < 12 && (!best || d < best.d)) best = { kind: 'sat', d, name, chased }
       }
       if (best) return best
     }
@@ -1596,6 +1632,21 @@ export function MapView({
     if (hit.kind === 'muf') {
       return `Ionosonde · measured MUF ${hit.muf.toFixed(1)} MHz here (KC2G) — a data point, not a station`
     }
+    if (hit.kind === 'sat') {
+      const star = hit.chased ? '★' : '☆'
+      const now = Date.now() / 1000
+      const pass = sats?.passes.find((pp) => pp.name === hit.name && pp.losUnix > now)
+      let when = 'no pass over you in 24 h'
+      if (pass) {
+        const t = new Date(pass.aosUnix * 1000)
+        const hhmm = `${t.getHours().toString().padStart(2, '0')}:${t.getMinutes().toString().padStart(2, '0')}`
+        when =
+          pass.aosUnix <= now
+            ? `IN PASS now · max ${Math.round(pass.maxElDeg)}°`
+            : `next pass ${hhmm} (in ${Math.max(1, Math.round((pass.aosUnix - now) / 60))} min) · max ${Math.round(pass.maxElDeg)}°`
+      }
+      return `${hit.name} ${star} · ${when}${onSelectSat ? ' — click for passes' : ''} · dbl-click: favorite`
+    }
     const sp = hit.sp
     const age = sp.ageSecs < 60 ? `${sp.ageSecs}s` : `${Math.round(sp.ageSecs / 60)}m`
     const freq = sp.freqMhz ? ` · ${sp.freqMhz.toFixed(4).replace(/\.?0+$/, '')} MHz` : ''
@@ -1612,7 +1663,9 @@ export function MapView({
           ? hit.card.call
           : hit.kind === 'spot'
             ? hit.sp.call
-            : null // muf diamonds: info-only, no ring
+            : hit.kind === 'sat'
+              ? hit.name // drives the hover ring around the icon
+              : null // muf diamonds: info-only, no ring
       : null
   /** Pointer event → CANVAS LAYOUT coords (the space dots are projected in).
    * The app's UI scale (`.app { zoom: var(--ui-zoom) }`) makes visual px ≠
@@ -1682,6 +1735,20 @@ export function MapView({
       }
       const [mx, my] = canvasXY(e)
       const hit = hitTest(mx, my)
+      if (hit?.kind === 'sat') {
+        // A sat click opens the bird's passes — it must NOT clear the station
+        // selection (the operator may be mid-QSO watching a pass approach).
+        // Deferred ~320 ms so a double-click (★ toggle) can cancel it first.
+        if (onSelectSat) {
+          const name = hit.name
+          if (satNavTimer.current != null) window.clearTimeout(satNavTimer.current)
+          satNavTimer.current = window.setTimeout(() => {
+            satNavTimer.current = null
+            onSelectSat(name)
+          }, 320)
+        }
+        return
+      }
       const call =
         hit?.kind === 'station' ? hit.s.call : hit?.kind === 'dxped' ? hit.card.call : hit?.kind === 'spot' ? hit.sp.call : null
       onSelectCall(call ? (call === selectedCall ? null : call) : null)
@@ -1691,9 +1758,20 @@ export function MapView({
   // call/band/mode/freq to the app's atomic work path (rig jumps band+mode+freq,
   // cockpit opens). Stations stay single-click-select (worked from the cockpit).
   const onDoubleClick = (e: React.MouseEvent) => {
-    if (!onWorkSpot) return
     const [mx, my] = canvasXY(e)
     const hit = hitTest(mx, my)
+    if (hit?.kind === 'sat') {
+      // Double-click a bird = toggle ★ favorite (the sat analog of the
+      // double-click-to-work idiom). The 1 s sat tick repaints the star state.
+      // Cancel the pending single-click navigation — this was a ★ gesture.
+      if (satNavTimer.current != null) {
+        window.clearTimeout(satNavTimer.current)
+        satNavTimer.current = null
+      }
+      toggleSatChasing(hit.name)
+      return
+    }
+    if (!onWorkSpot) return
     if (hit?.kind === 'spot') {
       onWorkSpot({
         call: hit.sp.call,

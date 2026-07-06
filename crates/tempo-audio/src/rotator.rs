@@ -15,6 +15,17 @@ pub fn point_line(az_deg: f64) -> String {
     format!("P {:.1} 0\n", az_deg.rem_euclid(360.0))
 }
 
+/// rotctld `P` — point to `az_deg` (normalized to [0,360)) and `el_deg` (clamped
+/// to [0,90], an az/el rotor's mechanical elevation range). The elevation-capable
+/// form used to track a satellite pass.
+pub fn point_line_azel(az_deg: f64, el_deg: f64) -> String {
+    format!(
+        "P {:.1} {:.1}\n",
+        az_deg.rem_euclid(360.0),
+        el_deg.clamp(0.0, 90.0)
+    )
+}
+
 fn connect(addr: &str) -> std::io::Result<TcpStream> {
     let s = TcpStream::connect(addr)?;
     s.set_read_timeout(Some(IO_TIMEOUT))?;
@@ -27,6 +38,25 @@ fn connect(addr: &str) -> std::io::Result<TcpStream> {
 pub fn point(addr: &str, az_deg: f64) -> std::io::Result<()> {
     let mut s = connect(addr)?;
     s.write_all(point_line(az_deg).as_bytes())?;
+    let mut buf = [0u8; 64];
+    let n = s.read(&mut buf).unwrap_or(0);
+    let reply = String::from_utf8_lossy(&buf[..n]);
+    if reply.contains("RPRT 0") || reply.trim().is_empty() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "rotctld error: {}",
+            reply.trim()
+        )))
+    }
+}
+
+/// Point the rotator at `az_deg`/`el_deg` via rotctld at `addr` (host:port). `Ok`
+/// on `RPRT 0` (or an empty ack), else the daemon's error text. The az/el twin of
+/// [`point`] for satellite tracking on an elevation-capable rotor.
+pub fn point_azel(addr: &str, az_deg: f64, el_deg: f64) -> std::io::Result<()> {
+    let mut s = connect(addr)?;
+    s.write_all(point_line_azel(az_deg, el_deg).as_bytes())?;
     let mut buf = [0u8; 64];
     let n = s.read(&mut buf).unwrap_or(0);
     let reply = String::from_utf8_lossy(&buf[..n]);
@@ -72,5 +102,17 @@ mod tests {
         // wrap negatives and ≥360 into [0,360)
         assert_eq!(point_line(-90.0), "P 270.0 0\n");
         assert_eq!(point_line(450.0), "P 90.0 0\n");
+    }
+
+    #[test]
+    fn point_line_azel_formats_normalizes_and_clamps() {
+        assert_eq!(point_line_azel(90.0, 45.0), "P 90.0 45.0\n");
+        assert_eq!(point_line_azel(0.0, 0.0), "P 0.0 0.0\n");
+        // azimuth wraps into [0,360)
+        assert_eq!(point_line_azel(-90.0, 30.0), "P 270.0 30.0\n");
+        assert_eq!(point_line_azel(450.0, 10.0), "P 90.0 10.0\n");
+        // elevation clamps into [0,90]
+        assert_eq!(point_line_azel(180.0, -5.0), "P 180.0 0.0\n");
+        assert_eq!(point_line_azel(180.0, 120.0), "P 180.0 90.0\n");
     }
 }

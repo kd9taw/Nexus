@@ -50,6 +50,8 @@ import {
 import { NeededPanel } from './components/NeededPanel'
 import { ConnectView } from './components/ConnectView'
 import { DxpeditionsView } from './components/DxpeditionsView'
+import { SatellitesView } from './components/SatellitesView'
+import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
 import { StationList } from './components/StationList'
 import { visibleNeeds, modeClassOf, workTarget } from './features/needs'
@@ -231,9 +233,9 @@ export function DetachedPanel({ panel }: { panel: string }) {
           onWorkSpot={onWorkSpot}
           needAlerts={gatedAlerts}
           onPoint={
-            // Same rotator gate as App; silent fire-and-forget — detached windows
-            // have no toast host.
-            settings?.rotatorHost?.trim()
+            // Same rotator gate as App (model-launched rotctld OR external host);
+            // silent fire-and-forget — detached windows have no toast host.
+            (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim()
               ? (call) => void pointRotatorAtCall(call).catch(() => {})
               : undefined
           }
@@ -246,6 +248,17 @@ export function DetachedPanel({ panel }: { panel: string }) {
     return (
       <div className="app detached">
         <DxpeditionsView snap={prop} onWorkSpot={onWorkSpot} onShowOnMap={onSelect} />
+      </div>
+    )
+  }
+
+  if (panel === 'sats') {
+    return (
+      <div className="app detached">
+        <SatellitesView />
+        {/* This panel's Track/alarm actions report via toasts — unlike the older
+            detached panels (silent by design), it needs a host in this window. */}
+        <Toasts />
       </div>
     )
   }

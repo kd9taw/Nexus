@@ -11119,3 +11119,321 @@ select.settings-input {
   background: var(--accent);
   border-radius: 999px;
 }
+
+/* ============ Satellites section (SatellitesView) ============ */
+.sats-view {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  height: 100%;
+  overflow: hidden;
+}
+.sats-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.sats-head h1 {
+  font-size: var(--fs-title);
+  margin: 0;
+}
+.sats-sub {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.sats-tracking-badge {
+  margin-left: auto;
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 2px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sats-tracking-badge button {
+  background: none;
+  border: none;
+  color: var(--band-marginal);
+  cursor: pointer;
+  font-size: var(--fs-micro);
+  padding: 0;
+}
+.sats-empty {
+  grid-column: 1;
+  color: var(--text-dim);
+  font-size: var(--fs-body);
+  padding: var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  align-self: start;
+}
+.sats-best {
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.sats-best h2,
+.sats-sched h2,
+.sats-detail h2,
+.sats-favmgr h2 {
+  font-size: var(--fs-label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 0 0 var(--space-1) 0;
+}
+.sats-best-row {
+  text-align: left;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  font-size: var(--fs-body);
+  color: var(--text);
+}
+.sats-best-row:hover {
+  border-color: var(--accent);
+}
+.sats-best-row.live {
+  border-color: var(--band-good);
+}
+.sats-best-row b {
+  margin-right: 6px;
+}
+.sats-sched {
+  grid-column: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.sats-sched table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-body);
+}
+.sats-sched th {
+  text-align: left;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 2px 6px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+.sats-sched td {
+  padding: 3px 6px;
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+.sats-sched tr {
+  cursor: pointer;
+}
+.sats-sched tr.sel td {
+  background: var(--bg-elev);
+}
+.sats-sched tr.live .sat-count {
+  color: var(--band-good);
+  font-weight: 700;
+}
+.sat-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.sat-count {
+  color: var(--text-dim);
+}
+.sat-star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-dim);
+  opacity: 0.45;
+  padding: 0 2px;
+}
+.sat-star.on {
+  color: #f2c14e;
+  opacity: 1;
+}
+.sat-bell {
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0.4;
+  padding: 0 2px;
+}
+.sat-bell.on {
+  opacity: 1;
+}
+.sat-lead {
+  font-size: var(--fs-micro);
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-left: var(--space-1);
+}
+.sat-track {
+  font-size: var(--fs-micro);
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+  cursor: pointer;
+}
+.sat-track.on {
+  color: var(--band-marginal);
+  border-color: var(--band-marginal);
+}
+.sat-chip {
+  font-size: var(--fs-micro);
+  border-radius: 999px;
+  padding: 0 6px;
+  margin-left: 6px;
+}
+.sat-chip.alive {
+  color: var(--band-good);
+  border: 1px solid var(--band-good);
+}
+.sat-chip.dead {
+  color: var(--band-marginal);
+  border: 1px solid var(--band-marginal);
+}
+.sats-side {
+  grid-row: 2 / -1;
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+  min-height: 0;
+}
+.sats-detail {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-2);
+}
+.sat-norad {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.sat-passline {
+  font-size: var(--fs-body);
+  color: var(--text);
+  margin-bottom: var(--space-1);
+}
+.sat-polar {
+  width: 100%;
+  max-width: 220px;
+  display: block;
+  margin: 0 auto var(--space-1);
+}
+.sat-polar-ring {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 0.75;
+}
+.sat-polar-label {
+  fill: var(--text-dim);
+  font-size: 8px;
+  font-family: var(--font-mono);
+}
+.sat-polar-track {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.sat-polar-aos {
+  fill: var(--band-good);
+}
+.sat-polar-live {
+  fill: #5eead4;
+}
+.sat-polar-rotor line {
+  stroke: var(--band-marginal);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.sat-polar-rotor circle {
+  fill: var(--band-marginal);
+}
+.sat-freqs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
+}
+.sat-freqs th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 2px var(--space-1);
+}
+.sat-freqs td {
+  padding: 2px var(--space-1);
+  border-top: 1px solid var(--border);
+}
+.sat-freqs tr.off td {
+  opacity: 0.45;
+}
+.sats-credit {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  margin-top: var(--space-1);
+}
+.sats-favmgr ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+.sats-favmgr li {
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--border);
+}
+.sats-favmgr li.sel {
+  background: var(--bg-elev);
+}
+.sat-pick {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  cursor: pointer;
+  padding: 3px var(--space-1);
+  text-align: left;
+  flex: 1;
+}
+.sats-search {
+  width: 100%;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: var(--fs-body);
+  padding: 3px var(--space-2);
+  margin-bottom: var(--space-1);
+}
+/* Narrow layouts: the side column drops below the schedule. */
+[data-viewport='narrow'] .sats-view,
+[data-viewport='phone'] .sats-view {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow-y: auto;
+}
+[data-viewport='narrow'] .sats-side,
+[data-viewport='phone'] .sats-side {
+  grid-column: 1;
+  grid-row: auto;
+}

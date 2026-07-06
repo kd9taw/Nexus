@@ -91,15 +91,13 @@ pub fn discover(secs: u64) -> std::io::Result<Vec<FlexRadio>> {
     let mut found: Vec<FlexRadio> = Vec::new();
     let mut buf = [0u8; 2048];
     while Instant::now() < deadline {
-        match sock.recv_from(&mut buf) {
-            Ok((n, _)) => {
-                if let Some(r) = parse_discovery(&buf[..n]) {
-                    if !found.iter().any(|f| f.ip == r.ip) {
-                        found.push(r);
-                    }
+        // Err = the 400 ms read timeout ticking — keep listening until the deadline.
+        if let Ok((n, _)) = sock.recv_from(&mut buf) {
+            if let Some(r) = parse_discovery(&buf[..n]) {
+                if !found.iter().any(|f| f.ip == r.ip) {
+                    found.push(r);
                 }
             }
-            Err(_) => {} // timeout tick — keep listening until the deadline
         }
     }
     Ok(found)

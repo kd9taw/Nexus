@@ -27,6 +27,7 @@ const EXPECTED_SECTIONS: FeatureId[] = [
   'fieldDay',
   'pota',
   'dxped',
+  'sats',
   'awards',
 ]
 

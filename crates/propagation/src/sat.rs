@@ -198,6 +198,70 @@ pub fn passes(tle: &Tle, observer: (f64, f64), from_unix: i64, hours: u32) -> Ve
     out
 }
 
+/// Azimuth and elevation of `tle` seen from `observer` (geodetic lat, lon in
+/// degrees) at `unix`, as `(azimuth °, elevation °)` — azimuth 0 = N clockwise,
+/// elevation ° above the horizon (negative = below). The one-shot form of the
+/// same propagate-then-SEZ transform [`passes`] runs at every step, so a map
+/// hover or a rotor's "point at it now" reads a single instant directly. `None`
+/// if the TLE is unparseable or the propagation diverges at `unix`.
+pub fn look_at(tle: &Tle, observer: (f64, f64), unix: i64) -> Option<(f64, f64)> {
+    let (constants, epoch_unix) = prepare(tle)?;
+    let (obs_lat_deg, obs_lon_deg) = observer;
+    let obs_ecef = geodetic_to_ecef(obs_lat_deg, obs_lon_deg, 0.0);
+    let sat = sat_ecef(&constants, epoch_unix, unix)?;
+    let (el, az) = look_angles(
+        sat,
+        obs_ecef,
+        obs_lat_deg.to_radians(),
+        obs_lon_deg.to_radians(),
+    );
+    Some((az, el))
+}
+
+/// Sampled look-angle trajectory of `tle` over `observer` from `aos_unix` to
+/// `los_unix` **inclusive**, one `(unix, azimuth °, elevation °)` per `step_secs`
+/// (clamped to ≥ 5 s so a zero step can't spin). The TLE is parsed ONCE — this is
+/// the batch path a polar-plot trajectory and a rotor tracking loop share, so a
+/// per-sample [`look_at`] loop (which re-parses elements each call) is avoided.
+/// The `los_unix` endpoint is always sampled even when the stride overshoots it.
+/// Samples where the propagation diverges are skipped; empty if the TLE is
+/// unusable.
+pub fn pass_track(
+    tle: &Tle,
+    observer: (f64, f64),
+    aos_unix: i64,
+    los_unix: i64,
+    step_secs: u32,
+) -> Vec<(i64, f64, f64)> {
+    let Some((constants, epoch_unix)) = prepare(tle) else {
+        return Vec::new();
+    };
+    let (obs_lat_deg, obs_lon_deg) = observer;
+    let obs_ecef = geodetic_to_ecef(obs_lat_deg, obs_lon_deg, 0.0);
+    let obs_lat = obs_lat_deg.to_radians();
+    let obs_lon = obs_lon_deg.to_radians();
+    let step = step_secs.max(5) as i64;
+    let sample = |t: i64| -> Option<(i64, f64, f64)> {
+        let sat = sat_ecef(&constants, epoch_unix, t)?;
+        let (el, az) = look_angles(sat, obs_ecef, obs_lat, obs_lon);
+        Some((t, az, el))
+    };
+
+    let mut out = Vec::new();
+    let mut t = aos_unix;
+    loop {
+        if let Some(s) = sample(t) {
+            out.push(s);
+        }
+        if t >= los_unix {
+            break;
+        }
+        // Clamp the last stride onto LOS so the endpoint is always represented.
+        t = (t + step).min(los_unix);
+    }
+    out
+}
+
 /// Age (days) of a TLE from its epoch field on line 1, relative to `now_unix`.
 /// `None` if line 1 is too short or the epoch columns don't parse. The honesty
 /// gate uses this: stale elements (>14 d) get a badge, very stale (>30 d) are
@@ -216,6 +280,13 @@ pub fn tle_age_days(line1: &str, now_unix: i64) -> Option<f64> {
     // Day-of-year 1.0 is Jan 1 00:00 UTC, so seconds-into-year = (doy − 1)·86400.
     let epoch_unix = days_from_civil(year, 1, 1) as f64 * 86_400.0 + (doy - 1.0) * 86_400.0;
     Some((now_unix as f64 - epoch_unix) / 86_400.0)
+}
+
+/// The NORAD catalog number from TLE line 1 (columns 3–7, i.e. `&line1[2..7]`
+/// trimmed). `None` if the line is too short or those columns aren't a number.
+/// This keys a bird's elements to its SatNOGS transmitter/status record.
+pub fn norad_id(line1: &str) -> Option<u32> {
+    line1.get(2..7)?.trim().parse().ok()
 }
 
 // --- internals ---------------------------------------------------------------
@@ -461,6 +532,59 @@ mod tests {
     }
 
     #[test]
+    fn look_at_is_overhead_at_subpoint_and_below_at_antipode() {
+        // The bird sits directly above its own sub-satellite point, so an observer
+        // standing there looks essentially straight up (elevation ≈ 90°).
+        let (lat, lon, _alt) = subpoint(&iss(), ISS_EPOCH_UNIX).expect("subpoint");
+        let (_az, el) = look_at(&iss(), (lat, lon), ISS_EPOCH_UNIX).expect("look_at overhead");
+        assert!(el > 89.0, "el {el} should be ~90 directly under the bird");
+        // From the antipode the whole Earth is in the way — the bird is well below
+        // the horizon (negative elevation).
+        let anti = (-lat, (lon + 360.0).rem_euclid(360.0) - 180.0);
+        let (_az2, el2) = look_at(&iss(), anti, ISS_EPOCH_UNIX).expect("look_at antipode");
+        assert!(
+            el2 < 0.0,
+            "el {el2} at the antipode should be below the horizon"
+        );
+    }
+
+    #[test]
+    fn pass_track_endpoints_match_look_at() {
+        let observer = (42.5, -89.0);
+        let ps = passes(&iss(), observer, ISS_EPOCH_UNIX, 24);
+        // The highest pass has unambiguous horizon crossings to anchor on.
+        let p = ps
+            .iter()
+            .max_by(|a, b| a.max_el_deg.total_cmp(&b.max_el_deg))
+            .expect("at least one pass");
+        let track = pass_track(&iss(), observer, p.aos_unix, p.los_unix, 30);
+        assert!(
+            track.len() >= 2,
+            "a multi-minute pass yields several samples"
+        );
+        let (t0, az0, el0) = track[0];
+        let (tn, azn, eln) = *track.last().unwrap();
+        assert_eq!(t0, p.aos_unix, "first sample is AOS");
+        assert_eq!(tn, p.los_unix, "last sample is LOS (inclusive)");
+        // The batch path and the one-shot path are the same math → equal to the bit.
+        let (la_az0, la_el0) = look_at(&iss(), observer, p.aos_unix).unwrap();
+        let (la_azn, la_eln) = look_at(&iss(), observer, p.los_unix).unwrap();
+        assert!((az0 - la_az0).abs() < 1e-9 && (el0 - la_el0).abs() < 1e-9);
+        assert!((azn - la_azn).abs() < 1e-9 && (eln - la_eln).abs() < 1e-9);
+        // step_secs is clamped to ≥ 5 s: a zero step must neither spin nor divide.
+        let clamped = pass_track(&iss(), observer, p.aos_unix, p.aos_unix + 20, 0);
+        assert_eq!(clamped[1].0 - clamped[0].0, 5, "step floored to 5 s");
+    }
+
+    #[test]
+    fn norad_id_parses_line1_catalog_number() {
+        assert_eq!(norad_id(ISS_L1), Some(25544));
+        assert_eq!(norad_id("1 00005U 58002B   00179.78495062"), Some(5));
+        assert_eq!(norad_id("not a tle"), None);
+        assert_eq!(norad_id("1 2"), None); // too short for columns 3–7
+    }
+
+    #[test]
     fn malformed_tles_never_panic() {
         let junk = Tle {
             name: "GARBAGE".to_string(),
@@ -469,6 +593,15 @@ mod tests {
         };
         assert!(subpoint(&junk, ISS_EPOCH_UNIX).is_none());
         assert!(passes(&junk, (42.5, -89.0), ISS_EPOCH_UNIX, 24).is_empty());
+        assert!(look_at(&junk, (42.5, -89.0), ISS_EPOCH_UNIX).is_none());
+        assert!(pass_track(
+            &junk,
+            (42.5, -89.0),
+            ISS_EPOCH_UNIX,
+            ISS_EPOCH_UNIX + 600,
+            30
+        )
+        .is_empty());
         // Age helper: too short, and non-numeric epoch columns.
         assert!(tle_age_days("1 25544U", 0).is_none());
         assert!(tle_age_days("1 25544U 98067A   xxxxx.xxxxxxxx  .0 0 0 0 0", 0).is_none());

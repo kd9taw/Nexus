@@ -62,6 +62,7 @@ import { CwCockpit } from './components/CwCockpit'
 import { PhoneCockpit } from './components/PhoneCockpit'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
 import { DxpeditionsView } from './components/DxpeditionsView'
+import { SatellitesView } from './components/SatellitesView'
 import { ConnectView } from './components/ConnectView'
 import {
   getPropagation,
@@ -70,6 +71,7 @@ import {
   getAllSpots,
   getXrayNow,
   getDxpedWindows,
+  getSatSchedule,
   setOperatingMode,
   workSpot,
   setLicenseClass,
@@ -80,6 +82,7 @@ import {
 import { processFlare, effectiveXray } from './flareAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
+import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedTag, NeedAlert, SpotRow, DxpedWindow, WorkableCard } from './types'
@@ -190,6 +193,8 @@ export default function App() {
     if (h === 'propagation' || h === 'map') return 'connect'
     return features.landing
   })
+  // Bird handed off from a map satellite click — the Satellites section opens on it.
+  const [satFocus, setSatFocus] = useState<string | null>(null)
   // Per-section rig-mode policy. Only ENTERING an actual operating cockpit changes the rig:
   // the workspace sections (FT8/FT4, Tempo, contest…) + the global CW/Phone cockpits. A
   // global, non-operating view (Map, Logbook, Settings, Propagation, Awards…) leaves the rig
@@ -355,6 +360,14 @@ export default function App() {
           )
           // Armed wake-me alarms (dxpedAlarm.ts owns persistence + never-twice).
           checkDxpedAlarms(dxpedWindowsRef.current, Date.now())
+          // Satellite pass alarms fire app-wide, not only with the section open.
+          // Armed birds only (no IPC otherwise); a 2 h horizon covers the max lead.
+          const armedSats = Object.keys(satAlarmMap())
+          if (armedSats.length > 0) {
+            getSatSchedule(armedSats, 2)
+              .then((passes) => checkSatAlarms(passes, Date.now()))
+              .catch(() => {})
+          }
           // Loud one-shot alert when a band comes alive (the flagship moment).
           const tnow = Date.now()
           for (const o of p.openings) {
@@ -1360,7 +1373,11 @@ export default function App() {
           onQsy={(a) => handleQsy(a.band, a.freqMhz ?? undefined)}
           onSelect={handleSelect}
           onWork={handleWorkNeeded}
-          onPoint={settings?.rotatorHost?.trim() ? handlePointAntenna : undefined}
+          onPoint={
+              (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim()
+                ? handlePointAntenna
+                : undefined
+            }
           onPopOut={() => void openPanelWindow('needed')}
           phoneSource={
             feedHealth
@@ -1461,7 +1478,22 @@ export default function App() {
           needByCall={needByCall}
           onWorkSpot={handleWorkMapSpot}
           needAlerts={visibleAlerts}
-          onPoint={settings?.rotatorHost?.trim() ? handlePointAntenna : undefined}
+          // Rotor is configured EITHER by picking a model (Nexus launches the
+          // bundled rotctld) OR by the advanced external host — host-only was
+          // the pre-rotctld gate and silently disabled point-at for model users.
+          onPoint={
+            (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim()
+              ? handlePointAntenna
+              : undefined
+          }
+          onSelectSat={
+            features.isOn('sats')
+              ? (name) => {
+                  setSatFocus(name)
+                  setView('sats')
+                }
+              : undefined
+          }
           onPopOut={() => void openPanelWindow('connect')}
         />
       )
@@ -1479,6 +1511,13 @@ export default function App() {
             }}
             onPopOut={() => void openPanelWindow('dxped')}
           />
+        </main>
+      )
+      break
+    case 'sats':
+      workspace = (
+        <main className="layout single">
+          <SatellitesView focusSat={satFocus} onPopOut={() => void openPanelWindow('sats')} />
         </main>
       )
       break

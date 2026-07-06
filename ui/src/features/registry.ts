@@ -16,6 +16,7 @@ export type View =
   | 'phone'
   | 'connect'
   | 'dxped'
+  | 'sats'
   | 'needed'
   | 'spots'
   | 'chat'
@@ -221,6 +222,19 @@ export const FEATURES: FeatureDef[] = [
     // global (no workspace — never touches the rig): the expedition board. The old
     // standalone Propagation section merged into Connect; its DXped pieces live here.
     oneLine: 'DXpeditions — active now, the forward calendar, and your needed status.',
+  },
+  {
+    id: 'sats',
+    label: 'Satellites',
+    kind: 'section',
+    category: 'Propagation',
+    core: false,
+    dependsOn: [],
+    intents: ['casual', 'vhf'],
+    view: 'sats',
+    // global (no workspace — read-only until the operator arms a rotor track):
+    // pass schedule for the ★ favorites, per-bird polar plot + frequencies.
+    oneLine: 'Satellite passes over YOUR grid — when to try which bird, favorites first.',
   },
   {
     id: 'awards',

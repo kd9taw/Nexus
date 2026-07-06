@@ -147,6 +147,37 @@ export async function getSatellites(): Promise<import('./types').SatView | null>
   return invoke<import('./types').SatView | null>('get_satellites')
 }
 
+/** Passes for the ★ favorites over the next `hours` (Satellites section schedule).
+ * Empty when the grid is unset or no named bird has elements. */
+export async function getSatSchedule(names: string[], hours: number): Promise<import('./types').SatPass[]> {
+  return invoke<import('./types').SatPass[]>('get_sat_schedule', { names, hours })
+}
+
+/** Per-bird detail: SatNOGS status/frequencies (cached weekly; absent offline)
+ * + the current/next pass with its polar-plot track. */
+export async function getSatDetail(name: string): Promise<import('./types').SatDetail> {
+  return invoke<import('./types').SatDetail>('get_sat_detail', { name })
+}
+
+/** Arm rotor auto-track for a bird's pass — `aosUnix` picks WHICH schedule row
+ * (±3 min tolerance); omitted = current/next. Returns the initial status, or
+ * null when there's no rotor/grid/matching pass. */
+export async function startSatTrack(
+  name: string,
+  aosUnix?: number,
+): Promise<import('./types').SatTrackStatus | null> {
+  return invoke<import('./types').SatTrackStatus | null>('start_sat_track', { name, aosUnix })
+}
+
+export async function stopSatTrack(): Promise<void> {
+  return invoke('stop_sat_track')
+}
+
+/** The live auto-track state (poll while the section is open); null = idle. */
+export async function getSatTrackStatus(): Promise<import('./types').SatTrackStatus | null> {
+  return invoke<import('./types').SatTrackStatus | null>('sat_track_status')
+}
+
 export interface LotwUsersStatus {
   count: number
   fetchedAt: number

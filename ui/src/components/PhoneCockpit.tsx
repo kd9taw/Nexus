@@ -8,6 +8,7 @@ import { LevelMeter } from './LevelMeter'
 import { LogEntry } from './LogEntry'
 import { setPtt, setRfPower, startQsoRecording, stopQsoRecording } from '../api'
 import { pushToast } from '../toast'
+import { RotorStrip } from './RotorStrip'
 
 interface Props {
   snap: AppSnapshot
@@ -174,6 +175,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           <span className="ph-power-val">{power}%</span>
         </label>
         <span className="ph-spacer" />
+        <RotorStrip />
         <button
           type="button"
           className={`ph-rec${recording ? ' on' : ''}`}

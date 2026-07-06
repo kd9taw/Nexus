@@ -1,7 +1,9 @@
-// Satellite chase stars: which birds the operator cares about (the ⭐ on the
-// Passes pane). Persisted like the DXpedition chase set; chased birds sort
-// first and get map footprint rings. No alerting v1 — passes are predictable,
-// the wake-me pattern can graft on later if wanted.
+// Satellite ★ favorites (a.k.a. the chase set — one concept, one storage key):
+// which birds the operator cares about. Drives the Passes pane sort, the map
+// emphasis (bigger icon + footprint ring), the Satellites section schedule,
+// and which birds can carry pass alarms (satAlarm.ts).
+
+import { disarmSatAlarm } from './satAlarm'
 
 const KEY = 'nexus.sats.chasing'
 
@@ -23,7 +25,12 @@ export function toggleSatChasing(name: string): boolean {
   const key = name.toUpperCase()
   const now = !set.has(key)
   if (now) set.add(key)
-  else set.delete(key)
+  else {
+    set.delete(key)
+    // Alarms only have a disarm surface on the schedule (favorites) — an
+    // unstarred bird's alarm would otherwise fire orphaned forever.
+    disarmSatAlarm(key)
+  }
   try {
     localStorage.setItem(KEY, JSON.stringify([...set]))
   } catch {

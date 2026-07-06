@@ -1845,6 +1845,10 @@ struct SatPassDto {
     max_el_deg: f64,
     aos_az_deg: f64,
     los_az_deg: f64,
+    /// SatNOGS operational status, stamped only on Satellites-section schedule
+    /// rows (from the weekly cache); absent on the map view + when offline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
 }
 
 /// Current amateur-satellite picture: sub-satellite points for the Celestrak
@@ -1856,7 +1860,6 @@ struct SatPassDto {
 /// when no usable elements exist at all — the UI draws nothing.
 #[tauri::command]
 async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView>, String> {
-    const TLE_TTL_SECS: u64 = 12 * 3600;
     const VIEW_TTL_SECS: u64 = 600;
     const STALE_DAYS: f64 = 30.0;
     let mygrid = {
@@ -1871,57 +1874,10 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
             (*k == key && when.elapsed().as_secs() < VIEW_TTL_SECS).then(|| v.clone())
         })
     };
-    // Elements: fresh cache → network (persisting on success) → disk → None.
-    let cached = {
-        let g = TLE_CACHE.lock().map_err(|e| e.to_string())?;
-        g.as_ref().and_then(|(when, t)| {
-            (when.elapsed().as_secs() < TLE_TTL_SECS).then(|| t.clone())
-        })
-    };
-    let tles = match cached {
-        Some(t) => t,
-        None => {
-            match tauri::async_runtime::spawn_blocking(propagation::live::tle::fetch_tles)
-                .await
-                .map_err(|e| e.to_string())?
-            {
-                Ok(t) if !t.is_empty() => {
-                    if let Ok(mut g) = TLE_CACHE.lock() {
-                        *g = Some((std::time::Instant::now(), t.clone()));
-                    }
-                    if let Ok(json) = serde_json::to_string(&t) {
-                        let _ = std::fs::write(tles_path(), json);
-                    }
-                    t
-                }
-                _ => {
-                    // Fetch failed — serve the stale cache, else the persisted set.
-                    let stale = TLE_CACHE
-                        .lock()
-                        .ok()
-                        .and_then(|g| g.as_ref().map(|(_, t)| t.clone()));
-                    match stale {
-                        Some(t) => t,
-                        None => {
-                            let disk: Option<Vec<propagation::sat::Tle>> =
-                                std::fs::read_to_string(tles_path())
-                                    .ok()
-                                    .and_then(|s| serde_json::from_str(&s).ok());
-                            match disk {
-                                Some(t) if !t.is_empty() => {
-                                    if let Ok(mut g) = TLE_CACHE.lock() {
-                                        *g = Some((std::time::Instant::now(), t.clone()));
-                                    }
-                                    t
-                                }
-                                _ => return Ok(None), // never had elements — honest no-data
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    };
+    let tles = load_tles().await?;
+    if tles.is_empty() {
+        return Ok(None); // never had elements — honest no-data
+    }
     let observer = propagation::geo::maidenhead_to_latlon(mygrid.trim());
     let need_passes = cached_passes.is_none();
     let out = tauri::async_runtime::spawn_blocking(move || {
@@ -1971,6 +1927,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                                 max_el_deg: p.max_el_deg,
                                 aos_az_deg: p.aos_az_deg,
                                 los_az_deg: p.los_az_deg,
+                                status: None,
                             });
                         }
                     }
@@ -2007,6 +1964,540 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
         }
         None => None,
     })
+}
+
+/// Elements for every sat command: fresh cache → network (persisting on
+/// success) → stale cache → disk. Empty = we truly never had elements — the
+/// callers render honest no-data, never a guess.
+async fn load_tles() -> Result<Vec<propagation::sat::Tle>, String> {
+    const TLE_TTL_SECS: u64 = 12 * 3600;
+    let cached = {
+        let g = TLE_CACHE.lock().map_err(|e| e.to_string())?;
+        g.as_ref().and_then(|(when, t)| {
+            (when.elapsed().as_secs() < TLE_TTL_SECS).then(|| t.clone())
+        })
+    };
+    Ok(match cached {
+        Some(t) => t,
+        None => {
+            match tauri::async_runtime::spawn_blocking(propagation::live::tle::fetch_tles)
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                Ok(t) if !t.is_empty() => {
+                    if let Ok(mut g) = TLE_CACHE.lock() {
+                        *g = Some((std::time::Instant::now(), t.clone()));
+                    }
+                    if let Ok(json) = serde_json::to_string(&t) {
+                        let _ = std::fs::write(tles_path(), json);
+                    }
+                    t
+                }
+                _ => {
+                    // Fetch failed — serve the stale cache, else the persisted set.
+                    let stale = TLE_CACHE
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.as_ref().map(|(_, t)| t.clone()));
+                    match stale {
+                        Some(t) => t,
+                        None => {
+                            let disk: Option<Vec<propagation::sat::Tle>> =
+                                std::fs::read_to_string(tles_path())
+                                    .ok()
+                                    .and_then(|s| serde_json::from_str(&s).ok());
+                            match disk {
+                                Some(t) if !t.is_empty() => {
+                                    if let Ok(mut g) = TLE_CACHE.lock() {
+                                        *g = Some((std::time::Instant::now(), t.clone()));
+                                    }
+                                    t
+                                }
+                                _ => Vec::new(),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Where the SatNOGS snapshot persists (beside settings.json). Week-scale data:
+/// statuses and transponders change on human timescales, and SatNOGS asks bulk
+/// consumers to be gentle — one filtered fetch a week is plenty.
+fn satnogs_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("satnogs.json")
+}
+
+/// The persisted SatNOGS snapshot: fetch stamp + statuses + transmitters for
+/// the birds we track. Data CC-BY-SA 4.0 — the UI credits it where shown.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct SatnogsSnapshot {
+    fetched_at: i64,
+    /// The NORAD set this snapshot was fetched FOR. Coverage is part of
+    /// freshness: a time-fresh snapshot that was never asked about a bird is a
+    /// MISS for that bird (review catch — a single-bird detail fetch must
+    /// never freeze a 1-bird snapshot for a week).
+    #[serde(default)]
+    norads: Vec<u32>,
+    statuses: Vec<propagation::live::satnogs::SatStatus>,
+    transmitters: Vec<propagation::live::satnogs::Transmitter>,
+}
+
+static SATNOGS: Mutex<Option<SatnogsSnapshot>> = Mutex::new(None);
+static SATNOGS_FETCHING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Last refresh ATTEMPT (unix) — failed fetches back off 30 min instead of
+/// being re-tripped every 30 s by the alarm tick (SatNOGS asks bulk consumers
+/// to be gentle; a dead network must not turn into a full-catalog hammer).
+static SATNOGS_LAST_TRY: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Best-available SatNOGS data NOW (memory → disk), kicking a background
+/// refresh when the snapshot is older than a week. Returns `None` when we have
+/// never fetched — callers show "no data yet", never invented statuses. A stale
+/// snapshot is still served (with its honest fetch stamp) while the refresh runs.
+fn satnogs_snapshot(norads: Vec<u32>) -> Option<SatnogsSnapshot> {
+    use std::sync::atomic::Ordering;
+    const TTL_SECS: i64 = 7 * 24 * 3600;
+    const RETRY_BACKOFF_SECS: i64 = 1800;
+    let mem = SATNOGS.lock().ok().and_then(|g| g.clone());
+    let snap = mem.or_else(|| {
+        let disk: Option<SatnogsSnapshot> = std::fs::read_to_string(satnogs_path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok());
+        if let Some(d) = &disk {
+            if let Ok(mut g) = SATNOGS.lock() {
+                *g = Some(d.clone());
+            }
+        }
+        disk
+    });
+    // Fresh = recent AND covering every requested bird. The refresh fetches
+    // the UNION of requested + already-covered, so a narrow caller can only
+    // ever GROW the snapshot, never shrink it for everyone else.
+    let now = now_unix();
+    let covered: std::collections::HashSet<u32> = snap
+        .as_ref()
+        .map(|sn| sn.norads.iter().copied().collect())
+        .unwrap_or_default();
+    let fresh = snap
+        .as_ref()
+        .is_some_and(|sn| now - sn.fetched_at < TTL_SECS)
+        && norads.iter().all(|n| covered.contains(n));
+    let backoff_ok = now - SATNOGS_LAST_TRY.load(Ordering::SeqCst) >= RETRY_BACKOFF_SECS;
+    if !fresh
+        && !norads.is_empty()
+        && backoff_ok
+        && !SATNOGS_FETCHING.swap(true, Ordering::SeqCst)
+    {
+        SATNOGS_LAST_TRY.store(now, Ordering::SeqCst);
+        let mut want: Vec<u32> = covered.union(&norads.iter().copied().collect()).copied().collect();
+        want.sort_unstable();
+        tauri::async_runtime::spawn_blocking(move || {
+            let statuses = propagation::live::satnogs::fetch_satellites(&want);
+            let transmitters = propagation::live::satnogs::fetch_transmitters(&want);
+            if let (Ok(statuses), Ok(transmitters)) = (statuses, transmitters) {
+                let sn = SatnogsSnapshot {
+                    fetched_at: now_unix(),
+                    norads: want,
+                    statuses,
+                    transmitters,
+                };
+                if let Ok(json) = serde_json::to_string(&sn) {
+                    let _ = std::fs::write(satnogs_path(), json);
+                }
+                if let Ok(mut g) = SATNOGS.lock() {
+                    *g = Some(sn);
+                }
+            } // a failed fetch keeps whatever we had — retried after the backoff
+            SATNOGS_FETCHING.store(false, Ordering::SeqCst);
+        });
+    }
+    snap
+}
+
+/// Passes for NAMED birds (the ★ favorites) over the next `hours` (1–72),
+/// SatNOGS status stamped when the weekly cache knows the bird. Empty when the
+/// grid is unset or no named bird has usable elements. Geometry is modelled
+/// (SGP4); status is community-measured — the two are labeled apart in the UI.
+#[tauri::command]
+async fn get_sat_schedule(
+    state: State<'_, SharedEngine>,
+    names: Vec<String>,
+    hours: u32,
+) -> Result<Vec<SatPassDto>, String> {
+    const STALE_DAYS: f64 = 30.0;
+    let hours = hours.clamp(1, 72);
+    let mygrid = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        eng.settings().mygrid.clone()
+    };
+    let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
+        return Ok(Vec::new());
+    };
+    let tles = load_tles().await?;
+    if tles.is_empty() {
+        return Ok(Vec::new());
+    }
+    let wanted: std::collections::HashSet<String> =
+        names.iter().map(|n| n.trim().to_uppercase()).collect();
+    let now = now_unix();
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        use propagation::sat;
+        let mine: Vec<&sat::Tle> = tles
+            .iter()
+            .filter(|t| wanted.contains(&t.name.to_uppercase()))
+            .filter(|t| sat::tle_age_days(&t.line1, now).is_some_and(|a| a <= STALE_DAYS))
+            .collect();
+        // Status lookup by NORAD id (name-mapping-proof), from the weekly cache.
+        let norads: Vec<u32> = mine.iter().filter_map(|t| sat::norad_id(&t.line1)).collect();
+        let status_by_norad: std::collections::HashMap<u32, String> = satnogs_snapshot(norads)
+            .map(|sn| sn.statuses.into_iter().map(|st| (st.norad, st.status)).collect())
+            .unwrap_or_default();
+        let mut passes = Vec::new();
+        for t in mine {
+            let status = sat::norad_id(&t.line1).and_then(|n| status_by_norad.get(&n).cloned());
+            // Scan from 6 h back so a pass ALREADY in progress keeps its real
+            // AOS — MEO birds (IO-117-style) fly multi-hour passes, and a short
+            // backscan fabricated a window-edge AOS + understated max el. The
+            // horizon is widened to compensate so `hours` stays FORWARD-looking.
+            for p in sat::passes(t, obs, now - 21_600, hours + 6) {
+                if p.los_unix <= now {
+                    continue;
+                }
+                passes.push(SatPassDto {
+                    name: t.name.clone(),
+                    aos_unix: p.aos_unix,
+                    los_unix: p.los_unix,
+                    max_el_deg: p.max_el_deg,
+                    aos_az_deg: p.aos_az_deg,
+                    los_az_deg: p.los_az_deg,
+                    status: status.clone(),
+                });
+            }
+        }
+        passes.sort_by_key(|p| p.aos_unix);
+        passes
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// Per-bird detail for the Satellites section: SatNOGS status + transponders
+/// (absent fields when we've never fetched — offline honesty) and the
+/// current/next pass with its az/el sky track for the polar plot.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SatDetailDto {
+    name: String,
+    norad: Option<u32>,
+    status: Option<String>,
+    transmitters: Vec<propagation::live::satnogs::Transmitter>,
+    data_fetched_at: Option<i64>,
+    pass: Option<SatPassDto>,
+    pass_track: Vec<(i64, f64, f64)>,
+}
+
+#[tauri::command]
+async fn get_sat_detail(
+    state: State<'_, SharedEngine>,
+    name: String,
+) -> Result<SatDetailDto, String> {
+    let mygrid = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        eng.settings().mygrid.clone()
+    };
+    let obs = propagation::geo::maidenhead_to_latlon(mygrid.trim());
+    let tles = load_tles().await?;
+    let now = now_unix();
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        use propagation::sat;
+        let key = name.trim().to_uppercase();
+        let tle = tles.iter().find(|t| t.name.to_uppercase() == key);
+        let norad = tle.and_then(|t| sat::norad_id(&t.line1));
+        let snap = satnogs_snapshot(norad.into_iter().collect());
+        let status = norad.and_then(|n| {
+            snap.as_ref()
+                .and_then(|sn| sn.statuses.iter().find(|st| st.norad == n))
+                .map(|st| st.status.clone())
+        });
+        let transmitters = norad
+            .and_then(|n| {
+                snap.as_ref().map(|sn| {
+                    sn.transmitters
+                        .iter()
+                        .filter(|tr| tr.norad == n)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+            })
+            .unwrap_or_default();
+        let (pass, pass_track) = match (tle, obs) {
+            (Some(t), Some(o)) => {
+                // 6 h backscan: a mid-pass MEO bird keeps its true AOS (see
+                // get_sat_schedule); +6 h keeps the horizon 24 h forward.
+                let next = sat::passes(t, o, now - 21_600, 30)
+                    .into_iter()
+                    .find(|p| p.los_unix > now);
+                match next {
+                    Some(p) => {
+                        let track = sat::pass_track(t, o, p.aos_unix, p.los_unix, 30);
+                        (
+                            Some(SatPassDto {
+                                name: t.name.clone(),
+                                aos_unix: p.aos_unix,
+                                los_unix: p.los_unix,
+                                max_el_deg: p.max_el_deg,
+                                aos_az_deg: p.aos_az_deg,
+                                los_az_deg: p.los_az_deg,
+                                status: status.clone(),
+                            }),
+                            track,
+                        )
+                    }
+                    None => (None, Vec::new()),
+                }
+            }
+            _ => (None, Vec::new()),
+        };
+        SatDetailDto {
+            name,
+            norad,
+            status,
+            transmitters,
+            data_fetched_at: snap.map(|sn| sn.fetched_at),
+            pass,
+            pass_track,
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// Live rotor auto-track state. Generation-owned like the WSPR feed: starting a
+/// new track (or stopping) bumps the generation and the old loop exits on its
+/// next tick — one loop owns the rotor at a time.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SatTrackDto {
+    name: String,
+    /// "armed" (waiting, no rotor commands until 5 min before AOS),
+    /// "prepositioning" (parked on the AOS azimuth) or "tracking".
+    state: String,
+    az_deg: f64,
+    el_deg: f64,
+    aos_unix: i64,
+    los_unix: i64,
+}
+
+static SAT_TRACK_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SAT_TRACK: Mutex<Option<SatTrackDto>> = Mutex::new(None);
+
+/// Arm rotor auto-track for a bird's pass. Far from AOS the loop is merely
+/// "armed" (no rotor commands); from 5 min out it slews to the AOS azimuth
+/// (the S.A.T. behavior — on target before the bird rises), then follows
+/// az/el every 3 s until LOS, then stops the rotor. `aos_unix` picks WHICH
+/// pass (±3 min tolerance — the schedule row the operator clicked); omitted =
+/// the current/next one. `None` = no rotor configured, no grid, or no matching
+/// pass in the next 48 h — the UI says so plainly.
+#[tauri::command]
+async fn start_sat_track(
+    state: State<'_, SharedEngine>,
+    name: String,
+    aos_unix: Option<i64>,
+) -> Result<Option<SatTrackDto>, String> {
+    let (mygrid, addr) = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        let st = eng.settings();
+        (st.mygrid.clone(), effective_rotator_addr(st))
+    };
+    let Some(addr) = addr else {
+        return Ok(None);
+    };
+    let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
+        return Ok(None);
+    };
+    let tles = load_tles().await?;
+    let key = name.trim().to_uppercase();
+    let now = now_unix();
+    let Some(tle) = tles.iter().find(|t| t.name.to_uppercase() == key).cloned() else {
+        return Ok(None);
+    };
+    // 6 h backscan (true AOS for mid-pass MEO birds) + 48 h forward horizon
+    // (any schedule row is armable).
+    let Some(pass) = propagation::sat::passes(&tle, obs, now - 21_600, 54)
+        .into_iter()
+        .filter(|p| p.los_unix > now)
+        .find(|p| aos_unix.is_none_or(|h| (p.aos_unix - h).abs() <= 180))
+    else {
+        return Ok(None);
+    };
+    let gen = SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let initial = SatTrackDto {
+        name: tle.name.clone(),
+        state: if now < pass.aos_unix - 300 {
+            "armed"
+        } else if now < pass.aos_unix {
+            "prepositioning"
+        } else {
+            "tracking"
+        }
+        .to_string(),
+        az_deg: pass.aos_az_deg,
+        el_deg: 0.0,
+        aos_unix: pass.aos_unix,
+        los_unix: pass.los_unix,
+    };
+    {
+        // Guarded like every other badge write: a racing newer start must not
+        // have its badge clobbered by this older one.
+        let mut g = SAT_TRACK.lock().map_err(|e| e.to_string())?;
+        if SAT_TRACK_GEN.load(std::sync::atomic::Ordering::SeqCst) == gen {
+            *g = Some(initial.clone());
+        }
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        use propagation::sat;
+        use std::sync::atomic::Ordering;
+        let mut azel_ok = true; // az-only rotors: fall back, probe to recover
+        let mut az_only_ticks = 0u32;
+        let mut misses = 0u32;
+        let update_badge = |dto: SatTrackDto| {
+            if let Ok(mut g) = SAT_TRACK.lock() {
+                if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
+                    *g = Some(dto);
+                }
+            }
+        };
+        loop {
+            if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
+                return; // replaced or stopped — the newer owner drives the rotor
+            }
+            let t = now_unix();
+            if t > pass.los_unix {
+                break;
+            }
+            // Far from AOS: ARMED — hold fire entirely (the operator keeps the
+            // rotor for HF until 5 min before the bird rises).
+            if t < pass.aos_unix - 300 {
+                update_badge(SatTrackDto {
+                    name: tle.name.clone(),
+                    state: "armed".to_string(),
+                    az_deg: pass.aos_az_deg,
+                    el_deg: 0.0,
+                    aos_unix: pass.aos_unix,
+                    los_unix: pass.los_unix,
+                });
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                continue;
+            }
+            let (az, el, phase) = if t < pass.aos_unix {
+                (pass.aos_az_deg, 0.0, "prepositioning")
+            } else {
+                match sat::look_at(&tle, obs, t) {
+                    Some((az, el)) => (az, el.max(0.0), "tracking"),
+                    None => break, // propagation diverged — stop honestly
+                }
+            };
+            // Stop pressed while we computed? Re-check right before the wire
+            // write — narrows the one-command-after-halt window to microseconds.
+            if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
+                return;
+            }
+            let sent = if azel_ok {
+                match tempo_audio::rotator::point_azel(&addr, az, el) {
+                    Ok(()) => true,
+                    Err(_) => {
+                        // Az-only rotor (rotctld rejects el)? Try plain azimuth;
+                        // if that works, go az-only — but PROBE below, so a
+                        // transient error doesn't downgrade the whole pass.
+                        if tempo_audio::rotator::point(&addr, az).is_ok() {
+                            azel_ok = false;
+                            az_only_ticks = 0;
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
+            } else {
+                az_only_ticks += 1;
+                if az_only_ticks >= 20 {
+                    // ~60 s recovery probe: if az/el works again (the earlier
+                    // failure was transient comms, not an az-only rotor), resume.
+                    az_only_ticks = 0;
+                    match tempo_audio::rotator::point_azel(&addr, az, el) {
+                        Ok(()) => {
+                            azel_ok = true;
+                            true
+                        }
+                        Err(_) => tempo_audio::rotator::point(&addr, az).is_ok(),
+                    }
+                } else {
+                    tempo_audio::rotator::point(&addr, az).is_ok()
+                }
+            };
+            if sent {
+                misses = 0;
+                update_badge(SatTrackDto {
+                    name: tle.name.clone(),
+                    state: phase.to_string(),
+                    az_deg: az,
+                    // Honesty: report what was COMMANDED. An az-only fallback
+                    // never commands elevation, so it must not claim one.
+                    el_deg: if azel_ok { el } else { 0.0 },
+                    aos_unix: pass.aos_unix,
+                    los_unix: pass.los_unix,
+                });
+            } else {
+                misses += 1;
+                if misses >= 5 {
+                    break; // rotor stopped answering — clear the badge, don't lie
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
+        // LOS / rotor lost: halt the rotor and clear the badge if still ours
+        // (gen check INSIDE the lock — a newer track's badge must survive).
+        let _ = tempo_audio::rotator::stop(&addr);
+        if let Ok(mut g) = SAT_TRACK.lock() {
+            if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
+                *g = None;
+            }
+        }
+    });
+    Ok(Some(initial))
+}
+
+/// Disarm auto-track: the loop exits on its next tick; halt the rotor now.
+#[tauri::command]
+async fn stop_sat_track(state: State<'_, SharedEngine>) -> Result<(), String> {
+    SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut g) = SAT_TRACK.lock() {
+        *g = None;
+    }
+    let addr = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        effective_rotator_addr(eng.settings())
+    };
+    if let Some(addr) = addr {
+        let _ = tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::stop(&addr))
+            .await;
+    }
+    Ok(())
+}
+
+/// The live auto-track state; `None` = idle.
+#[tauri::command]
+fn sat_track_status() -> Result<Option<SatTrackDto>, String> {
+    Ok(SAT_TRACK.lock().map_err(|e| e.to_string())?.clone())
 }
 
 /// Real-time KC2G ionosonde MUF/foF2 station fixes for the Connect map's MUF
@@ -6110,6 +6601,11 @@ pub fn run() {
             point_rotator,
             stop_rotator,
             discover_flex,
+            get_sat_schedule,
+            get_sat_detail,
+            start_sat_track,
+            stop_sat_track,
+            sat_track_status,
             point_rotator_at_call,
             read_rotator,
             cw_decode,

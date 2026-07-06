@@ -14,8 +14,10 @@ import {
   cwSkim,
   selectPeer,
   previewCw,
+  pointRotatorAtCall,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import { RotorStrip } from './RotorStrip'
 
 interface Props {
   snap: AppSnapshot
@@ -342,6 +344,14 @@ export function CwCockpit({ snap, theme, pitchHz = 600, pendingWork, onConsumeWo
         </label>
         <BandPicker snap={snap} mode="cw" onSnap={onSnap} />
         <span className="cw-spacer" />
+        <RotorStrip
+          targetCall={guide.workedCall}
+          onPointAt={(call) =>
+            pointRotatorAtCall(call)
+              .then((bearing) => pushToast(`Rotator → ${call}: ${Math.round(bearing)}°`, 'info'))
+              .catch((e) => pushToast(`Rotator: ${e instanceof Error ? e.message : e}`, 'error'))
+          }
+        />
         {snap.radio.splitTxMhz != null && (
           <span className="cw-mode-badge" title={`Split — TX ${snap.radio.splitTxMhz.toFixed(4)} MHz`}>
             SPLIT ▲

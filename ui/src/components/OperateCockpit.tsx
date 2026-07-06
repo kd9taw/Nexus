@@ -17,8 +17,9 @@ import {
   toggleIgnored,
 } from '../txMessages'
 import { getSettings, notifyErase, setSettings } from '../api'
-import { redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
+import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { pushToast } from '../toast'
+import { RotorStrip } from './RotorStrip'
 import { Waterfall } from './Waterfall'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { OperateQsoStrip } from './OperateQsoStrip'
@@ -593,6 +594,15 @@ export function OperateCockpit({
         {/* Active DXpedition mode badge — prominent, next to the TX indicator */}
         {specialOpBadge}
         <span className="cs-spacer" />
+        <RotorStrip
+          active={active}
+          targetCall={selectedCall}
+          onPointAt={(call) =>
+            pointRotatorAtCall(call)
+              .then((bearing) => pushToast(`Rotator → ${call}: ${Math.round(bearing)}°`, 'info'))
+              .catch((e) => pushToast(`Rotator: ${e instanceof Error ? e.message : e}`, 'error'))
+          }
+        />
         <button
           type="button"
           className={`cs-period${snap.radio.txCycleAuto ? ' is-auto' : ''}`}
