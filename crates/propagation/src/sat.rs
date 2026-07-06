@@ -71,6 +71,35 @@ pub fn subpoint(tle: &Tle, unix: i64) -> Option<(f64, f64, f64)> {
     Some(ecef_to_geodetic(ecef))
 }
 
+/// The ground track around an instant: sub-satellite points from
+/// `unix - back_secs` to `unix + ahead_secs`, one per `step_secs`, as
+/// `(t, lat°, lon° −180..180)`. The TLE is parsed ONCE (a per-point
+/// [`subpoint`] loop would re-parse elements every sample — this is the batch
+/// path the map's trail/projection layer uses). Points where the propagation
+/// diverges are simply skipped. Empty if the TLE is unparseable.
+pub fn track(
+    tle: &Tle,
+    unix: i64,
+    back_secs: i64,
+    ahead_secs: i64,
+    step_secs: i64,
+) -> Vec<(i64, f64, f64)> {
+    let Some((constants, epoch_unix)) = prepare(tle) else {
+        return Vec::new();
+    };
+    let step = step_secs.max(10);
+    let mut out = Vec::with_capacity(((back_secs + ahead_secs) / step + 1) as usize);
+    let mut t = unix - back_secs;
+    while t <= unix + ahead_secs {
+        if let Some(ecef) = sat_ecef(&constants, epoch_unix, t) {
+            let (lat, lon, _alt) = ecef_to_geodetic(ecef);
+            out.push((t, lat, lon));
+        }
+        t += step;
+    }
+    out
+}
+
 /// The next passes of `tle` over `observer` (geodetic lat, lon in degrees) in the
 /// `[from_unix, from_unix + hours·3600)` window.
 ///

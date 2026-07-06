@@ -400,18 +400,42 @@ export function MapView({
     const id = setInterval(() => setNowMs(Date.now()), 60_000)
     return () => clearInterval(id)
   }, [])
+  // Amateur satellites — polled only while the layer is on (subpoints move
+  // ~4°/min; 30 s keeps dots honest without hammering the 10-min view cache).
+  const [sats, setSats] = useState<SatView | null>(null)
+  const satsOn = layers.sats.visible
+  useEffect(() => {
+    if (!satsOn) {
+      setSats(null)
+      return
+    }
+    let live = true
+    const load = () =>
+      getSatellites()
+        .then((s) => live && setSats(s))
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 30_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [satsOn])
   // The 1 s opening/flare-pulse tick — only while something animated is actually
-  // visible (an idle map never redraws for an animation nobody can see).
+  // visible (an idle map never redraws for an animation nobody can see). The
+  // satellite layer joins it: the icons interpolate along their tracks, so a
+  // 1 s tick is what makes the birds visibly MOVE between the 30 s polls.
   const heatPulsing = layers.heat.visible && hasOpening
   const flarePulsing = layers.flare.visible && flareActive
+  const satsMoving = layers.sats.visible && sats != null && sats.birds.length > 0
   useEffect(() => {
-    if (!heatPulsing && !flarePulsing) return
+    if (!heatPulsing && !flarePulsing && !satsMoving) return
     const id = setInterval(() => {
       // No redraws for a hidden tab (the fx rAF has the same guard).
       if (!document.hidden) setPulseTick((t) => t + 1)
     }, 1_000)
     return () => clearInterval(id)
-  }, [heatPulsing, flarePulsing])
+  }, [heatPulsing, flarePulsing, satsMoving])
   // Apply the Connect intent preset (soft) whenever it changes — sets projection,
   // default color-by, and which optional layers are on. The user can still tweak
   // any control afterwards; switching intent re-applies.
@@ -620,27 +644,6 @@ export function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cqzonesOn])
 
-  // Amateur satellites — polled only while the layer is on (subpoints move
-  // ~4°/min; 30 s keeps dots honest without hammering the 10-min view cache).
-  const [sats, setSats] = useState<SatView | null>(null)
-  const satsOn = layers.sats.visible
-  useEffect(() => {
-    if (!satsOn) {
-      setSats(null)
-      return
-    }
-    let live = true
-    const load = () =>
-      getSatellites()
-        .then((s) => live && setSats(s))
-        .catch(() => {})
-    load()
-    const id = setInterval(load, 30_000)
-    return () => {
-      live = false
-      clearInterval(id)
-    }
-  }, [satsOn])
 
   // Draw.
   useEffect(() => {
@@ -835,32 +838,101 @@ export function MapView({
       }
       ctx.globalAlpha = 1
     }
-    // Amateur satellites: subpoint dots + name labels; chased birds also get a
-    // dashed footprint ring (their radio horizon). Null data = nothing drawn.
+    // Amateur satellites: mini satellite icons at the INTERPOLATED live
+    // position (the track lets the icon actually move between 30 s polls),
+    // a fading trail of where the bird just was, and a dashed projection of
+    // where it's going. Chased birds add their footprint ring. Null = nothing.
     if (layers.sats.visible && sats) {
-      ctx.globalAlpha = layers.sats.opacity
       const chasedSet = satChasingSet()
+      const nowSecs = Date.now() / 1000
+      // Lerp helper along a track — lon wraps through ±180 correctly.
+      const posAt = (track: [number, number, number][], t: number): LatLon | null => {
+        if (track.length === 0) return null
+        if (t <= track[0][0]) return { lat: track[0][1], lon: track[0][2] }
+        for (let i = 1; i < track.length; i++) {
+          if (t <= track[i][0]) {
+            const [t0, la0, lo0] = track[i - 1]
+            const [t1, la1, lo1] = track[i]
+            const f = (t - t0) / Math.max(1, t1 - t0)
+            let dlon = lo1 - lo0
+            if (dlon > 180) dlon -= 360
+            if (dlon < -180) dlon += 360
+            let lon = lo0 + f * dlon
+            if (lon > 180) lon -= 360
+            if (lon < -180) lon += 360
+            return { lat: la0 + f * (la1 - la0), lon }
+          }
+        }
+        const last = track[track.length - 1]
+        return { lat: last[1], lon: last[2] }
+      }
+      // Stroke a track segment as short projected legs, breaking at the
+      // dateline/backside (a long pixel jump = a wrap, not a path).
+      const strokeTrack = (pts: LatLon[], style: string, dash: number[]) => {
+        ctx.strokeStyle = style
+        ctx.setLineDash(dash)
+        ctx.lineWidth = 1.2
+        let prev: [number, number] | null = null
+        ctx.beginPath()
+        for (const ll of pts) {
+          const q = project(proj, ll)
+          if (!q) {
+            prev = null
+            continue
+          }
+          if (prev && Math.hypot(q[0] - prev[0], q[1] - prev[1]) < w / 2) {
+            ctx.moveTo(prev[0], prev[1])
+            ctx.lineTo(q[0], q[1])
+          }
+          prev = q
+        }
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
       ctx.font = `500 10px ${cssVar('--font-mono') || 'monospace'}`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
       for (const b of sats.birds) {
-        const p = project(proj, { lat: b.lat, lon: b.lon })
-        if (!p) continue
         const isChased = chasedSet.has(b.name.toUpperCase())
+        const live = posAt(b.track, nowSecs) ?? { lat: b.lat, lon: b.lon }
+        const p = project(proj, live)
+        const color = isChased ? '#5eead4' : 'rgba(148, 163, 184, 0.95)'
+        // Trail (past → now): drawn in two halves so the older half fades.
+        const past = b.track.filter(([t]) => t <= nowSecs).map(([, la, lo]) => ({ lat: la, lon: lo }))
+        const future = b.track.filter(([t]) => t > nowSecs).map(([, la, lo]) => ({ lat: la, lon: lo }))
+        past.push(live)
+        ctx.globalAlpha = layers.sats.opacity * 0.25
+        strokeTrack(past.slice(0, Math.ceil(past.length / 2)), color, [])
+        ctx.globalAlpha = layers.sats.opacity * 0.55
+        strokeTrack(past.slice(Math.floor(past.length / 2)), color, [])
+        // Projection (now → ahead): dashed.
+        ctx.globalAlpha = layers.sats.opacity * 0.45
+        strokeTrack([live, ...future], color, [3, 4])
+        ctx.globalAlpha = layers.sats.opacity
+        if (!p) {
+          continue // bird itself is on the far side / off-frame
+        }
         if (isChased) {
           ctx.strokeStyle = 'rgba(94, 234, 212, 0.55)'
           ctx.setLineDash([4, 4])
           ctx.lineWidth = 1
           ctx.beginPath()
-          path(rangeRing({ lat: b.lat, lon: b.lon }, b.footprintKm))
+          path(rangeRing(live, b.footprintKm))
           ctx.stroke()
           ctx.setLineDash([])
         }
-        ctx.fillStyle = isChased ? '#5eead4' : 'rgba(148, 163, 184, 0.95)'
-        ctx.beginPath()
-        ctx.arc(p[0], p[1], isChased ? 3.5 : 2.5, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.fillText(b.name, p[0] + 6, p[1])
+        // Mini satellite icon: body + solar panels, tilted 45° so it reads as
+        // a bird, not a box. Scales slightly up for chased birds.
+        const sc = isChased ? 1.25 : 1
+        ctx.save()
+        ctx.translate(p[0], p[1])
+        ctx.rotate(Math.PI / 4)
+        ctx.fillStyle = color
+        ctx.fillRect(-2.4 * sc, -2.4 * sc, 4.8 * sc, 4.8 * sc) // body
+        ctx.fillRect(-8 * sc, -1.4 * sc, 4.4 * sc, 2.8 * sc) // left panel
+        ctx.fillRect(3.6 * sc, -1.4 * sc, 4.4 * sc, 2.8 * sc) // right panel
+        ctx.restore()
+        ctx.fillText(b.name, p[0] + 9 * sc, p[1])
       }
       ctx.globalAlpha = 1
     }

@@ -1817,6 +1817,11 @@ struct SatBird {
     alt_km: f64,
     /// Horizon-circle radius (km) — the footprint ring the map draws for chased birds.
     footprint_km: f64,
+    /// Ground track ±(trail/projection) around now, one point per minute:
+    /// [unix, lat, lon]. Past points draw the fading trail; future points the
+    /// dashed projection — and the UI interpolates along them so the icon
+    /// MOVES in real time between polls.
+    track: Vec<(i64, f64, f64)>,
 }
 
 /// The satellites view: positions NOW + upcoming passes over the operator's QTH.
@@ -1945,12 +1950,16 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
         for t in &fresh {
             if let Some((lat, lon, alt_km)) = sat::subpoint(t, now) {
                 let footprint_km = RE_KM * (RE_KM / (RE_KM + alt_km)).acos();
+                // 10 min of trail + 25 min of projection at 1-min steps — one
+                // TLE parse per bird (the batch fn), ~ms for the whole flock.
+                let track = sat::track(t, now, 600, 1_500, 60);
                 birds.push(SatBird {
                     name: t.name.clone(),
                     lat,
                     lon,
                     alt_km,
                     footprint_km,
+                    track,
                 });
                 if need_passes {
                     if let Some(obs) = observer {

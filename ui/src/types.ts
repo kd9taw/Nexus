@@ -304,7 +304,16 @@ export interface PcaView {
 export interface SatView {
   /** Age of the oldest element set (days) — badge stale when > 14. */
   tleAgeDays: number
-  birds: { name: string; lat: number; lon: number; altKm: number; footprintKm: number }[]
+  birds: {
+    name: string
+    lat: number
+    lon: number
+    altKm: number
+    footprintKm: number
+    /** Ground track ±now ([unix, lat, lon] per minute): past = trail, future =
+     * projection; the map interpolates along it for real-time motion. */
+    track: [number, number, number][]
+  }[]
   /** Sorted by AOS; geometry only — no transponder/workability claim. */
   passes: SatPass[]
 }
