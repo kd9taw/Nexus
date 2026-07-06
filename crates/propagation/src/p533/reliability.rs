@@ -85,6 +85,19 @@ pub struct Reliability {
     pub bcr: f64,
 }
 
+/// Step 11 of the reliability chain in closed form: the BCR (%) for a given
+/// median SNR, its decile deviations, and a required SNR. Pulled out of
+/// [`circuit_reliability`] because the SNR distribution is mode-independent —
+/// re-evaluating a different required SNR (FT8 vs CW vs SSB) is this one
+/// formula, no re-run of the field-strength/noise chain.
+pub fn bcr_for_required_snr(snr: f64, du_sn: f64, dl_sn: f64, snrr: f64) -> f64 {
+    if snr >= snrr {
+        (130.0 - 80.0 / (1.0 + ((snr - snrr) / dl_sn))).min(100.0)
+    } else {
+        (80.0 / (1.0 + ((snrr - snr) / du_sn)) - 30.0).max(0.0)
+    }
+}
+
 /// Port of the analog reliability chain of `CircuitReliability()`.
 ///
 /// For [`Modulation::Digital`] the reference computes a different signal `S`
@@ -221,11 +234,7 @@ pub fn circuit_reliability(
 
     // Step 11: basic circuit reliability for S/N >= or < S/Nr (%).
     // (reference lines 246-252)
-    let bcr = if snr >= input.snrr {
-        (130.0 - 80.0 / (1.0 + ((snr - input.snrr) / dl_sn))).min(100.0)
-    } else {
-        (80.0 / (1.0 + ((input.snrr - snr) / du_sn)) - 30.0).max(0.0)
-    };
+    let bcr = bcr_for_required_snr(snr, du_sn, dl_sn, input.snrr);
 
     // SNR for the required reliability (CCIR Report 322). NORM[40] = 1.28:
     // SNRXX = SNR50 +- t(XX%)*(D_u,l/1.28). (reference lines 402-420)

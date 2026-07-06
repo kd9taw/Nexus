@@ -202,6 +202,9 @@ export interface BandOutlook {
   hourly: number[]
   /** Circuit reliability: % of the 24 h the band is usable (≥ Fair) — a coverage metric. */
   reliability: number
+  /** Per-mode workability right now (P.533 engine only — real SNR statistics vs
+   * each mode's required SNR). Empty/absent on the heuristic → the UI hides it. */
+  modeNow?: { mode: string; score: number }[]
 }
 /** Per-path HF prediction (the PathPredictor seam): operator↔DX, best-first. */
 export interface PathPrediction {
@@ -282,6 +285,20 @@ export interface DxpedDayBest {
   best: string
   score: number
 }
+/** Polar-cap absorption (PCA) view — GOES protons through the D-RAP2 model
+ * (get_pca). Null command result = no proton data ever fetched (offline);
+ * empty `points` = quiet sky (draw nothing). */
+export interface PcaView {
+  /** J(≥10 MeV) pfu — the NOAA S-scale driver (S1=10, S2=100, …). */
+  j10: number
+  /** Day/night 30 MHz polar-cap absorption (dB). */
+  a30Day: number
+  a30Night: number
+  /** Polar-cap cutoff (geomagnetic latitude, °) at the current Kp. */
+  cutoffDeg: number
+  points: { lat: number; lon: number; db30: number }[]
+}
+
 /** Real-time solar wind (DSCOVR) — the leading geomagnetic indicator (leads Kp/A). */
 export interface SolarWind {
   /** Bz (GSM), nT. Negative = southward = geoeffective. */
@@ -1435,6 +1452,10 @@ export interface Settings {
   /** Path-prediction engine: 'heuristic' (physics-lite default) or 'p533'
    * (native ITU-R P.533 — real circuit-reliability physics). */
   propEngine: string
+  /** Antenna gains (dBi) for the P.533 link budget — 0 = isotropic/wire.
+   * Honest v1: plain dB adders, no pattern modelling; heuristic ignores them. */
+  antTxGainDbi?: number
+  antRxGainDbi?: number
   /** Editable quick-reply macros, per context. */
   macros: {
     chat: string[]

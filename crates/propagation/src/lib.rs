@@ -33,6 +33,7 @@ pub mod model;
 pub mod needalert;
 pub mod opening;
 pub mod p533;
+pub mod pca;
 pub mod pota;
 pub mod predict;
 pub mod pskr_mqtt;
@@ -66,7 +67,9 @@ pub use journey::{
     Tier as JourneyTier,
 };
 pub use kc2g::MufStation;
-pub use likelihood::{BandOutlook, PathModel, PropParams, Workability};
+pub use likelihood::{
+    mode_now_at, BandOutlook, ModeHourly, ModeNow, PathModel, PropParams, Workability,
+};
 pub use mapspots::{build_map_spots, MapSpot};
 pub use model::{
     classify_spot_mode, classify_vhf_mode, ActivityTier, Band, Confidence, ModeClass, PathSpot,

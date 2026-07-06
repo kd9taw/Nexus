@@ -8,6 +8,7 @@ import { geoPath } from 'd3-geo'
 import { RotateCcw } from 'lucide-react'
 import type {
   AuroraPoint,
+  PcaView,
   MapSpot,
   MufStation,
   NeedTag,
@@ -18,7 +19,7 @@ import type {
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
 import type { Theme } from '../useTheme'
-import { getAurora } from '../api'
+import { getAurora, getPca } from '../api'
 import { gridToLatLon, haversineKm, bearingDeg, type LatLon } from '../grid'
 import {
   basemap,
@@ -184,6 +185,7 @@ type LayerKey =
   | 'muf'
   | 'aurora'
   | 'flare'
+  | 'pca'
   | 'coast'
   | 'grid'
   | 'rings'
@@ -206,6 +208,9 @@ const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   // an M/X flare (R1+, the same onset as the flare insight + toast) — so the
   // default costs nothing until the sun actually does something.
   flare: { label: 'Flare blackout (D-RAP)', visible: true, opacity: 0.8 },
+  // Same free-until-real-event pattern: PCA points only exist during a proton
+  // event (S1+), so the default-on layer draws nothing on a quiet sun.
+  pca: { label: 'Proton polar cap (PCA)', visible: true, opacity: 0.8 },
   coast: { label: 'Coastlines', visible: true, opacity: 0.85 },
   grid: { label: 'Grid (20°×10°)', visible: true, opacity: 0.5 },
   rings: { label: 'Range rings', visible: true, opacity: 0.55 },
@@ -551,6 +556,29 @@ export function MapView({
     }
   }, [auroraOn])
 
+  // Proton polar-cap absorption — fetched only while the layer is on (the
+  // backend caches the GOES feed 5 min; a matching poll is ample). Null =
+  // no proton data (offline); empty points = quiet sky. Both draw nothing.
+  const [pca, setPca] = useState<PcaView | null>(null)
+  const pcaOn = layers.pca.visible
+  useEffect(() => {
+    if (!pcaOn) {
+      setPca(null)
+      return
+    }
+    let live = true
+    const load = () =>
+      getPca()
+        .then((p) => live && setPca(p))
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 300_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [pcaOn])
+
   // Draw.
   useEffect(() => {
     const canvas = canvasRef.current
@@ -814,6 +842,23 @@ export function MapView({
       ctx.globalAlpha = 1
     }
 
+    // Proton polar-cap absorption (PCA, D-RAP2) — violet shading over the polar
+    // caps during a solar proton event; opacity tracks the 30 MHz absorption
+    // (0.5 dB faint → 10 dB+ solid). Quiet sun = zero points = nothing drawn.
+    if (layers.pca.visible && pca && pca.points.length > 0) {
+      for (const s of pca.points) {
+        const p = project(proj, { lat: s.lat, lon: s.lon })
+        if (!p) continue
+        const t = Math.max(0, Math.min(1, s.db30 / 10))
+        ctx.globalAlpha = layers.pca.opacity * (0.18 + 0.5 * t)
+        ctx.beginPath()
+        ctx.arc(p[0], p[1], 3, 0, Math.PI * 2)
+        ctx.fillStyle = `rgb(${Math.round(150 + 60 * t)}, 80, ${Math.round(220 - 30 * t)})`
+        ctx.fill()
+      }
+      ctx.globalAlpha = 1
+    }
+
     // BAND HEAT — the HamClock-class aura layer: kernel-density glow built from the
     // SAME live spots (real evidence, not a model), splatted at 1/3 resolution with
     // radial gradients in each spot's band color and composited additively, so
@@ -1067,7 +1112,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey])
+  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -1577,6 +1622,12 @@ export function MapView({
               preview={flarePreview}
             />
           )}
+          {layers.pca.visible && pca && pca.points.length > 0 && (
+            <div className="flare-chip pca-chip" role="status">
+              ☢ Proton event · S{sScaleOf(pca.j10)} · polar caps absorbing ~
+              {pca.a30Day.toFixed(1)} dB @30 MHz (day) — high-lat paths degraded
+            </div>
+          )}
           {prop && (
             <MapInsightRail
               prop={prop}
@@ -1665,6 +1716,16 @@ function MapLegend() {
 /** The live flare readout, shown only while the D-RAP layer is actually drawing:
  * class, R-scale, the absorption ceiling, and where the event is heading (the
  * X-ray trend word + the D-RAP recovery estimate once it's falling). */
+/** NOAA S-scale from J(≥10 MeV): S1=10 pfu, S2=100, S3=1e3, S4=1e4, S5=1e5. */
+function sScaleOf(j10: number): number {
+  if (j10 >= 1e5) return 5
+  if (j10 >= 1e4) return 4
+  if (j10 >= 1e3) return 3
+  if (j10 >= 100) return 2
+  if (j10 >= 10) return 1
+  return 0
+}
+
 function FlareChip({
   xrayLong,
   hafMhz,

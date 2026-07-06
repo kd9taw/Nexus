@@ -17,13 +17,20 @@
 //! [`P533Config`] — every constant tunable, none buried in the math.
 
 use crate::geo;
-use crate::likelihood::{hhmm, hhmm_z, BandOutlook, Workability};
+use crate::likelihood::{hhmm, hhmm_z, mode_now_at, BandOutlook, ModeHourly, Workability};
 use crate::model::{band_digital_mhz, Band, SpaceWx};
 use crate::predict::{PathPrediction, PathPredictor};
 
 use super::geometry::Location;
 use super::noise::ManMadeCategory;
+use super::reliability::bcr_for_required_snr;
 use super::{run_p533, P533Params};
+
+/// Required SNR (dB in 1 Hz) per operating mode, for the per-mode "workable
+/// now" rows. VOACAP-conventional figures: FT8 13 dB·Hz (−21 dB in 2.5 kHz),
+/// FT4 ≈ 3.5 dB less sensitive, CW 24 dB·Hz (skilled ear), SSB 38 dB·Hz
+/// (communication quality). Table order = display order.
+const MODE_SNR_DBHZ: [(&str, f64); 4] = [("FT8", 13.0), ("FT4", 16.5), ("CW", 24.0), ("SSB", 38.0)];
 
 /// Tunable system assumptions for the p533 engine.
 #[derive(Debug, Clone, Copy)]
@@ -37,6 +44,10 @@ pub struct P533Config {
     pub required_snr_dbhz: f64,
     /// BCR (%) a hour must clear to count toward `BandOutlook.reliability`.
     pub bcr_usable_pct: f64,
+    /// Combined antenna gain (dBi, TX + RX) applied as a plain dB adder to the
+    /// link budget (v1: no pattern/takeoff-angle modelling — the P.372 noise is
+    /// referenced to a short lossless antenna, so signal-side gain shifts SNR 1:1).
+    pub ant_gain_dbi: f64,
 }
 
 impl Default for P533Config {
@@ -46,6 +57,7 @@ impl Default for P533Config {
             man_made: ManMadeCategory::Rural,
             required_snr_dbhz: 13.0,
             bcr_usable_pct: 50.0,
+            ant_gain_dbi: 0.0,
         }
     }
 }
@@ -161,7 +173,8 @@ impl PathPredictor for P533Engine {
         let tx = Location::new(me.0.to_radians(), me.1.to_radians());
         let rx = Location::new(dx.0.to_radians(), dx.1.to_radians());
         let sys = P533Params {
-            txpower: self.cfg.txpower_dbkw,
+            // Antenna gain rides on the TX power term (see P533Config.ant_gain_dbi).
+            txpower: self.cfg.txpower_dbkw + self.cfg.ant_gain_dbi,
             bw_hz: 1.0,
             snrr: self.cfg.required_snr_dbhz,
             snrxxp: 90,
@@ -173,6 +186,13 @@ impl PathPredictor for P533Engine {
         for &band in Band::ALL.iter().filter(|b| !b.is_vhf()) {
             let freq = band_digital_mhz(band);
             let mut hourly = [0.0f32; 24];
+            let mut mode_hourly: Vec<ModeHourly> = MODE_SNR_DBHZ
+                .iter()
+                .map(|&(mode, _)| ModeHourly {
+                    mode: mode.to_string(),
+                    hourly: [0.0; 24],
+                })
+                .collect();
             for (h, slot_score) in hourly.iter_mut().enumerate() {
                 // UT hour h ↔ reference slot h−1 (slot i is UT i+1).
                 let slot = ((h + 23) % 24) as i32;
@@ -182,7 +202,19 @@ impl PathPredictor for P533Engine {
                 if band == Band::B20 {
                     muf_hourly[h] = run.path.opmuf as f32;
                 }
+                // Per-mode workability: the hour's SNR distribution is
+                // mode-independent, so each mode is one closed-form BCR
+                // re-evaluation against its required SNR — no chain re-run.
+                // ALL hours are kept (mode_hourly) so a day-scale cache can
+                // re-derive the "now" chips at serve time.
+                for (mi, &(_, snrr)) in MODE_SNR_DBHZ.iter().enumerate() {
+                    mode_hourly[mi].hourly[h] =
+                        (bcr_for_required_snr(run.rel.snr, run.rel.du_sn, run.rel.dl_sn, snrr)
+                            / 100.0)
+                            .clamp(0.0, 1.0) as f32;
+                }
             }
+            let mode_now = mode_now_at(&mode_hourly, now_hour);
             let (window, grayline, peak, _) = best_window(&hourly, day0, band);
             let usable = hourly
                 .iter()
@@ -196,6 +228,8 @@ impl PathPredictor for P533Engine {
                 grayline,
                 hourly: hourly.to_vec(),
                 reliability: (usable as f32 / 24.0) * 100.0,
+                mode_now,
+                mode_hourly,
             });
         }
         bands.sort_by(|a, b| {

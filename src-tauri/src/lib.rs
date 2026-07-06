@@ -50,6 +50,8 @@ type AuroraCache = Arc<Mutex<Option<(std::time::Instant, Vec<propagation::live::
 /// TTL cache for the KC2G ionosonde MUF map. Distinct payload type → distinct
 /// TypeId for `.manage()`.
 type Kc2gCache = Arc<Mutex<Option<(std::time::Instant, Vec<propagation::MufStation>)>>>;
+type ProtonCache =
+    Arc<Mutex<Option<(std::time::Instant, propagation::live::protons::ProtonFlux)>>>;
 /// TTL cache for the NOAA R/S/G scales + recent SWPC alerts (one fetch pair).
 /// Distinct payload type → distinct TypeId for `.manage()`.
 type ScalesCache =
@@ -1095,10 +1097,15 @@ async fn get_path_outlook(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
 ) -> Result<propagation::PathPrediction, String> {
-    let (mygrid, prop_engine, station_power_w) = {
+    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = state.lock().map_err(|e| e.to_string())?;
         let st = eng.settings();
-        (st.mygrid.clone(), st.prop_engine.clone(), st.station_power_w)
+        (
+            st.mygrid.clone(),
+            st.prop_engine.clone(),
+            st.station_power_w,
+            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        )
     };
     let me = propagation::geo::maidenhead_to_latlon(&mygrid);
     let Some(dx) = propagation::geo::maidenhead_to_latlon(grid.trim()) else {
@@ -1127,25 +1134,41 @@ async fn get_path_outlook(
     use propagation::PathPredictor as _; // bring the trait's `predict` into scope
     // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or
     // the heuristic fallback. p533 is compute-heavy → keep it off the async core.
-    let eng = propagation::make_predictor(&prop_engine, me, station_power_w);
+    let eng = propagation::make_predictor(&prop_engine, me, station_power_w, ant_gain_dbi);
     let t = now_unix();
     tauri::async_runtime::spawn_blocking(move || eng.predict(dx, t, &wx))
         .await
         .map_err(|e| e.to_string())
 }
 
+/// Ring-outlook cache (p533 only): (computed-at, params-key, value). The 8-azimuth
+/// p533 sweep is ~1 s of pure compute — day-scale climatology, so serve it cached
+/// until the params (UTC day, grid, power/gain, SSN) change or 6 h pass. The
+/// heuristic path never touches this (it's microseconds and Kp-sensitive).
+static RING_OUTLOOK: Mutex<Option<(std::time::Instant, String, propagation::PathPrediction)>> =
+    Mutex::new(None);
+
 /// The no-selection "Band outlook (modelled)": modeled per-band workability + MUF to
 /// a ring of representative long-haul DX directions (best per band over the ring), so
 /// the Connect view can answer "which bands are modeled-open for DX right now" without
-/// a selected station. Needs only the operator's grid; empty if it's unset.
+/// a selected station. Needs only the operator's grid; empty if it's unset. Honors the
+/// configured prediction engine (Settings ▸ "Prediction engine"): p533 runs off the
+/// async core behind a windows-style params cache; the heuristic stays sync + uncached.
 #[tauri::command]
 async fn get_band_outlook(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
 ) -> Result<propagation::PathPrediction, String> {
-    let mygrid = {
+    const RING_TTL_SECS: u64 = 6 * 3600;
+    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = state.lock().map_err(|e| e.to_string())?;
-        eng.settings().mygrid.clone()
+        let st = eng.settings();
+        (
+            st.mygrid.clone(),
+            st.prop_engine.clone(),
+            st.station_power_w,
+            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        )
     };
     let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(propagation::PathPrediction {
@@ -1155,21 +1178,69 @@ async fn get_band_outlook(
             muf_hourly: Vec::new(),
         });
     };
+    let p533 = prop_engine == "p533";
     let wx = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
             .map(|(_, s)| propagation::SpaceWx {
+                // R12 only matters to p533; withholding it from the heuristic keeps
+                // that path byte-identical to its pre-engine-seam behavior.
+                ssn: if p533 {
+                    LAST_SSN.lock().ok().and_then(|g| *g)
+                } else {
+                    None
+                },
                 sfi: s.space_wx.sfi,
-                ssn: None, // ring outlook stays on the heuristic — no R12 needed
                 kp: s.space_wx.kp,
                 a_index: s.space_wx.a_index,
                 xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
             })
             .unwrap_or_default()
     };
+    let t = now_unix();
     // 8 azimuths at ~9000 km — direction-agnostic "best band to ANY far DX now".
-    Ok(propagation::band_outlook_ring(me, 9000.0, 8, now_unix(), &wx))
+    if !p533 {
+        let eng = propagation::HeuristicEngine::new(Some(me));
+        return Ok(propagation::band_outlook_ring(&eng, me, 9000.0, 8, t, &wx));
+    }
+    let key = format!(
+        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{:?}",
+        t / 86_400,
+        station_power_w,
+        wx.ssn.map(|v| v.round() as i32),
+    );
+    if let Ok(g) = RING_OUTLOOK.lock() {
+        if let Some((when, k, v)) = g.as_ref() {
+            if *k == key && when.elapsed().as_secs() < RING_TTL_SECS {
+                // The cached hourly grids are day-anchored; the two "now"
+                // scalars (muf_now + each band's mode_now chips) drift across
+                // hours — re-derive BOTH for the serving hour (review catch:
+                // mode_now froze at compute time and served 6 h stale).
+                let mut out = v.clone();
+                let h = (t.rem_euclid(86_400) / 3600) as usize;
+                if let Some(&m) = out.muf_hourly.get(h) {
+                    out.muf_now = m;
+                }
+                for b in &mut out.bands {
+                    if !b.mode_hourly.is_empty() {
+                        b.mode_now = propagation::mode_now_at(&b.mode_hourly, h);
+                    }
+                }
+                return Ok(out);
+            }
+        }
+    }
+    let eng = propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi);
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        propagation::band_outlook_ring(eng.as_ref(), me, 9000.0, 8, t, &wx)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Ok(mut g) = RING_OUTLOOK.lock() {
+        *g = Some((std::time::Instant::now(), key, out.clone()));
+    }
+    Ok(out)
 }
 
 /// One DXpedition's modelled contact windows from the operator's QTH — the
@@ -1233,10 +1304,15 @@ async fn get_dxped_windows(
     // 1 = today only (Connect's default); the DXpeditions board asks for 7 (the
     // week planner). Clamped so a bad caller can't request an unbounded sweep.
     let days = days.unwrap_or(1).clamp(1, 10);
-    let (mygrid, prop_engine, station_power_w) = {
+    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = state.lock().map_err(|e| e.to_string())?;
         let st = eng.settings();
-        (st.mygrid.clone(), st.prop_engine.clone(), st.station_power_w)
+        (
+            st.mygrid.clone(),
+            st.prop_engine.clone(),
+            st.station_power_w,
+            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        )
     };
     let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(Vec::new());
@@ -1292,7 +1368,7 @@ async fn get_dxped_windows(
     let mut calls: Vec<&str> = targets.iter().map(|(c, ..)| c.as_str()).collect();
     calls.sort_unstable();
     let key = format!(
-        "{day}|{days}|{mygrid}|{prop_engine}|{:?}|{:?}|{}",
+        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{:?}|{}",
         station_power_w,
         wx.ssn.map(|v| v.round() as i32),
         calls.join(",")
@@ -1308,7 +1384,7 @@ async fn get_dxped_windows(
     use propagation::PathPredictor as _;
     // Build the engine ONCE and sweep every target inside one spawn_blocking —
     // the p533 CCIR-cell memo makes same-month targets amortize each other.
-    let eng = propagation::make_predictor(&prop_engine, Some(me), station_power_w);
+    let eng = propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi);
     let t = now_unix();
     let out = tauri::async_runtime::spawn_blocking(move || {
         targets
@@ -1413,6 +1489,75 @@ async fn get_aurora(
             Ok(g.as_ref().map(|(_, p)| p.clone()).unwrap_or_default())
         }
     }
+}
+
+/// The current polar-cap absorption (PCA) view for the map overlay + space-wx
+/// insight: GOES integral-proton flux (SWPC, cached 5 min, stale-served on
+/// fetch failure) composed through the Sauer & Wilkinson D-RAP2 model
+/// (propagation::pca). `None` when no proton data has EVER been fetched —
+/// the honest offline state; a quiet sky returns Some with empty `points`
+/// (the map draws nothing).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PcaView {
+    /// J(≥10 MeV) pfu — the NOAA S-scale driver (S1=10, S2=100, …).
+    j10: f64,
+    /// Day/night 30 MHz cap absorption (dB) — the headline numbers.
+    a30_day: f64,
+    a30_night: f64,
+    /// Polar-cap cutoff (geomagnetic latitude, °) at the current Kp.
+    cutoff_deg: f64,
+    /// Polar shading samples (empty when quiet — draw nothing).
+    points: Vec<propagation::pca::PcaPoint>,
+}
+
+#[tauri::command]
+async fn get_pca(
+    cache: State<'_, PropCache>,
+    protons: State<'_, ProtonCache>,
+) -> Result<Option<PcaView>, String> {
+    const PROTON_TTL_SECS: u64 = 300;
+    /// Below this 30 MHz cap absorption the event isn't operationally visible.
+    const MIN_DB: f64 = 0.5;
+    let cached = {
+        let g = protons.lock().map_err(|e| e.to_string())?;
+        g.as_ref().and_then(|(when, p)| {
+            (when.elapsed().as_secs() < PROTON_TTL_SECS).then_some(*p)
+        })
+    };
+    let flux = match cached {
+        Some(p) => Some(p),
+        None => {
+            match tauri::async_runtime::spawn_blocking(propagation::live::protons::fetch_protons)
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                Ok(p) => {
+                    if let Ok(mut g) = protons.lock() {
+                        *g = Some((std::time::Instant::now(), p));
+                    }
+                    Some(p)
+                }
+                // Serve the stale reading rather than nothing; None if never had one.
+                Err(_) => protons.lock().map_err(|e| e.to_string())?.as_ref().map(|(_, p)| *p),
+            }
+        }
+    };
+    let Some(flux) = flux else {
+        return Ok(None); // never fetched — honest offline, not a fabricated quiet
+    };
+    let kp = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        guard.as_ref().map(|(_, s)| s.space_wx.kp as f64).unwrap_or(0.0)
+    };
+    let now = now_unix();
+    Ok(Some(PcaView {
+        j10: flux.j10,
+        a30_day: propagation::pca::a30_day(flux.j5),
+        a30_night: propagation::pca::a30_night(flux.j1),
+        cutoff_deg: propagation::pca::cutoff_lat_deg(kp),
+        points: propagation::pca::pca_layer(flux.j5, flux.j1, kp, now, MIN_DB),
+    }))
 }
 
 /// Real-time KC2G ionosonde MUF/foF2 station fixes for the Connect map's MUF
@@ -5263,6 +5408,7 @@ pub fn run() {
     let prop_cache: PropCache = Arc::new(Mutex::new(None));
     let aurora_cache: AuroraCache = Arc::new(Mutex::new(None));
     let kc2g_cache: Kc2gCache = Arc::new(Mutex::new(None));
+    let proton_cache: ProtonCache = Arc::new(Mutex::new(None));
     let scales_cache: ScalesCache = Arc::new(Mutex::new(None));
 
     tauri::Builder::default()
@@ -5270,6 +5416,7 @@ pub fn run() {
         .manage(prop_cache)
         .manage(aurora_cache)
         .manage(kc2g_cache)
+        .manage(proton_cache)
         .manage(scales_cache)
         .manage(spots)
         .manage(live_paths)
@@ -5397,6 +5544,7 @@ pub fn run() {
             get_band_outlook,
             get_getting_out,
             get_aurora,
+            get_pca,
             get_kc2g_muf,
             get_space_wx_scales,
             get_xray_now,

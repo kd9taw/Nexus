@@ -15,6 +15,23 @@
 //!   dip/gyrofrequency, and the CCIR numerical-map expansion (foF2, M(3000)F2).
 //! - `muf` / `fieldstrength` / `noise` / `reliability` — the P.533 chain.
 
+// This module tree deliberately mirrors the reference C (ITU-R-HF P533.c)
+// statement-by-statement so every line can be audited against the published
+// method, and it is frozen against the ISO golden vectors (engine.rs tests).
+// The C's index-loop / explicit-comparison / repeated-branch idioms therefore
+// stay as written — restyling them for these lints risks numeric drift for
+// zero behavior gain.
+#![allow(
+    clippy::needless_range_loop,
+    clippy::manual_range_contains,
+    clippy::type_complexity,
+    clippy::too_many_arguments,
+    clippy::nonminimal_bool,
+    clippy::if_same_then_else,
+    clippy::unnecessary_unwrap,
+    clippy::unnecessary_cast
+)]
+
 pub mod absorption;
 pub mod coeffs;
 pub mod cp;

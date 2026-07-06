@@ -8,6 +8,7 @@
 import type { ReactNode } from 'react'
 import { type PaneId, PANE_IDS } from '../../features/connectConfig'
 import type { PaneContext } from './paneContext'
+import type { BandOutlook } from '../../types'
 import { bandTiming } from '../../propViz'
 import { SpaceWxGauges } from '../prop/SpaceWxGauges'
 import { BandAdvisor } from '../prop/BandAdvisor'
@@ -60,6 +61,28 @@ export interface PaneDef {
 }
 
 // ---- Expert renders: verbatim ConnectView panel JSX, locals → c.* ----
+
+/** Per-mode "workable now" chips (P.533 only — the heuristic sends none).
+ * Same Fair boundary (0.3) as everywhere; ≥0.5 reads as solidly workable. */
+function ModeNowChips({ b }: { b: BandOutlook }) {
+  if (!b.modeNow?.length) return null
+  return (
+    <span className="cp-modes">
+      {b.modeNow.map((m) => {
+        const cls = m.score >= 0.5 ? 'good' : m.score >= 0.3 ? 'fair' : 'closed'
+        return (
+          <span
+            key={m.mode}
+            className={`cp-mode ${cls}`}
+            title={`${m.mode}: ~${Math.round(m.score * 100)}% of days this circuit works right now (P.533)`}
+          >
+            {m.mode}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
 
 function renderSelection(c: PaneContext): ReactNode {
   const call = c.selectedCall
@@ -176,6 +199,7 @@ function renderPath(c: PaneContext): ReactNode {
                   {b.window}
                 </span>
                 <span className="cp-eta">{bandTiming(b.hourly, Date.now())}</span>
+                <ModeNowChips b={b} />
               </li>
             ))}
           </ul>
@@ -221,6 +245,7 @@ function renderOutlook(c: PaneContext): ReactNode {
                   {b.window}
                 </span>
                 <span className="cp-eta">{bandTiming(b.hourly, Date.now())}</span>
+                <ModeNowChips b={b} />
               </li>
             ))}
           </ul>

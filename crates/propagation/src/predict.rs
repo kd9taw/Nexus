@@ -98,19 +98,23 @@ impl PathPredictor for HeuristicEngine {
 
 /// Build the configured path-prediction engine by name. `"p533"` returns the
 /// validated ITU-R P.533/P.372 engine (its TX power taken from the station
-/// power setting when present); any other name — including the default
-/// `"heuristic"` — returns the always-available physics-lite fallback, so a
-/// stale or unknown setting can never break predictions.
+/// power setting when present, plus `ant_gain_dbi` — the combined TX+RX
+/// antenna gain, 0 = isotropic — as a link-budget adder); any other name —
+/// including the default `"heuristic"` — returns the always-available
+/// physics-lite fallback (which ignores gain), so a stale or unknown setting
+/// can never break predictions.
 pub fn make_predictor(
     name: &str,
     me_latlon: Option<(f64, f64)>,
     station_power_w: Option<f64>,
+    ant_gain_dbi: f64,
 ) -> Box<dyn PathPredictor> {
     match name {
         "p533" => {
-            let cfg = station_power_w
+            let mut cfg = station_power_w
                 .map(crate::p533::engine::P533Config::with_power_watts)
                 .unwrap_or_default();
+            cfg.ant_gain_dbi = ant_gain_dbi;
             Box::new(crate::p533::engine::P533Engine::with_config(me_latlon, cfg))
         }
         _ => Box::new(HeuristicEngine::new(me_latlon)),
@@ -169,9 +173,11 @@ pub fn representative_muf(me: (f64, f64), now: i64, wx: &SpaceWx) -> f32 {
 /// directions — the no-selection "general band outlook". Each band reports its BEST
 /// modeled workability to ANY of `n_dirs` evenly-spaced azimuths at `dist_km`, plus
 /// the ring's max MUF (now + per-hour). Direction-agnostic: answers "which bands are
-/// modeled-workable to DX right now" without picking one arbitrary path. Reuses
-/// [`HeuristicEngine`]; `n_dirs` is clamped to 1..=36.
+/// modeled-workable to DX right now" without picking one arbitrary path. Runs on the
+/// CALLER'S engine (heuristic stays cheap-and-sync; p533 is compute-heavy — cache it
+/// and keep it off the async core); `n_dirs` is clamped to 1..=36.
 pub fn band_outlook_ring(
+    eng: &dyn PathPredictor,
     me: (f64, f64),
     dist_km: f64,
     n_dirs: usize,
@@ -179,7 +185,6 @@ pub fn band_outlook_ring(
     wx: &SpaceWx,
 ) -> PathPrediction {
     use std::collections::HashMap;
-    let eng = HeuristicEngine::new(Some(me));
     let n = n_dirs.clamp(1, 36);
     let mut best: HashMap<String, BandOutlook> = HashMap::new();
     let mut muf_now = 0f32;
@@ -211,7 +216,7 @@ pub fn band_outlook_ring(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     PathPrediction {
-        engine: "heuristic".to_string(),
+        engine: eng.name().to_string(),
         bands,
         muf_now,
         muf_hourly,
@@ -332,7 +337,7 @@ mod tests {
         };
         // Midday: at least one direction is sunlit, so the ring finds workable HF.
         let midday = MIDNIGHT_UTC + 18 * 3600;
-        let ring = band_outlook_ring(me, 9000.0, 8, midday, &wx);
+        let ring = band_outlook_ring(&HeuristicEngine::new(Some(me)), me, 9000.0, 8, midday, &wx);
         assert!(!ring.bands.is_empty());
         // HF only, sorted best-first, 24 MUF hours, positive ceiling somewhere.
         assert!(ring

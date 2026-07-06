@@ -150,6 +150,45 @@ pub struct BandOutlook {
     /// per-time scores. Day coverage, NOT a per-hour SNR-based reliability (that needs the
     /// CCIR-coefficient + statistical-SNR port — a separate effort).
     pub reliability: f32,
+    /// Per-mode workability RIGHT NOW (current hour) from the engine's SNR
+    /// distribution vs each mode's required SNR (FT8/FT4/CW/SSB). Only the
+    /// P.533 engine fills this (it has real SNR statistics); the heuristic
+    /// leaves it empty and the UI hides the row — honesty over guessing.
+    pub mode_now: Vec<ModeNow>,
+    /// The full per-mode × per-hour grid behind `mode_now` — in-process only
+    /// (`serde(skip)`), retained so a day-scale cache can re-derive the "now"
+    /// chips for the SERVING hour instead of freezing them at compute time
+    /// (`mode_now` is a now-scalar exactly like `muf_now`).
+    #[serde(skip)]
+    pub mode_hourly: Vec<ModeHourly>,
+}
+
+/// One mode's "workable right now" entry — see [`BandOutlook::mode_now`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeNow {
+    pub mode: String,
+    /// BCR-derived likelihood 0..1 for this mode at the current hour.
+    pub score: f32,
+}
+
+/// One mode's per-UTC-hour scores — see [`BandOutlook::mode_hourly`].
+#[derive(Debug, Clone)]
+pub struct ModeHourly {
+    pub mode: String,
+    pub hourly: [f32; 24],
+}
+
+/// Slice a `mode_hourly` grid at one UTC hour → the `mode_now` chips for that
+/// hour. Empty in → empty out (the heuristic's honest no-data state).
+pub fn mode_now_at(mode_hourly: &[ModeHourly], hour: usize) -> Vec<ModeNow> {
+    mode_hourly
+        .iter()
+        .map(|m| ModeNow {
+            mode: m.mode.clone(),
+            score: m.hourly[hour % 24],
+        })
+        .collect()
 }
 
 /// The contact-likelihood model, anchored at one operator location.
@@ -289,6 +328,8 @@ impl PathModel {
             grayline,
             hourly,
             reliability,
+            mode_now: Vec::new(), // heuristic has no SNR statistics — stays empty
+            mode_hourly: Vec::new(),
         }
     }
 

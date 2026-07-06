@@ -925,6 +925,45 @@ button.nb-chip:hover {
   border-radius: 3px;
   padding: 1px 2px;
 }
+/* PCA (proton event) chip — the flare chip's violet sibling. */
+.pca-chip {
+  border-left-color: #a855f7;
+  top: calc(var(--space-3) + 34px); /* stack under the flare chip when both fire */
+}
+/* Per-mode workable-now chips on path/outlook band rows (P.533 only). */
+.cp-modes {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: var(--space-1);
+}
+.cp-mode {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  padding: 0 3px;
+  border-radius: 3px;
+  border: 1px solid var(--border-soft);
+  color: var(--text-faint);
+}
+.cp-mode.good {
+  color: var(--band-open);
+  border-color: var(--band-open);
+}
+.cp-mode.fair {
+  color: var(--band-marginal);
+  border-color: var(--band-marginal);
+}
+.cp-mode.closed {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+/* Two small numeric inputs side-by-side (e.g. TX/RX antenna gain). */
+.settings-inline-pair {
+  display: flex;
+  gap: var(--space-2);
+}
+.settings-inline-pair .settings-input {
+  width: 6em;
+}
 /* Chase Feed pane — rank number + last-days urgency chip on chase-row chrome. */
 .cfeed-rank {
   font-family: var(--font-mono);

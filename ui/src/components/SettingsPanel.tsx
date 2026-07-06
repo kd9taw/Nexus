@@ -2490,6 +2490,34 @@ export function SettingsPanel({
                   prediction, uses your station power). Live spots always win over any model.
                 </span>
               </label>
+
+              <div className="settings-field">
+                <span className="settings-label">Antenna gain (dBi) — TX / RX</span>
+                <div className="settings-inline-pair">
+                  {(['antTxGainDbi', 'antRxGainDbi'] as const).map((k) => (
+                    <input
+                      key={k}
+                      className="settings-input"
+                      type="number"
+                      step="0.5"
+                      min="-10"
+                      max="30"
+                      inputMode="decimal"
+                      aria-label={k === 'antTxGainDbi' ? 'TX antenna gain (dBi)' : 'RX antenna gain (dBi)'}
+                      value={form[k] ?? 0}
+                      onChange={(e) => {
+                        const num = Number(e.target.value)
+                        if (!Number.isNaN(num)) updateNum(k, num)
+                      }}
+                    />
+                  ))}
+                </div>
+                <span className="settings-hint">
+                  Used by the P.533 link budget only. 0 = a simple wire/vertical (isotropic);
+                  a 3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or
+                  takeoff-angle modelling, and the fast heuristic ignores it.
+                </span>
+              </div>
             </div>
           </fieldset>
           )}

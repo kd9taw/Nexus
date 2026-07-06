@@ -222,6 +222,13 @@ pub struct Settings {
     /// the heuristic in the factory, so old configs can never break.
     #[serde(default = "default_prop_engine")]
     pub prop_engine: String,
+    /// Antenna gains (dBi) for the P.533 engine's link budget — TX and RX.
+    /// 0 = isotropic (the honest default for a wire). Plain dB adders to the
+    /// modelled signal; the heuristic engine ignores them.
+    #[serde(default)]
+    pub ant_tx_gain_dbi: f64,
+    #[serde(default)]
+    pub ant_rx_gain_dbi: f64,
     /// Opt-in: track a gentle weekly "on the air" streak in the Journey view.
     /// Off by default (the achievement layer is opt-in, never coercive).
     #[serde(default)]
@@ -606,6 +613,8 @@ impl Default for Settings {
             tx_level: 0.9,
             station_power_w: None,
             prop_engine: default_prop_engine(),
+            ant_tx_gain_dbi: 0.0,
+            ant_rx_gain_dbi: 0.0,
             journey_streak_enabled: false,
             tx_watchdog_min: 6,
             tx_even: true,

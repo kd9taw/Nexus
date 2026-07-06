@@ -132,6 +132,11 @@ export async function getKc2gMuf(): Promise<MufStation[]> {
   return invoke<MufStation[]>('get_kc2g_muf')
 }
 
+/** Polar-cap absorption (GOES protons → D-RAP2). Null = no proton data yet. */
+export async function getPca(): Promise<import('./types').PcaView | null> {
+  return invoke<import('./types').PcaView | null>('get_pca')
+}
+
 /** The 60 s X-ray fast lane — the freshest GOES long-band flux, so a flare's
  * onset reaches the map + alert in ~1 min instead of the 5-min prop cadence. */
 export async function getXrayNow(): Promise<import('./types').XrayNow> {

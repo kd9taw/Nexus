@@ -12,6 +12,7 @@ pub mod eqsl;
 pub mod kc2g;
 pub mod lotw;
 pub mod pota;
+pub mod protons;
 pub mod pskreporter;
 pub mod qrz;
 pub mod solar_cycle;
