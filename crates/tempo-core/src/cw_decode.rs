@@ -183,9 +183,10 @@ pub fn skim_cw(samples: &[f32], sr: f32, lo_hz: u32, hi_hz: u32, step_hz: u32) -
 }
 
 const CW_TRANSCRIPT_CAP: usize = 4000; // keep the tail; drop older text
-const CW_SPIKE_FRAC: f32 = 0.4; // reject marks shorter than 0.4·dit as impulse noise
-                                // The per-mark SNR gate (a real element's peak must clear the noise floor) + the presence
-                                // gate are now operator-scaled — see CwStreamDecoder::snr_mult / present_mult (sensitivity).
+                                       // Every noise gate is operator-scaled by the sensitivity slider — the Schmitt keying
+                                       // rails (hi_frac/lo_frac), the sub-dit spike fraction (spike_frac), the per-mark SNR +
+                                       // presence multipliers (snr_mult/present_mult), and the Morse-timing plausibility
+                                       // squelch (timing_plausible). 0.5 = the historical fixed behavior.
 
 /// Streaming, stateful CW decoder — the persistent-transcript sibling of [`decode_cw`].
 ///
@@ -273,6 +274,40 @@ impl CwStreamDecoder {
         4.0 - 2.0 * self.sensitivity
     }
 
+    /// Schmitt upper-rail fraction of the AGC span: 0→0.85 (strict) · 0.5→0.60
+    /// (the historical fixed rail) · 1→0.35 (loose). THIS is the gate that
+    /// actually bites on a noisy band: the noise floor follower rides the
+    /// envelope MINIMUM, so against real band noise the peak/floor ratio dwarfs
+    /// the snr/present multipliers and they saturate at every slider position —
+    /// the operator-visible effect must come from how much of the peak−floor
+    /// span a mark must climb before it keys.
+    fn hi_frac(&self) -> f32 {
+        0.85 - 0.5 * self.sensitivity
+    }
+
+    /// Schmitt lower rail rides 0.20 below the upper (hysteresis width unchanged).
+    fn lo_frac(&self) -> f32 {
+        self.hi_frac() - 0.20
+    }
+
+    /// Sub-dit spike-rejection fraction: 0→0.55 (strict) · 0.5→0.40 (the historical
+    /// CW_SPIKE_FRAC) · 1→0.25 (loose). Noise storms are made of barely-dit marks;
+    /// the strict end simply refuses them.
+    fn spike_frac(&self) -> f32 {
+        0.55 - 0.3 * self.sensitivity
+    }
+
+    /// Morse-timing plausibility half-width: real keying holds dah ≈ 3×dit. A noise
+    /// storm drags one tracker toward spike length while the other lags → the ratio
+    /// leaves the physical band, and characters emitted in that state are muted.
+    /// Band = [3/k, 3k]: 0→k 1.6 (strict) · 0.5→k 3.0 (permissive ≈ historical) ·
+    /// 1→k 5.8 (anything goes).
+    fn timing_plausible(&self) -> bool {
+        let k = 1.6 + 2.8 * self.sensitivity;
+        let ratio = self.dah_avg / self.dit_avg.max(1e-6);
+        (3.0 / k..=3.0 * k).contains(&ratio)
+    }
+
     /// Retune to a new marker pitch. No-op if unchanged; otherwise resets all state +
     /// transcript (the old text belonged to a different signal) but keeps the operator's
     /// sensitivity setting.
@@ -327,8 +362,8 @@ impl CwStreamDecoder {
             // fifth of the window, which truncated the first character into a dit).
             let span = (self.peak - self.noise).max(0.0);
             self.present = self.peak >= self.noise * self.present_mult() && span > 1e-9;
-            self.hi_thresh = self.noise + 0.60 * span; // Schmitt upper rail
-            self.lo_thresh = self.noise + 0.40 * span; // Schmitt lower rail (hysteresis band)
+            self.hi_thresh = self.noise + self.hi_frac() * span; // Schmitt upper rail
+            self.lo_thresh = self.noise + self.lo_frac() * span; // Schmitt lower rail (hysteresis)
             self.step(p);
             // Update the AGC: the peak attacks instantly and decays slowly (holds through
             // inter-character gaps); the noise floor drops instantly to a quieter hop and
@@ -369,7 +404,7 @@ impl CwStreamDecoder {
     }
 
     fn on_mark_end(&mut self) {
-        let spike_min = (CW_SPIKE_FRAC * self.dit_avg).max(1.0);
+        let spike_min = (self.spike_frac() * self.dit_avg).max(1.0);
         // Reject a mark that is too SHORT (impulse) OR too WEAK (its peak barely clears the
         // noise floor). The weak case kills the "E E E…" storm the decoder otherwise emits
         // from band noise between signals — a real keyed element sits well above the floor.
@@ -400,10 +435,15 @@ impl CwStreamDecoder {
 
     fn on_gap_tick(&mut self) {
         let g = self.space_run as f32;
-        // Inter-character gap (≈3 dit): the symbol is complete → decode + emit it.
+        // Inter-character gap (≈3 dit): the symbol is complete → decode + emit it —
+        // unless the tracked timing is outside plausible Morse (the storm squelch;
+        // scaled by the sensitivity slider). The trackers keep adapting either way,
+        // so a real sender re-opens the gate within a few elements.
         if !self.flushed_char && !self.sym.is_empty() && g >= 2.0 * self.dit_avg {
-            if let Some(c) = morse_to_char(&self.sym) {
-                self.push_char(c);
+            if self.timing_plausible() {
+                if let Some(c) = morse_to_char(&self.sym) {
+                    self.push_char(c);
+                }
             }
             self.sym.clear();
             self.flushed_char = true;
@@ -558,6 +598,71 @@ mod tests {
             .collect();
         d2.push(&steady);
         assert_eq!(d2.transcript(), "");
+    }
+
+    /// Static-crash storm: the tone randomly keyed with sub-dit-to-dit-scale
+    /// bursts — the classic "ton of false characters" band condition.
+    fn crash_storm(secs: f32) -> Vec<f32> {
+        let mut seed = 0x2545F4914F6CDD1Du64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 40) as f32 / 16_777_216.0
+        };
+        let n = (SR * secs) as usize;
+        let mut audio = vec![0.0f32; n];
+        let mut i = 0usize;
+        while i < n {
+            let on = (SR * (0.004 + 0.05 * rnd())) as usize; // 4–54 ms burst
+            let off = (SR * (0.01 + 0.08 * rnd())) as usize; // 10–90 ms gap
+            let amp = 0.3 + 0.7 * rnd();
+            for j in 0..on.min(n - i) {
+                audio[i + j] =
+                    amp * (2.0 * std::f32::consts::PI * PITCH * (i + j) as f32 / SR).sin();
+            }
+            i += on + off;
+        }
+        audio
+    }
+
+    fn storm_glyphs(sens: f32) -> usize {
+        let mut d = CwStreamDecoder::new(SR, PITCH);
+        d.set_sensitivity(sens);
+        d.push(&crash_storm(12.0));
+        d.transcript()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .count()
+    }
+
+    #[test]
+    fn sensitivity_slider_visibly_gates_a_noise_storm() {
+        // The operator-reported bug: sliding the CW sensitivity did NOTHING to a
+        // false-character storm (all gates saturated against the min-following
+        // noise floor). The slider now drives the Schmitt rails, the spike gate,
+        // and the timing-plausibility squelch — each end must be VISIBLY
+        // different on the same storm.
+        let strict = storm_glyphs(0.0);
+        let default = storm_glyphs(0.5);
+        let loose = storm_glyphs(1.0);
+        assert!(
+            strict * 2 < default,
+            "strict must at least halve the storm: strict={strict} default={default}"
+        );
+        assert!(
+            default < loose,
+            "loose must admit more than default: default={default} loose={loose}"
+        );
+    }
+
+    #[test]
+    fn strict_sensitivity_still_copies_clean_cw() {
+        // Turning the slider all the way down must never break solid copy.
+        let mut d = CwStreamDecoder::new(SR, PITCH);
+        d.set_sensitivity(0.0);
+        d.push(&morse_audio("CQ DX DE W1ABC", 22, 0.6));
+        assert_eq!(d.transcript().trim(), "CQ DX DE W1ABC");
     }
 
     #[test]
