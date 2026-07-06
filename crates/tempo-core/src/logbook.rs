@@ -54,6 +54,10 @@ pub struct QsoRecord {
     /// accepted for DXCC/WAZ/WPX/WAS, so award counting (DXCC, Challenge, …) must
     /// use this — not [`confirmed`](Self::confirmed) — or it over-counts.
     pub award_confirmed: bool,
+    /// WHICH channel(s) confirmed (the per-source truth behind the two booleans).
+    /// May be all-false on legacy in-memory records whose sync predates the
+    /// split; the ADIF writer keeps a best-guess fallback for those.
+    pub qsl_rcvd: QslRcvd,
     /// Awards credit has been **granted** (ARRL credited it) — normalized ADIF
     /// award codes ("DXCC", "DXCC_BAND", "WAS"…), uppercased + sorted + deduped.
     /// Distinct from `award_confirmed`: a confirmation you hold vs credit you've
@@ -72,6 +76,41 @@ pub struct QsoRecord {
     /// for POTA, `MY_SOTA_REF`/`SOTA_REF` for SOTA), so exports upload cleanly to
     /// pota.app / the SOTA database. Default all-`None`.
     pub ota: Ota,
+}
+
+/// Per-channel INBOUND confirmation state — which source(s) actually confirmed
+/// this QSO. The derived [`QsoRecord::confirmed`]/[`QsoRecord::award_confirmed`]
+/// booleans stay for cheap consumption, but THIS is the truth they derive from:
+/// collapsing to two bools was lossy (the writer used to re-emit a paper-card
+/// confirmation as `LOTW_QSL_RCVD`, silently rewriting the operator's QSL
+/// history on every save).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QslRcvd {
+    /// Paper/bureau/direct card (ADIF `QSL_RCVD`). Award-eligible.
+    pub card: bool,
+    /// Logbook of The World (ADIF `LOTW_QSL_RCVD`). Award-eligible.
+    pub lotw: bool,
+    /// eQSL.cc (ADIF `EQSL_QSL_RCVD`). NOT award-eligible for DXCC/WAZ/WPX/WAS.
+    pub eqsl: bool,
+}
+
+impl QslRcvd {
+    /// Any channel confirmed.
+    pub fn any(self) -> bool {
+        self.card || self.lotw || self.eqsl
+    }
+
+    /// Award-eligible (LoTW or paper — never eQSL).
+    pub fn award(self) -> bool {
+        self.card || self.lotw
+    }
+
+    /// Monotonic per-source merge (confirmations only ever add).
+    pub fn merge(&mut self, inc: QslRcvd) {
+        self.card |= inc.card;
+        self.lotw |= inc.lotw;
+        self.eqsl |= inc.eqsl;
+    }
 }
 
 /// Parks/Summits On The Air tags on a contact: your activation (`my_*`) and/or the
@@ -189,6 +228,7 @@ impl Logbook {
             Some(old) => {
                 rec.confirmed = old.confirmed;
                 rec.award_confirmed = old.award_confirmed;
+                rec.qsl_rcvd = old.qsl_rcvd;
                 rec.credit_granted = old.credit_granted.clone();
                 rec.credit_submitted = old.credit_submitted.clone();
                 rec.upload = old.upload.clone();
@@ -517,9 +557,21 @@ pub fn adif_record(r: &QsoRecord) -> String {
     if let Some(p) = r.tx_power {
         out.push_str(&field("TX_PWR", &format!("{p}")));
     }
-    // Preserve award-eligibility on round-trip: award-confirmed → LoTW; a
-    // confirmation that ISN'T award-eligible (eQSL-only) → eQSL.
-    if r.award_confirmed {
+    // Emit each confirming channel FAITHFULLY (the old two-bool collapse
+    // rewrote paper cards as LOTW_QSL_RCVD on every save). Legacy in-memory
+    // records (bools set, per-source empty) keep the old best-guess emission
+    // so their round-trip is unchanged until a sync refreshes them.
+    if r.qsl_rcvd.any() {
+        if r.qsl_rcvd.card {
+            out.push_str(&field("QSL_RCVD", "Y"));
+        }
+        if r.qsl_rcvd.lotw {
+            out.push_str(&field("LOTW_QSL_RCVD", "Y"));
+        }
+        if r.qsl_rcvd.eqsl {
+            out.push_str(&field("EQSL_QSL_RCVD", "Y"));
+        }
+    } else if r.award_confirmed {
         out.push_str(&field("LOTW_QSL_RCVD", "Y"));
     } else if r.confirmed {
         out.push_str(&field("EQSL_QSL_RCVD", "Y"));
@@ -664,10 +716,15 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         })
         .unwrap_or((0, 0, 0));
     let rcvd = |k: &str| f.get(k).is_some_and(|v| v.eq_ignore_ascii_case("Y"));
-    // Any confirmation (incl. eQSL) for general display...
-    let confirmed = rcvd("QSL_RCVD") || rcvd("LOTW_QSL_RCVD") || rcvd("EQSL_QSL_RCVD");
-    // ...but only LoTW + paper count toward DXCC/WAZ/WPX/WAS awards (NOT eQSL).
-    let award_confirmed = rcvd("QSL_RCVD") || rcvd("LOTW_QSL_RCVD");
+    // Per-source truth first; the two consumption booleans derive from it
+    // (any-channel for display, LoTW+paper for award counting — never eQSL).
+    let qsl_rcvd = QslRcvd {
+        card: rcvd("QSL_RCVD"),
+        lotw: rcvd("LOTW_QSL_RCVD"),
+        eqsl: rcvd("EQSL_QSL_RCVD"),
+    };
+    let confirmed = qsl_rcvd.any();
+    let award_confirmed = qsl_rcvd.award();
     let credit_granted = f
         .get("CREDIT_GRANTED")
         .map(|s| parse_credit(s))
@@ -780,6 +837,7 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         time_off_unix,
         confirmed,
         award_confirmed,
+        qsl_rcvd,
         credit_granted,
         credit_submitted,
         upload,
@@ -869,6 +927,7 @@ mod tests {
             time_off_unix: None,
             confirmed: false,
             award_confirmed: false,
+            qsl_rcvd: Default::default(),
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: Default::default(),
@@ -1310,5 +1369,51 @@ mod tests {
         assert_eq!(unix_from_ymdhms(2023, 11, 14, 22, 13, 20), 1_700_000_000);
         // epoch
         assert_eq!(datetime_utc(0), (1970, 1, 1, 0, 0, 0));
+    }
+
+    #[test]
+    fn per_source_qsl_round_trips_faithfully() {
+        // THE regression: a paper-card confirmation must survive a save/load
+        // cycle AS a card — the old writer re-emitted it as LOTW_QSL_RCVD.
+        let card = "<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<QSL_RCVD:1>Y<EOR>\n";
+        let mut lb = Logbook::new();
+        lb.import_adif(card);
+        let r = &lb.records()[0];
+        assert!(r.qsl_rcvd.card && !r.qsl_rcvd.lotw && !r.qsl_rcvd.eqsl);
+        assert!(r.award_confirmed && r.confirmed);
+        let out = lb.adif();
+        assert!(out.contains("<QSL_RCVD:1>Y"), "card stays a card: {out}");
+        assert!(
+            !out.contains("LOTW_QSL_RCVD"),
+            "never rewritten as LoTW: {out}"
+        );
+
+        // Multi-channel: LoTW + eQSL both emit; no card is fabricated.
+        let both =
+            "<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<LOTW_QSL_RCVD:1>Y<EQSL_QSL_RCVD:1>Y<EOR>\n";
+        let mut lb2 = Logbook::new();
+        lb2.import_adif(both);
+        let out2 = lb2.adif();
+        assert!(out2.contains("<LOTW_QSL_RCVD:1>Y") && out2.contains("<EQSL_QSL_RCVD:1>Y"));
+        assert!(
+            !out2.contains("<QSL_RCVD:1>Y"),
+            "no fabricated card: {out2}"
+        );
+    }
+
+    #[test]
+    fn legacy_bools_without_sources_keep_the_old_emission() {
+        // A record whose sync predates the per-source split (bools set, sources
+        // empty) must round-trip exactly as before until a sync refreshes it.
+        let mut r = rec("K2DEF", "40m", 1_700_000_000);
+        r.confirmed = true;
+        r.award_confirmed = true;
+        let mut lb = Logbook::new();
+        lb.add(r);
+        let out = lb.adif();
+        assert!(
+            out.contains("<LOTW_QSL_RCVD:1>Y"),
+            "legacy best-guess kept: {out}"
+        );
     }
 }

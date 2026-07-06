@@ -922,6 +922,7 @@ mod tests {
             time_off_unix: None,
             confirmed: false,
             award_confirmed: false,
+            qsl_rcvd: Default::default(),
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: Default::default(),

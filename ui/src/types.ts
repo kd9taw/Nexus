@@ -730,6 +730,9 @@ export interface LoggedQso {
   confirmed: boolean
   /** Award-eligible confirmation (LoTW or paper only — eQSL excluded). */
   awardConfirmed: boolean
+  /** WHICH channel(s) confirmed — per-source truth behind the booleans
+   * (all-false on legacy records whose sync predates the split). */
+  qslRcvd?: { card: boolean; lotw: boolean; eqsl: boolean }
   /** Awards credit granted by ARRL (normalized ADIF codes, e.g. "DXCC"). */
   creditGranted?: string[]
   /** Awards credit applied/submitted but not yet granted. */

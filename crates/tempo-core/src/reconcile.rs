@@ -132,6 +132,9 @@ pub fn reconcile(local: &mut [QsoRecord], incoming: &[QsoRecord]) -> ReconcileSu
                     rec.confirmed = true;
                     sum.newly_confirmed += 1;
                 }
+                // Per-source truth merges monotonically alongside the derived
+                // booleans (which channel confirmed — LoTW vs card vs eQSL).
+                rec.qsl_rcvd.merge(inc.qsl_rcvd);
                 if merge_codes(&mut rec.credit_granted, &inc.credit_granted) {
                     sum.newly_credited += 1;
                 }
@@ -270,6 +273,7 @@ mod tests {
             time_off_unix: None,
             confirmed: false,
             award_confirmed: false,
+            qsl_rcvd: Default::default(),
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: Default::default(),

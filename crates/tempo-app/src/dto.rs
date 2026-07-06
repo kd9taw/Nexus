@@ -615,6 +615,10 @@ pub struct LoggedQso {
     /// the award counts; the UI can distinguish award-grade from eQSL-only.
     #[serde(default)]
     pub award_confirmed: bool,
+    /// WHICH channel(s) confirmed — the per-source truth behind the booleans
+    /// (all-false on legacy records whose sync predates the split).
+    #[serde(default)]
+    pub qsl_rcvd: QslRcvdDto,
     /// Awards credit GRANTED by ARRL (normalized ADIF codes, e.g. "DXCC").
     #[serde(default)]
     pub credit_granted: Vec<String>,
@@ -647,11 +651,25 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             when_unix: r.when_unix,
             confirmed: r.confirmed,
             award_confirmed: r.award_confirmed,
+            qsl_rcvd: QslRcvdDto {
+                card: r.qsl_rcvd.card,
+                lotw: r.qsl_rcvd.lotw,
+                eqsl: r.qsl_rcvd.eqsl,
+            },
             credit_granted: r.credit_granted,
             credit_submitted: r.credit_submitted,
             upload: r.upload.into(),
         }
     }
+}
+
+/// Per-channel inbound confirmation (mirrors tempo_core::logbook::QslRcvd).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QslRcvdDto {
+    pub card: bool,
+    pub lotw: bool,
+    pub eqsl: bool,
 }
 
 impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
@@ -675,6 +693,11 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             time_off_unix: None, // not carried on the DTO (like `ota`); set at log time / via ADIF
             confirmed: q.confirmed,
             award_confirmed: q.award_confirmed,
+            qsl_rcvd: tempo_core::logbook::QslRcvd {
+                card: q.qsl_rcvd.card,
+                lotw: q.qsl_rcvd.lotw,
+                eqsl: q.qsl_rcvd.eqsl,
+            },
             credit_granted: q.credit_granted,
             credit_submitted: q.credit_submitted,
             upload: q.upload.into(),

@@ -544,7 +544,27 @@ export function Logbook({
                 <span className="log-cell mono">{fmtReport(q.rstRcvd)}</span>
                 <span className="log-cell mono">{fmtUtc(q.whenUnix)}</span>
                 <span className="log-cell">
-                  {q.awardConfirmed ? (
+                  {q.qslRcvd && (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl) ? (
+                    // Per-source detail: which channel(s) actually confirmed.
+                    <span
+                      className={`log-qsl ${q.awardConfirmed ? 'ok' : 'eqsl'}`}
+                      title={[
+                        q.qslRcvd.lotw ? 'LoTW confirmed (award-eligible)' : null,
+                        q.qslRcvd.card ? 'Paper card received (award-eligible)' : null,
+                        q.qslRcvd.eqsl ? 'eQSL received (NOT DXCC/WAZ/WAS-eligible)' : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    >
+                      {[
+                        q.qslRcvd.lotw ? 'L' : null,
+                        q.qslRcvd.card ? 'C' : null,
+                        q.qslRcvd.eqsl ? 'E' : null,
+                      ]
+                        .filter(Boolean)
+                        .join('·')}
+                    </span>
+                  ) : q.awardConfirmed ? (
                     <span className="log-qsl ok" title="LoTW / paper — award-eligible">
                       ✓
                     </span>
