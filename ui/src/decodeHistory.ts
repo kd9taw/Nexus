@@ -61,7 +61,9 @@ export function passesFilter(d: DecodeRow, filter: DecodeFilter, rxOffsetHz: num
     case 'b4':
       return d.worked
     case 'new':
-      return Boolean(d.newDxcc || d.newGrid || (!d.worked && (d.isCq || d.directedToMe)))
+      // STRICTLY new ones (entity/grid) — a plain unworked CQ is not a "new one",
+      // and including it diluted the chaser's most-used filter into noise.
+      return Boolean(d.newDxcc || d.newGrid)
     default:
       return true
   }

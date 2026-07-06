@@ -11,21 +11,11 @@ import { dualStateLabel, kpImpact, sortInsights } from '../../propViz'
 import { buildChaseTargets, chaseSummaryLine } from '../../features/chase'
 import { buildChaseFeed, chaseFeedLine as feedSummary } from '../../features/chaseFeed'
 import { getoutSummary } from '../../features/getout'
-import type { NeedTag, PropagationSnapshot } from '../../types'
+import type { PropagationSnapshot } from '../../types'
 import type { PaneContext } from './paneContext'
 
-/** Need tag → the chip label/class the Needed board uses — ONE color language. */
-export const NEED_CHIP: Record<NeedTag, { label: string; cls: string }> = {
-  NewEntity: { label: 'NEW ONE', cls: 'entity' },
-  NewZone: { label: 'ZONE', cls: 'zone' },
-  NewBand: { label: 'BAND', cls: 'band' },
-  NewMode: { label: 'MODE', cls: 'mode' },
-  NewGrid: { label: 'GRID', cls: 'grid' },
-  Confirm: { label: 'CONFIRM', cls: 'confirm' },
-  Dxped: { label: 'DXPED', cls: 'dxped' },
-  Pota: { label: 'POTA', cls: 'pota' },
-  Sota: { label: 'SOTA', cls: 'sota' },
-}
+/** Need tag → the chip vocabulary (canonical record in features/needVisuals). */
+export { NEED_CHIP } from '../../features/needVisuals'
 
 export function provLabel(
   source: PropagationSnapshot['source'],

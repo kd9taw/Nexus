@@ -2239,6 +2239,8 @@ mod tests {
             rig_model: 1035,
             serial_port: "/dev/ttyUSB0".to_string(),
             baud: 38400,
+            rig_conn: "serial".to_string(),
+            rig_addr: String::new(),
             rigctld_port,
             broker_self_port,
             audio_in: String::new(),

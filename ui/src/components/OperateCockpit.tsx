@@ -26,6 +26,9 @@ import { OperateRoster } from './OperateRoster'
 import { TxPanel } from './TxPanel'
 
 interface Props {
+  /** Configured companion UDP listen address (Settings) — shown instead of a
+   * hardcoded :2237 so a moved WSJT-X port reads truthfully. */
+  companionAddr?: string
   snap: AppSnapshot
   theme: string
   /** Active mode/tier (authoritative from the snapshot's link). */
@@ -152,6 +155,7 @@ export function OperateCockpit({
   onLayoutMode,
   onPopOut,
   active = true,
+  companionAddr,
 }: Props) {
   const source = snap.radio.source
   const catOk = snap.radio.catOk
@@ -457,7 +461,7 @@ export function OperateCockpit({
             className="cockpit-source"
             role="group"
             aria-label="Signal source"
-            title={`Where decodes come from — ${snap.radio.sourceLabel || 'native engine'}. Native = Nexus decodes local audio; Companion = ride an upstream WSJT-X/JTDX/MSHV decode stream over UDP :2237.`}
+            title={`Where decodes come from — ${snap.radio.sourceLabel || 'native engine'}. Native = Nexus decodes local audio; Companion = ride an upstream WSJT-X/JTDX/MSHV decode stream over UDP ${companionAddr || '127.0.0.1:2237'}.`}
           >
             <button
               type="button"
@@ -473,14 +477,14 @@ export function OperateCockpit({
               className={`cs-opt${source === 'companion' ? ' active' : ''}`}
               aria-pressed={source === 'companion'}
               onClick={() => onSourceChange('companion')}
-              title="Companion — ride an existing WSJT-X / JTDX / MSHV decode stream over UDP :2237"
+              title={`Companion — ride an existing WSJT-X / JTDX / MSHV decode stream over UDP ${companionAddr || '127.0.0.1:2237'}`}
             >
               ⇄ Companion
             </button>
           </div>
           <span className="cockpit-source-label" title="Active decode source">
             {snap.radio.sourceLabel || 'Native'}
-            {source === 'companion' && ' · listening :2237'}
+            {source === 'companion' && ` · listening ${companionAddr || '127.0.0.1:2237'}`}
           </span>
           {/* DF readouts: type an exact audio offset and commit on Enter/blur
               (clamped to the 200–2900 Hz passband) — WSJT-X's Rx/Tx Hz spinners. */}

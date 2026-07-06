@@ -1,6 +1,7 @@
 import type { NeedTag, Station } from '../types'
 import { bearingLabel, distanceLabel } from '../grid'
 import { RarityGem } from './RarityGem'
+import { NEED_CHIP } from '../features/needVisuals'
 
 interface Props {
   station: Station
@@ -15,18 +16,6 @@ interface Props {
   onCall: (call: string) => void
 }
 
-/** Short chip text + class suffix per need tier. */
-const NEED_CHIP: Record<NeedTag, { label: string; cls: string; title: string }> = {
-  NewEntity: { label: 'NEW', cls: 'entity', title: 'New DXCC entity — work it!' },
-  NewZone: { label: 'ZONE', cls: 'zone', title: 'New CQ zone' },
-  NewBand: { label: 'BAND', cls: 'band', title: 'New band-slot for this entity' },
-  NewMode: { label: 'MODE', cls: 'mode', title: 'New mode for this entity' },
-  NewGrid: { label: 'GRID', cls: 'grid', title: 'New grid square' },
-  Confirm: { label: 'CFM', cls: 'confirm', title: 'Worked — needs a confirmation' },
-  Dxped: { label: 'DXP', cls: 'dxped', title: 'Active announced DXpedition' },
-  Pota: { label: 'POTA', cls: 'pota', title: 'Live POTA activator on a park right now' },
-  Sota: { label: 'SOTA', cls: 'sota', title: 'Live SOTA activator on a summit right now' },
-}
 
 function lastHeardLabel(lastHeardSlot: number, currentSlot: number): string {
   const slots = currentSlot - lastHeardSlot
@@ -69,7 +58,7 @@ export function StationCard({
             <span className="station-call">{station.call}</span>
             {chip && (
               <span className={`need-chip need-${chip.cls}`} title={chip.title}>
-                {chip.label}
+                {chip.short}
               </span>
             )}
             {station.worked && <span className="b4-chip" title="Worked before">B4</span>}

@@ -553,14 +553,18 @@ impl Default for Settings {
             phone_mode: "ssb".to_string(),
             rptr_shift: "simplex".to_string(),
             ctcss_tone_hz: 0.0,
-            fd_class: "1D".to_string(),
+            fd_class: String::new(),
             fd_event: String::new(), // "" = arrlfd
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             n3fjp_host: String::new(),
             n3fjp_port: 1100,
             n1mm_addr: String::new(),
-            fd_section: "WI".to_string(),
+            // Deliberately EMPTY: a contest exchange goes on the air, so it must
+            // be the operator's own — set_mode refuses Field Day until both the
+            // class and section are set (a "WI" default sent wrong exchanges for
+            // every operator outside Wisconsin).
+            fd_section: String::new(),
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),

@@ -265,15 +265,20 @@ export default function App() {
     )
   }, [snap, area])
 
-  // Pop the Needed board out into its own window on every app load (the operator can
-  // close it). Once per launch, after the app is up + only if the feature is enabled;
-  // a no-op in the browser/mock (the Tauri command isn't there) and in a detached
-  // panel window (that renders DetachedPanel, not App).
+  // Pop the Needed board out into its own window at launch — but honor the
+  // operator's persisted choice (the board previously force-opened EVERY start
+  // with no opt-out; closing it each session was a standing annoyance). The
+  // toggle lives on the Needed panel header; default stays auto-open.
   const neededPoppedRef = useRef(false)
   useEffect(() => {
     if (neededPoppedRef.current || !snap) return
     if (features.enabled.needed === false) return
     neededPoppedRef.current = true
+    try {
+      if (localStorage.getItem('nexus.needed.autopop') === 'off') return
+    } catch {
+      /* storage blocked — keep the default behavior */
+    }
     void openPanelWindow('needed').catch(() => {})
   }, [snap, features.enabled])
 
@@ -1327,7 +1332,18 @@ export default function App() {
           <Logbook
             defaultBand={snap.radio.band}
             defaultFreqMhz={snap.radio.dialMhz}
-            defaultMode={snap.link.tier}
+            // Seed manual entries from the mode the operator was ACTUALLY running —
+            // a hand-logged SSB/CW QSO must not default to the digital codec tier
+            // (that silently wrote "FT8" on phone contacts and corrupted awards).
+            defaultMode={
+              lastOpModeRef.current === 'phone'
+                ? settings?.phoneMode?.toLowerCase() === 'fm'
+                  ? 'FM'
+                  : 'SSB'
+                : lastOpModeRef.current === 'cw'
+                  ? 'CW'
+                  : snap.link.tier
+            }
           />
         </main>
       )
@@ -1595,6 +1611,7 @@ export default function App() {
             as before) and display:none when hidden. */}
         <div className="operate-host" hidden={effectiveView !== 'operate'}>
           <OperateCockpit
+            companionAddr={settings?.companionAddr}
             snap={snap}
             theme={theme}
             tier={tier}

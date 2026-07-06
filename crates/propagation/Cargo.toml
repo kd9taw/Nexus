@@ -12,6 +12,13 @@ serde = { version = "1", features = ["derive"] }
 # offline); also by the live feed adapters.
 serde_json = { version = "1" }
 
+# SGP4/SDP4 orbital propagation for the satellite geometry (crate::sat). MIT,
+# pure Rust, validated against the AIAA-2006-6753 SGP4 test vectors. NOT
+# feature-gated: sat.rs is pure math consumed in the default build; only the
+# TLE *fetch* (live::tle) sits behind `live`. Lean features — we need the SGP4
+# math + TLE parse (std/alloc + chrono), not sgp4's optional serde.
+sgp4 = { version = "2.4", default-features = false, features = ["std"] }
+
 # Live feed adapters (NOAA SWPC + PSK Reporter) are opt-in so the pure-logic
 # intelligence stays dependency-light and unit-testable without a network.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"], optional = true }

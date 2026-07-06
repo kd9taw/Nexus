@@ -37,6 +37,7 @@ pub mod pca;
 pub mod pota;
 pub mod predict;
 pub mod pskr_mqtt;
+pub mod sat;
 pub mod solar_cycle;
 pub mod solar_wind;
 pub mod space_wx;
@@ -94,6 +95,7 @@ pub use pskr_mqtt::{
     parse_mqtt_report_payload as parse_pskr_mqtt_payload, region_topics as pskr_region_topics,
     LiveSpots, REGION_SPOT_CAP,
 };
+pub use sat::{passes as sat_passes, subpoint as sat_subpoint, tle_age_days, Pass, Tle};
 pub use solar_wind::SolarWind;
 pub use space_wx::{ScalarTrend, SpaceWxHistory, SpaceWxSample, TrendDir, WxTrend};
 pub use spot::Spot;

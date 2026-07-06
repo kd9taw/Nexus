@@ -20,18 +20,8 @@ import {
 import { pointRotator, readRotator } from '../api'
 import { pushToast } from '../toast'
 import { RarityGem } from './RarityGem'
+import { NEED_CHIP } from '../features/needVisuals'
 
-const NEED_CHIP: Record<NeedTag, { label: string; cls: string; title: string }> = {
-  NewEntity: { label: 'NEW ONE', cls: 'entity', title: 'All-time-new DXCC entity (ATNO)' },
-  NewZone: { label: 'ZONE', cls: 'zone', title: 'New CQ zone' },
-  NewBand: { label: 'BAND', cls: 'band', title: 'New band-slot for this entity' },
-  NewMode: { label: 'MODE', cls: 'mode', title: 'New mode for this entity' },
-  NewGrid: { label: 'GRID', cls: 'grid', title: 'New grid square' },
-  Confirm: { label: 'CONFIRM', cls: 'confirm', title: 'Worked — needs a confirmation' },
-  Dxped: { label: 'DXPED', cls: 'dxped', title: 'Active announced DXpedition — a limited-time window' },
-  Pota: { label: 'POTA', cls: 'pota', title: 'Live POTA activator — the row\'s call is on a park right now' },
-  Sota: { label: 'SOTA', cls: 'sota', title: 'Live SOTA activator — the row\'s call is on a summit right now' },
-}
 /** Defensive chip lookup — an unknown future tag renders visibly, never throws. */
 function chipFor(t: NeedTag): { label: string; cls: string; title: string } {
   return NEED_CHIP[t] ?? { label: String(t).toUpperCase(), cls: 'confirm', title: String(t) }
@@ -231,6 +221,14 @@ export function NeededPanel({
   })
   const [filters, setFilters] = useState<NeededFilters>(loadFilters)
   const [filtersOpen, setFiltersOpen] = useState(false)
+  // Persisted launch behavior for the detached window (read by App's auto-pop).
+  const [autopop, setAutopop] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('nexus.needed.autopop') !== 'off'
+    } catch {
+      return true
+    }
+  })
 
   const knownBands = useMemo(() => new Set(bandPlan.map((b) => b.band)), [bandPlan])
 
@@ -359,6 +357,24 @@ export function NeededPanel({
             ⧉ Pop out
           </button>
         )}
+        <label
+          className="np-autopop"
+          title="Open this board in its own window automatically when the app starts"
+        >
+          <input
+            type="checkbox"
+            checked={autopop}
+            onChange={(e) => {
+              setAutopop(e.target.checked)
+              try {
+                localStorage.setItem('nexus.needed.autopop', e.target.checked ? 'on' : 'off')
+              } catch {
+                /* storage blocked — applies this session only */
+              }
+            }}
+          />
+          <span>open at launch</span>
+        </label>
       </div>
 
       {/* Phone-source liveness — Phone needs come ONLY from the human DX-cluster node, so a

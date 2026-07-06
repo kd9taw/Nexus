@@ -63,3 +63,48 @@ export const NEED_PRECEDENCE: NeedCat[] = [
   'pota',
   'sota',
 ]
+
+/** The need-chip vocabulary — the ONE source for chip text/class/tooltip per
+ * NeedTag (this record used to be duplicated with drifting wording across
+ * StationCard, OperateRoster, NeededPanel, and the Connect paneFormat).
+ * `label` is the full board wording; `short` is for dense columns — the
+ * surface picks, the words stay in one place. */
+export const NEED_CHIP: Record<
+  import('../types').NeedTag,
+  { label: string; short: string; cls: string; title: string }
+> = {
+  NewEntity: {
+    label: 'NEW ONE',
+    short: 'NEW',
+    cls: 'entity',
+    title: 'All-time-new DXCC entity (ATNO)',
+  },
+  NewZone: { label: 'ZONE', short: 'ZONE', cls: 'zone', title: 'New CQ zone' },
+  NewBand: { label: 'BAND', short: 'BAND', cls: 'band', title: 'New band-slot for this entity' },
+  NewMode: { label: 'MODE', short: 'MODE', cls: 'mode', title: 'New mode for this entity' },
+  NewGrid: { label: 'GRID', short: 'GRID', cls: 'grid', title: 'New grid square' },
+  Confirm: {
+    label: 'CONFIRM',
+    short: 'CFM',
+    cls: 'confirm',
+    title: 'Worked — needs a confirmation',
+  },
+  Dxped: {
+    label: 'DXPED',
+    short: 'DXP',
+    cls: 'dxped',
+    title: 'Active announced DXpedition — a limited-time window',
+  },
+  Pota: {
+    label: 'POTA',
+    short: 'POTA',
+    cls: 'pota',
+    title: "Live POTA activator — the row's call is on a park right now",
+  },
+  Sota: {
+    label: 'SOTA',
+    short: 'SOTA',
+    cls: 'sota',
+    title: "Live SOTA activator — the row's call is on a summit right now",
+  },
+}

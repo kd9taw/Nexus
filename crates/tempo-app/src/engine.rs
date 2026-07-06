@@ -1934,6 +1934,17 @@ impl Engine {
     pub fn set_mode(&mut self, spec: &str) -> Result<(), String> {
         let mycall = self.settings.mycall.clone();
         let mygrid = self.settings.mygrid.clone();
+        // The Field Day exchange goes ON THE AIR — refuse to start the mode on a
+        // blank class/section rather than transmit somebody else's defaults.
+        if spec.starts_with("fieldday")
+            && (self.settings.fd_class.trim().is_empty()
+                || self.settings.fd_section.trim().is_empty())
+        {
+            return Err(
+                "Set your Field Day class and ARRL/RAC section in Settings first —                  they are the exchange you transmit"
+                    .to_string(),
+            );
+        }
         let exch = Exchange::new(&self.settings.fd_class, &self.settings.fd_section);
         let band = self.settings.band.clone();
         self.mode = match spec {
@@ -4784,6 +4795,12 @@ mod tests {
         // — a blank grid must NOT suppress the FD over.
         let mut e = Engine::new("W9XYZ", "", 0);
         e.set_tier(Tier::Ft8);
+        // But a BLANK class/section must refuse the mode — the exchange goes on
+        // the air, and the old "WI" default sent wrong exchanges outside Wisconsin.
+        assert!(
+            e.set_mode("fieldday-run").is_err(),
+            "blank FD exchange must not start"
+        );
         assert!(
             e.structured_tx_ready(false).is_ok(),
             "FD needs only a callsign"

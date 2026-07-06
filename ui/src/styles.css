@@ -925,6 +925,30 @@ button.nb-chip:hover {
   border-radius: 3px;
   padding: 1px 2px;
 }
+/* Needed board launch-behavior toggle. */
+.np-autopop {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+/* Logbook needs-confirmation filter chip. */
+.log-filter-chip {
+  font-size: var(--fs-label);
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.log-filter-chip.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 /* Annual DX marathon card. */
 .jy-marathon {
   display: flex;

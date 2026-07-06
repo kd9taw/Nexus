@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { NeedTag, Station } from '../types'
 import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, magneticDeg } from '../grid'
 import { getDeclination } from '../api'
+import { NEED_CHIP } from '../features/needVisuals'
 import { isIgnored } from '../txMessages'
 import { RarityGem } from './RarityGem'
 
@@ -36,17 +37,6 @@ const NEED_RANK: Record<NeedTag, number> = {
   Dxped: 0,
   Pota: 0,
   Sota: 0,
-}
-const NEED_CHIP: Record<NeedTag, { label: string; cls: string }> = {
-  NewEntity: { label: 'NEW', cls: 'entity' },
-  NewZone: { label: 'ZONE', cls: 'zone' },
-  NewBand: { label: 'BAND', cls: 'band' },
-  NewMode: { label: 'MODE', cls: 'mode' },
-  NewGrid: { label: 'GRID', cls: 'grid' },
-  Confirm: { label: 'CFM', cls: 'confirm' },
-  Dxped: { label: 'DXP', cls: 'dxped' },
-  Pota: { label: 'POTA', cls: 'pota' },
-  Sota: { label: 'SOTA', cls: 'sota' },
 }
 
 const snrClass = (snr: number) => (snr >= -10 ? 'good' : snr >= -18 ? 'ok' : 'weak')
@@ -196,7 +186,7 @@ export function OperateRoster({
                 }
               >
                 <span className="or-need">
-                  {chip && <span className={`need-chip need-${chip.cls}`}>{chip.label}</span>}
+                  {chip && <span className={`need-chip need-${chip.cls}`}>{chip.short}</span>}
                 </span>
                 <span className="or-call">
                   {s.call}

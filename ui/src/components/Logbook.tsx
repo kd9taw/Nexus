@@ -80,6 +80,9 @@ export function Logbook({
   const [qrzBusy, setQrzBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [search, setSearch] = useState('')
+  // Filter to contacts still lacking an award-eligible confirmation (the DX
+  // chaser's "who do I still need a card/LoTW from" view).
+  const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
   // arm the danger button — a deliberate, typed gate for an irreversible wipe.
   const [showPurge, setShowPurge] = useState(false)
@@ -273,11 +276,13 @@ export function Logbook({
   }
 
   const matchesSearch = (q: LoggedQso): boolean => {
+    if (needsConfirmOnly && q.awardConfirmed) return false
     const t = search.trim().toLowerCase()
     if (!t) return true
     return (
       q.call.toLowerCase().includes(t) ||
       (q.country?.toLowerCase().includes(t) ?? false) ||
+      (q.grid?.toLowerCase().includes(t) ?? false) ||
       q.band.toLowerCase().includes(t) ||
       q.mode.toLowerCase().includes(t) ||
       fmtUtc(q.whenUnix).toLowerCase().includes(t)
@@ -401,10 +406,19 @@ export function Logbook({
           className="settings-input log-search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search call / band / mode / date…"
+          placeholder="Search call / grid / band / mode / date…"
           autoComplete="off"
           spellCheck={false}
         />
+        <button
+          type="button"
+          className={`log-filter-chip${needsConfirmOnly ? ' active' : ''}`}
+          onClick={() => setNeedsConfirmOnly((v) => !v)}
+          aria-pressed={needsConfirmOnly}
+          title="Show only contacts without an award-eligible (LoTW/paper) confirmation"
+        >
+          needs confirmation
+        </button>
         {search.trim() && (
           <button type="button" className="log-search-clear" onClick={() => setSearch('')} title="Clear">
             ✕

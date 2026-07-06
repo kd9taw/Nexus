@@ -7,11 +7,11 @@
 //!
 //! Pure (no network, no clock — `now` is a parameter), like [`crate::reconcile`].
 //!
-//! **Phase 1a** (this module) covers the reasons derivable with NO schema change:
-//! confirmed-on-a-non-award-source (R3), field-mismatch via orphans (R4a/b/c),
-//! WAS-blocking missing STATE (R4d, US-family-gated), busted call (R6), possible
-//! duplicate (R7). The upload-state reasons (R1 never-uploaded, R9 bounced, the
-//! Confident R2) need a new `UploadState` field → Phase 1b.
+//! Covers: confirmed-on-a-non-award-source (R3), field-mismatch via orphans
+//! (R4a/b/c), WAS-blocking missing STATE (R4d, US-family-gated), busted call
+//! (R6), possible duplicate (R7), and the upload-state reasons (R1
+//! never-uploaded, R9 bounced, the Confident R2 partner-hasn't) via the
+//! `UploadState` field (the spec's Phase 1b — shipped).
 
 use crate::logbook::{QsoRecord, UploadOutcome};
 use crate::reconcile::{mode_class, OrphanConfirmation, ReconcileSummary};
