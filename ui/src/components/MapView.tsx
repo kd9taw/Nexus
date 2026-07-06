@@ -310,7 +310,7 @@ export function MapView({
   const [pathMode, setPathMode] = useState<'sp' | 'lp'>('sp')
   const [layers, setLayers] = useState(DEFAULT_LAYERS)
   const [size, setSize] = useState({ w: 0, h: 0 })
-  const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null)
+  const [hover, setHover] = useState<{ x: number; y: number; text: string; info?: boolean } | null>(null)
   // The hovered feature's call — drives the on-canvas hover ring (changes only
   // on target enter/leave, so it never redraws per mouse-move) — and whether a
   // drag is IN PROGRESS (cursor turns 'grabbing' only then; the resting cursor
@@ -769,15 +769,22 @@ export function MapView({
     // out over the oceans. Tells you at a glance which bands the ionosphere supports where.
     // Gated to the Expert layer panel + off by default; the on-map legend maps color→band.
     if (layers.muf.visible) {
-      // Live ionosonde MUF as DOTS colored by band (blue = low band, red = high band open) —
-      // real measured points, not an interpolated field, so it never washes the map. A
-      // back-facing globe point returns null from project() and is skipped.
+      // Live ionosonde MUF fixes, drawn as DIAMONDS colored by band (blue = low,
+      // red = high) — real measured points, not an interpolated field. The shape
+      // deliberately differs from the round station/spot dots: these are DATA
+      // markers (hover explains them), not clickable stations — round dots =
+      // stations you can click, diamonds = measurements.
       ctx.globalAlpha = layers.muf.opacity
       for (const s of mufStations) {
         const p = project(proj, { lat: s.lat, lon: s.lon })
         if (!p) continue
+        const r = 3.8
         ctx.beginPath()
-        ctx.arc(p[0], p[1], 3.2, 0, Math.PI * 2)
+        ctx.moveTo(p[0], p[1] - r)
+        ctx.lineTo(p[0] + r, p[1])
+        ctx.lineTo(p[0], p[1] + r)
+        ctx.lineTo(p[0] - r, p[1])
+        ctx.closePath()
         ctx.fillStyle = mufDotColor(s.muf)
         ctx.fill()
         ctx.lineWidth = 1
@@ -1242,10 +1249,13 @@ export function MapView({
   // Nearest interactive feature to a screen point. Priority: decoded stations
   // (richest data), then DXpedition markers, then live spots — so overlapping
   // pixels resolve to the most actionable thing. Each respects its layer toggle.
+  // Ionosonde MUF diamonds come LAST and are hover-info only (a measurement,
+  // not a station) — without a tooltip they read as "dots that won't click".
   type MapHit =
     | { kind: 'station'; d: number; s: Station; ll: LatLon }
     | { kind: 'dxped'; d: number; card: WorkableCard }
     | { kind: 'spot'; d: number; sp: MapSpot }
+    | { kind: 'muf'; d: number; muf: number }
   const hitTest = (mx: number, my: number): MapHit | null => {
     if (layers.stations.visible) {
       let best: MapHit | null = null
@@ -1270,6 +1280,17 @@ export function MapView({
         // Generous 10 px target on a ~3 px dot — small dots were genuinely
         // hard to hit (operator report).
         if (d < 10 && (!best || d < best.d)) best = { kind: 'spot', d, sp }
+      }
+      if (best) return best
+    }
+    if (layers.muf.visible && me && size.w > 0) {
+      const proj = makeProjection(kind, me, size.w, size.h, view)
+      let best: MapHit | null = null
+      for (const s of mufStations) {
+        const p = project(proj, { lat: s.lat, lon: s.lon })
+        if (!p) continue
+        const d = Math.hypot(p[0] - mx, p[1] - my)
+        if (d < 9 && (!best || d < best.d)) best = { kind: 'muf', d, muf: s.muf }
       }
       if (best) return best
     }
@@ -1298,6 +1319,9 @@ export function MapView({
       const c = hit.card
       return `${c.call} · ${c.entity} · ${c.need} on ${c.band} · ${c.likelihood}${c.liveConfirmed ? ' · live-confirmed' : ''}${workHint}`
     }
+    if (hit.kind === 'muf') {
+      return `Ionosonde · measured MUF ${hit.muf.toFixed(1)} MHz here (KC2G) — a data point, not a station`
+    }
     const sp = hit.sp
     const age = sp.ageSecs < 60 ? `${sp.ageSecs}s` : `${Math.round(sp.ageSecs / 60)}m`
     const freq = sp.freqMhz ? ` · ${sp.freqMhz.toFixed(4).replace(/\.?0+$/, '')} MHz` : ''
@@ -1307,7 +1331,15 @@ export function MapView({
   // Drag = spin the Globe / pan the flat maps; a press that doesn't travel = a
   // click (select a station). Wheel zooms (the native listener, below).
   const hitCall = (hit: MapHit | null): string | null =>
-    hit ? (hit.kind === 'station' ? hit.s.call : hit.kind === 'dxped' ? hit.card.call : hit.sp.call) : null
+    hit
+      ? hit.kind === 'station'
+        ? hit.s.call
+        : hit.kind === 'dxped'
+          ? hit.card.call
+          : hit.kind === 'spot'
+            ? hit.sp.call
+            : null // muf diamonds: info-only, no ring
+      : null
   /** Pointer event → CANVAS LAYOUT coords (the space dots are projected in).
    * The app's UI scale (`.app { zoom: var(--ui-zoom) }`) makes visual px ≠
    * layout px: clientX/getBoundingClientRect are VISUAL, while size/clientWidth
@@ -1335,7 +1367,7 @@ export function MapView({
     if (!d) {
       const [mx, my] = canvasXY(e)
       const hit = hitTest(mx, my)
-      setHover(hit ? { x: mx, y: my, text: hitText(hit) } : null)
+      setHover(hit ? { x: mx, y: my, text: hitText(hit), info: hit.kind === 'muf' } : null)
       setHoverKey(hitCall(hit)) // state only changes on target enter/leave
       return
     }
@@ -1473,7 +1505,7 @@ export function MapView({
               // Pointer over a feature → pointer (clickable); mid-drag → grabbing;
               // otherwise a NORMAL ARROW — the permanent grab-glove made precise
               // dot clicks feel impossible (operator report). Drag still spins/pans.
-              cursor: hover ? 'pointer' : dragging ? 'grabbing' : 'default',
+              cursor: hover ? (hover.info ? 'help' : 'pointer') : dragging ? 'grabbing' : 'default',
               touchAction: 'none',
             }}
             onPointerDown={onPointerDown}
