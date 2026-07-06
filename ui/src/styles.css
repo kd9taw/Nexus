@@ -813,6 +813,36 @@ button.nb-chip:hover {
   color: var(--text-faint);
   margin-top: 2px;
 }
+/* Chase star (WorkNowCard + calendar rows) — quiet until armed. */
+.wn-chase {
+  margin-left: var(--space-1);
+  padding: 0 var(--space-1);
+  background: none;
+  border: none;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.wn-chase:hover {
+  color: var(--text);
+}
+.wn-chase.active {
+  color: #f5a524; /* the chase star burns gold */
+}
+/* Best-shot details expander on the card's window line. */
+.wn-details {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-1);
+  background: none;
+  border: none;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.wn-details:hover {
+  color: var(--text);
+}
 
 /* DXpedition calendar */
 .dxped-calendar .cal-list {
@@ -2177,6 +2207,21 @@ button.nb-chip:hover {
 .muf-legend-title {
   font-weight: 600;
   color: var(--text-dim);
+}
+/* Layers-panel flare preview button — quiet inline affordance. */
+.flare-preview {
+  margin: 2px 0 var(--space-1);
+  padding: 1px var(--space-2);
+  font-size: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.flare-preview.active {
+  color: #ff8c3a;
+  border-color: #ff8c3a;
 }
 /* Live solar-flare readout (D-RAP layer) — top-left, warm accent, only rendered
    while a flare is actually degrading HF. */

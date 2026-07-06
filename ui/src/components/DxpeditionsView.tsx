@@ -3,11 +3,17 @@
 // band×hour likelihood heatmaps for planning), and a hand-off to the Connect map
 // ("show on map" → select the call there). The old standalone Propagation section
 // merged into Connect; the expedition pieces graduated to this dedicated section.
-import type { PropagationSnapshot, WorkableCard } from '../types'
+// "Your Window": the get_dxped_windows sweep (configured engine — P.533 when
+// selected) feeds each card's Best-shot line + expandable 24h×band grid, and the
+// ★ chase toggle arms the window-open alert (features/dxpedChase).
+import { useEffect, useState } from 'react'
+import type { DxpedWindow, PropagationSnapshot, WorkableCard } from '../types'
 import { StateBlock } from './StateBlock'
 import { WorkNowCard } from './prop/WorkNowCard'
 import { DxpedCalendar } from './prop/DxpedCalendar'
 import { modeClassOf } from '../features/needs'
+import { getDxpedWindows } from '../api'
+import { chasingSet, toggleChasing } from '../features/dxpedChase'
 
 interface Props {
   snap: PropagationSnapshot | null
@@ -41,6 +47,38 @@ function provenance(source: PropagationSnapshot['source'], asOf: number): { labe
 }
 
 export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Props) {
+  // "Your Window" data: server-cached climatology — a 10-min poll is generous.
+  const [windows, setWindows] = useState<Map<string, DxpedWindow>>(new Map())
+  useEffect(() => {
+    let live = true
+    let retry = 0
+    const load = () =>
+      getDxpedWindows()
+        .then((list) => {
+          if (!live) return
+          setWindows(new Map(list.map((w) => [w.call.toUpperCase(), w])))
+          // Cold start: the command answers [] until the first prop snapshot
+          // exists — retry once shortly instead of leaving the board bare for
+          // a whole poll cycle.
+          if (list.length === 0) retry = window.setTimeout(load, 45_000)
+        })
+        .catch(() => {})
+    load()
+    const id = window.setInterval(load, 600_000)
+    return () => {
+      live = false
+      window.clearInterval(id)
+      window.clearTimeout(retry)
+    }
+  }, [])
+  // Chase set — re-read after each toggle (localStorage is the source of truth
+  // so the flag survives restarts and is shared with the App-level alerter).
+  const [chased, setChased] = useState<Set<string>>(() => chasingSet())
+  const onToggleChase = (call: string) => {
+    toggleChasing(call)
+    setChased(chasingSet())
+  }
+
   if (!snap) {
     return (
       <div className="prop">
@@ -97,6 +135,9 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
               <div className="dx-card-wrap" key={`${c.call}-${c.band}-${i}`}>
                 <WorkNowCard
                   card={c}
+                  window={windows.get(c.call.toUpperCase())}
+                  chasing={chased.has(c.call.toUpperCase())}
+                  onToggleChase={onToggleChase}
                   onWork={
                     onWorkSpot
                       ? (card) =>
@@ -123,7 +164,12 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
         )}
       </section>
 
-      <DxpedCalendar entries={dxpeditions.upcoming} />
+      <DxpedCalendar
+        entries={dxpeditions.upcoming}
+        windows={windows}
+        chasing={chased}
+        onToggleChase={onToggleChase}
+      />
       {dxpeditions.upcoming.length === 0 && (
         <p className="dx-none">The forward calendar is empty — announced operations land here.</p>
       )}

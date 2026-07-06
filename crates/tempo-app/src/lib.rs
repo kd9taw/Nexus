@@ -105,6 +105,13 @@ impl AppState {
         self.store.set_identity(mycall, mygrid);
     }
 
+    /// Forget the heard-stations roster (band QSY: the old band's stations aren't
+    /// on the new frequency). Conversations, the inbox threads, the `*` band feed,
+    /// and the active peer are all preserved — only presence resets.
+    pub fn clear_stations(&mut self) {
+        self.inbox.roster.clear();
+    }
+
     /// Archive (hide) a conversation thread — drops it from the in-memory thread map
     /// and clears the active peer if it was selected. A deliberate operator action
     /// (the recents-list hide affordance); the `*` band feed re-creates on the next

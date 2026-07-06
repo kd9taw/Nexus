@@ -69,6 +69,7 @@ import {
   getNeedAlerts,
   getAllSpots,
   getXrayNow,
+  getDxpedWindows,
   setOperatingMode,
   workSpot,
   setLicenseClass,
@@ -76,8 +77,10 @@ import {
   pointRotatorAtCall,
 } from './api'
 import { processFlare, effectiveXray } from './flareAlert'
+import { processDxpedAlerts } from './features/dxpedChase'
+import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
-import type { PropagationSnapshot, FeedHealth, NeedTag, NeedAlert, SpotRow } from './types'
+import type { PropagationSnapshot, FeedHealth, NeedTag, NeedAlert, SpotRow, DxpedWindow, WorkableCard } from './types'
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
@@ -315,6 +318,12 @@ export default function App() {
   // Freshest fast-lane X-ray reading (60 s poller below) — merged with each prop
   // snapshot so the flare heads-up fires app-wide, whatever view is open.
   const xrayFastRef = useRef<number | null>(null)
+  // Chased-DXpedition alert inputs: the latest windows sweep (10-min poller
+  // below), the current QSO partner (kept fresh by the decode-alert effect),
+  // and the work action (assigned once handleWorkMapSpot exists).
+  const dxpedWindowsRef = useRef<Map<string, DxpedWindow> | null>(null)
+  const qsoPartnerRef = useRef<string | null>(null)
+  const workDxpedRef = useRef<((c: WorkableCard) => void) | null>(null)
   useEffect(() => {
     let live = true
     const OPENING_ALERT_COOLDOWN_MS = 10 * 60_000
@@ -325,6 +334,13 @@ export default function App() {
           setProp(p)
           // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup).
           processFlare(effectiveXray(xrayFastRef.current, p.spaceWx.xrayLong))
+          // Chased-expedition window alerts (dxpedChase.ts owns the dedup).
+          processDxpedAlerts(
+            p.dxpeditions.workableNow,
+            dxpedWindowsRef.current,
+            qsoPartnerRef.current,
+            (c) => workDxpedRef.current?.(c),
+          )
           // Loud one-shot alert when a band comes alive (the flagship moment).
           const tnow = Date.now()
           for (const o of p.openings) {
@@ -381,6 +397,24 @@ export default function App() {
         .catch(() => {})
     load()
     const id = setInterval(load, 60_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [])
+  // DXpedition best-shot windows for the chase alerts (server-cached climatology;
+  // 10 min is generous). Best-effort — without it the loud spotted-alert still
+  // works from the snapshot's cards; only the quiet modelled-only toast needs it.
+  useEffect(() => {
+    let live = true
+    const load = () =>
+      getDxpedWindows()
+        .then((list) => {
+          if (live) dxpedWindowsRef.current = new Map(list.map((w) => [w.call.toUpperCase(), w]))
+        })
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 600_000)
     return () => {
       live = false
       clearInterval(id)
@@ -625,6 +659,9 @@ export default function App() {
   // The QSO context keeps popups quiet while actively working someone / running CQ.
   useEffect(() => {
     if (!snap || !settings) return
+    const dxcall = snap.fieldDay?.dxcall ?? snap.qso?.dxcall ?? null
+    // Keep the chase-alert suppression in sync (the prop poller reads the ref).
+    qsoPartnerRef.current = dxcall
     processDecodes(
       snap.recentDecodes,
       settings,
@@ -635,7 +672,7 @@ export default function App() {
       // strings (CallingCq/AwaitExchange/AwaitConfirm/Done) gate identically.
       {
         state: snap.fieldDay?.state ?? snap.qso?.state ?? null,
-        dxcall: snap.fieldDay?.dxcall ?? snap.qso?.dxcall ?? null,
+        dxcall,
       },
     )
   }, [snap, settings, handleCall])
@@ -905,6 +942,12 @@ export default function App() {
     },
     [handleWorkNeeded],
   )
+  // The chase toast's "Work" action — assigned via ref because the prop poller
+  // (defined above, deps []) closes over its startup scope. Routes by the
+  // expedition's announced modes like every other DXpedition work path (a
+  // CW-only op must open the CW cockpit at the CW activity freq, not FT8).
+  workDxpedRef.current = (c: WorkableCard) =>
+    handleWorkMapSpot({ call: c.call, band: c.band, mode: dxpedWorkMode(c.modes), freqMhz: null })
 
   // Hunt a POTA/SOTA activator: tag the next QSO with the park/summit reference AND
   // QSY to the spot's exact frequency — the same atomic workSpot path as handleWorkNeeded.

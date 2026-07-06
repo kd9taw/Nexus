@@ -84,4 +84,17 @@ describe('processDecodes QSO-aware quieting', () => {
     processDecodes([decode({ from: 'W1AW', directedToMe: true })], settings)
     expect(toasts).toHaveBeenCalledTimes(1)
   })
+
+  it('new-grid alerts are quiet: info toast, short, not prominent', () => {
+    processDecodes([decode({ from: 'K7XYZ', newGrid: true })], settings, undefined, {
+      state: 'Listening',
+      dxcall: null,
+    })
+    expect(toasts).toHaveBeenCalledTimes(1)
+    const [msg, kind, ttl, opts] = toasts.mock.calls[0]
+    expect(msg).toContain('New grid')
+    expect(kind).toBe('info')
+    expect(ttl).toBe(6000)
+    expect((opts as { prominent?: boolean } | undefined)?.prominent).toBeUndefined()
+  })
 })

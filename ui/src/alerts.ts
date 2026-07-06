@@ -146,10 +146,13 @@ export function processDecodes(
       })
       continue
     }
-    beep(BEEP_HZ[kind])
-    // Someone calling YOU is the most time-critical alert — make it loud and let it linger
-    // (the beep was firing but the toast vanished before you could find it). A new grid is
-    // prominent too; an opt-in CQ stays a quieter, shorter info toast.
+    // A new grid is common enough to be noise at full volume (operator report:
+    // "too chatty") — quiet info toast, no beep. The future grid-RARITY tiers
+    // are what earn loudness back for the rare ones.
+    if (kind !== 'newgrid') beep(BEEP_HZ[kind])
+    // Someone calling YOU is the most time-critical alert — make it loud and let
+    // it linger (the beep was firing but the toast vanished before you could
+    // find it). An opt-in CQ stays a quieter, shorter info toast.
     if (kind === 'mycall') {
       pushToast(`📢 ${who} is calling you`, 'success', 20000, {
         prominent: true,
@@ -157,8 +160,7 @@ export function processDecodes(
         actionLabel: 'Answer',
       })
     } else if (kind === 'newgrid') {
-      pushToast(`New grid: ${who}${where}`, 'success', 12000, {
-        prominent: true,
+      pushToast(`New grid: ${who}${where}`, 'info', 6000, {
         action: workAction,
         actionLabel: 'Work',
       })

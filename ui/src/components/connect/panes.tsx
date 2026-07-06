@@ -99,6 +99,14 @@ function renderSelection(c: PaneContext): ReactNode {
           {c.selStation.worked ? ' · worked before' : ''}
         </div>
       )}
+      {c.selDxped && c.selDxpedWindow?.best && (
+        <div className="cs-spot">
+          Best shot: {c.selDxpedWindow.best}
+          <span className="cp-engine">
+            {c.selDxpedWindow.engine === 'p533' ? 'P.533' : 'modelled'}
+          </span>
+        </div>
+      )}
       {c.onWorkSpot && (c.selSpot || c.selDxped) && (
         <button
           type="button"

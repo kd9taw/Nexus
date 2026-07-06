@@ -6,6 +6,7 @@ import type { MapIntent } from '../MapView'
 import type {
   AlertView,
   BandOutlook,
+  DxpedWindow,
   GettingOut,
   MapSpot,
   MufStation,
@@ -34,6 +35,8 @@ export interface PaneContext {
   selStation: Station | null
   selSpot: MapSpot | null
   selDxped: WorkableCard | null
+  /** The selected DXpedition's modelled best-shot window, when known. */
+  selDxpedWindow: DxpedWindow | null
   selGrid: string | null
   // outlook (API-fetched in ConnectView)
   pathPred: PathPrediction | null

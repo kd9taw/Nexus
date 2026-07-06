@@ -35,6 +35,12 @@ impl Roster {
         Self::default()
     }
 
+    /// Forget every heard station — a band QSY makes the old band's roster
+    /// stale (those stations aren't on the new frequency).
+    pub fn clear(&mut self) {
+        self.stations.clear();
+    }
+
     /// Update the roster from a decode heard at `slot`.
     pub fn observe(&mut self, d: &Decode, slot: u64) {
         let m = Msg::parse(&d.message);

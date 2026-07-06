@@ -250,6 +250,18 @@ export interface DxpedDashboard {
   active: string[]
   upcoming: CalendarEntry[]
 }
+
+/** One DXpedition's modelled contact windows from YOUR grid ("Your Window") —
+ * computed by the configured prediction engine (get_dxped_windows). */
+export interface DxpedWindow {
+  call: string
+  /** Which model produced it: "p533" → the badge shows P.533, else modelled. */
+  engine: string
+  /** One-line headline, e.g. "17m Good 0230–0430Z" (same format as CalendarEntry.best). */
+  best: string
+  /** Top bands' 24 h outlooks, best first — feeds LikelihoodHeatmap. */
+  outlook: BandOutlook[]
+}
 /** Real-time solar wind (DSCOVR) — the leading geomagnetic indicator (leads Kp/A). */
 export interface SolarWind {
   /** Bz (GSM), nT. Negative = southward = geoeffective. */

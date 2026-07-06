@@ -584,9 +584,12 @@ impl Engine {
     pub fn set_frequency(&mut self, dial_mhz: f64, band: &str, mode: &str) {
         // Band change invalidates the decode context: answering a HISTORY row from
         // the old band would target a station that isn't here and derive parity
-        // from the old band's slots. (In-band QSY keeps it — same activity.)
+        // from the old band's slots. The heard-stations roster goes with it —
+        // those stations aren't on the new band (operator report: stale roster
+        // entries lingered across QSY). (In-band QSY keeps both — same activity.)
         if !self.settings.band.eq_ignore_ascii_case(band) {
             self.clear_decode_context();
+            self.app.clear_stations();
         }
         self.settings.dial_mhz = dial_mhz;
         self.settings.band = band.to_string();
@@ -611,9 +614,10 @@ impl Engine {
         let mhz = hz as f64 / 1_000_000.0;
         self.settings.dial_mhz = mhz;
         if let Some(band) = crate::bandplan::band_for_dial(mhz) {
-            // Knob QSY across bands invalidates the decode context too.
+            // Knob QSY across bands invalidates the decode context + roster too.
             if !self.settings.band.eq_ignore_ascii_case(band) {
                 self.clear_decode_context();
+                self.app.clear_stations();
             }
             self.settings.band = band.to_string();
         }
@@ -5428,6 +5432,33 @@ mod tests {
         // Parity derives from the ANSWERED decode's slot (5 → odd ingest → their
         // audio slot 4/even → we TX on odd), not from the unrelated slot-9 decode.
         assert!(!e.tx_even(), "TX parity opposite the CALLER's period");
+    }
+
+    #[test]
+    fn band_change_clears_the_roster_but_in_band_qsy_keeps_it() {
+        // Operator report: after a band QSY the roster still showed the old
+        // band's stations — stale presence (they aren't on the new frequency).
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.ingest_decodes_for_test(&[dec_snr("CQ K1ABC FN42", -5)], 1);
+        assert!(!e.snapshot().stations.is_empty(), "heard station on roster");
+        // In-band QSY (same band label) keeps the roster — same activity.
+        let radio = e.snapshot().radio;
+        e.set_frequency(radio.dial_mhz + 0.002, &radio.band, &radio.sideband);
+        assert!(
+            !e.snapshot().stations.is_empty(),
+            "in-band QSY keeps roster"
+        );
+        // Cross-band QSY wipes it.
+        let target = if radio.band.eq_ignore_ascii_case("40m") {
+            "20m"
+        } else {
+            "40m"
+        };
+        e.set_frequency(7.074, target, &radio.sideband);
+        assert!(
+            e.snapshot().stations.is_empty(),
+            "cross-band QSY clears roster"
+        );
     }
 
     #[test]

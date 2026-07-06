@@ -317,13 +317,24 @@ export function MapView({
   // its absorption field breathes on the same 1 s cadence while a flare is live.)
   const [pulseTick, setPulseTick] = useState(0)
   const hasOpening = (prop?.openings?.length ?? 0) > 0
+  // Flare PREVIEW: release builds have no devtools, so the operator needs an
+  // in-app way to SEE the layer on a quiet sun. The Layers-panel button
+  // simulates an X2 for 60 s — map visuals only (chip says PREVIEW; no
+  // toasts/beeps ever fire from a preview, those watch the real feed).
+  const [flarePreview, setFlarePreview] = useState(false)
+  useEffect(() => {
+    if (!flarePreview) return
+    const id = setTimeout(() => setFlarePreview(false), 60_000)
+    return () => clearTimeout(id)
+  }, [flarePreview])
+  const xrayEff = flarePreview ? 2e-4 : xrayLong
   // D-RAP flare state. The visualization gates at M1 (R1) — the SAME onset as
   // the flare insight and toast, so the map never announces a "blackout" the
   // rest of the app calls quiet. (C-class flux is routine background at solar
   // max, adds little beyond normal daytime D-layer absorption, and would keep
   // the pulse tick + fx canvas running near-continuously.)
-  const flareHafNow = flareHafMhz(xrayLong ?? 0)
-  const flareActive = flareRScale(xrayLong ?? 0) >= 1
+  const flareHafNow = flareHafMhz(xrayEff ?? 0)
+  const flareActive = flareRScale(xrayEff ?? 0) >= 1
   // Interactive view: zoom (wheel), Globe rotation + flat-map pan (drag). Reset
   // when the projection changes (rotation/pan don't carry across projections).
   const DEFAULT_VIEW: MapView3 = { zoom: 1, rotate: null, panX: 0, panY: 0 }
@@ -702,7 +713,7 @@ export function MapView({
     // breathes on the 1 s pulse tick (faster = stronger flare). The animated
     // sun + rays live on the separate fx canvas (below). Drawn over the night
     // shading, under spots/stations, so real activity stays legible.
-    if (layers.flare.visible && flareActive && xrayLong) {
+    if (layers.flare.visible && flareActive && xrayEff) {
       const hw = Math.max(1, Math.floor(w / 3))
       const hh = Math.max(1, Math.floor(h / 3))
       const off =
@@ -713,11 +724,11 @@ export function MapView({
       if (fctx) {
         fctx.clearRect(0, 0, hw, hh)
         fctx.globalCompositeOperation = 'lighter'
-        const r = Math.max(1, flareRScale(xrayLong))
+        const r = Math.max(1, flareRScale(xrayEff))
         // Live time like the heat pulse — the 1 s pulseTick forces the redraws.
         const pulse = 0.8 + 0.2 * Math.sin((Date.now() * 2 * Math.PI) / flarePulsePeriodMs(r))
         const splat = Math.max(8, Math.min(w, h) * 0.03) / 3
-        for (const s of flareField(nowMs, xrayLong)) {
+        for (const s of flareField(nowMs, xrayEff)) {
           const p = project(proj, { lat: s.lat, lon: s.lon }) // null on the far side
           if (!p) continue
           const [cr, cg, cb] = flareColor(s.haf)
@@ -974,7 +985,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayLong, flareActive, flareHafNow])
+  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -988,7 +999,7 @@ export function MapView({
   useEffect(() => {
     const fx = fxRef.current
     const { w, h } = size
-    if (!fx || !me || w === 0 || h === 0 || !flarePulsing || !xrayLong) return
+    if (!fx || !me || w === 0 || h === 0 || !flarePulsing || !xrayEff) return
     const dpr = window.devicePixelRatio || 1
     fx.width = Math.round(w * dpr)
     fx.height = Math.round(h * dpr)
@@ -998,7 +1009,7 @@ export function MapView({
     const proj = makeProjection(kind, me, w, h, view)
     const [gcx, gcy] = proj.translate()
     const gR = proj.scale()
-    const r = Math.max(1, flareRScale(xrayLong))
+    const r = Math.max(1, flareRScale(xrayEff))
     const period = flarePulsePeriodMs(r)
     const dashSpeed = 40 + 45 * r // px/s the ray dashes stream at
     const KM_PER_DEG = 111.195
@@ -1139,7 +1150,7 @@ export function MapView({
     }
     raf = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(raf)
-  }, [me, kind, view, size, flarePulsing, xrayLong, flareOpacity])
+  }, [me, kind, view, size, flarePulsing, xrayEff, flareOpacity])
 
   if (!me) {
     return (
@@ -1411,11 +1422,12 @@ export function MapView({
           )}
           <MapLegend />
           {layers.muf.visible && <MufLegend />}
-          {flarePulsing && xrayLong != null && (
+          {flarePulsing && xrayEff != null && (
             <FlareChip
-              xrayLong={xrayLong}
+              xrayLong={xrayEff}
               hafMhz={flareHafNow}
-              trend={prop?.wxTrend?.xray.dir ?? null}
+              trend={flarePreview ? null : (prop?.wxTrend?.xray.dir ?? null)}
+              preview={flarePreview}
             />
           )}
           {prop && (
@@ -1442,6 +1454,19 @@ export function MapView({
                 />
                 {layers[k].label}
               </label>
+              {k === 'flare' && (
+                // The layer is event-driven (nothing draws below an M1 flare), so
+                // give the operator a way to SEE it on a quiet sun: a 60 s
+                // simulated X2, map visuals only, chip labeled PREVIEW.
+                <button
+                  type="button"
+                  className={`flare-preview${flarePreview ? ' active' : ''}`}
+                  onClick={() => setFlarePreview((p) => !p)}
+                  title="Simulate an X2 flare on the map for 60 s — visual preview only (no alerts). The layer otherwise draws nothing until a real M-class flare."
+                >
+                  {flarePreview ? '■ stop' : '☀ preview'}
+                </button>
+              )}
               <input
                 type="range"
                 min={0}
@@ -1497,10 +1522,14 @@ function FlareChip({
   xrayLong,
   hafMhz,
   trend,
+  preview = false,
 }: {
   xrayLong: number
   hafMhz: number
   trend: 'rising' | 'steady' | 'falling' | null
+  /** Simulated flux from the Layers-panel Preview button — labeled so simulated
+   * data can never be mistaken for a real event. */
+  preview?: boolean
 }) {
   const rec = flareRecoveryMin(xrayLong)
   const recTxt = rec ? ` (~${Math.round(rec)} min)` : ''
@@ -1509,7 +1538,7 @@ function FlareChip({
   return (
     <div className="flare-chip" role="status">
       ☀️ {flareClass(xrayLong)} flare · R{flareRScale(xrayLong)} · HF ≤{Math.round(hafMhz)} MHz
-      absorbed on dayside{phase}
+      absorbed on dayside{preview ? ' · PREVIEW' : phase}
     </div>
   )
 }

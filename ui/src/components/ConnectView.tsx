@@ -19,7 +19,8 @@ import type {
 } from '../types'
 import type { AlertView, MufStation, NoaaScalesView } from '../types'
 import type { Theme } from '../useTheme'
-import { getPathOutlook, getBandOutlook, getGettingOut, getSpaceWxScales, getKc2gMuf, getXrayNow } from '../api'
+import { getPathOutlook, getBandOutlook, getGettingOut, getSpaceWxScales, getKc2gMuf, getXrayNow, getDxpedWindows } from '../api'
+import type { DxpedWindow } from '../types'
 import { effectiveXray } from '../flareAlert'
 import { latLonToGrid } from '../grid'
 import { MapView, type MapIntent } from './MapView'
@@ -229,6 +230,24 @@ export function ConnectView({
   }, [])
   // The one flux value the map renders (dev-override > fast lane > snapshot).
   const xrayLong = effectiveXray(xrayNow, prop?.spaceWx.xrayLong)
+  // DXpedition best-shot windows (server-cached climatology) — the selection
+  // pane shows the selected expedition's line. 10-min poll is generous.
+  const [dxpedWindows, setDxpedWindows] = useState<Map<string, DxpedWindow>>(new Map())
+  useEffect(() => {
+    let live = true
+    const load = () =>
+      getDxpedWindows()
+        .then((list) => {
+          if (live) setDxpedWindows(new Map(list.map((w) => [w.call.toUpperCase(), w])))
+        })
+        .catch(() => {})
+    load()
+    const id = window.setInterval(load, 600_000)
+    return () => {
+      live = false
+      window.clearInterval(id)
+    }
+  }, [])
 
   // One context handed to every pane (built from the already-lifted state above).
   const ctx: PaneContext = {
@@ -244,6 +263,7 @@ export function ConnectView({
     selStation,
     selSpot,
     selDxped,
+    selDxpedWindow: selDxped ? (dxpedWindows.get(selDxped.call.toUpperCase()) ?? null) : null,
     selGrid,
     pathPred,
     bandOutlook,

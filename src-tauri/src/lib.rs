@@ -1172,6 +1172,137 @@ async fn get_band_outlook(
     Ok(propagation::band_outlook_ring(me, 9000.0, 8, now_unix(), &wx))
 }
 
+/// One DXpedition's modelled contact windows from the operator's QTH — the
+/// "Your Window" data for the cards + calendar (best-shot line + 24h×band grid).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DxpedWindow {
+    call: String,
+    /// Which model produced it ("p533" → the UI badge shows P.533).
+    engine: String,
+    /// One-line headline, e.g. "17m Good 0230–0430Z" (CalendarEntry.best format).
+    best: String,
+    /// Top bands' 24 h outlooks, best first — feeds LikelihoodHeatmap directly.
+    outlook: Vec<propagation::BandOutlook>,
+}
+
+/// Windows cache: (computed-at, params-key, value). The windows are month-scale
+/// climatology — recompute only when the params change (UTC day, grid, engine,
+/// power, SSN, target set) or 6 h pass. A p533 sweep of ~20 targets is seconds
+/// (release) and runs off the async core; cached serves are instant.
+static DXPED_WINDOWS: Mutex<Option<(std::time::Instant, String, Vec<DxpedWindow>)>> =
+    Mutex::new(None);
+
+/// Modelled best-contact windows for every active + upcoming DXpedition, from
+/// the operator's grid, using the CONFIGURED prediction engine (Settings ▸
+/// "Prediction engine" — p533 or heuristic; the `engine` field badges which).
+/// Deliberately a separate command from `get_propagation`: the dashboard builds
+/// synchronously inside the live snapshot fetch, and 10–30 p533 predictions
+/// would stall that path. Targets come from the cached snapshot's dashboard
+/// (positions recovered via bearing+distance — same entity-centroid fidelity
+/// the cards were built from). Empty until the first snapshot exists.
+#[tauri::command]
+async fn get_dxped_windows(
+    state: State<'_, SharedEngine>,
+    cache: State<'_, PropCache>,
+) -> Result<Vec<DxpedWindow>, String> {
+    const WINDOWS_TTL_SECS: u64 = 6 * 3600;
+    let (mygrid, prop_engine, station_power_w) = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        let st = eng.settings();
+        (st.mygrid.clone(), st.prop_engine.clone(), st.station_power_w)
+    };
+    let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
+        return Ok(Vec::new());
+    };
+    // Targets (call → latlon via bearing+distance) + space weather, both from the
+    // cached snapshot (the same values the dashboard itself was built from).
+    let (targets, wx) = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        let Some((_, s)) = guard.as_ref() else {
+            return Ok(Vec::new()); // no snapshot yet — the board is empty too
+        };
+        let mut seen = std::collections::HashSet::new();
+        let mut targets: Vec<(String, (f64, f64))> = Vec::new();
+        let cards = s
+            .dxpeditions
+            .workable_now
+            .iter()
+            .map(|c| (&c.call, c.bearing_deg, c.distance_km));
+        let cal = s
+            .dxpeditions
+            .upcoming
+            .iter()
+            .map(|e| (&e.call, e.bearing_deg, e.distance_km));
+        for (call, brg, km) in cards.chain(cal) {
+            if seen.insert(call.clone()) {
+                targets.push((
+                    call.clone(),
+                    propagation::geo::destination_point(me, brg as f64, km as f64),
+                ));
+            }
+        }
+        let wx = propagation::SpaceWx {
+            sfi: s.space_wx.sfi,
+            ssn: LAST_SSN.lock().ok().and_then(|g| *g),
+            kp: s.space_wx.kp,
+            a_index: s.space_wx.a_index,
+            xray_long: s.space_wx.xray_long,
+        };
+        (targets, wx)
+    };
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let day = now_unix() / 86_400;
+    let mut calls: Vec<&str> = targets.iter().map(|(c, _)| c.as_str()).collect();
+    calls.sort_unstable();
+    let key = format!(
+        "{day}|{mygrid}|{prop_engine}|{:?}|{:?}|{}",
+        station_power_w,
+        wx.ssn.map(|v| v.round() as i32),
+        calls.join(",")
+    );
+    if let Ok(g) = DXPED_WINDOWS.lock() {
+        if let Some((when, k, v)) = g.as_ref() {
+            if *k == key && when.elapsed().as_secs() < WINDOWS_TTL_SECS {
+                return Ok(v.clone());
+            }
+        }
+    }
+    use propagation::PathPredictor as _;
+    // Build the engine ONCE and sweep every target inside one spawn_blocking —
+    // the p533 CCIR-cell memo makes same-month targets amortize each other.
+    let eng = propagation::make_predictor(&prop_engine, Some(me), station_power_w);
+    let t = now_unix();
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        targets
+            .into_iter()
+            .map(|(call, dx)| {
+                let mut p = eng.predict(dx, t, &wx);
+                p.bands.truncate(4);
+                let best = p
+                    .bands
+                    .first()
+                    .map(|b| format!("{} {} {}", b.band, b.workability, b.window))
+                    .unwrap_or_default();
+                DxpedWindow {
+                    call,
+                    engine: p.engine,
+                    best,
+                    outlook: p.bands,
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Ok(mut g) = DXPED_WINDOWS.lock() {
+        *g = Some((std::time::Instant::now(), key, out.clone()));
+    }
+    Ok(out)
+}
+
 /// "Am I getting out?" — who is hearing the operator right now, from the live PSK
 /// Reporter / RBN firehose (spots where the operator is the TX side). Pure
 /// observed data — the most reassuring live answer a station can get.
@@ -5196,6 +5327,7 @@ pub fn run() {
             get_kc2g_muf,
             get_space_wx_scales,
             get_xray_now,
+            get_dxped_windows,
             get_feed_health,
             qsy_set_enabled,
             qsy_configure,
