@@ -2723,11 +2723,13 @@ button.nb-chip:hover {
   --bg-elev: #ffffff;
   --bg-elev-2: #f4f6f9;
   --panel: #ffffff;
-  --border: #d3dae3;
-  --border-soft: #e4e9ef;
+  /* Operator report: light-mode greys read washed-out — borders and dim text
+     run a step darker here than a naive inversion would give. */
+  --border: #c4cedb;
+  --border-soft: #d8dfe9;
   --text: #14202e;
-  --text-dim: #51607a;
-  --text-faint: #5f6c7e;
+  --text-dim: #46556e;
+  --text-faint: #57647a;
   --accent: #0d8ecf;
   --accent-ink: #ffffff;
   --bubble-mine: #0d8ecf;
@@ -2756,6 +2758,50 @@ button.nb-chip:hover {
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
   --shadow: 0 4px 14px rgba(30, 50, 80, 0.12);
+  /* Shared needed-palette, light inks (same hues as the dark pastels — the
+     chips/badges keep one color language, readable on white). The map is
+     unaffected: it carries its own hardcoded copies tuned to its basemap. */
+  --need-entity: #c2187f;
+  --need-zone: #7e22ce;
+  --need-band: #a16207;
+  --need-mode: #0e7490;
+  --need-grid: #047857;
+  --need-dxped: #0369a1;
+  --need-pota: #15803d;
+  --need-sota: #6d28d9;
+  --need-confirm: #64748b;
+}
+
+/* ---- LIGHT-MODE INK OVERRIDES ------------------------------------------
+   Dark-tuned pastel text/icon colors that sit on PAGE backgrounds (not on
+   solid colored chips) — each gets a same-hue ink readable on white. Scoped
+   strictly to the light theme; dark/amber are untouched. */
+[data-theme='light'] .wn-chase.active {
+  color: #9d6500; /* the chase star, gold ink */
+}
+[data-theme='light'] .lotw-mark {
+  color: #0369a1;
+}
+[data-theme='light'] .timesync.warn {
+  color: #8a6100;
+}
+[data-theme='light'] .rarity-gem.rare {
+  color: #9d6300;
+}
+[data-theme='light'] .rarity-gem.ultra {
+  color: #7e22ce;
+}
+[data-theme='light'] .decode-row.own-tx .decode-msg {
+  color: #7a5d00;
+}
+[data-theme='light'] .decode-row.newdxcc .decode-msg {
+  color: #b0004f;
+}
+[data-theme='light'] .decode-row.newgrid .decode-msg {
+  color: #96660a;
+}
+[data-theme='light'] .sat-star.on {
+  color: #96600a;
 }
 
 /* ---- AMBER-NIGHT (night-vision safe) ---- */
@@ -11206,7 +11252,7 @@ select.settings-input {
   border-color: var(--accent);
 }
 .sats-best-row.live {
-  border-color: var(--band-good);
+  border-color: var(--band-open);
 }
 .sats-best-row b {
   margin-right: 6px;
@@ -11243,7 +11289,7 @@ select.settings-input {
   background: var(--bg-elev);
 }
 .sats-sched tr.live .sat-count {
-  color: var(--band-good);
+  color: var(--band-open);
   font-weight: 700;
 }
 .sat-name {
@@ -11303,8 +11349,8 @@ select.settings-input {
   margin-left: 6px;
 }
 .sat-chip.alive {
-  color: var(--band-good);
-  border: 1px solid var(--band-good);
+  color: var(--band-open);
+  border: 1px solid var(--band-open);
 }
 .sat-chip.dead {
   color: var(--band-marginal);
@@ -11356,7 +11402,7 @@ select.settings-input {
   stroke-width: 1.5;
 }
 .sat-polar-aos {
-  fill: var(--band-good);
+  fill: var(--band-open);
 }
 .sat-polar-live {
   fill: #5eead4;
