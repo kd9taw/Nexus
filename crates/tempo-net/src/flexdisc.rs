@@ -57,12 +57,35 @@ pub fn parse_discovery(datagram: &[u8]) -> Option<FlexRadio> {
 }
 
 /// Listen on UDP 4992 for up to `secs` and return every distinct radio heard.
-/// Empty = nothing announced (no Flex powered up on this segment, or another
-/// app holds the port exclusively). `SO_REUSEADDR`-style sharing is attempted
-/// so running SmartSDR alongside doesn't always block us — but on Windows a
-/// non-sharing listener can still win; the UI wording covers that case.
+/// Empty = the port was bound fine but nothing announced (no Flex powered up
+/// on this segment).
+///
+/// The socket sets `SO_REUSEADDR` before binding: SmartSDR's own discovery
+/// listener (FlexLib) opts into sharing too, so a co-hosted SmartSDR and Nexus
+/// can both hear the broadcast — on Windows, sharing works only when BOTH
+/// sockets opt in. If the bind still fails because some non-sharing app holds
+/// 4992 exclusively, we return a distinctive AddrInUse error naming the likely
+/// culprit so the UI can show it verbatim instead of a raw os-error string.
 pub fn discover(secs: u64) -> std::io::Result<Vec<FlexRadio>> {
-    let sock = UdpSocket::bind(("0.0.0.0", 4992))?;
+    let raw = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    raw.set_reuse_address(true)?;
+    let addr: std::net::SocketAddr = ([0, 0, 0, 0], 4992).into();
+    raw.bind(&addr.into()).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "discovery port 4992 is held exclusively by another app (SmartSDR?) — \
+                 close it and retry, or type the radio's IP manually",
+            )
+        } else {
+            e
+        }
+    })?;
+    let sock: UdpSocket = raw.into();
     sock.set_read_timeout(Some(Duration::from_millis(400)))?;
     let deadline = Instant::now() + Duration::from_secs(secs.clamp(1, 10));
     let mut found: Vec<FlexRadio> = Vec::new();

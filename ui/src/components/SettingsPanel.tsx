@@ -1275,7 +1275,7 @@ export function SettingsPanel({
                           .then((radios) => {
                             if (radios.length === 0) {
                               pushToast(
-                                'No Flex announced itself in 3 s — is the radio on this network? (If SmartSDR is running here it can hold the discovery port.)',
+                                'No Flex announced itself in 3 s — is the radio powered up on this network?',
                                 'info',
                                 8000,
                               )
@@ -1324,8 +1324,8 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     host:port of the radio — a FlexRadio's IP on SmartSDR's port 4992, or a
                     remote rigctld. Nexus runs BESIDE SmartSDR as the digital brain: CAT
-                    follows SmartSDR's ACTIVE slice (perfect for single-slice digital;
-                    multi-slice targeting isn't supported), audio rides DAX.
+                    targets slice A (Hamlib's SmartSDR slice-A model — run your digital
+                    slice on A; other slices aren't targetable), audio rides DAX.
                   </span>
                 </label>
               )}
