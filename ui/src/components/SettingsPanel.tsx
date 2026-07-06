@@ -30,7 +30,7 @@ import { loadProfiles, saveProfile, deleteProfile, type Profile } from '../profi
 import { getConnectionLog, getCredentialsStatus } from '../api'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { discoverFlex } from '../api'
-import { findDaxDevices } from '../features/dax'
+import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
 import { LevelMeter } from './LevelMeter'
@@ -209,6 +209,7 @@ export function SettingsPanel({
   const [portsLoading, setPortsLoading] = useState(false)
   const [audioLoading, setAudioLoading] = useState(false)
   const [detected, setDetected] = useState<DetectedRig[]>([])
+  const [detectedFlex, setDetectedFlex] = useState<{ model: string; nickname: string; ip: string }[]>([])
   const [detecting, setDetecting] = useState(false)
   const [catTesting, setCatTesting] = useState(false)
   const [catResult, setCatResult] = useState<CatTestResult | null>(null)
@@ -220,7 +221,6 @@ export function SettingsPanel({
   // sentinel can never leak into the form (review catch: -1 in the payload
   // failed serde's u32 and rejected the ENTIRE settings save).
   // Find-my-Flex discovery (network rig section).
-  const [flexScanning, setFlexScanning] = useState(false)
   const [rotOther, setRotOther] = useState(false)
   const [rotCustom, setRotCustom] = useState('')
   const [lotwUsers, setLotwUsers] = useState<LotwUsersStatus | null>(null)
@@ -450,11 +450,22 @@ export function SettingsPanel({
   // Zero-config: scan connected USB radios.
   const onDetectRigs = async () => {
     setDetecting(true)
-    const rigs = await withErrorToast(() => detectRigs(), 'Radio detection failed')
+    // ONE detect for every radio kind (operator request: the USB-only scan
+    // could never see a Flex): USB enumeration + LAN discovery in parallel;
+    // either probe may fail without killing the other's results.
+    const [rigs, flexes] = await Promise.all([
+      withErrorToast(() => detectRigs(), 'USB radio detection failed'),
+      discoverFlex().catch((e) => {
+        pushToast(`Flex LAN scan: ${e instanceof Error ? e.message : e}`, 'info', 6000)
+        return []
+      }),
+    ])
+    setDetectedFlex(flexes)
     setDetecting(false)
     if (rigs) {
       setDetected(rigs)
-      if (rigs.length === 0) pushToast('No USB radios detected — plug one in, then Detect again.', 'info')
+      if (rigs.length === 0 && flexes.length === 0)
+        pushToast('No radios found — USB: plug in + power on; Flex: must be on this network.', 'info')
     }
   }
 
@@ -475,6 +486,27 @@ export function SettingsPanel({
     )
     pushToast(
       `Applied ${r.suggestedModelName ?? (r.product || 'radio')} on ${r.portName} — review + Save settings`,
+      'success',
+    )
+  }
+
+  // One-click apply a discovered Flex: network conn via SmartSDR CAT's default
+  // slice-A TCP port + the FLEX-6xxx dialect model (the WSJT-X-proven path).
+  const applyDetectedFlex = (f: { model: string; nickname: string; ip: string }) => {
+    markDirty()
+    setForm((prev) =>
+      prev
+        ? {
+            ...prev,
+            rigConn: 'network',
+            rigAddr: '127.0.0.1:5002',
+            rigModel: 2036,
+            rigModelName: 'FlexRadio FLEX-6xxx (SmartSDR CAT)',
+          }
+        : prev,
+    )
+    pushToast(
+      `Applied ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} via SmartSDR CAT (slice A, port 5002) — review + Save, then Test CAT. Second slice? Use port 60001.`,
       'success',
     )
   }
@@ -1177,8 +1209,24 @@ export function SettingsPanel({
                     {detecting ? 'Scanning…' : 'Detect my radio'}
                   </button>
                 </div>
-                {detected.length > 0 && (
+                {(detected.length > 0 || detectedFlex.length > 0) && (
                   <ul className="rig-detect-list">
+                    {detectedFlex.map((f, i) => (
+                      <li className="rig-detect" key={`flex-${f.ip}-${i}`}>
+                        <div className="rig-detect-main">
+                          <span className="rig-detect-name">
+                            {f.model}
+                            {f.nickname ? ` “${f.nickname}”` : ''} — network
+                          </span>
+                          <span className="rig-detect-meta">
+                            {f.ip} · via SmartSDR CAT on this PC (slice A, TCP 5002)
+                          </span>
+                        </div>
+                        <button type="button" className="settings-save" onClick={() => applyDetectedFlex(f)}>
+                          Use this
+                        </button>
+                      </li>
+                    ))}
                     {detected.map((r, i) => (
                       <li className="rig-detect" key={`${r.portName}-${i}`}>
                         <div className="rig-detect-main">
@@ -1216,7 +1264,8 @@ export function SettingsPanel({
                   </ul>
                 )}
                 <span className="settings-hint">
-                  Scans connected USB radios and fills the model, port, and sound device below. Review, then Save.
+                  One scan for everything: USB radios (fills model, port, sound device)
+                  AND FlexRadios on the network (fills the SmartSDR CAT config). Review, then Save.
                 </span>
               </div>
 
@@ -1256,70 +1305,22 @@ export function SettingsPanel({
               {form.rigConn === 'network' && (
                 <label className="settings-field">
                   <span className="settings-label">Network Address</span>
-                  <div className="settings-input-row">
-                    <input
-                      className="settings-input"
-                      type="text"
-                      value={form.rigAddr}
-                      placeholder="192.168.1.50:4992"
-                      onChange={(e) => update('rigAddr', e.target.value)}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                    <button
-                      type="button"
-                      className="settings-test-btn"
-                      disabled={flexScanning}
-                      onClick={() => {
-                        setFlexScanning(true)
-                        discoverFlex()
-                          .then((radios) => {
-                            if (radios.length === 0) {
-                              pushToast(
-                                'No Flex announced itself in 3 s — is the radio powered up on this network?',
-                                'info',
-                                8000,
-                              )
-                              return
-                            }
-                            const r = radios[0]
-                            // The WSJT-X-proven path: CAT rides the SmartSDR CAT
-                            // app on THIS PC (model 2036, 127.0.0.1:5004), never
-                            // the radio's own 4992 — Hamlib's direct native
-                            // backend is alpha and failed on a real 6400M.
-                            update('rigAddr', '127.0.0.1:5004')
-                            markDirty()
-                            setForm((prev) =>
-                              prev
-                                ? {
-                                    ...prev,
-                                    rigModel: 2036,
-                                    rigModelName: 'FlexRadio FLEX-6xxx (SmartSDR CAT)',
-                                  }
-                                : prev,
-                            )
-                            pushToast(
-                              `Found ${r.model}${r.nickname ? ` "${r.nickname}"` : ''} at ${r.ip}${radios.length > 1 ? ` (+${radios.length - 1} more — first taken)` : ''}. CAT set to SmartSDR CAT: open the SmartSDR CAT app, add a TCP port 5004, then Save + Test CAT.`,
-                              'success',
-                              12000,
-                            )
-                          })
-                          .catch((e) =>
-                            pushToast(
-                              `Flex scan failed: ${e instanceof Error ? e.message : e}`,
-                              'error',
-                            ),
-                          )
-                          .finally(() => setFlexScanning(false))
-                      }}
-                      title="Listen 3 s for a FlexRadio announcing itself on this network and fill its address (written to the published discovery format — not yet verified on real hardware)"
-                    >
-                      {flexScanning ? 'Scanning…' : 'Find my Flex'}
-                    </button>
-                  </div>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.rigAddr}
+                    placeholder="127.0.0.1:5002"
+                    onChange={(e) => update('rigAddr', e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
                   {(() => {
                     const dax = findDaxDevices(audio.input, audio.output)
-                    const paired = dax != null && form.audioIn === dax.input && form.audioOut === dax.output
+                    // Bootstrapper, not enforcer: once BOTH sides are any DAX
+                    // device (auto or hand-picked), stop offering to "fix" them
+                    // — re-pairing over a manual endpoint choice was reverting
+                    // the operator's working config (real-6400M report).
+                    const paired = isDaxPaired(form.audioIn, form.audioOut)
                     return dax && !paired ? (
                       <button
                         type="button"
@@ -1337,11 +1338,13 @@ export function SettingsPanel({
                   })()}
                   <span className="settings-hint">
                     host:port. For a Flex: the WSJT-X-proven path is the SmartSDR CAT app
-                    on THIS PC — add a TCP port in SmartSDR CAT (5004 by convention; 5002
-                    is DDUtil's), use 127.0.0.1:5004 with the FLEX-6xxx model, and audio
-                    rides DAX. (Direct-to-radio :4992 needs Hamlib's experimental native
-                    model and failed on real hardware — not recommended.) Other rigs: a
-                    remote rigctld's host:port works with their normal model.
+                    on THIS PC — its DEFAULT TCP port 5002 is directed at slice A, so
+                    127.0.0.1:5002 with the FLEX-6xxx model works out of the box; audio
+                    rides DAX. Multi-slice: SmartSDR CAT's per-slice ports are B=60001,
+                    C=60002, D=60003 — Nexus drives ONE slice, so enter the port of the
+                    slice you run digital on. (Direct-to-radio :4992 needs Hamlib's
+                    experimental native model and failed on real hardware.) Other rigs:
+                    a remote rigctld's host:port with their normal model.
                   </span>
                 </label>
               )}

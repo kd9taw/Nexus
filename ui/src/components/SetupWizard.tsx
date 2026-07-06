@@ -5,7 +5,7 @@ import type { FeatureId, View } from '../features/registry'
 import type { AudioDevices, CatTestResult, DetectedRig, Settings } from '../types'
 import { detectRigs, discoverFlex, getAudioDevices } from '../api'
 import { isValidGrid } from '../grid'
-import { findDaxDevices } from '../features/dax'
+import { findDaxDevices, isDaxPaired } from '../features/dax'
 
 /** What the wizard collects beyond the goal profiles: station identity + rig.
  * Only the fields the operator actually touched are set — App merges this into
@@ -91,8 +91,8 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
   const [audioOut, setAudioOut] = useState(() => settings?.audioOut ?? '')
   const [audio, setAudio] = useState<AudioDevices>({ input: [], output: [] })
   const [detected, setDetected] = useState<DetectedRig[] | null>(null)
+  const [detectedFlex, setDetectedFlex] = useState<{ model: string; nickname: string; ip: string }[]>([])
   const [detecting, setDetecting] = useState(false)
-  const [flexScanning, setFlexScanning] = useState(false)
   const [flexNote, setFlexNote] = useState<string | null>(null)
   const [catResult, setCatResult] = useState<CatTestResult | null>(null)
   const [catTesting, setCatTesting] = useState(false)
@@ -156,9 +156,16 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
 
   const runDetect = () => {
     setDetecting(true)
-    detectRigs()
-      .then((rigs) => setDetected(rigs))
-      .catch(() => setDetected([]))
+    // One scan, every radio kind: USB enumeration + Flex LAN discovery run
+    // together; either probe may fail without killing the other's results.
+    Promise.all([
+      detectRigs().catch(() => [] as DetectedRig[]),
+      discoverFlex().catch(() => []),
+    ])
+      .then(([rigs, flexes]) => {
+        setDetected(rigs)
+        setDetectedFlex(flexes)
+      })
       .finally(() => setDetecting(false))
   }
   const applyDetected = (r: DetectedRig) => {
@@ -173,29 +180,18 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
       setAudioOut(r.suggestedAudio)
     }
   }
-  const runFlexScan = () => {
-    setFlexScanning(true)
-    setFlexNote(null)
-    discoverFlex()
-      .then((radios) => {
-        if (radios.length === 0) {
-          setFlexNote('No Flex announced itself in 3 s — is the radio powered up on this network?')
-          return
-        }
-        const r = radios[0]
-        // The WSJT-X-proven path: CAT rides the SmartSDR CAT app on THIS PC
-        // (model 2036 @ 127.0.0.1:5004), never the radio's own :4992 — the
-        // direct native backend is alpha in Hamlib and failed on a real 6400M
-        // (WSAEADDRNOTAVAIL). Discovery still proves the radio is reachable.
-        setRigAddr('127.0.0.1:5004')
-        setRigModel(2036)
-        setRigModelName('FlexRadio FLEX-6xxx (SmartSDR CAT)')
-        setFlexNote(
-          `Found ${r.model}${r.nickname ? ` "${r.nickname}"` : ''} at ${r.ip}${radios.length > 1 ? ` (+${radios.length - 1} more — first taken)` : ''} — CAT set to ride SmartSDR CAT: open the SmartSDR CAT app, add a TCP port 5004, then Test CAT below.`,
-        )
-      })
-      .catch((e) => setFlexNote(`Scan failed: ${e instanceof Error ? e.message : e}`))
-      .finally(() => setFlexScanning(false))
+  const applyDetectedFlex = (f: { model: string; nickname: string; ip: string }) => {
+    // The WSJT-X-proven path: CAT rides the SmartSDR CAT app on THIS PC
+    // (model 2036 @ SmartSDR CAT's default slice-A TCP port 5002), never the
+    // radio's own :4992 — Hamlib's direct native backend is alpha and failed
+    // on a real 6400M. Discovery proves the radio is reachable.
+    setRigConn('network')
+    setRigAddr('127.0.0.1:5002')
+    setRigModel(2036)
+    setRigModelName('FlexRadio FLEX-6xxx (SmartSDR CAT)')
+    setFlexNote(
+      `${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — CAT set via SmartSDR CAT (slice A, port 5002; a second slice uses 60001). Test CAT below.`,
+    )
   }
   const runCatTest = () => {
     setCatTesting(true)
@@ -280,9 +276,52 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
         <>
           <h2 className="wizard-title">How does the radio connect?</h2>
           <p className="wizard-sub">
-            Plug the rig in over USB and hit detect — or point Nexus at a network radio.
+            One detect finds everything — USB rigs and FlexRadios on the network.
             Skippable; Settings ▸ Rig Control has all of this later (including Test CAT).
           </p>
+          <div className="wizard-detect">
+            <button type="button" className="wizard-btn" disabled={detecting} onClick={runDetect}>
+              {detecting ? 'Detecting…' : '🔍 Detect my radio'}
+            </button>
+            {detected != null && detected.length === 0 && detectedFlex.length === 0 && (
+              <span className="wizard-field-hint">
+                Nothing found — USB: plug in + power on; Flex: must be on this network.
+                Or skip and set it up later.
+              </span>
+            )}
+            {detectedFlex.map((f) => (
+              <button
+                key={f.ip}
+                type="button"
+                className={`wizard-detect-row${rigConn === 'network' && rigModel === 2036 ? ' sel' : ''}`}
+                onClick={() => applyDetectedFlex(f)}
+              >
+                <b>
+                  {f.model}
+                  {f.nickname ? ` “${f.nickname}”` : ''}
+                </b>{' '}
+                on the network ({f.ip})
+                <span className="wizard-field-hint"> · via SmartSDR CAT</span>
+              </button>
+            ))}
+            {(detected ?? []).map((r) => (
+              <button
+                key={r.portName}
+                type="button"
+                className={`wizard-detect-row${serialPort === r.portName ? ' sel' : ''}`}
+                onClick={() => applyDetected(r)}
+              >
+                <b>{r.suggestedModelName ?? r.product ?? 'Unknown radio'}</b> on {r.portName}
+                <span className="wizard-field-hint"> · {r.chip}</span>
+              </button>
+            ))}
+            {flexNote && <span className="wizard-field-hint">{flexNote}</span>}
+            {rigConn === 'serial' && serialPort && (
+              <span className="wizard-field-hint">
+                Selected: {rigModelName ?? 'radio'} on {serialPort}
+              </span>
+            )}
+          </div>
           <div className="wizard-rigconn">
             <button
               type="button"
@@ -304,35 +343,6 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
             </button>
           </div>
 
-          {rigConn === 'serial' && (
-            <div className="wizard-detect">
-              <button type="button" className="wizard-btn" disabled={detecting} onClick={runDetect}>
-                {detecting ? 'Detecting…' : '🔍 Detect my radio'}
-              </button>
-              {detected != null && detected.length === 0 && (
-                <span className="wizard-field-hint">
-                  No USB radios found — plug one in and detect again, or skip for now.
-                </span>
-              )}
-              {(detected ?? []).map((r) => (
-                <button
-                  key={r.portName}
-                  type="button"
-                  className={`wizard-detect-row${serialPort === r.portName ? ' sel' : ''}`}
-                  onClick={() => applyDetected(r)}
-                >
-                  <b>{r.suggestedModelName ?? r.product ?? 'Unknown radio'}</b> on {r.portName}
-                  <span className="wizard-field-hint"> · {r.chip}</span>
-                </button>
-              ))}
-              {serialPort && (
-                <span className="wizard-field-hint">
-                  Selected: {rigModelName ?? 'radio'} on {serialPort}
-                </span>
-              )}
-            </div>
-          )}
-
           {rigConn === 'network' && (
             <div className="wizard-detect">
               <label className="wizard-field">
@@ -340,29 +350,19 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
                 <input
                   type="text"
                   value={rigAddr}
-                  placeholder="192.168.1.50:4992"
+                  placeholder="127.0.0.1:5002"
                   autoComplete="off"
                   spellCheck={false}
                   onChange={(e) => setRigAddr(e.target.value)}
                 />
               </label>
-              <button
-                type="button"
-                className="wizard-btn"
-                disabled={flexScanning}
-                onClick={runFlexScan}
-                title="Listen 3 s for a FlexRadio announcing itself (written to the published discovery format — not yet verified on real hardware)"
-              >
-                {flexScanning ? 'Scanning…' : '📡 Find my Flex'}
-              </button>
-              {flexNote && <span className="wizard-field-hint">{flexNote}</span>}
               <span className="wizard-field-hint">
                 A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR
-                CAT app on this PC (model FLEX-6xxx @ 127.0.0.1:5004 — add that TCP port
-                in SmartSDR CAT once), audio through DAX. Other network rigs: pick their
-                model later in Settings ▸ Rig Control.
+                CAT app on this PC — its default TCP port 5002 drives slice A (per-slice
+                ports: B=60001, C=60002) — and audio through DAX. Other network rigs:
+                pick their model later in Settings ▸ Rig Control.
               </span>
-              {dax && (audioIn !== dax.input || audioOut !== dax.output) && (
+              {dax && !isDaxPaired(audioIn, audioOut) && (
                 <button
                   type="button"
                   className="wizard-btn"

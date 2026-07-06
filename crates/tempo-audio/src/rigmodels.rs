@@ -69,7 +69,8 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         (2045, "Elecraft KX3"),
         // FlexRadio. 2036 is the WSJT-X-proven path: it speaks the Flex dialect
         // of Kenwood CAT served by the SmartSDR CAT app's TCP/serial ports on
-        // the PC (127.0.0.1:5004 by convention — 5002 is the DDUtil port).
+        // the PC. SmartSDR CAT's DEFAULT TCP port 5002 is directed at slice A;
+        // its per-slice extras are B=60001, C=60002, D=60003 (60000 base).
         // 23005 talks the radio's native API directly and is alpha-grade in
         // Hamlib (failed on a real 6400M with WSAEADDRNOTAVAIL) — keep it
         // selectable, but nothing auto-picks it anymore.
