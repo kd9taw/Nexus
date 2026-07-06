@@ -43,6 +43,9 @@ import {
   setRxOffset,
   setTxOffset,
   pointRotatorAtCall,
+  setTxEnabled,
+  setTune,
+  setHoldTxFreq,
 } from './api'
 import { NeededPanel } from './components/NeededPanel'
 import { ConnectView } from './components/ConnectView'
@@ -297,6 +300,9 @@ export function DetachedPanel({ panel }: { panel: string }) {
             apply(overrideNextTx(call, grid, text))
           }
           onHaltTx={() => apply(haltTx())}
+          onSetTxEnabled={(on: boolean) => apply(setTxEnabled(on))}
+          onSetTune={(on: boolean) => apply(setTune(on))}
+          onSetHoldTxFreq={(on: boolean) => apply(setHoldTxFreq(on))}
           onSnap={setSnap}
           preferRrr={settings?.preferRrr ?? false}
           qsoMacros={settings?.macros.qso ?? []}

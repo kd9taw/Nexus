@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { ModeRequest, QsoStatus } from '../types'
+import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 
 interface Props {
   qso: QsoStatus | null
@@ -15,6 +15,13 @@ interface Props {
   onFreetext: (text: string) => void
   /** Log the active QSO now (inline "Log QSO" button). */
   onLog: () => void
+  /** TX controls consolidated beside CQ/S&P (operator request: one cluster,
+   * no mousing to the top bar). Present only in the digital cockpit. */
+  radio?: RadioStatus
+  onSetTxEnabled?: (on: boolean) => void
+  onSetTune?: (on: boolean) => void
+  onHaltTx?: () => void
+  onSetHoldTxFreq?: (on: boolean) => void
 }
 
 function reportLabel(rx: number | null | undefined): string | null {
@@ -28,7 +35,7 @@ function reportLabel(rx: number | null | undefined): string | null {
  * Resend), the Call-CQ / Monitor role toggle, and an in-QSO free-text field —
  * so you work a station and watch it sequence WITHOUT leaving the waterfall.
  */
-export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext, onLog }: Props) {
+export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext, onLog, radio, onSetTxEnabled, onSetTune, onHaltTx, onSetHoldTxFreq }: Props) {
   const running = qso?.running ?? false
   const dxcall = qso?.dxcall ?? null
   const state = qso?.state ?? 'Idle'
@@ -82,6 +89,49 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
             S&amp;P
           </button>
         </div>
+        {radio && (
+          <div className="op-controls cq-txctl" role="group" aria-label="Transmit controls">
+            <button
+              type="button"
+              className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
+              aria-pressed={radio.txEnabled}
+              onClick={() => onSetTxEnabled?.(!radio.txEnabled)}
+              title={
+                radio.txEnabled
+                  ? 'Transmit ENABLED — your queued message will go out. Click to disable transmit (receive keeps decoding either way).'
+                  : 'Transmit DISABLED — receive keeps decoding. Click to enable transmit (WSJT-X "Enable Tx").'
+              }
+            >
+              {radio.txEnabled ? 'TX On' : 'TX Off'}
+            </button>
+            <button
+              type="button"
+              className={`op-btn tune${radio.tuning ? ' keyed' : ''}`}
+              aria-pressed={radio.tuning}
+              onClick={() => onSetTune?.(!radio.tuning)}
+              title="Key a tune carrier"
+            >
+              Tune
+            </button>
+            <button
+              type="button"
+              className="op-btn stop"
+              onClick={() => onHaltTx?.()}
+              title="Stop transmitting immediately"
+            >
+              Stop TX
+            </button>
+            <button
+              type="button"
+              className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
+              aria-pressed={radio.holdTxFreq}
+              onClick={() => onSetHoldTxFreq?.(!radio.holdTxFreq)}
+              title="Hold Tx Freq: keep your TX offset fixed when you click the waterfall to set RX"
+            >
+              Hold Tx
+            </button>
+          </div>
+        )}
       </div>
 
       <div className={`cq-now${stalled ? ' stalled' : ''}`}>

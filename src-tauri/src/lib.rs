@@ -2598,6 +2598,32 @@ async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<()
     }
 }
 
+/// Stop the rotator immediately (rotctld `S`) — the control panel's STOP.
+#[tauri::command]
+async fn stop_rotator(state: State<'_, SharedEngine>) -> Result<(), String> {
+    #[cfg(feature = "radio")]
+    {
+        let host = state
+            .lock()
+            .map_err(|e| e.to_string())?
+            .settings()
+            .rotator_host
+            .clone();
+        if host.trim().is_empty() {
+            return Err("Set the rotator (rotctld) host:port in Settings first.".to_string());
+        }
+        tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::stop(&host))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = state;
+        Err("radio support is not built into this binary".to_string())
+    }
+}
+
 /// Point the rotator at a callsign's DXCC entity — the great-circle bearing from your
 /// grid. Returns the bearing pointed to (degrees) for UI feedback.
 #[tauri::command]
@@ -5970,6 +5996,7 @@ pub fn run() {
             detect_rigs,
             probe_cat_ports,
             point_rotator,
+            stop_rotator,
             point_rotator_at_call,
             read_rotator,
             cw_decode,

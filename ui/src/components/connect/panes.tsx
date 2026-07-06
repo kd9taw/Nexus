@@ -21,6 +21,7 @@ import { InsightFeed } from '../prop/InsightFeed'
 import { ChasePane } from '../prop/ChasePane'
 import { ChaseFeedPane } from '../prop/ChaseFeedPane'
 import { SatPassesPane } from '../prop/SatPassesPane'
+import { RotorPane } from '../prop/RotorPane'
 import { GetoutCompass } from '../prop/GetoutCompass'
 import { getoutSummary } from '../../features/getout'
 import { GreylineWindow } from '../prop/GreylineWindow'
@@ -496,6 +497,16 @@ export const PANES: PaneDef[] = [
     basic: () =>
       'Upcoming amateur-satellite passes over your QTH appear here once orbital elements load.',
     expert: (c) => <SatPassesPane expert={c.expert} />,
+  },
+  {
+    id: 'rotor',
+    title: 'Rotor',
+    category: 'b3',
+    basic: () =>
+      'Rotator control appears here once a rotctld host is set in Settings (and the daemon answers).',
+    // Self-contained control surface — polls read_rotator while mounted and
+    // hides itself (→ this Basic hint) when nothing answers.
+    expert: () => <RotorPane />,
   },
 ]
 

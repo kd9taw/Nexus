@@ -40,6 +40,15 @@ pub fn point(addr: &str, az_deg: f64) -> std::io::Result<()> {
     }
 }
 
+/// Stop rotation immediately (rotctld `S`).
+pub fn stop(addr: &str) -> std::io::Result<()> {
+    let mut s = connect(addr)?;
+    s.write_all(b"S\n")?;
+    let mut buf = [0u8; 64];
+    let _ = s.read(&mut buf); // drain the RPRT ack; stop is best-effort
+    Ok(())
+}
+
 /// Read the current azimuth (degrees) from rotctld (`p` → `az\nel`). `None` on any
 /// failure (daemon down, timeout, unparsable) — the UI shows "—" rather than erroring.
 pub fn read_azimuth(addr: &str) -> Option<f64> {

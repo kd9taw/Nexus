@@ -57,6 +57,10 @@ interface Props {
   onOverrideTx: (call: string, grid: string | null, text: string) => void
   /** Halt TX immediately (the Esc key — same api as the Stop TX button). */
   onHaltTx: () => void
+  /** TX-control cluster consolidated into the QSO strip (beside CQ/S&P). */
+  onSetTxEnabled?: (on: boolean) => void
+  onSetTune?: (on: boolean) => void
+  onSetHoldTxFreq?: (on: boolean) => void
   /** Apply a fresh snapshot returned by a cockpit-local api call. */
   onSnap?: (s: AppSnapshot) => void
   /** Roger the final with RRR instead of RR73 (Settings preferRrr). */
@@ -142,6 +146,9 @@ export function OperateCockpit({
   onLog,
   onOverrideTx,
   onHaltTx,
+  onSetTxEnabled,
+  onSetTune,
+  onSetHoldTxFreq,
   onSnap,
   preferRrr = false,
   dxClearTick = 0,
@@ -625,6 +632,11 @@ export function OperateCockpit({
         {/* Prominent operating bar: Call CQ / S&P / Now-sending / Resend / Tx5. */}
         <OperateQsoStrip
           qso={snap.qso}
+          radio={snap.radio}
+          onSetTxEnabled={onSetTxEnabled}
+          onSetTune={onSetTune}
+          onHaltTx={onHaltTx}
+          onSetHoldTxFreq={onSetHoldTxFreq}
           onSetMode={onSetMode}
           onCallCq={() => {
             // The labelled "Call CQ" is always a PLAIN run — it also clears a

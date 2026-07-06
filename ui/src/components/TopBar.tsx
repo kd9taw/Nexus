@@ -8,6 +8,9 @@ import { StatusLane } from './StatusLane'
 import { LevelMeter } from './LevelMeter'
 
 interface Props {
+  /** Hide the TX-control cluster (the FT cockpit shows its own consolidated
+   * copy beside CQ/S&P — operator request; other sections keep it here). */
+  hideTxControls?: boolean
   mycall: string
   mygrid: string
   radio: RadioStatus
@@ -89,6 +92,7 @@ export function TopBar({
   onTierChange,
   theme,
   onThemeChange,
+  hideTxControls,
 }: Props) {
   const countdown = (radio.nextSlotMs / 1000).toFixed(1)
   return (
@@ -133,6 +137,7 @@ export function TopBar({
           </button>
         )}
 
+        {!hideTxControls && (
         <div className="op-controls" role="group" aria-label="Transmit controls">
           <button
             type="button"
@@ -174,6 +179,7 @@ export function TopBar({
             Hold Tx
           </button>
         </div>
+        )}
 
         {radio.txWatchdog && (
           <span className="watchdog-chip" role="alert" title="Transmit was auto-halted by the TX watchdog. Click TX On to re-enable.">

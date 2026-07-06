@@ -1558,6 +1558,7 @@ export default function App() {
             onSetTxCycleAuto={handleSetTxCycleAuto}
         onSetHoldTxFreq={handleSetHoldTxFreq}
         onStopRecording={handleStopRecording}
+        hideTxControls={effectiveView === 'operate'}
         wfLayout={wfLayout}
         onWfLayoutChange={setWfLayout}
         tier={tier}
@@ -1628,6 +1629,9 @@ export default function App() {
             onLog={handleLogCurrent}
             onOverrideTx={handleOverrideTx}
             onHaltTx={handleHaltTx}
+            onSetTxEnabled={handleSetTxEnabled}
+            onSetTune={handleSetTune}
+            onSetHoldTxFreq={handleSetHoldTxFreq}
             dxClearTick={dxClearTick}
             onSnap={setSnap}
             preferRrr={settings?.preferRrr ?? false}
