@@ -224,7 +224,7 @@ fn tx_template_set() -> Vec<u8> {
         (0x8001, 0xFFFF), // senderCallsign (variable string)
         (0x8005, 4),      // frequency (u32 Hz; WSJT-X uses up to 8, see note)
         (0x8006, 1),      // snr (i8)
-        (0x8007, 0xFFFF), // mode (variable string)
+        (0x800A, 0xFFFF), // mode (variable string; 0x8007 is iMD, NOT mode)
         (150, 4),         // flowStartSeconds (standard IE 150, u32)
     ];
     plain_template_set(TEMPLATE_TX, ENTERPRISE, &fields)
@@ -351,6 +351,30 @@ mod tests {
     }
     fn read_u32(b: &[u8], off: usize) -> u32 {
         u32::from_be_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+    }
+
+    #[test]
+    fn tx_template_declares_the_pskreporter_mode_field() {
+        // Field ids per PSK Reporter's registry (enterprise 30351), as used by
+        // WSJT-X's PSKReporter.cpp: 1=senderCallsign, 5=frequency, 6=sNR,
+        // 10=mode, plus standard IE 150=flowStartSeconds. Field 7 is iMD — a
+        // PSK31 distortion metric; declaring the mode string there leaves the
+        // report modeless and PSK Reporter displays its default (PSK31).
+        let set = tx_template_set();
+        assert_eq!(read_u16(&set, 0), SET_ID_TEMPLATE);
+        assert_eq!(read_u16(&set, 4), TEMPLATE_TX);
+        let n = read_u16(&set, 6) as usize;
+        let mut ids = Vec::new();
+        let mut off = 8;
+        for _ in 0..n {
+            let ie = read_u16(&set, off);
+            ids.push(ie);
+            off += 4; // ie id + length
+            if ie & 0x8000 != 0 {
+                off += 4; // enterprise number
+            }
+        }
+        assert_eq!(ids, vec![0x8001, 0x8005, 0x8006, 0x800A, 150]);
     }
 
     #[test]
