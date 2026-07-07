@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { callHistory, isNewEntity } from './callHistory'
+import { callHistory, entitySlots, isNewEntity } from './callHistory'
 import type { LoggedQso } from '../types'
 
 function qso(call: string, band: string, mode: string, whenUnix: number, confirmed = false): LoggedQso {
@@ -74,5 +74,38 @@ describe('isNewEntity', () => {
     expect(isNewEntity(log, '   ')).toBe(false)
     expect(isNewEntity(log, null)).toBe(false)
     expect(isNewEntity(log, undefined)).toBe(false)
+  })
+})
+
+describe('entitySlots', () => {
+  // One entity (Japan) across several calls/bands/modes, plus another entity and a
+  // blank-country row that must never bleed into Japan's slots.
+  const log = [
+    { call: 'JA1A', country: 'Japan', band: '20m', mode: 'SSB' },
+    { call: 'JA7B', country: ' japan ', band: '40m', mode: 'CW' }, // same entity, diff call, case/space
+    { call: 'W1AW', country: 'United States', band: '20m', mode: 'FT8' },
+    { call: 'JR3C', country: 'JAPAN', band: '20m', mode: 'CW' }, // dupe 20m band for Japan
+    { call: 'X', country: null, band: '15m', mode: 'SSB' }, // blank country — not any entity
+  ]
+
+  it('unworked or blank country → not worked, empty slots', () => {
+    expect(entitySlots(log, 'Fiji')).toEqual({ workedEver: false, bandsWorked: [], modesWorked: [] })
+    expect(entitySlots(log, '')).toEqual({ workedEver: false, bandsWorked: [], modesWorked: [] })
+    expect(entitySlots(log, null)).toEqual({ workedEver: false, bandsWorked: [], modesWorked: [] })
+    expect(entitySlots([], 'Japan')).toEqual({ workedEver: false, bandsWorked: [], modesWorked: [] })
+  })
+
+  it('collects distinct entity bands/modes across calls, case/whitespace-insensitive on country', () => {
+    const s = entitySlots(log, 'japan')
+    expect(s.workedEver).toBe(true)
+    expect(s.bandsWorked).toEqual(['20M', '40M']) // distinct, normalized, first-seen order
+    expect(s.modesWorked).toEqual(['SSB', 'CW'])
+  })
+
+  it('normalizes bands/modes so membership tests are case/whitespace-tolerant', () => {
+    const s = entitySlots(log, 'JAPAN')
+    expect(s.bandsWorked.includes('20m'.trim().toUpperCase())).toBe(true)
+    expect(s.bandsWorked.includes('15M')).toBe(false) // 15m was the blank-country row, not Japan
+    expect(s.modesWorked.includes('ft8'.toUpperCase())).toBe(false) // FT8 was the USA row
   })
 })

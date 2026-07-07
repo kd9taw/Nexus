@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, LoggedQso } from '../types'
 import { fdLogManual, getLog, logQso, qrzLookup } from '../api'
-import { callHistory, isNewEntity } from '../features/callHistory'
+import { callHistory, entitySlots, isNewEntity } from '../features/callHistory'
 import { pushToast, withErrorToast } from '../toast'
 
 interface Props {
@@ -171,6 +171,16 @@ export function LogEntry({
   // cty.dat) — an unresolved country falls back to the plain "not in your log" line.
   const newEntity = useMemo(() => isNewEntity(allLog, logCountry), [allLog, logCountry])
 
+  // DXCC-Challenge axis: the entity is already worked, but is THIS band (or mode) a new
+  // slot for it? Only meaningful once the entity is in the log (an ATNO is owned by
+  // `newEntity` above; a blank/unresolved country yields workedEver=false and falls through
+  // to the plain "not in your log" line). Bands/modes are entity-wide; band wins over mode.
+  const slots = useMemo(() => entitySlots(allLog, logCountry), [allLog, logCountry])
+  const newBandSlot =
+    slots.workedEver && !slots.bandsWorked.includes(snap.radio.band.trim().toUpperCase())
+  const newModeSlot =
+    slots.workedEver && !newBandSlot && !slots.modesWorked.includes(mode.trim().toUpperCase())
+
   // QRZ callbook autofill — fills ONLY blank fields, never clobbers operator input. The
   // explicit button toasts; the on-blur auto-lookup is silent on failure so an operator
   // without QRZ configured isn't nagged on every Tab.
@@ -335,6 +345,20 @@ export function LogEntry({
         ) : newEntity ? (
           <div className="le-prior new-entity">
             <span className="le-prior-text">New DXCC — {logCountry.trim()}!</span>
+          </div>
+        ) : newBandSlot ? (
+          <div className="le-prior">
+            <span className="need-chip need-band">BAND</span>
+            <span className="le-prior-text">
+              New band for {logCountry.trim()} — first time on {snap.radio.band} in your log
+            </span>
+          </div>
+        ) : newModeSlot ? (
+          <div className="le-prior">
+            <span className="need-chip need-mode">MODE</span>
+            <span className="le-prior-text">
+              New mode for {logCountry.trim()} on {snap.radio.band} — first {mode} in your log
+            </span>
           </div>
         ) : (
           <div className="le-prior new">

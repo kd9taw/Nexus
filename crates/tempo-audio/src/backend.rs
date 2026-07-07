@@ -32,6 +32,30 @@ pub trait AudioBackend {
     fn set_monitor(&mut self, _enabled: bool, _device: &str, _level: f32) -> Result<(), String> {
         Ok(())
     }
+    /// Open (`Some(name)`) or close (`None`) a transient SECOND input stream capturing
+    /// the operator's voice from a dedicated mic, used only while a recording is in
+    /// progress — so "record a voice message" captures the mic, not the shared rig-codec
+    /// input the decoder hears. Opening never touches the main capture/TX streams (the
+    /// decode path never restarts). `Err` = the named device failed to open (the caller
+    /// falls back to the shared capture tap). Default no-op; the real sound card overrides.
+    fn set_voice_mic(&mut self, _device: Option<&str>) -> Result<(), String> {
+        Ok(())
+    }
+    /// 12 kHz mono samples captured from the voice-mic stream since the last call (empty
+    /// when no mic stream is open). Default empty; the real sound card overrides it.
+    fn voice_capture(&mut self) -> Vec<f32> {
+        Vec::new()
+    }
+}
+
+/// Whether a recording should capture from the dedicated voice-mic device instead of
+/// the shared input tap: only when a recording is actually in progress AND the operator
+/// configured a (non-empty) voice-mic device. The pure decision behind opening the
+/// transient second input stream (see the radio loop) — the source ACTUALLY fed to the
+/// recorder also depends on that stream opening, since a failed open falls back to the
+/// shared tap. Empty device = today's zero-surprise behavior (record the shared input).
+pub fn want_voice_mic(recording_active: bool, voice_mic_device: &str) -> bool {
+    recording_active && !voice_mic_device.trim().is_empty()
 }
 
 /// In-memory backend for tests: serves scripted capture chunks and records every
@@ -42,6 +66,14 @@ pub struct MockBackend {
     pub played: Vec<f32>,
     /// How many times `flush_output` was called (for hard-Stop-TX tests).
     pub flush_calls: usize,
+    /// Scripted chunks the next `voice_capture()` calls return (voice-mic tests).
+    to_voice_capture: VecDeque<Vec<f32>>,
+    /// Every `set_voice_mic` argument, in order (for asserting open/close behavior).
+    pub voice_mic_calls: Vec<Option<String>>,
+    /// Whether a mock voice-mic stream is currently "open".
+    pub voice_mic_open: bool,
+    /// When true, `set_voice_mic(Some(_))` returns `Err` (simulates an open failure).
+    pub voice_mic_fail: bool,
 }
 
 impl MockBackend {
@@ -51,6 +83,10 @@ impl MockBackend {
     /// Queue a chunk that the next `capture()` will return.
     pub fn queue_capture(&mut self, samples: Vec<f32>) {
         self.to_capture.push_back(samples);
+    }
+    /// Queue a chunk that the next `voice_capture()` will return (voice-mic tests).
+    pub fn queue_voice_capture(&mut self, samples: Vec<f32>) {
+        self.to_voice_capture.push_back(samples);
     }
 }
 
@@ -64,5 +100,48 @@ impl AudioBackend for MockBackend {
     fn flush_output(&mut self) -> usize {
         self.flush_calls += 1;
         0
+    }
+    fn set_voice_mic(&mut self, device: Option<&str>) -> Result<(), String> {
+        self.voice_mic_calls.push(device.map(str::to_string));
+        match device {
+            Some(_) if self.voice_mic_fail => Err("mock voice mic failed to open".to_string()),
+            Some(_) => {
+                self.voice_mic_open = true;
+                Ok(())
+            }
+            None => {
+                self.voice_mic_open = false;
+                Ok(())
+            }
+        }
+    }
+    fn voice_capture(&mut self) -> Vec<f32> {
+        self.to_voice_capture.pop_front().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn want_voice_mic_only_when_recording_and_a_device_is_set() {
+        assert!(
+            want_voice_mic(true, "USB Mic"),
+            "recording + device → use the mic"
+        );
+        assert!(
+            !want_voice_mic(false, "USB Mic"),
+            "not recording → shared input (no idle second stream)"
+        );
+        assert!(
+            !want_voice_mic(true, ""),
+            "no device → shared input (today's zero-surprise default)"
+        );
+        assert!(
+            !want_voice_mic(true, "   "),
+            "whitespace-only device → shared input"
+        );
+        assert!(!want_voice_mic(false, ""));
     }
 }

@@ -98,6 +98,76 @@ pub struct CpalBackend {
     /// audio to a chosen output device. Reconfigured via [`AudioBackend::set_monitor`]
     /// WITHOUT touching the capture/TX streams (the decode path never restarts).
     monitor: Monitor,
+    /// A transient SECOND input stream capturing the operator's voice from a dedicated
+    /// mic, opened via [`AudioBackend::set_voice_mic`] only while a recording is in
+    /// progress. `None` = no mic stream (recordings read the shared input). Opening /
+    /// closing it never touches the main capture/TX streams.
+    voice_mic: Option<VoiceMic>,
+}
+
+/// The transient voice-mic input stream + its capture ring. Downmixes the device to
+/// mono at its native rate into a lock-guarded ring; [`CpalBackend::voice_capture`]
+/// drains + resamples it to 12 kHz. Dropping this stops and frees the device.
+struct VoiceMic {
+    _stream: Stream,
+    ring: Arc<Mutex<VecDeque<f32>>>,
+    rate: u32,
+    /// The device name this stream targets, so a re-`set_voice_mic` on the SAME device
+    /// is a no-op (only a different device rebuilds the stream).
+    device: String,
+}
+
+impl VoiceMic {
+    /// Open a mono capture stream on the named input device. The caller MUST already
+    /// hold [`AUDIO_HOST_LOCK`]. Unlike the main input / monitor pickers this does NOT
+    /// fall back to the system default: a missing named mic returns `Err` so the loop
+    /// falls back to the shared capture tap (recording the wrong default device would
+    /// reintroduce the very "records the band" surprise this feature fixes).
+    fn open(name: &str) -> Result<Self, String> {
+        let host = cpal::default_host();
+        let dev = pick_device(host.input_devices().ok(), Some(name), None)
+            .ok_or_else(|| format!("voice-mic input device {name:?} not found"))?;
+        let cfg = dev.default_input_config().map_err(|e| e.to_string())?;
+        let rate = cfg.sample_rate().0;
+        let ch = cfg.channels() as usize;
+        let ring = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+        let ring_cb = ring.clone();
+        let stream = match cfg.sample_format() {
+            SampleFormat::F32 => dev.build_input_stream(
+                &cfg.config(),
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    let mut r = ring_cb.lock().unwrap_or_else(|e| e.into_inner());
+                    for frame in data.chunks(ch.max(1)) {
+                        r.push_back(frame.iter().copied().sum::<f32>() / ch.max(1) as f32);
+                    }
+                },
+                err_fn,
+                None,
+            ),
+            SampleFormat::I16 => dev.build_input_stream(
+                &cfg.config(),
+                move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                    let mut r = ring_cb.lock().unwrap_or_else(|e| e.into_inner());
+                    for frame in data.chunks(ch.max(1)) {
+                        let m = frame.iter().map(|&s| s as f32 / 32768.0).sum::<f32>()
+                            / ch.max(1) as f32;
+                        r.push_back(m);
+                    }
+                },
+                err_fn,
+                None,
+            ),
+            other => return Err(format!("unsupported voice-mic input format: {other:?}")),
+        }
+        .map_err(|e| e.to_string())?;
+        stream.play().map_err(|e| e.to_string())?;
+        Ok(Self {
+            _stream: stream,
+            ring,
+            rate,
+            device: name.to_string(),
+        })
+    }
 }
 
 impl CpalBackend {
@@ -250,6 +320,7 @@ impl CpalBackend {
             rx_level,
             tx_level: 1.0,
             monitor: Monitor::new(mon_ring, mon_enabled, mon_level, in_rate),
+            voice_mic: None,
         })
     }
 }
@@ -305,5 +376,48 @@ impl AudioBackend for CpalBackend {
     /// restarts.
     fn set_monitor(&mut self, enabled: bool, device: &str, level: f32) -> Result<(), String> {
         self.monitor.apply(enabled, device, level)
+    }
+
+    /// Open (`Some(name)`) or close (`None`) the transient voice-mic input stream. Opens
+    /// a SECOND cpal input on the named device WITHOUT touching the main capture/TX
+    /// streams (the decode path never restarts). All host/device/stream work is under
+    /// [`AUDIO_HOST_LOCK`], like every other cpal entry point. `Err` = the named device
+    /// failed to open (the caller falls back to the shared capture tap).
+    fn set_voice_mic(&mut self, device: Option<&str>) -> Result<(), String> {
+        let wanted = device.map(str::trim).filter(|d| !d.is_empty());
+        match wanted {
+            None => {
+                if self.voice_mic.is_some() {
+                    // Tear the stream down under the host lock (native device-graph
+                    // teardown shares the non-reentrant state construction uses).
+                    let _guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                    self.voice_mic = None;
+                }
+                Ok(())
+            }
+            Some(name) => {
+                // Already open on this exact device → nothing to rebuild.
+                if self.voice_mic.as_ref().map(|v| v.device == name) == Some(true) {
+                    return Ok(());
+                }
+                let _guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                self.voice_mic = None; // free any prior device first
+                self.voice_mic = Some(VoiceMic::open(name)?);
+                Ok(())
+            }
+        }
+    }
+
+    /// 12 kHz mono samples captured from the voice-mic stream since the last call (empty
+    /// when no mic stream is open), resampled from the mic device's native rate.
+    fn voice_capture(&mut self) -> Vec<f32> {
+        let Some(mic) = self.voice_mic.as_ref() else {
+            return Vec::new();
+        };
+        let dev: Vec<f32> = {
+            let mut ring = mic.ring.lock().unwrap_or_else(|e| e.into_inner());
+            ring.drain(..).collect()
+        };
+        resample_linear(&dev, mic.rate, MODEM_RATE)
     }
 }

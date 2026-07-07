@@ -1415,6 +1415,12 @@ export interface Settings {
   audioIn: string
   /** Output (TX) audio device name. "" = system default. */
   audioOut: string
+  /** Microphone device for RECORDING voice-keyer messages. "" (default) = record from
+   * audioIn (the shared input) — but on a digital setup that's the rig's RX codec, so a
+   * voice message would capture the band, not the operator. Set to the real mic and each
+   * recording opens a separate input on it; a device that fails to open falls back to
+   * the shared input. The decode path is never affected. */
+  voiceMicDevice?: string
   /** Transmit drive level, 0–1 (default 0.9). */
   txLevel: number
   /** Headphone monitor (DARK, off by default): live pass-through of the RX audio the

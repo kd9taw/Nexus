@@ -871,6 +871,11 @@ export function SettingsPanel({
   const monitorOutOptions = form.monitorDevice && !audio.output.includes(form.monitorDevice)
     ? [form.monitorDevice, ...audio.output]
     : audio.output
+  // Voice-mic device picker: the enumerated INPUT list (it's a microphone), keeping the
+  // saved selection visible even if it's since disappeared.
+  const voiceMicOptions = form.voiceMicDevice && !audio.input.includes(form.voiceMicDevice)
+    ? [form.voiceMicDevice, ...audio.input]
+    : audio.input
 
   // Frequencies tab: last-wins override lookup for the stock table, plus
   // duplicate band+mode keys (flagged in the editor — the last row wins).
@@ -1736,6 +1741,28 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">Sound card feeding the rig (transmit).</span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">Voice mic (recording)</span>
+                <select
+                  className="settings-input"
+                  value={form.voiceMicDevice ?? ''}
+                  onChange={(e) => update('voiceMicDevice', e.target.value)}
+                >
+                  <option value="">Same as audio input (default)</option>
+                  {voiceMicOptions.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">
+                  Mic used when RECORDING a voice-keyer message. Default records from the
+                  input device above — but on a digital setup that's the rig's RX audio, so
+                  you'd record the band, not your voice. Pick your actual mic here. If it
+                  can't open, recording falls back to the input device (never silent).
+                </span>
               </label>
 
               <label className="settings-field">

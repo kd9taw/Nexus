@@ -238,6 +238,15 @@ struct Sinks<'a> {
 /// All persistent state of the radio loop. One iteration is [`RadioLoop::step`],
 /// generic over [`AudioBackend`] so a `MockBackend` (+ a `Rig::vox()` / mock
 /// rigctld) can drive the whole heartbeat in a test with no sound card.
+/// Owner of the single audio-error status line (see `err_owner`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ErrOwner {
+    None,
+    Device,
+    Monitor,
+    VoiceMic,
+}
+
 struct RadioLoop {
     cur_tier: Tier,
     clock: SlotClock,
@@ -286,6 +295,17 @@ struct RadioLoop {
     qso_sink: Option<crate::voice::WavSink>,
     /// When the in-progress QSO recording started (loop ms), for the max-duration auto-stop.
     qso_started_ms: Option<f64>,
+    /// A transient voice-mic input stream is live and feeding the recorder (see
+    /// `voice_mic_device`). Toggled on the recording session's rising/falling edge.
+    voice_mic_open: bool,
+    /// Retry suppression for a failed mic open — cleared when the recording
+    /// ends so the NEXT recording tries the device again (not per-loop spam).
+    voice_mic_failed: bool,
+    /// Nudge: re-evaluate the monitor block next loop even without a settings
+    /// change (used when the voice-mic notice cleared a line the monitor may
+    /// still be entitled to — its guard/failure state gets re-surfaced).
+    monitor_reapply: bool,
+    /// We wrote the current audio-error line with a voice-mic open failure, so we clear
     psk_spots: Vec<Spot>,
     last_psk_flush: f64,
     /// Slot index whose WSJT-X-style EARLY decode pass already ran (once per
@@ -307,7 +327,13 @@ struct RadioLoop {
     /// The monitor block currently OWNS the audio-error line (it wrote either
     /// the guard refusal or an open failure there). A real device error takes
     /// ownership back; only an owning monitor may clear the line on success.
-    monitor_owns_error: bool,
+    /// WHO wrote the shared audio-error line. Three writers (real device
+    /// failures, the headphone monitor, the voice mic) previously juggled two
+    /// booleans and could stomp/erase each other's notices (review ×3). Rules:
+    /// Device is set only by the audio-reopen path and outranks everything;
+    /// Monitor/VoiceMic may write only over None or themselves, and clear only
+    /// what they own.
+    err_owner: ErrOwner,
     last_fd_qsos: usize,
     /// Latest measured PC-clock-vs-UTC offset (ms, `local − UTC`), read from the
     /// engine each loop and SUBTRACTED from the system clock so TX/RX slots land
@@ -341,6 +367,10 @@ impl RadioLoop {
             last_rf_power: None,
             qso_sink: None,
             qso_started_ms: None,
+            voice_mic_open: false,
+            voice_mic_failed: false,
+            monitor_reapply: false,
+            err_owner: ErrOwner::None,
             psk_spots: Vec::new(),
             early_done_slot: None,
             fake_it_restore: None,
@@ -348,7 +378,7 @@ impl RadioLoop {
             last_psk_flush: now_unix_ms(),
             last_rig_poll: now_unix_ms(),
             cat_ok: None,
-            monitor_owns_error: false,
+
             last_fd_qsos: 0,
             clock_offset_ms: 0,
         }
@@ -455,15 +485,20 @@ impl RadioLoop {
                         if let Ok(mut eng) = engine.lock() {
                             eng.set_audio_error(None);
                         }
-                        self.monitor_owns_error = false; // line cleared; nobody owns it
+                        self.err_owner = ErrOwner::None;
+                        // The fresh backend has NO mic stream — a stale-true flag
+                        // here fed the recorder empty audio for the rest of a
+                        // live recording, silently (review MAJOR). The rising
+                        // edge reopens the mic on the new backend next loop.
+                        self.voice_mic_open = false;
                     }
                     Err(e) => {
                         if let Ok(mut eng) = engine.lock() {
                             eng.set_audio_error(Some(format!("Audio device failed to open: {e}")));
                         }
-                        // A REAL device error now owns the audio-error line — a
-                        // later monitor success must not clear it (review catch).
-                        self.monitor_owns_error = false;
+                        // A REAL device error owns the line — monitor/voice-mic
+                        // notices may neither overwrite nor clear it.
+                        self.err_owner = ErrOwner::Device;
                     }
                 }
             } else if (want.tx_level - self.applied.tx_level).abs() > f32::EPSILON {
@@ -475,7 +510,10 @@ impl RadioLoop {
             // whose monitor starts off. This never rebuilds the capture/TX streams, so
             // the decode path never restarts. Guard: refuse to open the monitor on the
             // rig's TX output device, which would transmit the received band back out.
-            if audio_rebuilt || want.monitor_differs(&self.applied) {
+            if audio_rebuilt
+                || want.monitor_differs(&self.applied)
+                || std::mem::take(&mut self.monitor_reapply)
+            {
                 // Resolve "system default" to its REAL device name first — an
                 // empty monitor_device against a named audio_out that happens to
                 // BE the OS default was a hole in the name-based guard (review
@@ -496,30 +534,33 @@ impl RadioLoop {
                 if let Ok(mut eng) = engine.lock() {
                     match outcome {
                         Err(e) => {
-                            eng.set_audio_error(Some(format!(
-                                "Headphone monitor could not open: {e}"
-                            )));
-                            // We own the line now — a later monitor success may
-                            // clear it (the open-failure was sticky before).
-                            self.monitor_owns_error = true;
+                            // Write only over None or our own prior notice — a
+                            // Device error outranks us; a VoiceMic notice is the
+                            // operator's more recent concern.
+                            if matches!(self.err_owner, ErrOwner::None | ErrOwner::Monitor) {
+                                eng.set_audio_error(Some(format!(
+                                    "Headphone monitor could not open: {e}"
+                                )));
+                                self.err_owner = ErrOwner::Monitor;
+                            }
                         }
                         Ok(()) if want.monitor_enabled && guarded => {
-                            // Refused — surface why on the audio-status line (the loop's
-                            // audio-domain notice channel), once.
-                            eng.set_audio_error(Some(
-                                "Headphone monitor is off: the chosen output is the rig's TX \
-                                 device — monitoring it would transmit the received band. Pick a \
-                                 separate headphone or speaker device."
-                                    .to_string(),
-                            ));
-                            self.monitor_owns_error = true;
+                            if matches!(self.err_owner, ErrOwner::None | ErrOwner::Monitor) {
+                                eng.set_audio_error(Some(
+                                    "Headphone monitor is off: the chosen output is the rig's TX \
+                                     device — monitoring it would transmit the received band. Pick a \
+                                     separate headphone or speaker device."
+                                        .to_string(),
+                                ));
+                                self.err_owner = ErrOwner::Monitor;
+                            }
                         }
                         Ok(()) => {
-                            // Clear only a line the MONITOR wrote (guard refusal or
-                            // open failure) — never stomp a real device error.
-                            if self.monitor_owns_error {
+                            // Clear only a line the MONITOR wrote — never a real
+                            // device error, never the voice-mic's notice.
+                            if self.err_owner == ErrOwner::Monitor {
                                 eng.set_audio_error(None);
-                                self.monitor_owns_error = false;
+                                self.err_owner = ErrOwner::None;
                             }
                         }
                     }
@@ -853,10 +894,80 @@ impl RadioLoop {
         // and, while recording, accumulate the captured frame into the engine's buffer.
         // One engine lock for both. Gated on `tx_enabled` (Monitor) inside the engine.
         {
+            // Voice-mic recording source: while a VOICE-MESSAGE recording is in
+            // progress AND the operator configured a dedicated voice-mic device, capture
+            // the operator's voice from a SECOND transient input stream on that device —
+            // instead of the shared tap, which on a digital setup is the rig's RX codec
+            // (so recording a voice message would otherwise record the band). QSO
+            // recording is deliberately NOT mic-routed: its documented job is capturing
+            // the CONTACT (the received audio), which IS the shared tap. The mic
+            // open/close takes the cpal host lock, so it runs OUTSIDE the engine lock, and
+            // it never touches the main capture stream, so the decode path never restarts.
+            let recording_active = {
+                let eng = engine.lock().map_err(|e| e.to_string())?;
+                eng.is_recording()
+            };
+            let want_mic =
+                crate::backend::want_voice_mic(recording_active, &self.applied.voice_mic_device);
+            if want_mic && !self.voice_mic_open && !self.voice_mic_failed {
+                // Rising edge: open the mic once. A failed open surfaces why and falls back
+                // to the shared tap; `voice_mic_failed` blocks a per-loop retry until the
+                // recording ends (so we don't spam the device open every 20 ms).
+                match backend.set_voice_mic(Some(&self.applied.voice_mic_device)) {
+                    Ok(()) => self.voice_mic_open = true,
+                    Err(e) => {
+                        self.voice_mic_failed = true;
+                        // Notice only over None or our own line — a real device
+                        // error or a live monitor notice is not ours to stomp
+                        // (review: the mic failure erased both kinds).
+                        if matches!(self.err_owner, ErrOwner::None | ErrOwner::VoiceMic) {
+                            if let Ok(mut eng) = engine.lock() {
+                                eng.set_audio_error(Some(format!(
+                                    "Voice mic could not open: {e} — recording from the shared \
+                                     input instead"
+                                )));
+                            }
+                            self.err_owner = ErrOwner::VoiceMic;
+                        }
+                    }
+                }
+            } else if !want_mic && (self.voice_mic_open || self.voice_mic_failed) {
+                // Falling edge (recording ended / device cleared): close the mic stream,
+                // clear retry suppression, and clear only a notice WE own — then nudge
+                // the monitor block to re-surface its own guard/failure state if any
+                // (its notice may have predated ours).
+                if self.voice_mic_open {
+                    backend.set_voice_mic(None).ok();
+                    self.voice_mic_open = false;
+                }
+                self.voice_mic_failed = false;
+                if self.err_owner == ErrOwner::VoiceMic {
+                    if let Ok(mut eng) = engine.lock() {
+                        eng.set_audio_error(None);
+                    }
+                    self.err_owner = ErrOwner::None;
+                    self.monitor_reapply = true;
+                }
+            }
+            // The audio the recorder ingests this iteration: the mic when its stream is
+            // live, else the shared capture tap (today's behavior / the failed-open
+            // fallback). Only the recorder switches source — the decoder always reads the
+            // shared `captured` folded in at the top of the loop.
+            let mic_samples: Vec<f32> = if self.voice_mic_open {
+                backend.voice_capture()
+            } else {
+                Vec::new()
+            };
+            let rec_samples: &[f32] = if self.voice_mic_open {
+                &mic_samples
+            } else {
+                &captured
+            };
+
             let (abort, samples, qso_rec, qso_path) = {
                 let mut eng = engine.lock().map_err(|e| e.to_string())?;
                 if eng.is_recording() {
-                    eng.push_record_samples(&captured);
+                    eng.push_record_samples(rec_samples);
                 }
                 (
                     eng.take_voice_abort(),
@@ -906,6 +1017,9 @@ impl RadioLoop {
                 }
                 (true, true) => {
                     if let Some(s) = self.qso_sink.as_mut() {
+                        // Always the shared RX tap: the QSO recording is the
+                        // CONTACT, never the operator's mic (which may be live
+                        // for a simultaneous voice-message recording).
                         let _ = s.write(&captured);
                     }
                     // Safety auto-stop for a forgotten recording (mirrors the tune-carrier
@@ -1765,6 +1879,10 @@ struct Transport {
     broker_self_port: Option<u16>,
     audio_in: String,
     audio_out: String,
+    /// Dedicated voice-mic device for recordings ("" = record from the shared input).
+    /// Carried here so the recording block reads the live value; changing it never
+    /// rebuilds the capture/TX streams (it only affects the transient mic stream).
+    voice_mic_device: String,
     tx_level: f32,
     /// Dark headphone-monitor settings (off by default). Carried here so a change is
     /// applied to the running backend IN PLACE — never as a capture-stream rebuild.
@@ -1786,6 +1904,9 @@ impl Transport {
             broker_self_port: c.broker_self_port,
             audio_in: c.audio_in.clone(),
             audio_out: c.audio_out.clone(),
+            // The voice mic is not part of the startup seed — the initial applied state
+            // is "none", so the first recording reads it from the live engine settings.
+            voice_mic_device: String::new(),
             tx_level: c.tx_level,
             // The monitor is not part of the startup seed — the initial applied state
             // is "off", so the first loop turns it on from the live engine settings.
@@ -1811,6 +1932,7 @@ impl Transport {
             },
             audio_in: s.audio_in.clone(),
             audio_out: s.audio_out.clone(),
+            voice_mic_device: s.voice_mic_device.clone(),
             tx_level: s.tx_level,
             monitor_enabled: s.monitor_enabled,
             monitor_device: s.monitor_device.clone(),
@@ -2442,6 +2564,7 @@ mod tests {
             broker_self_port,
             audio_in: String::new(),
             audio_out: String::new(),
+            voice_mic_device: String::new(),
             tx_level: 0.9,
             monitor_enabled: false,
             monitor_device: String::new(),
@@ -2538,6 +2661,254 @@ mod tests {
         assert!(
             reopened.get(),
             "a rig-affecting Settings change triggers reopen_rig"
+        );
+    }
+
+    // ---- voice-mic recording source (the pure predicate is tested in backend.rs) ----
+
+    /// Helper: an engine with a configured voice mic and a voice-message recording started.
+    fn recording_engine(voice_mic_device: &str) -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            eng.apply_settings(Settings {
+                voice_mic_device: voice_mic_device.to_string(),
+                ..Settings::default()
+            });
+            eng.start_recording();
+        }
+        engine
+    }
+
+    #[test]
+    fn recording_with_a_voice_mic_feeds_the_recorder_from_the_mic_not_the_band() {
+        let engine = recording_engine("USB Mic");
+        let mut backend = MockBackend::new();
+        backend.queue_capture(vec![0.9, 0.9, 0.9]); // shared input = the rig codec / the band
+        backend.queue_voice_capture(vec![0.1, 0.2, 0.3]); // the operator's actual mic
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+
+        assert_eq!(
+            backend.voice_mic_calls,
+            vec![Some("USB Mic".to_string())],
+            "opened the configured mic exactly once"
+        );
+        assert!(state.voice_mic_open);
+        let recorded = engine.lock().unwrap().stop_recording();
+        assert_eq!(
+            recorded,
+            vec![0.1, 0.2, 0.3],
+            "the recording captured the mic, never the shared band audio"
+        );
+    }
+
+    #[test]
+    fn audio_rebuild_mid_recording_reopens_the_mic_on_the_new_backend() {
+        // Review MAJOR: swapping the backend (audio_in/out change mid-recording)
+        // left voice_mic_open stale-true — the recorder then read the NEW
+        // backend's nonexistent mic and captured silence for the rest of the
+        // recording, with no error. The Ok arm now resets the flag so the
+        // rising edge re-opens the mic on the fresh backend.
+        let engine = recording_engine("USB Mic");
+        let mut backend = MockBackend::new();
+        backend.queue_voice_capture(vec![0.1, 0.2]);
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+        assert!(state.voice_mic_open, "mic live on the first backend");
+
+        // The operator changes the audio device mid-recording → rebuild.
+        engine.lock().unwrap().apply_settings(Settings {
+            voice_mic_device: "USB Mic".to_string(),
+            audio_in: "Different Device".to_string(),
+            ..Settings::default()
+        });
+        engine.lock().unwrap().start_recording(); // apply_settings reset the engine's flag? keep recording on
+        let mut fresh = MockBackend::new();
+        fresh.queue_voice_capture(vec![0.5, 0.6]);
+        let mut ra2 = {
+            let fresh = std::cell::RefCell::new(Some(fresh));
+            move |_t: &Transport| -> Result<MockBackend, String> {
+                Ok(fresh.borrow_mut().take().expect("one rebuild"))
+            }
+        };
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra2,
+                &mut rr,
+            )
+            .unwrap();
+        assert!(
+            state.voice_mic_open,
+            "mic re-opened on the REBUILT backend (stale flag would fake this — check calls)"
+        );
+        assert_eq!(
+            backend.voice_mic_calls,
+            vec![Some("USB Mic".to_string())],
+            "the swapped-in backend saw its own mic open (not inherited state)"
+        );
+        let recorded = engine.lock().unwrap().stop_recording();
+        assert!(
+            !recorded.is_empty(),
+            "recording keeps receiving real audio across the rebuild — never silence"
+        );
+    }
+
+    #[test]
+    fn recording_without_a_voice_mic_records_from_the_shared_input() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().start_recording(); // no voice_mic_device configured
+        let mut backend = MockBackend::new();
+        backend.queue_capture(vec![0.5, 0.6]);
+        backend.queue_voice_capture(vec![0.1]); // must be ignored — no mic stream
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+
+        assert!(
+            backend.voice_mic_calls.is_empty(),
+            "no configured mic → never opens a second input stream"
+        );
+        assert!(!state.voice_mic_open);
+        assert_eq!(engine.lock().unwrap().stop_recording(), vec![0.5, 0.6]);
+    }
+
+    #[test]
+    fn voice_mic_open_failure_falls_back_to_the_shared_input_and_surfaces_it() {
+        let engine = recording_engine("Missing Mic");
+        let mut backend = MockBackend::new();
+        backend.voice_mic_fail = true; // the configured mic can't open
+        backend.queue_capture(vec![0.9, 0.8, 0.7]); // the shared input (the fallback)
+        backend.queue_voice_capture(vec![0.1, 0.2]); // must NOT be used (mic never opened)
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+
+        assert!(!state.voice_mic_open, "a failed open is never marked live");
+        assert!(
+            state.voice_mic_failed,
+            "the failure is latched, which also suppresses a per-loop reopen storm"
+        );
+        assert!(
+            matches!(state.err_owner, super::ErrOwner::VoiceMic),
+            "the surfaced notice is owned by the voice-mic writer"
+        );
+        let recorded = engine.lock().unwrap().stop_recording();
+        assert_eq!(
+            recorded,
+            vec![0.9, 0.8, 0.7],
+            "a failed mic falls back to the shared input — never records silence"
+        );
+        let err = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            err.as_deref()
+                .unwrap_or("")
+                .contains("Voice mic could not open"),
+            "the failure is surfaced on the audio-status line, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn stopping_a_recording_closes_the_voice_mic_stream() {
+        let engine = recording_engine("USB Mic");
+        let mut backend = MockBackend::new();
+        backend.queue_capture(vec![0.9]);
+        backend.queue_voice_capture(vec![0.1]);
+        backend.queue_capture(vec![0.9]); // second step's shared frame
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+
+        // Step 1: recording in progress → the mic opens.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+        assert!(state.voice_mic_open);
+
+        // Operator stops recording; the next step tears the mic stream down.
+        let _ = engine.lock().unwrap().stop_recording();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                20.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+
+        assert!(
+            !state.voice_mic_open,
+            "the mic stream closed once recording ended"
+        );
+        assert_eq!(
+            backend.voice_mic_calls,
+            vec![Some("USB Mic".to_string()), None],
+            "opened on the rising edge, closed on the falling edge"
         );
     }
 }

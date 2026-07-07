@@ -44,6 +44,41 @@ export function isNewEntity(
   return !log.some((q) => (q.country ?? '').trim().toUpperCase() === c)
 }
 
+export interface EntitySlots {
+  /** The entity (country) has at least one prior QSO in the log. */
+  workedEver: boolean
+  /** Distinct bands worked for the entity, normalized (trim + UPPER), first-seen order. */
+  bandsWorked: string[]
+  /** Distinct modes worked for the entity, normalized (trim + UPPER), first-seen order. */
+  modesWorked: string[]
+}
+
+/** Per-ENTITY band/mode-slot summary — the DXCC-Challenge axis that per-call
+ * `callHistory` can't answer: "I've worked this country, but is THIS band (or mode)
+ * a new slot for it?". Matches the entity on `country` case-insensitively, exactly as
+ * `isNewEntity` does (a blank/unresolved country never counts as worked). Bands and modes
+ * are normalized (trim + UPPER) so membership tests tolerate case/whitespace; they are used
+ * only for comparison, never displayed. */
+export function entitySlots(
+  log: { country?: string | null; band?: string | null; mode?: string | null }[],
+  country: string | null | undefined,
+): EntitySlots {
+  const c = (country ?? '').trim().toUpperCase()
+  if (!c) return { workedEver: false, bandsWorked: [], modesWorked: [] }
+  const bandsWorked: string[] = []
+  const modesWorked: string[] = []
+  let workedEver = false
+  for (const q of log) {
+    if ((q.country ?? '').trim().toUpperCase() !== c) continue
+    workedEver = true
+    const b = (q.band ?? '').trim().toUpperCase()
+    const m = (q.mode ?? '').trim().toUpperCase()
+    if (b && !bandsWorked.includes(b)) bandsWorked.push(b)
+    if (m && !modesWorked.includes(m)) modesWorked.push(m)
+  }
+  return { workedEver, bandsWorked, modesWorked }
+}
+
 /** Summarize a call's prior contacts from the full log. Case-insensitive on the call;
  * `band` is the current operating band for the dupe check (pass '' to skip it). */
 export function callHistory(log: LoggedQso[], call: string, band: string): CallHistory {

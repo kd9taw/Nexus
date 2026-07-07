@@ -220,6 +220,15 @@ pub struct Settings {
     pub audio_in: String,
     /// Output (playback) device name. Empty = system default output.
     pub audio_out: String,
+    /// Microphone device for RECORDING voice-keyer messages. Empty (default) = keep
+    /// today's behavior: record from `audio_in`, the shared capture input. But on a
+    /// typical digital setup that input is the RIG's RX codec / DAX, so recording a
+    /// voice message from it captures the BAND, not the operator's voice. Set this to
+    /// the operator's actual mic and each recording opens a SEPARATE transient input
+    /// on it for the recording's duration (the decode path / shared input is untouched).
+    /// A configured device that fails to open falls back to the shared input.
+    #[serde(default)]
+    pub voice_mic_device: String,
     /// Tx audio level (0.0–1.0) applied to outgoing samples before they reach
     /// the sound card.
     pub tx_level: f32,
@@ -675,6 +684,7 @@ impl Default for Settings {
             ],
             audio_in: String::new(),
             audio_out: String::new(),
+            voice_mic_device: String::new(),
             tx_level: 0.9,
             monitor_enabled: false,
             monitor_device: String::new(),
@@ -1008,6 +1018,28 @@ mod tests {
         let old: Settings = serde_json::from_str(partial).unwrap();
         assert!(!old.monitor_enabled);
         assert_eq!(old.monitor_level, 0.5);
+    }
+
+    #[test]
+    fn voice_mic_device_defaults_and_roundtrips() {
+        let s = Settings::default();
+        assert_eq!(
+            s.voice_mic_device, "",
+            "empty default = record from the shared input (today's behavior)"
+        );
+        // Round-trips as camelCase and reloads identically.
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"voiceMicDevice\":\"\""));
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+        // An old settings file without the key still loads (serde default → empty).
+        let partial = r#"{"mycall":"W9XYZ","audioIn":"USB CODEC"}"#;
+        let old: Settings = serde_json::from_str(partial).unwrap();
+        assert_eq!(old.voice_mic_device, "");
+        // A configured mic survives a save/load round-trip.
+        let mut s2 = Settings::default();
+        s2.voice_mic_device = "USB Microphone".into();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s2).unwrap()).unwrap();
+        assert_eq!(back.voice_mic_device, "USB Microphone");
     }
 
     #[test]
