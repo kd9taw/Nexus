@@ -4,6 +4,7 @@ import {
   Layers,
   Radio,
   Grid3x3,
+  MapPin,
   Tent,
   MailQuestion,
   TreePine,
@@ -20,6 +21,7 @@ export type NeedCat =
   | 'band'
   | 'mode'
   | 'grid'
+  | 'state'
   | 'dxped'
   | 'confirm'
   | 'pota'
@@ -46,6 +48,7 @@ export const NEED_VISUALS: Record<NeedCat, NeedVisual> = {
   band: { cls: 'need-band', Icon: Layers, label: 'BAND', title: 'New band-slot for this entity' },
   mode: { cls: 'need-mode', Icon: Radio, label: 'MODE', title: 'New mode for this entity' },
   grid: { cls: 'need-grid', Icon: Grid3x3, label: 'GRID', title: 'New grid square' },
+  state: { cls: 'need-state', Icon: MapPin, label: 'STATE', title: 'New US state (WAS) — a hint from the grid; confirm from the log' },
   dxped: { cls: 'need-dxped', Icon: Tent, label: 'DXPED', title: 'Active DXpedition — limited-time window', iconOnly: true },
   confirm: { cls: 'need-confirm', Icon: MailQuestion, label: 'CONFIRM', title: 'Worked — needs a confirmation (QSL)' },
   pota: { cls: 'need-pota', Icon: TreePine, label: 'POTA', title: 'Live POTA activator', iconOnly: true },
@@ -62,6 +65,7 @@ export const NEED_PRECEDENCE: NeedCat[] = [
   'band',
   'mode',
   'grid',
+  'state',
   'dxped',
   'confirm',
   'pota',
@@ -87,6 +91,7 @@ export const NEED_CHIP: Record<
   NewBand: { label: 'BAND', short: 'BAND', cls: 'band', title: 'New band-slot for this entity' },
   NewMode: { label: 'MODE', short: 'MODE', cls: 'mode', title: 'New mode for this entity' },
   NewGrid: { label: 'GRID', short: 'GRID', cls: 'grid', title: 'New grid square' },
+  NewState: { label: 'STATE', short: 'ST', cls: 'state', title: 'New US state (WAS) — best-guess from the grid' },
   Confirm: {
     label: 'CONFIRM',
     short: 'CFM',

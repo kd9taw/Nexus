@@ -35,6 +35,7 @@ const NEED_RANK: Record<NeedTag, number> = {
   NewEntity: 5,
   NewZone: 4,
   NewGrid: 4,
+  NewState: 4,
   NewBand: 3,
   NewMode: 2,
   Confirm: 1,

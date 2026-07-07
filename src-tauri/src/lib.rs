@@ -920,7 +920,7 @@ async fn get_propagation(
         let mut needs = propagation::LogNeeds::new();
         for q in eng.get_log() {
             // A "needs confirmation" must be award-grade (LoTW/paper), not eQSL.
-            needs.add(&q.call, &q.band, &q.mode, q.grid.as_deref(), q.award_confirmed);
+            needs.add(&q.call, &q.band, &q.mode, q.grid.as_deref(), q.state.as_deref(), q.award_confirmed);
         }
         // The operator's OWN decoded roster on the current band → "I heard X"
         // PathSpots. This feeds the opening detector + advisor from MONITORING
@@ -4564,7 +4564,7 @@ async fn get_need_alerts(
     let eng = state.lock().map_err(|e| e.to_string())?;
     let mut needs = propagation::LogNeeds::new();
     for q in eng.get_log() {
-        needs.add(&q.call, &q.band, &q.mode, q.grid.as_deref(), q.award_confirmed);
+        needs.add(&q.call, &q.band, &q.mode, q.grid.as_deref(), q.state.as_deref(), q.award_confirmed);
     }
     let snap = eng.snapshot();
     // Operator "wanted" watch list (W1.5) — captured before the lock drops.
@@ -4586,6 +4586,12 @@ async fn get_need_alerts(
             admitted_at: None,
             evidence: Some("decoded by YOUR radio on this band".to_string()),
             grid: s.grid.clone(), // own decode's Maidenhead grid → drives NewGrid
+            // Best-guess US state from the grid (drives the WAS NewState hint).
+            us_state: s
+                .grid
+                .as_deref()
+                .and_then(propagation::state_for_grid)
+                .map(|st| st.to_string()),
         })
         .collect();
     // The real value (empirical evidence, not a model): two complementary signals
@@ -4711,12 +4717,19 @@ async fn get_need_alerts(
                         "spotted by {} via cluster/RBN",
                         spotters.join(" + ")
                     )),
-                    grid: None, // cluster/RBN spots carry no grid
+                    grid: None,     // cluster/RBN spots carry no grid
+                    us_state: None, // no grid → no state hint from a cluster spot
                 });
             }
         }
     }
-    let mut alerts = propagation::rank_needs(&heard, &needs, needs.worked_zones(), needs.worked_grids());
+    let mut alerts = propagation::rank_needs(
+        &heard,
+        &needs,
+        needs.worked_zones(),
+        needs.worked_grids(),
+        needs.worked_states(),
+    );
     // Never alert on the operator's own call (their PSKR "heard me" echoes can
     // otherwise surface it as a phantom row).
     let me_up = snap.mycall.to_uppercase();
@@ -4808,6 +4821,7 @@ async fn get_need_alerts(
                 &needs,
                 needs.worked_zones(),
                 needs.worked_grids(),
+                needs.worked_states(),
             ) else {
                 continue;
             };
@@ -4867,6 +4881,7 @@ async fn get_need_alerts(
                 &needs,
                 needs.worked_zones(),
                 needs.worked_grids(),
+                needs.worked_states(),
             ) {
                 // wanted_alert doesn't know the spot metadata — carry it over.
                 a.freq_mhz = h.freq_mhz;

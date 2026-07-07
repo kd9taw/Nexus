@@ -143,6 +143,9 @@ pub struct LogNeeds {
     worked_zones: HashSet<u8>,
     /// 4-char Maidenhead grids worked (for the "new grid" need). Call-independent.
     worked_grids: HashSet<String>,
+    /// US states worked (for the WAS "new state" need), from the logged ADIF
+    /// STATE. Canonicalized to the 50 WAS codes; junk/territory states dropped.
+    worked_states: HashSet<String>,
 }
 
 impl LogNeeds {
@@ -154,7 +157,15 @@ impl LogNeeds {
     /// (cty.dat) so it matches the DXpedition side; unresolved calls are skipped
     /// (rare with the full country file). `band` is an ADIF band label ("20m"),
     /// `mode` an ADIF MODE string.
-    pub fn add(&mut self, call: &str, band: &str, mode: &str, grid: Option<&str>, confirmed: bool) {
+    pub fn add(
+        &mut self,
+        call: &str,
+        band: &str,
+        mode: &str,
+        grid: Option<&str>,
+        state: Option<&str>,
+        confirmed: bool,
+    ) {
         // A worked grid is independent of call resolution / DXCC — track it first.
         if let Some(g) = grid.and_then(crate::needalert::grid4) {
             self.worked_grids.insert(g);
@@ -162,6 +173,16 @@ impl LogNeeds {
         let Some(info) = dxcc::resolve(call) else {
             return;
         };
+        // A worked US state (WAS) — from the log's ADIF STATE, but GATED on a
+        // US-family DXCC entity, exactly like the awards engine. Without the gate,
+        // a non-US subdivision code that collides with a US postal code (Australian
+        // "WA" = Western Australia, Brazilian "SC"/"PA"/etc.) would poison the
+        // worked set and wrongly SUPPRESS a genuinely-needed US state.
+        if matches!(info.entity, "United States" | "Alaska" | "Hawaii") {
+            if let Some(s) = state.and_then(crate::awards::valid_state) {
+                self.worked_states.insert(s.to_string());
+            }
+        }
         // WAZ zone is valid even on a WAE/CQ-only entity, so track it BEFORE the
         // DXCC gate (need-aware spotting flags a new CQ zone independently).
         if (1..=40).contains(&info.cq_zone) {
@@ -198,6 +219,11 @@ impl LogNeeds {
     /// 4-char Maidenhead grids the operator has worked (for the "new grid" need).
     pub fn worked_grids(&self) -> &HashSet<String> {
         &self.worked_grids
+    }
+
+    /// US states the operator has worked (for the WAS "new state" need).
+    pub fn worked_states(&self) -> &HashSet<String> {
+        &self.worked_states
     }
 }
 
@@ -592,7 +618,7 @@ mod tests {
             NeedKind::Atno
         );
         // Work Japan on 40m CW, unconfirmed.
-        n.add("JA1ABC", "40m", "CW", None, false);
+        n.add("JA1ABC", "40m", "CW", None, None, false);
         // Entity worked, but not on 20m → NewBand.
         assert_eq!(
             n.need("Japan", Band::B20, ModeClass::Digital),
@@ -606,7 +632,7 @@ mod tests {
         // 40m CW worked but unconfirmed → Confirm.
         assert_eq!(n.need("Japan", Band::B40, ModeClass::Cw), NeedKind::Confirm);
         // Confirm it → Satisfied.
-        n.add("JA1ABC", "40m", "CW", None, true);
+        n.add("JA1ABC", "40m", "CW", None, None, true);
         assert_eq!(
             n.need("Japan", Band::B40, ModeClass::Cw),
             NeedKind::Satisfied
@@ -631,7 +657,7 @@ mod tests {
             most_wanted_rank: None,
         };
         let mut needs = LogNeeds::new();
-        needs.add("W9ZZZ", "20m", "FT8", None, true); // United States, 20m, Digital, confirmed
+        needs.add("W9ZZZ", "20m", "FT8", None, None, true); // United States, 20m, Digital, confirmed
         let wx = SpaceWx::default();
         let advisory = PropAdvisor::new("KD9TAW", "EN52").advise(NOW, &[], &wx);
         let dash = DxpeditionTracker::new("EN52").dashboard(NOW, &[plan], &needs, &advisory, &wx);
@@ -657,5 +683,25 @@ mod tests {
         let advisory = PropAdvisor::new("KD9TAW", "EN52").advise(NOW, &[], &wx);
         let dash = DxpeditionTracker::new("EN52").dashboard(NOW, &[plan], &needs, &advisory, &wx);
         assert!(dash.workable_now.is_empty());
+    }
+
+    #[test]
+    fn worked_states_is_gated_on_a_us_entity_not_a_colliding_subdivision() {
+        // A Western-Australia contact carries ADIF STATE "WA" (Western Australia)
+        // — which collides with Washington's postal code. It must NOT enter the
+        // worked-states set (that would wrongly SUPPRESS a needed Washington),
+        // while a real US contact's state does. Grids are call-independent and
+        // still tracked either way.
+        let mut n = LogNeeds::new();
+        n.add("VK6XYZ", "20m", "FT8", Some("OF78"), Some("WA"), true); // Western Australia
+        assert!(
+            !n.worked_states().contains("WA"),
+            "a non-US subdivision code must not poison worked_states"
+        );
+        n.add("W7ABC", "20m", "FT8", Some("CN87"), Some("WA"), true); // real Washington
+        assert!(
+            n.worked_states().contains("WA"),
+            "a genuine US-state QSO does count for WAS"
+        );
     }
 }

@@ -1519,10 +1519,15 @@ button.nb-chip:hover {
   color: #38bdf8;
   border: 1px solid color-mix(in srgb, #38bdf8 50%, transparent);
 }
-.need-chip.need-wanted {
+".need-chip.need-wanted {
   background: color-mix(in srgb, var(--need-wanted) 22%, transparent);
   color: var(--need-wanted);
   border: 1px solid color-mix(in srgb, var(--need-wanted) 50%, transparent);
+}
+.need-chip.need-state {
+  background: color-mix(in srgb, var(--need-state) 20%, transparent);
+  color: var(--need-state);
+  border: 1px solid color-mix(in srgb, var(--need-state) 48%, transparent);
 }
 .np-filter {
   margin-left: 10px;
@@ -2771,6 +2776,7 @@ button.nb-chip:hover {
   --need-band: #a16207;
   --need-mode: #0e7490;
   --need-grid: #047857;
+  --need-state: #0d9488; /* teal — new US state (WAS) */
   --need-dxped: #0369a1;
   --need-pota: #15803d;
   --need-sota: #6d28d9;
@@ -3857,6 +3863,7 @@ select optgroup {
   --need-band: #f59e0b; /* orange — new band-slot */
   --need-mode: #22d3ee; /* cyan — new mode */
   --need-grid: #34d399; /* green — new grid */
+  --need-state: #2dd4bf; /* teal — new US state (WAS) */
   --need-confirm: #9ca3af; /* grey — worked, needs a confirmation */
   --need-dxped: #38bdf8; /* sky — active DXpedition */
   --need-pota: #4ade80; /* green — live POTA activator */
@@ -3899,6 +3906,9 @@ select optgroup {
 }
 .need-sota {
   --need-color: var(--need-sota);
+}
+.need-state {
+  --need-color: var(--need-state);
 }
 .need-wanted {
   --need-color: var(--need-wanted);
@@ -7604,6 +7614,10 @@ select.settings-input {
 .decode-row.need-grid {
   border-left: 3px solid var(--need-grid);
   background: color-mix(in srgb, var(--need-grid) 16%, transparent);
+}
+.decode-row.need-state {
+  border-left: 3px solid var(--need-state);
+  background: color-mix(in srgb, var(--need-state) 16%, transparent);
 }
 .decode-row.need-confirm {
   border-left: 3px solid var(--need-confirm);

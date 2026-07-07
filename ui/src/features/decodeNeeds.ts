@@ -7,6 +7,7 @@ const TAG_TO_CAT: Record<NeedTag, NeedCat> = {
   NewBand: 'band',
   NewMode: 'mode',
   NewGrid: 'grid',
+  NewState: 'state',
   Confirm: 'confirm',
   Dxped: 'dxped',
   Pota: 'pota',

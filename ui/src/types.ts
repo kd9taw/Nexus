@@ -1007,6 +1007,7 @@ export type NeedTag =
   | 'NewBand'
   | 'NewMode'
   | 'NewGrid'
+  | 'NewState'
   | 'Confirm'
   | 'Dxped'
   | 'Pota'
