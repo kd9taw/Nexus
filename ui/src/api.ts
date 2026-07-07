@@ -876,6 +876,16 @@ export async function getSerialPorts(): Promise<string[]> {
   return invoke<string[]>('get_serial_ports')
 }
 
+/** Post your own DX spot to the connected human cluster (rejects if none connected). */
+export async function postSpot(freqMhz: number, call: string, comment: string): Promise<void> {
+  return invoke('post_spot', { freqMhz, call, comment })
+}
+
+/** Upcoming contests from the WA7BNM calendar (rejects if the feed is unreachable). */
+export async function getContests(): Promise<import('./types').ContestEvent[]> {
+  return invoke<import('./types').ContestEvent[]>('get_contests')
+}
+
 /** Enumerate the CURATED (verified) Hamlib rig models as [modelNumber, name] pairs. */
 export async function getRigModels(): Promise<[number, string][]> {
   return invoke<[number, string][]>('get_rig_models')

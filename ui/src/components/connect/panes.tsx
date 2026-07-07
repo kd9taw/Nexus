@@ -22,6 +22,8 @@ import { ChasePane } from '../prop/ChasePane'
 import { ChaseFeedPane } from '../prop/ChaseFeedPane'
 import { SatPassesPane } from '../prop/SatPassesPane'
 import { RotorPane } from '../prop/RotorPane'
+import { ContestCalendarPane } from '../ContestCalendarPane'
+import { getContests } from '../../api'
 import { GetoutCompass } from '../prop/GetoutCompass'
 import { getoutSummary } from '../../features/getout'
 import { GreylineWindow } from '../prop/GreylineWindow'
@@ -507,6 +509,15 @@ export const PANES: PaneDef[] = [
     // Self-contained control surface — polls read_rotator while mounted and
     // hides itself (→ this Basic hint) when nothing answers.
     expert: () => <RotorPane />,
+  },
+  {
+    id: 'contests',
+    title: 'Contests',
+    category: 'b3',
+    // Self-fetching (get_contests) — Basic stays a static hint since the data
+    // lives in the component, not PaneContext (same pattern as Satellite Passes).
+    basic: () => 'Upcoming HF/VHF contests (WA7BNM) appear here once online.',
+    expert: (c) => <ContestCalendarPane load={getContests} expert={c.expert} />,
   },
 ]
 

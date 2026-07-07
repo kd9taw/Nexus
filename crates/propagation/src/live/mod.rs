@@ -7,6 +7,7 @@
 
 pub mod aurora;
 pub mod clublog;
+pub mod contests;
 pub mod dxped;
 pub mod eqsl;
 pub mod hamqth;

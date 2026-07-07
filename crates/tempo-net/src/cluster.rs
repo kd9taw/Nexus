@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// One parsed cluster spot. Band derivation is left to the consumer (which owns
@@ -150,6 +151,38 @@ pub fn parse_dx_spot(line: &str) -> Option<ClusterSpot> {
         received_unix: 0, // stamped at buffer insertion
         corroborators: Vec::new(),
     })
+}
+
+/// Format a cluster "post spot" command line — the outbound counterpart of
+/// [`parse_dx_spot`]. Convention (universal across cluster software):
+/// `DX <freq_khz> <dxcall> <comment>` terminated with the same `\r\n` the login
+/// uses. `freq_khz` is rendered in its shortest exact form (14074.0 → "14074",
+/// 14025.5 → "14025.5"). The call is uppercased with ALL whitespace removed
+/// (a callsign is a single token) and the comment has CR/LF stripped — both
+/// close the injection vector where an embedded newline would smuggle a second
+/// command onto the wire. An empty comment is omitted (no trailing space).
+///
+/// Purely a formatter: the caller is responsible for validating `freq_khz`
+/// (finite, > 0) and that `call` is a real callsign before posting.
+pub fn format_dx_spot(freq_khz: f64, call: &str, comment: &str) -> String {
+    // A callsign carries no internal whitespace; dropping all of it (incl. CR/LF)
+    // means a hostile call field can't inject an extra telnet command.
+    let call: String = call
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    // The comment is operator free-text: strip the CR/LF command separators.
+    let comment: String = comment
+        .chars()
+        .filter(|c| *c != '\r' && *c != '\n')
+        .collect();
+    let comment = comment.trim();
+    if comment.is_empty() {
+        format!("DX {freq_khz} {call}\r\n")
+    } else {
+        format!("DX {freq_khz} {call} {comment}\r\n")
+    }
 }
 
 /// What the session wants the transport to do in response to received bytes.
@@ -339,12 +372,29 @@ fn pump<R: Read, W: Write>(
     on_spot: &mut dyn FnMut(&ClusterSpot),
     stop: &AtomicBool,
     connected: &AtomicBool,
+    outbox: &Mutex<VecDeque<String>>,
 ) -> std::io::Result<()> {
     let mut session = ClusterSession::new(call);
     let mut buf = [0u8; 4096];
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
+        }
+        // Flush any operator-queued outbound commands (e.g. a posted DX spot),
+        // but ONLY after login: the callsign must reach the node first, or it
+        // reads our `DX …` line as the login response and rejects it. Until then
+        // the commands stay queued (and survive to the next connection). Drained
+        // every iteration — the live socket's read timeout wakes the loop even
+        // when no bytes arrive, so a queued spot goes out within that window.
+        if session.logged_in {
+            // Copy out then release the lock: never hold it across the socket write.
+            let queued: Vec<String> = {
+                let mut q = outbox.lock().unwrap_or_else(|e| e.into_inner());
+                q.drain(..).collect()
+            };
+            for line in queued {
+                writer.write_all(line.as_bytes())?;
+            }
         }
         let n = match reader.read(&mut buf) {
             Ok(0) => return Ok(()), // connection closed
@@ -388,6 +438,7 @@ pub fn run(
     mut on_spot: impl FnMut(&ClusterSpot),
     stop: &AtomicBool,
     connected: &AtomicBool,
+    outbox: &Mutex<VecDeque<String>>,
 ) {
     const BASE: Duration = Duration::from_secs(2);
     const MAX: Duration = Duration::from_secs(60);
@@ -398,7 +449,7 @@ pub fn run(
             if let Ok(reader) = stream.try_clone() {
                 // `connected` flips true inside pump when the login prompt is
                 // ANSWERED (not on bare TCP-establish), and clears on session end.
-                let _ = pump(reader, stream, call, &mut on_spot, stop, connected);
+                let _ = pump(reader, stream, call, &mut on_spot, stop, connected, outbox);
                 connected.store(false, Ordering::Relaxed);
             }
         }
@@ -812,6 +863,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut spots: Vec<ClusterSpot> = Vec::new();
         let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
         pump(
             reader,
             &mut writer,
@@ -819,6 +871,7 @@ mod tests {
             &mut |sp| spots.push(sp.clone()),
             &stop,
             &connected,
+            &outbox,
         )
         .unwrap();
         assert_eq!(writer, b"W9XYZ\r\n", "the callsign was sent at the prompt");
@@ -840,11 +893,128 @@ mod tests {
         let mut writer: Vec<u8> = Vec::new();
         let stop = AtomicBool::new(true);
         let connected = AtomicBool::new(false);
-        pump(reader, &mut writer, "W9XYZ", &mut |_| {}, &stop, &connected).unwrap();
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        pump(
+            reader,
+            &mut writer,
+            "W9XYZ",
+            &mut |_| {},
+            &stop,
+            &connected,
+            &outbox,
+        )
+        .unwrap();
         assert!(writer.is_empty());
         assert!(
             !connected.load(Ordering::Relaxed),
             "never answered → never connected"
+        );
+    }
+
+    #[test]
+    fn format_dx_spot_builds_a_canonical_post_line() {
+        // Whole-kHz freq renders without a decimal; call is uppercased; CRLF terminates.
+        assert_eq!(
+            format_dx_spot(14074.0, "3y0j", "FT8 up 2"),
+            "DX 14074 3Y0J FT8 up 2\r\n"
+        );
+        // Fractional freq keeps its decimals exactly.
+        assert_eq!(
+            format_dx_spot(14025.5, "UA9CDC", "CW 599"),
+            "DX 14025.5 UA9CDC CW 599\r\n"
+        );
+        // Empty comment → no trailing space before the CRLF.
+        assert_eq!(format_dx_spot(7005.0, "ja1abc", ""), "DX 7005 JA1ABC\r\n");
+        // A comment that is only whitespace is treated as empty.
+        assert_eq!(
+            format_dx_spot(7005.0, "ja1abc", "   "),
+            "DX 7005 JA1ABC\r\n"
+        );
+    }
+
+    #[test]
+    fn format_dx_spot_sanitizes_against_command_injection() {
+        // CR/LF in the comment (the telnet command separators) are stripped so a
+        // hostile/pasted comment can't smuggle a second command onto the wire.
+        let line = format_dx_spot(14074.0, "3Y0J", "hi\r\nSH/DX all\r\nthere");
+        assert_eq!(line, "DX 14074 3Y0J hiSH/DX allthere\r\n");
+        assert_eq!(
+            line.matches("\r\n").count(),
+            1,
+            "exactly one line terminator"
+        );
+        // A newline embedded in the CALL field is closed the same way (all
+        // whitespace, incl. CR/LF, is removed from the single-token callsign).
+        let line = format_dx_spot(14074.0, "3Y0J\r\nDX 1 PIRATE", "x");
+        assert_eq!(line, "DX 14074 3Y0JDX1PIRATE x\r\n");
+        assert_eq!(line.matches("\r\n").count(), 1, "no injected extra command");
+    }
+
+    #[test]
+    fn pump_flushes_a_queued_command_after_login() {
+        // A spot is queued BEFORE the login prompt arrives; it must be held back
+        // until after the callsign is sent, then flushed — in that order.
+        let reader = ScriptReader {
+            chunks: vec![b"login: ".to_vec()].into(),
+        };
+        let mut writer: Vec<u8> = Vec::new();
+        let stop = AtomicBool::new(false);
+        let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        outbox
+            .lock()
+            .unwrap()
+            .push_back(format_dx_spot(14074.0, "3Y0J", "FT8"));
+        pump(
+            reader,
+            &mut writer,
+            "W9XYZ",
+            &mut |_| {},
+            &stop,
+            &connected,
+            &outbox,
+        )
+        .unwrap();
+        assert_eq!(
+            writer, b"W9XYZ\r\nDX 14074 3Y0J FT8\r\n",
+            "login is sent first, then the queued spot flushes after it"
+        );
+        assert!(
+            outbox.lock().unwrap().is_empty(),
+            "the queue is drained once flushed"
+        );
+    }
+
+    #[test]
+    fn pump_holds_a_queued_command_until_login() {
+        // No login prompt ever arrives (only a banner); the queued command must
+        // NOT be sent, and must remain buffered for the next connection.
+        let reader = ScriptReader {
+            chunks: vec![b"RBN banner, no prompt here\r\n".to_vec()].into(),
+        };
+        let mut writer: Vec<u8> = Vec::new();
+        let stop = AtomicBool::new(false);
+        let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        outbox
+            .lock()
+            .unwrap()
+            .push_back(format_dx_spot(14074.0, "3Y0J", "FT8"));
+        pump(
+            reader,
+            &mut writer,
+            "W9XYZ",
+            &mut |_| {},
+            &stop,
+            &connected,
+            &outbox,
+        )
+        .unwrap();
+        assert!(writer.is_empty(), "nothing sent before login");
+        assert_eq!(
+            outbox.lock().unwrap().len(),
+            1,
+            "the unsent command stays buffered"
         );
     }
 }

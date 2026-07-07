@@ -26,6 +26,9 @@ interface Props {
   ignoredCalls?: ReadonlySet<string>
   /** Toggle a call in/out of the session ignore set (Alt-double-click). */
   onToggleIgnore?: (call: string) => void
+  /** Post the selected station to the DX cluster (spot it at the current dial).
+   *  Absent = no cluster connected → the control hides. */
+  onSpot?: (call: string) => void
 }
 
 type SortKey = 'need' | 'call' | 'country' | 'dist' | 'bearing' | 'snr' | 'age'
@@ -71,6 +74,7 @@ export function OperateRoster({
   onCall,
   ignoredCalls,
   onToggleIgnore,
+  onSpot,
 }: Props) {
   // QTH magnetic declination (WMM) — the Brg column's tooltip shows the compass
   // heading a rotator zeroed on magnetic north needs.
@@ -174,6 +178,21 @@ export function OperateRoster({
         <label className="or-filter">
           <input type="checkbox" checked={hideWorked} onChange={(e) => setHideWorked(e.target.checked)} /> Hide worked
         </label>
+        {onSpot && (
+          <button
+            type="button"
+            className="or-filter or-spot"
+            disabled={!selectedCall}
+            onClick={() => selectedCall && onSpot(selectedCall)}
+            title={
+              selectedCall
+                ? `Spot ${selectedCall} to the DX cluster at the current dial`
+                : 'Select a station to spot it to the DX cluster'
+            }
+          >
+            Spot{selectedCall ? ` ${selectedCall}` : ''}
+          </button>
+        )}
       </div>
       <div className="or-grid" role="table">
         <div className="or-row or-header" role="row">

@@ -554,6 +554,13 @@ export interface Station {
   lotwUser?: boolean
 }
 
+export interface ContestEvent {
+  name: string
+  startUnix: number
+  endUnix: number
+  url: string | null
+}
+
 export interface ChatMessage {
   from: string | null
   to: string | null

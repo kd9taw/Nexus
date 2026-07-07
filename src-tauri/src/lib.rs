@@ -70,6 +70,17 @@ type SharedWxHistory = Arc<Mutex<propagation::SpaceWxHistory>>;
 /// this stop flag exists only so `cluster::run`'s signature is satisfied.
 static CLUSTER_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Outbound command queue for the HUMAN DX-cluster nodes — the `post_spot`
+/// command pushes a formatted `DX …` line here and the nodes' pump loops flush
+/// it once logged in. Nodes DRAIN (remove) each line, so with several nodes up
+/// exactly ONE posts each spot (whichever pump grabs it first). RBN skimmer
+/// feeds get [`RBN_DEAD_OUTBOX`] instead — you never post spots to a skimmer.
+static CLUSTER_OUTBOX: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+/// A never-fed outbox for the receive-only RBN feeds (satisfies `run`'s signature).
+static RBN_DEAD_OUTBOX: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
 /// Per-host once-latch for the human DX-cluster nodes (the SSB/phone aggregator): the set of
 /// node hosts already spawned this process. `set_settings` re-runs the spawn for every save,
 /// so this lets a NEWLY-added node connect live (skipping ones already up) without a restart.
@@ -273,6 +284,7 @@ fn start_cluster_feed(
             },
             &CLUSTER_STOP,
             &hp_conn.cluster_connected,
+            &RBN_DEAD_OUTBOX, // RBN is receive-only — never post to a skimmer
         );
     });
 }
@@ -336,6 +348,7 @@ fn start_human_cluster_feed(spots: &SharedSpots, host: &str, mycall: &str, healt
             },
             &CLUSTER_STOP,
             &conn,
+            &CLUSTER_OUTBOX, // the post target — `post_spot` pushes DX lines here
         );
     });
 }
@@ -1905,6 +1918,50 @@ struct SatPassDto {
 
 /// Current amateur-satellite picture: sub-satellite points for the Celestrak
 /// amateur group + next-24 h passes over the operator's grid. TLEs cached 12 h
+/// Post the operator's own DX spot to the human DX cluster. Formats a canonical
+/// `DX <freq_khz> <call> <comment>` line and queues it for the connected human
+/// node(s) to send. Gated on a node being connected NOW — a spot must not buffer
+/// and post stale hours later — and on a real callsign + a sane frequency.
+#[tauri::command]
+fn post_spot(freq_mhz: f64, call: String, comment: String) -> Result<(), String> {
+    if !freq_mhz.is_finite() || freq_mhz <= 0.0 {
+        return Err("invalid frequency".into());
+    }
+    let call = call.trim().to_ascii_uppercase();
+    if !is_real_call(&call) {
+        return Err("enter a valid callsign to spot".into());
+    }
+    let connected = PHONE_NODE_CONNS
+        .lock()
+        .map(|v| v.iter().any(|b| b.load(std::sync::atomic::Ordering::Relaxed)))
+        .unwrap_or(false);
+    if !connected {
+        return Err("no DX cluster connected — set a cluster host in Settings".into());
+    }
+    let line = tempo_net::cluster::format_dx_spot(freq_mhz * 1000.0, &call, &comment);
+    CLUSTER_OUTBOX
+        .lock()
+        .map_err(|_| "spot queue unavailable".to_string())?
+        .push_back(line);
+    Ok(())
+}
+
+/// Upcoming amateur-radio contests from the WA7BNM calendar RSS feed. Off the
+/// async runtime (blocking HTTP + parse). Rejects if the feed is unreachable.
+const CONTEST_RSS_URL: &str = "https://www.contestcalendar.com/calendar.rss";
+
+#[tauri::command]
+async fn get_contests() -> Result<Vec<propagation::live::contests::ContestEvent>, String> {
+    tauri::async_runtime::spawn_blocking(
+        || -> Result<Vec<propagation::live::contests::ContestEvent>, String> {
+            let xml = propagation::live::contests::fetch(CONTEST_RSS_URL)?;
+            Ok(propagation::live::contests::parse_contest_rss(&xml))
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// (+ persisted beside settings, so a restart serves instantly and offline
 /// starts stay honest). Subpoints are recomputed EVERY call (LEO tracks move
 /// ~4°/min); only the 24 h pass scan caches (10 min). Staleness is per bird:
@@ -7199,6 +7256,8 @@ pub fn run() {
             get_pca,
             get_declination,
             get_satellites,
+            get_contests,
+            post_spot,
             get_lotw_users_status,
             fetch_lotw_users,
             get_kc2g_muf,

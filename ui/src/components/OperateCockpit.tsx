@@ -17,7 +17,7 @@ import {
   toggleIgnored,
 } from '../txMessages'
 import { getSettings, notifyErase, setSettings } from '../api'
-import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
+import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording, postSpot } from '../api'
 import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { Waterfall } from './Waterfall'
@@ -696,6 +696,16 @@ export function OperateCockpit({
                   onCall={onCall}
                   ignoredCalls={ignored}
                   onToggleIgnore={handleToggleIgnore}
+                  onSpot={(call) => {
+                    // Spot at the current dial — in FT8/FT4 every station shares
+                    // it — with the active tier as the cluster comment.
+                    const mode = String(snap.link.tier).toUpperCase()
+                    postSpot(snap.radio.dialMhz, call, mode)
+                      .then(() => pushToast(`Spotted ${call} on the cluster`, 'info', 2500))
+                      .catch((e) =>
+                        pushToast(typeof e === 'string' ? e : 'Spot failed', 'error', 3500),
+                      )
+                  }}
                 />
               </div>
               <aside className="cockpit-side">
