@@ -42,6 +42,13 @@ const NEED_RANK: Record<NeedTag, number> = {
   Sota: 0,
 }
 
+// The call roster shows only ACTIVELY-heard stations: a station drops off once
+// it hasn't been decoded for this many T/R cycles, so the list reflects who's
+// on the band right now rather than everyone heard since the last band change.
+// (View-scoped — the backend roster is left intact so the Tempo/FT1 presence
+// and store-and-forward paths keep their longer retention.)
+const ACTIVE_ROSTER_CYCLES = 6
+
 const snrClass = (snr: number) => (snr >= -10 ? 'good' : snr >= -18 ? 'ok' : 'weak')
 /** Shared empty set so the ignore checks stay allocation-free per render. */
 const EMPTY_IGNORES: ReadonlySet<string> = new Set()
@@ -99,7 +106,9 @@ export function OperateRoster({
         age: currentSlot - s.lastHeardSlot,
       }
     })
-    let f = built
+    // Keep only stations heard within the recency window — the roster stays a
+    // live picture of the band, not a running tally.
+    let f = built.filter((x) => x.age <= ACTIVE_ROSTER_CYCLES)
     if (neededOnly) f = f.filter((x) => x.need != null)
     if (hideWorked) f = f.filter((x) => !x.s.worked || x.need != null)
     const dir = sort.dir === 'asc' ? 1 : -1
