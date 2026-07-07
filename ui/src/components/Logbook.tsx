@@ -3,6 +3,7 @@ import type { LoggedQso } from '../types'
 import {
   deleteQso,
   editQso,
+  exportGeneralLog,
   getLog,
   importAdif,
   logQso,
@@ -14,6 +15,16 @@ import {
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso } from '../api'
+
+/** Trigger a browser download of `text` as a file (no server round-trip). */
+function downloadText(filename: string, text: string, mime: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -416,6 +427,36 @@ export function Logbook({
             title="Reconcile a LoTW ADIF export into the log — upgrades confirmations + credit on existing QSOs"
           >
             Sync confirmations
+          </button>
+          <button
+            type="button"
+            className="export-btn"
+            disabled={log.length === 0}
+            onClick={() =>
+              withErrorToast(async () => {
+                const text = await exportGeneralLog('adif')
+                const stamp = new Date().toISOString().slice(0, 10)
+                downloadText(`nexus-log-${stamp}.adi`, text, 'text/plain')
+              }, 'Export failed')
+            }
+            title="Download the whole logbook as an ADIF file"
+          >
+            Export ADIF
+          </button>
+          <button
+            type="button"
+            className="export-btn"
+            disabled={log.length === 0}
+            onClick={() =>
+              withErrorToast(async () => {
+                const text = await exportGeneralLog('csv')
+                const stamp = new Date().toISOString().slice(0, 10)
+                downloadText(`nexus-log-${stamp}.csv`, text, 'text/csv')
+              }, 'Export failed')
+            }
+            title="Download the whole logbook as a CSV spreadsheet"
+          >
+            Export CSV
           </button>
           <button
             type="button"

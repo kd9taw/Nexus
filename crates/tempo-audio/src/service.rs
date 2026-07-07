@@ -1358,6 +1358,16 @@ impl RadioLoop {
                             eng.set_tx_enabled(true);
                         }
                     }
+                    // Companion mode: WSJT-X logged a QSO. It emits BOTH LoggedAdif
+                    // (type 12, the full ADIF record) and QsoLogged (type 5, a
+                    // structured summary) for the same contact — route ONLY the
+                    // ADIF one through the dedup-safe import path, and ignore the
+                    // structured summary, so the contact reaches the logbook /
+                    // awards / Needed board exactly once (never double-logged).
+                    WsjtxInbound::LoggedAdif { adif, .. } => {
+                        eng.import_adif(&adif);
+                    }
+                    WsjtxInbound::QsoLogged { .. } => {} // handled via LoggedAdif above
                     _ => {}
                 }
             }

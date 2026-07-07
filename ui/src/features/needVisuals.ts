@@ -8,6 +8,7 @@ import {
   MailQuestion,
   TreePine,
   Mountain,
+  Star,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -23,6 +24,7 @@ export type NeedCat =
   | 'confirm'
   | 'pota'
   | 'sota'
+  | 'wanted'
 
 export interface NeedVisual {
   /** CSS class suffix — pairs with the `--need-*` palette (`.decode-row.need-*`,
@@ -48,11 +50,13 @@ export const NEED_VISUALS: Record<NeedCat, NeedVisual> = {
   confirm: { cls: 'need-confirm', Icon: MailQuestion, label: 'CONFIRM', title: 'Worked — needs a confirmation (QSL)' },
   pota: { cls: 'need-pota', Icon: TreePine, label: 'POTA', title: 'Live POTA activator', iconOnly: true },
   sota: { cls: 'need-sota', Icon: Mountain, label: 'SOTA', title: 'Live SOTA activator', iconOnly: true },
+  wanted: { cls: 'need-wanted', Icon: Star, label: 'WANTED', title: 'On your wanted watch list' },
 }
 
 /** Canonical precedence (icon order left→right; also picks the row colour): the most
  * chase-worthy reason first. */
 export const NEED_PRECEDENCE: NeedCat[] = [
+  'wanted',
   'entity',
   'zone',
   'band',
@@ -106,5 +110,11 @@ export const NEED_CHIP: Record<
     short: 'SOTA',
     cls: 'sota',
     title: "Live SOTA activator — the row's call is on a summit right now",
+  },
+  Wanted: {
+    label: 'WANTED',
+    short: 'WANT',
+    cls: 'wanted',
+    title: 'On your wanted watch list',
   },
 }

@@ -1011,6 +1011,7 @@ export type NeedTag =
   | 'Dxped'
   | 'Pota'
   | 'Sota'
+  | 'Wanted'
 
 /** One phone voice-keyer slot: an F-key-numbered label bound to a recorded WAV.
  * `file` is empty until the operator records or imports a message. */
@@ -1534,6 +1535,15 @@ export interface Settings {
   alertCq: boolean
   /** Alert when a station not heard before this session appears. */
   alertNew: boolean
+  // --- Auto-CQ caller selection (W1.4) ---
+  /** When several stations answer your CQ, which to work first:
+   *  'first' (stock), 'strongest', 'farthest', or 'cq_first'. */
+  bestCaller: string
+  /** Ignore answering stations weaker than this SNR (dB) when picking. null = no floor. */
+  bestCallerMinSnr: number | null
+  // --- Wanted watch list / alert filters (W1.5) ---
+  /** Watch list: exact calls or trailing-* wildcard prefixes that raise a loud alert. */
+  wantedCalls: string[]
   // --- confirmations (LoTW) ---
   /** LoTW account username (often, but not always, the callsign). The password is
    *  NOT here — it lives in the OS keychain (set via setLotwPassword). */

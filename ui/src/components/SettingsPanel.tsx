@@ -10,6 +10,7 @@ import {
   detectRigs,
   downloadEqslReport,
   downloadLotwReport,
+  getAllRigModels,
   getAudioDevices,
   getBandPlan,
   getRigModels,
@@ -203,6 +204,11 @@ export function SettingsPanel({
   const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'saved'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [rigModels, setRigModels] = useState<[number, string][]>([])
+  // Full Hamlib catalog (thousands of entries) — fetched lazily only when the
+  // operator checks "Show all models", so the common case (curated ~50) stays fast.
+  const [allRigModels, setAllRigModels] = useState<[number, string][]>([])
+  const [allRigModelsLoading, setAllRigModelsLoading] = useState(false)
+  const [showAllRigModels, setShowAllRigModels] = useState(false)
   const [serialPorts, setSerialPorts] = useState<string[]>([])
   const [profiles, setProfiles] = useState<Profile[]>(() => loadProfiles())
   const [selectedProfile, setSelectedProfile] = useState('')
@@ -384,6 +390,17 @@ export function SettingsPanel({
     )
   }
 
+  // Wanted watch list: comma-separated exact calls or trailing-* wildcard prefixes
+  // (e.g. "VP8*, 3Y0J") that raise a loud alert even on a worked station.
+  const updateWantedCalls = (raw: string) => {
+    markDirty()
+    const list = raw
+      .split(',')
+      .map((x) => x.trim().toUpperCase())
+      .filter((x) => x.length > 0)
+    setForm((prev) => (prev ? { ...prev, wantedCalls: list } : prev))
+  }
+
   /** WSJT-X Split Operation (none | rig | fakeit). */
   const setSplitMode = (m: NonNullable<Settings['splitMode']>) => {
     markDirty()
@@ -445,10 +462,26 @@ export function SettingsPanel({
     if (raw.trim() !== '' && Number.isFinite(num) && num > 0) updateOverride(idx, { mhz: num })
   }
 
+  // Resolve a model's friendly name from whichever list(s) are loaded; an unrecognized
+  // number (e.g. typed directly) still commits — Hamlib may support it even unnamed here.
+  const findRigModelName = (modelNum: number): string =>
+    rigModels.find((m) => m[0] === modelNum)?.[1] ?? allRigModels.find((m) => m[0] === modelNum)?.[1] ?? ''
+
   const selectRig = (modelNum: number) => {
     markDirty()
-    const name = rigModels.find((m) => m[0] === modelNum)?.[1] ?? ''
-    setForm((prev) => (prev ? { ...prev, rigModel: modelNum, rigModelName: name } : prev))
+    setForm((prev) => (prev ? { ...prev, rigModel: modelNum, rigModelName: findRigModelName(modelNum) } : prev))
+  }
+
+  // Lazily fetch the full Hamlib catalog only the first time it's requested.
+  const onToggleShowAllRigModels = (checked: boolean) => {
+    setShowAllRigModels(checked)
+    if (checked && allRigModels.length === 0 && !allRigModelsLoading) {
+      setAllRigModelsLoading(true)
+      getAllRigModels()
+        .then(setAllRigModels)
+        .catch(() => {})
+        .finally(() => setAllRigModelsLoading(false))
+    }
   }
 
   // Zero-config: scan connected USB radios.
@@ -1310,19 +1343,54 @@ export function SettingsPanel({
 
               <label className="settings-field">
                 <span className="settings-label">Rig Model</span>
-                <select
-                  className="settings-input"
-                  value={String(form.rigModel)}
-                  onChange={(e) => selectRig(Number(e.target.value))}
-                >
-                  <option value="0">— None —</option>
-                  {rigModels.map(([num, name]) => (
-                    <option key={num} value={String(num)}>
-                      {name} ({num})
-                    </option>
-                  ))}
-                </select>
-                <span className="settings-hint">Hamlib rig model.</span>
+                <div className="settings-input-row">
+                  <select
+                    className="settings-input"
+                    value={String(form.rigModel)}
+                    onChange={(e) => selectRig(Number(e.target.value))}
+                  >
+                    <option value="0">— None —</option>
+                    {(showAllRigModels ? allRigModels : rigModels).map(([num, name]) => (
+                      <option key={num} value={String(num)}>
+                        {name} ({num})
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className="settings-input"
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    placeholder="or enter model #"
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      const n = Number(raw)
+                      if (raw.trim() !== '' && Number.isInteger(n) && n >= 0) {
+                        markDirty()
+                        setForm((prev) =>
+                          prev ? { ...prev, rigModel: n, rigModelName: findRigModelName(n) } : prev,
+                        )
+                      }
+                    }}
+                    aria-label="Enter a Hamlib rig model number directly"
+                  />
+                </div>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    checked={showAllRigModels}
+                    onChange={(e) => onToggleShowAllRigModels(e.target.checked)}
+                    aria-label="Show all Hamlib rig models"
+                  />
+                  <span className="settings-hint">
+                    Show all models{allRigModelsLoading ? ' (loading…)' : ''} — the list above
+                    defaults to ~50 curated common rigs; check this for the full Hamlib catalog.
+                  </span>
+                </span>
+                <span className="settings-hint">
+                  Hamlib rig model. Not listed? Type its model number directly — Hamlib may
+                  still support it even without a friendly name here.
+                </span>
               </label>
 
               <label className="settings-field">
@@ -2083,6 +2151,34 @@ export function SettingsPanel({
               </div>
 
               <div className="settings-field">
+                <span className="settings-label">Best caller (auto-CQ pick)</span>
+                <div className="settings-input-row">
+                  <select
+                    className="settings-input"
+                    value={form.bestCaller || 'first'}
+                    onChange={(e) => update('bestCaller', e.target.value)}
+                  >
+                    <option value="first">First to answer (default)</option>
+                    <option value="strongest">Strongest signal</option>
+                    <option value="farthest">Farthest away</option>
+                    <option value="cq_first">Prefer CQ callers</option>
+                  </select>
+                  <input
+                    className="settings-input"
+                    type="number"
+                    inputMode="numeric"
+                    value={form.bestCallerMinSnr ?? ''}
+                    placeholder="min SNR dB (optional)"
+                    onChange={(e) => updateNullableNum('bestCallerMinSnr', e.target.value, -30)}
+                    aria-label="Minimum SNR (dB) to consider when picking the best caller"
+                  />
+                </div>
+                <span className="settings-hint">
+                  When several stations answer your CQ, which to work first.
+                </span>
+              </div>
+
+              <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">Disable TX after sending 73</span>
                   <button
@@ -2520,6 +2616,23 @@ export function SettingsPanel({
                   chasing. Does NOT alert on every decode.
                 </span>
               </div>
+
+              <label className="settings-field">
+                <span className="settings-label">Wanted watch list</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={(form.wantedCalls ?? []).join(', ')}
+                  placeholder="VP8*, 3Y0J"
+                  onChange={(e) => updateWantedCalls(e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  Heard stations on this list raise a loud alert — even ones you've already
+                  worked. Comma-separated exact calls or a trailing-* wildcard prefix (e.g. VP8*).
+                </span>
+              </label>
             </div>
           </fieldset>
 

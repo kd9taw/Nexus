@@ -865,9 +865,15 @@ export async function getSerialPorts(): Promise<string[]> {
   return invoke<string[]>('get_serial_ports')
 }
 
-/** Enumerate supported Hamlib rig models as [modelNumber, name] pairs. */
+/** Enumerate the CURATED (verified) Hamlib rig models as [modelNumber, name] pairs. */
 export async function getRigModels(): Promise<[number, string][]> {
   return invoke<[number, string][]>('get_rig_models')
+}
+
+/** Enumerate the FULL Hamlib catalog (verified + extended) — for the Settings
+ *  "show all models" toggle and resolving a typed-in model number's name. */
+export async function getAllRigModels(): Promise<[number, string][]> {
+  return invoke<[number, string][]>('get_all_rig_models')
 }
 
 /** Zero-config: scan connected USB radios → suggested model + port + paired audio. */

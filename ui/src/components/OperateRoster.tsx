@@ -31,6 +31,7 @@ interface Props {
 type SortKey = 'need' | 'call' | 'country' | 'dist' | 'bearing' | 'snr' | 'age'
 
 const NEED_RANK: Record<NeedTag, number> = {
+  Wanted: 6,
   NewEntity: 5,
   NewZone: 4,
   NewGrid: 4,

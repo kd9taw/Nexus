@@ -228,6 +228,34 @@ pub fn encode_clear(id: &str, window: u8) -> Vec<u8> {
     w.into_bytes()
 }
 
+/// A completed contact reported by an upstream logger — the owned, parsed form
+/// of the [`QsoLogged`] encode struct. Field order and meaning mirror
+/// [`QsoLogged`] exactly, except the two `QDateTime`s are decoded back to Unix
+/// seconds (UTC). Carried by [`Inbound::QsoLogged`] and boxed there so that one
+/// 18-field variant does not bloat every `Inbound` value.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LoggedQso {
+    /// QSO end time, Unix seconds (UTC).
+    pub time_off: i64,
+    pub dx_call: String,
+    pub dx_grid: String,
+    pub tx_freq: u64,
+    pub mode: String,
+    pub report_sent: String,
+    pub report_recvd: String,
+    pub tx_power: String,
+    pub comments: String,
+    pub name: String,
+    /// QSO start time, Unix seconds (UTC).
+    pub time_on: i64,
+    pub op_call: String,
+    pub my_call: String,
+    pub my_grid: String,
+    pub exchange_sent: String,
+    pub exchange_recvd: String,
+    pub adif_propmode: String,
+}
+
 /// A parsed inbound datagram from a controlling app (e.g. GridTracker telling
 /// us to reply to a CQ, halt TX, or send free text).
 #[derive(Debug, Clone, PartialEq)]
@@ -289,8 +317,38 @@ pub enum Inbound {
         low_confidence: bool,
         off_air: bool,
     },
+    /// **QSOLogged (type 5)** — the operator logged a contact in the upstream
+    /// app (WSJT-X/JTDX/MSHV). In companion mode Nexus consumes this to log the
+    /// same QSO. Payload mirrors [`QsoLogged`] (the encode side); it is boxed to
+    /// keep this enum small. `id` is the sender key; the contact is in the box.
+    QsoLogged { id: String, qso: Box<LoggedQso> },
+    /// **LoggedADIF (type 12)** — the upstream app emits the just-logged QSO as
+    /// a raw ADIF record (the same text it appends to its `wsjtx_log.adi`).
+    /// Carried verbatim so Nexus can ingest it through its ADIF import path.
+    LoggedAdif { id: String, adif: String },
     /// A datagram we recognized the header of but do not act on.
     Other { id: String, message_type: u32 },
+}
+
+/// Decode a `QDateTime` (as [`QdsWriter::put_qdatetime`] wrote it) back to a
+/// Unix timestamp in whole seconds (UTC). Wire layout: `qint64` Julian day,
+/// `quint32` ms-of-day, `qint8` time-spec. WSJT-X always sends UTC (spec `1`)
+/// for QSO times, so the spec byte is consumed but not interpreted.
+fn read_qdatetime(r: &mut QdsReader<'_>) -> Option<i64> {
+    const JD_UNIX_EPOCH: i64 = 2_440_588;
+    const SECS_PER_DAY: i64 = 86_400;
+    let jd = r.read_i64()?;
+    let ms_of_day = r.read_u32()?;
+    let _spec = r.read_i8()?;
+    // Saturating math: a hostile/garbage Julian-day value must never panic the
+    // inbound poll loop (debug builds have overflow-checks on). An out-of-range
+    // jd just yields a clamped timestamp — harmless, since a bad datagram is
+    // dropped downstream anyway.
+    Some(
+        jd.saturating_sub(JD_UNIX_EPOCH)
+            .saturating_mul(SECS_PER_DAY)
+            .saturating_add((ms_of_day / 1000) as i64),
+    )
 }
 
 /// Parse an inbound WSJT-X datagram. Returns `None` if the magic/header is not
@@ -363,6 +421,33 @@ pub fn parse_inbound(bytes: &[u8]) -> Option<Inbound> {
             // `low_confidence` / `off_air` are tolerated absent on older senders.
             low_confidence: r.read_bool().unwrap_or(false),
             off_air: r.read_bool().unwrap_or(false),
+        }),
+        msg_type::QSO_LOGGED => Some(Inbound::QsoLogged {
+            id,
+            // Read in the exact field order `encode_qso_logged` writes.
+            qso: Box::new(LoggedQso {
+                time_off: read_qdatetime(&mut r)?,
+                dx_call: r.read_utf8()?.unwrap_or_default(),
+                dx_grid: r.read_utf8()?.unwrap_or_default(),
+                tx_freq: r.read_u64()?,
+                mode: r.read_utf8()?.unwrap_or_default(),
+                report_sent: r.read_utf8()?.unwrap_or_default(),
+                report_recvd: r.read_utf8()?.unwrap_or_default(),
+                tx_power: r.read_utf8()?.unwrap_or_default(),
+                comments: r.read_utf8()?.unwrap_or_default(),
+                name: r.read_utf8()?.unwrap_or_default(),
+                time_on: read_qdatetime(&mut r)?,
+                op_call: r.read_utf8()?.unwrap_or_default(),
+                my_call: r.read_utf8()?.unwrap_or_default(),
+                my_grid: r.read_utf8()?.unwrap_or_default(),
+                exchange_sent: r.read_utf8()?.unwrap_or_default(),
+                exchange_recvd: r.read_utf8()?.unwrap_or_default(),
+                adif_propmode: r.read_utf8()?.unwrap_or_default(),
+            }),
+        }),
+        msg_type::LOGGED_ADIF => Some(Inbound::LoggedAdif {
+            id,
+            adif: r.read_utf8()?.unwrap_or_default(),
         }),
         other => Some(Inbound::Other {
             id,
@@ -644,11 +729,104 @@ mod tests {
         );
     }
 
+    /// A QSOLogged (type 5) written by [`encode_qso_logged`] must parse back to
+    /// an equivalent [`Inbound::QsoLogged`] — this is the companion-mode contract
+    /// that lets Nexus auto-log a contact the upstream app's operator confirmed.
+    /// The two `QDateTime`s must survive as the original Unix-second instants.
+    #[test]
+    fn parse_qso_logged_roundtrip() {
+        let q = QsoLogged {
+            time_off: 1_577_836_800, // 2020-01-01T00:00:00Z
+            dx_call: "W1AW",
+            dx_grid: "FN31",
+            tx_freq: 14_075_500,
+            mode: "FT8",
+            report_sent: "-10",
+            report_recvd: "-12",
+            tx_power: "50",
+            comments: "FD",
+            name: "ARRL",
+            time_on: 1_577_836_860, // 2020-01-01T00:01:00Z (+60s)
+            op_call: "KD9TAW",
+            my_call: "KD9TAW",
+            my_grid: "EN52",
+            exchange_sent: "1D WI",
+            exchange_recvd: "3A EMA",
+            adif_propmode: "",
+        };
+        let bytes = encode_qso_logged("WSJT-X", &q);
+        match parse_inbound(&bytes).unwrap() {
+            Inbound::QsoLogged { id, qso } => {
+                assert_eq!(id, "WSJT-X");
+                assert_eq!(
+                    *qso,
+                    LoggedQso {
+                        time_off: 1_577_836_800,
+                        dx_call: "W1AW".to_string(),
+                        dx_grid: "FN31".to_string(),
+                        tx_freq: 14_075_500,
+                        mode: "FT8".to_string(),
+                        report_sent: "-10".to_string(),
+                        report_recvd: "-12".to_string(),
+                        tx_power: "50".to_string(),
+                        comments: "FD".to_string(),
+                        name: "ARRL".to_string(),
+                        time_on: 1_577_836_860,
+                        op_call: "KD9TAW".to_string(),
+                        my_call: "KD9TAW".to_string(),
+                        my_grid: "EN52".to_string(),
+                        exchange_sent: "1D WI".to_string(),
+                        exchange_recvd: "3A EMA".to_string(),
+                        adif_propmode: String::new(),
+                    }
+                );
+            }
+            other => panic!("expected QsoLogged, got {other:?}"),
+        }
+    }
+
+    /// LoggedADIF (type 12) carries the raw ADIF record verbatim so Nexus can
+    /// import it. Build one the way WSJT-X does (id + ADIF string) and parse it.
+    #[test]
+    fn parse_logged_adif() {
+        let adif = "<call:5>W1AW <band:3>20m <mode:3>FT8 <eor>";
+        let mut w = QdsWriter::new();
+        w.put_u32(MAGIC)
+            .put_u32(SCHEMA)
+            .put_u32(msg_type::LOGGED_ADIF)
+            .put_utf8(Some("WSJT-X"))
+            .put_utf8(Some(adif));
+        assert_eq!(
+            parse_inbound(&w.into_bytes()),
+            Some(Inbound::LoggedAdif {
+                id: "WSJT-X".to_string(),
+                adif: adif.to_string(),
+            })
+        );
+    }
+
     #[test]
     fn parse_rejects_bad_magic() {
         let mut w = QdsWriter::new();
         w.put_u32(0xDEADBEEF).put_u32(SCHEMA).put_u32(0);
         assert_eq!(parse_inbound(&w.into_bytes()), None);
+    }
+
+    #[test]
+    fn hostile_qdatetime_does_not_panic() {
+        // A type-5 datagram whose QDateTime Julian-day is i64::MAX must not panic
+        // the inbound poll loop (debug builds have overflow-checks on). Build the
+        // header + a raw QDateTime (jd / ms-of-day / spec) with an overflowing jd.
+        let mut w = QdsWriter::new();
+        w.put_u32(MAGIC)
+            .put_u32(SCHEMA)
+            .put_u32(msg_type::QSO_LOGGED)
+            .put_utf8(Some("evil"))
+            .put_i64(i64::MAX) // Julian day — overflows the naive (jd - epoch) * 86400
+            .put_u32(0)
+            .put_i8(1);
+        // Truncated after the first field is fine; the point is it must not panic.
+        let _ = parse_inbound(&w.into_bytes());
     }
 
     #[test]

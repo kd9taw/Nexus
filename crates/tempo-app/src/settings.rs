@@ -402,6 +402,25 @@ pub struct Settings {
     /// Alert when a new (not previously heard) station is decoded.
     pub alert_new: bool,
 
+    // --- Auto-CQ caller selection (W1.4) ---
+    /// When running CQ and several stations answer, which one to work first:
+    /// `"first"` = stock next-caller (WSJT-X behavior), `"strongest"` = highest
+    /// SNR, `"farthest"` = greatest distance from my grid, `"cq_first"` = prefer
+    /// a station that itself was calling CQ (a fresh contact over a tail-ender).
+    #[serde(default = "default_best_caller")]
+    pub best_caller: String,
+    /// When picking a caller, ignore any answering station weaker than this SNR
+    /// (dB). `None` = no floor. Guards against chasing an uncopyable caller.
+    #[serde(default)]
+    pub best_caller_min_snr: Option<i32>,
+
+    // --- Wanted watch list / alert filters (W1.5) ---
+    /// Operator "wanted" watch list: entries raise a LOUD need-alert when heard.
+    /// Each entry is an exact call or a trailing-`*` wildcard prefix
+    /// (e.g. `"VP8*"`, `"3Y0J"`, `"FT*"`). Empty = feature off.
+    #[serde(default)]
+    pub wanted_calls: Vec<String>,
+
     // --- confirmations (LoTW) ---
     /// LoTW account **username** (usually but not always the callsign). The
     /// password is NOT stored here — it lives in the OS keychain (set via the
@@ -528,6 +547,10 @@ fn default_rotator_baud() -> u32 {
 
 fn default_save_wav() -> String {
     "none".to_string()
+}
+
+fn default_best_caller() -> String {
+    "first".to_string()
 }
 
 fn default_monitor_level() -> f32 {
@@ -723,6 +746,9 @@ impl Default for Settings {
             qsy_set: vec!["20m".to_string(), "40m".to_string(), "30m".to_string()],
             qsy_cadence: tempo_core::qsy::DEFAULT_CADENCE,
             alert_my_call: true,
+            best_caller: default_best_caller(),
+            best_caller_min_snr: None,
+            wanted_calls: Vec::new(),
             alert_cq: false,
             // New-DXCC / new-grid alerts: ON by default — these are the "new ones"
             // worth chasing (not per-decode spam, which we never alert on).

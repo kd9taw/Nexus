@@ -39,6 +39,10 @@ pub enum NeedTag {
     /// The call belongs to an ACTIVE announced DXpedition — a limited-time window
     /// (appended alongside the award tags; never the primary row color).
     Dxped,
+    /// The call is on the operator's "wanted" watch list — an explicit ask to be told
+    /// loudly when it's heard, so it earns the TOP tier and leads the row, even when the
+    /// station advances no DX award (see [`wanted_alert`]).
+    Wanted,
 }
 
 impl NeedTag {
@@ -53,11 +57,14 @@ impl NeedTag {
             NeedTag::Dxped => "DXpedition",
             NeedTag::Pota => "POTA",
             NeedTag::Sota => "SOTA",
+            NeedTag::Wanted => "Wanted",
         }
     }
     /// Ranking weight (higher = more valuable to work right now).
     fn tier(self) -> u32 {
         match self {
+            // The operator asked for this call by name — it outranks even an ATNO.
+            NeedTag::Wanted => 120,
             NeedTag::NewEntity => 100,
             NeedTag::NewZone => 70,
             NeedTag::NewGrid => 60,
@@ -233,6 +240,9 @@ pub fn score(
         NeedTag::Dxped => format!("Active DXpedition — {}", info.entity),
         NeedTag::Pota => format!("POTA activator — {}", info.entity),
         NeedTag::Sota => format!("SOTA activator — {}", info.entity),
+        // Wanted is applied by [`wanted_alert`] (which owns its own headline), never by
+        // score(); this arm exists only for match exhaustiveness.
+        NeedTag::Wanted => format!("Wanted — {}", info.entity),
     };
     Some(NeedAlert {
         call: call.to_ascii_uppercase(),
@@ -397,6 +407,128 @@ pub fn activation_alert(
         spot.reference,
         spot.activator.to_ascii_uppercase()
     ));
+    Some(alert)
+}
+
+/// The operator's "wanted" watch list, borrowed from Settings. A heard station whose
+/// call matches any entry is something the operator explicitly asked to be told about,
+/// so it earns the loudest alert on the board — even when it advances no DX award (an
+/// already-worked entity you still want to catch again). Entries are either an exact
+/// call ("VP8PJ") or a trailing-`*` prefix ("VP8*"); matching is case-insensitive.
+#[derive(Debug, Clone, Copy)]
+pub struct WantedConfig<'a> {
+    /// Watch-list entries: an exact call, or a trailing-`*` prefix ("VP8*" → any VP8…).
+    pub calls: &'a [String],
+    /// When true, only a station actively calling CQ matches (ignore mid-QSO stations).
+    pub cq_only: bool,
+    /// Reject a station weaker than this SNR (dB). `None` = no floor. A station whose
+    /// SNR is UNKNOWN is never rejected — an explicit want isn't suppressed on missing
+    /// evidence (cluster/RBN spots often carry no SNR).
+    pub min_snr: Option<i32>,
+}
+
+/// Does one watch-list `entry` match `call_upper` (already trimmed + uppercased)? A
+/// trailing `*` is a prefix wildcard ("VP8*" matches "VP8PJ"); anything else is an exact
+/// match. A bare "*" (empty prefix) matches NOTHING — a stray wildcard must never turn
+/// the whole roster loud. Blank entries are ignored.
+fn wanted_entry_matches(entry: &str, call_upper: &str) -> bool {
+    let entry = entry.trim().to_ascii_uppercase();
+    match entry.strip_suffix('*') {
+        Some(prefix) => !prefix.is_empty() && call_upper.starts_with(prefix),
+        None => !entry.is_empty() && call_upper == entry,
+    }
+}
+
+/// Is this heard station a "wanted" hit — on the operator's watch list AND past the
+/// CQ-only / SNR gates? Pure and case-insensitive. `is_cq` is whether the station was
+/// calling CQ (meaningful only for own decodes; cluster/RBN spots pass `false`), `snr`
+/// its report in dB when known.
+pub fn wanted_match(call: &str, is_cq: bool, snr: Option<i32>, cfg: &WantedConfig) -> bool {
+    if cfg.calls.is_empty() {
+        return false; // nothing on the list → nothing wanted
+    }
+    // CQ gate: when set, the station must be actively calling CQ to qualify.
+    if cfg.cq_only && !is_cq {
+        return false;
+    }
+    // SNR floor: reject a station weaker than the operator's threshold. Unknown SNR
+    // passes (is_some_and is false) — see WantedConfig::min_snr.
+    if let Some(floor) = cfg.min_snr {
+        if snr.is_some_and(|s| s < floor) {
+            return false;
+        }
+    }
+    let call_upper = call.trim().to_ascii_uppercase();
+    !call_upper.is_empty()
+        && cfg
+            .calls
+            .iter()
+            .any(|e| wanted_entry_matches(e, &call_upper))
+}
+
+/// Build the loudest-tier Needed-board alert for a WANTED station. Like
+/// [`activation_alert`] (and unlike [`score`], which returns `None` for a fully-worked
+/// station), a watch-list hit is ITSELF the opportunity — so this yields an alert even
+/// when no DX award is advanced, carrying the [`NeedTag::Wanted`] tag PLUS any award the
+/// station also satisfies (a wanted new-one keeps its award chips and still leads with
+/// Wanted). Returns `None` when the station isn't a wanted hit (see [`wanted_match`]).
+/// The caller attaches the spot's freq/time/evidence and dedups against award/activation
+/// rows by `(call, band, mode)`, exactly as it does for [`score`]/[`activation_alert`].
+#[allow(clippy::too_many_arguments)]
+pub fn wanted_alert(
+    call: &str,
+    band: &str,
+    mode: &str,
+    grid: Option<&str>,
+    is_cq: bool,
+    snr: Option<i32>,
+    cfg: &WantedConfig,
+    needs: &dyn OperatorNeeds,
+    worked_zones: &HashSet<u8>,
+    worked_grids: &HashSet<String>,
+) -> Option<NeedAlert> {
+    if !wanted_match(call, is_cq, snr, cfg) {
+        return None;
+    }
+    // Any DX award this wanted station ALSO satisfies (merged, like activation_alert).
+    let award = score(call, band, mode, grid, needs, worked_zones, worked_grids);
+    let info = dxcc::resolve(call);
+    let mut alert = award.unwrap_or_else(|| NeedAlert {
+        call: call.to_ascii_uppercase(),
+        entity: info
+            .as_ref()
+            .map(|i| i.entity.to_string())
+            .unwrap_or_default(),
+        band: band.to_string(),
+        zone: info.as_ref().map(|i| i.cq_zone).unwrap_or(0),
+        tags: Vec::new(),
+        priority: 0,
+        headline: String::new(),
+        mode: ModeClass::from_adif(mode).label().to_string(),
+        freq_mhz: None,
+        admitted_at: None,
+        evidence: None,
+        grid_rarity: grid.and_then(crate::gridrarity::grid_rarity),
+    });
+    // Wanted is the loudest reason: it leads the tag list (drives the row color/headline)
+    // and floors the priority at its tier, so a watch-list hit tops the board above a
+    // random new one. Any award tags it merged keep riding along as extra chips.
+    if !alert.tags.contains(&NeedTag::Wanted) {
+        alert.tags.insert(0, NeedTag::Wanted);
+    }
+    alert.priority = alert.priority.max(NeedTag::Wanted.tier());
+    // A bare want names the entity/call; a want that's also an award keeps the award
+    // line with the Wanted flag prepended (mirrors the DXpedition append style).
+    alert.headline = if alert.headline.is_empty() {
+        let who = if alert.entity.is_empty() {
+            alert.call.clone()
+        } else {
+            alert.entity.clone()
+        };
+        format!("Wanted — {who}")
+    } else {
+        format!("Wanted · {}", alert.headline)
+    };
     Some(alert)
 }
 
@@ -1293,6 +1425,244 @@ mod tests {
             &needs,
             needs.worked_zones(),
             needs.worked_grids(),
+        )
+        .is_none());
+    }
+
+    fn wcfg(calls: &[String], cq_only: bool, min_snr: Option<i32>) -> WantedConfig<'_> {
+        WantedConfig {
+            calls,
+            cq_only,
+            min_snr,
+        }
+    }
+
+    #[test]
+    fn wanted_match_exact_call_is_case_insensitive_both_ways() {
+        // Uppercase entry vs varied heard-call casing/whitespace…
+        let calls = vec!["VP8PJ".to_string()];
+        let cfg = wcfg(&calls, false, None);
+        assert!(wanted_match("VP8PJ", false, None, &cfg));
+        assert!(wanted_match("vp8pj", false, None, &cfg), "lowercase call");
+        assert!(wanted_match("  VP8PJ  ", false, None, &cfg), "trimmed");
+        // …and a lowercase ENTRY still matches an uppercase call.
+        let lc = vec!["vp8pj".to_string()];
+        assert!(wanted_match("VP8PJ", false, None, &wcfg(&lc, false, None)));
+        // Exact means exact — a superstring or substring is not a hit.
+        assert!(!wanted_match("VP8PJX", false, None, &cfg));
+        assert!(!wanted_match("VP8", false, None, &cfg));
+        assert!(!wanted_match("W1AW", false, None, &cfg));
+    }
+
+    #[test]
+    fn wanted_match_prefix_wildcard() {
+        let calls = vec!["VP8*".to_string()];
+        let cfg = wcfg(&calls, false, None);
+        assert!(wanted_match("VP8PJ", false, None, &cfg));
+        assert!(wanted_match("VP8ORK", false, None, &cfg));
+        assert!(
+            wanted_match("vp8x", false, None, &cfg),
+            "case-insensitive prefix"
+        );
+        assert!(
+            wanted_match("VP8", false, None, &cfg),
+            "prefix itself starts_with"
+        );
+        assert!(
+            !wanted_match("VP9AB", false, None, &cfg),
+            "different prefix"
+        );
+        assert!(!wanted_match("W1AW", false, None, &cfg));
+    }
+
+    #[test]
+    fn wanted_match_bare_star_and_blank_entries_never_match() {
+        // A stray "*" or blank entry must never turn the whole roster loud.
+        let calls = vec!["*".to_string(), "  ".to_string(), String::new()];
+        let cfg = wcfg(&calls, false, None);
+        assert!(
+            !wanted_match("W1AW", false, None, &cfg),
+            "bare * matches nothing"
+        );
+        assert!(!wanted_match("3Y0J", false, None, &cfg));
+        // A blank heard call never matches a real entry either.
+        let real = vec!["W1AW".to_string()];
+        assert!(!wanted_match("   ", false, None, &wcfg(&real, false, None)));
+    }
+
+    #[test]
+    fn wanted_match_empty_list_never_matches() {
+        let calls: Vec<String> = Vec::new();
+        assert!(!wanted_match(
+            "W1AW",
+            true,
+            Some(30),
+            &wcfg(&calls, false, None)
+        ));
+    }
+
+    #[test]
+    fn wanted_match_cq_only_gates_non_cq_callers() {
+        let calls = vec!["W1AW".to_string()];
+        let cq = wcfg(&calls, true, None);
+        assert!(wanted_match("W1AW", true, None, &cq), "CQ caller passes");
+        assert!(
+            !wanted_match("W1AW", false, None, &cq),
+            "non-CQ rejected when cq_only"
+        );
+        // With the gate off, a non-CQ station on the list still matches.
+        assert!(wanted_match(
+            "W1AW",
+            false,
+            None,
+            &wcfg(&calls, false, None)
+        ));
+    }
+
+    #[test]
+    fn wanted_match_snr_floor_rejects_weaker_but_passes_unknown() {
+        let calls = vec!["W1AW".to_string()];
+        let cfg = wcfg(&calls, false, Some(-10));
+        assert!(
+            wanted_match("W1AW", false, Some(-5), &cfg),
+            "above floor passes"
+        );
+        assert!(
+            wanted_match("W1AW", false, Some(-10), &cfg),
+            "at floor passes"
+        );
+        assert!(
+            !wanted_match("W1AW", false, Some(-15), &cfg),
+            "below floor rejected"
+        );
+        // Unknown SNR is NOT rejected — an explicit want survives missing evidence.
+        assert!(
+            wanted_match("W1AW", false, None, &cfg),
+            "unknown SNR passes the floor"
+        );
+    }
+
+    #[test]
+    fn wanted_alert_surfaces_a_fully_worked_station_as_a_loud_row() {
+        // W1ABC advances no DX award (USA/20m/Phone + CQ zone 5 all satisfied) — but it's
+        // on the watch list, so it must still raise the loudest alert on the board.
+        let mut n = LogNeeds::new();
+        n.add("W1AW", "20m", "SSB", None, true);
+        let calls = vec!["W1ABC".to_string()];
+        let cfg = wcfg(&calls, false, None);
+        // score() alone yields nothing for this station.
+        assert!(score(
+            "W1ABC",
+            "20m",
+            "SSB",
+            None,
+            &n,
+            n.worked_zones(),
+            n.worked_grids()
+        )
+        .is_none());
+        let a = wanted_alert(
+            "W1ABC",
+            "20m",
+            "SSB",
+            None,
+            false,
+            None,
+            &cfg,
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+        )
+        .unwrap();
+        assert_eq!(
+            a.tags[0],
+            NeedTag::Wanted,
+            "Wanted leads the row: {:?}",
+            a.tags
+        );
+        assert_eq!(a.priority, 120, "loudest tier floors the priority");
+        assert!(
+            a.headline.starts_with("Wanted —"),
+            "names the station: {}",
+            a.headline
+        );
+        assert_eq!(a.mode, "Phone");
+    }
+
+    #[test]
+    fn wanted_alert_merges_a_dx_award_and_still_leads_with_wanted() {
+        let n = LogNeeds::new(); // empty log → 3Y0J is an all-time new one
+        let calls = vec!["3Y0*".to_string()]; // prefix wildcard hit
+        let cfg = wcfg(&calls, false, None);
+        let a = wanted_alert(
+            "3Y0J",
+            "20m",
+            "FT8",
+            None,
+            false,
+            None,
+            &cfg,
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+        )
+        .unwrap();
+        assert_eq!(
+            a.tags[0],
+            NeedTag::Wanted,
+            "Wanted leads even over a new one"
+        );
+        assert!(
+            a.tags.contains(&NeedTag::NewEntity),
+            "award chip kept: {:?}",
+            a.tags
+        );
+        assert_eq!(
+            a.priority, 120,
+            "at least the Wanted floor (no rarity boost here)"
+        );
+        assert!(
+            a.headline.starts_with("Wanted · "),
+            "award line kept: {}",
+            a.headline
+        );
+        assert!(
+            a.headline.contains("New one"),
+            "award detail preserved: {}",
+            a.headline
+        );
+    }
+
+    #[test]
+    fn wanted_alert_returns_none_when_not_a_hit() {
+        let n = LogNeeds::new();
+        let calls = vec!["3Y0J".to_string()];
+        // Call isn't on the list → no alert.
+        assert!(wanted_alert(
+            "W1AW",
+            "20m",
+            "FT8",
+            None,
+            true,
+            None,
+            &wcfg(&calls, false, None),
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+        )
+        .is_none());
+        // On the list, but the cq_only gate fails → no alert.
+        assert!(wanted_alert(
+            "3Y0J",
+            "20m",
+            "FT8",
+            None,
+            false,
+            None,
+            &wcfg(&calls, true, None),
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
         )
         .is_none());
     }

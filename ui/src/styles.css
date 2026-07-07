@@ -1519,6 +1519,11 @@ button.nb-chip:hover {
   color: #38bdf8;
   border: 1px solid color-mix(in srgb, #38bdf8 50%, transparent);
 }
+.need-chip.need-wanted {
+  background: color-mix(in srgb, var(--need-wanted) 22%, transparent);
+  color: var(--need-wanted);
+  border: 1px solid color-mix(in srgb, var(--need-wanted) 50%, transparent);
+}
 .np-filter {
   margin-left: 10px;
   font-size: 0.72rem;
@@ -2769,6 +2774,7 @@ button.nb-chip:hover {
   --need-dxped: #0369a1;
   --need-pota: #15803d;
   --need-sota: #6d28d9;
+  --need-wanted: #d97706; /* amber — on your wanted watch list */
   --need-confirm: #64748b;
 }
 
@@ -3855,6 +3861,7 @@ select optgroup {
   --need-dxped: #38bdf8; /* sky — active DXpedition */
   --need-pota: #4ade80; /* green — live POTA activator */
   --need-sota: #a78bfa; /* purple — live SOTA activator */
+  --need-wanted: #fbbf24; /* amber — on your wanted watch list */
 }
 .need-chip {
   font-size: 10.5px;
@@ -3892,6 +3899,9 @@ select optgroup {
 }
 .need-sota {
   --need-color: var(--need-sota);
+}
+.need-wanted {
+  --need-color: var(--need-wanted);
 }
 /* A subtle left accent on the card so needed stations stand out in the list. */
 .station-card.needed {
@@ -7571,6 +7581,10 @@ select.settings-input {
 /* Need-tagged rows in the band-activity feed — same vocabulary + palette as the
    Needed panel so the two views read as one system. (dxped/pota/sota are icon-only and
    never colour a row; the award tier keeps the colour.) */
+.decode-row.need-wanted {
+  border-left: 3px solid var(--need-wanted);
+  background: color-mix(in srgb, var(--need-wanted) 24%, transparent);
+}
 .decode-row.need-entity {
   border-left: 3px solid var(--need-entity);
   background: color-mix(in srgb, var(--need-entity) 22%, transparent);

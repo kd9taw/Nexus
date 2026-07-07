@@ -3545,6 +3545,24 @@ fn get_rig_models() -> Vec<(u32, String)> {
     }
 }
 
+/// Full Hamlib rig catalog (verified + extended) for the Settings "show all
+/// models" toggle — so an owner of a supported-but-uncurated rig can still find
+/// and select it (or type its model number).
+#[tauri::command]
+fn get_all_rig_models() -> Vec<(u32, String)> {
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::rigmodels::all_rig_models()
+            .into_iter()
+            .map(|(n, s)| (n, s.to_string()))
+            .collect()
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        Vec::new()
+    }
+}
+
 /// Tempo's proposed calling-frequency band plan (HF + VHF/UHF), for the band
 /// selector. Each entry is General-legal + clear of the existing watering holes.
 #[tauri::command]
@@ -4538,6 +4556,8 @@ async fn get_need_alerts(
         needs.add(&q.call, &q.band, &q.mode, q.grid.as_deref(), q.award_confirmed);
     }
     let snap = eng.snapshot();
+    // Operator "wanted" watch list (W1.5) — captured before the lock drops.
+    let wanted_calls = eng.settings().wanted_calls.clone();
     drop(eng); // nothing below needs the engine — don't hold the hot lock
     let band = snap.radio.band.clone();
     // Your own radio's decodes on the CURRENT band (you are the receiver). These come
@@ -4794,6 +4814,56 @@ async fn get_need_alerts(
             alerts.push(alert);
         }
         // Re-sort: an activation that is ALSO a new one must land among the new ones.
+        alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
+    }
+    // Wanted watch list (W1.5): a station on the operator's list must top the
+    // board even if it advances no award. This aggregated needs path carries no
+    // per-spot CQ status or SNR, so the cq_only/min_snr gates can't be honored
+    // here — the operator-facing controls for them are intentionally not shipped
+    // (only wanted_calls). We pass is_cq=true / snr=None so every watch-list hit
+    // surfaces; `wanted_match`/`wanted_alert` treat unknown SNR as passing.
+    if !wanted_calls.is_empty() {
+        let wcfg = propagation::WantedConfig {
+            calls: &wanted_calls,
+            cq_only: false,
+            min_snr: None,
+        };
+        // (a) Decorate existing rows that are on the watch list — loud, on top.
+        for a in &mut alerts {
+            if !a.tags.contains(&propagation::NeedTag::Wanted)
+                && propagation::wanted_match(&a.call, true, None, &wcfg)
+            {
+                a.tags.insert(0, propagation::NeedTag::Wanted);
+                a.priority = a.priority.max(120);
+                a.headline = format!("Wanted · {}", a.headline);
+            }
+        }
+        // (b) Surface a loud row for a wanted heard station that produced no
+        //     alert (an already-worked entity you still want to catch).
+        for h in &heard {
+            let up = h.call.to_ascii_uppercase();
+            if up == me_up || alerts.iter().any(|a| a.call == up && a.band == h.band) {
+                continue;
+            }
+            if let Some(mut a) = propagation::wanted_alert(
+                &h.call,
+                &h.band,
+                &h.mode,
+                h.grid.as_deref(),
+                true,
+                None,
+                &wcfg,
+                &needs,
+                needs.worked_zones(),
+                needs.worked_grids(),
+            ) {
+                // wanted_alert doesn't know the spot metadata — carry it over.
+                a.freq_mhz = h.freq_mhz;
+                a.admitted_at = h.admitted_at;
+                a.evidence = h.evidence.clone();
+                alerts.push(a);
+            }
+        }
         alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
     }
     Ok(alerts)
@@ -6838,6 +6908,7 @@ pub fn run() {
             preview_cw,
             cw_skim,
             get_rig_models,
+            get_all_rig_models,
             get_band_plan,
             set_license_class,
             get_licensed_band_plan,

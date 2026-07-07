@@ -1,16 +1,28 @@
-//! A curated subset of Hamlib rig model numbers for the rig-control UI.
+//! Hamlib rig model numbers for the rig-control UI, split into two tiers.
 //!
-//! These `(model, name)` pairs cover the radios most likely to be used for
-//! Field Day / digital work. The model numbers are **best-effort**: Hamlib's
-//! catalog is large and occasionally renumbered between releases, so the
-//! definitive list for an operator's installed Hamlib is `rigctl -l`. Model
-//! `1` is Hamlib's "Dummy" rig and `2` is "NET rigctl" (talk to another
-//! rigctld); both are always present.
+//! [`rig_models`] is the **verified** tier: `(model, name)` pairs we've
+//! sanity-checked and that cover the radios most likely to be used for Field
+//! Day / digital work. It's what the default Settings dropdown shows.
+//!
+//! [`all_rig_models`] is the **full** catalog: the verified tier plus a much
+//! broader set of common amateur transceivers so an operator whose exact rig
+//! isn't in the short list can still find it (surface this behind a "show all
+//! models" toggle). Rigctld actually speaks 250+ models; this covers the
+//! common transmitting amateur rigs across the major makers. For anything
+//! still not listed, the operator can type the raw Hamlib model number — the
+//! definitive list for their installed Hamlib is `rigctl -l`.
+//!
+//! Every number here is anchored on Hamlib's `include/hamlib/riglist.h`
+//! (`model = 1000 * backend + index`, e.g. Dummy=1, NET=2, FLRig=4,
+//! IC-7300=3073). Model indices are append-only and never renumbered across
+//! Hamlib releases, so a number verified in one 4.x release holds in the next.
 
-/// `(hamlib_model_number, friendly_name)` for a curated set of common rigs.
+/// `(hamlib_model_number, friendly_name)` for the curated **verified** set of
+/// common rigs. This is the default UI list.
 ///
 /// Ordered roughly Dummy/NET first, then by manufacturer. Not exhaustive —
-/// verify against `rigctl -l` for the operator's Hamlib version.
+/// for the long tail use [`all_rig_models`] or type the model number directly;
+/// `rigctl -l` is the definitive list for the operator's Hamlib version.
 pub fn rig_models() -> Vec<(u32, &'static str)> {
     // Numbers verified against Hamlib 4.7.1 `include/hamlib/riglist.h`:
     // model = 1000 * backend + index (RIG_MAKE_MODEL), anchored on
@@ -93,9 +105,90 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
     ]
 }
 
-/// Friendly name for a Hamlib model number, if it's in the curated table.
-pub fn rig_model_name(model: u32) -> Option<&'static str> {
+/// The additional (beyond-verified) common amateur transceivers that fill out
+/// the full catalog. Kept private; callers want [`all_rig_models`] (verified +
+/// these) or [`rig_models`] (verified only).
+///
+/// Every number is anchored on Hamlib's `riglist.h` (`model = 1000 * backend +
+/// index`). These are drawn from the authoritative header — no guessed numbers.
+fn extended_rig_models() -> Vec<(u32, &'static str)> {
+    vec![
+        // Hamlib built-in bridges (backend 0)
+        (5, "TRX-Manager (rig control)"),
+        (7, "TCI (SunSDR / ExpertSDR)"),
+        // Icom (backend 3)
+        (3011, "Icom IC-706MKIIG"),
+        (3010, "Icom IC-706MKII"),
+        (3009, "Icom IC-706"),
+        (3055, "Icom IC-703"),
+        (3061, "Icom IC-7200"),
+        (3067, "Icom IC-7410"),
+        (3062, "Icom IC-7700"),
+        (3063, "Icom IC-7600"),
+        (3056, "Icom IC-7800"),
+        (3068, "Icom IC-9100"),
+        (3026, "Icom IC-756"),
+        (3027, "Icom IC-756PRO"),
+        (3047, "Icom IC-756PROII"),
+        (3019, "Icom IC-735"),
+        // Yaesu (backend 1)
+        (1001, "Yaesu FT-847"),
+        (1010, "Yaesu FT-736R"),
+        (1021, "Yaesu FT-100 / FT-100D"),
+        (1023, "Yaesu FT-897"),
+        (1027, "Yaesu FT-450"),
+        (1014, "Yaesu FT-920"),
+        (1030, "Yaesu FTDX9000"),
+        (1004, "Yaesu FT-1000MP Mark-V"),
+        (1016, "Yaesu FT-990"),
+        // Kenwood (backend 2)
+        (2001, "Kenwood TS-50S"),
+        (2002, "Kenwood TS-440S"),
+        (2003, "Kenwood TS-450S"),
+        (2004, "Kenwood TS-570D"),
+        (2016, "Kenwood TS-570S"),
+        (2005, "Kenwood TS-690S"),
+        (2007, "Kenwood TS-790"),
+        (2011, "Kenwood TS-940S"),
+        (2013, "Kenwood TS-950SDX"),
+        (2025, "Kenwood TS-140S"),
+        (2034, "Kenwood TM-D710"),
+        (2035, "Kenwood TM-V71"),
+        // Kenwood-family backend: Elecraft K2 + SDRs that speak Kenwood CAT
+        (2021, "Elecraft K2"),
+        (2040, "OpenHPSDR / PiHPSDR"),
+        (2049, "Malachite DSP SDR"),
+        (2050, "Lab599 Discovery TX-500"),
+        (2051, "SDRuno (SDRplay)"),
+        // Ten-Tec (backend 16)
+        (16001, "Ten-Tec TT-550 Pegasus"),
+        (16002, "Ten-Tec TT-538 Jupiter"),
+        (16007, "Ten-Tec TT-516 Argonaut V"),
+        (16009, "Ten-Tec TT-585 Paragon"),
+        // Xiegu (Icom-family backend)
+        (3076, "Xiegu X108G"),
+        // Alinco (backend 17)
+        (17001, "Alinco DX-77"),
+    ]
+}
+
+/// The full rig catalog: the [`rig_models`] verified set first (in curated
+/// order), then [`extended_rig_models`] grouped by manufacturer. Use this for
+/// the "show all models" view; the two tiers never share a model number, so a
+/// caller can badge verified entries by membership in [`rig_models`].
+pub fn all_rig_models() -> Vec<(u32, &'static str)> {
     rig_models()
+        .into_iter()
+        .chain(extended_rig_models())
+        .collect()
+}
+
+/// Friendly name for a Hamlib model number, if it's anywhere in the full
+/// catalog (verified or extended). Returns `None` for an unknown number, so a
+/// typed-in model that Hamlib supports but we don't name still shows as blank
+/// rather than mislabeled.
+pub fn rig_model_name(model: u32) -> Option<&'static str> {
+    all_rig_models()
         .into_iter()
         .find(|(m, _)| *m == model)
         .map(|(_, name)| name)
@@ -104,6 +197,7 @@ pub fn rig_model_name(model: u32) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn table_is_non_empty_and_has_builtins() {
@@ -120,16 +214,80 @@ mod tests {
     fn name_lookup_resolves_known_and_unknown() {
         assert_eq!(rig_model_name(3073), Some("Icom IC-7300"));
         assert_eq!(rig_model_name(1), Some("Hamlib Dummy"));
-        // An out-of-table model number has no curated name.
+        // An out-of-catalog model number has no name.
         assert_eq!(rig_model_name(999_999), None);
     }
 
     #[test]
     fn model_numbers_are_unique() {
         let models = rig_models();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         for (m, _) in models {
             assert!(seen.insert(m), "duplicate model number {m}");
+        }
+    }
+
+    #[test]
+    fn full_catalog_supersets_verified_without_collisions() {
+        let verified = rig_models();
+        let all = all_rig_models();
+        // The full catalog is strictly larger (verified + extended entries).
+        assert!(all.len() > verified.len());
+        assert_eq!(all.len(), verified.len() + extended_rig_models().len());
+
+        // Every verified entry survives verbatim into the full catalog.
+        let all_set: HashSet<(u32, &str)> = all.iter().copied().collect();
+        for entry in &verified {
+            assert!(
+                all_set.contains(entry),
+                "verified entry {entry:?} missing from full catalog"
+            );
+        }
+
+        // No model number is duplicated across the whole catalog. This is the
+        // load-bearing guard: an accidental collision between the verified and
+        // extended tiers would silently mislabel a rig the operator selects.
+        let mut seen = HashSet::new();
+        for (m, _) in &all {
+            assert!(
+                seen.insert(*m),
+                "duplicate model number {m} in full catalog"
+            );
+        }
+    }
+
+    #[test]
+    fn verified_and_extended_tiers_are_disjoint() {
+        let verified: HashSet<u32> = rig_models().into_iter().map(|(m, _)| m).collect();
+        for (m, name) in extended_rig_models() {
+            assert!(
+                !verified.contains(&m),
+                "extended model {m} ({name}) collides with the verified tier"
+            );
+        }
+    }
+
+    #[test]
+    fn extended_only_model_resolves_via_name_lookup() {
+        // 3011 (IC-706MKIIG) is only in the extended tier, not the verified one.
+        assert!(rig_models().iter().all(|(m, _)| *m != 3011));
+        assert_eq!(rig_model_name(3011), Some("Icom IC-706MKIIG"));
+        // A representative extended entry from another backend.
+        assert_eq!(rig_model_name(2050), Some("Lab599 Discovery TX-500"));
+    }
+
+    #[test]
+    fn every_catalog_number_lands_in_a_known_backend() {
+        // Guards against a fat-fingered number that decodes to a nonexistent
+        // Hamlib backend (backend = model / 1000). These are the backends we
+        // actually draw from; anything else means a typo in a model number.
+        let known_backends: HashSet<u32> = [0, 1, 2, 3, 16, 17, 23].into_iter().collect();
+        for (m, name) in all_rig_models() {
+            let backend = m / 1000;
+            assert!(
+                known_backends.contains(&backend),
+                "model {m} ({name}) decodes to unexpected backend {backend}"
+            );
         }
     }
 }

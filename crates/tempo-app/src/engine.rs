@@ -4137,7 +4137,29 @@ impl Engine {
             Mode::Chat => {}
             Mode::Qso { station, .. } => {
                 let state_before = station.state;
-                station.observe(decodes);
+                // W1.4 best-caller selection: when RUNNING CQ and several stations
+                // answer in the same slot, reorder the decodes so the sequencer
+                // locks onto the operator's preferred caller instead of stock
+                // first-heard. The default ("first", no SNR floor) leaves the
+                // slice untouched, so the existing sequencer tests stay identical.
+                let picked;
+                let observed: &[modes::Decode] = if self.cq_running
+                    && state_before == QsoState::CallingCq
+                    && (self.settings.best_caller != "first"
+                        || self.settings.best_caller_min_snr.is_some())
+                {
+                    picked = best_caller_decodes(
+                        decodes,
+                        &self.settings.mycall,
+                        &self.settings.best_caller,
+                        self.settings.best_caller_min_snr,
+                        &self.settings.mygrid,
+                    );
+                    &picked
+                } else {
+                    decodes
+                };
+                station.observe(observed);
                 sequence_advanced = station.state != state_before;
                 // Quiet-finish (hound) completion sends NOTHING after the Fox's
                 // RR73 — so the stock "disable TX after 73" one-shot in the TX
@@ -4527,6 +4549,183 @@ fn now_unix_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// One station answering my CQ this slot, distilled for best-caller ranking (W1.4).
+#[derive(Debug, Clone)]
+struct CqCaller {
+    /// Position of this caller's decode in the slot's decode slice.
+    decode_idx: usize,
+    /// SNR we decoded them at (dB).
+    snr: i32,
+    /// Whether this same station ALSO produced a `CQ` decode this slot — i.e. they
+    /// were themselves calling CQ (the `cq_first` strategy prefers such a caller).
+    calling_cq: bool,
+    /// Their Maidenhead grid when the answer carried one (a `Grid` reply with a
+    /// non-empty locator); `None` for bare-report or grid-less answers.
+    grid: Option<String>,
+}
+
+/// Pick which answering caller to work, per the operator's best-caller strategy.
+/// Returns the index into `callers` of the winner, or `None` when the list is
+/// empty or every caller is below the `min_snr` floor.
+///
+/// Strategies: `first` (earliest decode = stock WSJT-X), `strongest` (max SNR),
+/// `farthest` (greatest great-circle distance from `mygrid`; grid-less callers
+/// always rank last), `cq_first` (prefer a caller who was themselves calling CQ,
+/// then the strongest of them, else fall back to strongest). Ties always break to
+/// the earliest decode so the choice is deterministic. An unknown strategy string
+/// behaves as `first`.
+fn pick_caller(
+    callers: &[CqCaller],
+    strategy: &str,
+    min_snr: Option<i32>,
+    mygrid: &str,
+) -> Option<usize> {
+    let mut eligible: Vec<usize> = callers
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| min_snr.is_none_or(|floor| c.snr >= floor))
+        .map(|(i, _)| i)
+        .collect();
+    if eligible.is_empty() {
+        return None;
+    }
+    match strategy {
+        // Loudest wins; ties fall to the earliest decode.
+        "strongest" => {
+            eligible.sort_by(|&a, &b| callers[b].snr.cmp(&callers[a].snr).then(a.cmp(&b)));
+        }
+        // Greatest great-circle distance from my grid; grid-less callers
+        // (distance NEG_INFINITY) always sort last.
+        "farthest" => {
+            let me = maidenhead_center(mygrid);
+            let dist = |c: &CqCaller| -> f64 {
+                match (me, c.grid.as_deref().and_then(maidenhead_center)) {
+                    (Some(m), Some(g)) => haversine_km(m, g),
+                    _ => f64::NEG_INFINITY,
+                }
+            };
+            eligible.sort_by(|&a, &b| {
+                dist(&callers[b])
+                    .total_cmp(&dist(&callers[a]))
+                    .then(a.cmp(&b))
+            });
+        }
+        // Prefer someone who was themselves calling CQ, then the strongest of
+        // them; with no CQ-caller in the pileup this reduces to "strongest".
+        "cq_first" => {
+            eligible.sort_by(|&a, &b| {
+                callers[b]
+                    .calling_cq
+                    .cmp(&callers[a].calling_cq)
+                    .then(callers[b].snr.cmp(&callers[a].snr))
+                    .then(a.cmp(&b))
+            });
+        }
+        // "first" (and any unknown value): `eligible` is already in ascending
+        // decode order, so the earliest caller stays at the front.
+        _ => {}
+    }
+    eligible.first().copied()
+}
+
+/// Reorder a slot's decodes so the sequencer's first-heard auto-answer locks onto
+/// the operator's best-caller pick (W1.4). Every non-answer decode is preserved in
+/// place; among the stations answering my CQ, only the chosen one is kept (so the
+/// `CallingCq` arms in [`tempo_core::qso`] commit to it). When no caller clears the
+/// SNR floor, all answers are dropped and the run keeps calling CQ. Callers with no
+/// answer at all yield the slice unchanged.
+fn best_caller_decodes(
+    decodes: &[modes::Decode],
+    mycall: &str,
+    strategy: &str,
+    min_snr: Option<i32>,
+    mygrid: &str,
+) -> Vec<modes::Decode> {
+    // Calls heard calling CQ this slot — input for the `cq_first` strategy.
+    let cq_callers: Vec<String> = decodes
+        .iter()
+        .filter_map(|d| match Msg::parse(&d.message) {
+            Msg::Cq { de, .. } => Some(de),
+            _ => None,
+        })
+        .collect();
+    // Distill the stations answering MY CQ this slot: a grid reply or a bare
+    // report addressed to me — the two forms the sequencer auto-answers from
+    // CallingCq.
+    let mut callers = Vec::new();
+    for (idx, d) in decodes.iter().enumerate() {
+        let (de, grid) = match Msg::parse(&d.message) {
+            Msg::Grid { to, de, grid } if same_call(&to, mycall) => {
+                (de, (!grid.is_empty()).then_some(grid))
+            }
+            Msg::Report { to, de, .. } if same_call(&to, mycall) => (de, None),
+            _ => continue,
+        };
+        callers.push(CqCaller {
+            decode_idx: idx,
+            snr: d.snr,
+            calling_cq: cq_callers.iter().any(|c| same_call(c, &de)),
+            grid,
+        });
+    }
+    // No one answered → nothing to arbitrate; hand the slice back unchanged.
+    if callers.is_empty() {
+        return decodes.to_vec();
+    }
+    let keep = pick_caller(&callers, strategy, min_snr, mygrid).map(|i| callers[i].decode_idx);
+    let answers: Vec<usize> = callers.iter().map(|c| c.decode_idx).collect();
+    decodes
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !answers.contains(i) || Some(*i) == keep)
+        .map(|(_, d)| d.clone())
+        .collect()
+}
+
+/// Maidenhead locator → (lat, lon) at the grid-square center; `None` when
+/// malformed. A local 4/6-char copy so `tempo-app` needn't depend on the
+/// propagation crate just to rank callers by distance.
+fn maidenhead_center(grid: &str) -> Option<(f64, f64)> {
+    let g = grid.trim().to_uppercase();
+    let b = g.as_bytes();
+    if b.len() < 4 || !b[2].is_ascii_digit() || !b[3].is_ascii_digit() {
+        return None;
+    }
+    let f_lon = b[0].checked_sub(b'A')? as f64;
+    let f_lat = b[1].checked_sub(b'A')? as f64;
+    if f_lon > 17.0 || f_lat > 17.0 {
+        return None;
+    }
+    let s_lon = (b[2] - b'0') as f64;
+    let s_lat = (b[3] - b'0') as f64;
+    let mut lon = -180.0 + f_lon * 20.0 + s_lon * 2.0;
+    let mut lat = -90.0 + f_lat * 10.0 + s_lat * 1.0;
+    if b.len() >= 6 {
+        let ss_lon = b[4].checked_sub(b'A')? as f64;
+        let ss_lat = b[5].checked_sub(b'A')? as f64;
+        if ss_lon > 23.0 || ss_lat > 23.0 {
+            return None;
+        }
+        lon += ss_lon * (5.0 / 60.0) + (2.5 / 60.0);
+        lat += ss_lat * (2.5 / 60.0) + (1.25 / 60.0);
+    } else {
+        lon += 1.0;
+        lat += 0.5;
+    }
+    Some((lat, lon))
+}
+
+/// Great-circle distance in km between two (lat, lon) points (haversine, R = 6371).
+fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
+    const R_KM: f64 = 6371.0;
+    let (lat1, lon1) = (a.0.to_radians(), a.1.to_radians());
+    let (lat2, lon2) = (b.0.to_radians(), b.1.to_radians());
+    let dlat = lat2 - lat1;
+    let dlon = lon2 - lon1;
+    let h = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+    2.0 * R_KM * h.sqrt().asin()
 }
 
 #[cfg(test)]
@@ -7320,5 +7519,122 @@ mod tests {
             "FT4 live ingest must recover the message; got {:?}",
             e.last_decodes()
         );
+    }
+
+    #[test]
+    fn pick_caller_honors_each_strategy() {
+        // A synthetic pileup answering my CQ (indices = decode order):
+        //   idx0 K1ABC — weak, New England (FN42)
+        //   idx1 W5FAR — loud, SoCal (DM13, farthest from EN37)
+        //   idx2 N0CQ  — mid SNR, was itself calling CQ
+        //   idx3 K9BARE — loudest but grid-less (bare-report answer)
+        let callers = vec![
+            CqCaller {
+                decode_idx: 0,
+                snr: -18,
+                calling_cq: false,
+                grid: Some("FN42".into()),
+            },
+            CqCaller {
+                decode_idx: 1,
+                snr: -3,
+                calling_cq: false,
+                grid: Some("DM13".into()),
+            },
+            CqCaller {
+                decode_idx: 2,
+                snr: -10,
+                calling_cq: true,
+                grid: Some("EN37".into()),
+            },
+            CqCaller {
+                decode_idx: 3,
+                snr: -1,
+                calling_cq: false,
+                grid: None,
+            },
+        ];
+        let mygrid = "EN37";
+
+        // "first" = earliest decode, stock WSJT-X.
+        assert_eq!(pick_caller(&callers, "first", None, mygrid), Some(0));
+        // "strongest" = max SNR (idx3 at -1 dB).
+        assert_eq!(pick_caller(&callers, "strongest", None, mygrid), Some(3));
+        // "farthest" = greatest distance from EN37 (DM13); the loud grid-less
+        // caller (idx3) still ranks last for want of a grid.
+        assert_eq!(pick_caller(&callers, "farthest", None, mygrid), Some(1));
+        // "cq_first" = prefer the station that was itself calling CQ (idx2),
+        // even though idx3 is louder.
+        assert_eq!(pick_caller(&callers, "cq_first", None, mygrid), Some(2));
+
+        // SNR floor drops everyone weaker than -5 → only idx1/idx3 survive; the
+        // earliest survivor is idx1.
+        assert_eq!(pick_caller(&callers, "first", Some(-5), mygrid), Some(1));
+        // A floor above every caller → nobody to work.
+        assert_eq!(pick_caller(&callers, "strongest", Some(0), mygrid), None);
+        // With a floor, "strongest" still ranks within the survivors (idx3).
+        assert_eq!(
+            pick_caller(&callers, "strongest", Some(-5), mygrid),
+            Some(3)
+        );
+        // Empty pileup → nothing to pick.
+        assert_eq!(pick_caller(&[], "strongest", None, mygrid), None);
+    }
+
+    #[test]
+    fn cq_run_defaults_to_first_caller_in_the_slot() {
+        // Regression: the default strategy must remain stock first-heard — it
+        // works the FIRST caller decoded regardless of SNR or distance.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0); // CQ out on our slot
+        e.ingest_decodes_for_test(
+            &[
+                dec_snr("W9XYZ K1ABC FN42", -18),
+                dec_snr("W9XYZ W5LOUD EM12", -3),
+            ],
+            1,
+        );
+        assert_eq!(
+            e.snapshot().qso.unwrap().dxcall.as_deref(),
+            Some("K1ABC"),
+            "default best_caller=first works the earliest answerer"
+        );
+    }
+
+    #[test]
+    fn cq_run_strongest_works_the_loudest_caller() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.settings.best_caller = "strongest".to_string();
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0);
+        e.ingest_decodes_for_test(
+            &[
+                dec_snr("W9XYZ K1ABC FN42", -18),
+                dec_snr("W9XYZ W5LOUD EM12", -3),
+            ],
+            1,
+        );
+        assert_eq!(
+            e.snapshot().qso.unwrap().dxcall.as_deref(),
+            Some("W5LOUD"),
+            "best_caller=strongest works the loudest answerer, not the first"
+        );
+    }
+
+    #[test]
+    fn cq_run_min_snr_skips_a_too_weak_caller_and_keeps_calling() {
+        // A caller below the SNR floor must NOT be worked; the run stays on CQ.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.settings.best_caller_min_snr = Some(-10);
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0);
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -18)], 1);
+        let qso = e.snapshot().qso.expect("still running");
+        assert_eq!(
+            qso.state, "CallingCq",
+            "too-weak caller ignored — the run keeps calling CQ"
+        );
+        assert!(qso.dxcall.is_none(), "did not lock the below-floor caller");
     }
 }
