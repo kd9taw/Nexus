@@ -110,7 +110,27 @@ impl WsjtxServer {
     pub fn poll(&self) -> io::Result<Option<Inbound>> {
         let mut buf = [0u8; 4096];
         match self.socket.recv_from(&mut buf) {
-            Ok((n, _from)) => Ok(wsjtx::parse_inbound(&buf[..n])),
+            Ok((n, from)) => {
+                // Only accept control from loopback or the configured peer.
+                // Inbound Reply / FreeText-with-send ARM the transmitter, so
+                // this socket must never be steerable by an arbitrary host —
+                // WSJT-X's own trust model is localhost. A datagram from any
+                // other source is dropped before it is even parsed.
+                //
+                // Multicast is the exception: when the target is a group the
+                // operator explicitly joined, inbound datagrams arrive sourced
+                // from members' unicast interface IPs (never the group address),
+                // so peer-equality can't apply — group membership IS the opt-in,
+                // so accept. Loopback/unicast targets keep the strict filter.
+                let allowed = from.ip().is_loopback()
+                    || self.target.ip().is_multicast()
+                    || from.ip() == self.target.ip();
+                if allowed {
+                    Ok(wsjtx::parse_inbound(&buf[..n]))
+                } else {
+                    Ok(None)
+                }
+            }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(e),
         }

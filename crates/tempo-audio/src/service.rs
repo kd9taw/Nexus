@@ -129,6 +129,18 @@ impl Default for RadioConfig {
     }
 }
 
+/// Set on app shutdown so the radio loop unkeys the transmitter and exits
+/// (see the check at the top of the loop in [`run_radio`]). A stuck carrier on
+/// quit is a TX-safety hazard, so the exit path sets this and waits briefly.
+pub static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set by the radio loop AFTER it has unkeyed the transmitter and is exiting.
+/// The shutdown path polls this so it returns the instant the un-key is flushed
+/// (~tens of ms in the common case) but still waits out a worst-case in-flight
+/// CAT command (a blocking read can hold the loop for up to 2.5 s) instead of a
+/// fixed sleep that could exit before the un-key ever runs.
+pub static SHUTDOWN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Run the radio slot loop until an unrecoverable error. Blocks — call on a
 /// dedicated thread. Opens the default sound devices, sets the rig, then each
 /// slot transmits the engine's `poll_tx` audio (holding PTT for the over) or
@@ -171,16 +183,26 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
     // Optional network outputs (WSJT-X UDP API + PSK Reporter), set up once.
     let wsjtx = if cfg.wsjtx_udp {
         match cfg.wsjtx_addr.parse::<std::net::SocketAddr>() {
-            Ok(target) => match WsjtxServer::new("0.0.0.0:0".parse().unwrap(), target) {
-                Ok(s) => {
-                    let _ = s.send_heartbeat(3, env!("CARGO_PKG_VERSION"), "Nexus");
-                    Some(s)
+            // Bind loopback when the logger is local (the usual case) so the
+            // TX-arming inbound control socket isn't even reachable off-host;
+            // fall back to all-interfaces only for a logger on another machine.
+            Ok(target) => {
+                let bind = if target.ip().is_loopback() {
+                    "127.0.0.1:0"
+                } else {
+                    "0.0.0.0:0"
+                };
+                match WsjtxServer::new(bind.parse().unwrap(), target) {
+                    Ok(s) => {
+                        let _ = s.send_heartbeat(3, env!("CARGO_PKG_VERSION"), "Nexus");
+                        Some(s)
+                    }
+                    Err(e) => {
+                        eprintln!("tempo: WSJT-X UDP disabled: {e}");
+                        None
+                    }
                 }
-                Err(e) => {
-                    eprintln!("tempo: WSJT-X UDP disabled: {e}");
-                    None
-                }
-            },
+            }
             Err(e) => {
                 eprintln!("tempo: invalid wsjtxAddr {:?}: {e}", cfg.wsjtx_addr);
                 None
@@ -206,6 +228,15 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
     // and injects their re-open side-effects.
     let mut state = RadioLoop::new(applied, rigctld_proc, &cfg);
     loop {
+        // App shutdown: unkey the transmitter through the still-alive rig before
+        // the process exits. Without this, quitting while keyed (a TX slot or a
+        // tune carrier) leaves the radio transmitting until its own timeout.
+        if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
+            backend.flush_output();
+            let _ = rig.ptt(false);
+            SHUTDOWN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+            return Ok(());
+        }
         let now = now_unix_ms();
         state.step(
             &engine,
@@ -457,6 +488,25 @@ impl RadioLoop {
                 )
             };
             if want.rig_differs(&self.applied) {
+                // Unkey through the STILL-ALIVE old rig/daemon before tearing it
+                // down. Dropping rigctld_proc and swapping *rig first would strand
+                // a keyed transmitter (or a tune carrier): the un-key command
+                // would go to a dead daemon. Order matters — flush, unkey, clear
+                // TX state, THEN drop the daemon.
+                if rig.keyed
+                    || self.tx_until_ms.is_some()
+                    || self.tuning_keyed
+                    || self.manual_ptt_applied
+                {
+                    backend.flush_output();
+                    let _ = rig.ptt(false);
+                    self.tx_until_ms = None;
+                    self.tuning_keyed = false;
+                    self.manual_ptt_applied = false;
+                    if let Ok(mut eng) = engine.lock() {
+                        eng.halt_tx();
+                    }
+                }
                 self.rigctld_proc = None; // drop kills the old daemon + frees the port
                 let (new_rig, proc, ok, detail) = reopen_rig(&want, dial, &md);
                 *rig = new_rig;

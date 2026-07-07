@@ -178,36 +178,69 @@ impl Rig {
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "no rig stream"))
     }
 
-    /// Send one command line and read whatever reply is available.
+    /// Send one command line and read its COMPLETE (newline-terminated) reply.
+    ///
+    /// On ANY failure — incomplete reply by the deadline, a closed connection,
+    /// or a hard I/O error — the stream is dropped so the next command
+    /// reconnects from a clean protocol state. This is a TX-safety invariant:
+    /// if a slow reply were left in the socket buffer, the *next* command would
+    /// read it as its own answer and every command after that would be judged on
+    /// the previous one's reply (a keyed rig read as "PTT ok", a rejected T read
+    /// as success). A dropped stream can never desync; a stale byte can.
     fn command(&mut self, line: &str) -> std::io::Result<String> {
+        match self.command_inner(line) {
+            Ok(reply) => Ok(reply),
+            Err(e) => {
+                self.stream = None; // force a clean reconnect on the next call
+                Err(e)
+            }
+        }
+    }
+
+    fn command_inner(&mut self, line: &str) -> std::io::Result<String> {
         let stream = self.ensure_connected()?;
         stream.write_all(line.as_bytes())?;
         // Read until a COMPLETE reply (newline-terminated), not one 500 ms
         // gulp: a networked chain (rigctld → SmartSDR CAT → radio) can take
-        // longer than one read window and can split a reply across reads —
-        // the old single-read returned "" or a fragment, which upstream read
-        // as "rig did not return a frequency" / dropped commands (operator
-        // report on a real FLEX-6400M). The per-read timeout (500 ms) still
-        // bounds each wait; a 2.5 s overall deadline bounds the whole reply.
+        // longer than one read window and can split a reply across reads.
+        // The per-read timeout (500 ms) bounds each wait; a 2.5 s overall
+        // deadline bounds the whole reply. An incomplete reply is an ERROR
+        // (not a silently-truncated "") so callers never treat a partial or
+        // timed-out answer as success — and `command` drops the stream.
         let deadline = std::time::Instant::now() + Duration::from_millis(2_500);
         let mut out = Vec::with_capacity(64);
         let mut buf = [0u8; 256];
         loop {
             match stream.read(&mut buf) {
-                Ok(0) => break, // connection closed — return what we have
+                Ok(0) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "rigctld closed the connection",
+                    ));
+                }
                 Ok(n) => {
                     out.extend_from_slice(&buf[..n]);
                     if out.ends_with(b"\n") {
-                        break; // rigctld replies are newline-terminated
+                        return Ok(String::from_utf8_lossy(&out).to_string());
                     }
                 }
-                Err(_) => {} // per-read timeout tick — keep waiting to the deadline
+                Err(ref e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {} // per-read timeout tick — keep waiting to the deadline
+                Err(e) => return Err(e), // hard error — caller drops the stream
             }
             if std::time::Instant::now() >= deadline {
-                break;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!(
+                        "rig reply incomplete after 2.5 s (got {:?})",
+                        String::from_utf8_lossy(&out)
+                    ),
+                ));
             }
         }
-        Ok(String::from_utf8_lossy(&out).to_string())
     }
 
     /// Key (true) or unkey (false) the transmitter. No-op under VOX (and under CAT
@@ -624,6 +657,53 @@ mod tests {
         });
         let mut rig = Rig::rigctld(&addr.to_string());
         assert_eq!(rig.read_freq().expect("whole reply assembled"), 14_074_000);
+    }
+
+    #[test]
+    fn timed_out_reply_errors_and_drops_stream_so_the_next_command_cannot_desync() {
+        // The C3 desync: a reply that lands after the 2.5 s deadline must NOT be
+        // left in the socket for the next command to read as its own answer.
+        // Command 1's reply arrives late (past the deadline) → the command must
+        // error AND drop the stream; command 2 reconnects and reads its OWN
+        // fresh reply, never the stale one.
+        use std::io::{Read as _, Write as _};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let n = Arc::new(AtomicUsize::new(0));
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let mut sock = match conn {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                let idx = n.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 64];
+                    let _ = sock.read(&mut buf); // consume the command line
+                    if idx == 0 {
+                        // Reply LATE — past the 2.5 s deadline. The client has
+                        // already abandoned this command; this write is stale.
+                        std::thread::sleep(std::time::Duration::from_millis(2_800));
+                        let _ = sock.write_all(b"RPRT 0\n");
+                    } else {
+                        let _ = sock.write_all(b"14074000\n"); // fresh, immediate
+                    }
+                });
+            }
+        });
+        let mut rig = Rig::rigctld(&addr.to_string());
+        // Slow reply must be an ERROR, never a silent success.
+        assert!(
+            rig.set_mode("USB", 0).is_err(),
+            "reply past the 2.5 s deadline must error, not succeed"
+        );
+        // Stream was dropped; the next command reconnects and reads its OWN reply.
+        assert_eq!(
+            rig.read_freq().expect("reconnect + fresh reply"),
+            14_074_000,
+            "next command must read its own reply, not the stale RPRT 0"
+        );
     }
 
     #[test]

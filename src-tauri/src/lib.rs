@@ -6911,6 +6911,28 @@ pub fn run() {
             // periodic-save window doesn't lose recent chat or resurrect an archived
             // thread. ExitRequested fires on the app-level quit (Alt+F4 / menu quit).
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                // Unkey the transmitter before the process dies: signal the radio
+                // loop to drop PTT and give it a brief window to flush the un-key
+                // command to the rig. A stuck carrier on quit is a TX-safety
+                // hazard, so this blocks the exit for up to ~250 ms.
+                #[cfg(feature = "radio")]
+                {
+                    use std::sync::atomic::Ordering;
+                    tempo_audio::service::SHUTDOWN.store(true, Ordering::Relaxed);
+                    // Wait until the loop has actually unkeyed (SHUTDOWN_DONE),
+                    // not a fixed sleep: the loop only reaches the un-key after
+                    // its current step() returns, and a step can be blocked in a
+                    // CAT read for up to ~2.5 s. Poll so the common case returns
+                    // in tens of ms while the worst case still flushes the
+                    // un-key before we let the process exit.
+                    let deadline =
+                        std::time::Instant::now() + std::time::Duration::from_millis(3_000);
+                    while !tempo_audio::service::SHUTDOWN_DONE.load(Ordering::Relaxed)
+                        && std::time::Instant::now() < deadline
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                }
                 persist_conversations(app_handle.state::<SharedEngine>().inner());
             }
         });

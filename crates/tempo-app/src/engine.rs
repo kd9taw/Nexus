@@ -554,7 +554,27 @@ impl Engine {
         self.tx_offset_hz = self.settings.tx_offset_hz;
         self.rx_offset_hz = self.settings.rx_offset_hz;
         self.hold_tx_freq = self.settings.hold_tx_freq;
-        self.mode = Mode::Chat;
+        // A settings save must NOT destroy an active Field Day session: the
+        // Mode::FieldDay variant carries the whole dupe-checked contest log
+        // in memory, and resetting to Chat would drop it irrecoverably (a
+        // solo entrant with no club logger has no other copy). Every other
+        // mode is safe to reset — Chat holds nothing, a QSO is transient. The
+        // FD panel itself saves settings on each bonus-checkbox toggle, so
+        // this guard is load-bearing, not a corner case.
+        if !matches!(self.mode, Mode::FieldDay { .. }) {
+            self.mode = Mode::Chat;
+            // Clear the CQ-run flag alongside the mode reset — otherwise a save
+            // that drops out of a QSO run leaves `cq_running` stale-true, which
+            // suppresses the smart auto-cycle on the next chat answer.
+            self.cq_running = false;
+        }
+        // A save carries a `band` field; now that the Field Day log survives a
+        // save (above), keep its frozen band in step with the saved band —
+        // otherwise a QSY that reaches settings.band via a save (e.g. the FD
+        // panel resending a stale-then-updated struct, or a knob QSY followed by
+        // a bonus toggle) would leave log.band diverged, stamping later contacts
+        // under the wrong band and busting dupe keys. No-op outside Field Day.
+        self.sync_fd_band();
         self.tx_queue.clear();
         self.broadcast_queue.clear();
         // Reconcile the (separate) coordinated-QSY feature with the saved flags.
@@ -2701,6 +2721,14 @@ impl Engine {
         // So does a deferred after-73 disable: TX is already off.
         self.pending_tx_disable = false;
         self.pending_cw_id = false; // halt = silence; no parting CW ID either
+                                    // Cut any in-progress CW: the global Stop TX and the external UDP HaltTx
+                                    // both route here, and CW keyed over CAT (`send_morse`) or a WinKeyer's
+                                    // buffer keeps sending until explicitly aborted. Clearing cw_queue and
+                                    // arming cw_abort makes the audio loop issue rig.stop_morse()/wk.clear()
+                                    // on its next tick — otherwise "Stop TX" is a no-op mid-CW.
+        self.cw_queue.clear();
+        self.cw_abort = true;
+        self.voice_tx = None; // drop any queued voice-keyer audio too
         self.tx_queue.clear();
         self.broadcast_queue.clear();
         self.own_tx.clear();
@@ -4930,6 +4958,34 @@ mod tests {
             !e.poll_tx(0).is_empty(),
             "FT8 Field Day keys without a grid"
         );
+
+        // A settings save mid-event must NOT destroy the Field Day contest log
+        // (the FD panel saves settings on every bonus-checkbox toggle).
+        {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            {
+                let mut s = e.settings().clone();
+                s.fd_class = "3A".into();
+                s.fd_section = "WI".into();
+                e.apply_settings(s);
+            }
+            e.set_mode("fieldday-run").unwrap();
+            assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+            assert!(e.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
+            let before = e.fd_score().expect("in Field Day mode");
+            assert!(before.0 > 0, "logged contacts score points");
+            // Toggle a bonus — this saves settings, the exact mid-event action.
+            let mut s = e.settings().clone();
+            s.fd_bonuses = vec!["w1aw".into()];
+            e.apply_settings(s);
+            let after = e
+                .fd_score()
+                .expect("still in Field Day after a settings save");
+            assert_eq!(
+                after.0, before.0,
+                "the contest log must survive a settings save"
+            );
+        }
 
         // FT1 free-text is exempt from the standard-message grid contract.
         let mut e = Engine::new("W9XYZ", "", 0);
