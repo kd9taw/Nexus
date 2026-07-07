@@ -103,6 +103,10 @@ pub struct Station {
     /// partner still owes a 73) instead of the combined `RR73`. Default `false`
     /// (RR73 — modern FT8 practice). Mirrors WSJT-X's "Settings ▸ behaviour".
     pub confirm_with_rrr: bool,
+    /// Hound (FT8 DXpedition) finish rule: complete on the Fox's RR73 WITHOUT
+    /// transmitting a parting 73 (the Fox segment must stay clean). Set by the
+    /// engine when the operator's special-op mode is Hound.
+    pub quiet_finish: bool,
     /// Human-readable event log.
     pub transcript: Vec<String>,
 }
@@ -126,6 +130,7 @@ impl Station {
             tx_count: 0,
             cq_call_cap: None,
             confirm_with_rrr: false,
+            quiet_finish: false,
             transcript: Vec::new(),
         }
     }
@@ -144,6 +149,7 @@ impl Station {
             tx_count: 0,
             cq_call_cap: None,
             confirm_with_rrr: false,
+            quiet_finish: false,
             transcript: Vec::new(),
         }
     }
@@ -301,6 +307,7 @@ impl Station {
             tx_count: 0,
             cq_call_cap: None,
             confirm_with_rrr: prefer_rrr,
+            quiet_finish: false,
             transcript: vec![log_line],
         }
     }
@@ -548,12 +555,21 @@ impl Station {
                 | (State::AwaitRr73, Msg::Rrr { to, de })
                     if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>
                 {
-                    self.pending = Some(Msg::Bye73 {
-                        to: de.clone(),
-                        de: self.mycall.clone(),
-                    });
+                    if self.quiet_finish {
+                        // Hound rule (FT8 DXpedition mode): the Fox's RR73 ends
+                        // the QSO — log and STOP. A parting 73 would land in the
+                        // Fox's own 300–900 Hz segment: pure QRM the mode exists
+                        // to avoid, and stock WSJT-X hounds send nothing here.
+                        self.pending = None;
+                        self.log("got RR73 → QSO complete (hound: no 73)".into());
+                    } else {
+                        self.pending = Some(Msg::Bye73 {
+                            to: de.clone(),
+                            de: self.mycall.clone(),
+                        });
+                        self.log("got RR73 → sending 73, QSO complete".into());
+                    }
                     self.state = State::Done;
-                    self.log("got RR73 → sending 73, QSO complete".into());
                 }
                 (State::Confirming, Msg::Bye73 { to, de })
                     if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>

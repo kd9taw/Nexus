@@ -302,6 +302,12 @@ struct RadioLoop {
     /// Last known CAT health (from connect/Test-CAT): `Some(false)` = configured but failing,
     /// so we skip the read-back poll to avoid blocking the loop on a dead read every cycle.
     cat_ok: Option<bool>,
+    /// Whether we last surfaced the "monitor refused — would transmit into the TX
+    /// device" note on the audio-error line, so we clear only our OWN message.
+    /// The monitor block currently OWNS the audio-error line (it wrote either
+    /// the guard refusal or an open failure there). A real device error takes
+    /// ownership back; only an owning monitor may clear the line on success.
+    monitor_owns_error: bool,
     last_fd_qsos: usize,
     /// Latest measured PC-clock-vs-UTC offset (ms, `local − UTC`), read from the
     /// engine each loop and SUBTRACTED from the system clock so TX/RX slots land
@@ -342,6 +348,7 @@ impl RadioLoop {
             last_psk_flush: now_unix_ms(),
             last_rig_poll: now_unix_ms(),
             cat_ok: None,
+            monitor_owns_error: false,
             last_fd_qsos: 0,
             clock_offset_ms: 0,
         }
@@ -439,22 +446,84 @@ impl RadioLoop {
                     eng.set_cat_status(ok, detail);
                 }
             }
+            let mut audio_rebuilt = false;
             if want.audio_differs(&self.applied) {
                 match reopen_audio(&want) {
                     Ok(b) => {
                         *backend = b;
+                        audio_rebuilt = true;
                         if let Ok(mut eng) = engine.lock() {
                             eng.set_audio_error(None);
                         }
+                        self.monitor_owns_error = false; // line cleared; nobody owns it
                     }
                     Err(e) => {
                         if let Ok(mut eng) = engine.lock() {
                             eng.set_audio_error(Some(format!("Audio device failed to open: {e}")));
                         }
+                        // A REAL device error now owns the audio-error line — a
+                        // later monitor success must not clear it (review catch).
+                        self.monitor_owns_error = false;
                     }
                 }
             } else if (want.tx_level - self.applied.tx_level).abs() > f32::EPSILON {
                 backend.set_tx_level(want.tx_level);
+            }
+
+            // Headphone monitor (DARK, off by default): reconfigure it IN PLACE on a
+            // monitor-setting change — or re-apply it to a freshly rebuilt backend,
+            // whose monitor starts off. This never rebuilds the capture/TX streams, so
+            // the decode path never restarts. Guard: refuse to open the monitor on the
+            // rig's TX output device, which would transmit the received band back out.
+            if audio_rebuilt || want.monitor_differs(&self.applied) {
+                // Resolve "system default" to its REAL device name first — an
+                // empty monitor_device against a named audio_out that happens to
+                // BE the OS default was a hole in the name-based guard (review
+                // catch: the monitor would mix the received band into the rig's
+                // TX stream). Resolution only runs when the monitor is on.
+                let (mon_dev, out_dev) = if want.monitor_enabled {
+                    (
+                        crate::monitor::resolve_output_name(&want.monitor_device),
+                        crate::monitor::resolve_output_name(&want.audio_out),
+                    )
+                } else {
+                    (want.monitor_device.clone(), want.audio_out.clone())
+                };
+                let guarded = crate::monitor::monitor_would_transmit(&mon_dev, &out_dev);
+                let effective = want.monitor_enabled && !guarded;
+                let outcome =
+                    backend.set_monitor(effective, &want.monitor_device, want.monitor_level);
+                if let Ok(mut eng) = engine.lock() {
+                    match outcome {
+                        Err(e) => {
+                            eng.set_audio_error(Some(format!(
+                                "Headphone monitor could not open: {e}"
+                            )));
+                            // We own the line now — a later monitor success may
+                            // clear it (the open-failure was sticky before).
+                            self.monitor_owns_error = true;
+                        }
+                        Ok(()) if want.monitor_enabled && guarded => {
+                            // Refused — surface why on the audio-status line (the loop's
+                            // audio-domain notice channel), once.
+                            eng.set_audio_error(Some(
+                                "Headphone monitor is off: the chosen output is the rig's TX \
+                                 device — monitoring it would transmit the received band. Pick a \
+                                 separate headphone or speaker device."
+                                    .to_string(),
+                            ));
+                            self.monitor_owns_error = true;
+                        }
+                        Ok(()) => {
+                            // Clear only a line the MONITOR wrote (guard refusal or
+                            // open failure) — never stomp a real device error.
+                            if self.monitor_owns_error {
+                                eng.set_audio_error(None);
+                                self.monitor_owns_error = false;
+                            }
+                        }
+                    }
+                }
             }
             if want != self.applied {
                 self.applied = want;
@@ -1306,7 +1375,22 @@ impl RadioLoop {
                         tx_watchdog: false,
                         sub_mode: "",
                         fast_mode: false,
-                        special_op: if snap.field_day.is_some() { 3 } else { 0 },
+                        // The LIVE mode wins: field_day is Some only while the
+                        // Field Day mode is actually RUNNING, whereas special_op
+                        // is a persistent setting an operator can forget to turn
+                        // off — a stale Hound flag must not misadvertise an
+                        // active FD session (review catch). 6=FOX stays unbuilt.
+                        special_op: if snap.field_day.is_some() {
+                            3
+                        } else if matches!(
+                            eng.settings().special_op,
+                            tempo_app::settings::SpecialOp::Hound
+                                | tempo_app::settings::SpecialOp::SuperHound
+                        ) {
+                            7
+                        } else {
+                            0
+                        },
                         freq_tol: 0,
                         // T/R period (s), mode-driven: FT1 = 4, FT4 ≈ 8, FT8/DX1 = 15.
                         tr_period: eng.active_slot_secs().round() as u32,
@@ -1674,6 +1758,11 @@ struct Transport {
     audio_in: String,
     audio_out: String,
     tx_level: f32,
+    /// Dark headphone-monitor settings (off by default). Carried here so a change is
+    /// applied to the running backend IN PLACE — never as a capture-stream rebuild.
+    monitor_enabled: bool,
+    monitor_device: String,
+    monitor_level: f32,
 }
 
 impl Transport {
@@ -1690,6 +1779,11 @@ impl Transport {
             audio_in: c.audio_in.clone(),
             audio_out: c.audio_out.clone(),
             tx_level: c.tx_level,
+            // The monitor is not part of the startup seed — the initial applied state
+            // is "off", so the first loop turns it on from the live engine settings.
+            monitor_enabled: false,
+            monitor_device: String::new(),
+            monitor_level: 0.5,
         }
     }
 
@@ -1710,6 +1804,9 @@ impl Transport {
             audio_in: s.audio_in.clone(),
             audio_out: s.audio_out.clone(),
             tx_level: s.tx_level,
+            monitor_enabled: s.monitor_enabled,
+            monitor_device: s.monitor_device.clone(),
+            monitor_level: s.monitor_level,
         }
     }
 
@@ -1735,6 +1832,14 @@ impl Transport {
     /// True if the selected sound-card input/output device changed.
     fn audio_differs(&self, o: &Transport) -> bool {
         self.audio_in != o.audio_in || self.audio_out != o.audio_out
+    }
+
+    /// True if a headphone-monitor setting changed (enable, device, or level). Drives
+    /// an in-place monitor reconfigure — NOT a capture-stream rebuild.
+    fn monitor_differs(&self, o: &Transport) -> bool {
+        self.monitor_enabled != o.monitor_enabled
+            || self.monitor_device != o.monitor_device
+            || (self.monitor_level - o.monitor_level).abs() > f32::EPSILON
     }
 }
 
@@ -2053,6 +2158,39 @@ mod tests {
     }
 
     #[test]
+    fn transport_monitor_differs_on_monitor_settings_only() {
+        let base = Transport::from_settings(&test_settings());
+        assert!(!base.monitor_differs(&base.clone()));
+
+        // Each monitor field flags a change (drives an in-place reconfigure).
+        let mutations: [fn(&mut Settings); 3] = [
+            |s| s.monitor_enabled = true,
+            |s| s.monitor_device = "Headphones".to_string(),
+            |s| s.monitor_level = 0.9,
+        ];
+        for mutate in mutations {
+            let mut s = test_settings();
+            mutate(&mut s);
+            assert!(base.monitor_differs(&Transport::from_settings(&s)));
+        }
+
+        // A monitor change must NOT rebuild the rig OR re-open the capture streams
+        // (the decode path never restarts for a monitor toggle).
+        let mut s = test_settings();
+        s.monitor_enabled = true;
+        s.monitor_device = "Headphones".to_string();
+        let want = Transport::from_settings(&s);
+        assert!(
+            !base.rig_differs(&want),
+            "monitor change never rebuilds the rig"
+        );
+        assert!(
+            !base.audio_differs(&want),
+            "monitor change never re-opens the capture/TX streams"
+        );
+    }
+
+    #[test]
     fn transport_audio_differs_on_device_change_only() {
         let base = Transport::from_settings(&test_settings());
         assert!(!base.audio_differs(&base.clone()));
@@ -2297,6 +2435,9 @@ mod tests {
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
+            monitor_enabled: false,
+            monitor_device: String::new(),
+            monitor_level: 0.5,
         }
     }
 

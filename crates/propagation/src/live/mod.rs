@@ -9,6 +9,7 @@ pub mod aurora;
 pub mod clublog;
 pub mod dxped;
 pub mod eqsl;
+pub mod hrdlog;
 pub mod kc2g;
 pub mod lotw;
 pub mod lotw_users;

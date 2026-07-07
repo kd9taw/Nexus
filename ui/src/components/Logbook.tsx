@@ -6,13 +6,14 @@ import {
   getLog,
   importAdif,
   logQso,
+  markQslSent,
   purgeLog,
   qrzLookup,
   syncLotwReport,
   uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { qrzPushQso, clublogPushQso } from '../api'
+import { qrzPushQso, clublogPushQso, hrdlogPushQso } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -48,6 +49,16 @@ function fmtUtc(whenUnix: number): string {
 
 function fmtReport(v: string | null): string {
   return v && v.trim() !== '' ? v : '—'
+}
+
+/** ADIF QSL_SENT_VIA letter → human word for the "sent via …" note. */
+const QSL_VIA_LABEL: Record<string, string> = { B: 'bureau', D: 'direct', E: 'electronic' }
+
+/** A quiet "sent <date> via <method>" note for a row that's been QSL-requested. */
+function fmtQslSent(sent: { sent: boolean; via: string | null; dateUnix: number | null }): string {
+  const via = sent.via ? QSL_VIA_LABEL[sent.via.toUpperCase()] ?? sent.via : null
+  const date = sent.dateUnix ? fmtUtc(sent.dateUnix).slice(0, 10) : null
+  return `QSL sent${date ? ` ${date}` : ''}${via ? ` via ${via}` : ''}`
 }
 
 // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
@@ -245,6 +256,39 @@ export function Logbook({
     }
   }
 
+  // Manual (re-)push of one logged QSO to HRDLog.net — same verification/bounce-
+  // recovery role as onPushQrz. HRDLog.net is a live-logging/awards site, NOT an
+  // ARRL confirmation source, so a success here is not DXCC/WAS credit.
+  const onPushHrdlog = async (q: LoggedQso) => {
+    try {
+      const r = await hrdlogPushQso(q)
+      if (r.result === 'ok') {
+        pushToast(`✓ ${q.call} pushed to HRDLog.net`, 'success', 4000)
+      } else if (r.result === 'duplicate') {
+        pushToast(`✓ ${q.call} already on HRDLog.net (duplicate) — upload chain works`, 'success', 5000)
+      } else if (r.result === 'unknown') {
+        // Transient by contract (server down / odd body) — saying "rejected"
+        // would imply the QSO itself is permanently bad. Match the auto-push.
+        pushToast(`HRDLog.net unavailable — ${q.call} not confirmed uploaded; try again later`, 'info', 6000)
+      } else {
+        pushToast(`✗ HRDLog.net rejected ${q.call}: ${r.message ?? r.result}`, 'error', 6000)
+      }
+    } catch (e) {
+      pushToast(`✗ HRDLog.net push failed: ${String(e)}`, 'error', 6000)
+    }
+  }
+
+  // Record an operator-declared QSL request on a contact (a card/request WAS sent,
+  // via bureau/direct/electronic). This is NOT a confirmation — it stays in the
+  // needs-confirmation filter until the partner actually confirms.
+  const onMarkQslSent = async (q: LoggedQso, i: number, via: 'B' | 'D' | 'E') => {
+    const snap = await withErrorToast(() => markQslSent(i, via), 'Could not mark QSL sent')
+    if (snap) {
+      pushToast(`Marked QSL sent to ${q.call} (${QSL_VIA_LABEL[via]})`, 'success')
+      load()
+    }
+  }
+
   const onDelete = async (q: LoggedQso, i: number) => {
     if (!window.confirm(`Delete the QSO with ${q.call} on ${q.band}? This can't be undone.`)) return
     const snap = await withErrorToast(() => deleteQso(i), 'Could not delete the QSO')
@@ -415,7 +459,7 @@ export function Logbook({
           className={`log-filter-chip${needsConfirmOnly ? ' active' : ''}`}
           onClick={() => setNeedsConfirmOnly((v) => !v)}
           aria-pressed={needsConfirmOnly}
-          title="Show only contacts without an award-eligible (LoTW/paper) confirmation"
+          title="Show only contacts without an award-eligible (LoTW/paper) confirmation. Rows you've already sent a QSL request for stay here — a request is not a confirmation."
         >
           needs confirmation
         </button>
@@ -577,6 +621,17 @@ export function Logbook({
                       —
                     </span>
                   )}
+                  {/* A request is NOT a confirmation — this rides alongside the QSL
+                      state as a quiet muted marker so the row stays "needs conf". */}
+                  {q.qslSent?.sent && (
+                    <span
+                      style={{ marginLeft: 4, opacity: 0.6, fontSize: '0.85em' }}
+                      title={fmtQslSent(q.qslSent)}
+                      aria-label={fmtQslSent(q.qslSent)}
+                    >
+                      ✉{q.qslSent.via ?? ''}
+                    </span>
+                  )}
                 </span>
                 <span className="log-cell log-rowactions">
                   <button
@@ -597,6 +652,35 @@ export function Logbook({
                   >
                     CL
                   </button>
+                  <button
+                    type="button"
+                    className="log-rowbtn"
+                    onClick={() => void onPushHrdlog(q)}
+                    title={`Push ${q.call} to HRDLog.net (live-logging/awards site — not an ARRL confirmation source; re-push is safe)`}
+                    aria-label={`Push ${q.call} to HRDLog.net`}
+                  >
+                    HL
+                  </button>
+                  {/* QSL-request queue: mark a card/request sent (once) on the
+                      needs-confirmation view. Operator-declared, not a confirmation. */}
+                  {needsConfirmOnly && !q.qslSent?.sent && (
+                    <select
+                      className="log-rowbtn"
+                      style={{ fontSize: '0.85em' }}
+                      value=""
+                      onChange={(e) => {
+                        const v = e.target.value as 'B' | 'D' | 'E' | ''
+                        if (v) void onMarkQslSent(q, i, v)
+                      }}
+                      title={`Mark a QSL request sent to ${q.call} (bureau/direct/electronic). A request is not a confirmation — the row stays here until it's confirmed.`}
+                      aria-label={`Mark QSL sent to ${q.call}`}
+                    >
+                      <option value="">QSL▸</option>
+                      <option value="B">Bureau</option>
+                      <option value="D">Direct</option>
+                      <option value="E">Electronic</option>
+                    </select>
+                  )}
                   <button
                     type="button"
                     className="log-rowbtn"

@@ -11,12 +11,14 @@
 //! may want to pick a specific CODEC device and a 48 kHz config explicitly.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 
 use crate::backend::AudioBackend;
+use crate::monitor::{Monitor, SpscRing};
 use crate::resample::resample_linear;
 
 const MODEM_RATE: u32 = 12_000;
@@ -42,7 +44,7 @@ const RX_METER_DECAY: f32 = 0.85;
 ///
 /// Every entry point that touches the cpal host/devices/streams must hold this for
 /// the full duration of that work, so enumeration can never overlap a stream open.
-static AUDIO_HOST_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static AUDIO_HOST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Enumerate the host's input and output device names. Errors (and devices whose
 /// name can't be read) are ignored, yielding empty/partial lists rather than
@@ -65,7 +67,7 @@ pub fn available_devices() -> (Vec<String>, Vec<String>) {
 
 /// Pick a device by name from an iterator of devices, falling back to `default`
 /// when `name` is empty/None or no device matches.
-fn pick_device(
+pub(crate) fn pick_device(
     devices: Option<impl Iterator<Item = cpal::Device>>,
     name: Option<&str>,
     default: Option<cpal::Device>,
@@ -92,6 +94,10 @@ pub struct CpalBackend {
     rx_level: Arc<Mutex<f32>>,
     /// Tx audio level (0.0–1.0) applied to outgoing samples in [`Self::play`].
     tx_level: f32,
+    /// Dark headphone monitor: an in-place, off-by-default pass-through of the RX
+    /// audio to a chosen output device. Reconfigured via [`AudioBackend::set_monitor`]
+    /// WITHOUT touching the capture/TX streams (the decode path never restarts).
+    monitor: Monitor,
 }
 
 impl CpalBackend {
@@ -135,19 +141,37 @@ impl CpalBackend {
         let out_ring = Arc::new(Mutex::new(VecDeque::<f32>::new()));
         let rx_level = Arc::new(Mutex::new(0.0f32));
 
+        // ---- headphone monitor shared state (DARK; nothing drains it until the
+        // operator enables the monitor, which opens the output stream). Sized ~0.5 s
+        // of capture-rate mono so the 20 ms loop bursts never overflow it in normal
+        // use. The capture callback only pushes here while `mon_enabled` is set. ----
+        let mon_ring = Arc::new(SpscRing::new((in_rate as usize / 2).max(4096)));
+        let mon_enabled = Arc::new(AtomicBool::new(false));
+        let mon_level = Arc::new(AtomicU32::new(0.5f32.to_bits()));
+
         // ---- input: downmix to mono f32 → in_ring (+ decaying peak meter) ----
         let in_ring_cb = in_ring.clone();
         let rx_meter_cb = rx_level.clone();
+        let mon_ring_in = mon_ring.clone();
+        let mon_enabled_in = mon_enabled.clone();
         let in_stream = match in_cfg.sample_format() {
             SampleFormat::F32 => in_dev.build_input_stream(
                 &in_cfg.config(),
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let mut ring = in_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
+                    // Read the monitor gate ONCE per callback (not per sample). When on,
+                    // push each mono sample into the wait-free monitor ring — it never
+                    // blocks or allocates and drops on overflow, so the decode path
+                    // (this same callback) is never stalled by monitoring.
+                    let monitoring = mon_enabled_in.load(std::sync::atomic::Ordering::Relaxed);
                     let mut peak = 0.0f32;
                     for frame in data.chunks(in_ch.max(1)) {
                         let m = frame.iter().copied().sum::<f32>() / in_ch.max(1) as f32;
                         peak = peak.max(m.abs());
                         ring.push_back(m);
+                        if monitoring {
+                            mon_ring_in.push(m);
+                        }
                     }
                     update_rx_meter(&rx_meter_cb, peak);
                 },
@@ -158,12 +182,16 @@ impl CpalBackend {
                 &in_cfg.config(),
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     let mut ring = in_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
+                    let monitoring = mon_enabled_in.load(std::sync::atomic::Ordering::Relaxed);
                     let mut peak = 0.0f32;
                     for frame in data.chunks(in_ch.max(1)) {
                         let m = frame.iter().map(|&s| s as f32 / 32768.0).sum::<f32>()
                             / in_ch.max(1) as f32;
                         peak = peak.max(m.abs());
                         ring.push_back(m);
+                        if monitoring {
+                            mon_ring_in.push(m);
+                        }
                     }
                     update_rx_meter(&rx_meter_cb, peak);
                 },
@@ -221,6 +249,7 @@ impl CpalBackend {
             out_rate,
             rx_level,
             tx_level: 1.0,
+            monitor: Monitor::new(mon_ring, mon_enabled, mon_level, in_rate),
         })
     }
 }
@@ -269,5 +298,12 @@ impl AudioBackend for CpalBackend {
         let n = ring.len();
         ring.clear();
         n
+    }
+
+    /// Reconfigure the dark headphone monitor in place (start/stop/retune its output
+    /// stream) — the capture and TX streams are untouched, so the decode path never
+    /// restarts.
+    fn set_monitor(&mut self, enabled: bool, device: &str, level: f32) -> Result<(), String> {
+        self.monitor.apply(enabled, device, level)
     }
 }

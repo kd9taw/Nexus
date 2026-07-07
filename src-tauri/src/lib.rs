@@ -4248,6 +4248,26 @@ fn edit_qso(
     Ok(eng.snapshot())
 }
 
+/// Mark logbook entry `index` (oldest-first, as returned by `get_log`) as
+/// QSL-sent — operator-declared truth that a card/request was sent `via`
+/// "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT a
+/// confirmation: this never flips `confirmed`/`awardConfirmed`. Returns the
+/// refreshed snapshot.
+#[tauri::command]
+fn mark_qsl_sent(
+    state: State<'_, SharedEngine>,
+    index: usize,
+    via: String,
+) -> Result<AppSnapshot, String> {
+    let via = tempo_core::logbook::QslVia::from_code(&via)
+        .ok_or_else(|| format!("Unknown QSL-sent method '{via}' — use B, D, or E."))?;
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    if !eng.mark_qsl_sent(index, via) {
+        return Err("That contact no longer exists — reload the log and try again.".into());
+    }
+    Ok(eng.snapshot())
+}
+
 /// Delete logbook entry `index` (oldest-first, as returned by `get_log`). Returns
 /// the refreshed snapshot. Indices shift after a delete — the UI reloads the log.
 #[tauri::command]
@@ -4788,6 +4808,11 @@ const EQSL_KEYCHAIN_USER: &str = "eqsl-password";
 const QRZ_KEYCHAIN_USER: &str = "qrz-password";
 const QRZ_LOGBOOK_KEYCHAIN_USER: &str = "qrz-logbook-key";
 const CLUBLOG_KEYCHAIN_USER: &str = "clublog-password";
+const HRDLOG_KEYCHAIN_USER: &str = "hrdlog-code";
+
+/// Client name Nexus sends to HRDLog.net's `NewEntry.aspx` as `App` (aids their
+/// support / usage stats). Non-secret.
+const HRDLOG_APP_NAME: &str = "Nexus";
 
 /// Session-level kill-switch for ClubLog auto-push: set on a 403 (bad creds) so we
 /// stop re-POSTing every QSO (ClubLog IP-blocks repeated auth failures); reset when
@@ -4864,7 +4889,7 @@ struct CredStatus {
 
 #[tauri::command]
 fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStatus>, String> {
-    let (lotw_user, eqsl_user, qrz_user, clublog_email, clublog_key) = {
+    let (lotw_user, eqsl_user, qrz_user, clublog_email, mycall, clublog_key) = {
         let eng = state.lock().map_err(|e| e.to_string())?;
         let st = eng.settings();
         (
@@ -4872,6 +4897,7 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             st.eqsl_username.clone(),
             st.qrz_username.clone(),
             st.clublog_email.clone(),
+            st.mycall.clone(),
             // The API key is an APPLICATION (developer) credential, not a user
             // one: a Settings override OR the key baked into official installer
             // builds (CLUBLOG_API_KEY at build time) both satisfy it. The user's
@@ -4907,6 +4933,13 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             connector: "ClubLog".into(),
             stored: has(clublog_keychain()) && clublog_key,
             identity: clublog_email,
+        },
+        CredStatus {
+            // The station callsign IS the HRDLog identity (the upload code is the
+            // only secret); show mycall so a save is visibly attributed.
+            connector: "HRDLog.net".into(),
+            stored: has(hrdlog_keychain()),
+            identity: mycall,
         },
     ])
 }
@@ -4945,6 +4978,11 @@ fn qrz_logbook_keychain() -> Result<keyring::Entry, String> {
 
 fn clublog_keychain() -> Result<keyring::Entry, String> {
     keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, CLUBLOG_KEYCHAIN_USER)
+        .map_err(|e| format!("couldn't open the system keychain: {e}"))
+}
+
+fn hrdlog_keychain() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, HRDLOG_KEYCHAIN_USER)
         .map_err(|e| format!("couldn't open the system keychain: {e}"))
 }
 
@@ -5077,6 +5115,7 @@ enum UploadToggle {
     Qrz,
     Clublog,
     Eqsl,
+    Hrdlog,
 }
 
 /// Flip a connector's auto-upload toggle (persisted) when its credential
@@ -5095,6 +5134,7 @@ fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: b
                 UploadToggle::Qrz => ("QRZ Logbook", s.qrz_logbook_upload),
                 UploadToggle::Clublog => ("ClubLog", s.clublog_upload),
                 UploadToggle::Eqsl => ("eQSL", s.eqsl_upload),
+                UploadToggle::Hrdlog => ("HRDLog.net", s.hrdlog_upload),
             }
         };
         if already == on {
@@ -5104,6 +5144,7 @@ fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: b
             UploadToggle::Qrz => eng.set_upload_toggles(Some(on), None, None),
             UploadToggle::Clublog => eng.set_upload_toggles(None, Some(on), None),
             UploadToggle::Eqsl => eng.set_upload_toggles(None, None, Some(on)),
+            UploadToggle::Hrdlog => eng.set_hrdlog_upload(on),
         };
         if let Err(e) = updated.save(&settings_path()) {
             eprintln!("tempo: couldn't persist settings: {e}");
@@ -5668,6 +5709,90 @@ fn clear_clublog_password(state: State<'_, SharedEngine>) -> Result<(), String> 
     Ok(())
 }
 
+// ----- HRDLog.net upload code + realtime QSO push ----------------------------
+
+/// Store (or, if empty, clear) the HRDLog.net **upload code** in the OS keychain.
+/// Write-only, like the QRZ/eQSL/ClubLog counterparts. Saving a code also switches
+/// HRDLog.net auto-upload ON (entering the credential is the intent).
+#[tauri::command]
+fn set_hrdlog_code(code: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+    let entry = hrdlog_keychain()?;
+    if code.is_empty() {
+        clear_keychain_entry(&entry)?;
+        conn_log("HRDLog.net", "info", "upload code cleared from the OS keychain");
+        set_upload_toggle(&state, UploadToggle::Hrdlog, false);
+        return Ok(());
+    }
+    entry
+        .set_password(&code)
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+    conn_log("HRDLog.net", "ok", "upload code saved to the OS keychain");
+    set_upload_toggle(&state, UploadToggle::Hrdlog, true);
+    Ok(())
+}
+
+/// Remove the stored HRDLog.net upload code from the OS keychain (idempotent);
+/// also turns HRDLog.net auto-upload off (no credential to push with).
+#[tauri::command]
+fn clear_hrdlog_code(state: State<'_, SharedEngine>) -> Result<(), String> {
+    let r = clear_keychain_entry(&hrdlog_keychain()?);
+    if r.is_ok() {
+        conn_log("HRDLog.net", "info", "upload code cleared from the OS keychain");
+        set_upload_toggle(&state, UploadToggle::Hrdlog, false);
+    }
+    r
+}
+
+/// Push one logged QSO to HRDLog.net (`NewEntry.aspx`). Resolves the station
+/// callsign (`mycall`) + the keychain upload code, uploads one ADIF record, and
+/// classifies the XML response. HRDLog.net is a live-logging/awards site — NOT an
+/// ARRL confirmation source, so this never touches confirmation/award state.
+#[tauri::command]
+async fn hrdlog_push_qso(
+    record: LoggedQso,
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::HrdLogPushResultDto, String> {
+    let who = record.call.clone();
+    // Blocking HTTP off the async executor (see qrz_push_qso).
+    let engine = state.inner().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || hrdlog_push_qso_impl(record, &engine))
+        .await
+        .map_err(|e| format!("upload task failed: {e}"))?;
+    conn_logged("HRDLog.net", |r| format!("pushed {} — {}", who, r.result), res)
+}
+
+fn hrdlog_push_qso_impl(
+    record: LoggedQso,
+    engine: &SharedEngine,
+) -> Result<tempo_app::dto::HrdLogPushResultDto, String> {
+    let callsign = {
+        let eng = engine.lock().map_err(|e| e.to_string())?;
+        eng.settings().mycall.trim().to_string()
+    };
+    if callsign.is_empty() {
+        return Err("Set your station callsign in Settings first.".to_string());
+    }
+    let code = hrdlog_keychain()?
+        .get_password()
+        .map_err(|_| "No HRDLog.net upload code stored — set it in Settings.".to_string())?;
+    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let adif = tempo_core::logbook::adif_record(&rec);
+
+    // Build + POST without the lock; the body carries the code — never logged.
+    let resp = {
+        let query = tempo_core::hrdlog::HrdLogQuery {
+            callsign,
+            code,
+            app: HRDLOG_APP_NAME.to_string(),
+            adif,
+        };
+        let body = tempo_core::hrdlog::build_upload_body(&query);
+        propagation::live::hrdlog::post_form(tempo_core::hrdlog::HRDLOG_NEWENTRY_URL, body)?
+    }; // `query` + `body` (both hold the code) dropped here
+
+    Ok(tempo_core::hrdlog::classify_response(&resp).into())
+}
+
 /// Push one logged QSO to ClubLog (realtime). Resolves the 4 credentials (email +
 /// callsign∥mycall + api-key from Settings or the build-time `option_env!` + the
 /// keychain app-password), uploads, and classifies the HTTP-status response. A 403
@@ -5850,6 +5975,7 @@ fn auto_push_one(
     qrz_on: bool,
     clublog_on: bool,
     eqsl_on: bool,
+    hrdlog_on: bool,
 ) {
     let call = dto.call.clone();
     let mut parts: Vec<String> = Vec::new();
@@ -5901,6 +6027,33 @@ fn auto_push_one(
             Err(e) => {
                 conn_log("ClubLog", "error", format!("auto-push {call} — {e}"));
                 (format!("ClubLog ✗ {e}"), false)
+            }
+        };
+        parts.push(part);
+        all_ok &= ok;
+    }
+    if hrdlog_on {
+        let (part, ok) = match hrdlog_push_qso_impl(dto.clone(), engine) {
+            Ok(r) => {
+                let ok = matches!(r.result.as_str(), "ok" | "duplicate");
+                conn_log(
+                    "HRDLog.net",
+                    if ok { "ok" } else { "error" },
+                    format!("auto-push {call} — {}", r.result),
+                );
+                // HRDLog.net is a live-logging/awards site — never DXCC/WAS credit.
+                let part = match r.result.as_str() {
+                    "ok" => "HRDLog ✓".to_string(),
+                    "duplicate" => "HRDLog dup".to_string(),
+                    "authFail" => "HRDLog ✗ code invalid — check Settings".to_string(),
+                    "unknown" => "HRDLog ✗ unavailable".to_string(),
+                    _ => format!("HRDLog ✗ {}", r.message.as_deref().unwrap_or("rejected")),
+                };
+                (part, ok)
+            }
+            Err(e) => {
+                conn_log("HRDLog.net", "error", format!("auto-push {call} — {e}"));
+                (format!("HRDLog ✗ {e}"), false)
             }
         };
         parts.push(part);
@@ -6485,28 +6638,40 @@ pub fn run() {
         let push_engine = engine.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
-            let (recs, qrz_on, clublog_on, eqsl_on) = {
+            let (recs, qrz_on, clublog_on, eqsl_on, hrdlog_on) = {
                 // Recover a poisoned lock (conn_log pattern) — a panicked command
                 // holding the engine must not silently kill auto-upload forever.
                 let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
-                let (q, c, e) = {
+                let (q, c, e, h) = {
                     let s = eng.settings();
-                    (s.qrz_logbook_upload, s.clublog_upload, s.eqsl_upload)
+                    (
+                        s.qrz_logbook_upload,
+                        s.clublog_upload,
+                        s.eqsl_upload,
+                        s.hrdlog_upload,
+                    )
                 };
-                if !(q || c || e) {
+                if !(q || c || e || h) {
                     // Nothing enabled: LEAVE the queue intact (bounded at 256) so
                     // flipping a toggle on later still uploads this session's
                     // recent QSOs — log-first-configure-later must not lose them.
                     continue;
                 }
-                (eng.take_pending_uploads(), q, c, e)
+                (eng.take_pending_uploads(), q, c, e, h)
             };
             // ClubLog suspended (403 latch): skip that leg instead of erroring
             // per QSO — the suspension was announced once; re-push covers later.
             let clublog_live = clublog_on
                 && !CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed);
             for rec in recs {
-                auto_push_one(&push_engine, LoggedQso::from(rec), qrz_on, clublog_live, eqsl_on);
+                auto_push_one(
+                    &push_engine,
+                    LoggedQso::from(rec),
+                    qrz_on,
+                    clublog_live,
+                    eqsl_on,
+                    hrdlog_on,
+                );
             }
         });
     }
@@ -6670,6 +6835,7 @@ pub fn run() {
             log_qso,
             get_log,
             edit_qso,
+            mark_qsl_sent,
             delete_qso,
             purge_log,
             get_awards,
@@ -6694,6 +6860,9 @@ pub fn run() {
             clear_clublog_password,
             clublog_push_qso,
             eqsl_push_qso,
+            set_hrdlog_code,
+            clear_hrdlog_code,
+            hrdlog_push_qso,
             get_ota_spots,
             set_activation,
             clear_activation,

@@ -58,6 +58,10 @@ pub struct QsoRecord {
     /// May be all-false on legacy in-memory records whose sync predates the
     /// split; the ADIF writer keeps a best-guess fallback for those.
     pub qsl_rcvd: QslRcvd,
+    /// Operator-declared OUTBOUND QSL-request state (did I send a card, how, when).
+    /// A *request*, NOT a confirmation — never promotes `confirmed`/`qsl_rcvd`.
+    /// Round-trips via ADIF `QSL_SENT`/`QSL_SENT_VIA`/`QSLSDATE`. Default = not sent.
+    pub qsl_sent: QslSent,
     /// Awards credit has been **granted** (ARRL credited it) — normalized ADIF
     /// award codes ("DXCC", "DXCC_BAND", "WAS"…), uppercased + sorted + deduped.
     /// Distinct from `award_confirmed`: a confirmation you hold vs credit you've
@@ -111,6 +115,56 @@ impl QslRcvd {
         self.lotw |= inc.lotw;
         self.eqsl |= inc.eqsl;
     }
+}
+
+/// How a paper/card QSL was sent (ADIF `QSL_SENT_VIA`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QslVia {
+    /// Bureau (ADIF `B`).
+    Bureau,
+    /// Direct — mailed to the operator (ADIF `D`).
+    Direct,
+    /// Electronic (ADIF `E`).
+    Electronic,
+}
+
+impl QslVia {
+    /// The single-letter ADIF `QSL_SENT_VIA` code.
+    pub fn code(self) -> &'static str {
+        match self {
+            QslVia::Bureau => "B",
+            QslVia::Direct => "D",
+            QslVia::Electronic => "E",
+        }
+    }
+
+    /// Parse an ADIF `QSL_SENT_VIA` code (case-insensitive). `None` for anything
+    /// outside the B/D/E subset the operator can pick.
+    pub fn from_code(s: &str) -> Option<QslVia> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "B" => Some(QslVia::Bureau),
+            "D" => Some(QslVia::Direct),
+            "E" => Some(QslVia::Electronic),
+            _ => None,
+        }
+    }
+}
+
+/// Operator-declared OUTBOUND QSL-request state: whether the operator has sent a
+/// QSL card/request for this contact, how, and when. This is a *request*, NOT a
+/// confirmation — it is operator-declared truth that NEVER sets `confirmed` /
+/// `qsl_rcvd` (a request is not a card in hand). Round-trips via the standard ADIF
+/// `QSL_SENT` / `QSL_SENT_VIA` / `QSLSDATE` fields, with the same legacy-absent
+/// tolerance as [`QslRcvd`] (all fields missing ⇒ default, `sent == false`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QslSent {
+    /// A QSL was sent (ADIF `QSL_SENT` = `Y`). Operator-declared.
+    pub sent: bool,
+    /// How it was sent (ADIF `QSL_SENT_VIA`), when recorded.
+    pub via: Option<QslVia>,
+    /// Date sent, Unix seconds at UTC midnight (ADIF `QSLSDATE`, `YYYYMMDD`) — the
+    /// field carries no time-of-day, so only the date round-trips.
+    pub date_unix: Option<u64>,
 }
 
 /// Parks/Summits On The Air tags on a contact: your activation (`my_*`) and/or the
@@ -229,6 +283,9 @@ impl Logbook {
                 rec.confirmed = old.confirmed;
                 rec.award_confirmed = old.award_confirmed;
                 rec.qsl_rcvd = old.qsl_rcvd;
+                // A field-edit (busted call, wrong band) must not wipe an
+                // operator-declared QSL-sent mark — only `mark_qsl_sent` mutates it.
+                rec.qsl_sent = old.qsl_sent;
                 rec.credit_granted = old.credit_granted.clone();
                 rec.credit_submitted = old.credit_submitted.clone();
                 rec.upload = old.upload.clone();
@@ -247,6 +304,25 @@ impl Logbook {
                     rec.time_off_unix = old.time_off_unix;
                 }
                 self.records[index] = rec;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Mark the record at `index` as QSL-sent — operator-declared truth that you
+    /// sent a card/request `via` (bureau/direct/electronic) on `date_unix`. Only
+    /// ever ADDS a request; it never touches `confirmed`/`qsl_rcvd` (a request is
+    /// not a confirmation). Returns false if `index` is out of range. Pure — call
+    /// [`save`](Self::save) to persist.
+    pub fn mark_qsl_sent(&mut self, index: usize, via: QslVia, date_unix: u64) -> bool {
+        match self.records.get_mut(index) {
+            Some(rec) => {
+                rec.qsl_sent = QslSent {
+                    sent: true,
+                    via: Some(via),
+                    date_unix: Some(date_unix),
+                };
                 true
             }
             None => false,
@@ -576,6 +652,19 @@ pub fn adif_record(r: &QsoRecord) -> String {
     } else if r.confirmed {
         out.push_str(&field("EQSL_QSL_RCVD", "Y"));
     }
+    // Operator-declared OUTBOUND QSL request (I sent a card/request) — standard
+    // ADIF so any logger imports it. Emitted only when actually sent; the via/date
+    // ride along when recorded. NOT a confirmation.
+    if r.qsl_sent.sent {
+        out.push_str(&field("QSL_SENT", "Y"));
+        if let Some(via) = r.qsl_sent.via {
+            out.push_str(&field("QSL_SENT_VIA", via.code()));
+        }
+        if let Some(ts) = r.qsl_sent.date_unix {
+            let (sy, smo, sd, ..) = datetime_utc(ts);
+            out.push_str(&field("QSLSDATE", &format!("{sy:04}{smo:02}{sd:02}")));
+        }
+    }
     // Credit state round-trips so a reconciled log re-exports its granted/applied
     // awards (and re-imports back to the same state).
     if !r.credit_granted.is_empty() {
@@ -725,6 +814,22 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
     };
     let confirmed = qsl_rcvd.any();
     let award_confirmed = qsl_rcvd.award();
+    // Operator-declared OUTBOUND QSL request. Absent fields ⇒ default (not sent),
+    // matching the QslRcvd legacy tolerance. QSLSDATE is date-only → UTC midnight.
+    let qsl_sent = QslSent {
+        sent: f
+            .get("QSL_SENT")
+            .is_some_and(|v| v.eq_ignore_ascii_case("Y")),
+        via: f.get("QSL_SENT_VIA").and_then(|v| QslVia::from_code(v)),
+        date_unix: f.get("QSLSDATE").filter(|s| s.len() >= 8).map(|s| {
+            let (sy, smo, sd) = (
+                s[0..4].parse::<i32>().unwrap_or(1970),
+                s[4..6].parse::<u32>().unwrap_or(1),
+                s[6..8].parse::<u32>().unwrap_or(1),
+            );
+            unix_from_ymdhms(sy, smo, sd, 0, 0, 0)
+        }),
+    };
     let credit_granted = f
         .get("CREDIT_GRANTED")
         .map(|s| parse_credit(s))
@@ -838,6 +943,7 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         confirmed,
         award_confirmed,
         qsl_rcvd,
+        qsl_sent,
         credit_granted,
         credit_submitted,
         upload,
@@ -928,11 +1034,71 @@ mod tests {
             confirmed: false,
             award_confirmed: false,
             qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: Default::default(),
             ota: Default::default(),
         }
+    }
+
+    #[test]
+    fn qsl_sent_round_trips_through_adif() {
+        // Standard ADIF QSL_SENT / QSL_SENT_VIA / QSLSDATE, not APP_-fields.
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.qsl_sent = QslSent {
+            sent: true,
+            via: Some(QslVia::Bureau),
+            date_unix: Some(unix_from_ymdhms(2024, 3, 9, 0, 0, 0)),
+        };
+        let adif = adif_header() + &adif_record(&r);
+        assert!(adif.contains("<QSL_SENT:1>Y"));
+        assert!(adif.contains("<QSL_SENT_VIA:1>B"));
+        assert!(adif.contains("<QSLSDATE:8>20240309"));
+        let back = &parse_adif(&adif)[0];
+        assert_eq!(
+            back.qsl_sent, r.qsl_sent,
+            "QSL-sent survives the round-trip"
+        );
+        // A request is NOT a confirmation.
+        assert!(!back.confirmed && !back.award_confirmed);
+
+        // Direct with no recorded date: sent + via survive, date stays None.
+        let mut d = rec("K2DEF", "40m", 1_700_000_100);
+        d.qsl_sent = QslSent {
+            sent: true,
+            via: Some(QslVia::Direct),
+            date_unix: None,
+        };
+        let dback = &parse_adif(&(adif_header() + &adif_record(&d)))[0];
+        assert_eq!(dback.qsl_sent.via, Some(QslVia::Direct));
+        assert!(dback.qsl_sent.sent && dback.qsl_sent.date_unix.is_none());
+    }
+
+    #[test]
+    fn qsl_sent_absent_fields_default_to_not_sent() {
+        // Legacy record with no QSL_SENT tags (like every log before this feature)
+        // parses back as the default — never spuriously "sent".
+        let adif = "<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<EOR>\n";
+        let back = &parse_adif(adif)[0];
+        assert_eq!(back.qsl_sent, QslSent::default());
+        assert!(!back.qsl_sent.sent);
+        // And such a record emits NO QSL_SENT field on write-back.
+        assert!(!adif_record(back).contains("QSL_SENT"));
+    }
+
+    #[test]
+    fn mark_qsl_sent_declares_request_without_confirming() {
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        assert!(lb.mark_qsl_sent(0, QslVia::Electronic, 1_700_000_000));
+        let r = &lb.records()[0];
+        assert!(r.qsl_sent.sent);
+        assert_eq!(r.qsl_sent.via, Some(QslVia::Electronic));
+        // Marking a request must NEVER fabricate a confirmation.
+        assert!(!r.confirmed && !r.award_confirmed && !r.qsl_rcvd.any());
+        // Out-of-range is a no-op false.
+        assert!(!lb.mark_qsl_sent(9, QslVia::Bureau, 1_700_000_000));
     }
 
     #[test]
@@ -974,6 +1140,11 @@ mod tests {
         original.confirmed = true;
         original.award_confirmed = true;
         original.credit_granted = vec!["DXCC".into()];
+        original.qsl_sent = QslSent {
+            sent: true,
+            via: Some(QslVia::Direct),
+            date_unix: Some(1_700_000_000),
+        };
         original.upload.lotw = Some(UploadStatus {
             outcome: UploadOutcome::Accepted,
             when_unix: 1,
@@ -1004,6 +1175,10 @@ mod tests {
             r.upload.lotw.as_ref().map(|s| s.outcome),
             Some(UploadOutcome::Accepted),
             "upload state preserved"
+        );
+        assert!(
+            r.qsl_sent.sent && r.qsl_sent.via == Some(QslVia::Direct),
+            "QSL-sent mark preserved across an edit"
         );
         assert!(
             !lb.update_record(9, rec("X", "20m", 1)),

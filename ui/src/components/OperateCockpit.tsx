@@ -690,6 +690,7 @@ export function OperateCockpit({
                   myGrid={snap.mygrid}
                   currentSlot={snap.radio.slot}
                   needByCall={needByCall}
+                  needAlertsByCall={needAlertsByCall}
                   selectedCall={selectedCall}
                   onSelect={onSelect}
                   onCall={onCall}

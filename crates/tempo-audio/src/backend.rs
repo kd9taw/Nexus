@@ -23,6 +23,15 @@ pub trait AudioBackend {
     fn flush_output(&mut self) -> usize {
         0
     }
+    /// Start / stop / retune the dark headphone monitor in place, WITHOUT rebuilding
+    /// the capture/TX streams (the decode path must never restart). `enabled` is the
+    /// already-guard-resolved decision (the caller has refused any TX-device
+    /// collision); `device` is the output device name ("" = system default); `level`
+    /// is 0.0–1.0. `Err` = the monitor output device failed to open. Default no-op
+    /// (non-hardware backends have no monitor); the real sound card overrides it.
+    fn set_monitor(&mut self, _enabled: bool, _device: &str, _level: f32) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// In-memory backend for tests: serves scripted capture chunks and records every

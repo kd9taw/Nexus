@@ -4,7 +4,7 @@
 // "Roster" cockpit layout's primary surface — distinct from the waterfall-first
 // "Classic" layout, not just a reshaped pane.
 import { useEffect, useMemo, useState } from 'react'
-import type { NeedTag, Station } from '../types'
+import type { NeedAlert, NeedTag, Station } from '../types'
 import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, magneticDeg } from '../grid'
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
@@ -16,6 +16,9 @@ interface Props {
   myGrid: string
   currentSlot: number
   needByCall: Map<string, NeedTag>
+  /** FULL per-call alerts — a station needed on several dimensions (grid AND
+   * band…) shows EVERY need chip, not just the top tier (operator report). */
+  needAlertsByCall?: Map<string, NeedAlert[]>
   selectedCall: string | null
   onSelect: (call: string) => void
   onCall: (call: string, grid?: string) => void
@@ -53,6 +56,7 @@ export function OperateRoster({
   myGrid,
   currentSlot,
   needByCall,
+  needAlertsByCall,
   selectedCall,
   onSelect,
   onCall,
@@ -75,10 +79,20 @@ export function OperateRoster({
   const rows = useMemo(() => {
     const built = stations.map((s) => {
       const need = needByCall.get(s.call.toUpperCase()) ?? null
+      // Union of ALL need forms for the row (deduped, insertion-ordered by the
+      // alerts). Falls back to the single top tag when the full map is absent.
+      let needAll: NeedTag[] = need ? [need] : []
+      const alerts = needAlertsByCall?.get(s.call.toUpperCase())
+      if (alerts && alerts.length > 0) {
+        const seen = new Set<NeedTag>()
+        for (const a of alerts) for (const t of a.tags) seen.add(t)
+        if (seen.size > 0) needAll = [...seen]
+      }
       const ll = s.grid ? gridToLatLon(s.grid) : null
       return {
         s,
         need,
+        needAll,
         needRank: need ? NEED_RANK[need] : 0,
         distKm: me && ll ? haversineKm(me, ll) : Infinity,
         brg: me && ll ? bearingDeg(me, ll) : 999,
@@ -118,7 +132,7 @@ export function OperateRoster({
       return c * dir
     })
     return f
-  }, [stations, needByCall, me, currentSlot, sort, neededOnly, hideWorked])
+  }, [stations, needByCall, needAlertsByCall, me, currentSlot, sort, neededOnly, hideWorked])
 
   const th = (key: SortKey, label: string, title?: string) => (
     <button
@@ -164,7 +178,7 @@ export function OperateRoster({
         {rows.length === 0 ? (
           <div className="or-empty">No stations heard yet — decoded stations appear here as they arrive.</div>
         ) : (
-          rows.map(({ s, need, age }) => {
+          rows.map(({ s, need, needAll, age }) => {
             const chip = need ? NEED_CHIP[need] : null
             const ignoredRow = isIgnored(ignoredCalls ?? EMPTY_IGNORES, s.call)
             return (
@@ -186,7 +200,16 @@ export function OperateRoster({
                 }
               >
                 <span className="or-need">
-                  {chip && <span className={`need-chip need-${chip.cls}`}>{chip.short}</span>}
+                  {needAll.map((t) => {
+                    const c = NEED_CHIP[t]
+                    return (
+                      c && (
+                        <span key={t} className={`need-chip need-${c.cls}`} title={c.label}>
+                          {c.short}
+                        </span>
+                      )
+                    )
+                  })}
                 </span>
                 <span className="or-call">
                   {s.call}

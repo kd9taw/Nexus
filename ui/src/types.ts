@@ -785,6 +785,10 @@ export interface LoggedQso {
   /** WHICH channel(s) confirmed — per-source truth behind the booleans
    * (all-false on legacy records whose sync predates the split). */
   qslRcvd?: { card: boolean; lotw: boolean; eqsl: boolean }
+  /** Operator-declared OUTBOUND QSL-request state (did I send a card, how, when).
+   * `via` is the ADIF QSL_SENT_VIA letter: "B"(ureau) / "D"(irect) / "E"(lectronic).
+   * A request is NOT a confirmation. */
+  qslSent?: { sent: boolean; via: string | null; dateUnix: number | null }
   /** Awards credit granted by ARRL (normalized ADIF codes, e.g. "DXCC"). */
   creditGranted?: string[]
   /** Awards credit applied/submitted but not yet granted. */
@@ -1087,6 +1091,14 @@ export interface QrzPushResult {
  *  ClubLog"; `authFail` means a 403 (auto-upload is then suppressed until creds change). */
 export interface ClubLogPushResult {
   result: 'ok' | 'modified' | 'duplicate' | 'rejected' | 'authFail' | 'serverError' | 'unknown'
+  message: string | null
+}
+
+/** Result of an HRDLog.net upload. `duplicate` is the benign "already on HRDLog";
+ *  `authFail` means a bad callsign/upload code. HRDLog.net is a live-logging/awards
+ *  site — it is NOT an ARRL confirmation source (never DXCC/WAS credit). */
+export interface HrdLogPushResult {
+  result: 'ok' | 'duplicate' | 'authFail' | 'rejected' | 'unknown'
   message: string | null
 }
 
@@ -1405,6 +1417,13 @@ export interface Settings {
   audioOut: string
   /** Transmit drive level, 0–1 (default 0.9). */
   txLevel: number
+  /** Headphone monitor (DARK, off by default): live pass-through of the RX audio the
+   * decoder hears to a chosen output device. Refuses to open on the rig's TX device. */
+  monitorEnabled?: boolean
+  /** Headphone-monitor output device name. "" = system default output. */
+  monitorDevice?: string
+  /** Headphone-monitor playback level, 0–1 (default 0.5). */
+  monitorLevel?: number
   /** Station transmit power in WATTS (RF out) — unlocks the Journey miles-per-watt
    * + QRP feats. `null` until set (those feats stay gated). */
   stationPowerW?: number | null
@@ -1543,6 +1562,10 @@ export interface Settings {
   /** Auto-upload each logged QSO to eQSL.cc (ImportADIF). eQSL username is
    *  `eqslUsername`; the password is in the keychain. */
   eqslUpload: boolean
+  /** Auto-upload each logged QSO to HRDLog.net (the online logging/awards site,
+   *  NOT the HRD Logbook UDP push). Station callsign is `mycall`; the upload code
+   *  is in the keychain. Not an ARRL confirmation source. */
+  hrdlogUpload: boolean
   /** Watch near-region spots (not just your own paths) so opening detection can
    *  flag "a band is open around you" before you've worked anyone. */
   openingRegional: boolean

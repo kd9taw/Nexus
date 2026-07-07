@@ -386,6 +386,13 @@ export async function editQso(index: number, record: LoggedQso): Promise<AppSnap
   return invoke<AppSnapshot>('edit_qso', { index, record })
 }
 
+/** Mark logbook entry `index` as QSL-sent (operator-declared): a card/request was
+ *  sent `via` "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT
+ *  a confirmation — this never flips `confirmed`/`awardConfirmed`. */
+export async function markQslSent(index: number, via: 'B' | 'D' | 'E'): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('mark_qsl_sent', { index, via })
+}
+
 /** Delete logbook entry `index` (the position in the `getLog()` array). */
 export async function deleteQso(index: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('delete_qso', { index })
@@ -521,6 +528,24 @@ export async function clublogPushQso(record: LoggedQso): Promise<ClubLogPushResu
 /** Upload one logged QSO to eQSL.cc (ImportADIF). */
 export async function eqslPushQso(record: LoggedQso): Promise<UploadReport> {
   return invoke<UploadReport>('eqsl_push_qso', { record })
+}
+
+/** Store the HRDLog.net upload code in the OS keychain (write-only; empty clears). */
+export async function setHrdlogCode(code: string): Promise<void> {
+  await invoke<void>('set_hrdlog_code', { code })
+}
+
+/** Remove the stored HRDLog.net upload code from the OS keychain (idempotent). */
+export async function clearHrdlogCode(): Promise<void> {
+  await invoke<void>('clear_hrdlog_code')
+}
+
+/** Push one logged QSO to HRDLog.net (NewEntry.aspx). Not an ARRL confirmation
+ *  source — this never earns DXCC/WAS credit. */
+export async function hrdlogPushQso(
+  record: LoggedQso,
+): Promise<import('./types').HrdLogPushResult> {
+  return invoke<import('./types').HrdLogPushResult>('hrdlog_push_qso', { record })
 }
 
 /** Need-aware spotting: the stations heard now, ranked by award value. */

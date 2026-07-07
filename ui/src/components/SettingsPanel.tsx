@@ -3,6 +3,7 @@ import type { AudioDevices, BandChannel, CatTestResult, DetectedRig, RadioStatus
 import {
   clearClublogPassword,
   clearEqslPassword,
+  clearHrdlogCode,
   clearLotwPassword,
   clearQrzLogbookKey,
   clearQrzPassword,
@@ -16,6 +17,7 @@ import {
   getSettings,
   setClublogPassword,
   setEqslPassword,
+  setHrdlogCode,
   setLotwPassword,
   setQrzLogbookKey,
   setQrzPassword,
@@ -275,6 +277,7 @@ export function SettingsPanel({
   const [qrzPw, setQrzPw] = useState('')
   const [qrzKey, setQrzKey] = useState('')
   const [clublogPw, setClublogPw] = useState('')
+  const [hrdlogCode, setHrdlogCodeField] = useState('')
   const [tab, setTab] = useState<SettingsTab>('station')
   // In-progress MHz text for the override row being edited — committed only when
   // it parses as a positive number, so a half-typed "14." never corrupts the form.
@@ -763,6 +766,31 @@ export function SettingsPanel({
     }
   }
 
+  const onSaveHrdlogCode = async () => {
+    if (!hrdlogCode) return
+    const ok = await withErrorToast(async () => {
+      await setHrdlogCode(hrdlogCode)
+      return true
+    }, 'Could not save the HRDLog.net upload code')
+    if (ok) {
+      setHrdlogCodeField('')
+      updateBool('hrdlogUpload', true)
+      pushToast('HRDLog.net code saved — auto-upload to HRDLog.net is ON', 'success')
+    }
+  }
+
+  const onForgetHrdlogCode = async () => {
+    const ok = await withErrorToast(async () => {
+      await clearHrdlogCode()
+      return true
+    }, 'Could not clear the HRDLog.net upload code')
+    if (ok) {
+      setHrdlogCodeField('')
+      updateBool('hrdlogUpload', false)
+      pushToast('HRDLog.net code cleared — auto-upload to HRDLog.net is off', 'success')
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!form) return
@@ -836,6 +864,11 @@ export function SettingsPanel({
     : audio.input
   const audioOutOptions = form.audioOut && !audio.output.includes(form.audioOut)
     ? [form.audioOut, ...audio.output]
+    : audio.output
+  // Headphone-monitor device picker: same enumerated-output list, keeping the
+  // saved selection visible even if it's since disappeared.
+  const monitorOutOptions = form.monitorDevice && !audio.output.includes(form.monitorDevice)
+    ? [form.monitorDevice, ...audio.output]
     : audio.output
 
   // Frequencies tab: last-wins override lookup for the stock table, plus
@@ -1655,6 +1688,7 @@ export function SettingsPanel({
 
           {/* ---- Audio ---- */}
           {tab === 'audio' && (
+          <>
           <fieldset className="settings-section">
             <legend>Audio</legend>
             <div className="settings-grid">
@@ -1730,6 +1764,70 @@ export function SettingsPanel({
               </div>
             </div>
           </fieldset>
+
+          <fieldset className="settings-section">
+            <legend>Headphone monitor</legend>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">Enable monitor</span>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    checked={!!form.monitorEnabled}
+                    onChange={(e) => updateBool('monitorEnabled', e.target.checked)}
+                    aria-label="Enable headphone monitor"
+                  />
+                  <span className="settings-hint">
+                    Plays the exact audio the decoder hears — for level / RFI diagnosis and
+                    listening to the band. Off by default; UNVERIFIED on-air until the attended
+                    session. Guards against the rig's TX device by name (System default is
+                    resolved to its real device first) — if your devices go by multiple
+                    names, pick your headphones explicitly rather than System default.
+                  </span>
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">Monitor Output Device</span>
+                <select
+                  className="settings-input"
+                  value={form.monitorDevice ?? ''}
+                  onChange={(e) => update('monitorDevice', e.target.value)}
+                  disabled={!form.monitorEnabled}
+                >
+                  <option value="">System default</option>
+                  {monitorOutOptions.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">
+                  Your headphones or speakers — must NOT be the rig's TX output device.
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">
+                  Monitor Level{' '}
+                  <span className="settings-value">{Math.round((form.monitorLevel ?? 0.5) * 100)}%</span>
+                </span>
+                <input
+                  className="settings-slider"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={String(form.monitorLevel ?? 0.5)}
+                  onChange={(e) => updateNum('monitorLevel', Number(e.target.value))}
+                  disabled={!form.monitorEnabled}
+                  aria-label="Headphone monitor level"
+                />
+                <span className="settings-hint">Headphone listening volume (does not affect TX).</span>
+              </label>
+            </div>
+          </fieldset>
+          </>
           )}
 
           {/* ---- Operating ---- */}
@@ -3241,6 +3339,62 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">
                   Push each logged QSO to ClubLog in real time (needs the email, app-password, and API key above).
+                </span>
+              </div>
+
+              <label className="settings-field">
+                <span className="settings-label">HRDLog.net upload code</span>
+                <div className="settings-input-row">
+                  <input
+                    className="settings-input"
+                    type="password"
+                    value={hrdlogCode}
+                    placeholder="your hrdlog.net upload code"
+                    onChange={(e) => setHrdlogCodeField(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={onSaveHrdlogCode}
+                    disabled={!hrdlogCode}
+                  >
+                    Set
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={onForgetHrdlogCode}
+                    title="Remove the stored HRDLog.net code from the system keychain"
+                  >
+                    Forget
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  The upload code from your HRDLog.net account (Options → your code). Uploads log under your
+                  station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate
+                  from the HRD Logbook UDP push under Logging.
+                </span>
+              </label>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Auto-upload QSOs to HRDLog.net</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.hrdlogUpload}
+                    className={`toggle${form.hrdlogUpload ? ' on' : ''}`}
+                    onClick={() => updateBool('hrdlogUpload', !form.hrdlogUpload)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Push each logged QSO to HRDLog.net (needs the upload code above). HRDLog.net is a live-logging
+                  and awards site — it is <strong>not</strong> an ARRL confirmation source, so an upload here
+                  never earns DXCC/WAS credit.
                 </span>
               </div>
             </div>

@@ -223,6 +223,18 @@ pub struct Settings {
     /// Tx audio level (0.0–1.0) applied to outgoing samples before they reach
     /// the sound card.
     pub tx_level: f32,
+    /// Headphone monitor (DARK, off by default): live pass-through of the exact RX
+    /// audio the decoder hears to a chosen output device, so the operator can HEAR
+    /// the band and diagnose levels / RFI. Best-effort name guard against the rig's TX device (System default resolved first)
+    /// (`audio_out`) — monitoring into it would transmit the received band back out.
+    #[serde(default)]
+    pub monitor_enabled: bool,
+    /// Headphone-monitor output device name. Empty = system default output.
+    #[serde(default)]
+    pub monitor_device: String,
+    /// Headphone-monitor playback level (0.0–1.0). Default 0.5.
+    #[serde(default = "default_monitor_level")]
+    pub monitor_level: f32,
     /// Station transmit power in WATTS (RF out), used by the Journey miles-per-watt
     /// + QRP feats. `None` until the operator sets it (those feats stay gated).
     #[serde(default)]
@@ -420,6 +432,11 @@ pub struct Settings {
     /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
     /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
     pub eqsl_upload: bool,
+    /// Auto-upload each logged QSO to HRDLog.net (the online logging/awards site,
+    /// NOT the HRD Logbook UDP push above). Off by default. The station callsign is
+    /// `mycall`; the upload code lives in the OS keychain. HRDLog.net is not an ARRL
+    /// confirmation source — an upload here never earns DXCC/WAS credit.
+    pub hrdlog_upload: bool,
 
     /// Watch near-region spots (not just your own paths) so opening detection can
     /// flag "a band is open around you" before you've worked anyone. On by default;
@@ -497,6 +514,10 @@ fn default_rotator_baud() -> u32 {
 
 fn default_save_wav() -> String {
     "none".to_string()
+}
+
+fn default_monitor_level() -> f32 {
+    0.5
 }
 
 fn default_lotw_max_age_days() -> u32 {
@@ -650,6 +671,9 @@ impl Default for Settings {
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
+            monitor_enabled: false,
+            monitor_device: String::new(),
+            monitor_level: 0.5,
             station_power_w: None,
             prop_engine: default_prop_engine(),
             save_wav: default_save_wav(),
@@ -700,6 +724,7 @@ impl Default for Settings {
             clublog_api_key: String::new(),
             clublog_upload: false,
             eqsl_upload: false,
+            hrdlog_upload: false,
             opening_regional: true,
             macros: Macros::default(),
             voice_messages: default_voice_messages(),
@@ -959,6 +984,24 @@ mod tests {
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
         assert_eq!(s.dial_hz(), 14_074_000); // default = FT8 20 m (the default mode)
+    }
+
+    #[test]
+    fn monitor_defaults_and_roundtrip() {
+        let s = Settings::default();
+        assert!(!s.monitor_enabled, "monitor ships DARK (off by default)");
+        assert_eq!(s.monitor_device, "");
+        assert_eq!(s.monitor_level, 0.5);
+        // Round-trips as camelCase and reloads identically.
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"monitorEnabled\":false"));
+        assert!(json.contains("\"monitorLevel\":0.5"));
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+        // An old settings file without the monitor keys still loads (serde defaults).
+        let partial = r#"{"mycall":"W9XYZ","audioOut":"USB CODEC"}"#;
+        let old: Settings = serde_json::from_str(partial).unwrap();
+        assert!(!old.monitor_enabled);
+        assert_eq!(old.monitor_level, 0.5);
     }
 
     #[test]

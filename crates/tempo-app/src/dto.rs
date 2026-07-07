@@ -619,6 +619,10 @@ pub struct LoggedQso {
     /// (all-false on legacy records whose sync predates the split).
     #[serde(default)]
     pub qsl_rcvd: QslRcvdDto,
+    /// Operator-declared OUTBOUND QSL-request state (did I send a card, how, when).
+    /// A request, NOT a confirmation.
+    #[serde(default)]
+    pub qsl_sent: QslSentDto,
     /// Awards credit GRANTED by ARRL (normalized ADIF codes, e.g. "DXCC").
     #[serde(default)]
     pub credit_granted: Vec<String>,
@@ -656,6 +660,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
                 lotw: r.qsl_rcvd.lotw,
                 eqsl: r.qsl_rcvd.eqsl,
             },
+            qsl_sent: r.qsl_sent.into(),
             credit_granted: r.credit_granted,
             credit_submitted: r.credit_submitted,
             upload: r.upload.into(),
@@ -670,6 +675,37 @@ pub struct QslRcvdDto {
     pub card: bool,
     pub lotw: bool,
     pub eqsl: bool,
+}
+
+/// Operator-declared OUTBOUND QSL-request state (mirrors tempo_core::logbook::QslSent).
+/// A request, NOT a confirmation. `via` is the ADIF `QSL_SENT_VIA` letter ("B"/"D"/"E").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QslSentDto {
+    pub sent: bool,
+    pub via: Option<char>,
+    pub date_unix: Option<u64>,
+}
+
+impl From<tempo_core::logbook::QslSent> for QslSentDto {
+    fn from(s: tempo_core::logbook::QslSent) -> Self {
+        QslSentDto {
+            sent: s.sent,
+            via: s.via.map(|v| v.code().chars().next().unwrap_or('?')),
+            date_unix: s.date_unix,
+        }
+    }
+}
+impl From<QslSentDto> for tempo_core::logbook::QslSent {
+    fn from(s: QslSentDto) -> Self {
+        tempo_core::logbook::QslSent {
+            sent: s.sent,
+            via: s
+                .via
+                .and_then(|c| tempo_core::logbook::QslVia::from_code(&c.to_string())),
+            date_unix: s.date_unix,
+        }
+    }
 }
 
 impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
@@ -698,6 +734,7 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
                 lotw: q.qsl_rcvd.lotw,
                 eqsl: q.qsl_rcvd.eqsl,
             },
+            qsl_sent: q.qsl_sent.into(),
             credit_granted: q.credit_granted,
             credit_submitted: q.credit_submitted,
             upload: q.upload.into(),
@@ -1091,6 +1128,35 @@ impl From<tempo_core::clublog::ClubLogPush> for ClubLogPushResultDto {
         }
         .to_string();
         ClubLogPushResultDto {
+            result,
+            message: p.message,
+        }
+    }
+}
+
+/// Result of an HRDLog.net upload (one-QSO `NewEntry.aspx`). `result` is a
+/// camelCase outcome tag the UI switches on; `duplicate` is the benign "already on
+/// HRDLog". HRDLog.net is a live-logging/awards site — never DXCC/WAS credit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HrdLogPushResultDto {
+    /// "ok" | "duplicate" | "authFail" | "rejected" | "unknown".
+    pub result: String,
+    pub message: Option<String>,
+}
+
+impl From<tempo_core::hrdlog::HrdLogPush> for HrdLogPushResultDto {
+    fn from(p: tempo_core::hrdlog::HrdLogPush) -> Self {
+        use tempo_core::hrdlog::HrdLogResult::*;
+        let result = match p.result {
+            Ok => "ok",
+            Duplicate => "duplicate",
+            AuthFail => "authFail",
+            Rejected => "rejected",
+            Unknown => "unknown",
+        }
+        .to_string();
+        HrdLogPushResultDto {
             result,
             message: p.message,
         }

@@ -606,6 +606,15 @@ impl Engine {
         self.settings.clone()
     }
 
+    /// Flip the HRDLog.net auto-upload toggle (persisted by the caller). Kept
+    /// separate from [`set_upload_toggles`](Self::set_upload_toggles) so the three
+    /// existing callers stay untouched; same rationale — a credential save must not
+    /// reset the operating mode or drop queued TX (never `apply_settings`).
+    pub fn set_hrdlog_upload(&mut self, on: bool) -> Settings {
+        self.settings.hrdlog_upload = on;
+        self.settings.clone()
+    }
+
     /// Change band / dial frequency / mode **live** — without resetting the
     /// operating mode or queues (unlike [`Engine::apply_settings`]). Updates the
     /// settings + the UI radio readout; the radio loop re-tunes the rig from
@@ -1710,6 +1719,22 @@ impl Engine {
         ok
     }
 
+    /// Mark logbook entry `index` as QSL-sent (operator-declared: I sent a
+    /// card/request `via` bureau/direct/electronic, dated now). Only ADDS a request
+    /// — never touches confirmation state. Persists by rewriting the ADIF. Returns
+    /// false if `index` is out of range.
+    pub fn mark_qsl_sent(&mut self, index: usize, via: tempo_core::logbook::QslVia) -> bool {
+        let ok = self.logbook.mark_qsl_sent(index, via, now_unix_secs());
+        if ok {
+            if let Some(path) = &self.log_path {
+                if let Err(e) = self.logbook.save(path) {
+                    eprintln!("tempo: mark_qsl_sent save failed: {e}");
+                }
+            }
+        }
+        ok
+    }
+
     /// Delete a logbook entry (a mis-logged contact). Persists by rewriting the
     /// ADIF. Returns false if `index` is out of range. Shifts later indices — the
     /// caller must reload the log afterward.
@@ -2189,6 +2214,12 @@ impl Engine {
             dxcall,
             context.as_ref().map(|(m, s)| (m, *s)),
             self.settings.prefer_rrr,
+        );
+        // Hound (DXpedition) QSOs end on the Fox's RR73 with NO parting 73 —
+        // a 73 would land in the Fox's own segment (see qso.rs quiet_finish).
+        station.quiet_finish = matches!(
+            self.settings.special_op,
+            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
         );
         // Pre-seed the operator/spot grid only if we didn't capture one from the
         // message we're answering.
@@ -4014,16 +4045,27 @@ impl Engine {
                 let state_before = station.state;
                 station.observe(decodes);
                 sequence_advanced = station.state != state_before;
+                // Quiet-finish (hound) completion sends NOTHING after the Fox's
+                // RR73 — so the stock "disable TX after 73" one-shot in the TX
+                // path never fires. Arm it here instead: the service loop drops
+                // Enable-Tx once TX is idle, matching WSJT-X hound behavior
+                // (review catch — Enable-Tx stayed lit after every hound QSO).
+                if sequence_advanced
+                    && station.quiet_finish
+                    && station.state == QsoState::Done
+                    && self.settings.disable_tx_after_73
+                {
+                    self.pending_tx_disable = true;
+                }
                 // Hound rule: when the Fox answers with our report (we just
                 // queued the R+report), move TX onto the FOX's frequency —
                 // stock "your Tx frequency is moved to the Fox's". Find the
                 // advancing decode (the report from the Fox addressed to us).
-                if sequence_advanced
-                    && matches!(
-                        self.settings.special_op,
-                        crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
-                    )
-                    && station.state == QsoState::AwaitRr73
+                // Gated on station.quiet_finish — the marker call_station sets
+                // on TRUE hound QSOs — not just the persistent setting: a CQ run
+                // with a stale Hound setting reaching AwaitRr73 must never have
+                // its run frequency yanked onto a caller (review catch).
+                if sequence_advanced && station.quiet_finish && station.state == QsoState::AwaitRr73
                 {
                     if let Some(dx) = station.dxcall.clone() {
                         let mycall = self.settings.mycall.clone();
@@ -4226,6 +4268,7 @@ impl Engine {
             confirmed: false,
             award_confirmed: false,
             qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: Default::default(),
@@ -6013,6 +6056,16 @@ mod tests {
             !e.get_log().is_empty(),
             "the hound contact logged on the Fox's RR73"
         );
+        // And the hound goes SILENT: no parting 73 may key up in the Fox's
+        // segment (stock WSJT-X hounds log and stop; ours transmitted one 73
+        // at the Fox's own frequency until the quiet_finish fix).
+        let after = e.snapshot().qso.and_then(|q| q.tx_now);
+        assert!(
+            after
+                .as_deref()
+                .is_none_or(|t| !t.contains("73") || t.contains("RR73")),
+            "hound must not queue a parting 73 after the Fox's RR73, got {after:?}"
+        );
     }
 
     #[test]
@@ -6187,6 +6240,7 @@ mod tests {
             confirmed: false,
             award_confirmed: false,
             qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
             credit_granted: vec![],
             credit_submitted: vec![],
             upload: Default::default(),
@@ -6274,6 +6328,7 @@ mod tests {
             confirmed: false,
             award_confirmed: false,
             qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
             credit_granted: vec![],
             credit_submitted: vec![],
             upload: Default::default(),
