@@ -5,6 +5,33 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — Phone & CW operating buildout
+
+Focused on making the Phone (SSB) and CW cockpits first-class alongside the digital
+modes, plus a deeper logbook.
+
+### Added
+
+- **Vertical band map** — a pop-out, N1MM-style frequency map of live cluster spots,
+  colored by need and struck through when already worked; click a spot to QSY and
+  prefill the log. Shared by the Phone and CW cockpits.
+- **Logbook Statistics** — a descriptive dashboard: QSOs by band / mode / year /
+  hour-of-day, top DXCC entities, worked-all-states, confirmations, plus continent,
+  CQ-zone and DX-vs-domestic breakdowns (cty.dat-resolved).
+- **Weak-signal CW decode** — an off-pitch true-SNR reference so the sensitivity
+  control meaningfully trades copy against noise on a busy band.
+- **Callbook photo** — the QRZ / HamQTH profile photo now shows in the recall panel.
+- **RX filter-width control** over CAT, and DSP function toggles (NB / NR / notch,
+  plus COMP / VOX on Phone) surfaced per the rig's reported capabilities.
+
+### Changed / Fixed
+
+- The band-activity strip spans the whole band again (clickable across it), with the
+  licensed phone segment shaded.
+- Removed a redundant, wrong-dial band dropdown from the top of the Phone / CW cockpits
+  (each keeps its own mode-appropriate band picker).
+- Fixed a periodic scope/passband stall by staggering the rig's CAT function polling.
+
 ## [0.3.0] — the Nexus transformation
 
 **Tempo became Nexus.** What began as a chat-first app for the FT1/DX1 waveforms

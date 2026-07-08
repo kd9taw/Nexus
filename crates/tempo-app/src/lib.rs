@@ -17,6 +17,7 @@ pub mod bandplan;
 pub mod dto;
 pub mod engine;
 pub mod privileges;
+pub mod update;
 
 use std::collections::HashMap;
 
@@ -205,6 +206,17 @@ impl AppState {
                 // (the engine recomputes this from recent DT each snapshot).
                 time_sync_ok: true,
                 rf_power: None, // engine fills from command/read-back
+                smeter_db: None, // engine fills from CAT STRENGTH read-back
+                rig_mode: None, // engine fills from CAT mode read-back (display-only)
+                sideband_override: None, // engine fills from the cockpit mode picker (transient)
+                phone_seg_lo: None, // engine fills from license privileges for the current band
+                phone_seg_hi: None,
+                nb: None, // engine fills from the CAT func probe + read-back
+                nr: None,
+                notch: None,
+                comp: None,
+                vox: None,
+                filter_width_hz: None, // engine fills from the CAT `m` passband read-back
                 rx_level: 0.0,
                 tx_level: 0.9,
                 tx_enabled: true,
@@ -623,6 +635,7 @@ impl AppState {
             // Work-a-spot navigation hint — owned by the engine (fills in snapshot()).
             work_tick: 0,
             work_view: None,
+            work_call: None,
             field_day: None,
             // Filled by the engine from its last decodes; empty at the AppState layer.
             recent_decodes: Vec::new(),
@@ -953,7 +966,7 @@ mod tests {
         // Switching to FT1 resumes real chat folding (no replay of the FT8 frames).
         app.set_tier(Tier::Ft1);
         app.observe(&[dec("K2DEF N0ABC EM48", -8)], 10);
-        for (i, f) in text::chunk("HI PAT", 'B').iter().enumerate() {
+        for (i, f) in text::chunk("HI SETH", 'B').iter().enumerate() {
             app.observe(&[dec(f, -8)], 11 + i as u64);
         }
         assert!(
