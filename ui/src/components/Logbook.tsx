@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LoggedQso } from '../types'
 import {
   deleteQso,
@@ -126,6 +127,9 @@ export function Logbook({
   const [qrzBusy, setQrzBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [search, setSearch] = useState('')
+  // Filtering runs against a DEFERRED copy of the search so typing stays responsive on a 10k log —
+  // the input updates instantly; the (memoized) filter/sort catches up a frame later.
+  const deferredSearch = useDeferredValue(search)
   // Filter to contacts still lacking an award-eligible confirmation (the DX
   // chaser's "who do I still need a card/LoTW from" view).
   const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
@@ -359,19 +363,46 @@ export function Logbook({
     }
   }
 
-  const matchesSearch = (q: LoggedQso): boolean => {
-    if (needsConfirmOnly && q.awardConfirmed) return false
-    const t = search.trim().toLowerCase()
-    if (!t) return true
-    return (
-      q.call.toLowerCase().includes(t) ||
-      (q.country?.toLowerCase().includes(t) ?? false) ||
-      (q.grid?.toLowerCase().includes(t) ?? false) ||
-      q.band.toLowerCase().includes(t) ||
-      q.mode.toLowerCase().includes(t) ||
-      fmtUtc(q.whenUnix).toLowerCase().includes(t)
-    )
-  }
+  const matchesSearch = useCallback(
+    (q: LoggedQso): boolean => {
+      if (needsConfirmOnly && q.awardConfirmed) return false
+      const t = deferredSearch.trim().toLowerCase()
+      if (!t) return true
+      return (
+        q.call.toLowerCase().includes(t) ||
+        (q.country?.toLowerCase().includes(t) ?? false) ||
+        (q.grid?.toLowerCase().includes(t) ?? false) ||
+        q.band.toLowerCase().includes(t) ||
+        q.mode.toLowerCase().includes(t) ||
+        fmtUtc(q.whenUnix).toLowerCase().includes(t)
+      )
+    },
+    [deferredSearch, needsConfirmOnly],
+  )
+
+  // Filter + sort ONCE per data/criteria change (not on every render, e.g. the frequent dial-poll
+  // re-renders). `i` is the backend get_log index, kept glued to each record so edit/delete/mark
+  // still target the right row regardless of display order.
+  const rows = useMemo(() => {
+    const out = log.map((q, i) => ({ q, i })).filter(({ q }) => matchesSearch(q))
+    out.sort((a, b) => {
+      const av = sortVal(a.q, sortKey)
+      const bv = sortVal(b.q, sortKey)
+      const cmp = av < bv ? -1 : av > bv ? 1 : a.q.whenUnix - b.q.whenUnix
+      return sortAsc ? cmp : -cmp
+    })
+    return out
+  }, [log, matchesSearch, sortKey, sortAsc])
+
+  // Virtualize the row list: at 10k QSOs the old render put ~150k DOM nodes on screen (heavy scroll
+  // + a full reconcile every dial-poll re-render). Now only the visible window mounts.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 43, // ~row height; measureElement corrects per row
+    overscan: 12,
+  })
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -659,26 +690,36 @@ export function Logbook({
           {th('QSL', 'qsl')}
           <span className="log-cell" role="columnheader" aria-label="Edit / delete"></span>
         </div>
-        <div className="log-scroll">
+        <div className="log-scroll" ref={scrollRef}>
           {log.length === 0 && <p className="empty">No logged contacts yet.</p>}
-          {(() => {
-            const rows = log.map((q, i) => ({ q, i })).filter(({ q }) => matchesSearch(q))
-            // Sort the {q, i} pairs — `i` (the backend get_log index) stays glued to its record
-            // so edit/delete/mark still target the right row regardless of display order.
-            rows.sort((a, b) => {
-              const av = sortVal(a.q, sortKey)
-              const bv = sortVal(b.q, sortKey)
-              const cmp = av < bv ? -1 : av > bv ? 1 : a.q.whenUnix - b.q.whenUnix
-              return sortAsc ? cmp : -cmp
-            })
-            if (log.length > 0 && rows.length === 0)
-              return <p className="empty">No contacts match “{search.trim()}”.</p>
-            return rows.map(({ q, i }) => (
-              <div
-                className={`log-row logbook-row${editIndex === i ? ' editing' : ''}`}
-                role="row"
-                key={`${q.call}-${q.whenUnix}-${i}`}
-              >
+          {log.length > 0 && rows.length === 0 && (
+            <p className="empty">No contacts match “{deferredSearch.trim()}”.</p>
+          )}
+          {rows.length > 0 && (
+            <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+              {rowVirtualizer.getVirtualItems().map((vrow) => {
+                const { q, i } = rows[vrow.index]
+                return (
+                  <div
+                    className={`log-row logbook-row${editIndex === i ? ' editing' : ''}`}
+                    role="row"
+                    // The backend index `i` is unique per record → collision-proof even for two
+                    // identical QSOs (double-clicked Log in the same second). Rows are stateless
+                    // divs, so key churn after a delete-shift costs nothing.
+                    key={`${q.call}-${q.whenUnix}-${i}`}
+                    data-index={vrow.index}
+                    ref={rowVirtualizer.measureElement}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${vrow.start}px)`,
+                      // Stripe by REAL index (inline beats the nth-child rule, which would otherwise
+                      // stripe by render order and appear to "move" as the virtual window scrolls).
+                      background: vrow.index % 2 ? 'color-mix(in srgb, var(--bg-elev) 50%, transparent)' : 'transparent',
+                    }}
+                  >
                 <span className="log-cell mono">{q.call}</span>
                 <span className="log-cell log-country" title={q.country ?? ''}>{q.country ?? '—'}</span>
                 <span className="log-cell">{q.band}</span>
@@ -813,8 +854,10 @@ export function Logbook({
                   </button>
                 </span>
               </div>
-            ))
-          })()}
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
 
