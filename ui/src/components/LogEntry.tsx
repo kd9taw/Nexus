@@ -329,6 +329,19 @@ export function LogEntry({
     if (e.key === 'Enter') void logIt()
   }
 
+  // Enter in the CALL field: on a fresh call (not yet enriched, no name typed) do the QRZ lookup
+  // first — like Tab — so a single Enter pulls the callbook; once enriched, Enter logs as usual.
+  const onCallEnter = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter') return
+    const call = logCall.trim()
+    if (call && !logName.trim() && !qrzBusy && enrichedForRef.current !== call.toUpperCase()) {
+      e.preventDefault()
+      void lookup(false)
+    } else {
+      void logIt()
+    }
+  }
+
   // ---- FD variant render ----
   if (fdActive) {
     return (
@@ -378,9 +391,26 @@ export function LogEntry({
   }
 
   // ---- Standard logbook variant render ----
+  // A pending POTA/SOTA hunt (from a spot click) auto-tags the matching QSO by callsign at log
+  // time — surface it so the operator SEES the park will be recorded (edit/manual entry is on the
+  // dedicated park field). Matches when the logged call equals the hunted activator.
+  const hunt = snap.hunt
+  const huntMatches =
+    hunt != null &&
+    logCall.trim() !== '' &&
+    hunt.call.trim().toUpperCase().split('/')[0] === logCall.trim().toUpperCase().split('/')[0]
+
   return (
     <div className="log-entry">
       <h2>Log this QSO</h2>
+
+      {hunt && (
+        <div className={`le-hunt-chip${huntMatches ? ' match' : ''}`} title="This QSO will be tagged with the hunted park reference when you log it (matched by callsign).">
+          🌲 {hunt.program} {hunt.reference}
+          <span className="le-hunt-for"> · {hunt.call}</span>
+          {!huntMatches && logCall.trim() !== '' && <span className="le-hunt-warn"> (call ≠ hunt)</span>}
+        </div>
+      )}
 
       <div className="le-row">
         <input
@@ -391,7 +421,7 @@ export function LogEntry({
             setLogCall(e.target.value.toUpperCase())
           }}
           onBlur={onCallBlur}
-          onKeyDown={onEnter}
+          onKeyDown={onCallEnter}
           placeholder="Call"
           autoComplete="off"
           spellCheck={false}

@@ -5686,6 +5686,33 @@ select optgroup {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-title);
 }
+/* Pending POTA/SOTA hunt chip — the QSO will be park-tagged on log (matched by callsign). */
+.le-hunt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+  padding: 2px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--border-soft);
+}
+.le-hunt-chip.match {
+  color: var(--ok, #2fbf71);
+  background: color-mix(in srgb, var(--ok, #2fbf71) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok, #2fbf71) 40%, transparent);
+}
+.le-hunt-for {
+  font-weight: 400;
+  color: var(--text-faint);
+}
+.le-hunt-warn {
+  font-weight: 400;
+  color: var(--warn, #e8a33d);
+}
 .le-row {
   display: flex;
   gap: var(--space-2);
@@ -6925,6 +6952,21 @@ select optgroup {
   letter-spacing: 0.05em;
   color: var(--text-faint);
   font-weight: 700;
+}
+/* Sortable column-header buttons — look like the header text, click to sort. */
+.log-row.head .log-th {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.log-row.head .log-th:hover {
+  color: var(--text);
+}
+.log-row.head .log-th.sorted {
+  color: var(--accent);
 }
 .log-scroll {
   flex: 1;
