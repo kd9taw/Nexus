@@ -3,6 +3,7 @@ import type { AppSnapshot } from '../types'
 import { setFrequency, setRit, setXit, setVfo } from '../api'
 import { bandLabelForMhz } from '../band'
 import { pushToast } from '../toast'
+import { FrequencyReadout } from './FrequencyReadout'
 
 /** Tuning steps (Hz). The `×10` buttons jump ten of the selected step. */
 const STEPS = [
@@ -35,7 +36,6 @@ export function TuningStrip({
   const [stepInternal, setStepInternal] = useState(100)
   const step = stepProp ?? stepInternal
   const setStep = onStep ?? setStepInternal
-  const [entry, setEntry] = useState('')
   const rit = snap.radio.ritHz ?? 0
   const xit = snap.radio.xitHz ?? 0
   const vfo = snap.radio.activeVfo || 'A'
@@ -54,11 +54,6 @@ export function TuningStrip({
   }
   // Round to the nearest Hz to avoid float drift accumulating on repeated nudges.
   const nudge = (deltaHz: number) => void tuneTo(Math.round((dial + deltaHz / 1e6) * 1e6) / 1e6)
-  const commitEntry = () => {
-    const mhz = parseFloat(entry.trim().replace(',', '.'))
-    if (Number.isFinite(mhz) && mhz > 0) void tuneTo(mhz)
-    setEntry('')
-  }
 
   return (
     <div className="tuning-strip" role="group" aria-label="Tuning">
@@ -82,9 +77,14 @@ export function TuningStrip({
       >
         ◄
       </button>
-      <span className="tuning-readout mono" title="Current dial frequency (MHz)">
-        {dial.toFixed(4)}
-      </span>
+      <FrequencyReadout
+        dialMhz={dial}
+        size="hero"
+        editable
+        disabled={!catOk}
+        onCommit={(mhz) => void tuneTo(mhz)}
+        txBlocked={!bandLabelForMhz(dial)}
+      />
       <button
         type="button"
         className="tuning-nudge"
@@ -118,21 +118,6 @@ export function TuningStrip({
           </option>
         ))}
       </select>
-      <input
-        className="settings-input mono tuning-goto"
-        value={entry}
-        onChange={(e) => setEntry(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') commitEntry()
-          else if (e.key === 'Escape') setEntry('')
-        }}
-        onBlur={() => setEntry('')} // abandon a partial entry on blur — commit is Enter-only
-        disabled={!catOk}
-        placeholder="Go to MHz"
-        title="Type a frequency in MHz, then Enter (Esc to cancel)"
-        autoComplete="off"
-        spellCheck={false}
-      />
       <span className="tuning-vfo" role="group" aria-label="Active VFO">
         <button
           type="button"

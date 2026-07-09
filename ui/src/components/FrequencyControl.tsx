@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { BandChannel, RadioMode } from '../types'
 import { bandLabelForMhz } from '../band'
+import { FrequencyReadout } from './FrequencyReadout'
 
 interface Props {
   channels: BandChannel[]
@@ -39,14 +40,6 @@ export function FrequencyControl({
   variant = 'compact',
   onSet,
 }: Props) {
-  // local text buffer for the manual MHz field; committed on Enter / blur
-  const [draft, setDraft] = useState<string>(dialMhz.toFixed(3))
-
-  // keep the field in sync when the authoritative dial changes elsewhere
-  useEffect(() => {
-    setDraft(dialMhz.toFixed(3))
-  }, [dialMhz])
-
   const active = useMemo(
     () => findActive(channels, dialMhz, mode),
     [channels, dialMhz, mode],
@@ -64,17 +57,6 @@ export function FrequencyControl({
   const selectChannel = (key: string) => {
     const c = channels.find((x) => chanKey(x) === key)
     if (c) onSet(c.dialMhz, c.band, c.mode)
-  }
-
-  const commitManual = () => {
-    const v = Number(draft)
-    if (!Number.isFinite(v) || v <= 0) {
-      setDraft(dialMhz.toFixed(3)) // revert invalid entry
-      return
-    }
-    if (Math.abs(v - dialMhz) < MATCH_EPS) return // unchanged
-    const label = bandLabelForMhz(v)
-    onSet(v, label, mode)
   }
 
   const setMode = (next: RadioMode) => {
@@ -108,30 +90,16 @@ export function FrequencyControl({
         </select>
       </label>
 
-      <label className="freq-manual-wrap">
+      <div className="freq-manual-wrap">
         {variant === 'full' && <span className="settings-label">Dial (MHz)</span>}
-        <span className="freq-manual-row">
-          <input
-            className="freq-manual"
-            type="number"
-            inputMode="decimal"
-            step="0.001"
-            min="0"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commitManual}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                commitManual()
-              }
-            }}
-            aria-label="Manual dial frequency in MHz"
-            title="Type a frequency in MHz, then Enter"
-          />
-          <span className="freq-unit">MHz</span>
-        </span>
-      </label>
+        <FrequencyReadout
+          dialMhz={dialMhz}
+          size="hero"
+          editable
+          commitOnBlur
+          onCommit={(v) => onSet(v, bandLabelForMhz(v), mode)}
+        />
+      </div>
 
       <div className="freq-band-tag" title={active ? active.note : 'Current band'}>
         <span className={`band-chip${active ? ' active' : ''}`}>{band || bandLabelForMhz(dialMhz) || '—'}</span>

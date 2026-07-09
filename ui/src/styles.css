@@ -3416,19 +3416,53 @@ select optgroup {
 }
 
 .readout {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
   gap: var(--space-1);
   font-family: var(--font-mono);
+}
+.readout.editable {
+  cursor: text;
+  border-radius: 4px;
+}
+.readout.editable:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 .readout-val {
   font-size: 20px;
   font-weight: 700;
   letter-spacing: 0.01em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.readout.hero .readout-val {
+  font-size: var(--fs-display);
+  line-height: var(--lh-tight);
+}
+.readout.compact .readout-val {
+  font-size: 17px;
+}
+.readout.blocked .readout-val {
+  color: var(--tx);
 }
 .readout-unit {
   font-size: 11px;
   color: var(--text-faint);
+}
+.readout-input {
+  font-family: var(--font-mono);
+  font-size: var(--fs-display);
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  width: 9ch;
+  padding: 0 var(--space-1);
+}
+.readout.compact .readout-input {
+  font-size: 17px;
 }
 
 .pill {
