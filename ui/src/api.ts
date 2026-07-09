@@ -680,6 +680,23 @@ export async function setFilterWidth(hz: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_filter_width', { hz })
 }
 
+/** Set the RIT (receive incremental tuning) offset in Hz — 0 turns RIT off. */
+export async function setRit(hz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_rit', { hz })
+}
+/** Set the XIT (transmit incremental tuning) offset in Hz — 0 turns XIT off. */
+export async function setXit(hz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_xit', { hz })
+}
+/** Select the active VFO ("A" / "B"). */
+export async function setVfo(vfo: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_vfo', { vfo })
+}
+/** Swap the active VFO (A↔B). */
+export async function swapVfo(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('swap_vfo')
+}
+
 /** Toggle a rig DSP function ('nb'|'nr'|'notch'|'comp'|'vox') on/off; the radio loop applies it.
  * The returned snapshot reflects the request optimistically (the loop's read-back reconciles). */
 export async function setRigFunc(

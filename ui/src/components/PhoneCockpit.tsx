@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import type { AppSnapshot, FieldDayStatus, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { BandStrip } from './BandStrip'
+import { TuningStrip } from './TuningStrip'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
@@ -249,9 +250,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             rig: {modeMismatch}
           </span>
         )}
-        <span className="ph-freq mono">
-          {snap.radio.dialMhz.toFixed(3)} MHz · {snap.radio.band}
-        </span>
+        <TuningStrip snap={snap} onSnap={onSnap} />
         <BandPicker snap={snap} mode="phone" onSnap={onSnap} />
         {catOk && (
           <div className={`ph-split ${splitOn ? 'on' : ''}`}>

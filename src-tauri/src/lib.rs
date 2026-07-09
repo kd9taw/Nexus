@@ -3893,6 +3893,38 @@ fn set_filter_width(state: State<'_, SharedEngine>, hz: u32) -> Result<AppSnapsh
     Ok(eng.snapshot())
 }
 
+/// Set the RIT (receive incremental tuning) offset in Hz — 0 turns RIT off. Applied next loop.
+#[tauri::command]
+fn set_rit(state: State<'_, SharedEngine>, hz: i32) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.request_rit(hz);
+    Ok(eng.snapshot())
+}
+
+/// Set the XIT (transmit incremental tuning) offset in Hz — 0 turns XIT off.
+#[tauri::command]
+fn set_xit(state: State<'_, SharedEngine>, hz: i32) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.request_xit(hz);
+    Ok(eng.snapshot())
+}
+
+/// Select the active VFO ("A" / "B").
+#[tauri::command]
+fn set_vfo(state: State<'_, SharedEngine>, vfo: String) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.request_vfo(vfo.trim().eq_ignore_ascii_case("B"));
+    Ok(eng.snapshot())
+}
+
+/// Swap the active VFO (A↔B).
+#[tauri::command]
+fn swap_vfo(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.request_swap_vfo();
+    Ok(eng.snapshot())
+}
+
 /// Choose the CW keyer back-end ("cat" = rig send_morse / "soundcard" = keyed tone)
 /// and tone pitch (Hz; <=0 keeps the current pitch). Soundcard moves the rig to USB.
 #[tauri::command]
@@ -7428,6 +7460,10 @@ pub fn run() {
             set_rig_func,
             set_sideband_override,
             set_filter_width,
+            set_rit,
+            set_xit,
+            set_vfo,
+            swap_vfo,
             play_voice_message,
             stop_voice,
             start_voice_recording,

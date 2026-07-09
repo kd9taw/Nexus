@@ -625,6 +625,12 @@ export interface RadioStatus {
   vox?: boolean | null
   /** Rig RX passband / filter width in Hz over CAT; null/absent = unknown or the rig's default. */
   filterWidthHz?: number | null
+  /** RIT (receive incremental tuning) offset in Hz — last commanded (0 = off). */
+  ritHz?: number
+  /** XIT (transmit incremental tuning) offset in Hz — last commanded (0 = off). */
+  xitHz?: number
+  /** Active VFO ("A" / "B") — last commanded. */
+  activeVfo?: string
   rxLevel: number
   /** Whether transmit is enabled (Monitor on). Off = muted/listening only. */
   txEnabled: boolean

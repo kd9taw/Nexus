@@ -272,6 +272,15 @@ pub struct Engine {
     split_tx_mhz: Option<f64>,
     /// One-shot "apply the split state now" flag for the radio loop.
     split_dirty: bool,
+    /// RIT / XIT clarifier offsets in Hz (0 = off) and the active VFO — the CAT-panel controls.
+    /// Write-only + optimistic (no read-back): the loop applies a change once and the snapshot
+    /// mirrors the last commanded value, like the RF-power / filter-width path.
+    rit_hz: i32,
+    xit_hz: i32,
+    active_vfo_b: bool, // false = VFO A, true = VFO B
+    rit_dirty: bool,
+    xit_dirty: bool,
+    vfo_dirty: bool,
     /// Transient operator mode override for Phone (`"USB"`/`"LSB"`/`"FM"`), or `None` = AUTO
     /// (the band-derived sideband policy). NOT persisted — the cockpit mode picker sets it; a
     /// band change clears it so QSY re-asserts the auto sideband. FM as a persistent default
@@ -538,6 +547,12 @@ impl Engine {
             tx_dial_shift_hz: 0,
             split_tx_mhz: None,
             split_dirty: false,
+            rit_hz: 0,
+            xit_hz: 0,
+            active_vfo_b: false,
+            rit_dirty: false,
+            xit_dirty: false,
+            vfo_dirty: false,
             sideband_override: None,
             cw_queue: VecDeque::new(),
             cw_sent: VecDeque::new(),
@@ -957,6 +972,47 @@ impl Engine {
     /// window's log directly, so the call rides the snapshot and the main window prefills from it.
     pub fn note_work_call(&mut self, call: Option<String>) {
         self.work_call = call.filter(|c| !c.trim().is_empty());
+    }
+
+    /// Request a RIT (receive incremental tuning) offset in Hz (0 = off); the radio loop applies it.
+    pub fn request_rit(&mut self, hz: i32) {
+        self.rit_hz = hz;
+        self.rit_dirty = true;
+    }
+    /// One-shot: the pending RIT offset to write, if any.
+    pub fn take_rit_apply(&mut self) -> Option<i32> {
+        self.rit_dirty.then(|| {
+            self.rit_dirty = false;
+            self.rit_hz
+        })
+    }
+    /// Request an XIT (transmit incremental tuning) offset in Hz (0 = off).
+    pub fn request_xit(&mut self, hz: i32) {
+        self.xit_hz = hz;
+        self.xit_dirty = true;
+    }
+    pub fn take_xit_apply(&mut self) -> Option<i32> {
+        self.xit_dirty.then(|| {
+            self.xit_dirty = false;
+            self.xit_hz
+        })
+    }
+    /// Select VFO A (`false`) or B (`true`).
+    pub fn request_vfo(&mut self, vfo_b: bool) {
+        self.active_vfo_b = vfo_b;
+        self.vfo_dirty = true;
+    }
+    /// Swap the active VFO (A↔B).
+    pub fn request_swap_vfo(&mut self) {
+        self.active_vfo_b = !self.active_vfo_b;
+        self.vfo_dirty = true;
+    }
+    /// One-shot: the pending VFO selection to write (`true` = B), if any.
+    pub fn take_vfo_apply(&mut self) -> Option<bool> {
+        self.vfo_dirty.then(|| {
+            self.vfo_dirty = false;
+            self.active_vfo_b
+        })
     }
 
     /// Consume the one-shot split request: `Some(Some(tx))` = set split TX dial,
@@ -3611,6 +3667,9 @@ impl Engine {
         s.radio.comp = self.rig_funcs[3];
         s.radio.vox = self.rig_funcs[4];
         s.radio.filter_width_hz = self.rig_passband;
+        s.radio.rit_hz = self.rit_hz;
+        s.radio.xit_hz = self.xit_hz;
+        s.radio.active_vfo = if self.active_vfo_b { "B" } else { "A" }.to_string();
         s.radio.hold_tx_freq = self.hold_tx_freq;
         s.radio.clock_offset_ms = self.clock_offset_ms;
         s.radio.source = self.source_kind;

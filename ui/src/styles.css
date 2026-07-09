@@ -5686,6 +5686,93 @@ select optgroup {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-title);
 }
+/* Compact RX tuning strip in the Phone/CW cockpits — live freq + VFO step + direct MHz entry. */
+.tuning-strip {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+/* VFO A/B + RIT/XIT clarifier clusters. */
+.tuning-vfo,
+.tuning-clar {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+.tuning-vfo button,
+.tuning-clar button {
+  min-width: 20px;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--bg-elev-2, var(--bg-elev));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.tuning-vfo button:hover:not(:disabled),
+.tuning-clar button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tuning-vfo button.active {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.tuning-vfo button:disabled,
+.tuning-clar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tuning-clar {
+  padding: 0 3px;
+  border-radius: var(--radius-sm);
+}
+.tuning-clar.on {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.tuning-clar-val {
+  min-width: 34px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text);
+}
+.tuning-nudge {
+  min-width: 26px;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-elev-2, var(--bg-elev));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.tuning-nudge:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tuning-nudge:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tuning-readout {
+  min-width: 92px;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+.tuning-step {
+  flex: 0 0 auto;
+  max-width: 78px;
+}
+.tuning-goto {
+  max-width: 96px;
+}
 /* Pending POTA/SOTA hunt chip — the QSO will be park-tagged on log (matched by callsign). */
 .le-hunt-chip {
   display: inline-flex;

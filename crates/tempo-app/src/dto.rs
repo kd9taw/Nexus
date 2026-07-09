@@ -314,6 +314,15 @@ pub struct RadioStatus {
     /// Rig RX passband / filter width in Hz from CAT; `None` = unknown or the rig's own default.
     #[serde(default)]
     pub filter_width_hz: Option<u32>,
+    /// RIT (receive incremental tuning) offset in Hz — last commanded (0 = off). Optimistic.
+    #[serde(default)]
+    pub rit_hz: i32,
+    /// XIT (transmit incremental tuning) offset in Hz — last commanded (0 = off). Optimistic.
+    #[serde(default)]
+    pub xit_hz: i32,
+    /// Active VFO ("A" / "B") — last commanded. Optimistic (no read-back).
+    #[serde(default)]
+    pub active_vfo: String,
     /// RX input audio level (0.0–1.0), a decaying peak meter for the UI.
     #[serde(default)]
     pub rx_level: f32,
