@@ -54,20 +54,17 @@ interface Props {
   active?: boolean
 }
 
-// Audio passband shown on the waterfall (matches the engine's 200–2900 Hz band).
+// Default FT8/digital view window (Hz) — the FT8 signals live here. The spectrum ROW may span
+// wider (0–4000 Hz); drawRow maps the view onto the row via the DTO's lo/hi, so a wider row just
+// renders at finer resolution within this view.
 const F_MIN = 200
 const F_MAX = 2900
-const BINS = 120
 
-// Display mapping over the current view window [lo, hi] (defaults = full passband), so
-// the waterfall can zoom into a sub-range of the audio band.
+// Display mapping over the current view window [lo, hi] (defaults = the FT8 view), so
+// the waterfall can zoom into a sub-range of the band.
 function freqToX(hz: number, width: number, lo = F_MIN, hi = F_MAX): number {
   const f = Math.max(lo, Math.min(hi, hz))
   return ((f - lo) / (hi - lo)) * width
-}
-
-function binToFreq(bin: number): number {
-  return F_MIN + (bin / (BINS - 1)) * (F_MAX - F_MIN)
 }
 
 function xToFreq(x: number, width: number, lo = F_MIN, hi = F_MAX): number {
@@ -318,8 +315,8 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
       }
 
       // Build ONE device-width RGBA row via the pre-baked LUT (reusing the buffer)
-      // and blit it once — replacing the per-column fillRect loop. The 200–2900 Hz
-      // band maps linearly to bins, so device-x → bin is direct.
+      // and blit it once — replacing the per-column fillRect loop. device-x → view
+      // frequency → row bin (via the row's DTO span), interpolated per column.
       if (rowBufW !== Wd || !rowBuf || !rowImg) {
         rowBuf = new Uint8ClampedArray(Wd * 4)
         rowImg = new ImageData(rowBuf, Wd, 1)
@@ -332,9 +329,13 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
       // sub-range of bins across the whole width). Full view → identity (x→bin direct).
       const vlo = viewLoRef.current
       const vhi = viewHiRef.current
+      // Map view frequency → bin using the ROW's ACTUAL span (carried in the DTO), not a hardcoded
+      // band — so a widened / native-wide row renders at the correct frequencies and finer bins.
+      const rowLo = spec.loHz ?? F_MIN
+      const rowHi = spec.hiHz ?? F_MAX
       for (let x = 0; x < Wd; x++) {
         const f = vlo + (x / Wd) * (vhi - vlo)
-        let bin = ((f - F_MIN) / (F_MAX - F_MIN)) * (nBins - 1)
+        let bin = ((f - rowLo) / (rowHi - rowLo)) * (nBins - 1)
         if (bin < 0) bin = 0
         else if (bin > nBins - 1) bin = nBins - 1
         const b0 = Math.floor(bin)
@@ -578,5 +579,3 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
     </div>
   )
 }
-
-export { binToFreq }

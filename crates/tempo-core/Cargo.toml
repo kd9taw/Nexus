@@ -10,3 +10,6 @@ description = "Nexus transceiver core — slot timing, virtual-air channel, TX/R
 [dependencies]
 ft1 = { path = "../ft1" }
 modes = { path = "../modes" }
+# Fixed-size real FFT for the waterfall power spectrum (MIT). Zero-alloc, ~2 transitive deps —
+# an exact fit for the compile-time 4096-sample window.
+microfft = "0.6"

@@ -33,8 +33,10 @@ use crate::AppState;
 use modes::{NativeSource, SignalSource, WsjtxUdpSource};
 use tempo_core::message::{same_call, Msg};
 
-/// Default waterfall resolution (bins).
-pub const SPECTRUM_BINS: usize = 120;
+/// Default waterfall resolution (display bins). 512 over the 0–4000 Hz span ≈ 7.8 Hz/bin — ~3×
+/// finer than the old 120-bin/22.5 Hz bank, over a wider band. The row is resampled from a
+/// Hann-windowed 4096-point FFT (see `tempo_core::spectrum`).
+pub const SPECTRUM_BINS: usize = 512;
 
 /// The engine's current operating mode (holds the active sequencer).
 ///
@@ -4794,8 +4796,11 @@ impl Engine {
     /// audio — not zeros — so the UI cleanly skips the tick (an all-zeros row scrolls a flat floor
     /// band that reads as broken).
     fn compute_spectrum(audio: &[f32]) -> Spectrum {
-        const LO_HZ: f32 = 200.0;
-        const HI_HZ: f32 = 2900.0;
+        // Widened from 200–2900: shows the full SSB/DATA passband (incl. wide DATA modes) and the
+        // filter-slope shelf; the percentile AGC + gain/zero absorb the quiet edges. The 6 kHz
+        // Nyquist (12 kHz capture) caps the top; 4000 covers every voice/data passband in use.
+        const LO_HZ: f32 = 0.0;
+        const HI_HZ: f32 = 4000.0;
         let row = if audio.is_empty() {
             Vec::new()
         } else {

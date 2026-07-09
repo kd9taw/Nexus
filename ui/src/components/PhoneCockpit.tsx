@@ -56,7 +56,7 @@ const DSP_FUNCS = [
 
 /** Bandscope span presets — slices of the captured audio passband. */
 const SPANS = [
-  { label: 'Full', lo: 200, hi: 2900, title: 'Whole audio passband (200–2900 Hz)' },
+  { label: 'Full', lo: 0, hi: 4000, title: 'Whole captured band (0–4000 Hz) — incl. the filter slopes' },
   { label: 'Voice', lo: 300, hi: 2700, title: 'Voice energy (300–2700 Hz)' },
   { label: 'Low', lo: 200, hi: 1500, title: 'Lower half — zoomed (200–1500 Hz)' },
   { label: 'High', lo: 1500, hi: 2900, title: 'Upper half — zoomed (1500–2900 Hz)' },

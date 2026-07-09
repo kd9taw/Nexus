@@ -54,8 +54,8 @@ export function PhoneScope({
   transmitting,
   theme,
   active = true,
-  viewLoHz = 200,
-  viewHiHz = 2900,
+  viewLoHz = 0,
+  viewHiHz = 4000,
   markerHz = null,
   smeterDb = null,
 }: Props) {
