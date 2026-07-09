@@ -655,6 +655,7 @@ export function Logbook({
           <span className="log-cell" role="columnheader">Sent</span>
           <span className="log-cell" role="columnheader">Rcvd</span>
           {th('Time (UTC)', 'time')}
+          <span className="log-cell" role="columnheader">Park</span>
           {th('QSL', 'qsl')}
           <span className="log-cell" role="columnheader" aria-label="Edit / delete"></span>
         </div>
@@ -686,6 +687,18 @@ export function Logbook({
                 <span className="log-cell mono">{fmtReport(q.rstSent)}</span>
                 <span className="log-cell mono">{fmtReport(q.rstRcvd)}</span>
                 <span className="log-cell mono">{fmtUtc(q.whenUnix)}</span>
+                <span
+                  className="log-cell mono log-park"
+                  title={
+                    q.ota?.theirRef
+                      ? `${q.ota.theirProgram ?? 'POTA'} ${q.ota.theirRef} (worked)`
+                      : q.ota?.myRef
+                        ? `My activation: ${q.ota.myProgram ?? 'POTA'} ${q.ota.myRef}`
+                        : ''
+                  }
+                >
+                  {q.ota?.theirRef ?? (q.ota?.myRef ? `@${q.ota.myRef}` : '—')}
+                </span>
                 <span className="log-cell">
                   {q.qslRcvd && (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl) ? (
                     // Per-source detail: which channel(s) actually confirmed.

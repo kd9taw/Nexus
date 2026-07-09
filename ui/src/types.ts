@@ -823,6 +823,16 @@ export interface LoggedQso {
   creditSubmitted?: string[]
   /** Per-source outbound upload state (drives the "Upload to LoTW" count). */
   upload?: UploadState
+  /** POTA/SOTA references — my activation (my*) and the station I hunted (their*). */
+  ota?: Ota
+}
+
+/** On-the-air (POTA/SOTA) references for a QSO. POTA maps to ADIF SIG/SIG_INFO, SOTA to SOTA_REF. */
+export interface Ota {
+  myProgram?: string | null
+  myRef?: string | null
+  theirProgram?: string | null
+  theirRef?: string | null
 }
 
 /** Per-source upload status (mirror of the Rust UploadStatusDto). */

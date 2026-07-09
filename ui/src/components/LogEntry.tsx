@@ -74,6 +74,9 @@ export function LogEntry({
   const [logCountry, setLogCountry] = useState('')
   // Callbook profile photo (display-only, not written to the log). Cleared when the call changes.
   const [logImage, setLogImage] = useState<string | null>(null)
+  // POTA/SOTA park of the station worked (ota.their_*). Prefilled from a hunted spot; editable.
+  const [logParkProgram, setLogParkProgram] = useState('POTA')
+  const [logParkRef, setLogParkRef] = useState('')
   const [qrzBusy, setQrzBusy] = useState(false)
   const [allLog, setAllLog] = useState<LoggedQso[]>([])
   const rstRef = useRef<HTMLInputElement>(null)
@@ -129,11 +132,23 @@ export function LogEntry({
       setLogState('')
       setLogCountry('')
       setLogImage(null)
+      setLogParkRef('') // the park was for the previous call
       // The wiped name may have been the CW decoder's copy — un-latch so it can refill for the
       // new call (declared below; the effect callback runs after render, so it's initialized).
       cwNameFilled.current = false
     }
   }, [logCall])
+
+  // Prefill the park field from a hunted spot (snap.hunt = the activator's program+ref). Keyed on
+  // the reference string so it fires when a NEW park is hunted, not on every snapshot poll.
+  useEffect(() => {
+    const h = snap.hunt
+    if (h?.reference) {
+      setLogParkProgram(h.program)
+      setLogParkRef(h.reference)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.hunt?.reference, snap.hunt?.program])
 
   const refreshLog = () => void getLog().then(setAllLog).catch(() => {})
   useEffect(() => {
@@ -273,6 +288,7 @@ export function LogEntry({
     setLogState('')
     setLogCountry('')
     setLogImage(null)
+    setLogParkRef('')
     // Keep fdClass/fdSection across resets for speed in FD runs.
   }
 
@@ -316,6 +332,11 @@ export function LogEntry({
       whenUnix: Math.floor(Date.now() / 1000),
       confirmed: false,
       awardConfirmed: false,
+      // The park of the station worked (their side). The engine's pending-hunt auto-tag only
+      // fills this if we leave it empty, so an explicit entry here always wins.
+      ota: logParkRef.trim()
+        ? { theirProgram: logParkProgram, theirRef: logParkRef.trim().toUpperCase() }
+        : undefined,
     }
     const r = await withErrorToast(() => logQso(rec), 'Could not log the QSO')
     if (r) {
@@ -487,6 +508,28 @@ export function LogEntry({
           onKeyDown={onEnter}
           placeholder="Comment (sharable)"
           autoComplete="off"
+        />
+      </div>
+
+      <div className="le-row le-park-row">
+        <select
+          className="settings-input le-park-prog"
+          value={logParkProgram}
+          onChange={(e) => setLogParkProgram(e.target.value)}
+          title="On-the-air program for the park/summit you worked"
+        >
+          <option value="POTA">POTA</option>
+          <option value="SOTA">SOTA</option>
+        </select>
+        <input
+          className="settings-input mono le-park-ref"
+          value={logParkRef}
+          onChange={(e) => setLogParkRef(e.target.value.toUpperCase())}
+          onKeyDown={onEnter}
+          placeholder={logParkProgram === 'SOTA' ? 'Summit (W7A/MN-001)' : 'Park (K-1234)'}
+          title="Park/summit reference of the station you worked — logged to ADIF (POTA→SIG_INFO, SOTA→SOTA_REF)"
+          autoComplete="off"
+          spellCheck={false}
         />
       </div>
 

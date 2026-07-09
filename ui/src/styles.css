@@ -5726,6 +5726,11 @@ select optgroup {
   max-width: 80px;
   flex: 0 0 auto !important;
 }
+/* POTA/SOTA park row: a narrow program select + a flexible reference input. */
+.le-park-prog {
+  max-width: 84px;
+  flex: 0 0 auto !important;
+}
 /* Persistent Sent/Rcvd captions on the two RST boxes — the placeholders were hidden behind the
    default "59", so the send vs receive side was unlabeled. */
 .le-rst-field {
@@ -8516,7 +8521,7 @@ select.settings-input {
   margin-top: var(--space-3);
 }
 .logbook-row {
-  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.7fr 0.8fr;
+  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 0.8fr;
 }
 .log-country {
   overflow: hidden;
@@ -8602,12 +8607,13 @@ select.settings-input {
   .logbook-row {
     grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 0.7fr;
   }
-  /* Narrow: keep Call, Country, Band, QSL, actions; hide Freq/Mode/Sent/Rcvd/Time. */
+  /* Narrow: keep Call, Country, Band, QSL, actions; hide Freq/Mode/Sent/Rcvd/Time/Park. */
   .logbook-row .log-cell:nth-child(4),
   .logbook-row .log-cell:nth-child(5),
   .logbook-row .log-cell:nth-child(6),
   .logbook-row .log-cell:nth-child(7),
-  .logbook-row .log-cell:nth-child(8) {
+  .logbook-row .log-cell:nth-child(8),
+  .logbook-row .log-cell:nth-child(9) {
     display: none;
   }
   /* keep edit/delete reachable on touch (no hover) */
@@ -11432,6 +11438,38 @@ select.settings-input {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   font-size: var(--fs-label);
+}
+/* My-activation control (start/stop an activation; QSOs logged while active get my park). */
+.pota-activation {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  margin: 0 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  font-size: var(--fs-label);
+}
+.pota-activation.active {
+  background: color-mix(in srgb, var(--ok, #2fbf71) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok, #2fbf71) 40%, transparent);
+}
+.pota-act-label {
+  color: var(--text-dim);
+  font-weight: 700;
+}
+.pota-act-sub {
+  color: var(--text-faint);
+}
+.pota-act-prog {
+  max-width: 84px;
+  flex: 0 0 auto;
+}
+.pota-act-ref {
+  max-width: 160px;
+}
+.pota-act-text {
+  flex: 1;
 }
 .pota-hunt-icon {
   display: flex;

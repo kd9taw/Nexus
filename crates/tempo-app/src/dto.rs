@@ -671,6 +671,46 @@ pub struct LoggedQso {
     /// the diagnostics R1/R9/R2 reasons).
     #[serde(default)]
     pub upload: UploadStateDto,
+    /// POTA/SOTA on-the-air references — my activation (my_*) and the station I hunted (their_*).
+    /// Previously dropped from the DTO, so parks were invisible to the log form + table.
+    #[serde(default)]
+    pub ota: OtaDto,
+}
+
+/// On-the-air (POTA/SOTA) references for a QSO — serde mirror of `tempo_core::logbook::Ota`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OtaDto {
+    /// The program I'm activating under ("POTA" / "SOTA"), if activating.
+    pub my_program: Option<String>,
+    /// My park/summit reference ("K-1234" / "W7A/MN-001").
+    pub my_ref: Option<String>,
+    /// The program of the station I hunted.
+    pub their_program: Option<String>,
+    /// The park/summit reference I hunted.
+    pub their_ref: Option<String>,
+}
+
+impl From<tempo_core::logbook::Ota> for OtaDto {
+    fn from(o: tempo_core::logbook::Ota) -> Self {
+        OtaDto {
+            my_program: o.my_program,
+            my_ref: o.my_ref,
+            their_program: o.their_program,
+            their_ref: o.their_ref,
+        }
+    }
+}
+
+impl From<OtaDto> for tempo_core::logbook::Ota {
+    fn from(o: OtaDto) -> Self {
+        tempo_core::logbook::Ota {
+            my_program: o.my_program,
+            my_ref: o.my_ref,
+            their_program: o.their_program,
+            their_ref: o.their_ref,
+        }
+    }
 }
 
 impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
@@ -702,6 +742,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             credit_granted: r.credit_granted,
             credit_submitted: r.credit_submitted,
             upload: r.upload.into(),
+            ota: r.ota.into(),
         }
     }
 }
@@ -764,7 +805,7 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             notes: q.notes,
             tx_power: q.tx_power,
             when_unix: q.when_unix,
-            time_off_unix: None, // not carried on the DTO (like `ota`); set at log time / via ADIF
+            time_off_unix: None, // not carried on the DTO; set at log time / via ADIF import
             confirmed: q.confirmed,
             award_confirmed: q.award_confirmed,
             qsl_rcvd: tempo_core::logbook::QslRcvd {
@@ -776,7 +817,7 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             credit_granted: q.credit_granted,
             credit_submitted: q.credit_submitted,
             upload: q.upload.into(),
-            ota: Default::default(),
+            ota: q.ota.into(),
         }
     }
 }
