@@ -5,8 +5,18 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { TreePine, Mountain, RefreshCw, X } from 'lucide-react'
-import type { AppSnapshot, OtaSpot } from '../types'
-import { clearHuntTarget, getOtaSpots, setHuntTarget } from '../api'
+import type { AppSnapshot, OtaSpot, Activation } from '../types'
+import {
+  clearHuntTarget,
+  getOtaSpots,
+  setHuntTarget,
+  setActivation,
+  clearActivation,
+  getActivation,
+  parksCount,
+  downloadParks,
+  importParksCsv,
+} from '../api'
 import { pushToast, withErrorToast } from '../toast'
 import { bandFromKhz, spotModeClass } from '../otaHunt'
 
@@ -149,6 +159,67 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
 
   const hunt = snap.hunt ?? null
 
+  // My-side activation: the backend stamps my park ref onto every QSO I log while active.
+  const [act, setAct] = useState<Activation | null>(null)
+  const [actRef, setActRef] = useState('')
+  const [actProg, setActProg] = useState('POTA')
+  useEffect(() => {
+    void getActivation()
+      .then(setAct)
+      .catch(() => {})
+  }, [])
+  const activating = act != null && act.reference != null
+
+  const handleStartActivation = async () => {
+    const ref = actRef.trim().toUpperCase()
+    if (!ref) return
+    const a = await withErrorToast(() => setActivation(actProg, ref), 'Could not start activation')
+    if (a) {
+      setAct(a)
+      pushToast(`Activating ${a.program} ${a.reference} — QSOs will be park-tagged`, 'success')
+    }
+  }
+  const handleStopActivation = async () => {
+    const a = await withErrorToast(() => clearActivation(), 'Could not stop activation')
+    if (a) {
+      setAct(a)
+      setActRef('')
+      pushToast('Activation ended', 'info', 2000)
+    }
+  }
+
+  // Local park directory — download once / import a CSV, then search it offline in the log form.
+  const [parkN, setParkN] = useState(0)
+  const [parkBusy, setParkBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    void parksCount()
+      .then(setParkN)
+      .catch(() => {})
+  }, [])
+  const handleDownloadParks = async () => {
+    setParkBusy(true)
+    const n = await withErrorToast(() => downloadParks(), 'Park-list download failed')
+    setParkBusy(false)
+    if (n != null) {
+      setParkN(n)
+      pushToast(`Downloaded ${n.toLocaleString()} parks — searchable in the log`, 'success')
+    }
+  }
+  const handleImportFile = async (file: File) => {
+    setParkBusy(true)
+    try {
+      const csv = await file.text()
+      const n = await importParksCsv(csv)
+      setParkN(n)
+      pushToast(`Imported ${n.toLocaleString()} parks`, 'success')
+    } catch (e) {
+      pushToast(`Import failed: ${String(e)}`, 'error')
+    } finally {
+      setParkBusy(false)
+    }
+  }
+
   const handleClearHunt = async () => {
     const s = await withErrorToast(() => clearHuntTarget(), 'Could not clear hunt target')
     if (s) {
@@ -209,6 +280,67 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
           </button>
         </div>
       )}
+
+      {/* My activation — while active, every QSO I log is stamped with MY park (my_ref). */}
+      <div className={`pota-activation${activating ? ' active' : ''}`}>
+        {activating ? (
+          <>
+            <span className="pota-act-text">
+              📻 Activating <strong>{act?.program} {act?.reference}</strong>
+              <span className="pota-act-sub"> · {act?.qsoCount ?? 0} logged — QSOs get your park tagged</span>
+            </span>
+            <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title="End activation">
+              <X size={13} aria-hidden="true" /> Stop
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="pota-act-label">I'm activating:</span>
+            <select className="settings-input pota-act-prog" value={actProg} onChange={(e) => setActProg(e.target.value)}>
+              <option value="POTA">POTA</option>
+              <option value="SOTA">SOTA</option>
+            </select>
+            <input
+              className="settings-input mono pota-act-ref"
+              value={actRef}
+              onChange={(e) => setActRef(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleStartActivation()
+              }}
+              placeholder={actProg === 'SOTA' ? 'W7A/MN-001' : 'K-1234'}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button type="button" className="pota-act-start" onClick={() => void handleStartActivation()} disabled={!actRef.trim()}>
+              Start
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Local park directory — download/import once, then search offline in the log form. */}
+      <div className="pota-parklist">
+        <span className="pota-parklist-status">
+          {parkN > 0 ? `📖 ${parkN.toLocaleString()} parks — searchable in the log` : '📖 No local park list yet'}
+        </span>
+        <button type="button" className="pota-act-start" onClick={() => void handleDownloadParks()} disabled={parkBusy}>
+          {parkBusy ? '…' : parkN > 0 ? 'Update' : 'Download'}
+        </button>
+        <button type="button" className="pota-parklist-import" onClick={() => fileRef.current?.click()} disabled={parkBusy}>
+          Import CSV
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".csv,text/csv"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) void handleImportFile(f)
+            e.target.value = ''
+          }}
+        />
+      </div>
 
       {/* Program toggle + band/mode filters + refresh */}
       <div className="pota-controls">

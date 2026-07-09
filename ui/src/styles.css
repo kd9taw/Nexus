@@ -5686,6 +5686,120 @@ select optgroup {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-title);
 }
+/* Compact RX tuning strip in the Phone/CW cockpits — live freq + VFO step + direct MHz entry. */
+.tuning-strip {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+/* VFO A/B + RIT/XIT clarifier clusters. */
+.tuning-vfo,
+.tuning-clar {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+.tuning-vfo button,
+.tuning-clar button {
+  min-width: 20px;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--bg-elev-2, var(--bg-elev));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.tuning-vfo button:hover:not(:disabled),
+.tuning-clar button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tuning-vfo button.active {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.tuning-vfo button:disabled,
+.tuning-clar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tuning-clar {
+  padding: 0 3px;
+  border-radius: var(--radius-sm);
+}
+.tuning-clar.on {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.tuning-clar-val {
+  min-width: 34px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text);
+}
+.tuning-nudge {
+  min-width: 26px;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-elev-2, var(--bg-elev));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.tuning-nudge:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tuning-nudge:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tuning-readout {
+  min-width: 92px;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+.tuning-step {
+  flex: 0 0 auto;
+  max-width: 78px;
+}
+.tuning-goto {
+  max-width: 96px;
+}
+/* Pending POTA/SOTA hunt chip — the QSO will be park-tagged on log (matched by callsign). */
+.le-hunt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+  padding: 2px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--border-soft);
+}
+.le-hunt-chip.match {
+  color: var(--ok, #2fbf71);
+  background: color-mix(in srgb, var(--ok, #2fbf71) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok, #2fbf71) 40%, transparent);
+}
+.le-hunt-for {
+  font-weight: 400;
+  color: var(--text-faint);
+}
+.le-hunt-warn {
+  font-weight: 400;
+  color: var(--warn, #e8a33d);
+}
 .le-row {
   display: flex;
   gap: var(--space-2);
@@ -5698,6 +5812,88 @@ select optgroup {
 .le-rst {
   max-width: 80px;
   flex: 0 0 auto !important;
+}
+/* POTA/SOTA park row: a narrow program select + a flexible reference input. */
+.le-park-prog {
+  max-width: 84px;
+  flex: 0 0 auto !important;
+}
+.le-park-search {
+  position: relative;
+  flex: 1;
+}
+.le-park-search .le-park-ref {
+  width: 100%;
+}
+/* Offline park-directory suggestions dropdown. */
+.le-park-suggest {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+.le-park-suggest button {
+  display: flex;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+}
+.le-park-suggest button:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.le-park-hit-ref {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 700;
+}
+.le-park-hit-name {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Park-directory download/import control in the POTA view. */
+.pota-parklist {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  margin: 0 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  font-size: var(--fs-label);
+}
+.pota-parklist-status {
+  flex: 1;
+  color: var(--text-dim);
+}
+.pota-parklist-import {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  color: var(--text);
+  cursor: pointer;
+}
+.pota-parklist-import:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 /* Persistent Sent/Rcvd captions on the two RST boxes — the placeholders were hidden behind the
    default "59", so the send vs receive side was unlabeled. */
@@ -6926,6 +7122,21 @@ select optgroup {
   color: var(--text-faint);
   font-weight: 700;
 }
+/* Sortable column-header buttons — look like the header text, click to sort. */
+.log-row.head .log-th {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.log-row.head .log-th:hover {
+  color: var(--text);
+}
+.log-row.head .log-th.sorted {
+  color: var(--accent);
+}
 .log-scroll {
   flex: 1;
   overflow-y: auto;
@@ -7426,6 +7637,12 @@ select.settings-input {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-dim);
+}
+.ph-scope-sub {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint);
 }
 .ph-scope-head-label {
   font-size: 10px;
@@ -8474,7 +8691,7 @@ select.settings-input {
   margin-top: var(--space-3);
 }
 .logbook-row {
-  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.7fr 0.8fr;
+  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 0.8fr;
 }
 .log-country {
   overflow: hidden;
@@ -8560,12 +8777,13 @@ select.settings-input {
   .logbook-row {
     grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 0.7fr;
   }
-  /* Narrow: keep Call, Country, Band, QSL, actions; hide Freq/Mode/Sent/Rcvd/Time. */
+  /* Narrow: keep Call, Country, Band, QSL, actions; hide Freq/Mode/Sent/Rcvd/Time/Park. */
   .logbook-row .log-cell:nth-child(4),
   .logbook-row .log-cell:nth-child(5),
   .logbook-row .log-cell:nth-child(6),
   .logbook-row .log-cell:nth-child(7),
-  .logbook-row .log-cell:nth-child(8) {
+  .logbook-row .log-cell:nth-child(8),
+  .logbook-row .log-cell:nth-child(9) {
     display: none;
   }
   /* keep edit/delete reachable on touch (no hover) */
@@ -11391,6 +11609,38 @@ select.settings-input {
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   font-size: var(--fs-label);
 }
+/* My-activation control (start/stop an activation; QSOs logged while active get my park). */
+.pota-activation {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  margin: 0 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  font-size: var(--fs-label);
+}
+.pota-activation.active {
+  background: color-mix(in srgb, var(--ok, #2fbf71) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok, #2fbf71) 40%, transparent);
+}
+.pota-act-label {
+  color: var(--text-dim);
+  font-weight: 700;
+}
+.pota-act-sub {
+  color: var(--text-faint);
+}
+.pota-act-prog {
+  max-width: 84px;
+  flex: 0 0 auto;
+}
+.pota-act-ref {
+  max-width: 160px;
+}
+.pota-act-text {
+  flex: 1;
+}
 .pota-hunt-icon {
   display: flex;
   align-items: center;
@@ -11655,6 +11905,11 @@ select.settings-input {
 .rig-detect-meta {
   font-size: var(--fs-micro);
   color: var(--text-dim);
+}
+.rig-detect-nomodel {
+  font-size: var(--fs-micro);
+  color: var(--warn, #e8a33d);
+  line-height: 1.35;
 }
 .rig-detect-driver {
   font-size: var(--fs-micro);

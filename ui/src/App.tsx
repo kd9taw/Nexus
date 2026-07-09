@@ -1662,6 +1662,7 @@ export default function App() {
         onStopRecording={handleStopRecording}
         hideTxControls={effectiveView === 'operate'}
         hideFrequencyControl={effectiveView === 'phone' || effectiveView === 'cw'}
+        hideDigitalChrome={effectiveView === 'phone' || effectiveView === 'cw'}
         wfLayout={wfLayout}
         onWfLayoutChange={setWfLayout}
         tier={tier}

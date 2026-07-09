@@ -5,6 +5,35 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — Phone tuning, POTA logging, smoother setup
+
+Driven by test-user feedback on the 0.4.0 build: the Phone and CW cockpits are now
+self-contained for tuning, POTA / SOTA park references log end-to-end, and first-time
+CAT setup on bridge-chip rigs (e.g. the FTDX10) is less painful.
+
+### Added
+
+- **Tune from Phone & CW** — a tuning strip in both cockpits: live dial readout, VFO
+  step-nudge, direct MHz entry (commit on Enter), RIT / XIT, and A / B VFO, over CAT.
+- **POTA / SOTA logging** — a park-reference field in the log entry, a Park column in
+  the logbook, and an "I'm activating K-####" control. Hunting a spot prefills the park
+  and auto-tags the matching QSO.
+- **Local park search** — download or import the POTA park directory and search it
+  as-you-type from the log form.
+- **Sortable logbook** — click any column header to sort; defaults to newest-first.
+
+### Changed / Fixed
+
+- The Phone and CW sections no longer show FT8-specific chrome (tier pills, TX-cycle,
+  slot timing, DT, waterfall layout) that never applied to them.
+- Smoother Phone bandscope — the audio spectrum is now computed once per radio-loop
+  tick instead of recomputed on every UI poll, ending the periodic stutter — with
+  clearer "audio passband, not an RF panadapter" labeling.
+- Smoother setup on rigs behind a generic USB-serial bridge — Auto-test now finds the
+  CAT port before the rig model is chosen, and Detect calls out when it can only see
+  the bridge chip so you know to pick the model.
+- QRZ / HamQTH lookup now also fires on Enter in the Call field, not only on Tab.
+
 ## [0.4.0] — Phone & CW operating buildout
 
 Focused on making the Phone (SSB) and CW cockpits first-class alongside the digital

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import type { AppSnapshot, FieldDayStatus, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { BandStrip } from './BandStrip'
+import { TuningStrip } from './TuningStrip'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
@@ -249,9 +250,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             rig: {modeMismatch}
           </span>
         )}
-        <span className="ph-freq mono">
-          {snap.radio.dialMhz.toFixed(3)} MHz · {snap.radio.band}
-        </span>
+        <TuningStrip snap={snap} onSnap={onSnap} />
         <BandPicker snap={snap} mode="phone" onSnap={onSnap} />
         {catOk && (
           <div className={`ph-split ${splitOn ? 'on' : ''}`}>
@@ -381,9 +380,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         <div className="ph-scope-head">
           <span
             className="ph-scope-title"
-            title="A ~3 kHz slice of the receiver audio passband — not a band-wide panadapter"
+            title="Receiver AUDIO spectrum (200–2900 Hz of the demodulated passband) — not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune."
           >
-            Passband
+            Passband <span className="ph-scope-sub">· RX audio</span>
           </span>
           <span className="ph-scope-head-label">Colors</span>
           <PalettePicker />

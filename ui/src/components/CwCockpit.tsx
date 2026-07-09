@@ -4,6 +4,7 @@ import { PhoneScope } from './PhoneScope'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
+import { TuningStrip } from './TuningStrip'
 import { LogEntry } from './LogEntry'
 import {
   sendCw,
@@ -380,6 +381,7 @@ export function CwCockpit({
             aria-label="CW pitch (Hz)"
           />
         </label>
+        <TuningStrip snap={snap} onSnap={onSnap} />
         <BandPicker snap={snap} mode="cw" onSnap={onSnap} />
         {catOk && (
           <div className="ph-filter" title="RX filter / passband width (CAT) — narrow to dig CW out of QRM">

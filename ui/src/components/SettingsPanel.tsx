@@ -595,13 +595,17 @@ export function SettingsPanel({
     try {
       const r = await probeCatPorts()
       if (r.found) {
+        // Apply port + baud (confirmed working). Only trust the MODEL when it wasn't a guess — a
+        // seeded common-rig probe can be answered by a same-family sibling (FT-991A on the FTDX10
+        // probe), so keep the operator's Rig Model rather than persisting a wrong one.
         const next = {
           ...form,
           serialPort: r.portName,
           baud: r.baud,
-          rigModel: r.model,
-          rigModelName: r.modelName,
           pttMethod: 'cat',
+          ...(r.modelSeeded
+            ? {}
+            : { rigModel: r.model, rigModelName: r.modelName }),
         }
         setForm(next)
         await setSettings(next)
@@ -1345,8 +1349,11 @@ export function SettingsPanel({
                             {r.suggestedAudio ? ` · ${r.suggestedAudio}` : ''}
                           </span>
                           {!r.suggestedModel && (
-                            <span className="rig-detect-meta">
-                              Couldn't identify the model from USB — pick it below.
+                            <span className="rig-detect-nomodel">
+                              ⚠ Found the port but not the exact model — common on Yaesu, whose USB
+                              bridge reports only its chip name. Pick your rig in <em>Rig Model</em>{' '}
+                              below, or click <em>Auto-test</em> (it now tries common rigs to find
+                              the right port + baud for you).
                             </span>
                           )}
                           {r.driverNote && !r.driverBundled && (

@@ -949,6 +949,18 @@ impl RadioLoop {
                                 }
                             }
                         }
+                        // Apply pending RIT/XIT/VFO clarifier requests (CAT-panel controls). Drain
+                        // under the lock, RELEASE it, then do the CAT round-trip. Write-only +
+                        // optimistic — the snapshot already mirrors the commanded value.
+                        if let Some(hz) = engine.lock().ok().and_then(|mut e| e.take_rit_apply()) {
+                            let _ = rig.set_rit(hz);
+                        }
+                        if let Some(hz) = engine.lock().ok().and_then(|mut e| e.take_xit_apply()) {
+                            let _ = rig.set_xit(hz);
+                        }
+                        if let Some(vfo_b) = engine.lock().ok().and_then(|mut e| e.take_vfo_apply()) {
+                            let _ = rig.set_vfo(if vfo_b { "VFOB" } else { "VFOA" });
+                        }
                         // DSP funcs (NB/NR/notch=ANF/COMP/VOX): one GET per still-supported func on
                         // the slow sub-cadence, mirroring the S-meter's lazy-capability + miss-
                         // tolerance. A GET miss on this proven-alive link means the rig lacks the

@@ -15,6 +15,10 @@ interface Props {
    * mode-appropriate band picker; the top one is fed the DIGITAL (FT8) band plan, so
    * showing it there is a confusing second, wrong-dial band dropdown. */
   hideFrequencyControl?: boolean
+  /** Hide FT8/digital-only chrome (tier selector, TX-cycle, waterfall layout, slot
+   * countdown, time-sync, DT readout, and the FT8 TX cluster). Set on the Phone/CW
+   * cockpits so they focus on phone/CW operating, not the digital-mode furniture. */
+  hideDigitalChrome?: boolean
   mycall: string
   mygrid: string
   radio: RadioStatus
@@ -98,6 +102,7 @@ export function TopBar({
   onThemeChange,
   hideTxControls,
   hideFrequencyControl,
+  hideDigitalChrome,
 }: Props) {
   const countdown = (radio.nextSlotMs / 1000).toFixed(1)
   return (
@@ -144,7 +149,7 @@ export function TopBar({
           </button>
         )}
 
-        {!hideTxControls && (
+        {!hideTxControls && !hideDigitalChrome && (
         <div className="op-controls" role="group" aria-label="Transmit controls">
           <button
             type="button"
@@ -195,40 +200,48 @@ export function TopBar({
         )}
 
         <StatusLane />
-        <div className="slot-clock" title="Time to next slot">
-          <span className="slot-count">{countdown}s</span>
-          <span className="slot-label">next slot</span>
-        </div>
-        <UtcClock />
-        {radio.clockOffsetMs != null ? (
-          <span
-            className={`timesync ${clockClass(radio.clockOffsetMs)}`}
-            title={`PC clock is ${clockLabel(radio.clockOffsetMs)} vs UTC (NTP). FT1/DX1 need it within ~0.5 s — sync via NTP / time.is (off-grid: GPS).`}
-          >
-            <span className="dot" />
-            clock {clockLabel(radio.clockOffsetMs)}
-          </span>
-        ) : (
-          <span
-            className={`timesync ${radio.timeSyncOk ? 'ok' : 'bad'}`}
-            title={
-              radio.timeSyncOk
-                ? 'Time sync OK (from decode timing)'
-                : 'Decodes land far off the slot boundary — sync your PC clock (NTP / time.is; off-grid: GPS).'
-            }
-          >
-            <span className="dot" />
-            {radio.timeSyncOk ? 'Sync' : 'No Sync'}
-          </span>
+        {!hideDigitalChrome && (
+          <div className="slot-clock" title="Time to next slot">
+            <span className="slot-count">{countdown}s</span>
+            <span className="slot-label">next slot</span>
+          </div>
         )}
-        <span
-          className={`dt-readout${Math.abs(link.dtSec) > 0.5 ? ' bad' : ''}`}
-          title="Decode time offset (how far heard signals land from the slot boundary)"
-        >
-          {dtLabel(link.dtSec)}
-        </span>
+        <UtcClock />
+        {!hideDigitalChrome && (
+          <>
+            {radio.clockOffsetMs != null ? (
+              <span
+                className={`timesync ${clockClass(radio.clockOffsetMs)}`}
+                title={`PC clock is ${clockLabel(radio.clockOffsetMs)} vs UTC (NTP). FT1/DX1 need it within ~0.5 s — sync via NTP / time.is (off-grid: GPS).`}
+              >
+                <span className="dot" />
+                clock {clockLabel(radio.clockOffsetMs)}
+              </span>
+            ) : (
+              <span
+                className={`timesync ${radio.timeSyncOk ? 'ok' : 'bad'}`}
+                title={
+                  radio.timeSyncOk
+                    ? 'Time sync OK (from decode timing)'
+                    : 'Decodes land far off the slot boundary — sync your PC clock (NTP / time.is; off-grid: GPS).'
+                }
+              >
+                <span className="dot" />
+                {radio.timeSyncOk ? 'Sync' : 'No Sync'}
+              </span>
+            )}
+            <span
+              className={`dt-readout${Math.abs(link.dtSec) > 0.5 ? ' bad' : ''}`}
+              title="Decode time offset (how far heard signals land from the slot boundary)"
+            >
+              {dtLabel(link.dtSec)}
+            </span>
+          </>
+        )}
       </div>
 
+      {!hideDigitalChrome && (
+      <>
       <div className="topbar-group tier-toggle" role="group" aria-label="Link tier">
         <button
           type="button"
@@ -319,6 +332,8 @@ export function TopBar({
           WF <small>top</small>
         </button>
       </div>
+      </>
+      )}
 
       <div className="topbar-group">
         <ThemeSwitcher theme={theme} onChange={onThemeChange} />

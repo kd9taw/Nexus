@@ -680,6 +680,23 @@ export async function setFilterWidth(hz: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_filter_width', { hz })
 }
 
+/** Set the RIT (receive incremental tuning) offset in Hz — 0 turns RIT off. */
+export async function setRit(hz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_rit', { hz })
+}
+/** Set the XIT (transmit incremental tuning) offset in Hz — 0 turns XIT off. */
+export async function setXit(hz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_xit', { hz })
+}
+/** Select the active VFO ("A" / "B"). */
+export async function setVfo(vfo: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_vfo', { vfo })
+}
+/** Swap the active VFO (A↔B). */
+export async function swapVfo(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('swap_vfo')
+}
+
 /** Toggle a rig DSP function ('nb'|'nr'|'notch'|'comp'|'vox') on/off; the radio loop applies it.
  * The returned snapshot reflects the request optimistically (the loop's read-back reconciles). */
 export async function setRigFunc(
@@ -963,6 +980,30 @@ export async function clearActivation(): Promise<Activation> {
 /** Read the current activation state. */
 export async function getActivation(): Promise<Activation> {
   return invoke<Activation>('get_activation')
+}
+
+/** A park directory entry from the local searchable list. */
+export interface Park {
+  reference: string
+  name: string
+  grid: string
+  location: string
+}
+/** Search the local (offline) POTA park directory by reference prefix or name substring. */
+export async function searchParks(query: string, limit?: number): Promise<Park[]> {
+  return invoke<Park[]>('search_parks', { query, limit })
+}
+/** How many parks are loaded locally (0 = not downloaded/imported yet). */
+export async function parksCount(): Promise<number> {
+  return invoke<number>('parks_count')
+}
+/** Import a park directory from CSV text the operator downloaded. Returns the park count. */
+export async function importParksCsv(csv: string): Promise<number> {
+  return invoke<number>('import_parks_csv', { csv })
+}
+/** Download + cache the current POTA all-parks list for offline search. Returns the park count. */
+export async function downloadParks(): Promise<number> {
+  return invoke<number>('download_parks')
 }
 
 /**

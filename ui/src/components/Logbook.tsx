@@ -78,6 +78,30 @@ function parseReport(s: string): string | null {
   return t === '' ? null : t
 }
 
+// Sortable columns. `band` sorts by frequency (more meaningful than the label string).
+type SortKey = 'call' | 'country' | 'band' | 'freq' | 'mode' | 'time' | 'qsl'
+function sortVal(q: LoggedQso, k: SortKey): string | number {
+  switch (k) {
+    case 'call':
+      return q.call.toUpperCase()
+    case 'country':
+      return (q.country ?? '').toUpperCase()
+    case 'band':
+    case 'freq':
+      return q.freqMhz
+    case 'mode':
+      return q.mode.toUpperCase()
+    case 'time':
+      return q.whenUnix
+    case 'qsl':
+      return q.awardConfirmed ? 2 : q.confirmed ? 1 : 0
+  }
+}
+/** Sensible default direction when switching TO a column: text ascending, numeric/time descending. */
+function defaultAsc(k: SortKey): boolean {
+  return k === 'call' || k === 'country' || k === 'mode'
+}
+
 export function Logbook({
   defaultBand,
   defaultFreqMhz,
@@ -112,6 +136,11 @@ export function Logbook({
   const [purging, setPurging] = useState(false)
   // Index (in the loaded `log` array) being edited; null = the form logs a NEW QSO.
   const [editIndex, setEditIndex] = useState<number | null>(null)
+  // Column sort — purely a VIEW concern; the backend `get_log` index is kept on each row so
+  // edit/delete/mark still hit the right record. Default newest-first (the get_log order is
+  // oldest-first, which the test user disliked).
+  const [sortKey, setSortKey] = useState<SortKey>('time')
+  const [sortAsc, setSortAsc] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const syncRef = useRef<HTMLInputElement>(null)
 
@@ -394,6 +423,27 @@ export function Logbook({
     }
   }
 
+  // A clickable, sort-toggling column header. Clicking the active column flips direction;
+  // clicking a new column jumps to its sensible default direction.
+  const th = (label: string, k: SortKey) => (
+    <button
+      type="button"
+      className={`log-cell log-th${sortKey === k ? ' sorted' : ''}`}
+      role="columnheader"
+      aria-sort={sortKey === k ? (sortAsc ? 'ascending' : 'descending') : 'none'}
+      onClick={() => {
+        if (sortKey === k) setSortAsc((v) => !v)
+        else {
+          setSortKey(k)
+          setSortAsc(defaultAsc(k))
+        }
+      }}
+    >
+      {label}
+      {sortKey === k ? (sortAsc ? ' ▲' : ' ▼') : ''}
+    </button>
+  )
+
   return (
     <section className="panel log-view logbook">
       <div className="panel-header log-header">
@@ -597,21 +647,30 @@ export function Logbook({
 
       <div className="log-table logbook-table" role="table">
         <div className="log-row logbook-row head" role="row">
-          <span className="log-cell" role="columnheader">Call</span>
-          <span className="log-cell" role="columnheader">Country</span>
-          <span className="log-cell" role="columnheader">Band</span>
-          <span className="log-cell" role="columnheader">Freq</span>
-          <span className="log-cell" role="columnheader">Mode</span>
+          {th('Call', 'call')}
+          {th('Country', 'country')}
+          {th('Band', 'band')}
+          {th('Freq', 'freq')}
+          {th('Mode', 'mode')}
           <span className="log-cell" role="columnheader">Sent</span>
           <span className="log-cell" role="columnheader">Rcvd</span>
-          <span className="log-cell" role="columnheader">Time (UTC)</span>
-          <span className="log-cell" role="columnheader">QSL</span>
+          {th('Time (UTC)', 'time')}
+          <span className="log-cell" role="columnheader">Park</span>
+          {th('QSL', 'qsl')}
           <span className="log-cell" role="columnheader" aria-label="Edit / delete"></span>
         </div>
         <div className="log-scroll">
           {log.length === 0 && <p className="empty">No logged contacts yet.</p>}
           {(() => {
             const rows = log.map((q, i) => ({ q, i })).filter(({ q }) => matchesSearch(q))
+            // Sort the {q, i} pairs — `i` (the backend get_log index) stays glued to its record
+            // so edit/delete/mark still target the right row regardless of display order.
+            rows.sort((a, b) => {
+              const av = sortVal(a.q, sortKey)
+              const bv = sortVal(b.q, sortKey)
+              const cmp = av < bv ? -1 : av > bv ? 1 : a.q.whenUnix - b.q.whenUnix
+              return sortAsc ? cmp : -cmp
+            })
             if (log.length > 0 && rows.length === 0)
               return <p className="empty">No contacts match “{search.trim()}”.</p>
             return rows.map(({ q, i }) => (
@@ -628,6 +687,18 @@ export function Logbook({
                 <span className="log-cell mono">{fmtReport(q.rstSent)}</span>
                 <span className="log-cell mono">{fmtReport(q.rstRcvd)}</span>
                 <span className="log-cell mono">{fmtUtc(q.whenUnix)}</span>
+                <span
+                  className="log-cell mono log-park"
+                  title={
+                    q.ota?.theirRef
+                      ? `${q.ota.theirProgram ?? 'POTA'} ${q.ota.theirRef} (worked)`
+                      : q.ota?.myRef
+                        ? `My activation: ${q.ota.myProgram ?? 'POTA'} ${q.ota.myRef}`
+                        : ''
+                  }
+                >
+                  {q.ota?.theirRef ?? (q.ota?.myRef ? `@${q.ota.myRef}` : '—')}
+                </span>
                 <span className="log-cell">
                   {q.qslRcvd && (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl) ? (
                     // Per-source detail: which channel(s) actually confirmed.
