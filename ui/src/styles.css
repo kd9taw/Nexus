@@ -5902,6 +5902,41 @@ select optgroup {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Auto-loaded park detail (name/location/grid) for a complete reference. */
+.le-park-detail {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--rx) 8%, transparent);
+  border: 1px solid var(--border-soft);
+}
+.le-park-detail-ref {
+  font-weight: 700;
+  color: var(--rx);
+}
+.le-park-detail-name {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.le-park-detail-loc,
+.le-park-detail-grid {
+  color: var(--text-dim);
+}
+.le-park-detail-src {
+  margin-left: auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
 /* Park-directory download/import control in the POTA view. */
 .pota-parklist {
   display: flex;

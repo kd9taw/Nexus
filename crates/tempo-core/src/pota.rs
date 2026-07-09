@@ -209,6 +209,15 @@ impl ParkIndex {
         ref_hits.truncate(limit);
         ref_hits
     }
+
+    /// Exact lookup of one park by reference (normalized first). Unlike `search`'s prefix/substring
+    /// matching, this is deterministic — used to auto-fill a park's details the moment a complete
+    /// ref is typed (so `K-1234` never resolves to `K-12340`). `None` if the ref is malformed or
+    /// not in the index.
+    pub fn lookup(&self, reference: &str) -> Option<Park> {
+        let norm = normalize_pota_ref(reference)?;
+        self.parks.iter().find(|p| p.reference == norm).cloned()
+    }
 }
 
 #[cfg(test)]
@@ -302,6 +311,18 @@ K-5678,Yellowstone National Park,1,US-WY,44.6,-110.5,DN44\n";
     fn search_respects_the_limit() {
         let idx = ParkIndex::parse_csv(PARKS_CSV);
         assert_eq!(idx.search("K-", 2).len(), 2);
+    }
+
+    #[test]
+    fn lookup_is_exact_and_normalizes() {
+        let idx = ParkIndex::parse_csv(PARKS_CSV);
+        // Exact ref (case/whitespace-normalized) resolves the full park.
+        let p = idx.lookup(" k-0001 ").unwrap();
+        assert_eq!(p.reference, "K-0001");
+        assert_eq!(p.grid, "FN54");
+        // Malformed (too few digits) and well-formed-but-absent both return None — no fuzzy hit.
+        assert!(idx.lookup("K-5").is_none());
+        assert!(idx.lookup("K-9999").is_none());
     }
 
     #[test]

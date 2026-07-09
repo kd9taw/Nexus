@@ -6771,6 +6771,9 @@ struct ParkDto {
     name: String,
     grid: String,
     location: String,
+    /// Coordinates — only the LIVE lookup carries these; the local CSV index doesn't.
+    latitude: Option<f64>,
+    longitude: Option<f64>,
 }
 
 impl From<tempo_core::pota::Park> for ParkDto {
@@ -6780,6 +6783,21 @@ impl From<tempo_core::pota::Park> for ParkDto {
             name: p.name,
             grid: p.grid,
             location: p.location,
+            latitude: None,
+            longitude: None,
+        }
+    }
+}
+
+impl From<propagation::live::pota::LiveParkDetail> for ParkDto {
+    fn from(p: propagation::live::pota::LiveParkDetail) -> Self {
+        ParkDto {
+            reference: p.reference,
+            name: p.name,
+            grid: p.grid,
+            location: p.location,
+            latitude: p.latitude,
+            longitude: p.longitude,
         }
     }
 }
@@ -6856,6 +6874,27 @@ async fn download_parks(parks: State<'_, SharedParks>) -> Result<usize, String> 
     let _ = std::fs::write(parks_cache_path(), &csv);
     *parks.lock().map_err(|e| e.to_string())? = idx;
     Ok(n)
+}
+
+/// Exact local lookup of one park by reference (offline, instant). `None` if the ref is malformed
+/// or not in the loaded directory — the caller then falls back to the live lookup.
+#[tauri::command]
+fn lookup_park(parks: State<'_, SharedParks>, reference: String) -> Result<Option<ParkDto>, String> {
+    let idx = parks.lock().map_err(|e| e.to_string())?;
+    Ok(idx.lookup(&reference).map(ParkDto::from))
+}
+
+/// Live lookup of one park's details from the POTA directory (name/grid/location + coordinates).
+/// Used when the local list is empty/stale or when coordinates are wanted. Blocking HTTP off the
+/// main thread. `reference` should be a normalized ref.
+#[tauri::command]
+async fn lookup_park_live(reference: String) -> Result<ParkDto, String> {
+    let detail = tauri::async_runtime::spawn_blocking(move || {
+        propagation::live::pota::fetch_park(&reference)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(ParkDto::from(detail))
 }
 
 // ----- coordinated QSY ("move together") — a separate, opt-in feature ------
@@ -7559,6 +7598,8 @@ pub fn run() {
             parks_count,
             import_parks_csv,
             download_parks,
+            lookup_park,
+            lookup_park_live,
             set_activation,
             clear_activation,
             get_activation,

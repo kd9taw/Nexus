@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, LoggedQso } from '../types'
-import { fdLogManual, getLog, logQso, qrzLookup, searchParks, type Park } from '../api'
+import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, searchParks, type Park } from '../api'
 import { callHistory, entitySlots, isNewEntity } from '../features/callHistory'
 import { RecallPanel } from './RecallPanel'
 import { pushToast, withErrorToast } from '../toast'
@@ -80,6 +80,9 @@ export function LogEntry({
   // Local park-directory suggestions (POTA only) as the operator types the reference.
   const [parkHits, setParkHits] = useState<Park[]>([])
   const [parkPicked, setParkPicked] = useState(false)
+  // Auto-loaded details for a complete park reference (name/location/grid), local-first then live.
+  const [parkDetail, setParkDetail] = useState<Park | null>(null)
+  const [parkDetailLive, setParkDetailLive] = useState(false)
   const [qrzBusy, setQrzBusy] = useState(false)
   const [allLog, setAllLog] = useState<LoggedQso[]>([])
   const rstRef = useRef<HTMLInputElement>(null)
@@ -189,6 +192,43 @@ export function LogEntry({
     }, 180)
     return () => clearTimeout(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logParkRef, logParkProgram])
+
+  // Auto-load a park's details the moment a COMPLETE valid POTA reference is entered (like HRD):
+  // instant offline lookup first, then the live POTA directory if it's not in the local list. Purely
+  // informational — never blocks typing or logging, and swallows all errors (offline = no chip).
+  useEffect(() => {
+    const ref = logParkRef.trim().toUpperCase()
+    if (logParkProgram !== 'POTA' || !/^[A-Z0-9]{1,4}-\d{4,5}$/.test(ref)) {
+      setParkDetail(null)
+      return
+    }
+    let cancelled = false
+    const id = setTimeout(() => {
+      void lookupPark(ref)
+        .then((local) => {
+          if (cancelled) return
+          if (local) {
+            setParkDetail(local)
+            setParkDetailLive(false)
+            return
+          }
+          // Not in the local list (empty/stale) → try the live POTA directory (also brings coords).
+          return lookupParkLive(ref).then((live) => {
+            if (!cancelled) {
+              setParkDetail(live)
+              setParkDetailLive(true)
+            }
+          })
+        })
+        .catch(() => {
+          if (!cancelled) setParkDetail(null)
+        })
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(id)
+    }
   }, [logParkRef, logParkProgram])
 
   const refreshLog = () => void getLog().then(setAllLog).catch(() => {})
@@ -610,6 +650,24 @@ export function LogEntry({
           )}
         </div>
       </div>
+
+      {parkDetail &&
+        logParkProgram === 'POTA' &&
+        // Only show the chip while it still matches the field — never the PREVIOUS ref's park
+        // during an in-flight lookup of a newly-typed ref (both paths return the normalized ref).
+        parkDetail.reference === logParkRef.trim().toUpperCase() && (
+        <div className="le-park-detail" role="status">
+          <span className="mono le-park-detail-ref">{parkDetail.reference}</span>
+          <span className="le-park-detail-name">{parkDetail.name || '—'}</span>
+          {parkDetail.location && <span className="le-park-detail-loc">{parkDetail.location}</span>}
+          {parkDetail.grid && <span className="mono le-park-detail-grid">{parkDetail.grid}</span>}
+          {parkDetailLive && (
+            <span className="le-park-detail-src" title="Fetched live from the POTA directory">
+              live
+            </span>
+          )}
+        </div>
+      )}
 
       <textarea
         className="settings-input le-notes"

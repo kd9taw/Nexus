@@ -988,10 +988,21 @@ export interface Park {
   name: string
   grid: string
   location: string
+  /** Coordinates — only the live lookup carries these. */
+  latitude?: number | null
+  longitude?: number | null
 }
 /** Search the local (offline) POTA park directory by reference prefix or name substring. */
 export async function searchParks(query: string, limit?: number): Promise<Park[]> {
   return invoke<Park[]>('search_parks', { query, limit })
+}
+/** Exact local lookup by reference (offline, instant). null = malformed ref or not in the list. */
+export async function lookupPark(reference: string): Promise<Park | null> {
+  return invoke<Park | null>('lookup_park', { reference })
+}
+/** Live lookup of one park's details (name/grid/location + coordinates) from the POTA directory. */
+export async function lookupParkLive(reference: string): Promise<Park> {
+  return invoke<Park>('lookup_park_live', { reference })
 }
 /** How many parks are loaded locally (0 = not downloaded/imported yet). */
 export async function parksCount(): Promise<number> {
