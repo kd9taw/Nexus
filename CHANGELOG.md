@@ -5,6 +5,27 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-07-10 — dual-radio on-rig fixes
+
+On-rig fixes from testing 0.5.0 with an FTDX10 + IC-9700 (HF + VHF on separate antennas).
+
+### Fixed
+
+- **Transmit worked on only one radio after switching.** After swinging to the other rig, its
+  frequency and mode still tracked but PTT/transmit did nothing (it "keyed once, then never again").
+  The switch adopted the radio's live background connection, which is opened read-only for
+  monitoring — so it stayed in listen-only keying. The handoff now restores the radio's real PTT
+  method (CAT / RTS / DTR) when it becomes active, and puts the radio you switched *away* from back
+  into read-only monitoring.
+
+### Added
+
+- **Automatic band-routing.** Selecting a band (or typing a frequency) now switches to the radio
+  configured for that band — pick 2 m and it moves to the VHF rig, pick an HF band and it swings
+  back — instead of retuning whichever radio was active. A radio's explicit band list wins the bands
+  it claims; a radio left with no band list is the catch-all for everything else. Turn on **peg-lock**
+  in the top-bar switcher to pin the active radio and stop any auto-switching.
+
 ## [0.5.0] — 2026-07-10 — operating experience + dual-radio
 
 Field-test-driven work on the day-to-day operating experience (waterfall fidelity, a prominent

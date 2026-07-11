@@ -600,7 +600,12 @@ fn handoff_if_switched(
         .position(|c| c.id == active && c.rig.has_control() && !c.transport.rig_differs(&want_cat))
     {
         let conn = p.remove(idx);
-        let old_rig = std::mem::replace(rig, conn.rig);
+        let mut old_rig = std::mem::replace(rig, conn.rig);
+        // The adopted rig was opened READ-ONLY by the monitor (`PttMode::Vox`); give it the active
+        // radio's REAL PTT mode so it can key (else `ptt()` no-ops → "TX dead after switching to the
+        // FTDX10"). The demoted radio goes back to Vox — a monitor must never key.
+        rig.set_ptt_mode(ptt_mode_for(&want_active));
+        old_rig.set_ptt_mode(PttMode::Vox);
         let old_proc = state.rigctld_proc.take();
         let mut old_transport = std::mem::replace(&mut state.applied, conn.transport);
         // Monitor conns always carry `broker_self_port = None` (`from_profile`); strip it off the
@@ -2824,6 +2829,26 @@ fn mode_set_note(rig: &mut Rig, md: &str) -> String {
 /// keeps the launched `rigctld` daemon alive (kill-on-drop).
 type RigOpen = (Rig, Option<RigctldProc>, Option<bool>, String);
 
+/// The [`PttMode`] a transport keys with — mirrors `open_rig`'s ptt_method dispatch. A monitor
+/// opens each background rig read-only (`PttMode::Vox`); when the handoff ADOPTS that rig as the
+/// active radio, it must be switched to this real mode or `ptt()` silently no-ops (the "TX dead on
+/// the FTDX10 after switching to it, but freq/mode still work" bug — Vox keying is a no-op while
+/// set_freq/set_mode ignore the PTT mode).
+fn ptt_mode_for(t: &Transport) -> PttMode {
+    match t.ptt_method.as_str() {
+        "cat" if t.rig_model != 0 => PttMode::Cat,
+        "rts" => PttMode::Serial {
+            port: t.serial_port.clone(),
+            line: SerialLine::Rts,
+        },
+        "dtr" => PttMode::Serial {
+            port: t.serial_port.clone(),
+            line: SerialLine::Dtr,
+        },
+        _ => PttMode::Vox,
+    }
+}
+
 /// Build the [`Rig`] for a transport and report its connection status. For CAT,
 /// launches the bundled `rigctld`, sets the dial/mode, and probes by reading the
 /// frequency back; for serial PTT it opens the control line; for VOX `cat_ok` is
@@ -3278,6 +3303,96 @@ mod tests {
         assert_eq!(
             p[0].transport.rigctld_port, 4532,
             "old active's transport preserved in the pool"
+        );
+    }
+
+    #[test]
+    fn ptt_mode_for_maps_the_transport_ptt_method() {
+        // The adopted-radio PTT fix depends on this mapping mirroring open_rig's dispatch: a monitor is
+        // opened Vox (read-only), and on adopt it MUST regain the profile's real keying or ptt() no-ops.
+        let mut t = cat_transport(4532, None);
+        t.ptt_method = "cat".into();
+        t.rig_model = 1042;
+        assert_eq!(ptt_mode_for(&t), PttMode::Cat);
+
+        t.rig_model = 0; // CAT selected but no model → can't key via CAT → Vox
+        assert_eq!(ptt_mode_for(&t), PttMode::Vox);
+
+        t.serial_port = "/dev/ttyUSB0".into();
+        t.ptt_method = "rts".into();
+        assert_eq!(
+            ptt_mode_for(&t),
+            PttMode::Serial {
+                port: "/dev/ttyUSB0".into(),
+                line: SerialLine::Rts,
+            }
+        );
+
+        t.ptt_method = "dtr".into();
+        assert_eq!(
+            ptt_mode_for(&t),
+            PttMode::Serial {
+                port: "/dev/ttyUSB0".into(),
+                line: SerialLine::Dtr,
+            }
+        );
+
+        t.ptt_method = "vox".into();
+        assert_eq!(ptt_mode_for(&t), PttMode::Vox);
+    }
+
+    #[test]
+    fn handoff_gives_the_adopted_radio_its_real_ptt_mode() {
+        // Bug: TX dead on the FTDX10 after switching to it (freq/mode still work). The monitor opens
+        // every non-active radio Vox (read-only); the handoff installs that Vox rig as the active radio,
+        // so `ptt()` silently no-ops. The adopt must give the adopted rig the profile's REAL keying
+        // (Cat) AND demote the outgoing rig to Vox (a monitor must never key).
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (r1, r1_transport, r1_port) = {
+            let mut e = engine.lock().unwrap();
+            let r1 = e.add_radio(); // active becomes r1 (add_radio switches to the new radio)
+                                    // Configure r1 (now the active/form radio) as a real CAT rig via the public settings path.
+            let mut s = e.settings().clone();
+            s.ptt_method = "cat".into();
+            s.rig_model = 1042; // FTDX10 — a real model, so ptt_mode_for → Cat
+            e.apply_settings(s);
+            let p = e
+                .settings()
+                .radios
+                .iter()
+                .find(|p| p.id == r1)
+                .unwrap()
+                .clone();
+            (r1, Transport::from_profile(&p), p.rigctld_port)
+        };
+        let mut state = loop_state();
+        state.applied = cat_transport(4532, None); // radio 0 (the OUTGOING active) on its port
+                                                   // Radio 0 is a live CAT rig — after the swap it must be DEMOTED to Vox in the pool.
+        let mut rig = Rig::with_control(Some("127.0.0.1:4532".to_string()), PttMode::Cat);
+        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+            id: r1,
+            transport: r1_transport,
+            rig: Rig::with_control(Some(format!("127.0.0.1:{r1_port}")), PttMode::Vox),
+            rigctld_proc: None,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+        }]));
+        let mut last_active = 0u32;
+        handoff_if_switched(&engine, &pool, &mut rig, &mut state, &mut last_active);
+
+        assert_eq!(last_active, r1, "switched to radio 1");
+        assert_eq!(
+            rig.ptt_mode(),
+            &PttMode::Cat,
+            "the adopted FTDX10 regains CAT keying (was Vox as a monitor) — else TX is dead"
+        );
+        let p = pool.lock().unwrap();
+        assert_eq!(p[0].id, 0, "old active demoted into the pool");
+        assert_eq!(
+            p[0].rig.ptt_mode(),
+            &PttMode::Vox,
+            "the demoted radio can never key while it's a read-only monitor"
         );
     }
 

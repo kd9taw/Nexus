@@ -928,6 +928,16 @@ impl Engine {
     }
 
     pub fn set_frequency(&mut self, dial_mhz: f64, band: &str, mode: &str) {
+        // Dual-Radio P4 auto band-routing: a commanded band pick (dropdown / manual entry) that a
+        // DIFFERENT radio covers better hands off to that radio FIRST, then the tune below lands it on
+        // the requested dial — so selecting 2 m activates the IC-9700 (which has 2 m configured) and
+        // selecting an HF band swings back to the FTDX10. Peg-lock pins the active radio (no auto-
+        // switch). No-op for a single radio, or when the active radio already covers the band.
+        if !self.settings.radio_pegged {
+            if let Some(id) = self.settings.radio_for_band(band) {
+                self.set_active_radio(id);
+            }
+        }
         // Band change invalidates the decode context: answering a HISTORY row from
         // the old band would target a station that isn't here and derive parity
         // from the old band's slots. The heard-stations roster goes with it —
@@ -8268,6 +8278,51 @@ mod tests {
             e.settings.rigctld_port, r1_port,
             "flat mirror (active loop's Transport::from_settings) == the de-conflicted active profile \
              port (monitors' Transport::from_profile) — no divergence, so neither daemon collides"
+        );
+    }
+
+    #[test]
+    fn set_frequency_auto_routes_the_band_to_the_covering_radio() {
+        // Dual-Radio P4: selecting 2 m (the band dropdown / manual entry, both via set_frequency) must
+        // hand off to the IC-9700 (radio 1, which has 2 m configured) and land it on the 2 m dial —
+        // and swinging back to an HF band returns to the FTDX10. Peg-lock pins the active radio.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.rig_model = 1042; // FTDX10 on radio 0 (catch-all: no band list)
+        e.settings.band = "20m".into();
+        e.settings.dial_mhz = 14.074;
+        e.settings.sync_active_from_flat();
+        let r1 = e.add_radio(); // IC-9700, now active
+        e.settings.rig_model = 3081;
+        e.settings.sync_active_from_flat();
+        e.set_radio_bands(r1, vec!["2m".into()]); // IC-9700 explicitly covers 2 m
+        e.set_active_radio(0); // back on the FTDX10
+
+        // Select 2 m → routes to the IC-9700 AND parks it on the requested dial.
+        e.set_frequency(144.200, "2m", "USB");
+        assert_eq!(
+            e.settings.active_radio, r1,
+            "2 m selection switched to the IC-9700"
+        );
+        assert_eq!(e.settings.band, "2m");
+        assert!(
+            (e.settings.dial_mhz - 144.200).abs() < 1e-9,
+            "landed on the 2 m dial"
+        );
+
+        // Select an HF band → swings back to the FTDX10 (catch-all beats the IC-9700's 2 m-only list).
+        e.set_frequency(14.074, "20m", "USB");
+        assert_eq!(
+            e.settings.active_radio, 0,
+            "HF selection switched back to the FTDX10"
+        );
+
+        // Peg-lock: no auto-switch. Selecting 2 m stays on the FTDX10 (out-of-range TX-lock handles it).
+        e.set_radio_pegged(true);
+        e.set_frequency(144.200, "2m", "USB");
+        assert_eq!(
+            e.settings.active_radio, 0,
+            "pegged → band selection never switches radios"
         );
     }
 

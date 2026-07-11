@@ -953,6 +953,34 @@ impl Settings {
         self.radios.iter().find(|p| p.id == self.active_radio)
     }
 
+    /// Which radio should own `band` (Dual-Radio P4 auto band-routing). Returns `Some(id)` only when a
+    /// DIFFERENT enabled radio covers the band *better* than the active one — else `None` (stay put).
+    ///
+    /// Coverage rank: an EXPLICIT band listing (2) beats a catch-all/empty coverage set (1) beats no
+    /// coverage (0). A radio that explicitly lists 2 m therefore wins 2 m even when the active radio is
+    /// an unrestricted "covers everything" rig — this is the operator's mental model ("switch to the
+    /// radio that has 2 m configured"). Ties (both catch-all, or both explicit) keep the active radio
+    /// so a fine-tune inside a shared band never bounces. A band no radio claims stays on the active
+    /// radio (TX-lock/out-of-range handles it as today). Peg-lock is honored by the caller.
+    pub fn radio_for_band(&self, band: &str) -> Option<u32> {
+        let rank = |p: &RadioProfile| -> u8 {
+            if p.bands.is_empty() {
+                1
+            } else if p.bands.iter().any(|b| b.eq_ignore_ascii_case(band)) {
+                2
+            } else {
+                0
+            }
+        };
+        let active_rank = self.active_profile().map(&rank).unwrap_or(0);
+        self.radios
+            .iter()
+            .filter(|p| p.enabled && p.id != self.active_radio)
+            .max_by_key(|p| rank(p))
+            .filter(|p| rank(p) > active_rank)
+            .map(|p| p.id)
+    }
+
     /// Append a new radio profile with a fresh (never-reused) id, a placeholder name, and CAT/rotator
     /// TCP ports guaranteed distinct from every existing radio's (two daemons can't bind one port).
     /// Returns the new profile's id. The operator then configures its CAT by switching to it (the
@@ -1304,6 +1332,84 @@ mod tests {
         assert_eq!(s.rig_mode(), "USB");
         s.dial_mhz = 7.200;
         assert_eq!(s.rig_mode(), "LSB");
+    }
+
+    #[test]
+    fn radio_for_band_routes_to_the_radio_that_covers_the_band() {
+        // Operator setup: FTDX10 (radio 0) + IC-9700 (radio 1, "2m" configured). Auto band-routing (P4)
+        // must hand off 2 m to the IC-9700 and swing back to the FTDX10 for HF.
+        let mut s = Settings::default();
+        s.ensure_radio_profiles(); // radio 0
+        let r1 = s.add_radio_profile(); // radio 1
+        s.radios.iter_mut().find(|p| p.id == r1).unwrap().bands = vec!["2m".into()]; // IC-9700 explicitly covers 2 m
+
+        // FTDX10 (radio 0) with EMPTY coverage (= "covers all") is still beaten by the IC-9700's
+        // EXPLICIT 2 m claim — an explicit listing outranks a catch-all (the operator's mental model).
+        s.active_radio = 0;
+        assert_eq!(
+            s.radio_for_band("2m"),
+            Some(r1),
+            "2 m routes to the IC-9700"
+        );
+        assert_eq!(
+            s.radio_for_band("2M"),
+            Some(r1),
+            "band match is case-insensitive"
+        );
+        assert_eq!(
+            s.radio_for_band("20m"),
+            None,
+            "the FTDX10 (catch-all) keeps HF — no needless switch"
+        );
+
+        // From the IC-9700, an HF band swings BACK to the FTDX10 (its explicit 2 m list does not cover
+        // 20 m → rank 0; the FTDX10's catch-all rank 1 wins).
+        s.active_radio = r1;
+        assert_eq!(
+            s.radio_for_band("20m"),
+            Some(0),
+            "HF swings back to the FTDX10"
+        );
+        assert_eq!(
+            s.radio_for_band("2m"),
+            None,
+            "already on the 2 m radio — stay"
+        );
+
+        // With the FTDX10 given an EXPLICIT HF list, a band NEITHER radio claims stays put.
+        s.radios.iter_mut().find(|p| p.id == 0).unwrap().bands = vec!["20m".into(), "40m".into()];
+        s.active_radio = 0;
+        assert_eq!(
+            s.radio_for_band("2m"),
+            Some(r1),
+            "explicit 2 m still routes to the IC-9700"
+        );
+        assert_eq!(
+            s.radio_for_band("40m"),
+            None,
+            "FTDX10 explicitly covers 40 m — stay"
+        );
+        assert_eq!(
+            s.radio_for_band("6m"),
+            None,
+            "no radio covers 6 m — stay on active"
+        );
+
+        // A disabled radio is never a routing target (rig temporarily unplugged).
+        s.radios.iter_mut().find(|p| p.id == r1).unwrap().enabled = false;
+        assert_eq!(
+            s.radio_for_band("2m"),
+            None,
+            "disabled IC-9700 is not routed to"
+        );
+    }
+
+    #[test]
+    fn radio_for_band_never_switches_with_a_single_radio() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles(); // exactly one radio
+        assert_eq!(s.radio_for_band("2m"), None);
+        assert_eq!(s.radio_for_band("20m"), None);
     }
 
     #[test]
