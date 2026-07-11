@@ -452,7 +452,7 @@ export function CwCockpit({
           type="button"
           className={`cw-tune${snap.radio.tuning ? ' keyed' : ''}`}
           aria-pressed={snap.radio.tuning}
-          onClick={() => void setTune(!snap.radio.tuning)}
+          onClick={() => void setTune(!snap.radio.tuning).then((s) => onSnap?.(s))}
           disabled={!snap.radio.txAllowed}
           title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
         >

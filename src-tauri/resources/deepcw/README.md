@@ -1,4 +1,4 @@
-# DeepCW model (AI CW decoder, beta)
+# DeepCW model (the AI CW decoder)
 
 `model.onnx` + `model.onnx.json` come from https://github.com/e04/deepcw-engine
 (**AGPL-3.0-only**, © e04) and are deliberately **not committed** to this repo.

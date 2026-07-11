@@ -3289,6 +3289,11 @@ impl Engine {
         // unchecks Enable Tx). Drop any tune carrier and queued audio too.
         self.tx_enabled = false;
         self.tuning = false;
+        // Drop any LATCHED key intent too (manual PTT-lock / a broker client holding
+        // T 1): Stop TX and a radio switch must release PTT, not merely mask it until
+        // TX re-enables — else re-arming TX re-keys the radio with nobody holding it.
+        self.manual_ptt = false;
+        self.broker_ptt = false;
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;

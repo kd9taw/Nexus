@@ -352,25 +352,39 @@ impl Rig {
 
     /// Key (true) or unkey (false) the transmitter. No-op under VOX (and under CAT
     /// keying when no control channel is configured — degrades to VOX).
+    ///
+    /// FAIL-SAFE `keyed` semantics (the stuck-TX-light root cause): a key-down ATTEMPT
+    /// marks the rig keyed immediately (even if the command then fails, the radio may
+    /// have keyed), but an unkey clears the flag ONLY when the command succeeded. A
+    /// failed unkey therefore leaves `keyed == true`, so every unkey-first teardown
+    /// gate keeps firing and the idle self-heal in the radio loop retries until the
+    /// radio actually releases — one transient CAT failure can no longer latch PTT
+    /// until the radio is rebooted.
     pub fn ptt(&mut self, on: bool) -> std::io::Result<()> {
-        self.keyed = on;
-        match &self.ptt_mode {
+        if on {
+            self.keyed = true;
+        }
+        let result = match &self.ptt_mode {
             PttMode::Vox => Ok(()),
             PttMode::Serial { .. } => self.serial_ptt(on),
             PttMode::Cat => {
                 if self.control.is_none() {
-                    return Ok(()); // CAT keying chosen but no CAT channel → VOX fallback
-                }
-                let reply = self.command(&ptt_line(on))?;
-                if reply_ok(&reply) || reply.is_empty() {
-                    Ok(())
+                    Ok(()) // CAT keying chosen but no CAT channel → VOX fallback
                 } else {
-                    Err(std::io::Error::other(format!(
-                        "rigctld PTT error: {reply:?}"
-                    )))
+                    match self.command(&ptt_line(on)) {
+                        Ok(reply) if reply_ok(&reply) || reply.is_empty() => Ok(()),
+                        Ok(reply) => Err(std::io::Error::other(format!(
+                            "rigctld PTT error: {reply:?}"
+                        ))),
+                        Err(e) => Err(e),
+                    }
                 }
             }
+        };
+        if !on && result.is_ok() {
+            self.keyed = false;
         }
+        result
     }
 
     /// Assert/deassert the configured serial PTT line.

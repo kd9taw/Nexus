@@ -182,7 +182,15 @@ If the rig has a split TX frequency set (`splitTxMhz` in the radio snapshot), a 
 
 - **No ESM auto-sequencer:** CW is manual-only. The FT8 seven-state sequencer is explicitly excluded from CW.
 - **No paddle/iambic input through the app:** the only input paths are F-key macros and typed text. For live paddle feel, connect paddles to the rig or to the WinKeyer directly.
-- **Single-signal decoder, not a skimmer:** the live decoder follows one station at your marker pitch; it does not decode the whole passband at once.
+- **AI decoder (the default):** CW copy is powered by a neural-network decoder (the
+  DeepCW model by e04, AGPL-3.0 — see NOTICE) reading the whole 400–1200 Hz window:
+  dramatically better weak-signal copy than pitch-tracking decoders, updating every few
+  seconds as a flowing transcript. The **Clear** button wipes it; the AI toggle in the
+  DECODE header falls back to the classic pitch decoder (also used automatically if the
+  model file is missing). Fused prosigns (<AR>, <BT>) aren't in the model's alphabet and
+  can appear as letter fragments.
+- **Not a full-band skimmer:** the decode follows the audio passband, not every signal on
+  the band at once; the WPM readout is estimated by the classic decoder underneath.
 - **Macros not user-editable:** the 8 slots and their text are compiled in; no UI for custom macro text in this version.
 - **No contest exchange:** RST is hardcoded to 599, no serial-number field exists. This cockpit is casual/ragchew only.
 - **CAT abort reliability:** `\stop_morse` varies by Hamlib version and rig manufacturer; older builds and some rigs may not halt mid-element.

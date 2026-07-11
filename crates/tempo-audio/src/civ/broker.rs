@@ -51,11 +51,16 @@ impl CivBackend {
 
 impl RigBackend for CivBackend {
     fn freq_hz(&self) -> u64 {
-        self.read(commands::read_freq(self.addr), 0x03, None)
-            .ok()
-            .and_then(|f| commands::parse_freq(&f))
-            .or(self.h.state().freq_hz) // radio busy → last transceive/reply
-            .unwrap_or(0)
+        match self.read(commands::read_freq(self.addr), 0x03, None) {
+            Ok(f) => commands::parse_freq(&f)
+                .or(self.h.state().freq_hz)
+                .unwrap_or(0),
+            // Radio busy (a timeout can be one crowded moment): the last transceive/
+            // reply is honest recent truth. A DEAD engine gets no such grace — serving
+            // the frozen cache would paint a zombie green with a frozen dial.
+            Err(CivError::Timeout) => self.h.state().freq_hz.unwrap_or(0),
+            Err(_) => 0,
+        }
     }
 
     fn mode(&self) -> (String, u32) {
@@ -229,6 +234,8 @@ impl RigBackend for CivBackend {
 /// The running native daemon: the CI-V serial engine + a stoppable rigctld TCP server.
 pub struct CivDaemon {
     engine: CivEngine,
+    /// The radio's CI-V address — kept for the Drop-time safety key-up.
+    civ_addr: u8,
     tcp_stop: Arc<AtomicBool>,
     tcp_thread: Option<JoinHandle<()>>,
 }
@@ -257,10 +264,15 @@ impl CivDaemon {
                                 let b = Arc::clone(&backend);
                                 std::thread::spawn(move || serve_connection(stream, b));
                             }
+                            // Transient accept errors (an aborted pending connection —
+                            // WSAECONNRESET on Windows) must NOT kill the listener: a
+                            // healthy daemon would turn permanently connection-refused.
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                 std::thread::sleep(Duration::from_millis(50));
                             }
-                            Err(_) => break,
+                            Err(_) => {
+                                std::thread::sleep(Duration::from_millis(50));
+                            }
                         }
                     }
                 })
@@ -268,6 +280,7 @@ impl CivDaemon {
         };
         Ok(CivDaemon {
             engine,
+            civ_addr,
             tcp_stop,
             tcp_thread: Some(tcp_thread),
         })
@@ -308,10 +321,30 @@ impl CivDaemon {
     pub fn set_scope_enabled(&self, on: bool) {
         self.engine.set_scope_enabled(on);
     }
+
+    /// Flip the rig's DATA mode (`1A 06`) — the TUNE path uses this so a plain-USB Icom
+    /// modulates the tune tone from the USB codec (data OFF = mic source = zero RF).
+    /// Best-effort single transact; NAKs (rig already there) are fine.
+    pub fn set_data_mode(&self, on: bool) {
+        let _ = self.engine.handle().transact(
+            commands::set_data_mode(self.civ_addr, on, None),
+            Expect::Ack,
+        );
+    }
 }
 
 impl Drop for CivDaemon {
     fn drop(&mut self) {
+        // TX SAFETY: a radio keyed via CI-V stays keyed when the port merely closes —
+        // send a best-effort key-up FIRST, while the serial engine is still alive.
+        // Idempotent (an already-RX radio just acks); one choke point covers every
+        // native teardown path: rig rebuilds, monitor recycles, handoff drops, app exit.
+        if self.engine.is_alive() {
+            let _ = self
+                .engine
+                .handle()
+                .transact(commands::set_ptt(self.civ_addr, false), Expect::Ack);
+        }
         self.tcp_stop.store(true, Ordering::Relaxed);
         if let Some(t) = self.tcp_thread.take() {
             let _ = t.join();

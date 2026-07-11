@@ -80,12 +80,18 @@ impl CivRequest {
 pub struct CivHandle {
     tx: mpsc::Sender<CivRequest>,
     state: Arc<Mutex<CivState>>,
+    alive: Arc<AtomicBool>,
 }
 
 impl CivHandle {
     /// Send one CI-V command and wait for its reply/ack. Serialized with every other
     /// caller — the engine owns the half-duplex bus.
     pub fn transact(&self, frame: Frame, expect: Expect) -> Result<Frame, CivError> {
+        // Fail in microseconds when the engine thread is dead — a wedged daemon must
+        // never serialize callers behind full recv timeouts (the UI-hang convoy).
+        if !self.alive.load(Ordering::Relaxed) {
+            return Err(CivError::Gone);
+        }
         let (rtx, rrx) = mpsc::sync_channel(1);
         self.tx
             .send(CivRequest {
@@ -148,7 +154,11 @@ impl CivEngine {
                 .expect("spawn civ-engine")
         };
         CivEngine {
-            handle: CivHandle { tx, state },
+            handle: CivHandle {
+                tx,
+                state,
+                alive: alive.clone(),
+            },
             scope_row,
             scope_enabled,
             stop,
@@ -185,6 +195,31 @@ impl Drop for CivEngine {
             let _ = t.join();
         }
     }
+}
+
+/// One frame write with bounded retries for transient stalls.
+enum WriteOutcome {
+    Ok,
+    /// Timed out repeatedly — the request fails, the engine lives.
+    Transient,
+    /// Hard I/O error — the port is gone.
+    Fatal,
+}
+
+fn write_frame(io: &mut Box<dyn CivIo>, frame: &Frame) -> WriteOutcome {
+    let bytes = frame.to_bytes();
+    for _ in 0..3 {
+        match io.write_all(&bytes).and_then(|_| io.flush()) {
+            Ok(()) => return WriteOutcome::Ok,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) => {} // retry
+            Err(_) => return WriteOutcome::Fatal,
+        }
+    }
+    WriteOutcome::Transient
 }
 
 /// True when `f` resolves a request expecting `expect`. `FA` rejects both kinds.
@@ -247,11 +282,21 @@ fn engine_loop(
             });
             match next {
                 Ok(req) => {
-                    if io.write_all(&req.frame.to_bytes()).is_err() || io.flush().is_err() {
-                        req.resolve(Err(CivError::Gone));
-                        break; // port gone
+                    // A transient write stall (USB hiccup) fails THIS REQUEST, never the
+                    // engine — killing the engine over one stall would take down all
+                    // native CAT including the ability to unkey a keyed radio.
+                    match write_frame(&mut io, &req.frame) {
+                        WriteOutcome::Ok => {
+                            pending = Some((req, Instant::now() + REQUEST_DEADLINE));
+                        }
+                        WriteOutcome::Transient => {
+                            req.resolve(Err(CivError::Timeout));
+                        }
+                        WriteOutcome::Fatal => {
+                            req.resolve(Err(CivError::Gone));
+                            break; // port gone for real
+                        }
                     }
-                    pending = Some((req, Instant::now() + REQUEST_DEADLINE));
                 }
                 Err(true) => break, // all handles dropped
                 Err(false) => {}

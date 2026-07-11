@@ -384,6 +384,9 @@ struct MonitorConn {
     last_poll: f64,
     ticks: u32,
     smeter_supported: Option<bool>,
+    /// Consecutive failed freq reads — the pill only goes red after ≥3 (mirrors the
+    /// active loop's FREQ_MISS_LIMIT; a single slow poll must not flash the pill).
+    freq_misses: u32,
 }
 
 impl Transport {
@@ -441,7 +444,10 @@ fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
                 return (Rig::vox(), None, Some(false));
             }
             let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
-            rig.set_slow_transport(network);
+            // Native-daemon transports are LOCAL TCP but their serve path can take up to
+            // ~1.3 s (engine queue) — the client deadline must outlast it or every busy
+            // moment reads as CAT-dead (the flapping pill).
+            rig.set_slow_transport(network || native_civ_addr(t).is_some());
             let (ok, _d) = probe_cat(&mut rig, t.rigctld_port);
             (rig, Some(proc), ok)
         }
@@ -486,30 +492,38 @@ fn monitor_loop(engine: Arc<Mutex<Engine>>, pool: MonitorPool) {
 /// held (spawning rigctld is slow) so a concurrent handoff never waits on a daemon launch.
 fn reconcile_pool(pool: &MonitorPool, want: &[(u32, Transport)], engine: &Arc<Mutex<Engine>>) {
     let (to_open, to_close): (Vec<(u32, Transport)>, Vec<u32>) = {
-        let p = pool.lock().unwrap_or_else(|e| e.into_inner());
+        let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
         let mut to_open = Vec::new();
         for (id, t) in want {
-            match p.iter().find(|c| c.id == *id) {
-                // Keep only a CAT-identical AND LIVE conn. A conn parked as `Rig::vox()` (rigctld
-                // couldn't bind / CAT probe failed — often a transient same-port bind race at the
-                // switch moment) has no control channel; recycle it so it self-heals instead of
-                // polling dead forever (and so a later switch-to never adopts a dead conn).
-                Some(c) if !c.transport.rig_differs(t) && c.rig.has_control() => {} // keep
-                _ => to_open.push((*id, t.clone())), // new / CAT changed / DEAD → (re)open
+            // Keep only a CAT-identical AND LIVE conn — live Rig control channel AND a live
+            // daemon. A conn parked as `Rig::vox()` (rigctld couldn't bind / CAT probe failed)
+            // has no control channel; a dead DAEMON behind a cached TCP answer is a zombie.
+            // Either way: recycle so it self-heals (and a switch-to never adopts a dead conn).
+            let keep = p.iter_mut().find(|c| c.id == *id).is_some_and(|c| {
+                !c.transport.rig_differs(t)
+                    && c.rig.has_control()
+                    && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
+            });
+            if !keep {
+                to_open.push((*id, t.clone())); // new / CAT changed / DEAD → (re)open
             }
         }
-        let to_close: Vec<u32> = p
-            .iter()
-            .map(|c| c.id)
-            .filter(|id| {
-                match want.iter().find(|(wid, _)| wid == id) {
-                    None => true, // no longer wanted
-                    Some((_, t)) => p.iter().find(|c| c.id == *id).is_some_and(|c| {
-                        c.transport.rig_differs(t) || !c.rig.has_control() // CAT changed OR dead
-                    }),
+        let mut to_close: Vec<u32> = Vec::new();
+        for c in p.iter_mut() {
+            let keep = match want.iter().find(|(wid, _)| *wid == c.id) {
+                None => false, // no longer wanted
+                Some((_, t)) => {
+                    !c.transport.rig_differs(t)
+                        && c.rig.has_control()
+                        // A dead DAEMON behind a live TCP cache is a zombie: the pill
+                        // would show a frozen dial forever. Recycle it.
+                        && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
                 }
-            })
-            .collect();
+            };
+            if !keep {
+                to_close.push(c.id);
+            }
+        }
         (to_open, to_close)
     };
     if !to_close.is_empty() {
@@ -537,6 +551,7 @@ fn reconcile_pool(pool: &MonitorPool, want: &[(u32, Transport)], engine: &Arc<Mu
                 last_poll: 0.0,
                 ticks: 0,
                 smeter_supported: None,
+                freq_misses: 0,
             });
         }
     }
@@ -567,6 +582,7 @@ fn poll_monitors(pool: &MonitorPool, active: u32, engine: &Arc<Mutex<Engine>>) {
         conn.ticks = conn.ticks.wrapping_add(1);
         match conn.rig.read_freq() {
             Ok(hz) => {
+                conn.freq_misses = 0;
                 if let Ok(mut e) = engine.lock() {
                     e.observe_radio_freq(conn.id, hz);
                     e.observe_radio_cat(conn.id, Some(true));
@@ -594,8 +610,13 @@ fn poll_monitors(pool: &MonitorPool, active: u32, engine: &Arc<Mutex<Engine>>) {
                 }
             }
             Err(_) => {
-                if let Ok(mut e) = engine.lock() {
-                    e.observe_radio_cat(conn.id, Some(false));
+                // Debounced: one slow/failed poll is routine on a busy CI-V link; only a
+                // STREAK means the radio is really unreachable (the flashing-pill fix).
+                conn.freq_misses = conn.freq_misses.saturating_add(1);
+                if conn.freq_misses >= 3 {
+                    if let Ok(mut e) = engine.lock() {
+                        e.observe_radio_cat(conn.id, Some(false));
+                    }
                 }
             }
         }
@@ -628,20 +649,31 @@ fn handoff_if_switched(
     // carrier that nothing ever drops). `set_active_radio` cleared the ENGINE's TX intent (halt_tx);
     // this drops the PHYSICAL PTT, which only the loop thread can command. Mirrors step()'s
     // unkey-before-teardown guard.
-    if rig.keyed || state.tx_until_ms.is_some() || state.tuning_keyed || state.manual_ptt_applied {
+    // UNCONDITIONAL (root-cause fix): the client-side flags can desync from the radio
+    // (a failed unkey used to clear them), and a keyed radio demoted into the read-only
+    // pool is unrecoverable there. One idempotent key-up per switch is cheap insurance.
+    {
         let _ = rig.ptt(false);
         let _ = rig.stop_morse();
         state.tx_until_ms = None;
         state.tuning_keyed = false;
         state.manual_ptt_applied = false;
+        state.tune_started_ms = None; // a stale tune clock would auto-cancel the NEXT tune
     }
     let mut p = match pool.try_lock() {
         Ok(p) => p,
         // FIX #4: recover a poisoned pool (like poll/reconcile do) — else every future switch would be
         // silently lost. WouldBlock = monitor mid-poll → retry next tick (never stall the audio loop).
         Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
-        Err(std::sync::TryLockError::WouldBlock) => return,
+        Err(std::sync::TryLockError::WouldBlock) => {
+            // Monitor mid-poll: retry next tick — and tell step() to SKIP its rig_differs
+            // rebuild until the handoff has had its chance, else it tears down/reopens the
+            // new radio while its monitor conn still owns the serial port (a bind race).
+            state.handoff_deferred = true;
+            return;
+        }
     };
+    state.handoff_deferred = false;
     // The monitor's `from_profile` conn transport zeroes the broker port; compare CAT fields against a
     // broker-stripped `want` so the broker being on doesn't spuriously fail the match (FIX #3: adopt
     // ONLY a conn whose CAT config matches what we now want — a stale conn is dropped + reopened).
@@ -664,6 +696,11 @@ fn handoff_if_switched(
         // radio's REAL PTT mode so it can key (else `ptt()` no-ops → "TX dead after switching to the
         // FTDX10"). The demoted radio goes back to Vox — a monitor must never key.
         rig.set_ptt_mode(ptt_mode_for(&want_active));
+        // Unkey-on-adopt: the radio may be PHYSICALLY keyed from a previous wedge (the
+        // fresh Rig starts keyed=false and would never know). Now that this rig has
+        // control + a real PTT mode, one idempotent key-up puts the newly active radio
+        // in a known-unkeyed state — Session 2's "light stays lit after switching".
+        let _ = rig.ptt(false);
         old_rig.set_ptt_mode(PttMode::Vox);
         let old_proc = state.rigctld_proc.take();
         // The demoted radio becomes a monitor: stop its scope stream (the waveform would
@@ -697,6 +734,7 @@ fn handoff_if_switched(
             last_poll: 0.0,
             ticks: 0,
             smeter_supported: None,
+            freq_misses: 0,
         });
         *last_active = active;
     } else {
@@ -753,6 +791,9 @@ struct RadioLoop {
     tune_phase: f32,
     tune_started_ms: Option<f64>,
     applied: Transport,
+    /// Set when a handoff bailed on the pool lock: step() skips ONE rig_differs rebuild
+    /// tick so the handoff (not a fresh spawn racing the monitor's port) wins.
+    handoff_deferred: bool,
     rigctld_proc: Option<CatDaemon>,
     last_dial: u64,
     last_mode: String,
@@ -916,6 +957,7 @@ impl RadioLoop {
             last_freq_poll: now_unix_ms(),
             freq_misses: 0,
             cat_ok: None,
+            handoff_deferred: false,
             smeter_supported: None,
             smeter_misses: 0,
             rig_poll_ticks: 0,
@@ -1070,22 +1112,27 @@ impl RadioLoop {
                     fm,
                 )
             };
-            if want.rig_differs(&self.applied) {
+            if self.handoff_deferred {
+                // A radio switch is mid-flight but the handoff couldn't take the pool
+                // lock this tick — do NOT rebuild toward the new transport here, or we
+                // spawn a fresh daemon racing the monitor conn that still owns the port.
+                // The handoff retries next tick and clears this flag.
+            } else if want.rig_differs(&self.applied) {
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down. Dropping rigctld_proc and swapping *rig first would strand
                 // a keyed transmitter (or a tune carrier): the un-key command
                 // would go to a dead daemon. Order matters — flush, unkey, clear
                 // TX state, THEN drop the daemon.
-                if rig.keyed
-                    || self.tx_until_ms.is_some()
-                    || self.tuning_keyed
-                    || self.manual_ptt_applied
                 {
+                    // UNCONDITIONAL: the flags can desync from a keyed radio (failed
+                    // unkey); this teardown is the last chance to key-up through a
+                    // LIVE channel before the daemon dies. Idempotent when idle.
                     backend.flush_output();
                     let _ = rig.ptt(false);
                     self.tx_until_ms = None;
                     self.tuning_keyed = false;
                     self.manual_ptt_applied = false;
+                    self.tune_started_ms = None;
                     if let Ok(mut eng) = engine.lock() {
                         eng.halt_tx();
                     }
@@ -1133,16 +1180,14 @@ impl RadioLoop {
                 // modem samples are already gone — and the sequencer would count
                 // that silent over as sent and wait for a reply that never comes.
                 // Mirrors the rig-rebuild path above.
-                if rig.keyed
-                    || self.tx_until_ms.is_some()
-                    || self.tuning_keyed
-                    || self.manual_ptt_applied
                 {
+                    // UNCONDITIONAL — same desync rationale as the rig-rebuild guard.
                     backend.flush_output();
                     let _ = rig.ptt(false);
                     self.tx_until_ms = None;
                     self.tuning_keyed = false;
                     self.manual_ptt_applied = false;
+                    self.tune_started_ms = None;
                     if let Ok(mut eng) = engine.lock() {
                         eng.halt_tx();
                     }
@@ -2083,7 +2128,18 @@ impl RadioLoop {
             }
         }
         if is_tuning {
-            if !self.tuning_keyed {
+            let keying = !self.tuning_keyed;
+            // Drop the ENGINE lock before the CAT+audio work: a slow/wedged daemon must
+            // freeze this tick, not every UI command sharing the mutex (the hang convoy).
+            drop(eng);
+            if keying {
+                // Icom-native only: a plain-USB/LSB Icom takes TX audio from the MIC, so
+                // a keyed tune tone via the USB codec radiates ZERO RF ("red light, no
+                // signal"). Flip DATA mode on for the tune; restored on release below.
+                // Yaesu/hamlib paths untouched.
+                if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
+                    d.set_data_mode(true);
+                }
                 let _ = rig.ptt(true);
                 self.tuning_keyed = true;
                 self.tune_started_ms = Some(now);
@@ -2093,11 +2149,15 @@ impl RadioLoop {
             let chunk = tune_carrier(TUNE_FREQ_HZ, n, ft1::SAMPLE_RATE, &mut self.tune_phase);
             backend.play(&chunk);
             self.rx.clear(); // don't decode our own carrier
-            drop(eng);
             return Ok(());
         } else if self.tuning_keyed {
-            // Tuning just released: drop PTT and re-anchor to the slot grid.
+            // Tuning just released: drop PTT and re-anchor to the slot grid. The keyed
+            // flag only clears on a SUCCESSFUL unkey (fail-safe Rig::ptt), so a miss
+            // here is retried by the idle self-heal below.
             let _ = rig.ptt(false);
+            if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
+                d.set_data_mode(false); // restore the operator's non-data mode
+            }
             self.tuning_keyed = false;
             self.tune_started_ms = None;
             self.last_slot = None;
@@ -2112,6 +2172,16 @@ impl RadioLoop {
             let _ = rig.ptt(false);
             backend.flush_output();
             self.tx_until_ms = None;
+        }
+
+        // IDLE SELF-HEAL (TX safety): the loop believes the radio should be receiving,
+        // but the fail-safe keyed flag says a previous unkey never succeeded (wedged
+        // CI-V, rigctld hiccup). Retry key-up every tick until the radio acknowledges —
+        // this is what turns "stuck TX light until the radio reboots" into a self-
+        // recovering blip. One idempotent CAT call per tick, only while desynced.
+        if rig.keyed && self.tx_until_ms.is_none() && !self.tuning_keyed && !self.manual_ptt_applied
+        {
+            let _ = rig.ptt(false);
         }
 
         // Inbound WSJT-X control (HaltTx / FreeText / Reply) from a logger / JTAlert.
@@ -3096,7 +3166,7 @@ fn open_cat(
             // Give the daemon a moment to bind its TCP port before connecting.
             std::thread::sleep(Duration::from_millis(700));
             let mut rig = Rig::with_control(Some(addr), ptt_mode);
-            rig.set_slow_transport(network); // network chains get the long command deadline
+            rig.set_slow_transport(network || native_civ_addr(t).is_some()); // network chains + the native daemon get the long deadline
             let _ = rig.set_freq(dial_hz);
             let _ = rig.set_mode(mode, passband_for(mode));
             let (ok, detail) = probe_cat(&mut rig, t.rigctld_port);
@@ -3446,6 +3516,7 @@ mod tests {
             last_poll: 0.0,
             ticks: 0,
             smeter_supported: None,
+            freq_misses: 0,
         }]));
         let mut last_active = 0u32;
         engine.lock().unwrap().set_active_radio(r1); // operator switches to radio 1
@@ -3547,6 +3618,7 @@ mod tests {
             last_poll: 0.0,
             ticks: 0,
             smeter_supported: None,
+            freq_misses: 0,
         }]));
         let mut last_active = 0u32;
         handoff_if_switched(&engine, &pool, &mut rig, &mut state, &mut last_active);
@@ -3597,6 +3669,7 @@ mod tests {
             last_poll: 0.0,
             ticks: 0,
             smeter_supported: None,
+            freq_misses: 0,
         }]));
         let mut last_active = 0u32;
         engine.lock().unwrap().set_active_radio(r1);
@@ -3655,6 +3728,7 @@ mod tests {
             last_poll: 0.0,
             ticks: 0,
             smeter_supported: None,
+            freq_misses: 0,
         }]));
         let mut last_active = 0u32;
         engine.lock().unwrap().set_active_radio(r1);

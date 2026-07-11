@@ -261,11 +261,15 @@ component whose exact license is not stated above, consult the upstream
 project's own license files (for Hamlib, those ship under
 `resources/hamlib/`).
 
-## DeepCW model (AI CW decoder, optional)
-The AI CW decoder feature uses the DeepCW neural-network model by e04
-(https://github.com/e04/deepcw-engine), licensed AGPL-3.0-only. The model ships
-as an optional app resource (resources/deepcw/); its source form (the ONNX
-weights + metadata) is available from the upstream repository, and Nexus's
-modification (constant-folding the graph at the fixed 15 s decode window) is
-documented in src-tauri/resources/deepcw/README.md. Per GPLv3 §13/AGPLv3 §13
-the combination is conveyed under both licenses' terms.
+## DeepCW model (the AI CW decoder)
+Nexus's PRIMARY CW decoder is powered by the DeepCW neural-network model,
+created by **e04** (https://github.com/e04/deepcw-engine), licensed
+**AGPL-3.0-only** — our thanks for an outstanding piece of weak-signal
+engineering. The model ships as an app resource (resources/deepcw/); its
+source form (the ONNX weights + metadata) is available from the upstream
+repository, and Nexus's modification (constant-folding the graph at the fixed
+15 s decode window) is documented in src-tauri/resources/deepcw/README.md.
+Per GPLv3 §13/AGPLv3 §13 the combination is conveyed under both licenses'
+terms; the classic decoder remains as the automatic fallback if the model is
+absent. The inference and stitching code around the model is original Nexus
+code (GPL-3.0).

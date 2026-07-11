@@ -21,7 +21,7 @@
 ---
 
 **Nexus** is a free, GPLv3, all-mode amateur radio operations center for the desktop. It puts a
-WSJT-X-parity **FT8/FT4** cockpit, a **CW** keying station, an **SSB phone** cockpit with a voice
+WSJT-X-parity **FT8/FT4** cockpit, a **CW** keying station with an **AI decoder** (DeepCW model by e04), an **SSB phone** cockpit with a voice
 keyer, a live **propagation map**, an evidence-backed **"work this now"** board, a **POTA/SOTA
 hunter**, a club-ready **Field Day** mode, and a **DXCC-first logbook** with LoTW / QRZ / ClubLog /
 eQSL connectors — in one window, on one rig, with one log.
