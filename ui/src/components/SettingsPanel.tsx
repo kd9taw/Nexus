@@ -451,11 +451,11 @@ export function SettingsPanel({
     { key: 'F8', label: '?', text: '? ' },
   ]
   const setCwMacros = (cw: { key: string; label: string; text: string }[] | undefined) => {
-    setDirty(true)
+    markDirty()
     setForm((prev) => (prev ? { ...prev, macros: { ...prev.macros, cw } } : prev))
   }
   const updateCwMacro = (i: number, field: 'label' | 'text', value: string) => {
-    setDirty(true)
+    markDirty()
     setForm((prev) => {
       if (!prev?.macros.cw) return prev
       const cw = prev.macros.cw.map((m, mi) => (mi === i ? { ...m, [field]: value } : m))
