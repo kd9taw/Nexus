@@ -57,6 +57,7 @@ import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
 import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
+import { Waterfall } from './components/Waterfall'
 import { StationList } from './components/StationList'
 import { visibleNeeds, modeClassOf, workTarget } from './features/needs'
 import { readEnabledModes } from './useFeatures'
@@ -239,6 +240,27 @@ export function DetachedPanel({ panel }: { panel: string }) {
             onWorkSpot({ call: s.call, band: s.band, mode: s.mode, freqMhz: s.freqMhz })
           }
         />
+      </div>
+    )
+  }
+
+  if (panel === 'waterfall') {
+    // The FT8/digital waterfall, torn off — it self-fetches its spectrum; clicks tune
+    // the shared engine's RX/TX offsets exactly like the in-cockpit strip.
+    return (
+      <div className="detached detached-waterfall">
+        <Waterfall
+          transmitting={snap?.radio.transmitting ?? false}
+          rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
+          txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
+          theme={theme}
+          onTune={(hz, target) => {
+            if (target === 'rx' || target === 'both') void setRxOffset(hz)
+            if (target === 'tx' || target === 'both') void setTxOffset(hz)
+          }}
+          active
+        />
+        <Toasts />
       </div>
     )
   }

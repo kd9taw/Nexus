@@ -1718,6 +1718,8 @@ export interface Settings {
     chat: string[]
     qso: string[]
     band: string[]
+    /** CW cockpit F-key macros; empty = the built-in defaults. */
+    cw?: { key: string; label: string; text: string }[]
   }
   // --- dual-radio ---
   /** Configured radios (dual-radio). Migrated to a single profile for a one-radio station; the flat

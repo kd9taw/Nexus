@@ -158,9 +158,10 @@ pub struct Settings {
     pub winkeyer_port: String,
     /// CW sidetone / keyed-tone pitch in Hz (soundcard keyer + UI marker). Default 600.
     pub cw_pitch_hz: f32,
-    /// AI CW decoder (DeepCW model, beta): a second, neural-net copy of the CW audio in
-    /// the cockpit next to the classic decoder. Off by default; needs the bundled model.
-    #[serde(default)]
+    /// AI CW decoder (DeepCW model): the PRIMARY CW decode — dramatically better
+    /// low-SNR copy than the classic Goertzel decoder (which still supplies the WPM
+    /// estimate underneath). On by default; the model ships with the app.
+    #[serde(default = "default_true")]
     pub ai_cw_enabled: bool,
     /// Local TCP port Tempo uses for rigctld (it spawns rigctld on this port).
     pub rigctld_port: u16,
@@ -666,6 +667,21 @@ pub struct Macros {
     pub chat: Vec<String>,
     pub qso: Vec<String>,
     pub band: Vec<String>,
+    /// CW cockpit F-key macros (experienced hams customize these, N1MM-style). Each
+    /// entry: F-key name + button label + template text ({MYCALL}/{RST}/{NAME}/! =
+    /// worked call, expanded by the engine). EMPTY = the cockpit's built-in defaults,
+    /// so upgrades keep improving the defaults for anyone who hasn't customized.
+    #[serde(default)]
+    pub cw: Vec<CwMacroDef>,
+}
+
+/// One customizable CW F-key macro.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CwMacroDef {
+    pub key: String,
+    pub label: String,
+    pub text: String,
 }
 
 impl Default for Macros {
@@ -678,6 +694,7 @@ impl Default for Macros {
             // Call-CQ button (a "CQ CQ" free-text chip went out as a chunked, gridless
             // "DE <CALL> A12CQ CQ", never a real CQ).
             band: v(&["QRZ?", "Net check-in", "73 to all"]),
+            cw: Vec::new(),
         }
     }
 }
@@ -728,6 +745,11 @@ pub struct RadioProfile {
     pub last_sideband: String,
     // --- native panadapter: "auto" | "none" | "flex" | "civ" ---
     pub native_scope: String,
+}
+
+/// serde default helper: booleans that default ON for absent fields in older settings.
+fn default_true() -> bool {
+    true
 }
 
 impl Default for RadioProfile {
@@ -833,7 +855,7 @@ impl Default for Settings {
             cw_keyer: CwKeyerBackend::Cat, // rig keyer via send_morse (zero hardware)
             winkeyer_port: String::new(),
             cw_pitch_hz: 600.0,
-            ai_cw_enabled: false,
+            ai_cw_enabled: true,
             rigctld_port: 4532,
             rotator_model: 0,
             rotator_port: String::new(),

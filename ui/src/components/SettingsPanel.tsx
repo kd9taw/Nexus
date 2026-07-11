@@ -424,6 +424,31 @@ export function SettingsPanel({
   }
 
   // Macros are edited as comma-separated text per context; commit on change.
+  // CW F-key macro editor. Empty/unset = the cockpit's built-in defaults; "Customize"
+  // seeds the editor from them so the operator tweaks rather than starts blank.
+  const CW_MACRO_DEFAULTS: { key: string; label: string; text: string }[] = [
+    { key: 'F1', label: 'CQ', text: 'CQ CQ DE {MYCALL} {MYCALL} K' },
+    { key: 'F2', label: 'Call', text: '! DE {MYCALL} {MYCALL} K' },
+    { key: 'F3', label: 'Reply', text: '! DE {MYCALL} UR {RST} {RST} NAME {NAME} {NAME} HW? KN' },
+    { key: 'F4', label: '73', text: '! DE {MYCALL} TU 73 SK' },
+    { key: 'F5', label: 'My Call', text: '{MYCALL}' },
+    { key: 'F6', label: 'His Call', text: '! ' },
+    { key: 'F7', label: 'AGN', text: 'AGN AGN' },
+    { key: 'F8', label: '?', text: '? ' },
+  ]
+  const setCwMacros = (cw: { key: string; label: string; text: string }[] | undefined) => {
+    setDirty(true)
+    setForm((prev) => (prev ? { ...prev, macros: { ...prev.macros, cw } } : prev))
+  }
+  const updateCwMacro = (i: number, field: 'label' | 'text', value: string) => {
+    setDirty(true)
+    setForm((prev) => {
+      if (!prev?.macros.cw) return prev
+      const cw = prev.macros.cw.map((m, mi) => (mi === i ? { ...m, [field]: value } : m))
+      return { ...prev, macros: { ...prev.macros, cw } }
+    })
+  }
+
   const updateMacros = (ctx: keyof Settings['macros'], raw: string) => {
     markDirty()
     const list = raw
@@ -2957,6 +2982,64 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">Open broadcasts — the Call CQ launchpad + band feed.</span>
               </label>
+            </div>
+
+            <div className="settings-field cw-macro-editor">
+              <span className="settings-label">CW cockpit F-keys</span>
+              {!form.macros.cw?.length ? (
+                <div className="cw-macro-row">
+                  <span className="settings-hint">
+                    Using the built-in F1–F8 set. Customize to make them your own (labels +
+                    templates; tokens: {'{MYCALL} {RST} {NAME}'} and ! = the worked call).
+                  </span>
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={() => setCwMacros(CW_MACRO_DEFAULTS.map((m) => ({ ...m })))}
+                  >
+                    Customize
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {form.macros.cw.map((m, i) => (
+                    <div key={m.key} className="cw-macro-row">
+                      <span className="cw-macro-key">{m.key}</span>
+                      <input
+                        className="settings-input cw-macro-label"
+                        type="text"
+                        value={m.label}
+                        onChange={(e) => updateCwMacro(i, 'label', e.target.value)}
+                        aria-label={`${m.key} label`}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <input
+                        className="settings-input cw-macro-text"
+                        type="text"
+                        value={m.text}
+                        onChange={(e) => updateCwMacro(i, 'text', e.target.value)}
+                        aria-label={`${m.key} text`}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                    </div>
+                  ))}
+                  <div className="cw-macro-row">
+                    <span className="settings-hint">
+                      Tokens: {'{MYCALL} {RST} {NAME}'} · ! = the worked call. Save to apply;
+                      the CW cockpit picks these up on its next open.
+                    </span>
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={() => setCwMacros(undefined)}
+                    >
+                      Reset to defaults
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </fieldset>
           </>

@@ -3531,11 +3531,21 @@ impl Engine {
             .collect()
     }
 
-    /// Decode CW from the recent receive audio at the operator's pitch — a live readout
-    /// of the signal under the marker. Empty unless there's a clear keyed signal.
+    /// The live CW decode the cockpit renders. The AI decoder (DeepCW) is PRIMARY: its
+    /// stitched transcript is the text. The classic streaming Goertzel decoder still runs
+    /// quietly underneath — it supplies the WPM estimate (the model doesn't measure speed)
+    /// and the transcript fallback when the AI is off or its model is missing.
     pub fn cw_decode(&self) -> tempo_core::cw_decode::CwDecode {
+        let ai_live = self.settings.ai_cw_enabled
+            && (!self.ai_cw_text.is_empty() || self.ai_cw_status.is_empty());
         tempo_core::cw_decode::CwDecode {
-            text: self.cw_stream.transcript().to_string(),
+            text: if ai_live && !self.ai_cw_text.is_empty() {
+                self.ai_cw_text.clone()
+            } else if self.settings.ai_cw_enabled {
+                String::new() // AI on but warming up / no copy yet — show idle, not stale Goertzel
+            } else {
+                self.cw_stream.transcript().to_string()
+            },
             wpm: self.cw_stream.wpm(),
         }
     }
@@ -3581,6 +3591,7 @@ impl Engine {
     pub fn cw_clear(&mut self) {
         self.cw_stream.clear();
         self.cw_sent.clear();
+        self.ai_cw_text.clear();
     }
 
     /// Wideband CW skim of the recent receive audio: every distinct keyed signal across

@@ -4423,6 +4423,7 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
         "dxped" => "Nexus — DXpeditions".to_string(),
         "needed" => "Nexus — Needed".to_string(),
         "operate" => "Nexus — Operate".to_string(),
+        "waterfall" => "Nexus — Waterfall".to_string(),
         "bandmapPhone" => "Nexus — Band map (Phone)".to_string(),
         "bandmapCw" => "Nexus — Band map (CW)".to_string(),
         other => format!("Nexus — {other}"),

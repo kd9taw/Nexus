@@ -7,6 +7,7 @@ import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { LogEntry } from './LogEntry'
 import {
+  getSettings,
   sendCw,
   setCwKeyer,
   setCwWpm,
@@ -52,7 +53,7 @@ interface Props {
  * F3 Reply (send your report + name, once they've come back to you) → F4 73. Overs end
  * `KN` ("go ahead, you only"). The engine expands the tokens ({MYCALL}/{NAME}/{RST}/! =
  * worked call) with the live QSO context, so we just send the template. */
-const MACROS: { key: string; label: string; text: string }[] = [
+const DEFAULT_MACROS: { key: string; label: string; text: string }[] = [
   { key: 'F1', label: 'CQ', text: 'CQ CQ DE {MYCALL} {MYCALL} K' },
   { key: 'F2', label: 'Call', text: '! DE {MYCALL} {MYCALL} K' },
   { key: 'F3', label: 'Reply', text: '! DE {MYCALL} UR {RST} {RST} NAME {NAME} {NAME} HW? KN' },
@@ -124,34 +125,19 @@ export function CwCockpit({
   // engine ~1.4 Hz (the decode reads a multi-second ring, so faster adds no detail).
   const [decoded, setDecoded] = useState<{ text: string; wpm: number }>({ text: '', wpm: 0 })
   const decodeRef = useRef<HTMLDivElement>(null)
-  // AI transcript autoscroll (mirrors the classic decode pane).
-  const aiRef = useRef<HTMLDivElement>(null)
-  // Operator decode sensitivity (0..1; 0.5 = original gates). Higher catches weaker/off-pitch
-  // marks the single-pitch decoder otherwise drops. A ref feeds the fixed-deps poll loop without
-  // restarting the interval on every slider nudge.
-  const [sensitivity, setSensitivity] = useState<number>(() => {
-    const v = parseFloat(localStorage.getItem('nexus.cw.sensitivity') ?? '')
-    return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.5
-  })
-  const sensitivityRef = useRef(sensitivity)
-  sensitivityRef.current = sensitivity
-  const changeSensitivity = (v: number) => {
-    setSensitivity(v)
-    try {
-      localStorage.setItem('nexus.cw.sensitivity', String(v))
-    } catch {
-      /* storage blocked — still applies this session */
-    }
-  }
+  // Decode sensitivity for the internal pitch decoder (now WPM-estimation + AI-off
+  // fallback only — the slider left with the classic pane; the stored value still applies).
+  const sensitivityRef = useRef<number>(
+    (() => {
+      const v = parseFloat(localStorage.getItem('nexus.cw.sensitivity') ?? '')
+      return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.5
+    })(),
+  )
   // Keep the newest decoded text in view as the transcript grows.
   useEffect(() => {
     const el = decodeRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [decoded.text])
-  useEffect(() => {
-    const el = aiRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [snap.aiCw?.text])
   // TX echo — what we've actually transmitted (macros expanded), polled alongside the decode.
   const [sent, setSent] = useState<string[]>([])
   const sentRef = useRef<HTMLDivElement>(null)
@@ -189,13 +175,28 @@ export function CwCockpit({
   })
   // True once the operator sets WPM by hand → stop auto-matching to the decoded speed.
   const wpmTouched = useRef(false)
+  // F-key macros: the operator's custom set from Settings, else the built-in defaults.
+  const [macros, setMacros] = useState(DEFAULT_MACROS)
+  const macrosRef = useRef(macros)
+  macrosRef.current = macros
+  useEffect(() => {
+    let alive = true
+    void getSettings()
+      .then((s) => {
+        if (alive && s.macros?.cw?.length) setMacros(s.macros.cw)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
   // Reply preview: the exact text each F-key WILL send (macros expanded with the worked
   // call). Refetched from the backend when the worked station changes — cheap, once per QSO.
   const [previews, setPreviews] = useState<Record<string, string>>({})
   useEffect(() => {
     let alive = true
     Promise.all(
-      MACROS.map((m) =>
+      macros.map((m) =>
         previewCw(m.text)
           .then((p) => [m.key, p] as const)
           .catch(() => [m.key, m.text] as const),
@@ -206,7 +207,7 @@ export function CwCockpit({
     return () => {
       alive = false
     }
-  }, [guide.workedCall])
+  }, [guide.workedCall, macros])
   useEffect(() => {
     let alive = true
     const tick = () => {
@@ -315,7 +316,7 @@ export function CwCockpit({
   stateRef.current = { wpm, text }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const macro = MACROS.find((m) => m.key === e.key)
+      const macro = macrosRef.current.find((m) => m.key === e.key)
       if (macro) {
         e.preventDefault()
         send(macro.text)
@@ -591,26 +592,29 @@ export function CwCockpit({
 
       <div
         className="cw-decode"
-        title="Live CW decode at your pitch — a running transcript that persists as text scrolls by"
+        title="Live CW decode — the AI (neural-net) decoder reads the whole 400–1200 Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder."
       >
         <div className="cw-decode-head">
           <span className="cw-decode-label">DECODE</span>
+          <span className="cw-ai-beta">AI</span>
           {decoded.wpm > 0 && <span className="cw-decode-wpm">{decoded.wpm} WPM</span>}
-          <label
-            className="cw-sens"
-            title="Decode sensitivity — slide up to catch weaker / off-pitch signals (more noise); down is stricter. Middle = default."
+          {snap.aiCw?.enabled && snap.aiCw.status && (
+            <span className="cw-ai-status">{snap.aiCw.status}</span>
+          )}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={snap.aiCw?.enabled ?? false}
+            className={`toggle${snap.aiCw?.enabled ? ' on' : ''}`}
+            onClick={() => void setAiCw(!(snap.aiCw?.enabled ?? false))}
+            title={
+              snap.aiCw?.enabled
+                ? 'AI decoder on — click for the classic pitch decoder'
+                : 'AI decoder off (classic pitch decoder) — click to turn AI on'
+            }
           >
-            <span>SENS</span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={sensitivity}
-              aria-label="CW decode sensitivity"
-              onChange={(e) => changeSensitivity(Number(e.target.value))}
-            />
-          </label>
+            <span className="toggle-knob" />
+          </button>
           <button
             className="cw-decode-clear"
             onClick={() => {
@@ -624,40 +628,14 @@ export function CwCockpit({
           </button>
         </div>
         <div className="cw-decode-text" ref={decodeRef}>
-          {decoded.text ? decoded.text : <span className="cw-decode-idle">listening…</span>}
-        </div>
-      </div>
-
-      <div
-        className="cw-decode cw-ai-panel"
-        title="AI CW decoder (beta) — a neural-net copy of the same audio, one line per 15-second window. Much better weak-signal copy than the classic decoder; needs the bundled DeepCW model."
-      >
-        <div className="cw-decode-head">
-          <span className="cw-decode-label">AI COPY</span>
-          <span className="cw-ai-beta">beta</span>
-          {snap.aiCw?.enabled && snap.aiCw.status && (
-            <span className="cw-ai-status">{snap.aiCw.status}</span>
+          {decoded.text ? (
+            decoded.text
+          ) : (
+            <span className="cw-decode-idle">
+              {(snap.aiCw?.enabled && snap.aiCw.status) || 'listening…'}
+            </span>
           )}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={snap.aiCw?.enabled ?? false}
-            className={`toggle${snap.aiCw?.enabled ? ' on' : ''}`}
-            onClick={() => void setAiCw(!(snap.aiCw?.enabled ?? false))}
-            title={snap.aiCw?.enabled ? 'Turn the AI decoder off' : 'Turn the AI decoder on'}
-          >
-            <span className="toggle-knob" />
-          </button>
         </div>
-        {snap.aiCw?.enabled && (
-          <div className="cw-decode-text" ref={aiRef}>
-            {snap.aiCw.text ? (
-              snap.aiCw.text
-            ) : (
-              <span className="cw-decode-idle">{snap.aiCw.status || 'listening…'}</span>
-            )}
-          </div>
-        )}
       </div>
 
       {sent.length > 0 && (
@@ -679,7 +657,7 @@ export function CwCockpit({
       )}
 
       <div className="cw-macros" role="group" aria-label="CW macros">
-        {MACROS.map((m) => (
+        {macros.map((m) => (
           <button
             key={m.key}
             type="button"

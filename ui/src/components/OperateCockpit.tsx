@@ -16,7 +16,7 @@ import {
   stdMessageList,
   toggleIgnored,
 } from '../txMessages'
-import { getSettings, notifyErase, setSettings } from '../api'
+import { openPanelWindow, getSettings, notifyErase, setSettings } from '../api'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording, postSpot } from '../api'
 import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
@@ -629,6 +629,14 @@ export function OperateCockpit({
         {/* Waterfall: a short full-width strip (not a tall column) — the spectrum
             is a glance tool; the real estate goes to the decode lists + roster. */}
         <section className="cockpit-waterfall panel">
+          <button
+            type="button"
+            className="wf-popout"
+            onClick={() => void openPanelWindow('waterfall')}
+            title="Pop the waterfall out into its own window (drag to another monitor)"
+          >
+            ⧉
+          </button>
           <Waterfall
             transmitting={snap.radio.transmitting}
             rxOffsetHz={snap.radio.rxOffsetHz}
