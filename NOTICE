@@ -6,12 +6,14 @@ https://github.com/kd9taw/nexus
 
 Nexus is free software: you can redistribute it and/or modify it under the
 terms of the **GNU General Public License, version 3 or any later version**
-(SPDX: `GPL-3.0-or-later`). The full license text is in the file `COPYING` at
+(SPDX: `GPL-3.0-only`). The full license text is in the file `COPYING` at
 the repository root.
 
 Because Nexus incorporates and links GPLv3 code (most significantly the
 WSJT-X-derived modem internals it reuses), Nexus *as a whole* is licensed
-under GPLv3-or-later. This NOTICE documents the upstream lineage and the
+under GPLv3 (v3-only: the WSJT-X-derived sources carry no "or any later
+version" grant, so the combined work cannot offer one). This NOTICE documents
+the upstream lineage and the
 third-party components that Nexus bundles, links, depends on, or queries at
 runtime, along with their licenses and what is used from each. Where a license
 cannot be confirmed from this repository, this file says so rather than
@@ -51,7 +53,9 @@ is an independent application and is **not affiliated with or endorsed by** the
 WSJT project.
 
 ### FT1 waveform — KD9TAW
-License: **GPL-3.0-or-later** (part of Nexus / `libft1`).
+License: **GPL-3.0** (part of Nexus / `libft1`; upstream WSJT-X is GPLv3 and
+its `lib/` sources carry no "or later" boilerplate, so no later-version grant
+can be claimed for the derived work).
 
 The FT1 waveform (the 4-CPM coherent turbo modem with IR-HARQ used by the
 "Fast" tier) is original work by KD9TAW. The DX1 mode (`libft1/dx1/` — the
@@ -233,10 +237,10 @@ a courtesy to the operators and communities who provide them:
 
 ## License compatibility
 
-The bundled and linked components combine into the GPLv3-or-later whole:
+The bundled and linked components combine into the GPLv3 whole:
 
 - GPLv3 / LGPL / GPLv2-or-later (WSJT-X, Hamlib, FFTW) combine into the
-  GPLv3-or-later whole.
+  GPLv3 whole (FFTW's v2-or-later is satisfied by electing v3).
 - Permissive licenses (BSL-1.0 for Boost; MIT / Apache-2.0 for Tauri, cpal,
   sgp4, keyring, reqwest, hound, socket2, serde, React, TypeScript, Vite,
   Radix; ISC for d3-geo, topojson-client, world-atlas, us-atlas, lucide-react;
