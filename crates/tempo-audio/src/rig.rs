@@ -220,6 +220,17 @@ impl Rig {
     pub fn set_slow_transport(&mut self, slow: bool) {
         self.slow_transport = slow;
     }
+    /// Change how this rig is keyed WITHOUT touching its (already-open) CAT control channel. Used by
+    /// the dual-radio handoff: a monitor rig is opened read-only (`PttMode::Vox`), so when it's adopted
+    /// as the ACTIVE radio it must be switched to the profile's real PTT mode (`Cat`/`Serial`) or
+    /// `ptt()` would silently no-op (the "TX dead after switching to the FTDX10" bug).
+    pub fn set_ptt_mode(&mut self, mode: PttMode) {
+        self.ptt_mode = mode;
+    }
+    /// How this rig is currently keyed (for the handoff to verify an adopted rig can key).
+    pub fn ptt_mode(&self) -> &PttMode {
+        &self.ptt_mode
+    }
     /// No CAT control, no keying — rely on the rig's VOX.
     pub fn vox() -> Self {
         Self::with_control(None, PttMode::Vox)
