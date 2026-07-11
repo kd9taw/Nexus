@@ -44,9 +44,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources/hamlib/*"
-    ],
+    "resources": {
+      "resources/hamlib/*": "resources/hamlib/",
+      "../COPYING": "COPYING",
+      "../NOTICE": "NOTICE"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "offlineInstaller"
