@@ -427,6 +427,19 @@ export function SettingsPanel({
   // Macros are edited as comma-separated text per context; commit on change.
   // CW F-key macro editor. Empty/unset = the cockpit's built-in defaults; "Customize"
   // seeds the editor from them so the operator tweaks rather than starts blank.
+  // The Guided copilot recommends the next F-key by ROLE (CQ → answer → report → 73):
+  // customization changes the TEXT each key sends, never the key's job — so the
+  // recommended-key highlight and the auto call fill (!) keep working for everyone.
+  const CW_MACRO_ROLES: Record<string, string> = {
+    F1: 'CQ',
+    F2: 'Answer a station',
+    F3: 'Send report',
+    F4: 'Sign off (73)',
+    F5: 'My call',
+    F6: 'His call',
+    F7: 'Ask repeat',
+    F8: 'Query',
+  }
   const CW_MACRO_DEFAULTS: { key: string; label: string; text: string }[] = [
     { key: 'F1', label: 'CQ', text: 'CQ CQ DE {MYCALL} {MYCALL} K' },
     { key: 'F2', label: 'Call', text: '! DE {MYCALL} {MYCALL} K' },
@@ -3017,7 +3030,10 @@ export function SettingsPanel({
                 <>
                   {form.macros.cw.map((m, i) => (
                     <div key={m.key} className="cw-macro-row">
-                      <span className="cw-macro-key">{m.key}</span>
+                      <span className="cw-macro-key" title={CW_MACRO_ROLES[m.key] ?? ''}>
+                        {m.key}
+                      </span>
+                      <span className="cw-macro-role">{CW_MACRO_ROLES[m.key] ?? ''}</span>
                       <input
                         className="settings-input cw-macro-label"
                         type="text"
@@ -3040,8 +3056,11 @@ export function SettingsPanel({
                   ))}
                   <div className="cw-macro-row">
                     <span className="settings-hint">
-                      Tokens: {'{MYCALL} {RST} {NAME}'} · ! = the worked call. Save to apply;
-                      the CW cockpit picks these up on its next open.
+                      Tokens: {'{MYCALL} {RST} {NAME}'} · ! = the worked call (auto-filled from
+                      the copilot / roster click). Each key KEEPS its role — the Guided
+                      copilot's next-step highlight follows the role, so customized text
+                      still rolls through F1→F2→F3→F4 exactly as before. Keep the ! token
+                      wherever you want the other station's call inserted. Save to apply.
                     </span>
                     <button
                       type="button"

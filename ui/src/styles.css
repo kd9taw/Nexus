@@ -13158,3 +13158,10 @@ select.settings-input {
 .settings-audio-scope {
   grid-column: 1 / -1;
 }
+
+.cw-macro-role {
+  color: var(--text-dim);
+  font-size: var(--fs-small);
+  min-width: 8.5em;
+  flex: none;
+}
