@@ -13,10 +13,31 @@ import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
 import { gridToLatLon } from '../grid'
 import { bandColor } from '../bandColors'
-import { subsolarPoint, usStateBorders, flareField, flareRScale } from '../mapGeo'
-import { getAurora, getPca } from '../api'
+import { subsolarPoint, usStateBorders, flareField, flareRScale, destinationPoint } from '../mapGeo'
+import { getAurora, getPca, getSatellites } from '../api'
 import { MapInsightRail } from './prop/MapInsightRail'
-import type { PropagationSnapshot, PathPrediction, MufStation, AuroraPoint, PcaView } from '../types'
+import type { PropagationSnapshot, PathPrediction, MufStation, AuroraPoint, PcaView, SatView } from '../types'
+
+const EARTH_KM = 6371 // for altKm → globe-radius altitude units
+
+/** Interpolate a satellite's subpoint from its per-minute ground track at unix `tSec`. */
+function satPosAt(track: [number, number, number][], tSec: number): { lat: number; lon: number } | null {
+  if (track.length === 0) return null
+  if (tSec <= track[0][0]) return { lat: track[0][1], lon: track[0][2] }
+  for (let i = 1; i < track.length; i++) {
+    if (tSec <= track[i][0]) {
+      const [t0, la0, lo0] = track[i - 1]
+      const [t1, la1, lo1] = track[i]
+      const f = (tSec - t0) / (t1 - t0 || 1)
+      let dlon = lo1 - lo0
+      if (dlon > 180) dlon -= 360
+      if (dlon < -180) dlon += 360
+      return { lat: la0 + (la1 - la0) * f, lon: lo0 + dlon * f }
+    }
+  }
+  const last = track[track.length - 1]
+  return { lat: last[1], lon: last[2] }
+}
 
 type RGB = [number, number, number]
 interface CloudSample {
@@ -150,6 +171,8 @@ export default function Globe3D({
   const wrapRef = useRef<HTMLDivElement>(null)
   const globeRef = useRef<GlobeMethods | undefined>(undefined)
   const cloudsRef = useRef<Record<string, THREE.Points>>({})
+  const satGroupRef = useRef<THREE.Group | null>(null)
+  const satMarkersRef = useRef<Record<string, THREE.Object3D>>({})
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [ready, setReady] = useState(false)
   const [ok] = useState(webglOk)
@@ -158,6 +181,7 @@ export default function Globe3D({
   // Self-fetched space-weather feeds (aurora + PCA come from their own polls, like the 2-D map).
   const [auroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
   const [pca, setPca] = useState<PcaView | null>(null)
+  const [sats, setSats] = useState<SatView | null>(null)
   // Toggleable 3-D layers. Default-on mirrors the 2-D map (aurora off by default).
   const [show, setShow] = useState({
     spots: true,
@@ -170,6 +194,7 @@ export default function Globe3D({
     pca: true,
     heat: true,
     grid: false,
+    sats: false,
   })
 
   // Measure the container BEFORE paint so the globe is never sized to the whole window
@@ -429,6 +454,104 @@ export default function Globe3D({
     )
   }, [ready, nowMs, xrayLong, show.flare, show.aurora, show.muf, show.pca, show.heat, auroraPts, muf, pca, spots])
 
+  // Self-fetch satellites while the layer is on (~30 s, like the 2-D map).
+  useEffect(() => {
+    if (!show.sats) {
+      setSats(null)
+      return
+    }
+    let live = true
+    const poll = () =>
+      getSatellites()
+        .then((s) => live && setSats(s))
+        .catch(() => {})
+    poll()
+    const id = setInterval(poll, 30_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [show.sats])
+
+  // Build the satellite scene: a REAL 3-D orbit per bird (the ground track lifted to its
+  // orbital altitude), a footprint ring on the surface, and a live marker. This is the
+  // 3-D-native payoff — 2-D could only show a flat ground track.
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    if (satGroupRef.current) {
+      g.scene().remove(satGroupRef.current)
+      satGroupRef.current.traverse((o) => {
+        ;(o as THREE.Mesh).geometry?.dispose?.()
+      })
+      satGroupRef.current = null
+      satMarkersRef.current = {}
+    }
+    if (!show.sats || !sats) return
+    const group = new THREE.Group()
+    const markers: Record<string, THREE.Object3D> = {}
+    for (const bird of sats.birds) {
+      const alt = bird.altKm / EARTH_KM
+      // Orbit line: the ground track lifted to orbital altitude.
+      const pts = bird.track.map(([, la, lo]) => {
+        const c = g.getCoords(la, lo, alt)
+        return new THREE.Vector3(c.x, c.y, c.z)
+      })
+      if (pts.length > 1) {
+        group.add(
+          new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints(pts),
+            new THREE.LineBasicMaterial({ color: '#7ad0ff', transparent: true, opacity: 0.55 }),
+          ),
+        )
+      }
+      // Footprint ring (radio horizon) on the surface.
+      const fp: THREE.Vector3[] = []
+      for (let b = 0; b <= 360; b += 15) {
+        const d = destinationPoint({ lat: bird.lat, lon: bird.lon }, b, bird.footprintKm)
+        const c = g.getCoords(d.lat, d.lon, 0.002)
+        fp.push(new THREE.Vector3(c.x, c.y, c.z))
+      }
+      group.add(
+        new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(fp),
+          new THREE.LineBasicMaterial({ color: '#7ad0ff', transparent: true, opacity: 0.28 }),
+        ),
+      )
+      // Live marker at the sat's current position + altitude.
+      const c = g.getCoords(bird.lat, bird.lon, alt)
+      const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(1.6, 10, 10),
+        new THREE.MeshBasicMaterial({ color: '#eaffff' }),
+      )
+      marker.position.set(c.x, c.y, c.z)
+      markers[bird.name] = marker
+      group.add(marker)
+    }
+    g.scene().add(group)
+    satGroupRef.current = group
+    satMarkersRef.current = markers
+  }, [ready, sats, show.sats])
+
+  // Animate the sat markers along their tracks each second (real-time motion between polls).
+  useEffect(() => {
+    if (!show.sats || !sats) return
+    const id = setInterval(() => {
+      const g = globeRef.current
+      if (!g) return
+      const now = Date.now() / 1000
+      for (const bird of sats.birds) {
+        const marker = satMarkersRef.current[bird.name]
+        if (!marker) continue
+        const pos = satPosAt(bird.track, now)
+        if (!pos) continue
+        const c = g.getCoords(pos.lat, pos.lon, bird.altKm / EARTH_KM)
+        marker.position.set(c.x, c.y, c.z)
+      }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [show.sats, sats])
+
   if (!ok) {
     return (
       <div className="globe3d-fallback">
@@ -460,6 +583,7 @@ export default function Globe3D({
               ['aurora', 'Aurora'],
               ['muf', 'MUF'],
               ['pca', 'Polar cap (PCA)'],
+              ['sats', 'Satellites'],
               ['states', 'US states'],
               ['grid', 'Graticule'],
               ['lights', 'City lights'],
