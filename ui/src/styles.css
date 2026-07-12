@@ -1384,6 +1384,24 @@ button.nb-chip:hover {
   color: var(--text);
   cursor: pointer;
 }
+/* Live-spot markers on the 3-D globe: bright flat glowing dots (not lit 3-D cylinders),
+   colored by band via the --c variable, always readable over day or night. */
+.globe3d-spot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--c);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 0 7px var(--c),
+    0 0 3px #fff;
+  cursor: pointer;
+}
+.globe3d-spot:hover {
+  box-shadow:
+    0 0 12px var(--c),
+    0 0 5px #fff;
+}
 .connect-map > .map-view {
   flex: 1;
 }

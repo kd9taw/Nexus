@@ -282,14 +282,19 @@ export default function Globe3D({
           showAtmosphere
           atmosphereColor="#68a8e2"
           atmosphereAltitude={0.18}
-          pointsData={show.spots ? points : []}
-          pointLat="lat"
-          pointLng="lng"
-          pointColor="color"
-          pointAltitude={0.02}
-          pointRadius={0.55}
-          pointLabel={(d: object) => (d as { call: string }).call}
-          onPointClick={(d: object) => onSelectCall((d as { call: string }).call)}
+          htmlElementsData={show.spots ? points : []}
+          htmlLat="lat"
+          htmlLng="lng"
+          htmlAltitude={0.01}
+          htmlElement={(d: object) => {
+            const p = d as { call: string; color: string }
+            const el = document.createElement('div')
+            el.className = 'globe3d-spot'
+            el.style.setProperty('--c', p.color)
+            el.title = p.call
+            el.onclick = () => onSelectCall(p.call)
+            return el
+          }}
           arcsData={show.arcs ? arcs : []}
           arcColor="color"
           arcStroke={0.5}
