@@ -80,5 +80,5 @@ call + grid, the other station's call + grid, band and dial frequency, tier
 
 ---
 
-*Nexus is GPL-3.0-or-later. Not affiliated with ARRL, the WSJT project, or any
+*Nexus is GPL-3.0-only. Not affiliated with ARRL, the WSJT project, or any
 rig manufacturer. Built by KD9TAW.*

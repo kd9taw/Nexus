@@ -6,7 +6,7 @@
 >
 > **Author / contact:** KD9TAW &lt;kd9taw@protonmail.com&gt;
 > **Repository:** https://github.com/kd9taw/nexus
-> **License:** GPL-3.0-or-later (full text in [`COPYING`](../COPYING)).
+> **License:** GPL-3.0-only (full text in [`COPYING`](../COPYING)).
 
 This document explains *why* this layer is shaped the way it is and *how* the
 layers fit together. It predates the Nexus expansion, and its deep dives (tiering

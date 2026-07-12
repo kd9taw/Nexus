@@ -165,5 +165,5 @@ picker also includes **Dummy** (model 1) for click-through testing and **FLRig**
 
 ---
 
-*Nexus is GPL-3.0-or-later. Not affiliated with any rig manufacturer. Built by
+*Nexus is GPL-3.0-only. Not affiliated with any rig manufacturer. Built by
 KD9TAW.*

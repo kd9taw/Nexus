@@ -129,4 +129,4 @@ The best feedback is a GitHub issue with your **rig, band, observed SNR, and dec
 
 ---
 
-*Nexus — © 2026 KD9TAW. Free and open source under GPL-3.0-or-later. github.com/kd9taw/nexus*
+*Nexus — © 2026 KD9TAW. Free and open source under GPL-3.0-only. github.com/kd9taw/nexus*

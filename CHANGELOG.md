@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] — 2026-07-11 — AI CW decoder as primary, dual-radio TX-safety, operating polish
 
 ### Added
 
@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   modulates; plain USB takes TX audio from the mic jack).
 - Radio-switcher pill no longer flashes on a single slow poll; wedged native-CAT sessions
   no longer freeze the UI; several native-daemon robustness fixes.
+- **Switching radios now moves control instantly.** A switch could leave the pill on the new
+  radio while CAT kept commanding the old one for a while before catching up — the handoff
+  no longer applies any change until it has fully taken over the new radio, so control
+  follows the pill the moment you switch.
 
 ## [0.5.2] — 2026-07-11 — native panadapter (early access) + logger forwarding + watch list
 

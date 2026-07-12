@@ -94,7 +94,7 @@ fn norm(s: &str) -> String {
 
 fn main() {
     let dir = std::env::var("DEEPCW_DIR").unwrap_or_else(|_| {
-        "/tmp/claude-1000/-home-kd9taw-work-twowayfd/dfb0e04e-3109-488a-9eb1-85b642eb5062/scratchpad/deepcw-engine".to_string()
+        "deepcw-engine".to_string() // set DEEPCW_DIR to a deepcw-engine checkout
     });
     let ai = match DeepCw::load(std::path::Path::new(&dir)) {
         Ok(d) => d,

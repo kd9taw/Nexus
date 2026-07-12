@@ -53,5 +53,5 @@ seasoned DXer won't outgrow.** Windows, GPL-3.0, built in Rust.
 Bug reports and FT1/DX1 on-air decode reports are the most valuable thing you
 can send during the beta: open a ticket at <https://sourceforge.net/p/nexus-ham-radio/tickets/>.
 
-*GPL-3.0-or-later. Not affiliated with ARRL, the WSJT project, or any rig
+*GPL-3.0-only. Not affiliated with ARRL, the WSJT project, or any rig
 manufacturer. Built by KD9TAW.*

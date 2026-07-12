@@ -135,5 +135,5 @@ on GitHub covers CAT failures, drivers, port conflicts, and audio.
 
 ---
 
-*Nexus is GPL-3.0-or-later. Not affiliated with ARRL, the WSJT project, or any
+*Nexus is GPL-3.0-only. Not affiliated with ARRL, the WSJT project, or any
 rig manufacturer. Built by KD9TAW.*
