@@ -6,7 +6,7 @@ Short, honest answers. For depth, follow the links.
 
 ### Is Nexus free? What license?
 
-Yes. Nexus is **GPLv3** open-source software. Source lives at [kd9taw/nexus](https://github.com/kd9taw/nexus). You can build it yourself, fork it, and redistribute it under the same terms. There is no subscription, no telemetry, and no account required to use any feature.
+Yes. Nexus is **GPLv3** open-source software. Source lives at [kd9taw/nexus](https://sourceforge.net/projects/nexus-ham-radio). You can build it yourself, fork it, and redistribute it under the same terms. There is no subscription, no telemetry, and no account required to use any feature.
 
 ---
 
@@ -151,7 +151,7 @@ In Companion source mode, Nexus can also ride an upstream WSJT-X or JTDX decode 
 
 ### How do I help the project?
 
-**On-air FT1/DX1 reports are the highest-value contribution.** Report what you observed: band, dial frequency, mode/tier (FT1 or DX1), path distance, conditions (time UTC, solar conditions if notable), and what you decoded vs. what you expected. Open an issue at [kd9taw/nexus](https://github.com/kd9taw/nexus) with that data. The simulation thresholds (FT1 ≈ −15 dB AWGN, DX1 ≈ −18.6 dB AWGN) need real-path confirmation before the beta label comes off.
+**On-air FT1/DX1 reports are the highest-value contribution.** Report what you observed: band, dial frequency, mode/tier (FT1 or DX1), path distance, conditions (time UTC, solar conditions if notable), and what you decoded vs. what you expected. Open an issue at [kd9taw/nexus](https://sourceforge.net/projects/nexus-ham-radio) with that data. The simulation thresholds (FT1 ≈ −15 dB AWGN, DX1 ≈ −18.6 dB AWGN) need real-path confirmation before the beta label comes off.
 
 Bug reports, pull requests, and build feedback for non-Windows platforms are also welcome via the same repo.
 

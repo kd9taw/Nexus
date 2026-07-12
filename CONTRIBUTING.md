@@ -9,7 +9,7 @@ the FT1/DX1 tiers** (more on that below).
 
 Nexus is maintained by KD9TAW
 &lt;kd9taw@protonmail.com&gt;. The canonical repo is
-<https://github.com/kd9taw/nexus>.
+<https://sourceforge.net/p/nexus-ham-radio/code/>.
 
 ---
 

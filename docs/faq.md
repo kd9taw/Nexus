@@ -60,7 +60,7 @@ Send honest on-air reports: band, dial frequency, which tier (FT1 or DX1), dista
 and rough conditions, and what you decoded versus what you expected — including the
 surprises (false decodes, retransmissions that combined, stations you saw that others
 didn't). Field reports are the single most useful contribution right now. Use the
-issue tracker at <https://github.com/kd9taw/nexus>.
+issue tracker at <https://sourceforge.net/projects/nexus-ham-radio>.
 
 ---
 
@@ -145,7 +145,7 @@ you already run.
 
 ### Where is the source code, and can I contribute?
 
-The repository is <https://github.com/kd9taw/nexus>. Contributions are welcome —
+The repository is <https://sourceforge.net/projects/nexus-ham-radio>. Contributions are welcome —
 issues, field reports, and pull requests all help. The most valuable contributions
 during beta are **on-air decode reports** for FT1 and DX1 (see "How do I help the
 beta?" above) and **rig confirmations** for radios beyond the two the author has
@@ -170,4 +170,4 @@ the SHA-256 of each new download) to update manually.
 [DX1](protocols/dx1.md) · [interop and companion setup](interop.md)
 
 *License: GPL-3.0 · by KD9TAW · Repository:
-<https://github.com/kd9taw/nexus>*
+<https://sourceforge.net/projects/nexus-ham-radio>*

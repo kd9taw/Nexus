@@ -72,4 +72,4 @@ Two practical notes:
 math in [FT1-Protocol.md](../FT1-Protocol.md) · running alongside WSJT-X and your
 logger in [interop.md](../interop.md).
 
-*License: GPL-3.0 · Repository: <https://github.com/kd9taw/nexus>*
+*License: GPL-3.0 · Repository: <https://sourceforge.net/projects/nexus-ham-radio>*

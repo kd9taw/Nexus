@@ -120,7 +120,7 @@ This is an open invitation. If you have an HF station and a soundcard-mode workf
 ### Get involved
 
 - **Download for Windows (latest release):** https://sourceforge.net/projects/nexus-ham-radio/files/latest/download
-- **Source, issues & feedback:** https://github.com/kd9taw/nexus
+- **Source, issues & feedback:** https://sourceforge.net/projects/nexus-ham-radio
 - **Direct contact:** kd9taw@protonmail.com
 
 The best feedback is a GitHub issue with your **rig, band, observed SNR, and decode result** — but an email works too.
@@ -129,4 +129,4 @@ The best feedback is a GitHub issue with your **rig, band, observed SNR, and dec
 
 ---
 
-*Nexus — © 2026 KD9TAW. Free and open source under GPL-3.0-only. github.com/kd9taw/nexus*
+*Nexus — © 2026 KD9TAW. Free and open source under GPL-3.0-only. sourceforge.net/projects/nexus-ham-radio*

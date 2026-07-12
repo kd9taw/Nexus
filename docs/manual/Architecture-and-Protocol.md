@@ -1,8 +1,8 @@
 # Architecture and Protocol
 
-> **Scope:** This page covers the **FT1/DX1 protocol layer** (the Tempo chat layer) specifically — waveforms, message formats, HARQ, and ecosystem interop. For app-level architecture (the Nexus multi-mode desktop shell, all-mode stack, and component layout), see [`docs/ARCHITECTURE.md`](https://github.com/kd9taw/nexus/blob/main/docs/ARCHITECTURE.md).
+> **Scope:** This page covers the **FT1/DX1 protocol layer** (the Tempo chat layer) specifically — waveforms, message formats, HARQ, and ecosystem interop. For app-level architecture (the Nexus multi-mode desktop shell, all-mode stack, and component layout), see [`docs/ARCHITECTURE.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/ARCHITECTURE.md).
 
-An operator-friendly tour of how the FT1/DX1 protocol layer is built and how its messages move. This is the *summary* — for the full design, the tiering rationale, and the DSP derivations, read the developer reference: [`docs/ARCHITECTURE.md`](https://github.com/kd9taw/nexus/blob/main/docs/ARCHITECTURE.md).
+An operator-friendly tour of how the FT1/DX1 protocol layer is built and how its messages move. This is the *summary* — for the full design, the tiering rationale, and the DSP derivations, read the developer reference: [`docs/ARCHITECTURE.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/ARCHITECTURE.md).
 
 > **Validation status (v0.2.0 beta).** Nexus's two waveforms — including **live IR-HARQ** and **full-passband DX1 acquisition** — are validated by **simulation + Windows cross-build** (AWGN + fading), **not yet on-air**. On-air decode-rate-vs-SNR is the open gate. The FT8/FT4 tier is Phase 2 (internals compiled in, no decode wired). Nothing here is an on-air sensitivity claim.
 
@@ -83,7 +83,7 @@ Nexus handles rig control in-app. For **CAT** it **launches Hamlib's `rigctld`**
 
 ## Want more depth?
 
-- **Full design + tiering rationale + DSP:** [`docs/ARCHITECTURE.md`](https://github.com/kd9taw/nexus/blob/main/docs/ARCHITECTURE.md).
-- **The frequency rationale:** [`docs/FREQUENCIES.md`](https://github.com/kd9taw/nexus/blob/main/docs/FREQUENCIES.md) and [Frequency Plan](Frequency-Plan.md).
-- **Crate layout + how to build:** [`CONTRIBUTING.md`](https://github.com/kd9taw/nexus/blob/main/CONTRIBUTING.md) and [Building from Source](Building-from-Source.md).
+- **Full design + tiering rationale + DSP:** [`docs/ARCHITECTURE.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/ARCHITECTURE.md).
+- **The frequency rationale:** [`docs/FREQUENCIES.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/FREQUENCIES.md) and [Frequency Plan](Frequency-Plan.md).
+- **Crate layout + how to build:** [`CONTRIBUTING.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/CONTRIBUTING.md) and [Building from Source](Building-from-Source.md).
 - **What's still to come:** [Roadmap](Roadmap.md).

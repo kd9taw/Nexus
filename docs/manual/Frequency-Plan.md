@@ -2,7 +2,7 @@
 
 Nexus uses a **new waveform** (FT1 / DX1 — the Tempo chat layer protocols), so it must **not** transmit on the established FT8 / FT4 / JS8 / WSPR / PSK watering holes — it would QRM them, and they'd QRM it. So Nexus ships its **own** calling frequencies, chosen to sit clear of every existing narrowband convention while staying inside the operator's legal sub-band.
 
-> **These are proposed, editable defaults — not regulatory channels.** They're a starting point to coordinate with the digital community. In the app you can pick any band with one tap **or type any dial frequency manually** (top bar and Settings). **Confirm your local band plan and operate within your license privileges.** For the full rationale and verification notes, see the developer reference: [`docs/FREQUENCIES.md`](https://github.com/kd9taw/nexus/blob/main/docs/FREQUENCIES.md).
+> **These are proposed, editable defaults — not regulatory channels.** They're a starting point to coordinate with the digital community. In the app you can pick any band with one tap **or type any dial frequency manually** (top bar and Settings). **Confirm your local band plan and operate within your license privileges.** For the full rationale and verification notes, see the developer reference: [`docs/FREQUENCIES.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/FREQUENCIES.md).
 
 ---
 

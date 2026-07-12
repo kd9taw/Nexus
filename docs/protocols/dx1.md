@@ -119,4 +119,4 @@ points.
 constants — are documented in [FT1-Protocol.md §7.2](../FT1-Protocol.md). To choose
 between the tiers, see the [protocol overview](index.md).
 
-*License: GPL-3.0 · Repository: <https://github.com/kd9taw/nexus>*
+*License: GPL-3.0 · Repository: <https://sourceforge.net/projects/nexus-ham-radio>*

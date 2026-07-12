@@ -18,7 +18,7 @@ full of live decodes, and one FT8 QSO in your log.
 
 Download the Windows installer — `Nexus_<version>_x64-setup.exe` — from the
 [SourceForge download page](https://sourceforge.net/projects/nexus-ham-radio/files/)
-(source lives on [GitHub](https://github.com/kd9taw/nexus)). It is a per-user install and needs no administrator rights;
+(source lives on [GitHub](https://sourceforge.net/projects/nexus-ham-radio)). It is a per-user install and needs no administrator rights;
 WebView2 and Hamlib are bundled, so there is nothing else to install. Full detail,
 including SHA-256 verification and where your data lives, is in
 [Install & Verify](install.md).

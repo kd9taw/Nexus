@@ -20,9 +20,9 @@ The **[operator manual](docs/manual/)** is your full guide:
 
 ## 2. Ask a question
 
-For setup help, usage questions, or general discussion, open a
-**[Discussion](https://github.com/kd9taw/nexus/discussions)**. Quick on-air
-chatter is welcome there too.
+For setup help, usage questions, bug reports, or general discussion, open a
+**[ticket](https://sourceforge.net/p/nexus-ham-radio/tickets/)** on the
+SourceForge project. Quick on-air chatter is welcome there too.
 
 ## 3. Report something
 

@@ -123,5 +123,5 @@ intent from a volunteer project, not a contractual guarantee.
 
 ---
 
-*Nexus — <https://github.com/kd9taw/nexus> — KD9TAW
+*Nexus — <https://sourceforge.net/projects/nexus-ham-radio/> — KD9TAW
 &lt;kd9taw@protonmail.com&gt;*

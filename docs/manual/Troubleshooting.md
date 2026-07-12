@@ -5,7 +5,7 @@
 > the deep reference detail (TQSL exit codes, split-mode internals, UDP wire
 > facts) that the field guide links into.
 
-Work top-to-bottom; most problems are CAT/driver, audio device, time sync, or credentials. Open an issue at <https://github.com/kd9taw/nexus> with band, dial, mode, and what you saw vs. expected.
+Work top-to-bottom; most problems are CAT/driver, audio device, time sync, or credentials. Open an issue at <https://sourceforge.net/projects/nexus-ham-radio> with band, dial, mode, and what you saw vs. expected.
 
 > **First:** make sure you are on the latest release — several issues below are fixed in current builds. Download: <https://sourceforge.net/projects/nexus-ham-radio/files/latest/download>.
 
@@ -251,7 +251,7 @@ Use the **Test N3FJP** button in Settings to send the `<CMD><PROGRAM></CMD>` han
 
 - Re-check the setup pages: [Getting Started](Getting-Started.md), [Rig and Audio Setup](Rig-and-Audio-Setup.md).
 - Review the Connector log (Settings → Connectors) for per-event detail on upload failures.
-- File an issue with details (band, dial, mode, OS, rig model, what you saw vs. expected): <https://github.com/kd9taw/nexus>.
+- File an issue with details (band, dial, mode, OS, rig model, what you saw vs. expected): <https://sourceforge.net/projects/nexus-ham-radio>.
 
 ---
 

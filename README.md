@@ -6,7 +6,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6)
-[![Release](https://img.shields.io/badge/release-v0.3.0--beta-blue)](https://sourceforge.net/projects/nexus-ham-radio/files/)
+[![Release](https://img.shields.io/badge/release-v0.7.1-blue)](https://sourceforge.net/projects/nexus-ham-radio/files/)
 [![Downloads](https://img.shields.io/sourceforge/dt/nexus-ham-radio?label=downloads)](https://sourceforge.net/projects/nexus-ham-radio/files/)
 ![Status](https://img.shields.io/badge/status-beta-orange)
 
@@ -181,7 +181,7 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the full design.
 ## Building from source
 
 ```bash
-git clone https://github.com/kd9taw/nexus.git
+git clone https://git.code.sf.net/p/nexus-ham-radio/code nexus
 cd nexus
 cargo test --workspace                  # Rust core (modem FFI, engine, sequencer, exports)
 cd ui && npm install && npx vitest run  # UI suites
@@ -201,10 +201,13 @@ The FT1/FT8 modem is Fortran + C behind a Rust FFI, so the **GNU toolchain** is 
 
 ## License & credits
 
-Nexus is **free software under the [GNU GPL v3](COPYING)** (or later).
+Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
 
-- **WSJT-X** (Joe Taylor **K1JT** and the WSJT Development Group) — the FT8/FT4 modes, the 77-bit
-  message packing, LDPC(174,91) FEC, and the behavioral reference for the entire digital tier. GPLv3.
+- **WSJT-X** — Joe Taylor **K1JT**, Steve Franke **K9AN**, Bill Somerville **G4WJS**, and the WSJT
+  Development Group. The FT8/FT4 modes, the 77-bit message packing, and the LDPC(174,91) FEC are
+  their work and the behavioral reference for Nexus's entire digital tier, which interoperates with
+  their ecosystem over the standard WSJT-X UDP protocol. Nexus's FT8/FT4 support is an independent
+  reimplementation; **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.
 - **FT1 / DX1** — the native weak-signal waveforms by **KD9TAW**.
 - **[Hamlib](https://hamlib.github.io/)** — bundled `rigctld` for CAT control (GPL/LGPL).
 - **[FFTW](https://www.fftw.org/)** (GPL), **[Tauri](https://tauri.app/)**, React,
@@ -222,7 +225,7 @@ contributions welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)** and the
 
 **[⬇ Download](https://sourceforge.net/projects/nexus-ham-radio/files/latest/download)** ·
 **[📖 Manual](docs/manual/)** ·
-**[💬 Discussions](https://github.com/kd9taw/nexus/discussions)** ·
-**[⭐ Star](https://github.com/kd9taw/nexus)**
+**[💬 Discuss / report a bug](https://sourceforge.net/p/nexus-ham-radio/tickets/)** ·
+**[📦 Project page](https://sourceforge.net/projects/nexus-ham-radio/)**
 
 </sub></div>

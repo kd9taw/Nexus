@@ -5,7 +5,7 @@
 > of **Nexus**, the all-mode amateur radio operations center this project became.
 >
 > **Author / contact:** KD9TAW &lt;kd9taw@protonmail.com&gt;
-> **Repository:** https://github.com/kd9taw/nexus
+> **Repository:** https://sourceforge.net/projects/nexus-ham-radio
 > **License:** GPL-3.0-only (full text in [`COPYING`](../COPYING)).
 
 This document explains *why* this layer is shaped the way it is and *how* the

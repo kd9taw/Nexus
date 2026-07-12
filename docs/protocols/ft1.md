@@ -164,4 +164,4 @@ constants from the modem source — lives in
 [FT1-Protocol.md](../FT1-Protocol.md). For how to pick between the tiers, see the
 [protocol overview](index.md); for the robust tier, [DX1](dx1.md).
 
-*License: GPL-3.0 · Repository: <https://github.com/kd9taw/nexus>*
+*License: GPL-3.0 · Repository: <https://sourceforge.net/projects/nexus-ham-radio>*
