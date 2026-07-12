@@ -1311,6 +1311,26 @@ button.nb-chip:hover {
   display: flex;
   min-width: 0;
   min-height: 0;
+  /* Clip the 3-D globe's WebGL canvas to the center cell so it can never paint over
+     the side rails / bottom strip (react-globe.gl briefly wants the whole window). */
+  overflow: hidden;
+}
+/* The 3-D globe fills the center cell exactly, like the 2-D .map-view does. */
+.globe3d-wrap {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+.globe3d-fallback {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.9rem;
 }
 .connect-map > .map-view {
   flex: 1;

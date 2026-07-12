@@ -383,7 +383,12 @@ export function ConnectView({
               <Suspense
                 fallback={<div className="globe3d-loading">Loading 3D globe…</div>}
               >
-                <Globe3D myGrid={myGrid} />
+                <Globe3D
+                  myGrid={myGrid}
+                  spots={prop?.spots ?? []}
+                  selectedCall={selectedCall}
+                  onSelectCall={onSelectCall}
+                />
               </Suspense>
             ) : (
             <MapView
