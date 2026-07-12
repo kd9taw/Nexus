@@ -392,6 +392,8 @@ export function ConnectView({
                   outlook={selectedCall ? pathPred : bandOutlook}
                   onBandClick={toggleFocusBand}
                   activeBand={focusBand}
+                  muf={muf}
+                  xrayLong={xrayLong}
                 />
               </Suspense>
             ) : (

@@ -13,9 +13,88 @@ import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
 import { gridToLatLon } from '../grid'
 import { bandColor } from '../bandColors'
-import { subsolarPoint, usStateBorders } from '../mapGeo'
+import { subsolarPoint, usStateBorders, flareField, flareRScale } from '../mapGeo'
+import { getAurora, getPca } from '../api'
 import { MapInsightRail } from './prop/MapInsightRail'
-import type { PropagationSnapshot, PathPrediction } from '../types'
+import type { PropagationSnapshot, PathPrediction, MufStation, AuroraPoint, PcaView } from '../types'
+
+type RGB = [number, number, number]
+interface CloudSample {
+  lat: number
+  lng: number
+  rgb: RGB
+  alt?: number
+}
+
+/** Create/update a GPU point-cloud layer (space-weather fields) on the globe scene. One
+ * THREE.Points per layer, per-vertex colored, additively blended — cheap for dense fields
+ * and always bright (no lighting). `store` persists the Points across renders. */
+function syncCloud(
+  g: GlobeMethods,
+  store: Record<string, THREE.Points>,
+  key: string,
+  samples: CloudSample[],
+  size: number,
+  visible: boolean,
+) {
+  let pts = store[key]
+  if (!visible || samples.length === 0) {
+    if (pts) pts.visible = false
+    return
+  }
+  const pos = new Float32Array(samples.length * 3)
+  const col = new Float32Array(samples.length * 3)
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i]
+    const c = g.getCoords(s.lat, s.lng, s.alt ?? 0.004)
+    pos[i * 3] = c.x
+    pos[i * 3 + 1] = c.y
+    pos[i * 3 + 2] = c.z
+    col[i * 3] = s.rgb[0]
+    col[i * 3 + 1] = s.rgb[1]
+    col[i * 3 + 2] = s.rgb[2]
+  }
+  if (!pts) {
+    const mat = new THREE.PointsMaterial({
+      size,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.9,
+      sizeAttenuation: false,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+    pts = new THREE.Points(new THREE.BufferGeometry(), mat)
+    store[key] = pts
+    g.scene().add(pts)
+  }
+  pts.geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+  pts.geometry.setAttribute('color', new THREE.BufferAttribute(col, 3))
+  ;(pts.material as THREE.PointsMaterial).size = size
+  pts.visible = true
+}
+
+const lerp = (a: number, b: number, t: number) => a + (b - a) * Math.max(0, Math.min(1, t))
+/** Fire palette for the flare D-RAP HAF (MHz): yellow (low) → deep red (high). */
+const flareRgb = (haf: number): RGB => {
+  const t = haf / 30
+  return [1, lerp(0.95, 0.25, t), lerp(0.35, 0.1, t)]
+}
+/** Aurora probability (8–90%): green (low) → red (high). */
+const auroraRgb = (prob: number): RGB => {
+  const t = (prob - 8) / 82
+  return [lerp(0.25, 0.95, t), lerp(0.9, 0.25, t), 0.28]
+}
+/** MUF (MHz, 7–30): cool blue (low) → warm red (high). */
+const mufRgb = (mhz: number): RGB => {
+  const t = (mhz - 7) / 23
+  return [lerp(0.3, 1, t), lerp(0.55, 0.32, t), lerp(1, 0.2, t)]
+}
+/** #rrggbb → normalized RGB (for the band-colored heat layer). */
+const hexRgb = (hex: string): RGB => {
+  const c = new THREE.Color(hex)
+  return [c.r, c.g, c.b]
+}
 
 interface Props {
   /** The operator's Maidenhead grid — places + frames the QTH. */
@@ -34,6 +113,10 @@ interface Props {
   onBandClick?: (band: string) => void
   /** The currently focused band. */
   activeBand?: string | null
+  /** Ionosonde MUF stations (the only overlay feed that comes via a prop, like 2-D). */
+  muf?: MufStation[]
+  /** GOES long-band X-ray flux (W/m²) — drives the flare D-RAP layer. */
+  xrayLong?: number | null
   /** Draw US state borders (default on, matching the 2-D map). */
   showStates?: boolean
 }
@@ -59,17 +142,35 @@ export default function Globe3D({
   outlook,
   onBandClick,
   activeBand,
+  muf,
+  xrayLong,
   showStates = true,
 }: Props) {
   const spots = useMemo(() => prop?.spots ?? [], [prop])
   const wrapRef = useRef<HTMLDivElement>(null)
   const globeRef = useRef<GlobeMethods | undefined>(undefined)
+  const cloudsRef = useRef<Record<string, THREE.Points>>({})
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [ready, setReady] = useState(false)
   const [ok] = useState(webglOk)
   const [spin, setSpin] = useState(true) // idle auto-rotate; on by default, operator-toggleable
-  // Toggleable 3-D layers (Phase B grows this to match the 2-D map's layer set).
-  const [show, setShow] = useState({ spots: true, arcs: true, states: showStates, lights: true })
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  // Self-fetched space-weather feeds (aurora + PCA come from their own polls, like the 2-D map).
+  const [auroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
+  const [pca, setPca] = useState<PcaView | null>(null)
+  // Toggleable 3-D layers. Default-on mirrors the 2-D map (aurora off by default).
+  const [show, setShow] = useState({
+    spots: true,
+    arcs: true,
+    states: showStates,
+    lights: true,
+    flare: true,
+    aurora: false,
+    muf: true,
+    pca: true,
+    heat: true,
+    grid: false,
+  })
 
   // Measure the container BEFORE paint so the globe is never sized to the whole window
   // (react-globe.gl's default when width/height are undefined) — that was painting over
@@ -219,6 +320,115 @@ export default function Globe3D({
     return () => clearInterval(id)
   }, [ready])
 
+  // Slow clock for the flare field + sun position (60 s, like the 2-D map's tick).
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60_000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Self-fetch aurora while its layer is on (server caches ~10 min).
+  useEffect(() => {
+    if (!show.aurora) {
+      setAuroraPts([])
+      return
+    }
+    let live = true
+    const poll = () =>
+      getAurora()
+        .then((a) => live && setAuroraPts(a ?? []))
+        .catch(() => {})
+    poll()
+    const id = setInterval(poll, 600_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [show.aurora])
+
+  // Self-fetch PCA while its layer is on (~5 min).
+  useEffect(() => {
+    if (!show.pca) {
+      setPca(null)
+      return
+    }
+    let live = true
+    const poll = () =>
+      getPca()
+        .then((p) => live && setPca(p))
+        .catch(() => {})
+    poll()
+    const id = setInterval(poll, 300_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [show.pca])
+
+  // Sync the space-weather point clouds when their data / toggles / readiness change.
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    const store = cloudsRef.current
+    // Solar flare D-RAP absorption on the sunlit hemisphere — only during an M/X flare.
+    const xrayEff = xrayLong ?? 0
+    const flareOn = show.flare && flareRScale(xrayEff) >= 1
+    syncCloud(
+      g,
+      store,
+      'flare',
+      flareOn
+        ? flareField(nowMs, xrayEff).map((s) => ({ lat: s.lat, lng: s.lon, rgb: flareRgb(s.haf), alt: 0.006 }))
+        : [],
+      5,
+      flareOn,
+    )
+    // Aurora oval.
+    syncCloud(
+      g,
+      store,
+      'aurora',
+      auroraPts
+        .filter((a) => a.prob >= 8)
+        .map((a) => ({ lat: a.lat, lng: a.lon, rgb: auroraRgb(a.prob), alt: 0.01 })),
+      4,
+      show.aurora,
+    )
+    // Ionosonde MUF (measured stations).
+    syncCloud(
+      g,
+      store,
+      'muf',
+      (muf ?? [])
+        .filter((m) => m.mufMhz != null)
+        .map((m) => ({ lat: m.lat, lng: m.lon, rgb: mufRgb(m.mufMhz as number), alt: 0.008 })),
+      6,
+      show.muf,
+    )
+    // Proton polar-cap absorption.
+    syncCloud(
+      g,
+      store,
+      'pca',
+      (pca?.points ?? []).map((p) => ({ lat: p.lat, lng: p.lon, rgb: [0.72, 0.34, 1] as RGB, alt: 0.009 })),
+      5,
+      show.pca,
+    )
+    // Band-heat openings (live spots as an additive glow).
+    syncCloud(
+      g,
+      store,
+      'heat',
+      spots.map((s) => ({
+        lat: s.lat,
+        lng: s.lon,
+        rgb: hexRgb(s.heardMe ? GETTING_OUT : bandColor(s.band)),
+        alt: 0.003,
+      })),
+      7,
+      show.heat,
+    )
+  }, [ready, nowMs, xrayLong, show.flare, show.aurora, show.muf, show.pca, show.heat, auroraPts, muf, pca, spots])
+
   if (!ok) {
     return (
       <div className="globe3d-fallback">
@@ -245,7 +455,13 @@ export default function Globe3D({
             [
               ['spots', 'Spots'],
               ['arcs', 'Heard-me arcs'],
+              ['heat', 'Band heat'],
+              ['flare', 'Flare blackout'],
+              ['aurora', 'Aurora'],
+              ['muf', 'MUF'],
+              ['pca', 'Polar cap (PCA)'],
               ['states', 'US states'],
+              ['grid', 'Graticule'],
               ['lights', 'City lights'],
             ] as const
           ).map(([k, label]) => (
@@ -282,6 +498,7 @@ export default function Globe3D({
           showAtmosphere
           atmosphereColor="#68a8e2"
           atmosphereAltitude={0.18}
+          showGraticules={show.grid}
           htmlElementsData={show.spots ? points : []}
           htmlLat="lat"
           htmlLng="lng"
