@@ -4420,6 +4420,7 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
         "dxped" => "Nexus — DXpeditions".to_string(),
         "needed" => "Nexus — Needed".to_string(),
         "operate" => "Nexus — Operate".to_string(),
+        "fieldday" => "Nexus — Field Day".to_string(),
         "waterfall" => "Nexus — Waterfall".to_string(),
         "bandmapPhone" => "Nexus — Band map (Phone)".to_string(),
         "bandmapCw" => "Nexus — Band map (CW)".to_string(),
@@ -4431,6 +4432,8 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
         (1140.0, 760.0)
     } else if slug == "bandmapPhone" || slug == "bandmapCw" {
         (420.0, 780.0)
+    } else if slug == "fieldday" {
+        (560.0, 760.0) // the scoreboard: operator + tiles + sections board
     } else if slug == "waterfall" {
         (900.0, 300.0) // a wide, short monitoring strip
     } else {
@@ -7500,6 +7503,13 @@ pub fn run() {
         // written per contact and restored when FD mode starts, so a mid-event
         // restart loses nothing.
         eng.set_fd_log_path(fd_backup_path());
+        // Restore-on-launch (spec §1.1): if the operator left the Field Day
+        // master switch on, re-enter FD (passive S&P) so a crash/restart during a
+        // 24-hour contest comes back operating and the durable journal (set just
+        // above) restores the contest log. Must follow set_fd_log_path so the
+        // merge finds the journal. This is the ONLY auto-entry, and only because
+        // the operator left `fd_active` on — no date/default path ever sets it.
+        eng.restore_field_day_if_enabled();
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
         // Restore persisted Tempo conversation threads so chat history (and the `*`

@@ -104,13 +104,10 @@ export function bakeLut(name: ColormapName, size = 256): Uint8ClampedArray {
 /**
  * The colormap for a theme — v1 rides the one-color-language theme token rather
  * than an explicit picker (deferred). dark→inferno (warm perceptual),
- * amber→amber-crt (the amber-on-black shack look, properly ramped),
  * light→cividis (CVD-safe, reads on a bright screen). Anything else → inferno.
  */
 export function themeColormap(theme: string): ColormapName {
   switch (theme) {
-    case 'amber':
-      return 'amber-crt'
     case 'light':
       return 'cividis'
     default:

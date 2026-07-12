@@ -185,6 +185,21 @@ impl FieldDayLog {
             .len()
     }
 
+    /// The distinct sections worked — the identities behind the
+    /// [`sections`](Self::sections) count, sorted for a stable board order
+    /// (the worked-sections color board, spec §5).
+    pub fn worked_sections(&self) -> Vec<String> {
+        let mut sections: Vec<String> = self
+            .qsos
+            .iter()
+            .map(|q| q.section.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        sections.sort();
+        sections
+    }
+
     /// Per-mode QSO points (phone 1, CW/digital 2) — power multiplier and
     /// bonuses are applied at the score layer (engine), not here.
     pub fn qso_points(&self) -> u32 {
@@ -462,9 +477,10 @@ impl FieldDayStation {
             pending: Some(Msg::Cq {
                 de: mycall.to_string(),
                 grid: mygrid.to_string(),
-                // Field Day's CQ is "CQ FD <call> <grid>" by convention — but the
-                // exchange machinery has always sent a plain CQ here; keep as-is.
-                dir: String::new(),
+                // Field Day's running CQ is the directed "CQ FD <call> <grid>" —
+                // the `FD` token advertises a Field Day CQ (`to_text` renders it,
+                // `is_cq_dir` accepts it). S&P still answers ANY CQ, FD or plain.
+                dir: "FD".to_string(),
             }),
             dxcall: None,
             peer_exch: None,
@@ -544,6 +560,34 @@ impl FieldDayStation {
                     self.transcript
                         .push(format!("caller {de} {class} {section} → R + my exch"));
                 }
+                // Running (out-of-order tolerance): a caller that ROGERED its
+                // exchange (roger:true) while we're still calling CQ — the plain
+                // exchange was dropped, or the caller pre-rogered. The class +
+                // section are carried in the rogered frame, so skip straight to
+                // logging and close with RR73 rather than stalling on CQ.
+                // Happy-path callers send roger:false, so this never fires on the
+                // normal sequence.
+                (
+                    FdState::CallingCq,
+                    Msg::FieldDay {
+                        to,
+                        de,
+                        roger: true,
+                        class,
+                        section,
+                    },
+                ) if to == self.mycall() => {
+                    self.dxcall = Some(de.clone());
+                    self.log.log(de, class, section, slot);
+                    self.pending = Some(Msg::Rr73 {
+                        to: de.clone(),
+                        de: self.mycall().to_string(),
+                    });
+                    self.state = FdState::Done;
+                    self.transcript.push(format!(
+                        "caller {de} {class} {section} rogered early → log + RR73"
+                    ));
+                }
                 // S&P: the runner rogered + sent their exchange → log + RR73.
                 (
                     FdState::AwaitExchange,
@@ -564,9 +608,14 @@ impl FieldDayStation {
                     self.transcript
                         .push(format!("logged {de} {class} {section}; send RR73"));
                 }
-                // Running: caller confirmed → log them.
+                // Running: caller confirmed → log them. A bare `73` (Bye73)
+                // completes too — if the caller closes with 73 instead of
+                // RR73/RRR the contact must not stall (their exchange is already
+                // in hand from the CallingCq step). Happy-path callers send RR73,
+                // so the added Bye73 alternative never fires on the normal flow.
                 (FdState::AwaitConfirm, Msg::Rr73 { to, .. })
                 | (FdState::AwaitConfirm, Msg::Rrr { to, .. })
+                | (FdState::AwaitConfirm, Msg::Bye73 { to, .. })
                     if to == self.mycall() =>
                 {
                     if let Some((call, class, section)) = self.peer_exch.take() {
@@ -771,6 +820,18 @@ mod tests {
     }
 
     #[test]
+    fn worked_sections_returns_the_distinct_set_sorted() {
+        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20M");
+        assert!(log.log("K2DEF", "3A", "IL", 1));
+        assert!(log.log("N0ABC", "1D", "MN", 2));
+        assert!(log.log_mode_at("W1AW", "2A", "IL", "CW", 0, 100)); // IL again, new mode
+                                                                    // The count and the identities agree; identities are the distinct set,
+                                                                    // sorted (IL once, though worked twice), and stable.
+        assert_eq!(log.worked_sections(), vec!["IL", "MN"]);
+        assert_eq!(log.worked_sections().len(), log.sections());
+    }
+
+    #[test]
     fn observe_runs_sp_side() {
         // S&P station hears a CQ, sends exchange, then the runner's rogered exch.
         let mut sp =
@@ -783,5 +844,88 @@ mod tests {
         assert_eq!(sp.log.qso_count(), 1);
         assert_eq!(sp.log.qsos()[0].class, "3A");
         assert_eq!(sp.log.qsos()[0].section, "WI");
+    }
+
+    #[test]
+    fn running_station_calls_directed_cq_fd() {
+        // The running station advertises a DIRECTED Field Day CQ so it reads as
+        // "CQ FD" on the air — and an S&P station still answers it.
+        let run = FieldDayStation::running("W9XYZ", "EN37", Exchange::new("3A", "WI"), "20M");
+        let cq = run.outgoing().unwrap().to_text();
+        assert!(cq.contains("CQ FD"), "directed FD CQ: {cq}");
+        assert_eq!(cq, "CQ FD W9XYZ EN37");
+        let mut sp =
+            FieldDayStation::search_and_pounce("K2DEF", "FN31", Exchange::new("2A", "IL"), "20M");
+        sp.observe(&[dec(&cq)], 0);
+        assert_eq!(
+            sp.state,
+            FdState::AwaitExchange,
+            "S&P answers a directed FD CQ"
+        );
+    }
+
+    #[test]
+    fn loopback_completes_the_exchange_on_the_happy_path() {
+        // The full round-trip over the real modem still completes unchanged after
+        // the directed-CQ-FD switch: both stations log the OTHER's exchange.
+        let mut running =
+            FieldDayStation::running("W9XYZ", "EN37", Exchange::new("3A", "WI"), "20M");
+        let mut sp =
+            FieldDayStation::search_and_pounce("K2DEF", "FN31", Exchange::new("2A", "IL"), "20M");
+        run_loopback_fieldday(&mut running, &mut sp, 15.0, 40);
+        assert_eq!(
+            running.log.qso_count(),
+            1,
+            "running: {:?}",
+            running.transcript
+        );
+        assert_eq!(sp.log.qso_count(), 1, "sp: {:?}", sp.transcript);
+        assert_eq!(
+            running.log.qsos()[0].section,
+            "IL",
+            "running logged the caller"
+        );
+        assert_eq!(sp.log.qsos()[0].section, "WI", "S&P logged the runner");
+    }
+
+    #[test]
+    fn running_logs_on_a_bare_73() {
+        // Caller closes with a bare `73` instead of RR73/RRR: the contact must
+        // still complete + log (the caller's exchange was captured at CallingCq),
+        // not stall in AwaitConfirm.
+        let mut run = FieldDayStation::running("W9XYZ", "EN37", Exchange::new("3A", "WI"), "20M");
+        run.observe(&[dec("W9XYZ K2DEF 2A IL")], 0); // caller's exchange
+        assert_eq!(run.state, FdState::AwaitConfirm);
+        run.observe(&[dec("W9XYZ K2DEF 73")], 1); // bare 73, not RR73
+        assert_eq!(run.state, FdState::Done);
+        assert_eq!(run.log.qso_count(), 1);
+        let q = &run.log.qsos()[0];
+        assert_eq!(
+            (q.call.as_str(), q.class.as_str(), q.section.as_str()),
+            ("K2DEF", "2A", "IL")
+        );
+    }
+
+    #[test]
+    fn running_skips_ahead_on_an_early_rogered_exchange() {
+        // A caller that ROGERS its exchange while we're still calling CQ (the
+        // plain exchange dropped, or the caller pre-rogered): the class + section
+        // are in the rogered frame, so skip straight to logging + close with RR73
+        // instead of stalling on CQ.
+        let mut run = FieldDayStation::running("W9XYZ", "EN37", Exchange::new("3A", "WI"), "20M");
+        assert_eq!(run.state, FdState::CallingCq);
+        run.observe(&[dec("W9XYZ K2DEF R 2A IL")], 0); // rogered, skipping the plain form
+        assert_eq!(run.state, FdState::Done);
+        assert_eq!(run.log.qso_count(), 1);
+        let q = &run.log.qsos()[0];
+        assert_eq!(
+            (q.call.as_str(), q.class.as_str(), q.section.as_str()),
+            ("K2DEF", "2A", "IL")
+        );
+        assert_eq!(
+            run.outgoing().unwrap().to_text(),
+            "K2DEF W9XYZ RR73",
+            "closes with RR73 to the caller"
+        );
     }
 }

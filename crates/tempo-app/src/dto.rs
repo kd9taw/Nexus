@@ -395,6 +395,11 @@ pub struct RadioStatus {
     /// why the waterfall is blank instead of failing silently.
     #[serde(default)]
     pub audio_error: Option<String>,
+    /// Set when two enabled radios are configured on the SAME serial COM port — the
+    /// monitor radio's CAT can't open the busy port and shows a confusing red pill.
+    /// A config warning (self-clears once the ports differ); surfaced in the status lane.
+    #[serde(default)]
+    pub radio_config_warning: Option<String>,
     /// Transmit on even/"1st" slots (true) or odd/"2nd" slots (false). Two
     /// stations must use OPPOSITE periods to complete a QSO.
     #[serde(default = "default_true")]
@@ -565,6 +570,10 @@ pub struct FieldDayStatus {
     pub dxcall: Option<String>,
     pub qso_count: usize,
     pub sections: usize,
+    /// The distinct sections worked (the identities behind `sections`), sorted —
+    /// the worked-sections color board (spec §5) reads this.
+    #[serde(default)]
+    pub worked_sections: Vec<String>,
     /// Raw per-mode QSO points (phone 1, CW/digital 2) before multipliers.
     pub points: u32,
     /// Which event: "arrlfd" | "wfd".

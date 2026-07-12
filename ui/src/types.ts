@@ -659,6 +659,8 @@ export interface RadioStatus {
   splitTxMhz?: number | null
   /** Set when the sound card failed to open (explains a blank waterfall). */
   audioError?: string | null
+  /** Set when two radios are on the same serial COM port (explains a red pill). */
+  radioConfigWarning?: string | null
   /** Transmit on even/"1st" slots (true) or odd/"2nd" (false). */
   txEven: boolean
   /** Smart auto-cycle on: answering a heard station auto-picks the opposite cycle
@@ -1401,6 +1403,7 @@ export interface FieldDayQso {
   section: string
   band: string  /** Scoring class: 'DIG' | 'CW' | 'PH'. */
   mode?: string
+  whenUnix?: number
 }
 
 /** Field Day operating + scoring status. */
@@ -1413,6 +1416,8 @@ export interface FieldDayStatus {
   dxcall?: string | null
   qsoCount: number
   sections: number
+  /** The distinct sections worked (identities behind `sections`), for the board. */
+  workedSections?: string[]
   points: number
   log: FieldDayQso[]  /** Which event: 'arrlfd' | 'wfd'. */
   event?: string
@@ -1465,6 +1470,13 @@ export interface Settings {
   ctcssToneHz: number
   fdClass: string
   fdSection: string
+  /** The current operator at the key (call/initials) — FD rotates ops, so this
+   * differs from mycall. Pushed to N3FJP as the QSO operator; empty = use mycall. */
+  fdOperator?: string
+  /** Field Day master switch (persisted). Default false; ONLY the operator's toggle sets it
+   * true (never date/default). Drives all Field Day visibility (nav item, FD-detail tab) and
+   * the backend operating mode. */
+  fdActive: boolean
   /** Amateur license class: 'technician' | 'general' | 'extra' | 'open' (no TX limits). */
   licenseClass: string
   /** Active operating mode ('digital' | 'phone' | 'cw') — set live via the section nav, but
@@ -1611,6 +1623,10 @@ export interface Settings {
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string
   n3fjpPort?: number
+  /** Field Day push uses the contest-correct ENTER sequence (N3FJP scores it) vs ADDDIRECT. Default on. */
+  n3fjpUseEnter?: boolean
+  /** Report this position's band to N3FJP (no CAT) for the club Network Status Display board. Default off. */
+  n3fjpReportBand?: boolean
   /** Auto-forward EVERY logged QSO to N3FJP ACLog (not just Field Day). Uses the host/port above. */
   n3fjpUpload?: boolean
   /** Cloudlog / Wavelog self-hosted logbook: base URL, station-profile id, instance API key. */
@@ -1718,8 +1734,14 @@ export interface Settings {
     chat: string[]
     qso: string[]
     band: string[]
-    /** CW cockpit F-key macros; empty = the built-in defaults. */
+    /** LEGACY flat CW F-key list — kept for back-compat; migrated into `cwProfiles`
+     * (a "Default" profile) on load. New reads/writes go through the profiles. */
     cw?: { key: string; label: string; text: string }[]
+    /** Named CW cockpit F-key macro sets (one per operator/purpose). Each profile's
+     * empty macro list = the cockpit's built-in defaults. */
+    cwProfiles?: { name: string; macros: { key: string; label: string; text: string }[] }[]
+    /** Index into `cwProfiles` of the active set. */
+    activeCwProfile?: number
   }
   // --- dual-radio ---
   /** Configured radios (dual-radio). Migrated to a single profile for a one-radio station; the flat

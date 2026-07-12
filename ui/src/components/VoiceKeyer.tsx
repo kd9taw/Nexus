@@ -18,6 +18,9 @@ interface Props {
   /** Whether the operator is holding live PTT — playing a canned message then would fight
    * the live over, so we block it and say so. */
   keyed: boolean
+  /** Field Day exchange to read ("3A WI") — when set (FD mode), hint that a slot can be
+   * recorded with it for one-key sends. Empty/undefined outside FD. */
+  fdExchange?: string | null
 }
 
 /**
@@ -26,7 +29,7 @@ interface Props {
  * Click a slot or press its F-key to play; ● records from the input device; ⤓ imports a
  * `.wav`; ✕ clears; Esc / ■ Stop aborts.
  */
-export function VoiceKeyer({ txEnabled, keyed }: Props) {
+export function VoiceKeyer({ txEnabled, keyed, fdExchange }: Props) {
   const [msgs, setMsgs] = useState<VoiceMessage[]>([])
   const [recording, setRecording] = useState<number | null>(null)
   const fileRefs = useRef<Record<number, HTMLInputElement | null>>({})
@@ -152,6 +155,12 @@ export function VoiceKeyer({ txEnabled, keyed }: Props) {
         ● records from your <strong>input device</strong> — often the rig's RX audio, not a
         mic. If so, record your message elsewhere and use Import (⤓).
       </p>
+      {fdExchange && (
+        <p className="vk-fd-hint">
+          Field Day: record a slot with your exchange <strong>“{fdExchange}”</strong> for
+          one-key sends.
+        </p>
+      )}
       <div className="vk-grid">
         {msgs.map((m) => {
           const isRec = recording === m.slot

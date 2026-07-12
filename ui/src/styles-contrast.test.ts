@@ -79,7 +79,7 @@ describe('light theme readability', () => {
     // Every hex inside the marked section must hold ≥4.5:1 on white (they are
     // TEXT colors on page backgrounds — that's why the section exists).
     const start = css.indexOf('LIGHT-MODE INK OVERRIDES')
-    const end = css.indexOf('AMBER-NIGHT', start)
+    const end = css.indexOf('Stock WSJT-X decode', start)
     expect(start).toBeGreaterThan(-1)
     for (const m of css.slice(start, end).matchAll(/color:\s*(#[0-9a-fA-F]{6})/g)) {
       expect(contrast(m[1], WHITE), `${m[1]} vs white`).toBeGreaterThanOrEqual(4.5)
@@ -96,7 +96,6 @@ describe('light theme readability', () => {
       ...Object.keys(rootBlock()),
       ...Object.keys(themeBlock('dark')),
       ...Object.keys(themeBlock('light')),
-      ...Object.keys(themeBlock('amber')),
     ])
     const used = new Set([...css.matchAll(/var\((--[\w-]+)[),]/g)].map((m) => m[1]))
     const undefd = [...used].filter(

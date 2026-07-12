@@ -446,8 +446,6 @@ const AI_CW_WINDOW: usize = 180_000;
 const QSO_WAV_WINDOW: usize = 720_000;
 
 /// Window of recent decode DT samples used for the time-sync health median.
-/// Snap a stored power multiplier to the LEGAL ARRL FD tiers {1, 2, 5} — a
-/// hand-edited settings file must never score with ×3/×4 (not real tiers).
 /// Map a UI DSP-func name to its `[nb, nr, notch, comp, vox]` slot index (the same order the
 /// radio loop uses for the `["NB","NR","ANF","COMP","VOX"]` Hamlib tokens). `None` = unknown name.
 fn func_index(func: &str) -> Option<usize> {
@@ -458,16 +456,6 @@ fn func_index(func: &str) -> Option<usize> {
         "comp" => Some(3),
         "vox" => Some(4),
         _ => None,
-    }
-}
-
-fn legal_fd_power(v: u32) -> u32 {
-    if v >= 5 {
-        5
-    } else if v >= 2 {
-        2
-    } else {
-        1
     }
 }
 
@@ -752,14 +740,38 @@ impl Engine {
         self.tx_offset_hz = self.settings.tx_offset_hz;
         self.rx_offset_hz = self.settings.rx_offset_hz;
         self.hold_tx_freq = self.settings.hold_tx_freq;
-        // A settings save must NOT destroy an active Field Day session: the
-        // Mode::FieldDay variant carries the whole dupe-checked contest log
-        // in memory, and resetting to Chat would drop it irrecoverably (a
-        // solo entrant with no club logger has no other copy). Every other
-        // mode is safe to reset — Chat holds nothing, a QSO is transient. The
-        // FD panel itself saves settings on each bonus-checkbox toggle, so
-        // this guard is load-bearing, not a corner case.
-        if !matches!(self.mode, Mode::FieldDay { .. }) {
+        // A settings save reconciles the operating mode with the Field Day
+        // master switch `fd_active`, which is authoritative over whether the
+        // engine operates in Field Day (spec §1). apply_settings is heavyweight
+        // — it resets the mode to Chat and clears the TX queue — so this is the
+        // one place a save re-enters (or leaves) FD to keep it in step with the
+        // master.
+        if self.settings.fd_active {
+            // Master ON. PRESERVE an already-active FD session in place: the
+            // Mode::FieldDay variant carries the whole dupe-checked contest log
+            // in memory, and rebuilding it would drop everything logged since
+            // the last journal flush (a solo entrant with no club logger has no
+            // other live copy). The FD panel saves settings on every bonus-
+            // checkbox toggle, so this preservation is load-bearing. If NOT yet
+            // in FD, this save turned the master on (or followed a mode change):
+            // reset the heavyweight state, then enter passive S&P so every
+            // cockpit goes FD-aware — but only once class + section are set
+            // (else `restore_field_day_if_enabled` leaves Chat so the UI can
+            // prompt for them; the exchange goes on the air and `set_mode`
+            // refuses a blank one).
+            if !matches!(self.mode, Mode::FieldDay { .. }) {
+                self.mode = Mode::Chat;
+                self.cq_running = false;
+                self.restore_field_day_if_enabled();
+            }
+        } else {
+            // Master OFF. Field Day must be fully EXITED — reset to Chat
+            // regardless of the current mode. This closes the gap (spec §1.3)
+            // where flipping the master off left a lingering Mode::FieldDay, so
+            // the operator was stranded in FD with the nav hidden. The durable
+            // journal (written per contact) restores the log on the next
+            // re-enable. Every non-FD mode is likewise safe to reset — Chat
+            // holds nothing, a QSO is transient.
             self.mode = Mode::Chat;
             // Clear the CQ-run flag alongside the mode reset — otherwise a save
             // that drops out of a QSO run leaves `cq_running` stale-true, which
@@ -784,6 +796,27 @@ impl Engine {
             self.qsy.enable(home, partner);
         } else if !self.settings.qsy_enabled && self.qsy.enabled {
             let _ = self.qsy.disable();
+        }
+    }
+
+    /// Re-enter Field Day if the persisted master switch (`fd_active`) left it
+    /// on. Called by the shell at startup (AFTER [`set_fd_log_path`](Self::set_fd_log_path),
+    /// so the durable journal restores the contest log) and by
+    /// [`apply_settings`](Self::apply_settings) when a save turns the master on.
+    /// Enters passive S&P (`fieldday-sp`) so every cockpit goes FD-aware and the
+    /// journal is merged in. This is the ONLY code path that auto-enters FD, and
+    /// only because the operator left the master on — no date/default logic ever
+    /// sets `fd_active` (spec §1.1). No-op unless the master is on with a
+    /// non-blank class + section (the exchange goes on the air; `set_mode`
+    /// refuses a blank one) and the engine is not already in FD (never rebuild a
+    /// live in-memory FD log).
+    pub fn restore_field_day_if_enabled(&mut self) {
+        if self.settings.fd_active
+            && !self.settings.fd_class.trim().is_empty()
+            && !self.settings.fd_section.trim().is_empty()
+            && !matches!(self.mode, Mode::FieldDay { .. })
+        {
+            let _ = self.set_mode("fieldday-sp");
         }
     }
 
@@ -988,6 +1021,14 @@ impl Engine {
         if !self.settings.band.eq_ignore_ascii_case(band) {
             self.sideband_override = None;
         }
+        // A QSY — band change OR a same-band dial move (band picker, MHz entry, or
+        // working a needed spot, which funnels through here) — lands on a different
+        // signal, so the CW copy from the old frequency is stale. Clear it.
+        if !self.settings.band.eq_ignore_ascii_case(band)
+            || (self.settings.dial_mhz - dial_mhz).abs() > 1e-9
+        {
+            self.clear_cw_decode();
+        }
         self.settings.dial_mhz = dial_mhz;
         self.settings.band = band.to_string();
         self.settings.sideband = mode.to_string();
@@ -1024,9 +1065,10 @@ impl Engine {
                 self.clear_decode_context();
                 self.app.clear_stations();
                 self.halt_tx();
-                // A knob QSY across bands drops the transient mode override too, exactly like an
-                // app-commanded band change (set_frequency) — so the tooltip's "until you change
-                // bands" holds however the QSY happened, and the auto sideband re-asserts.
+                self.clear_cw_decode(); // stale CW copy across a cross-band knob QSY
+                                        // A knob QSY across bands drops the transient mode override too, exactly like an
+                                        // app-commanded band change (set_frequency) — so the tooltip's "until you change
+                                        // bands" holds however the QSY happened, and the auto sideband re-asserts.
                 self.sideband_override = None;
             }
             self.settings.band = band.to_string();
@@ -1385,12 +1427,21 @@ impl Engine {
             .active_peer()
             .map(|s| s.to_string())
             .unwrap_or_default();
+        // Field Day exchange tokens ({CLASS}/{SECTION}/{EXCH}) are live only while the FD
+        // master switch is on; outside FD they're empty so a stray token collapses cleanly.
+        let (class, section): (&str, &str) = if self.settings.fd_active {
+            (&self.settings.fd_class, &self.settings.fd_section)
+        } else {
+            ("", "")
+        };
         let ctx = tempo_core::cw::CwContext {
             mycall: &self.settings.mycall,
             myname: &self.settings.op_name,
             mygrid: &self.settings.mygrid,
             hiscall: &hiscall,
             rst: "599",
+            class,
+            section,
         };
         tempo_core::cw::expand(text, &ctx)
     }
@@ -2090,14 +2141,14 @@ impl Engine {
         let Mode::FieldDay { station, .. } = &self.mode else {
             return None;
         };
-        let qso_pts = station.log.qso_points();
-        let powered = qso_pts * legal_fd_power(self.settings.fd_power_mult);
-        let bonus: u32 = self
-            .settings
-            .fd_bonuses
-            .iter()
-            .filter_map(|id| crate::fd_bonus_points(id))
-            .sum();
+        let rs = tempo_core::fd_rules::ruleset(
+            station.log.event,
+            tempo_core::fd_rules::CURRENT_RULES_YEAR,
+        );
+        let (qso_pts, powered) = rs
+            .scoring
+            .qso_and_powered(&station.log, self.settings.fd_power_mult);
+        let bonus = rs.bonus_points(&self.settings.fd_bonuses);
         Some((qso_pts, powered, bonus))
     }
 
@@ -2975,6 +3026,17 @@ impl Engine {
         self.decode_history.clear();
         self.last_decode_slot = None;
         self.early_seen = None;
+    }
+
+    /// Clear the CW decode transcript + reset the stream decoder. A QSY (band change,
+    /// commanded retune, or working a spot) moves onto a different signal, so the old
+    /// CW copy is stale (operator report: the CW decode area lingered across a QSY).
+    fn clear_cw_decode(&mut self) {
+        self.ai_cw_text.clear();
+        self.ai_cw_status.clear();
+        self.ai_cw_audio.clear();
+        self.ai_cw_fed = 0;
+        self.cw_stream.clear();
     }
 
     /// The best resume point from `dxcall` addressed to `mycall` in this slot, for
@@ -4052,6 +4114,8 @@ impl Engine {
         }
         .to_string();
         s.radio.audio_error = self.audio_error.clone();
+        s.radio.radio_config_warning =
+            crate::settings::serial_port_conflicts(&self.settings.radios);
         s.radio.tx_even = self.tx_even();
         s.radio.tx_cycle_auto = self.tx_cycle_auto;
         s.radio.tr_period_secs = self.active_slot_secs();
@@ -4158,17 +4222,20 @@ impl Engine {
                     tx_count: station.tx_count,
                 });
             }
+            // Master switch off (spec §1.3): defensively refuse to expose FD
+            // chrome while `fd_active` is false, so a lingering `Mode::FieldDay`
+            // can't strand the operator in Field Day after the master flips off.
+            Mode::FieldDay { .. } if !self.settings.fd_active => s.mode = OpMode::Chat,
             Mode::FieldDay { station, running } => {
                 s.mode = OpMode::FieldDay;
                 let log = &station.log;
-                let qso_pts = log.qso_points();
-                let powered = qso_pts * legal_fd_power(self.settings.fd_power_mult);
-                let bonus: u32 = self
-                    .settings
-                    .fd_bonuses
-                    .iter()
-                    .filter_map(|id| crate::fd_bonus_points(id))
-                    .sum();
+                let rs = tempo_core::fd_rules::ruleset(
+                    log.event,
+                    tempo_core::fd_rules::CURRENT_RULES_YEAR,
+                );
+                let (qso_pts, powered) =
+                    rs.scoring.qso_and_powered(log, self.settings.fd_power_mult);
+                let bonus = rs.bonus_points(&self.settings.fd_bonuses);
                 s.field_day = Some(FieldDayStatus {
                     my_class: log.myexch.class.clone(),
                     my_section: log.myexch.section.clone(),
@@ -4177,6 +4244,7 @@ impl Engine {
                     dxcall: station.dxcall.clone(),
                     qso_count: log.qso_count(),
                     sections: log.sections(),
+                    worked_sections: log.worked_sections(),
                     points: qso_pts,
                     event: if matches!(log.event, tempo_core::fieldday::FdEvent::WinterFd) {
                         "wfd".into()
@@ -5650,6 +5718,31 @@ mod tests {
     }
 
     #[test]
+    fn a_qsy_clears_the_cw_decode_transcript() {
+        // Operator report: the CW decode area lingered after a QSY. Changing bands
+        // or working a needed spot moves onto a different signal, so the old CW
+        // copy is stale and must clear.
+        let mut e = Engine::new("W9XYZ", "EN61", 0); // default dial is 20 m
+        e.ai_cw_text = "CQ CQ DE K1ABC K1ABC".into();
+        e.ai_cw_status = "copying".into();
+        // Band change (band picker, or a cross-band needed-click) clears the copy.
+        e.set_frequency(7.030, "40m", "USB");
+        assert!(
+            e.ai_cw_text.is_empty(),
+            "band-change QSY clears the CW decode"
+        );
+        assert!(e.ai_cw_status.is_empty());
+        // Same-band QSY by working a needed spot must ALSO clear (a new signal on
+        // the same band still means new copy).
+        e.ai_cw_text = "W1AW 599 599".into();
+        e.work_spot("CW", 7.025, "40m");
+        assert!(
+            e.ai_cw_text.is_empty(),
+            "working a spot (same band, new freq) clears the CW decode"
+        );
+    }
+
+    #[test]
     fn tx_lockout_blocks_all_paths_outside_license_privileges() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
@@ -6006,11 +6099,14 @@ mod tests {
         );
 
         // A settings save mid-event must NOT destroy the Field Day contest log
-        // (the FD panel saves settings on every bonus-checkbox toggle).
+        // (the FD panel saves settings on every bonus-checkbox toggle). A real
+        // FD session has the master switch on, so the save preserves FD in place
+        // rather than exiting it (master off = not in FD, spec §1.3).
         {
             let mut e = Engine::new("W9XYZ", "EN61", 0);
             {
                 let mut s = e.settings().clone();
+                s.fd_active = true;
                 s.fd_class = "3A".into();
                 s.fd_section = "WI".into();
                 e.apply_settings(s);
@@ -7458,6 +7554,174 @@ mod tests {
         }
     }
 
+    /// PARITY GUARD for the `fd_rules` refactor: `fd_score` + the snapshot
+    /// scoring block now compute via `fd_rules::ruleset(..).scoring`/bonuses
+    /// instead of the old inline `legal_fd_power` + `fd_bonus_points`. The
+    /// numbers must be byte-identical to what the inline math produced, so this
+    /// pins an ARRL-FD fixture to values hand-computed from the OLD formula
+    /// (`qso_pts × legal_fd_power(mult) + Σ bonus points`).
+    #[test]
+    fn fd_score_is_byte_identical_after_the_ruleset_refactor() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_power_mult = 5; // legal tier 5
+            s.fd_bonuses = vec!["w1aw-bulletin".into(), "web-submission".into()]; // 100 + 50
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        // 6 QSO points: CW 2 + CW 2 + PH 1 + PH 1.
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(e.fd_log_manual("N0XYZ", "4A", "MN", "CW").unwrap());
+        assert!(e.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
+        assert!(e.fd_log_manual("K5ABC", "3A", "STX", "PH").unwrap());
+
+        // OLD formula: qso_pts=6, powered=6×5=30, bonus=100+50=150.
+        assert_eq!(
+            e.fd_score(),
+            Some((6, 30, 150)),
+            "fd_score matches the pre-refactor inline math exactly"
+        );
+        // The snapshot scoring block must agree (same ruleset path).
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(fd.points, 6);
+        assert_eq!(fd.powered_points, 30);
+        assert_eq!(fd.bonus_points, 150);
+        assert_eq!(fd.total_score, 180);
+    }
+
+    /// Master switch OFF (spec §1.3): even when the engine is still in
+    /// `Mode::FieldDay`, a false `fd_active` must hide all FD chrome — the
+    /// snapshot exposes no `field_day` so no cockpit shows the FD form.
+    #[test]
+    fn master_off_hides_field_day_chrome_in_the_snapshot() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            // fd_active stays false (the default) — the operator never flipped it.
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "master off → no FD chrome even in Mode::FieldDay"
+        );
+    }
+
+    /// Master switch drives the operating mode (spec §1.2): a settings save with
+    /// `fd_active` true and class/section set enters `Mode::FieldDay` (passive
+    /// S&P), so every cockpit goes FD-aware without a separate `set_mode` — this
+    /// is what the frontend toggle triggers through `apply_settings`.
+    #[test]
+    fn apply_settings_master_on_enters_field_day() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Baseline: default off → no FD.
+        assert!(e.snapshot().field_day.is_none(), "master off by default");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        let fd = e
+            .snapshot()
+            .field_day
+            .expect("master on + class/section → engine enters Field Day S&P");
+        assert!(!fd.running, "the master enters passive S&P, not a run");
+        assert_eq!(fd.my_class, "3A");
+        assert_eq!(fd.my_section, "WI");
+    }
+
+    /// Master ON but the exchange is incomplete: `apply_settings` must NOT enter
+    /// FD on a blank class/section (the exchange goes on the air) — it leaves the
+    /// engine non-FD so the setup screen (spec §1.2 #1) can prompt for them.
+    #[test]
+    fn apply_settings_master_on_without_exchange_stays_out_of_field_day() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true; // master flipped on, but class/section still blank
+            e.apply_settings(s);
+        }
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "no FD entry without a class/section to transmit"
+        );
+    }
+
+    /// Master switch OFF forces FD exit (spec §1.3): once the engine is in Field
+    /// Day, a save with `fd_active` false must leave the engine NOT in
+    /// `Mode::FieldDay` (not merely hide the chrome) — otherwise the operator is
+    /// stranded in FD with the nav hidden. `field_day_log_adif` reads the raw
+    /// mode, so its `None` proves the engine truly left FD.
+    #[test]
+    fn apply_settings_master_off_exits_field_day() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        assert!(
+            e.field_day_log_adif().is_some() || e.snapshot().field_day.is_some(),
+            "precondition: the engine is in Field Day"
+        );
+        // Log a contact so the raw-mode accessor has something to report.
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(e.field_day_log_adif().is_some(), "in FD with a contact");
+        // The operator flips the master off.
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = false;
+            e.apply_settings(s);
+        }
+        assert!(
+            e.field_day_log_adif().is_none(),
+            "master off → engine is no longer in Mode::FieldDay"
+        );
+        assert!(e.snapshot().field_day.is_none(), "and no FD chrome");
+    }
+
+    /// Restore-on-launch (spec §1.1): a relaunch with `fd_active` persisted true
+    /// must re-enter Field Day so a crash/restart mid-contest comes back
+    /// operating. `restore_field_day_if_enabled` is the shell's startup hook.
+    #[test]
+    fn restore_field_day_if_enabled_re_enters_on_relaunch() {
+        // Simulate a relaunch: build the engine straight from persisted settings
+        // (the shell's `Engine::with_settings` path) with the master left on. A
+        // fresh engine boots in Chat — FD is NOT auto-entered by construction.
+        let mut s = Engine::new("W9XYZ", "EN61", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        let mut e = Engine::with_settings(s);
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "freshly loaded engine is not yet in FD"
+        );
+        e.restore_field_day_if_enabled();
+        assert!(
+            e.snapshot().field_day.is_some(),
+            "restore re-enters FD when the master was left on"
+        );
+        // Idempotent: a second restore never rebuilds a live FD log.
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        e.restore_field_day_if_enabled();
+        assert_eq!(
+            e.snapshot().field_day.expect("still in FD").qso_count,
+            1,
+            "restore is a no-op once already in FD (never rebuilds the log)"
+        );
+    }
+
     /// M15: the Field Day contest log is memory-only, so the shell needs a way to
     /// serialize it for a flush-on-exit. `field_day_log_adif` yields the whole
     /// log — with the class/section exchange — as ADIF, and is `None` when there
@@ -7514,6 +7778,7 @@ mod tests {
             let mut e = Engine::new("W9XYZ", "EN61", 0);
             {
                 let mut s = e.settings().clone();
+                s.fd_active = true; // master switch on — FD chrome visible in the snapshot
                 s.fd_class = "3A".into();
                 s.fd_section = "WI".into();
                 e.apply_settings(s);

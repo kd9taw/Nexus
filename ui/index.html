@@ -9,7 +9,7 @@
         try {
           var d = document.documentElement
           var t = localStorage.getItem('tempo-theme')
-          if (t === 'light' || t === 'dark' || t === 'amber') d.setAttribute('data-theme', t)
+          if (t === 'light' || t === 'dark') d.setAttribute('data-theme', t)
           var l = localStorage.getItem('tempo-layout')
           if (l === 'right' || l === 'top') d.setAttribute('data-layout', l)
           var den = localStorage.getItem('nexus-density')

@@ -1,6 +1,6 @@
 /* ===========================================================================
    Nexus UI — hand-written CSS, themed via CSS variables.
-   Themes: Light (sunlight), Dark (shack), Amber-Night (night-vision-safe).
+   Themes: Light (sunlight), Dark (shack).
    Modern flat hierarchy, one accent, semantic state colors, system sans.
    =========================================================================== */
 
@@ -2832,12 +2832,21 @@ button.nb-chip:hover {
 
 /* ---- LIGHT (sunlight) ---- */
 [data-theme='light'] {
-  --bg: #eef1f5;
-  --bg-elev: #ffffff;
+  --bg: #e5eaf0;
+  --bg-elev: #fbfcfe;
   --bg-elev-2: #f4f6f9;
-  --panel: #ffffff;
-  /* Operator report: light-mode greys read washed-out — borders and dim text
-     run a step darker here than a naive inversion would give. */
+  --panel: #fbfcfe;
+  /* Elevation-first light theme (Refactoring UI / Material 3 / Apple HIG):
+     the earlier all-white surfaces read washed-out even though the inks pass
+     WCAG — the STRUCTURE was flat. Fix is structural, not more contrast: the
+     page (--bg) sits a step darker and the big surfaces (--panel/--bg-elev) go
+     a hair off pure white to cut glare, WIDENING the page↔panel value step so
+     panels visibly lift (reinforced by the light --shadow on
+     [data-theme='light'] .panel below). Inputs stay on --bg, so they read as
+     recessed wells against the off-white panel. Inks still run a touch darker
+     than a naive inversion. Component-level structure tweaks (row dividers,
+     chip fills, state tint) live in the LIGHT-MODE STRUCTURE OVERRIDES section
+     further down — all [data-theme='light'] scoped so dark is byte-identical. */
   --border: #c4cedb;
   --border-soft: #d8dfe9;
   --text: #14202e;
@@ -2890,7 +2899,7 @@ button.nb-chip:hover {
 /* ---- LIGHT-MODE INK OVERRIDES ------------------------------------------
    Dark-tuned pastel text/icon colors that sit on PAGE backgrounds (not on
    solid colored chips) — each gets a same-hue ink readable on white. Scoped
-   strictly to the light theme; dark/amber are untouched. */
+   strictly to the light theme; dark is untouched. */
 [data-theme='light'] .wn-chase.active {
   color: #9d6500; /* the chase star, gold ink */
 }
@@ -2919,51 +2928,10 @@ button.nb-chip:hover {
   color: #96600a;
 }
 
-/* ---- AMBER-NIGHT (night-vision safe) ---- */
-[data-theme='amber'] {
-  --bg: #060400;
-  --bg-elev: #0e0a02;
-  --bg-elev-2: #161003;
-  --panel: #0c0801;
-  --border: #3a2a06;
-  --border-soft: #241a04;
-  --text: #ffb000;
-  --text-dim: #b87c00;
-  --text-faint: #9c6e00;
-  --accent: #ffc233;
-  --accent-ink: #1a1000;
-  --bubble-mine: #5a3d00;
-  --bubble-mine-text: #ffd874;
-  --bubble-theirs: #1a1203;
-  --bubble-theirs-text: #ffb000;
-  --status-new-entity: #ffcd62;
-  --status-new-band: #d88027;
-  --status-new-mode: #f9875e;
-  --status-worked: #98724e;
-  --status-confirmed: #d8bd51;
-  --status-dupe: #675849;
-  --snr-strong: #e1c34b;
-  --snr-marginal: #dd9231;
-  --snr-weak: #c13f29;
-  --tx: #c13f29;
-  --rx: #e1c34b;
-  --band-open: #e1c34b;
-  --band-marginal: #dd9231;
-  --band-closed: #675849;
-  --alert-critical: #ff964e;
-  --alert-warning: #f0903c;
-  --alert-info: #b88848;
-  --focus-ring: #ffc233;
-  --state-good: var(--snr-strong);
-  --state-ok: var(--snr-marginal);
-  --state-weak: var(--snr-weak);
-  --shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
-}
-
 /* Stock WSJT-X decode highlight swatches (Settings ▸ Colors), per theme. The
    light theme uses the literal stock backgrounds (#ffd0d7 my-call pink /
-   #d9ffd9 CQ green); dark + amber translate them to theme-safe tints with
-   readable ink so the semantics stay stock without searing the night vision. */
+   #d9ffd9 CQ green); dark translates them to a theme-safe tint with readable
+   ink so the semantics stay stock. */
 :root,
 [data-theme='dark'] {
   --decode-me-bg: rgba(229, 67, 67, 0.24);
@@ -2977,11 +2945,49 @@ button.nb-chip:hover {
   --decode-cq-bg: #d9ffd9;
   --decode-cq-ink: #00611f;
 }
-[data-theme='amber'] {
-  --decode-me-bg: rgba(193, 63, 41, 0.28);
-  --decode-me-ink: #ff8a5e;
-  --decode-cq-bg: rgba(225, 195, 75, 0.15);
-  --decode-cq-ink: #e1c34b;
+
+/* ---- LIGHT-MODE STRUCTURE OVERRIDES ------------------------------------
+   Component-level, light-only fixes for the "washed-out because flat" report.
+   The token step above lifts panels; these restore table scannability, make
+   secondary chips read as controls, and give the faint catch-all row tint a
+   perceptible step. Every rule is [data-theme='light'] scoped — dark renders
+   byte-identical. */
+
+/* Panels lift off the (now slightly darker) page with the soft light shadow
+   instead of leaning on the faint border alone. */
+[data-theme='light'] .panel {
+  box-shadow: var(--shadow);
+}
+
+/* Call Roster: firm the hairline row divider (the old 50%-transparent border
+   vanished on white) and promote the country to full ink beside the callsign
+   so the two primary data cells carry equal weight. */
+[data-theme='light'] .or-row:not(.or-header) {
+  border-bottom-color: var(--border-soft);
+}
+[data-theme='light'] .or-country {
+  color: var(--text);
+}
+
+/* Band Activity: same hairline separation between decode rows. */
+[data-theme='light'] .decode-row {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+/* Secondary/inactive chips read as controls, not smudges: a raised off-white
+   fill + a firmer border. Active (accent-filled) chips are left untouched. */
+[data-theme='light'] .filter-chip:not(.active) {
+  border-color: var(--border);
+}
+[data-theme='light'] .band-chip:not(.active) {
+  background: var(--bg-elev-2);
+}
+
+/* Row-state tint: the catch-all "fresh, unworked" decode row leaned on a 4%
+   accent wash that disappeared on white — give it a perceptible step. CQ and
+   directed rows already use solid stock swatches, so they stay untouched. */
+[data-theme='light'] .decode-row.new {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 * {
@@ -3355,6 +3361,14 @@ body.resizing {
 }
 
 .radio-readout {
+  margin-left: auto;
+}
+
+/* Phone/CW hide the frequency readout, which is the group that normally carries
+   the trailing controls (TX/RX + theme toggle) to the right. Without it, those
+   controls bunch mid-left and the theme switcher is easy to miss — re-pin the
+   trailing cluster right in those views. */
+.topbar--no-readout .txrx {
   margin-left: auto;
 }
 
@@ -6866,6 +6880,30 @@ select optgroup {
   font-size: var(--fs-micro);
   color: var(--text-faint);
 }
+/* Field Day exchange prompt — what the operator reads aloud when they key up. */
+.ph-fd-give {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  white-space: nowrap;
+}
+.ph-fd-give-lbl {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.ph-fd-give-exch {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
 /* (Phone + CW log strips now share the .log-entry styles above.) */
 
 /* ---- Phone voice keyer (F-key WAV messages) ------------------------------- */
@@ -6896,6 +6934,17 @@ select optgroup {
   font-size: var(--fs-micro);
   color: var(--text-faint);
   line-height: 1.4;
+}
+/* Field Day slot hint — only shown in FD mode (fdExchange set). */
+.vk-fd-hint {
+  margin: 0 0 10px;
+  font-size: var(--fs-micro);
+  color: var(--accent);
+  line-height: 1.4;
+}
+.vk-fd-hint strong {
+  font-family: var(--font-mono);
+  font-weight: 800;
 }
 .vk-spacer {
   flex: 1;
@@ -7116,8 +7165,7 @@ select optgroup {
 }
 
 .fd-log {
-  flex: 1;
-  min-height: 0;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
 }
@@ -7142,7 +7190,9 @@ select optgroup {
   font-weight: 700;
 }
 .fd-log-scroll {
-  flex: 1;
+  /* Only a confirmation strip of the newest few QSOs — the sections board above
+     gets the reclaimed height. The auto-scroll keeps the latest contact in view. */
+  max-height: 190px;
   overflow-y: auto;
 }
 .fd-log-row {
@@ -7158,6 +7208,11 @@ select optgroup {
 }
 .fd-col.mono {
   font-family: var(--font-mono);
+}
+.fd-col.time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
 }
 /* new-section multiplier accent */
 .fd-log-row.mult {
@@ -7269,10 +7324,12 @@ select optgroup {
   background: color-mix(in srgb, var(--state-info, #5ba8f5) 16%, transparent);
   border-color: color-mix(in srgb, var(--state-info, #5ba8f5) 30%, transparent);
 }
-/* Small variant used in the log table */
+/* Log-table badge: a clear, uniform-width DIG/CW/PH pill (full base padding). */
 .fd-mode-chip.sm {
-  font-size: 9px;
-  padding: 1px 5px;
+  display: inline-block;
+  min-width: 2.6em;
+  text-align: center;
+  font-size: 12px;
 }
 
 /* Bonuses collapsible */
@@ -7349,10 +7406,10 @@ select optgroup {
   white-space: nowrap;
 }
 
-/* Log table: 5 columns (added Mode) */
+/* Log table: 6 columns (Time · Call · Class · Section · Band · Mode) */
 .fd-log-head,
 .fd-log-row {
-  grid-template-columns: 1.4fr 0.7fr 0.9fr 0.7fr 0.6fr;
+  grid-template-columns: 0.55fr 1.3fr 0.7fr 0.9fr 0.7fr 0.7fr;
 }
 .fd-col.mode {
   /* Mode chip column */
@@ -7399,9 +7456,52 @@ select optgroup {
   font-size: 11px;
   color: var(--text-faint);
 }
-.le-fd-class,
-.le-fd-section {
-  max-width: 90px;
+/* Enlarged FD exchange form (Call / Class / Section) — big, readable, captioned
+   so a logger beside the operator can read the exchange across the table at Field
+   Day. Scoped to .log-entry-fd; the non-FD log strip is unaffected. */
+.le-fd-big {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.le-fd-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  cursor: text;
+}
+.le-fd-field-call {
+  flex: 1 1 200px;
+  min-width: 180px;
+}
+.le-fd-cap {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  user-select: none;
+}
+.le-fd-input {
+  width: 100%;
+  min-height: 58px;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.le-fd-input-call {
+  text-align: left;
+}
+.le-fd-input-code {
+  width: 130px;
+  text-align: center;
+}
+.le-fd-log-btn {
+  min-height: 58px;
+  padding: 0 var(--space-5);
+  font-size: var(--fs-title);
 }
 
 /* ===========================================================================
@@ -13306,4 +13406,11 @@ select.settings-input {
   font-size: var(--fs-small);
   min-width: 8.5em;
   flex: none;
+}
+
+/* Field Day section-picker inline validation warning (Settings ▸ Field Day). */
+.fd-section-warn {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warn, #e8a13c);
 }

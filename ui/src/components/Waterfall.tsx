@@ -363,10 +363,8 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
       const AXIS_H = axisHFor(H)
       const wfH = H - AXIS_H
       const th = themeRef.current
-      const axisColor =
-        th === 'light' ? 'rgba(40,50,70,0.7)' : th === 'amber' ? 'rgba(255,176,0,0.7)' : 'rgba(190,205,230,0.7)'
-      const axisBg =
-        th === 'light' ? 'rgba(245,247,250,0.95)' : th === 'amber' ? 'rgba(10,7,2,0.95)' : 'rgba(10,14,22,0.92)'
+      const axisColor = th === 'light' ? 'rgba(40,50,70,0.7)' : 'rgba(190,205,230,0.7)'
+      const axisBg = th === 'light' ? 'rgba(245,247,250,0.95)' : 'rgba(10,14,22,0.92)'
 
       // --- bottom frequency axis ---
       ctx.fillStyle = axisBg

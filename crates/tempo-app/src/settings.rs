@@ -78,6 +78,13 @@ pub struct Settings {
     pub rptr_shift: String,
     /// FM CTCSS (PL) tone in Hz for repeater access, e.g. 100.0; 0.0 = off.
     pub ctcss_tone_hz: f32,
+    /// Field Day MASTER SWITCH — the single source of truth for whether Field
+    /// Day mode is engaged (spec §1.1). Persisted so it survives restarts
+    /// mid-contest, but set true ONLY by the operator's explicit toggle: NO code
+    /// path (default, date logic, first-run, migration) may ever turn it on.
+    /// Default false — a fresh install is entirely Field-Day-free.
+    #[serde(default)]
+    pub fd_active: bool,
     /// ARRL Field Day class, e.g. "1D", "3A".
     pub fd_class: String,
     /// Which Field Day event: "arrlfd" (June) | "wfd" (Winter Field Day).
@@ -96,12 +103,27 @@ pub struct Settings {
     pub n3fjp_host: String,
     #[serde(default = "default_n3fjp_port")]
     pub n3fjp_port: u16,
+    /// Push each Field Day contact with the contest-correct **ENTER sequence**
+    /// (which N3FJP scores) instead of ADDDIRECT (which stores the class/section
+    /// but may not score the contest log). On by default; a bulk/backfill path
+    /// can still use ADDDIRECT.
+    #[serde(default = "default_true")]
+    pub n3fjp_use_enter: bool,
+    /// Report THIS position's band to N3FJP (no CAT needed) so the club's
+    /// Network Status Display band board shows where we are. Off by default.
+    #[serde(default)]
+    pub n3fjp_report_band: bool,
     /// N1MM+ contact broadcast: emit the native <contactinfo> XML datagram per
     /// FD QSO. Empty = off; "host:port" or "host" (default port 12060).
     #[serde(default)]
     pub n1mm_addr: String,
     /// ARRL/RAC section, e.g. "WI".
     pub fd_section: String,
+    /// The current OPERATOR at the key (call or initials) — Field Day rotates
+    /// operators, so this differs from the station `mycall`. Pushed to N3FJP as
+    /// the QSO's operator; empty = fall back to `mycall`.
+    #[serde(default)]
+    pub fd_operator: String,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -667,12 +689,22 @@ pub struct Macros {
     pub chat: Vec<String>,
     pub qso: Vec<String>,
     pub band: Vec<String>,
-    /// CW cockpit F-key macros (experienced hams customize these, N1MM-style). Each
-    /// entry: F-key name + button label + template text ({MYCALL}/{RST}/{NAME}/! =
-    /// worked call, expanded by the engine). EMPTY = the cockpit's built-in defaults,
-    /// so upgrades keep improving the defaults for anyone who hasn't customized.
+    /// LEGACY single CW F-key macro list — kept only for one-way migration into
+    /// `cw_profiles` (see [`Macros::migrate_cw_profiles`]). New reads/writes go through
+    /// the named profiles; `load` empties this field once it has seeded the "Default"
+    /// profile from it.
     #[serde(default)]
     pub cw: Vec<CwMacroDef>,
+    /// Named CW F-key macro sets — one per operator/purpose, selectable in the cockpit
+    /// (Field Day ops rotate profiles as operators change). Seeded on load with a single
+    /// "Default" profile migrated from the legacy `cw` field. Each entry's macros carry
+    /// the same {MYCALL}/{RST}/{NAME}/! tokens the engine expands; an EMPTY macro list
+    /// means the cockpit's built-in defaults, so upgrades keep improving them.
+    #[serde(default)]
+    pub cw_profiles: Vec<CwMacroProfile>,
+    /// Index into `cw_profiles` of the active set. Clamped in range on load.
+    #[serde(default)]
+    pub active_cw_profile: usize,
 }
 
 /// One customizable CW F-key macro.
@@ -682,6 +714,14 @@ pub struct CwMacroDef {
     pub key: String,
     pub label: String,
     pub text: String,
+}
+
+/// A named set of CW F-key macros (one operator / one purpose).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CwMacroProfile {
+    pub name: String,
+    pub macros: Vec<CwMacroDef>,
 }
 
 impl Default for Macros {
@@ -695,6 +735,38 @@ impl Default for Macros {
             // "DE <CALL> A12CQ CQ", never a real CQ).
             band: v(&["QRZ?", "Net check-in", "73 to all"]),
             cw: Vec::new(),
+            cw_profiles: Vec::new(),
+            active_cw_profile: 0,
+        }
+    }
+}
+
+impl Macros {
+    /// The active CW profile's macros (the list the cockpit renders as F-keys).
+    /// Bounds-checked: an out-of-range `active_cw_profile` or an unmigrated (empty)
+    /// `cw_profiles` yields an empty slice, which the cockpit reads as "use built-in
+    /// defaults".
+    pub fn active_cw_macros(&self) -> &[CwMacroDef] {
+        self.cw_profiles
+            .get(self.active_cw_profile)
+            .map(|p| p.macros.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// One-way, idempotent migration of the legacy single `cw` list into the named
+    /// `cw_profiles`. If no profiles exist yet, seed exactly one named "Default" from the
+    /// legacy `cw` (or empty when `cw` is empty), select it, and clear `cw` so it can't
+    /// diverge. Always clamps `active_cw_profile` into range (covers a corrupt/old index).
+    pub fn migrate_cw_profiles(&mut self) {
+        if self.cw_profiles.is_empty() {
+            self.cw_profiles = vec![CwMacroProfile {
+                name: "Default".to_string(),
+                macros: std::mem::take(&mut self.cw),
+            }];
+            self.active_cw_profile = 0;
+        }
+        if self.active_cw_profile >= self.cw_profiles.len() {
+            self.active_cw_profile = 0;
         }
     }
 }
@@ -811,6 +883,35 @@ pub fn validate_radio_ports(radios: &[RadioProfile], broker: Option<u16>) -> Res
     Ok(())
 }
 
+/// Two enabled radios cannot share a serial CAT port: the OS opens a COM port
+/// exclusively, so the monitor radio's CAT can't open the busy port and reads as
+/// failing (a confusing persistent-red pill). Unlike TCP ports, a serial port can't
+/// be auto-bumped — it's real hardware — so this is a WARNING the operator must act
+/// on, surfaced in the snapshot (it self-clears once the ports differ). Only counts
+/// radios that actually use a serial CAT link (a real rig on a serial connection with
+/// a port set); network CAT and VOX/none don't own a COM port. Case-insensitive
+/// (`COM3` == `com3`). Returns the first collision message, else `None`.
+pub fn serial_port_conflicts(radios: &[RadioProfile]) -> Option<String> {
+    let mut used: Vec<(String, String)> = Vec::new(); // (port, radio name)
+    for p in radios.iter().filter(|p| {
+        p.enabled
+            && p.rig_model > 0
+            && p.rig_conn.eq_ignore_ascii_case("serial")
+            && !p.serial_port.trim().is_empty()
+    }) {
+        let port = p.serial_port.trim();
+        if let Some((_, other)) = used.iter().find(|(u, _)| u.eq_ignore_ascii_case(port)) {
+            return Some(format!(
+                "{other} and {} are both on serial port {port} — only one radio can own a COM port. \
+                 Give them different ports (or disable one).",
+                p.name
+            ));
+        }
+        used.push((port.to_string(), p.name.clone()));
+    }
+    None
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -827,18 +928,22 @@ impl Default for Settings {
             phone_mode: "ssb".to_string(),
             rptr_shift: "simplex".to_string(),
             ctcss_tone_hz: 0.0,
+            fd_active: false, // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
             fd_event: String::new(), // "" = arrlfd
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             n3fjp_host: String::new(),
             n3fjp_port: 1100,
+            n3fjp_use_enter: true,
+            n3fjp_report_band: false,
             n1mm_addr: String::new(),
             // Deliberately EMPTY: a contest exchange goes on the air, so it must
             // be the operator's own — set_mode refuses Field Day until both the
             // class and section are set (a "WI" default sent wrong exchanges for
             // every operator outside Wisconsin).
             fd_section: String::new(),
+            fd_operator: String::new(),
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),
@@ -1271,6 +1376,10 @@ impl Settings {
         s.macros
             .chat
             .retain(|m| !matches!(m.trim().to_uppercase().as_str(), "CQ" | "CQ CQ"));
+        // Migration: fold the legacy single CW F-key list (`macros.cw`) into named CW
+        // macro PROFILES — an old settings.json comes back as one "Default" profile with
+        // the same macros. Idempotent, and clamps the active-profile index in range.
+        s.macros.migrate_cw_profiles();
         // Migration: cluster_host used to BE the RBN endpoint (digital-only, port 7001),
         // which is why CW/Phone needs never appeared; a later build wrongly defaulted it to
         // NC7J's SKIMMER port (dxc.nc7j.com:7373), which just duplicates the RBN we pull.
@@ -1840,6 +1949,163 @@ mod tests {
     }
 
     #[test]
+    fn migrate_cw_profiles_seeds_default_from_legacy_cw_and_is_idempotent() {
+        let mut m = Macros {
+            cw: vec![
+                CwMacroDef {
+                    key: "F1".into(),
+                    label: "CQ".into(),
+                    text: "CQ CQ DE {MYCALL}".into(),
+                },
+                CwMacroDef {
+                    key: "F2".into(),
+                    label: "Rprt".into(),
+                    text: "! {RST}".into(),
+                },
+            ],
+            ..Macros::default()
+        };
+        m.migrate_cw_profiles();
+        assert_eq!(m.cw_profiles.len(), 1, "seeds exactly one profile");
+        assert_eq!(m.cw_profiles[0].name, "Default");
+        assert_eq!(m.cw_profiles[0].macros.len(), 2, "legacy macros carried in");
+        assert_eq!(m.cw_profiles[0].macros[0].key, "F1");
+        assert_eq!(m.active_cw_profile, 0);
+        assert!(m.cw.is_empty(), "legacy cw cleared after migration");
+
+        // A 2nd call must not re-seed, duplicate, or resurrect the legacy list.
+        let before = m.cw_profiles.clone();
+        m.migrate_cw_profiles();
+        assert_eq!(m.cw_profiles, before, "idempotent");
+        assert!(m.cw.is_empty());
+    }
+
+    #[test]
+    fn migrate_cw_profiles_seeds_empty_default_when_no_legacy_macros() {
+        let mut m = Macros::default(); // fresh: legacy cw empty, no profiles
+        m.migrate_cw_profiles();
+        assert_eq!(m.cw_profiles.len(), 1);
+        assert_eq!(m.cw_profiles[0].name, "Default");
+        assert!(
+            m.cw_profiles[0].macros.is_empty(),
+            "empty legacy → empty Default (cockpit uses built-in defaults)"
+        );
+    }
+
+    #[test]
+    fn active_cw_macros_returns_the_active_profiles_macros() {
+        let mac = |k: &str| CwMacroDef {
+            key: k.into(),
+            label: k.into(),
+            text: k.into(),
+        };
+        let m = Macros {
+            cw_profiles: vec![
+                CwMacroProfile {
+                    name: "Alice".into(),
+                    macros: vec![mac("F1"), mac("F2")],
+                },
+                CwMacroProfile {
+                    name: "Bob".into(),
+                    macros: vec![mac("F3")],
+                },
+            ],
+            active_cw_profile: 1,
+            ..Macros::default()
+        };
+        assert_eq!(m.active_cw_macros().len(), 1);
+        assert_eq!(m.active_cw_macros()[0].key, "F3");
+    }
+
+    #[test]
+    fn active_cw_macros_clamps_out_of_range_index() {
+        // A corrupt/stale active index must never panic — migrate clamps it, and the
+        // accessor also falls back to an empty slice for an unmigrated Macros.
+        let mut m = Macros {
+            cw_profiles: vec![CwMacroProfile {
+                name: "Default".into(),
+                macros: vec![CwMacroDef {
+                    key: "F1".into(),
+                    label: "CQ".into(),
+                    text: "CQ".into(),
+                }],
+            }],
+            active_cw_profile: 9, // out of range
+            ..Macros::default()
+        };
+        // Accessor is safe even before clamping (empty-slice fallback).
+        assert!(m.active_cw_macros().is_empty());
+        m.migrate_cw_profiles();
+        assert_eq!(m.active_cw_profile, 0, "clamped into range");
+        assert_eq!(m.active_cw_macros().len(), 1);
+
+        // A bare/default Macros with no profiles also yields an empty slice, no panic.
+        assert!(Macros::default().active_cw_macros().is_empty());
+    }
+
+    #[test]
+    fn load_migrates_legacy_cw_into_a_default_profile() {
+        let path = std::env::temp_dir()
+            .join("tempo_settings_cwprofiles")
+            .join("settings.json");
+        let mut s = Settings::default();
+        s.macros.cw_profiles.clear(); // force the legacy (unmigrated) shape
+        s.macros.active_cw_profile = 0;
+        s.macros.cw = vec![CwMacroDef {
+            key: "F1".into(),
+            label: "CQ".into(),
+            text: "CQ CQ DE {MYCALL}".into(),
+        }];
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(back.macros.cw_profiles.len(), 1);
+        assert_eq!(back.macros.cw_profiles[0].name, "Default");
+        assert_eq!(back.macros.cw_profiles[0].macros.len(), 1);
+        assert_eq!(back.macros.cw_profiles[0].macros[0].key, "F1");
+        assert!(back.macros.cw.is_empty(), "legacy cw cleared on load");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn cw_profiles_survive_a_settings_round_trip() {
+        let path = std::env::temp_dir()
+            .join("tempo_settings_cwprofile_rt")
+            .join("settings.json");
+        let mut s = Settings::default();
+        s.macros.cw_profiles = vec![
+            CwMacroProfile {
+                name: "Alice".into(),
+                macros: vec![CwMacroDef {
+                    key: "F1".into(),
+                    label: "CQ".into(),
+                    text: "CQ DE {MYCALL}".into(),
+                }],
+            },
+            CwMacroProfile {
+                name: "Bob".into(),
+                macros: vec![CwMacroDef {
+                    key: "F2".into(),
+                    label: "73".into(),
+                    text: "73".into(),
+                }],
+            },
+        ];
+        s.macros.active_cw_profile = 1;
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(
+            back.macros.cw_profiles.len(),
+            2,
+            "both named profiles preserved"
+        );
+        assert_eq!(back.macros.cw_profiles[0].name, "Alice");
+        assert_eq!(back.macros.cw_profiles[1].name, "Bob");
+        assert_eq!(back.macros.active_cw_profile, 1, "active index preserved");
+        assert_eq!(back.macros.active_cw_macros()[0].key, "F2");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn load_migrates_old_rbn_cluster_host_to_a_human_node() {
         // cluster_host used to BE the RBN endpoint (digital-only) — that's why CW/Phone
         // needs never appeared. RBN is now wired automatically; an old RBN value must
@@ -2050,6 +2316,46 @@ mod tests {
             validate_radio_ports(&[a], Some(4532)).is_err(),
             "broker collides with a rig"
         );
+    }
+
+    #[test]
+    fn serial_port_conflicts_flags_two_radios_on_one_com() {
+        let rig = |name: &str, port: &str, conn: &str, model: u32, enabled: bool| RadioProfile {
+            name: name.into(),
+            serial_port: port.into(),
+            rig_conn: conn.into(),
+            rig_model: model,
+            enabled,
+            ..Default::default()
+        };
+        let ftdx = rig("FTDX10", "COM3", "serial", 1042, true);
+        // Same COM port (case-insensitive) → a conflict message naming both radios.
+        let ic = rig("IC-9700", "com3", "serial", 23005, true);
+        let msg = serial_port_conflicts(&[ftdx.clone(), ic.clone()]).expect("conflict expected");
+        assert!(
+            msg.contains("FTDX10") && msg.contains("IC-9700"),
+            "message names both radios: {msg}"
+        );
+        // Distinct ports → no conflict.
+        assert!(serial_port_conflicts(&[
+            ftdx.clone(),
+            rig("IC-9700", "COM5", "serial", 23005, true)
+        ])
+        .is_none());
+        // A disabled radio is ignored.
+        assert!(serial_port_conflicts(&[
+            ftdx.clone(),
+            rig("IC-9700", "COM3", "serial", 23005, false)
+        ])
+        .is_none());
+        // Network CAT doesn't own a COM port.
+        assert!(serial_port_conflicts(&[
+            ftdx.clone(),
+            rig("IC-9700", "COM3", "network", 23005, true)
+        ])
+        .is_none());
+        // VOX / no-rig (model 0) doesn't count.
+        assert!(serial_port_conflicts(&[ftdx, rig("VOX", "COM3", "serial", 0, true)]).is_none());
     }
 
     #[test]

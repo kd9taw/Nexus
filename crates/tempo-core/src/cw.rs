@@ -15,12 +15,19 @@ pub struct CwContext<'a> {
     pub hiscall: &'a str,
     /// The report being sent — `{RST}` (cut: 9→N, 0→T, e.g. "599" → "5NN").
     pub rst: &'a str,
+    /// The Field Day class exchange — `{CLASS}` (e.g. "3A"). Empty outside Field Day,
+    /// so an FD token collapses to nothing.
+    pub class: &'a str,
+    /// The Field Day ARRL/RAC section — `{SECTION}` (e.g. "WI"). Empty outside Field Day.
+    pub section: &'a str,
 }
 
 /// Expand a CW macro template into the literal text to key. Recognized tokens:
-/// `{MYCALL}` `{NAME}` `{MYGRID}` `{RST}` (cut numbers) and `!` (worked call). Unknown
-/// `{...}` tokens are left as-is so typos are visible rather than silently dropped.
-/// Plain typed text (no tokens) passes through unchanged.
+/// `{MYCALL}` `{NAME}` `{MYGRID}` `{RST}` (cut numbers), `!` (worked call), and the Field
+/// Day exchange `{CLASS}` / `{SECTION}` / `{EXCH}` (= "`{CLASS} {SECTION}`", e.g. "3A WI").
+/// The FD tokens are empty outside Field Day, so an FD macro collapses to nothing then
+/// (like an unfilled `{NAME}`). Unknown `{...}` tokens are left as-is so typos are visible
+/// rather than silently dropped. Plain typed text (no tokens) passes through unchanged.
 pub fn expand(template: &str, ctx: &CwContext) -> String {
     let mut out = template.to_string();
     // Order matters only in that {RST} is cut; the rest are literal substitutions.
@@ -28,6 +35,12 @@ pub fn expand(template: &str, ctx: &CwContext) -> String {
     out = out.replace("{NAME}", ctx.myname);
     out = out.replace("{MYGRID}", ctx.mygrid);
     out = out.replace("{RST}", &cut_numbers(ctx.rst));
+    // Field Day exchange. `{EXCH}` is the full "CLASS SECTION"; trimmed so it (and the
+    // whitespace-collapse below) leaves nothing when not operating FD (both fields blank).
+    out = out.replace("{CLASS}", ctx.class);
+    out = out.replace("{SECTION}", ctx.section);
+    let exch = format!("{} {}", ctx.class, ctx.section);
+    out = out.replace("{EXCH}", exch.trim());
     // `!` = the worked station's call (N1MM/WinWarbler convention).
     out = out.replace('!', ctx.hiscall);
     // Collapse runs of whitespace a substitution may have left (e.g. empty {NAME}),
@@ -197,6 +210,8 @@ mod tests {
             mygrid: "EN61",
             hiscall: "K2DEF",
             rst: "599",
+            class: "3A",
+            section: "WI",
         }
     }
 
@@ -222,6 +237,29 @@ mod tests {
             "K2DEF DE W9XYZ UR 5NN 5NN NAME SETH SETH HW? K2DEF",
         );
         assert_eq!(expand("{MYGRID}", &c), "EN61");
+    }
+
+    #[test]
+    fn expands_the_field_day_exchange_tokens() {
+        let c = ctx();
+        assert_eq!(expand("{CLASS}", &c), "3A");
+        assert_eq!(expand("{SECTION}", &c), "WI");
+        assert_eq!(expand("{EXCH}", &c), "3A WI");
+        // A default FD call macro sends the exchange twice for copy.
+        assert_eq!(
+            expand("! DE {MYCALL} {EXCH} {EXCH} K", &c),
+            "K2DEF DE W9XYZ 3A WI 3A WI K",
+        );
+        // Outside Field Day class/section are empty → the FD tokens collapse cleanly,
+        // just like an unfilled {NAME}, leaving no stray double space.
+        let off = CwContext {
+            mycall: "W9XYZ",
+            ..Default::default()
+        };
+        assert_eq!(expand("{CLASS}", &off), "");
+        assert_eq!(expand("{SECTION}", &off), "");
+        assert_eq!(expand("{EXCH}", &off), "");
+        assert_eq!(expand("! DE {MYCALL} {EXCH} K", &off), "DE W9XYZ K");
     }
 
     #[test]

@@ -74,10 +74,12 @@ fn field_day_mode_logs_through_the_engine() {
     // Configure exchanges via settings, then enter Field Day mode.
     {
         let mut s = run_st.settings().clone();
+        s.fd_active = true; // master switch on — FD chrome visible in the snapshot
         s.fd_class = "3A".into();
         s.fd_section = "WI".into();
         run_st.apply_settings(s);
         let mut s = sp.settings().clone();
+        s.fd_active = true;
         s.fd_class = "2A".into();
         s.fd_section = "IL".into();
         sp.apply_settings(s);

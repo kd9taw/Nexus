@@ -237,6 +237,10 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lock])
 
+  // Field Day exchange the operator reads aloud (and the string to record into a voice-keyer
+  // slot). Class + Section from the active ruleset; empty until FD setup fills them in.
+  const fdExchange = fieldDay ? `${fieldDay.myClass} ${fieldDay.mySection}`.trim() : ''
+
   return (
     <main className="layout single phone-cockpit" ref={cockpitRef}>
       <div className="ph-bar">
@@ -505,6 +509,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       )}
 
       <div className="ph-ptt-row">
+        {fdExchange && (
+          <span
+            className="ph-fd-give"
+            title="Field Day exchange — read this to the station you're working (your class + section)."
+          >
+            <span className="ph-fd-give-lbl">Give</span>
+            <span className="ph-fd-give-exch mono">{fdExchange}</span>
+          </span>
+        )}
         <button
           type="button"
           className={`ph-ptt${keyed ? ' keyed' : ''}`}
@@ -547,7 +560,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         </div>
       </div>
 
-      <VoiceKeyer txEnabled={snap.radio.txEnabled} keyed={keyed} />
+      <VoiceKeyer txEnabled={snap.radio.txEnabled} keyed={keyed} fdExchange={fdExchange} />
 
       <LogEntry
         snap={snap}

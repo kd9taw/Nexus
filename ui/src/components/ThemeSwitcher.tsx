@@ -8,7 +8,6 @@ interface Props {
 const OPTIONS: { id: Theme; label: string; title: string }[] = [
   { id: 'light', label: 'Light', title: 'Light (sunlight)' },
   { id: 'dark', label: 'Dark', title: 'Dark (shack)' },
-  { id: 'amber', label: 'Amber', title: 'Amber-Night (night-vision safe)' },
 ]
 
 export function ThemeSwitcher({ theme, onChange }: Props) {

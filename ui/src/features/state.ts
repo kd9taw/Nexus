@@ -38,6 +38,10 @@ export function coerceEnabled(partial: Partial<Record<FeatureId, boolean>>): Rec
  * down only by explicit choice. */
 export function defaultState(): FeatureState {
   const s = applyProfile('everything')
+  // Field Day starts hidden. NOTE: the authoritative FD-visibility switch is the persisted
+  // `settings.fdActive` master (App.tsx overrides `enabled.fieldDay` with it), which this pure
+  // module can't read — so this default just keeps a fresh install's persisted flag off; it no
+  // longer governs whether the FD nav/tab show. See registry.ts fieldDay for the full note.
   s.enabled.fieldDay = false
   // It's everything-EXCEPT-Field-Day, so it's a curated set, not the pure
   // 'everything' preset — tag it 'custom' so the Settings profile selector

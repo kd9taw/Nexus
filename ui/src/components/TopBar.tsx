@@ -117,7 +117,7 @@ export function TopBar({
 }: Props) {
   const countdown = (radio.nextSlotMs / 1000).toFixed(1)
   return (
-    <header className="topbar">
+    <header className={`topbar${hideFrequencyControl ? ' topbar--no-readout' : ''}`}>
       <div className="topbar-group brand">
         <span className="logo">Nexus</span>
         <span className="mycall">

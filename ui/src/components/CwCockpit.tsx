@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AppSnapshot, FieldDayStatus, SpotRow } from '../types'
+import type { AppSnapshot, FieldDayStatus, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
@@ -9,6 +9,7 @@ import { Splitter } from './Splitter'
 import { LogEntry } from './LogEntry'
 import {
   getSettings,
+  setSettings,
   sendCw,
   setCwKeyer,
   setCwWpm,
@@ -59,6 +60,21 @@ const DEFAULT_MACROS: { key: string; label: string; text: string }[] = [
   { key: 'F2', label: 'Call', text: '! DE {MYCALL} {MYCALL} K' },
   { key: 'F3', label: 'Reply', text: '! DE {MYCALL} UR {RST} {RST} NAME {NAME} {NAME} HW? KN' },
   { key: 'F4', label: '73', text: '! DE {MYCALL} TU 73 SK' },
+  { key: 'F5', label: 'My Call', text: '{MYCALL}' },
+  { key: 'F6', label: 'His Call', text: '! ' },
+  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
+  { key: 'F8', label: '?', text: '? ' },
+]
+
+/** Default Field Day CW macro set — replaces the casual defaults while FD mode is on.
+ * The engine fills {EXCH} = "{CLASS} {SECTION}" (e.g. "3A WI") from the FD settings, so
+ * one template serves both events. Contest cadence: F1 CQ FD → F2 answer with your call →
+ * F3 send the exchange (twice, for copy) → F4 confirm + TU. */
+const DEFAULT_FD_MACROS: { key: string; label: string; text: string }[] = [
+  { key: 'F1', label: 'CQ FD', text: 'CQ FD DE {MYCALL} {MYCALL} K' },
+  { key: 'F2', label: 'Call', text: '! DE {MYCALL} K' },
+  { key: 'F3', label: 'Exch', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
+  { key: 'F4', label: 'TU', text: '! TU {EXCH} DE {MYCALL} K' },
   { key: 'F5', label: 'My Call', text: '{MYCALL}' },
   { key: 'F6', label: 'His Call', text: '! ' },
   { key: 'F7', label: 'AGN', text: 'AGN AGN' },
@@ -178,21 +194,45 @@ export function CwCockpit({
   })
   // True once the operator sets WPM by hand → stop auto-matching to the decoded speed.
   const wpmTouched = useRef(false)
-  // F-key macros: the operator's custom set from Settings, else the built-in defaults.
-  const [macros, setMacros] = useState(DEFAULT_MACROS)
-  const macrosRef = useRef(macros)
-  macrosRef.current = macros
+  // F-key macros come from the ACTIVE named CW profile (Settings ▸ Macros). A rotating
+  // operator can switch profiles right here in the cockpit bar; an empty profile falls
+  // back to the built-in defaults — which swap to the Field Day set (with the {EXCH}
+  // exchange tokens) while FD mode is on. Keep the full settings so the switcher can
+  // persist the new active-profile index without dropping other fields.
+  const [cwSettings, setCwSettings] = useState<Settings | null>(null)
+  const [profiles, setProfiles] = useState<{ name: string; macros: { key: string; label: string; text: string }[] }[]>(
+    [],
+  )
+  const [activeProfile, setActiveProfile] = useState(0)
   useEffect(() => {
     let alive = true
     void getSettings()
       .then((s) => {
-        if (alive && s.macros?.cw?.length) setMacros(s.macros.cw)
+        if (!alive) return
+        setCwSettings(s)
+        setProfiles(s.macros?.cwProfiles ?? [])
+        setActiveProfile(s.macros?.activeCwProfile ?? 0)
       })
       .catch(() => {})
     return () => {
       alive = false
     }
   }, [])
+  const profileMacros = profiles[activeProfile]?.macros
+  const macros =
+    profileMacros && profileMacros.length ? profileMacros : fieldDay ? DEFAULT_FD_MACROS : DEFAULT_MACROS
+  // Switch the active macro profile from the cockpit (optimistic) and persist it.
+  const switchProfile = (i: number) => {
+    setActiveProfile(i)
+    if (!cwSettings) return
+    const next = { ...cwSettings, macros: { ...cwSettings.macros, activeCwProfile: i } }
+    setCwSettings(next)
+    void setSettings(next)
+      .then((s) => onSnap?.(s))
+      .catch(() => pushToast('Could not switch macro profile', 'error'))
+  }
+  const macrosRef = useRef(macros)
+  macrosRef.current = macros
   // Reply preview: the exact text each F-key WILL send (macros expanded with the worked
   // call). Refetched from the backend when the worked station changes — cheap, once per QSO.
   const [previews, setPreviews] = useState<Record<string, string>>({})
@@ -407,6 +447,23 @@ export function CwCockpit({
             aria-label="CW pitch (Hz)"
           />
         </label>
+        {profiles.length > 1 && (
+          <label className="cw-wpm" title="CW macro profile — your active F-key set (edit sets in Settings ▸ Macros)">
+            <span>Macros</span>
+            <select
+              className="settings-input"
+              value={activeProfile}
+              onChange={(e) => switchProfile(Number(e.target.value))}
+              aria-label="CW macro profile"
+            >
+              {profiles.map((p, i) => (
+                <option key={i} value={i}>
+                  {p.name || `Profile ${i + 1}`}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <TuningStrip snap={snap} onSnap={onSnap} step={tuneStep} onStep={setTuneStep} />
         <BandPicker snap={snap} mode="cw" onSnap={onSnap} />
         {catOk && (

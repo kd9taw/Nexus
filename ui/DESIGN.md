@@ -11,7 +11,7 @@
    surfaces/text/accent + the status roles below. Themes swap via a single `data-theme` attribute on `<html>`.
 3. **Component** (density-derived) — `--roster-row-h`, `--now-bar-h`, etc.
 
-Three themes: **dark** (canonical), **light** (derived), **amber** (night-vision, first-class).
+Two themes: **dark** (canonical), **light** (derived).
 Migration is additive + back-compat aliases (`--state-good` → `--snr-strong`) so existing CSS keeps working.
 
 ## The one semantic color language
@@ -19,25 +19,25 @@ Migration is additive + back-compat aliases (`--state-good` → `--snr-strong`) 
 Applied **identically** across roster dots, map, log/awards badges, decode rows, the Now-Bar verdict.
 **Color is a redundant cue; the glyph is the primary, CVD-immune identifier.**
 
-| role | meaning | glyph | dark | light | amber |
-|---|---|---|---|---|---|
-| `new-entity` | ATNO — never worked (top priority) | ★ | `#ffb35b` | `#a30000` | `#ffcd62` |
-| `new-band` | worked entity, new band-slot | ◑ | `#ccb10d` | `#bb8805` | `#d88027` |
-| `new-mode` | worked entity, new mode-slot | ◧ | `#bb8aef` | `#7c44c3` | `#f9875e` |
-| `worked` | worked, unconfirmed | ○ | `#7a96ab` | `#5c7f98` | `#98724e` |
-| `confirmed` | confirmed (LoTW/eQSL/QSL) | ✓ | `#70e093` | `#008d3c` | `#d8bd51` |
-| `dupe` | already have it (recede) | · | `#747b81` | `#98a0a5` | `#675849` |
-| `snr-strong` | strong signal | ▇ | `#69d98d` | `#007f35` | `#e1c34b` |
-| `snr-marginal` | marginal signal | ▅ | `#f1ca47` | `#a27000` | `#dd9231` |
-| `snr-weak` | weak signal | ▂ | `#ec5b57` | `#a20003` | `#c13f29` |
-| `tx` | transmitting | ▲ | `#e64343` | `#a50000` | `#c13f29` |
-| `rx` | receiving | ▼ | `#69d98d` | `#007f35` | `#e1c34b` |
-| `band-open` | path workable now | ● | `#69d98d` | `#007f35` | `#e1c34b` |
-| `band-marginal` | path marginal | ◐ | `#f1ca47` | `#a27000` | `#dd9231` |
-| `band-closed` | path closed (recede) | ⊘ | `#747b81` | `#80878d` | `#675849` |
-| `alert-critical` | interrupt — act now | ⚑ | `#ff6100` | `#9c0000` | `#ff964e` |
-| `alert-warning` | caution | △ | `#f7c243` | `#a76d00` | `#f0903c` |
-| `alert-info` | informational | i | `#79c0f1` | `#0070a6` | `#b88848` |
+| role | meaning | glyph | dark | light |
+|---|---|---|---|---|
+| `new-entity` | ATNO — never worked (top priority) | ★ | `#ffb35b` | `#a30000` |
+| `new-band` | worked entity, new band-slot | ◑ | `#ccb10d` | `#bb8805` |
+| `new-mode` | worked entity, new mode-slot | ◧ | `#bb8aef` | `#7c44c3` |
+| `worked` | worked, unconfirmed | ○ | `#7a96ab` | `#5c7f98` |
+| `confirmed` | confirmed (LoTW/eQSL/QSL) | ✓ | `#70e093` | `#008d3c` |
+| `dupe` | already have it (recede) | · | `#747b81` | `#98a0a5` |
+| `snr-strong` | strong signal | ▇ | `#69d98d` | `#007f35` |
+| `snr-marginal` | marginal signal | ▅ | `#f1ca47` | `#a27000` |
+| `snr-weak` | weak signal | ▂ | `#ec5b57` | `#a20003` |
+| `tx` | transmitting | ▲ | `#e64343` | `#a50000` |
+| `rx` | receiving | ▼ | `#69d98d` | `#007f35` |
+| `band-open` | path workable now | ● | `#69d98d` | `#007f35` |
+| `band-marginal` | path marginal | ◐ | `#f1ca47` | `#a27000` |
+| `band-closed` | path closed (recede) | ⊘ | `#747b81` | `#80878d` |
+| `alert-critical` | interrupt — act now | ⚑ | `#ff6100` | `#9c0000` |
+| `alert-warning` | caution | △ | `#f7c243` | `#a76d00` |
+| `alert-info` | informational | i | `#79c0f1` | `#0070a6` |
 
 ### Rules (enforced by `verify.mjs`)
 1. **Color + glyph, always.** Never color alone (≈8% of male hams have red-green CVD). Every role's glyph is **unique**.
@@ -46,13 +46,11 @@ Applied **identically** across roster dots, map, log/awards badges, decode rows,
    they live in.
 3. **Good (green) ↔ bad (red) must survive every CVD** — guaranteed by keeping greens lighter than reds, so deutan/
    protan (which collapse hue) still separate them by luminance. (Verified ΔE ≥ 0.06 under Machado deutan/protan/tritan.)
-4. **Amber (monochromatic gamut)** cannot make distinct green/red *hues*, so good = **bright**, bad = **dark**, always
-   with a glyph.
-5. **`alert-critical` is an interrupt, not a "bad signal"** — it escapes the good/bad lightness convention: it is the
+4. **`alert-critical` is an interrupt, not a "bad signal"** — it escapes the good/bad lightness convention: it is the
    **brightest/loudest** treatment (distinct from `tx`), and is always rendered as a **filled, bordered chip + ⚑**
-   (+ pulse when motion is allowed). In amber it is forced bright (not buried).
-6. **ATNO is the loudest need-state** (highest contrast of the need-set) in every theme.
-7. **De-emphasis states** (`dupe`, `band-closed`) intentionally sit below the 3:1 status floor — they *recede*, are
+   (+ pulse when motion is allowed).
+5. **ATNO is the loudest need-state** (highest contrast of the need-set) in every theme.
+6. **De-emphasis states** (`dupe`, `band-closed`) intentionally sit below the 3:1 status floor — they *recede*, are
    glyph/position-carried, and are **never the sole carrier of must-read text** (a dupe call sign uses the normal text
    token at reduced opacity, not the dim status color).
 
@@ -73,9 +71,8 @@ De-emphasis states are exempt from the 3:1 floor by design.
 
 ### CVD edge cases the gate enforces
 These color-collision cases are fixed and gated:
-- **`tx` == `alert-critical`** (byte-identical in light/amber) → split: critical is a distinct bright orange + filled
+- **`tx` == `alert-critical`** (byte-identical in light) → split: critical is a distinct bright orange + filled
   ⚑ chip; documented form-based distinction; gate added.
-- **Amber `alert-critical` was nearly the dimmest role** → forced bright (L 0.82); "never buried" gate added.
 - **Glyph reuse** (`○` worked *and* band-closed; `▲` tx *and* alert-warning) → band-closed→`⊘`, alert-warning→`△`;
   all-roles glyph-uniqueness gate added.
 - **ATNO not the loudest need-state** → re-laddered; "ATNO loudest" gate added.

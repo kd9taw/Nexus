@@ -53,6 +53,7 @@ import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
 import { PROFILE_LIST } from '../features/profiles'
 import { checkForUpdateManual } from '../features/updateCheck'
+import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
 
 interface Props {
   /** Called after a successful save so the shell can refresh its snapshot. */
@@ -86,6 +87,21 @@ const FEATURE_CATEGORY_ORDER: FeatureCategory[] = [
 ]
 
 type FieldKey = keyof Settings
+
+// Flat ARRL/RAC section list + validity set for the Field Day section picker
+// (spec §6). Derived once from the grouped universe; the datalist shows every
+// section (code + name + division) and any typed value is validated against
+// this set so an operator can only ship a real section in the Cabrillo log.
+const FD_SECTION_OPTIONS = ARRL_SECTIONS_BY_DIVISION.flatMap((d) => d.sections)
+const FD_SECTION_CODES = new Set(FD_SECTION_OPTIONS.map((s) => s.code))
+
+// TODO (spec §6 grid-seed, deferred): pre-suggest the section from the operator's
+// Maidenhead grid for single-section US states. This needs grid → lat/lon → state
+// polygon lookup (point-in-polygon against us-atlas) → state → section, which is not
+// trivially derivable on the frontend today (no `state_for_grid` mirror exists here);
+// the honest single-section states are also a subset that a naive map would get wrong.
+// Skipping rather than fabricating — the datalist + validation above already make the
+// section fast and correct to pick by hand.
 
 interface FieldDef {
   key: FieldKey
@@ -450,16 +466,79 @@ export function SettingsPanel({
     { key: 'F7', label: 'AGN', text: 'AGN AGN' },
     { key: 'F8', label: '?', text: '? ' },
   ]
-  const setCwMacros = (cw: { key: string; label: string; text: string }[] | undefined) => {
+  // --- CW macro profiles (named F-key sets; the active one drives the cockpit) ---
+  // The backend migrates the legacy flat `cw` list into a "Default" profile on load, so
+  // `cwProfiles` always has at least one entry. The macro grid below edits the ACTIVE
+  // profile's macros; an empty macro list means the cockpit's built-in F1–F8 defaults.
+  const cwProfiles = form?.macros.cwProfiles ?? []
+  const activeCwIdx = form?.macros.activeCwProfile ?? 0
+  const activeCwMacros = cwProfiles[activeCwIdx]?.macros ?? []
+
+  const selectCwProfile = (i: number) => {
     markDirty()
-    setForm((prev) => (prev ? { ...prev, macros: { ...prev.macros, cw } } : prev))
+    setForm((prev) => (prev ? { ...prev, macros: { ...prev.macros, activeCwProfile: i } } : prev))
+  }
+  const addCwProfile = () => {
+    const name = window.prompt('New CW macro profile name:', `Profile ${cwProfiles.length + 1}`)?.trim()
+    if (!name) return
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const list = prev.macros.cwProfiles ?? []
+      const cur = list[prev.macros.activeCwProfile ?? 0]?.macros ?? []
+      // Seed from the current profile's macros (a copy) so a new set starts editable, or
+      // the built-in defaults when the current profile is still on the built-ins (empty).
+      const seed = cur.length ? cur.map((m) => ({ ...m })) : CW_MACRO_DEFAULTS.map((m) => ({ ...m }))
+      const next = [...list, { name, macros: seed }]
+      return { ...prev, macros: { ...prev.macros, cwProfiles: next, activeCwProfile: next.length - 1 } }
+    })
+  }
+  const renameCwProfile = () => {
+    const cur = cwProfiles[activeCwIdx]
+    if (!cur) return
+    const name = window.prompt('Rename CW macro profile:', cur.name)?.trim()
+    if (!name) return
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const idx = prev.macros.activeCwProfile ?? 0
+      const list = (prev.macros.cwProfiles ?? []).map((p, i) => (i === idx ? { ...p, name } : p))
+      return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
+    })
+  }
+  const deleteCwProfile = () => {
+    if (cwProfiles.length <= 1) return // never delete the last profile
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const idx = prev.macros.activeCwProfile ?? 0
+      const list = (prev.macros.cwProfiles ?? []).filter((_, i) => i !== idx)
+      return {
+        ...prev,
+        macros: { ...prev.macros, cwProfiles: list, activeCwProfile: Math.min(idx, list.length - 1) },
+      }
+    })
+  }
+  // Seed / clear the ACTIVE profile's macros (empty list = the built-in defaults).
+  const setCwMacros = (macros: { key: string; label: string; text: string }[]) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const idx = prev.macros.activeCwProfile ?? 0
+      const list = (prev.macros.cwProfiles ?? []).map((p, i) => (i === idx ? { ...p, macros } : p))
+      return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
+    })
   }
   const updateCwMacro = (i: number, field: 'label' | 'text', value: string) => {
     markDirty()
     setForm((prev) => {
-      if (!prev?.macros.cw) return prev
-      const cw = prev.macros.cw.map((m, mi) => (mi === i ? { ...m, [field]: value } : m))
-      return { ...prev, macros: { ...prev.macros, cw } }
+      if (!prev) return prev
+      const idx = prev.macros.activeCwProfile ?? 0
+      const list = (prev.macros.cwProfiles ?? []).map((p, pi) => {
+        if (pi !== idx) return p
+        return { ...p, macros: p.macros.map((m, mi) => (mi === i ? { ...m, [field]: value } : m)) }
+      })
+      return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
     })
   }
 
@@ -1081,6 +1160,11 @@ export function SettingsPanel({
     overrideByKey.set(k, o.mhz)
   }
 
+  // Field Day section validity: a non-empty value that isn't a known ARRL/RAC
+  // section is flagged inline so it never silently reaches the Cabrillo log.
+  const fdSectionInvalid =
+    form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
+
   return (
     <section className="panel settings-panel">
       <div className="panel-header">
@@ -1101,7 +1185,9 @@ export function SettingsPanel({
 
       <form className="settings-form" onSubmit={handleSubmit}>
         <div className="settings-tabs" role="tablist" aria-label="Settings sections">
-          {SETTINGS_TABS.map((t) => (
+          {/* The FD-detail tab is hidden unless the Field Day master switch (fdActive,
+              toggled in Features) is on — off-season Field Day is entirely invisible. */}
+          {SETTINGS_TABS.filter((t) => t.id !== 'fieldday' || form.fdActive).map((t) => (
             <button
               key={t.id}
               type="button"
@@ -1224,14 +1310,50 @@ export function SettingsPanel({
               <div className="settings-grid">{FEATURES.filter((f) => f.core).map(featureRow)}</div>
             </div>
 
-            {/* Optional features, grouped by category. */}
+            {/* Optional features, grouped by category. Field Day is NOT a plain feature
+                toggle: its visibility is driven by the persisted master switch
+                (settings.fdActive), so the Contesting group hosts that master toggle in
+                place of the old standalone fieldDay flag. */}
             {FEATURE_CATEGORY_ORDER.map((cat) => {
-              const inCat = FEATURES.filter((f) => f.category === cat && !f.core)
-              if (inCat.length === 0) return null
+              const inCat = FEATURES.filter((f) => f.category === cat && !f.core && f.id !== 'fieldDay')
+              const isContesting = cat === 'Contesting'
+              if (inCat.length === 0 && !isContesting) return null
               return (
                 <div className="settings-featgroup" key={cat}>
                   <span className="settings-featgroup-title">{cat}</span>
-                  <div className="settings-grid">{inCat.map(featureRow)}</div>
+                  <div className="settings-grid">
+                    {isContesting && (
+                      <div className="settings-field">
+                        <label className="settings-toggle">
+                          <span className="settings-label">Field Day mode</span>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={!!form.fdActive}
+                            className={`toggle${form.fdActive ? ' on' : ''}`}
+                            onClick={() => {
+                              const next = !form.fdActive
+                              updateBool('fdActive', next)
+                              // Turning on with no Class/Section yet → jump to the FD setup
+                              // tab (now visible) so they're filled; the backend won't enter
+                              // Field Day until both are set.
+                              if (next && (!form.fdClass.trim() || !form.fdSection.trim())) setTab('fieldday')
+                            }}
+                            aria-label={`${form.fdActive ? 'Disable' : 'Enable'} Field Day mode`}
+                          >
+                            <span className="toggle-knob" />
+                          </button>
+                        </label>
+                        <span className="settings-hint">
+                          Turn on for Field Day weekend — reveals the Field Day workspace, the
+                          Class/Section exchange across all modes, and the setup tab. Off the rest of
+                          the year (nothing shows). Stays on across restarts until you turn it off;
+                          Save settings to apply.
+                        </span>
+                      </div>
+                    )}
+                    {inCat.map(featureRow)}
+                  </div>
                 </div>
               )
             })}
@@ -3012,7 +3134,38 @@ export function SettingsPanel({
 
             <div className="settings-field cw-macro-editor">
               <span className="settings-label">CW cockpit F-keys</span>
-              {!form.macros.cw?.length ? (
+              {/* Named macro profiles — a rotating operator switches sets here (or in one
+                  click from the CW cockpit bar). The grid below edits the ACTIVE profile. */}
+              <div className="cw-macro-row">
+                <select
+                  className="settings-input"
+                  value={activeCwIdx}
+                  onChange={(e) => selectCwProfile(Number(e.target.value))}
+                  aria-label="Active CW macro profile"
+                >
+                  {cwProfiles.map((p, i) => (
+                    <option key={i} value={i}>
+                      {p.name || `Profile ${i + 1}`}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="settings-refresh" onClick={addCwProfile}>
+                  New
+                </button>
+                <button type="button" className="settings-refresh" onClick={renameCwProfile}>
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  className="settings-refresh danger"
+                  onClick={deleteCwProfile}
+                  disabled={cwProfiles.length <= 1}
+                  title={cwProfiles.length <= 1 ? 'Keep at least one profile' : 'Delete this profile'}
+                >
+                  Delete
+                </button>
+              </div>
+              {!activeCwMacros.length ? (
                 <div className="cw-macro-row">
                   <span className="settings-hint">
                     Using the built-in F1–F8 set. Customize to make them your own (labels +
@@ -3028,7 +3181,7 @@ export function SettingsPanel({
                 </div>
               ) : (
                 <>
-                  {form.macros.cw.map((m, i) => (
+                  {activeCwMacros.map((m, i) => (
                     <div key={m.key} className="cw-macro-row">
                       <span className="cw-macro-key" title={CW_MACRO_ROLES[m.key] ?? ''}>
                         {m.key}
@@ -3065,7 +3218,7 @@ export function SettingsPanel({
                     <button
                       type="button"
                       className="settings-refresh"
-                      onClick={() => setCwMacros(undefined)}
+                      onClick={() => setCwMacros([])}
                     >
                       Reset to defaults
                     </button>
@@ -4015,6 +4168,12 @@ export function SettingsPanel({
           <>
           <fieldset className="settings-section">
             <legend>Field Day Setup</legend>
+            {(!form.fdClass.trim() || !form.fdSection.trim()) && (
+              <p className="settings-note">
+                <strong>Set your Class + Section to start operating.</strong> Field Day mode is on,
+                but the station won&apos;t enter Field Day until both are filled in below.
+              </p>
+            )}
             <div className="settings-grid">
               <div className="settings-field">
                 <span className="settings-label">Event</span>
@@ -4056,22 +4215,37 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   {(form.fdEvent ?? 'arrlfd') === 'wfd'
                     ? 'Transmitters + location: H=Home, I=Indoor, M=Mobile, O=Outdoor (e.g. 2O = 2 transmitters, outdoor).'
-                    : 'E.g. 1D (1 transmitter, EOC). Set before Field Day starts.'}
+                    : 'Number of transmitters + class letter: A=club/group portable, B=1–2 person portable, C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A = 3 transmitters, club portable.'}
                 </span>
               </label>
 
               <label className="settings-field">
                 <span className="settings-label">ARRL Section</span>
                 <input
-                  className="settings-input mono"
+                  className={`settings-input mono${fdSectionInvalid ? ' invalid' : ''}`}
                   type="text"
                   value={form.fdSection}
                   placeholder="WI"
+                  list="fd-section-list"
+                  aria-invalid={fdSectionInvalid}
                   onChange={(e) => update('fdSection', e.target.value.toUpperCase())}
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">Your ARRL / RAC section (e.g. WI, ENY, ONN). Required for the Cabrillo log.</span>
+                <datalist id="fd-section-list">
+                  {FD_SECTION_OPTIONS.map((s) => (
+                    <option key={s.code} value={s.code}>{`${s.name} · ${s.division}`}</option>
+                  ))}
+                </datalist>
+                {fdSectionInvalid && (
+                  <span className="fd-section-warn" role="alert">
+                    &ldquo;{form.fdSection}&rdquo; isn&apos;t a known ARRL/RAC section — pick one from the list.
+                  </span>
+                )}
+                <span className="settings-hint">
+                  Your ARRL / RAC section (e.g. WI, ENY, ONN). Start typing the code or a state name and pick from
+                  the list — validated against all {FD_SECTION_OPTIONS.length} sections. Required for the Cabrillo log.
+                </span>
               </label>
 
               <div className="settings-field">
@@ -4143,6 +4317,45 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">N3FJP's API TCP port (default 1100).</span>
               </label>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Use ENTER for Field Day scoring</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.n3fjpUseEnter ?? true}
+                    className={`toggle${(form.n3fjpUseEnter ?? true) ? ' on' : ''}`}
+                    onClick={() => updateBool('n3fjpUseEnter', !(form.n3fjpUseEnter ?? true))}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Log each FD contact with N3FJP's <strong>ENTER</strong> sequence, which scores the
+                  contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code>{' '}
+                  insert (may not score). On by default.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Report my band to N3FJP</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.n3fjpReportBand ?? false}
+                    className={`toggle${form.n3fjpReportBand ? ' on' : ''}`}
+                    onClick={() => updateBool('n3fjpReportBand', !form.n3fjpReportBand)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Tell N3FJP which band you're on (no CAT needed), so the club's Network Status
+                  Display band board shows this position. Off by default.
+                </span>
+              </div>
 
               <div className="settings-field">
                 <label className="settings-toggle">

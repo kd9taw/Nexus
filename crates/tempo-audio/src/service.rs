@@ -95,6 +95,11 @@ use tempo_net::wsjtx::{
 /// Flush PSK Reporter spots at most this often (seconds) — its service rate-limits.
 const PSK_FLUSH_SECS: f64 = 300.0;
 
+/// Coarse heartbeat (ms) for the no-CAT N3FJP band report, so the club board
+/// stays fresh without a TCP connect every slot boundary. A band/mode change
+/// reports immediately regardless of this interval.
+const N3FJP_BAND_REPORT_MS: f64 = 60_000.0;
+
 /// Tune-carrier audio tone (Hz), the same f0 the FT1 modem centers on.
 const TUNE_FREQ_HZ: f32 = 1500.0;
 /// How many ms of tune carrier to queue per loop iteration (keeps the output
@@ -976,6 +981,12 @@ struct RadioLoop {
     /// what they own.
     err_owner: ErrOwner,
     last_fd_qsos: usize,
+    /// Last time (loop ms) we reported our band to the N3FJP club board, so the
+    /// no-CAT band report fires on a coarse heartbeat, not every slot boundary.
+    last_reported_band: f64,
+    /// The last "band|mode" reported to N3FJP, so a band/mode change reports
+    /// immediately (between heartbeats). Empty until the first report.
+    last_reported_bm: String,
     /// Whether the previous boundary saw a live FD session — the None→Some
     /// edge seeds `last_fd_qsos` past the restored journal rows so they are
     /// never re-pushed to the club network / WSJT-X sinks as newly logged.
@@ -1038,6 +1049,8 @@ impl RadioLoop {
             func_state: [None; 5],
 
             last_fd_qsos: 0,
+            last_reported_band: now_unix_ms(),
+            last_reported_bm: String::new(),
             fd_was_active: false,
             clock_offset_ms: 0,
         }
@@ -2674,11 +2687,24 @@ impl RadioLoop {
                         let st = eng.settings();
                         let n3_host = st.n3fjp_host.trim().to_string();
                         let n3_port = st.n3fjp_port;
+                        // Field Day contacts use the ENTER sequence (which scores
+                        // the contest log) unless the operator opts back to ADDDIRECT.
+                        let n3_use_enter = st.n3fjp_use_enter;
                         let n1_addr = st.n1mm_addr.trim().to_string();
                         if !n3_host.is_empty() || !n1_addr.is_empty() {
                             let new_qsos: Vec<_> =
                                 fd.log[self.last_fd_qsos.min(fd.log.len())..].to_vec();
                             let mycall = snap.mycall.clone();
+                            // The operator at the key (FD rotates ops) — the settable
+                            // fd_operator when set, else the station call.
+                            let operator = {
+                                let op = st.fd_operator.trim();
+                                if op.is_empty() {
+                                    mycall.clone()
+                                } else {
+                                    op.to_string()
+                                }
+                            };
                             let myexch = format!("{} {}", fd.my_class, fd.my_section);
                             let contest = if fd.event == "wfd" {
                                 "WFD"
@@ -2710,11 +2736,17 @@ impl RadioLoop {
                                             mode: mode_str.to_string(),
                                             freq_mhz: dial_mhz,
                                             when_unix: when,
-                                            operator: mycall.clone(),
+                                            operator: operator.clone(),
                                         };
-                                        if let Err(e) =
+                                        let res = if n3_use_enter {
+                                            tempo_net::n3fjp::push_qso_enter(
+                                                &n3_host, n3_port, &push,
+                                            )
+                                            .map(|_| ())
+                                        } else {
                                             tempo_net::n3fjp::push_qso(&n3_host, n3_port, &push)
-                                        {
+                                        };
+                                        if let Err(e) = res {
                                             eprintln!("tempo: N3FJP push failed: {e}");
                                         }
                                     }
@@ -2735,7 +2767,7 @@ impl RadioLoop {
                                             contestname: contest.to_string(),
                                             freq_10hz: (dial_mhz * 1e5) as u64,
                                             sent_exchange: myexch.clone(),
-                                            operator: mycall.clone(),
+                                            operator: operator.clone(),
                                             // 32-hex dedup id: time + index + call hash.
                                             id: format!(
                                                 "{:016x}{:016x}",
@@ -2760,6 +2792,42 @@ impl RadioLoop {
             // above) — so it also RESETS to 0 when a session ends, and a stale
             // count can never later flood the club log after FD is re-armed.
             self.last_fd_qsos = snap.field_day.as_ref().map(|f| f.qso_count).unwrap_or(0);
+
+            // Club band board (N3FJP Network Status Display): report THIS
+            // position's band without CAT so the club sees where we are. Fires
+            // on a band/mode change or a coarse heartbeat; spawned so a parked
+            // N3FJP box never stalls the slot loop. Opt-in (default off).
+            if eng.settings().n3fjp_report_band {
+                let host = eng.settings().n3fjp_host.trim().to_string();
+                if !host.is_empty() {
+                    let band_meters = band_for_interop(&snap.radio.band);
+                    let mode = snap.radio.sideband.clone();
+                    let bm_key = format!("{band_meters}|{mode}");
+                    if bm_key != self.last_reported_bm
+                        || now - self.last_reported_band >= N3FJP_BAND_REPORT_MS
+                    {
+                        self.last_reported_band = now;
+                        self.last_reported_bm = bm_key;
+                        let port = eng.settings().n3fjp_port;
+                        let freq_mhz = snap.radio.dial_mhz;
+                        std::thread::spawn(move || {
+                            // Nexus owns the rig, so N3FJP's own rig interface is
+                            // off → CHANGEBM (rig_iface_on = false), the no-CAT
+                            // local-bridge default.
+                            if let Err(e) = tempo_net::n3fjp::report_band(
+                                &host,
+                                port,
+                                &band_meters,
+                                &mode,
+                                freq_mhz,
+                                false,
+                            ) {
+                                eprintln!("tempo: N3FJP band report failed: {e}");
+                            }
+                        });
+                    }
+                }
+            }
         }
         drop(eng); // release before the PSK flush re-locks the engine
 
@@ -4932,6 +5000,9 @@ mod tests {
         {
             let mut eng = engine.lock().unwrap();
             eng.apply_settings(Settings {
+                // Master switch ON — the snapshot only exposes `field_day` (and so
+                // the club push only fires) while `fd_active` is true.
+                fd_active: true,
                 fd_class: "1D".to_string(),
                 fd_section: "WI".to_string(),
                 n3fjp_host: "127.0.0.1".to_string(),
@@ -5019,6 +5090,9 @@ mod tests {
         {
             let mut eng = engine.lock().unwrap();
             eng.apply_settings(Settings {
+                // Master switch ON — the snapshot only exposes `field_day` (and so
+                // the club push only fires) while `fd_active` is true.
+                fd_active: true,
                 fd_class: "1D".to_string(),
                 fd_section: "WI".to_string(),
                 n3fjp_host: "127.0.0.1".to_string(),

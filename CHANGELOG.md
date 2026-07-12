@@ -5,6 +5,51 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-07-12 — Field Day mode, readable light theme, and operating fixes
+
+### Added
+
+- **One-switch Field Day mode.** A single "Field Day mode" toggle in Settings turns on
+  everything at once across Phone, CW, and digital — the Class+Section exchange, logging,
+  scoring, dupe-checking, and the connectors. It's off (and completely invisible) the rest of
+  the year, never turns itself on, and — once you enable it — survives a restart so a crash
+  mid-event comes back operating with your log intact. Summer Field Day and Winter Field Day
+  are selected automatically by date (with a manual override), each with its own rules.
+- **Worked-sections board.** A colored ARRL/RAC section grid (all 83 sections, grouped by
+  division) that lights up each section as you work it — see your coverage at a glance.
+- **Club Log / N3FJP Field Day networking.** Nexus now logs into N3FJP using the contest-correct
+  ENTER path (so your Class and Section actually score), and can report your band to the club's
+  N3FJP network display without needing CAT on the N3FJP side.
+- **CW Field Day macros** — new `{CLASS}` / `{SECTION}` / `{EXCH}` macro tokens send your
+  exchange, plus a default Field Day macro set; a "Give: 3A WI" exchange prompt on Phone; and
+  Winter-Field-Day operating from the Tempo chat cockpit.
+- **Field Day exports** — one-page score summary and a dupe sheet alongside Cabrillo/ADIF, and a
+  section-validated setup so you can't mistype your ARRL section.
+- **Pop-out Field Day scoreboard** with a settable operator call that's passed straight through to
+  N3FJP, plus timestamps on the Field Day call log and a larger Call/Class/Section entry.
+- **Custom F-key macro profiles for CW** — save multiple named macro sets (per operator or per
+  activity) and switch the active one from the CW cockpit; your existing macros become the
+  "Default" profile automatically.
+- **Roster is the default FT8/FT4 layout** (the friendlier at-a-glance view) — Classic is still
+  one click away and your choice sticks.
+
+### Changed
+
+- **Light theme is much easier to read** — stronger surface hierarchy (panels lift off the page),
+  softer off-white surfaces instead of harsh pure white, and clearer tables, chips, and status
+  tints. Dark mode is unchanged.
+- **Amber theme removed** — its monochrome palette flattened the color language; anyone on amber
+  is moved to dark. (The amber-CRT *waterfall* color scheme stays.)
+
+### Fixed
+
+- **CW decode clears on QSY** — changing bands or clicking a Needed contact while operating CW
+  now clears the CW decode window instead of leaving stale copy from the old frequency.
+- **Two radios on one COM port now warns you** — configuring two radios on the same serial port
+  (which left one showing a mysterious red status) now shows a clear "same COM port" message.
+- **Light/Dark toggle now reachable in the Phone and CW views** — it was rendering but bunched to
+  the left where it was easy to miss; it's now pinned to the top-right in every view.
+
 ## [0.7.1] — 2026-07-12 — Club Log upload enabled
 
 ### Added

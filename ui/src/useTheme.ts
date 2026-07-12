@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 
-export type Theme = 'light' | 'dark' | 'amber'
+export type Theme = 'light' | 'dark'
 
 const STORAGE_KEY = 'tempo-theme'
 
 function readInitial(): Theme {
   const saved = localStorage.getItem(STORAGE_KEY)
-  if (saved === 'light' || saved === 'dark' || saved === 'amber') return saved
+  if (saved === 'light' || saved === 'dark') return saved
+  // the amber theme was removed — migrate any saved value to dark so it doesn't recur
+  if (saved === 'amber') {
+    localStorage.setItem(STORAGE_KEY, 'dark')
+    return 'dark'
+  }
   // default to dark (shack), matching the index.html default
   return 'dark'
 }

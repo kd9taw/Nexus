@@ -233,8 +233,9 @@ export default function App() {
   }, [view])
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
   // Operate layout mode: Classic (WSJT-X — Band Activity dominant) vs Roster
-  // (GridTracker — the Call Roster dominant). Persisted UI pref; new hams who
-  // love GridTracker pick Roster, die-hards keep Classic. Default Classic.
+  // (GridTracker — the Call Roster dominant). Persisted UI pref; Roster is the
+  // default (the friendlier at-a-glance view), and die-hards can pick Classic —
+  // an explicit 'classic' choice is kept, everyone else gets Roster.
   const [operateLayout, setOperateLayout] = useState<'classic' | 'roster'>(() => {
     try {
       const v = localStorage.getItem('nexus.operateLayout')
@@ -242,7 +243,7 @@ export default function App() {
     } catch {
       /* unreadable storage — fall through to default */
     }
-    return 'classic'
+    return 'roster'
   })
   const handleOperateLayout = useCallback((m: 'classic' | 'roster') => {
     setOperateLayout(m)
@@ -326,6 +327,16 @@ export default function App() {
       setStatus('audio', null)
     }
   }, [snap?.radio.audioError])
+
+  // Surface a serial COM-port collision (two radios on one port) in the status
+  // lane — otherwise it only shows as an unexplained red radio pill.
+  useEffect(() => {
+    const warn = snap?.radio.radioConfigWarning
+    setStatus(
+      'radioConfig',
+      warn ? { tier: 'warning', message: 'RADIO CONFIG', detail: warn } : null,
+    )
+  }, [snap?.radio.radioConfigWarning])
 
   // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend
   // log funnel; the engine bumps uploadTick per outcome and we toast it here —
@@ -1294,10 +1305,21 @@ export default function App() {
   // displayed tier is the authoritative link tier from the snapshot
   const tier = snap.link.tier
 
+  // Field Day visibility is owned by the persisted master switch (settings.fdActive),
+  // NOT the standalone feature flag — so the two can never diverge. Fold it into the
+  // enabled map that the nav and the redirect guard below both read: master off →
+  // Field Day is invisible (nav item hidden, view redirects away); master on → visible.
+  const fdActive = settings?.fdActive === true
+  const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: fdActive }
+  const isViewEnabled = (v: View): boolean => navEnabled[v as FeatureId] !== false
+
   // Defense in depth: if the current view's feature got disabled (e.g. toggled
   // off in Settings while viewing it), fall back to the profile's landing view.
-  // The nav already hides disabled sections; this guards a stale selection.
-  const effectiveView: View = features.isOn(view as FeatureId) ? view : features.landing
+  // The nav already hides disabled sections; this guards a stale selection. Never
+  // land on a disabled view (e.g. a Contest profile whose landing is Field Day while
+  // the master is off) → operate.
+  const fallbackView: View = isViewEnabled(features.landing) ? features.landing : 'operate'
+  const effectiveView: View = isViewEnabled(view) ? view : fallbackView
 
   // First-run nudge: callsign unset / still the placeholder, and not dismissed.
   const needsOnboarding =
@@ -1734,7 +1756,7 @@ export default function App() {
         <ModeNav
           view={effectiveView}
           mode={snap.mode}
-          enabled={features.enabled}
+          enabled={navEnabled}
           onSelect={handleView}
           tier={tier}
           onDigitalMode={handleDigitalMode}

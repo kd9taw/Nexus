@@ -231,18 +231,17 @@ describe('sidebandSign', () => {
 
 describe('resolveColormap (palette picker)', () => {
   it("'auto' rides the theme", () => {
-    expect(resolveColormap('auto', 'amber')).toBe('amber-crt')
     expect(resolveColormap('auto', 'light')).toBe('cividis')
     expect(resolveColormap('auto', 'dark')).toBe('inferno')
   })
 
   it('an explicit palette wins over the theme', () => {
-    expect(resolveColormap('digipan', 'amber')).toBe('digipan')
+    expect(resolveColormap('digipan', 'dark')).toBe('digipan')
     expect(resolveColormap('grayscale', 'light')).toBe('grayscale')
   })
 
   it('an unknown/stale value falls back to the theme map', () => {
-    expect(resolveColormap('bogus', 'amber')).toBe('amber-crt')
+    expect(resolveColormap('bogus', 'light')).toBe('cividis')
   })
 })
 
@@ -276,7 +275,6 @@ describe('bakeLut', () => {
 describe('themeColormap', () => {
   it('maps each theme token to its perceptual colormap', () => {
     expect(themeColormap('dark')).toBe('inferno')
-    expect(themeColormap('amber')).toBe('amber-crt')
     expect(themeColormap('light')).toBe('cividis')
   })
 

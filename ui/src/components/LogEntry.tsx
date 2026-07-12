@@ -456,6 +456,10 @@ export function LogEntry({
   }
 
   // ---- FD variant render ----
+  // Call/Class/Section are enlarged and stacked under clear captions so a logger
+  // sitting beside the operator can read the exchange at a glance — using the
+  // vertical room at the bottom of the strip. Scoped to .log-entry-fd, so the
+  // normal (non-FD) log strip keeps its compact single-row layout.
   if (fdActive) {
     return (
       <div className="log-entry log-entry-fd">
@@ -465,37 +469,51 @@ export function LogEntry({
           <span className="le-fd-hint">{snap.radio.band} · contacts go to the Field Day log</span>
         </div>
 
-        <div className="le-row">
-          <input
-            className="settings-input mono le-call"
-            value={logCall}
-            onChange={(e) => setLogCall(e.target.value.toUpperCase())}
-            onKeyDown={onEnter}
-            placeholder="Call"
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <input
-            className="settings-input mono le-fd-class"
-            value={fdClass}
-            onChange={(e) => setFdClass(e.target.value.toUpperCase())}
-            onKeyDown={onEnter}
-            placeholder="Class (1D)"
-            autoComplete="off"
-            spellCheck={false}
-            title="Their Field Day class"
-          />
-          <input
-            className="settings-input mono le-fd-section"
-            value={fdSection}
-            onChange={(e) => setFdSection(e.target.value.toUpperCase())}
-            onKeyDown={onEnter}
-            placeholder="Sec (WI)"
-            autoComplete="off"
-            spellCheck={false}
-            title="Their ARRL section"
-          />
-          <button type="button" className="le-log-btn" onClick={logIt} disabled={!logCall.trim()}>
+        <div className="le-fd-big">
+          <label className="le-fd-field le-fd-field-call">
+            <span className="le-fd-cap">Call</span>
+            <input
+              className="settings-input mono le-fd-input le-fd-input-call"
+              value={logCall}
+              onChange={(e) => setLogCall(e.target.value.toUpperCase())}
+              onKeyDown={onEnter}
+              placeholder="W1AW"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <label className="le-fd-field">
+            <span className="le-fd-cap">Class</span>
+            <input
+              className="settings-input mono le-fd-input le-fd-input-code"
+              value={fdClass}
+              onChange={(e) => setFdClass(e.target.value.toUpperCase())}
+              onKeyDown={onEnter}
+              placeholder="1D"
+              autoComplete="off"
+              spellCheck={false}
+              title="Their Field Day class"
+            />
+          </label>
+          <label className="le-fd-field">
+            <span className="le-fd-cap">Section</span>
+            <input
+              className="settings-input mono le-fd-input le-fd-input-code"
+              value={fdSection}
+              onChange={(e) => setFdSection(e.target.value.toUpperCase())}
+              onKeyDown={onEnter}
+              placeholder="WI"
+              autoComplete="off"
+              spellCheck={false}
+              title="Their ARRL section"
+            />
+          </label>
+          <button
+            type="button"
+            className="le-log-btn le-fd-log-btn"
+            onClick={logIt}
+            disabled={!logCall.trim()}
+          >
             Log FD
           </button>
         </div>

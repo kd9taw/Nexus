@@ -164,6 +164,11 @@ export const FEATURES: FeatureDef[] = [
     oneLine: 'Free-form QSO text (FT1/DX1).',
   },
   {
+    // NOTE: Field Day VISIBILITY is not driven by this persisted feature flag — it is
+    // owned by the Field Day master switch `settings.fdActive` (a persisted backend bool,
+    // toggled in Settings ▸ Features). App.tsx overrides `enabled.fieldDay` with `fdActive`
+    // for the nav + view-redirect, so the two can never diverge. This entry stays only so
+    // Field Day remains a real registry section (view/landing/profile semantics).
     id: 'fieldDay',
     label: 'Field Day',
     kind: 'section',

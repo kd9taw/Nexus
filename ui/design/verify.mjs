@@ -138,35 +138,6 @@ const themes = {
       'alert-info': { L: 0.52, C: 0.12, H: 240 },
     },
   },
-  amber: {
-    // Night-vision: blue/cyan collapse, so NO role may rely on blue hue;
-    // distinctions ride L (brightness) + glyph within the amber/red gamut.
-    surfaces: { bg: '#060400', panel: '#0c0801', elev: '#0e0a02', border: '#3a2a06' },
-    text: { text: '#ffb000', dim: '#b87c00', faint: '#9c6e00' },
-    status: {
-      // Monochromatic gamut: green/red hues are NOT separable, so "good" rides
-      // HIGH lightness and "bad" rides LOW lightness, always with a glyph.
-      // need-set is a clean lightness ladder: dupe<worked<new-band<new-mode<confirmed<new-entity.
-      'new-entity': { L: 0.90, C: 0.15, H: 72 },     // brightest gold ★
-      'new-band':   { L: 0.68, C: 0.145, H: 60 },    // mid amber ◑
-      'new-mode':   { L: 0.74, C: 0.15, H: 40 },     // orange ◧
-      worked:       { L: 0.58, C: 0.07, H: 64 },     // dim amber ○
-      confirmed:    { L: 0.80, C: 0.13, H: 95 },     // bright yellow-green ✓ (good=bright)
-      dupe:         { L: 0.47, C: 0.03, H: 64 },      // very dim ·
-      'snr-strong': { L: 0.82, C: 0.14, H: 95 },
-      'snr-marginal': { L: 0.72, C: 0.14, H: 68 },
-      'snr-weak':   { L: 0.55, C: 0.17, H: 32 },     // bad=low L
-      tx:           { L: 0.55, C: 0.17, H: 32 },     // transmit (▲, column-scoped)
-      rx:           { L: 0.82, C: 0.14, H: 95 },
-      'band-open':  { L: 0.82, C: 0.14, H: 95 },
-      'band-marginal': { L: 0.72, C: 0.14, H: 68 },
-      'band-closed': { L: 0.47, C: 0.03, H: 65 },
-      // interrupt escapes the bad=dark rule: BRIGHTEST red-orange in amber ⚑
-      'alert-critical': { L: 0.82, C: 0.19, H: 45 },
-      'alert-warning': { L: 0.74, C: 0.15, H: 58 },
-      'alert-info': { L: 0.66, C: 0.10, H: 72 },
-    },
-  },
 }
 
 // Glyphs are the PRIMARY (CVD-immune) channel — every role gets a UNIQUE one.
@@ -257,8 +228,7 @@ for (const [tname, t] of Object.entries(themes)) {
     if (!ok) fails++
     console.log(`  salience: ATNO ${atno.toFixed(2)} >= other needs ${others.toFixed(2)} ${ok ? 'ok' : 'FAIL'}`)
   }
-  // Salience: alert-critical is never buried — louder than tx + worked, and in
-  // the monochromatic amber theme also brighter than a routine "good" chip.
+  // Salience: alert-critical is never buried — louder than tx + worked.
   {
     const cr = (r) => contrast(hex[r], t.surfaces.panel)
     const crit = cr('alert-critical')

@@ -49,6 +49,7 @@ import {
   setTxEnabled,
   setTune,
   setHoldTxFreq,
+  setSettings as persistSettings,
 } from './api'
 import { NeededPanel } from './components/NeededPanel'
 import { BandMap } from './components/BandMap'
@@ -57,6 +58,7 @@ import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
 import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
+import { FieldDayScoreboard } from './components/FieldDayView'
 import { Waterfall } from './components/Waterfall'
 import { StationList } from './components/StationList'
 import { visibleNeeds, modeClassOf, workTarget } from './features/needs'
@@ -72,9 +74,10 @@ type OperateLayout = 'classic' | 'roster'
 
 function loadOperateLayout(): OperateLayout {
   try {
-    return localStorage.getItem('nexus.operate.layout') === 'roster' ? 'roster' : 'classic'
+    // Roster is the default; only an explicit 'classic' choice keeps Classic.
+    return localStorage.getItem('nexus.operate.layout') === 'classic' ? 'classic' : 'roster'
   } catch {
-    return 'classic'
+    return 'roster'
   }
 }
 
@@ -333,6 +336,31 @@ export function DetachedPanel({ panel }: { panel: string }) {
         {/* This panel's Track/alarm actions report via toasts — unlike the older
             detached panels (silent by design), it needs a host in this window. */}
         <Toasts />
+      </div>
+    )
+  }
+
+  if (panel === 'fieldday') {
+    const fd = snap?.fieldDay ?? null
+    return (
+      <div className="app detached">
+        {fd ? (
+          <FieldDayScoreboard
+            fieldDay={fd}
+            settings={settings}
+            detached
+            onSaveOperator={(call) => {
+              if (!settings) return
+              const updated: Settings = { ...settings, fdOperator: call }
+              setSettings(updated) // optimistic local mirror (useState)
+              apply(persistSettings(updated)) // persist + mirror the returned snapshot
+            }}
+          />
+        ) : (
+          <div className="app loading">
+            <span>Field Day isn’t active.</span>
+          </div>
+        )}
       </div>
     )
   }

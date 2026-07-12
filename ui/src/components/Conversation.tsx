@@ -89,6 +89,20 @@ export function Conversation({
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  // Winter-Field-Day-only FD chrome. Tempo (FT1 chat) is a first-class Field Day
+  // contact surface for WFD only (operator: FT1 is relevant to Winter FD, not
+  // Summer). Under SFD (event 'arrlfd') or no active FD this is null, so no FD
+  // chrome renders anywhere in the Tempo cockpit. The narrowing (assign the
+  // status, not a boolean) keeps `wfdFd` typed non-null where used.
+  const wfdFd = fieldDay && fieldDay.event === 'wfd' ? fieldDay : null
+
+  // TODO(FD parity §3.4): full digital-cockpit parity ("call CQ FD" as a
+  // structured Msg::FieldDay CQ, and a one-tap "work this peer for FD" that runs
+  // the FieldDayStation exchange over FT1 and logs the QSO) needs a backend seam
+  // that does not exist yet — onCallCq sends a generic CQ and there is no command
+  // to run/complete an FD exchange with a chat peer. This surface is chrome +
+  // exchange-chip only until that command lands; do NOT fabricate the API here.
+
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
@@ -103,6 +117,17 @@ export function Conversation({
         <div className="empty-conv-inner">
           <h2>No conversation selected</h2>
           <p>Pick a station from the roster, or call CQ to be heard on the band.</p>
+          {wfdFd && (
+            <p className="conv-sub" style={{ marginBottom: 'var(--space-2)' }}>
+              <span
+                className="fd-state-chip"
+                style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+              >
+                🏕 Field Day · Winter
+              </span>{' '}
+              active — call CQ, then send your exchange from the chat box.
+            </p>
+          )}
           <button type="button" className="cq-btn" onClick={onCallCq}>
             📣 Call CQ
           </button>
@@ -201,6 +226,24 @@ export function Conversation({
           >
             ⚙
           </button>
+        )}
+        {wfdFd && (
+          <>
+            <span
+              className="fd-state-chip"
+              style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+              title="Winter Field Day is active — Tempo is a first-class Field Day contact surface"
+            >
+              🏕 Field Day · Winter
+            </span>
+            <span className="conv-sub" title={wfdFd.state || undefined}>
+              {wfdFd.dxcall
+                ? `Working ${wfdFd.dxcall}`
+                : wfdFd.running
+                  ? 'Running (calling CQ)'
+                  : 'Search & pounce'}
+            </span>
+          </>
         )}
       </div>
 
