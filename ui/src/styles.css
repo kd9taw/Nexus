@@ -10578,6 +10578,36 @@ select.settings-input {
   border-color: var(--accent);
   color: var(--accent);
 }
+/* The 2D/3D map-mode toggle — groups to the right next to Pop-out. */
+.connect-3d-toggle {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.connect-3d-toggle:hover {
+  border-color: var(--accent);
+}
+.connect-3d-toggle.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* 3D globe lazy-load placeholder (three.js chunk loading). */
+.globe3d-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
 /* A torn-off panel window: fill the OS window, no app chrome. */
 .app.detached {
   height: 100vh;

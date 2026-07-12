@@ -6,7 +6,7 @@
 // The panes are an assignable wrap-the-globe grid (HamClock-style): every panel is a
 // reassignable pane with a Basic (one plain sentence) and Expert (full data) view; the
 // globe stays the untouched centerpiece. See components/connect/* + features/connectConfig.
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
 import type {
   GettingOut,
   MapSpot,
@@ -24,6 +24,9 @@ import type { DxpedWindow } from '../types'
 import { effectiveXray } from '../flareAlert'
 import { latLonToGrid } from '../grid'
 import { MapView, type MapIntent } from './MapView'
+// The 3-D WebGL globe is LAZY-loaded: three.js only downloads when an operator turns on
+// 3-D mode, so the 2-D default (which runs anywhere) never pays for it.
+const Globe3D = lazy(() => import('./Globe3D'))
 import { provLabel } from './connect/paneFormat'
 import { PaneFrame } from './connect/PaneFrame'
 import type { PaneContext } from './connect/paneContext'
@@ -94,6 +97,25 @@ export function ConnectView({
       /* ignore */
     }
   }
+  // 2-D (default, universal) vs the opt-in 3-D WebGL globe. Persisted; off by default so
+  // the map always starts on the everywhere-compatible 2-D renderer.
+  const [map3d, setMap3d] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('nexus.connect.map3d') === '1'
+    } catch {
+      return false
+    }
+  })
+  const toggleMap3d = () =>
+    setMap3d((v) => {
+      const nv = !v
+      try {
+        localStorage.setItem('nexus.connect.map3d', nv ? '1' : '0')
+      } catch {
+        /* ignore */
+      }
+      return nv
+    })
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
   const { mode, slots, setMode, assignPane } = useConnectConfig()
   const expert = mode === 'expert' // still feeds MapView.expert
@@ -330,6 +352,18 @@ export function ConnectView({
               Expert
             </button>
           </div>
+          <button
+            type="button"
+            className={`connect-3d-toggle${map3d ? ' active' : ''}`}
+            onClick={toggleMap3d}
+            title={
+              map3d
+                ? 'Using the 3D WebGL globe — click for the 2D map (works on any PC)'
+                : 'Switch to the 3D WebGL globe (best on higher-end PCs)'
+            }
+          >
+            🌐 {map3d ? '3D' : '2D'}
+          </button>
           {onPopOut && (
             <button
               type="button"
@@ -345,6 +379,13 @@ export function ConnectView({
           {railFrame('left1')}
           {railFrame('left2')}
           <div className="connect-map">
+            {map3d ? (
+              <Suspense
+                fallback={<div className="globe3d-loading">Loading 3D globe…</div>}
+              >
+                <Globe3D myGrid={myGrid} />
+              </Suspense>
+            ) : (
             <MapView
               myGrid={myGrid}
               theme={theme}
@@ -363,6 +404,7 @@ export function ConnectView({
               muf={muf}
               xrayLong={xrayLong}
             />
+            )}
           </div>
           {railFrame('right1')}
           {railFrame('right2')}
