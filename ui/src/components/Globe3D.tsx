@@ -68,6 +68,8 @@ export default function Globe3D({
   const [ready, setReady] = useState(false)
   const [ok] = useState(webglOk)
   const [spin, setSpin] = useState(true) // idle auto-rotate; on by default, operator-toggleable
+  // Toggleable 3-D layers (Phase B grows this to match the 2-D map's layer set).
+  const [show, setShow] = useState({ spots: true, arcs: true, states: showStates, lights: true })
 
   // Measure the container BEFORE paint so the globe is never sized to the whole window
   // (react-globe.gl's default when width/height are undefined) — that was painting over
@@ -112,11 +114,10 @@ export default function Globe3D({
 
   // US state borders as globe paths (one path per border line-string).
   const statePaths = useMemo(() => {
-    if (!showStates) return []
     // usStateBorders() returns a GeoJSON MultiLineString mesh (lon/lat coords).
     const geo = usStateBorders() as unknown as { coordinates?: [number, number][][] }
     return (geo.coordinates ?? []).map((line) => line.map(([lon, lat]) => [lat, lon] as [number, number]))
-  }, [showStates])
+  }, [])
 
   const rings = qth ? [{ lat: qth.lat, lng: qth.lon }] : []
 
@@ -136,7 +137,7 @@ export default function Globe3D({
       // out by the sun on the day side. This is the "dark earth, less lights" look.
       emissiveMap: night,
       emissive: new THREE.Color('#ffffff'),
-      emissiveIntensity: 0.6,
+      emissiveIntensity: 0.35, // dimmed city lights — a faint glow, not a blaze
       shininess: 4,
     })
   }, [])
@@ -197,6 +198,12 @@ export default function Globe3D({
     ;(g.controls() as { autoRotate: boolean }).autoRotate = spin
   }, [ready, spin])
 
+  // City-lights on/off from the layers panel (dim the emissive to 0 when off).
+  useEffect(() => {
+    globeMat.emissiveIntensity = show.lights ? 0.35 : 0
+    globeMat.needsUpdate = true
+  }, [globeMat, show.lights])
+
   // Keep the day/night light following the sun (~1 min cadence, cheap).
   useEffect(() => {
     if (!ready) return
@@ -230,6 +237,29 @@ export default function Globe3D({
       >
         {spin ? '⏸ Spin' : '▶ Spin'}
       </button>
+      {/* Layers panel (Expert), matching the 2-D map. Grows as Phase B adds layers. */}
+      {expert && (
+        <div className="globe3d-layers">
+          <span className="globe3d-layers-h">Layers</span>
+          {(
+            [
+              ['spots', 'Spots'],
+              ['arcs', 'Heard-me arcs'],
+              ['states', 'US states'],
+              ['lights', 'City lights'],
+            ] as const
+          ).map(([k, label]) => (
+            <label key={k}>
+              <input
+                type="checkbox"
+                checked={show[k]}
+                onChange={(e) => setShow((s) => ({ ...s, [k]: e.target.checked }))}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      )}
       {/* The same on-map insight rail (openings / band advisor / MUF) the 2-D map shows —
           overlaid on the right, so the 3-D globe has the same operating windows. */}
       {prop && (
@@ -252,26 +282,26 @@ export default function Globe3D({
           showAtmosphere
           atmosphereColor="#68a8e2"
           atmosphereAltitude={0.18}
-          pointsData={points}
+          pointsData={show.spots ? points : []}
           pointLat="lat"
           pointLng="lng"
           pointColor="color"
-          pointAltitude={0.01}
-          pointRadius={0.28}
+          pointAltitude={0.02}
+          pointRadius={0.55}
           pointLabel={(d: object) => (d as { call: string }).call}
           onPointClick={(d: object) => onSelectCall((d as { call: string }).call)}
-          arcsData={arcs}
+          arcsData={show.arcs ? arcs : []}
           arcColor="color"
           arcStroke={0.5}
           arcDashLength={0.5}
           arcDashGap={0.25}
           arcDashAnimateTime={2200}
           arcAltitudeAutoScale={0.4}
-          pathsData={statePaths}
+          pathsData={show.states ? statePaths : []}
           pathPointLat={(p: unknown) => (p as [number, number])[0]}
           pathPointLng={(p: unknown) => (p as [number, number])[1]}
-          pathColor={() => 'rgba(77,102,117,0.55)'}
-          pathStroke={0.4}
+          pathColor={() => 'rgba(126,158,180,0.8)'}
+          pathStroke={1.1}
           ringsData={rings}
           ringColor={() => '#4ea1ff'}
           ringMaxRadius={1.6}
