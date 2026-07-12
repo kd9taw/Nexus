@@ -127,6 +127,33 @@ pub fn morse_samples(text: &str, wpm: u32, pitch_hz: f32, sample_rate: u32) -> V
     out
 }
 
+/// Keying duration of `text` as Morse at `wpm`, in milliseconds — the exact time
+/// [`morse_samples`] would produce (dit = 1200/wpm ms; dah 3, intra-char gap 1,
+/// inter-char gap 3, inter-word gap 7). The radio loop uses this to pace a word-by-word
+/// CW send so at most one word sits in the rig's keyer buffer (Stop TX can drop the rest).
+pub fn morse_duration_ms(text: &str, wpm: u32) -> f64 {
+    let unit = 1200.0 / wpm.clamp(5, 60) as f64;
+    let mut units = 0.0f64;
+    for (wi, word) in text.split_whitespace().enumerate() {
+        if wi > 0 {
+            units += 7.0; // word gap
+        }
+        for (ci, ch) in word.chars().enumerate() {
+            let Some(code) = morse_code(ch) else { continue };
+            if ci > 0 {
+                units += 3.0; // inter-character gap
+            }
+            for (ei, el) in code.chars().enumerate() {
+                if ei > 0 {
+                    units += 1.0; // intra-character gap
+                }
+                units += if el == '-' { 3.0 } else { 1.0 };
+            }
+        }
+    }
+    units * unit
+}
+
 fn append_gap(out: &mut Vec<f32>, n: usize) {
     out.extend(std::iter::repeat_n(0.0, n));
 }
@@ -248,6 +275,20 @@ mod tests {
         assert!(
             morse_samples("#", wpm, 600.0, sr).is_empty(),
             "unsupported char keys nothing"
+        );
+    }
+
+    #[test]
+    fn morse_duration_matches_the_paris_calibration() {
+        // "PARIS" is the classic WPM yardstick = 50 dit-units WITH its trailing word space;
+        // the word's own keying (no trailing space) is 43 units. At 20 WPM a dit is 60 ms.
+        assert!((morse_duration_ms("PARIS", 20) - 43.0 * 60.0).abs() < 1e-6);
+        // "E" is one dit; two words insert a 7-dit gap: "E E" = 1 + 7 + 1 = 9 units.
+        assert!((morse_duration_ms("E", 20) - 60.0).abs() < 1e-6);
+        assert!((morse_duration_ms("E E", 20) - 9.0 * 60.0).abs() < 1e-6);
+        // Duration scales inversely with speed: 40 WPM is half the time of 20.
+        assert!(
+            (morse_duration_ms("PARIS", 40) - morse_duration_ms("PARIS", 20) / 2.0).abs() < 1e-6
         );
     }
 }

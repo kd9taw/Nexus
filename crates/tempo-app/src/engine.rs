@@ -1401,7 +1401,12 @@ impl Engine {
             while self.cw_sent.len() > 50 {
                 self.cw_sent.pop_front();
             }
-            self.cw_queue.push_back(expanded);
+            // Queue WORD-BY-WORD so the radio loop feeds the rig one word at a time. That
+            // keeps at most one word in the rig's CW keyer buffer, so Stop TX (which clears
+            // this queue) drops the rest of the macro instead of the rig playing it all out.
+            for word in expanded.split_whitespace() {
+                self.cw_queue.push_back(word.to_string());
+            }
         }
     }
 
@@ -1452,13 +1457,15 @@ impl Engine {
         self.cw_abort = true;
     }
 
-    /// Drain queued CW for the radio loop to key. Empty while TX is disabled (Monitor) —
-    /// the queue is held until TX is re-enabled, so a stray macro never keys unexpectedly.
-    pub fn poll_cw(&mut self) -> Vec<String> {
+    /// Pop the next queued CW WORD for the radio loop to key, or None if the queue is empty
+    /// or TX is disabled (Monitor / outside privileges — the queue is then held, so a stray
+    /// macro never keys unexpectedly). One word per call so the loop paces the send and Stop
+    /// TX (which clears the queue) can drop the remainder before it reaches the rig.
+    pub fn poll_cw_one(&mut self) -> Option<String> {
         if !self.tx_enabled || !self.tx_allowed() {
-            return Vec::new();
+            return None;
         }
-        self.cw_queue.drain(..).collect()
+        self.cw_queue.pop_front()
     }
 
     /// Take + reset the one-shot CW abort flag (the loop calls `rig.stop_morse`).
@@ -5455,28 +5462,32 @@ mod tests {
         e.set_cw_wpm(999); // out of range → clamps to 50
         assert_eq!(e.cw_wpm(), 50);
 
-        // A macro expands using the operator's call, queues, and the loop drains it.
+        // A macro expands using the operator's call and queues WORD-BY-WORD; the loop pops
+        // one word per ready tick (so it can pace the send and Stop can drop the rest).
         e.send_cw("CQ CQ DE {MYCALL} K");
-        assert_eq!(e.poll_cw(), vec!["CQ CQ DE W9XYZ K".to_string()]);
-        assert!(e.poll_cw().is_empty(), "drained");
+        for w in ["CQ", "CQ", "DE", "W9XYZ", "K"] {
+            assert_eq!(e.poll_cw_one(), Some(w.to_string()));
+        }
+        assert_eq!(e.poll_cw_one(), None, "drained");
 
         // Gated by Monitor: with TX disabled nothing keys; the queue is held.
         e.set_tx_enabled(false);
         e.send_cw("TEST");
-        assert!(e.poll_cw().is_empty(), "no CW keyed while TX is disabled");
+        assert_eq!(e.poll_cw_one(), None, "no CW keyed while TX is disabled");
         e.set_tx_enabled(true);
         assert_eq!(
-            e.poll_cw(),
-            vec!["TEST".to_string()],
+            e.poll_cw_one(),
+            Some("TEST".to_string()),
             "held until TX re-enabled"
         );
 
-        // Abort clears the queue and raises the one-shot flag for the loop.
+        // Abort clears the WHOLE remaining queue (the un-keyed words) and raises the one-shot
+        // flag for the loop — this is what makes Stop TX interrupt a long macro.
         e.send_cw("A LONG MESSAGE");
         e.stop_cw();
         assert!(e.take_cw_abort());
         assert!(!e.take_cw_abort(), "abort is one-shot");
-        assert!(e.poll_cw().is_empty(), "abort cleared the queue");
+        assert_eq!(e.poll_cw_one(), None, "abort cleared the queue");
     }
 
     #[test]
@@ -5583,7 +5594,7 @@ mod tests {
         assert!(e.poll_tx(0).is_empty(), "slot TX blocked");
         e.set_operating_mode("cw", false);
         e.send_cw("TEST");
-        assert!(e.poll_cw().is_empty(), "CW blocked outside privileges");
+        assert_eq!(e.poll_cw_one(), None, "CW blocked outside privileges");
         e.set_operating_mode("phone", false);
         e.set_ptt(true);
         assert!(!e.manual_ptt(), "manual PTT blocked outside privileges");

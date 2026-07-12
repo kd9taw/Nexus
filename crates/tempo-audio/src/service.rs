@@ -873,6 +873,10 @@ struct RadioLoop {
     mode_giveup: Option<String>,
     /// Last CW keyer speed (WPM) pushed to the rig, so we only `set_keyspd` on change.
     last_cw_wpm: u32,
+    /// Unix-ms until which the current CW word is still keying — the next queued word is
+    /// held until then, so at most one word sits in the rig's keyer buffer (Stop TX drops
+    /// the rest). 0.0 = idle / ready to send now.
+    cw_busy_until: f64,
     /// Last FM repeater config (shift, offset Hz, CTCSS Hz) applied — so the shift/offset/
     /// CTCSS commands only fire on change, not every loop. `None` when not in FM.
     last_fm: Option<(String, i64, f32)>,
@@ -997,6 +1001,7 @@ impl RadioLoop {
             mode_fail_count: 0,
             mode_giveup: None,
             last_cw_wpm: 0, // 0 = unset → first send pushes the speed
+            cw_busy_until: 0.0,
             last_fm: None,
             #[cfg(feature = "serial")]
             winkeyer: None,
@@ -1082,6 +1087,7 @@ impl RadioLoop {
         self.mode_fail_count = 0;
         self.mode_giveup = None;
         self.last_cw_wpm = 0;
+        self.cw_busy_until = 0.0;
         self.last_fm = None;
         self.manual_ptt_applied = false;
         self.last_rf_power = None;
@@ -1822,16 +1828,19 @@ impl RadioLoop {
             }
         }
 
-        // CW keying (CAT send_morse path): drain the engine's CW queue and key it via
-        // the rig. Honor a one-shot abort and push the keyer speed only when it changes.
-        // Operator-initiated; the engine gates `poll_cw` on `tx_enabled` (Monitor).
+        // CW keying: feed the rig ONE WORD AT A TIME, paced so at most one word is ever in
+        // the rig's keyer buffer. That is what lets Stop TX actually interrupt a long macro:
+        // the abort clears the engine's word queue, so every word not yet sent is dropped
+        // (a whole-macro `send_morse` blob would keep keying out of the rig's buffer past the
+        // one `\stop_morse`). Operator-initiated; the engine gates on tx_enabled + privileges.
         {
-            let (abort, wpm, items, soundcard, pitch, winkeyer_port) = {
+            let ready = now >= self.cw_busy_until;
+            let (abort, wpm, word, soundcard, pitch, winkeyer_port) = {
                 let mut eng = engine.lock().map_err(|e| e.to_string())?;
                 (
                     eng.take_cw_abort(),
                     eng.cw_wpm(),
-                    eng.poll_cw(),
+                    if ready { eng.poll_cw_one() } else { None },
                     eng.cw_soundcard(),
                     eng.cw_pitch_hz(),
                     eng.cw_winkeyer_port(),
@@ -1845,7 +1854,7 @@ impl RadioLoop {
                 self.winkeyer = None;
             }
             if abort {
-                let _ = rig.stop_morse(); // CAT keyer abort (rig CW buffer)
+                let _ = rig.stop_morse(); // CAT keyer abort (cut the one word in the rig buffer)
                                           // WinKeyer abort: one Clear Buffer byte stops keying + flushes its queue.
                 #[cfg(feature = "serial")]
                 if let Some((_, wk)) = self.winkeyer.as_mut() {
@@ -1857,11 +1866,17 @@ impl RadioLoop {
                     let _ = rig.ptt(false);
                     self.tx_until_ms = None;
                 }
+                self.cw_busy_until = 0.0; // a fresh macro after Stop keys immediately
             }
-            if !items.is_empty() {
+            if let Some(text) = word {
+                // Hold the next word until this one finishes keying + a word space (7 dits),
+                // so only ONE word is buffered in the rig at a time.
+                let unit_ms = 1200.0 / wpm.clamp(5, 60) as f64;
+                self.cw_busy_until =
+                    now + tempo_core::cw::morse_duration_ms(&text, wpm) + 7.0 * unit_ms;
                 let mut handled = false;
                 // WinKeyer hardware keyer: open the serial port on demand (reopen if the
-                // configured port changed) and stream the text to it. On open failure,
+                // configured port changed) and stream the word to it. On open failure,
                 // fall through to the CAT keyer so CW still goes out.
                 #[cfg(feature = "serial")]
                 if let Some(port) = &winkeyer_port {
@@ -1879,33 +1894,29 @@ impl RadioLoop {
                         if wpm != self.last_cw_wpm && wk.set_wpm(wpm).is_ok() {
                             self.last_cw_wpm = wpm;
                         }
-                        for text in &items {
-                            let _ = wk.send(text);
-                        }
+                        let _ = wk.send(&text);
                         handled = true;
                     }
                 }
                 if !handled {
                     if soundcard {
-                        // Key a generated tone (rig in USB): PTT + play, drop PTT after.
-                        let mut buf: Vec<f32> = Vec::new();
-                        for text in &items {
-                            buf.extend(tempo_core::cw::morse_samples(
-                                text,
-                                wpm,
-                                pitch,
-                                ft1::SAMPLE_RATE as u32,
-                            ));
-                        }
+                        // Key a generated tone (rig in USB): PTT + play. Hold PTT across the
+                        // inter-word gap (until the next word extends it) so the carrier
+                        // stays up for the whole macro, not toggling per word.
+                        let buf = tempo_core::cw::morse_samples(
+                            &text,
+                            wpm,
+                            pitch,
+                            ft1::SAMPLE_RATE as u32,
+                        );
                         if !buf.is_empty() {
-                            let secs = buf.len() as f32 / ft1::SAMPLE_RATE;
                             // Capture PTT: if the rig won't key, the tone still plays locally so
                             // it LOOKS like it sent while nothing reaches the air — surface that
                             // instead of the silent false-positive. (Audio-routing problems can't
                             // be detected here — see the Soundcard control's caveat.)
                             let ptt_err = rig.ptt(true).is_err();
                             backend.play(&buf);
-                            let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
+                            let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
                             self.tx_until_ms =
                                 Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                             if let Ok(mut eng) = engine.lock() {
@@ -1918,19 +1929,14 @@ impl RadioLoop {
                             }
                         }
                     } else {
-                        // CAT keyer: the rig generates CW from text via send_morse. Many
+                        // CAT keyer: the rig generates CW from the word via send_morse. Many
                         // Hamlib backends accept freq/mode/PTT but NOT send_morse (`b`), so
                         // capture the result and SURFACE a failure instead of keying into
                         // the void — point the operator at the Soundcard keyer.
                         if wpm != self.last_cw_wpm && rig.set_keyspd(wpm).is_ok() {
                             self.last_cw_wpm = wpm;
                         }
-                        let mut cw_err = false;
-                        for text in &items {
-                            if rig.send_morse(text).is_err() {
-                                cw_err = true;
-                            }
-                        }
+                        let cw_err = rig.send_morse(&text).is_err();
                         if let Ok(mut eng) = engine.lock() {
                             eng.set_cw_keyer_error(cw_err.then(|| {
                                 "Your rig didn't accept CAT CW keying (Hamlib send_morse). \
