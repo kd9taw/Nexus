@@ -246,6 +246,7 @@ export default function Globe3D({
     coverage: false,
     decodes: true,
     dxped: false,
+    greyline: true,
   })
 
   // Measure the container BEFORE paint so the globe is never sized to the whole window
@@ -675,6 +676,20 @@ export default function Globe3D({
     }
     syncLines(g, linesRef.current, 'rings', ringLines, '#4ea1ff', 0.4, show.rings)
     syncLines(g, linesRef.current, 'cqzones', cqzones, '#e0a94d', 0.5, show.cqzones)
+    // Greyline: the day/night terminator = a circle 90° (a quarter of the globe) from the
+    // subsolar point, in the 2-D map's warm gold. Follows the sun via the nowMs tick.
+    const greylineLines: [number, number][][] = []
+    if (show.greyline) {
+      const ss = subsolarPoint(nowMs)
+      const QUARTER_KM = (EARTH_KM * Math.PI) / 2
+      const circle: [number, number][] = []
+      for (let b = 0; b <= 360; b += 4) {
+        const d = destinationPoint(ss, b, QUARTER_KM)
+        circle.push([d.lat, d.lon])
+      }
+      greylineLines.push(circle)
+    }
+    syncLines(g, linesRef.current, 'greyline', greylineLines, '#ffc86e', 0.75, show.greyline, 0.004)
     syncCloud(
       g,
       cloudsRef.current,
@@ -683,7 +698,7 @@ export default function Globe3D({
       4,
       show.coverage,
     )
-  }, [ready, qth, show.rings, show.cqzones, show.coverage, cqzones, workedGrids])
+  }, [ready, nowMs, qth, show.rings, show.cqzones, show.coverage, show.greyline, cqzones, workedGrids])
 
   // My decodes + DXpeditions as distinct point clouds.
   useEffect(() => {
@@ -751,6 +766,7 @@ export default function Globe3D({
               ['aurora', 'Aurora'],
               ['muf', 'MUF'],
               ['pca', 'Polar cap (PCA)'],
+              ['greyline', 'Greyline'],
               ['sats', 'Satellites'],
               ['rings', 'Range rings'],
               ['cqzones', 'CQ zones'],
