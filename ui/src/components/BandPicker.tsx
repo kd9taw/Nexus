@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AppSnapshot, BandChannel } from '../types'
 import { getLicensedBandPlan, setFrequency } from '../api'
+import { bandColor } from '../bandColors'
 
 interface Props {
   snap: AppSnapshot
@@ -36,13 +37,19 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
   // the plan), still show it as the selected option so the control reflects the real dial.
   const known = plan.some((c) => c.band === snap.radio.band)
 
+  // The band is a PRIMARY operating fact — color the control with the active band's color
+  // (shared with the map's spot dots) so "what band am I on" reads across the room.
+  const col = bandColor(snap.radio.band)
+
   return (
     <div className="band-picker">
+      <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
       <select
         className="band-picker-select"
         value={snap.radio.band}
         onChange={(e) => onPick(e.target.value)}
-        title="Jump to the start of your licensed segment on this band"
+        title="Band — jump to the start of your licensed segment on this band"
+        style={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
       >
         {!known && <option value={snap.radio.band}>{snap.radio.band}</option>}
         {plan.map((c) => (
