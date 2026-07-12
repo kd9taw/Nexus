@@ -203,6 +203,9 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
   Connect map's US state borders, and is also the build-time source for
   `grid_state.bin`. Its geometry derives from **US Census Bureau** cartographic
   boundary files (**public domain**); see the WAS grid-state note above.
+- **three.js** and **react-globe.gl** / **globe.gl** — **MIT** (© Mikola Lysenko /
+  Vasco Asturiano / three.js authors). The optional 3-D WebGL Connect globe (lazy-loaded
+  only when the operator turns it on); the 2-D Canvas map remains the default.
 - **Lucide** icons via `lucide-react` — **ISC** (© Lucide contributors; based
   on Feather Icons, MIT).
 - **Radix UI** primitives `@radix-ui/react-dialog`, `-dropdown-menu`, `-toast`,

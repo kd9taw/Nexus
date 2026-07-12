@@ -5,6 +5,23 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-07-12 — Optional 3-D WebGL Connect globe
+
+### Added
+
+- **3-D Connect globe (opt-in)** — a cinematic WebGL globe for the Connect map, toggled with
+  the 🌐 button in the map header. A dark night-earth with dimmed city lights, a day/night
+  terminator + greyline, atmosphere and bloom, band-colored clickable spots, and great-circle
+  arcs to the stations you're working / that heard you.
+- **Full layer parity in 3-D** — the same operating layers as the 2-D map, in the Layers
+  panel: solar-flare blackout, aurora, MUF, proton polar cap, band-heat openings, CQ zones,
+  range rings, coverage, your decodes, DXpeditions, US states, and the greyline.
+- **Satellites with real 3-D orbits** — amateur birds actually orbit the globe at their true
+  altitude, with footprint rings and live motion — not a flat ground track.
+- **Automatic 3-D on capable machines** — on first run, PCs with a real GPU default to the
+  3-D globe; low-end or software-rendered machines stay on the universal 2-D map. Your choice
+  always overrides, and the 3-D engine is lazy-loaded so the 2-D default never pays for it.
+
 ## [0.6.0] — 2026-07-11 — AI CW decoder as primary, dual-radio TX-safety, operating polish
 
 ### Added
