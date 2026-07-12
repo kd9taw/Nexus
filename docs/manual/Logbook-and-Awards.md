@@ -109,7 +109,7 @@ HTTP response codes determine outcome: 200 + body → Ok/Modified/Duplicate, 400
 
 After a 403 (authentication suspended), Nexus sets a session-level flag that stops further auto-push attempts to avoid triggering ClubLog's IP-ban policy. Re-entering your credentials in Settings clears the flag.
 
-Auto-push on log is controlled by `clublog_upload` (default: **off**). ClubLog integration requires a developer/app API key that is not committed to the public GPLv3 repository; operators building from source must supply their own key.
+Auto-push on log is controlled by `clublog_upload` (default: **off**). ClubLog integration requires a developer/app API key: official installer builds bundle one at build time, but it is never committed to the public GPLv3 repository — operators building from source must supply their own.
 
 ---
 
@@ -211,7 +211,7 @@ Journey is deliberately white-hat: there are no decaying streaks (the streak wid
 - **County and IOTA** are not stored in QsoRecord and are not round-tripped through ADIF. Contacts from other loggers that carry these fields lose them on import.
 - **LoTW upload requires a separately installed TQSL** (from the ARRL). Nexus does not bundle TQSL or handle Callsign Certificate management.
 - **QRZ grid and state** are subscriber-only on the free QRZ XML tier and will be absent for non-subscribers.
-- **ClubLog developer API key** is not included in the public GPLv3 build. Operators building from source must supply their own key via the build environment or Settings.
+- **ClubLog developer API key** is baked into official installer builds but never committed to the public GPLv3 source. Operators building from source must supply their own key via the build environment or Settings.
 - **eQSL InBox download** is a page-scrape that depends on the "Your ADIF log file has been built" HTML marker. A change in eQSL's page structure will break the extractor until an update ships.
 - **No background periodic sync.** LoTW, eQSL, QRZ, and ClubLog syncs are triggered manually or on log entry (for outbound auto-push); there is no automatic scheduled pull.
 - **WAZ** does not advance for contacts whose callsign cannot be resolved to a DXCC entity by cty.dat.

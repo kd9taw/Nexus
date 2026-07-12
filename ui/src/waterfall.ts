@@ -134,6 +134,82 @@ export function zoomRange(centerHz: number, spanHz: number): { lo: number; hi: n
   return { lo, hi: lo + spanHz }
 }
 
+/** Scope feeds whose rows span ABSOLUTE RF Hz (a native panadapter retuned to the dial:
+ * 'flex' = SmartSDR VITA, 'civ' = Icom CI-V scope). ''/'audio' = the soundcard FFT,
+ * whose rows span demodulated audio-passband Hz. */
+export function isRfScopeSource(source: string): boolean {
+  return source === 'flex' || source === 'civ'
+}
+
+/** Carrier-symmetric modes (FM/AM): the signal straddles the carrier, so an RF scope
+ * window should CENTER on the dial rather than hang off one side of it. */
+export function isSymmetricMode(mode: string): boolean {
+  const m = mode.trim().toUpperCase()
+  return m === 'FM' || m === 'AM'
+}
+
+/** Sideband sign for mapping audio-offset Hz onto RF: +1 = USB-side (USB/CW-U — a higher
+ * pitch sits ABOVE the carrier), -1 = LSB-side (LSB/CW-L/CW-R — below). FM/unknown → +1. */
+export function sidebandSign(sideband: string): 1 | -1 {
+  switch (sideband.trim().toUpperCase()) {
+    case 'LSB':
+    case 'CW-L':
+    case 'CWL':
+    case 'CW-R':
+    case 'CWR':
+      return -1
+    default:
+      return 1
+  }
+}
+
+/**
+ * Project the requested audio view window onto one spectrum row for the Phone/CW scope.
+ *
+ * Audio rows (soundcard FFT) already span passband Hz, so the view window applies
+ * directly — clamped into the row, hi held ≥ lo+50 so an odd view never yields a
+ * degenerate window (the pre-existing behavior, unchanged).
+ *
+ * Native-panadapter rows span ABSOLUTE RF Hz, but the row center only APPROXIMATES the
+ * dial: the Flex pan recenters only after >500 Hz dial moves (RETUNE_EPS), and an Icom
+ * FIXED/edge-mode sweep may not track the dial at all — so when the live dial is known
+ * and inside the row, anchor there; otherwise fall back to the row center. Clamping the
+ * audio window into such a row degenerates to a 50 Hz sliver at the pan's LOW edge
+ * (~100 kHz off frequency) — instead map the audio offsets onto RF around the dial:
+ * rf(f) = center + sign·(f − anchor), where anchor is the CW pitch when a marker is
+ * requested (the marker then lands exactly ON the dial = zero-beat), the view midpoint
+ * for carrier-symmetric modes (`symmetric` — FM/AM center on the dial), or 0 for
+ * sideband Phone; then clamp to the row.
+ */
+export function scopeView(
+  rowLoHz: number,
+  rowHiHz: number,
+  source: string,
+  viewLoHz: number,
+  viewHiHz: number,
+  markerHz: number | null,
+  sign: 1 | -1,
+  dialHz: number | null = null,
+  symmetric = false,
+): { loHz: number; hiHz: number; markerAtHz: number | null } {
+  if (!isRfScopeSource(source)) {
+    const loHz = Math.max(rowLoHz, viewLoHz)
+    const hiHz = Math.min(rowHiHz, Math.max(viewHiHz, loHz + 50))
+    return { loHz, hiHz, markerAtHz: markerHz }
+  }
+  const center =
+    dialHz != null && dialHz >= rowLoHz && dialHz <= rowHiHz ? dialHz : (rowLoHz + rowHiHz) / 2
+  const anchor = markerHz ?? (symmetric ? (viewLoHz + viewHiHz) / 2 : 0)
+  const rf = (f: number) => center + sign * (f - anchor)
+  const a = rf(viewLoHz)
+  const b = rf(viewHiHz) // LSB mirrors the window, so a/b may arrive swapped
+  return {
+    loHz: Math.max(rowLoHz, Math.min(a, b)),
+    hiHz: Math.min(rowHiHz, Math.max(a, b)),
+    markerAtHz: markerHz == null ? null : rf(markerHz),
+  }
+}
+
 /** Zoom span options (Hz) for the waterfall picker; 0 = full passband. */
 export const WATERFALL_ZOOMS: { value: number; label: string }[] = [
   { value: 0, label: 'Full' },

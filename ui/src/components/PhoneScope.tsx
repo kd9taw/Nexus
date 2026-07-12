@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { getSpectrumRow } from '../api'
 import { sampleLut } from '../colormaps'
-import { agcRange, bakeLut, normalize, resolveColormap } from '../waterfall'
+import { agcRange, bakeLut, isSymmetricMode, normalize, resolveColormap, scopeView, sidebandSign } from '../waterfall'
 import { useWaterfallPalette } from '../waterfallPalette'
 
 interface Props {
@@ -12,7 +12,8 @@ interface Props {
   active?: boolean
   /** Displayed audio window (Hz) within the captured 200–2900 row. Defaults = the
    * full voice passband; the CW cockpit narrows to ~300–1100 so individual carriers
-   * are readable for tone placement. */
+   * are readable for tone placement. On a native RF panadapter row the same window
+   * is mapped onto RF around the dial (scopeView), so the width still applies. */
   viewLoHz?: number
   viewHiHz?: number
   /** Draw a hairline at this audio frequency (the CW pitch) — tune a signal onto
@@ -21,6 +22,18 @@ interface Props {
   /** CAT S-meter reading (dB relative to S9). When present, drives a calibrated
    * S-unit meter; `null`/absent = the rig doesn't report STRENGTH → meter shows "—". */
   smeterDb?: number | null
+  /** Rig sideband/mode ("USB"/"LSB"/"FM"/"CW-L"…). Only matters for a native RF
+   * panadapter row, where it sets which way the audio view window maps onto RF
+   * (USB-side up from the dial, LSB-side down; FM/AM centered). See scopeView. */
+  sideband?: string
+  /** Live dial (absolute Hz). Only matters for a native RF panadapter row, where it
+   * anchors the view window on the ACTUAL dial — the row center can sit off frequency
+   * (Flex RETUNE_EPS lag, Icom fixed-edge sweeps). `null`/absent = unknown → scopeView
+   * falls back to the row center. */
+  dialHz?: number | null
+  /** Reports the drawn window whenever it changes (feed source + absolute Hz span) so
+   * the host cockpit can keep its scope label honest (RX audio vs real RF span). */
+  onFeed?: (source: string, loHz: number, hiHz: number) => void
 }
 
 /**
@@ -58,6 +71,9 @@ export function PhoneScope({
   viewHiHz = 4000,
   markerHz = null,
   smeterDb = null,
+  sideband = 'USB',
+  dialHz = null,
+  onFeed,
 }: Props) {
   // Master palette shared with the FT8 waterfall + all scopes ('auto' = theme-driven).
   const [palette] = useWaterfallPalette()
@@ -67,6 +83,12 @@ export function PhoneScope({
   const themeRef = useRef(theme)
   const paletteRef = useRef(palette)
   const activeRef = useRef(active)
+  const viewLoRef = useRef(viewLoHz)
+  const viewHiRef = useRef(viewHiHz)
+  const markerRef = useRef(markerHz)
+  const sidebandRef = useRef(sideband)
+  const dialRef = useRef(dialHz)
+  const onFeedRef = useRef(onFeed)
   const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme)))
   // Which scope feed is live: '' / 'audio' = soundcard FFT, 'flex'/'civ' = a native RF panadapter.
   // Lifted out of the draw loop (updated only when it changes) so the badge can render it.
@@ -77,6 +99,12 @@ export function PhoneScope({
   themeRef.current = theme
   paletteRef.current = palette
   activeRef.current = active
+  viewLoRef.current = viewLoHz
+  viewHiRef.current = viewHiHz
+  markerRef.current = markerHz
+  sidebandRef.current = sideband
+  dialRef.current = dialHz
+  onFeedRef.current = onFeed
 
   useLayoutEffect(() => {
     lutRef.current = bakeLut(resolveColormap(palette, theme))
@@ -107,6 +135,7 @@ export function PhoneScope({
     let agcFloor = 0
     let agcCeil = 1
     let agcInit = false
+    let lastFeed = '' // last onFeed-reported "source:lo:hi" (fire only on change)
 
     let rowBuf: Uint8ClampedArray<ArrayBuffer> | null = null
     let rowImg: ImageData | null = null
@@ -170,11 +199,32 @@ export function PhoneScope({
       const rowHi = spec.hiHz ?? 2900
       const span = Math.max(1, rowHi - rowLo)
 
+      // Project the audio view window onto this row — audio rows directly, native RF
+      // panadapter rows anchored on the live dial (row-center fallback when the dial is
+      // unknown or outside the row). See scopeView.
+      const view = scopeView(
+        rowLo,
+        rowHi,
+        src,
+        viewLoRef.current,
+        viewHiRef.current,
+        markerRef.current,
+        sidebandSign(sidebandRef.current),
+        dialRef.current,
+        isSymmetricMode(sidebandRef.current),
+      )
+      // Tell the host what's actually drawn (only on change) — the honest scope label.
+      const feed = `${src}:${view.loHz}:${view.hiHz}`
+      if (feed !== lastFeed) {
+        lastFeed = feed
+        onFeedRef.current?.(src, view.loHz, view.hiHz)
+      }
+
       // AGC over the VISIBLE window only — a loud signal outside the view (e.g.
       // the FT8 cluster above a narrow CW window) must not compress what's shown.
       const nb = row.length
-      const vLo = Math.max(0, Math.floor(((Math.max(rowLo, viewLoHz) - rowLo) / span) * (nb - 1)))
-      const vHi = Math.min(nb, Math.ceil(((Math.min(rowHi, viewHiHz) - rowLo) / span) * (nb - 1)) + 1)
+      const vLo = Math.max(0, Math.floor(((view.loHz - rowLo) / span) * (nb - 1)))
+      const vHi = Math.min(nb, Math.ceil(((view.hiHz - rowLo) / span) * (nb - 1)) + 1)
       const visible = vHi - vLo >= 8 ? row.slice(vLo, vHi) : row
       const { floor, ceil } = agcRange(visible)
       if (!agcInit) {
@@ -211,9 +261,9 @@ export function PhoneScope({
       const lut = lutRef.current
       const nBins = row.length
       // normalized magnitude per device column (shared by waterfall + trace), reused buffer
-      // The captured row spans rowLo..rowHi (from the DTO); project the view window.
-      const lo = Math.max(rowLo, viewLoHz)
-      const hi = Math.min(rowHi, Math.max(viewHiHz, lo + 50))
+      // over the projected view window (audio Hz or absolute RF Hz per the feed source).
+      const lo = view.loHz
+      const hi = view.hiHz
       for (let x = 0; x < Wd; x++) {
         const hz = lo + (x / Wd) * (hi - lo)
         const bin = ((hz - rowLo) / span) * (nBins - 1)
@@ -261,8 +311,10 @@ export function PhoneScope({
       ctx.stroke()
 
       // ---- Pitch marker (CW): tune a carrier onto the hairline = zero-beat ----
-      if (markerHz != null && markerHz > lo && markerHz < hi) {
-        const mx = Math.round(((markerHz - lo) / (hi - lo)) * Wd)
+      // (on a native RF row scopeView puts the marker exactly ON the dial)
+      const markerAt = view.markerAtHz
+      if (markerAt != null && markerAt > lo && markerAt < hi) {
+        const mx = Math.round(((markerAt - lo) / (hi - lo)) * Wd)
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)'
         ctx.setLineDash([4 * scaleY, 3 * scaleY])
         ctx.lineWidth = Math.max(1, scaleY)

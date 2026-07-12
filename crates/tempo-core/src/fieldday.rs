@@ -198,6 +198,8 @@ impl FieldDayLog {
             s.push_str(&adif_field("CALL", &q.call));
             s.push_str(&adif_field(
                 "MODE",
+                // Mode class → ADIF MODE; the reverse map lives in
+                // [`merge_adif`](Self::merge_adif) — keep the two in step.
                 match q.mode.as_str() {
                     "CW" => "CW",
                     "PH" => "SSB",
@@ -205,12 +207,118 @@ impl FieldDayLog {
                 },
             ));
             s.push_str(&adif_field("BAND", &q.band));
+            // A real date/time so [`merge_adif`](Self::merge_adif) can restore
+            // `when_unix` (and Cabrillo keeps its ARRL-required timestamps
+            // across a restart). Legacy rows without a stamp omit both fields
+            // rather than inventing a date.
+            if q.when_unix > 0 {
+                let (date, time) = adif_datetime(q.when_unix);
+                s.push_str(&adif_field("QSO_DATE", &date));
+                s.push_str(&adif_field("TIME_ON", &time));
+            }
             s.push_str(&adif_field("CONTEST_ID", self.event.contest_id()));
             s.push_str(&adif_field("CLASS", &q.class));
             s.push_str(&adif_field("ARRL_SECT", &q.section));
             s.push_str("<EOR>\n");
         }
         s
+    }
+
+    /// Merge a previously-flushed ADIF journal (see [`adif`](Self::adif)) back
+    /// into this log — the restore half of the durable Field Day backup, so a
+    /// restart mid-event doesn't reset the contest log. Rows missing a CALL or
+    /// stamped before `min_when_unix` are skipped (a previous event's journal
+    /// self-expires), rows already in the dupe index are skipped, and garbage
+    /// input merges nothing — never an error. Restored dupe keys keep the ROW's
+    /// band, so they survive a mid-event QSY.
+    pub fn merge_adif(&mut self, text: &str, min_when_unix: u64) {
+        // Minimal `<NAME:len>value` tokenizer mirroring logbook.rs `parse_adif`
+        // (this journal only needs the handful of FD tags).
+        let body = match text.to_ascii_uppercase().find("<EOH>") {
+            Some(i) => &text[i + 5..],
+            None => text,
+        };
+        let mut cur: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let bytes = body.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] != b'<' {
+                i += 1;
+                continue;
+            }
+            let end = match body[i..].find('>') {
+                Some(e) => i + e,
+                None => break,
+            };
+            let tag = &body[i + 1..end];
+            i = end + 1;
+            if tag.eq_ignore_ascii_case("EOR") {
+                self.restore_row(&cur, min_when_unix);
+                cur.clear();
+                continue;
+            }
+            // NAME:len or NAME:len:type
+            let mut parts = tag.splitn(3, ':');
+            let name = parts.next().unwrap_or("").to_ascii_uppercase();
+            let len: usize = parts
+                .next()
+                .and_then(|l| l.trim().parse().ok())
+                .unwrap_or(0);
+            let val = body.get(i..i + len).unwrap_or("").to_string();
+            i += len;
+            cur.insert(name, val);
+        }
+    }
+
+    /// One tokenized journal record → the log (the dupe-checked insert half of
+    /// [`merge_adif`](Self::merge_adif)).
+    fn restore_row(&mut self, f: &std::collections::HashMap<String, String>, min_when_unix: u64) {
+        let Some(call) = f.get("CALL").filter(|c| !c.trim().is_empty()) else {
+            return;
+        };
+        // ADIF MODE → mode class: the reverse of the map in [`adif`](Self::adif)
+        // (every digital mode exports as FT8) — keep the two in step.
+        let mode = match f.get("MODE").map(|m| m.to_ascii_uppercase()).as_deref() {
+            Some("CW") => "CW",
+            Some("SSB") => "PH",
+            _ => "DIG",
+        };
+        // QSO_DATE (yyyymmdd) + TIME_ON (hhmmss) → when_unix. Unparseable rows
+        // stamp 0 and fall to the age gate (never a panic on garbage input).
+        let parse_dt = |d: &str, t: &str| -> Option<u64> {
+            Some(unix_from_ymdhms(
+                d.get(0..4)?.parse().ok()?,
+                d.get(4..6)?.parse().ok()?,
+                d.get(6..8)?.parse().ok()?,
+                t.get(0..2)?.parse().ok()?,
+                t.get(2..4)?.parse().ok()?,
+                t.get(4..6)?.parse().ok()?,
+            ))
+        };
+        let when_unix = match (f.get("QSO_DATE"), f.get("TIME_ON")) {
+            (Some(d), Some(t)) => parse_dt(d, t).unwrap_or(0),
+            _ => 0,
+        };
+        if when_unix < min_when_unix {
+            return;
+        }
+        // The ROW's band, not the log's current one — a restored dupe key must
+        // keep its original band across a mid-event QSY.
+        let band = f.get("BAND").cloned().unwrap_or_default();
+        let key = (call.to_uppercase(), band.clone(), mode.to_string());
+        if self.worked.contains(&key) {
+            return;
+        }
+        self.worked.insert(key);
+        self.qsos.push(LoggedQso {
+            call: call.clone(),
+            class: f.get("CLASS").cloned().unwrap_or_default(),
+            section: f.get("ARRL_SECT").cloned().unwrap_or_default(),
+            band,
+            mode: mode.to_string(),
+            slot: 0,
+            when_unix,
+        });
     }
 
     /// Export the log in Cabrillo QSO-line form for the given band frequency (kHz).
@@ -256,14 +364,30 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// Unix seconds → ("yyyy-mm-dd", "hhmm") in UTC (Howard Hinnant's civil-from-days;
-/// no external date crate needed for two Cabrillo fields).
+/// Unix seconds → ("yyyy-mm-dd", "hhmm") in UTC for two Cabrillo fields.
 fn cabrillo_datetime(unix: u64) -> (String, String) {
+    let (y, mo, d, h, mi, _s) = civil_from_unix(unix);
+    (format!("{y:04}-{mo:02}-{d:02}"), format!("{h:02}{mi:02}"))
+}
+
+/// Unix seconds → ("yyyymmdd", "hhmmss") in UTC for ADIF QSO_DATE / TIME_ON.
+fn adif_datetime(unix: u64) -> (String, String) {
+    let (y, mo, d, h, mi, s) = civil_from_unix(unix);
+    (
+        format!("{y:04}{mo:02}{d:02}"),
+        format!("{h:02}{mi:02}{s:02}"),
+    )
+}
+
+/// Unix seconds → civil UTC (y, mo, d, h, mi, s) (Howard Hinnant's
+/// civil-from-days; no external date crate needed for a few export fields).
+fn civil_from_unix(unix: u64) -> (i64, u32, u32, u32, u32, u32) {
     let secs_of_day = unix % 86_400;
     let days = (unix / 86_400) as i64;
-    let (h, m) = (
+    let (h, mi, s) = (
         (secs_of_day / 3600) as u32,
         ((secs_of_day % 3600) / 60) as u32,
+        (secs_of_day % 60) as u32,
     );
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -275,7 +399,21 @@ fn cabrillo_datetime(unix: u64) -> (String, String) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let mo = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let y = if mo <= 2 { y + 1 } else { y };
-    (format!("{y:04}-{mo:02}-{d:02}"), format!("{h:02}{m:02}"))
+    (y, mo, d, h, mi, s)
+}
+
+/// Civil UTC → Unix seconds — the inverse of [`civil_from_unix`], for restoring
+/// journal timestamps (mirrors `logbook.rs::unix_from_ymdhms`).
+fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
+    let y = y as i64 - if m <= 2 { 1 } else { 0 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let m = m as i64;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + (h as i64) * 3600 + (mi as i64) * 60 + s as i64;
+    secs.max(0) as u64
 }
 
 fn adif_field(name: &str, value: &str) -> String {
@@ -551,6 +689,54 @@ mod tests {
             "real date/time on the QSO line (ARRL submission requires it): {cab}"
         );
         assert!(!cab.contains("----------"), "no placeholder when stamped");
+    }
+
+    #[test]
+    fn adif_round_trip_restores_log_and_dupes() {
+        // The FD contest log lives only in memory, so the exit flush's ADIF is
+        // its sole durable copy — merging it back into a fresh log (a restart
+        // mid-event) must restore the QSOs, the dupe index, the sections and
+        // real timestamps (not the '----------' Cabrillo placeholder).
+        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        assert!(log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 1_782_583_500));
+        assert!(log.log_mode_at("K2DEF", "1D", "EMA", "CW", 0, 1_782_583_560));
+        assert!(log.log_mode_at("N0GHI", "5A", "MN", "PH", 0, 1_782_583_620));
+        let adif = log.adif();
+
+        let mut restored = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        restored.merge_adif(&adif, 0);
+        assert_eq!(restored.qso_count(), 3, "all three contacts restored");
+        for (call, mode) in [("K1ABC", "DIG"), ("K2DEF", "CW"), ("N0GHI", "PH")] {
+            assert!(
+                restored.is_dupe_mode(call, mode),
+                "{call} {mode} restored into the dupe index"
+            );
+        }
+        assert_eq!(restored.sections(), 3, "sections survive the round-trip");
+        assert_eq!(restored.qso_points(), 2 + 2 + 1, "DIG 2 + CW 2 + PH 1");
+        let cab = restored.cabrillo(14_074);
+        assert!(
+            cab.contains("2026-06-27"),
+            "restored rows keep their real timestamp: {cab}"
+        );
+        assert!(!cab.contains("----------"), "no placeholder after restore");
+    }
+
+    #[test]
+    fn merge_adif_age_gate_and_garbage_merge_nothing() {
+        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        assert!(log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 1_782_583_500));
+        let adif = log.adif();
+
+        // A min_when_unix newer than every row (a previous event's journal)
+        // restores nothing — the backup self-expires.
+        let mut restored = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        restored.merge_adif(&adif, 1_782_583_501);
+        assert_eq!(restored.qso_count(), 0, "expired journal merges nothing");
+
+        // Garbage input merges nothing and never errors.
+        restored.merge_adif("not adif <CALL:junk><EOR> \u{fe0f}<QSO_DATE:8>x<EOR>", 0);
+        assert_eq!(restored.qso_count(), 0, "garbage merges nothing");
     }
 
     use super::*;

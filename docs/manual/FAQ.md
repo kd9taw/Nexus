@@ -129,7 +129,7 @@ QSO recordings (if started in the Phone cockpit) are written to timestamped WAV 
 
 Only if you enable them. Auto-upload on log for QRZ Logbook, ClubLog, and eQSL is **off by default** (three separate boolean flags in Settings > Connectors). LoTW upload is also manual: you trigger it from the Awards page or the per-row button in the Logbook, and Nexus shells out to your installed TQSL binary with `-d -u -x -a compliant`. TQSL must be installed separately from ARRL; Nexus does not bundle it.
 
-Note that **ClubLog also requires a developer API key** that Nexus does not ship in open-source builds. Without a key configured, every ClubLog push fails with an error directing you to obtain a free key at `clublog.org/requestapikey.php` and add it in Settings. QRZ and eQSL do not have this requirement.
+Note that **ClubLog also requires a developer API key**. Official installer builds bundle one, so you only need your ClubLog email and Application Password. If you build from source (the key is never committed to the public repository), pushes fail with an error directing you to obtain a free key at `clublog.org/requestapikey.php` and add it in Settings. QRZ and eQSL do not have this requirement.
 
 Confirmation syncs (LoTW download, eQSL InBox) are likewise triggered manually or from the Awards diagnostics panel. There is no background periodic sync running on a timer.
 

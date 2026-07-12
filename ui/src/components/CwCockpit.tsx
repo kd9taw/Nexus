@@ -483,6 +483,8 @@ export function CwCockpit({
           viewLoHz={300}
           viewHiHz={1100}
           markerHz={pitch}
+          sideband={snap.radio.sideband || 'USB'}
+          dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
         />
       </section>
       <Splitter

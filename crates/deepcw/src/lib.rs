@@ -81,8 +81,7 @@ pub fn spectrogram(audio: &[f32], m: &Metadata) -> (Vec<f32>, usize) {
         // microfft packs Nyquist into bin 0's imaginary part; our 400–1200 Hz slice
         // (bins 32..97 at 12.5 Hz/bin) never touches bin 0, so plain magnitude is safe.
         let spectrum = microfft::real::rfft_256(&mut frame);
-        for b in start_bin..stop_bin {
-            let c = spectrum[b];
+        for c in &spectrum[start_bin..stop_bin] {
             out.push((c.re * c.re + c.im * c.im).sqrt().ln_1p());
         }
     }

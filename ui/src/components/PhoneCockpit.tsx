@@ -15,6 +15,7 @@ import { RotorStrip } from './RotorStrip'
 import { MemoryBank } from './MemoryBank'
 import { setFrequency, getSettings, setSettings, setSplit, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
 import { bandLabelForMhz } from '../band'
+import { isRfScopeSource } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
 
 interface Props {
@@ -80,6 +81,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // soundcard audio, not RF IQ, so "span" means which slice of the passband
   // fills the scope).
   const [span, setSpan] = useState<(typeof SPANS)[number]>(SPANS[0])
+  // Live scope feed (reported by PhoneScope) — keeps the "RX audio" label honest when a
+  // native RF panadapter is driving the scope (show the real RF span instead).
+  const [scopeFeed, setScopeFeed] = useState<{ source: string; loHz: number; hiHz: number } | null>(
+    null,
+  )
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
   // Wheel-to-tune over the bandscope, sharing the tuning strip's step selector.
@@ -392,12 +398,28 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
       <section className="ph-scope-panel">
         <div className="ph-scope-head">
-          <span
-            className="ph-scope-title"
-            title="Receiver AUDIO spectrum (200–2900 Hz of the demodulated passband) — not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune."
-          >
-            Passband <span className="ph-scope-sub">· RX audio</span>
-          </span>
+          {(() => {
+            // Honest per feed: soundcard FFT = the demodulated RX audio; a native
+            // panadapter = the real RF spectrum, so show its absolute span instead.
+            const rf = scopeFeed != null && isRfScopeSource(scopeFeed.source) ? scopeFeed : null
+            return (
+              <span
+                className="ph-scope-title"
+                title={
+                  rf
+                    ? 'Native RF panadapter — the real RF spectrum around your dial, not the demodulated audio passband.'
+                    : 'Receiver AUDIO spectrum (200–2900 Hz of the demodulated passband) — not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.'
+                }
+              >
+                Passband{' '}
+                <span className="ph-scope-sub">
+                  {rf
+                    ? `· RF ${(rf.loHz / 1e6).toFixed(4)}–${(rf.hiHz / 1e6).toFixed(4)} MHz`
+                    : '· RX audio'}
+                </span>
+              </span>
+            )
+          })()}
           <span className="ph-scope-head-label">Colors</span>
           <PalettePicker />
         </div>
@@ -422,6 +444,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             smeterDb={snap.radio.smeterDb}
             viewLoHz={span.lo}
             viewHiHz={span.hi}
+            sideband={commandedMode}
+            dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
+            onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
           />
         </div>
       </section>

@@ -163,6 +163,11 @@ pub struct Engine {
     logbook: Logbook,
     /// ADIF file the logbook is persisted to, if the shell set one.
     log_path: Option<PathBuf>,
+    /// ADIF journal for the Field Day contest log, if the shell set one — the
+    /// in-memory FD log (which lives only inside [`Mode::FieldDay`]) is
+    /// rewritten here on every logged contact and merged back in when a Field
+    /// Day mode starts, so a mid-event restart loses nothing.
+    fd_log_path: Option<PathBuf>,
     /// Callsign → DXCC entity resolver, injected by the command layer (which owns
     /// the cty.dat table) so tempo-app stays DXCC-free. `None` in headless tests
     /// (new-DXCC highlighting simply stays off). See [`Engine::set_dxcc_resolver`].
@@ -369,7 +374,9 @@ pub struct Engine {
     /// Cached waterfall row — recomputed once per audio feed in the radio loop, so `get_spectrum_row`
     /// (the ~20-30 Hz UI poll) just returns it instead of re-running the Goertzel under the engine
     /// lock on every call (the source of the "choppy" Phone scope under lock/IPC contention).
-    spectrum_cache: Option<crate::dto::Spectrum>,
+    /// Stamped like `spectrum_rf` so a dead capture stream (unplugged device, lost DAX) goes
+    /// quiet instead of scrolling the last captured row forever as a frozen ghost.
+    spectrum_cache: Option<(crate::dto::Spectrum, Instant)>,
     /// The latest NATIVE RF panadapter row (Flex VITA / Icom CI-V) + when it arrived. Preferred
     /// over `spectrum_cache` while fresh (< 1 s); a stalled native source falls back to audio.
     /// Fed by `set_spectrum_rf`; `None` until a native scope worker is running.
@@ -554,6 +561,7 @@ impl Engine {
             seen_decode: false,
             logbook: Logbook::new(),
             log_path: None,
+            fd_log_path: None,
             dxcc_resolve: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
@@ -1940,6 +1948,39 @@ impl Engine {
         self.refresh_worked_index();
     }
 
+    /// Point the Field Day contest log at its durable ADIF journal. Called once
+    /// by the shell at startup (beside [`Self::set_log_path`]); the journal is
+    /// rewritten on every FD contact and restored when FD mode starts.
+    pub fn set_fd_log_path(&mut self, path: PathBuf) {
+        self.fd_log_path = Some(path);
+    }
+
+    /// Flush the in-memory Field Day contest log to `fd_log_path` as ADIF
+    /// (write-tmp + fsync + rename, so neither a crash mid-write nor a power loss
+    /// right after the rename can truncate the journal — each save REPLACES the
+    /// whole file, so a torn publish would lose every contact, and Field Day runs
+    /// on generators; same rationale as `Settings::save`).
+    /// Best-effort: a write hiccup must never take down a logging path. No-op
+    /// with no path set, outside FD mode, or on an empty log.
+    pub fn persist_fd_log(&self) {
+        let (Some(path), Some(text)) = (&self.fd_log_path, self.field_day_log_adif()) else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let tmp = path.with_extension("adi.tmp");
+        let res = std::fs::File::create(&tmp)
+            .and_then(|mut f| {
+                std::io::Write::write_all(&mut f, text.as_bytes())?;
+                f.sync_all() // data on disk BEFORE the rename publishes it
+            })
+            .and_then(|()| std::fs::rename(&tmp, path));
+        if let Err(e) = res {
+            eprintln!("tempo: field day log save failed: {e}");
+        }
+    }
+
     /// Inject the callsign → DXCC entity resolver (the command layer passes
     /// `propagation::dxcc::resolve`-backed closure). Rebuilds the worked-entity
     /// index so new-DXCC decode highlighting works from the next snapshot.
@@ -2034,9 +2075,13 @@ impl Engine {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Field Day mode is not active".into());
         };
-        Ok(station
+        let logged = station
             .log
-            .log_mode_at(call, class, section, mode, 0, now_unix_secs()))
+            .log_mode_at(call, class, section, mode, 0, now_unix_secs());
+        if logged {
+            self.persist_fd_log(); // journal every contact — a crash loses nothing
+        }
+        Ok(logged)
     }
 
     /// Field Day score = QSO points × power multiplier + claimed bonuses.
@@ -2670,6 +2715,19 @@ impl Engine {
         // Carry the operator's RR73/RRR preference into a fresh QSO sequencer.
         if let Mode::Qso { station, .. } = &mut self.mode {
             station.confirm_with_rrr = self.settings.prefer_rrr;
+        }
+        // Restore the durable FD journal into the fresh station — entering Field
+        // Day used to build an EMPTY log, so a restart (or a run↔S&P toggle)
+        // mid-event dropped every contact and the next exit flush overwrote the
+        // backup with just the new session. Rows older than 4 days are a
+        // previous event's journal and self-expire.
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            if let Some(path) = &self.fd_log_path {
+                station.log.merge_adif(
+                    &std::fs::read_to_string(path).unwrap_or_default(),
+                    now_unix_secs().saturating_sub(4 * 86_400),
+                );
+            }
         }
         // Mode↔tier invariant: free-text Chat needs an FT1/DX1 waveform — its
         // chunked free text does NOT fit FT8/FT4's 13-char packer (it would
@@ -3501,7 +3559,7 @@ impl Engine {
         }
         // Recompute the cached waterfall row here (radio-loop thread) so the UI poll returns it
         // without re-running the Goertzel under the engine lock.
-        self.spectrum_cache = Some(Self::compute_spectrum(&self.spectrum_audio));
+        self.spectrum_cache = Some((Self::compute_spectrum(&self.spectrum_audio), Instant::now()));
         // Also feed the longer CW-decode ring (the 4096-sample waterfall window is far too
         // short for Morse — CW_WINDOW holds several seconds so a callsign fits).
         self.cw_audio.extend_from_slice(samples);
@@ -4813,6 +4871,8 @@ impl Engine {
         // needs several repeats, a progressing QSO must not be watchdog-killed
         // mid-exchange. (Operator actions reset it elsewhere, as before.)
         let mut sequence_advanced = false;
+        // Did the Field Day sequencer log a contact this slot (→ journal it)?
+        let mut fd_logged = false;
         // Hound: TX frequency to adopt for the R+report (the Fox's freq).
         let mut hound_move_tx: Option<f32> = None;
         match &mut self.mode {
@@ -4919,9 +4979,16 @@ impl Engine {
             }
             Mode::FieldDay { station, .. } => {
                 let state_before = station.state;
+                let count_before = station.log.qso_count();
                 station.observe(decodes, slot);
                 sequence_advanced = station.state != state_before;
+                // The FD sequencer logged a contact this slot → journal it
+                // (after the match — persist_fd_log needs `self` unborrowed).
+                fd_logged = station.log.qso_count() > count_before;
             }
+        }
+        if fd_logged {
+            self.persist_fd_log();
         }
         if sequence_advanced {
             self.reset_tx_watchdog();
@@ -5229,11 +5296,16 @@ impl Engine {
             }
         }
         // Live capture → return the row already computed in the radio loop (cheap clone, no
-        // recompute under the lock). Fallback: a Companion/UDP source with no local capture →
-        // compute from the last decoded RX buffer on demand (rare, low-rate path).
-        if let Some(c) = &self.spectrum_cache {
+        // recompute under the lock) while fresh (< 2 s — the loop feeds every tick, so silence
+        // means the capture died; go quiet rather than scroll the last row as a frozen ghost).
+        // Fallback: a Companion/UDP source with no local capture (cache never fed) → compute
+        // from the last decoded RX buffer on demand (rare, low-rate path).
+        if let Some((c, at)) = &self.spectrum_cache {
             if !c.row.is_empty() {
-                return c.clone();
+                if at.elapsed() < std::time::Duration::from_secs(2) {
+                    return c.clone();
+                }
+                return Self::compute_spectrum(&[]);
             }
         }
         Self::compute_spectrum(self.last_rx.as_deref().unwrap_or(&[]))
@@ -7429,6 +7501,58 @@ mod tests {
         );
     }
 
+    /// The FD contest log lived ONLY in `Mode::FieldDay`: every FD-mode entry
+    /// built a fresh empty log, so a quit + relaunch mid-event dropped every
+    /// contact — and the next exit flush OVERWROTE the backup with just the new
+    /// session. With a journal path set, the log must survive quits/re-entry.
+    #[test]
+    fn field_day_log_survives_quit_and_relaunch() {
+        let path =
+            std::env::temp_dir().join(format!("nexus_fd_journal_{}.adi", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let fd_engine = || {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            {
+                let mut s = e.settings().clone();
+                s.fd_class = "3A".into();
+                s.fd_section = "WI".into();
+                e.apply_settings(s);
+            }
+            e.set_fd_log_path(path.clone());
+            e.set_mode("fieldday-run").unwrap();
+            e
+        };
+
+        // Session A logs two contacts and quits.
+        let mut a = fd_engine();
+        assert!(a.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(a.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
+        drop(a);
+
+        // Session B (a relaunch) restores both, still dupe-checks them, adds a third.
+        let mut b = fd_engine();
+        let snap = b.snapshot().field_day.expect("in Field Day mode");
+        assert_eq!(snap.qso_count, 2, "a restart restores the contest log");
+        assert!(
+            !b.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap(),
+            "restored contacts still dupe-check"
+        );
+        assert!(b.fd_log_manual("N0XYZ", "4A", "MN", "CW").unwrap());
+        drop(b);
+
+        // Session C: B's quit must not have overwritten the journal with only
+        // B's session — all three contacts survive the second relaunch.
+        let c = fd_engine();
+        assert_eq!(
+            c.snapshot().field_day.expect("in Field Day mode").qso_count,
+            3,
+            "the second quit keeps A's AND B's contacts"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// M18: a full-log ADIF rewrite from a stale in-memory copy must not silently
     /// drop QSOs that another Nexus instance (sharing the same file) appended.
     #[test]
@@ -8377,6 +8501,24 @@ mod tests {
             e.spectrum_row().source,
             "audio",
             "empty native row → audio fallback"
+        );
+    }
+
+    #[test]
+    fn stale_audio_spectrum_goes_quiet_instead_of_scrolling_a_frozen_ghost() {
+        // A dead capture stream (device unplugged, DAX stream lost) must not keep the scope
+        // scrolling the last captured row as steady phantom carriers — after the freshness
+        // window it goes quiet, mirroring the native RF row's 1 s expiry above.
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.set_spectrum_audio(&vec![0.1f32; 256]);
+        assert!(!e.spectrum_row().row.is_empty(), "fresh audio row draws");
+        // Backdate the stamp to simulate the radio loop going silent for > 2 s.
+        if let Some((_, at)) = e.spectrum_cache.as_mut() {
+            *at = Instant::now() - std::time::Duration::from_secs(3);
+        }
+        assert!(
+            e.spectrum_row().row.is_empty(),
+            "stale audio row goes quiet (no frozen ghost)"
         );
     }
 

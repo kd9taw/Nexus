@@ -3947,7 +3947,7 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">
-                  Push each logged QSO to ClubLog in real time (needs the email, app-password, and API key above).
+                  Push each logged QSO to ClubLog in real time (needs the email + app-password above; official builds bundle the API key).
                 </span>
               </div>
 

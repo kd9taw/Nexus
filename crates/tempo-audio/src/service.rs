@@ -976,6 +976,10 @@ struct RadioLoop {
     /// what they own.
     err_owner: ErrOwner,
     last_fd_qsos: usize,
+    /// Whether the previous boundary saw a live FD session — the None→Some
+    /// edge seeds `last_fd_qsos` past the restored journal rows so they are
+    /// never re-pushed to the club network / WSJT-X sinks as newly logged.
+    fd_was_active: bool,
     /// Latest measured PC-clock-vs-UTC offset (ms, `local − UTC`), read from the
     /// engine each loop and SUBTRACTED from the system clock so TX/RX slots land
     /// on the true UTC grid even when the OS clock is skewed. 0 until measured.
@@ -1034,6 +1038,7 @@ impl RadioLoop {
             func_state: [None; 5],
 
             last_fd_qsos: 0,
+            fd_was_active: false,
             clock_offset_ms: 0,
         }
     }
@@ -2565,6 +2570,15 @@ impl RadioLoop {
             // that gate, silently starving N3FJP/N1MM whenever both sinks were their
             // default-off (the club master log simply never received the QSOs).
             let snap = eng.snapshot();
+            // An FD session just (re)started: the journal restore repopulates
+            // qso_count from 0 in one jump — seed the cursor so restored rows are
+            // never re-pushed to the club network / WSJT-X sinks as newly logged.
+            if !self.fd_was_active {
+                if let Some(fd) = snap.field_day.as_ref() {
+                    self.last_fd_qsos = fd.qso_count;
+                }
+            }
+            self.fd_was_active = snap.field_day.is_some();
             // --- network emission (WSJT-X UDP API + PSK Reporter) ---
             if sinks.wsjtx.is_some() || sinks.psk.is_some() || snap.field_day.is_some() {
                 let tier = tier_mode(snap.link.tier);
@@ -4925,7 +4939,6 @@ mod tests {
                 ..Settings::default()
             });
             eng.set_mode("fieldday-run").unwrap();
-            assert!(eng.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
         }
 
         let mut backend = MockBackend::new();
@@ -4934,6 +4947,8 @@ mod tests {
         // Sinks OFF — the pre-fix bug means the club push is never reached.
         let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
 
+        // First boundary registers the live (empty) session — a contact already
+        // present here would read as a restored journal row and never push.
         state
             .step(
                 &engine,
@@ -4941,6 +4956,22 @@ mod tests {
                 &mut rig,
                 &sinks,
                 0.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+        assert!(engine
+            .lock()
+            .unwrap()
+            .fd_log_manual("K1ABC", "2A", "EMA", "CW")
+            .unwrap());
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                16_000.0,
                 &mut ra,
                 &mut rr,
             )
@@ -4969,6 +5000,110 @@ mod tests {
         assert_eq!(
             state.last_fd_qsos, 1,
             "the FD cursor advanced past the pushed QSO"
+        );
+    }
+
+    #[test]
+    fn field_day_restored_journal_is_not_repushed_to_club_sinks() {
+        // Entering FD mode restores the durable ADIF journal, so the loop's
+        // FIRST boundary already sees qso_count > 0. Those rows were pushed to
+        // the club network in a previous session — re-pushing them dupe-spams
+        // N3FJP/N1MM/WSJT-X sinks. Only contacts logged AFTER the loop has seen
+        // the live session may push. Stand up a listener as the N3FJP box and
+        // prove exactly the ONE new QSO reaches it.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            eng.apply_settings(Settings {
+                fd_class: "1D".to_string(),
+                fd_section: "WI".to_string(),
+                n3fjp_host: "127.0.0.1".to_string(),
+                n3fjp_port: port,
+                ..Settings::default()
+            });
+            eng.set_mode("fieldday-run").unwrap();
+            // Stands in for the journal restore: a contact already in the log
+            // before the loop's first boundary observes the session.
+            assert!(eng.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        }
+
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+
+        // First boundary: the restored row must NOT push.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+
+        // A NEW contact once the session is live: exactly this one pushes.
+        assert!(engine
+            .lock()
+            .unwrap()
+            .fd_log_manual("W2NEW", "3A", "ENY", "PH")
+            .unwrap());
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                16_000.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+
+        // Collect every connection the spawned pushes make: wait (bounded) for
+        // the first, then a short grace window so a buggy SECOND push (the
+        // restored row) would still be caught.
+        use std::io::Read;
+        let mut payload = String::new();
+        let mut connections = 0;
+        let mut stop_at = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < stop_at {
+            match listener.accept() {
+                Ok((mut s, _)) => {
+                    connections += 1;
+                    s.set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                        .unwrap();
+                    let mut buf = String::new();
+                    let _ = s.read_to_string(&mut buf); // sender closes → EOF
+                    payload.push_str(&buf);
+                    stop_at = std::time::Instant::now() + std::time::Duration::from_millis(500);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+
+        assert!(
+            payload.contains("W2NEW"),
+            "the newly logged contact reached the club log"
+        );
+        assert!(
+            !payload.contains("K1ABC"),
+            "the restored journal row was re-pushed to the club log"
+        );
+        assert_eq!(connections, 1, "exactly one push fired (the new QSO only)");
+        assert_eq!(
+            state.last_fd_qsos, 2,
+            "the FD cursor covers restored + new rows"
         );
     }
 }

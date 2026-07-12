@@ -771,7 +771,7 @@ mod tests {
                 let n = sig.len() + k;
                 sig.push(0.10 * (2.0 * std::f32::consts::PI * PITCH * n as f32 / SR).sin());
             }
-            sig.extend(std::iter::repeat(0.0).take(3 * dit)); // flushing gap
+            sig.extend(std::iter::repeat_n(0.0, 3 * dit)); // flushing gap
         }
         let noise = white_noise(sig.len(), 0.14);
         let mixed: Vec<f32> = sig

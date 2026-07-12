@@ -713,6 +713,17 @@ fn logbook_path() -> PathBuf {
         .join("log.adi")
 }
 
+/// Where the Field Day contest log's durable ADIF journal lives (beside
+/// settings.json). The engine rewrites it on every FD contact and restores it
+/// when Field Day mode starts; the exit flush writes the SAME file.
+fn fd_backup_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("fieldday_backup.adi")
+}
+
 /// Where the grid-activity census is persisted (beside settings.json): a small
 /// bounded JSON of decayed per-grid heard counts — the demote-only refinement
 /// evidence for the rarity gems. Losing it is harmless (it re-accumulates).
@@ -795,29 +806,15 @@ fn persist_conversations(engine: &SharedEngine) {
     }
 }
 
-/// Flush the in-memory Field Day contest log to disk as ADIF. The FD log lives
-/// only in `Mode::FieldDay` and is otherwise lost on quit (a solo entrant with
-/// no club logger has no other copy), so back it up on exit next to settings.
-/// No-op when not in Field Day or the log is empty.
+/// Flush the in-memory Field Day contest log to its ADIF journal
+/// ([`fd_backup_path`]) via the engine's own per-contact write path. Kept as an
+/// exit-time backstop; no-op when not in Field Day or the log is empty.
+/// Recovers a poisoned lock (mirrors `persist_conversations`).
 fn persist_field_day_log(engine: &SharedEngine) {
-    let adif = engine
+    engine
         .lock()
-        .map(|e| e.field_day_log_adif())
-        .unwrap_or_else(|e| e.into_inner().field_day_log_adif());
-    if let Some(text) = adif {
-        let path = settings_path()
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("fieldday_backup.adi");
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let tmp = path.with_extension("adi.tmp");
-        if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
-        }
-    }
+        .map(|e| e.persist_fd_log())
+        .unwrap_or_else(|e| e.into_inner().persist_fd_log());
 }
 
 /// Directory for phone voice-keyer recordings: `<settings dir>/voice` (12 kHz mono WAVs).
@@ -7499,6 +7496,10 @@ pub fn run() {
                 .is_some_and(|t| now_unix() - t <= max_secs)
         });
         eng.set_log_path(logbook_path());
+        // The Field Day contest log journals to its own ADIF beside the logbook —
+        // written per contact and restored when FD mode starts, so a mid-event
+        // restart loses nothing.
+        eng.set_fd_log_path(fd_backup_path());
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
         // Restore persisted Tempo conversation threads so chat history (and the `*`

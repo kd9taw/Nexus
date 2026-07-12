@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, zoomRange, WF_F_MIN, WF_F_MAX } from './waterfall'
+import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, isSymmetricMode, scopeView, sidebandSign, zoomRange, WF_F_MIN, WF_F_MAX } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -111,6 +111,121 @@ describe('zoomRange (waterfall span/zoom)', () => {
     const { lo, hi } = zoomRange(2800, 1000) // would end past F_MAX
     expect(hi).toBe(WF_F_MAX)
     expect(hi - lo).toBe(1000)
+  })
+})
+
+describe('scopeView (Phone/CW scope window per feed source)', () => {
+  it('audio row: the view window passes through unchanged, marker untouched', () => {
+    expect(scopeView(0, 4000, 'audio', 300, 1100, 600, 1)).toEqual({
+      loHz: 300,
+      hiHz: 1100,
+      markerAtHz: 600,
+    })
+  })
+
+  it('audio row: the window clamps into the captured row (legacy 200–2900 behavior)', () => {
+    expect(scopeView(200, 2900, '', 0, 4000, null, 1)).toEqual({
+      loHz: 200,
+      hiHz: 2900,
+      markerAtHz: null,
+    })
+  })
+
+  it('RF row (flex): the CW window maps around the dial with the marker exactly ON it (zero-beat)', () => {
+    // 200 kHz pan centered on a 7.025 MHz dial; CW pitch 600 anchors the marker on the dial.
+    const v = scopeView(6_925_000, 7_125_000, 'flex', 300, 1100, 600, 1)
+    expect(v.loHz).toBe(7_024_700)
+    expect(v.hiHz).toBe(7_025_500)
+    expect(v.markerAtHz).toBe(7_025_000)
+  })
+
+  it('RF row: LSB/CW-L mirrors the window below the dial (marker still on the dial)', () => {
+    const v = scopeView(6_925_000, 7_125_000, 'flex', 300, 1100, 600, -1)
+    expect(v.loHz).toBe(7_024_500)
+    expect(v.hiHz).toBe(7_025_300)
+    expect(v.markerAtHz).toBe(7_025_000)
+  })
+
+  it('RF row: the mapped window clamps at the row edges', () => {
+    // a narrow ±200 Hz pan: the requested window overflows both edges → clamp, marker intact
+    const v = scopeView(7_024_800, 7_025_200, 'civ', 300, 1100, 600, 1)
+    expect(v.loHz).toBe(7_024_800)
+    expect(v.hiHz).toBe(7_025_200)
+    expect(v.markerAtHz).toBe(7_025_000)
+  })
+
+  it('REGRESSION: an RF row never degenerates to the 50 Hz sliver at the pan low edge', () => {
+    // Phone view (no marker) on a native pan: the old inline clamp gave lo=rowLo,
+    // hi=rowLo+50 — a 50 Hz sliver ~100 kHz below the dial stretched across the canvas.
+    const v = scopeView(6_925_000, 7_125_000, 'civ', 0, 4000, null, 1)
+    expect(v.hiHz - v.loHz).not.toBe(50)
+    expect(v.hiHz - v.loHz).toBe(4000) // the full requested audio span, mapped to RF
+    expect(v.loHz).toBeGreaterThanOrEqual(7_025_000 - 4000) // anchored at the dial, not the pan edge
+  })
+
+  it('RF row: a known dial anchors the marker on the DIAL, not the row center (Flex RETUNE_EPS)', () => {
+    // The Flex pan only recenters after >500 Hz dial moves, so during fine tuning the row
+    // center sits up to 500 Hz off the dial. Pan stuck at 6.9750–7.1750 (center 7.0750),
+    // dial fine-tuned to 7.0254 → zero-beat marker must land ON the dial.
+    const v = scopeView(6_975_000, 7_175_000, 'flex', 300, 1100, 600, 1, 7_025_400)
+    expect(v.markerAtHz).toBe(7_025_400)
+    expect(v.loHz).toBe(7_025_100)
+    expect(v.hiHz).toBe(7_025_900)
+  })
+
+  it('RF row: a fixed-edge sweep (Icom FIXED mode) anchors the window on the dial, not the sweep center', () => {
+    // Fixed-edge civ sweep 7.000–7.100 (center 7.050) with the dial at 7.028: the Phone
+    // window must sit at the dial, not 22 kHz away at the sweep center.
+    const v = scopeView(7_000_000, 7_100_000, 'civ', 0, 4000, null, 1, 7_028_000)
+    expect(v.loHz).toBe(7_028_000)
+    expect(v.hiHz).toBe(7_032_000)
+  })
+
+  it('RF row: symmetric modes (FM/AM) center the window on the dial (carrier mid-window)', () => {
+    // FM is carrier-symmetric: the dial must land at the window CENTER, not its low edge.
+    const v = scopeView(6_980_000, 7_080_000, 'civ', 0, 4000, null, 1, 7_028_000, true)
+    expect(v.loHz).toBe(7_026_000)
+    expect(v.hiHz).toBe(7_030_000)
+  })
+
+  it('RF row: an unknown or out-of-row dial falls back to the row center (previous behavior)', () => {
+    const noDial = scopeView(6_925_000, 7_125_000, 'flex', 300, 1100, 600, 1, null)
+    expect(noDial.markerAtHz).toBe(7_025_000)
+    // a stale dial outside the row (e.g. band change before the scope re-tunes) is ignored
+    const outside = scopeView(6_925_000, 7_125_000, 'flex', 300, 1100, 600, 1, 14_025_000)
+    expect(outside.markerAtHz).toBe(7_025_000)
+  })
+})
+
+describe('isSymmetricMode', () => {
+  it('true for the carrier-symmetric modes (FM/AM), case/whitespace-insensitive', () => {
+    expect(isSymmetricMode('FM')).toBe(true)
+    expect(isSymmetricMode('fm')).toBe(true)
+    expect(isSymmetricMode(' AM ')).toBe(true)
+  })
+
+  it('false for sideband/CW/unknown modes', () => {
+    expect(isSymmetricMode('USB')).toBe(false)
+    expect(isSymmetricMode('LSB')).toBe(false)
+    expect(isSymmetricMode('CW')).toBe(false)
+    expect(isSymmetricMode('')).toBe(false)
+  })
+})
+
+describe('sidebandSign', () => {
+  it('+1 for USB-side modes (USB / CW / FM / unknown)', () => {
+    expect(sidebandSign('USB')).toBe(1)
+    expect(sidebandSign('CW')).toBe(1)
+    expect(sidebandSign('FM')).toBe(1)
+    expect(sidebandSign('')).toBe(1)
+  })
+
+  it('-1 for LSB-side modes (LSB / CW-L / CW-R), case-insensitive', () => {
+    expect(sidebandSign('LSB')).toBe(-1)
+    expect(sidebandSign('lsb')).toBe(-1)
+    expect(sidebandSign('CW-L')).toBe(-1)
+    expect(sidebandSign('CWR')).toBe(-1)
+    expect(sidebandSign('CW-R')).toBe(-1)
   })
 })
 

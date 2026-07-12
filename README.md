@@ -110,7 +110,7 @@ software can share the radio *through* Nexus.
 | **N1MM+** | Native `<contactinfo>` UDP broadcast per contact |
 | **LoTW** | TQSL upload + two-pull incremental confirmation sync |
 | **QRZ.com** | Callbook autofill, logbook push, connection test |
-| **ClubLog / eQSL** | Real-time push (bring your own free ClubLog API key — open-source builds can't ship one) / InBox confirmation import |
+| **ClubLog / eQSL** | Real-time push (official installers bundle the ClubLog API key; source builds supply their own free key) / InBox confirmation import |
 | **DX cluster / RBN** | Telnet feed with locality-gated VHF admission |
 | **PSK Reporter** | MQTT firehose in for propagation; standard UDP spot uploads out (you appear on the map) |
 

@@ -178,7 +178,7 @@ An important confirmation-source distinction: eQSL confirmations set `confirmed 
 - N1MM integration is broadcast-only; Nexus does not receive inbound contactinfo from other network stations.
 - N3FJP push errors are not surfaced in the UI beyond the Test button; check N3FJP's API log for delivery failures.
 - The PSK Reporter HTTP query path is rate-limited to ≥5 minutes between fetches to respect PSK Reporter's published query policy; the MQTT firehose is the real-time path.
-- ClubLog integration requires a developer API key (`CLUBLOG_API_KEY`) that is not committed to the public GPLv3 repository; operators building from source must supply their own key.
+- ClubLog integration requires a developer API key (`CLUBLOG_API_KEY`): official installers bundle one at build time, but it is never committed to the public GPLv3 repository — operators building from source must supply their own key.
 - LoTW upload requires the operator's own installed TQSL binary from ARRL; Nexus does not bundle TQSL or handle Callsign Certificate management.
 - eQSL InBox download uses an HTML scrape of the DownloadInBox page; a page-structure change at eQSL would break the extractor.
 - There is no background periodic sync for any online service; the operator must trigger downloads manually or enable per-QSO auto-push.

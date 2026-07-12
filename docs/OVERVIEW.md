@@ -207,8 +207,9 @@ the secret): LoTW upload via the operator's installed TQSL plus a two-pull incre
 confirmation sync (new confirmations, then own-echo promotion, with a high-water cursor); QRZ
 callbook autofill on call-entry blur plus QRZ Logbook push with a connection Test button and
 per-row re-push from the Logbook; ClubLog real-time push with auto-suspend on auth failure;
-ClubLog needs a free API key from clublog.org/requestapikey.php — as an open-source project Nexus
-can't publish one (ClubLog auto-revokes committed keys); eQSL outbound push and InBox confirmation
+official installers bundle the required ClubLog API key — it is never published in source, since
+ClubLog auto-revokes committed keys, so source builds bring their own free key from
+clublog.org/requestapikey.php; eQSL outbound push and InBox confirmation
 import (host-pinned to eqsl.cc, HTTPS forced).
 Reconciliation tolerates ±1 day of midnight skew and matches by mode-class, so FT4-vs-FT8
 labeling differences don't orphan confirmations.

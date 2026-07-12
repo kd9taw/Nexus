@@ -117,6 +117,17 @@ Both modes share a single drain point: the VFO is always restored when PTT is re
 - **Too low (meter barely moves):** raise the input gain. If the rig has an AF output level control, use it.
 - **TX too hot:** lower the **Pwr** slider (default 0.9 / 90% drive) and watch the rig's ALC meter — ALC deflection means splatter. Use **Tune** (12 s auto-release) to set drive level before operating. See [Rig and Audio Setup](Rig-and-Audio-Setup.md).
 
+### Audio devices missing under Remote Desktop (DAX, virtual audio)
+
+If you run Nexus over an RDP session and expected audio devices don't appear in the
+input/output pickers (FlexRadio DAX is the classic case — FlDigi sees it, Nexus and
+WSJT-X don't), check the RDP client's audio setting. With **remote audio** set to "play
+on this computer," Windows redirects sound to the RDP device and stops enumerating the
+machine's own devices through the standard (WASAPI/MME) lists Nexus uses — FlDigi is
+unaffected only because it reads low-level WDM-KS devices directly. Fix: in the RDP
+client, set remote audio to **"play on remote computer"** (or disable redirection),
+reconnect, and the DAX/virtual devices reappear.
+
 ---
 
 ## Time sync
@@ -185,7 +196,7 @@ Grid and state are subscriber-only on QRZ's free XML tier. The app shows a toast
 
 A 403 response from ClubLog triggers a session-level suspend flag that stops further auto-upload to avoid an IP ban. The flag clears only when you save new credentials. Check your ClubLog Application Password (not your main password) in Settings → Connectors.
 
-ClubLog integration also requires a developer API key (`CLUBLOG_API_KEY`). Operators building from source must supply their own key; it is not in the public repo.
+ClubLog integration also requires a developer API key (`CLUBLOG_API_KEY`). Official installer builds bundle one; operators building from source must supply their own key — it is not in the public repo.
 
 ### eQSL InBox sync fails
 

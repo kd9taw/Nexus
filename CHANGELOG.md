@@ -15,6 +15,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Club Log in real time. (The developer key is injected at build time and never committed to
   source, per Club Log's terms.)
 
+### Fixed
+
+- **The Field Day contest log now survives restarts.** Contacts are journaled to
+  `fieldday_backup.adi` as they are logged and restored whenever you re-enter Field Day
+  mode — a mid-event restart, crash, or Run ↔ Search-&-Pounce switch no longer clears the
+  log or the dupe sheet. The journal carries real timestamps, so a recovered log still
+  produces a valid Cabrillo entry. Entries from a previous event (over 4 days old) are
+  not restored.
+- **Settings can no longer be lost to a torn write.** The settings file is flushed to disk
+  before the atomic swap, and a corrupt or unreadable `settings.json` (disk fault, hand
+  edit, a virus scanner holding the file at startup) is preserved as
+  `settings.json.corrupt` for recovery instead of being discarded. The app still starts
+  from defaults in that case — re-check your callsign and license class — but your
+  original settings can be recovered from the `.corrupt` file.
+- **The Phone/CW scope now shows the right slice of the band on a native panadapter**
+  (Flex SmartSDR / Icom CI-V). The view window was collapsing to a sliver ~100 kHz below
+  the dial; it now centers on the dial with the CW zero-beat marker exactly on frequency,
+  and the scope label reports the true RF span in MHz. Span and pitch changes also
+  retarget the scope immediately instead of waiting for a re-open.
+- **A dead audio stream no longer scrolls a frozen waterfall.** If the RX capture stops
+  (device unplugged, DAX stream lost — e.g. RDP remote audio hiding the devices), the
+  scope goes quiet instead of replaying the last captured row as phantom signals. A new
+  Troubleshooting entry covers the RDP/DAX device-visibility case.
+
 ## [0.7.0] — 2026-07-12 — Optional 3-D WebGL Connect globe
 
 ### Added
@@ -53,6 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stand out. All in the universal 2D map (a high-fidelity 3D mode is planned for later).
 - **Prominent band picker** — the CW/Phone band selector is now a large, band-colored
   control (matching the map's per-band spot colors) so your operating band reads at a glance.
+- **Open-source compliance** — the DeepCW model's full AGPL-3.0 license text now ships with
+  the installer (`resources/deepcw/`), and NOTICE credits the model and its corresponding
+  source (e04/deepcw-engine) plus us-atlas for the runtime map data.
 
 ### Fixed
 

@@ -1101,7 +1101,7 @@ impl Settings {
             return;
         }
         let mut used: Vec<u16> = broker.into_iter().collect();
-        let mut free_from = |start: u16, used: &mut Vec<u16>| -> u16 {
+        let free_from = |start: u16, used: &mut Vec<u16>| -> u16 {
             let mut port = start.max(1024);
             while used.contains(&port) {
                 port = port.saturating_add(1);
@@ -1224,12 +1224,42 @@ impl Settings {
         }
     }
 
-    /// Load settings from `path`, or return defaults if missing/invalid.
+    /// Load settings from `path`. A missing file (first run) returns defaults. A
+    /// present-but-CORRUPT file is NOT silently defaulted — that would be
+    /// indistinguishable from a first run, wiping the operator's identity/rig config
+    /// and resetting `license_class` to `Open` (re-opening TX privileges). Instead the
+    /// bad file is set aside as a sibling `.corrupt` file for recovery, then defaults
+    /// apply.
     pub fn load(path: &Path) -> Self {
-        let mut s: Settings = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let mut s: Settings = match std::fs::read_to_string(path) {
+            // Missing file: a normal first run.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
+            // Present but UNREADABLE (permissions, an AV/backup tool's exclusive
+            // lock): NOT a first run — set the intact file aside so a later save()
+            // of the defaults can't clobber it (best-effort; a held lock can make
+            // the rename fail too, but then the file survives in place).
+            Err(e) => {
+                eprintln!(
+                    "tempo: cannot read {} ({e}); setting it aside as .corrupt and starting from defaults",
+                    path.display()
+                );
+                let _ = std::fs::rename(path, path.with_extension("json.corrupt"));
+                Settings::default()
+            }
+            Ok(text) => match serde_json::from_str(&text) {
+                Ok(s) => s,
+                Err(e) => {
+                    // Corrupt file: preserve the evidence (best-effort — defaults are
+                    // still the right fallback even if the rename fails).
+                    eprintln!(
+                        "tempo: {} is corrupt ({e}); setting it aside as .corrupt and starting from defaults",
+                        path.display()
+                    );
+                    let _ = std::fs::rename(path, path.with_extension("json.corrupt"));
+                    Settings::default()
+                }
+            },
+        };
         // One-time migration: drop the known-bad free-text "CQ"/"CQ CQ" macro chips that
         // persisted from older defaults. A CQ now goes through the structured Call-CQ
         // button; a free-text "CQ CQ" chip went out as a chunked, gridless "DE <CALL>
@@ -1297,11 +1327,13 @@ impl Settings {
     }
 
     /// Persist settings to `path` (creating parent directories). Writes a sibling
-    /// `.tmp` file then renames it into place (the [`Logbook::save`] pattern), so a
-    /// crash / power loss mid-write can't truncate `settings.json`. A torn write of the
-    /// live file would silently collapse to [`Settings::default`] on the next load —
-    /// blanking the operator's identity/rig config and resetting `license_class` to
-    /// `Open`, which drops the Part 97 TX lockout. The rename makes a save all-or-nothing.
+    /// `.tmp` file, fsyncs it, then renames it into place (the [`Logbook::save`]
+    /// pattern), so a crash / power loss mid-write can't truncate `settings.json`. A
+    /// torn write of the live file would silently collapse to [`Settings::default`] on
+    /// the next load — blanking the operator's identity/rig config and resetting
+    /// `license_class` to `Open`, which drops the Part 97 TX lockout. The rename makes
+    /// a save all-or-nothing; the fsync stops a filesystem from committing the rename
+    /// before the tmp's data blocks on power loss (which would publish a torn file).
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -1312,7 +1344,12 @@ impl Settings {
         to_save.sync_active_from_flat();
         let json = serde_json::to_string_pretty(&to_save).map_err(std::io::Error::other)?;
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json)?;
+        let mut f = std::fs::File::create(&tmp)?;
+        std::io::Write::write_all(&mut f, json.as_bytes())?;
+        f.sync_all()?; // data on disk BEFORE the rename publishes it
+        drop(f);
+        // No pre-remove of `path`: rename replaces it atomically on Unix and Windows
+        // (MOVEFILE_REPLACE_EXISTING); a remove-first would open a no-file crash window.
         std::fs::rename(&tmp, path)
     }
 
@@ -1704,6 +1741,72 @@ mod tests {
             "TX lockout (license class) preserved, not reset to Open"
         );
         assert_eq!(back.serial_port, "/dev/ttyUSB0", "rig config preserved");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_preserves_corrupt_file_instead_of_silently_defaulting() {
+        // A present-but-corrupt settings.json must NOT be silently collapsed to
+        // Settings::default() — that's indistinguishable from a first run, wipes the
+        // operator's callsign/rig config, and resets license_class to Open (re-opening
+        // TX privileges). load() must set the bad file aside as a sibling `.corrupt`
+        // file so the operator (or support) can recover it, then fall back to defaults.
+        let dir = std::env::temp_dir().join("tempo_settings_corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let good = Settings {
+            mycall: "W9XYZ".into(),
+            license_class: LicenseClass::Technician,
+            ..Settings::default()
+        };
+        good.save(&path).unwrap();
+        // Simulate a torn write / disk corruption of the live file.
+        let truncated = r#"{"mycall":"W9X"#;
+        std::fs::write(&path, truncated).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(back.mycall, "", "corrupt file falls back to defaults");
+        assert_eq!(back.license_class, LicenseClass::Open);
+        let corrupt = path.with_extension("json.corrupt");
+        assert!(
+            corrupt.exists(),
+            "corrupt settings.json set aside for recovery, not discarded"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&corrupt).unwrap(),
+            truncated,
+            "the .corrupt file holds the original bad bytes"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_sets_aside_an_unreadable_file_instead_of_leaving_it_for_save_to_clobber() {
+        // An UNREADABLE (permissions / AV-locked) settings.json is not a first run
+        // either: if load() just defaulted and left the intact file in place, the
+        // session's first save() would clobber the operator's real config with
+        // defaults once the lock cleared. load() must set the file aside like the
+        // corrupt case. (unix-only: permission bits don't model a Windows lock,
+        // but they exercise the same read-Err arm.)
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join("tempo_settings_unreadable");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let good = Settings {
+            mycall: "W9XYZ".into(),
+            license_class: LicenseClass::Technician,
+            ..Settings::default()
+        };
+        good.save(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(back.mycall, "", "unreadable file falls back to defaults");
+        let corrupt = path.with_extension("json.corrupt");
+        assert!(
+            corrupt.exists(),
+            "the intact-but-unreadable file is set aside, not left for save() to clobber"
+        );
+        let _ = std::fs::set_permissions(&corrupt, std::fs::Permissions::from_mode(0o600));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

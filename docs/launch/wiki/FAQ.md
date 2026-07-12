@@ -161,8 +161,9 @@ interest is what prioritizes it.
 
 ### Will there be automatic updates?
 
-Not in this beta — there's no auto-updater yet. Watch the download page (and verify
-the SHA-256 of each new download) to update manually.
+Nexus checks SourceForge for new releases and notifies you in-app with a Download
+button when one is available. Installing is still manual — download the new
+installer (and verify its SHA-256), then run it over your existing install.
 
 ---
 
