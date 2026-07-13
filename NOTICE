@@ -5,9 +5,8 @@ Copyright (C) 2026 KD9TAW <kd9taw@protonmail.com>
 https://sourceforge.net/projects/nexus-ham-radio/
 
 Nexus is free software: you can redistribute it and/or modify it under the
-terms of the **GNU General Public License, version 3 or any later version**
-(SPDX: `GPL-3.0-only`). The full license text is in the file `COPYING` at
-the repository root.
+terms of the **GNU General Public License, version 3** (SPDX: `GPL-3.0-only`).
+The full license text is in the file `COPYING` at the repository root.
 
 Because Nexus incorporates and links GPLv3 code (most significantly the
 WSJT-X-derived modem internals it reuses), Nexus *as a whole* is licensed

@@ -11,9 +11,10 @@ field reports are wanted.
 
 ### Is this a WSJT-X replacement?
 
-For **FT8 and FT4 operating**, that's the goal. The sequencer is built to
-WSJT-X's behavior and verified against a 207-row parity matrix, and Nexus adds
-things stock WSJT-X doesn't have — country and worked-before flags on every
+Think of it as a **modern companion to the WSJT-X ecosystem**, not a replacement.
+For **FT8 and FT4 operating** it's a full-featured alternative — the sequencer is
+built to WSJT-X's behavior and verified against a 207-row parity matrix, and Nexus
+adds things stock WSJT-X doesn't have — country and worked-before flags on every
 decode, one-click "work it" that jumps band/mode/frequency together, and a Needed
 board that ranks the stations on the air by what they're worth to *your* log.
 

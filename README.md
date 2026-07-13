@@ -204,10 +204,12 @@ The FT1/FT8 modem is Fortran + C behind a Rust FFI, so the **GNU toolchain** is 
 Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
 
 - **WSJT-X** — Joe Taylor **K1JT**, Steve Franke **K9AN**, Bill Somerville **G4WJS**, and the WSJT
-  Development Group. The FT8/FT4 modes, the 77-bit message packing, and the LDPC(174,91) FEC are
-  their work and the behavioral reference for Nexus's entire digital tier, which interoperates with
-  their ecosystem over the standard WSJT-X UDP protocol. Nexus's FT8/FT4 support is an independent
-  reimplementation; **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.
+  Development Group. Nexus's digital modem (`libft1/`) is **derived from WSJT-X**: the FT8/FT4 codec,
+  the 77-bit message packing, the LDPC(174,91) FEC, and the CRC-14 check are their GPL-licensed work,
+  vendored and reused unmodified via a foreign-function interface (see **[NOTICE](NOTICE)** for the
+  full lineage and marked modifications). Nexus interoperates with their ecosystem over the standard
+  WSJT-X UDP protocol; its auto-sequencer is original Rust modeled on WSJT-X's on-air behavior.
+  **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.
 - **FT1 / DX1** — the native weak-signal waveforms by **KD9TAW**.
 - **[Hamlib](https://hamlib.github.io/)** — bundled `rigctld` for CAT control (GPL/LGPL).
 - **[FFTW](https://www.fftw.org/)** (GPL), **[Tauri](https://tauri.app/)**, React,
