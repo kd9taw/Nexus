@@ -360,7 +360,18 @@ impl Rig {
     /// gate keeps firing and the idle self-heal in the radio loop retries until the
     /// radio actually releases — one transient CAT failure can no longer latch PTT
     /// until the radio is rebooted.
+    #[track_caller]
     pub fn ptt(&mut self, on: bool) -> std::io::Result<()> {
+        // Diagnostic: name the exact caller of every PTT change. A CI-V capture that shows an
+        // unexplained unkey mid-TX can then be traced to the precise line that dropped it —
+        // this is how the IC-9700 flicker's true source gets pinned instead of inferred. Cheap
+        // when the diagnostic log is off (a single atomic load; the format! is skipped).
+        if crate::civ::diag::is_enabled() {
+            crate::civ::diag::note(&format!(
+                "Rig::ptt({on}) called from {}",
+                std::panic::Location::caller()
+            ));
+        }
         if on {
             self.keyed = true;
         }
