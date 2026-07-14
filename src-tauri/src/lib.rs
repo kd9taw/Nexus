@@ -4077,6 +4077,30 @@ fn set_filter_width(state: State<'_, SharedEngine>, hz: u32) -> Result<AppSnapsh
     Ok(eng.snapshot())
 }
 
+/// Set the native Icom scope SPAN (± half-width, Hz); applied to the rig by the radio loop.
+#[tauri::command]
+fn set_scope_span(state: State<'_, SharedEngine>, hz: u32) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.request_scope_span(hz);
+    Ok(eng.snapshot())
+}
+
+/// Set the native Icom scope REFERENCE level (tenths of a dB, −200..+200).
+#[tauri::command]
+fn set_scope_ref(state: State<'_, SharedEngine>, tenths_db: i32) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.request_scope_ref(tenths_db);
+    Ok(eng.snapshot())
+}
+
+/// Set the native Icom scope center/fixed mode (`true` = fixed band-edge view).
+#[tauri::command]
+fn set_scope_fixed(state: State<'_, SharedEngine>, fixed: bool) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.request_scope_fixed(fixed);
+    Ok(eng.snapshot())
+}
+
 /// Set the RIT (receive incremental tuning) offset in Hz — 0 turns RIT off. Applied next loop.
 #[tauri::command]
 fn set_rit(state: State<'_, SharedEngine>, hz: i32) -> Result<AppSnapshot, String> {
@@ -8057,6 +8081,9 @@ pub fn run() {
             set_rig_func,
             set_sideband_override,
             set_filter_width,
+            set_scope_span,
+            set_scope_ref,
+            set_scope_fixed,
             set_rit,
             set_xit,
             set_vfo,

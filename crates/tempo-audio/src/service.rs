@@ -1452,6 +1452,31 @@ impl RadioLoop {
                 // while WE'RE transmitting — a transient reconnect of Nexus's own Rig must never
                 // steal the over (the native-CI-V PTT flicker). Cleared the moment TX ends.
                 d.set_tx_intent(keyed_now);
+                // Native-scope CONTROL one-shots from the UI (span/ref/mode). These are short 27
+                // CAT frames (NOT the waveform stream), so no 115200 requirement — but they share
+                // the half-duplex bus, so hold them until unkey (same reason the stream pauses).
+                if !keyed_now {
+                    let (span, refl, fixed) = engine
+                        .lock()
+                        .ok()
+                        .map(|mut e| {
+                            (
+                                e.take_scope_span_request(),
+                                e.take_scope_ref_request(),
+                                e.take_scope_fixed_request(),
+                            )
+                        })
+                        .unwrap_or((None, None, None));
+                    if let Some(hz) = span {
+                        d.set_scope_span(hz);
+                    }
+                    if let Some(t) = refl {
+                        d.set_scope_ref(t);
+                    }
+                    if let Some(f) = fixed {
+                        d.set_scope_center_mode(f);
+                    }
+                }
                 if let Some(sweep) = d.take_scope_row() {
                     if let Ok(mut e) = engine.lock() {
                         e.set_spectrum_rf(tempo_app::dto::Spectrum {

@@ -56,10 +56,8 @@ pub struct ScopeSweep {
 pub fn scope_stream_frames(radio: u8, on: bool) -> Vec<Frame> {
     let b = u8::from(on);
     if on {
-        // Dual-scope models by CI-V default address: IC-7610 (0x98), IC-9700 (0xA2).
-        let dual_scope = matches!(radio, 0x98 | 0xA2);
         let mut frames = Vec::with_capacity(3);
-        if dual_scope {
+        if scope_is_dual(radio) {
             frames.push(Frame::command(radio, 0x27, &[0x12, 0x00])); // target = Main scope
         }
         frames.push(Frame::command(radio, 0x27, &[0x10, 0x01]));
@@ -69,6 +67,13 @@ pub fn scope_stream_frames(radio: u8, on: bool) -> Vec<Frame> {
         // Leave the scope display itself as the operator had it; just stop the stream.
         vec![Frame::command(radio, 0x27, &[0x11, b])]
     }
+}
+
+/// True for dual-receiver Icoms (two scopes: Main + Sub) — IC-7610 (0x98) and IC-9700 (0xA2)
+/// by CI-V default address. Their `27 14/15/19` scope-CONTROL commands take a leading Main/Sub
+/// selector byte that single-scope rigs (IC-7300/705/905) omit.
+pub fn scope_is_dual(radio: u8) -> bool {
+    matches!(radio, 0x98 | 0xA2)
 }
 
 /// One decimal from a BCD byte pair position (two digits per byte).

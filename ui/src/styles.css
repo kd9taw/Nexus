@@ -6883,6 +6883,34 @@ select optgroup {
   border-radius: var(--radius-sm);
 }
 
+/* Rig scope controls (native Icom CI-V) — a compact strip that drives the radio's panadapter. */
+.ph-rigscope {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-1) var(--space-2);
+}
+.ph-rigscope-lbl {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.ph-rigscope-ref {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+.ph-rigscope-ref input[type='range'] {
+  width: 120px;
+}
+
 /* Transmit meters (SWR/ALC/Po/COMP) — a compact grid of labeled bars shown only while keyed. */
 .ph-txmeters {
   display: grid;

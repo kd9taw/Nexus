@@ -409,6 +409,39 @@ impl CivDaemon {
             Expect::Ack,
         );
     }
+
+    /// Main/Sub selector byte for the scope-CONTROL commands: `Some(0x00)` (Main) on dual-scope
+    /// rigs, `None` (omit) on single-scope rigs. The stream is already pinned to Main by
+    /// `scope_stream_frames`, so controlling the Main scope is what the operator sees.
+    fn scope_ms(&self) -> Option<u8> {
+        super::scope::scope_is_dual(self.civ_addr).then_some(0x00)
+    }
+
+    /// Set the rig's scope SPAN (`27 15`) — the ± half-width in Hz (rig table 2.5k..500k).
+    /// Best-effort transact; a NAK (unsupported / in fixed mode) is fine.
+    pub fn set_scope_span(&self, span_hz: u32) {
+        let _ = self.engine.handle().transact(
+            commands::set_scope_span(self.civ_addr, self.scope_ms(), span_hz),
+            Expect::Ack,
+        );
+    }
+
+    /// Set the rig's scope REFERENCE level (`27 19`), in tenths of a dB (−200..+200).
+    pub fn set_scope_ref(&self, ref_tenths_db: i32) {
+        let _ = self.engine.handle().transact(
+            commands::set_scope_ref(self.civ_addr, self.scope_ms(), ref_tenths_db),
+            Expect::Ack,
+        );
+    }
+
+    /// Set the rig's scope CENTER/FIXED mode (`27 14`): `true` = fixed (band-edge), `false` =
+    /// center (follow the dial).
+    pub fn set_scope_center_mode(&self, fixed: bool) {
+        let _ = self.engine.handle().transact(
+            commands::set_scope_center_mode(self.civ_addr, self.scope_ms(), fixed),
+            Expect::Ack,
+        );
+    }
 }
 
 impl Drop for CivDaemon {

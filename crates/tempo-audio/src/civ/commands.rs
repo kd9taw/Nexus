@@ -325,6 +325,42 @@ pub fn parse_data_mode(f: &Frame) -> Option<bool> {
     }
 }
 
+// ---- scope CONTROL (command 0x27 sub 14/15/19) — set the RIG's panadapter, not the stream ----
+// Byte layouts verified against Hamlib (rigs/icom/icom.c). On dual-receiver rigs (IC-9700/7610)
+// each of these takes a leading Main/Sub selector byte (`main_sub` = Some(0x00) for Main); single-
+// scope rigs pass None and omit it. The caller (CivDaemon) supplies main_sub from scope_is_dual.
+
+fn scope_ctrl_frame(radio: u8, sub: u8, main_sub: Option<u8>, payload: &[u8]) -> Frame {
+    let mut data = Vec::with_capacity(2 + payload.len());
+    data.push(sub);
+    if let Some(ms) = main_sub {
+        data.push(ms);
+    }
+    data.extend_from_slice(payload);
+    Frame::command(radio, 0x27, &data)
+}
+
+/// Scope SPAN in center mode (`27 15`): the ± half-width in Hz as 5-byte little-endian BCD (the
+/// frequency codec). Table values: 2500/5000/10000/25000/50000/100000/250000/500000.
+pub fn set_scope_span(radio: u8, main_sub: Option<u8>, span_hz: u32) -> Frame {
+    scope_ctrl_frame(radio, 0x15, main_sub, &freq_to_bcd(u64::from(span_hz)))
+}
+
+/// Scope REFERENCE level (`27 19`): magnitude as 2-byte big-endian BCD in 0.01 dB units (rounded
+/// to 0.5 dB steps), then a trailing sign byte (00 = +, 01 = −). Range −20.0..+20.0 dB.
+pub fn set_scope_ref(radio: u8, main_sub: Option<u8>, ref_tenths_db: i32) -> Frame {
+    let tenths = ref_tenths_db.clamp(-200, 200);
+    // Round to the nearest 0.5 dB (5 tenths), then to 0.01-dB hundredths for the wire.
+    let hundredths = ((tenths.abs() + 2) / 5 * 5 * 10) as u16;
+    let [hi, lo] = level_to_bcd2(hundredths);
+    scope_ctrl_frame(radio, 0x19, main_sub, &[hi, lo, u8::from(tenths < 0)])
+}
+
+/// Scope CENTER/FIXED mode (`27 14`): one byte, 00 = center, 01 = fixed.
+pub fn set_scope_center_mode(radio: u8, main_sub: Option<u8>, fixed: bool) -> Frame {
+    scope_ctrl_frame(radio, 0x14, main_sub, &[u8::from(fixed)])
+}
+
 // ---- reply decoders ----
 
 /// Extract the frequency (Hz) from a `03` frequency report (or an unsolicited transceive
@@ -528,6 +564,34 @@ mod tests {
         assert_eq!(f.data[0], 0x0B);
         assert_eq!(level_from_bcd2(f.data[1], f.data[2]), 255);
         assert_eq!(level_from_bcd2(set_mic_gain(0xA2, 0).data[1], set_mic_gain(0xA2, 0).data[2]), 0);
+    }
+
+    #[test]
+    fn scope_span_frame_matches_icom_reference() {
+        // Hamlib ref: set Main scope span 25 kHz on an IC-9700 → 27 15 00 <25000 LE BCD>.
+        // Dual-scope rig gets the leading Main byte (00); single-scope omits it.
+        let dual = set_scope_span(0xA2, Some(0x00), 25_000);
+        assert_eq!(dual.cmd, 0x27);
+        assert_eq!(dual.data, vec![0x15, 0x00, 0x00, 0x50, 0x02, 0x00, 0x00]);
+        let single = set_scope_span(0x94, None, 25_000);
+        assert_eq!(single.data, vec![0x15, 0x00, 0x50, 0x02, 0x00, 0x00]); // no Main/Sub byte
+    }
+
+    #[test]
+    fn scope_ref_encodes_level_then_sign() {
+        // 27 19: [scope, 2-byte BE BCD magnitude in 0.01 dB, sign(00=+/01=-)].
+        // +10.0 dB → 1000 → 10 00, sign 00.
+        assert_eq!(set_scope_ref(0xA2, Some(0x00), 100).data, vec![0x19, 0x00, 0x10, 0x00, 0x00]);
+        // −20.0 dB → 2000 → 20 00, sign 01. (Clamped range.)
+        assert_eq!(set_scope_ref(0xA2, Some(0x00), -200).data, vec![0x19, 0x00, 0x20, 0x00, 0x01]);
+        // +0.5 dB (5 tenths) → 50 → 00 50, sign 00.
+        assert_eq!(set_scope_ref(0x94, None, 5).data, vec![0x19, 0x00, 0x50, 0x00]);
+    }
+
+    #[test]
+    fn scope_center_mode_is_one_byte() {
+        assert_eq!(set_scope_center_mode(0xA2, Some(0x00), true).data, vec![0x14, 0x00, 0x01]);
+        assert_eq!(set_scope_center_mode(0x94, None, false).data, vec![0x14, 0x00]);
     }
 
     #[test]

@@ -702,6 +702,19 @@ export async function setFilterWidth(hz: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_filter_width', { hz })
 }
 
+/** Set the native Icom scope SPAN — the rig's real panadapter ± half-width in Hz. */
+export async function setScopeSpan(hz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_scope_span', { hz })
+}
+/** Set the native Icom scope REFERENCE level in tenths of a dB (−200..+200). */
+export async function setScopeRef(tenthsDb: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_scope_ref', { tenthsDb })
+}
+/** Set the native Icom scope center/fixed mode (true = fixed band-edge view). */
+export async function setScopeFixed(fixed: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_scope_fixed', { fixed })
+}
+
 /** Set the RIT (receive incremental tuning) offset in Hz — 0 turns RIT off. */
 export async function setRit(hz: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_rit', { hz })

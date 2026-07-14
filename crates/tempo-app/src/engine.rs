@@ -392,6 +392,12 @@ pub struct Engine {
     rig_passband: Option<u32>,
     /// Pending RX filter-width set (Hz) from the UI; the loop drains + applies it via set_mode.
     pending_passband: Option<u32>,
+    /// Pending native-scope control one-shots from the UI (native Icom CI-V only): span in Hz
+    /// (± half-width), reference level in tenths of a dB, and center(false)/fixed(true) mode. The
+    /// radio loop drains each and calls the CivDaemon while not keyed.
+    pending_scope_span: Option<u32>,
+    pending_scope_ref: Option<i32>,
+    pending_scope_fixed: Option<bool>,
     /// A foreign CAT-broker client is holding PTT (arbitrated in `broker_ptt`).
     broker_ptt: bool,
     /// Phone voice-keyer: pending 12 kHz mono samples to transmit. The radio loop drains
@@ -657,6 +663,9 @@ impl Engine {
             pending_func: [None; 5],
             rig_passband: None,
             pending_passband: None,
+            pending_scope_span: None,
+            pending_scope_ref: None,
+            pending_scope_fixed: None,
             broker_ptt: false,
             voice_tx: None,
             voice_abort: false,
@@ -1813,6 +1822,30 @@ impl Engine {
     /// Drain a pending filter-width request for the radio loop.
     pub fn take_passband_request(&mut self) -> Option<u32> {
         self.pending_passband.take()
+    }
+
+    /// Queue a native-scope SPAN change (Hz, ± half-width) from the UI. Native Icom CI-V only;
+    /// the loop drains it and drives the rig's real panadapter width while not keyed.
+    pub fn request_scope_span(&mut self, span_hz: u32) {
+        self.pending_scope_span = Some(span_hz);
+    }
+    /// Queue a native-scope REFERENCE-level change (tenths of a dB, −200..+200) from the UI.
+    pub fn request_scope_ref(&mut self, ref_tenths_db: i32) {
+        self.pending_scope_ref = Some(ref_tenths_db);
+    }
+    /// Queue a native-scope CENTER/FIXED mode change from the UI (`true` = fixed).
+    pub fn request_scope_fixed(&mut self, fixed: bool) {
+        self.pending_scope_fixed = Some(fixed);
+    }
+    /// Drain the pending native-scope control one-shots for the radio loop.
+    pub fn take_scope_span_request(&mut self) -> Option<u32> {
+        self.pending_scope_span.take()
+    }
+    pub fn take_scope_ref_request(&mut self) -> Option<i32> {
+        self.pending_scope_ref.take()
+    }
+    pub fn take_scope_fixed_request(&mut self) -> Option<bool> {
+        self.pending_scope_fixed.take()
     }
 
     // ----- Phone voice keyer — play recorded WAVs + record, via the radio loop -----

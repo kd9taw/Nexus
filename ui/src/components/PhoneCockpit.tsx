@@ -15,6 +15,8 @@ import {
   setPtt,
   setRfPower,
   setMicGain,
+  setScopeSpan,
+  setScopeRef,
   startQsoRecording,
   stopQsoRecording,
   setTune,
@@ -84,6 +86,19 @@ const RF_SPANS = [
   { label: '±5k', lo: -5_000, hi: 5_000, title: '±5 kHz around your dial' },
 ] as const
 
+/** RIG scope-span presets (native Icom CI-V only) — these change the RADIO's real panadapter
+ *  sweep width via CI-V 27 15 (± half-width in Hz), from the rig's own span table. Unlike the
+ *  client-side RF zoom above, this commands the hardware. */
+const RIG_SPANS = [
+  { label: '±2.5k', hz: 2_500 },
+  { label: '±5k', hz: 5_000 },
+  { label: '±10k', hz: 10_000 },
+  { label: '±25k', hz: 25_000 },
+  { label: '±50k', hz: 50_000 },
+  { label: '±100k', hz: 100_000 },
+  { label: '±250k', hz: 250_000 },
+] as const
+
 export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, spots, onWorkSpot }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   // Mirror the RIG's real level (CAT read-back / last commanded) so the slider
@@ -109,6 +124,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     setMic(pct)
     void setMicGain(pct / 100)
   }
+  // Native Icom scope reference level, in tenths of a dB (−200..+200 = −20.0..+20.0 dB).
+  const [scopeRefTenths, setScopeRefTenths] = useState(0)
+  const changeScopeRef = (tenths: number) => {
+    setScopeRefTenths(tenths)
+    void setScopeRef(tenths)
+  }
+  // True only when the rig's own Icom scope is streaming (span/ref are Icom CI-V commands; the
+  // Flex panadapter has a different control path, so gate on 'civ' specifically, not any RF feed).
+  const civScope = scopeFeed?.source === 'civ'
   const [keyed, setKeyed] = useState(false)
   // Bandscope span (audio-window zoom within the captured passband — this is
   // soundcard audio, not RF IQ, so "span" means which slice of the passband
@@ -554,6 +578,43 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         defaultPct={22}
         label="scope height"
       />
+
+      {/* Rig scope controls (native Icom CI-V only) — drive the RADIO's real panadapter: span
+          changes the hardware sweep width, ref sets weak-signal visibility. Distinct from the
+          view-zoom chips on the scope itself, which only zoom what's already streamed. */}
+      {civScope && (
+        <div className="ph-rigscope" role="group" aria-label="Rig scope control">
+          <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
+            Rig&nbsp;scope
+          </span>
+          <div className="ph-span">
+            {RIG_SPANS.map((sp) => (
+              <button
+                key={sp.label}
+                type="button"
+                className="theme-chip"
+                title={`Set the radio's scope span to ${sp.label}`}
+                onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+              >
+                {sp.label}
+              </button>
+            ))}
+          </div>
+          <label className="ph-rigscope-ref" title="Scope reference level — lower to lift weak signals out of the noise">
+            <span>Ref</span>
+            <input
+              type="range"
+              min={-200}
+              max={200}
+              step={5}
+              value={scopeRefTenths}
+              onChange={(e) => changeScopeRef(Number(e.target.value))}
+              aria-label="Scope reference level (dB)"
+            />
+            <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} dB</span>
+          </label>
+        </div>
+      )}
 
       {/* Transmit meters (SWR/ALC/Po/COMP) — appear only while keyed, where the S-meter sat. */}
       <TxMeters radio={snap.radio} />
