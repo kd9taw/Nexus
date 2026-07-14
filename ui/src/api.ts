@@ -1095,6 +1095,16 @@ export async function civDiagnosticLog(enable: boolean): Promise<string> {
 }
 
 /**
+ * The active CI-V diagnostic-log path, or '' when logging is off. The Settings toggle
+ * queries this on mount so it reflects the real backend state — logging keeps running while
+ * you leave Settings to transmit, so the switch must not appear to reset (re-arming would
+ * truncate the capture).
+ */
+export async function civDiagnosticStatus(): Promise<string> {
+  return invoke<string>('civ_diagnostic_status', {})
+}
+
+/**
  * Export the contest/contact log in the given format. Returns the serialized
  * text (the caller saves it via a browser download). Rejects if there is no
  * log to export (e.g. not in Field Day mode).

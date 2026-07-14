@@ -29,6 +29,7 @@ static SINK: Mutex<Option<Sink>> = Mutex::new(None);
 struct Sink {
     w: BufWriter<File>,
     start: Instant,
+    path: String,
 }
 
 /// Which way a chunk of bytes crossed the wire.
@@ -63,12 +64,23 @@ pub fn start(path: &Path) -> std::io::Result<()> {
         *g = Some(Sink {
             w,
             start: Instant::now(),
+            path: path.display().to_string(),
         });
     }
     // Arm only after the sink is in place: a reader that sees the flag then locks the sink
     // is guaranteed to find it present.
     ENABLED.store(true, Ordering::Relaxed);
     Ok(())
+}
+
+/// The path of the active log, or `None` when logging is off. Lets the UI reflect the real
+/// backend state (logging survives navigating away from Settings), instead of a local toggle
+/// that appears to reset — and re-arming would truncate the capture.
+pub fn status() -> Option<String> {
+    if !is_enabled() {
+        return None;
+    }
+    SINK.lock().ok().and_then(|g| g.as_ref().map(|s| s.path.clone()))
 }
 
 /// Disarm the tap, then flush and close the log.

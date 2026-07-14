@@ -3066,6 +3066,15 @@ fn civ_diagnostic_log(app: tauri::AppHandle, enable: bool) -> Result<String, Str
     Ok(path.display().to_string())
 }
 
+/// The active CI-V diagnostic-log path, or an empty string when logging is off. The UI
+/// queries this on load so the toggle reflects the real backend state — logging keeps
+/// running while you leave Settings to transmit, so a local-only toggle would wrongly read
+/// "off" (and re-arming would truncate the capture).
+#[tauri::command]
+fn civ_diagnostic_status() -> String {
+    tempo_audio::civ::diag::status().unwrap_or_default()
+}
+
 /// Transmit an open broadcast (FT8-style "to all") free-text message.
 #[tauri::command]
 fn broadcast(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
@@ -7998,6 +8007,7 @@ pub fn run() {
             export_general_log,
             save_text_to_downloads,
             civ_diagnostic_log,
+            civ_diagnostic_status,
             broadcast,
             get_serial_ports,
             get_audio_devices,

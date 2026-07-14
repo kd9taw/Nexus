@@ -42,7 +42,7 @@ import { loadProfiles, saveProfile, deleteProfile, type Profile } from '../profi
 import { getConnectionLog, getCredentialsStatus } from '../api'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { discoverFlex } from '../api'
-import { civDiagnosticLog } from '../api'
+import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
@@ -250,8 +250,21 @@ export function SettingsPanel({
   const [showAllRigModels, setShowAllRigModels] = useState(false)
   const [serialPorts, setSerialPorts] = useState<string[]>([])
   // Native CI-V bus diagnostic log: null = off, string = the log file path while capturing.
-  // Transient (not persisted) — a support tool the operator arms to capture a fault.
+  // Transient (not persisted) — a support tool the operator arms to capture a fault. The
+  // backend keeps logging while Settings is closed (so the operator can go transmit), so the
+  // toggle reads its real state on mount instead of resetting to "off" on every return here.
   const [civLogPath, setCivLogPath] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    civDiagnosticStatus()
+      .then((p) => {
+        if (alive) setCivLogPath(p === '' ? null : p)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
   const [profiles, setProfiles] = useState<Profile[]>(() => loadProfiles())
   const [selectedProfile, setSelectedProfile] = useState('')
   const [newProfileName, setNewProfileName] = useState('')
@@ -2156,9 +2169,11 @@ export function SettingsPanel({
                     <span className="settings-hint">
                       {civLogPath !== null ? (
                         <>
-                          Capturing the raw CI-V bus traffic to <code>{civLogPath}</code>. Reproduce
-                          the issue (e.g. the PTT flicker on transmit), then turn this off and send
-                          that file — it shows exactly what's on the bus during the fault.
+                          <strong>Recording</strong> to <code>{civLogPath}</code> — this keeps
+                          running while you're on other screens, so go to the FT8 or Phone cockpit
+                          and reproduce the issue (Tune or transmit) now. Come back and turn it off
+                          when done, then send that file. It shows exactly what's on the bus during
+                          the fault.
                         </>
                       ) : (
                         <>
