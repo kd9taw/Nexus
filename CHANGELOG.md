@@ -11,13 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Native Icom CI-V: transmit no longer flickers the PTT (IC-9700 and friends).** With the native
   CI-V path on, hitting Tune or transmitting keyed the rig and then unkeyed it ~50 ms later — a fast
-  "click," TX light but no RF. Root cause (found via the new CI-V diagnostic log): Nexus's own rig
-  control is a client of the native daemon's built-in rigctld server, which has a *fail-safe* that
-  unkeys the radio if a PTT-asserting client disconnects (so a crashing WSJT-X/N1MM can't strand the
-  rig keyed). A transient reconnect of Nexus's *own* connection tripped that fail-safe and dropped
-  the over. The fail-safe now stands down while Nexus itself is transmitting, and still fires for a
-  genuine external-client crash. (The scope-waveform stream, separately, is rejected by the IC-9700,
-  so native CI-V has no live scope on that model yet — tracked for a follow-up.)
+  "click," TX light but no RF. Two stacked root causes, found via the new CI-V diagnostic log:
+  **(1) A Windows-only socket bug killed every CAT connection after ~one command.** On WinSock —
+  unlike Linux, where all our tests run — a socket returned by `accept()` inherits the listener's
+  non-blocking mode. The native daemon's rigctld listener is non-blocking, so every accepted
+  connection's first idle read errored and the server closed it: Nexus's own rig-control link was
+  silently reconnecting for *every command* all session. Accepted connections are now reset to
+  blocking. **(2) The disconnect fail-safe stole our own transmit.** The daemon's rigctld server
+  unkeys the radio when a PTT-asserting client disconnects (so a crashing WSJT-X/N1MM can't strand
+  the rig keyed) — and the constant churn from (1) meant the connection that keyed always died
+  moments later, unkeying the over. The fail-safe now stands down while Nexus itself is
+  transmitting (published to the broker at every keying site, so there's no race), and still fires
+  for a genuine external-client crash. (The scope-waveform stream, separately, is rejected by the
+  IC-9700, so native CI-V has no live scope on that model yet — tracked for a follow-up.)
 
 ### Added
 

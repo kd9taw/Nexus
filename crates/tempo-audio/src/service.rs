@@ -1102,6 +1102,17 @@ impl RadioLoop {
         }
     }
 
+    /// Publish "Nexus is transmitting" to the native broker RIGHT NOW. Called at each keying
+    /// site, because the per-tick publish (the scope-gate block) can lag a fresh key-up by a
+    /// whole tick (~20 ms) — and a capture showed the broker's disconnect fail-safe racing
+    /// that gap: it fired 5 ms after PTT-ON with tx_intent still false and unkeyed the tune.
+    /// Idempotent atomic store; a no-op on the Hamlib path (no native daemon).
+    fn publish_tx_intent_now(&self) {
+        if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
+            d.set_tx_intent(true);
+        }
+    }
+
     /// Reset the per-rig caches after a dual-radio HANDOFF adopted an already-connected Rig for a new
     /// active radio. Forces the retune block to re-assert the restored dial/mode (sentinel
     /// `last_dial`/`last_mode`) and the health / S-meter / DSP-func capabilities to re-probe for the
@@ -1959,6 +1970,7 @@ impl RadioLoop {
                             // it LOOKS like it sent while nothing reaches the air — surface that
                             // instead of the silent false-positive. (Audio-routing problems can't
                             // be detected here — see the Soundcard control's caveat.)
+                            self.publish_tx_intent_now(); // before keying
                             let ptt_err = rig.ptt(true).is_err();
                             backend.play(&buf);
                             let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
@@ -2090,6 +2102,7 @@ impl RadioLoop {
             if let Some(buf) = samples {
                 if !buf.is_empty() {
                     let secs = buf.len() as f32 / ft1::SAMPLE_RATE;
+                    self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                     let _ = rig.ptt(true);
                     backend.play(&buf);
                     let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
@@ -2156,6 +2169,9 @@ impl RadioLoop {
                 (eng.manual_ptt(), eng.rf_power())
             };
             if ptt != self.manual_ptt_applied {
+                if ptt {
+                    self.publish_tx_intent_now(); // before keying — the fail-safe must already know
+                }
                 let _ = rig.ptt(ptt);
                 self.manual_ptt_applied = ptt;
             }
@@ -2273,6 +2289,7 @@ impl RadioLoop {
                     d.set_scope_enabled(false);
                     d.set_data_mode(true);
                 }
+                self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                 let _ = rig.ptt(true);
                 self.tuning_keyed = true;
                 self.tune_started_ms = Some(now);
@@ -2464,6 +2481,7 @@ impl RadioLoop {
                         if split.rig_split_engaged {
                             self.audio_rig_split = true;
                         }
+                        self.publish_tx_intent_now(); // before keying
                         let _ = rig.ptt(true);
                         let mut secs = 0.0f32;
                         let last = waves.len() - 1;
@@ -2562,6 +2580,10 @@ impl RadioLoop {
             );
             if let Some(t) = action.tx_until_ms {
                 self.tx_until_ms = Some(t);
+                // The slot core just keyed (slot.rs) — publish TX intent immediately rather
+                // than waiting for the next tick's scope-gate publish (~20 ms), so the broker's
+                // disconnect fail-safe can't race the fresh key-up.
+                self.publish_tx_intent_now();
             }
             if action.fake_it_restore.is_some() {
                 self.fake_it_restore = action.fake_it_restore;

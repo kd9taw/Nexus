@@ -274,6 +274,17 @@ impl CivDaemon {
                     while !stop.load(Ordering::Relaxed) {
                         match listener.accept() {
                             Ok((stream, _)) => {
+                                // WINDOWS GOTCHA: WinSock accept() INHERITS the listener's
+                                // non-blocking mode (Linux does not — so tests never saw this).
+                                // Our listener is non-blocking (the loop polls tcp_stop), so
+                                // without this reset every accepted connection's first idle
+                                // read hit WouldBlock, serve_connection's line loop treated it
+                                // as an error and closed the connection after ~one command.
+                                // Nexus's own Rig client then churned reconnects (os error
+                                // 10053) — and when the dropped connection had just asserted
+                                // PTT (`T 1`), the disconnect fail-safe unkeyed the radio: the
+                                // IC-9700 native-CI-V "PTT flicker".
+                                let _ = stream.set_nonblocking(false);
                                 let _ = stream.set_nodelay(true);
                                 let b = Arc::clone(&backend);
                                 std::thread::spawn(move || serve_connection(stream, b));

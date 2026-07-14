@@ -354,6 +354,10 @@ pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
 /// thread. Backed by `backend` (shared with Nexus's rig).
 pub fn serve(listener: TcpListener, backend: Arc<dyn RigBackend>) {
     for stream in listener.incoming().flatten() {
+        // WinSock accept() inherits the listener's non-blocking mode (Linux doesn't).
+        // serve_connection needs blocking reads — force it, in case a caller ever
+        // hands us a non-blocking listener (the CivDaemon broker bug, generalized).
+        let _ = stream.set_nonblocking(false);
         let b = Arc::clone(&backend);
         std::thread::spawn(move || serve_connection(stream, b));
     }
