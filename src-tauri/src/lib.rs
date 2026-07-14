@@ -703,6 +703,61 @@ fn settings_path() -> PathBuf {
         .join("settings.json")
 }
 
+/// Persisted geometry (logical px) + side-dock of the torn-off band-map window, so the
+/// vertical band map reopens where the operator left it instead of re-arranging it every
+/// launch. A tiny sibling of settings.json (not part of the big Settings blob — it's pure
+/// window state, written from the window-event handler and read at window-open time).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct BandmapWindow {
+    w: f64,
+    h: f64,
+    x: f64,
+    y: f64,
+    /// "left" | "right" | "" (free-floating). When set, the window re-snaps to that edge on open.
+    #[serde(default)]
+    dock: String,
+}
+
+fn bandmap_window_path() -> PathBuf {
+    settings_path().with_file_name("bandmap-window.json")
+}
+
+fn load_bandmap_window() -> Option<BandmapWindow> {
+    let g: BandmapWindow = serde_json::from_str(&std::fs::read_to_string(bandmap_window_path()).ok()?).ok()?;
+    // Reject a degenerate/blank record so a corrupt file falls back to the default size.
+    (g.w >= 200.0 && g.h >= 200.0).then_some(g)
+}
+
+fn save_bandmap_window(g: &BandmapWindow) {
+    if let Ok(txt) = serde_json::to_string(g) {
+        let p = bandmap_window_path();
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(p, txt);
+    }
+}
+
+/// Snapshot a band-map window's current size+position to disk (logical px), preserving its
+/// dock choice. Called on close so the next open restores it. No-op for any other window.
+fn capture_bandmap_window(window: &tauri::WebviewWindow) {
+    if !window.label().starts_with("panel-bandmap") {
+        return;
+    }
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let (Ok(size), Ok(pos)) = (window.inner_size(), window.outer_position()) else {
+        return;
+    };
+    let dock = load_bandmap_window().map(|g| g.dock).unwrap_or_default();
+    save_bandmap_window(&BandmapWindow {
+        w: size.width as f64 / scale,
+        h: size.height as f64 / scale,
+        x: pos.x as f64 / scale,
+        y: pos.y as f64 / scale,
+        dock,
+    });
+}
+
 /// Where the ADIF logbook is persisted: the same base dir as [`settings_path`],
 /// i.e. `%APPDATA%\tempo\log.adi` on Windows / `~/.config/tempo/log.adi` on Unix.
 fn logbook_path() -> PathBuf {
@@ -4536,9 +4591,15 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
     };
     // The Operate cockpit (waterfall + Band Activity + roster) needs more room than the
     // narrower insight panels; the band map is tall + narrow (a vertical frequency axis).
-    let (w, h) = if slug == "operate" {
+    let is_bandmap = slug == "bandmapPhone" || slug == "bandmapCw";
+    // The band map reopens where the operator left it (size + position), so a Windows-snapped
+    // vertical strip on the side survives restarts. Other pop-outs keep their fixed defaults.
+    let saved = if is_bandmap { load_bandmap_window() } else { None };
+    let (w, h) = if let Some(g) = &saved {
+        (g.w, g.h)
+    } else if slug == "operate" {
         (1140.0, 760.0)
-    } else if slug == "bandmapPhone" || slug == "bandmapCw" {
+    } else if is_bandmap {
         (420.0, 780.0)
     } else if slug == "fieldday" {
         (560.0, 760.0) // the scoreboard: operator + tiles + sections board
@@ -4547,7 +4608,7 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
     } else {
         (760.0, 660.0)
     };
-    let builder = tauri::WebviewWindowBuilder::new(
+    let mut builder = tauri::WebviewWindowBuilder::new(
         &app,
         &label,
         tauri::WebviewUrl::App(format!("index.html?panel={slug}").into()),
@@ -4555,10 +4616,62 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
     .title(title)
     .inner_size(w, h)
     .min_inner_size(if slug == "waterfall" { 380.0 } else { 420.0 }, if slug == "waterfall" { 180.0 } else { 360.0 });
+    if let Some(g) = &saved {
+        builder = builder.position(g.x, g.y);
+    }
     // Pop-outs are ordinary windows — the operator must be able to send them behind the
     // main UI (a tester couldn't hide the waterfall while it was pinned always-on-top). A
     // future "pin" toggle can call `window.set_always_on_top(true)` on demand.
     builder.build().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Snap the calling band-map window to the left/right edge of its monitor as a full-height
+/// vertical strip (the built-in version of the Windows-snap the operator was doing by hand),
+/// keeping its current width. `side` = "left" | "right"; anything else un-docks (free-float,
+/// just persists the current geometry). The dock + geometry persist so it restores on relaunch.
+#[tauri::command]
+fn dock_bandmap_window(window: tauri::WebviewWindow, side: String) -> Result<(), String> {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    // Current width (logical) — a dock keeps the strip's width, only pins the edge + height.
+    let cur_w = window
+        .inner_size()
+        .map(|s| (s.width as f64 / scale).clamp(300.0, 640.0))
+        .unwrap_or(420.0);
+
+    if side != "left" && side != "right" {
+        // Un-dock: leave the window where it is, just clear the dock flag so a later open
+        // doesn't re-snap it. Persist the current geometry.
+        capture_bandmap_window(&window);
+        let mut g = load_bandmap_window().unwrap_or_default();
+        g.dock = String::new();
+        save_bandmap_window(&g);
+        return Ok(());
+    }
+
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "no monitor for this window".to_string())?;
+    let msize = monitor.size(); // physical
+    let mpos = monitor.position(); // physical (top-left in the virtual desktop)
+    let mw = msize.width as f64 / scale;
+    let mh = msize.height as f64 / scale;
+    let mx = mpos.x as f64 / scale;
+    let my = mpos.y as f64 / scale;
+    // Full monitor height as a vertical strip; the OS keeps it clear of a docked taskbar in
+    // most setups (we don't guess the taskbar size). Width stays as-is, pinned to the edge.
+    let w = cur_w;
+    let h = mh;
+    let x = if side == "left" { mx } else { mx + mw - w };
+    let y = my;
+    window
+        .set_size(tauri::LogicalSize::new(w, h))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(tauri::LogicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    save_bandmap_window(&BandmapWindow { w, h, x, y, dock: side });
     Ok(())
 }
 
@@ -8186,6 +8299,7 @@ pub fn run() {
             set_hold_tx_freq,
             call_station,
             open_panel_window,
+            dock_bandmap_window,
             set_area,
             qso_resend,
             qso_freetext,
@@ -8288,15 +8402,23 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the MAIN window tears down the whole app: close any torn-off
-            // panel windows too, so they don't linger (and keep the process alive).
-            if window.label() == "main"
-                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
-            {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 let app = window.app_handle();
-                for (label, w) in app.webview_windows() {
-                    if label != "main" {
-                        let _ = w.close();
+                // Remember the band-map window's size+position so it reopens where it was.
+                // Captured on close (not per move/resize) so we write the file once, not on
+                // every drag frame. Fetch the WebviewWindow by label (the event gives the base
+                // Window); no-op for any non-band-map window.
+                if let Some(w) = app.get_webview_window(window.label()) {
+                    capture_bandmap_window(&w);
+                }
+                // Closing the MAIN window tears down the whole app: close any torn-off panel
+                // windows too, so they don't linger — persisting each band map's geometry first.
+                if window.label() == "main" {
+                    for (label, w) in app.webview_windows() {
+                        if label != "main" {
+                            capture_bandmap_window(&w);
+                            let _ = w.close();
+                        }
                     }
                 }
             }

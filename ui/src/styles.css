@@ -8746,6 +8746,26 @@ select.settings-input {
   background: color-mix(in srgb, var(--text) 4%, var(--bg));
   overflow: hidden;
 }
+/* Left/right edge-dock controls — only in the detached band-map window. */
+.bandmap-dock {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 6px;
+}
+.bandmap-dock-btn {
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.bandmap-dock-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 /* Frequency gridline + its label (in the left gutter) — the scale that makes it read as a map. */
 .bandmap-grid {
   position: absolute;

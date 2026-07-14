@@ -49,6 +49,7 @@ import {
   setTxEnabled,
   setTune,
   setHoldTxFreq,
+  dockBandmapWindow,
   setSettings as persistSettings,
 } from './api'
 import { NeededPanel } from './components/NeededPanel'
@@ -265,6 +266,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
           needByCall={needByCall}
           typeByCall={typeByCall}
           workedCalls={workedCalls}
+          onDock={(side) => void dockBandmapWindow(side)}
           onWorkSpot={(s) =>
             onWorkSpot({ call: s.call, band: s.band, mode: s.mode, freqMhz: s.freqMhz })
           }

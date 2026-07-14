@@ -348,6 +348,12 @@ export async function openPanelWindow(panel: string): Promise<void> {
   await invoke('open_panel_window', { panel })
 }
 
+/** Snap the current band-map pop-out window to the left/right screen edge as a full-height
+ *  vertical strip (or 'none' to un-dock). The dock + geometry persist across launches. */
+export async function dockBandmapWindow(side: 'left' | 'right' | 'none'): Promise<void> {
+  await invoke('dock_bandmap_window', { side })
+}
+
 /** Switch the Operate mode: 'dx' (FT8/FT4) or 'msg' (Tempo two-way calling).
  * Atomically sets the mode's tier + mode. Returns the fresh snapshot. */
 export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {

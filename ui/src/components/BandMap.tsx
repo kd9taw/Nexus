@@ -37,6 +37,9 @@ interface Props {
   typeByCall?: Map<string, 'Pota' | 'Sota' | 'Dxped'>
   /** Calls already worked (UPPERCASE, from the log) — struck through, like the roster. */
   workedCalls?: Set<string>
+  /** When set (detached window only), shows Dock L/R buttons that snap this window to the
+   *  screen edge as a full-height strip (persisted across launches). */
+  onDock?: (side: 'left' | 'right' | 'none') => void
 }
 
 /** Compact "how long ago" for a spot tooltip. */
@@ -68,6 +71,7 @@ export function BandMap({
   needByCall,
   typeByCall,
   workedCalls,
+  onDock,
 }: Props) {
   const [showLegend, setShowLegend] = useState(
     () => (localStorage.getItem('nexus.spotlegend') ?? '1') === '1',
@@ -183,6 +187,16 @@ export function BandMap({
         <div className="bandstrip-head">
           <span className="bandstrip-title">Band map</span>
           <span className="bandstrip-count">{band || '—'} — off the band plan</span>
+          {onDock && (
+            <span className="bandmap-dock">
+              <button type="button" className="bandmap-dock-btn" onClick={() => onDock('left')} title="Dock to the left screen edge">
+                ◧
+              </button>
+              <button type="button" className="bandmap-dock-btn" onClick={() => onDock('right')} title="Dock to the right screen edge">
+                ◨
+              </button>
+            </span>
+          )}
         </div>
         <div className="bandmap-track">
           <div className="bandmap-empty">no band-plan data for {band || 'this frequency'}</div>
@@ -217,6 +231,16 @@ export function BandMap({
         >
           Legend
         </button>
+        {onDock && (
+          <span className="bandmap-dock">
+            <button type="button" className="bandmap-dock-btn" onClick={() => onDock('left')} title="Dock this window to the left screen edge (full-height strip, remembered)">
+              ◧
+            </button>
+            <button type="button" className="bandmap-dock-btn" onClick={() => onDock('right')} title="Dock this window to the right screen edge (full-height strip, remembered)">
+              ◨
+            </button>
+          </span>
+        )}
       </div>
       {showLegend && <SpotLegend />}
       <div
