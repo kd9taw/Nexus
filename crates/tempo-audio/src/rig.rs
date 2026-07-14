@@ -534,6 +534,19 @@ impl Rig {
         parse_smeter_db(&reply)
     }
 
+    /// Read a transmit METER as a raw float via rigctld `l NAME` — unlike [`Rig::read_level`]
+    /// this does NOT clamp to 0..1, so it works for SWR (1.0–6.0), Po watts, and COMP dB.
+    /// CAT-only; `None` on VOX/serial or no finite numeric reply (e.g. the rig ignores the
+    /// read while receiving). Used for SWR/ALC/RFPOWER_METER/COMP_METER.
+    pub fn read_meter_f32(&mut self, name: &str) -> Option<f32> {
+        self.control.as_ref()?;
+        let reply = self.command(&format!("l {name}\n")).ok()?;
+        reply
+            .lines()
+            .find_map(|l| l.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite() && *v >= 0.0)
+    }
+
     /// Read a rig CAT function state (e.g. "NB", "NR", "ANF", "COMP", "VOX") via rigctld
     /// `u FUNC`. CAT-only; `None` on VOX/serial, an unsupported func, or a link hiccup — the
     /// caller keeps the last known state rather than flickering the toggle.

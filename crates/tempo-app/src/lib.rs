@@ -207,6 +207,10 @@ impl AppState {
                 time_sync_ok: true,
                 rf_power: None,          // engine fills from command/read-back
                 smeter_db: None,         // engine fills from CAT STRENGTH read-back
+                tx_swr: None,            // engine fills from the keyed-only TX-meter poll
+                tx_alc: None,
+                tx_po_w: None,
+                tx_comp_db: None,
                 rig_mode: None,          // engine fills from CAT mode read-back (display-only)
                 sideband_override: None, // engine fills from the cockpit mode picker (transient)
                 phone_seg_lo: None, // engine fills from license privileges for the current band

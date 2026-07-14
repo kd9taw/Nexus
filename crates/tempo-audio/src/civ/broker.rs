@@ -52,6 +52,14 @@ impl CivBackend {
     fn read(&self, f: Frame, cmd: u8, sub: Option<u8>) -> Result<Frame, CivError> {
         self.h.transact(f, Expect::Reply { cmd, sub })
     }
+
+    /// Read a `15 <sub>` transmit meter and format it through `cal` (raw 0–255 → engineering
+    /// unit) to `decimals` places. Returns None if the rig doesn't answer (e.g. not keyed).
+    fn tx_meter(&self, sub: u8, cal: fn(u16) -> f32, decimals: usize) -> Option<String> {
+        let f = self.read(commands::read_meter(self.addr, sub), 0x15, Some(sub)).ok()?;
+        let raw = commands::parse_meter_raw(&f, sub)?;
+        Some(format!("{:.*}", decimals, cal(raw)))
+    }
 }
 
 impl RigBackend for CivBackend {
@@ -162,6 +170,12 @@ impl RigBackend for CivBackend {
                 let raw = commands::parse_mic_gain_raw(&f)?;
                 Some(format!("{:.2}", f64::from(raw) / 255.0))
             }
+            // Transmit meters (0x15 read family). Values are already in engineering units:
+            // SWR ratio, ALC 0..1, Po in watts, COMP in dB. Meaningful only while keyed.
+            "SWR" => self.tx_meter(commands::METER_SWR, commands::swr_from_raw, 2),
+            "ALC" => self.tx_meter(commands::METER_ALC, commands::alc_frac_from_raw, 3),
+            "RFPOWER_METER" => self.tx_meter(commands::METER_PO, commands::po_watts_from_raw, 1),
+            "COMP_METER" => self.tx_meter(commands::METER_COMP, commands::comp_db_from_raw, 1),
             _ => None,
         }
     }

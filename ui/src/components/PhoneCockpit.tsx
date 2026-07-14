@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import type { AppSnapshot, FieldDayStatus, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
+import { TxMeters } from './TxMeters'
 import { BandStrip } from './BandStrip'
 import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
@@ -512,6 +513,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         defaultPct={22}
         label="scope height"
       />
+
+      {/* Transmit meters (SWR/ALC/Po/COMP) — appear only while keyed, where the S-meter sat. */}
+      <TxMeters radio={snap.radio} />
 
       {(() => {
           // Only funcs the rig actually reports (non-null) render — capability-gated, no dead buttons.

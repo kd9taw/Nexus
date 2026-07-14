@@ -365,6 +365,13 @@ pub struct Engine {
     /// Rig CAT S-meter (dB relative to S9) from the radio-loop poll; `None` when the
     /// rig doesn't report STRENGTH. Observed-only, RX-only.
     rig_smeter_db: Option<i32>,
+    /// Rig CAT transmit meters from the radio-loop poll — the mirror image of the S-meter:
+    /// read ONLY while keyed, `None` while receiving or when the rig doesn't report them.
+    /// SWR ratio (1.0–6.0), ALC 0.0–1.0, Po in watts, COMP in dB. Observed-only.
+    rig_tx_swr: Option<f32>,
+    rig_tx_alc: Option<f32>,
+    rig_tx_po_w: Option<f32>,
+    rig_tx_comp_db: Option<f32>,
     /// Rig's actual mode read back over CAT (Hamlib name, e.g. "USB"/"LSB"/"FM").
     /// DISPLAY-ONLY — the cockpit flags a mismatch with the commanded mode, but this
     /// never overwrites the canonical commanded sideband (App-side invariant).
@@ -634,6 +641,10 @@ impl Engine {
             rf_power: None,
             rig_rf_power: None,
             rig_smeter_db: None,
+            rig_tx_swr: None,
+            rig_tx_alc: None,
+            rig_tx_po_w: None,
+            rig_tx_comp_db: None,
             rig_mode: None,
             rig_funcs: [None; 5],
             pending_func: [None; 5],
@@ -1684,6 +1695,39 @@ impl Engine {
     /// needle never implies a signal that is no longer being measured.
     pub fn clear_rig_smeter(&mut self) {
         self.rig_smeter_db = None;
+    }
+
+    /// Adopt the rig's transmit meters (from the keyed-only poll): SWR ratio, ALC 0..1, Po
+    /// watts, COMP dB. Each is independently `Some`/`None` so a rig that reports only some of
+    /// them still shows those. The poll reads these ONLY while keyed, mirroring the S-meter.
+    pub fn observe_rig_tx_meters(
+        &mut self,
+        swr: Option<f32>,
+        alc: Option<f32>,
+        po_w: Option<f32>,
+        comp_db: Option<f32>,
+    ) {
+        if swr.is_some() {
+            self.rig_tx_swr = swr;
+        }
+        if alc.is_some() {
+            self.rig_tx_alc = alc;
+        }
+        if po_w.is_some() {
+            self.rig_tx_po_w = po_w;
+        }
+        if comp_db.is_some() {
+            self.rig_tx_comp_db = comp_db;
+        }
+    }
+
+    /// Blank the transmit meters — called on unkey and on a CAT breaker trip, so the bars
+    /// don't freeze at the last keyed reading while receiving.
+    pub fn clear_rig_tx_meters(&mut self) {
+        self.rig_tx_swr = None;
+        self.rig_tx_alc = None;
+        self.rig_tx_po_w = None;
+        self.rig_tx_comp_db = None;
     }
 
     /// Drop the rig's read-back mode so the mismatch tag hides — called on a breaker trip
@@ -4260,6 +4304,10 @@ impl Engine {
         // Rig read-back wins (the knob's truth); else the last commanded value.
         s.radio.rf_power = self.rig_rf_power.or(self.rf_power);
         s.radio.smeter_db = self.rig_smeter_db;
+        s.radio.tx_swr = self.rig_tx_swr;
+        s.radio.tx_alc = self.rig_tx_alc;
+        s.radio.tx_po_w = self.rig_tx_po_w;
+        s.radio.tx_comp_db = self.rig_tx_comp_db;
         s.radio.rig_mode = self.rig_mode.clone();
         s.radio.sideband_override = self.sideband_override.clone();
         // Phone sub-band the operator may legally use on the CURRENT band + class — the band-strip

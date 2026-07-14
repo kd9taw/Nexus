@@ -6882,6 +6882,48 @@ select optgroup {
   display: block;
   border-radius: var(--radius-sm);
 }
+
+/* Transmit meters (SWR/ALC/Po/COMP) — a compact grid of labeled bars shown only while keyed. */
+.ph-txmeters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-1) var(--space-2);
+}
+.ph-txmeter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.ph-txmeter-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text-dim);
+  min-width: 2.8em;
+}
+.ph-txmeter-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.ph-txmeter-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--ok, #2fbf71);
+  transition: width 80ms linear, background 120ms linear;
+}
+.ph-txmeter-value {
+  min-width: 3.6em;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.86rem;
+}
 .ph-ptt-row {
   display: flex;
   align-items: center;

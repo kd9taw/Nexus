@@ -302,6 +302,19 @@ pub struct RadioStatus {
     /// rather than a fake one. RX-only — not refreshed while transmitting.
     #[serde(default)]
     pub smeter_db: Option<i32>,
+    /// Transmit meters from the rig's CAT poll (native Icom CI-V), refreshed ONLY while
+    /// keyed and `None` while receiving — the mirror image of `smeter_db`. `tx_swr` is the
+    /// SWR ratio (1.0–6.0), `tx_alc` is ALC 0.0–1.0, `tx_po_w` is output power in watts,
+    /// `tx_comp_db` is speech compression in dB. Each is independently absent when the rig
+    /// doesn't report it, so the UI shows only the meters it actually has.
+    #[serde(default)]
+    pub tx_swr: Option<f32>,
+    #[serde(default)]
+    pub tx_alc: Option<f32>,
+    #[serde(default)]
+    pub tx_po_w: Option<f32>,
+    #[serde(default)]
+    pub tx_comp_db: Option<f32>,
     /// The rig's actual mode read back over CAT (Hamlib name, e.g. "USB"/"LSB"/"FM").
     /// Display-only — the cockpit flags a mismatch with the commanded mode. `None` until
     /// the rig reports it.

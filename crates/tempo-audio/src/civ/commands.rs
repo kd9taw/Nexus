@@ -370,6 +370,78 @@ pub fn parse_rf_power_raw(f: &Frame) -> Option<u16> {
     }
 }
 
+// ---- transmit meters (CI-V command 0x15 read family) ----
+// Sub-commands: Po=0x11, SWR=0x12, ALC=0x13, COMP=0x14. Each reply is a 2-byte BCD raw
+// value 0–255 (same codec as the S-meter). The raw→engineering-unit conversions below are
+// the EXACT IC-9700 breakpoint tables Hamlib ships (rigs/icom/ic7300.c, the IC-9700 caps),
+// linearly interpolated and clamped at the ends — so Nexus matches the reference reading.
+
+/// Po (RF power) meter sub-command.
+pub const METER_PO: u8 = 0x11;
+/// SWR meter sub-command.
+pub const METER_SWR: u8 = 0x12;
+/// ALC meter sub-command.
+pub const METER_ALC: u8 = 0x13;
+/// Speech-compression meter sub-command.
+pub const METER_COMP: u8 = 0x14;
+
+/// Read a `15 <sub>` transmit meter.
+pub fn read_meter(radio: u8, sub: u8) -> Frame {
+    Frame::command(radio, 0x15, &[sub])
+}
+/// Extract the raw meter level (0–255) from a `15 <sub>` reply.
+pub fn parse_meter_raw(f: &Frame, sub: u8) -> Option<u16> {
+    if f.cmd == 0x15 && f.data.first() == Some(&sub) && f.data.len() >= 3 {
+        Some(level_from_bcd2(f.data[1], f.data[2]))
+    } else {
+        None
+    }
+}
+
+/// Linear interpolation over a raw→value breakpoint table, clamped at both ends.
+fn interp_cal(raw: u16, table: &[(u16, f32)]) -> f32 {
+    let x = f32::from(raw);
+    if x <= f32::from(table[0].0) {
+        return table[0].1;
+    }
+    for w in table.windows(2) {
+        let (x0, y0) = (f32::from(w[0].0), w[0].1);
+        let (x1, y1) = (f32::from(w[1].0), w[1].1);
+        if x <= x1 {
+            return y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+        }
+    }
+    table[table.len() - 1].1
+}
+
+// IC-9700 calibration tables (Hamlib rigs/icom/ic7300.c: IC9700_*_CAL).
+const SWR_CAL: &[(u16, f32)] = &[(0, 1.0), (48, 1.5), (80, 2.0), (120, 3.0), (240, 6.0)];
+const ALC_CAL: &[(u16, f32)] = &[(0, 0.0), (120, 1.0)];
+const PO_WATTS_CAL: &[(u16, f32)] = &[
+    (0, 0.0), (21, 5.0), (43, 10.0), (65, 15.0), (83, 20.0), (95, 25.0), (105, 30.0),
+    (114, 35.0), (124, 40.0), (143, 50.0), (183, 75.0), (213, 100.0), (255, 120.0),
+];
+// IC-9700-specific (the IC-7300 tops out at 241→30 dB; the 9700 at 210→25.5 dB).
+const COMP_DB_CAL: &[(u16, f32)] = &[(0, 0.0), (130, 15.0), (210, 25.5)];
+
+/// SWR ratio (1.0–6.0) from the raw SWR meter.
+pub fn swr_from_raw(raw: u16) -> f32 {
+    interp_cal(raw, SWR_CAL)
+}
+/// ALC as a 0.0–1.0 fraction (full-scale "in the zone" edge = raw 120).
+pub fn alc_frac_from_raw(raw: u16) -> f32 {
+    interp_cal(raw, ALC_CAL)
+}
+/// Transmit power in WATTS from the Po meter (per the rig's own scale; the 9700 divides by
+/// 10 above 1 GHz, which this table does not model — the low band is the common case).
+pub fn po_watts_from_raw(raw: u16) -> f32 {
+    interp_cal(raw, PO_WATTS_CAL)
+}
+/// Speech compression in dB from the COMP meter.
+pub fn comp_db_from_raw(raw: u16) -> f32 {
+    interp_cal(raw, COMP_DB_CAL)
+}
+
 /// Convert a raw Icom S-meter reading (0–255) to dB relative to S9, using Icom's nominal
 /// scale (S9 ≈ raw 120; each S-unit ≈ 6 dB below S9; raw 120→241 ≈ 0→+60 dB over S9).
 /// Approximate and per-rig-calibratable, but consistent and monotonic.

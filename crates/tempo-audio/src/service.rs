@@ -116,6 +116,11 @@ const MAX_QSO_REC_MS: f64 = 2.0 * 60.0 * 60.0 * 1000.0;
 /// How often to run the FULL rig read-back over CAT — RF power, S-meter, mode mirror, DSP funcs.
 /// Each is a blocking TCP round-trip, so the heavy set is throttled well below the loop rate.
 const RIG_POLL_MS: f64 = 750.0;
+/// How often to read the TRANSMIT meters (SWR/ALC/Po/COMP) while keyed — the mirror image of
+/// the RX health poll. Faster than RIG_POLL_MS because a TX meter must be live (an operator sets
+/// mic gain against the moving ALC bar), but slow enough that 4 CI-V reads/cycle don't crowd the
+/// bus mid-over. RX health polling is suspended while keyed, so this reuses that bus headroom.
+const TX_METER_POLL_MS: f64 = 300.0;
 /// How often to run the FAST dial-only read-back. The dial is the one value that must track a
 /// manual VFO knob in real time, so it's polled ~4× faster than the heavy set — matching HRD's
 /// Yaesu responsiveness (which is pure fast polling; the earlier 1–2 s lag was self-inflicted by
@@ -943,6 +948,9 @@ struct RadioLoop {
     audio_rig_split: bool,
     /// Last time we ran the FULL rig read-back (dial + RF power + S-meter + mode + funcs), ms.
     last_rig_poll: f64,
+    /// Last time we read the TRANSMIT meters (ms). 0.0 when the bars are blanked (not keyed), so
+    /// the first keyed tick reads immediately and unkey clears them exactly once.
+    last_tx_meter_poll: f64,
     /// Last time we ran the FAST dial-only read-back (ms). The dial is mirrored on a much shorter
     /// cadence than the heavy reads so a manual VFO-knob turn tracks like HRD (~⅕ s), not the
     /// 750 ms health poll — the heavy reads (S-meter/mode/funcs) stay slow to bound CAT traffic.
@@ -1044,6 +1052,7 @@ impl RadioLoop {
             audio_rig_split: false,
             last_psk_flush: now_unix_ms(),
             last_rig_poll: now_unix_ms(),
+            last_tx_meter_poll: 0.0,
             last_freq_poll: now_unix_ms(),
             freq_misses: 0,
             cat_ok: None,
@@ -2181,6 +2190,36 @@ impl RadioLoop {
             if let Some(p) = power {
                 if Some(p) != self.last_rf_power && rig.set_power(p).is_ok() {
                     self.last_rf_power = Some(p);
+                }
+            }
+        }
+
+        // Transmit meters (SWR / ALC / Po / COMP) — the mirror image of the RX S-meter poll:
+        // read ONLY while keyed (a tune carrier, a slot/CW/voice over, or live phone PTT), and
+        // blanked on unkey so the bars never freeze on a stale reading. Each meter is read via
+        // the generic `l NAME` level path, so it works on BOTH the native CI-V daemon (Icom
+        // 15 11/12/13/14) and any Hamlib rig that reports these levels; an unsupported meter
+        // returns None and simply doesn't render. Throttled, and RX health polling is suspended
+        // while keyed, so this doesn't crowd the bus mid-over.
+        {
+            let keyed_now =
+                self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
+            if keyed_now && self.cat_ok != Some(false) {
+                if now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
+                    self.last_tx_meter_poll = now;
+                    let swr = rig.read_meter_f32("SWR");
+                    let alc = rig.read_meter_f32("ALC");
+                    let po = rig.read_meter_f32("RFPOWER_METER");
+                    let comp = rig.read_meter_f32("COMP_METER");
+                    if let Ok(mut eng) = engine.lock() {
+                        eng.observe_rig_tx_meters(swr, alc, po, comp);
+                    }
+                }
+            } else if self.last_tx_meter_poll != 0.0 {
+                // Just unkeyed (or CAT tripped): blank the bars once.
+                self.last_tx_meter_poll = 0.0;
+                if let Ok(mut eng) = engine.lock() {
+                    eng.clear_rig_tx_meters();
                 }
             }
         }

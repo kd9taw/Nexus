@@ -607,6 +607,13 @@ export interface RadioStatus {
   /** CAT S-meter in dB relative to S9 (S9 = 0, S1 ≈ -48, S9+20 = +20). Absent when
    * the rig doesn't report STRENGTH over CAT (RX-only; not updated during TX). */
   smeterDb?: number | null
+  /** Transmit meters from the rig's CAT poll — the mirror of smeterDb: present ONLY while
+   * transmitting, absent while receiving (or when the rig doesn't report that meter).
+   * txSwr = SWR ratio (1.0–6.0), txAlc = ALC 0–1, txPoW = output watts, txCompDb = COMP dB. */
+  txSwr?: number | null
+  txAlc?: number | null
+  txPoW?: number | null
+  txCompDb?: number | null
   /** The rig's actual mode read back over CAT (e.g. "USB"/"LSB"/"FM"); display-only,
    * used to flag when the rig's mode knob disagrees with the commanded mode. */
   rigMode?: string | null
