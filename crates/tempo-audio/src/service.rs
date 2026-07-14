@@ -116,11 +116,12 @@ const MAX_QSO_REC_MS: f64 = 2.0 * 60.0 * 60.0 * 1000.0;
 /// How often to run the FULL rig read-back over CAT — RF power, S-meter, mode mirror, DSP funcs.
 /// Each is a blocking TCP round-trip, so the heavy set is throttled well below the loop rate.
 const RIG_POLL_MS: f64 = 750.0;
-/// How often to read the TRANSMIT meters (SWR/ALC/Po/COMP) while keyed — the mirror image of
-/// the RX health poll. Faster than RIG_POLL_MS because a TX meter must be live (an operator sets
-/// mic gain against the moving ALC bar), but slow enough that 4 CI-V reads/cycle don't crowd the
-/// bus mid-over. RX health polling is suspended while keyed, so this reuses that bus headroom.
-const TX_METER_POLL_MS: f64 = 300.0;
+/// How often to read the NEXT transmit meter while keyed — the mirror image of the RX health
+/// poll. One meter is read per interval (round-robin over SWR/ALC/Po/COMP), so at 150 ms each
+/// meter refreshes ~1.7×/s: live enough to set mic gain against the moving ALC bar, while never
+/// more than one blocking CAT read lands per loop tick. RX health polling is suspended while
+/// keyed, so this reuses that bus headroom.
+const TX_METER_POLL_MS: f64 = 150.0;
 /// How often to run the FAST dial-only read-back. The dial is the one value that must track a
 /// manual VFO knob in real time, so it's polled ~4× faster than the heavy set — matching HRD's
 /// Yaesu responsiveness (which is pure fast polling; the earlier 1–2 s lag was self-inflicted by
@@ -953,6 +954,9 @@ struct RadioLoop {
     /// Last time we read the TRANSMIT meters (ms). 0.0 when the bars are blanked (not keyed), so
     /// the first keyed tick reads immediately and unkey clears them exactly once.
     last_tx_meter_poll: f64,
+    /// Round-robin index over the four TX meters (SWR/ALC/Po/COMP) — one read per throttled
+    /// cycle, so a slow rig can never block the loop with four back-to-back reads.
+    tx_meter_idx: usize,
     /// Last time we ran the FAST dial-only read-back (ms). The dial is mirrored on a much shorter
     /// cadence than the heavy reads so a manual VFO-knob turn tracks like HRD (~⅕ s), not the
     /// 750 ms health poll — the heavy reads (S-meter/mode/funcs) stay slow to bound CAT traffic.
@@ -1056,6 +1060,7 @@ impl RadioLoop {
             last_psk_flush: now_unix_ms(),
             last_rig_poll: now_unix_ms(),
             last_tx_meter_poll: 0.0,
+            tx_meter_idx: 0,
             last_freq_poll: now_unix_ms(),
             freq_misses: 0,
             cat_ok: None,
@@ -2211,36 +2216,6 @@ impl RadioLoop {
             }
         }
 
-        // Transmit meters (SWR / ALC / Po / COMP) — the mirror image of the RX S-meter poll:
-        // read ONLY while keyed (a tune carrier, a slot/CW/voice over, or live phone PTT), and
-        // blanked on unkey so the bars never freeze on a stale reading. Each meter is read via
-        // the generic `l NAME` level path, so it works on BOTH the native CI-V daemon (Icom
-        // 15 11/12/13/14) and any Hamlib rig that reports these levels; an unsupported meter
-        // returns None and simply doesn't render. Throttled, and RX health polling is suspended
-        // while keyed, so this doesn't crowd the bus mid-over.
-        {
-            let keyed_now =
-                self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
-            if keyed_now && self.cat_ok != Some(false) {
-                if now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
-                    self.last_tx_meter_poll = now;
-                    let swr = rig.read_meter_f32("SWR");
-                    let alc = rig.read_meter_f32("ALC");
-                    let po = rig.read_meter_f32("RFPOWER_METER");
-                    let comp = rig.read_meter_f32("COMP_METER");
-                    if let Ok(mut eng) = engine.lock() {
-                        eng.observe_rig_tx_meters(swr, alc, po, comp);
-                    }
-                }
-            } else if self.last_tx_meter_poll != 0.0 {
-                // Just unkeyed (or CAT tripped): blank the bars once.
-                self.last_tx_meter_poll = 0.0;
-                if let Ok(mut eng) = engine.lock() {
-                    eng.clear_rig_tx_meters();
-                }
-            }
-        }
-
         // Drop PTT once the transmitted audio has played out (+ a small tail). Do NOT
         // unkey while the operator is holding live PTT — they own the key then, so a
         // voice/CW message tail ending must not cut a live phone over (the manual-PTT
@@ -2253,6 +2228,46 @@ impl RadioLoop {
                 self.tx_until_ms = None;
                 // Split restore happens in the catch-all below (single drain
                 // point — per-site restores leaked through HaltTx/tune paths).
+            }
+        }
+
+        // Transmit meters (SWR / ALC / Po / COMP) — the mirror image of the RX S-meter poll:
+        // read ONLY while keyed (a tune carrier, a slot/CW/voice over, or live phone PTT), and
+        // blanked on unkey so the bars never freeze on a stale reading. Read via the generic
+        // `l NAME` level path, so it works on BOTH the native CI-V daemon (Icom 15 11/12/13/14)
+        // and any Hamlib rig reporting these levels; an unsupported meter returns None and
+        // simply doesn't render. Deliberately placed AFTER the PTT-drop above: a meter read is a
+        // blocking CAT round-trip, so it must never sit upstream of the auto-unkey and hold the
+        // transmitter keyed past the over on a slow rig. And only ONE meter is read per throttled
+        // cycle (round-robin) so at most one blocking read lands per tick — four back-to-back
+        // reads could stall a chunked tune/voice carrier if the rig answers slowly.
+        {
+            let keyed_now =
+                self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
+            if keyed_now && self.cat_ok != Some(false) {
+                if now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
+                    // RFPOWER_METER_WATTS (not RFPOWER_METER): Hamlib's plain RFPOWER_METER is a
+                    // normalized 0..1, only the _WATTS variant is true watts — and the native
+                    // daemon answers both with calibrated watts. So `tx_po_w` is watts on both.
+                    let (swr, alc, po, comp) = match self.tx_meter_idx % 4 {
+                        0 => (rig.read_meter_f32("SWR"), None, None, None),
+                        1 => (None, rig.read_meter_f32("ALC"), None, None),
+                        2 => (None, None, rig.read_meter_f32("RFPOWER_METER_WATTS"), None),
+                        _ => (None, None, None, rig.read_meter_f32("COMP_METER")),
+                    };
+                    self.tx_meter_idx = self.tx_meter_idx.wrapping_add(1);
+                    self.last_tx_meter_poll = now;
+                    if let Ok(mut eng) = engine.lock() {
+                        eng.observe_rig_tx_meters(swr, alc, po, comp);
+                    }
+                }
+            } else if self.last_tx_meter_poll != 0.0 {
+                // Just unkeyed (or CAT tripped): blank the bars once.
+                self.last_tx_meter_poll = 0.0;
+                self.tx_meter_idx = 0;
+                if let Ok(mut eng) = engine.lock() {
+                    eng.clear_rig_tx_meters();
+                }
             }
         }
 

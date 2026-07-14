@@ -174,7 +174,13 @@ impl RigBackend for CivBackend {
             // SWR ratio, ALC 0..1, Po in watts, COMP in dB. Meaningful only while keyed.
             "SWR" => self.tx_meter(commands::METER_SWR, commands::swr_from_raw, 2),
             "ALC" => self.tx_meter(commands::METER_ALC, commands::alc_frac_from_raw, 3),
-            "RFPOWER_METER" => self.tx_meter(commands::METER_PO, commands::po_watts_from_raw, 1),
+            // Answer BOTH tokens with true watts: Hamlib's plain RFPOWER_METER is a normalized
+            // 0..1 fraction while _WATTS is watts, and Nexus polls _WATTS so the reading is watts
+            // on any rig. The native daemon has only the one calibrated Po meter, so it serves
+            // watts for either name (a Hamlib rig lacking _WATTS returns None → the row hides).
+            "RFPOWER_METER" | "RFPOWER_METER_WATTS" => {
+                self.tx_meter(commands::METER_PO, commands::po_watts_from_raw, 1)
+            }
             "COMP_METER" => self.tx_meter(commands::METER_COMP, commands::comp_db_from_raw, 1),
             _ => None,
         }
