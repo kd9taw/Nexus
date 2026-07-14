@@ -449,6 +449,21 @@ impl Logbook {
         crate::reconcile::reconcile(&mut self.records, &incoming)
     }
 
+    /// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own
+    /// book pulled back down). Unlike [`merge_report`] (confirmations only, unmatched
+    /// rows become orphans), this ADDS the QSOs the download has that the local log
+    /// lacks AND upgrades confirmations on the ones already present — in a single
+    /// consume-once pass keyed at reconcile (mode-class) granularity, so a mode-spelling
+    /// difference can't double-log the same contact. Returns `(added_records, summary)`;
+    /// call [`save`](Self::save) to persist.
+    pub fn merge_downloaded(
+        &mut self,
+        text: &str,
+    ) -> (Vec<QsoRecord>, crate::reconcile::ReconcileSummary) {
+        let incoming = parse_adif(text);
+        crate::reconcile::merge_and_add(&mut self.records, incoming)
+    }
+
     /// Merge a LoTW **own-QSO** report (`qso_qsl=no` ADIF — your records LoTW holds
     /// but the partner hasn't matched). Promotes matched QSOs' LoTW upload state to
     /// `Accepted` (your side is on file → "waiting on partner"). Returns the count

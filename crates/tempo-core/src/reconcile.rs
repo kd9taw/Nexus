@@ -83,11 +83,9 @@ fn fmt_day(unix: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Merge a confirmation/credit report into `local`, in place. Each incoming
-/// record consumes at most one matching local QSO (so two same-day/band/mode
-/// contacts with one call reconcile against two distinct report rows).
-pub fn reconcile(local: &mut [QsoRecord], incoming: &[QsoRecord]) -> ReconcileSummary {
-    // Index local QSOs by match key; reversed so pop() consumes in log order.
+/// Index local QSOs by match key; each bucket reversed so `pop()` consumes in log
+/// order (oldest first), so two same-key contacts reconcile against distinct rows.
+fn build_buckets(local: &[QsoRecord]) -> HashMap<Key, Vec<usize>> {
     let mut buckets: HashMap<Key, Vec<usize>> = HashMap::new();
     for (i, r) in local.iter().enumerate() {
         buckets.entry(key(r)).or_default().push(i);
@@ -95,74 +93,85 @@ pub fn reconcile(local: &mut [QsoRecord], incoming: &[QsoRecord]) -> ReconcileSu
     for v in buckets.values_mut() {
         v.reverse();
     }
+    buckets
+}
 
-    let mut sum = ReconcileSummary::default();
-    for inc in incoming {
-        let call_u = inc.call.to_ascii_uppercase();
-        let band_l = inc.band.to_ascii_lowercase();
-        let mc = mode_class(&inc.mode);
-        let day = inc.when_unix / 86_400;
-        // Exact UTC day preferred, then ±1 day — tolerates a report timestamped
-        // across midnight from the logged QSO (clock skew / the other op's minute),
-        // which would otherwise falsely orphan the same contact.
-        let mut idx = None;
-        for d in [day, day.wrapping_sub(1), day + 1] {
-            if let Some(v) = buckets.get_mut(&(call_u.clone(), band_l.clone(), mc, d)) {
-                if let Some(i) = v.pop() {
-                    idx = Some(i);
-                    break;
-                }
+/// Consume-once lookup of the local QSO matching `inc`: exact UTC day preferred,
+/// then ±1 day — tolerates a report timestamped across midnight from the logged
+/// QSO (clock skew / the other op's minute), which would otherwise falsely orphan
+/// the same contact. Returns the matched local index and removes it from the bucket.
+fn take_match(buckets: &mut HashMap<Key, Vec<usize>>, inc: &QsoRecord) -> Option<usize> {
+    let call_u = inc.call.to_ascii_uppercase();
+    let band_l = inc.band.to_ascii_lowercase();
+    let mc = mode_class(&inc.mode);
+    let day = inc.when_unix / 86_400;
+    for d in [day, day.wrapping_sub(1), day + 1] {
+        if let Some(v) = buckets.get_mut(&(call_u.clone(), band_l.clone(), mc, d)) {
+            if let Some(i) = v.pop() {
+                return Some(i);
             }
         }
-        match idx {
-            Some(i) => {
-                sum.matched += 1;
-                let rec = &mut local[i];
-                // Monotonic merge — only ever adds confirmation/credit.
-                // `newly_confirmed_any` counts a plain confirmed flip from any
-                // channel (incl. eQSL); `newly_confirmed` counts only award-grade
-                // (LoTW/paper) upgrades. An award confirmation of a previously
-                // unconfirmed QSO bumps both.
-                if inc.confirmed && !rec.confirmed {
-                    rec.confirmed = true;
-                    sum.newly_confirmed_any += 1;
-                }
-                if inc.award_confirmed && !rec.award_confirmed {
-                    rec.award_confirmed = true;
-                    rec.confirmed = true;
-                    sum.newly_confirmed += 1;
-                }
-                // Per-source truth merges monotonically alongside the derived
-                // booleans (which channel confirmed — LoTW vs card vs eQSL).
-                rec.qsl_rcvd.merge(inc.qsl_rcvd);
-                if merge_codes(&mut rec.credit_granted, &inc.credit_granted) {
-                    sum.newly_credited += 1;
-                }
-                if merge_codes(&mut rec.credit_submitted, &inc.credit_submitted) {
-                    sum.newly_submitted += 1;
-                }
-                // A granted award is no longer merely "applied" — drop it from the
-                // submitted set so applied/granted stay mutually exclusive.
-                if !rec.credit_submitted.is_empty() {
-                    let granted = rec.credit_granted.clone();
-                    rec.credit_submitted.retain(|c| !granted.contains(c));
-                }
-                // Location enrich: a report (e.g. LoTW) often carries STATE the
-                // logged QSO lacked — fill it so WAS can credit it. Monotonic:
-                // never overwrites an existing state.
-                if rec.state.is_none() {
-                    if let Some(st) = &inc.state {
-                        rec.state = Some(st.clone());
-                    }
-                }
-                // Same for COUNTRY (DXCC entity) — fill a missing country from the
-                // report. Monotonic: never overwrites an existing country.
-                if rec.country.is_none() {
-                    if let Some(c) = &inc.country {
-                        rec.country = Some(c.clone());
-                    }
-                }
-            }
+    }
+    None
+}
+
+/// Monotonically upgrade a matched local record from an incoming report row (only
+/// ever adds confirmation/credit) and tally the change in `sum`.
+fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut ReconcileSummary) {
+    sum.matched += 1;
+    // `newly_confirmed_any` counts a plain confirmed flip from any channel (incl.
+    // eQSL/QRZ); `newly_confirmed` counts only award-grade (LoTW/paper) upgrades.
+    // An award confirmation of a previously unconfirmed QSO bumps both.
+    if inc.confirmed && !rec.confirmed {
+        rec.confirmed = true;
+        sum.newly_confirmed_any += 1;
+    }
+    if inc.award_confirmed && !rec.award_confirmed {
+        rec.award_confirmed = true;
+        rec.confirmed = true;
+        sum.newly_confirmed += 1;
+    }
+    // Per-source truth merges monotonically alongside the derived booleans (which
+    // channel confirmed — LoTW vs card vs eQSL vs QRZ).
+    rec.qsl_rcvd.merge(inc.qsl_rcvd);
+    if merge_codes(&mut rec.credit_granted, &inc.credit_granted) {
+        sum.newly_credited += 1;
+    }
+    if merge_codes(&mut rec.credit_submitted, &inc.credit_submitted) {
+        sum.newly_submitted += 1;
+    }
+    // A granted award is no longer merely "applied" — drop it from the submitted
+    // set so applied/granted stay mutually exclusive.
+    if !rec.credit_submitted.is_empty() {
+        let granted = rec.credit_granted.clone();
+        rec.credit_submitted.retain(|c| !granted.contains(c));
+    }
+    // Location enrich: a report often carries STATE/COUNTRY the logged QSO lacked —
+    // fill it so WAS/DXCC can credit it. Monotonic: never overwrites an existing value.
+    if rec.state.is_none() {
+        if let Some(st) = &inc.state {
+            rec.state = Some(st.clone());
+        }
+    }
+    if rec.country.is_none() {
+        if let Some(c) = &inc.country {
+            rec.country = Some(c.clone());
+        }
+    }
+}
+
+/// Merge a confirmation/credit report into `local`, in place. Each incoming
+/// record consumes at most one matching local QSO (so two same-day/band/mode
+/// contacts with one call reconcile against two distinct report rows). Unmatched
+/// confirmations become orphans (a "why is this missing?" diagnostic) — they are
+/// NOT added, because a LoTW/eQSL confirmation of a QSO we never logged is a gap to
+/// surface, not a contact to fabricate.
+pub fn reconcile(local: &mut [QsoRecord], incoming: &[QsoRecord]) -> ReconcileSummary {
+    let mut buckets = build_buckets(local);
+    let mut sum = ReconcileSummary::default();
+    for inc in incoming {
+        match take_match(&mut buckets, inc) {
+            Some(i) => apply_match(&mut local[i], inc, &mut sum),
             // Only a row that actually carries a confirmation/credit is a
             // meaningful "missing" diagnostic; a plain unconfirmed QSO row is not.
             None if inc.confirmed
@@ -170,6 +179,9 @@ pub fn reconcile(local: &mut [QsoRecord], incoming: &[QsoRecord]) -> ReconcileSu
                 || !inc.credit_granted.is_empty()
                 || !inc.credit_submitted.is_empty() =>
             {
+                let mc = mode_class(&inc.mode);
+                let call_u = inc.call.to_ascii_uppercase();
+                let band_l = inc.band.to_ascii_lowercase();
                 let reason = format!(
                     "no logged QSO with {call_u} on {band_l} ({mc}) on {}",
                     fmt_day(inc.when_unix),
@@ -186,6 +198,39 @@ pub fn reconcile(local: &mut [QsoRecord], incoming: &[QsoRecord]) -> ReconcileSu
         }
     }
     sum
+}
+
+/// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own
+/// book pulled back down). ONE consume-once pass keyed identically to [`reconcile`]
+/// (call / band / mode-CLASS / UTC-day, ±1-day tolerance): a row that matches a local
+/// QSO upgrades its confirmation monotonically; a row that matches NOTHING is APPENDED
+/// as a genuinely-new QSO (and indexed so a later duplicate row in the same batch
+/// matches it rather than adding twice). The single shared key is the whole point —
+/// a separate full-mode import + class-reconcile disagree on "same QSO" whenever the
+/// mode spelling differs (local `SSB` vs a re-uploaded `USB`, `FT4` vs `MFSK`), which
+/// double-logs the contact. Returns the newly-added records (so the caller persists
+/// exactly those) plus the reconcile summary.
+pub fn merge_and_add(
+    local: &mut Vec<QsoRecord>,
+    incoming: Vec<QsoRecord>,
+) -> (Vec<QsoRecord>, ReconcileSummary) {
+    let mut buckets = build_buckets(local);
+    let mut sum = ReconcileSummary::default();
+    let mut added = Vec::new();
+    for inc in incoming {
+        match take_match(&mut buckets, &inc) {
+            Some(i) => apply_match(&mut local[i], &inc, &mut sum),
+            None => {
+                // New contact from the download — append it and index its slot so a
+                // duplicate row later in this same batch matches here, not re-adds.
+                let idx = local.len();
+                buckets.entry(key(&inc)).or_default().push(idx);
+                added.push(inc.clone());
+                local.push(inc);
+            }
+        }
+    }
+    (added, sum)
 }
 
 /// Promote a logged QSO's own LoTW upload state to `Accepted` when it appears in
@@ -555,5 +600,58 @@ mod tests {
         assert_eq!(s.matched, 0, "Digital report must not match a Phone QSO");
         assert_eq!(s.orphans.len(), 1);
         assert!(!log[0].award_confirmed);
+    }
+
+    // ---- merge_and_add (two-way download sync) ----
+
+    #[test]
+    fn merge_add_does_not_double_log_across_mode_spelling() {
+        // Local SSB QSO; the download re-reports the SAME contact as USB (a phone app
+        // uploaded it that way). The old two-pass import (full-mode key) would have
+        // seen USB as new and appended a phantom; merge_and_add's single class-keyed
+        // pass matches it, upgrades the confirmation, and adds nothing.
+        let mut log = vec![rec("W1AW", "20m", "SSB", 20_000)];
+        let mut usb = rec("W1AW", "20m", "USB", 20_000);
+        usb.confirmed = true; // QRZ-native confirmation
+        let (added, sum) = merge_and_add(&mut log, vec![usb]);
+        assert!(
+            added.is_empty(),
+            "USB must match the SSB QSO, not add a phantom"
+        );
+        assert_eq!(log.len(), 1);
+        assert!(log[0].confirmed);
+        assert_eq!(sum.matched, 1);
+        assert!(sum.orphans.is_empty());
+    }
+
+    #[test]
+    fn merge_add_appends_new_and_is_idempotent() {
+        let mut log = vec![rec("W1AW", "20m", "FT8", 20_000)];
+        let mut newq = rec("K5NEW", "40m", "CW", 20_000);
+        newq.confirmed = true;
+        // First sync: K5NEW is new → added; W1AW row (unconfirmed) matches, no change.
+        let (added, _) = merge_and_add(
+            &mut log,
+            vec![rec("W1AW", "20m", "FT8", 20_000), newq.clone()],
+        );
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].call, "K5NEW");
+        assert_eq!(log.len(), 2);
+        // Second identical sync: nothing new, nothing re-confirmed.
+        let (added2, sum2) = merge_and_add(&mut log, vec![rec("W1AW", "20m", "FT8", 20_000), newq]);
+        assert!(added2.is_empty(), "re-sync must add no duplicates");
+        assert_eq!(log.len(), 2);
+        assert_eq!(sum2.newly_confirmed_any, 0, "already confirmed");
+    }
+
+    #[test]
+    fn merge_add_dedups_repeated_new_row_within_one_batch() {
+        // Two identical rows for a call not in the log: the first is added, the second
+        // matches the just-added row (indexed mid-pass) rather than adding a twin.
+        let mut log: Vec<QsoRecord> = Vec::new();
+        let a = rec("DL1XYZ", "15m", "FT8", 20_100);
+        let (added, _) = merge_and_add(&mut log, vec![a.clone(), a]);
+        assert_eq!(added.len(), 1, "duplicate row in the same batch adds once");
+        assert_eq!(log.len(), 1);
     }
 }

@@ -2868,19 +2868,12 @@ impl Engine {
         text: &str,
     ) -> (usize, tempo_core::reconcile::ReconcileSummary) {
         self.recover_external_appends();
-        // Pass 1 — add the QSOs QRZ has that the local log lacks (deduped by
-        // call/band/mode-class/UTC-day). Their confirmation state rides in on import.
-        let (added, _skipped) = self.logbook.import_adif(text);
-        if let Some(path) = &self.log_path {
-            for r in &added {
-                if let Err(e) = Logbook::append(path, r) {
-                    eprintln!("tempo: merge_qrz_report append failed: {e}");
-                }
-            }
-        }
-        // Pass 2 — upgrade confirmations on the QSOs already present (import skips
-        // those). Every QRZ row now matches a local QSO, so orphans should be empty.
-        let summary = self.logbook.merge_report(text);
+        // ONE consume-once pass: add the QSOs QRZ has that we lack AND upgrade
+        // confirmations on the ones already present, keyed identically so a mode-
+        // spelling difference (e.g. a phone QSO re-uploaded as USB vs our SSB) can't
+        // double-log the same contact. A full save then captures both the appended
+        // rows and the reconciled confirmations.
+        let (added, summary) = self.logbook.merge_downloaded(text);
         self.last_qrz_reconcile = Some(summary.clone());
         if let Some(path) = &self.log_path {
             if let Err(e) = self.logbook.save(path) {
