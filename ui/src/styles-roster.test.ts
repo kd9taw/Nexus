@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url'
 // painted over the callsign, making it look blurry). The fix is per-cell containment:
 // `.or-need` and `.or-call` must keep `min-width: 0` + `overflow: hidden` so excess chips
 // clip inside their own grid track instead of bleeding across. That containment is what keeps
-// header and data rows aligned (content can't push a track), so `.or-row`'s first (Need) column
+// header and data rows aligned (content can't push a track), so `.or-row`'s first (Call) column
 // only needs a DEFINED MINIMUM width — a bare `px` track or a `minmax(<px>, …)` — never a
-// content-sized track that could collapse or drift. (It's now `minmax(140px, 1.5fr)` so the Need
-// column widens to fit all the need chips + the 💎 rarity pill.)
+// content-sized track that could collapse or drift. (Call leads the row now; the Need column that
+// follows it is the widest track so it fits all the need chips + the 💎 rarity pill.)
 describe('styles.css call-roster overlap containment', () => {
   const css = readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8')
   const block = (selector: string): string => {
@@ -30,11 +30,11 @@ describe('styles.css call-roster overlap containment', () => {
     expect(b).toMatch(/overflow:\s*hidden/)
   })
 
-  it('.or-row gives the Need track a defined minimum width (header/data alignment)', () => {
+  it('.or-row gives the first track a defined minimum width (header/data alignment)', () => {
     const b = block('.or-row')
-    // First (Need) track must start with a px minimum — a bare `<px>` track OR `minmax(<px>, …)`.
+    // First (Call) track must start with a px minimum — a bare `<px>` track OR `minmax(<px>, …)`.
     // Combined with the containment above, that keeps header and data rows aligned and prevents
-    // the Need column from collapsing.
+    // the first column from collapsing.
     expect(b).toMatch(/grid-template-columns:\s*(?:\d+px|minmax\(\s*\d+px)/)
   })
 })

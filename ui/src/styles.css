@@ -11253,12 +11253,12 @@ select.settings-input {
 }
 .or-row {
   display: grid;
-  /* The Need column is the "why work this station" column — the need chips AND the rarity pill —
-     so it's the WIDEST and flexible; Call shrinks (callsigns are short, and its 88px min still fits
-     VE2OPR-length calls + the B4/L marks). This is the room to show all the chips + a 💎 ULTRA pill
-     without clipping. Anything past the (roomy) cell is still clipped by `.or-need` rather than
-     bleeding over the callsign. */
-  grid-template-columns: minmax(105px, 1.13fr) minmax(88px, 1fr) minmax(50px, 0.85fr) 54px 56px 48px 44px 48px;
+  /* Call comes first (people scan by callsign), then the Need column — the "why work this station"
+     column carrying the need chips AND the rarity pill. Call is compact (callsigns are short; its
+     88px min still fits VE2OPR-length calls + the B4/L marks); Need is the WIDEST and flexible so it
+     has room for all the chips + a 💎 ULTRA pill without clipping. Anything past the (roomy) Need
+     cell is clipped by `.or-need` rather than bleeding into the next column. */
+  grid-template-columns: minmax(88px, 1fr) minmax(105px, 1.13fr) minmax(50px, 0.85fr) 54px 56px 48px 44px 48px;
   align-items: center;
   gap: var(--space-2);
   padding: 3px var(--space-2);

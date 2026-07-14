@@ -5,6 +5,14 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **FT8 Call Roster now leads with the callsign, then the Need column.** Callsign is the first thing
+  operators scan, so it moves to the front; the Need column (need chips + rarity pill) follows it,
+  reading as "why you'd want this station" right after the call.
+
 ## [0.8.4] — 2026-07-13 — Spot to cluster, band-edge tones, LoTW count
 
 ### Fixed

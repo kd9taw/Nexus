@@ -1,5 +1,5 @@
 // A WSJT-X / GridTracker-style Call Roster: one row per heard station as aligned,
-// sortable columns (Need · Call · Country · Grid · Dist · Brg · SNR · Age) with
+// sortable columns (Call · Need · Country · Grid · Dist · Brg · SNR · Age) with
 // roster filters (Needed-only, Hide-worked) and double-click-to-work. This is the
 // "Roster" cockpit layout's primary surface — distinct from the waterfall-first
 // "Classic" layout, not just a reshaped pane.
@@ -196,8 +196,8 @@ export function OperateRoster({
       </div>
       <div className="or-grid" role="table">
         <div className="or-row or-header" role="row">
-          {th('need', 'Need')}
           {th('call', 'Call')}
+          {th('need', 'Need')}
           {th('country', 'Country')}
           <span className="or-th-static">Grid</span>
           {th('dist', 'Dist')}
@@ -229,6 +229,19 @@ export function OperateRoster({
                     : `Double-click to work ${s.call}`
                 }
               >
+                <span className="or-call">
+                  {s.call}
+                  {s.worked && (
+                    <span className="b4-chip" title="Worked before">
+                      B4
+                    </span>
+                  )}
+                  {s.lotwUser && (
+                    <span className="lotw-mark" title="Uploads to LoTW — this contact should confirm">
+                      L
+                    </span>
+                  )}
+                </span>
                 <span className="or-need">
                   {needAll.map((t) => {
                     const c = NEED_CHIP[t]
@@ -243,19 +256,6 @@ export function OperateRoster({
                   {/* Rarity lives with the needs — both answer "why work this station?" — and the
                       widened Need column has room for the loud 💎 ULTRA pill the grid cell clipped. */}
                   <RarityChip rarity={s.gridRarity} />
-                </span>
-                <span className="or-call">
-                  {s.call}
-                  {s.worked && (
-                    <span className="b4-chip" title="Worked before">
-                      B4
-                    </span>
-                  )}
-                  {s.lotwUser && (
-                    <span className="lotw-mark" title="Uploads to LoTW — this contact should confirm">
-                      L
-                    </span>
-                  )}
                 </span>
                 <span className="or-country">{s.country ?? '—'}</span>
                 <span className="or-gridc">{s.grid ?? '—'}</span>
