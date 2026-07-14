@@ -839,7 +839,7 @@ export interface LoggedQso {
   awardConfirmed: boolean
   /** WHICH channel(s) confirmed — per-source truth behind the booleans
    * (all-false on legacy records whose sync predates the split). */
-  qslRcvd?: { card: boolean; lotw: boolean; eqsl: boolean }
+  qslRcvd?: { card: boolean; lotw: boolean; eqsl: boolean; qrz?: boolean }
   /** Operator-declared OUTBOUND QSL-request state (did I send a card, how, when).
    * `via` is the ADIF QSL_SENT_VIA letter: "B"(ureau) / "D"(irect) / "E"(lectronic).
    * A request is NOT a confirmation. */
@@ -904,6 +904,8 @@ export interface LotwSyncResult {
   /** Uploads the own-echo pull promoted Pending→Accepted (your side now on file).
    *  0 for a paste-reconcile (only the online sync runs the own-echo pull). */
   promoted: number
+  /** New QSOs pulled down and added to the log (QRZ two-way sync only). 0 otherwise. */
+  added?: number
   orphans: LotwOrphan[]
 }
 

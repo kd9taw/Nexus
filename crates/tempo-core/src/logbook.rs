@@ -96,15 +96,19 @@ pub struct QslRcvd {
     pub lotw: bool,
     /// eQSL.cc (ADIF `EQSL_QSL_RCVD`). NOT award-eligible for DXCC/WAZ/WPX/WAS.
     pub eqsl: bool,
+    /// QRZ Logbook native confirmation (both ops have the QSO in their QRZ logs, ADIF
+    /// `APP_QRZLOG_STATUS=C`). Like eQSL: it confirms the contact but is NOT award-eligible —
+    /// keeping it out of `award()` is what stops a QRZ-only match inflating DXCC/WAS counts.
+    pub qrz: bool,
 }
 
 impl QslRcvd {
     /// Any channel confirmed.
     pub fn any(self) -> bool {
-        self.card || self.lotw || self.eqsl
+        self.card || self.lotw || self.eqsl || self.qrz
     }
 
-    /// Award-eligible (LoTW or paper — never eQSL).
+    /// Award-eligible (LoTW or paper — never eQSL or QRZ-native).
     pub fn award(self) -> bool {
         self.card || self.lotw
     }
@@ -114,6 +118,7 @@ impl QslRcvd {
         self.card |= inc.card;
         self.lotw |= inc.lotw;
         self.eqsl |= inc.eqsl;
+        self.qrz |= inc.qrz;
     }
 }
 
@@ -656,6 +661,11 @@ pub fn adif_record(r: &QsoRecord) -> String {
         if r.qsl_rcvd.eqsl {
             out.push_str(&field("EQSL_QSL_RCVD", "Y"));
         }
+        if r.qsl_rcvd.qrz {
+            // QRZ Logbook native confirmation. APP_-namespaced so other loggers ignore it and it
+            // never masquerades as an award-grade QSL_RCVD; round-trips back to `qrz` on import.
+            out.push_str(&field("APP_QRZLOG_STATUS", "C"));
+        }
     } else if r.award_confirmed {
         out.push_str(&field("LOTW_QSL_RCVD", "Y"));
     } else if r.confirmed {
@@ -849,11 +859,19 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         .unwrap_or((0, 0, 0));
     let rcvd = |k: &str| f.get(k).is_some_and(|v| v.eq_ignore_ascii_case("Y"));
     // Per-source truth first; the two consumption booleans derive from it
-    // (any-channel for display, LoTW+paper for award counting — never eQSL).
+    // (any-channel for display, LoTW+paper for award counting — never eQSL/QRZ).
+    // A QRZ Logbook FETCH marks a native confirmation in APP_QRZLOG_STATUS=C (some exports use
+    // Y). Map that to the QRZ channel — deliberately NOT to `card`, so a QRZ-only confirmation
+    // never wrongly earns award credit. LOTW_QSL_RCVD / EQSL_QSL_RCVD that QRZ re-reports still
+    // flow to their own award-grade channels.
+    let qrz_status = f
+        .get("APP_QRZLOG_STATUS")
+        .is_some_and(|v| v.eq_ignore_ascii_case("C") || v.eq_ignore_ascii_case("Y"));
     let qsl_rcvd = QslRcvd {
         card: rcvd("QSL_RCVD"),
         lotw: rcvd("LOTW_QSL_RCVD"),
         eqsl: rcvd("EQSL_QSL_RCVD"),
+        qrz: qrz_status,
     };
     let confirmed = qsl_rcvd.any();
     let award_confirmed = qsl_rcvd.award();
@@ -1455,6 +1473,35 @@ mod tests {
         // Unconfirmed by default.
         let n = rec("N0ABC", "20m", 1_700_000_000);
         assert!(!n.confirmed && !n.award_confirmed);
+    }
+
+    #[test]
+    fn qrz_native_confirmation_is_not_award_eligible() {
+        // A QRZ Logbook FETCH marks a native match in APP_QRZLOG_STATUS=C. It must land
+        // `confirmed` (both ops logged it) but NOT `award_confirmed` — and critically it
+        // must NOT promote the paper `card` channel (which would wrongly earn DXCC/WAS).
+        let qrz = "<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<APP_QRZLOG_STATUS:1>C<EOR>\n";
+        let q = &parse_adif(qrz)[0];
+        assert!(q.confirmed, "QRZ native match is a confirmation...");
+        assert!(!q.award_confirmed, "...but QRZ is NOT award-eligible");
+        assert!(q.qsl_rcvd.qrz, "the QRZ channel is set");
+        assert!(
+            !q.qsl_rcvd.card,
+            "QRZ status must NOT promote the paper card channel"
+        );
+        assert!(!q.qsl_rcvd.lotw && !q.qsl_rcvd.eqsl);
+
+        // It round-trips back to the QRZ channel (APP_-namespaced), not QSL_RCVD.
+        let mut lb = Logbook::new();
+        lb.add(q.clone());
+        let text = lb.adif();
+        assert!(text.contains("<APP_QRZLOG_STATUS:1>C"));
+        assert!(
+            !text.contains("<QSL_RCVD:"),
+            "must not masquerade as a paper QSL"
+        );
+        let back = &parse_adif(&text)[0];
+        assert!(back.qsl_rcvd.qrz && back.confirmed && !back.award_confirmed);
     }
 
     #[test]

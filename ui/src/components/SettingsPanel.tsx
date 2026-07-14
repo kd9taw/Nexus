@@ -35,6 +35,7 @@ import {
   testCat,
   probeCatPorts,
   qrzTestConnection,
+  syncQrz,
   n3fjpTestConnection,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
@@ -338,6 +339,7 @@ export function SettingsPanel({
   const [eqslSyncing, setEqslSyncing] = useState(false)
   const [qrzPw, setQrzPw] = useState('')
   const [qrzKey, setQrzKey] = useState('')
+  const [qrzSyncing, setQrzSyncing] = useState(false)
   const [hamqthPw, setHamqthPw] = useState('')
   const [clublogPw, setClublogPw] = useState('')
   const [hrdlogCode, setHrdlogCodeField] = useState('')
@@ -1028,6 +1030,24 @@ export function SettingsPanel({
       setQrzKey('')
       updateBool('qrzLogbookUpload', false)
       pushToast('QRZ Logbook key cleared — auto-upload to QRZ is off', 'success')
+    }
+  }
+
+  const onSyncQrz = async () => {
+    setQrzSyncing(true)
+    // Two-way pull: FETCH the online QRZ logbook and merge it in (new QSOs +
+    // confirmations). Uses the saved Logbook API key, so no form save is needed.
+    const r = await withErrorToast(syncQrz, 'QRZ sync failed')
+    setQrzSyncing(false)
+    if (r) {
+      const added = r.added ?? 0
+      const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
+      // QRZ-native confirmations are non-award-grade, so report newlyConfirmedAny.
+      pushToast(
+        `QRZ: ${added} new QSO${added === 1 ? '' : 's'}, ${r.newlyConfirmedAny} newly confirmed${orphans}`,
+        'success',
+      )
+      onSaved?.()
     }
   }
 
@@ -4133,6 +4153,27 @@ export function SettingsPanel({
                   </label>
                   <span className="settings-hint">
                     Push each logged QSO to your QRZ logbook (needs the Logbook API key above).
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <span className="settings-label">Two-way sync</span>
+                  <div className="settings-input-row">
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onSyncQrz}
+                      disabled={qrzSyncing}
+                      title="FETCH your online QRZ logbook and merge it in — pulls QSOs you logged elsewhere plus their confirmations"
+                    >
+                      {qrzSyncing ? 'Syncing…' : 'Sync from QRZ now'}
+                    </button>
+                  </div>
+                  <span className="settings-hint">
+                    Pull your QRZ logbook <strong>down</strong> — adds QSOs you logged elsewhere (e.g. a
+                    phone app in the field) and marks QRZ-confirmed contacts. QRZ confirmations count as
+                    confirmations but <strong>not</strong> for DXCC/WAS. Safe to run repeatedly (deduped).
+                    Needs the Logbook API key above.
                   </span>
                 </div>
               </div>

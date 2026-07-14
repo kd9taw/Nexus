@@ -6153,6 +6153,50 @@ fn download_eqsl_report_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncR
     Ok(summary)
 }
 
+/// Two-way QRZ Logbook sync: FETCH the operator's online QRZ logbook and merge it
+/// INTO the local log. Pulls down QSOs logged elsewhere (e.g. a phone app in the
+/// field) AND confirmation status. Uses the per-logbook API key (NOT the QRZ
+/// password); the key-bearing request body is never logged. QRZ-native
+/// confirmations land `confirmed` but NOT `award_confirmed`, so they can't inflate
+/// DXCC/WAS counts.
+#[tauri::command]
+fn sync_qrz(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
+    conn_logged(
+        "QRZ Logbook",
+        |r: &LotwSyncResult| {
+            format!(
+                "sync OK — {} new QSOs, {} newly confirmed",
+                r.added, r.newly_confirmed_any
+            )
+        },
+        sync_qrz_impl(state),
+    )
+}
+
+fn sync_qrz_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
+    let key = qrz_logbook_keychain()?.get_password().map_err(|_| {
+        "No QRZ Logbook API key stored — this is the per-logbook key from logbook.qrz.com \
+         (Settings ▸ Logbook & QSL ▸ QRZ), NOT your QRZ password."
+            .to_string()
+    })?;
+    // Build + send the FETCH; the body carries the key, so it's dropped right after.
+    let resp = {
+        let body = tempo_core::qrz::build_fetch_body(&key);
+        propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?
+    };
+    let fetched = tempo_core::qrz::parse_fetch(&resp);
+    if !fetched.ok {
+        return Err(fetched
+            .reason
+            .unwrap_or_else(|| "QRZ rejected the FETCH — check your Logbook API key.".into()));
+    }
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let (added, summary) = eng.merge_qrz_report(&fetched.adif);
+    let mut result: LotwSyncResult = summary.into();
+    result.added = added;
+    Ok(result)
+}
+
 // ----- QRZ.com / HamQTH.com callsign lookup (session-key XML APIs) -----------
 
 /// Outcome of one lookup attempt with a given session key/id. Shared by QRZ and its
@@ -8184,6 +8228,7 @@ pub fn run() {
             set_cloudlog_key,
             clear_cloudlog_key,
             qrz_push_qso,
+            sync_qrz,
             set_clublog_password,
             clear_clublog_password,
             clublog_push_qso,

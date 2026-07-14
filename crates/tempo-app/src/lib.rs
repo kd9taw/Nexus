@@ -205,16 +205,16 @@ impl AppState {
                 // Optimistic until the engine has seen decodes to judge from
                 // (the engine recomputes this from recent DT each snapshot).
                 time_sync_ok: true,
-                rf_power: None,          // engine fills from command/read-back
-                mic_gain: None,          // engine fills from command/read-back
-                nr_level: None,          // engine fills from CAT NR-level read-back
-                agc: None,               // engine fills from CAT AGC read-back
-                smeter_db: None,         // engine fills from CAT STRENGTH read-back
-                tx_swr: None,            // engine fills from the keyed-only TX-meter poll
+                rf_power: None,  // engine fills from command/read-back
+                mic_gain: None,  // engine fills from command/read-back
+                nr_level: None,  // engine fills from CAT NR-level read-back
+                agc: None,       // engine fills from CAT AGC read-back
+                smeter_db: None, // engine fills from CAT STRENGTH read-back
+                tx_swr: None,    // engine fills from the keyed-only TX-meter poll
                 tx_alc: None,
                 tx_po_w: None,
                 tx_comp_db: None,
-                rig_mode: None,          // engine fills from CAT mode read-back (display-only)
+                rig_mode: None, // engine fills from CAT mode read-back (display-only)
                 sideband_override: None, // engine fills from the cockpit mode picker (transient)
                 phone_seg_lo: None, // engine fills from license privileges for the current band
                 phone_seg_hi: None,

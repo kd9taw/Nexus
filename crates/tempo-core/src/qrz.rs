@@ -325,6 +325,73 @@ pub fn parse_status_response(body: &str) -> QrzStatus {
     }
 }
 
+/// Result of a QRZ Logbook **FETCH** — the raw ADIF payload plus the header counts. The caller
+/// feeds `adif` through the ordinary ADIF importer + reconcile merge; this only unwraps the
+/// QRZ envelope. Two-way sync: pull the operator's own book back down (new QSOs + confirmations).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct QrzFetch {
+    /// `RESULT=OK` (or `STATUS=OK`).
+    pub ok: bool,
+    /// Records returned (QRZ `COUNT`).
+    pub count: u32,
+    /// The ADIF text QRZ returned (may be empty), taken verbatim.
+    pub adif: String,
+    /// Failure reason (auth errors etc.), when not OK.
+    pub reason: Option<String>,
+}
+
+/// Build the body of a QRZ Logbook **FETCH** request — pulls the operator's own logbook back
+/// down. The bare form fetches the whole book; QRZ streams it as one ADIF blob in the response
+/// `ADIF` field. Carries the API key — never log it.
+pub fn build_fetch_body(api_key: &str) -> String {
+    format!("KEY={}&ACTION=FETCH", pct(api_key.trim()))
+}
+
+/// Split a FETCH response at the `ADIF=` field boundary. The ADIF payload itself contains `&`,
+/// `=`, and newlines, so it CANNOT be split as an ordinary `name=value` pair — QRZ always emits
+/// it last. Everything before the boundary is the small metadata header; everything after is the
+/// raw ADIF blob (verbatim — QRZ sends literal, un-encoded ADIF meant to be saved as an .adi).
+fn split_adif(body: &str) -> (&str, String) {
+    let lower = body.to_ascii_lowercase();
+    let mut search = 0;
+    while let Some(rel) = lower[search..].find("adif=") {
+        let idx = search + rel;
+        let at_boundary = idx == 0 || body.as_bytes()[idx - 1] == b'&';
+        if at_boundary {
+            let head_end = idx.saturating_sub(1); // drop the trailing '&' (0 stays 0)
+            return (&body[..head_end], body[idx + 5..].to_string());
+        }
+        search = idx + 5;
+    }
+    (body, String::new())
+}
+
+/// Parse a QRZ Logbook FETCH response into its header + ADIF payload.
+pub fn parse_fetch(body: &str) -> QrzFetch {
+    let (head, adif) = split_adif(body);
+    let mut ok = false;
+    let mut count = 0u32;
+    let mut reason = None;
+    for pair in head.split('&') {
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        let val = urldecode(v.trim());
+        match k.trim().to_ascii_uppercase().as_str() {
+            "RESULT" | "STATUS" => ok = val.eq_ignore_ascii_case("OK"),
+            "COUNT" => count = val.parse().unwrap_or(0),
+            "REASON" if !val.is_empty() => reason = Some(val),
+            _ => {}
+        }
+    }
+    QrzFetch {
+        ok,
+        count,
+        adif,
+        reason,
+    }
+}
+
 /// Parse a QRZ Logbook `name=value` response. A `RESULT=FAIL` whose `REASON`
 /// mentions "duplicate" maps to [`QrzPushResult::Duplicate`] (benign).
 pub fn parse_push_response(body: &str) -> QrzPush {
@@ -655,5 +722,40 @@ mod tests {
         assert_eq!(QrzPushResult::Duplicate.to_upload_outcome(), U::Duplicate);
         assert_eq!(QrzPushResult::AuthFail.to_upload_outcome(), U::AuthFail);
         assert_eq!(QrzPushResult::Fail.to_upload_outcome(), U::Rejected);
+    }
+
+    #[test]
+    fn fetch_body_is_key_and_action() {
+        assert_eq!(build_fetch_body("  abc123  "), "KEY=abc123&ACTION=FETCH");
+    }
+
+    #[test]
+    fn fetch_splits_adif_payload_verbatim() {
+        // The ADIF payload itself carries `&`, `=`, `<`, and newlines — it must be
+        // cleaved off at the field boundary and returned untouched, not split as pairs.
+        let adif = "<CALL:5>W1AW &<QSO_DATE:8>20240101<APP_QRZLOG_STATUS:1>C<EOR>\n";
+        let body = format!("RESULT=OK&COUNT=1&ADIF={adif}");
+        let f = parse_fetch(&body);
+        assert!(f.ok);
+        assert_eq!(f.count, 1);
+        assert_eq!(f.adif, adif);
+        assert!(f.reason.is_none());
+    }
+
+    #[test]
+    fn fetch_reports_failure_reason() {
+        let f = parse_fetch("RESULT=FAIL&REASON=invalid+api+key");
+        assert!(!f.ok);
+        assert_eq!(f.adif, "");
+        assert_eq!(f.reason.as_deref(), Some("invalid api key"));
+    }
+
+    #[test]
+    fn fetch_tolerates_status_alias_and_empty_book() {
+        // Some responses use STATUS= and an empty ADIF (nothing to pull).
+        let f = parse_fetch("STATUS=OK&COUNT=0&ADIF=");
+        assert!(f.ok);
+        assert_eq!(f.count, 0);
+        assert_eq!(f.adif, "");
     }
 }

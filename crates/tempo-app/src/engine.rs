@@ -487,6 +487,9 @@ pub struct Engine {
     /// until the next sync.
     last_lotw_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
     last_eqsl_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
+    /// Orphans from the last QRZ two-way sync (own its slot so an eQSL/LoTW sync
+    /// doesn't clobber them). Resets on restart until the next sync.
+    last_qrz_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
     /// Current Parks/Summits On The Air activation `(program, reference)` — when set,
     /// each logged QSO is tagged as your activation (POTA/SOTA). Transient (an
     /// activation ends), so not persisted. `None` = not activating.
@@ -702,6 +705,7 @@ impl Engine {
             qsy,
             last_lotw_reconcile: None,
             last_eqsl_reconcile: None,
+            last_qrz_reconcile: None,
             activation: None,
         }
     }
@@ -2852,6 +2856,42 @@ impl Engine {
         summary
     }
 
+    /// Two-way QRZ Logbook sync: merge a QRZ **FETCH** ADIF (the operator's whole
+    /// book) INTO the log. QRZ returns both QSOs the operator logged elsewhere (e.g.
+    /// a phone app in the field) AND confirmation status, so this runs two passes:
+    /// first import genuinely-new QSOs (deduped), then reconcile confirmations onto
+    /// the QSOs already present. A QRZ-native confirmation (`APP_QRZLOG_STATUS`) lands
+    /// `confirmed` but NOT `award_confirmed`, by construction of the `qrz` channel, so
+    /// it can't inflate DXCC/WAS counts. Returns `(added, reconcile_summary)`.
+    pub fn merge_qrz_report(
+        &mut self,
+        text: &str,
+    ) -> (usize, tempo_core::reconcile::ReconcileSummary) {
+        self.recover_external_appends();
+        // Pass 1 — add the QSOs QRZ has that the local log lacks (deduped by
+        // call/band/mode-class/UTC-day). Their confirmation state rides in on import.
+        let (added, _skipped) = self.logbook.import_adif(text);
+        if let Some(path) = &self.log_path {
+            for r in &added {
+                if let Err(e) = Logbook::append(path, r) {
+                    eprintln!("tempo: merge_qrz_report append failed: {e}");
+                }
+            }
+        }
+        // Pass 2 — upgrade confirmations on the QSOs already present (import skips
+        // those). Every QRZ row now matches a local QSO, so orphans should be empty.
+        let summary = self.logbook.merge_report(text);
+        self.last_qrz_reconcile = Some(summary.clone());
+        if let Some(path) = &self.log_path {
+            if let Err(e) = self.logbook.save(path) {
+                eprintln!("tempo: merge_qrz_report save failed: {e}");
+            }
+        }
+        self.backfill_country();
+        self.refresh_worked_index();
+        (added.len(), summary)
+    }
+
     /// A clone of all logbook records (oldest-first / newest-last).
     pub fn get_log(&self) -> Vec<QsoRecord> {
         self.logbook.records().to_vec()
@@ -2873,6 +2913,9 @@ impl Engine {
             recents.push(s);
         }
         if let Some(s) = &self.last_eqsl_reconcile {
+            recents.push(s);
+        }
+        if let Some(s) = &self.last_qrz_reconcile {
             recents.push(s);
         }
         tempo_core::diagnostics::diagnose(
@@ -9413,5 +9456,54 @@ mod tests {
             p1.rig_model, 3081,
             "radio 1's CAT was not clobbered by the stale form"
         );
+    }
+
+    #[test]
+    fn qrz_two_way_sync_adds_new_and_confirms_existing_without_award() {
+        // Seed a local unconfirmed QSO (as if logged in Nexus).
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut local = e.qso_record("W1AW".into(), None, Some(-5));
+        local.band = "20m".into();
+        local.mode = "FT8".into();
+        local.when_unix = 1_700_000_000;
+        e.log_qso(local);
+        assert_eq!(e.get_log().len(), 1);
+
+        // A QRZ FETCH body: the same QSO now QRZ-confirmed, PLUS a brand-new QSO the
+        // operator logged elsewhere (e.g. a phone app) that Nexus has never seen.
+        let day = "20231114"; // matches 1_700_000_000's UTC day
+        let adif = format!(
+            "<EOH>\n\
+             <CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>{day}<TIME_ON:6>223000\
+             <APP_QRZLOG_STATUS:1>C<EOR>\n\
+             <CALL:5>K5NEW<BAND:3>40m<MODE:2>CW<QSO_DATE:8>{day}<TIME_ON:6>010000\
+             <APP_QRZLOG_STATUS:1>C<EOR>\n"
+        );
+        let (added, summary) = e.merge_qrz_report(&adif);
+
+        // The new QSO was pulled down; the existing one was reconciled (not re-added).
+        assert_eq!(added, 1, "only K5NEW is new");
+        assert_eq!(e.get_log().len(), 2, "log grew by exactly one");
+
+        // The existing QSO is now confirmed by QRZ — but NOT award-eligible.
+        let w1aw = e.get_log().into_iter().find(|r| r.call == "W1AW").unwrap();
+        assert!(w1aw.confirmed, "QRZ match confirms the contact");
+        assert!(!w1aw.award_confirmed, "QRZ confirmation is NOT award-grade");
+        assert!(w1aw.qsl_rcvd.qrz && !w1aw.qsl_rcvd.card);
+        assert_eq!(summary.newly_confirmed, 0, "no award-grade upgrades");
+        assert!(
+            summary.newly_confirmed_any >= 1,
+            "confirmed by some channel"
+        );
+
+        // The imported new QSO also carries the QRZ confirmation, non-award.
+        let k5new = e.get_log().into_iter().find(|r| r.call == "K5NEW").unwrap();
+        assert!(k5new.confirmed && !k5new.award_confirmed && k5new.qsl_rcvd.qrz);
+
+        // Idempotent: a second identical sync adds nothing and re-confirms nothing new.
+        let (added2, summary2) = e.merge_qrz_report(&adif);
+        assert_eq!(added2, 0, "second sync adds no duplicates");
+        assert_eq!(e.get_log().len(), 2);
+        assert_eq!(summary2.newly_confirmed_any, 0, "already confirmed");
     }
 }

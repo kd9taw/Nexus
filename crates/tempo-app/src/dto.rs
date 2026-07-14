@@ -807,6 +807,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
                 card: r.qsl_rcvd.card,
                 lotw: r.qsl_rcvd.lotw,
                 eqsl: r.qsl_rcvd.eqsl,
+                qrz: r.qsl_rcvd.qrz,
             },
             qsl_sent: r.qsl_sent.into(),
             credit_granted: r.credit_granted,
@@ -824,6 +825,9 @@ pub struct QslRcvdDto {
     pub card: bool,
     pub lotw: bool,
     pub eqsl: bool,
+    /// QRZ Logbook native confirmation — displayed as confirmed, but not award-eligible.
+    #[serde(default)]
+    pub qrz: bool,
 }
 
 /// Operator-declared OUTBOUND QSL-request state (mirrors tempo_core::logbook::QslSent).
@@ -882,6 +886,7 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
                 card: q.qsl_rcvd.card,
                 lotw: q.qsl_rcvd.lotw,
                 eqsl: q.qsl_rcvd.eqsl,
+                qrz: q.qsl_rcvd.qrz,
             },
             qsl_sent: q.qsl_sent.into(),
             credit_granted: q.credit_granted,
@@ -940,6 +945,10 @@ pub struct LotwSyncResult {
     /// QSOs whose own LoTW upload was promoted Pending→Accepted by the own-echo
     /// pull this sync (your side is now confirmed on file). 0 for a paste-reconcile.
     pub promoted: usize,
+    /// New QSOs pulled DOWN and added to the log (QRZ two-way sync only — LoTW/eQSL
+    /// reconcile confirmations onto existing QSOs and never add). 0 for those paths.
+    #[serde(default)]
+    pub added: usize,
     pub orphans: Vec<LotwOrphan>,
 }
 
@@ -952,6 +961,7 @@ impl From<tempo_core::reconcile::ReconcileSummary> for LotwSyncResult {
             newly_credited: s.newly_credited,
             newly_submitted: s.newly_submitted,
             promoted: 0, // set by the online sync after the own-echo pull
+            added: 0,    // set by the QRZ two-way sync after the import pass
 
             orphans: s
                 .orphans

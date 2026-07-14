@@ -5,6 +5,27 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6] — 2026-07-14 — Panadapter controls, RX DSP levels, two-way QRZ logbook sync
+
+### Added
+
+- **Phone cockpit: panadapter controls for the native scope (span + reference level).** When a
+  FlexRadio or Icom CI-V scope is streaming, a control row lets you set the RF span (±2.5k up to
+  ±250k) and the reference level directly from Nexus — the same knobs you'd reach for on the rig's
+  own scope. On dual-scope Icoms (IC-9700/7610) the commands target the Main scope; single-scope
+  rigs (IC-7300/705/905) omit the selector, matching each rig's CI-V format.
+- **Phone cockpit: RX DSP level controls (noise reduction + AGC speed).** Beside the existing DSP
+  toggles, an NR-level slider and a Fast/Mid/Slow AGC selector — read back from and written to the
+  rig over CI-V (native path) or Hamlib, so what the cockpit shows matches the radio. Controls only
+  appear for rigs that report the level.
+- **Two-way QRZ logbook sync — pull your online QRZ logbook back down.** Until now Nexus only
+  *pushed* QSOs to QRZ. **Settings ▸ Logbook & QSL ▸ QRZ ▸ "Sync from QRZ now"** now FETCHes your
+  online QRZ logbook and merges it in: it **adds QSOs you logged elsewhere** (e.g. a phone logger in
+  the field) and marks **QRZ-confirmed** contacts. QRZ-native confirmations count as confirmations
+  but **not** toward DXCC/WAS (a separate tier, like eQSL) — so a QRZ match can never inflate your
+  award counts. Safe to run repeatedly (deduped by call/band/mode/day). Uses the per-logbook API
+  key (not your QRZ password).
+
 ## [0.8.5] — 2026-07-14 — Native Icom phone toolkit (RF panadapter, TX meters, mic gain) + CI-V PTT fix
 
 ### Fixed

@@ -483,6 +483,12 @@ export async function downloadEqslReport(): Promise<LotwSyncResult> {
   return invoke<LotwSyncResult>('download_eqsl_report')
 }
 
+/** Two-way QRZ sync: FETCH the online QRZ logbook and merge it into the local log —
+ *  pulls new QSOs (logged elsewhere) plus confirmations (uses the stored Logbook API key). */
+export async function syncQrz(): Promise<LotwSyncResult> {
+  return invoke<LotwSyncResult>('sync_qrz')
+}
+
 /** Store the QRZ password in the OS keychain (write-only; empty clears it). */
 export async function setQrzPassword(password: string): Promise<void> {
   await invoke<void>('set_qrz_password', { password })
