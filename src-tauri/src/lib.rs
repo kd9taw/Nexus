@@ -4175,6 +4175,22 @@ fn send_cw(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, 
     Ok(eng.snapshot())
 }
 
+/// Record the worked station's QRZ name + US state for the `{HISNAME}`/`{HISSTATE}` CW-macro
+/// tokens. Pushed by the log form when a callbook lookup resolves; `call` keys it to the contact
+/// so a stale lookup never keys the wrong name. Empty `call` clears it. Fire-and-forget (no
+/// snapshot — the peer info only surfaces at macro-expand time).
+#[tauri::command]
+fn set_cw_peer_info(
+    state: State<'_, SharedEngine>,
+    call: String,
+    name: String,
+    peer_state: String,
+) -> Result<(), String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_cw_peer_info(call, name, peer_state);
+    Ok(())
+}
+
 /// Set the CW keyer speed in WPM (5–50).
 #[tauri::command]
 fn set_cw_wpm(state: State<'_, SharedEngine>, wpm: u32) -> Result<AppSnapshot, String> {
@@ -8451,6 +8467,7 @@ pub fn run() {
             get_connection_log,
             get_credentials_status,
             send_cw,
+            set_cw_peer_info,
             set_cw_wpm,
             stop_cw,
             set_cw_keyer,

@@ -347,6 +347,12 @@ pub struct Engine {
     /// A CW-keyer failure to surface (e.g. the rig rejected CAT send_morse), else None.
     /// Set by the radio loop; cleared when the operator switches keyer back-end.
     cw_keyer_error: Option<String>,
+    /// Worked-station QRZ info for the `{HISNAME}`/`{HISSTATE}` CW-macro tokens, pushed by the
+    /// frontend on a callbook lookup and keyed to the contact (`cw_peer_call`) so a stale
+    /// lookup can't key the wrong name. All empty until a lookup resolves. See `set_cw_peer_info`.
+    cw_peer_call: String,
+    cw_peer_name: String,
+    cw_peer_state: String,
     /// CW keyer speed in WPM (drives the rig's `KEYSPD`). Default 25.
     cw_wpm: u32,
     /// One-shot: the operator hit Abort — the radio loop calls `rig.stop_morse` and
@@ -656,6 +662,9 @@ impl Engine {
             cw_queue: VecDeque::new(),
             cw_sent: VecDeque::new(),
             cw_keyer_error: None,
+            cw_peer_call: String::new(),
+            cw_peer_name: String::new(),
+            cw_peer_state: String::new(),
             cw_wpm: 25,
             cw_abort: false,
             manual_ptt: false,
@@ -1504,6 +1513,16 @@ impl Engine {
             .active_peer()
             .map(|s| s.to_string())
             .unwrap_or_default();
+        // {HISNAME}/{HISSTATE} come from the frontend's QRZ lookup (the engine has no callbook).
+        // Use them ONLY when the stored info belongs to the CURRENT worked call — otherwise a
+        // stale lookup could key the wrong name at the wrong station.
+        let peer_matches =
+            !self.cw_peer_call.is_empty() && self.cw_peer_call.eq_ignore_ascii_case(&hiscall);
+        let (hisname, hisstate): (&str, &str) = if peer_matches {
+            (self.cw_peer_name.as_str(), self.cw_peer_state.as_str())
+        } else {
+            ("", "")
+        };
         // Field Day exchange tokens ({CLASS}/{SECTION}/{EXCH}) are live only while the FD
         // master switch is on; outside FD they're empty so a stray token collapses cleanly.
         let (class, section): (&str, &str) = if self.settings.fd_active {
@@ -1515,12 +1534,25 @@ impl Engine {
             mycall: &self.settings.mycall,
             myname: &self.settings.op_name,
             mygrid: &self.settings.mygrid,
+            mystate: &self.settings.op_state,
             hiscall: &hiscall,
+            hisname,
+            hisstate,
             rst: "599",
             class,
             section,
         };
         tempo_core::cw::expand(text, &ctx)
+    }
+
+    /// Record the worked station's QRZ name + US state for the `{HISNAME}`/`{HISSTATE}` CW
+    /// macro tokens. Pushed by the frontend when a callbook lookup resolves; `call` keys it to
+    /// the contact so a stale lookup never keys the wrong name (see `expand_cw`). Empty
+    /// `call` clears it (the operator cleared the log field).
+    pub fn set_cw_peer_info(&mut self, call: String, name: String, state: String) {
+        self.cw_peer_call = call.trim().to_string();
+        self.cw_peer_name = name.trim().to_string();
+        self.cw_peer_state = state.trim().to_string();
     }
 
     /// Expand a CW macro WITHOUT queuing it — the cockpit's reply preview.

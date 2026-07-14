@@ -11,8 +11,15 @@ pub struct CwContext<'a> {
     pub myname: &'a str,
     /// The operator's grid — `{MYGRID}`.
     pub mygrid: &'a str,
+    /// The operator's US state/province — `{MYSTATE}` (from settings). Empty if unset.
+    pub mystate: &'a str,
     /// The station being worked (the selected/active peer) — `!`.
     pub hiscall: &'a str,
+    /// The worked station's name — `{HISNAME}` (from the QRZ lookup: nickname or name).
+    /// Empty until a lookup resolves for the current call.
+    pub hisname: &'a str,
+    /// The worked station's US state — `{HISSTATE}` (from the QRZ lookup). Empty if unknown.
+    pub hisstate: &'a str,
     /// The report being sent — `{RST}` (cut: 9→N, 0→T, e.g. "599" → "5NN").
     pub rst: &'a str,
     /// The Field Day class exchange — `{CLASS}` (e.g. "3A"). Empty outside Field Day,
@@ -23,17 +30,24 @@ pub struct CwContext<'a> {
 }
 
 /// Expand a CW macro template into the literal text to key. Recognized tokens:
-/// `{MYCALL}` `{NAME}` `{MYGRID}` `{RST}` (cut numbers), `!` (worked call), and the Field
-/// Day exchange `{CLASS}` / `{SECTION}` / `{EXCH}` (= "`{CLASS} {SECTION}`", e.g. "3A WI").
-/// The FD tokens are empty outside Field Day, so an FD macro collapses to nothing then
-/// (like an unfilled `{NAME}`). Unknown `{...}` tokens are left as-is so typos are visible
-/// rather than silently dropped. Plain typed text (no tokens) passes through unchanged.
+/// `{MYCALL}` `{NAME}` `{MYGRID}` `{MYSTATE}` `{RST}` (cut numbers), `!` (worked call),
+/// `{HISNAME}` / `{HISSTATE}` (the worked station's QRZ name/state), and the Field Day
+/// exchange `{CLASS}` / `{SECTION}` / `{EXCH}` (= "`{CLASS} {SECTION}`", e.g. "3A WI").
+/// The FD tokens are empty outside Field Day, and `{HISNAME}`/`{HISSTATE}` are empty until a
+/// QRZ lookup resolves for the current call — an empty token collapses to nothing (like an
+/// unfilled `{NAME}`). Unknown `{...}` tokens are left as-is so typos are visible rather than
+/// silently dropped. Plain typed text (no tokens) passes through unchanged.
 pub fn expand(template: &str, ctx: &CwContext) -> String {
     let mut out = template.to_string();
-    // Order matters only in that {RST} is cut; the rest are literal substitutions.
+    // Order matters only in that {RST} is cut; the rest are literal substitutions. The
+    // brace-delimited tokens are distinct literals (e.g. "{HISNAME}" never contains "{NAME}"),
+    // so replacement order among them is irrelevant.
     out = out.replace("{MYCALL}", ctx.mycall);
     out = out.replace("{NAME}", ctx.myname);
     out = out.replace("{MYGRID}", ctx.mygrid);
+    out = out.replace("{MYSTATE}", ctx.mystate);
+    out = out.replace("{HISNAME}", ctx.hisname);
+    out = out.replace("{HISSTATE}", ctx.hisstate);
     out = out.replace("{RST}", &cut_numbers(ctx.rst));
     // Field Day exchange. `{EXCH}` is the full "CLASS SECTION"; trimmed so it (and the
     // whitespace-collapse below) leaves nothing when not operating FD (both fields blank).
@@ -208,7 +222,10 @@ mod tests {
             mycall: "W9XYZ",
             myname: "SETH",
             mygrid: "EN61",
+            mystate: "WI",
             hiscall: "K2DEF",
+            hisname: "BOB",
+            hisstate: "OH",
             rst: "599",
             class: "3A",
             section: "WI",
@@ -237,6 +254,31 @@ mod tests {
             "K2DEF DE W9XYZ UR 5NN 5NN NAME SETH SETH HW? K2DEF",
         );
         assert_eq!(expand("{MYGRID}", &c), "EN61");
+    }
+
+    #[test]
+    fn expands_state_and_worked_station_tokens() {
+        let c = ctx();
+        // My QTH + addressing the other op by his QRZ name.
+        assert_eq!(
+            expand(
+                "! DE {MYCALL} UR {RST} QTH {MYSTATE} NAME {NAME} HW CPY BOB? !",
+                &c
+            ),
+            "K2DEF DE W9XYZ UR 5NN QTH WI NAME SETH HW CPY BOB? K2DEF",
+        );
+        assert_eq!(expand("R FB {HISNAME}", &c), "R FB BOB");
+        assert_eq!(expand("{HISSTATE}", &c), "OH");
+        // {HISNAME}/{HISSTATE}/{MYSTATE} are empty until known → collapse cleanly, no double space.
+        let bare = CwContext {
+            mycall: "W9XYZ",
+            hiscall: "K2DEF",
+            ..Default::default()
+        };
+        assert_eq!(expand("R TU {HISNAME} DE {MYCALL}", &bare), "R TU DE W9XYZ");
+        assert_eq!(expand("QTH {MYSTATE}", &bare), "QTH");
+        // {HISNAME} must NOT be touched by the {NAME} substitution.
+        assert_eq!(expand("{NAME} vs {HISNAME}", &c), "SETH vs BOB");
     }
 
     #[test]

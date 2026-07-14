@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, LoggedQso } from '../types'
-import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, searchParks, type Park } from '../api'
+import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, searchParks, setCwPeerInfo, type Park } from '../api'
 import { callHistory, entitySlots, isNewEntity } from '../features/callHistory'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
 import { RecallPanel } from './RecallPanel'
@@ -345,6 +345,9 @@ export function LogEntry({
     if (r.country) setLogCountry((v) => (v.trim() ? v : r.country ?? ''))
     setLogImage(r.image ?? null) // display-only; no operator value to preserve
     enrichedForRef.current = call.toUpperCase()
+    // Feed the worked station's name/state to the engine for the {HISNAME}/{HISSTATE} CW-macro
+    // tokens (keyed to the call so a stale lookup can't key the wrong name).
+    void setCwPeerInfo(call, preferredName ?? '', r.state ?? '')
     if (!silent) {
       const detail = [r.name, r.grid && `grid ${r.grid}`, r.state].filter(Boolean).join(' · ')
       const note = r.grid ? '' : ' · grid/state need a QRZ subscription'
@@ -385,6 +388,7 @@ export function LogEntry({
     setLogCountry('')
     setLogImage(null)
     setLogParkRef('')
+    void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
     // Keep fdClass/fdSection across resets for speed in FD runs.
     // Snap focus back to the callsign field so the operator can type the next
     // contact immediately (rapid logging / a Field Day run), like WSJT-X/N1MM.

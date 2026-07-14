@@ -1465,6 +1465,8 @@ export interface Settings {
   mygrid: string
   /** Operator first name — the CW {NAME} macro + logging. */
   opName: string
+  /** Operator US state/province — the CW {MYSTATE} macro (ragchew QTH exchange). */
+  opState: string
   /** LEGACY single DX-cluster node (host:port) — kept for back-compat; `clusterHosts` is
    * the live source of truth (the backend seeds the list from this on upgrade). */
   clusterHost: string

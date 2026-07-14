@@ -121,6 +121,7 @@ const BASIC_FIELDS: FieldDef[] = [
   { key: 'mycall', label: 'Callsign', type: 'text', placeholder: 'KD9TAW', hint: 'Your station callsign (required).' },
   { key: 'mygrid', label: 'Grid', type: 'text', placeholder: 'EN52', hint: 'Maidenhead locator.' },
   { key: 'opName', label: 'Operator name', type: 'text', placeholder: 'Seth', hint: 'Used by the CW {NAME} macro and logging.' },
+  { key: 'opState', label: 'State', type: 'text', placeholder: 'WI', hint: 'Your US state/province — the CW {MYSTATE} macro (ragchew QTH).' },
 ]
 
 const PTT_METHODS: { value: string; label: string }[] = [
@@ -3366,11 +3367,13 @@ export function SettingsPanel({
                   ))}
                   <div className="cw-macro-row">
                     <span className="settings-hint">
-                      Tokens: {'{MYCALL} {RST} {NAME}'} · ! = the worked call (auto-filled from
-                      the copilot / roster click). Each key KEEPS its role — the Guided
-                      copilot's next-step highlight follows the role, so customized text
-                      still rolls through F1→F2→F3→F4 exactly as before. Keep the ! token
-                      wherever you want the other station's call inserted. Save to apply.
+                      Tokens: {'{MYCALL} {NAME} {MYGRID} {MYSTATE} {RST}'} · ! = the worked call ·{' '}
+                      {'{HISNAME} {HISSTATE}'} = the worked station's QRZ name/state (fill in
+                      Settings ▸ Station for {'{MYSTATE}'}; the rest auto-fill from the copilot /
+                      roster click + QRZ lookup). Each key KEEPS its role — the Guided copilot's
+                      next-step highlight follows the role, so customized text still rolls through
+                      F1→F2→F3→F4 exactly as before. Keep the ! token wherever you want the other
+                      station's call inserted. Save to apply.
                     </span>
                     <button
                       type="button"

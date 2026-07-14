@@ -14,6 +14,7 @@ vi.mock('../api', () => ({
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
   qrzLookup: vi.fn(() => Promise.resolve(null)),
   searchParks: vi.fn(() => Promise.resolve([])),
+  setCwPeerInfo: vi.fn(() => Promise.resolve()),
 }))
 
 const mockedFdLog = vi.mocked(fdLogManual)

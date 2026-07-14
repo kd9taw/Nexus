@@ -759,6 +759,12 @@ export async function sendCw(text: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('send_cw', { text })
 }
 
+/** Record the worked station's QRZ name + state for the {HISNAME}/{HISSTATE} CW-macro tokens,
+ *  keyed to `call` (pass an empty call to clear). Fire-and-forget. */
+export async function setCwPeerInfo(call: string, name: string, peerState: string): Promise<void> {
+  await invoke('set_cw_peer_info', { call, name, peerState })
+}
+
 /** Set the CW keyer speed in WPM (5–50). */
 export async function setCwWpm(wpm: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_cw_wpm', { wpm })
