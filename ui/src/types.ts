@@ -1610,6 +1610,8 @@ export interface Settings {
   cqStallOvers?: number | null
   /** WSJT-X Settings ▸ Behavior parity. */
   disableTxAfter73?: boolean
+  /** Play a ding/dong audio cue when the dial crosses your TX privileges (default on). */
+  bandEdgeTones?: boolean
   /** WSJT-X "CW ID after 73" — key MYCALL in CW after the final over (default off). */
   cwIdAfter73?: boolean
   clearDxAfterLog?: boolean

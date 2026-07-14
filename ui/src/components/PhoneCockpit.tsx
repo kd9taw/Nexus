@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import type { AppSnapshot, FieldDayStatus, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { BandStrip } from './BandStrip'
+import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { Splitter } from './Splitter'
 import { PalettePicker } from './PalettePicker'
@@ -88,6 +89,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   )
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
+  const [spotOpen, setSpotOpen] = useState(false) // spot-to-cluster popup
   // Wheel-to-tune over the bandscope, sharing the tuning strip's step selector.
   const [tuneStep, setTuneStep] = useState(100)
   const scopeRef = useRef<HTMLDivElement>(null)
@@ -384,6 +386,14 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         <RotorStrip />
         <button
           type="button"
+          className="ph-rec"
+          onClick={() => setSpotOpen(true)}
+          title="Spot a callsign to the DX cluster (opens a popup — call, frequency, comment)"
+        >
+          📢 Spot
+        </button>
+        <button
+          type="button"
           className={`ph-rec${recording ? ' on' : ''}`}
           onClick={toggleRecord}
           disabled={recBusy}
@@ -574,6 +584,13 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         onConsumeWork={onConsumeWork}
         fieldDay={fieldDay}
         fdMode="PH"
+      />
+      <SpotDialog
+        open={spotOpen}
+        onClose={() => setSpotOpen(false)}
+        initialCall=""
+        freqMhz={snap.radio.dialMhz}
+        defaultComment={commandedMode}
       />
     </main>
   )

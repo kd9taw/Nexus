@@ -461,6 +461,12 @@ export async function uploadLotwReport(indices?: number[]): Promise<UploadReport
   return invoke<UploadReport>('upload_lotw_report', { indices: indices ?? null })
 }
 
+/** Mark every currently-unsent QSO as already on LoTW (for an imported legacy log uploaded
+ *  through another tool). Returns how many were marked. */
+export async function markLotwUploaded(): Promise<number> {
+  return invoke<number>('mark_lotw_uploaded')
+}
+
 /** Store the eQSL password in the OS keychain (write-only; empty clears it). */
 export async function setEqslPassword(password: string): Promise<void> {
   await invoke<void>('set_eqsl_password', { password })

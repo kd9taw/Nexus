@@ -17,13 +17,14 @@ import {
   toggleIgnored,
 } from '../txMessages'
 import { openPanelWindow, getSettings, notifyErase, setSettings } from '../api'
-import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording, postSpot } from '../api'
+import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { Waterfall } from './Waterfall'
 import { Splitter } from './Splitter'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { OperateQsoStrip } from './OperateQsoStrip'
+import { SpotDialog } from './SpotDialog'
 import { OperateRoster } from './OperateRoster'
 import { TxPanel } from './TxPanel'
 
@@ -238,6 +239,13 @@ export function OperateCockpit({
 
   // --- WSJT-X Tx1–Tx6 message machine (the Classic layout's Tx panel) ---
   const [dxCall, setDxCall] = useState('')
+  // Spot-to-cluster popup: open state + the call to pre-fill (from the toolbar button or a roster row).
+  const [spotOpen, setSpotOpen] = useState(false)
+  const [spotSeedCall, setSpotSeedCall] = useState('')
+  const openSpot = (call: string) => {
+    setSpotSeedCall(call)
+    setSpotOpen(true)
+  }
   const [dxGrid, setDxGrid] = useState('')
   // Tx5 free text: auto-tracks the generated baseline until the operator edits
   // it; Generate Std Msgs resets the edit and re-baselines (stock behavior).
@@ -588,6 +596,14 @@ export function OperateCockpit({
               Roster
             </button>
           </div>
+          <button
+            type="button"
+            className="cockpit-popout"
+            onClick={() => openSpot(dxCall || selectedCall || '')}
+            title="Spot a callsign to the DX cluster (opens a popup — call, frequency, comment)"
+          >
+            📢 Spot
+          </button>
           {onPopOut && (
             <button
               type="button"
@@ -757,16 +773,10 @@ export function OperateCockpit({
                   onCall={onCall}
                   ignoredCalls={ignored}
                   onToggleIgnore={handleToggleIgnore}
-                  onSpot={(call) => {
-                    // Spot at the current dial — in FT8/FT4 every station shares
-                    // it — with the active tier as the cluster comment.
-                    const mode = String(snap.link.tier).toUpperCase()
-                    postSpot(snap.radio.dialMhz, call, mode)
-                      .then(() => pushToast(`Spotted ${call} on the cluster`, 'info', 2500))
-                      .catch((e) =>
-                        pushToast(typeof e === 'string' ? e : 'Spot failed', 'error', 3500),
-                      )
-                  }}
+                  // Open the reviewable Spot popup pre-filled with this station (posting to a public
+                  // cluster deserves a glance before it goes out); the dialog seeds the dial + a mode
+                  // comment itself.
+                  onSpot={(call) => openSpot(call)}
                 />
               </div>
               <aside className="cockpit-side">
@@ -849,6 +859,13 @@ export function OperateCockpit({
           )}
         </div>
       </div>
+      <SpotDialog
+        open={spotOpen}
+        onClose={() => setSpotOpen(false)}
+        initialCall={spotSeedCall}
+        freqMhz={snap.radio.dialMhz}
+        defaultComment={String(snap.link.tier).toUpperCase()}
+      />
     </main>
   )
 }

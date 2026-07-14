@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nexus</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #0e151f;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      /* The window is sized to the image's aspect, so cover fills it with no distortion. */
+      img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-user-drag: none;
+      }
+    </style>
+  </head>
+  <body>
+    <img src="/splash.png" alt="Nexus" draggable="false" />
+  </body>
+</html>

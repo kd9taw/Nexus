@@ -896,7 +896,19 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         })
     };
     let upload = UploadState {
-        lotw: parse_ul("APP_TEMPO_UL_LOTW"),
+        // Prefer Nexus's own upload record; otherwise honor the standard ADIF
+        // `LOTW_QSL_SENT=Y` — the QSO was already uploaded to LoTW by whatever tool
+        // wrote the ADIF, so an imported log isn't counted as needing a LoTW upload it
+        // already had (the inflated "Upload to LoTW (N)" count on an imported log).
+        lotw: parse_ul("APP_TEMPO_UL_LOTW").or_else(|| {
+            f.get("LOTW_QSL_SENT")
+                .is_some_and(|v| v.eq_ignore_ascii_case("Y"))
+                .then_some(UploadStatus {
+                    outcome: UploadOutcome::Accepted,
+                    when_unix: 0,
+                    detail: Some("LOTW_QSL_SENT (imported)".into()),
+                })
+        }),
         eqsl: parse_ul("APP_TEMPO_UL_EQSL"),
         qrz: parse_ul("APP_TEMPO_UL_QRZ"),
         clublog: parse_ul("APP_TEMPO_UL_CLUBLOG"),
@@ -1106,6 +1118,29 @@ mod tests {
         assert_eq!(out.matches("<EOR>").count(), 1, "still exactly one record");
         // Blank identity → unchanged from the plain record (named-location mode).
         assert_eq!(adif_record_with_station(&r, "", ""), adif_record(&r));
+    }
+
+    #[test]
+    fn import_honors_lotw_qsl_sent_so_uploaded_qsos_arent_recounted() {
+        // The inflated "Upload to LoTW (N)" fix: a QSO the ADIF says was already sent to LoTW
+        // (LOTW_QSL_SENT=Y) is marked already-uploaded on import, so it's not re-offered.
+        let mut lb = Logbook::default();
+        let adif = "<CALL:5>W1ABC<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>120000<LOTW_QSL_SENT:1>Y<EOR>\n\
+                    <CALL:5>W2DEF<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>130000<EOR>\n";
+        lb.import_adif(adif);
+        let sent = lb.records().iter().find(|r| r.call == "W1ABC").unwrap();
+        let unsent = lb.records().iter().find(|r| r.call == "W2DEF").unwrap();
+        assert!(
+            sent.upload
+                .lotw
+                .as_ref()
+                .is_some_and(|s| s.outcome.is_sent()),
+            "LOTW_QSL_SENT=Y → counts as already on LoTW"
+        );
+        assert!(
+            unsent.upload.lotw.is_none(),
+            "no field → still needs uploading"
+        );
     }
 
     #[test]

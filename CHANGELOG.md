@@ -5,6 +5,41 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] — 2026-07-13 — Spot to cluster, band-edge tones, LoTW count
+
+### Fixed
+
+- **Icom stays in DATA-U on FT8 through Tune and Transmit.** Tuning used to drop an Icom already in a
+  data mode (PKTUSB / DATA-U) back to plain USB: the tune keys in DATA mode (a plain-USB Icom needs
+  that to radiate a tune tone), but on release it forced DATA back *off* unconditionally. It now
+  restores the mode you were in before tuning, so an FT8 operator holds DATA-U while a plain-USB tune
+  still keys with output and returns to USB.
+- **Native Icom CI-V (early access): the scope stream now pauses during transmit** to keep the
+  shared CI-V bus clear while keyed — part of ongoing work on IC-9700 TX reliability on the native
+  path. (If you hit PTT trouble on native CI-V, the standard Hamlib CAT path is the stable one.)
+
+### Added
+
+- **Startup splash screen** — a borderless splash window shows a branded image on launch for a few
+  seconds while the app loads behind it, then the main window opens (classic desktop-app style).
+- **Spot a callsign to the DX cluster** — a "📢 Spot" button in both the FT8/Digital and Phone
+  cockpits opens a popup pre-filled with the callsign, dial frequency, and an editable comment, and
+  posts it to your connected cluster (rejects if none is connected). In FT8, the roster's per-station
+  spot now opens the same reviewable popup.
+- **Band-edge audio cues** — a rising "ding" when you dial back into your license privileges and a
+  falling "dong" when you stray past an edge, so you hear the band edge without watching the readout.
+  New toggle in Settings ▸ Operating ▸ Transmit & Sequencing (on by default).
+- **"Mark on LoTW" bulk action** (Logbook) — if you imported a log that's already on LoTW via another
+  tool, one click marks it so the "Upload to LoTW" count reflects reality instead of offering a large
+  redundant re-upload. Nothing is sent; only Nexus's own record changes.
+
+### Fixed
+
+- **The "Upload to LoTW (N)" count no longer over-counts an imported log.** Import now honors the ADIF
+  `LOTW_QSL_SENT` field, so a QSO already uploaded to LoTW isn't counted as still needing an upload.
+- **FT8 Call Roster "Need" column is wider** so all the need chips are visible, and the 💎 rarity pill
+  now shows there (it was being clipped in the narrow grid column).
+
 ## [0.8.3] — 2026-07-13 — CW/POTA fixes + phantom-log guard
 
 ### Fixed

@@ -45,6 +45,7 @@ import { useScale } from './useScale'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
 import { useMotion } from './useMotion'
+import { useBandEdgeTones } from './useBandEdgeTones'
 import { useAchievements } from './useAchievements'
 import { useJourneyUnlocks } from './useJourneyUnlocks'
 import { useFeatures } from './useFeatures'
@@ -591,6 +592,8 @@ export default function App() {
   const [typingTick, setTypingTick] = useState(0)
   const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
+  // Ding/dong when the dial crosses your TX privileges (default on).
+  useBandEdgeTones(snap?.radio.txAllowed, settings?.bandEdgeTones ?? true)
   // User watch list (localStorage) — fed to the decode alerter. Re-synced when the manager
   // edits it (it dispatches `nexus:watchlist-changed`), so alerts pick up changes live.
   const [watchlist, setWatchlist] = useState<WatchFilter[]>(() => loadWatchlist())

@@ -5877,6 +5877,15 @@ fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
 /// resolvable) BEFORE any state is stamped, so a missing tool never corrupts
 /// upload state. The QSOs are stamped per the TQSL exit code (Pending/Duplicate/
 /// Rejected/AuthFail; a network error leaves state untouched for a clean retry).
+/// Mark every currently-unsent QSO as already on LoTW — the operator's declaration that an
+/// imported legacy log was uploaded through another tool. Zeroes the "Upload to LoTW (N)" count
+/// so a big redundant re-upload isn't offered. Returns how many were marked.
+#[tauri::command]
+fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(eng.mark_lotw_uploaded_all())
+}
+
 #[tauri::command]
 async fn upload_lotw_report(
     state: State<'_, SharedEngine>,
@@ -8072,6 +8081,7 @@ pub fn run() {
             clear_lotw_password,
             download_lotw_report,
             upload_lotw_report,
+            mark_lotw_uploaded,
             set_eqsl_password,
             clear_eqsl_password,
             download_eqsl_report,
@@ -8131,6 +8141,24 @@ pub fn run() {
             qsy_pause,
             qsy_stop
         ])
+        .setup(|app| {
+            // Classic startup splash: the borderless `splashscreen` window shows on top for ~3s
+            // while the `main` window (declared hidden) loads behind it; then reveal main and
+            // close the splash. A plain thread timer — no dependency on the frontend being ready.
+            use tauri::Manager;
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                if let Some(main) = handle.get_webview_window("main") {
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                }
+                if let Some(splash) = handle.get_webview_window("splashscreen") {
+                    let _ = splash.close();
+                }
+            });
+            Ok(())
+        })
         .on_window_event(|window, event| {
             // Closing the MAIN window tears down the whole app: close any torn-off
             // panel windows too, so they don't linger (and keep the process alive).

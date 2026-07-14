@@ -8,6 +8,7 @@ import {
   getLog,
   importAdif,
   logQso,
+  markLotwUploaded,
   markQslSent,
   purgeLog,
   qrzLookup,
@@ -129,6 +130,9 @@ export function Logbook({
   const [showPurge, setShowPurge] = useState(false)
   const [purgeText, setPurgeText] = useState('')
   const [purging, setPurging] = useState(false)
+  // "Mark all as already on LoTW" confirmation — for an imported legacy log that was
+  // uploaded through another tool, so the unsent count reflects reality.
+  const [showMarkLotw, setShowMarkLotw] = useState(false)
   // Index (in the loaded `log` array) being edited; null = the form logs a NEW QSO.
   const [editIndex, setEditIndex] = useState<number | null>(null)
   // Column sort — purely a VIEW concern; the backend `get_log` index is kept on each row so
@@ -223,6 +227,17 @@ export function Logbook({
     else if (r.outcome === 'authfail')
       pushToast(`LoTW rejected your certificate/Station Location${r.detail ? `: ${r.detail}` : ''}`, 'error')
     else pushToast(`LoTW upload failed${r.detail ? `: ${r.detail}` : ''}`, 'error')
+    load()
+  }
+
+  const onMarkLotwUploaded = async () => {
+    setShowMarkLotw(false)
+    const n = await withErrorToast(() => markLotwUploaded(), 'Could not update LoTW state')
+    if (n == null) return
+    pushToast(
+      n > 0 ? `Marked ${n.toLocaleString()} QSO${n === 1 ? '' : 's'} as already on LoTW` : 'Nothing to mark',
+      'success',
+    )
     load()
   }
 
@@ -541,6 +556,15 @@ export function Logbook({
             title="Sign + upload your un-uploaded QSOs to LoTW via TQSL (set your Station Location in Settings)"
           >
             {uploading ? 'Uploading…' : `Upload to LoTW${unsentLotw ? ` (${unsentLotw})` : ''}`}
+          </button>
+          <button
+            type="button"
+            className="export-btn"
+            onClick={() => setShowMarkLotw(true)}
+            disabled={unsentLotw === 0}
+            title="Already have these on LoTW (uploaded via another tool)? Mark them so Nexus stops counting them as needing upload."
+          >
+            Mark on LoTW
           </button>
           <button
             type="button"
@@ -903,6 +927,44 @@ export function Logbook({
                 disabled={purging || purgeText.trim().toUpperCase() !== PURGE_WORD}
               >
                 {purging ? 'Purging…' : `Purge ${log.length} contact${log.length === 1 ? '' : 's'}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showMarkLotw && (
+        <div
+          className="logconfirm-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Mark as already on LoTW"
+          onClick={() => setShowMarkLotw(false)}
+        >
+          <div className="logconfirm" onClick={(e) => e.stopPropagation()}>
+            <div className="logconfirm-head">
+              <h2>
+                Mark {unsentLotw.toLocaleString()} QSO{unsentLotw === 1 ? '' : 's'} as already on LoTW?
+              </h2>
+            </div>
+            <p className="purge-warn">
+              Use this if you imported a log you'd already uploaded to LoTW another way (Ham2K Polo,
+              TQSL…). It marks the {unsentLotw.toLocaleString()} un-uploaded QSO
+              {unsentLotw === 1 ? '' : 's'} as already on LoTW, so the <strong>Upload to LoTW</strong>{' '}
+              count stops offering to re-send them. It only updates Nexus's own record — nothing is
+              sent, and your LoTW account and log are untouched. New QSOs you make later still upload
+              normally.
+            </p>
+            <div className="logconfirm-actions">
+              <button
+                type="button"
+                className="logconfirm-discard"
+                onClick={() => setShowMarkLotw(false)}
+              >
+                Cancel
+              </button>
+              <button type="button" className="logconfirm-log" onClick={onMarkLotwUploaded}>
+                Mark {unsentLotw.toLocaleString()} as on LoTW
               </button>
             </div>
           </div>

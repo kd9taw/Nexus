@@ -240,6 +240,9 @@ export function OperateRoster({
                       )
                     )
                   })}
+                  {/* Rarity lives with the needs — both answer "why work this station?" — and the
+                      widened Need column has room for the loud 💎 ULTRA pill the grid cell clipped. */}
+                  <RarityChip rarity={s.gridRarity} />
                 </span>
                 <span className="or-call">
                   {s.call}
@@ -255,10 +258,7 @@ export function OperateRoster({
                   )}
                 </span>
                 <span className="or-country">{s.country ?? '—'}</span>
-                <span className="or-gridc">
-                  {s.grid ?? '—'}
-                  <RarityChip rarity={s.gridRarity} />
-                </span>
+                <span className="or-gridc">{s.grid ?? '—'}</span>
                 <span className="or-dist">{distanceLabel(myGrid, s.grid) ?? '—'}</span>
                 <span
                   className="or-brg"

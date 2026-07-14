@@ -856,6 +856,10 @@ struct RadioLoop {
     prev_slot_was_tx: bool,
     tx_until_ms: Option<f64>,
     tuning_keyed: bool,
+    /// Was the operator in a DATA mode (FT8/PKTUSB → DATA-U) when this tune started? The Icom
+    /// tune keys in DATA mode regardless; on release we restore THIS state, not a hardcoded OFF —
+    /// else an FT8 operator gets dropped from DATA-U to plain USB.
+    tune_was_data: bool,
     tune_phase: f32,
     tune_started_ms: Option<f64>,
     applied: Transport,
@@ -1007,6 +1011,7 @@ impl RadioLoop {
             prev_slot_was_tx: false,
             tx_until_ms: None,
             tuning_keyed: false,
+            tune_was_data: false,
             tune_phase: 0.0,
             tune_started_ms: None,
             applied,
@@ -1393,7 +1398,18 @@ impl RadioLoop {
             if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
                 // The waveform stream needs a fast CI-V link (~7.5 KB/s of frames): below
                 // 57.6k it would starve CAT commands, so leave it off and CAT-only.
-                d.set_scope_enabled(self.applied.baud >= 57_600);
+                //
+                // AND pause it while TRANSMITTING: on the shared half-duplex CI-V bus a continuous
+                // 0x27 flood during TX makes the IC-9700's PTT chatter (rapid key/unkey → no RF, no
+                // CAT error). Gate the stream OFF for any keyed state — an FT8 over (tx_until_ms),
+                // the tune carrier (tuning_keyed), or manual phone PTT — and it resumes on unkey.
+                // RX scope is meaningless during TX anyway. (Native path only; Hamlib has no stream.)
+                d.set_scope_enabled(
+                    self.applied.baud >= 57_600
+                        && self.tx_until_ms.is_none()
+                        && !self.tuning_keyed
+                        && !self.manual_ptt_applied,
+                );
                 if let Some(sweep) = d.take_scope_row() {
                     if let Ok(mut e) = engine.lock() {
                         e.set_spectrum_rf(tempo_app::dto::Spectrum {
@@ -2235,9 +2251,16 @@ impl RadioLoop {
             if keying {
                 // Icom-native only: a plain-USB/LSB Icom takes TX audio from the MIC, so
                 // a keyed tune tone via the USB codec radiates ZERO RF ("red light, no
-                // signal"). Flip DATA mode on for the tune; restored on release below.
+                // signal"). Flip DATA mode on for the tune (this exact sequence — set DATA,
+                // then PTT — is the known-good keying path; don't skip it or the CI-V PTT
+                // won't hold). We remember the pre-tune data state so the release RESTORES it
+                // instead of forcing DATA off: an FT8 (DATA-U) operator must stay in DATA-U.
                 // Yaesu/hamlib paths untouched.
+                self.tune_was_data = mode_is_data(&self.last_mode);
                 if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
+                    // Clear the scope stream off the bus BEFORE keying (the retune gate at ~1401
+                    // only catches it a tick later), so the tune carrier keys onto an idle bus.
+                    d.set_scope_enabled(false);
                     d.set_data_mode(true);
                 }
                 let _ = rig.ptt(true);
@@ -2256,7 +2279,9 @@ impl RadioLoop {
             // here is retried by the idle self-heal below.
             let _ = rig.ptt(false);
             if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
-                d.set_data_mode(false); // restore the operator's non-data mode
+                // Restore the PRE-TUNE data state — NOT a hardcoded OFF. An FT8/DATA-U operator
+                // (tune_was_data) stays in DATA-U; only a plain USB/LSB operator gets DATA off.
+                d.set_data_mode(self.tune_was_data);
             }
             self.tuning_keyed = false;
             self.tune_started_ms = None;
@@ -3182,6 +3207,14 @@ impl Transport {
 /// filter — the operator's chosen CW width / SSB filter is left untouched. (Passband `0` is
 /// Hamlib's `RIG_PASSBAND_NORMAL`, which actively commands the rig's *default* width and pops the
 /// rig's Width display on every mode change — the bug this avoids.)
+/// Is `md` a DATA/PKT mode (PKTUSB/PKTLSB, DATA-U/DATA-L)? The Icom tune path skips its
+/// temporary DATA-mode flip for these — an FT8 operator is already in DATA-U and must stay
+/// there through tune (else the release turns DATA off and strands the rig in plain USB).
+fn mode_is_data(md: &str) -> bool {
+    let m = md.trim().to_ascii_uppercase();
+    m.starts_with("PKT") || m.starts_with("DATA")
+}
+
 fn passband_for(md: &str) -> i32 {
     match md.trim().to_ascii_uppercase().as_str() {
         "PKTUSB" | "PKTLSB" => 3000,
@@ -3474,6 +3507,21 @@ mod tests {
         assert_eq!(tier_mode(Tier::Dx1), "DX1");
         assert_eq!(tier_mode(Tier::Ft8), "FT8");
         assert_eq!(tier_mode(Tier::Ft4), "FT4");
+    }
+
+    #[test]
+    fn mode_is_data_classifies_pkt_and_data_modes() {
+        // FT8 (PKTUSB) etc. are data modes → the Icom tune must NOT flip DATA off on release.
+        assert!(mode_is_data("PKTUSB"));
+        assert!(mode_is_data("PKTLSB"));
+        assert!(mode_is_data("data-u"));
+        assert!(mode_is_data(" DATA-L "));
+        // Plain voice/CW modes are NOT — tune temporarily flips them into DATA and restores.
+        assert!(!mode_is_data("USB"));
+        assert!(!mode_is_data("LSB"));
+        assert!(!mode_is_data("CW"));
+        assert!(!mode_is_data("FM"));
+        assert!(!mode_is_data(""));
     }
 
     #[test]

@@ -2484,6 +2484,25 @@ export function SettingsPanel({
 
                 <div className="settings-field">
                   <label className="settings-toggle">
+                    <span className="settings-label">Band-edge tones</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.bandEdgeTones !== false}
+                      className={`toggle${form.bandEdgeTones !== false ? ' on' : ''}`}
+                      onClick={() => updateBool('bandEdgeTones', form.bandEdgeTones === false)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    A short audio cue when the dial crosses your license privileges — a rising
+                    "ding" back in band, a falling "dong" past an edge.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
                     <span className="settings-label">Double-click arms TX</span>
                     <button
                       type="button"

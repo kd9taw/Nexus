@@ -2812,6 +2812,24 @@ impl Engine {
         }
     }
 
+    /// Mark every QSO currently counted as un-uploaded to LoTW (the "Upload to LoTW (N)" set)
+    /// as ALREADY on LoTW — the operator's declaration that an imported legacy log was uploaded
+    /// through another tool (Ham2K Polo, TQSL, etc.). Stamps them `Accepted` so they drop out of
+    /// the unsent count and a bulk upload never re-pushes them. Returns how many were marked.
+    pub fn mark_lotw_uploaded_all(&mut self) -> usize {
+        let indices = self.lotw_unsent_indices();
+        let n = indices.len();
+        if n > 0 {
+            self.stamp_lotw_upload(
+                &indices,
+                tempo_core::logbook::UploadOutcome::Accepted,
+                now_unix_secs() as i64,
+                Some("marked already on LoTW".into()),
+            );
+        }
+        n
+    }
+
     /// Set the operating mode. `spec`: `chat` | `qso-run` | `qso-monitor` |
     /// `fieldday-run` | `fieldday-sp`.
     pub fn set_mode(&mut self, spec: &str) -> Result<(), String> {
