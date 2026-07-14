@@ -4555,13 +4555,9 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
     .title(title)
     .inner_size(w, h)
     .min_inner_size(if slug == "waterfall" { 380.0 } else { 420.0 }, if slug == "waterfall" { 180.0 } else { 360.0 });
-    // The waterfall pop-out is a MONITORING strip: keep it on top so it survives
-    // working in other apps/sections — the whole point of tearing it off.
-    let builder = if slug == "waterfall" {
-        builder.always_on_top(true)
-    } else {
-        builder
-    };
+    // Pop-outs are ordinary windows — the operator must be able to send them behind the
+    // main UI (a tester couldn't hide the waterfall while it was pinned always-on-top). A
+    // future "pin" toggle can call `window.set_always_on_top(true)` on demand.
     builder.build().map_err(|e| e.to_string())?;
     Ok(())
 }

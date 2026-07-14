@@ -1276,7 +1276,12 @@ button.nb-chip:hover {
 .connect-shell {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /* Flex-FILL the (now flex-column) .layout.single instead of height:100%. Under app
+     zoom a %-height against the block+overflow .layout.single resolved to auto, which
+     collapsed the map's 1fr grid rows to zero (the 2-D map vanished + rail panes were
+     clipped at 110%). This mirrors the detached-window fix. */
+  flex: 1;
+  height: auto;
   min-height: 0;
 }
 .connect-header {
@@ -1302,9 +1307,11 @@ button.nb-chip:hover {
   gap: var(--space-3);
   padding: var(--space-3);
   grid-template-columns: var(--cn-rail, 300px) minmax(0, 1fr) var(--cn-rail, 300px);
-  /* Strip row capped at 30vh (not bare `auto`): a tall pane reassigned into the strip
-     scrolls inside its own body instead of stealing height from the globe's 1fr rows. */
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 30vh);
+  /* Strip row capped at 30% of the EFFECTIVE (zoom-corrected) viewport height (not bare
+     `auto`, and not raw `30vh` which ignores the app's `zoom` and over-tall the strip):
+     a tall pane reassigned into the strip scrolls inside its own body instead of stealing
+     height from the globe's 1fr rows. --vh-eff is published by useViewport. */
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, calc(0.3 * var(--vh-eff, 100vh)));
   grid-template-areas:
     'left1  center right1'
     'left2  center right2'
@@ -1512,7 +1519,7 @@ button.nb-chip:hover {
 }
 [data-viewport='xs'] .connect {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(280px, 46vh) auto auto auto auto auto;
+  grid-template-rows: minmax(280px, calc(0.46 * var(--vh-eff, 100vh))) auto auto auto auto auto;
   grid-template-areas:
     'center'
     'left1'
@@ -3188,6 +3195,14 @@ body.resizing {
   height: 100%;
   max-width: 1100px;
   margin: 0 auto;
+}
+/* Connect is the ONE .single view that must flex-FILL rather than block-scroll — its map
+   needs a definite height (see .connect-shell). Target it alone via :has(> .connect-shell)
+   so Log/Settings keep their block+scroll. Same fix the detached window already applies. */
+.layout.single:has(> .connect-shell) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .panel {
@@ -5972,6 +5987,10 @@ select optgroup {
 .cw-macro-label {
   font-weight: 700;
   font-size: var(--fs-body);
+  /* Pin the theme text color — a bare <button> child otherwise inherits the UA
+     `ButtonText`, which paints dark-on-dark and made the label invisible (only the
+     F-key badge showed, since `.cw-macro-key` sets its color explicitly). */
+  color: var(--text);
 }
 .cw-send {
   display: flex;
@@ -7155,6 +7174,9 @@ select optgroup {
   flex: 1;
   font-size: 13px;
   font-weight: 700;
+  /* Same fix as `.cw-macro-label`: pin the theme color so the label doesn't inherit
+     the <button>'s UA `ButtonText` and vanish dark-on-dark. */
+  color: var(--text);
 }
 .vk-state {
   font-size: 12px;
@@ -8542,12 +8564,26 @@ select.settings-input {
   height: 64%;
   width: 2px;
   transform: translateX(-50%);
-  background: var(--accent);
+  /* Colour by need tier (the `need-*` class sets --need-color); plain spots stay accent. */
+  background: var(--need-color, var(--accent));
   border-radius: 1px;
+}
+/* A need-tagged tick reads as a fuller bar so the colour is legible at strip density. */
+.bandstrip-tick[class*='need-'] {
+  width: 3px;
 }
 .bandstrip-spot:hover .bandstrip-tick {
   width: 3px;
-  background: var(--text);
+  background: var(--need-color, var(--text));
+}
+/* POTA/SOTA/DXped type badge, pinned above the tick (independent of the need colour). */
+.bandstrip-type {
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  transform: translateX(-50%);
+  z-index: 2;
+  pointer-events: none;
 }
 .bandstrip-spot-call {
   display: none;
@@ -8604,7 +8640,7 @@ select.settings-input {
 
 /* "Pop out band map" button in the strip header — opens the vertical map in its own window. */
 .bandstrip-popout {
-  margin-left: auto;
+  margin-left: 6px;
   font-size: 10px;
   font-weight: 700;
   padding: 2px 9px;
@@ -8617,6 +8653,79 @@ select.settings-input {
 .bandstrip-popout:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* "Legend" toggle — first right-aligned control, so it + the pop-out group at the right. */
+.bandstrip-legend-toggle {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.bandstrip-legend-toggle.on,
+.bandstrip-legend-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* Small square activity-type badge (POTA park / SOTA summit / DXpedition) — shared by the
+ * legend, band strip, and band map. Colour keyed to the program's --need-* palette entry. */
+.spot-type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  color: #06121f;
+}
+.spot-type-badge.type-pota {
+  background: var(--need-pota);
+}
+.spot-type-badge.type-sota {
+  background: var(--need-sota);
+  color: #f4f1ff;
+}
+.spot-type-badge.type-dxped {
+  background: var(--need-dxped);
+}
+/* The shared colour + type key. Compact, wraps, small — a reference row, not chrome. */
+.spot-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) 10px;
+  margin-bottom: var(--space-2);
+  padding: 5px var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-elev) 60%, transparent);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.spot-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+.spot-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--need-color, var(--accent));
+}
+.spot-legend-div {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0 2px;
 }
 /* The vertical N1MM-style band map (its own torn-off window via open_panel_window) — flex-fills
  * the detached window (flex, not a height:100% chain, per the .app.detached note above). */
@@ -8680,6 +8789,7 @@ select.settings-input {
   transform: translateY(-50%);
   display: flex;
   align-items: center;
+  gap: var(--space-1);
   height: 15px;
   padding: 0 6px;
   background: transparent;

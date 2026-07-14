@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AppSnapshot, FieldDayStatus, Settings, SpotRow } from '../types'
+import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
@@ -46,6 +46,10 @@ interface Props {
   fieldDay?: FieldDayStatus | null
   /** Live cluster spots (all bands/modes); the band-strip filters to CW on the current band. */
   spots?: SpotRow[]
+  /** Top need tag per heard call (UPPERCASE) — colours band-strip ticks by need tier. */
+  needByCall?: Map<string, NeedTag>
+  /** Activity type per heard call (UPPERCASE) — POTA/SOTA/DXped badges on the band strip. */
+  typeByCall?: Map<string, 'Pota' | 'Sota' | 'Dxped'>
   /** Work a spotted station from the band-strip (QSY to its freq + prefill the log). */
   onWorkSpot?: (s: SpotRow) => void
 }
@@ -107,6 +111,8 @@ export function CwCockpit({
   onSnap,
   fieldDay,
   spots,
+  needByCall,
+  typeByCall,
   onWorkSpot,
 }: Props) {
   const catOk = snap.radio.catOk === true
@@ -597,6 +603,8 @@ export function CwCockpit({
           txAllowed={snap.radio.txAllowed}
           spots={spots ?? []}
           spotMode="CW"
+          needByCall={needByCall}
+          typeByCall={typeByCall}
           onWorkSpot={onWorkSpot}
           onPopOut={() => void openPanelWindow('bandmapCw')}
         />
@@ -745,7 +753,7 @@ export function CwCockpit({
             title={previews[m.key] || m.text}
           >
             <span className="cw-macro-key">{m.key}</span>
-            <span className="cw-macro-label">{m.label}</span>
+            <span className="cw-macro-label">{m.label || m.key}</span>
           </button>
         ))}
       </div>

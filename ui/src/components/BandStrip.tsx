@@ -1,5 +1,8 @@
-import type { SpotRow } from '../types'
+import { useState } from 'react'
+import type { SpotRow, NeedTag } from '../types'
 import { bandRangeForLabel, cwRangeForLabel } from '../band'
+import { NEED_CHIP } from '../features/needVisuals'
+import { SpotLegend, TYPE_BADGE } from './SpotLegend'
 
 interface Props {
   /** Current operating band label (e.g. "20m"). */
@@ -15,11 +18,16 @@ interface Props {
   spots: SpotRow[]
   /** Which spot mode to plot — 'Phone' (SSB, default) for the Phone cockpit, 'CW' for the CW one. */
   spotMode?: 'Phone' | 'CW'
+  /** Top need tag per heard call (UPPERCASE) — colours the tick by why it's worth working. */
+  needByCall?: Map<string, NeedTag>
+  /** Activity type per heard call (UPPERCASE) — flags POTA/SOTA/DXped independent of the need colour. */
+  typeByCall?: Map<string, 'Pota' | 'Sota' | 'Dxped'>
   /** Work a spotted station — QSY to its exact freq + prefill the log (App's handleWorkSpot). */
   onWorkSpot: (s: SpotRow) => void
   /** When set, shows a "pop out" button that opens the full vertical band-map in its own window. */
   onPopOut?: () => void
 }
+
 
 /** Compact "how long ago" for a spot tooltip. */
 function ageLabel(secs: number): string {
@@ -44,9 +52,22 @@ export function BandStrip({
   phoneSegHi,
   spots,
   spotMode = 'Phone',
+  needByCall,
+  typeByCall,
   onWorkSpot,
   onPopOut,
 }: Props) {
+  // Legend is opt-in but remembered — it answers "what do the colours mean?" once, then
+  // stays out of the way. Default ON the first time so the key is discoverable.
+  const [showLegend, setShowLegend] = useState(
+    () => (localStorage.getItem('nexus.spotlegend') ?? '1') === '1',
+  )
+  const toggleLegend = () => {
+    setShowLegend((v) => {
+      localStorage.setItem('nexus.spotlegend', v ? '0' : '1')
+      return !v
+    })
+  }
   // In the CW cockpit, clip the strip to the band's CW sub-band (band bottom → CW top) so it shows
   // ONLY the CW portion; the Phone cockpit still spans the whole allocation. But only while the dial
   // is actually IN that segment — if the operator tunes above CW top (into the data/phone part) fall
@@ -83,6 +104,15 @@ export function BandStrip({
             ? `${phone.length} ${modeLabel} spot${phone.length === 1 ? '' : 's'} · ${band}`
             : `no ${modeLabel} spots on ${band} yet`}
         </span>
+        <button
+          type="button"
+          className={`bandstrip-legend-toggle${showLegend ? ' on' : ''}`}
+          onClick={toggleLegend}
+          title="Show/hide the colour + type key"
+          aria-pressed={showLegend}
+        >
+          Legend
+        </button>
         {onPopOut && (
           <button
             type="button"
@@ -94,6 +124,7 @@ export function BandStrip({
           </button>
         )}
       </div>
+      {showLegend && <SpotLegend />}
       <div className="bandstrip-track" title={`${band}: ${lo.toFixed(3)}–${hi.toFixed(3)} MHz`}>
         {shade && shade.width > 0 && (
           <div
@@ -105,8 +136,17 @@ export function BandStrip({
         {phone.map((s, i) => {
           // Fade older spots so density + freshness read at a glance (fresh ≈ opaque, ~30 min → faint).
           const opacity = s.ageSecs < 0 ? 0.9 : Math.max(0.35, 1 - s.ageSecs / 1800)
+          const cu = s.call.toUpperCase()
+          // Colour the tick by need tier (why it's worth working) — parity with the band map.
+          const need = needByCall?.get(cu)
+          const needCls = need ? ` need-${NEED_CHIP[need].cls}` : ''
+          // Flag the activity type (POTA/SOTA/DXped) independent of the colour.
+          const type = typeByCall?.get(cu)
+          const badge = type ? TYPE_BADGE[type] : null
           const detail = [
             s.call,
+            need && NEED_CHIP[need].label,
+            badge?.word,
             `${s.freqMhz.toFixed(3)} MHz`,
             ageLabel(s.ageSecs),
             s.spotter && `de ${s.spotter}`,
@@ -123,7 +163,8 @@ export function BandStrip({
               title={`${detail} — click to work`}
               onClick={() => onWorkSpot(s)}
             >
-              <span className="bandstrip-tick" />
+              {badge && <span className={`bandstrip-type spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
+              <span className={`bandstrip-tick${needCls}`} />
               <span className="bandstrip-spot-call mono">{s.call}</span>
             </button>
           )

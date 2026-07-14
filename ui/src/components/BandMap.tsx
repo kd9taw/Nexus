@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import type { SpotRow, NeedTag } from '../types'
 import { bandRangeForLabel } from '../band'
 import { NEED_CHIP } from '../features/needVisuals'
+import { SpotLegend, TYPE_BADGE } from './SpotLegend'
 
 /** Fallback track height (px) before the real one is measured — the track flex-fills its window. */
 const TRACK_H = 460
@@ -32,6 +33,8 @@ interface Props {
   onWorkSpot: (s: SpotRow) => void
   /** Top need tag per call (UPPERCASE-keyed, mode-gated) — colors a marker like the roster. */
   needByCall?: Map<string, NeedTag>
+  /** Activity type per call (UPPERCASE) — POTA/SOTA/DXped badge beside the call. */
+  typeByCall?: Map<string, 'Pota' | 'Sota' | 'Dxped'>
   /** Calls already worked (UPPERCASE, from the log) — struck through, like the roster. */
   workedCalls?: Set<string>
 }
@@ -63,8 +66,18 @@ export function BandMap({
   spotMode = 'Phone',
   onWorkSpot,
   needByCall,
+  typeByCall,
   workedCalls,
 }: Props) {
+  const [showLegend, setShowLegend] = useState(
+    () => (localStorage.getItem('nexus.spotlegend') ?? '1') === '1',
+  )
+  const toggleLegend = () => {
+    setShowLegend((v) => {
+      localStorage.setItem('nexus.spotlegend', v ? '0' : '1')
+      return !v
+    })
+  }
   const range = bandRangeForLabel(band)
   const modeLabel = spotMode === 'CW' ? 'CW' : 'SSB'
 
@@ -195,7 +208,17 @@ export function BandMap({
               }`
             : `no ${modeLabel} spots on ${band} yet`}
         </span>
+        <button
+          type="button"
+          className={`bandstrip-legend-toggle${showLegend ? ' on' : ''}`}
+          onClick={toggleLegend}
+          title="Show/hide the colour + type key"
+          aria-pressed={showLegend}
+        >
+          Legend
+        </button>
       </div>
+      {showLegend && <SpotLegend />}
       <div
         ref={trackRef}
         className="bandmap-track"
@@ -217,6 +240,8 @@ export function BandMap({
           const cu = s.call.toUpperCase()
           const need = needByCall?.get(cu) ?? null
           const chip = need ? NEED_CHIP[need] : null
+          const type = typeByCall?.get(cu)
+          const badge = type ? TYPE_BADGE[type] : null
           const worked = workedCalls?.has(cu) ?? false
           const opacity = s.ageSecs < 0 ? 0.95 : Math.max(0.4, 1 - s.ageSecs / 1800)
           const detail = [
@@ -224,6 +249,7 @@ export function BandMap({
             `${s.freqMhz.toFixed(3)} MHz`,
             ageLabel(s.ageSecs),
             chip?.label,
+            badge?.word,
             s.spotter && `de ${s.spotter}`,
             s.comment,
           ]
@@ -241,6 +267,7 @@ export function BandMap({
                 title={`${detail} — click to work`}
                 onClick={() => onWorkSpot(s)}
               >
+                {badge && <span className={`spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
                 <span className="bandmap-call mono">{s.call}</span>
               </button>
             </span>

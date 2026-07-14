@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import type { AppSnapshot, FieldDayStatus, SpotRow } from '../types'
+import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { TxMeters } from './TxMeters'
 import { BandStrip } from './BandStrip'
@@ -50,6 +50,10 @@ interface Props {
   phoneMode?: string
   /** Live cluster spots (all bands/modes); the band-strip filters to SSB on the current band. */
   spots?: SpotRow[]
+  /** Top need tag per heard call (UPPERCASE) — colours band-strip ticks by need tier. */
+  needByCall?: Map<string, NeedTag>
+  /** Activity type per heard call (UPPERCASE) — POTA/SOTA/DXped badges on the band strip. */
+  typeByCall?: Map<string, 'Pota' | 'Sota' | 'Dxped'>
   /** Work a spotted station from the band-strip (QSY to its freq + prefill the log). */
   onWorkSpot?: (s: SpotRow) => void
 }
@@ -101,7 +105,7 @@ const RIG_SPANS = [
   { label: '±250k', hz: 250_000 },
 ] as const
 
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, spots, onWorkSpot }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, spots, needByCall, typeByCall, onWorkSpot }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   // Mirror the RIG's real level (CAT read-back / last commanded) so the slider
   // never lies at a guessed 100% — but never fight an in-flight drag.
@@ -138,6 +142,20 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const changeNr = (pct: number) => {
     setNr(pct)
     void setNrLevel(pct / 100)
+  }
+  // AGC speed — local optimistic mirror so the segmented highlight flips on click. Reading
+  // snap.radio.agc directly lagged ~0.75–1.5 s: setAgc's snapshot returns the OLD rig read-back
+  // (rig_agc.or(agc)) until the next RX poll, so the clicked chip wouldn't light up. Sync from
+  // the snapshot when it changes (confirms / corrects), exactly like the NR slider above.
+  const [agc, setAgcLocal] = useState<string | null>(() => snap.radio.agc ?? null)
+  useEffect(() => {
+    if (snap.radio.agc != null) setAgcLocal(snap.radio.agc)
+  }, [snap.radio.agc])
+  const changeAgc = (sp: string) => {
+    setAgcLocal(sp)
+    void setAgc(sp)
+      .then((s) => onSnap?.(s))
+      .catch(() => {})
   }
   // Native Icom scope reference level, in tenths of a dB (−200..+200 = −20.0..+20.0 dB).
   const [scopeRefTenths, setScopeRefTenths] = useState(0)
@@ -694,9 +712,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                 <button
                   key={sp}
                   type="button"
-                  className={`theme-chip${snap.radio.agc === sp ? ' active' : ''}`}
-                  aria-pressed={snap.radio.agc === sp}
-                  onClick={() => void setAgc(sp).then((s) => onSnap?.(s)).catch(() => {})}
+                  className={`theme-chip${agc === sp ? ' active' : ''}`}
+                  aria-pressed={agc === sp}
+                  onClick={() => changeAgc(sp)}
                 >
                   {sp === 'fast' ? 'Fast' : sp === 'mid' ? 'Mid' : 'Slow'}
                 </button>
@@ -714,6 +732,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           phoneSegLo={snap.radio.phoneSegLo}
           phoneSegHi={snap.radio.phoneSegHi}
           spots={spots ?? []}
+          needByCall={needByCall}
+          typeByCall={typeByCall}
           onWorkSpot={onWorkSpot}
           onPopOut={() => void openPanelWindow('bandmapPhone')}
         />

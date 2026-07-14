@@ -227,6 +227,16 @@ export function DetachedPanel({ panel }: { panel: string }) {
     for (const a of gatedAlerts) if (a.tags.length > 0) m.set(a.call.toUpperCase(), a.tags[0])
     return m
   }, [gatedAlerts])
+  const typeByCall = useMemo(() => {
+    const m = new Map<string, 'Pota' | 'Sota' | 'Dxped'>()
+    for (const a of gatedAlerts) {
+      const k = a.call.toUpperCase()
+      if (m.has(k)) continue
+      const t = a.tags.find((x) => x === 'Pota' || x === 'Sota' || x === 'Dxped')
+      if (t) m.set(k, t as 'Pota' | 'Sota' | 'Dxped')
+    }
+    return m
+  }, [gatedAlerts])
   const needAlertsByCall = useMemo(() => {
     const m = new Map<string, NeedAlert[]>()
     for (const a of gatedAlerts) {
@@ -253,6 +263,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
           spots={allSpots}
           spotMode={spotMode}
           needByCall={needByCall}
+          typeByCall={typeByCall}
           workedCalls={workedCalls}
           onWorkSpot={(s) =>
             onWorkSpot({ call: s.call, band: s.band, mode: s.mode, freqMhz: s.freqMhz })

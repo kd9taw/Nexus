@@ -576,6 +576,20 @@ export default function App() {
     }
     return m
   }, [visibleAlerts])
+  // Activity TYPE per heard call (POTA / SOTA / DXpedition), independent of the need tier.
+  // needByCall keeps only tags[0], so a POTA activator that's ALSO a new band shows the band
+  // colour and loses the program tag — this map surfaces the program badge regardless, so the
+  // band strip/map can flag "this is a park/summit/DXped" even when a higher need wins the colour.
+  const typeByCall = useMemo(() => {
+    const m = new Map<string, 'Pota' | 'Sota' | 'Dxped'>()
+    for (const a of visibleAlerts) {
+      const k = a.call.toUpperCase()
+      if (m.has(k)) continue
+      const t = a.tags.find((x) => x === 'Pota' || x === 'Sota' || x === 'Dxped')
+      if (t) m.set(k, t as 'Pota' | 'Sota' | 'Dxped')
+    }
+    return m
+  }, [visibleAlerts])
   // Full alert set per heard call (all bands/modes) for the band-activity decode feed's
   // need-icons + row colouring — richer than needByCall's top-tag-only map. Keyed
   // UPPERCASE; from the same GATED visibleAlerts so a disabled mode never tags a row.
@@ -1527,6 +1541,8 @@ export default function App() {
           onSnap={setSnap}
           fieldDay={snap.fieldDay}
           spots={allSpots}
+          needByCall={needByCall}
+          typeByCall={typeByCall}
           onWorkSpot={handleWorkSpot}
         />
       )
@@ -1542,6 +1558,8 @@ export default function App() {
           fieldDay={snap.fieldDay}
           phoneMode={settings?.phoneMode}
           spots={allSpots}
+          needByCall={needByCall}
+          typeByCall={typeByCall}
           onWorkSpot={handleWorkSpot}
         />
       )
