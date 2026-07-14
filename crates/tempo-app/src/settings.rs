@@ -215,6 +215,12 @@ pub struct Settings {
     /// points at the *PC's* CAT port, not the radio). Empty = no native Flex scope.
     #[serde(default)]
     pub flex_radio_ip: String,
+    /// Opt-in to the FlexRadio native SmartSDR panadapter (VITA-49 FFT). OFF by default: the
+    /// worker + command syntax are UNVERIFIED on a real Flex, so a tester enables it here, and
+    /// it becomes the default only once proven. Mirrors the Icom `icom_native_cat` opt-in.
+    /// Takes effect on the next tick for an active network Flex.
+    #[serde(default)]
+    pub flex_native_pan: bool,
 
     // --- multi-radio (dual-radio) ---
     /// Configured radios. EMPTY in older settings files → migrated to a single profile 0 mirroring
@@ -988,6 +994,7 @@ impl Default for Settings {
             cat_broker: false,
             cat_broker_port: 4532,
             flex_radio_ip: String::new(),
+            flex_native_pan: false,
             radios: Vec::new(), // migrated to a single profile on load()
             active_radio: 0,
             radio_pegged: false,

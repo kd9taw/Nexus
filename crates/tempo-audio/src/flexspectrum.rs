@@ -73,6 +73,24 @@ pub fn set_pan_center_command(pan_id: u32, center_mhz: f64) -> String {
     format!("display pan set 0x{pan_id:08X} center={center_mhz:.6}")
 }
 
+/// Command to change an existing pan's BANDWIDTH (span) — SmartSDR takes MHz.
+pub fn set_pan_bw_command(pan_id: u32, span_hz: f64) -> String {
+    format!(
+        "display pan set 0x{pan_id:08X} bw={:.6}",
+        span_hz / 1_000_000.0
+    )
+}
+
+/// Command to set an existing pan's reference window (SmartSDR `min_dbm`/`max_dbm`): `ref_dbm` is
+/// the TOP of the window; a fixed 100 dB range sits below it. NOTE: verified on a real Flex
+/// pending — the exact field names/effect are from the SmartSDR API docs, not hardware here.
+pub fn set_pan_ref_command(pan_id: u32, ref_dbm: i32) -> String {
+    format!(
+        "display pan set 0x{pan_id:08X} max_dbm={ref_dbm} min_dbm={}",
+        ref_dbm - 100
+    )
+}
+
 /// Command to remove a pan on teardown.
 pub fn remove_pan_command(pan_id: u32) -> String {
     format!("display pan remove 0x{pan_id:08X}")
@@ -94,6 +112,15 @@ fn engine_dial_hz(engine: &Arc<Mutex<Engine>>) -> u64 {
         .ok()
         .map(|e| (e.settings().dial_mhz * 1_000_000.0) as u64)
         .unwrap_or(0)
+}
+
+/// The operator's desired pan bandwidth (Hz) + reference (dBm, `None`=auto), from the engine.
+fn engine_flex_controls(engine: &Arc<Mutex<Engine>>) -> (f64, Option<i32>) {
+    engine
+        .lock()
+        .ok()
+        .map(|e| (e.flex_pan_span_hz(), e.flex_pan_ref_dbm()))
+        .unwrap_or((SPAN_HZ, None))
 }
 
 // ---- orchestrator ----
@@ -123,6 +150,10 @@ impl FlexSpectrum {
         // center (MHz), so the UDP thread can filter/label and the TCP thread can retune.
         let stream_id = Arc::new(Mutex::new(None::<u32>));
         let center = Arc::new(Mutex::new(pan_center_mhz(dial_hz)));
+        // Live pan bandwidth (Hz), driven by the operator's Flex span control: the TCP thread
+        // applies changes to the rig, the UDP thread reads it to label the emitted RF span.
+        let (init_span, init_ref) = engine_flex_controls(&engine);
+        let span_hz = Arc::new(Mutex::new(init_span));
         let mut handles = Vec::new();
 
         // --- TCP control thread ---
@@ -130,6 +161,7 @@ impl FlexSpectrum {
             let stop = stop.clone();
             let stream_id = stream_id.clone();
             let center = center.clone();
+            let span_hz = span_hz.clone();
             let engine = engine.clone();
             handles.push(std::thread::spawn(move || {
                 let Ok(mut flex) = FlexCat::connect(&ip) else {
@@ -140,13 +172,15 @@ impl FlexSpectrum {
                 }
                 let _ = flex.send(&create_pan_command(
                     *center.lock().unwrap(),
-                    SPAN_HZ,
+                    init_span,
                     X_PIXELS,
                     FPS,
                 ));
                 let mut pan_id: Option<u32> = None;
                 let mut last_ka = Instant::now();
                 let mut last_center = *center.lock().unwrap();
+                let mut last_span = init_span;
+                let mut last_ref = init_ref;
                 while !stop.load(Ordering::Relaxed) {
                     // Drain async status → learn the pan id + VITA stream id (send() left the
                     // status stream for us; command() would have swallowed it).
@@ -162,13 +196,26 @@ impl FlexSpectrum {
                             }
                         }
                     }
-                    // Retune the pan when the operator's dial moves.
                     if let Some(pid) = pan_id {
+                        // Retune the pan when the operator's dial moves.
                         let want = pan_center_mhz(engine_dial_hz(&engine));
                         if want > 0.0 && (want - last_center).abs() > RETUNE_EPS_MHZ {
                             let _ = flex.send(&set_pan_center_command(pid, want));
                             *center.lock().unwrap() = want;
                             last_center = want;
+                        }
+                        // Apply the operator's span + reference controls when they change.
+                        let (want_span, want_ref) = engine_flex_controls(&engine);
+                        if (want_span - last_span).abs() > 1.0 {
+                            let _ = flex.send(&set_pan_bw_command(pid, want_span));
+                            *span_hz.lock().unwrap() = want_span;
+                            last_span = want_span;
+                        }
+                        if want_ref != last_ref {
+                            if let Some(r) = want_ref {
+                                let _ = flex.send(&set_pan_ref_command(pid, r));
+                            }
+                            last_ref = want_ref;
                         }
                     }
                     if last_ka.elapsed() >= KEEPALIVE {
@@ -187,6 +234,7 @@ impl FlexSpectrum {
             let stop = stop.clone();
             let stream_id = stream_id.clone();
             let center = center.clone();
+            let span_hz = span_hz.clone();
             handles.push(std::thread::spawn(move || {
                 let mut asm = FftReassembler::new();
                 let mut dg = vec![0u8; 16 * 1024];
@@ -210,7 +258,8 @@ impl FlexSpectrum {
                         continue;
                     };
                     if let Some(bins) = asm.push(&frame) {
-                        let (lo, hi) = rf_span_hz(*center.lock().unwrap(), SPAN_HZ);
+                        let (lo, hi) =
+                            rf_span_hz(*center.lock().unwrap(), *span_hz.lock().unwrap());
                         let spec = Spectrum {
                             row: fft_to_row(&bins),
                             lo_hz: lo,
@@ -275,6 +324,19 @@ mod tests {
         assert_eq!(
             remove_pan_command(0x40000000),
             "display pan remove 0x40000000"
+        );
+    }
+
+    #[test]
+    fn span_and_ref_command_strings() {
+        assert_eq!(
+            set_pan_bw_command(0x40000000, 50_000.0),
+            "display pan set 0x40000000 bw=0.050000"
+        );
+        // ref = top of the window; a 100 dB range sits below.
+        assert_eq!(
+            set_pan_ref_command(0x40000000, -40),
+            "display pan set 0x40000000 max_dbm=-40 min_dbm=-140"
         );
     }
 

@@ -4306,6 +4306,25 @@ fn set_scope_ref(state: State<'_, SharedEngine>, tenths_db: i32) -> Result<AppSn
     Ok(eng.snapshot())
 }
 
+/// Set the FlexRadio native-panadapter BANDWIDTH (Hz); the FlexSpectrum worker applies it live.
+#[tauri::command]
+fn set_flex_pan_span(state: State<'_, SharedEngine>, hz: f64) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_flex_pan_span(hz);
+    Ok(eng.snapshot())
+}
+
+/// Set the FlexRadio panadapter REFERENCE level (dBm); `None`/absent = auto.
+#[tauri::command]
+fn set_flex_pan_ref(
+    state: State<'_, SharedEngine>,
+    ref_dbm: Option<i32>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_flex_pan_ref(ref_dbm);
+    Ok(eng.snapshot())
+}
+
 /// Set the native Icom scope center/fixed mode (`true` = fixed band-edge view).
 #[tauri::command]
 fn set_scope_fixed(state: State<'_, SharedEngine>, fixed: bool) -> Result<AppSnapshot, String> {
@@ -8482,6 +8501,8 @@ pub fn run() {
             set_filter_width,
             set_scope_span,
             set_scope_ref,
+            set_flex_pan_span,
+            set_flex_pan_ref,
             set_scope_fixed,
             set_rit,
             set_xit,

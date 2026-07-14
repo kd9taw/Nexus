@@ -722,6 +722,14 @@ export async function setScopeSpan(hz: number): Promise<AppSnapshot> {
 export async function setScopeRef(tenthsDb: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_scope_ref', { tenthsDb })
 }
+/** Set the FlexRadio native-panadapter BANDWIDTH (span) in Hz. */
+export async function setFlexPanSpan(hz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_flex_pan_span', { hz })
+}
+/** Set the FlexRadio panadapter REFERENCE level (dBm); null = auto. */
+export async function setFlexPanRef(refDbm: number | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_flex_pan_ref', { refDbm })
+}
 /** Set the native Icom scope center/fixed mode (true = fixed band-edge view). */
 export async function setScopeFixed(fixed: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_scope_fixed', { fixed })

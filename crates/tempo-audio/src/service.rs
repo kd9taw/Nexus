@@ -739,7 +739,9 @@ fn handoff_if_switched(
     // try_lock; re-unkeying every retry adds CAT round-trips that stretch the retry past the
     // monitor's lock-free gaps). Still re-runs if anything keyed the rig mid-deferral.
     if !state.handoff_deferred || rig.keyed || state.tx_until_ms.is_some() {
-        crate::civ::diag::note("dual-radio handoff: unkeying the outgoing rig before it leaves the active slot");
+        crate::civ::diag::note(
+            "dual-radio handoff: unkeying the outgoing rig before it leaves the active slot",
+        );
         let _ = rig.ptt(false);
         let _ = rig.stop_morse();
         state.tx_until_ms = None;
@@ -1116,7 +1118,21 @@ impl RadioLoop {
         use crate::rigmodels::{native_spectrum_kind, SpectrumKind};
         let conn = if is_network { "network" } else { "serial" };
         let kind = native_spectrum_kind(rig_model, conn);
-        let key = kind.map(|_| (rig_model, is_network));
+        // Flex's native panadapter is OPT-IN (`flex_native_pan`) — unverified on real hardware
+        // until a tester enables it. Read the toggle ONLY when the active radio is actually a
+        // scope-capable Flex, so non-Flex users keep the lock-free fast path (the `&&`
+        // short-circuits before any lock). Folding it into the key makes toggling take effect
+        // on the next tick (key flips Some↔None → the worker starts/stops).
+        let flex_enabled = matches!(kind, Some(SpectrumKind::FlexVita))
+            && engine
+                .lock()
+                .map(|e| e.settings().flex_native_pan)
+                .unwrap_or(false);
+        let key = match kind {
+            None => None,
+            Some(SpectrumKind::FlexVita) if !flex_enabled => None, // opt-in off → no worker
+            Some(_) => Some((rig_model, is_network)),
+        };
         if key == self.spectrum_src_key {
             return; // unchanged — no-op (the common case, every tick)
         }
@@ -1124,7 +1140,7 @@ impl RadioLoop {
         // stops the threads + removes the pan) before starting the new one.
         self.spectrum_src = None;
         self.spectrum_src_key = key;
-        if let Some(SpectrumKind::FlexVita) = kind {
+        if flex_enabled {
             // Read the Flex API IP + current dial once, at start (a later IP edit takes effect on the
             // next radio re-select). Lock only on this rare transition, never per tick.
             let (ip, dial_hz) = match engine.lock() {
@@ -1280,7 +1296,9 @@ impl RadioLoop {
                     // UNCONDITIONAL: the flags can desync from a keyed radio (failed
                     // unkey); this teardown is the last chance to key-up through a
                     // LIVE channel before the daemon dies. Idempotent when idle.
-                    crate::civ::diag::note("rig_differs: transport changed → teardown+rebuild daemon (unkey first)");
+                    crate::civ::diag::note(
+                        "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
+                    );
                     backend.flush_output();
                     let _ = rig.ptt(false);
                     self.tx_until_ms = None;
@@ -3921,10 +3939,29 @@ mod tests {
         assert!(state.spectrum_src_key.is_none());
         assert!(state.spectrum_src.is_none());
 
-        // A Flex (model 2036, network) IS a native-scope rig, but with no `flex_radio_ip` set the
-        // worker is inert — the key is remembered so ticks are a no-op, but no connection is made.
+        // A Flex (model 2036, network) IS scope-capable, but the native panadapter is OPT-IN and
+        // OFF by default → no worker, and (key folds in the gate) no key either.
         state.reconcile_spectrum_source(&engine, 2036, true);
-        assert_eq!(state.spectrum_src_key, Some((2036, true)));
+        assert!(
+            state.spectrum_src_key.is_none(),
+            "flex_native_pan off → no worker, no key (unverified feature stays inert)"
+        );
+        assert!(state.spectrum_src.is_none());
+
+        // Enable the opt-in. Still no `flex_radio_ip`, so the worker is inert — but the key is now
+        // remembered so a network Flex's ticks are a no-op, and no connection is made.
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.flex_native_pan = true;
+            e.apply_settings(s);
+        }
+        state.reconcile_spectrum_source(&engine, 2036, true);
+        assert_eq!(
+            state.spectrum_src_key,
+            Some((2036, true)),
+            "opt-in on → key remembered"
+        );
         assert!(
             state.spectrum_src.is_none(),
             "empty flex_radio_ip → no worker started (no network I/O)"

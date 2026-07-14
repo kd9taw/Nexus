@@ -411,6 +411,12 @@ pub struct Engine {
     pending_scope_span: Option<u32>,
     pending_scope_ref: Option<i32>,
     pending_scope_fixed: Option<bool>,
+    /// FlexRadio native-panadapter controls (read continuously by the FlexSpectrum worker, which
+    /// applies them via `display pan set`): the pan BANDWIDTH in Hz (default 200 kHz) and an
+    /// optional reference level in dBm (`None` = leave the Flex on auto). Distinct from the Icom
+    /// one-shots above — the Flex worker polls the current value, so these are live, not drained.
+    flex_pan_span_hz: f64,
+    flex_pan_ref_dbm: Option<i32>,
     /// A foreign CAT-broker client is holding PTT (arbitrated in `broker_ptt`).
     broker_ptt: bool,
     /// Phone voice-keyer: pending 12 kHz mono samples to transmit. The radio loop drains
@@ -688,6 +694,8 @@ impl Engine {
             pending_passband: None,
             pending_scope_span: None,
             pending_scope_ref: None,
+            flex_pan_span_hz: 200_000.0,
+            flex_pan_ref_dbm: None,
             pending_scope_fixed: None,
             broker_ptt: false,
             voice_tx: None,
@@ -1911,6 +1919,25 @@ impl Engine {
     /// Queue a native-scope CENTER/FIXED mode change from the UI (`true` = fixed).
     pub fn request_scope_fixed(&mut self, fixed: bool) {
         self.pending_scope_fixed = Some(fixed);
+    }
+
+    /// FlexRadio panadapter controls, applied continuously by the FlexSpectrum worker (not
+    /// drained). Set the pan BANDWIDTH (Hz) — the worker `display pan set … bw=` and re-labels the
+    /// emitted RF span. Clamped to SmartSDR's practical range.
+    pub fn set_flex_pan_span(&mut self, span_hz: f64) {
+        self.flex_pan_span_hz = span_hz.clamp(5_000.0, 14_000_000.0);
+    }
+    /// Set the Flex pan REFERENCE level (dBm) — the worker sets the pan's dB window; `None` = auto.
+    pub fn set_flex_pan_ref(&mut self, ref_dbm: Option<i32>) {
+        self.flex_pan_ref_dbm = ref_dbm.map(|d| d.clamp(-160, 20));
+    }
+    /// The current Flex pan bandwidth (Hz) — polled by the FlexSpectrum worker.
+    pub fn flex_pan_span_hz(&self) -> f64 {
+        self.flex_pan_span_hz
+    }
+    /// The current Flex pan reference level (dBm), or `None` for auto — polled by the worker.
+    pub fn flex_pan_ref_dbm(&self) -> Option<i32> {
+        self.flex_pan_ref_dbm
     }
     /// Drain the pending native-scope control one-shots for the radio loop.
     pub fn take_scope_span_request(&mut self) -> Option<u32> {

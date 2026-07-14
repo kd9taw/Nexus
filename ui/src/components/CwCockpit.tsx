@@ -26,6 +26,8 @@ import {
   setAgc,
   setScopeSpan,
   setScopeRef,
+  setFlexPanSpan,
+  setFlexPanRef,
   openPanelWindow,
   setTune,
   haltTx,
@@ -53,6 +55,16 @@ const RIG_SPANS = [
   { label: '±50k', hz: 50_000 },
   { label: '±100k', hz: 100_000 },
   { label: '±250k', hz: 250_000 },
+] as const
+
+/** FlexRadio pan BANDWIDTH presets (full span) — command the SmartSDR panadapter width. */
+const FLEX_SPANS = [
+  { label: '50k', hz: 50_000 },
+  { label: '100k', hz: 100_000 },
+  { label: '200k', hz: 200_000 },
+  { label: '500k', hz: 500_000 },
+  { label: '1M', hz: 1_000_000 },
+  { label: '2M', hz: 2_000_000 },
 ] as const
 
 interface Props {
@@ -205,6 +217,14 @@ export function CwCockpit({
   )
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
   const civScope = scopeFeed?.source === 'civ'
+  const flexScope = scopeFeed?.source === 'flex'
+  const [flexRefDbm, setFlexRefDbm] = useState(-80)
+  const changeFlexRef = (dbm: number) => {
+    setFlexRefDbm(dbm)
+    void setFlexPanRef(dbm)
+      .then((s) => onSnap?.(s))
+      .catch(() => {})
+  }
   const [rfSpan, setRfSpan] = useState<(typeof RF_SPANS)[number]>(RF_SPANS[0])
   const [scopeRefTenths, setScopeRefTenths] = useState(0)
   const changeScopeRef = (tenths: number) => {
@@ -699,6 +719,41 @@ export function CwCockpit({
               aria-label="Scope reference level (dB)"
             />
             <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} dB</span>
+          </label>
+        </div>
+      )}
+
+      {/* FlexRadio SmartSDR panadapter controls — bandwidth + reference. Parity with Phone. */}
+      {flexScope && (
+        <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
+          <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
+            Flex&nbsp;pan
+          </span>
+          <div className="ph-span">
+            {FLEX_SPANS.map((sp) => (
+              <button
+                key={sp.label}
+                type="button"
+                className="theme-chip"
+                title={`Set the Flex panadapter bandwidth to ${sp.label}`}
+                onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+              >
+                {sp.label}
+              </button>
+            ))}
+          </div>
+          <label className="ph-rigscope-ref" title="Panadapter reference level (dBm) — lower to lift weak signals out of the noise">
+            <span>Ref</span>
+            <input
+              type="range"
+              min={-140}
+              max={-20}
+              step={5}
+              value={flexRefDbm}
+              onChange={(e) => changeFlexRef(Number(e.target.value))}
+              aria-label="Flex panadapter reference level (dBm)"
+            />
+            <span className="ph-power-val">{flexRefDbm} dBm</span>
           </label>
         </div>
       )}

@@ -2171,6 +2171,29 @@ export function SettingsPanel({
                   </label>
                 )}
 
+              {form.rigConn === 'network' &&
+                (/flex/i.test(form.rigModelName ?? '') || (form.flexRadioIp ?? '').trim() !== '') && (
+                  <label className="settings-field">
+                    <span className="settings-label">Flex native panadapter (early access)</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.flexNativePan ?? false}
+                      className={`toggle${form.flexNativePan ? ' on' : ''}`}
+                      onClick={() => updateBool('flexNativePan', !form.flexNativePan)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                    <span className="settings-hint">
+                      Stream this FlexRadio's real SmartSDR panadapter (VITA-49 FFT) into the
+                      cockpit scope — the RF spectrum around your dial, with the Flex-pan span/ref
+                      controls. <strong>Unverified on hardware</strong>, so it's opt-in: needs the
+                      Flex IP set (from Find Radios) and SmartSDR reachable on this network. If the
+                      scope stays blank or the app hitches, turn it back off. Save to apply.
+                    </span>
+                  </label>
+                )}
+
               {form.rigConn !== 'network' &&
                 /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') &&
                 form.icomNativeCat && (

@@ -19,6 +19,8 @@ import {
   setAgc,
   setScopeSpan,
   setScopeRef,
+  setFlexPanSpan,
+  setFlexPanRef,
   startQsoRecording,
   stopQsoRecording,
   setTune,
@@ -105,6 +107,17 @@ const RIG_SPANS = [
   { label: '±250k', hz: 250_000 },
 ] as const
 
+/** FlexRadio pan BANDWIDTH presets (full span, not ± half-width) — command the SmartSDR
+ *  panadapter's real width via `display pan set … bw=`. */
+const FLEX_SPANS = [
+  { label: '50k', hz: 50_000 },
+  { label: '100k', hz: 100_000 },
+  { label: '200k', hz: 200_000 },
+  { label: '500k', hz: 500_000 },
+  { label: '1M', hz: 1_000_000 },
+  { label: '2M', hz: 2_000_000 },
+] as const
+
 export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, spots, needByCall, typeByCall, onWorkSpot }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   // Mirror the RIG's real level (CAT read-back / last commanded) so the slider
@@ -182,6 +195,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // True only when the rig's own Icom scope is streaming (span/ref are Icom CI-V commands; the
   // Flex panadapter has a different control path, so gate on 'civ' specifically, not any RF feed).
   const civScope = scopeFeed?.source === 'civ'
+  // FlexRadio SmartSDR panadapter — its own span/ref command path (display pan set …).
+  const flexScope = scopeFeed?.source === 'flex'
+  const [flexRefDbm, setFlexRefDbm] = useState(-80)
+  const changeFlexRef = (dbm: number) => {
+    setFlexRefDbm(dbm)
+    void setFlexPanRef(dbm)
+      .then((s) => onSnap?.(s))
+      .catch(() => {})
+  }
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
   const [spotOpen, setSpotOpen] = useState(false) // spot-to-cluster popup
@@ -645,6 +667,41 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               aria-label="Scope reference level (dB)"
             />
             <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} dB</span>
+          </label>
+        </div>
+      )}
+
+      {/* FlexRadio SmartSDR panadapter controls — command the Flex pan's real bandwidth + ref. */}
+      {flexScope && (
+        <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
+          <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
+            Flex&nbsp;pan
+          </span>
+          <div className="ph-span">
+            {FLEX_SPANS.map((sp) => (
+              <button
+                key={sp.label}
+                type="button"
+                className="theme-chip"
+                title={`Set the Flex panadapter bandwidth to ${sp.label}`}
+                onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+              >
+                {sp.label}
+              </button>
+            ))}
+          </div>
+          <label className="ph-rigscope-ref" title="Panadapter reference level (dBm) — lower to lift weak signals out of the noise">
+            <span>Ref</span>
+            <input
+              type="range"
+              min={-140}
+              max={-20}
+              step={5}
+              value={flexRefDbm}
+              onChange={(e) => changeFlexRef(Number(e.target.value))}
+              aria-label="Flex panadapter reference level (dBm)"
+            />
+            <span className="ph-power-val">{flexRefDbm} dBm</span>
           </label>
         </div>
       )}

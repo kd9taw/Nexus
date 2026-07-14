@@ -1542,6 +1542,8 @@ export interface Settings {
   catBrokerPort: number
   /** A FlexRadio's IP for the SmartSDR API (port 4992), for the native panadapter. Empty = off. */
   flexRadioIp: string
+  /** Opt-in to the Flex native SmartSDR panadapter (unverified on hardware; off by default). */
+  flexNativePan: boolean
   /** Let a broker client (WSJT-X/N1MM) key PTT when Nexus is idle. OFF by
    * default — Nexus owns TX unless the operator opts in. */
   catBrokerPtt?: boolean
