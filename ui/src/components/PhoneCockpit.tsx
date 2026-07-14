@@ -65,6 +65,16 @@ const SPANS = [
   { label: 'High', lo: 1500, hi: 2900, title: 'Upper half — zoomed (1500–2900 Hz)' },
 ] as const
 
+/** RF panadapter zoom presets (used only when a native RF scope is streaming). Symmetric ±Hz
+ *  windows centered on the dial — scopeView maps these to absolute RF and clamps to the swept
+ *  span, so "Full" (a huge window) shows the rig's WHOLE sweep rather than a passband-width sliver. */
+const RF_SPANS = [
+  { label: 'Full', lo: -1e9, hi: 1e9, title: "The rig's whole scope sweep (set the width on the radio)" },
+  { label: '±25k', lo: -25_000, hi: 25_000, title: '±25 kHz around your dial' },
+  { label: '±10k', lo: -10_000, hi: 10_000, title: '±10 kHz around your dial' },
+  { label: '±5k', lo: -5_000, hi: 5_000, title: '±5 kHz around your dial' },
+] as const
+
 export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, spots, onWorkSpot }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   // Mirror the RIG's real level (CAT read-back / last commanded) so the slider
@@ -82,11 +92,17 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // soundcard audio, not RF IQ, so "span" means which slice of the passband
   // fills the scope).
   const [span, setSpan] = useState<(typeof SPANS)[number]>(SPANS[0])
+  const [rfSpan, setRfSpan] = useState<(typeof RF_SPANS)[number]>(RF_SPANS[0])
   // Live scope feed (reported by PhoneScope) — keeps the "RX audio" label honest when a
   // native RF panadapter is driving the scope (show the real RF span instead).
   const [scopeFeed, setScopeFeed] = useState<{ source: string; loHz: number; hiHz: number } | null>(
     null,
   )
+  // True while a native RF panadapter (Flex/Icom CI-V) is actually streaming the scope. Drives
+  // the whole panel's identity: when the rig's real RF spectrum is live we drop the audio-passband
+  // framing (the "RX audio" label and the audio-Hz span chips) so the operator sees ONE unambiguous
+  // display — the panadapter — instead of RF spectrum wrapped in audio-passband chrome.
+  const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
   const [spotOpen, setSpotOpen] = useState(false) // spot-to-cluster popup
@@ -418,8 +434,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         <div className="ph-scope-head">
           {(() => {
             // Honest per feed: soundcard FFT = the demodulated RX audio; a native
-            // panadapter = the real RF spectrum, so show its absolute span instead.
-            const rf = scopeFeed != null && isRfScopeSource(scopeFeed.source) ? scopeFeed : null
+            // panadapter = the real RF spectrum, so name it a panadapter and show its span.
+            const rf = nativeRf ? scopeFeed : null
             return (
               <span
                 className="ph-scope-title"
@@ -429,10 +445,10 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                     : 'Receiver AUDIO spectrum (200–2900 Hz of the demodulated passband) — not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.'
                 }
               >
-                Passband{' '}
+                {rf ? 'RF Panadapter' : 'Passband'}{' '}
                 <span className="ph-scope-sub">
                   {rf
-                    ? `· RF ${(rf.loHz / 1e6).toFixed(4)}–${(rf.hiHz / 1e6).toFixed(4)} MHz`
+                    ? `· ${(rf.loHz / 1e6).toFixed(4)}–${(rf.hiHz / 1e6).toFixed(4)} MHz`
                     : '· RX audio'}
                 </span>
               </span>
@@ -442,26 +458,44 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           <PalettePicker />
         </div>
         <div className="ph-scope-wrap" ref={scopeRef} title="Scroll here to tune the VFO">
-          <div className="ph-span" role="group" aria-label="Bandscope span">
-            {SPANS.map((sp) => (
-              <button
-                key={sp.label}
-                type="button"
-                className={`theme-chip${span.label === sp.label ? ' active' : ''}`}
-                aria-pressed={span.label === sp.label}
-                title={sp.title}
-                onClick={() => setSpan(sp)}
-              >
-                {sp.label}
-              </button>
-            ))}
-          </div>
+          {nativeRf ? (
+            // Native RF panadapter: RF-width zoom around the dial (not audio-passband slices).
+            <div className="ph-span" role="group" aria-label="Panadapter zoom">
+              {RF_SPANS.map((sp) => (
+                <button
+                  key={sp.label}
+                  type="button"
+                  className={`theme-chip${rfSpan.label === sp.label ? ' active' : ''}`}
+                  aria-pressed={rfSpan.label === sp.label}
+                  title={sp.title}
+                  onClick={() => setRfSpan(sp)}
+                >
+                  {sp.label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="ph-span" role="group" aria-label="Bandscope span">
+              {SPANS.map((sp) => (
+                <button
+                  key={sp.label}
+                  type="button"
+                  className={`theme-chip${span.label === sp.label ? ' active' : ''}`}
+                  aria-pressed={span.label === sp.label}
+                  title={sp.title}
+                  onClick={() => setSpan(sp)}
+                >
+                  {sp.label}
+                </button>
+              ))}
+            </div>
+          )}
           <PhoneScope
             transmitting={snap.radio.transmitting}
             theme={theme}
             smeterDb={snap.radio.smeterDb}
-            viewLoHz={span.lo}
-            viewHiHz={span.hi}
+            viewLoHz={nativeRf ? rfSpan.lo : span.lo}
+            viewHiHz={nativeRf ? rfSpan.hi : span.hi}
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
             onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
