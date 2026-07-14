@@ -208,6 +208,7 @@ enum WriteOutcome {
 
 fn write_frame(io: &mut Box<dyn CivIo>, frame: &Frame) -> WriteOutcome {
     let bytes = frame.to_bytes();
+    super::diag::log(super::diag::Dir::Tx, &bytes);
     for _ in 0..3 {
         match io.write_all(&bytes).and_then(|_| io.flush()) {
             Ok(()) => return WriteOutcome::Ok,
@@ -310,7 +311,10 @@ fn engine_loop(
                 std::thread::sleep(Duration::from_millis(1));
                 Vec::new()
             }
-            Ok(n) => splitter.push(&buf[..n]),
+            Ok(n) => {
+                super::diag::log(super::diag::Dir::Rx, &buf[..n]);
+                splitter.push(&buf[..n])
+            }
             Err(e)
                 if matches!(
                     e.kind(),

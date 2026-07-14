@@ -42,6 +42,7 @@ import { loadProfiles, saveProfile, deleteProfile, type Profile } from '../profi
 import { getConnectionLog, getCredentialsStatus } from '../api'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { discoverFlex } from '../api'
+import { civDiagnosticLog } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
@@ -248,6 +249,9 @@ export function SettingsPanel({
   const [allRigModelsLoading, setAllRigModelsLoading] = useState(false)
   const [showAllRigModels, setShowAllRigModels] = useState(false)
   const [serialPorts, setSerialPorts] = useState<string[]>([])
+  // Native CI-V bus diagnostic log: null = off, string = the log file path while capturing.
+  // Transient (not persisted) — a support tool the operator arms to capture a fault.
+  const [civLogPath, setCivLogPath] = useState<string | null>(null)
   const [profiles, setProfiles] = useState<Profile[]>(() => loadProfiles())
   const [selectedProfile, setSelectedProfile] = useState('')
   const [newProfileName, setNewProfileName] = useState('')
@@ -2123,6 +2127,46 @@ export function SettingsPanel({
                       instant dial tracking. Set the rig's CI-V USB baud rate to 115200 (Menu ▸
                       Connectors) and match Baud above. Save to apply; turn off any time to
                       return to the classic Hamlib path.
+                    </span>
+                  </label>
+                )}
+
+              {form.rigConn !== 'network' &&
+                /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') &&
+                form.icomNativeCat && (
+                  <label className="settings-field">
+                    <span className="settings-label">CI-V bus diagnostic log</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={civLogPath !== null}
+                      className={`toggle${civLogPath !== null ? ' on' : ''}`}
+                      onClick={() =>
+                        void withErrorToast(
+                          () => civDiagnosticLog(civLogPath === null),
+                          'Could not toggle the CI-V diagnostic log',
+                        ).then((path) => {
+                          if (path === undefined) return // error already toasted
+                          setCivLogPath(path === '' ? null : path)
+                        })
+                      }
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                    <span className="settings-hint">
+                      {civLogPath !== null ? (
+                        <>
+                          Capturing the raw CI-V bus traffic to <code>{civLogPath}</code>. Reproduce
+                          the issue (e.g. the PTT flicker on transmit), then turn this off and send
+                          that file — it shows exactly what's on the bus during the fault.
+                        </>
+                      ) : (
+                        <>
+                          Records every byte to/from the radio on the native CI-V path to a file in
+                          your Downloads — a support tool for hardware-only issues like the IC-9700
+                          PTT flicker. Turn on, reproduce the problem, turn off, then send the file.
+                        </>
+                      )}
                     </span>
                   </label>
                 )}

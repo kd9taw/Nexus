@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CI-V bus diagnostic log (Settings ▸ native Icom CI-V).** An opt-in support tool that records the
+  raw CI-V bus traffic — every byte to and from the radio, timestamped and decoded (PTT on/off, mode
+  set, scope waveform, ack…) — to a file in your Downloads. It's the way to root-cause hardware-only
+  native-CI-V faults (like the IC-9700 PTT flicker on transmit): turn it on, reproduce the issue,
+  turn it off, and the capture shows exactly what's on the bus during the fault. Off by default,
+  not persisted, and free when off (the engine only taps the wire while it's armed).
+
 ### Changed
 
 - **FT8 Call Roster now leads with the callsign, then the Need column.** Callsign is the first thing

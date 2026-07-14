@@ -19,6 +19,7 @@
 
 pub mod broker;
 pub mod commands;
+pub mod diag;
 pub mod engine;
 pub mod frame;
 pub mod scope;

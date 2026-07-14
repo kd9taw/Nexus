@@ -1085,6 +1085,16 @@ export async function importHuntedParksCsv(csv: string): Promise<number> {
 }
 
 /**
+ * Arm or disarm the native CI-V bus diagnostic log. When enabled, returns the path
+ * of the log file (in Downloads) that captures the raw CI-V traffic; when disabled,
+ * returns an empty string. A support tool for hardware-only faults like the IC-9700
+ * PTT flicker — off by default, not persisted.
+ */
+export async function civDiagnosticLog(enable: boolean): Promise<string> {
+  return invoke<string>('civ_diagnostic_log', { enable })
+}
+
+/**
  * Export the contest/contact log in the given format. Returns the serialized
  * text (the caller saves it via a browser download). Rejects if there is no
  * log to export (e.g. not in Field Day mode).

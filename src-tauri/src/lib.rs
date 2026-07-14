@@ -3044,6 +3044,28 @@ fn save_text_to_downloads(
     Ok(path.display().to_string())
 }
 
+/// Arm or disarm the native CI-V bus diagnostic log. When enabled, every byte the CI-V
+/// engine reads/writes is recorded (timestamped + decoded) to a file in the operator's
+/// Downloads folder; returns that path so the UI can show it. Off by default and not
+/// persisted — a support tool to capture the real bus traffic during a hardware-only fault.
+#[tauri::command]
+fn civ_diagnostic_log(app: tauri::AppHandle, enable: bool) -> Result<String, String> {
+    use tauri::Manager;
+    if !enable {
+        tempo_audio::civ::diag::stop();
+        return Ok(String::new());
+    }
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|e| format!("Could not locate your Downloads folder: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("nexus-civ-diagnostic.log");
+    tempo_audio::civ::diag::start(&path).map_err(|e| format!("Could not start the log: {e}"))?;
+    Ok(path.display().to_string())
+}
+
 /// Transmit an open broadcast (FT8-style "to all") free-text message.
 #[tauri::command]
 fn broadcast(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
@@ -7975,6 +7997,7 @@ pub fn run() {
             export_log,
             export_general_log,
             save_text_to_downloads,
+            civ_diagnostic_log,
             broadcast,
             get_serial_ports,
             get_audio_devices,
