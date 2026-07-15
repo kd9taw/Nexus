@@ -1230,7 +1230,13 @@ impl Settings {
     /// configs or hand-edited collisions.
     pub fn ensure_distinct_radio_ports(&mut self) {
         let broker = self.cat_broker.then_some(self.cat_broker_port);
-        if validate_radio_ports(&self.radios, broker).is_ok() {
+        // Repair when ports COLLIDE, or when any profile has an INVALID (0) rigctld port. A lone 0
+        // is technically "distinct" so `validate_radio_ports` alone wouldn't flag it, but connecting
+        // to 127.0.0.1:0 fails on Windows with WSAEADDRNOTAVAIL ("the requested address is not valid
+        // in its context", os error 10049) — so an older/imported config with a 0 port breaks CAT
+        // for that one radio while its siblings work. Treat 0 like a collision and reassign it.
+        let has_invalid_port = self.radios.iter().any(|p| p.rigctld_port == 0);
+        if !has_invalid_port && validate_radio_ports(&self.radios, broker).is_ok() {
             return;
         }
         let mut used: Vec<u16> = broker.into_iter().collect();
@@ -1243,14 +1249,14 @@ impl Settings {
             port
         };
         for p in self.radios.iter_mut() {
-            if used.contains(&p.rigctld_port) {
+            if p.rigctld_port == 0 || used.contains(&p.rigctld_port) {
                 p.rigctld_port = free_from(4532, &mut used);
             } else {
                 used.push(p.rigctld_port);
             }
             // Only radios that actually have a rotator claim a rotctld port.
             if p.rotator_model > 0 || !p.rotator_host.is_empty() {
-                if used.contains(&p.rotctld_port) {
+                if p.rotctld_port == 0 || used.contains(&p.rotctld_port) {
                     p.rotctld_port = free_from(4533, &mut used);
                 } else {
                     used.push(p.rotctld_port);
@@ -2434,6 +2440,38 @@ mod tests {
             s.radios.iter().find(|p| p.id == r1).unwrap().rigctld_port,
             4532,
             "the colliding radio was moved to a free port"
+        );
+    }
+
+    #[test]
+    fn ensure_distinct_radio_ports_repairs_zero_port() {
+        // Regression: a profile with rigctld_port == 0 (e.g. an older/imported config) is "distinct"
+        // from its siblings, so validate_radio_ports passes and the old early-return skipped repair —
+        // leaving Nexus to connect to 127.0.0.1:0, which fails with WSAEADDRNOTAVAIL (os error 10049).
+        // The repair must reassign a 0 port even when nothing collides.
+        let mut s = Settings::default();
+        s.ensure_radio_profiles(); // radio 0 @ 4532
+        let r1 = s.add_radio_profile(); // radio 1 @ 4533
+        s.radios
+            .iter_mut()
+            .find(|p| p.id == r1)
+            .unwrap()
+            .rigctld_port = 0; // the broken Xiegu-profile case
+                               // Distinct (0 != 4532), so validate alone does NOT catch it.
+        assert!(validate_radio_ports(&s.radios, None).is_ok());
+        s.ensure_distinct_radio_ports();
+        assert_ne!(
+            s.radios.iter().find(|p| p.id == r1).unwrap().rigctld_port,
+            0,
+            "the 0 port was reassigned to a real one"
+        );
+        assert!(
+            s.radios.iter().all(|p| p.rigctld_port != 0),
+            "no profile is left on port 0"
+        );
+        assert!(
+            validate_radio_ports(&s.radios, None).is_ok(),
+            "still pairwise-distinct after repair"
         );
     }
 

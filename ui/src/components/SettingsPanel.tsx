@@ -645,9 +645,21 @@ export function SettingsPanel({
   const findRigModelName = (modelNum: number): string =>
     rigModels.find((m) => m[0] === modelNum)?.[1] ?? allRigModels.find((m) => m[0] === modelNum)?.[1] ?? ''
 
+  // Xiegu CI-V rigs (G90/X6100/X6200/X5105/X108G) run CAT at 19200 by default and have no baud menu
+  // on the radio, so picking one auto-sets 19200 — the global default is 38400, which would leave CAT
+  // silent (rigctld connects but the radio never answers). Model numbers mirror the Xiegu (Icom-family)
+  // entries in crates/tempo-audio/src/rigmodels.rs.
+  const XIEGU_MODELS = new Set([3088, 3087, 3091, 3089, 3076])
+  const recommendedBaud = (modelNum: number): number | null => (XIEGU_MODELS.has(modelNum) ? 19200 : null)
+
   const selectRig = (modelNum: number) => {
     markDirty()
-    setForm((prev) => (prev ? { ...prev, rigModel: modelNum, rigModelName: findRigModelName(modelNum) } : prev))
+    const baud = recommendedBaud(modelNum)
+    setForm((prev) =>
+      prev
+        ? { ...prev, rigModel: modelNum, rigModelName: findRigModelName(modelNum), ...(baud ? { baud } : {}) }
+        : prev,
+    )
   }
 
   // --- Dual-radio roster (P2). These are LIVE verbs: they persist immediately and return a fresh
@@ -741,6 +753,7 @@ export function SettingsPanel({
   // One-click apply a detected rig: fill model (if identified) + port + paired audio.
   const applyDetectedRig = (r: DetectedRig) => {
     markDirty()
+    const baud = r.suggestedModel != null ? recommendedBaud(r.suggestedModel) : null
     setForm((prev) =>
       prev
         ? {
@@ -750,6 +763,7 @@ export function SettingsPanel({
               : {}),
             serialPort: r.portName,
             ...(r.suggestedAudio ? { audioIn: r.suggestedAudio, audioOut: r.suggestedAudio } : {}),
+            ...(baud ? { baud } : {}),
           }
         : prev,
     )

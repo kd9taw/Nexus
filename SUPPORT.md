@@ -20,9 +20,10 @@ The **[operator manual](docs/manual/)** is your full guide:
 
 ## 2. Ask a question
 
-For setup help, usage questions, bug reports, or general discussion, open a
-**[ticket](https://sourceforge.net/p/nexus-ham-radio/tickets/)** on the
-SourceForge project. Quick on-air chatter is welcome there too.
+For setup help, usage questions, or general discussion, join the
+**[hamradiotools groups.io list](https://groups.io/g/hamradiotools)**. To report a
+bug, open a **[ticket](https://sourceforge.net/p/nexus-ham-radio/tickets/)** on the
+SourceForge project. Quick on-air chatter is welcome on the list too.
 
 ## 3. Report something
 

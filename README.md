@@ -227,7 +227,8 @@ contributions welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)** and the
 
 **[⬇ Download](https://sourceforge.net/projects/nexus-ham-radio/files/latest/download)** ·
 **[📖 Manual](docs/manual/)** ·
-**[💬 Discuss / report a bug](https://sourceforge.net/p/nexus-ham-radio/tickets/)** ·
+**[💬 Discussion group](https://groups.io/g/hamradiotools)** ·
+**[🐛 Report a bug](https://sourceforge.net/p/nexus-ham-radio/tickets/)** ·
 **[📦 Project page](https://sourceforge.net/projects/nexus-ham-radio/)**
 
 </sub></div>

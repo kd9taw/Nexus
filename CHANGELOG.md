@@ -5,6 +5,27 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.8] — 2026-07-14 — Xiegu CAT fix ("os error 10049") + auto-baud
+
+### Fixed
+
+- **CAT no longer fails with "the requested address is not valid in its context (os error 10049)"
+  on a radio whose rigctld port was left at 0.** Nexus runs a separate rigctld per radio, each on
+  its own TCP port, and connects to `127.0.0.1:<port>`. A profile that carried port 0 (from an older
+  or imported config) made Nexus try to reach `127.0.0.1:0`, which Windows rejects with
+  WSAEADDRNOTAVAIL — so that one radio's CAT failed on **Test CAT** and on every mode change while
+  its siblings (Yaesu, Icom) kept working. The on-load port repair now reassigns a 0/invalid port
+  (not just *duplicate* ports), and the connection coerces a stray 0 to the default 4532, so this
+  can't resurface. If you hit it, just re-open **Settings ▸ Rig Control ▸ Advanced** and the port is
+  already fixed.
+
+### Changed
+
+- **Selecting a Xiegu (G90 / X6100 / X6200 / X5105 / X108G) now sets CAT to 19200 automatically.**
+  These rigs run CI-V at 19200 and have no baud menu on the radio, so the previous 38400 default left
+  CAT silent (rigctld connected but the radio never answered). Picking or auto-applying a Xiegu now
+  sets 19200; you can still change it by hand.
+
 ## [0.8.7] — 2026-07-14 — CW ragchew macro tokens + FlexRadio panadapter (early access)
 
 ### Added

@@ -56,6 +56,19 @@ impl CatDaemon {
     }
 }
 
+/// A rigctld TCP port is never allowed to be 0. Nexus spawns rigctld on this port and connects to
+/// `127.0.0.1:<port>`; connecting to port 0 fails on Windows with WSAEADDRNOTAVAIL ("the requested
+/// address is not valid in its context", os error 10049). Settings repair (`ensure_distinct_radio_ports`)
+/// keeps a persisted 0 from surviving a load, but this is the runtime backstop for a just-detected,
+/// not-yet-saved profile. 4532 is Hamlib's default rigctld port.
+fn safe_rigctld_port(port: u16) -> u16 {
+    if port == 0 {
+        4532
+    } else {
+        port
+    }
+}
+
 /// The CI-V address to natively drive `t` at — `Some` only when the operator opted this
 /// radio into `icom_native_cat` AND it's a scope-capable Icom on a serial connection.
 fn native_civ_addr(t: &Transport) -> Option<u8> {
@@ -441,7 +454,7 @@ impl Transport {
             baud: p.baud,
             rig_conn: p.rig_conn.clone(),
             rig_addr: p.rig_addr.clone(),
-            rigctld_port: p.rigctld_port,
+            rigctld_port: safe_rigctld_port(p.rigctld_port),
             icom_native_cat: p.icom_native_cat,
             broker_self_port: None,
             audio_in: String::new(),
@@ -3331,7 +3344,7 @@ impl Transport {
             baud: c.baud,
             rig_conn: c.rig_conn.clone(),
             rig_addr: c.rig_addr.clone(),
-            rigctld_port: c.rigctld_port,
+            rigctld_port: safe_rigctld_port(c.rigctld_port),
             icom_native_cat: c.icom_native_cat,
             broker_self_port: c.broker_self_port,
             audio_in: c.audio_in.clone(),
@@ -3357,7 +3370,7 @@ impl Transport {
             icom_native_cat: s.icom_native_cat,
             rig_conn: s.rig_conn.clone(),
             rig_addr: s.rig_addr.clone(),
-            rigctld_port: s.rigctld_port,
+            rigctld_port: safe_rigctld_port(s.rigctld_port),
             broker_self_port: if s.cat_broker {
                 Some(s.cat_broker_port)
             } else {
