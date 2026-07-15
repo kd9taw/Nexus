@@ -151,6 +151,33 @@ const FREQ_MISS_LIMIT: u32 = 3;
 /// `MN` (manual notch) which needs a separate NOTCHF frequency level.
 const RIG_FUNCS: [&str; 5] = ["NB", "NR", "ANF", "COMP", "VOX"];
 
+/// Indices into the `RadioLoop` `level_supported` / `level_misses` arrays — the optional extended
+/// per-poll level reads (RF power, mic gain, NR level, AGC). They mirror the rig's real knob
+/// positions into the UI every RX poll. A rig that's slow or silent on any of them (the Elecraft
+/// K4 via QK4 Remote is the report) makes each read eat the full per-command timeout and then
+/// drop+reconnect the CAT socket — the ~5 s "Nexus hangs up every few seconds" churn. Capability-
+/// caching them (3 consecutive misses → stop issuing that read) ends it, the same way
+/// `smeter_supported` and `func_supported` already gate their own reads.
+const LVL_RFPOWER: usize = 0;
+const LVL_MICGAIN: usize = 1;
+const LVL_NR: usize = 2;
+const LVL_AGC: usize = 3;
+
+/// Record one extended-level read outcome into its `supported`/`misses` slot, with the same
+/// miss-tolerance as the S-meter: a hit resets the counter and confirms support; three consecutive
+/// misses mark the read unsupported so the poll loop stops issuing it (and stops the socket churn).
+fn note_ext_read(supported: &mut Option<bool>, misses: &mut u8, ok: bool) {
+    if ok {
+        *supported = Some(true);
+        *misses = 0;
+    } else {
+        *misses = misses.saturating_add(1);
+        if *misses >= 3 {
+            *supported = Some(false);
+        }
+    }
+}
+
 /// AGC speed <-> Hamlib enum int (FAST=2, MEDIUM=5, SLOW=3). The UI/engine speak
 /// "fast"/"mid"/"slow"; the rigctld `AGC` level carries the enum int.
 fn agc_to_hamlib(speed: &str) -> u8 {
@@ -1029,6 +1056,13 @@ struct RadioLoop {
     /// Last-known func states, mirrored to the engine each sub-cadence poll; a read miss on a
     /// supported func keeps the last value so the toggle never flickers.
     func_state: [Option<bool>; 5],
+    /// Per-extended-level capability ([RFPOWER, MICGAIN, NR, AGC], see the `LVL_*` indices), the
+    /// same miss-tolerant caching as `func_supported`: `Some(false)` after 3 get-misses → stop
+    /// issuing that read, so a rig slow/silent on it doesn't churn the CAT socket every poll
+    /// (the K4/QK4 "hangs up every 5 s" bug). Reset on CAT re-confirm / rig rebuild.
+    level_supported: [Option<bool>; 4],
+    /// Consecutive get-miss counters per extended level — same tolerance as `smeter_misses`.
+    level_misses: [u8; 4],
     /// Whether we last surfaced the "monitor refused — would transmit into the TX
     /// device" note on the audio-error line, so we clear only our OWN message.
     /// The monitor block currently OWNS the audio-error line (it wrote either
@@ -1114,6 +1148,8 @@ impl RadioLoop {
             func_supported: [None; 5],
             func_misses: [0; 5],
             func_state: [None; 5],
+            level_supported: [None; 4],
+            level_misses: [0; 4],
 
             last_fd_qsos: 0,
             last_reported_band: now_unix_ms(),
@@ -1215,6 +1251,8 @@ impl RadioLoop {
         self.func_supported = [None; 5];
         self.func_misses = [0; 5];
         self.func_state = [None; 5];
+        self.level_supported = [None; 4];
+        self.level_misses = [0; 4];
         // The audio device must be (re)opened for the new radio even if its device name matches
         // (e.g. both "system default") — force it, since `audio_differs` alone would skip an
         // empty-vs-empty compare and leave the OLD radio's sound-card stream running.
@@ -1703,6 +1741,8 @@ impl RadioLoop {
                     self.func_supported = [None; 5];
                     self.func_misses = [0; 5];
                     self.func_state = [None; 5];
+                    self.level_supported = [None; 4];
+                    self.level_misses = [0; 4];
                     if let Ok(mut eng) = engine.lock() {
                         eng.set_cat_status(
                             Some(true),
@@ -1743,36 +1783,76 @@ impl RadioLoop {
                                 eng.observe_rig_freq(hz);
                             }
                         }
-                        // RF-power read-back: mirror the knob so the UI slider shows
-                        // the RIG's real level, not a guessed 100%. Kept separate
-                        // from the commanded value in the engine (observe never
-                        // fights a pending set_rf_power — see observe_rig_power).
-                        // Only AFTER the dial probe answered, so a half-open link
+                        // RF power / mic gain / NR / AGC read-backs mirror the rig's real knob
+                        // positions into the UI slider (kept separate from the commanded value —
+                        // observe never fights a pending set; see observe_rig_power). Each is
+                        // capability-cached (3 misses → stop issuing it) so a rig slow or silent on
+                        // one — the K4 via QK4 Remote — doesn't time out and drop+reconnect the CAT
+                        // socket every poll. Only AFTER the dial probe answered, so a half-open link
                         // can't eat a SECOND 2.5 s timeout on the same dead poll.
-                        if let Ok(frac) = rig.read_level("RFPOWER") {
-                            if let Ok(mut eng) = engine.lock() {
-                                eng.observe_rig_power(frac);
-                            }
+                        if self.level_supported[LVL_RFPOWER] != Some(false) {
+                            let ok = match rig.read_level("RFPOWER") {
+                                Ok(frac) => {
+                                    if let Ok(mut eng) = engine.lock() {
+                                        eng.observe_rig_power(frac);
+                                    }
+                                    true
+                                }
+                                Err(_) => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[LVL_RFPOWER],
+                                &mut self.level_misses[LVL_RFPOWER],
+                                ok,
+                            );
                         }
-                        // Mic-gain read-back: same as RF power — mirror the rig so the slider
-                        // shows the real level. Unsupported rigs just error out (ignored).
-                        if let Ok(frac) = rig.read_level("MICGAIN") {
-                            if let Ok(mut eng) = engine.lock() {
-                                eng.observe_rig_mic_gain(frac);
-                            }
+                        if self.level_supported[LVL_MICGAIN] != Some(false) {
+                            let ok = match rig.read_level("MICGAIN") {
+                                Ok(frac) => {
+                                    if let Ok(mut eng) = engine.lock() {
+                                        eng.observe_rig_mic_gain(frac);
+                                    }
+                                    true
+                                }
+                                Err(_) => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[LVL_MICGAIN],
+                                &mut self.level_misses[LVL_MICGAIN],
+                                ok,
+                            );
                         }
-                        // NR level + AGC read-back — mirror the rig so the controls show the real
-                        // state (and capability-gate: a rig that doesn't report them errors out,
-                        // leaving the field None so the UI hides the control).
-                        if let Ok(frac) = rig.read_level("NR") {
-                            if let Ok(mut eng) = engine.lock() {
-                                eng.observe_rig_nr_level(frac);
-                            }
+                        if self.level_supported[LVL_NR] != Some(false) {
+                            let ok = match rig.read_level("NR") {
+                                Ok(frac) => {
+                                    if let Ok(mut eng) = engine.lock() {
+                                        eng.observe_rig_nr_level(frac);
+                                    }
+                                    true
+                                }
+                                Err(_) => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[LVL_NR],
+                                &mut self.level_misses[LVL_NR],
+                                ok,
+                            );
                         }
-                        if let Some(v) = rig.read_agc() {
-                            if let Ok(mut eng) = engine.lock() {
-                                eng.observe_rig_agc(agc_from_hamlib(v).to_string());
-                            }
+                        if self.level_supported[LVL_AGC] != Some(false) {
+                            let ok = match rig.read_agc() {
+                                Some(v) => {
+                                    if let Ok(mut eng) = engine.lock() {
+                                        eng.observe_rig_agc(agc_from_hamlib(v).to_string());
+                                    }
+                                    true
+                                }
+                                None => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[LVL_AGC],
+                                &mut self.level_misses[LVL_AGC],
+                                ok,
+                            );
                         }
                         // Real CAT S-meter (STRENGTH, dB rel S9), mirrored to the UI as a
                         // calibrated S-unit bar. RX-only (this whole block is gated on
@@ -2644,13 +2724,21 @@ impl RadioLoop {
             // Late start, the WSJT-X way: the transmission stays TIME-ALIGNED to
             // the period grid — starting late just SKIPS the wave's leading
             // samples (the 0.5 s silence lead-in first, then leading symbols).
-            // The remote decoder still syncs (dt ≈ 0, just fewer symbols), which
-            // is why stock fires the current period for clicks up to ~2 s in.
-            const LATE_START_MAX_MS: f64 = 2_000.0;
-            // FT8/FT4 only — their wave layout (lead-in + costas sync) is what
-            // makes a head-truncated over decodable; other tiers need a full fit.
+            // The remote decoder still syncs (dt ≈ 0, just fewer symbols), so
+            // stock keys the CURRENT period rather than eating a full T/R cycle.
+            //
+            // Budget = how much leading audio a late over may drop and still decode.
+            // FT8 carries three 7-symbol Costas sync arrays (start / middle ≈6.3 s in
+            // / end); dropping only the head keeps the middle+end, so a click up to
+            // ~7.9 s into the period still syncs. FT4's ~half-signal edge is ~3 s of
+            // tones. The old shared 2 s cap deferred a click landing >~3.9 s in to the
+            // NEXT same-parity boundary (a full cycle later) — the "clicked 1 s too
+            // late, wait 30 s" complaint. Per-tier, Costas-preserving budgets mirror
+            // WSJT-X keying a late over. (WSJT-X keys even later; we stop at the
+            // decodable edge, which is the strictly safer product choice.)
             let allowed_deficit = match eng.tier() {
-                tempo_app::dto::Tier::Ft8 | tempo_app::dto::Tier::Ft4 => LATE_START_MAX_MS,
+                tempo_app::dto::Tier::Ft8 => 6_000.0,
+                tempo_app::dto::Tier::Ft4 => 3_000.0,
                 _ => 0.0,
             };
             let deficit_ms = (need_ms - room_ms).max(0.0);
@@ -2662,8 +2750,8 @@ impl RadioLoop {
                 let waves = eng.poll_tx(slot_now);
                 if !waves.is_empty() {
                     let trim_samples = ((deficit_ms / 1000.0) * ft1::SAMPLE_RATE as f64) as usize;
-                    // Must leave a transmittable remainder (always true within
-                    // the 2 s window — FT8 keeps ≥ 10.6 s of signal).
+                    // Must leave a transmittable remainder (always true within the
+                    // per-tier budget — trimming ≤6 s of FT8's 12.6 s keeps ≥6.6 s).
                     let trimmable = waves
                         .first()
                         .map(|w| trim_samples < w.len())

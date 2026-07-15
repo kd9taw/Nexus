@@ -54,11 +54,11 @@ interface Props {
   active?: boolean
 }
 
-// Default FT8/digital view window (Hz) — the FT8 signals live here. The spectrum ROW may span
-// wider (0–4000 Hz); drawRow maps the view onto the row via the DTO's lo/hi, so a wider row just
-// renders at finer resolution within this view.
+// Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
+// spectrum row so stations calling above ~2.9 kHz are visible + clickable. drawRow maps the view
+// onto the row via the DTO's lo/hi, so the row and view share the same span.
 const F_MIN = 200
-const F_MAX = 2900
+const F_MAX = 4000
 
 // Display mapping over the current view window [lo, hi] (defaults = the FT8 view), so
 // the waterfall can zoom into a sub-range of the band.

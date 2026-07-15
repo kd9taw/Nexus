@@ -144,11 +144,11 @@ describe('session ignore set (Alt-double-click)', () => {
   })
 })
 
-describe('DF entry clamp (200–2900 Hz)', () => {
+describe('DF entry clamp (200–4000 Hz)', () => {
   it('rounds and clamps', () => {
     expect(clampOffsetHz(1500.4)).toBe(1500)
     expect(clampOffsetHz(12)).toBe(200)
-    expect(clampOffsetHz(9000)).toBe(2900)
+    expect(clampOffsetHz(9000)).toBe(4000)
   })
 })
 

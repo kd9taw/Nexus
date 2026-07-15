@@ -115,9 +115,10 @@ export function themeColormap(theme: string): ColormapName {
   }
 }
 
-/** Audio passband shown on the waterfall (matches the engine's 200–2900 Hz band). */
+/** Audio passband shown on the waterfall (matches the engine's 4 kHz spectrum span, so
+ * stations calling above ~2.9 kHz are visible + clickable, not off the top edge). */
 export const WF_F_MIN = 200
-export const WF_F_MAX = 2900
+export const WF_F_MAX = 4000
 
 /** A zoom view window of `spanHz` centered on `centerHz`, clamped inside the full
  * passband so the window never runs off either edge (the displaced half is taken from

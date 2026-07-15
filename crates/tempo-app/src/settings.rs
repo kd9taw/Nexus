@@ -431,12 +431,15 @@ pub struct Settings {
     #[serde(default = "default_decode_depth")]
     pub decode_depth: u8,
     /// Decoder passband low edge (Hz) — WSJT-X "F Low". Signals below this are
-    /// not searched. 200 = the modem floor.
-    #[serde(default = "default_decode_flow")]
+    /// not searched. 200 = the modem floor. The explicit `rename` matches the UI's
+    /// `decodeFLowHz` key exactly; the struct's `camelCase` rule would emit
+    /// `decodeFlowHz` (lowercase L) and the setting would silently never round-trip.
+    #[serde(default = "default_decode_flow", rename = "decodeFLowHz")]
     pub decode_flow_hz: u32,
-    /// Decoder passband high edge (Hz) — WSJT-X "F High". 2900 = the modem
-    /// ceiling (12 kHz sample rate, conservative SSB filter).
-    #[serde(default = "default_decode_fhigh")]
+    /// Decoder passband high edge (Hz) — WSJT-X "F High". Default 2900; raise it up to
+    /// 4000 to decode stations calling above ~2.9 kHz (common on crowded FT8 bands).
+    /// `rename` matches the UI's `decodeFHighHz` key — see `decode_flow_hz` above.
+    #[serde(default = "default_decode_fhigh", rename = "decodeFHighHz")]
     pub decode_fhigh_hz: u32,
     /// WSJT-X "Special operating activity": Hound = work a DXpedition Fox
     /// (calls ≥ 1000 Hz, auto-move to the Fox's frequency for the R+report,

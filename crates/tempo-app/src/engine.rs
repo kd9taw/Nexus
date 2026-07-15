@@ -4176,13 +4176,15 @@ impl Engine {
     /// Set the transmit audio offset (Hz), clamped to the usable passband. Used
     /// for FT1 + DX1 TX modulation. Live — read by the next `poll_tx`.
     pub fn set_tx_offset(&mut self, hz: f32) {
-        self.tx_offset_hz = hz.clamp(200.0, 2900.0);
+        // Ceiling = the 4 kHz spectrum span (see the waterfall's HI_HZ), so the operator can
+        // place a signal anywhere WSJT-X-callers do, well above the old 2.9 kHz cap.
+        self.tx_offset_hz = hz.clamp(200.0, 4000.0);
         self.settings.tx_offset_hz = self.tx_offset_hz;
     }
     /// Set the receive audio offset (Hz) — the green waterfall marker. When
     /// "Hold Tx Freq" is off, the TX offset follows it (the common case).
     pub fn set_rx_offset(&mut self, hz: f32) {
-        self.rx_offset_hz = hz.clamp(200.0, 2900.0);
+        self.rx_offset_hz = hz.clamp(200.0, 4000.0);
         self.settings.rx_offset_hz = self.rx_offset_hz;
         if !self.hold_tx_freq {
             self.set_tx_offset(hz);
@@ -5160,11 +5162,14 @@ impl Engine {
             let iwave = channel::to_i16(frame);
             // Operator decode controls (WSJT-X F Low / F High / depth), clamped
             // to the modem's real passband and kept ordered.
-            let nfa = self.settings.decode_flow_hz.clamp(200, 2800) as i32;
+            let nfa = self.settings.decode_flow_hz.clamp(200, 3900) as i32;
+            // Ceiling = the 4 kHz spectrum span (waterfall HI_HZ). WSJT-X ops routinely call
+            // above the old 2.9 kHz cap; raising F High to 3.2 kHz+ lets those decode. The
+            // default (decode_fhigh_hz = 2900) is unchanged, so this is opt-in per operator.
             let nfb = self
                 .settings
                 .decode_fhigh_hz
-                .clamp(300, 2900)
+                .clamp(300, 4000)
                 .max(nfa as u32 + 100) as i32;
             let req = modes::DecodeRequest {
                 iwave: &iwave,
@@ -7079,10 +7084,10 @@ mod tests {
         e.set_rx_offset(50.0);
         assert_eq!(e.rx_offset_hz(), 200.0, "clamped to the low edge");
         e.set_tx_offset(5000.0);
-        assert_eq!(e.tx_offset_hz(), 2900.0, "clamped to the high edge");
+        assert_eq!(e.tx_offset_hz(), 4000.0, "clamped to the high edge");
         let snap = e.snapshot();
         assert_eq!(snap.radio.rx_offset_hz, 200.0);
-        assert_eq!(snap.radio.tx_offset_hz, 2900.0);
+        assert_eq!(snap.radio.tx_offset_hz, 4000.0);
         assert!(snap.radio.hold_tx_freq);
     }
 
@@ -7635,7 +7640,7 @@ mod tests {
         e.broadcast("CQ W9XYZ EN37");
         assert!(!e.poll_tx(6).is_empty());
         assert_eq!(e.take_tx_dial_shift(), -1500, "200 -> f0 1700, dial -1500");
-        e.set_tx_offset(2900.0); // ceiling → f0 1900, dial +1000
+        e.set_tx_offset(2900.0); // high tone → f0 1900, dial +1000
         e.broadcast("CQ W9XYZ EN37");
         assert!(!e.poll_tx(8).is_empty());
         assert_eq!(e.take_tx_dial_shift(), 1000, "2900 -> f0 1900, dial +1000");

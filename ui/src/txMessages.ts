@@ -153,9 +153,9 @@ export function isIgnored(ignored: ReadonlySet<string>, call: string | null | un
   return ignored.has(call.trim().toUpperCase())
 }
 
-/** Clamp + round a DF (audio offset) entry to the usable passband, 200–2900 Hz. */
+/** Clamp + round a DF (audio offset) entry to the usable passband, 200–4000 Hz. */
 export function clampOffsetHz(hz: number): number {
-  return Math.max(200, Math.min(2900, Math.round(hz)))
+  return Math.max(200, Math.min(4000, Math.round(hz)))
 }
 
 // ---------------------------------------------------------------------------

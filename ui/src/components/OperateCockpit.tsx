@@ -533,7 +533,7 @@ export function OperateCockpit({
             {source === 'companion' && ` · listening ${companionAddr || '127.0.0.1:2237'}`}
           </span>
           {/* DF readouts: type an exact audio offset and commit on Enter/blur
-              (clamped to the 200–2900 Hz passband) — WSJT-X's Rx/Tx Hz spinners. */}
+              (clamped to the 200–4000 Hz passband) — WSJT-X's Rx/Tx Hz spinners. */}
           <div className="cockpit-offsets" role="group" aria-label="Audio offsets (Hz)">
             <DfField label="Rx" hz={snap.radio.rxOffsetHz} onCommit={(hz) => onTune(hz, 'rx')} />
             <DfField label="Tx" hz={snap.radio.txOffsetHz} onCommit={(hz) => onTune(hz, 'tx')} />
@@ -872,7 +872,7 @@ export function OperateCockpit({
 
 /**
  * A compact labeled DF (audio offset) entry: tracks the snapshot value while
- * idle, commits on Enter/blur (rounded + clamped 200–2900 Hz), and reverts on
+ * idle, commits on Enter/blur (rounded + clamped 200–4000 Hz), and reverts on
  * garbage input. Enter just blurs — the single commit happens in onBlur.
  */
 function DfField({
@@ -906,13 +906,13 @@ function DfField({
     }
   }
   return (
-    <label className="df-field" title={`${label} audio offset (Hz) — Enter/blur commits, clamped 200–2900`}>
+    <label className="df-field" title={`${label} audio offset (Hz) — Enter/blur commits, clamped 200–4000`}>
       <span className="df-label">{label}</span>
       <input
         type="number"
         inputMode="numeric"
         min={200}
-        max={2900}
+        max={4000}
         step={1}
         value={text}
         aria-label={`${label} offset in Hz`}

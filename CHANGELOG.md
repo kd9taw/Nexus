@@ -5,6 +5,34 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] — 2026-07-15 — late-start TX, K4 CAT stability, wider FT8 passband
+
+### Added
+
+- **FT8/FT4 decode passband is now adjustable up to 4 kHz.** Operators regularly call above the old
+  2.9 kHz ceiling on crowded bands. Settings ▸ Digital ▸ Decoder passband now lets you raise **F high**
+  toward 4000 Hz, and the waterfall, the click-to-tune range, and the Rx/Tx offset entry all extend to
+  match — so a station calling at 3.3 kHz is visible, decodable, and answerable. The default stays
+  200–2900 Hz, so nothing changes unless you widen it. *What this means:* you can now work the people
+  who park themselves up high where it's less crowded. (This setting also existed before but never took
+  effect — the saved value used a key the backend didn't read; that round-trip is fixed.)
+
+### Fixed
+
+- **You can start a transmission a second or two into a period instead of waiting a full cycle.**
+  Previously, if you keyed up more than ~2 s late you'd be deferred to the next same-parity slot — the
+  "clicked one second too late, now I wait 30 seconds" complaint. Nexus now keys the *current* period
+  the WSJT-X way: the over stays time-aligned and just drops its leading samples, which the far-end
+  decoder still syncs on. The budget is per mode and preserves the sync tones — up to ~6 s late for FT8,
+  ~3 s for FT4.
+- **CAT no longer drops and reconnects every few seconds with the Elecraft K4 (QK4 Remote).** Nexus
+  polls the rig for RF power, mic gain, NR level and AGC to mirror the knobs into the UI. The K4 over
+  QK4 Remote is slow or silent on those reads, so each one hit the command timeout and tore down the
+  CAT socket — the ~5 s hang. Those reads are now capability-cached the same way the S-meter and DSP
+  toggles already were: after a few misses Nexus stops issuing the read, so a rig that doesn't answer
+  it quickly keeps a stable connection. (WSJT-X, HRD and DXLab were unaffected because they don't poll
+  those levels.)
+
 ## [0.9.0] — 2026-07-15 — Linux build + decode-regression fix + globe fix
 
 ### Added

@@ -2910,7 +2910,7 @@ export function SettingsPanel({
                         type="number"
                         inputMode="numeric"
                         min={200}
-                        max={2900}
+                        max={4000}
                         step={1}
                         value={form.decodeFHighHz ?? 2900}
                         aria-label="Decoder F high (Hz)"
@@ -2918,7 +2918,7 @@ export function SettingsPanel({
                           if (e.target.value === '') return // mid-edit clear: keep the prior value
                           markDirty()
                           const raw = Number(e.target.value)
-                          const clamped = Math.max(200, Math.min(2900, Math.round(raw)))
+                          const clamped = Math.max(200, Math.min(4000, Math.round(raw)))
                           setForm((prev) =>
                             prev
                               ? { ...prev, decodeFHighHz: clamped }
@@ -2938,8 +2938,9 @@ export function SettingsPanel({
                     </label>
                   </div>
                   <span className="settings-hint">
-                    Restrict the decoder&apos;s search range — useful with narrow filters or strong
-                    close-in QRM. Default 200–2900 Hz (full passband).
+                    The decoder&apos;s search range. Default 200–2900 Hz. Raise F high toward 4000 Hz
+                    to decode stations calling above ~2.9 kHz (common on crowded FT8 bands); lower the
+                    range to focus on a narrow filter or dodge strong close-in QRM.
                   </span>
                 </div>
 

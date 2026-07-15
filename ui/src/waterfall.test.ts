@@ -108,7 +108,7 @@ describe('zoomRange (waterfall span/zoom)', () => {
   })
 
   it('clamps to the high edge without shrinking the span', () => {
-    const { lo, hi } = zoomRange(2800, 1000) // would end past F_MAX
+    const { lo, hi } = zoomRange(3800, 1000) // would end past F_MAX
     expect(hi).toBe(WF_F_MAX)
     expect(hi - lo).toBe(1000)
   })
