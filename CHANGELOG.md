@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.3] — 2026-07-16 — tester batch: marker fix, instant Tune-off, faster CW, consistent header
+## [0.9.3] — 2026-07-16 — tester batch: marker fix, instant Tune-off, faster CW, freq-clip, wheel sensitivity
 
 ### Fixed
 
@@ -26,12 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Adjustable wheel-tune sensitivity** (Settings ▸ Rig / CAT) for high-resolution "free-spin" mice
   that tuned too far per flick.
-
-### Changed
-
-- **Consistent header across the Phone, Digital (FT8/FT4), and CW cockpits.** Band, frequency, mode,
-  power, and Tune now sit in the same place regardless of mode, while each mode keeps its own controls
-  (CW keyer/speed, phone mic/filter, digital sequencing) in a consistent spot.
 
 ## [0.9.2] — 2026-07-15 — click-to-tune on the Phone/CW scopes + layout cutoff fixes
 
