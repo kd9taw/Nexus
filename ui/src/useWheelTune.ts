@@ -10,6 +10,9 @@ const FLUSH_MS = 120
 const IDLE_RESEED_MS = 400
 /** Accumulated scroll (pixel-equivalents) per one tuning step — normalizes wheels vs trackpads. */
 const PX_PER_STEP = 100
+/** Cap on whole steps a SINGLE wheel event may apply, so one violent flick of an energetic /
+ * high-res mouse can't lurch the dial many steps at once. Excess is discarded, not carried. */
+const MAX_STEPS_PER_EVENT = 8
 
 interface WheelTuneOpts {
   /** Current rig dial (MHz) from the snapshot — the seed for a fresh wheel burst. */
@@ -20,6 +23,9 @@ interface WheelTuneOpts {
   enabled: boolean
   /** Hz per tuning step (Shift = ×10). Shared with the tuning strip's step selector. */
   stepHz: number
+  /** Sensitivity multiplier (1.0 = stock). <1 needs more scroll per step (damps an energetic /
+   * high-res mouse), >1 tunes faster. Clamped to a sane range. Default 1.0. */
+  sensitivity?: number
   /** Receive a fresh snapshot from the flushed set_frequency so the UI updates promptly. */
   onSnap?: (s: AppSnapshot) => void
 }
@@ -83,12 +89,19 @@ export function useWheelTune(ref: RefObject<HTMLElement | null>, opts: WheelTune
         accumRef.current = 0
       }
       // Normalize to pixel-equivalents so a trackpad's dozens of tiny events don't lurch the dial;
-      // a line/page-mode mouse wheel maps ~one notch → one step.
+      // a line/page-mode mouse wheel maps ~one notch → one step. The notch/page multipliers stay on
+      // the BASE PX_PER_STEP; sensitivity scales the per-step THRESHOLD, so every mouse type damps
+      // consistently (a higher threshold = more scroll per step = less sensitive).
       const px = e.deltaMode === 1 ? raw * PX_PER_STEP : e.deltaMode === 2 ? raw * PX_PER_STEP * 8 : raw
       accumRef.current += px
-      const steps = Math.trunc(accumRef.current / PX_PER_STEP)
-      if (steps === 0) return // still accumulating toward one whole step
-      accumRef.current -= steps * PX_PER_STEP
+      const sens = Math.max(0.2, Math.min(4, stateRef.current.sensitivity ?? 1))
+      const effPx = PX_PER_STEP / sens
+      const rawSteps = Math.trunc(accumRef.current / effPx)
+      if (rawSteps === 0) return // still accumulating toward one whole step
+      // Consume all whole steps from the accumulator (no residue lurch), but APPLY at most the cap
+      // so a single violent flick can't jump many steps; the capped-away steps are discarded.
+      accumRef.current -= rawSteps * effPx
+      const steps = Math.max(-MAX_STEPS_PER_EVENT, Math.min(MAX_STEPS_PER_EVENT, rawSteps))
       // Scroll up (negative delta) tunes UP, so negate: -steps × step.
       targetHzRef.current += -steps * stepHz * (e.shiftKey ? 10 : 1)
       if (timerRef.current == null) timerRef.current = window.setTimeout(flush, FLUSH_MS)

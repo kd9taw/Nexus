@@ -73,6 +73,8 @@ interface Props {
   theme: string
   /** CW sidetone pitch (Hz) — the scope's zero-beat marker. */
   pitchHz?: number
+  /** Wheel-tune sensitivity (from Settings) — applied to the scope + readout wheel-tune. */
+  wheelSensitivity?: number
   /** Click-to-work handoff from the Needed board: the callsign to prefill the log with.
    * `ts` changes on each click so re-working the same call refires the prefill. */
   pendingWork?: { call: string; ts: number } | null
@@ -144,6 +146,7 @@ export function CwCockpit({
   snap,
   theme,
   pitchHz = 600,
+  wheelSensitivity,
   pendingWork,
   onConsumeWork,
   onSnap,
@@ -162,6 +165,7 @@ export function CwCockpit({
     sideband: snap.radio.sideband || 'USB',
     enabled: catOk && !snap.radio.transmitting,
     stepHz: tuneStep,
+    sensitivity: wheelSensitivity,
     onSnap,
   })
   // Click/drag tuning from the scope (Flex-style): a click zero-beats the clicked CW
@@ -382,7 +386,10 @@ export function CwCockpit({
         .catch(() => {})
     }
     tick()
-    const id = window.setInterval(tick, 700)
+    // Poll the decoded transcript often — the Rust streaming decoder updates every ~20 ms, so a
+    // slow poll is pure display lag (the "desktop lags the web decoder" report). 200 ms ≈ 5 Hz
+    // keeps copy near real-time without hammering the command channel.
+    const id = window.setInterval(tick, 200)
     return () => {
       alive = false
       window.clearInterval(id)
@@ -575,7 +582,7 @@ export function CwCockpit({
             </select>
           </label>
         )}
-        <TuningStrip snap={snap} onSnap={onSnap} step={tuneStep} onStep={setTuneStep} />
+        <TuningStrip snap={snap} onSnap={onSnap} step={tuneStep} onStep={setTuneStep} sensitivity={wheelSensitivity} />
         <BandPicker snap={snap} mode="cw" onSnap={onSnap} />
         {catOk && (
           <div className="ph-filter" title="RX filter / passband width (CAT) — narrow to dig CW out of QRM">

@@ -51,6 +51,8 @@ interface Props {
   /** Phone sub-mode from Settings ('ssb' | 'fm') — drives the mode badge, mirroring
    * the rig-mode policy's Phone arm (FM, else sideband by band). */
   phoneMode?: string
+  /** Wheel-tune sensitivity (from Settings) — applied to the scope + readout wheel-tune. */
+  wheelSensitivity?: number
   /** Live cluster spots (all bands/modes); the band-strip filters to SSB on the current band. */
   spots?: SpotRow[]
   /** Top need tag per heard call (UPPERCASE) — colours band-strip ticks by need tier. */
@@ -119,7 +121,7 @@ const FLEX_SPANS = [
   { label: '2M', hz: 2_000_000 },
 ] as const
 
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, spots, needByCall, typeByCall, onWorkSpot }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   // Mirror the RIG's real level (CAT read-back / last commanded) so the slider
   // never lies at a guessed 100% — but never fight an in-flight drag.
@@ -218,6 +220,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     sideband: snap.radio.sideband || 'USB',
     enabled: snap.radio.catOk === true && !snap.radio.transmitting,
     stepHz: tuneStep,
+    sensitivity: wheelSensitivity,
     onSnap,
   })
 
@@ -407,7 +410,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             rig: {modeMismatch}
           </span>
         )}
-        <TuningStrip snap={snap} onSnap={onSnap} step={tuneStep} onStep={setTuneStep} />
+        <TuningStrip snap={snap} onSnap={onSnap} step={tuneStep} onStep={setTuneStep} sensitivity={wheelSensitivity} />
         <BandPicker snap={snap} mode="phone" onSnap={onSnap} />
         {catOk && (
           <div className={`ph-split ${splitOn ? 'on' : ''}`}>

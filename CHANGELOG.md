@@ -5,6 +5,34 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] — 2026-07-16 — tester batch: marker fix, instant Tune-off, faster CW, consistent header
+
+### Fixed
+
+- **The FT8/FT4 waterfall no longer leaves a trail of Rx/Tx marker lines when you retune.** The green
+  Rx and red Tx markers were painted into the scrolling spectrum image, so each time you moved one the
+  old position froze and scrolled up as a streak. Markers now draw on a separate overlay that's cleared
+  every frame — one Rx line and one Tx line, always.
+- **Tune turns off instantly again.** On rigs with a slow CAT link (native Icom CI-V, or a networked
+  chain like the K4 over QK4 Remote), releasing Tune could hang for up to a second or two waiting on the
+  radio's acknowledgement. PTT commands now use a short fixed timeout so the un-key fires promptly,
+  while the slower rig read-backs keep their longer window. (Regression from the 0.9.1 K4 CAT work.)
+- **The CW decoder keeps up in near real time.** The CW window was only reading new decoded text a few
+  times a second, which added visible lag; it now refreshes several times faster.
+- **The frequency display no longer scrolls off-screen when the window isn't maximized** (or at
+  110–125% UI zoom) — it wraps instead of clipping.
+
+### Added
+
+- **Adjustable wheel-tune sensitivity** (Settings ▸ Rig / CAT) for high-resolution "free-spin" mice
+  that tuned too far per flick.
+
+### Changed
+
+- **Consistent header across the Phone, Digital (FT8/FT4), and CW cockpits.** Band, frequency, mode,
+  power, and Tune now sit in the same place regardless of mode, while each mode keeps its own controls
+  (CW keyer/speed, phone mic/filter, digital sequencing) in a consistent spot.
+
 ## [0.9.2] — 2026-07-15 — click-to-tune on the Phone/CW scopes + layout cutoff fixes
 
 ### Added

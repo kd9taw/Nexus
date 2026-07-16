@@ -1536,6 +1536,7 @@ export default function App() {
       workspace = (
         <CwCockpit
           pitchHz={settings?.cwPitchHz ?? 600}
+          wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
           snap={snap}
           theme={theme}
           pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
@@ -1559,6 +1560,7 @@ export default function App() {
           onSnap={setSnap}
           fieldDay={snap.fieldDay}
           phoneMode={settings?.phoneMode}
+          wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
           spots={allSpots}
           needByCall={needByCall}
           typeByCall={typeByCall}

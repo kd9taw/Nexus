@@ -486,6 +486,11 @@ pub struct Settings {
     /// so silencing HF grid chatter keeps the genuinely rare open-water gems.
     #[serde(default = "default_alert_scope_all")]
     pub alert_rare_grid_bands: String,
+    /// Mouse-wheel tuning sensitivity multiplier (1.0 = stock). <1 = less sensitive
+    /// (needs more scroll per step — for over-energetic / high-res "free-spin" mice),
+    /// >1 = more sensitive. Applied to every wheel-tune surface (dial readout + scopes).
+    #[serde(default = "default_wheel_tune_sensitivity")]
+    pub wheel_tune_sensitivity: f32,
 
     // --- Auto-CQ caller selection (W1.4) ---
     /// When running CQ and several stations answer, which one to work first:
@@ -712,6 +717,10 @@ fn default_alert_scope_all() -> String {
 
 fn default_alert_grid_bands() -> String {
     "vhf".to_string()
+}
+
+fn default_wheel_tune_sensitivity() -> f32 {
+    1.0
 }
 
 pub fn default_voice_messages() -> Vec<VoiceMessage> {
@@ -1109,6 +1118,7 @@ impl Default for Settings {
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
             alert_rare_grid_bands: default_alert_scope_all(),
+            wheel_tune_sensitivity: default_wheel_tune_sensitivity(),
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
             lotw_station_location: String::new(),

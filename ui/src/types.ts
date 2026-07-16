@@ -1695,6 +1695,8 @@ export interface Settings {
   alertGridBands: string
   /** Band scope for the rare/ultra 💎 grid alerts (separate so HF-quiet keeps the gems). */
   alertRareGridBands: string
+  /** Mouse-wheel tuning sensitivity (1.0 = stock; <1 less sensitive, >1 more). */
+  wheelTuneSensitivity?: number
   // --- Auto-CQ caller selection (W1.4) ---
   /** When several stations answer your CQ, which to work first:
    *  'first' (stock), 'strongest', 'farthest', or 'cq_first'. */

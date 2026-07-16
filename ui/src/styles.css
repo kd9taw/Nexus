@@ -3402,6 +3402,11 @@ body.resizing {
 
 .radio-readout {
   margin-left: auto;
+  /* Let the pinned-right frequency pill wrap instead of running off the header edge when the
+     window isn't maximized (or at 110-125% UI zoom, where raw @media breakpoints mis-fire under
+     the app's zoom). Same remedy as the .cockpit-meta clip fix. */
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 /* Phone/CW hide the frequency readout, which is the group that normally carries
@@ -3497,6 +3502,11 @@ body.resizing {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  /* Wrap the readout + band/mode controls unconditionally so the big frequency number can't clip
+     off-screen at non-maximized width or high UI zoom (the old wrap was behind a raw-px @media the
+     app's zoom defeats). */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .freq-control.compact {
   background: var(--bg-elev-2);
@@ -9063,6 +9073,16 @@ select.settings-input {
   display: block;
   background: var(--bg);
   cursor: crosshair;
+}
+/* Axis + Rx/Tx marker layer over the spectrum canvas. Transparent, cleared each frame, and
+   pointer-transparent so clicks fall through to the spectrum canvas's tune handler. */
+.waterfall-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
 }
 
 /* Always-on color legend: a thin LUT gradient = signal strength, with the live

@@ -2098,6 +2098,28 @@ export function SettingsPanel({
                   on any CAT rig). None = stock WSJT-X default, transmits at the raw audio offset.
                 </span>
               </div>
+
+              <label className="settings-field">
+                <span className="settings-label">
+                  Wheel tuning sensitivity{' '}
+                  <span className="settings-value">×{(form.wheelTuneSensitivity ?? 1).toFixed(2)}</span>
+                </span>
+                <input
+                  className="settings-slider"
+                  type="range"
+                  min="0.25"
+                  max="2"
+                  step="0.05"
+                  value={String(form.wheelTuneSensitivity ?? 1)}
+                  onChange={(e) => updateNum('wheelTuneSensitivity', Number(e.target.value))}
+                  aria-label="Mouse-wheel tuning sensitivity"
+                />
+                <span className="settings-hint">
+                  How far the dial moves per mouse-wheel notch. Lower it if a high-resolution or
+                  free-spin mouse tunes too far per flick; raise it to tune faster. Applies to the
+                  frequency readout and the Phone/CW scope wheel.
+                </span>
+              </label>
             </div>
             <SettingsGroup title="Advanced" defaultOpen={false}>
               <label className="settings-field">

@@ -41,6 +41,10 @@ pub enum PttMode {
     Serial { port: String, line: SerialLine },
 }
 
+/// Reply deadline (ms) for a PTT (`T`) command — a one-line RPRT that must answer fast. Kept off
+/// the slow-transport 2.5 s read window so an un-key can never hang the single-threaded radio loop.
+const PTT_DEADLINE_MS: u64 = 700;
+
 /// rigctld command line for PTT.
 pub fn ptt_line(on: bool) -> String {
     format!("T {}\n", on as u8)
@@ -275,7 +279,22 @@ impl Rig {
     /// the previous one's reply (a keyed rig read as "PTT ok", a rejected T read
     /// as success). A dropped stream can never desync; a stale byte can.
     fn command(&mut self, line: &str) -> std::io::Result<String> {
-        match self.command_inner(line) {
+        self.command_with_deadline(line, None)
+    }
+
+    /// Like [`command`] but with an explicit reply deadline (ms), overriding the
+    /// transport-aware default. Used for PTT: a keying SET returns a one-line RPRT
+    /// and must NOT inherit the slow-transport 2.5 s read window (native CI-V /
+    /// networked chains) — a slow-to-answer rig would otherwise hold the un-key on
+    /// the single-threaded radio loop for up to ~2 s (the "Tune won't turn off"
+    /// report). The transport-aware window stays for the slow READ-BACK polls it
+    /// was added for (the K4 CAT-stability work).
+    fn command_with_deadline(
+        &mut self,
+        line: &str,
+        deadline_ms: Option<u64>,
+    ) -> std::io::Result<String> {
+        match self.command_inner(line, deadline_ms) {
             Ok(reply) => Ok(reply),
             Err(e) => {
                 // Diagnostic: dropping the rigctld connection is what triggers the daemon's
@@ -294,7 +313,11 @@ impl Rig {
         }
     }
 
-    fn command_inner(&mut self, line: &str) -> std::io::Result<String> {
+    fn command_inner(
+        &mut self,
+        line: &str,
+        deadline_override: Option<u64>,
+    ) -> std::io::Result<String> {
         // Read the transport class before the mutable stream borrow below (they'd otherwise alias).
         let slow = self.slow_transport;
         let stream = self.ensure_connected()?;
@@ -323,7 +346,7 @@ impl Rig {
         // transport-aware: a serial rig answers in ms so a stall is bounded
         // tightly (it can't hold the radio loop / fast dial poll), while a
         // network chain keeps the long 2.5 s window for legitimately slow replies.
-        let deadline_ms = if slow { 2_500 } else { 700 };
+        let deadline_ms = deadline_override.unwrap_or(if slow { 2_500 } else { 700 });
         let deadline = std::time::Instant::now() + Duration::from_millis(deadline_ms);
         let mut out = Vec::with_capacity(64);
         let mut buf = [0u8; 256];
@@ -392,7 +415,9 @@ impl Rig {
                 if self.control.is_none() {
                     Ok(()) // CAT keying chosen but no CAT channel → VOX fallback
                 } else {
-                    match self.command(&ptt_line(on)) {
+                    // PTT is time-critical: a fixed 700 ms deadline (not the slow-transport
+                    // 2.5 s read window) so the un-key can't hang the radio loop.
+                    match self.command_with_deadline(&ptt_line(on), Some(PTT_DEADLINE_MS)) {
                         Ok(reply) if reply_ok(&reply) || reply.is_empty() => Ok(()),
                         Ok(reply) => Err(std::io::Error::other(format!(
                             "rigctld PTT error: {reply:?}"

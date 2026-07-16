@@ -73,6 +73,10 @@ function xToFreq(x: number, width: number, lo = F_MIN, hi = F_MAX): number {
 
 export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune, active = true }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
+  // the scrolling spectrum canvas (a moved marker used to freeze into the image and scroll up
+  // as a streak — one per past tune). The overlay is cleared every frame.
+  const overlayRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef<number | null>(null)
   // Master palette ('auto' = theme-driven), shared across every scope; changing it in any
   // mode recolors them all. Manual contrast (gain/zero, 0 = pure auto-AGC) stays local.
@@ -135,6 +139,10 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    // Marker/axis overlay context (transparent, cleared each frame). Optional — if it can't be
+    // acquired, drawOverlay simply no-ops on the markers rather than crashing the spectrum loop.
+    const overlay = overlayRef.current
+    const octx = overlay?.getContext('2d') ?? null
 
     let running = true
     let drawing = false // single-flight guard: never overlap async drawRow calls
@@ -236,6 +244,12 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
       }
       devW = dW
       devH = dH
+      // Keep the overlay backing store the same device size as the spectrum canvas (it's cleared
+      // each frame, so no history to preserve — a plain resize is fine).
+      if (overlay && (overlay.width !== dW || overlay.height !== dH)) {
+        overlay.width = dW
+        overlay.height = dH
+      }
     }
     resize()
     const ro = new ResizeObserver((entries) => resize(entries[0]))
@@ -354,12 +368,18 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
     }
 
     const drawOverlay = () => {
+      // The axis + Rx/Tx markers render on the SEPARATE overlay canvas (transparent, fully
+      // cleared each frame). This is what keeps a moved marker from freezing into the scrolling
+      // spectrum image. The spectrum canvas (ctx) is only ever touched by drawRow.
+      if (!octx) return
       // Draw in CSS px; map to the device-pixel store via the measured scale
       // (= zoom × dpr), so the axis + markers stay aligned with the spectrum at
       // any UI zoom. (The spectrum path blits in device px and ignores this.)
-      ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0)
+      octx.setTransform(scaleX, 0, 0, scaleY, 0, 0)
       const W = cssW
       const H = cssH
+      // Clear the entire overlay every frame — no marker/axis pixel survives to the next frame.
+      octx.clearRect(0, 0, W, H)
       const AXIS_H = axisHFor(H)
       const wfH = H - AXIS_H
       const th = themeRef.current
@@ -367,11 +387,11 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
       const axisBg = th === 'light' ? 'rgba(245,247,250,0.95)' : 'rgba(10,14,22,0.92)'
 
       // --- bottom frequency axis ---
-      ctx.fillStyle = axisBg
-      ctx.fillRect(0, wfH, W, AXIS_H)
-      ctx.fillStyle = axisColor
-      ctx.font = '10px system-ui, sans-serif'
-      ctx.textBaseline = 'middle'
+      octx.fillStyle = axisBg
+      octx.fillRect(0, wfH, W, AXIS_H)
+      octx.fillStyle = axisColor
+      octx.font = '10px system-ui, sans-serif'
+      octx.textBaseline = 'middle'
       const vlo = viewLoRef.current
       const vhi = viewHiRef.current
       // Sparser labels when narrow; finer when zoomed in (a small window needs ticks).
@@ -380,8 +400,8 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
       const first = Math.ceil(vlo / labelStep) * labelStep
       for (let f = first; f <= vhi; f += labelStep) {
         const x = freqToX(f, W, vlo, vhi)
-        ctx.fillRect(x, wfH, 1, 4)
-        ctx.fillText(`${f}`, Math.min(W - 26, x + 2), wfH + AXIS_H / 2)
+        octx.fillRect(x, wfH, 1, 4)
+        octx.fillText(`${f}`, Math.min(W - 26, x + 2), wfH + AXIS_H / 2)
       }
 
       // (No per-decode callsign labels on the waterfall — WSJT-X keeps the
@@ -394,21 +414,21 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
       const txOff = txOffRef.current
       if (txOff >= vlo && txOff <= vhi) {
         const txx = freqToX(txOff, W, vlo, vhi)
-        ctx.fillStyle = txRef.current ? 'rgba(255,70,70,0.95)' : 'rgba(255,90,90,0.7)'
-        ctx.fillRect(txx - 1, 0, 2, wfH)
-        ctx.fillStyle = '#ff5a5a'
-        ctx.font = '600 10px system-ui, sans-serif'
-        ctx.fillText('TX', Math.min(W - 18, txx + 3), 9)
+        octx.fillStyle = txRef.current ? 'rgba(255,70,70,0.95)' : 'rgba(255,90,90,0.7)'
+        octx.fillRect(txx - 1, 0, 2, wfH)
+        octx.fillStyle = '#ff5a5a'
+        octx.font = '600 10px system-ui, sans-serif'
+        octx.fillText('TX', Math.min(W - 18, txx + 3), 9)
       }
 
       const rxOff = rxOffRef.current
       if (rxOff >= vlo && rxOff <= vhi) {
         const rxx = freqToX(rxOff, W, vlo, vhi)
-        ctx.fillStyle = 'rgba(60,220,140,0.9)'
-        ctx.fillRect(rxx - 1, 0, 2, wfH)
-        ctx.fillStyle = '#3ddc8c'
-        ctx.font = '600 10px system-ui, sans-serif'
-        ctx.fillText('RX', Math.min(W - 18, rxx + 3), wfH - 6)
+        octx.fillStyle = 'rgba(60,220,140,0.9)'
+        octx.fillRect(rxx - 1, 0, 2, wfH)
+        octx.fillStyle = '#3ddc8c'
+        octx.font = '600 10px system-ui, sans-serif'
+        octx.fillText('RX', Math.min(W - 18, rxx + 3), wfH - 6)
       }
     }
 
@@ -561,6 +581,8 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
           onContextMenu={(e) => e.preventDefault()}
           title="Click sets RX (WSJT-X) · Shift+click sets TX · Ctrl+click sets both"
         />
+        {/* Axis + Rx/Tx markers layer — transparent, cleared each frame, never scrolled. */}
+        <canvas ref={overlayRef} className="waterfall-overlay" aria-hidden="true" />
         <div
           className="wf-legend"
           aria-hidden="true"
