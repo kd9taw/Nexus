@@ -5,6 +5,7 @@ import {
   agcRange,
   applyGainZero,
   bakeLut,
+  isRfScopeSource,
   normalize,
   resolveColormap,
   WATERFALL_ZOOMS,
@@ -277,6 +278,12 @@ export function Waterfall({ transmitting, rxOffsetHz, txOffsetHz, theme, onTune,
       }
       const row = spec.row
       if (!row || row.length === 0) return
+      // The FT8/FT4 waterfall shows the AUDIO passband (0–4000 Hz) and is NOT source-aware, so a
+      // native RF-panadapter row (absolute MHz span, e.g. a native-CI-V Icom scope) would map every
+      // column out of range → a flat colormap-floor field. Backend gating stops feeding RF rows in
+      // DATA mode, but skip one here too as defense in depth: keep the last audio frame rather than
+      // blanking. (PhoneScope, the CW/Phone scope, IS source-aware and renders RF rows correctly.)
+      if (spec.source && isRfScopeSource(spec.source)) return
 
       // Read dimensions AFTER the await (from the resize-maintained device-pixel
       // backing store, which is exact under CSS zoom — NOT recomputed from

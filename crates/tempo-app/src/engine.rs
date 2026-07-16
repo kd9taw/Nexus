@@ -5780,6 +5780,12 @@ impl Engine {
         self.spectrum_rf = Some((spectrum, Instant::now()));
     }
 
+    /// Drop the native RF panadapter row so `spectrum_row()` falls back to the audio FFT. Called
+    /// when the native scope is off (e.g. FT8/FT4 DATA mode, where the waterfall shows audio).
+    pub fn clear_spectrum_rf(&mut self) {
+        self.spectrum_rf = None;
+    }
+
     pub fn spectrum_row(&self) -> Spectrum {
         // A native RF panadapter (Flex/Icom) wins while its rows are fresh (< 1 s) — this is the
         // single seam both native workers feed via `set_spectrum_rf`.

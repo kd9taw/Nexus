@@ -1553,7 +1553,15 @@ impl RadioLoop {
                     || self.tx_until_ms.is_some()
                     || self.tuning_keyed
                     || self.manual_ptt_applied;
-                d.set_scope_enabled(self.applied.baud >= 115_200 && !keyed_now);
+                // In FT8/FT4 (a DATA mode) the Operate waterfall shows the AUDIO FFT (0–4000 Hz),
+                // not the RF panadapter — so keep the native scope OFF here and never feed its
+                // absolute-RF row into the shared spectrum. Otherwise spectrum_row() prefers the
+                // fresh "civ" MHz-span row and the source-unaware FT8 waterfall maps it onto a
+                // 0–4000 Hz view → every bin clamps to the floor → a flat "purple" field (while FT8
+                // still decodes, since the decoder reads raw audio). Phone/CW keep the scope — their
+                // PhoneScope is source-aware and renders the civ row correctly.
+                let data_mode = mode_is_data(&self.last_mode);
+                d.set_scope_enabled(self.applied.baud >= 115_200 && !keyed_now && !data_mode);
                 // Tell the broker we're on the air, so its disconnect fail-safe unkey stands down
                 // while WE'RE transmitting — a transient reconnect of Nexus's own Rig must never
                 // steal the over (the native-CI-V PTT flicker). Cleared the moment TX ends.
@@ -1583,15 +1591,21 @@ impl RadioLoop {
                         d.set_scope_center_mode(f);
                     }
                 }
-                if let Some(sweep) = d.take_scope_row() {
-                    if let Ok(mut e) = engine.lock() {
-                        e.set_spectrum_rf(tempo_app::dto::Spectrum {
-                            row: sweep.row,
-                            lo_hz: sweep.lo_hz,
-                            hi_hz: sweep.hi_hz,
-                            source: "civ".into(),
-                        });
+                if !data_mode {
+                    if let Some(sweep) = d.take_scope_row() {
+                        if let Ok(mut e) = engine.lock() {
+                            e.set_spectrum_rf(tempo_app::dto::Spectrum {
+                                row: sweep.row,
+                                lo_hz: sweep.lo_hz,
+                                hi_hz: sweep.hi_hz,
+                                source: "civ".into(),
+                            });
+                        }
                     }
+                } else if let Ok(mut e) = engine.lock() {
+                    // DATA mode (FT8/FT4): drop any stale native row so spectrum_row() falls back to
+                    // the audio FFT immediately (no ~1 s window where the last civ row still wins).
+                    e.clear_spectrum_rf();
                 }
             }
 

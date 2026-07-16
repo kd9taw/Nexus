@@ -5,6 +5,17 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] — 2026-07-16 — Icom CI-V: FT8/FT4 waterfall no longer blank
+
+### Fixed
+
+- **The FT8/FT4 waterfall showed only a flat colored field on Icom radios in native CI-V mode.** The
+  Icom's built-in band scope kept feeding its RF spectrum into the display even in FT8, where the
+  waterfall shows the received *audio* (0–4000 Hz) instead — so the wide radio-frequency sweep mapped
+  off the edge and painted flat. (Decoding was never affected.) Nexus now turns the native scope off
+  in FT8/FT4 so the audio waterfall shows normally, and keeps it on for SSB and CW where it belongs.
+  Yaesu and other rigs were unaffected.
+
 ## [0.9.3] — 2026-07-16 — tester batch: marker fix, instant Tune-off, faster CW, freq-clip, wheel sensitivity
 
 ### Fixed
