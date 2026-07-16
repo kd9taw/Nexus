@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ease in for a slow readable cruise, shove to the very edge for about 3 screen-widths per second.
   The box stays pinned under your cursor the whole time.
 
+- **Per-alert band scopes — new-grid alerts default to VHF+ only.** Settings ▸ Alerts now gives
+  **New DXCC**, **New grid**, and **Rare grid 💎** each their own control: Off / HF only / VHF+
+  (6 m and up) / All bands. Grid chasing is a VHF pursuit (VUCC/FFMA start at 6 m) — on HF nearly
+  every decode is an unworked grid, so plain new-grid alerts now stay quiet below 6 m unless you
+  ask for them. The rare/water-only 💎 alerts are a separate control and stay on everywhere by
+  default, so silencing HF grid chatter keeps the gems. "My call" and "CQ" alerts are unchanged.
+
 ### Changed
 
 - **The panadapter trace no longer strobes with bursty signals.** The colored spectrum trace above

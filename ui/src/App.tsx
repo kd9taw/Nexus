@@ -789,6 +789,8 @@ export default function App() {
         dxcall,
       },
       watchlist,
+      // Current dial for the per-alert band scopes (grid alerts default to VHF+ only).
+      snap.radio.dialMhz > 0 ? snap.radio.dialMhz : undefined,
     )
   }, [snap, settings, handleCall, watchlist])
 

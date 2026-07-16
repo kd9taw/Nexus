@@ -1686,6 +1686,12 @@ export interface Settings {
   alertCq: boolean
   /** Alert when a station not heard before this session appears. */
   alertNew: boolean
+  /** Band scope for new-DXCC alerts: 'off' | 'hf' | 'vhf' | 'all' (alertNew stays the master). */
+  alertDxccBands: string
+  /** Band scope for plain new-grid alerts. Default 'vhf' — grid chasing is VHF-centric. */
+  alertGridBands: string
+  /** Band scope for the rare/ultra 💎 grid alerts (separate so HF-quiet keeps the gems). */
+  alertRareGridBands: string
   // --- Auto-CQ caller selection (W1.4) ---
   /** When several stations answer your CQ, which to work first:
    *  'first' (stock), 'strongest', 'farthest', or 'cq_first'. */

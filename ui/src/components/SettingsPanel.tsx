@@ -447,6 +447,24 @@ export function SettingsPanel({
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
   }
 
+  // Per-alert band-scope selects (new DXCC / new grid / rare grid). `alertNew` stays the
+  // stored master gate for backward compat: when it's off the UI renders every scope as
+  // Off, so changing one materializes that view (others → 'off') before re-enabling the
+  // master — enabling ONE type can't silently resurrect the rest.
+  const ALERT_SCOPE_KEYS = ['alertDxccBands', 'alertGridBands', 'alertRareGridBands'] as const
+  const changeAlertScope = (key: (typeof ALERT_SCOPE_KEYS)[number], value: string) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const next = { ...prev, [key]: value }
+      if (!prev.alertNew) {
+        for (const k of ALERT_SCOPE_KEYS) if (k !== key) next[k] = 'off'
+        next.alertNew = true
+      }
+      return next
+    })
+  }
+
   // The DX-cluster node list (SSB/phone aggregator). Functional update so rapid edits
   // (add/remove/edit a row) never race on a stale `form` capture.
   const mutateClusterHosts = (fn: (hosts: string[]) => string[]) => {
@@ -3280,22 +3298,67 @@ export function SettingsPanel({
                 <span className="settings-hint">Alert on any decoded CQ. Off by default — CQs are constant.</span>
               </div>
 
+              {/* Per-type band scopes: all decode alerts fire on the CURRENT band, so the
+                  scope is "should this alert on the band I'm on". VHF+ = 6 m and up. */}
               <div className="settings-field">
-                <label className="settings-toggle">
-                  <span className="settings-label">New DXCC / grid</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={form.alertNew}
-                    className={`toggle${form.alertNew ? ' on' : ''}`}
-                    onClick={() => updateBool('alertNew', !form.alertNew)}
+                <label className="settings-inline-label">
+                  <span className="settings-label">New DXCC</span>
+                  <select
+                    className="settings-input"
+                    value={!form.alertNew ? 'off' : (form.alertDxccBands ?? 'all')}
+                    aria-label="New DXCC alert bands"
+                    onChange={(e) => changeAlertScope('alertDxccBands', e.target.value)}
                   >
-                    <span className="toggle-knob" />
-                  </button>
+                    <option value="off">Off</option>
+                    <option value="hf">HF only</option>
+                    <option value="vhf">VHF+ (6 m and up)</option>
+                    <option value="all">All bands</option>
+                  </select>
                 </label>
                 <span className="settings-hint">
-                  Loudly alert on a new DXCC entity (a “new one”) or a new grid — the things worth
-                  chasing. Does NOT alert on every decode.
+                  Loud alert on a new DXCC entity — a “new one”. Does NOT alert on every decode.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-inline-label">
+                  <span className="settings-label">New grid</span>
+                  <select
+                    className="settings-input"
+                    value={!form.alertNew ? 'off' : (form.alertGridBands ?? 'vhf')}
+                    aria-label="New grid alert bands"
+                    onChange={(e) => changeAlertScope('alertGridBands', e.target.value)}
+                  >
+                    <option value="off">Off</option>
+                    <option value="hf">HF only</option>
+                    <option value="vhf">VHF+ (6 m and up)</option>
+                    <option value="all">All bands</option>
+                  </select>
+                </label>
+                <span className="settings-hint">
+                  Quiet toast on a grid you haven&apos;t worked. Default VHF+ only — grid awards
+                  (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-inline-label">
+                  <span className="settings-label">Rare grid 💎</span>
+                  <select
+                    className="settings-input"
+                    value={!form.alertNew ? 'off' : (form.alertRareGridBands ?? 'all')}
+                    aria-label="Rare grid alert bands"
+                    onChange={(e) => changeAlertScope('alertRareGridBands', e.target.value)}
+                  >
+                    <option value="off">Off</option>
+                    <option value="hf">HF only</option>
+                    <option value="vhf">VHF+ (6 m and up)</option>
+                    <option value="all">All bands</option>
+                  </select>
+                </label>
+                <span className="settings-hint">
+                  The loud 💎 alert for rare/water-only grids (rovers, maritime, DXpeditions) —
+                  separate from plain grids so silencing HF chatter keeps the gems.
                 </span>
               </div>
 

@@ -130,3 +130,84 @@ describe('processDecodes QSO-aware quieting', () => {
     expect(toasts).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('per-alert band scopes (dialMhz gate)', () => {
+  const ctx = { state: 'Listening', dxcall: null }
+
+  it('plain new grid is SUPPRESSED on HF by default (scope vhf)', () => {
+    processDecodes([decode({ from: 'N1GA', newGrid: true })], settings, undefined, ctx, undefined, 14.074)
+    expect(toasts).not.toHaveBeenCalled()
+  })
+
+  it('plain new grid fires on 6 m by default', () => {
+    processDecodes([decode({ from: 'N2GB', newGrid: true })], settings, undefined, ctx, undefined, 50.313)
+    expect(toasts).toHaveBeenCalledTimes(1)
+    expect(toasts.mock.calls[0][0]).toContain('New grid')
+  })
+
+  it('unknown dial (no CAT) is permissive — grid alert still fires', () => {
+    processDecodes([decode({ from: 'N3GC', newGrid: true })], settings, undefined, ctx)
+    expect(toasts).toHaveBeenCalledTimes(1)
+  })
+
+  it('new DXCC still fires on HF (default scope all)', () => {
+    processDecodes(
+      [decode({ from: 'N4GD', newDxcc: true, country: 'Bhutan' })],
+      settings,
+      undefined,
+      ctx,
+      undefined,
+      14.074,
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+    expect(toasts.mock.calls[0][0]).toContain('NEW DXCC')
+  })
+
+  it('rare 💎 grid still fires on HF (rare scope all beats grid scope vhf)', () => {
+    processDecodes(
+      [decode({ from: 'N5GE', newGrid: true, grid: 'AA11', gridRarity: 'ultraRare' })],
+      settings,
+      undefined,
+      ctx,
+      undefined,
+      14.074,
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+    expect(toasts.mock.calls[0][0]).toContain('ULTRA-RARE grid')
+  })
+
+  it('explicit Off silences grids even on VHF', () => {
+    const s = { ...settings, alertGridBands: 'off', alertRareGridBands: 'off' } as unknown as Settings
+    processDecodes([decode({ from: 'N6GF', newGrid: true })], s, undefined, ctx, undefined, 50.313)
+    expect(toasts).not.toHaveBeenCalled()
+  })
+
+  it('rare scope Off demotes a gem to the quiet toast where plain grids are allowed', () => {
+    const s = { ...settings, alertRareGridBands: 'off' } as unknown as Settings
+    processDecodes(
+      [decode({ from: 'N7GG', newGrid: true, grid: 'BB22', gridRarity: 'rare' })],
+      s,
+      undefined,
+      ctx,
+      undefined,
+      50.313,
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+    const [msg, kind] = toasts.mock.calls[0]
+    expect(msg).toContain('New grid')
+    expect(kind).toBe('info')
+  })
+
+  it('legacy master off keeps everything silent regardless of scopes', () => {
+    const s = { ...settings, alertNew: false } as unknown as Settings
+    processDecodes(
+      [decode({ from: 'N8GH', newGrid: true }), decode({ from: 'N9GI', newDxcc: true })],
+      s,
+      undefined,
+      ctx,
+      undefined,
+      50.313,
+    )
+    expect(toasts).not.toHaveBeenCalled()
+  })
+})

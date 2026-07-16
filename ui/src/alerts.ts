@@ -82,6 +82,23 @@ function engagedInQso(ctx?: QsoContext): boolean {
   return !!ctx?.state && ctx.state !== 'Listening' && ctx.state !== 'Done'
 }
 
+/** Per-alert band scope: which bands an alert type may fire on. 'vhf' = 6 m and up
+ * (≥ 50 MHz — where grid chasing actually lives, VUCC/FFMA), 'hf' = below 6 m. */
+export type AlertBandScope = 'off' | 'hf' | 'vhf' | 'all'
+
+/**
+ * Does an alert scope admit the current dial? Unknown dial (no CAT) is PERMISSIVE —
+ * any non-off scope passes, because silently dropping alerts on a band we can't
+ * verify would hide real ones; the operator can still pick Off for hard silence.
+ */
+export function bandScopeOk(scope: string | undefined, dialMhz: number | undefined, fallback: AlertBandScope): boolean {
+  const s = (scope ?? fallback) as AlertBandScope
+  if (s === 'off') return false
+  if (s === 'all') return true
+  if (dialMhz == null || !(dialMhz > 0)) return true // band unknown → permissive
+  return s === 'vhf' ? dialMhz >= 50 : dialMhz < 50
+}
+
 /**
  * Inspect the latest decode rows and fire alerts ONLY for new/needed things:
  * someone calling me, a new DXCC entity (aggressive), a new grid, or — if the
@@ -91,6 +108,12 @@ function engagedInQso(ctx?: QsoContext): boolean {
  * (every reply from a QSO partner is "directed to me" — that toasted every
  * over), and no "calling you" popups while mid-QSO/CQ-run (the sequencer is
  * already answering; the cockpit shows it). Monitoring stays fully alerted.
+ *
+ * Band scoping: new-DXCC / new-grid / rare-grid each carry a band scope setting
+ * (all decodes are on the CURRENT band, so the scope is just "should this alert
+ * on the band I'm on"). Plain grids default to VHF+ only — on HF nearly every
+ * decode is an unworked grid and the alert is noise; rare 💎 grids stay special
+ * everywhere by default.
  */
 export function processDecodes(
   decodes: DecodeRow[],
@@ -103,9 +126,16 @@ export function processDecodes(
   // The operator's user-defined watch list (localStorage). A match is the loudest tier —
   // they explicitly asked to be told about it — and takes precedence over the generic logic.
   watchlist?: WatchFilter[],
+  // Current dial (MHz) for the per-alert band scopes; absent = band unknown (permissive).
+  dialMhz?: number,
 ): void {
   const engaged = engagedInQso(qso)
   const partner = qso?.dxcall?.toUpperCase() ?? null
+  // Per-type band scopes, resolved once per batch. `alertNew` stays the master gate
+  // (a pre-scope settings file with it off keeps everything off, no migration).
+  const dxccOk = bandScopeOk(settings.alertDxccBands, dialMhz, 'all')
+  const gridOk = bandScopeOk(settings.alertGridBands, dialMhz, 'vhf')
+  const rareOk = bandScopeOk(settings.alertRareGridBands, dialMhz, 'all')
   for (const d of decodes) {
     const call = d.from
 
@@ -134,18 +164,23 @@ export function processDecodes(
     }
 
     // Decide whether this row should alert (highest priority first). New DXCC
-    // and new grid are gated by alertNew; a new DXCC is the loud "new one".
+    // and new grid are gated by alertNew (master) + their per-type band scope;
+    // a new DXCC is the loud "new one". A rare grid alerts when EITHER grid
+    // scope admits it (the rare scope keeps the gems when plain grids are off;
+    // the plain scope demotes a gem to a quiet toast when only IT is open).
+    const isRareGrid = d.gridRarity === 'rare' || d.gridRarity === 'ultraRare'
     let kind: AlertKind | null = null
     if (settings.alertMyCall && d.directedToMe && !engaged) kind = 'mycall'
-    else if (settings.alertNew && d.newDxcc) kind = 'newdxcc'
-    else if (settings.alertNew && d.newGrid) kind = 'newgrid'
+    else if (settings.alertNew && d.newDxcc && dxccOk) kind = 'newdxcc'
+    else if (settings.alertNew && d.newGrid && (isRareGrid ? rareOk || gridOk : gridOk))
+      kind = 'newgrid'
     else if (settings.alertCq && d.isCq) kind = 'cq'
     if (!kind) continue
 
     // Rarity escalation: a NEEDED rare/water-only grid is a hunting moment and
-    // earns the loudness plain new-grids gave up (the "too chatty" fix).
-    const rareGrid =
-      kind === 'newgrid' && (d.gridRarity === 'rare' || d.gridRarity === 'ultraRare')
+    // earns the loudness plain new-grids gave up (the "too chatty" fix) — but
+    // only when the RARE scope admits this band (else it rides the quiet tier).
+    const rareGrid = kind === 'newgrid' && isRareGrid && rareOk
 
     // Dedup scope per kind: a new DXCC alerts once per ENTITY (not again as the
     // same station's message evolves through the QSO), a new grid once per
