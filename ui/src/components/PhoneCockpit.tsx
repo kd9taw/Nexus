@@ -5,6 +5,7 @@ import { TxMeters } from './TxMeters'
 import { BandStrip } from './BandStrip'
 import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
+import { CockpitHeader } from './CockpitHeader'
 import { Splitter } from './Splitter'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
@@ -332,6 +333,19 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     setPower(pct)
     void setRfPower(pct / 100)
   }
+  // Commit a typed dial from the shared header readout — same CAT path as the
+  // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
+  // never flips the mode); rejects out-of-plan frequencies with a toast.
+  const commitDial = (mhz: number) => {
+    const band = bandLabelForMhz(mhz)
+    if (!band) {
+      pushToast(`${mhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
+      return
+    }
+    void setFrequency(mhz, band, snap.radio.sideband || 'USB')
+      .then((s) => s && onSnap?.(s))
+      .catch(() => {})
+  }
 
   // QSO recording (audio bridge): a session-level toggle driven by the snapshot (so the REC
   // badge survives nav + multi-window). Apply the returned snapshot immediately (no ~300 ms
@@ -379,29 +393,65 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
   return (
     <main className="layout single phone-cockpit" ref={cockpitRef}>
-      <div className="ph-bar">
-        <div className="ph-mode-pick" role="group" aria-label="Phone mode">
-          {(['AUTO', 'USB', 'LSB', 'FM'] as const).map((m) => {
-            const active = m === 'AUTO' ? modeOverride === null : modeOverride === m
-            return (
-              <button
-                key={m}
-                type="button"
-                className={`ph-mode-btn${active ? ' active' : ''}`}
-                aria-pressed={active}
-                disabled={!catOk}
-                title={
-                  m === 'AUTO'
-                    ? `AUTO — sideband by band (now ${sidebandAuto}); a band change re-asserts this`
-                    : `Force ${m} until you change bands`
-                }
-                onClick={() => pickMode(m === 'AUTO' ? null : m)}
-              >
-                {m === 'AUTO' ? `AUTO·${sidebandAuto}` : m}
-              </button>
-            )
-          })}
-        </div>
+      <CockpitHeader
+        snap={snap}
+        onSnap={onSnap}
+        modeIndicator={
+          <div className="ph-mode-pick" role="group" aria-label="Phone mode">
+            {(['AUTO', 'USB', 'LSB', 'FM'] as const).map((m) => {
+              const active = m === 'AUTO' ? modeOverride === null : modeOverride === m
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  className={`ph-mode-btn${active ? ' active' : ''}`}
+                  aria-pressed={active}
+                  disabled={!catOk}
+                  title={
+                    m === 'AUTO'
+                      ? `AUTO — sideband by band (now ${sidebandAuto}); a band change re-asserts this`
+                      : `Force ${m} until you change bands`
+                  }
+                  onClick={() => pickMode(m === 'AUTO' ? null : m)}
+                >
+                  {m === 'AUTO' ? `AUTO·${sidebandAuto}` : m}
+                </button>
+              )
+            })}
+          </div>
+        }
+        bandControl={<BandPicker snap={snap} mode="phone" onSnap={onSnap} />}
+        onCommitDial={commitDial}
+        wheelTune
+        wheelStepHz={tuneStep}
+        wheelSensitivity={wheelSensitivity}
+        frequencyExtras={
+          <TuningStrip
+            snap={snap}
+            onSnap={onSnap}
+            step={tuneStep}
+            onStep={setTuneStep}
+            sensitivity={wheelSensitivity}
+            showReadout={false}
+          />
+        }
+        power={{
+          value: power,
+          unit: '%',
+          onChange: changePower,
+          label: 'Power',
+          title: 'RF output power',
+          onPointerDown: () => {
+            dragging.current = true
+          },
+          onPointerUp: () => {
+            dragging.current = false
+          },
+        }}
+        txActiveLabel="▲ TX"
+        onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+        onStopTx={() => void haltTx()}
+      >
         {modeMismatch && (
           <span
             className="ph-mode-mismatch"
@@ -410,8 +460,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             rig: {modeMismatch}
           </span>
         )}
-        <TuningStrip snap={snap} onSnap={onSnap} step={tuneStep} onStep={setTuneStep} sensitivity={wheelSensitivity} />
-        <BandPicker snap={snap} mode="phone" onSnap={onSnap} />
         {catOk && (
           <div className={`ph-split ${splitOn ? 'on' : ''}`}>
             <button
@@ -447,24 +495,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             ⚠ no rig control
           </span>
         )}
-        <label className="ph-power" title="RF output power">
-          <span>Power</span>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={power}
-            onChange={(e) => changePower(Number(e.target.value))}
-            onPointerDown={() => {
-              dragging.current = true
-            }}
-            onPointerUp={() => {
-              dragging.current = false
-            }}
-            aria-label="RF power"
-          />
-          <span className="ph-power-val">{power}%</span>
-        </label>
         {snap.radio.micGain != null && (
           <label className="ph-power" title="Microphone gain — raise it until SSB peaks tickle the ALC zone">
             <span>Mic</span>
@@ -509,7 +539,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             </button>
           </div>
         )}
-        <span className="ph-spacer" />
         <MemoryBank
           dialMhz={snap.radio.dialMhz}
           mode={commandedMode}
@@ -559,10 +588,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           <span>RX</span>
           <LevelMeter value={snap.radio.rxLevel} label="RX audio level" variant="compact" />
         </label>
-        <span className={`ph-tx ${snap.radio.transmitting ? 'on' : ''}`}>
-          {snap.radio.transmitting ? '▲ TX' : snap.radio.txEnabled ? '▼ RX' : '■ TX off'}
-        </span>
-      </div>
+      </CockpitHeader>
 
       <section className="ph-scope-panel">
         <div className="ph-scope-head">
@@ -842,26 +868,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           <span>Lock</span>
         </label>
         <span className="ph-ptt-hint">Hold the button or the Space bar · you talk on the rig's mic</span>
-        <div className="ph-tx-utils">
-          <button
-            type="button"
-            className={`ph-tune${snap.radio.tuning ? ' keyed' : ''}`}
-            aria-pressed={snap.radio.tuning}
-            onClick={() => void setTune(!snap.radio.tuning).then((s) => onSnap?.(s))}
-            disabled={!snap.radio.txAllowed}
-            title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
-          >
-            {snap.radio.tuning ? 'TUNING…' : 'Tune'}
-          </button>
-          <button
-            type="button"
-            className="ph-stoptx"
-            onClick={() => void haltTx()}
-            title="Stop transmitting immediately — unkey PTT and drop the tune carrier"
-          >
-            Stop TX
-          </button>
-        </div>
       </div>
 
       <VoiceKeyer txEnabled={snap.radio.txEnabled} keyed={keyed} fdExchange={fdExchange} />

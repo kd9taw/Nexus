@@ -5,6 +5,31 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] — 2026-07-16 — one shared cockpit header across every mode + FT8 layout cleanup
+
+### Changed
+
+- **Every operating mode now shares one cockpit header.** Phone, CW, FT8/FT4, and Tempo show the same
+  base rig controls — frequency readout, band, mode, power, and CAT status — in the same position, so
+  switching modes keeps the controls where you left them. Each mode still keeps its own unique controls
+  (CW keyer/speed, phone sideband, FT8 tier and DXped, and so on).
+- **FT8/FT4 frequency gained the full tuning strip** (nudge, step, VFO A/B, RIT, XIT) that Phone and CW
+  already had, and its band/frequency picker is restyled to match the bold band control used elsewhere.
+- **The band shows its color everywhere.** The FT8/FT4 and Tempo frequency picker now carries the same
+  band-colored dot and glow as the Phone/CW band control (the same colors as the map's spots), so the
+  band you're on reads the same across every mode.
+- **Tempo now has the shared header too** — frequency, band, mode, and CAT. Before, those only lived in
+  the top bar; Tempo now reads like the other cockpits.
+- **FT8 Classic layout redesigned to the WSJT-X two-pane shape.** The standard-message machine (Tx1–Tx6)
+  moved from a wide band full of empty space into a compact panel in the right rail, so Band Activity now
+  takes the full height on the left.
+
+### Fixed
+
+- **The Tune button in the CW cockpit is visible again.** It was rendering without its styling, so it was
+  nearly invisible on the dark theme.
+- **The cockpit header keeps a steady height** when you switch between modes instead of jumping.
+
 ## [0.9.4] — 2026-07-16 — Icom CI-V: FT8/FT4 waterfall no longer blank
 
 ### Fixed

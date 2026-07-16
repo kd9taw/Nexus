@@ -56,6 +56,7 @@ import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
 import { StationList } from './components/StationList'
 import { Conversation } from './components/Conversation'
+import { TempoHeader } from './components/TempoHeader'
 import { Waterfall } from './components/Waterfall'
 import { LinkPill } from './components/LinkPill'
 import { ModeNav, type View, type DigitalMode } from './components/ModeNav'
@@ -1430,8 +1431,13 @@ export default function App() {
   // Three-pane workspace: stations | center | waterfall, with drag splitters
   // between each. CSS (keyed on `data-layout`) places the waterfall on the right
   // (default) or as a full-width strip on top — same JSX, no remount.
-  const threePane = (center: JSX.Element) => (
-    <main className="layout" data-three-pane ref={layoutRef}>
+  const threePane = (center: JSX.Element, header?: JSX.Element) => (
+    <main
+      className={`layout${header ? ' has-tempo-header' : ''}`}
+      data-three-pane
+      ref={layoutRef}
+    >
+      {header && <div className="grid-header">{header}</div>}
       <div className="grid-stations">{stationsPanel}</div>
       <div
         className="pane-splitter left"
@@ -1690,6 +1696,15 @@ export default function App() {
               }
               onRoamSettings={() => setRoamOpen(true)}
             />,
+            <TempoHeader
+              snap={snap}
+              onSnap={setSnap}
+              tier={tier}
+              onTierChange={handleTier}
+              bandPlan={bandPlan}
+              onSetFrequency={handleSetFrequency}
+              onSetTxLevel={handleSetTxLevel}
+            />,
           )}
           {roamOpen && (
             <div className="roam-modal" role="dialog" aria-label="Roam settings">
@@ -1740,7 +1755,12 @@ export default function App() {
         onSetHoldTxFreq={handleSetHoldTxFreq}
         onStopRecording={handleStopRecording}
         hideTxControls={effectiveView === 'operate'}
-        hideFrequencyControl={effectiveView === 'phone' || effectiveView === 'cw'}
+        hideFrequencyControl={
+          effectiveView === 'phone' ||
+          effectiveView === 'cw' ||
+          effectiveView === 'operate' ||
+          effectiveView === 'chat'
+        }
         hideDigitalChrome={effectiveView === 'phone' || effectiveView === 'cw'}
         wfLayout={wfLayout}
         onWfLayoutChange={setWfLayout}
@@ -1800,6 +1820,8 @@ export default function App() {
             theme={theme}
             tier={tier}
             onTierChange={handleTier}
+            bandPlan={bandPlan}
+            onSetFrequency={handleSetFrequency}
             onSourceChange={handleSourceChange}
             onTune={handleTune}
             onCall={handleCall}

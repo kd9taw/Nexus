@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   AppSnapshot,
+  BandChannel,
   ModeRequest,
   NeedAlert,
   NeedTag,
@@ -8,6 +9,7 @@ import type {
   SourceKind,
   Tier,
 } from '../types'
+import { bandLabelForMhz } from '../band'
 import {
   clampOffsetHz,
   cqDirFromText,
@@ -27,6 +29,9 @@ import { OperateQsoStrip } from './OperateQsoStrip'
 import { SpotDialog } from './SpotDialog'
 import { OperateRoster } from './OperateRoster'
 import { TxPanel } from './TxPanel'
+import { CockpitHeader } from './CockpitHeader'
+import { FrequencyControl } from './FrequencyControl'
+import { TuningStrip } from './TuningStrip'
 
 interface Props {
   /** Configured companion UDP listen address (Settings) — shown instead of a
@@ -45,6 +50,11 @@ interface Props {
   onCall: (call: string, grid?: string, message?: string, snr?: number, freq?: number) => void
   /** Set the TX audio drive level (0.0–1.0) — the Pwr slider. */
   onSetTxLevel: (level: number) => void
+  /** Band plan (channel select) shown in the header — FT8/FT4 freq+band moved
+   * out of the global TopBar into the cockpit header. */
+  bandPlan: BandChannel[]
+  /** Commit a dial/band/mode change (the app's setFrequency handler). */
+  onSetFrequency: (dialMhz: number, band: string, mode: string) => void
   /** Switch the QSO sequencer role (Call CQ / Monitor). */
   onSetMode: (mode: ModeRequest) => void
   /** Set the transmit period (Tx 1st/even vs Tx 2nd/odd). */
@@ -137,6 +147,8 @@ export function OperateCockpit({
   theme,
   tier,
   onTierChange,
+  bandPlan,
+  onSetFrequency,
   onSourceChange,
   onTune,
   onCall,
@@ -170,7 +182,6 @@ export function OperateCockpit({
   // Container the waterfall-height splitter measures + writes its CSS var on.
   const bodyRef = useRef<HTMLDivElement>(null)
   const source = snap.radio.source
-  const catOk = snap.radio.catOk
 
   // Live next-slot countdown: the snapshot's nextSlotMs only updates each poll,
   // so anchor it to wall-clock on each new value and tick locally for a smooth
@@ -192,6 +203,9 @@ export function OperateCockpit({
   // --- QSO recording (audio bridge) — same toggle as the Phone cockpit; the
   // global TopBar ● REC badge is the persistent stop once recording is on.
   const [recBusy, setRecBusy] = useState(false)
+  // Tuning step (Hz) for the header's TuningStrip nudge/step — shared with the
+  // step selector, same control CW/Phone carry (dial-nudge + VFO/RIT/XIT).
+  const [tuneStep, setTuneStep] = useState(100)
   const recording = snap.radio.qsoRecording
   const toggleRecord = () => {
     if (recBusy) return
@@ -465,25 +479,71 @@ export function OperateCockpit({
       </span>
     ) : null
 
+  // Commit a typed dial from the shared header readout — routes through the
+  // app's setFrequency handler (same path the old global TopBar readout used);
+  // rejects out-of-plan frequencies with a toast.
+  const commitDial = (mhz: number) => {
+    const band = bandLabelForMhz(mhz)
+    if (!band) {
+      pushToast(`${mhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
+      return
+    }
+    onSetFrequency(mhz, band, snap.radio.sideband || 'USB')
+  }
+
   return (
     <main className="layout single operate-cockpit">
-      <div className="cockpit-bar">
-        <div className="cockpit-modes" role="group" aria-label="Operating mode">
-          {MODES.map((m) => (
-            <button
-              key={m.tier}
-              type="button"
-              className={`cockpit-mode${tier === m.tier ? ' active' : ''}`}
-              aria-pressed={tier === m.tier}
-              onClick={() => onTierChange(m.tier)}
-              title={m.title}
-            >
-              <span className="cm-name">{m.label}</span>
-              <span className="cm-slot">{m.slot}</span>
-            </button>
-          ))}
-        </div>
-
+      <CockpitHeader
+        snap={snap}
+        onSnap={onSnap}
+        modeIndicator={
+          <div className="cockpit-modes" role="group" aria-label="Operating mode">
+            {MODES.map((m) => (
+              <button
+                key={m.tier}
+                type="button"
+                className={`cockpit-mode${tier === m.tier ? ' active' : ''}`}
+                aria-pressed={tier === m.tier}
+                onClick={() => onTierChange(m.tier)}
+                title={m.title}
+              >
+                <span className="cm-name">{m.label}</span>
+                <span className="cm-slot">{m.slot}</span>
+              </button>
+            ))}
+          </div>
+        }
+        bandControl={
+          <FrequencyControl
+            channels={bandPlan}
+            dialMhz={snap.radio.dialMhz}
+            band={snap.radio.band}
+            mode={snap.radio.sideband}
+            variant="compact"
+            showReadout={false}
+            showModeToggle={false}
+            onSet={onSetFrequency}
+          />
+        }
+        onCommitDial={commitDial}
+        frequencyExtras={
+          <TuningStrip
+            snap={snap}
+            onSnap={onSnap}
+            step={tuneStep}
+            onStep={setTuneStep}
+            showReadout={false}
+          />
+        }
+        power={{
+          value: snap.radio.txLevel,
+          unit: 'drive',
+          onChange: onSetTxLevel,
+          label: 'Pwr',
+          title: "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+        }}
+        txState={false}
+      >
         {/* DXpedition special-op selector — compact 3-chip control, always visible
             in both classic and roster layouts. Edits settings.specialOp. */}
         <div className="cockpit-specialop" role="group" aria-label="DXpedition mode">
@@ -568,14 +628,6 @@ export function OperateCockpit({
               SPLIT ▲
             </span>
           )}
-          {catOk != null && (
-            <span
-              className={`cockpit-cat ${catOk ? 'ok' : 'bad'}`}
-              title={snap.radio.catDetail || (catOk ? 'Rig CAT connected' : 'Rig CAT not connected')}
-            >
-              {catOk ? 'CAT ✓' : 'CAT ✗'}
-            </span>
-          )}
           <div className="cockpit-layout-toggle" role="group" aria-label="Operate layout">
             <button
               type="button"
@@ -614,21 +666,8 @@ export function OperateCockpit({
               ⧉ Pop out
             </button>
           )}
-          <label className="cockpit-pwr" title="TX drive (Pwr) — trim down until your rig's ALC is just zero">
-            <span>Pwr</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={snap.radio.txLevel}
-              onChange={(e) => onSetTxLevel(Number(e.target.value))}
-              aria-label="TX power / drive level"
-            />
-            <span className="cockpit-pwr-val">{Math.round(snap.radio.txLevel * 100)}%</span>
-          </label>
         </div>
-      </div>
+      </CockpitHeader>
 
       <div className={`cockpit-status ${snap.radio.transmitting ? 'tx' : 'rx'}`}>
         <span className="cs-state">
@@ -735,27 +774,6 @@ export function OperateCockpit({
           onLog={onLog}
         />
 
-        {/* The WSJT-X Tx1–Tx6 message machine — Classic layout only (the Roster
-            layout keeps its GridTracker focus). */}
-        {layoutMode === 'classic' && (
-          <TxPanel
-            dxCall={dxCall}
-            dxGrid={dxGrid}
-            onDxCall={setDxCall}
-            onDxGrid={setDxGrid}
-            messages={msgs}
-            tx5={tx5}
-            onTx5={handleTx5}
-            tx6={tx6}
-            onTx6={handleTx6}
-            nextIndex={nextIndex}
-            onTx={doTx}
-            onGenerate={handleGenerate}
-            onClear={clearDx}
-            qsoMacros={qsoMacros}
-          />
-        )}
-
         <div className={`cockpit-lower ${layoutMode}`}>
           {layoutMode === 'roster' ? (
             <>
@@ -819,8 +837,9 @@ export function OperateCockpit({
             </>
           ) : (
             <>
-              {/* Classic layout (WSJT-X-style): Band Activity dominant; the compact
-                  roster + Rx Frequency ride the side column. */}
+              {/* Classic layout (WSJT-X two-pane): Band Activity takes the full
+                  left column; the compact Tx1–Tx6 message machine, Rx Frequency,
+                  and the Stations roster ride the side rail. */}
               <div className="cockpit-decodes panel">
                 <OperateDecodes
                   decodes={snap.recentDecodes}
@@ -836,6 +855,23 @@ export function OperateCockpit({
                 />
               </div>
               <aside className="cockpit-side">
+                <TxPanel
+                  compact
+                  dxCall={dxCall}
+                  dxGrid={dxGrid}
+                  onDxCall={setDxCall}
+                  onDxGrid={setDxGrid}
+                  messages={msgs}
+                  tx5={tx5}
+                  onTx5={handleTx5}
+                  tx6={tx6}
+                  onTx6={handleTx6}
+                  nextIndex={nextIndex}
+                  onTx={doTx}
+                  onGenerate={handleGenerate}
+                  onClear={clearDx}
+                  qsoMacros={qsoMacros}
+                />
                 <div className="cockpit-rxfreq panel">
                   <OperateDecodes
                     decodes={snap.recentDecodes}

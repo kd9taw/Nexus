@@ -3125,6 +3125,32 @@ h2 {
     'waterfall waterfall waterfall'
     'stations split-left center';
 }
+/* Tempo cockpit: a full-width shared header row above the three panes (chat
+   view only — other three-pane views pass no header and are unaffected), so
+   Tempo's header spans the whole workspace like the single-pane cockpits. */
+.layout[data-three-pane].has-tempo-header {
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    'header header header header header'
+    'stations split-left center split waterfall';
+}
+[data-layout='top'] .layout[data-three-pane].has-tempo-header {
+  grid-template-rows: auto var(--strip-h) minmax(0, 1fr);
+  grid-template-areas:
+    'header header header'
+    'waterfall waterfall waterfall'
+    'stations split-left center';
+}
+.grid-header {
+  grid-area: header;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.grid-header > .cockpit-header {
+  flex: 1;
+  min-width: 0;
+}
 
 .grid-stations {
   grid-area: stations;
@@ -5741,7 +5767,8 @@ select optgroup {
   color: var(--state-weak);
   font-weight: 800;
 }
-.cw-abort {
+.cw-abort,
+.cockpit-stoptx {
   padding: 6px var(--space-4);
   border-radius: var(--radius-sm);
   font-weight: 800;
@@ -5749,7 +5776,8 @@ select optgroup {
   background: color-mix(in srgb, var(--state-weak) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--state-weak) 50%, transparent);
 }
-.cw-abort:hover {
+.cw-abort:hover,
+.cockpit-stoptx:hover {
   background: color-mix(in srgb, var(--state-weak) 22%, transparent);
 }
 /* Tune (ATU/amp carrier) + Stop-TX utilities — shared look across the Phone & CW cockpits.
@@ -5760,7 +5788,8 @@ select optgroup {
   align-items: center;
 }
 .ph-tune,
-.cw-tune {
+.cw-tune,
+.cockpit-tune {
   padding: 6px var(--space-4);
   border-radius: var(--radius-sm);
   font-weight: 800;
@@ -5770,17 +5799,20 @@ select optgroup {
   transition: var(--transition);
 }
 .ph-tune:hover:not(:disabled),
-.cw-tune:hover:not(:disabled) {
+.cw-tune:hover:not(:disabled),
+.cockpit-tune:hover:not(:disabled) {
   color: var(--text);
   border-color: color-mix(in srgb, var(--border) 40%, var(--text-dim));
 }
 .ph-tune:disabled,
-.cw-tune:disabled {
+.cw-tune:disabled,
+.cockpit-tune:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 .ph-tune.keyed,
-.cw-tune.keyed {
+.cw-tune.keyed,
+.cockpit-tune.keyed {
   background: var(--state-ok);
   border-color: var(--state-ok);
   color: var(--accent-ink);
@@ -10511,6 +10543,12 @@ select.settings-input {
   gap: var(--gap);
   flex-wrap: wrap;
   min-width: 0;
+  /* Consistent height across modes: FT8's 2-line tier tiles are the tallest
+     mode indicator, so pin the header to their height — CW's badge and Phone's
+     sideband group then sit at the same height and the header doesn't jog when
+     switching modes. (The mode-indicator CONTENTS legitimately differ per mode;
+     only the frame is aligned.) */
+  min-height: 44px;
 }
 .ch-identity {
   flex: 0 0 auto;
@@ -10533,6 +10571,32 @@ select.settings-input {
   display: flex;
   align-items: center;
   min-width: 0;
+}
+/* FT8/Tempo keep their frequency-PRESET dropdown (14.074 etc. — operator wants
+   that, unchanged), but restyle it in the header's band slot to the BandPicker's
+   bold/mono/bordered look so the band slot reads the same across every cockpit.
+   Scoped to .ch-band so the global TopBar's compact FrequencyControl is untouched. */
+.ch-band .freq-control.compact {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  gap: var(--space-2);
+}
+.ch-band .freq-channel {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  padding: 5px 10px;
+  min-height: 0;
+}
+.ch-band .freq-channel:hover {
+  filter: brightness(1.15);
 }
 /* The elastic member: fills the middle when wide, and (since both base clusters are flex:0 0 auto
    under flex-wrap) drops to its own row first when space is tight — so the mode-specific controls
@@ -10861,7 +10925,9 @@ select.settings-input {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  /* Classic two-pane: Band Activity dominant on the left, a wider rail on the
+     right now that it also carries the compact Tx1–Tx6 machine. */
+  grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: var(--gap);
 }
@@ -11033,6 +11099,40 @@ select.settings-input {
   .tx-panel {
     grid-template-columns: 1fr;
   }
+}
+
+/* Compact Tx1–Tx6 machine for the Classic two-pane side rail: one column so the
+   short messages never stretch into dead space, DX Call/Grid wrap onto one row,
+   and Generate/Clear take the row below. Content-sized so Band Activity keeps
+   the left column and Rx Frequency + Stations share the rail beneath it. */
+.tx-panel-compact {
+  grid-template-columns: 1fr;
+  gap: 8px;
+  align-content: start;
+}
+.tx-panel-compact .txp-dx {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.tx-panel-compact .txp-field {
+  flex: 1 1 128px;
+  min-width: 0;
+}
+.tx-panel-compact .txp-dx-actions {
+  flex: 1 1 100%;
+}
+/* Classic rail with the Tx machine on top: Rx Frequency and Stations become
+   equal flex fillers (both scroll internally) so the content-sized Tx panel
+   above them can't push the roster off the bottom. */
+.cockpit-lower.classic .cockpit-rxfreq {
+  flex: 1 1 0;
+  max-height: none;
+  min-height: 88px;
+}
+.cockpit-lower.classic .cockpit-roster {
+  min-height: 96px;
 }
 
 .cockpit-rxfreq {

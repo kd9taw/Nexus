@@ -52,6 +52,8 @@ export interface CockpitHeaderProps {
   power?: CockpitHeaderPower
   /** Show the compact TX/RX pill in the actions cluster. Default true. */
   txState?: boolean
+  /** Label shown on the pill while transmitting (default '▲ KEYING'; Phone passes '▲ TX'). */
+  txActiveLabel?: string
   /** Tune (key a steady carrier). */
   onTune?: (on: boolean) => void
   /** Stop TX / abort (CW passes its combined stopCw()+haltTx()). */
@@ -73,6 +75,7 @@ export function CockpitHeader({
   children,
   power,
   txState = true,
+  txActiveLabel = '▲ KEYING',
   onTune,
   onStopTx,
   catStatus,
@@ -92,7 +95,7 @@ export function CockpitHeader({
     onSnap,
   })
 
-  const txPill = radio.transmitting ? '▲ KEYING' : radio.txEnabled ? '▼ RX' : '■ TX off'
+  const txPill = radio.transmitting ? txActiveLabel : radio.txEnabled ? '▼ RX' : '■ TX off'
 
   return (
     <div className="cockpit-header">

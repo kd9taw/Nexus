@@ -26,6 +26,9 @@ interface Props {
   onClear: () => void
   /** Tx5 free-text suggestions (settings QSO macros + the stock 73/RR73). */
   qsoMacros: string[]
+  /** Narrow single-column layout for the side rail (Classic two-pane): DX
+   * fields wrap on one row, the six Tx rows stack below — no wide dead space. */
+  compact?: boolean
 }
 
 /**
@@ -50,6 +53,7 @@ export function TxPanel({
   onGenerate,
   onClear,
   qsoMacros,
+  compact = false,
 }: Props) {
   const canTx = dxCall.trim().length > 0
   const rows: { n: number; text: string }[] = [
@@ -64,7 +68,10 @@ export function TxPanel({
   const tx5Options = Array.from(new Set(['73', 'RR73', ...qsoMacros]))
 
   return (
-    <section className="tx-panel panel" aria-label="Standard messages (Tx1–Tx6)">
+    <section
+      className={`tx-panel panel${compact ? ' tx-panel-compact' : ''}`}
+      aria-label="Standard messages (Tx1–Tx6)"
+    >
       <div className="txp-dx">
         <label className="txp-field">
           <span>DX Call</span>

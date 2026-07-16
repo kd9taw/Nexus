@@ -439,6 +439,10 @@ export function DetachedPanel({ panel }: { panel: string }) {
           theme={theme}
           tier={snap.link.tier}
           onTierChange={(t: Tier) => apply(setTier(t))}
+          bandPlan={bandPlan}
+          onSetFrequency={(dialMhz: number, band: string, mode: string) =>
+            apply(setFrequency(dialMhz, band, mode))
+          }
           onSourceChange={(k: SourceKind) => apply(setSource(k))}
           onTune={onTune}
           onCall={onCall}

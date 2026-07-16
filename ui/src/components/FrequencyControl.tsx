@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { BandChannel, RadioMode } from '../types'
 import { bandLabelForMhz } from '../band'
+import { bandColor } from '../bandColors'
 import { FrequencyReadout } from './FrequencyReadout'
 
 interface Props {
@@ -73,8 +74,14 @@ export function FrequencyControl({
 
   const selectValue = active ? chanKey(active) : ''
 
+  // The band is a primary operating fact — color the control with the active
+  // band's color (shared with the map spot dots + the CW/Phone BandPicker) so
+  // FT8/FT4 and Tempo read the band the same way CW/Phone do.
+  const col = bandColor(band || bandLabelForMhz(dialMhz) || '')
+
   return (
     <div className={`freq-control ${variant}`} role="group" aria-label="Frequency control">
+      <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
       <label className="freq-channel-wrap">
         {variant === 'full' && <span className="settings-label">Band / Channel</span>}
         <select
@@ -83,6 +90,7 @@ export function FrequencyControl({
           onChange={(e) => selectChannel(e.target.value)}
           title={active ? active.note : 'Pick a band-plan channel'}
           aria-label="Band channel preset"
+          style={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
         >
           <option value="">{active ? '— Presets —' : `${band || '—'} (custom)`}</option>
           {grouped.map((g) => (

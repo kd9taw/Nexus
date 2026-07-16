@@ -5,6 +5,7 @@ import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
+import { CockpitHeader } from './CockpitHeader'
 import { Splitter } from './Splitter'
 import { LogEntry } from './LogEntry'
 import {
@@ -30,8 +31,10 @@ import {
   setFlexPanRef,
   openPanelWindow,
   setTune,
+  setFrequency,
   haltTx,
 } from '../api'
+import { bandLabelForMhz } from '../band'
 import { pushToast, withErrorToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { useWheelTune } from '../useWheelTune'
@@ -442,6 +445,19 @@ export function CwCockpit({
     void stopCw()
     void haltTx()
   }
+  // Commit a typed dial from the shared header readout — same CAT path as the
+  // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
+  // never flips the mode); rejects out-of-plan frequencies with a toast.
+  const commitDial = (mhz: number) => {
+    const band = bandLabelForMhz(mhz)
+    if (!band) {
+      pushToast(`${mhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
+      return
+    }
+    void setFrequency(mhz, band, snap.radio.sideband || 'USB')
+      .then((s) => s && onSnap?.(s))
+      .catch(() => {})
+  }
   const changeKeyer = (k: 'cat' | 'soundcard' | 'winkeyer') => {
     setKeyer(k)
     void setCwKeyer(k).then((s) => s && onSnap?.(s))
@@ -501,16 +517,35 @@ export function CwCockpit({
 
   return (
     <main className="layout single cw-cockpit" ref={cockpitRef}>
-      <div className="cw-bar">
-        <span
-          className="cw-mode-badge"
-          title={
-            snap.radio.catDetail ||
-            "The rig is set to CW while you're in this section"
-          }
-        >
-          CW
-        </span>
+      <CockpitHeader
+        snap={snap}
+        onSnap={onSnap}
+        modeIndicator={
+          <span
+            className="cw-mode-badge"
+            title={snap.radio.catDetail || "The rig is set to CW while you're in this section"}
+          >
+            CW
+          </span>
+        }
+        bandControl={<BandPicker snap={snap} mode="cw" onSnap={onSnap} />}
+        onCommitDial={commitDial}
+        wheelTune
+        wheelStepHz={tuneStep}
+        wheelSensitivity={wheelSensitivity}
+        frequencyExtras={
+          <TuningStrip
+            snap={snap}
+            onSnap={onSnap}
+            step={tuneStep}
+            onStep={setTuneStep}
+            sensitivity={wheelSensitivity}
+            showReadout={false}
+          />
+        }
+        onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+        onStopTx={abort}
+      >
         <label className="cw-wpm" title="Keyer speed — PgUp/PgDn to nudge (Shift = ±4)">
           <span>Speed</span>
           <input
@@ -582,8 +617,6 @@ export function CwCockpit({
             </select>
           </label>
         )}
-        <TuningStrip snap={snap} onSnap={onSnap} step={tuneStep} onStep={setTuneStep} sensitivity={wheelSensitivity} />
-        <BandPicker snap={snap} mode="cw" onSnap={onSnap} />
         {catOk && (
           <div className="ph-filter" title="RX filter / passband width (CAT) — narrow to dig CW out of QRM">
             <span className="ph-filter-lbl">BW</span>
@@ -606,7 +639,6 @@ export function CwCockpit({
             </button>
           </div>
         )}
-        <span className="cw-spacer" />
         <RotorStrip
           targetCall={guide.workedCall}
           onPointAt={(call) =>
@@ -620,23 +652,7 @@ export function CwCockpit({
             SPLIT ▲
           </span>
         )}
-        <span className={`cw-tx ${snap.radio.transmitting ? 'on' : ''}`}>
-          {snap.radio.transmitting ? '▲ KEYING' : snap.radio.txEnabled ? '▼ RX' : '■ TX off'}
-        </span>
-        <button
-          type="button"
-          className={`cw-tune${snap.radio.tuning ? ' keyed' : ''}`}
-          aria-pressed={snap.radio.tuning}
-          onClick={() => void setTune(!snap.radio.tuning).then((s) => onSnap?.(s))}
-          disabled={!snap.radio.txAllowed}
-          title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
-        >
-          {snap.radio.tuning ? 'TUNING…' : 'Tune'}
-        </button>
-        <button type="button" className="cw-abort" onClick={abort} title="Stop TX — CW sending + tune carrier (Esc)">
-          Stop TX
-        </button>
-      </div>
+      </CockpitHeader>
 
       {keyerError && (
         <div className="cw-keyer-warn" role="alert">
