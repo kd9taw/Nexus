@@ -195,27 +195,33 @@ type SettingsTab =
   | 'station'
   | 'rig'
   | 'audio'
-  | 'operating'
+  | 'phone'
+  | 'digital'
+  | 'cw'
   | 'frequencies'
   | 'alerts'
-  | 'connections'
   | 'confirmations'
+  | 'connections'
+  | 'fieldday'
   | 'features'
   | 'workspace'
-  | 'fieldday'
 
+// Mode-first order, mirroring the app's Phone · Digital · CW rail: radio/station setup, then the
+// three operating modes, then logging/alerts/integrations, then app prefs.
 const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'station', label: 'Station' },
   { id: 'rig', label: 'Rig / CAT' },
   { id: 'audio', label: 'Audio' },
-  { id: 'operating', label: 'Operating' },
+  { id: 'phone', label: 'Phone' },
+  { id: 'digital', label: 'Digital (FT8/FT4)' },
+  { id: 'cw', label: 'CW' },
   { id: 'frequencies', label: 'Frequencies' },
   { id: 'alerts', label: 'Alerts' },
-  { id: 'connections', label: 'Integrations & Feeds' },
   { id: 'confirmations', label: 'Logbook & QSL' },
+  { id: 'connections', label: 'Integrations & Feeds' },
+  { id: 'fieldday', label: 'Field Day' },
   { id: 'features', label: 'Features' },
   { id: 'workspace', label: 'Workspace' },
-  { id: 'fieldday', label: 'Field Day' },
 ]
 
 // Public human DX-cluster nodes (SSB/phone + human spots) — the RBN CW + digital skimmer
@@ -2070,22 +2076,6 @@ export function SettingsPanel({
                 />
               </div>
 
-              <label className="settings-field">
-                <span className="settings-label">WinKeyer port</span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.winkeyerPort}
-                  placeholder="COM6 — K1EL WinKeyer serial port"
-                  onChange={(e) => update('winkeyerPort', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <span className="settings-hint">
-                  For the WinKeyer CW keyer (select it in the CW cockpit). 1200 baud.
-                </span>
-              </label>
-
               <div className="settings-field">
                 <span className="settings-label">Split operation</span>
                 <div className="theme-switcher" role="group" aria-label="Split operation">
@@ -2109,57 +2099,6 @@ export function SettingsPanel({
                 </span>
               </div>
             </div>
-            <SettingsGroup title="Phone / FM" defaultOpen={false}>
-              <label className="settings-field">
-                <span className="settings-label">Phone mode</span>
-                <select
-                  className="settings-input"
-                  value={form.phoneMode}
-                  onChange={(e) => update('phoneMode', e.target.value)}
-                >
-                  <option value="ssb">SSB (USB/LSB by band)</option>
-                  <option value="fm">FM (VHF/UHF + repeaters)</option>
-                </select>
-                <span className="settings-hint">FM drives the rig to FM + the shift/tone below.</span>
-              </label>
-
-              {form.phoneMode === 'fm' && (
-                <>
-                  <label className="settings-field">
-                    <span className="settings-label">Repeater shift</span>
-                    <select
-                      className="settings-input"
-                      value={form.rptrShift}
-                      onChange={(e) => update('rptrShift', e.target.value)}
-                    >
-                      <option value="simplex">Simplex (no shift)</option>
-                      <option value="plus">Plus (+)</option>
-                      <option value="minus">Minus (−)</option>
-                    </select>
-                    <span className="settings-hint">Offset is the band standard (2 m 600 k, 70 cm 5 M…).</span>
-                  </label>
-
-                  <label className="settings-field">
-                    <span className="settings-label">CTCSS (PL) tone</span>
-                    <select
-                      className="settings-input"
-                      value={String(form.ctcssToneHz)}
-                      onChange={(e) =>
-                        setForm((p) => (p ? { ...p, ctcssToneHz: Number(e.target.value) } : p))
-                      }
-                    >
-                      <option value="0">Off</option>
-                      {CTCSS_TONES.map((t) => (
-                        <option key={t} value={String(t)}>
-                          {t.toFixed(1)} Hz
-                        </option>
-                      ))}
-                    </select>
-                    <span className="settings-hint">Repeater access tone (PL).</span>
-                  </label>
-                </>
-              )}
-            </SettingsGroup>
             <SettingsGroup title="Advanced" defaultOpen={false}>
               <label className="settings-field">
                 <span className="settings-label">rigctld TCP Port</span>
@@ -2436,28 +2375,6 @@ export function SettingsPanel({
                 <span className="settings-hint">Sound card feeding the rig (transmit).</span>
               </label>
 
-              <label className="settings-field">
-                <span className="settings-label">Voice mic (recording)</span>
-                <select
-                  className="settings-input"
-                  value={form.voiceMicDevice ?? ''}
-                  onChange={(e) => update('voiceMicDevice', e.target.value)}
-                >
-                  <option value="">Same as audio input (default)</option>
-                  {voiceMicOptions.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </select>
-                <span className="settings-hint">
-                  Mic used when RECORDING a voice-keyer message. Default records from the
-                  input device above — but on a digital setup that's the rig's RX audio, so
-                  you'd record the band, not your voice. Pick your actual mic here. If it
-                  can't open, recording falls back to the input device (never silent).
-                </span>
-              </label>
-
               <div className="settings-field settings-audio-scope">
                 <span className="settings-label">Live input spectrum</span>
                 <MiniSpectrum
@@ -2583,10 +2500,10 @@ export function SettingsPanel({
           </>
           )}
 
-          {/* ---- Operating ---- */}
-          {tab === 'operating' && (
+          {/* ---- Digital (FT8/FT4) — was "Operating"; ~90% FT8 sequencing/decoder knobs ---- */}
+          {tab === 'digital' && (
           <fieldset className="settings-section">
-            <legend>Operating</legend>
+            <legend>Digital (FT8/FT4)</legend>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">Transmit &amp; Sequencing</span>
               <div className="settings-grid">
@@ -3054,26 +2971,6 @@ export function SettingsPanel({
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">CW ID after 73</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={form.cwIdAfter73 === true}
-                      className={`toggle${form.cwIdAfter73 === true ? ' on' : ''}`}
-                      onClick={() => updateBool('cwIdAfter73', form.cwIdAfter73 !== true)}
-                    >
-                      <span className="toggle-knob" />
-                    </button>
-                  </label>
-                  <span className="settings-hint">
-                    Keys your callsign in CW once the final 73 has fully left the air (stock
-                    WSJT-X option, default off). Uses the normal CW keying path — PTT + tone —
-                    after the FT8 over, never on top of it.
-                  </span>
-                </div>
-
-                <div className="settings-field">
-                  <label className="settings-toggle">
                     <span className="settings-label">Clock check (NTP)</span>
                     <button
                       type="button"
@@ -3125,6 +3022,315 @@ export function SettingsPanel({
                     Leave blank if unknown.
                   </span>
                 </div>
+              </div>
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- Digital quick-reply macros (moved out of the old Alerts/Macros orphan) ---- */}
+          {tab === 'digital' && (
+          <fieldset className="settings-section">
+            <legend>Quick-reply macros</legend>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">Chat</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.macros.chat.join(', ')}
+                  onChange={(e) => updateMacros('chat', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">Comma-separated chips for Chat.</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">QSO</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.macros.qso.join(', ')}
+                  onChange={(e) => updateMacros('qso', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">Chips for sequenced QSOs.</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">Band / CQ</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.macros.band.join(', ')}
+                  onChange={(e) => updateMacros('band', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">Open broadcasts — the Call CQ launchpad + band feed.</span>
+              </label>
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- Phone (SSB / FM) ---- */}
+          {tab === 'phone' && (
+          <fieldset className="settings-section">
+            <legend>Phone (SSB / FM)</legend>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">Mode</span>
+              <label className="settings-field">
+                <span className="settings-label">Phone mode</span>
+                <select
+                  className="settings-input"
+                  value={form.phoneMode}
+                  onChange={(e) => update('phoneMode', e.target.value)}
+                >
+                  <option value="ssb">SSB (USB/LSB by band)</option>
+                  <option value="fm">FM (VHF/UHF + repeaters)</option>
+                </select>
+                <span className="settings-hint">FM drives the rig to FM + the shift/tone below.</span>
+              </label>
+
+              {form.phoneMode === 'fm' && (
+                <>
+                  <label className="settings-field">
+                    <span className="settings-label">Repeater shift</span>
+                    <select
+                      className="settings-input"
+                      value={form.rptrShift}
+                      onChange={(e) => update('rptrShift', e.target.value)}
+                    >
+                      <option value="simplex">Simplex (no shift)</option>
+                      <option value="plus">Plus (+)</option>
+                      <option value="minus">Minus (−)</option>
+                    </select>
+                    <span className="settings-hint">Offset is the band standard (2 m 600 k, 70 cm 5 M…).</span>
+                  </label>
+
+                  <label className="settings-field">
+                    <span className="settings-label">CTCSS (PL) tone</span>
+                    <select
+                      className="settings-input"
+                      value={String(form.ctcssToneHz)}
+                      onChange={(e) =>
+                        setForm((p) => (p ? { ...p, ctcssToneHz: Number(e.target.value) } : p))
+                      }
+                    >
+                      <option value="0">Off</option>
+                      {CTCSS_TONES.map((t) => (
+                        <option key={t} value={String(t)}>
+                          {t.toFixed(1)} Hz
+                        </option>
+                      ))}
+                    </select>
+                    <span className="settings-hint">Repeater access tone (PL).</span>
+                  </label>
+                </>
+              )}
+            </div>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">Microphone</span>
+              <label className="settings-field">
+                <span className="settings-label">Voice mic (recording)</span>
+                <select
+                  className="settings-input"
+                  value={form.voiceMicDevice ?? ''}
+                  onChange={(e) => update('voiceMicDevice', e.target.value)}
+                >
+                  <option value="">Same as audio input (default)</option>
+                  {voiceMicOptions.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">
+                  Mic used when RECORDING a voice-keyer message. Default records from the audio
+                  input device — but on a digital setup that's the rig's RX audio, so you'd record
+                  the band, not your voice. Pick your actual mic here. If it can't open, recording
+                  falls back to the input device (never silent).
+                </span>
+              </label>
+              <span className="settings-hint">
+                Mic gain and voice-keyer message recording are in the Phone cockpit (live CAT +
+                one-touch record).
+              </span>
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- CW — the standalone CW home (keyer + F-key macros) ---- */}
+          {tab === 'cw' && (
+          <fieldset className="settings-section">
+            <legend>CW</legend>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">Keyer</span>
+              <label className="settings-field">
+                <span className="settings-label">Keyer backend</span>
+                <select
+                  className="settings-input"
+                  value={form.cwKeyer ?? 'cat'}
+                  onChange={(e) => update('cwKeyer', e.target.value)}
+                >
+                  <option value="cat">CAT — the rig keys CW (Hamlib send_morse)</option>
+                  <option value="soundcard">Soundcard — keyed audio tone through SSB</option>
+                  <option value="winkeyer">WinKeyer — K1EL hardware keyer</option>
+                </select>
+                <span className="settings-hint">
+                  How Nexus sends CW. CAT uses the rig&apos;s internal keyer; Soundcard keys an audio
+                  tone (rig in SSB); WinKeyer drives a K1EL on the port below. Also switchable live
+                  from the CW cockpit.
+                </span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">Sidetone pitch (Hz)</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min="300"
+                  max="1200"
+                  step="10"
+                  inputMode="numeric"
+                  value={form.cwPitchHz}
+                  onChange={(e) => updateNum('cwPitchHz', Number(e.target.value))}
+                />
+                <span className="settings-hint">
+                  CW tone pitch (300–1200 Hz) — the soundcard keyer tone and the CW scope
+                  zero-beat marker.
+                </span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">WinKeyer port</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.winkeyerPort}
+                  placeholder="COM6 — K1EL WinKeyer serial port"
+                  onChange={(e) => update('winkeyerPort', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  For the WinKeyer CW keyer (select it above). 1200 baud.
+                </span>
+              </label>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">CW ID after 73</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.cwIdAfter73 === true}
+                    className={`toggle${form.cwIdAfter73 === true ? ' on' : ''}`}
+                    onClick={() => updateBool('cwIdAfter73', form.cwIdAfter73 !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Keys your callsign in CW once the final 73 has fully left the air (stock WSJT-X
+                  option, default off). Uses the normal CW keying path — PTT + tone — after the FT8
+                  over, never on top of it.
+                </span>
+              </div>
+            </div>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">Macros (F-key profiles)</span>
+              <div className="settings-field cw-macro-editor">
+                <span className="settings-label">CW cockpit F-keys</span>
+                {/* Named macro profiles — a rotating operator switches sets here (or in one
+                    click from the CW cockpit bar). The grid below edits the ACTIVE profile. */}
+                <div className="cw-macro-row">
+                  <select
+                    className="settings-input"
+                    value={activeCwIdx}
+                    onChange={(e) => selectCwProfile(Number(e.target.value))}
+                    aria-label="Active CW macro profile"
+                  >
+                    {cwProfiles.map((p, i) => (
+                      <option key={i} value={i}>
+                        {p.name || `Profile ${i + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="settings-refresh" onClick={addCwProfile}>
+                    New
+                  </button>
+                  <button type="button" className="settings-refresh" onClick={renameCwProfile}>
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-refresh danger"
+                    onClick={deleteCwProfile}
+                    disabled={cwProfiles.length <= 1}
+                    title={cwProfiles.length <= 1 ? 'Keep at least one profile' : 'Delete this profile'}
+                  >
+                    Delete
+                  </button>
+                </div>
+                {!activeCwMacros.length ? (
+                  <div className="cw-macro-row">
+                    <span className="settings-hint">
+                      Using the built-in F1–F8 set. Customize to make them your own (labels +
+                      templates; tokens: {'{MYCALL} {RST} {NAME}'} and ! = the worked call).
+                    </span>
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={() => setCwMacros(CW_MACRO_DEFAULTS.map((m) => ({ ...m })))}
+                    >
+                      Customize
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {activeCwMacros.map((m, i) => (
+                      <div key={m.key} className="cw-macro-row">
+                        <span className="cw-macro-key" title={CW_MACRO_ROLES[m.key] ?? ''}>
+                          {m.key}
+                        </span>
+                        <span className="cw-macro-role">{CW_MACRO_ROLES[m.key] ?? ''}</span>
+                        <input
+                          className="settings-input cw-macro-label"
+                          type="text"
+                          value={m.label}
+                          onChange={(e) => updateCwMacro(i, 'label', e.target.value)}
+                          aria-label={`${m.key} label`}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                        <input
+                          className="settings-input cw-macro-text"
+                          type="text"
+                          value={m.text}
+                          onChange={(e) => updateCwMacro(i, 'text', e.target.value)}
+                          aria-label={`${m.key} text`}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </div>
+                    ))}
+                    <div className="cw-macro-row">
+                      <span className="settings-hint">
+                        Tokens: {'{MYCALL} {NAME} {MYGRID} {MYSTATE} {RST}'} · ! = the worked call ·{' '}
+                        {'{HISNAME} {HISSTATE}'} = the worked station's QRZ name/state (fill in
+                        Settings ▸ Station for {'{MYSTATE}'}; the rest auto-fill from the copilot /
+                        roster click + QRZ lookup). Each key KEEPS its role — the Guided copilot's
+                        next-step highlight follows the role, so customized text still rolls through
+                        F1→F2→F3→F4 exactly as before. Keep the ! token wherever you want the other
+                        station's call inserted. Save to apply.
+                      </span>
+                      <button
+                        type="button"
+                        className="settings-refresh"
+                        onClick={() => setCwMacros([])}
+                      >
+                        Reset to defaults
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </fieldset>
@@ -3262,7 +3468,6 @@ export function SettingsPanel({
 
           {/* ---- Alerts ---- */}
           {tab === 'alerts' && (
-          <>
           <fieldset className="settings-section">
             <legend>Alerts</legend>
             <div className="settings-grid">
@@ -3368,147 +3573,6 @@ export function SettingsPanel({
               <WatchlistPanel />
             </div>
           </fieldset>
-
-          {/* ---- Macros ---- */}
-          <fieldset className="settings-section">
-            <legend>Quick-reply Macros</legend>
-            <div className="settings-grid">
-              <label className="settings-field">
-                <span className="settings-label">Chat</span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.macros.chat.join(', ')}
-                  onChange={(e) => updateMacros('chat', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <span className="settings-hint">Comma-separated chips for Chat.</span>
-              </label>
-              <label className="settings-field">
-                <span className="settings-label">QSO</span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.macros.qso.join(', ')}
-                  onChange={(e) => updateMacros('qso', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <span className="settings-hint">Chips for sequenced QSOs.</span>
-              </label>
-              <label className="settings-field">
-                <span className="settings-label">Band / CQ</span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.macros.band.join(', ')}
-                  onChange={(e) => updateMacros('band', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <span className="settings-hint">Open broadcasts — the Call CQ launchpad + band feed.</span>
-              </label>
-            </div>
-
-            <div className="settings-field cw-macro-editor">
-              <span className="settings-label">CW cockpit F-keys</span>
-              {/* Named macro profiles — a rotating operator switches sets here (or in one
-                  click from the CW cockpit bar). The grid below edits the ACTIVE profile. */}
-              <div className="cw-macro-row">
-                <select
-                  className="settings-input"
-                  value={activeCwIdx}
-                  onChange={(e) => selectCwProfile(Number(e.target.value))}
-                  aria-label="Active CW macro profile"
-                >
-                  {cwProfiles.map((p, i) => (
-                    <option key={i} value={i}>
-                      {p.name || `Profile ${i + 1}`}
-                    </option>
-                  ))}
-                </select>
-                <button type="button" className="settings-refresh" onClick={addCwProfile}>
-                  New
-                </button>
-                <button type="button" className="settings-refresh" onClick={renameCwProfile}>
-                  Rename
-                </button>
-                <button
-                  type="button"
-                  className="settings-refresh danger"
-                  onClick={deleteCwProfile}
-                  disabled={cwProfiles.length <= 1}
-                  title={cwProfiles.length <= 1 ? 'Keep at least one profile' : 'Delete this profile'}
-                >
-                  Delete
-                </button>
-              </div>
-              {!activeCwMacros.length ? (
-                <div className="cw-macro-row">
-                  <span className="settings-hint">
-                    Using the built-in F1–F8 set. Customize to make them your own (labels +
-                    templates; tokens: {'{MYCALL} {RST} {NAME}'} and ! = the worked call).
-                  </span>
-                  <button
-                    type="button"
-                    className="settings-refresh"
-                    onClick={() => setCwMacros(CW_MACRO_DEFAULTS.map((m) => ({ ...m })))}
-                  >
-                    Customize
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {activeCwMacros.map((m, i) => (
-                    <div key={m.key} className="cw-macro-row">
-                      <span className="cw-macro-key" title={CW_MACRO_ROLES[m.key] ?? ''}>
-                        {m.key}
-                      </span>
-                      <span className="cw-macro-role">{CW_MACRO_ROLES[m.key] ?? ''}</span>
-                      <input
-                        className="settings-input cw-macro-label"
-                        type="text"
-                        value={m.label}
-                        onChange={(e) => updateCwMacro(i, 'label', e.target.value)}
-                        aria-label={`${m.key} label`}
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
-                      <input
-                        className="settings-input cw-macro-text"
-                        type="text"
-                        value={m.text}
-                        onChange={(e) => updateCwMacro(i, 'text', e.target.value)}
-                        aria-label={`${m.key} text`}
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
-                    </div>
-                  ))}
-                  <div className="cw-macro-row">
-                    <span className="settings-hint">
-                      Tokens: {'{MYCALL} {NAME} {MYGRID} {MYSTATE} {RST}'} · ! = the worked call ·{' '}
-                      {'{HISNAME} {HISSTATE}'} = the worked station's QRZ name/state (fill in
-                      Settings ▸ Station for {'{MYSTATE}'}; the rest auto-fill from the copilot /
-                      roster click + QRZ lookup). Each key KEEPS its role — the Guided copilot's
-                      next-step highlight follows the role, so customized text still rolls through
-                      F1→F2→F3→F4 exactly as before. Keep the ! token wherever you want the other
-                      station's call inserted. Save to apply.
-                    </span>
-                    <button
-                      type="button"
-                      className="settings-refresh"
-                      onClick={() => setCwMacros([])}
-                    >
-                      Reset to defaults
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </fieldset>
-          </>
           )}
 
           {/* ---- Network integrations ---- */}
@@ -3826,68 +3890,158 @@ export function SettingsPanel({
           </fieldset>
           )}
 
-          {/* ---- Confirmations (LoTW / eQSL / QRZ / ClubLog accounts) ---- */}
-          {tab === 'confirmations' && (
+          {/* ---- N3FJP + N1MM loggers (moved from Field Day — they serve everyday club logging) ---- */}
+          {tab === 'connections' && (
           <>
           <fieldset className="settings-section">
-            <legend>LoTW users list</legend>
-            <div className="settings-field">
-              <div className="lotw-users-row">
-                <button
-                  type="button"
-                  className="settings-test-btn"
-                  disabled={lotwFetching}
-                  onClick={() => {
-                    setLotwFetching(true)
-                    fetchLotwUsers()
-                      .then((st) => {
-                        setLotwUsers(st)
-                        pushToast(
-                          `LoTW list loaded — ${st.count.toLocaleString()} calls`,
-                          'success',
-                          5000,
-                        )
-                      })
-                      .catch((e) =>
-                        pushToast(
-                          `LoTW list fetch failed: ${e instanceof Error ? e.message : e}`,
-                          'error',
-                        ),
-                      )
-                      .finally(() => setLotwFetching(false))
+            <legend>N3FJP Integration (club master log)</legend>
+            <p className="settings-note">
+              Each FD contact lands in the club's{' '}
+              <strong>N3FJP Field Day Contest Log</strong> the moment you log it — so the whole
+              club's score updates in real time. Run N3FJP on the master computer; point Nexus at
+              its IP + port (default 1100).
+            </p>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">N3FJP host</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.n3fjpHost ?? ''}
+                  placeholder="192.168.1.10 (empty = off)"
+                  onChange={(e) => update('n3fjpHost', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">IP or hostname of the master log computer. Leave blank to disable.</span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">N3FJP port</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  value={form.n3fjpPort ?? 1100}
+                  placeholder="1100"
+                  onChange={(e) => {
+                    markDirty()
+                    setForm((prev) => prev ? { ...prev, n3fjpPort: Number(e.target.value) || 1100 } : prev)
                   }}
-                >
-                  {lotwFetching ? 'Fetching…' : 'Fetch now'}
-                </button>
+                  autoComplete="off"
+                />
+                <span className="settings-hint">N3FJP's API TCP port (default 1100).</span>
+              </label>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Use ENTER for Field Day scoring</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.n3fjpUseEnter ?? true}
+                    className={`toggle${(form.n3fjpUseEnter ?? true) ? ' on' : ''}`}
+                    onClick={() => updateBool('n3fjpUseEnter', !(form.n3fjpUseEnter ?? true))}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
                 <span className="settings-hint">
-                  {lotwUsers && lotwUsers.count > 0
-                    ? `${lotwUsers.count.toLocaleString()} calls · fetched ${new Date(lotwUsers.fetchedAt * 1000).toISOString().slice(0, 10)}`
-                    : 'Not fetched yet — decode lists gain an L mark on calls that upload to LoTW.'}
+                  Log each FD contact with N3FJP's <strong>ENTER</strong> sequence, which scores the
+                  contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code>{' '}
+                  insert (may not score). On by default.
                 </span>
               </div>
-              <label className="settings-label" htmlFor="lotw-max-age" style={{ marginTop: 8 }}>
-                Count as a LoTW user if uploaded within (days)
-              </label>
-              <input
-                id="lotw-max-age"
-                className="settings-input"
-                type="number"
-                min="30"
-                max="3650"
-                step="1"
-                style={{ width: '7em' }}
-                value={form.lotwMaxAgeDays ?? 365}
-                onChange={(e) => {
-                  const n = Number(e.target.value)
-                  if (!Number.isNaN(n)) updateNum('lotwMaxAgeDays', n)
-                }}
-              />
-              <span className="settings-hint">
-                ARRL's activity list updates weekly — refetching more often just returns
-                "unchanged". Manual fetch by design (WSJT-X convention).
-              </span>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Report my band to N3FJP</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.n3fjpReportBand ?? false}
+                    className={`toggle${form.n3fjpReportBand ? ' on' : ''}`}
+                    onClick={() => updateBool('n3fjpReportBand', !form.n3fjpReportBand)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Tell N3FJP which band you're on (no CAT needed), so the club's Network Status
+                  Display band board shows this position. Off by default.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Forward every QSO</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.n3fjpUpload ?? false}
+                    className={`toggle${form.n3fjpUpload ? ' on' : ''}`}
+                    onClick={() => updateBool('n3fjpUpload', !form.n3fjpUpload)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Also push <strong>every</strong> logged QSO (not just Field Day) to N3FJP ACLog on
+                  the host above — everyday general logging. N3FJP dedupes, so it's safe to run
+                  alongside the Field-Day push.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <span className="settings-label">Connection test</span>
+                <div className="settings-input-row">
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={runN3fjpTest}
+                    disabled={n3fjpTest.state === 'testing' || !form.n3fjpHost?.trim()}
+                    title="Save settings, then test the N3FJP TCP connection"
+                  >
+                    {n3fjpTest.state === 'testing' ? 'Testing…' : 'Test N3FJP'}
+                  </button>
+                </div>
+                {n3fjpTest.state !== 'idle' && n3fjpTest.state !== 'testing' && (
+                  <span className={`cat-result ${n3fjpTest.state}`} role="status">
+                    {n3fjpTest.state === 'ok' ? '✓ ' : '✗ '}{n3fjpTest.msg}
+                  </span>
+                )}
+                <span className="settings-hint">Run this at the club site before the event starts to confirm the API link works.</span>
+              </div>
             </div>
           </fieldset>
+
+          <fieldset className="settings-section">
+            <legend>N1MM+ Integration</legend>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">N1MM contact broadcast address</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.n1mmAddr ?? ''}
+                  placeholder="127.0.0.1:12060 (empty = off)"
+                  onChange={(e) => update('n1mmAddr', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  N1MM+ contact broadcast target (host:port, UDP). Nexus sends an N1MM-compatible
+                  contact UDP packet for each FD QSO, so N1MM can display the contact on the network.
+                  Leave blank to disable.
+                </span>
+              </label>
+            </div>
+          </fieldset>
+          </>
+          )}
+
+          {/* ---- Connections (connector status + log) — moved from Logbook & QSL ---- */}
+          {tab === 'connections' && (
           <fieldset className="settings-section">
             <legend>Connections</legend>
             <div className="conn-status-grid">
@@ -3948,6 +4102,70 @@ export function SettingsPanel({
                   ))}
                 </ul>
               )}
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- Confirmations (LoTW / eQSL / QRZ / ClubLog accounts) ---- */}
+          {tab === 'confirmations' && (
+          <>
+          <fieldset className="settings-section">
+            <legend>LoTW users list</legend>
+            <div className="settings-field">
+              <div className="lotw-users-row">
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={lotwFetching}
+                  onClick={() => {
+                    setLotwFetching(true)
+                    fetchLotwUsers()
+                      .then((st) => {
+                        setLotwUsers(st)
+                        pushToast(
+                          `LoTW list loaded — ${st.count.toLocaleString()} calls`,
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((e) =>
+                        pushToast(
+                          `LoTW list fetch failed: ${e instanceof Error ? e.message : e}`,
+                          'error',
+                        ),
+                      )
+                      .finally(() => setLotwFetching(false))
+                  }}
+                >
+                  {lotwFetching ? 'Fetching…' : 'Fetch now'}
+                </button>
+                <span className="settings-hint">
+                  {lotwUsers && lotwUsers.count > 0
+                    ? `${lotwUsers.count.toLocaleString()} calls · fetched ${new Date(lotwUsers.fetchedAt * 1000).toISOString().slice(0, 10)}`
+                    : 'Not fetched yet — decode lists gain an L mark on calls that upload to LoTW.'}
+                </span>
+              </div>
+              <label className="settings-label" htmlFor="lotw-max-age" style={{ marginTop: 8 }}>
+                Count as a LoTW user if uploaded within (days)
+              </label>
+              <input
+                id="lotw-max-age"
+                className="settings-input"
+                type="number"
+                min="30"
+                max="3650"
+                step="1"
+                style={{ width: '7em' }}
+                value={form.lotwMaxAgeDays ?? 365}
+                onChange={(e) => {
+                  const n = Number(e.target.value)
+                  if (!Number.isNaN(n)) updateNum('lotwMaxAgeDays', n)
+                }}
+              />
+              <span className="settings-hint">
+                ARRL's activity list updates weekly — refetching more often just returns
+                "unchanged". Manual fetch by design (WSJT-X convention).
+              </span>
             </div>
           </fieldset>
           <fieldset className="settings-section">
@@ -4615,7 +4833,6 @@ export function SettingsPanel({
           )}
           {/* ---- Field Day ---- */}
           {tab === 'fieldday' && (
-          <>
           <fieldset className="settings-section">
             <legend>Field Day Setup</legend>
             {(!form.fdClass.trim() || !form.fdSection.trim()) && (
@@ -4727,152 +4944,6 @@ export function SettingsPanel({
               </div>
             </div>
           </fieldset>
-
-          <fieldset className="settings-section">
-            <legend>N3FJP Integration (club master log)</legend>
-            <p className="settings-note">
-              Each FD contact lands in the club's{' '}
-              <strong>N3FJP Field Day Contest Log</strong> the moment you log it — so the whole
-              club's score updates in real time. Run N3FJP on the master computer; point Nexus at
-              its IP + port (default 1100).
-            </p>
-            <div className="settings-grid">
-              <label className="settings-field">
-                <span className="settings-label">N3FJP host</span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.n3fjpHost ?? ''}
-                  placeholder="192.168.1.10 (empty = off)"
-                  onChange={(e) => update('n3fjpHost', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <span className="settings-hint">IP or hostname of the master log computer. Leave blank to disable.</span>
-              </label>
-
-              <label className="settings-field">
-                <span className="settings-label">N3FJP port</span>
-                <input
-                  className="settings-input"
-                  type="number"
-                  inputMode="numeric"
-                  value={form.n3fjpPort ?? 1100}
-                  placeholder="1100"
-                  onChange={(e) => {
-                    markDirty()
-                    setForm((prev) => prev ? { ...prev, n3fjpPort: Number(e.target.value) || 1100 } : prev)
-                  }}
-                  autoComplete="off"
-                />
-                <span className="settings-hint">N3FJP's API TCP port (default 1100).</span>
-              </label>
-
-              <div className="settings-field">
-                <label className="settings-toggle">
-                  <span className="settings-label">Use ENTER for Field Day scoring</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={form.n3fjpUseEnter ?? true}
-                    className={`toggle${(form.n3fjpUseEnter ?? true) ? ' on' : ''}`}
-                    onClick={() => updateBool('n3fjpUseEnter', !(form.n3fjpUseEnter ?? true))}
-                  >
-                    <span className="toggle-knob" />
-                  </button>
-                </label>
-                <span className="settings-hint">
-                  Log each FD contact with N3FJP's <strong>ENTER</strong> sequence, which scores the
-                  contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code>{' '}
-                  insert (may not score). On by default.
-                </span>
-              </div>
-
-              <div className="settings-field">
-                <label className="settings-toggle">
-                  <span className="settings-label">Report my band to N3FJP</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={form.n3fjpReportBand ?? false}
-                    className={`toggle${form.n3fjpReportBand ? ' on' : ''}`}
-                    onClick={() => updateBool('n3fjpReportBand', !form.n3fjpReportBand)}
-                  >
-                    <span className="toggle-knob" />
-                  </button>
-                </label>
-                <span className="settings-hint">
-                  Tell N3FJP which band you're on (no CAT needed), so the club's Network Status
-                  Display band board shows this position. Off by default.
-                </span>
-              </div>
-
-              <div className="settings-field">
-                <label className="settings-toggle">
-                  <span className="settings-label">Forward every QSO</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={form.n3fjpUpload ?? false}
-                    className={`toggle${form.n3fjpUpload ? ' on' : ''}`}
-                    onClick={() => updateBool('n3fjpUpload', !form.n3fjpUpload)}
-                  >
-                    <span className="toggle-knob" />
-                  </button>
-                </label>
-                <span className="settings-hint">
-                  Also push <strong>every</strong> logged QSO (not just Field Day) to N3FJP ACLog on
-                  the host above — everyday general logging. N3FJP dedupes, so it's safe to run
-                  alongside the Field-Day push.
-                </span>
-              </div>
-
-              <div className="settings-field">
-                <span className="settings-label">Connection test</span>
-                <div className="settings-input-row">
-                  <button
-                    type="button"
-                    className="settings-refresh"
-                    onClick={runN3fjpTest}
-                    disabled={n3fjpTest.state === 'testing' || !form.n3fjpHost?.trim()}
-                    title="Save settings, then test the N3FJP TCP connection"
-                  >
-                    {n3fjpTest.state === 'testing' ? 'Testing…' : 'Test N3FJP'}
-                  </button>
-                </div>
-                {n3fjpTest.state !== 'idle' && n3fjpTest.state !== 'testing' && (
-                  <span className={`cat-result ${n3fjpTest.state}`} role="status">
-                    {n3fjpTest.state === 'ok' ? '✓ ' : '✗ '}{n3fjpTest.msg}
-                  </span>
-                )}
-                <span className="settings-hint">Run this at the club site before the event starts to confirm the API link works.</span>
-              </div>
-            </div>
-          </fieldset>
-
-          <fieldset className="settings-section">
-            <legend>N1MM+ Integration</legend>
-            <div className="settings-grid">
-              <label className="settings-field">
-                <span className="settings-label">N1MM contact broadcast address</span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.n1mmAddr ?? ''}
-                  placeholder="127.0.0.1:12060 (empty = off)"
-                  onChange={(e) => update('n1mmAddr', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <span className="settings-hint">
-                  N1MM+ contact broadcast target (host:port, UDP). Nexus sends an N1MM-compatible
-                  contact UDP packet for each FD QSO, so N1MM can display the contact on the network.
-                  Leave blank to disable.
-                </span>
-              </label>
-            </div>
-          </fieldset>
-          </>
           )}
         </div>
 

@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Settings reorganized to match how you operate.** The tabs now mirror the app's Phone · Digital ·
+  CW layout instead of being grouped by subsystem. New **Phone**, **Digital (FT8/FT4)**, and **CW**
+  tabs gather each mode's own settings — most notably a real **CW** home with the keyer backend,
+  sidetone pitch, WinKeyer port, "CW ID after 73", and the F-key macro profiles all in one place
+  (the CW macros used to sit under Alerts). Misfiled panels were also moved to where they belong:
+  the N3FJP and N1MM+ logger integrations and the connector-status panel now live under
+  **Integrations & Feeds**. No settings were lost or renamed — everything you'd saved carries over.
 - **The panadapter trace no longer strobes with bursty signals.** The colored spectrum trace above
   the waterfall used to flash at frame rate with every syllable gap and CW dit. It now rises
   instantly when a signal appears and fades over about a second when it pauses (the classic rig

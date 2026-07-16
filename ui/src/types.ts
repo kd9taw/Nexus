@@ -1475,6 +1475,9 @@ export interface Settings {
   clusterHosts: string[]
   /** Companion-mode UDP listen address (WSJT-X/JTDX). */
   companionAddr: string
+  /** CW keyer backend: 'cat' | 'soundcard' | 'winkeyer'. Persisted (Rust `cwKeyer`); the CW
+   * cockpit also edits it live. Optional here as older saved settings may omit it. */
+  cwKeyer?: string
   /** CW sidetone/tone pitch (Hz) — the soundcard keyer tone + the CW scope marker. */
   cwPitchHz: number
   /** Serial port for the K1EL WinKeyer (when the CW keyer backend is WinKeyer). */
