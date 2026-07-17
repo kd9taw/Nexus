@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **AI CW decoder now finds its model on Linux.** The DeepCW model ships bundled inside the .deb and
+  AppImage, but the app located it in a Windows-only way (next to the exe), so on Linux it reported
+  "model not installed." It now uses the platform resource directory, so the model loads on all
+  platforms — there's nothing extra to download or install.
 - **"Sync from QRZ" now actually imports your QSOs.** QRZ returns the fetched logbook as ADIF with its
   angle brackets HTML-escaped (`&lt;call:5&gt;…`), which Nexus was treating as literal — so the importer
   saw no records and reported 0 QSOs with no error, even after a full re-sync. Nexus now decodes the

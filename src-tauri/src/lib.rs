@@ -8817,25 +8817,9 @@ pub fn run() {
         });
     }
 
-    // AI CW decoder thread (beta): DeepCW model over the engine's 15 s CW audio ring.
-    // The model ships as an app resource next to the exe (like the bundled hamlib);
-    // missing model = an honest "model not installed" status, nothing else affected.
-    #[cfg(feature = "radio")]
-    {
-        let dir = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-            .map(|exe_dir| {
-                let bundled = exe_dir.join("resources").join("deepcw");
-                if bundled.is_dir() {
-                    bundled
-                } else {
-                    exe_dir.join("deepcw")
-                }
-            })
-            .unwrap_or_else(|| std::path::PathBuf::from("resources/deepcw"));
-        tempo_audio::aicw::spawn_ai_cw(engine.clone(), dir);
-    }
+    // AI CW decoder (beta) is started in the Tauri `.setup()` below, where the app's
+    // cross-platform resource dir is available — the DeepCW model ships as a bundled
+    // resource, and resolving it by hand from the exe path only worked on Windows.
 
     // CAT broker: let other apps (WSJT-X / N1MM / loggers) share the radio THROUGH
     // Nexus over the rigctld protocol. Localhost-only (never expose the rig to the
@@ -9113,6 +9097,33 @@ pub fn run() {
                     let _ = splash.close();
                 }
             });
+            // AI CW decoder (beta): resolve the DeepCW model from the app's cross-platform
+            // RESOURCE dir (where Tauri bundles `resources/deepcw/*`) — next to the exe on
+            // Windows, under usr/lib/<app>/resources on a Linux .deb/AppImage. The prior
+            // exe-adjacent lookup only worked on Windows, so Linux reported "model not
+            // installed" though the model ships in the bundle. Try the resource-dir candidates
+            // (and the exe-adjacent one) and pick the first that exists; a genuinely missing
+            // model just surfaces the honest status.
+            #[cfg(feature = "radio")]
+            {
+                let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+                if let Ok(res) = app.path().resource_dir() {
+                    candidates.push(res.join("resources").join("deepcw"));
+                    candidates.push(res.join("deepcw"));
+                }
+                if let Ok(exe) = std::env::current_exe() {
+                    if let Some(d) = exe.parent() {
+                        candidates.push(d.join("resources").join("deepcw"));
+                    }
+                }
+                let dir = candidates
+                    .iter()
+                    .find(|d| d.is_dir())
+                    .cloned()
+                    .unwrap_or_else(|| std::path::PathBuf::from("resources/deepcw"));
+                let eng = app.state::<SharedEngine>().inner().clone();
+                tempo_audio::aicw::spawn_ai_cw(eng, dir);
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
