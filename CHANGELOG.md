@@ -5,6 +5,28 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — 0.11.0 (in progress)
+
+### Changed
+
+- **RX audio level meter now reads in dB, like WSJT-X.** It was a linear 0–1 bar whose
+  "good" zone (0.45–0.9) was a voice-style target too hot for FT8, so a perfectly good
+  weak-signal input read as "low" and pushed you to over-crank RX Gain. The meter now
+  shows `20·log10(rms)+90.3` — the same scale as WSJT-X (aim ~30 dB; ~15–60 decodes
+  fine; red is too hot) — so the reading is directly comparable and you can see you
+  don't need much gain. The RX Level / RX Gain hints were reworded to match.
+
+### Fixed
+
+- **The interface fills to the bottom of the window at every zoom level.** Below ~900 px
+  of usable height the UI scales down, and the app shell was being laid out at full
+  height and *then* scaled — leaving a dead band at the bottom of the screen. The shell
+  height now compensates for the zoom, so it fills the viewport exactly (no change at
+  100%).
+- **Core "always on" features (Operate, Logbook, Settings, …) show an "always on" badge
+  instead of a disabled toggle** that looked like a broken control next to the real,
+  toggleable feature settings.
+
 ## [0.10.0] — 2026-07-17 — Memories section + a big rig-control & reliability batch
 
 ### Fixed
