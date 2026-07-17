@@ -7,6 +7,17 @@ use tempo_app::engine::Engine;
 use tempo_core::channel::{VirtualAir, ON_TIME_OFFSET};
 use tempo_core::ft1;
 
+/// Real audio capture normalizes the soundcard int16 to f32 (÷32768); the VirtualAir
+/// harness instead emits f32 at the ×100 int16 scale (paired with channel::to_i16). The
+/// engine.'s real decode path now uses capture_to_i16 (×32767), so convert harness output
+/// to real-capture range before ingest — signal + noise together, so SNR is preserved.
+fn to_capture(mut rx: Vec<f32>) -> Vec<f32> {
+    for s in rx.iter_mut() {
+        *s *= 100.0 / 32767.0;
+    }
+    rx
+}
+
 /// Shuttle frames between two engines over the channel for `slots` slots.
 /// Engine `a` transmits on even slots, `b` on odd. Returns after `done(a,b)`.
 fn run(a: &mut Engine, b: &mut Engine, slots: u64, done: impl Fn(&Engine, &Engine) -> bool) {
@@ -15,12 +26,12 @@ fn run(a: &mut Engine, b: &mut Engine, slots: u64, done: impl Fn(&Engine, &Engin
     for slot in 0..slots {
         if slot % 2 == 0 {
             for w in a.poll_tx(slot) {
-                let rx = a2b.receive(&w, ON_TIME_OFFSET, 15.0);
+                let rx = to_capture(a2b.receive(&w, ON_TIME_OFFSET, 15.0));
                 b.ingest(&rx, slot);
             }
         } else {
             for w in b.poll_tx(slot) {
-                let rx = b2a.receive(&w, ON_TIME_OFFSET, 15.0);
+                let rx = to_capture(b2a.receive(&w, ON_TIME_OFFSET, 15.0));
                 a.ingest(&rx, slot);
             }
         }

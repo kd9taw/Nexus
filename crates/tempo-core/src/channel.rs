@@ -71,6 +71,23 @@ pub fn to_i16(samples: &[f32]) -> Vec<i16> {
         .collect()
 }
 
+/// Convert REAL captured audio (normalized f32 in −1.0..1.0) to int16 PCM at the
+/// native soundcard level — full-scale ×32767, the inverse of the i16→f32 division
+/// done at capture. This gives the WSJT-X decoder exactly the level it would get from
+/// the same soundcard, so Nexus decodes at the same input level WSJT-X does.
+///
+/// Do NOT use [`to_i16`] for real audio: its ×100 gain is calibrated for the synthetic
+/// FT1 loopback harness (whose f32 waveforms are ~300× hotter than normalized capture).
+/// On real audio ×100 leaves a normal-level signal at the int16 quantization floor, so
+/// the decoder starves until the operator cranks RX ~50 dB hotter than they should — the
+/// "have to run RX at 60 dB to get any decodes" bug.
+pub fn capture_to_i16(samples: &[f32]) -> Vec<i16> {
+    samples
+        .iter()
+        .map(|&x| (x * 32767.0).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+        .collect()
+}
+
 /// The virtual channel: builds a received [`NMAX`]-sample frame from a
 /// transmitted waveform.
 pub struct VirtualAir {

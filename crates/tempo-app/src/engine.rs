@@ -5209,7 +5209,11 @@ impl Engine {
                 ),
                 _ => (String::new(), String::new(), 0),
             };
-            let iwave = channel::to_i16(frame);
+            // Real captured audio → full-scale int16 (native soundcard level), so the
+            // decoder gets what WSJT-X gets. (channel::to_i16's ×100 is only for the
+            // synthetic loopback harness; on real audio it starved the decoder — the
+            // "no decodes unless RX is cranked to 60 dB" bug.)
+            let iwave = channel::capture_to_i16(frame);
             // Operator decode controls (WSJT-X F Low / F High / depth), clamped
             // to the modem's real passband and kept ordered.
             let nfa = self.settings.decode_flow_hz.clamp(200, 3900) as i32;
@@ -8978,8 +8982,8 @@ mod tests {
     }
 
     /// Build a clean (noise-free) full frame for `kind` carrying `msg` at `f0`,
-    /// scaled so the engine's `channel::to_i16` (×100 gain) lands in a healthy
-    /// int16 range. FT8 starts at the 0.5 s TX point; FT4 self-positions.
+    /// scaled so the engine's `channel::capture_to_i16` (×32767) lands at ~±1000 i16.
+    /// FT8 starts at the 0.5 s TX point; FT4 self-positions.
     fn native_frame_for(kind: modes::ModeKind, msg: &str, f0: f32) -> Vec<f32> {
         let mode = modes::make_mode(kind);
         let tones = mode.encode(msg);
@@ -8993,7 +8997,7 @@ mod tests {
         let mut frame = vec![0f32; n];
         for (i, &s) in wave.iter().enumerate() {
             if off + i < n {
-                frame[off + i] = s * 10.0; // ×10 here, ×100 in to_i16 → ~±1000 i16
+                frame[off + i] = s * 0.0305; // ×0.0305 here, ×32767 in capture_to_i16 → ~±1000 i16
             }
         }
         frame
@@ -9121,6 +9125,15 @@ mod tests {
         }
         for s in frame.iter_mut() {
             *s += noise.sample();
+        }
+        // The channel convention (unit-variance noise) is at the old ×100 int16 scale;
+        // the real decode path now uses capture_to_i16 (×32767, matching real normalized
+        // capture). Scale the whole frame (signal + noise together, so SNR is preserved)
+        // to real-capture range so ×32767 reproduces the exact int16 levels the decoder
+        // was validated against — no clipped noise.
+        const HARNESS_TO_CAPTURE: f32 = 100.0 / 32767.0;
+        for s in frame.iter_mut() {
+            *s *= HARNESS_TO_CAPTURE;
         }
         frame
     }
