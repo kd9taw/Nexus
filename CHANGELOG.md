@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The ALL.TXT decode log is now findable.** It moved to an app-named folder in your local app data
+  (`%LOCALAPPDATA%\Nexus\ALL.TXT` on Windows — the same class of place WSJT-X keeps its own), the folder
+  is created if missing, and Settings ▸ shows the exact path with a **"Reveal in folder"** button. The
+  hint now says what tripped people up: it's written only while the toggle is on, and the file first
+  appears after the next decode. (It can't live in the install folder — Program Files isn't writable
+  without elevation, so writes there would silently fail.)
 - **WSJT-X UDP (GridTracker, JTAlert) and PSK Reporter now turn on without restarting Nexus.** The
   UDP emitters were built once at startup, so enabling them *after* launch — the normal order when you
   set up GridTracker first, then point Nexus at it — did nothing until a restart. They're now rebuilt

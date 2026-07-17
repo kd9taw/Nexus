@@ -45,6 +45,7 @@ import { getConnectionLog, getCredentialsStatus } from '../api'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
+import { allTxtLocation, revealAllTxt } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
@@ -260,6 +261,7 @@ export function SettingsPanel({
   onRerunWizard,
 }: Props) {
   const [form, setForm] = useState<Settings | null>(null)
+  const [allTxtPath, setAllTxtPath] = useState('')
   const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'saved'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [rigModels, setRigModels] = useState<[number, string][]>([])
@@ -279,6 +281,17 @@ export function SettingsPanel({
     civDiagnosticStatus()
       .then((p) => {
         if (alive) setCivLogPath(p === '' ? null : p)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+  useEffect(() => {
+    let alive = true
+    allTxtLocation()
+      .then((p) => {
+        if (alive) setAllTxtPath(p)
       })
       .catch(() => {})
     return () => {
@@ -3981,7 +3994,24 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">WSJT-X-format ALL.TXT for GridTracker / loggers to tail</span>
+                  <span className="settings-hint">
+                    WSJT-X-format decode log for GridTracker / loggers to tail. Written only while
+                    this is on, and it first appears after the next decode.
+                    {allTxtPath && (
+                      <>
+                        {' '}Saved at <code>{allTxtPath}</code>.
+                      </>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => {
+                      revealAllTxt().catch(() => {})
+                    }}
+                  >
+                    Reveal in folder
+                  </button>
                 </div>
 
                 <div className="settings-field">

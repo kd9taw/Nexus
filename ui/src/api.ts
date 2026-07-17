@@ -627,6 +627,16 @@ export async function exportGeneralLog(format: 'adif' | 'csv'): Promise<string> 
   return invoke<string>('export_general_log', { format })
 }
 
+/** The absolute path where the ALL.TXT decode log is written (to show in Settings). */
+export async function allTxtLocation(): Promise<string> {
+  return invoke<string>('all_txt_location')
+}
+
+/** Reveal ALL.TXT (or its folder) in the OS file manager. */
+export async function revealAllTxt(): Promise<void> {
+  await invoke('reveal_all_txt')
+}
+
 /** Write text to the operator's Downloads folder; returns the full saved path. Reliable in a
  *  WebView2 window where a browser `<a download>` blob may silently fail. */
 export async function saveTextToDownloads(filename: string, text: string): Promise<string> {

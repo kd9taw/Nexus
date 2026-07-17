@@ -885,29 +885,74 @@ fn parks_cache_path() -> PathBuf {
         .join("parks.csv")
 }
 
-/// The WSJT-X-format decode log (`ALL.TXT`), in the same base dir as the logbook —
-/// loggers/GridTracker tail it. Written only when `settings.write_all_txt` is on.
+/// The WSJT-X-format decode log (`ALL.TXT`), in the app's LOCAL data dir
+/// (`%LOCALAPPDATA%\Nexus` on Windows — the same class of location WSJT-X uses for
+/// its own ALL.TXT; `$XDG_DATA_HOME`/`~/.local/share/Nexus` on Unix). Deliberately a
+/// findable, app-named folder rather than the Roaming `tempo` config dir, and NOT the
+/// install dir (Program Files isn't writable without elevation — a write there would
+/// fail silently). Written only when `settings.write_all_txt` is on; the Settings
+/// panel surfaces this path + a "Reveal" button (`all_txt_location`/`reveal_all_txt`).
 fn all_txt_path() -> PathBuf {
-    settings_path()
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."))
+    let base = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    } else {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+    };
+    base.unwrap_or_else(|| PathBuf::from("."))
+        .join("Nexus")
         .join("ALL.TXT")
 }
 
 /// Append the engine's buffered WSJT-X-format decode lines to `ALL.TXT` (best-effort:
-/// a write hiccup must never disturb the snapshot the UI is waiting on).
+/// a write hiccup must never disturb the snapshot the UI is waiting on). Creates the
+/// parent dir first — `OpenOptions::create` makes the file, not the directory.
 fn flush_all_txt(lines: &[String]) {
     if lines.is_empty() {
         return;
     }
     use std::io::Write;
+    let path = all_txt_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(all_txt_path())
+        .open(&path)
     {
         let _ = writeln!(f, "{}", lines.join("\n"));
+    }
+}
+
+/// The resolved absolute `ALL.TXT` path, for the Settings panel to show the operator
+/// exactly where the decode log lives.
+#[tauri::command]
+fn all_txt_location() -> String {
+    all_txt_path().to_string_lossy().into_owned()
+}
+
+/// Open the ALL.TXT location so the operator can find the decode log: reveal the file
+/// when it exists, else open the (freshly-created) folder. Called from Rust via the
+/// opener plugin, so no JS package or ACL capability entry is required.
+#[tauri::command]
+fn reveal_all_txt(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = all_txt_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if path.exists() {
+        app.opener()
+            .reveal_item_in_dir(&path)
+            .map_err(|e| e.to_string())
+    } else if let Some(dir) = path.parent() {
+        app.opener()
+            .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+            .map_err(|e| e.to_string())
+    } else {
+        Ok(())
     }
 }
 
@@ -8845,6 +8890,8 @@ pub fn run() {
             export_general_log,
             save_text_to_downloads,
             civ_diagnostic_log,
+            all_txt_location,
+            reveal_all_txt,
             civ_diagnostic_status,
             broadcast,
             get_serial_ports,
