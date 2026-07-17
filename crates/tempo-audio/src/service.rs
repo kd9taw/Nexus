@@ -285,6 +285,41 @@ pub static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 /// fixed sleep that could exit before the un-key ever runs.
 pub static SHUTDOWN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Bind the WSJT-X UDP emitter for `addr` (None when disabled or the address is
+/// unparseable). Loopback logger → bind loopback so the TX-arming inbound control
+/// socket isn't reachable off-host; a logger on another machine → all-interfaces.
+/// On success sends the opening Heartbeat so a listener (GridTracker, JTAlert)
+/// registers the client immediately — the same Heartbeat is what makes a live
+/// rebind (toggle flipped after launch) connect without an app restart.
+fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
+    if !enabled {
+        return None;
+    }
+    match addr.parse::<std::net::SocketAddr>() {
+        Ok(target) => {
+            let bind = if target.ip().is_loopback() {
+                "127.0.0.1:0"
+            } else {
+                "0.0.0.0:0"
+            };
+            match WsjtxServer::new(bind.parse().unwrap(), target) {
+                Ok(s) => {
+                    let _ = s.send_heartbeat(3, env!("CARGO_PKG_VERSION"), "Nexus");
+                    Some(s)
+                }
+                Err(e) => {
+                    eprintln!("tempo: WSJT-X UDP disabled: {e}");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("tempo: invalid wsjtxAddr {:?}: {e}", addr);
+            None
+        }
+    }
+}
+
 /// Run the radio slot loop until an unrecoverable error. Blocks — call on a
 /// dedicated thread. Opens the default sound devices, sets the rig, then each
 /// slot transmits the engine's `poll_tx` audio (holding PTT for the over) or
@@ -328,47 +363,15 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
         std::thread::spawn(move || clock_probe_loop(clk_engine));
     }
 
-    // Optional network outputs (WSJT-X UDP API + PSK Reporter), set up once.
-    let wsjtx = if cfg.wsjtx_udp {
-        match cfg.wsjtx_addr.parse::<std::net::SocketAddr>() {
-            // Bind loopback when the logger is local (the usual case) so the
-            // TX-arming inbound control socket isn't even reachable off-host;
-            // fall back to all-interfaces only for a logger on another machine.
-            Ok(target) => {
-                let bind = if target.ip().is_loopback() {
-                    "127.0.0.1:0"
-                } else {
-                    "0.0.0.0:0"
-                };
-                match WsjtxServer::new(bind.parse().unwrap(), target) {
-                    Ok(s) => {
-                        let _ = s.send_heartbeat(3, env!("CARGO_PKG_VERSION"), "Nexus");
-                        Some(s)
-                    }
-                    Err(e) => {
-                        eprintln!("tempo: WSJT-X UDP disabled: {e}");
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("tempo: invalid wsjtxAddr {:?}: {e}", cfg.wsjtx_addr);
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let psk = if cfg.pskreporter {
-        Some(PskReporter::new())
-    } else {
-        None
-    };
-    let sinks = Sinks {
-        wsjtx: wsjtx.as_ref(),
-        psk: psk.as_ref(),
-        cfg_dial_hz: cfg.dial_hz,
-    };
+    // Optional network outputs (WSJT-X UDP API + PSK Reporter). Built here from the
+    // startup config AND rebuilt live in the loop when the operator flips a toggle or
+    // retargets the WSJT-X address — otherwise a GridTracker/PSK setup done AFTER launch
+    // never connects (the reported "needs a Nexus restart" bug). `*_applied` tracks what
+    // the current emitters were built for so the loop rebuilds only on a real change.
+    let mut wsjtx = build_wsjtx_server(cfg.wsjtx_udp, &cfg.wsjtx_addr);
+    let mut wsjtx_applied = (cfg.wsjtx_udp, cfg.wsjtx_addr.clone());
+    let mut psk = cfg.pskreporter.then(PskReporter::new);
+    let mut psk_applied = cfg.pskreporter;
 
     // The loop's persistent state lives in RadioLoop; one iteration is
     // RadioLoop::step (generic over the AudioBackend, so a MockBackend can drive
@@ -426,6 +429,28 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
             SHUTDOWN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
         }
+        // Hot-apply the WSJT-X UDP + PSK Reporter settings (enable/disable, and the
+        // WSJT-X target address) without a restart. A brief settings read per tick;
+        // an actual rebuild only when the setting changed — the rebind re-sends the
+        // WSJT-X Heartbeat so GridTracker/JTAlert register the client immediately.
+        // The lock is released before state.step (which takes its own).
+        if let Ok(e) = engine.lock() {
+            let s = e.settings();
+            if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str()) != (wsjtx_applied.0, wsjtx_applied.1.as_str())
+            {
+                wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr);
+                wsjtx_applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
+            }
+            if s.pskreporter != psk_applied {
+                psk = s.pskreporter.then(PskReporter::new);
+                psk_applied = s.pskreporter;
+            }
+        }
+        let sinks = Sinks {
+            wsjtx: wsjtx.as_ref(),
+            psk: psk.as_ref(),
+            cfg_dial_hz: cfg.dial_hz,
+        };
         let now = now_unix_ms();
         state.step(
             &engine,
@@ -3906,6 +3931,18 @@ mod tests {
         assert_eq!(tier_mode(Tier::Dx1), "DX1");
         assert_eq!(tier_mode(Tier::Ft8), "FT8");
         assert_eq!(tier_mode(Tier::Ft4), "FT4");
+    }
+
+    #[test]
+    fn build_wsjtx_server_gates_on_enable_and_valid_addr() {
+        // Disabled → no socket regardless of address (the state before a toggle-on).
+        assert!(build_wsjtx_server(false, "127.0.0.1:2237").is_none());
+        // Enabled but unparseable target → None, not a panic.
+        assert!(build_wsjtx_server(true, "not-an-address").is_none());
+        assert!(build_wsjtx_server(true, "").is_none());
+        // Enabled + valid loopback target → a bound emitter (this is what a live
+        // toggle-on rebuilds; the opening Heartbeat to :2237 is harmless if unheard).
+        assert!(build_wsjtx_server(true, "127.0.0.1:2237").is_some());
     }
 
     #[test]

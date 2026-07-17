@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — Memories: a first-class saved-channel section
 
+### Fixed
+
+- **WSJT-X UDP (GridTracker, JTAlert) and PSK Reporter now turn on without restarting Nexus.** The
+  UDP emitters were built once at startup, so enabling them *after* launch — the normal order when you
+  set up GridTracker first, then point Nexus at it — did nothing until a restart. They're now rebuilt
+  live when you flip the toggle or change the target address, re-announcing on connect so GridTracker
+  registers Nexus immediately.
+
 ### Added
 
 - **A first-class Memories section — repeaters, HF nets, calling frequencies, POTA/SOTA and digital
