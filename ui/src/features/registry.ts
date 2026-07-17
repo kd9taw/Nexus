@@ -25,6 +25,7 @@ export type View =
   | 'awards'
   | 'stats'
   | 'pota'
+  | 'memories'
   | 'program'
   | 'settings'
 
@@ -246,6 +247,21 @@ export const FEATURES: FeatureDef[] = [
     // global (no workspace — read-only until the operator arms a rotor track):
     // pass schedule for the ★ favorites, per-bird polar plot + frequencies.
     oneLine: 'Satellite passes over YOUR grid — when to try which bird, favorites first.',
+  },
+  {
+    id: 'memories',
+    label: 'Memories',
+    kind: 'section',
+    category: 'Operate',
+    core: false,
+    dependsOn: [],
+    // Everyone saves frequencies — repeaters, nets, calling freqs — so every
+    // goal profile surfaces it (still toggleable in Settings ▸ Features).
+    intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
+    view: 'memories',
+    // Global (no workspace): a manager view — never touches the rig on entry;
+    // only an explicit Tune (recall) retunes.
+    oneLine: 'Saved channels — repeaters, HF nets, calling freqs: groups, ★ favorites, one-click tune, CHIRP CSV, starter packs + opt-in net reminders.',
   },
   {
     id: 'program',

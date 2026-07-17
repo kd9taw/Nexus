@@ -5,6 +5,26 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Memories: a first-class saved-channel section
+
+### Added
+
+- **A first-class Memories section — repeaters, HF nets, calling frequencies, POTA/SOTA and digital
+  watering holes in one place.** Replaces the small saved-frequency bank with a full manager: a sidebar
+  of groups and ★ favorites, a clean list with an inline editor, and a CHIRP-style grid on demand.
+  One-click **Tune** sets frequency, mode, repeater shift and tone in one atomic step and opens the
+  right cockpit (CW → CW, SSB/FM → Phone, FT8 → Digital) — no wrong-mode flash. Star a memory and it
+  rides the **MEM strip** in every cockpit for instant recall.
+- **Starter packs.** One click installs a curated channel set — *VHF/UHF Calling & Simplex*, *HF Digital
+  Watering Holes*, *POTA Activity*, and *Well-Known HF Nets* — deduped, so re-installing is safe.
+  Offered right from the empty Memories view on first run.
+- **Opt-in net reminders.** Give an HF-net memory its meeting days and UTC time, tick **Remind me**, and
+  Nexus raises a one-click *Tune* reminder a few minutes before it starts. Reminders are per-net — only
+  the nets you enable, never a firehose.
+- **Full CHIRP CSV round-trip.** Import and export the standard CHIRP format, so channels flow
+  Nexus ⇄ CHIRP ⇄ ~1,000 real radio models. The Program section still feeds repeaters straight into
+  Memories.
+
 ## [0.9.7] — 2026-07-17 — Serial CW keying + slow-rig CAT fix
 
 ### Added

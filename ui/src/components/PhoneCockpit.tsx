@@ -29,8 +29,9 @@ import {
 } from '../api'
 import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
-import { MemoryBank } from './MemoryBank'
-import { setFrequency, getSettings, setSettings, setSplit, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
+import { MemoryStrip } from './MemoryStrip'
+import type { Memory } from '../features/memories'
+import { setFrequency, setSplit, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
 import { bandLabelForMhz } from '../band'
 import { isRfScopeSource } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
@@ -62,6 +63,11 @@ interface Props {
   typeByCall?: Map<string, 'Pota' | 'Sota' | 'Dxped'>
   /** Work a spotted station from the band-strip (QSY to its freq + prefill the log). */
   onWorkSpot?: (s: SpotRow) => void
+  /** Recall a saved memory (App applies settings + retune + cockpit switch).
+   * Absent when the Memories feature is disabled — the MEM strip then hides. */
+  onRecallMemory?: (m: Memory) => void
+  /** Open the Memories section (manage/groups/import). */
+  onOpenMemories?: () => void
 }
 
 /**
@@ -122,7 +128,7 @@ const FLEX_SPANS = [
   { label: '2M', hz: 2_000_000 },
 ] as const
 
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   // Mirror the RIG's real level (CAT read-back / last commanded) so the slider
   // never lies at a guessed 100% — but never fight an in-flight drag.
@@ -539,43 +545,17 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             </button>
           </div>
         )}
-        <MemoryBank
-          dialMhz={snap.radio.dialMhz}
-          mode={commandedMode}
-          onRecall={(freqMhz, mode, chan) => {
-            // The Phone rig-mode policy derives the commanded mode from the
-            // phone sub-mode (fm vs ssb→band-sideband), NOT from the sideband
-            // arg — so a saved FM (or SSB) channel only round-trips if we first
-            // switch phone_mode to match, otherwise the rig lands on the wrong
-            // mode. Flip phone_mode only when it actually differs, then retune.
-            void (async () => {
-              const wantFm = mode.toUpperCase() === 'FM'
-              // A Program-section channel carries repeater fields — apply them
-              // with the mode flip so the rig keys the repeater, not just the
-              // output (shift/tone/odd-split offset ride the same FM path).
-              const rptr = wantFm && chan?.rptrShift ? chan : null
-              if (wantFm !== (phoneMode?.toLowerCase() === 'fm') || rptr) {
-                const s = await getSettings()
-                await setSettings({
-                  ...s,
-                  phoneMode: wantFm ? 'fm' : 'ssb',
-                  ...(rptr
-                    ? {
-                        rptrShift: rptr.rptrShift ?? 'simplex',
-                        ctcssToneHz: rptr.toneHz ?? 0,
-                        rptrOffsetOverrideHz: rptr.offsetHz ?? 0,
-                      }
-                    : {}),
-                })
-              }
-              // A recalled memory carries its own mode — drop any manual override (even same-band)
-              // so the saved channel's mode wins instead of a stale forced sideband.
-              await setSidebandOverride(null)
-              const snap = await setFrequency(freqMhz, bandLabelForMhz(freqMhz), mode)
-              onSnap?.(snap)
-            })()
-          }}
-        />
+        {onRecallMemory && (
+          // The ★-favorites quick-recall strip (bounded + wrapping — the old
+          // MemoryBank list grew the header unbounded). Recall is App-owned
+          // (recallMemory): settings patch + retune + cockpit auto-switch.
+          <MemoryStrip
+            dialMhz={snap.radio.dialMhz}
+            mode={commandedMode}
+            onRecall={onRecallMemory}
+            onManage={onOpenMemories}
+          />
+        )}
         <RotorStrip />
         <button
           type="button"

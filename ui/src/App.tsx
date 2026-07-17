@@ -72,6 +72,7 @@ import { StatsView } from './components/StatsView'
 import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
 import { RadioProgView } from './components/RadioProgView'
+import { MemoriesView } from './components/MemoriesView'
 import { ConnectView } from './components/ConnectView'
 import {
   getPropagation,
@@ -82,6 +83,7 @@ import {
   getDxpedWindows,
   getSatSchedule,
   setSettings as apiSetSettings,
+  setSidebandOverride,
   testCat,
   setOperatingMode,
   workSpot,
@@ -90,6 +92,9 @@ import {
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
 } from './api'
+import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
+import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
+import { bandLabelForMhz } from './band'
 import { processFlare, effectiveXray } from './flareAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
@@ -1004,6 +1009,115 @@ export default function App() {
     [bandPlan],
   )
 
+  // Recall a saved memory from ANYWHERE (the Memories section or a cockpit MEM strip):
+  // apply the phone-submode + repeater plumbing (shift/tone/odd-split), auto-switch to
+  // the memory's cockpit, and retune. Sequencing matters: the rig-mode guard is synced
+  // BEFORE navigating (the workNav idiom above) so the [view] effect never sees a mode
+  // change and re-homes the dial; the setFrequency lands LAST so the recalled frequency
+  // is the final word. A feature-disabled cockpit gates only the NAV — the rig still
+  // retunes (same behavior as the Needed board's work-click).
+  const recallMemory = useCallback(
+    (m: Memory) => {
+      const plan = planRecall(m)
+      const target = plan.view
+      const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
+      // The CW/Phone cockpits are opt-in. Recalling into a disabled cockpit would tune the
+      // rig but leave the operator with no place to work it — and (finding) half-apply a
+      // heavyweight settings write for a hidden feature. Guide them to enable it instead.
+      if ((target === 'cw' && !cwEnabled) || (target === 'phone' && !phoneEnabled)) {
+        pushToast(
+          `Enable the ${target === 'cw' ? 'CW' : 'Phone'} section in Settings to recall this memory`,
+          'info',
+          4000,
+        )
+        return
+      }
+      const mode = m.mode.toUpperCase()
+      const band = bandLabelForMhz(plan.freqMhz)
+      void (async () => {
+        try {
+          // FM repeaters (and a phone SUBMODE flip) need phone_mode + shift/tone written
+          // BEFORE the atomic tune so the rig keys the machine, not just the output. Guard
+          // the heavyweight whole-struct save: FM always (re)writes its plumbing; SSB writes
+          // only on a real fm→ssb flip — never on an ssb→ssb net hop.
+          const patch = plan.settingsPatch
+          if (patch) {
+            const s = await getSettings()
+            const isFm = patch.rptrShift !== undefined
+            if (isFm || patch.phoneMode !== s.phoneMode) {
+              const patched = { ...s, ...patch }
+              await apiSetSettings(patched)
+              setSettings(patched)
+            }
+          }
+          // ATOMIC band+mode+freq — the SAME verb the Needed board uses, so the rig can never
+          // land in the new mode at the old dial (no wrong-mode flash) and the mode is always
+          // asserted, gated path excluded above.
+          const s2 = await workSpot(opMode, plan.freqMhz, band)
+          if (!s2) {
+            pushToast('Recall failed — check CAT', 'error', 3000)
+            return
+          }
+          setSnap(s2)
+          // Honor a saved SSB memory's EXACT sideband over the band-auto convention (some nets
+          // run off-convention, e.g. USB below 10 MHz), and drop any stale manual override.
+          // Set AFTER the tune — set_frequency clears the override on a band change.
+          if (target === 'phone' && (mode === 'USB' || mode === 'LSB')) {
+            const s3 = await setSidebandOverride(mode as 'USB' | 'LSB')
+            if (s3) setSnap(s3)
+          }
+          // Keep the rig-mode effect's guard in sync so the nav doesn't re-home the dial.
+          lastOpModeRef.current = opMode
+          setView(target)
+          memoriesStore.update((b) => markRecalled(b, m.id, Math.floor(Date.now() / 1000)))
+          // The phone policy commands only SSB/FM; AM/WFM/DV/DN can't be set there, so for a
+          // phone memory in one of those we tune the dial but tell the operator to set the mode
+          // on the rig rather than claim a mode we didn't command. (CW and digital recalls set
+          // their mode via the CW/DATA operating policy, so they're always honest.)
+          const phoneUncommandable =
+            target === 'phone' && mode !== 'USB' && mode !== 'LSB' && mode !== 'FM'
+          pushToast(
+            phoneUncommandable
+              ? `${m.name} — ${plan.freqMhz.toFixed(3)} MHz · set ${plan.mode} on the rig`
+              : `${m.name} — ${plan.freqMhz.toFixed(3)} MHz ${plan.mode}`,
+            'success',
+            2500,
+          )
+        } catch (e) {
+          pushToast(`Recall failed: ${e instanceof Error ? e.message : e}`, 'error', 4000)
+        }
+      })()
+    },
+    [cwEnabled, phoneEnabled],
+  )
+
+  // Opt-in net reminders: a light 30 s poll that fires ONE prominent toast per net
+  // occurrence, a per-net lead time before it starts, with a Tune button that recalls
+  // the memory. Only nets the operator explicitly enabled (net.alertEnabled) are checked
+  // — never a firehose. Reading the store directly avoids a re-render on every tick.
+  const firedNetRemindersRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const check = () => {
+      const now = Date.now()
+      const due = dueNetReminders(memoriesStore.get().memories, now)
+      const fired = firedNetRemindersRef.current
+      for (const r of due) {
+        const key = reminderKey(r)
+        if (fired.has(key)) continue
+        fired.add(key)
+        pushToast(
+          `Net ${untilPhrase(r.startMs, now)}: ${r.memory.name} — ${r.memory.rxMhz.toFixed(3)} ${r.memory.mode}`,
+          'info',
+          300_000,
+          { prominent: true, action: () => recallMemory(r.memory), actionLabel: 'Tune' },
+        )
+      }
+    }
+    check()
+    const id = window.setInterval(check, 30_000)
+    return () => window.clearInterval(id)
+  }, [recallMemory])
+
   // Click-to-work ANY needed spot (CW / Phone / Digital): N1MM-style single click that
   // changes the band, mode, AND frequency to exactly the spot's — in ONE atomic backend call
   // (`workSpot`) so the rig can never end up in the new mode at the old dial (no wrong-mode
@@ -1581,6 +1695,8 @@ export default function App() {
           needByCall={needByCall}
           typeByCall={typeByCall}
           onWorkSpot={handleWorkSpot}
+          onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
+          onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
         />
       )
       break
@@ -1599,6 +1715,8 @@ export default function App() {
           needByCall={needByCall}
           typeByCall={typeByCall}
           onWorkSpot={handleWorkSpot}
+          onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
+          onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
         />
       )
       break
@@ -1695,6 +1813,29 @@ export default function App() {
       workspace = (
         <main className="layout single">
           <SatellitesView focusSat={satFocus} onPopOut={() => void openPanelWindow('sats')} />
+        </main>
+      )
+      break
+    case 'memories':
+      // A manager view — never touches the rig on entry; only an explicit
+      // Tune (recallMemory) retunes + switches cockpit.
+      workspace = (
+        <main className="layout single">
+          <MemoriesView
+            dialMhz={snap.radio.dialMhz}
+            dialMode={
+              lastOpModeRef.current === 'cw'
+                ? 'CW'
+                : lastOpModeRef.current === 'phone'
+                  ? settings?.phoneMode === 'fm'
+                    ? 'FM'
+                    : snap.radio.sideband || 'USB'
+                  : tier === 'FT4'
+                    ? 'FT4'
+                    : 'FT8'
+            }
+            onRecall={recallMemory}
+          />
         </main>
       )
       break
@@ -1881,6 +2022,8 @@ export default function App() {
             onSetHoldTxFreq={handleSetHoldTxFreq}
             dxClearTick={dxClearTick}
             onSnap={setSnap}
+            onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
+            onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
             preferRrr={settings?.preferRrr ?? false}
             qsoMacros={macros.qso}
             roster={stationsPanel}

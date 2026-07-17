@@ -30,6 +30,8 @@ import { SpotDialog } from './SpotDialog'
 import { OperateRoster } from './OperateRoster'
 import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
+import { MemoryStrip } from './MemoryStrip'
+import type { Memory } from '../features/memories'
 import { FrequencyControl } from './FrequencyControl'
 import { TuningStrip } from './TuningStrip'
 
@@ -100,6 +102,11 @@ interface Props {
   onLayoutMode: (m: 'classic' | 'roster') => void
   /** Open Operate in its own window (omit when already standalone). */
   onPopOut?: () => void
+  /** Recall a saved memory (App applies settings + retune + cockpit switch).
+   * Absent when the Memories feature is disabled — the MEM strip then hides. */
+  onRecallMemory?: (m: Memory) => void
+  /** Open the Memories section (manage/groups/import). */
+  onOpenMemories?: () => void
   /** True when the cockpit is the active view. The cockpit stays MOUNTED across
    * navigation (so Band Activity keeps accumulating in the background); this flag
    * pauses the waterfall's render loop while it's hidden. */
@@ -178,6 +185,8 @@ export function OperateCockpit({
   onPopOut,
   active = true,
   companionAddr,
+  onRecallMemory,
+  onOpenMemories,
 }: Props) {
   // Container the waterfall-height splitter measures + writes its CSS var on.
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -648,6 +657,14 @@ export function OperateCockpit({
               Roster
             </button>
           </div>
+          {onRecallMemory && (
+            <MemoryStrip
+              dialMhz={snap.radio.dialMhz}
+              mode={tier === 'FT4' ? 'FT4' : 'FT8'}
+              onRecall={onRecallMemory}
+              onManage={onOpenMemories}
+            />
+          )}
           <button
             type="button"
             className="cockpit-popout"

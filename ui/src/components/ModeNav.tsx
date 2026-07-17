@@ -16,6 +16,7 @@ import {
   BarChart3,
   Zap,
   Cable,
+  Bookmark,
   Settings,
 } from 'lucide-react'
 import { Tooltip, TooltipProvider } from './ui/Tooltip'
@@ -112,6 +113,7 @@ export const ITEMS: Item[] = [
   { id: 'stats', label: 'Stats', icon: BarChart3, title: 'Statistics — your logbook sliced: QSOs by band/mode/year/hour, top DXCC entities, states, confirmations' },
   { id: 'fieldDay', label: 'Field Day', icon: Tent, title: 'Field Day — contest rate workspace' },
   { id: 'pota', label: 'POTA/SOTA', icon: Trees, title: 'POTA / SOTA — parks & summits: who\'s on now (hunt) + tag your activation' },
+  { id: 'memories', label: 'Memories', icon: Bookmark, title: 'Memories — saved channels: repeaters, nets, calling freqs; groups + ★ favorites; one click to tune' },
   { id: 'program', label: 'Program', icon: Cable, title: 'Program — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now' },
 ]
 

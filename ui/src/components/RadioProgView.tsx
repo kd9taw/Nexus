@@ -17,7 +17,7 @@ import {
   setFrequency,
   setSettings,
 } from '../api'
-import { addChannel, loadMemoryBank, saveMemoryBank } from '../features/memoryBank'
+import { addMemoryDeduped, memoriesStore } from '../features/memories'
 import { bandLabelForMhz } from '../band'
 import {
   autoRadiusMi,
@@ -384,30 +384,44 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     })().catch((e) => pushToast(String(e), 'error'))
   }
 
-  /** Save the whole list into the Phone cockpit's memory bank (with the FM
-   * repeater fields, so recall keys the machine — not just the output). */
+  /** Save the whole list into the shared Memories store (with the FM repeater
+   * fields, so recall keys the machine — not just the output). Deduped on
+   * freq+mode+tone so re-saving the same list never piles duplicates; the
+   * SHARED store means the Memories section + cockpit MEM strips update live
+   * (the old direct-to-storage write went stale until reload). */
   const saveToBank = () => {
-    let list = loadMemoryBank()
     let n = 0
-    for (const r of displayRows) {
-      const c = r.channel
-      if (!(c.mode === 'fm' || c.mode === 'nfm' || c.mode === 'am')) continue
-      const { shift, offsetHz, toneHz } = rigRepeaterParams(c)
-      list = addChannel(list, {
-        label: sanitizeName(r.displayName, nameCap) || c.name,
-        freqMhz: c.rxMhz,
-        mode: 'FM',
-        rptrShift: shift,
-        offsetHz,
-        toneHz,
-      })
-      n += 1
-    }
-    saveMemoryBank(list)
+    let dup = 0
+    memoriesStore.update((bank) => {
+      let next = bank
+      for (const r of displayRows) {
+        const c = r.channel
+        if (!(c.mode === 'fm' || c.mode === 'nfm' || c.mode === 'am')) continue
+        const { shift, offsetHz, toneHz } = rigRepeaterParams(c)
+        const res = addMemoryDeduped(next, {
+          name: sanitizeName(r.displayName, nameCap) || c.name,
+          rxMhz: c.rxMhz,
+          mode: 'FM',
+          kind: shift === 'simplex' && !toneHz ? 'simplex' : 'repeater',
+          offsetDir: shift,
+          offsetMhz: offsetHz ? offsetHz / 1e6 : undefined,
+          toneMode: toneHz ? 'tone' : 'none',
+          ctcssEncHz: toneHz || undefined,
+          callsign: c.source?.callsign || undefined,
+          source: 'program',
+        })
+        next = res.bank
+        if (res.added) n += 1
+        else dup += 1
+      }
+      return next
+    })
     pushToast(
       n
-        ? `${n} channel${n === 1 ? '' : 's'} saved — recall them from the Phone cockpit's MEMORY list`
-        : 'No FM channels to save',
+        ? `${n} channel${n === 1 ? '' : 's'} saved to Memories${dup ? ` (${dup} already there)` : ''} — star ★ the ones you want on the cockpit MEM strip`
+        : dup
+          ? 'All of these are already in Memories'
+          : 'No FM channels to save',
       n ? 'success' : 'info',
       5000,
     )

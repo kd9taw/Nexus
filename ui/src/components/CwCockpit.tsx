@@ -6,6 +6,8 @@ import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
+import { MemoryStrip } from './MemoryStrip'
+import type { Memory } from '../features/memories'
 import { Splitter } from './Splitter'
 import { LogEntry } from './LogEntry'
 import {
@@ -95,6 +97,11 @@ interface Props {
   typeByCall?: Map<string, 'Pota' | 'Sota' | 'Dxped'>
   /** Work a spotted station from the band-strip (QSY to its freq + prefill the log). */
   onWorkSpot?: (s: SpotRow) => void
+  /** Recall a saved memory (App applies settings + retune + cockpit switch).
+   * Absent when the Memories feature is disabled — the MEM strip then hides. */
+  onRecallMemory?: (m: Memory) => void
+  /** Open the Memories section (manage/groups/import). */
+  onOpenMemories?: () => void
 }
 
 /** Default CASUAL/ragchew macro set (no contest serial/exchange). Standard CW QSO flow:
@@ -158,6 +165,8 @@ export function CwCockpit({
   needByCall,
   typeByCall,
   onWorkSpot,
+  onRecallMemory,
+  onOpenMemories,
 }: Props) {
   const catOk = snap.radio.catOk === true
   // Wheel-to-tune over the CW scope, sharing the tuning strip's step selector.
@@ -667,6 +676,14 @@ export function CwCockpit({
               +
             </button>
           </div>
+        )}
+        {onRecallMemory && (
+          <MemoryStrip
+            dialMhz={snap.radio.dialMhz}
+            mode="CW"
+            onRecall={onRecallMemory}
+            onManage={onOpenMemories}
+          />
         )}
         <RotorStrip
           targetCall={guide.workedCall}
