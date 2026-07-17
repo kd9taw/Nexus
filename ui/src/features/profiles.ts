@@ -103,10 +103,12 @@ export function resolveEnabled(profileId: ProfileId): Record<FeatureId, boolean>
     if (f.core) on.add(f.id)
   }
   if (profile.everything) {
-    for (const f of FEATURES) on.add(f.id)
+    // Staged defaultOff features stay out of even the 'everything' preset —
+    // only the explicit Settings ▸ Features toggle turns them on.
+    for (const f of FEATURES) if (!f.defaultOff) on.add(f.id)
   } else {
     for (const f of FEATURES) {
-      if (f.intents.some((i) => profile.intents.includes(i))) on.add(f.id)
+      if (!f.defaultOff && f.intents.some((i) => profile.intents.includes(i))) on.add(f.id)
     }
     for (const id of profile.extra ?? []) on.add(id)
   }

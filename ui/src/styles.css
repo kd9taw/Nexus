@@ -10908,9 +10908,12 @@ select.settings-input {
    real estate goes to the decode lists + roster below. */
 .cockpit-waterfall {
   /* Height is operator-resizable (the Splitter under it drives --cockpit-wf-h and
-     clamps 88–420 px); 22% stays the untouched default. */
-  flex: 0 0 var(--cockpit-wf-h, 22%);
-  min-height: 88px;
+     clamps 88–420 px); 22% stays the untouched default. `flex-shrink:1` + no px
+     floor + a max lets it YIELD on short windows instead of starving the lists
+     below — the fit-scale keeps it a comfortable size at normal sizes. */
+  flex: 0 1 var(--cockpit-wf-h, 22%);
+  min-height: 0;
+  max-height: 60%;
   display: flex;
   overflow: hidden;
 }
@@ -10943,7 +10946,11 @@ select.settings-input {
   flex-direction: column;
   min-height: 0;
   gap: var(--space-2);
-  overflow: hidden;
+  /* Last-resort: when the rail's minimum content is taller than the pane
+     (short windows — 1080p with a tall waterfall), the rail SCROLLS instead of
+     clipping the Stations chips at the window edge. Inert when content fits. */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 @media (max-width: 900px) {
   .cockpit-lower,
@@ -11107,14 +11114,14 @@ select.settings-input {
    the left column and Rx Frequency + Stations share the rail beneath it. */
 .tx-panel-compact {
   grid-template-columns: 1fr;
-  gap: 8px;
+  gap: var(--space-2);
   align-content: start;
 }
 .tx-panel-compact .txp-dx {
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 8px;
+  gap: 6px var(--space-2);
 }
 .tx-panel-compact .txp-field {
   flex: 1 1 128px;
@@ -11125,20 +11132,71 @@ select.settings-input {
 }
 /* Classic rail with the Tx machine on top: Rx Frequency and Stations become
    equal flex fillers (both scroll internally) so the content-sized Tx panel
-   above them can't push the roster off the bottom. */
+   above them can't push the roster off the bottom. No px floors — the panes
+   shrink freely and their inner scrollers absorb overflow; the whole UI
+   fit-scales (useScale) so at normal sizes everything stays comfortably
+   visible, and only genuinely tiny windows fall back to internal scroll. */
 .cockpit-lower.classic .cockpit-rxfreq {
   flex: 1 1 0;
   max-height: none;
-  min-height: 88px;
+  min-height: 0;
 }
 .cockpit-lower.classic .cockpit-roster {
-  min-height: 96px;
+  min-height: 0;
+}
+/* 1080p fit: tighten the classic rail's Tx machine (~50px back — smaller rows,
+   no CQ hint line) and the roster chrome. Scoped to the classic rail only;
+   plenty-of-height layouts (4K) simply have more list rows visible. */
+.cockpit-lower.classic .tx-panel-compact .txp-msg {
+  font-size: 11px;
+}
+.cockpit-lower.classic .tx-panel-compact .txp-rows {
+  gap: 1px;
+}
+.cockpit-lower.classic .tx-panel-compact .txp-cq-hint {
+  display: none;
+}
+.cockpit-lower.classic .tx-panel-compact .txp-field input {
+  padding: 2px 6px;
+  font-size: 0.75rem;
+}
+.cockpit-lower.classic .tx-panel-compact .txp-dx-actions button {
+  padding: 2px var(--space-2);
+}
+.cockpit-lower.classic .tx-panel-compact .txp-btn {
+  padding: 1px var(--space-2);
+}
+.cockpit-lower.classic .cockpit-roster .filter-row {
+  padding: var(--space-1) var(--space-2);
+}
+.cockpit-lower.classic .cockpit-roster .filter-chip {
+  min-height: 24px;
+  padding: 3px var(--space-2);
+}
+/* The FT8 cockpit's Stations panel is the CALL ROSTER — the Tempo chat chrome
+   inside the shared StationList either leaves (Recent chats = Tempo
+   conversations, meaningless in FT8/FT4) or slims to one line (the band row),
+   so the height goes to "on the band now" rows. Scoped to the cockpit host;
+   the Tempo three-pane keeps the full chrome. */
+.cockpit-roster .recent-chats {
+  display: none;
+}
+.cockpit-roster .band-row {
+  padding: 3px var(--space-2);
+  margin-bottom: var(--space-1);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cockpit-roster .panel-header {
+  padding-bottom: var(--space-1);
 }
 
 .cockpit-rxfreq {
   flex: 0 0 auto;
   max-height: 42%;
-  min-height: 96px;
+  min-height: 0;
   display: flex;
   overflow: hidden;
   padding: 6px 10px;
@@ -11170,7 +11228,7 @@ select.settings-input {
 }
 .cockpit-roster {
   flex: 1 1 0;
-  min-height: 120px;
+  min-height: 0;
   display: flex;
   overflow: hidden;
   padding: var(--space-2) 10px;
@@ -11219,7 +11277,7 @@ select.settings-input {
 .cockpit-decodes-side {
   /* The full decode window dominates the rail; Rx Frequency keeps a slimmer share. */
   flex: 1.6 1 0;
-  min-height: 160px;
+  min-height: 0;
   display: flex;
   overflow: hidden;
   padding: 6px 10px;
@@ -13974,4 +14032,293 @@ select.settings-input {
   font-size: 11px;
   font-weight: 600;
   color: var(--warn, #e8a13c);
+}
+
+/* ── Program (radio programming workbench): SOURCE pane (query + results) left,
+   CHANNEL LIST (the artifact) right. List-first by design — no map (the feature
+   is a programming tool, not a repeater directory). ────────────────────────── */
+.radioprog {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rp-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 1fr);
+  gap: var(--gap);
+  padding: var(--space-2) 10px;
+}
+@media (max-width: 900px) {
+  .rp-body {
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(0, auto);
+  }
+}
+.rp-source {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.rp-origin,
+.rp-recents,
+.rp-radius,
+.rp-filters,
+.rp-fetch-row,
+.rp-city-cands {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.rp-lbl {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-right: 2px;
+}
+.rp-grid {
+  width: 84px;
+  text-transform: uppercase;
+}
+.rp-city {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  min-width: 0;
+}
+.rp-city-input {
+  width: 200px;
+}
+.rp-search {
+  width: 160px;
+  margin-left: auto;
+}
+.rp-filter-gap {
+  width: var(--space-3);
+}
+.rp-hint {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+.rp-fetch {
+  font-weight: 800;
+}
+.rp-stamp {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.rp-error {
+  font-size: 0.8rem;
+  color: var(--state-weak);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.rp-count {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.settings-input.invalid {
+  border-color: var(--state-weak);
+}
+
+/* Results: an ARIA div-table, nearest first. */
+.rp-results {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
+.rp-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) 76px 56px 52px minmax(64px, 0.9fr) auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 3px var(--space-2);
+  font-size: 0.8rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+.rp-row.offair {
+  opacity: 0.55;
+}
+.rp-row.digital .rp-call,
+.rp-row.digital .rp-freq {
+  color: var(--text-dim);
+}
+.rp-off,
+.rp-tone,
+.rp-dist {
+  color: var(--text-dim);
+}
+.rp-badges {
+  display: inline-flex;
+  gap: 3px;
+}
+.rp-mode-badge {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.rp-offair-badge {
+  color: var(--state-weak);
+  border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
+}
+.rp-actions {
+  justify-self: end;
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.rp-add.added {
+  color: var(--state-good);
+  border-color: color-mix(in srgb, var(--state-good) 50%, transparent);
+}
+.rp-attribution {
+  padding-top: 2px;
+}
+
+/* Builder: the channel list. */
+.rp-builder {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-left: 1px solid var(--border);
+  padding-left: var(--gap);
+}
+@media (max-width: 900px) {
+  .rp-builder {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding-left: 0;
+    padding-top: var(--space-2);
+  }
+}
+.rp-builder-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.rp-builder-title {
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.rp-cap,
+.rp-startat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.rp-startat input {
+  width: 60px;
+}
+.rp-chan-rows {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.rp-chan-row {
+  display: grid;
+  grid-template-columns: 30px minmax(90px, 1fr) 74px 56px 48px auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-1);
+  font-size: 0.8rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+}
+.rp-chan-row.dup .rp-chan-name {
+  border-color: var(--state-weak);
+}
+.rp-chan-num {
+  color: var(--text-faint);
+  text-align: right;
+}
+.rp-chan-name {
+  min-width: 0;
+  padding: 2px 6px;
+}
+.rp-chan-freq,
+.rp-chan-off,
+.rp-chan-tone {
+  color: var(--text-dim);
+}
+.rp-chan-btns {
+  display: inline-flex;
+  gap: 2px;
+}
+.rp-chan-btns button {
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.rp-chan-btns button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.rp-chan-btns button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.rp-deliver {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.rp-clear {
+  margin-left: auto;
+}
+.rp-chirp-steps {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+.rp-chirp-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  flex-wrap: wrap;
+}
+.rp-chirp-skip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Keyboard focus for the roving-tabindex operating lists (a11y): a clear ring
+   on the focused decode / roster / needed row so a sighted keyboard user (and
+   low-vision) can see where they are. Screen-reader users hear the aria-label. */
+.decode-row:focus-visible,
+.or-row:focus-visible,
+.np-row:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--accent));
+  outline-offset: -2px;
 }

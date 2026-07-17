@@ -22,11 +22,13 @@ export interface FeatureState {
 
 /** Force every core feature on (the spine is never disableable). Returns a new
  * record covering ALL feature ids (missing → defaults to on, so a feature added
- * in a later version is visible to an upgrading user rather than silently lost). */
+ * in a later version is visible to an upgrading user rather than silently lost —
+ * EXCEPT staged `defaultOff` features, which stay hidden for new AND upgrading
+ * users until explicitly enabled; an explicit true persists through here). */
 export function coerceEnabled(partial: Partial<Record<FeatureId, boolean>>): Record<FeatureId, boolean> {
   const out = {} as Record<FeatureId, boolean>
   for (const f of FEATURES) {
-    out[f.id] = f.core ? true : partial[f.id] ?? true
+    out[f.id] = f.core ? true : partial[f.id] ?? !f.defaultOff
   }
   return out
 }

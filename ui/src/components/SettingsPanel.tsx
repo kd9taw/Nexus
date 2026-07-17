@@ -26,6 +26,7 @@ import {
   setLotwPassword,
   setQrzLogbookKey,
   setQrzPassword,
+  setRepeaterbookToken,
   setSettings,
   addRadio,
   removeRadio,
@@ -52,8 +53,9 @@ import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup } from './SettingsGroup'
 import type { Layout } from '../useLayout'
-import type { Scale } from '../useScale'
+import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS } from '../useScale'
+import type { Density } from '../useDensity'
 import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
 import { PROFILE_LIST } from '../features/profiles'
@@ -72,7 +74,12 @@ interface Props {
   layout: Layout
   onLayoutChange: (l: Layout) => void
   scale: Scale
-  onScaleChange: (s: Scale) => void
+  scaleMode: ScaleMode
+  scaleCap: Scale
+  onScaleModeChange: (m: ScaleMode) => void
+  onScaleCapChange: (c: Scale) => void
+  density: Density
+  onDensityChange: (d: Density) => void
   onResetLayout: () => void
   /** Modular-features API (toggles + profiles). */
   features: FeaturesApi
@@ -242,7 +249,12 @@ export function SettingsPanel({
   layout,
   onLayoutChange,
   scale,
-  onScaleChange,
+  scaleMode,
+  scaleCap,
+  onScaleModeChange,
+  onScaleCapChange,
+  density,
+  onDensityChange,
   onResetLayout,
   features,
   onRerunWizard,
@@ -350,6 +362,7 @@ export function SettingsPanel({
   const [hamqthPw, setHamqthPw] = useState('')
   const [clublogPw, setClublogPw] = useState('')
   const [hrdlogCode, setHrdlogCodeField] = useState('')
+  const [rbToken, setRbTokenField] = useState('')
   const [cloudlogKey, setCloudlogKeyField] = useState('')
   const [tab, setTab] = useState<SettingsTab>('station')
   // In-progress MHz text for the override row being edited — committed only when
@@ -669,12 +682,25 @@ export function SettingsPanel({
   const findRigModelName = (modelNum: number): string =>
     rigModels.find((m) => m[0] === modelNum)?.[1] ?? allRigModels.find((m) => m[0] === modelNum)?.[1] ?? ''
 
-  // Xiegu CI-V rigs (G90/X6100/X6200/X5105/X108G) run CAT at 19200 by default and have no baud menu
-  // on the radio, so picking one auto-sets 19200 — the global default is 38400, which would leave CAT
-  // silent (rigctld connects but the radio never answers). Model numbers mirror the Xiegu (Icom-family)
-  // entries in crates/tempo-audio/src/rigmodels.rs.
-  const XIEGU_MODELS = new Set([3088, 3087, 3091, 3089, 3076])
-  const recommendedBaud = (modelNum: number): number | null => (XIEGU_MODELS.has(modelNum) ? 19200 : null)
+  // Rigs whose CAT never runs at the app's 38400 default, so picking one auto-sets a baud
+  // that actually answers (rigctld connects regardless of baud; the radio just stays silent
+  // on a mismatch — the classic "CAT dead on defaults" trap):
+  // - Xiegu CI-V (G90/X6100/X6200/X5105/X108G): fixed 19200, no baud menu on the radio.
+  // - Vintage Kenwood (IC-10/IF-232C era — TS-140S/440S/450S/690S/790/850/940S/950SDX and
+  //   the TS-50S): the serial interface is FIXED at 4800 (8N2, handled by the Hamlib
+  //   backend; -s only overrides the speed).
+  // - 1990s Kenwood with a baud menu (TS-870S, TS-570D/S): factory default 9600.
+  // Model numbers mirror crates/tempo-audio/src/rigmodels.rs (verified vs riglist.h).
+  const BAUD_BY_MODEL = new Map<number, number>([
+    // Xiegu → 19200
+    [3088, 19200], [3087, 19200], [3091, 19200], [3089, 19200], [3076, 19200],
+    // Vintage Kenwood → 4800 fixed
+    [2001, 4800], [2002, 4800], [2003, 4800], [2005, 4800], [2007, 4800],
+    [2009, 4800], [2011, 4800], [2013, 4800], [2025, 4800],
+    // Kenwood with 9600 factory default
+    [2010, 9600], [2004, 9600], [2016, 9600],
+  ])
+  const recommendedBaud = (modelNum: number): number | null => BAUD_BY_MODEL.get(modelNum) ?? null
 
   const selectRig = (modelNum: number) => {
     markDirty()
@@ -1140,6 +1166,29 @@ export function SettingsPanel({
     }
   }
 
+  const onSaveRbToken = async () => {
+    if (!rbToken) return
+    const ok = await withErrorToast(async () => {
+      await setRepeaterbookToken(rbToken)
+      return true
+    }, 'Could not save the RepeaterBook token')
+    if (ok) {
+      setRbTokenField('')
+      pushToast('RepeaterBook token saved — the Program section now uses RepeaterBook', 'success')
+    }
+  }
+
+  const onForgetRbToken = async () => {
+    const ok = await withErrorToast(async () => {
+      await setRepeaterbookToken('')
+      return true
+    }, 'Could not clear the RepeaterBook token')
+    if (ok) {
+      setRbTokenField('')
+      pushToast('RepeaterBook token cleared — the Program section falls back to hearham.com', 'success')
+    }
+  }
+
   const onSaveCloudlogKey = async () => {
     if (!cloudlogKey) return
     const ok = await withErrorToast(async () => {
@@ -1332,20 +1381,90 @@ export function SettingsPanel({
 
               <div className="settings-field">
                 <span className="settings-label">UI scale</span>
-                <div className="theme-switcher" role="group" aria-label="UI scale">
-                  {SCALE_STEPS.map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      className={`theme-chip${scale === s ? ' active' : ''}`}
-                      aria-pressed={scale === s}
-                      onClick={() => onScaleChange(s)}
-                    >
-                      {s}%
-                    </button>
-                  ))}
+                <div className="theme-switcher" role="group" aria-label="UI scale mode">
+                  <button
+                    type="button"
+                    className={`theme-chip${scaleMode === 'auto' ? ' active' : ''}`}
+                    aria-pressed={scaleMode === 'auto'}
+                    onClick={() => onScaleModeChange('auto')}
+                  >
+                    Auto (fit)
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-chip${scaleMode !== 'auto' ? ' active' : ''}`}
+                    aria-pressed={scaleMode !== 'auto'}
+                    onClick={() => onScaleModeChange(scale)}
+                  >
+                    Manual
+                  </button>
                 </div>
-                <span className="settings-hint">Scales the whole interface; the waterfall stays sharp.</span>
+                {scaleMode === 'auto' ? (
+                  <>
+                    <span className="settings-hint">Max scale (auto won&apos;t exceed)</span>
+                    <div className="theme-switcher" role="group" aria-label="Maximum UI scale">
+                      {SCALE_STEPS.filter((s) => s >= 100).map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          className={`theme-chip${scaleCap === s ? ' active' : ''}`}
+                          aria-pressed={scaleCap === s}
+                          onClick={() => onScaleCapChange(s)}
+                        >
+                          {s}%
+                        </button>
+                      ))}
+                    </div>
+                    <span className="settings-hint">
+                      Fits the whole interface to the window so nothing is cut off (currently {scale}%). The
+                      waterfall stays sharp. Raise the max for big monitors.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <div className="theme-switcher" role="group" aria-label="UI scale">
+                      {SCALE_STEPS.map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          className={`theme-chip${scale === s ? ' active' : ''}`}
+                          aria-pressed={scale === s}
+                          onClick={() => onScaleModeChange(s)}
+                        >
+                          {s}%
+                        </button>
+                      ))}
+                    </div>
+                    <span className="settings-hint">
+                      Fixed scale. Switch to Auto to fit the interface to the window automatically.
+                    </span>
+                  </>
+                )}
+              </div>
+
+              <div className="settings-field">
+                <span className="settings-label">Density</span>
+                <div className="theme-switcher" role="group" aria-label="Information density">
+                  <button
+                    type="button"
+                    className={`theme-chip${density !== 'dense' ? ' active' : ''}`}
+                    aria-pressed={density !== 'dense'}
+                    onClick={() => onDensityChange('standard')}
+                  >
+                    Comfortable
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-chip${density === 'dense' ? ' active' : ''}`}
+                    aria-pressed={density === 'dense'}
+                    onClick={() => onDensityChange('dense')}
+                  >
+                    Compact
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  How tightly rows and controls pack. Compact fits more on screen.
+                </span>
               </div>
 
               <div className="settings-field">
@@ -3490,6 +3609,65 @@ export function SettingsPanel({
 
           {/* ---- Alerts ---- */}
           {tab === 'alerts' && (
+          <>
+          <fieldset className="settings-section">
+            <legend>Accessibility &amp; eyes-free</legend>
+            <p className="settings-note">
+              Speech and sound cues for operating by ear (screen-reader users, or anyone who wants
+              audible feedback). The keyboard and screen-reader labels throughout Nexus are always
+              on — these settings only control what comes out of the speakers.
+            </p>
+            <div className="settings-grid">
+              <div className="settings-field">
+                <label className="settings-inline-label">
+                  <span className="settings-label">Announce decodes (screen reader)</span>
+                  <select
+                    className="settings-input"
+                    value={form.announceVerbosity ?? 'needed'}
+                    onChange={(e) => update('announceVerbosity', e.target.value)}
+                  >
+                    <option value="off">Off</option>
+                    <option value="needed">Needed only (calling you / new / watched)</option>
+                    <option value="all">All (adds a per-cycle CQ summary)</option>
+                  </select>
+                </label>
+                <span className="settings-hint">
+                  What a screen reader speaks as decodes arrive. Silent without a reader running.
+                  "Needed" mirrors your alerts; "All" adds a spoken batch summary each cycle.
+                </span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">TX / RX earcon</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.soundTxState ?? false}
+                    className={`toggle${form.soundTxState ? ' on' : ''}`}
+                    onClick={() => updateBool('soundTxState', !form.soundTxState)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">A rising tone when you key up, falling when you unkey — know your TX state by ear.</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Decode-batch tick</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.soundDecodeTick ?? false}
+                    className={`toggle${form.soundDecodeTick ? ' on' : ''}`}
+                    onClick={() => updateBool('soundDecodeTick', !form.soundDecodeTick)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.</span>
+              </div>
+            </div>
+          </fieldset>
           <fieldset className="settings-section">
             <legend>Alerts</legend>
             <div className="settings-grid">
@@ -3595,6 +3773,7 @@ export function SettingsPanel({
               <WatchlistPanel />
             </div>
           </fieldset>
+          </>
           )}
 
           {/* ---- Connections (connector status + log) — moved from Logbook & QSL ---- */}
@@ -4760,6 +4939,47 @@ export function SettingsPanel({
                     never earns DXCC/WAS credit.
                   </span>
                 </div>
+              </div>
+            </div>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">RepeaterBook</span>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">RepeaterBook API token</span>
+                  <div className="settings-input-row">
+                    <input
+                      className="settings-input"
+                      type="password"
+                      value={rbToken}
+                      placeholder="rbuapp_…"
+                      onChange={(e) => setRbTokenField(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onSaveRbToken}
+                      disabled={!rbToken}
+                    >
+                      Set
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onForgetRbToken}
+                      title="Remove the stored RepeaterBook token from the system keychain"
+                    >
+                      Forget
+                    </button>
+                  </div>
+                  <span className="settings-hint">
+                    Optional. The <strong>Program</strong> section gets RepeaterBook data through Nexus's shared
+                    access automatically — a personal token (from your RepeaterBook account's{' '}
+                    <strong>API Apps</strong> page) makes your queries independent of it. Stored in the OS
+                    keychain. If RepeaterBook is unreachable, Program falls back to the open hearham.com list.
+                  </span>
+                </label>
               </div>
             </div>
             <div className="settings-featgroup">

@@ -18,11 +18,15 @@ use tempo_app::settings::OperatingMode;
 
 use crate::service::SHUTDOWN;
 
-/// Decode cadence: a fresh 15 s window every ~6 s (9 s overlap, so a callsign clipped by
-/// one window edge is whole in the next).
-const CADENCE: Duration = Duration::from_secs(6);
-/// How often the loop re-checks the enable/mode gates while idle.
-const IDLE_POLL: Duration = Duration::from_millis(500);
+/// Decode cadence: a fresh 15 s window every ~2 s (13 s overlap). The stitch emits only
+/// characters that are new since the previous pass, so a shorter cadence means SMALLER,
+/// more frequent text batches — the transcript flows instead of landing in 6 s blocks —
+/// without changing a single decoded character. CPU self-throttles below: a machine
+/// where one pass is slow automatically spaces passes to ≤~50% of one core.
+const CADENCE: Duration = Duration::from_secs(2);
+/// How often the loop re-checks the enable/mode gates while idle (also the cadence
+/// granularity — keep it well under CADENCE).
+const IDLE_POLL: Duration = Duration::from_millis(250);
 /// Re-attempt a failed model load this often (the operator may install it mid-session).
 const MODEL_RETRY: Duration = Duration::from_secs(30);
 
@@ -43,6 +47,11 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
     let mut model: Option<deepcw::DeepCw> = None;
     let mut last_model_try: Option<Instant> = None;
     let mut last_decode: Option<Instant> = None;
+    // Adaptive throttle: the measured duration of the last inference pass. The next
+    // pass waits max(CADENCE, 2×last_pass) so a slow machine never spends more than
+    // ~half a core on AI CW, while a fast one enjoys the full 2 s cadence.
+    let mut last_pass: Duration = Duration::ZERO;
+    let mut logged_pass_time = false;
     // The transcript cursor, in ABSOLUTE stream seconds (fed samples / 12 kHz): characters
     // at or before this moment are already emitted. Windows overlap 9 s; this is what
     // keeps the overlap from re-printing.
@@ -80,7 +89,8 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
                 }
             }
         }
-        let due = last_decode.is_none_or(|t| t.elapsed() >= CADENCE);
+        let wait = CADENCE.max(last_pass * 2);
+        let due = last_decode.is_none_or(|t| t.elapsed() >= wait);
         if !due {
             continue;
         }
@@ -103,7 +113,16 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
         }
         let ai = model.as_ref().unwrap();
         let audio_3200 = deepcw::resample_linear(&window, 12_000, ai.meta.sample_rate);
-        match ai.decode_timed(&audio_3200) {
+        let pass_t0 = Instant::now();
+        let decoded = ai.decode_timed(&audio_3200);
+        last_pass = pass_t0.elapsed();
+        // One log line for the record (the pass time was never measured before), plus
+        // any pass slow enough to defeat the cadence — silence otherwise.
+        if !logged_pass_time || last_pass > CADENCE {
+            eprintln!("ai-cw: inference pass took {:.2}s", last_pass.as_secs_f64());
+            logged_pass_time = true;
+        }
+        match decoded {
             Ok(chars) => {
                 // Stitch: only characters NEWER than the cursor and older than the tail
                 // guard (the guarded second re-decodes with full context next window).

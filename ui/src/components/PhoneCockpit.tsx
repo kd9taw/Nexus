@@ -542,7 +542,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         <MemoryBank
           dialMhz={snap.radio.dialMhz}
           mode={commandedMode}
-          onRecall={(freqMhz, mode) => {
+          onRecall={(freqMhz, mode, chan) => {
             // The Phone rig-mode policy derives the commanded mode from the
             // phone sub-mode (fm vs ssb→band-sideband), NOT from the sideband
             // arg — so a saved FM (or SSB) channel only round-trips if we first
@@ -550,9 +550,23 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             // mode. Flip phone_mode only when it actually differs, then retune.
             void (async () => {
               const wantFm = mode.toUpperCase() === 'FM'
-              if (wantFm !== (phoneMode?.toLowerCase() === 'fm')) {
+              // A Program-section channel carries repeater fields — apply them
+              // with the mode flip so the rig keys the repeater, not just the
+              // output (shift/tone/odd-split offset ride the same FM path).
+              const rptr = wantFm && chan?.rptrShift ? chan : null
+              if (wantFm !== (phoneMode?.toLowerCase() === 'fm') || rptr) {
                 const s = await getSettings()
-                await setSettings({ ...s, phoneMode: wantFm ? 'fm' : 'ssb' })
+                await setSettings({
+                  ...s,
+                  phoneMode: wantFm ? 'fm' : 'ssb',
+                  ...(rptr
+                    ? {
+                        rptrShift: rptr.rptrShift ?? 'simplex',
+                        ctcssToneHz: rptr.toneHz ?? 0,
+                        rptrOffsetOverrideHz: rptr.offsetHz ?? 0,
+                      }
+                    : {}),
+                })
               }
               // A recalled memory carries its own mode — drop any manual override (even same-band)
               // so the saved channel's mode wins instead of a stale forced sideband.
@@ -851,13 +865,24 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         <button
           type="button"
           className={`ph-ptt${keyed ? ' keyed' : ''}`}
+          aria-pressed={lock ? keyed : undefined}
           onPointerDown={onPttDown}
           onPointerUp={onPttUp}
           onPointerLeave={onPttUp}
+          // Keyboard: in Lock (hands-free) mode a focused Enter/Space toggles TX.
+          // preventDefault suppresses the synthetic click so it can't double-fire
+          // against the pointer handlers on a real mouse click. In hold mode the
+          // window-level Space handler owns push-to-talk (a keypress can't hold).
+          onKeyDown={(e) => {
+            if (lock && (e.key === 'Enter' || e.key === ' ')) {
+              e.preventDefault()
+              key(!keyed)
+            }
+          }}
           disabled={!snap.radio.txAllowed}
           title={
             snap.radio.txAllowed
-              ? "Hold to talk (or Space). Toggle 'Lock' for hands-free."
+              ? "Hold to talk (or Space). Toggle 'Lock' for hands-free (then Enter keys/unkeys)."
               : 'TX locked — outside your license privileges (pick a band, or change your license in Settings)'
           }
         >

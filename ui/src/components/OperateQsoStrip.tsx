@@ -65,7 +65,11 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
             AUTO&#8288;-&#8288;CQ
           </span>
         )}
-        <span className={`cq-state${running ? ' running' : ''}`}>{state}</span>
+        {/* role=status: the sequencer state is THE QSO progress signal — a
+            screen reader hears "AwaitReport… RR73… Done" as the exchange runs. */}
+        <span className={`cq-state${running ? ' running' : ''}`} role="status">
+          {state}
+        </span>
         {dxcall && <span className="cq-dx mono">{dxcall}</span>}
         {rpt && <span className="cq-rpt" title="Report received about your signal">{rpt}</span>}
         <span className="cq-spacer" />
@@ -134,7 +138,7 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
         )}
       </div>
 
-      <div className={`cq-now${stalled ? ' stalled' : ''}`}>
+      <div className={`cq-now${stalled ? ' stalled' : ''}`} role="status">
         <span className="cq-now-label">{stalled ? 'Stalled' : 'TX'}</span>
         <span className="cq-now-msg mono">{txNow ?? '— listening'}</span>
         {txCount > 1 && (

@@ -20,9 +20,10 @@ describe('feature state transitions', () => {
     // while Field Day is off.
     expect(s.profile).toBe('custom')
     for (const f of FEATURES) {
-      // Field Day is the one carve-out — opt-in (most operators don't contest);
+      // Two carve-outs: Field Day (opt-in — most operators don't contest) and
+      // staged `defaultOff` features (hidden until an external gate clears);
       // every other feature defaults on so upgrades never lose one.
-      expect(s.enabled[f.id]).toBe(f.id === 'fieldDay' ? false : true)
+      expect(s.enabled[f.id], f.id).toBe(f.id === 'fieldDay' || f.defaultOff ? false : true)
     }
   })
 
@@ -176,5 +177,13 @@ describe('feature state transitions', () => {
     const n = normalizeState({ profile: 'custom', enabled: { awards: true, logbook: false } } as never)
     expect(n.enabled.awards).toBe(true)
     expect(n.enabled.logbook).toBe(true)
+  })
+})
+
+describe('staged defaultOff features', () => {
+  it('stay hidden when the persisted key is missing, but an explicit enable persists', () => {
+    expect(coerceEnabled({}).program).toBe(false)
+    expect(coerceEnabled({ program: true }).program).toBe(true)
+    expect(coerceEnabled({ program: false }).program).toBe(false)
   })
 })

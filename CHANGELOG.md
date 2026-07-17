@@ -5,6 +5,86 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] — 2026-07-16 — Fits any window or screen size + Program (radio programming)
+
+### Changed
+
+- **Nexus now fits any window size and screen resolution, not just 1080p.** The whole
+  interface auto-scales to the window so the full cockpit stays visible instead of getting
+  cut off at the bottom or the right rail. At 1080p and larger it sits at 100% as before;
+  on a shorter or smaller window it scales down just enough to keep everything on screen,
+  and it re-fits live while you drag the window, down to a 900×600 minimum. Content that
+  still cannot fit scrolls inside its own panel rather than clipping. Two new controls live
+  in Settings ▸ Appearance: an **Auto (fit) / Manual** UI-scale switch with an adjustable
+  maximum for big monitors, and a **Comfortable / Compact** density switch. This retires the
+  old fixed layout that was tuned for 1080p and clipped on laptops, 1280-wide windows, and
+  smaller screens.
+
+### Accessibility
+
+- **Nexus now speaks and can be driven by keyboard — a first pass at full accessibility for blind
+  and low-vision operators.** These work with JAWS or NVDA on Windows (and are invisible to everyone
+  else — no "accessibility mode" to turn on):
+  - **The operating loop is now announced.** A screen reader hears the QSO sequencer advance
+    (calling CQ → report → RR73 → logged), the "now sending" message, and — assertively — every
+    switch between transmit and receive. The section you're in is announced and titles the window.
+  - **The band-activity, Call Roster, and Needed lists are keyboard-navigable.** Arrow through the
+    rows (each is read aloud), Enter to select, Shift+Enter to work the station, Alt+Enter to
+    ignore — the mouse's click and double-click, from the keyboard.
+  - **New Settings ▸ Alerts ▸ Accessibility & eyes-free:** optional spoken decode announcements
+    (off / needed-only / all), a TX/RX earcon, and a soft per-cycle decode tick — for operating by
+    ear. All default to quiet so nothing changes for sighted users.
+  - Phone's hands-free PTT Lock is now keyable (Enter toggles TX), dialog focus is trapped, and the
+    setup wizard announces a bad grid instead of silently disabling Next.
+
+### Fixed
+
+- **Click-and-hold tuning on the Phone/CW scope now works on every rig, not just those with a
+  native panadapter.** On Yaesu (and any audio-scope rig), grabbing the scope brings up the
+  passband box and dragging slides the band with your hand — the grabbed signal follows the
+  cursor — and holding near a scope edge keeps scrolling, exactly as on Icom/Flex. A click is an
+  in-passband fine-tune (snap to the signal under the cursor); the across-the-band jump needs the
+  real RF panadapter that Icom/Flex provide. The Icom/Flex behavior is unchanged.
+- **The FT8 Classic layout's right column no longer clips at 1080p.** The standard-message panel
+  is tighter, Rx Frequency and Stations shrink and scroll inside themselves, and if a window is
+  still too short the column itself scrolls instead of cutting off the station filters. The
+  Stations panel also stopped wasting height: the band row is one compact line and the Tempo
+  "Recent chats" list no longer renders in the FT8/FT4 cockpit (it belongs to Tempo).
+- **The AI CW decoder's copy now flows.** Decoded text used to arrive in blocks every ~6 seconds;
+  the decoder now runs passes every ~2 seconds (self-throttling on slower machines) and the panel
+  reveals new text character by character, so copy reads like a live operator. Same model, same
+  decoding — typical delay from key-down to on-screen drops from ~5 s to ~2 s.
+- **Vintage Kenwood rigs connect out of the box.** Picking a TS-140S, TS-440S, TS-850, TS-940S
+  (and the rest of the IF-232C era) now auto-sets their fixed 4800 baud, and the TS-870S/TS-570
+  set their factory 9600 — the 38400 default left CAT silent on these radios.
+- **Switching to CW now lands on the CW calling frequency, not the band edge.** Changing mode
+  to CW on 20 m used to park the dial at 14.000, the very bottom of the band; it now tunes to
+  the CW activity frequency (14.030 on 20 m, and the equivalent on every other band).
+
+### Added
+
+- **A new Program section: build channel lists for your radios** (ships hidden while our
+  RepeaterBook API access is pending — turn it on in Settings ▸ Features to try it on the open
+  hearham.com directory). Pick a location —
+  your station grid by default, or any grid square or city (for a trip) — set a radius, and fetch
+  the repeaters around it. Add the ones you want to a channel list with automatic offsets, tones,
+  channel numbers, and radio-ready names (6–16 characters, picked for your radio), then:
+  - **Export for CHIRP** — a CSV that CHIRP (free) imports and flashes to roughly a thousand radio
+    models, Baofeng to Kenwood. Nexus builds the list; CHIRP drives the cable.
+  - **Export CSV** — a plain spreadsheet-friendly listing for Anytone CPS, RT Systems, or printing.
+  - **Tune** — with a CAT rig connected, one click puts the rig on a repeater right now: FM, the
+    machine's exact shift and offset (odd splits included), and its CTCSS tone.
+  - **Save to Memory Bank** — the channels land in the Phone cockpit's MEMORY recall list, and
+    recalling one now applies the repeater shift and tone, not just the frequency.
+  The channel list persists across restarts, recent locations are one click to reuse, and off-air
+  machines are filtered out by default. DMR / D-STAR / Fusion repeaters are listed with badges so
+  you know they're there; programming them comes in a later version.
+- **Repeater data sources.** Out of the box the section uses the open hearham.com directory. A
+  RepeaterBook API token (Settings ▸ Integrations & Feeds) switches it to RepeaterBook's much
+  larger North-American directory — data courtesy of RepeaterBook.com. City search is powered by
+  OpenStreetMap. Directory data is cached for a week per state so repeat sessions are instant and
+  the sources aren't hammered.
+
 ## [0.9.5] — 2026-07-16 — one shared cockpit header across every mode + FT8 layout cleanup
 
 ### Changed

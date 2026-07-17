@@ -1491,6 +1491,9 @@ export interface Settings {
   rptrShift: string
   /** FM CTCSS (PL) tone in Hz; 0 = off. */
   ctcssToneHz: number
+  /** FM repeater offset override in Hz (0 = band convention). Set by the
+   * Program section's tune-now for odd-split machines. */
+  rptrOffsetOverrideHz?: number
   fdClass: string
   fdSection: string
   /** The current operator at the key (call/initials) — FD rotates ops, so this
@@ -1697,6 +1700,14 @@ export interface Settings {
   alertRareGridBands: string
   /** Mouse-wheel tuning sensitivity (1.0 = stock; <1 less sensitive, >1 more). */
   wheelTuneSensitivity?: number
+  /** Screen-reader speech for arriving decodes: 'off' | 'needed' (alerts only)
+   * | 'all' (adds a per-batch summary with CQ callers). Silent without a
+   * screen reader running. */
+  announceVerbosity?: string
+  /** Earcon on TX key/unkey (eyes-free TX pill). Off by default. */
+  soundTxState?: boolean
+  /** Soft tick when a decode batch lands. Off by default. */
+  soundDecodeTick?: boolean
   // --- Auto-CQ caller selection (W1.4) ---
   /** When several stations answer your CQ, which to work first:
    *  'first' (stock), 'strongest', 'farthest', or 'cq_first'. */
@@ -1894,4 +1905,101 @@ export interface AppSnapshot {
   uploadNote?: string | null
   uploadOk?: boolean
   uploadTick?: number
+}
+
+// ── Program section (radio programming): repeater search + channel projects ──
+// DTO mirrors of crates/propagation/src/{repeaters,memchan}.rs (serde camelCase)
+// and the src-tauri radioprog commands. Keys MUST match the Rust serde names.
+
+/** One repeater from a directory search, normalized across sources. */
+export interface RepeaterRecord {
+  source: 'repeaterbook' | 'hearham'
+  sourceId: string
+  callsign: string
+  /** Repeater output (you listen here), MHz. */
+  outputMhz: number
+  /** Repeater input (you transmit here), MHz. */
+  inputMhz: number
+  ctcssEncHz?: number | null
+  ctcssDecHz?: number | null
+  dcs?: number | null
+  lat: number
+  lon: number
+  city: string
+  county: string
+  state: string
+  fm: boolean
+  dmr: boolean
+  dstar: boolean
+  fusion: boolean
+  dmrColorCode?: number | null
+  bandwidthKhz?: number | null
+  operational: boolean
+  openUse: boolean
+  distanceKm: number
+  bearingDeg: number
+}
+
+/** One search row: the directory record (display) + the ready-to-add channel
+ * (derived in the tested Rust domain — never re-derived in TS). */
+export interface RepeaterSearchRow {
+  record: RepeaterRecord
+  channel: ProgChannel
+}
+
+/** A repeater search response: source label + data age + rows (nearest first). */
+export interface RepeaterSearchResult {
+  source: 'repeaterbook' | 'hearham'
+  fetchedUtc: number
+  /** True when a fetch failed/rate-limited and stale cache was served. */
+  stale: boolean
+  rows: RepeaterSearchRow[]
+}
+
+/** One geocoding candidate (OSM Nominatim). */
+export interface GeoCandidate {
+  displayName: string
+  lat: number
+  lon: number
+}
+
+/** One memory channel (mirror of propagation::memchan::Channel). */
+export interface ProgChannel {
+  id: string
+  name: string
+  rxMhz: number
+  duplex: 'simplex' | 'plus' | 'minus' | 'split'
+  offsetMhz: number
+  toneMode: 'none' | 'tone' | 'tsql' | 'dtcs'
+  rtoneHz: number
+  ctoneHz: number
+  dtcsCode: number
+  mode: 'fm' | 'nfm' | 'am' | 'dmr' | 'dstar' | 'fusion'
+  comment: string
+  dmrColorCode?: number | null
+  dmrTimeslot?: number | null
+  dmrTalkgroup?: number | null
+  dstarRpt1?: string | null
+  dstarRpt2?: string | null
+  source?: { source: string; sourceId: string; callsign: string } | null
+}
+
+/** Where a programming project's repeaters were searched from. */
+export interface ProgOrigin {
+  kind: 'station' | 'grid' | 'city'
+  grid: string
+  label: string
+  lat: number
+  lon: number
+}
+
+/** One saved programming project (a curated channel list). */
+export interface RadioProgProject {
+  id: string
+  name: string
+  createdUtc: number
+  updatedUtc: number
+  origin: ProgOrigin
+  radiusKm: number
+  channels: ProgChannel[]
 }

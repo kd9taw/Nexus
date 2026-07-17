@@ -38,6 +38,7 @@ import type {
 } from './types'
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
+import type { RepeaterSearchResult, GeoCandidate, RadioProgProject, ProgChannel } from './types'
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
 
@@ -1225,4 +1226,51 @@ export async function qsyPause(on: boolean): Promise<AppSnapshot> {
 /** Manual override: stop and return to the home channel. */
 export async function qsyStop(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('qsy_stop')
+}
+
+// ── Program section (radio programming) ──────────────────────────────────────
+
+/** Search repeaters within a radius (km) of a point. Source (RepeaterBook with
+ * a stored token on US ground, else hearham) is resolved backend-side. */
+export async function repeaterSearch(
+  lat: number,
+  lon: number,
+  radiusKm: number,
+): Promise<RepeaterSearchResult> {
+  return invoke<RepeaterSearchResult>('repeater_search', { lat, lon, radiusKm })
+}
+
+/** City-name → candidates via OSM Nominatim (explicit Search click only). */
+export async function geocodeCity(query: string): Promise<GeoCandidate[]> {
+  return invoke<GeoCandidate[]>('geocode_city', { query })
+}
+
+/** Store (or clear, with '') the operator's RepeaterBook rbuapp_… token. */
+export async function setRepeaterbookToken(token: string): Promise<void> {
+  return invoke<void>('set_repeaterbook_token', { token })
+}
+
+/** All saved programming projects (radioprog.json beside settings.json). */
+export async function radioprogListProjects(): Promise<RadioProgProject[]> {
+  return invoke<RadioProgProject[]>('radioprog_list_projects')
+}
+
+/** Create/update one programming project (upsert by id). */
+export async function radioprogSaveProject(project: RadioProgProject): Promise<void> {
+  return invoke<void>('radioprog_save_project', { project })
+}
+
+/** Delete one programming project. */
+export async function radioprogDeleteProject(id: string): Promise<void> {
+  return invoke<void>('radioprog_delete_project', { id })
+}
+
+/** Render channels to an export format ('chirp' | 'csv'); returns the file text. */
+export async function exportChannels(
+  channels: ProgChannel[],
+  format: 'chirp' | 'csv',
+  nameCap: number,
+  attribution: string,
+): Promise<string> {
+  return invoke<string>('export_channels', { channels, format, nameCap, attribution })
 }

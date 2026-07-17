@@ -11,6 +11,13 @@ export interface MemoryChannel {
   label: string
   freqMhz: number
   mode: string
+  /** FM repeater fields (optional — set when saved from the Program section):
+   * recall applies them so the rig keys the repeater, not just the output. */
+  rptrShift?: 'simplex' | 'plus' | 'minus'
+  /** Offset magnitude in Hz (0/absent = band convention). */
+  offsetHz?: number
+  /** CTCSS (PL) tone in Hz (0/absent = none). */
+  toneHz?: number
 }
 
 /** Fields the operator supplies when saving the current dial (id + label filled in). */
@@ -18,6 +25,9 @@ export interface NewChannel {
   label?: string
   freqMhz: number
   mode: string
+  rptrShift?: 'simplex' | 'plus' | 'minus'
+  offsetHz?: number
+  toneHz?: number
 }
 
 const STORAGE_KEY = 'nexus.memory.bank.v1'
@@ -53,7 +63,16 @@ function coerceChannel(raw: unknown): MemoryChannel | null {
   const rawLabel = typeof o.label === 'string' ? o.label.trim() : ''
   const label = rawLabel || derivedLabel(freqMhz, mode)
   const id = typeof o.id === 'string' && o.id ? o.id : newChannelId()
-  return { id, label, freqMhz, mode }
+  const out: MemoryChannel = { id, label, freqMhz, mode }
+  // Optional repeater fields — kept only when valid (legacy v1 entries lack them).
+  if (o.rptrShift === 'plus' || o.rptrShift === 'minus' || o.rptrShift === 'simplex') {
+    out.rptrShift = o.rptrShift
+  }
+  const offsetHz = Number(o.offsetHz)
+  if (Number.isFinite(offsetHz) && offsetHz > 0) out.offsetHz = offsetHz
+  const toneHz = Number(o.toneHz)
+  if (Number.isFinite(toneHz) && toneHz > 0) out.toneHz = toneHz
+  return out
 }
 
 /** Full valid channel list from arbitrary storage. Non-arrays → empty; invalid

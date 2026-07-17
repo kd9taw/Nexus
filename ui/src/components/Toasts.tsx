@@ -20,6 +20,11 @@ export function Toasts() {
       {toasts.map((t) => (
         <RToast.Root
           key={t.id}
+          // Screen-reader severity: errors + prominent alerts ("W1AW is calling
+          // you") interrupt (foreground = assertive); routine notes (QSY, saved-
+          // file confirmations) queue politely (background) so they never talk
+          // over the operator mid-exchange.
+          type={t.kind === 'error' || t.prominent ? 'foreground' : 'background'}
           className={`ui-toast ${KIND_CLASS[t.kind]}${t.prominent ? ' prominent' : ''}`}
           open
           onOpenChange={(o) => {

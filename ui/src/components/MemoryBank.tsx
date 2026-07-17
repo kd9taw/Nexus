@@ -5,7 +5,7 @@
 // (RotorStrip idiom) so it drops into any cockpit bar in either theme with no
 // shared-CSS edit.
 import { useState, type CSSProperties } from 'react'
-import { useMemoryBank } from '../features/memoryBank'
+import { useMemoryBank, type MemoryChannel } from '../features/memoryBank'
 
 export interface MemoryBankProps {
   /** Current dial (MHz) — what "Save" captures. */
@@ -13,8 +13,10 @@ export interface MemoryBankProps {
   /** Current mode (USB / LSB / FM / CW …) — captured alongside the dial. */
   mode: string
   /** Recall a channel. The host wires this to the setFrequency retune (it derives
-   *  the band from freqMhz); never call the backend from here. */
-  onRecall: (freqMhz: number, mode: string) => void
+   *  the band from freqMhz); never call the backend from here. The full channel
+   *  rides along so FM repeater fields (shift/offset/tone, saved by the Program
+   *  section) can be applied by the host. */
+  onRecall: (freqMhz: number, mode: string, chan?: MemoryChannel) => void
 }
 
 // Dial-match tolerance for the active-row highlight (mirrors FrequencyControl).
@@ -125,7 +127,7 @@ export function MemoryBank({ dialMhz, mode, onRecall }: MemoryBankProps) {
                   <button
                     type="button"
                     style={rowBtnStyle}
-                    onClick={() => onRecall(c.freqMhz, c.mode)}
+                    onClick={() => onRecall(c.freqMhz, c.mode, c)}
                     title={`Recall ${c.freqMhz.toFixed(3)} MHz · ${c.mode}`}
                     aria-pressed={active}
                   >

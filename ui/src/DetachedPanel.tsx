@@ -87,7 +87,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
   // A torn-off window is its OWN document — it must publish the same layout/responsive
   // state the main app does, or the CSS falls back to the broken narrow/stacked layout
   // (vertical rails go horizontal, the map collapses to zero height). Mirror App.tsx.
-  const [scale] = useScale()
+  const { scale } = useScale()
   useViewport(scale)
   useDensity()
   useMotion()

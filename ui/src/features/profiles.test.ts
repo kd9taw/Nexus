@@ -5,9 +5,9 @@ import { PROFILE_LIST, PROFILES, resolveEnabled, type ProfileId } from './profil
 const CORE: FeatureId[] = FEATURES.filter((f) => f.core).map((f) => f.id)
 
 describe('profiles', () => {
-  it('everything enables every feature', () => {
+  it('everything enables every feature except staged defaultOff ones', () => {
     const en = resolveEnabled('everything')
-    for (const f of FEATURES) expect(en[f.id]).toBe(true)
+    for (const f of FEATURES) expect(en[f.id], f.id).toBe(!f.defaultOff)
   })
 
   it('every profile keeps the core spine on', () => {

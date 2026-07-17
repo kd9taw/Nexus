@@ -37,7 +37,9 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast } from './toast'
-import { processDecodes } from './alerts'
+import { processDecodes, txEarcon } from './alerts'
+import { announce } from './announce'
+import { Announcer } from './components/Announcer'
 import { loadWatchlist, type WatchFilter } from './watchlist'
 import { useTheme } from './useTheme'
 import { useLayout } from './useLayout'
@@ -69,6 +71,7 @@ import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
 import { StatsView } from './components/StatsView'
 import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
+import { RadioProgView } from './components/RadioProgView'
 import { ConnectView } from './components/ConnectView'
 import {
   getPropagation,
@@ -154,12 +157,12 @@ const DEFAULT_MACROS: Settings['macros'] = {
 export default function App() {
   const [theme, setTheme] = useTheme()
   const [wfLayout, setWfLayout] = useLayout()
-  const [scale, setScale] = useScale()
+  const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale()
   // Publishes the zoom-aware `data-viewport` size class on <html> (live on resize
   // AND on scale change) so the layout adapts to the EFFECTIVE width.
   useViewport(scale)
-  // Activates + persists the density + motion attributes (control UI lands later).
-  useDensity()
+  // Density (row heights / padding). Comfortable ↔ Compact toggle lives in Settings.
+  const [density, setDensity] = useDensity()
   useMotion()
   // Modular features (toggles + profiles). Drives nav, view-gating, and the
   // gamification/achievements layer.
@@ -1309,21 +1312,10 @@ export default function App() {
     setWizardGen((g) => g + 1)
   }, [])
 
-  if (!snap) {
-    return (
-      <div className="app loading">
-        <span>Connecting to Nexus…</span>
-      </div>
-    )
-  }
-
-  const macros = settings?.macros ?? DEFAULT_MACROS
-
-  const activeConversation =
-    snap.conversations.find((c) => c.peer === activePeer) ?? null
-
-  // displayed tier is the authoritative link tier from the snapshot
-  const tier = snap.link.tier
+  // NOTE: everything from here down to the `!snap` early return is snap-INDEPENDENT
+  // and — critically for the hooks below — must run on EVERY render (rules of hooks:
+  // no hook may live after the early return, or React unmounts the whole app once
+  // snap loads and the hook count changes).
 
   // Field Day visibility is owned by the persisted master switch (settings.fdActive),
   // NOT the standalone feature flag — so the two can never diverge. Fold it into the
@@ -1340,6 +1332,42 @@ export default function App() {
   // the master is off) → operate.
   const fallbackView: View = isViewEnabled(features.landing) ? features.landing : 'operate'
   const effectiveView: View = isViewEnabled(view) ? view : fallbackView
+
+  // ── Eyes-free operating (a11y Phase A) — hooks BEFORE the `!snap` return ──
+  // Per-view window title + a polite "now on X" announcement (navigation is
+  // otherwise silent to a screen reader).
+  useEffect(() => {
+    const label = featureById(effectiveView)?.label ?? 'Settings'
+    document.title = `${label} — Nexus`
+    announce(label)
+  }, [effectiveView])
+  // TX state → assertive announce + opt-in earcon. Snap-safe (null pre-connect).
+  const prevTxRef = useRef<boolean | null>(null)
+  const txNow = snap?.radio.transmitting ?? false
+  useEffect(() => {
+    if (!snap) return
+    if (prevTxRef.current !== null && prevTxRef.current !== txNow) {
+      announce(txNow ? 'Transmitting' : 'Receiving', { assertive: true })
+      if (settings?.soundTxState) txEarcon(txNow)
+    }
+    prevTxRef.current = txNow
+  }, [snap, txNow, settings?.soundTxState])
+
+  if (!snap) {
+    return (
+      <div className="app loading">
+        <span>Connecting to Nexus…</span>
+      </div>
+    )
+  }
+
+  const macros = settings?.macros ?? DEFAULT_MACROS
+
+  const activeConversation =
+    snap.conversations.find((c) => c.peer === activePeer) ?? null
+
+  // displayed tier is the authoritative link tier from the snapshot
+  const tier = snap.link.tier
 
   // First-run nudge: callsign unset / still the placeholder, and not dismissed.
   const needsOnboarding =
@@ -1596,7 +1624,12 @@ export default function App() {
             layout={wfLayout}
             onLayoutChange={setWfLayout}
             scale={scale}
-            onScaleChange={setScale}
+            scaleMode={scaleMode}
+            scaleCap={scaleCap}
+            onScaleModeChange={setScaleMode}
+            onScaleCapChange={setScaleCap}
+            density={density}
+            onDensityChange={setDensity}
             onResetLayout={resetWidths}
             features={features}
             onRerunWizard={() => setShowWizard(true)}
@@ -1662,6 +1695,15 @@ export default function App() {
       workspace = (
         <main className="layout single">
           <SatellitesView focusSat={satFocus} onPopOut={() => void openPanelWindow('sats')} />
+        </main>
+      )
+      break
+    case 'program':
+      // The programming workbench never touches the rig on entry (no rig-mode
+      // policy entry needed — global sections leave the VFO alone).
+      workspace = (
+        <main className="layout single">
+          <RadioProgView myGrid={settings?.mygrid ?? ''} catOk={snap.radio.catOk === true} />
         </main>
       )
       break
@@ -1856,6 +1898,7 @@ export default function App() {
       </div>
 
       <Toasts />
+      <Announcer />
 
       {showWizard && settings && (
         // Gated on settings: the prefills are one-shot useState initializers,

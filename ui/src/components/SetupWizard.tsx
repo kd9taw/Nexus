@@ -284,9 +284,18 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
                 autoComplete="off"
                 spellCheck={false}
                 className={gridState === 'bad' ? 'bad' : ''}
+                // Announce the error to a screen reader (the red border + a
+                // silently-disabled Next are invisible otherwise): aria-invalid
+                // + the hint as an alert region tied by describedby.
+                aria-invalid={gridState === 'bad'}
+                aria-describedby="wizard-grid-hint"
                 onChange={(e) => setMygrid(e.target.value)}
               />
-              <span className={`wizard-field-hint${gridState === 'bad' ? ' bad' : ''}`}>
+              <span
+                id="wizard-grid-hint"
+                className={`wizard-field-hint${gridState === 'bad' ? ' bad' : ''}`}
+                role={gridState === 'bad' ? 'alert' : undefined}
+              >
                 {gridState === 'bad'
                   ? 'Not a Maidenhead locator — 4 or 6 characters, like EN52 or EN52xa.'
                   : 'Maidenhead locator (qrz.com shows yours). 4 characters is plenty.'}

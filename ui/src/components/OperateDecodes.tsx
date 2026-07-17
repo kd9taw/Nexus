@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useRovingList } from '../useRovingList'
 import type { DecodeRow, NeedAlert, Tier } from '../types'
 import { resolveDecodeNeeds, isAwardNeed } from '../features/decodeNeeds'
 import { NEED_VISUALS, type NeedCat } from '../features/needVisuals'
@@ -243,6 +244,16 @@ export function OperateDecodes({
     onCall(d.from, undefined, d.message, d.snr, d.freqHz)
   }
 
+  // Keyboard: arrow through rows, Enter selects, Shift+Enter works the station,
+  // Alt+Enter toggles ignore — the pointerless equivalent of click/double-click.
+  const roving = useRovingList(list.length, (i, mods) => {
+    const d = list[i]
+    if (!d?.from) return
+    if (mods.alt) onToggleIgnore?.(d.from)
+    else if (mods.shift) onCall(d.from, undefined, d.message, d.snr, d.freqHz)
+    else onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+  })
+
   const eraseBtn = (
     <button type="button" className="od-chip od-clear" onClick={erase} title="Erase this pane (WSJT-X Erase)">
       Erase
@@ -295,7 +306,14 @@ export function OperateDecodes({
         )}
       </div>
 
-      <div className="od-scroll" role="list" ref={scrollRef} onScroll={onScroll}>
+      <div
+        className="od-scroll"
+        role="listbox"
+        aria-label="Decoded stations — arrow to move, Enter to select, Shift+Enter to work"
+        ref={scrollRef}
+        onScroll={onScroll}
+        onKeyDown={roving.containerProps.onKeyDown}
+      >
         {list.length === 0 && (
           <StateBlock
             kind="empty"
@@ -334,11 +352,21 @@ export function OperateDecodes({
               )}
               <div
                 className={`decode-row ${rowClass(d, needs.rowNeed)}${selectedRow ? ' selected' : ''}${ignoredRow ? ' ignored' : ''}`}
-                role="listitem"
-                style={hlStyle}
-                onClick={() =>
-                  d.from && onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+                role="option"
+                aria-selected={selectedRow}
+                aria-label={
+                  d.from
+                    ? `${d.from}, ${fmtSnr(d.snr)} dB, ${Math.round(d.freqHz)} hertz, ${d.message}${d.country ? `, ${d.country}` : ''}`
+                    : d.message
                 }
+                tabIndex={roving.rowProps(i).tabIndex}
+                ref={roving.rowProps(i).ref as (el: HTMLDivElement | null) => void}
+                onFocus={roving.rowProps(i).onFocus}
+                style={hlStyle}
+                onClick={() => {
+                  roving.setActive(i)
+                  if (d.from) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+                }}
                 onDoubleClick={(e) => handleDouble(e, d)}
                 title={
                   ignoredRow

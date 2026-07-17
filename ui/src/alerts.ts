@@ -11,9 +11,13 @@
 
 import type { DecodeRow, Settings } from './types'
 import { pushToast } from './toast'
+import { announce } from './announce'
 import { matchWatchlist, watchLabel, type WatchFilter } from './watchlist'
 
 const alertedDecodes = new Set<string>()
+// Every decode key ever seen (not just alert-worthy) — drives the batch
+// freshness check for the decode tick + screen-reader batch summaries.
+const seenDecodes = new Set<string>()
 
 let audioCtx: AudioContext | null = null
 
@@ -65,6 +69,37 @@ const BEEP_HZ: Record<AlertKind, number> = { mycall: 880, newdxcc: 520, newgrid:
 export function doubleBeep(freq: number): void {
   beep(freq)
   window.setTimeout(() => beep(freq * 1.5), 130)
+}
+
+/** Soft, short tick — much quieter than an alert beep. The decode-batch pulse
+ * (Settings, off by default): the band's rhythm for eyes-free operating. */
+function tickBeep(): void {
+  const ctx = ensureCtx()
+  if (!ctx) return
+  const now = ctx.currentTime
+  const osc = ctx.createOscillator()
+  const gain = ctx.createGain()
+  osc.type = 'sine'
+  osc.frequency.value = 340
+  gain.gain.setValueAtTime(0.0001, now)
+  gain.gain.exponentialRampToValueAtTime(0.05, now + 0.008)
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.07)
+  osc.connect(gain)
+  gain.connect(ctx.destination)
+  osc.start(now)
+  osc.stop(now + 0.08)
+}
+
+/** TX key/unkey earcon (Settings `soundTxState`, off by default): a rising
+ * two-tone on key-down, a falling one on unkey — the eyes-free TX pill. */
+export function txEarcon(on: boolean): void {
+  if (on) {
+    beep(660)
+    window.setTimeout(() => beep(880), 110)
+  } else {
+    beep(880)
+    window.setTimeout(() => beep(560), 110)
+  }
 }
 
 /** What the operator is currently doing in the FT8/FT4 sequencer — lets the
@@ -131,6 +166,36 @@ export function processDecodes(
 ): void {
   const engaged = engagedInQso(qso)
   const partner = qso?.dxcall?.toUpperCase() ?? null
+
+  // ── Batch freshness (eyes-free channel): which rows have never been seen at
+  // all (any kind, not just alert-worthy)? Drives the soft decode tick and the
+  // screen-reader batch summary — both rate-limited by construction to one
+  // event per decode cycle. Seen-set capped so a long session can't grow it
+  // unbounded (a reset only risks one duplicate tick).
+  if (seenDecodes.size > 5000) seenDecodes.clear()
+  const fresh: DecodeRow[] = []
+  for (const d of decodes) {
+    if (d.mine) continue
+    const k = decodeKey(d)
+    if (!seenDecodes.has(k)) {
+      seenDecodes.add(k)
+      fresh.push(d)
+    }
+  }
+  if (fresh.length > 0) {
+    if (settings.soundDecodeTick) tickBeep()
+    // Verbosity "all": a compact spoken batch summary (count + up to three CQ
+    // callers) — the QLog filter doctrine, never the raw firehose. "needed"
+    // adds nothing here: the alert toasts below are already announced.
+    if (settings.announceVerbosity === 'all') {
+      const cqs = fresh.filter((d) => d.isCq && d.from).slice(0, 3)
+      const cqPart = cqs.length
+        ? ` CQ from ${cqs.map((d) => `${d.from}${d.country ? ` (${d.country})` : ''}`).join(', ')}.`
+        : ''
+      announce(`${fresh.length} new decode${fresh.length === 1 ? '' : 's'}.${cqPart}`)
+    }
+  }
+
   // Per-type band scopes, resolved once per batch. `alertNew` stays the master gate
   // (a pre-scope settings file with it off keeps everything off, no migration).
   const dxccOk = bandScopeOk(settings.alertDxccBands, dialMhz, 'all')

@@ -22,7 +22,8 @@ sgp4 = { version = "2.4", default-features = false, features = ["std"] }
 
 # Live feed adapters (NOAA SWPC + PSK Reporter) are opt-in so the pure-logic
 # intelligence stays dependency-light and unit-testable without a network.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"], optional = true }
+# `gzip` for the hearham.com repeater directory (~9 MB uncompressed, ~1 MB gzipped).
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json", "gzip"], optional = true }
 quick-xml = { version = "0.41", optional = true }
 # Pure eQSL URL/page/href/validate helpers, used only by the live eQSL transport.
 tempo-core = { path = "../tempo-core", optional = true }

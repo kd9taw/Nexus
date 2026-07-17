@@ -82,6 +82,11 @@ pub struct Settings {
     pub rptr_shift: String,
     /// FM CTCSS (PL) tone in Hz for repeater access, e.g. 100.0; 0.0 = off.
     pub ctcss_tone_hz: f32,
+    /// FM repeater offset override in Hz (0 = use the band convention from
+    /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
+    /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
+    #[serde(default)]
+    pub rptr_offset_override_hz: i64,
     /// Field Day MASTER SWITCH — the single source of truth for whether Field
     /// Day mode is engaged (spec §1.1). Persisted so it survives restarts
     /// mid-contest, but set true ONLY by the operator's explicit toggle: NO code
@@ -491,6 +496,19 @@ pub struct Settings {
     /// >1 = more sensitive. Applied to every wheel-tune surface (dial readout + scopes).
     #[serde(default = "default_wheel_tune_sensitivity")]
     pub wheel_tune_sensitivity: f32,
+    /// Screen-reader speech for arriving decodes: "off" | "needed" (only the
+    /// alert-worthy: calling-you / new one / watchlist) | "all" (adds every CQ).
+    /// Inaudible without a screen reader running, so "needed" is a safe default.
+    #[serde(default = "default_announce_verbosity")]
+    pub announce_verbosity: String,
+    /// Earcon on TX key/unkey (eyes-free operating). Off by default — FT8 keys
+    /// every cycle and sighted operators see the TX pill.
+    #[serde(default)]
+    pub sound_tx_state: bool,
+    /// Soft tick when a decode batch lands (the band's rhythm, eyes-free). Off
+    /// by default.
+    #[serde(default)]
+    pub sound_decode_tick: bool,
 
     // --- Auto-CQ caller selection (W1.4) ---
     /// When running CQ and several stations answer, which one to work first:
@@ -721,6 +739,10 @@ fn default_alert_grid_bands() -> String {
 
 fn default_wheel_tune_sensitivity() -> f32 {
     1.0
+}
+
+fn default_announce_verbosity() -> String {
+    "needed".to_string()
 }
 
 pub fn default_voice_messages() -> Vec<VoiceMessage> {
@@ -992,7 +1014,8 @@ impl Default for Settings {
             phone_mode: "ssb".to_string(),
             rptr_shift: "simplex".to_string(),
             ctcss_tone_hz: 0.0,
-            fd_active: false, // never auto-enabled — only the operator's toggle sets this
+            rptr_offset_override_hz: 0, // 0 = band-convention offset
+            fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
             fd_event: String::new(), // "" = arrlfd
             fd_power_mult: 2,
@@ -1119,6 +1142,9 @@ impl Default for Settings {
             alert_grid_bands: default_alert_grid_bands(),
             alert_rare_grid_bands: default_alert_scope_all(),
             wheel_tune_sensitivity: default_wheel_tune_sensitivity(),
+            announce_verbosity: default_announce_verbosity(),
+            sound_tx_state: false,
+            sound_decode_tick: false,
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
             lotw_station_location: String::new(),
@@ -1561,6 +1587,11 @@ impl Settings {
     /// 12 M). The shift DIRECTION comes from [`Self::rptr_shift`]; 0 below 28 MHz (no FM
     /// repeaters there).
     pub fn rptr_offset_hz(&self) -> i64 {
+        // An explicit override (the Program section's tune-now for odd-split
+        // machines) beats the band convention; 0 = no override.
+        if self.rptr_offset_override_hz > 0 {
+            return self.rptr_offset_override_hz;
+        }
         let f = self.dial_mhz;
         if f >= 1240.0 {
             12_000_000
@@ -1732,6 +1763,22 @@ mod tests {
         }
         s.dial_mhz = 14.250; // no FM repeaters on HF SSB bands
         assert_eq!(s.rptr_offset_hz(), 0);
+    }
+
+    #[test]
+    fn rptr_offset_override_beats_band_convention() {
+        let mut s = Settings::default();
+        s.dial_mhz = 146.5; // band convention says 600 kHz…
+        s.rptr_offset_override_hz = 1_000_000; // …but this machine is an odd +1 MHz split
+        assert_eq!(s.rptr_offset_hz(), 1_000_000);
+        s.rptr_offset_override_hz = 0; // cleared → back to the convention
+        assert_eq!(s.rptr_offset_hz(), 600_000);
+        // The key must round-trip settings JSON (the dead-key lesson).
+        s.rptr_offset_override_hz = 1_000_000;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"rptrOffsetOverrideHz\":1000000"), "{json}");
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.rptr_offset_override_hz, 1_000_000);
     }
 
     #[test]

@@ -25,6 +25,7 @@ export type View =
   | 'awards'
   | 'stats'
   | 'pota'
+  | 'program'
   | 'settings'
 
 /** Every section id is a `View`; capabilities add a few cross-cutting ids. */
@@ -65,6 +66,10 @@ export interface FeatureDef {
   /** Achievement id whose unlock *suggests* enabling this (adaptive reveal —
    * a follow-on; recorded here so the data model is ready). */
   revealOn?: string
+  /** Ships hidden: excluded from profile resolution (including 'everything') and
+   * defaults off for new AND upgrading users — only the explicit Settings ▸
+   * Features toggle turns it on. For features staged behind an external gate. */
+  defaultOff?: boolean
   /** One-line "why you'd want it", shown in Settings + the wizard. */
   oneLine: string
 }
@@ -241,6 +246,22 @@ export const FEATURES: FeatureDef[] = [
     // global (no workspace — read-only until the operator arms a rotor track):
     // pass schedule for the ★ favorites, per-bird polar plot + frequencies.
     oneLine: 'Satellite passes over YOUR grid — when to try which bird, favorites first.',
+  },
+  {
+    id: 'program',
+    label: 'Program',
+    kind: 'section',
+    category: 'Operate',
+    core: false,
+    dependsOn: [],
+    intents: ['casual', 'pota', 'vhf'],
+    view: 'program',
+    // global (no workspace) — a programming workbench, never touches the rig on entry.
+    // Ships OFF until the RepeaterBook application is approved (enable in
+    // Settings ▸ Features to try it on the open hearham.com data meanwhile);
+    // flip this to default-on in the release that activates the proxy.
+    defaultOff: true,
+    oneLine: 'Program your radios — local repeaters to a channel list: CHIRP CSV, rig memories, or tune-now.',
   },
   {
     id: 'awards',

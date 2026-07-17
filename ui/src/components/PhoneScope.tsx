@@ -150,6 +150,10 @@ export function PhoneScope({
     cursorX: number
     /** Optimistic dial during an edge-scan (advances rate×dt per tick); null = not scanning. */
     scanDialHz: number | null
+    /** Audio-scope relative drag anchor: the view-Hz under the hand at grab… */
+    grabAfHz: number
+    /** …and the dial at grab (null = needs re-seeding, e.g. after an edge-scan). */
+    grabDialHz: number | null
   } | null>(null)
   // Edge-scan while dragging: holding the box in the outer edge zone keeps scrolling the
   // band. The BOX stays pinned under the cursor (never repainted from Hz — the view is
@@ -602,6 +606,8 @@ export function PhoneScope({
       centerHz: 0,
       cursorX: e.clientX,
       scanDialHz: null,
+      grabAfHz: xToHz(e.clientX) ?? 0,
+      grabDialHz: dialRef.current,
     }
   }
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -609,7 +615,6 @@ export function PhoneScope({
     if (!g) return
     if (!g.moved && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) <= 6) return // click wobble
     g.moved = true
-    if (!g.rf) return // drag box is RF-rows only; an audio-row wobble stays a click
     const view = lastViewRef.current
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!view || !rect || rect.width < 4) return
@@ -620,6 +625,9 @@ export function PhoneScope({
     // Edge-scan zone: holding within the outer band keeps scrolling — cubic speed
     // (fine control through most of the zone, ramping hard at the very edge; pointer
     // capture means past-the-edge counts as full depth). Center region = normal drag.
+    // Runs for BOTH row sources: scanTick works in absolute dial Hz seeded from the
+    // rig's real dial, so the audio scope (Yaesu — no native panadapter) scans the
+    // band exactly like the RF scopes do.
     const EDGE = Math.min(36, rect.width / 4)
     const xIn = e.clientX - rect.left
     if (xIn <= EDGE) scanRef.current = { dir: -1, depth: Math.min(1, (EDGE - xIn) / EDGE) }
@@ -629,8 +637,38 @@ export function PhoneScope({
     if (scanRef.current.dir !== 0) {
       // Scanning: the box pins under the cursor and the rAF loop owns the tuning —
       // reporting cursor-Hz here would leap to the view edge and fight the smooth scan.
+      // The audio-drag anchor is invalidated so a return to mid-view re-seeds from the
+      // scanned-to dial instead of springing back to the original grab point.
+      g.grabDialHz = null
       positionBoxAtCursor(e.clientX, W)
       ensureScanLoop()
+      return
+    }
+    if (!g.rf) {
+      // Mid-view drag on the AUDIO scope (Yaesu — no native panadapter): a RELATIVE
+      // band drag. The audio window is anchored to the dial (af tracks RF − dial), so
+      // moving the hand by Δaf retunes the dial by −sign·Δaf — the grabbed signal
+      // follows the cursor, with the passband box riding under the hand. (The RF
+      // scopes' absolute box placement below is meaningless here — no RF map.)
+      const af = xToHz(e.clientX)
+      if (af == null) return
+      if (g.grabDialHz == null) {
+        // Fresh anchor (first move, or just left an edge-scan): re-seed from the
+        // optimistic scan dial when there is one, else the rig's real dial.
+        const seed = g.scanDialHz ?? dialRef.current
+        if (seed == null) return
+        g.grabDialHz = seed
+        g.grabAfHz = af
+      }
+      const target = g.grabDialHz - sidebandSign(sidebandRef.current) * (af - g.grabAfHz)
+      g.scanDialHz = target
+      // Same bookkeeping as scanTick: keep centerHz consistent so the release path
+      // (dialFromBoxCenter − off) round-trips to exactly this target.
+      const off = cwDragOffHz()
+      const edges = boxEdges(target + off, sidebandRef.current, W)
+      g.centerHz = (edges.loHz + edges.hiHz) / 2
+      positionBoxAtCursor(e.clientX, W)
+      onTuneRef.current?.({ dialHz: Math.round(target), kind: 'drag' })
       return
     }
     // Normal drag (mid-view): the box follows the cursor's frequency directly.
@@ -653,11 +691,15 @@ export function PhoneScope({
     endGesture()
     if (wasDragging) {
       // Final position rides the coalescer's pending timer — latest target wins.
-      const W = boxWidthFor(sidebandRef.current, filterWidthRef.current ?? null)
-      onTuneRef.current?.({
-        dialHz: Math.round(dialFromBoxCenter(centerHz, sidebandRef.current, W) - cwDragOffHz()),
-        kind: 'drag',
-      })
+      // centerHz 0 = an audio-row drag that never reached an edge zone (no tune
+      // was ever commanded): release quietly rather than tuning to nonsense.
+      if (centerHz > 0) {
+        const W = boxWidthFor(sidebandRef.current, filterWidthRef.current ?? null)
+        onTuneRef.current?.({
+          dialHz: Math.round(dialFromBoxCenter(centerHz, sidebandRef.current, W) - cwDragOffHz()),
+          kind: 'drag',
+        })
+      }
       return
     }
     // Click: snap-detect the signal under the cursor and tune to work it.

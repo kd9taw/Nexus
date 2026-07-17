@@ -266,11 +266,32 @@ export function CwCockpit({
       return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.5
     })(),
   )
+  // Typewriter reveal: the AI decoder emits each inference pass's text as one batch
+  // (window-batch inference — several characters land at once). Reveal appended text
+  // character-by-character so the copy FLOWS like a live operator's; the drain rate
+  // scales with backlog so a big batch clears in ~2 s and never falls behind. A
+  // non-append change (transcript reset/trim) snaps to the full text instantly.
+  const [revealLen, setRevealLen] = useState(0)
+  const prevTextRef = useRef('')
+  useEffect(() => {
+    const text = decoded.text
+    if (!text.startsWith(prevTextRef.current)) setRevealLen(text.length)
+    prevTextRef.current = text
+  }, [decoded.text])
+  useEffect(() => {
+    const backlog = decoded.text.length - revealLen
+    if (backlog <= 0) return
+    const id = window.setInterval(() => {
+      setRevealLen((n) => Math.min(decoded.text.length, n + Math.max(1, Math.ceil((decoded.text.length - n) / 40))))
+    }, 50)
+    return () => window.clearInterval(id)
+  }, [decoded.text, revealLen])
+  const revealedText = decoded.text.slice(0, revealLen)
   // Keep the newest decoded text in view as the transcript grows.
   useEffect(() => {
     const el = decodeRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [decoded.text])
+  }, [revealedText])
   // TX echo — what we've actually transmitted (macros expanded), polled alongside the decode.
   const [sent, setSent] = useState<string[]>([])
   const sentRef = useRef<HTMLDivElement>(null)
@@ -992,14 +1013,21 @@ export function CwCockpit({
             Clear
           </button>
         </div>
-        <div className="cw-decode-text" ref={decodeRef}>
-          {decoded.text ? (
-            decoded.text
+        {/* The visible transcript animates character-by-character (typewriter) —
+            aria-hidden so a screen reader doesn't announce every keystroke; the
+            hidden role=log mirror below receives whole batches instead (a log
+            region announces only ADDITIONS). */}
+        <div className="cw-decode-text" ref={decodeRef} aria-hidden="true">
+          {revealedText ? (
+            revealedText
           ) : (
             <span className="cw-decode-idle">
               {(snap.aiCw?.enabled && snap.aiCw.status) || 'listening…'}
             </span>
           )}
+        </div>
+        <div className="sr-only" role="log" aria-label="Decoded CW">
+          {decoded.text}
         </div>
       </div>
 

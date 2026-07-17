@@ -30,6 +30,7 @@ const EXPECTED_SECTIONS: FeatureId[] = [
   'sats',
   'awards',
   'stats',
+  'program',
 ]
 
 describe('feature registry', () => {

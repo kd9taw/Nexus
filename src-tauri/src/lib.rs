@@ -5775,6 +5775,13 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             stored: has(cloudlog_keychain()),
             identity: cloudlog_url,
         },
+        CredStatus {
+            // The token is app-scoped (an rbuapp_… token the user generates on
+            // RepeaterBook); there's no separate username identity to show.
+            connector: "RepeaterBook".into(),
+            stored: has(repeaterbook_keychain()),
+            identity: String::new(),
+        },
     ])
 }
 
@@ -7786,6 +7793,376 @@ async fn download_parks(parks: State<'_, SharedParks>) -> Result<usize, String> 
     Ok(n)
 }
 
+// ── Radio programming ("Program" section): repeater search, projects, exports ──────────────────
+//
+// Location → repeater directory → picked channels → CHIRP/generic CSV. Pure logic lives in
+// propagation::{repeaters, memchan, chirp}; the live fetchers in propagation::live::{repeaterbook,
+// hearham, geocode}. This shell owns: the RepeaterBook token (OS keychain), the per-user disk
+// cache with TTL (compliance: per-user, on-demand, never bundled/redistributed), per-state fetch
+// throttling, source fallback (no token / non-US / RB failure → hearham), and the saved
+// programming projects in radioprog.json beside settings.json.
+
+/// Saved programming projects (channel lists) — sidecar file so hours of curation survive webview
+/// storage clears and stay reachable for future direct-programming paths.
+fn radioprog_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("radioprog.json")
+}
+
+/// Per-source repeater-directory cache dir (rb_<state_id>.json / hearham.json), beside
+/// settings.json. Losing it is harmless (re-fetch); it is never exported or shipped.
+fn radioprog_cache_dir() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("radioprog_cache")
+}
+
+const REPEATERBOOK_KEYCHAIN_USER: &str = "repeaterbook-token";
+
+fn repeaterbook_keychain() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, REPEATERBOOK_KEYCHAIN_USER)
+        .map_err(|e| format!("couldn't open the system keychain: {e}"))
+}
+
+/// Store (or, if empty, clear) the operator's RepeaterBook API token (`rbuapp_…`, generated from
+/// their RepeaterBook "API Apps" dashboard). Write-only, like the other connector secrets.
+#[tauri::command]
+fn set_repeaterbook_token(token: String) -> Result<(), String> {
+    let entry = repeaterbook_keychain()?;
+    if token.trim().is_empty() {
+        clear_keychain_entry(&entry)?;
+        conn_log(
+            "RepeaterBook",
+            "info",
+            "API token cleared from the OS keychain",
+        );
+        return Ok(());
+    }
+    entry
+        .set_password(token.trim())
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+    conn_log("RepeaterBook", "ok", "API token saved to the OS keychain");
+    Ok(())
+}
+
+/// One cached directory payload: `{ fetchedUtc, body }`.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepeaterCacheFile {
+    fetched_utc: i64,
+    body: String,
+}
+
+/// Directory cache TTL — weekly. Repeater listings move slowly; a 7-day per-user cache keeps us
+/// well inside RepeaterBook's "minimize load, no offline database" posture (age is shown in the
+/// UI and Refresh is explicit).
+const RADIOPROG_TTL_SECS: i64 = 7 * 24 * 3600;
+/// Manual-refresh throttle per RepeaterBook state export.
+const RB_STATE_THROTTLE_SECS: i64 = 900;
+
+fn read_repeater_cache(name: &str) -> Option<RepeaterCacheFile> {
+    let p = radioprog_cache_dir().join(name);
+    let s = std::fs::read_to_string(p).ok()?;
+    serde_json::from_str(&s).ok()
+}
+
+fn write_repeater_cache(name: &str, body: &str) {
+    let dir = radioprog_cache_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let f = RepeaterCacheFile {
+        fetched_utc: now_unix(),
+        body: body.to_string(),
+    };
+    if let Ok(json) = serde_json::to_string(&f) {
+        let _ = std::fs::write(dir.join(name), json);
+    }
+}
+
+/// Last fetch attempt per RB state (unix secs) — the per-state refresh throttle.
+static RB_LAST_TRY: std::sync::Mutex<Option<std::collections::HashMap<String, i64>>> =
+    std::sync::Mutex::new(None);
+
+fn rb_throttle_ok(state_id: &str, now: i64) -> bool {
+    let mut g = RB_LAST_TRY.lock().unwrap_or_else(|e| e.into_inner());
+    let map = g.get_or_insert_with(std::collections::HashMap::new);
+    let ok = now - map.get(state_id).copied().unwrap_or(0) >= RB_STATE_THROTTLE_SECS;
+    if ok {
+        map.insert(state_id.to_string(), now);
+    }
+    ok
+}
+
+/// One search row: the directory record (display: distance/bearing/mode flags/status) plus the
+/// ready-to-add memory channel derived from it (propagation::repeaters::to_channel — duplex,
+/// offset and tone mapping stay in the tested Rust domain, never re-derived in TS).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepeaterSearchRow {
+    record: propagation::repeaters::RepeaterRecord,
+    channel: propagation::memchan::Channel,
+}
+
+/// A repeater search result: which source answered, how old the data is, and the rows inside
+/// the radius (distance/bearing filled, nearest first).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepeaterSearchResult {
+    /// "repeaterbook" | "hearham".
+    source: String,
+    /// Oldest payload timestamp behind these records (unix secs) — the UI's "as of" stamp.
+    fetched_utc: i64,
+    /// True when a fetch failed/was rate-limited and stale cache was served instead.
+    stale: bool,
+    rows: Vec<RepeaterSearchRow>,
+}
+
+fn search_rows(records: Vec<propagation::repeaters::RepeaterRecord>) -> Vec<RepeaterSearchRow> {
+    records
+        .into_iter()
+        .map(|r| RepeaterSearchRow {
+            channel: propagation::repeaters::to_channel(&r),
+            record: r,
+        })
+        .collect()
+}
+
+/// Search repeaters within `radius_km` of a point. Source resolution for a US origin: RepeaterBook
+/// state exports — through the operator's own token when one is stored, else through the Nexus
+/// proxy (rb.hamradiotools.io, the centralized model: the app token lives server-side only).
+/// Cached TTL 7d, per-state throttle, stale cache on failure/429. When RepeaterBook is
+/// unreachable/dormant with no cache (or the origin is non-US) → hearham, same cache discipline.
+/// All network + parsing off the main thread.
+#[tauri::command]
+async fn repeater_search(
+    lat: f64,
+    lon: f64,
+    radius_km: f64,
+) -> Result<RepeaterSearchResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use propagation::repeaters as rpt;
+        let origin = (lat, lon);
+        let radius = radius_km.clamp(1.0, 500.0);
+        let token = repeaterbook_keychain()
+            .ok()
+            .and_then(|e| e.get_password().ok())
+            .unwrap_or_default();
+        let states = rpt::plan_states(origin, radius);
+        let now = now_unix();
+
+        if !states.is_empty() {
+            let mut records = Vec::new();
+            let mut oldest = i64::MAX;
+            let mut stale = false;
+            let mut any = false;
+            let mut last_err = String::new();
+            for st in &states {
+                let cache_name = format!("rb_{st}.json");
+                let cached = read_repeater_cache(&cache_name);
+                let fresh = cached
+                    .as_ref()
+                    .is_some_and(|c| now - c.fetched_utc < RADIOPROG_TTL_SECS);
+                let body = if fresh {
+                    cached
+                        .as_ref()
+                        .map(|c| (c.body.clone(), c.fetched_utc, false))
+                } else if rb_throttle_ok(st, now) {
+                    // A stored personal token goes straight to RepeaterBook; otherwise the
+                    // Nexus proxy (which holds the app token server-side + an edge cache).
+                    let fetched = if token.is_empty() {
+                        propagation::live::repeaterbook::fetch_state_proxy(st)
+                    } else {
+                        propagation::live::repeaterbook::fetch_state(&token, st)
+                    };
+                    match fetched {
+                        Ok(b) => {
+                            write_repeater_cache(&cache_name, &b);
+                            Some((b, now, false))
+                        }
+                        Err(e) => {
+                            last_err = e;
+                            // Failure/429/dormant proxy → serve whatever cache exists, stale.
+                            cached
+                                .as_ref()
+                                .map(|c| (c.body.clone(), c.fetched_utc, true))
+                        }
+                    }
+                } else {
+                    cached
+                        .as_ref()
+                        .map(|c| (c.body.clone(), c.fetched_utc, true))
+                };
+                if let Some((b, at, was_stale)) = body {
+                    records.extend(rpt::parse_repeaterbook_json(&b));
+                    oldest = oldest.min(at);
+                    stale |= was_stale;
+                    any = true;
+                }
+            }
+            if any {
+                return Ok(RepeaterSearchResult {
+                    source: "repeaterbook".into(),
+                    fetched_utc: if oldest == i64::MAX { now } else { oldest },
+                    stale,
+                    rows: search_rows(rpt::filter_sort(&records, origin, radius)),
+                });
+            }
+            // Every state failed with no cache (e.g. the proxy is dormant pre-approval) — fall
+            // through to hearham, but log the RB reason for the Connections panel.
+            if !last_err.is_empty() {
+                conn_log("RepeaterBook", "info", &last_err);
+            }
+        }
+
+        // hearham: the no-token default, the non-US path, and the RB fallback.
+        let cached = read_repeater_cache("hearham.json");
+        let fresh = cached
+            .as_ref()
+            .is_some_and(|c| now - c.fetched_utc < RADIOPROG_TTL_SECS);
+        let (body, at, stale) = if fresh {
+            let c = cached.as_ref().unwrap();
+            (c.body.clone(), c.fetched_utc, false)
+        } else {
+            match propagation::live::hearham::fetch_all() {
+                Ok(b) => {
+                    write_repeater_cache("hearham.json", &b);
+                    (b, now, false)
+                }
+                Err(e) => match cached.as_ref() {
+                    Some(c) => (c.body.clone(), c.fetched_utc, true),
+                    None => return Err(e),
+                },
+            }
+        };
+        let records = rpt::parse_hearham_json(&body);
+        Ok(RepeaterSearchResult {
+            source: "hearham".into(),
+            fetched_utc: at,
+            stale,
+            rows: search_rows(rpt::filter_sort(&records, origin, radius)),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// City-name search via OSM Nominatim (explicit Search click only — the UI never queries per
+/// keystroke). Returns up to 5 candidates for the operator to pick from.
+#[tauri::command]
+async fn geocode_city(
+    query: String,
+) -> Result<Vec<propagation::live::geocode::GeoCandidate>, String> {
+    tauri::async_runtime::spawn_blocking(move || propagation::live::geocode::search_city(&query))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The saved-projects file: `{ version, projects: [...] }`.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct RadioProgFile {
+    version: u32,
+    projects: Vec<RadioProgProject>,
+}
+
+/// Where a project's repeaters were searched from (re-fetch seed + display label).
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct ProgOrigin {
+    /// "station" | "grid" | "city".
+    kind: String,
+    grid: String,
+    /// Display label ("EN52", "Gatlinburg, TN…").
+    label: String,
+    lat: f64,
+    lon: f64,
+}
+
+/// One named programming project — a curated channel list ("Home HT", "Denver trip").
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct RadioProgProject {
+    id: String,
+    name: String,
+    created_utc: i64,
+    updated_utc: i64,
+    origin: ProgOrigin,
+    radius_km: f64,
+    channels: Vec<propagation::memchan::Channel>,
+}
+
+fn load_radioprog() -> RadioProgFile {
+    std::fs::read_to_string(radioprog_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn store_radioprog(f: &RadioProgFile) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(f).map_err(|e| e.to_string())?;
+    std::fs::write(radioprog_path(), json)
+        .map_err(|e| format!("couldn't save programming projects: {e}"))
+}
+
+/// All saved programming projects.
+#[tauri::command]
+fn radioprog_list_projects() -> Result<Vec<RadioProgProject>, String> {
+    Ok(load_radioprog().projects)
+}
+
+/// Create/update one project (upsert by id; stamps updatedUtc, and createdUtc on first save).
+#[tauri::command]
+fn radioprog_save_project(mut project: RadioProgProject) -> Result<(), String> {
+    let mut f = load_radioprog();
+    f.version = 1;
+    project.updated_utc = now_unix();
+    if let Some(existing) = f.projects.iter_mut().find(|p| p.id == project.id) {
+        project.created_utc = existing.created_utc;
+        *existing = project;
+    } else {
+        project.created_utc = now_unix();
+        f.projects.push(project);
+    }
+    store_radioprog(&f)
+}
+
+/// Delete one project by id (missing id is a no-op success).
+#[tauri::command]
+fn radioprog_delete_project(id: String) -> Result<(), String> {
+    let mut f = load_radioprog();
+    f.projects.retain(|p| p.id != id);
+    store_radioprog(&f)
+}
+
+/// Render a channel list to an export format: "chirp" (the CHIRP generic CSV, analog rows only)
+/// or "csv" (the plain spreadsheet dump). The UI saves the returned text via its download path.
+/// `attribution` names the data source shown in the file's trailing comment ("" = none).
+#[tauri::command]
+fn export_channels(
+    channels: Vec<propagation::memchan::Channel>,
+    format: String,
+    name_cap: usize,
+    attribution: String,
+) -> Result<String, String> {
+    let cap = name_cap.clamp(4, 16);
+    match format.as_str() {
+        "chirp" => Ok(propagation::chirp::to_chirp_csv(
+            &channels,
+            cap,
+            &attribution,
+        )),
+        "csv" => Ok(propagation::memchan::to_generic_csv(
+            &channels,
+            &attribution,
+        )),
+        other => Err(format!("unknown export format: {other}")),
+    }
+}
+
 /// Exact local lookup of one park by reference (offline, instant). `None` if the ref is malformed
 /// or not in the loaded directory — the caller then falls back to the live lookup.
 #[tauri::command]
@@ -8619,6 +8996,13 @@ pub fn run() {
             download_parks,
             lookup_park,
             lookup_park_live,
+            set_repeaterbook_token,
+            repeater_search,
+            geocode_city,
+            radioprog_list_projects,
+            radioprog_save_project,
+            radioprog_delete_project,
+            export_channels,
             set_activation,
             clear_activation,
             get_activation,
@@ -8652,6 +9036,13 @@ pub fn run() {
             // while the `main` window (declared hidden) loads behind it; then reveal main and
             // close the splash. A plain thread timer — no dependency on the frontend being ready.
             use tauri::Manager;
+            // Enforce the minimum window size at runtime too. The tauri.conf `minWidth`/
+            // `minHeight` are set (both — Tauri no-ops minWidth alone), but re-applying here
+            // in DPI-aware logical px is belt-and-suspenders across platforms. 900x600 is the
+            // smallest window at which auto fit-scaling stays usable.
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.set_min_size(Some(tauri::LogicalSize::new(900.0, 600.0)));
+            }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(2));

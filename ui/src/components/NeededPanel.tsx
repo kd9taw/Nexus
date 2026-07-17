@@ -4,6 +4,7 @@
 // row to QSY the radio to that band and listen. The same stations light up on the
 // Connect map (shared needByCall), so this is the list half of "list + map".
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useRovingList } from '../useRovingList'
 import type { BandChannel, FeedStatus, NeedAlert, NeedTag } from '../types'
 import {
   filterAlerts,
@@ -306,6 +307,15 @@ export function NeededPanel({
     return filtered
   }, [alerts, sort, filters])
 
+  // Keyboard: arrow through rows, Enter selects + works/QSYs (same as a click).
+  const roving = useRovingList(rows.length, (i) => {
+    const a = rows[i]
+    if (!a) return
+    onSelect(a.call)
+    if (onWork) onWork(a)
+    else onQsy(a)
+  })
+
   const th = (key: SortKey, label: string) => (
     <button
       type="button"
@@ -468,7 +478,12 @@ export function NeededPanel({
         </div>
       )}
 
-      <div className="np-grid" role="table">
+      <div
+        className="np-grid"
+        role="grid"
+        aria-label="Needed now — arrow to move, Enter to work or QSY"
+        onKeyDown={roving.containerProps.onKeyDown}
+      >
         <div className="np-row np-header" role="row">
           {th('priority', 'Need')}
           {th('call', 'Call')}
@@ -485,7 +500,7 @@ export function NeededPanel({
               : 'Nothing needed on the air right now — needed stations (new ones, band-slots, modes, grids, POTA/SOTA) appear here as they\'re heard or spotted.'}
           </div>
         ) : (
-          rows.map((a) => {
+          rows.map((a, i) => {
             const canQsy = knownBands.has(a.band)
             const isVoiceCw = a.mode === 'CW' || a.mode === 'Phone'
             // Every mode is click-to-work when the host wires onWork (main window):
@@ -514,11 +529,17 @@ export function NeededPanel({
               <div
                 key={`${a.call}|${a.band}|${a.mode}`}
                 role="row"
+                aria-selected={a.call === selectedCall}
+                aria-label={`${a.call}, ${a.entity}, ${a.band} ${a.mode}, needed ${a.tags.join(' ')}`}
+                tabIndex={roving.rowProps(i).tabIndex}
+                ref={roving.rowProps(i).ref as (el: HTMLDivElement | null) => void}
+                onFocus={roving.rowProps(i).onFocus}
                 className={`np-row${a.call === selectedCall ? ' selected' : ''} need-${
                   a.tags[0] ? chipFor(a.tags[0]).cls : 'confirm'
                 }`}
                 title={fullTooltip}
                 onClick={() => {
+                  roving.setActive(i)
                   onSelect(a.call)
                   if (workable) onWork(a)
                   else if (canQsy) onQsy(a)

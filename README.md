@@ -73,6 +73,13 @@ WSJT-X muscle memory just works, inside a UI built this decade.
 - **💬 Novel weak-signal chat tiers.** The original Tempo layer: **FT1** (4-second conversational
   cycle) and **DX1** (fading-resilient non-coherent 8-FSK) with IR-HARQ retransmission combining
   and presence-gated store-and-forward — simulation-validated, seeking on-air reports.
+- **🔌 Program your radios.** The **Program** section turns "load the local repeaters into my HT"
+  from an evening with legacy per-radio software into minutes: pick a location (your grid, any
+  grid, or a city for a trip), fetch the repeaters around it, ADD the ones you want, and export a
+  **CHIRP-ready CSV** (CHIRP flashes ~1,000 radio models) or a plain CSV — offsets, tones, channel
+  numbers, and radio-length names handled for you. With a CAT rig connected, one click **tunes the
+  rig to a repeater now**, exact odd-split offsets included. Data courtesy of RepeaterBook.com
+  (with your own API token) or the open hearham.com directory.
 
 ## Who it's for
 

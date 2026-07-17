@@ -1287,12 +1287,18 @@ impl Engine {
                 })
             }
             OperatingMode::Cw => crate::privileges::segment_start(class, &band, om)
-                // Sideband is inert for CW (the rig-mode policy commands CW or a band-aware tone),
-                // but keep it self-consistent with the band's convention.
+                // Park on the CW ACTIVITY frequency (20 m → 14.030), NOT the dead band edge
+                // (14.000, where nobody works and your signal would fall out of band),
+                // clamped to the licensed CW-segment start so it never drops below privileges.
+                // This mirrors the band-dropdown path (getLicensedBandPlan) so switching TO CW
+                // mode and picking a band from the dropdown both land in the same place.
                 .map(|lo| {
+                    let dial = crate::bandplan::cw_activity_mhz(&band).map_or(lo, |a| a.max(lo));
+                    // Sideband is inert for CW (the rig-mode policy commands CW or a band-aware
+                    // tone), but keep it self-consistent with the band's convention.
                     (
-                        lo,
-                        if lo < 10.0 {
+                        dial,
+                        if dial < 10.0 {
                             "LSB".to_string()
                         } else {
                             "USB".to_string()
@@ -6287,13 +6293,13 @@ mod tests {
             e.settings().dial_mhz
         );
 
-        // CW tab → drop to the 20 m CW segment start (Extra 14.000).
+        // CW tab → the 20 m CW ACTIVITY freq (14.030), not the dead band edge (14.000).
         let _ = e.take_immediate_retune();
         e.set_operating_mode("cw", true);
         assert_eq!(e.settings().operating_mode, OperatingMode::Cw);
         assert!(
-            (e.settings().dial_mhz - 14.000).abs() < 1e-9,
-            "CW dropped to the CW segment start, got {}",
+            (e.settings().dial_mhz - 14.030).abs() < 1e-9,
+            "CW landed on the 20 m activity freq, got {}",
             e.settings().dial_mhz
         );
         assert!(

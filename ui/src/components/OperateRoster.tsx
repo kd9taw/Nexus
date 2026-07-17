@@ -4,6 +4,7 @@
 // "Roster" cockpit layout's primary surface — distinct from the waterfall-first
 // "Classic" layout, not just a reshaped pane.
 import { useEffect, useMemo, useState } from 'react'
+import { useRovingList } from '../useRovingList'
 import type { NeedAlert, NeedTag, Station } from '../types'
 import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, magneticDeg } from '../grid'
 import { getDeclination } from '../api'
@@ -149,6 +150,15 @@ export function OperateRoster({
     return f
   }, [stations, needByCall, needAlertsByCall, me, currentSlot, sort, neededOnly, hideWorked])
 
+  // Keyboard: arrow through rows, Enter selects, Shift+Enter works, Alt+Enter ignores.
+  const roving = useRovingList(rows.length, (i, mods) => {
+    const s = rows[i]?.s
+    if (!s) return
+    if (mods.alt) onToggleIgnore?.(s.call)
+    else if (mods.shift) onCall(s.call, s.grid ?? undefined)
+    else onSelect(s.call)
+  })
+
   const th = (key: SortKey, label: string, title?: string) => (
     <button
       type="button"
@@ -194,7 +204,13 @@ export function OperateRoster({
           </button>
         )}
       </div>
-      <div className="or-grid" role="table">
+      <div
+        className="or-grid"
+        role="grid"
+        aria-label="Call roster — arrow to move, Enter to select, Shift+Enter to work"
+        aria-rowcount={rows.length + 1}
+        onKeyDown={roving.containerProps.onKeyDown}
+      >
         <div className="or-row or-header" role="row">
           {th('call', 'Call')}
           {th('need', 'Need')}
@@ -208,17 +224,26 @@ export function OperateRoster({
         {rows.length === 0 ? (
           <div className="or-empty">No stations heard yet — decoded stations appear here as they arrive.</div>
         ) : (
-          rows.map(({ s, need, needAll, age }) => {
+          rows.map(({ s, need, needAll, age }, i) => {
             const chip = need ? NEED_CHIP[need] : null
             const ignoredRow = isIgnored(ignoredCalls ?? EMPTY_IGNORES, s.call)
+            const rp = roving.rowProps(i)
             return (
               <div
                 key={s.call}
                 role="row"
+                aria-selected={s.call === selectedCall}
+                aria-label={`${s.call}${s.grid ? `, grid ${s.grid}` : ''}${need ? `, needed ${need}` : ''}${s.worked ? ', worked' : ''}`}
+                tabIndex={rp.tabIndex}
+                ref={rp.ref as (el: HTMLDivElement | null) => void}
+                onFocus={rp.onFocus}
                 className={`or-row${s.call === selectedCall ? ' selected' : ''}${s.worked ? ' worked' : ''}${
                   chip ? ` need-${chip.cls}` : ''
                 }${ignoredRow ? ' ignored' : ''}`}
-                onClick={() => onSelect(s.call)}
+                onClick={() => {
+                  roving.setActive(i)
+                  onSelect(s.call)
+                }}
                 onDoubleClick={(e) =>
                   // Alt-double-click toggles the session ignore (stock WSJT-X).
                   e.altKey && onToggleIgnore ? onToggleIgnore(s.call) : onCall(s.call, s.grid ?? undefined)

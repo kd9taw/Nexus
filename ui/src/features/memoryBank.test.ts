@@ -144,3 +144,39 @@ describe('memoryBank', () => {
     expect(normalizeChannels(null)).toEqual([])
   })
 })
+
+describe('memoryBank repeater fields (Program section)', () => {
+  it('round-trips shift/offset/tone through normalize', () => {
+    const list = addChannel([], {
+      label: 'W9ABC',
+      freqMhz: 146.94,
+      mode: 'FM',
+      rptrShift: 'minus',
+      offsetHz: 600_000,
+      toneHz: 103.5,
+    })
+    const back = normalizeChannels(JSON.parse(JSON.stringify(list)))
+    expect(back[0].rptrShift).toBe('minus')
+    expect(back[0].offsetHz).toBe(600_000)
+    expect(back[0].toneHz).toBe(103.5)
+  })
+
+  it('legacy v1 entries (no repeater fields) still load unchanged', () => {
+    const legacy = [{ id: 'a', label: '20m FT8', freqMhz: 14.074, mode: 'USB' }]
+    const back = normalizeChannels(legacy)
+    expect(back).toHaveLength(1)
+    expect(back[0].rptrShift).toBeUndefined()
+    expect(back[0].offsetHz).toBeUndefined()
+  })
+
+  it('garbage repeater fields are dropped, not trusted', () => {
+    const raw = [
+      { id: 'a', label: 'X', freqMhz: 146.52, mode: 'FM', rptrShift: 'sideways', offsetHz: 'lots', toneHz: -3 },
+    ]
+    const back = normalizeChannels(raw)
+    expect(back).toHaveLength(1)
+    expect(back[0].rptrShift).toBeUndefined()
+    expect(back[0].offsetHz).toBeUndefined()
+    expect(back[0].toneHz).toBeUndefined()
+  })
+})
