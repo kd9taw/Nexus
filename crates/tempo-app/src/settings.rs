@@ -1014,6 +1014,42 @@ pub fn serial_port_conflicts(radios: &[RadioProfile]) -> Option<String> {
     None
 }
 
+/// A serial CW keyline aimed at a radio's CAT serial port is dangerous: opening that
+/// port toggles its DTR/RTS, which on most rigs is the PTT/keying line — so the keyer
+/// would fight rigctld for the port and can key the rig just by connecting. Warn (same
+/// surface as [`serial_port_conflicts`]) when the configured `cw_key_port` matches any
+/// enabled serial radio's CAT port. Case-insensitive; only when the serial keyer is the
+/// selected backend. The keyer ALSO deasserts both lines on open as a hard safety net —
+/// this warning is so the operator fixes the config rather than relying on that.
+pub fn cw_key_port_conflict(
+    keyer: CwKeyerBackend,
+    cw_key_port: &str,
+    radios: &[RadioProfile],
+) -> Option<String> {
+    if keyer != CwKeyerBackend::Serial {
+        return None;
+    }
+    let kp = cw_key_port.trim();
+    if kp.is_empty() {
+        return None;
+    }
+    radios
+        .iter()
+        .find(|p| {
+            p.enabled
+                && p.rig_model > 0
+                && p.rig_conn.eq_ignore_ascii_case("serial")
+                && p.serial_port.trim().eq_ignore_ascii_case(kp)
+        })
+        .map(|p| {
+            format!(
+                "The CW key port {kp} is also {}'s CAT port — the serial keyer would key that \
+                 port's PTT line and fight the radio for it. Give the CW keyline its own port.",
+                p.name
+            )
+        })
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -2508,6 +2544,35 @@ mod tests {
         .is_none());
         // VOX / no-rig (model 0) doesn't count.
         assert!(serial_port_conflicts(&[ftdx, rig("VOX", "COM3", "serial", 0, true)]).is_none());
+    }
+
+    #[test]
+    fn cw_key_port_conflict_flags_keyline_on_the_cat_port() {
+        let rig = |name: &str, port: &str, conn: &str, model: u32, enabled: bool| RadioProfile {
+            name: name.into(),
+            serial_port: port.into(),
+            rig_conn: conn.into(),
+            rig_model: model,
+            enabled,
+            ..Default::default()
+        };
+        let radios = [rig("FTDX10", "COM3", "serial", 1042, true)];
+        // Serial keyer pointed at the CAT port (case-insensitive) → warn, naming the radio.
+        let msg = cw_key_port_conflict(CwKeyerBackend::Serial, "com3", &radios).expect("conflict");
+        assert!(
+            msg.contains("FTDX10") && msg.contains("COM3") || msg.contains("com3"),
+            "{msg}"
+        );
+        // A separate key port → fine.
+        assert!(cw_key_port_conflict(CwKeyerBackend::Serial, "COM7", &radios).is_none());
+        // Only when the serial keyer is the selected backend.
+        assert!(cw_key_port_conflict(CwKeyerBackend::Cat, "COM3", &radios).is_none());
+        assert!(cw_key_port_conflict(CwKeyerBackend::WinKeyer, "COM3", &radios).is_none());
+        // Empty key port → nothing to collide.
+        assert!(cw_key_port_conflict(CwKeyerBackend::Serial, "", &radios).is_none());
+        // Network-CAT radio owns no COM port, so no collision even on a matching string.
+        let net = [rig("Flex", "COM3", "network", 2036, true)];
+        assert!(cw_key_port_conflict(CwKeyerBackend::Serial, "COM3", &net).is_none());
     }
 
     #[test]

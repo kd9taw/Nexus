@@ -97,12 +97,22 @@ mod imp {
 
     impl SerialKeyer {
         /// Open `port` and spawn the keying thread. 1200 baud is arbitrary — only the DTR/RTS
-        /// control line is toggled, no data bytes are sent. The line starts keyed up.
+        /// control line is toggled, no data bytes are sent. Both lines start idle (deasserted).
         pub fn open(port: &str, line: KeyLine) -> std::io::Result<Self> {
-            let sp = serialport::new(port, 1200)
+            let mut sp = serialport::new(port, 1200)
                 .timeout(Duration::from_millis(200))
                 .open()
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
+            // CRITICAL (Linux stuck-PTT): the kernel asserts DTR *and* RTS when a serial port
+            // is opened, and serialport's `dtr_on_open(false)` is documented as unreliable on
+            // Linux. The keying thread only manages the ONE line it keys, so on a conventional
+            // interface (DTR = key, RTS = PTT — see `KeyLine`) the *other* line would stay
+            // asserted for the whole session, holding the rig in transmit. So explicitly drive
+            // BOTH lines to deasserted (idle: key up, PTT off) before anything else — the safe
+            // state for either wiring, on every platform. Windows already deasserts both on
+            // open; this makes Linux match instead of keying the rig the moment you connect.
+            let _ = sp.write_data_terminal_ready(false);
+            let _ = sp.write_request_to_send(false);
             let (tx, rx) = mpsc::channel();
             let abort = Arc::new(AtomicBool::new(false));
             let abort_thread = abort.clone();
