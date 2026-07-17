@@ -42,7 +42,6 @@ import { announce } from './announce'
 import { Announcer } from './components/Announcer'
 import { loadWatchlist, type WatchFilter } from './watchlist'
 import { useTheme } from './useTheme'
-import { useLayout } from './useLayout'
 import { useScale } from './useScale'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
@@ -167,7 +166,6 @@ const DEFAULT_MACROS: Settings['macros'] = {
 
 export default function App() {
   const [theme, setTheme] = useTheme()
-  const [wfLayout, setWfLayout] = useLayout()
   const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale()
   // Publishes the zoom-aware `data-viewport` size class on <html> (live on resize
   // AND on scale change) so the layout adapts to the EFFECTIVE width.
@@ -1767,8 +1765,6 @@ export default function App() {
             onSaved={handleSettingsSaved}
             radio={snap.radio}
             activeRadioId={snap.activeRadioId}
-            layout={wfLayout}
-            onLayoutChange={setWfLayout}
             scale={scale}
             scaleMode={scaleMode}
             scaleCap={scaleCap}
@@ -1973,8 +1969,6 @@ export default function App() {
           effectiveView === 'chat'
         }
         hideDigitalChrome={effectiveView === 'phone' || effectiveView === 'cw'}
-        wfLayout={wfLayout}
-        onWfLayoutChange={setWfLayout}
         tier={tier}
         onTierChange={handleTier}
         theme={theme}

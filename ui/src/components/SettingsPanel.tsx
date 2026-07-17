@@ -53,7 +53,6 @@ import { LevelMeter } from './LevelMeter'
 import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup } from './SettingsGroup'
-import type { Layout } from '../useLayout'
 import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS } from '../useScale'
 import type { Density } from '../useDensity'
@@ -71,9 +70,7 @@ interface Props {
   /** The live active radio id (dual-radio). The form reloads when this changes so a switch made from
    * the always-visible TopBar pills while Settings is open can't leave the Rig form stale. */
   activeRadioId?: number
-  /** Workspace layout/scale prefs (UI-only — applied live, not via setSettings). */
-  layout: Layout
-  onLayoutChange: (l: Layout) => void
+  /** Workspace scale prefs (UI-only — applied live, not via setSettings). */
   scale: Scale
   scaleMode: ScaleMode
   scaleCap: Scale
@@ -247,8 +244,6 @@ export function SettingsPanel({
   onSaved,
   radio,
   activeRadioId,
-  layout,
-  onLayoutChange,
   scale,
   scaleMode,
   scaleCap,
@@ -1378,27 +1373,6 @@ export function SettingsPanel({
           <fieldset className="settings-section">
             <legend>Workspace</legend>
             <div className="settings-grid">
-              <div className="settings-field">
-                <span className="settings-label">Waterfall position</span>
-                <div className="theme-switcher" role="group" aria-label="Waterfall position">
-                  {(['right', 'top'] as Layout[]).map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      className={`theme-chip${layout === id ? ' active' : ''}`}
-                      aria-pressed={layout === id}
-                      onClick={() => onLayoutChange(id)}
-                    >
-                      {id === 'right' ? 'Right rail' : 'Top strip'}
-                    </button>
-                  ))}
-                </div>
-                <span className="settings-hint">
-                  Where the waterfall + decode feed sit. Drag the dividers between panes to resize
-                  (double-click a divider to reset).
-                </span>
-              </div>
-
               <div className="settings-field">
                 <span className="settings-label">UI scale</span>
                 <div className="theme-switcher" role="group" aria-label="UI scale mode">

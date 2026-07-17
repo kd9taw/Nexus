@@ -3102,9 +3102,8 @@ h2 {
   padding: var(--gap);
 }
 
-/* Three-pane workspace (chat/qso/fieldDay/band). Fluid side columns driven by
-   CSS vars (drag-resizable via the splitters). Default = waterfall on the right;
-   `[data-layout='top']` relocates it to a full-width strip. The single-panel
+/* Three-pane workspace (chat/qso/fieldDay/band): waterfall on the right rail. Fluid
+   side columns driven by CSS vars (drag-resizable via the splitters). The single-panel
    views (.layout.single) are NOT data-three-pane and are unaffected. */
 .layout[data-three-pane] {
   grid-template-columns:
@@ -3115,16 +3114,6 @@ h2 {
     var(--right-rail-w);
   grid-template-areas: 'stations split-left center split waterfall';
 }
-[data-layout='top'] .layout[data-three-pane] {
-  grid-template-columns:
-    minmax(var(--rail-min, 200px), var(--left-rail-w))
-    auto
-    minmax(0, 1fr);
-  grid-template-rows: var(--strip-h) minmax(0, 1fr);
-  grid-template-areas:
-    'waterfall waterfall waterfall'
-    'stations split-left center';
-}
 /* Tempo cockpit: a full-width shared header row above the three panes (chat
    view only — other three-pane views pass no header and are unaffected), so
    Tempo's header spans the whole workspace like the single-pane cockpits. */
@@ -3133,13 +3122,6 @@ h2 {
   grid-template-areas:
     'header header header header header'
     'stations split-left center split waterfall';
-}
-[data-layout='top'] .layout[data-three-pane].has-tempo-header {
-  grid-template-rows: auto var(--strip-h) minmax(0, 1fr);
-  grid-template-areas:
-    'header header header'
-    'waterfall waterfall waterfall'
-    'stations split-left center';
 }
 .grid-header {
   grid-area: header;
@@ -3206,27 +3188,6 @@ body.resizing {
   user-select: none;
 }
 
-/* In the top-strip layout the right splitter is meaningless; hide it and lay the
-   waterfall + decode feed side-by-side in the strip. */
-[data-layout='top'] .pane-splitter.right {
-  display: none;
-}
-[data-layout='top'] .right-rail {
-  flex-direction: row;
-  gap: var(--gap);
-}
-[data-layout='top'] .right-rail > .waterfall-wrap {
-  flex: 1 1 62%;
-  min-width: 0;
-}
-[data-layout='top'] .right-rail > .decode-feed {
-  flex: 1 1 0;
-  min-width: 0;
-}
-[data-layout='top'] .right-rail > .telemetry {
-  flex: 0 0 auto;
-  align-self: flex-start;
-}
 
 /* full-width single-panel views (Log, Settings) */
 .layout.single {
@@ -9153,11 +9114,6 @@ select.settings-input {
   letter-spacing: 0.04em;
   color: var(--text-faint);
 }
-/* In the short top-strip layout, drop the height so it never crowds the band. */
-[data-layout='top'] .wf-legend-bar {
-  height: 34px;
-}
-
 .telemetry {
   flex: 0 0 auto;
   border-top: 1px solid var(--border-soft);
@@ -9330,9 +9286,6 @@ select.settings-input {
   }
   .pane-splitter {
     display: none;
-  }
-  [data-layout='top'] .right-rail {
-    flex-direction: column;
   }
   .station-list {
     max-height: 240px;

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { BandChannel, LinkState, RadioStatus, RadioSummary, Tier } from '../types'
 import type { Theme } from '../useTheme'
-import type { Layout } from '../useLayout'
 import { ThemeSwitcher } from './ThemeSwitcher'
 import { FrequencyControl } from './FrequencyControl'
 import { StatusLane } from './StatusLane'
@@ -41,8 +40,6 @@ interface Props {
   /** Stop the in-progress QSO recording (audio bridge). The REC badge only shows while
    * `radio.qsoRecording` is true, giving a persistent, mode-independent stop. */
   onStopRecording?: () => void
-  wfLayout: Layout
-  onWfLayoutChange: (l: Layout) => void
   tier: Tier
   onTierChange: (t: Tier) => void
   theme: Theme
@@ -105,8 +102,6 @@ export function TopBar({
   onSetTxCycleAuto,
   onSetHoldTxFreq,
   onStopRecording,
-  wfLayout,
-  onWfLayoutChange,
   tier,
   onTierChange,
   theme,
@@ -331,26 +326,6 @@ export function TopBar({
         </button>
       </div>
 
-      <div className="topbar-group tier-toggle wf-layout" role="group" aria-label="Waterfall position">
-        <button
-          type="button"
-          className={`tier-btn${wfLayout === 'right' ? ' active' : ''}`}
-          aria-pressed={wfLayout === 'right'}
-          onClick={() => onWfLayoutChange('right')}
-          title="Waterfall on the right rail"
-        >
-          WF <small>right</small>
-        </button>
-        <button
-          type="button"
-          className={`tier-btn${wfLayout === 'top' ? ' active' : ''}`}
-          aria-pressed={wfLayout === 'top'}
-          onClick={() => onWfLayoutChange('top')}
-          title="Waterfall as a strip across the top"
-        >
-          WF <small>top</small>
-        </button>
-      </div>
       </>
       )}
 
