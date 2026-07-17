@@ -4,7 +4,7 @@ import type { Theme } from '../useTheme'
 import { ThemeSwitcher } from './ThemeSwitcher'
 import { FrequencyControl } from './FrequencyControl'
 import { StatusLane } from './StatusLane'
-import { LevelMeter } from './LevelMeter'
+import { LevelMeter, rxLevelDb } from './LevelMeter'
 import { RadioSwitcher } from './RadioSwitcher'
 
 interface Props {
@@ -147,7 +147,7 @@ export function TopBar({
           {radio.transmitting ? 'TX' : 'RX'}
         </span>
 
-        <div className="rx-level" title={`RX audio level ${Math.round(radio.rxLevel * 100)}%`}>
+        <div className="rx-level" title={`RX audio level ${Math.round(rxLevelDb(radio.rxLevel))} dB (aim ~30, like WSJT-X)`}>
           <span className="rx-level-label">RX</span>
           <LevelMeter value={radio.rxLevel} label="RX audio level" variant="compact" />
         </div>

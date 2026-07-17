@@ -49,7 +49,7 @@ import { allTxtLocation, revealAllTxt } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
-import { LevelMeter } from './LevelMeter'
+import { LevelMeter, rxLevelDb } from './LevelMeter'
 import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup } from './SettingsGroup'
@@ -2583,9 +2583,15 @@ export function SettingsPanel({
               </label>
 
               <div className="settings-field">
-                <span className="settings-label">RX Level</span>
+                <span className="settings-label">
+                  RX Level{' '}
+                  <span className="settings-value">{Math.round(rxLevelDb(radio ? radio.rxLevel : 0))} dB</span>
+                </span>
                 <LevelMeter value={radio ? radio.rxLevel : 0} label="RX audio level" variant="full" />
-                <span className="settings-hint">Aim for the green zone; red = clipping.</span>
+                <span className="settings-hint">
+                  A dB scale like WSJT-X — aim for around 30 dB. Anything from ~15–60 dB
+                  decodes fine; red means too hot (back off RX Gain or the rig's audio).
+                </span>
                 {radio?.audioError && (
                   <span className="cat-result fail" role="alert">✗ {radio.audioError}</span>
                 )}
@@ -2606,8 +2612,9 @@ export function SettingsPanel({
                   aria-label="RX capture gain"
                 />
                 <span className="settings-hint">
-                  Boost a quiet interface until RX Level reaches the green zone (applies on Save).
-                  Leave at ×1.0 unless the meter reads low.
+                  Boost a quiet interface until RX Level reads around 30 dB (applies on Save).
+                  Leave at ×1.0 unless the meter reads low (under ~15 dB) — FT8 decodes on a
+                  small signal, so you rarely need much.
                 </span>
               </label>
             </div>

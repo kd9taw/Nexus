@@ -3059,7 +3059,12 @@ h2 {
    App shell
    =========================================================================== */
 .app {
-  height: 100%;
+  /* Compensate the height for `zoom`: at zoom<1 a plain height:100% is laid out
+     at full viewport height then scaled DOWN, leaving dead space at the bottom;
+     dividing by --ui-zoom makes the scaled box fill the viewport exactly (no-op at
+     100%). This also aligns the shell height with --vh-eff (= innerHeight/zoom),
+     which the interior panes size against, so the two agree at every zoom level. */
+  height: calc(100% / var(--ui-zoom, 1));
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -3763,7 +3768,7 @@ select optgroup {
   transition: width 120ms linear, background-color 120ms linear;
 }
 .level-meter.low .level-fill {
-  background: var(--state-good);
+  background: var(--text-faint);
 }
 .level-meter.good .level-fill {
   background: var(--state-good);
@@ -3771,12 +3776,12 @@ select optgroup {
 .level-meter.hot .level-fill {
   background: var(--state-weak);
 }
-/* target-zone marker (~80%) */
+/* target marker at ~30 dB (30/90) — the WSJT-X sweet spot to aim for */
 .level-target {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 80%;
+  left: 33.3%;
   width: 1px;
   background: color-mix(in srgb, var(--text-faint) 60%, transparent);
 }

@@ -143,7 +143,8 @@ pub struct CpalBackend {
     out_ring: Arc<Mutex<VecDeque<f32>>>,
     in_rate: u32,
     out_rate: u32,
-    /// Decaying peak RX input level (0.0–1.0), updated on the audio thread.
+    /// Smoothed RX input RMS (0.0–1.0), updated on the audio thread. Rendered as
+    /// a WSJT-X-style dB level in the UI.
     rx_level: Arc<Mutex<f32>>,
     /// RX capture gain (f32 bits): a multiplier (≥1.0) applied to captured samples on the audio
     /// thread. Live-updatable from Settings for a quiet interface; 1.0 = unchanged. Atomic because
@@ -328,7 +329,8 @@ impl CpalBackend {
                     let monitoring = mon_enabled_in.load(Ordering::Relaxed);
                     let g = f32::from_bits(rx_gain_cb.load(Ordering::Relaxed));
                     let ch = in_ch.max(1);
-                    let mut peak = 0.0f32;
+                    let mut sum_sq = 0.0f32;
+                    let mut n = 0usize;
                     for frame in data.chunks(ch) {
                         // Fold to mono by AVERAGING the channels (× RX gain). Averaging keeps the
                         // signal phase-coherent across the whole FT8 window no matter how the rig's
@@ -337,13 +339,14 @@ impl CpalBackend {
                         // interfaces (Flex DAX, Xiegu DE-19) — a quiet rig is handled by RX Gain,
                         // not by discarding a channel.
                         let m = frame.iter().copied().sum::<f32>() / ch as f32 * g;
-                        peak = peak.max(m.abs());
+                        sum_sq += m * m;
+                        n += 1;
                         ring.push_back(m);
                         if monitoring {
                             mon_ring_in.push(m);
                         }
                     }
-                    update_rx_meter(&rx_meter_cb, peak);
+                    update_rx_meter(&rx_meter_cb, sum_sq, n);
                 },
                 err_fn,
                 None,
@@ -355,17 +358,19 @@ impl CpalBackend {
                     let monitoring = mon_enabled_in.load(Ordering::Relaxed);
                     let g = f32::from_bits(rx_gain_cb.load(Ordering::Relaxed));
                     let ch = in_ch.max(1);
-                    let mut peak = 0.0f32;
+                    let mut sum_sq = 0.0f32;
+                    let mut n = 0usize;
                     for frame in data.chunks(ch) {
                         let m =
                             frame.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() / ch as f32 * g;
-                        peak = peak.max(m.abs());
+                        sum_sq += m * m;
+                        n += 1;
                         ring.push_back(m);
                         if monitoring {
                             mon_ring_in.push(m);
                         }
                     }
-                    update_rx_meter(&rx_meter_cb, peak);
+                    update_rx_meter(&rx_meter_cb, sum_sq, n);
                 },
                 err_fn,
                 None,
@@ -379,7 +384,8 @@ impl CpalBackend {
                     let monitoring = mon_enabled_in.load(Ordering::Relaxed);
                     let g = f32::from_bits(rx_gain_cb.load(Ordering::Relaxed));
                     let ch = in_ch.max(1);
-                    let mut peak = 0.0f32;
+                    let mut sum_sq = 0.0f32;
+                    let mut n = 0usize;
                     for frame in data.chunks(ch) {
                         // U8 is offset-binary around 128.
                         let m = frame
@@ -388,13 +394,14 @@ impl CpalBackend {
                             .sum::<f32>()
                             / ch as f32
                             * g;
-                        peak = peak.max(m.abs());
+                        sum_sq += m * m;
+                        n += 1;
                         ring.push_back(m);
                         if monitoring {
                             mon_ring_in.push(m);
                         }
                     }
-                    update_rx_meter(&rx_meter_cb, peak);
+                    update_rx_meter(&rx_meter_cb, sum_sq, n);
                 },
                 err_fn,
                 None,
@@ -406,7 +413,8 @@ impl CpalBackend {
                     let monitoring = mon_enabled_in.load(Ordering::Relaxed);
                     let g = f32::from_bits(rx_gain_cb.load(Ordering::Relaxed));
                     let ch = in_ch.max(1);
-                    let mut peak = 0.0f32;
+                    let mut sum_sq = 0.0f32;
+                    let mut n = 0usize;
                     for frame in data.chunks(ch) {
                         let m = frame
                             .iter()
@@ -414,13 +422,14 @@ impl CpalBackend {
                             .sum::<f32>()
                             / ch as f32
                             * g;
-                        peak = peak.max(m.abs());
+                        sum_sq += m * m;
+                        n += 1;
                         ring.push_back(m);
                         if monitoring {
                             mon_ring_in.push(m);
                         }
                     }
-                    update_rx_meter(&rx_meter_cb, peak);
+                    update_rx_meter(&rx_meter_cb, sum_sq, n);
                 },
                 err_fn,
                 None,
@@ -515,12 +524,17 @@ impl CpalBackend {
     }
 }
 
-/// Fold a callback's peak into the decaying RX meter: rise instantly to a new
-/// peak, otherwise decay toward zero.
-fn update_rx_meter(meter: &Arc<Mutex<f32>>, peak: f32) {
+/// Fold a callback's RMS into the smoothed RX meter. The stored value is the
+/// normalized RMS (0..1) of the post-gain audio — the frontend renders it as a
+/// WSJT-X-style dB level (20·log10(rms)+90.3). RMS (not peak) is what makes the
+/// reading comparable to WSJT-X's meter. Exponentially smoothed for stability.
+fn update_rx_meter(meter: &Arc<Mutex<f32>>, sum_sq: f32, n: usize) {
+    if n == 0 {
+        return;
+    }
+    let rms = (sum_sq / n as f32).sqrt().clamp(0.0, 1.0);
     let mut lvl = meter.lock().unwrap_or_else(|e| e.into_inner());
-    let decayed = *lvl * RX_METER_DECAY;
-    *lvl = decayed.max(peak.clamp(0.0, 1.0));
+    *lvl = *lvl * RX_METER_DECAY + rms * (1.0 - RX_METER_DECAY);
 }
 
 impl AudioBackend for CpalBackend {

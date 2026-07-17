@@ -9,8 +9,9 @@ pub trait AudioBackend {
     fn capture(&mut self) -> Vec<f32>;
     /// Queue 12 kHz mono samples for transmission.
     fn play(&mut self, samples: &[f32]);
-    /// Decaying-peak RX input level (0.0–1.0) for the UI meter. Default 0 for
-    /// non-hardware backends (the real sound card overrides it).
+    /// Smoothed RX input RMS (0.0–1.0) for the UI meter — the frontend renders it
+    /// as a WSJT-X-style dB level. Default 0 for non-hardware backends (the real
+    /// sound card overrides it).
     fn rx_level(&self) -> f32 {
         0.0
     }
