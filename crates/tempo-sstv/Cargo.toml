@@ -1,0 +1,37 @@
+[package]
+publish = false
+name = "tempo-sstv"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+# MIT, not the workspace GPL-3.0-only: this crate is vendored third-party code
+# (see description) and keeps its upstream license. MIT is GPL-compatible, so
+# the combined Nexus work remains GPL-3.0-only.
+license = "MIT"
+description = "SSTV receiver core — vendored from the MIT `slowrx` crate v0.5.3 (jasonherald/slowrx.rs, commit aa384b4), a Rust port of slowrx by Oona Räisänen (ISC). VIS detect, sync/slant recovery, Martin/Scottie/Robot/PD decode; PD50/90/160/290 added locally."
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+panic = "warn"
+expect_used = "warn"
+
+[dependencies]
+thiserror = "2"
+rustfft = "6"
+
+[dev-dependencies]
+proptest = "1"
+# Self-dependency trick: enables `test-support` (the synthetic VIS/PD/Robot/
+# Scottie encoders) for every `cargo test -p tempo-sstv` run without shipping
+# the encoders in production builds or requiring a --features flag.
+tempo-sstv = { path = ".", features = ["test-support"] }
+
+[features]
+# Synthetic test encoders (VIS bursts + PD/Robot/Scottie modulators), used by
+# the integration tests. Also the seam a future SSTV TX feature would widen.
+test-support = []
