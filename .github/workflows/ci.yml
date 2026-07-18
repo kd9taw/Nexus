@@ -116,10 +116,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install UI dependencies
-        run: npm --prefix ui install
+        run: npm --prefix ui ci
 
       - name: Build UI
         run: npm --prefix ui run build
@@ -216,7 +216,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Set up Rust 1.93.1 toolchain (pinned) + windows-gnu target
         uses: dtolnay/rust-toolchain@master
