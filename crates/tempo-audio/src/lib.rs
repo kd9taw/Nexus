@@ -37,6 +37,8 @@ pub mod rigctld_proc;
 pub mod rigctld_server;
 pub mod rigmodels;
 pub mod rotator;
+pub mod rtty_afsk;
+pub mod rtty_fsk;
 pub mod runtime;
 pub mod slot;
 pub mod serial_keyer;
