@@ -5,20 +5,24 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 0.11.0 (in progress)
+## [0.11.0] — 2026-07-18 — RTTY + SSTV (beta), openings intelligence, and a decode-accuracy milestone
 
 ### Added
 
-- **RTTY — a first-class modern RTTY mode (receive live; transmit landing).** A new RTTY
+- **RTTY — a first-class modern RTTY mode (BETA: receive and transmit).** A new RTTY
   entry in the Digital rail with a real cockpit: arm the decoder and decoded text streams
   live off your rig's audio with **per-character confidence fading** (weak copy renders
   faint — you can see *how sure* the decoder is), an AFC readout that locks to the signal,
   and a band selector preloaded with the classic RTTY watering holes (14.083, 7.080, 3.580…,
   license-filtered). Under the hood: a full ITA2 Baudot codec and a demodulator ported from
   fldigi's proven W7AY design (mark/space matched filters, optimal ATC, acquire-then-freeze
-  AFC) — solid copy down to −2 dB SNR in testing. Both soundcard AFSK and true FSK keying
-  paths are built and land with the transmit wave.
-- **SSTV — receive slow-scan images into a gallery.** A new SSTV section: arm the receiver
+  AFC) — solid copy down to −2 dB SNR in testing. Transmit works on BOTH paths from day
+  one: soundcard AFSK (rig in LSB, audio through the same TX route as FT8 so your drive/ALC
+  setup carries over) and true FSK via a DTR/RTS keyline (rig in RTTY mode — narrow RTTY
+  filters unlock), with a compose line, one-tap macros (CQ/Answer/Exchange/73), a hard Stop,
+  and plain-language refusals when a send isn't safe (TX off, out of privileges, tuning).
+  Beta note: the transmit path is new this release — verify your first over at low power.
+- **SSTV — receive slow-scan images into a gallery (BETA).** A new SSTV section: arm the receiver
   and images decode off the air (Martin, Scottie, Robot, PD — including **PD120 for ISS
   events**) with live progressive preview, auto slant correction, and every completed image
   saved to a browsable gallery folder stamped with mode, frequency, and UTC time. The band
@@ -31,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FT8/FT4: cross-cycle AP decoding (WSJT-X a7).** Stations you decoded in the previous
   cycle are recovered a few dB deeper this cycle — their RR73s and reports especially.
   Matches WSJT-X's a7 machinery exactly; resets on band change.
+- **Spots: freeform search.** A search box over the firehose — terms combine across
+  callsign, entity, spotter, mode, band, and frequency ("w1 20m cw").
 - **Field Day / Winter Field Day correctness:** the WFD window is now the full 30 hours
   (was 24 — QSOs in the final 6 hours weren't counted), digital contacts export their REAL
   mode (an RTTY WFD log no longer exports as "FT8" — a mode WFD bans), and the ruleset now
@@ -38,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **RTTY and SSTV no longer show the FT8 frequency bar and tier tiles** — each cockpit's
+  own band selector is the only dial control there, like Phone and CW.
 - **The CW/Phone bandscope no longer paints a quiet band as full-width rainbow.** The
   scope's auto-contrast stretched the noise floor across the whole palette, so filtered-out
   stopband noise looked like signals. It now enforces a 10 dB minimum visual span (quiet
