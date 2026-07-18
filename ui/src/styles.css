@@ -12365,6 +12365,46 @@ select.settings-input {
   background: color-mix(in srgb, var(--text-dim) 12%, transparent);
 }
 
+/* ---- Chat CQ run control (TempoHeader) — the keep-calling toggle ---- */
+.cq-run {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.cq-run-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 700;
+  padding: var(--space-1) 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--transition);
+}
+.cq-run-btn.on {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: cq-run-pulse 2s ease-in-out infinite;
+}
+.cq-run-btn.on.paused {
+  animation: none;
+  background: color-mix(in srgb, var(--state-ok, #e0a94d) 14%, transparent);
+  border-color: color-mix(in srgb, var(--state-ok, #e0a94d) 60%, transparent);
+  color: var(--text);
+}
+.cq-run-btn.resume {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+@keyframes cq-run-pulse {
+  50% {
+    opacity: 0.65;
+  }
+}
+
 /* ---- Openings Log pane (historical episodes; OpeningsLogPane.tsx) ---- */
 .openings-log {
   display: flex;

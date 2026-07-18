@@ -19,6 +19,10 @@ interface Props {
   bandPlan: BandChannel[]
   onSetFrequency: (dialMhz: number, band: string, mode: string) => void
   onSetTxLevel: (level: number) => void
+  /** Toggle the CQ RUN (keep calling every idle TX slot). */
+  onToggleCqRun: () => void
+  /** Resume a paused run immediately. */
+  onResumeCqRun: () => void
 }
 
 /**
@@ -37,7 +41,10 @@ export function TempoHeader({
   bandPlan,
   onSetFrequency,
   onSetTxLevel,
+  onToggleCqRun,
+  onResumeCqRun,
 }: Props) {
+  const cq = snap.chatCq ?? 'off'
   const [tuneStep, setTuneStep] = useState(100)
   const commitDial = (mhz: number) => {
     const band = bandLabelForMhz(mhz)
@@ -95,6 +102,37 @@ export function TempoHeader({
         title: "TX drive (Pwr) — trim down until your rig's ALC is just zero",
       }}
       txActiveLabel="▲ TX"
-    />
+    >
+      {/* CQ RUN — the persistent keep-calling control (the one-shot Call CQ button's
+          dead-end fix): reachable from the header in every chat view, with the run
+          state always visible. Paused = someone answered (sequential policy). */}
+      <div className="cq-run" role="group" aria-label="CQ run">
+        <button
+          type="button"
+          className={`cq-run-btn${cq !== 'off' ? ' on' : ''}${cq === 'paused' ? ' paused' : ''}`}
+          aria-pressed={cq !== 'off'}
+          onClick={onToggleCqRun}
+          title={
+            cq === 'off'
+              ? 'Start a CQ run — keep calling CQ every idle TX slot until someone answers'
+              : cq === 'paused'
+                ? 'CQ run paused (you are in a conversation) — click to stop the run'
+                : 'Calling CQ every idle TX slot — click to stop'
+          }
+        >
+          {cq === 'off' ? '📢 Call CQ' : cq === 'paused' ? 'CQ paused ✕' : '📢 Calling CQ… ✕'}
+        </button>
+        {cq === 'paused' && (
+          <button
+            type="button"
+            className="cq-run-btn resume"
+            onClick={onResumeCqRun}
+            title="Resume calling CQ now (it auto-resumes after the conversation goes quiet)"
+          >
+            ▶ Resume
+          </button>
+        )}
+      </div>
+    </CockpitHeader>
   )
 }

@@ -338,6 +338,16 @@ export async function callCq(dir: string | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('call_cq', { dir })
 }
 
+/** Toggle the chat CQ RUN — keep calling every idle TX slot until answered/stopped. */
+export async function setChatCq(on: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_chat_cq', { on })
+}
+
+/** Resume a paused CQ run immediately (skip the idle auto-resume wait). */
+export async function resumeChatCq(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('resume_chat_cq')
+}
+
 /** Confirm-and-log a QSO held by the prompt-to-log popup (the possibly-edited
  * record). Returns the fresh snapshot. */
 export async function confirmPendingLog(record: LoggedQso): Promise<AppSnapshot> {

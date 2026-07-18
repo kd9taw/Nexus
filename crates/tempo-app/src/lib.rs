@@ -644,6 +644,7 @@ impl AppState {
             active_radio_id: 0,
             radio_pegged: false,
             link: self.link.clone(),
+            chat_cq: String::new(), // Engine fills the run state in snapshot()
             stations,
             conversations,
             active_peer: self.active_peer.clone(),

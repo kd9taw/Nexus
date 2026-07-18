@@ -266,6 +266,18 @@ pub struct Engine {
     /// Whether the operator is RUNNING (called CQ) vs answering a specific station.
     /// When running, a completed QSO returns to calling CQ (WSJT-X's run workflow).
     cq_running: bool,
+    /// Chat-native CQ run (Tempo): while on, an idle own-parity TX slot re-sends the
+    /// structured CQ — the WSJT-X-style "keep calling until someone answers" loop the
+    /// one-shot Call CQ button couldn't do. Runtime-only (resets each launch, like
+    /// Skip Tx1): a fresh session never keys on its own.
+    chat_cq: bool,
+    /// The run auto-pauses when the operator sends a directed message (sequential
+    /// policy: work the answer, don't interleave CQ into the QSO) and auto-resumes
+    /// after directed traffic has been idle for CHAT_CQ_RESUME_SLOTS.
+    chat_cq_paused: bool,
+    /// Slot of the last directed-traffic activity (send or owed-ACK) — drives the
+    /// idle auto-resume above.
+    chat_cq_last_directed: u64,
     /// The slot index of the most recent decoded frame — used to set TX parity to
     /// the OPPOSITE period when working a clicked station (WSJT-X double-click).
     last_decode_slot: Option<u64>,
@@ -648,6 +660,9 @@ impl Engine {
             qso_logged: false,
             qso_start_unix: None,
             cq_running: false,
+            chat_cq: false,
+            chat_cq_paused: false,
+            chat_cq_last_directed: 0,
             last_decode_slot: None,
             immediate_tx: false,
             immediate_retune: false,
@@ -3573,6 +3588,12 @@ impl Engine {
                 self.apply_cycle_parity(s % 2 == 0);
             }
         }
+        // Sequential CQ-run policy: answering/chatting pauses the run (never
+        // interleave CQ into a QSO); it auto-resumes after directed traffic idles
+        // (poll_tx) or via the operator's Resume.
+        if self.chat_cq {
+            self.chat_cq_paused = true;
+        }
         self.app.send_message(peer, text);
         // NOTE: the own-TX band-activity row is recorded when the message is actually
         // RELEASED on the air (poll_tx, via due_frames' first-release body) — not here at
@@ -3899,6 +3920,71 @@ impl Engine {
         self.arm_tx_now();
         self.app.note_broadcast(&text); // echo into the "*" band feed
         Ok(())
+    }
+
+    /// The structured chat-CQ text, or None when identity is invalid (same rules as
+    /// [`Self::call_cq`] — compound calls drop grid/dir). Used by the CQ run's
+    /// per-slot re-send, which must never emit a malformed frame silently.
+    fn chat_cq_text(&self) -> Option<String> {
+        let mycall = self.settings.mycall.trim().to_string();
+        let grid = self.settings.mygrid.trim();
+        if mycall.is_empty() {
+            return None;
+        }
+        let compound = tempo_core::message::is_compound(&mycall);
+        if !compound && grid.len() < 4 {
+            return None;
+        }
+        let grid = if compound {
+            String::new()
+        } else {
+            grid.chars().take(4).collect::<String>().to_uppercase()
+        };
+        Some(
+            Msg::Cq {
+                de: mycall,
+                grid,
+                dir: String::new(),
+            }
+            .to_text(),
+        )
+    }
+
+    /// Toggle the chat-native CQ RUN (Tempo "keep calling" loop). Starting queues an
+    /// immediate CQ + arms TX (via [`Self::call_cq`]); while running, every idle
+    /// own-parity TX slot re-sends the CQ until someone answers (then it auto-pauses;
+    /// see poll_tx) or the operator stops it.
+    pub fn set_chat_cq(&mut self, on: bool) -> Result<(), String> {
+        if on {
+            self.call_cq(None)?; // identity-validated immediate first call
+            self.chat_cq = true;
+            self.chat_cq_paused = false;
+        } else {
+            self.chat_cq = false;
+            self.chat_cq_paused = false;
+        }
+        Ok(())
+    }
+
+    /// Resume a paused CQ run now (operator override of the idle auto-resume),
+    /// re-calling immediately.
+    pub fn resume_chat_cq(&mut self) -> Result<(), String> {
+        if !self.chat_cq {
+            return Err("CQ run is not on".to_string());
+        }
+        self.chat_cq_paused = false;
+        self.call_cq(None)
+    }
+
+    /// Chat CQ run state for the UI: "off" | "calling" | "paused".
+    pub fn chat_cq_state(&self) -> &'static str {
+        if !self.chat_cq {
+            "off"
+        } else if self.chat_cq_paused {
+            "paused"
+        } else {
+            "calling"
+        }
     }
 
     pub fn set_tx_enabled(&mut self, on: bool) {
@@ -4515,6 +4601,7 @@ impl Engine {
         }
         // Reflect transmit-enable / tuning / watchdog and the DT-derived
         // time-sync health into the radio status the UI renders.
+        s.chat_cq = self.chat_cq_state().to_string();
         s.radio.tx_enabled = self.tx_enabled;
         s.radio.qso_recording = self.qso_recording;
         s.radio.tx_allowed = self.tx_allowed();
@@ -4919,10 +5006,37 @@ impl Engine {
                         for b in bodies {
                             self.record_own_tx(b);
                         }
+                        // Directed traffic released this slot: stamp the CQ run's idle
+                        // clock so a paused run doesn't resume mid-conversation.
+                        if !self.tx_queue.is_empty() {
+                            self.chat_cq_last_directed = slot;
+                        }
+                        // Chat CQ RUN: an idle own-parity TX slot re-sends the
+                        // structured CQ (the "keep calling until answered" loop).
+                        // Directed frames always win the slot (the queue check above);
+                        // a pause set by answering auto-resumes once directed traffic
+                        // has been quiet for CHAT_CQ_RESUME_SLOTS. Supersedes the
+                        // presence beacon while running.
+                        if self.chat_cq && self.tx_queue.is_empty() {
+                            const CHAT_CQ_RESUME_SLOTS: u64 = 8; // ~32 s at FT1's 4 s slots
+                            if self.chat_cq_paused
+                                && slot.saturating_sub(self.chat_cq_last_directed)
+                                    >= CHAT_CQ_RESUME_SLOTS
+                            {
+                                self.chat_cq_paused = false;
+                            }
+                            if !self.chat_cq_paused {
+                                if let Some(cq) = self.chat_cq_text() {
+                                    self.tx_queue.push_back(cq);
+                                }
+                            }
+                        }
                         // Presence beacon ("CQ <call> <grid>") only when the
                         // operator has enabled it. Default off → the app starts
                         // passive (hunt-and-pounce): it never calls CQ on its own.
-                        if self.settings.beacon
+                        // The CQ run supersedes it (never both in one slot).
+                        if !self.chat_cq
+                            && self.settings.beacon
                             && self.tx_queue.is_empty()
                             // Every Nth of OUR TX slots. The outer `slot%2 !=
                             // tx_parity` guard already restricts to TX slots;
@@ -7065,6 +7179,39 @@ mod tests {
             "normal slot TX is suppressed while holding a tune carrier"
         );
         assert!(e.snapshot().radio.tuning);
+    }
+
+    #[test]
+    fn chat_cq_run_repeats_pauses_on_send_and_resumes_when_idle() {
+        let s = Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: "EN52".into(),
+            ..Settings::default()
+        };
+        let mut e = Engine::with_settings(s);
+        e.set_tx_enabled(true);
+        assert_eq!(e.chat_cq_state(), "off");
+        e.set_chat_cq(true).unwrap();
+        assert_eq!(e.chat_cq_state(), "calling");
+        // Immediate CQ on start, then the run re-sends every idle own-parity slot —
+        // the loop the one-shot Call CQ button couldn't do.
+        assert!(!e.poll_tx(0).is_empty(), "immediate CQ on start");
+        assert!(!e.poll_tx(2).is_empty(), "run re-sends on the next TX slot");
+        assert!(!e.poll_tx(4).is_empty(), "and keeps calling");
+        // Answering someone pauses the run (sequential policy: no CQ mid-QSO).
+        e.send_message("W9XYZ", "hello there");
+        assert_eq!(e.chat_cq_state(), "paused");
+        assert!(
+            e.poll_tx(6).is_empty(),
+            "paused: no CQ while the conversation is fresh (peer absent → held)"
+        );
+        // Directed traffic idle for CHAT_CQ_RESUME_SLOTS → auto-resume.
+        assert!(!e.poll_tx(8).is_empty(), "idle → the run resumes calling");
+        assert_eq!(e.chat_cq_state(), "calling");
+        // Stop ends it cleanly.
+        e.set_chat_cq(false).unwrap();
+        assert_eq!(e.chat_cq_state(), "off");
+        assert!(e.poll_tx(10).is_empty(), "stopped: silent again");
     }
 
     #[test]

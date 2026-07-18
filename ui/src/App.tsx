@@ -17,7 +17,8 @@ import {
   archiveConversation as apiArchiveConversation,
   sendMessage as apiSendMessage,
   broadcast as apiBroadcast,
-  callCq as apiCallCq,
+  setChatCq as apiSetChatCq,
+  resumeChatCq as apiResumeChatCq,
   setFrequency as apiSetFrequency,
   setMode as apiSetMode,
   setTier as apiSetTier,
@@ -872,8 +873,26 @@ export default function App() {
   // free-text broadcast). The backend rejects it if the callsign/grid aren't set, so a
   // CQ never goes out malformed — the error surfaces as a toast.
   const handleCallCq = useCallback(() => {
-    void withErrorToast(() => apiCallCq(null), 'Could not call CQ').then(surfaceBandFeed)
-  }, [surfaceBandFeed])
+    // The launchpad button now STARTS the CQ run (keep calling until answered) and no
+    // longer force-navigates away — the run state lives in the Tempo header, so the
+    // affordance never vanishes after one press (the audited CQ dead-end).
+    void withErrorToast(() => apiSetChatCq(true), 'Could not call CQ').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  const handleToggleCqRun = useCallback(() => {
+    const next = (snap?.chatCq ?? 'off') === 'off'
+    void withErrorToast(() => apiSetChatCq(next), 'Could not toggle the CQ run').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [snap?.chatCq])
+
+  const handleResumeCqRun = useCallback(() => {
+    void withErrorToast(() => apiResumeChatCq(), 'Could not resume the CQ run').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
 
   const handleToggleBeacon = useCallback(() => {
     const next = !(snap?.radio.beacon ?? false)
@@ -1912,6 +1931,8 @@ export default function App() {
               bandPlan={bandPlan}
               onSetFrequency={handleSetFrequency}
               onSetTxLevel={handleSetTxLevel}
+              onToggleCqRun={handleToggleCqRun}
+              onResumeCqRun={handleResumeCqRun}
             />,
           )}
           {roamOpen && (

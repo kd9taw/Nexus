@@ -1897,6 +1897,8 @@ export interface AppSnapshot {
   /** AI CW decoder (beta): toggle state, status line, rolling stitched transcript. */
   aiCw: { enabled: boolean; status: string; text: string }
   link: LinkState
+  /** Chat CQ run state (Tempo keep-calling loop): 'off' | 'calling' | 'paused'. */
+  chatCq?: 'off' | 'calling' | 'paused'
   stations: Station[]
   conversations: Conversation[]
   activePeer: string | null

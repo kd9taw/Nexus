@@ -4816,6 +4816,23 @@ fn call_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSna
     Ok(eng.snapshot())
 }
 
+/// Toggle the chat CQ RUN (Tempo keep-calling loop): on = immediate CQ + re-send
+/// every idle TX slot until answered (auto-pauses) or stopped.
+#[tauri::command]
+fn set_chat_cq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_chat_cq(on)?;
+    Ok(eng.snapshot())
+}
+
+/// Resume a paused chat CQ run now (skip the idle auto-resume wait).
+#[tauri::command]
+fn resume_chat_cq(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.resume_chat_cq()?;
+    Ok(eng.snapshot())
+}
+
 /// WSJT-X Tx-slot click: force `text` as the next transmission to `call`
 /// (starts/retargets the QSO, arms per the double-click behavior option).
 #[tauri::command]
@@ -9113,6 +9130,8 @@ pub fn run() {
             redecode,
             start_cq,
             call_cq,
+            set_chat_cq,
+            resume_chat_cq,
             notify_erase,
             qrz_test_connection,
             set_hunt_target,

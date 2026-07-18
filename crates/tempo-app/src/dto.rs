@@ -1384,6 +1384,9 @@ pub struct AppSnapshot {
     #[serde(default)]
     pub ai_cw: AiCwStatus,
     pub link: LinkState,
+    /// Chat CQ run state: "off" | "calling" | "paused" (the Tempo keep-calling loop).
+    #[serde(default)]
+    pub chat_cq: String,
     pub stations: Vec<Station>,
     pub conversations: Vec<Conversation>,
     pub active_peer: Option<String>,
