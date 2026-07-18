@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **RTTY — a first-class modern RTTY mode (receive live; transmit landing).** A new RTTY
+  entry in the Digital rail with a real cockpit: arm the decoder and decoded text streams
+  live off your rig's audio with **per-character confidence fading** (weak copy renders
+  faint — you can see *how sure* the decoder is), an AFC readout that locks to the signal,
+  and a band selector preloaded with the classic RTTY watering holes (14.083, 7.080, 3.580…,
+  license-filtered). Under the hood: a full ITA2 Baudot codec and a demodulator ported from
+  fldigi's proven W7AY design (mark/space matched filters, optimal ATC, acquire-then-freeze
+  AFC) — solid copy down to −2 dB SNR in testing. Both soundcard AFSK and true FSK keying
+  paths are built and land with the transmit wave.
+- **SSTV — receive slow-scan images into a gallery.** A new SSTV section: arm the receiver
+  and images decode off the air (Martin, Scottie, Robot, PD — including **PD120 for ISS
+  events**) with live progressive preview, auto slant correction, and every completed image
+  saved to a browsable gallery folder stamped with mode, frequency, and UTC time. The band
+  selector includes **145.800 FM — the ISS downlink** — plus the HF calling frequencies
+  (14.230 and friends).
+- **Tempo: Call CQ is now a RUN.** Toggle it on and Nexus keeps calling on every idle TX
+  slot until someone answers — then it auto-pauses while you chat and resumes when the
+  conversation goes quiet (or on your Resume click). The control lives in the Tempo header
+  with its state always visible; no more one-shot CQ dead-end.
+- **FT8/FT4: cross-cycle AP decoding (WSJT-X a7).** Stations you decoded in the previous
+  cycle are recovered a few dB deeper this cycle — their RR73s and reports especially.
+  Matches WSJT-X's a7 machinery exactly; resets on band change.
+- **Field Day / Winter Field Day correctness:** the WFD window is now the full 30 hours
+  (was 24 — QSOs in the final 6 hours weren't counted), digital contacts export their REAL
+  mode (an RTTY WFD log no longer exports as "FT8" — a mode WFD bans), and the ruleset now
+  knows which modes WFD prohibits.
+
+### Fixed
+
+- **The CW/Phone bandscope no longer paints a quiet band as full-width rainbow.** The
+  scope's auto-contrast stretched the noise floor across the whole palette, so filtered-out
+  stopband noise looked like signals. It now enforces a 10 dB minimum visual span (quiet
+  water renders dark; real signals unchanged), adds the FT8 waterfall's Gain/Zero controls,
+  and shows a "Δ dB" readout of the view's true dynamic range.
+- **Linux: caught driver panics are no longer silent, and shipped binaries strip debug
+  info.** A quirky serial/audio stack could panic on every device poll — invisibly costing
+  CPU (sluggishness) and memory (the panic machinery's ~68 MB symbol cache). Caught panics
+  now log with a count, and release builds carry no DWARF for that cache to parse.
+
 - **2m openings are now detected — and every opening is classified, tiered, mapped, and
   logged.** The detector needed several distinct stations to call a VHF band open (right
   for a 6m Es cloud, impossible for 2m tropo/aurora, which are often ONE distant
