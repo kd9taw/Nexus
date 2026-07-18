@@ -291,8 +291,9 @@ extern "C" {
     );
 
     /// Decode every FT8 signal in a 180000-sample int16 frame: `ft8apset` ->
-    /// `sync8` candidate search -> `ft8b` (with internal multi-pass subtraction).
-    /// Returns decodes written (>=0) or -1. NOT thread-safe.
+    /// `sync8` candidate search -> `ft8b` (with internal multi-pass subtraction),
+    /// then the a7 cross-cycle replay (WSJT-X iaptype=7) on the authoritative
+    /// pass. Returns decodes written (>=0) or -1. NOT thread-safe.
     pub fn ft8_decode_frame(
         iwave: *const i16, // [FT8_NMAX]
         nfa: c_int,
@@ -302,9 +303,16 @@ extern "C" {
         hiscall: *const c_char,
         nqso_progress: c_int,
         nfqso: c_int, // QSO/RX freq (Hz); deep AP + sync center; 0/oob ⇒ band mid
+        nutc: c_int,  // a7 slot key: slot UTC seconds-of-day (slot*15); see libft1.h
+        la7final: c_int, // 1 = authoritative pass (a7 save + replay); 0 = early pass
         out: *mut Ft8DecodeT,
         max_out: c_int,
     ) -> c_int;
+
+    /// Clear the FT8 a7 cross-cycle decode table (prior-slot call pairs + slot
+    /// tracker). Call on band/QSO change so stale prior-cycle pairs are not
+    /// replayed as AP hypotheses. Mirrors [`ft1_harq_reset`].
+    pub fn ft8_a7_reset();
 
     // ---- FT4: native decode of the standard WSJT-X FT4 mode (7.5 s T/R) ------
 

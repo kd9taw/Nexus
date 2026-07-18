@@ -21,6 +21,11 @@ pub use decode::Decode;
 pub use mode::{make_mode, Capabilities, Ft1Mode, Ft4Mode, Ft8Mode, Mode, ModeKind};
 pub use source::{DecodeRequest, NativeSource, SignalSource, WsjtxUdpSource};
 
+/// Clear FT8's a7 cross-cycle decode table (prior-slot call pairs). The engine
+/// calls this on band QSY / tier switch — analogous to `ft1::harq_reset` — so a
+/// new band's audio is not probed with stale prior-cycle AP hypotheses.
+pub use ft8::a7_reset as reset_ft8_a7;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +141,39 @@ mod tests {
     #[test]
     fn native_ft1_through_trait() {
         native_roundtrip(ModeKind::Ft1);
+    }
+
+    /// The extended a7 path (`SignalSource::decode_a7` -> `Mode::decode_frame_a7`
+    /// with a REAL slot-derived frame_time_ms and the final-pass flag) must not
+    /// regress the baseline decode — the a7 machinery only adds decodes on top
+    /// of the direct pass. Also exercises the crate-root `reset_ft8_a7`.
+    #[test]
+    fn native_ft8_decode_a7_extended_path() {
+        let msg = "CQ KD9TAW EN52";
+        let mode = make_mode(ModeKind::Ft8);
+        let frame = native_frame(mode.as_ref(), msg, 1500.0);
+
+        let mut src = NativeSource::from_kind(ModeKind::Ft8);
+        let mut req = DecodeRequest::full_band(&frame);
+        req.frame_time_ms = 15_000; // slot 1 -> a7 slot key nutc = 15
+        let decs = src.decode_a7(&req, true);
+        assert!(
+            decs.iter().any(|d| d.message == msg),
+            "extended a7 path must still decode the clean signal; got {decs:?}"
+        );
+        assert!(
+            decs.iter().all(|d| d.mode == Some(ModeKind::Ft8)),
+            "decode_a7 decodes must carry their mode"
+        );
+
+        // The band-change reset is callable through the crate root (the engine's
+        // clear_decode_context hook) and does not disturb a following decode.
+        reset_ft8_a7();
+        let decs = src.decode_a7(&req, true);
+        assert!(
+            decs.iter().any(|d| d.message == msg),
+            "decode after reset_ft8_a7 must still work; got {decs:?}"
+        );
     }
 
     /// The companion source maps an upstream WSJT-X `Decode` datagram to a

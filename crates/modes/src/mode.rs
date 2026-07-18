@@ -137,6 +137,41 @@ pub trait Mode: Send + Sync {
         nfqso: i32,
         frame_time_ms: i64,
     ) -> Vec<Decode>;
+
+    /// [`decode_frame`](Mode::decode_frame) plus the cross-cycle a-priori flag.
+    ///
+    /// `a7_final` marks the authoritative full-audio (slot-boundary) pass: for
+    /// FT8 it gates WSJT-X's a7 cross-cycle replay (iaptype=7), which recovers
+    /// QSO continuations remembered from the previous same-parity slot (keyed
+    /// on `frame_time_ms`). The early partial pass sets it `false` (slot
+    /// bookkeeping only). Modes without a cross-cycle path ignore the flag —
+    /// this default delegates to [`decode_frame`](Mode::decode_frame).
+    #[allow(clippy::too_many_arguments)] // mirrors the modem decode ABI
+    fn decode_frame_a7(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        frame_time_ms: i64,
+        _a7_final: bool,
+    ) -> Vec<Decode> {
+        self.decode_frame(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            frame_time_ms,
+        )
+    }
 }
 
 /// Build a boxed [`Mode`] from its [`ModeKind`].
@@ -190,7 +225,7 @@ impl Mode for Ft8Mode {
         hiscall: &str,
         nqso_progress: i32,
         nfqso: i32,
-        _frame_time_ms: i64, // FT8 has no cross-frame IR-HARQ
+        _frame_time_ms: i64, // a7-inert legacy path (constant slot key)
     ) -> Vec<Decode> {
         ft8::decode_frame(
             iwave,
@@ -201,6 +236,41 @@ impl Mode for Ft8Mode {
             hiscall,
             nqso_progress,
             nfqso,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
+    fn decode_frame_a7(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        frame_time_ms: i64,
+        a7_final: bool,
+    ) -> Vec<Decode> {
+        // a7 slot key = slot UTC seconds-of-day. frame_time_ms is slot*15000 for
+        // FT8, so /1000 gives slot seconds; rem_euclid keeps i32 valid past 2038
+        // and preserves parity ((slot*15 mod 86400)/5 mod 2 == slot % 2, since
+        // 86400 is an even multiple of 15). The engine calls a7_reset (via
+        // modes::reset_ft8_a7) on band/QSO change.
+        let nutc = (frame_time_ms / 1000).rem_euclid(86_400) as i32;
+        ft8::decode_frame_a7(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            nutc,
+            a7_final,
         )
         .into_iter()
         .map(Into::into)

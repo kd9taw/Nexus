@@ -67,6 +67,19 @@ pub trait SignalSource: Send {
 
     /// Produce the decodes available for this interval.
     fn decode(&mut self, req: &DecodeRequest) -> Vec<Decode>;
+
+    /// [`decode`](SignalSource::decode) plus the a7 cross-cycle final-pass flag.
+    ///
+    /// `a7_final` is `true` on the authoritative full-audio (slot-boundary)
+    /// pass — for a native FT8 source this saves the slot's decodes into the a7
+    /// table and runs WSJT-X's cross-cycle replay (iaptype=7, keyed on
+    /// `req.frame_time_ms`) — and `false` on the early partial pass. Passive
+    /// sources and modes without a cross-cycle path ignore it; this default
+    /// delegates to [`decode`](SignalSource::decode).
+    fn decode_a7(&mut self, req: &DecodeRequest, a7_final: bool) -> Vec<Decode> {
+        let _ = a7_final;
+        self.decode(req)
+    }
 }
 
 /// Native decode: run the active [`Mode`] over locally captured audio.
@@ -122,6 +135,26 @@ impl SignalSource for NativeSource {
         );
         // Tag each decode with the mode that produced it (the conversion can't
         // know; we do).
+        for d in &mut decs {
+            d.mode = Some(kind);
+        }
+        decs
+    }
+
+    fn decode_a7(&mut self, req: &DecodeRequest, a7_final: bool) -> Vec<Decode> {
+        let kind = self.mode.kind();
+        let mut decs = self.mode.decode_frame_a7(
+            req.iwave,
+            req.nfa,
+            req.nfb,
+            req.ndepth,
+            req.mycall,
+            req.hiscall,
+            req.nqso_progress,
+            req.nfqso,
+            req.frame_time_ms,
+            a7_final,
+        );
         for d in &mut decs {
             d.mode = Some(kind);
         }

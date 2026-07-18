@@ -160,7 +160,9 @@ void ft1_harq_reset(void);
 /*===========================================================================
  * FT8: native decode/encode of the standard WSJT-X FT8 mode (15 s T/R),
  * built on the vendored WSJT-X GPL sources (lib/ft8). Full-frame decode via
- * the core primitives (ft8apset -> sync8 -> ft8b); no nzhsym/a7/shmem.
+ * the core primitives (ft8apset -> sync8 -> ft8b); no nzhsym/shmem. The a7
+ * cross-cycle AP table (WSJT-X iaptype=7) IS wired in — see ft8_decode_frame's
+ * nutc/la7final args and ft8_a7_reset().
  *===========================================================================*/
 
 #define FT8_NN     79       /* total channel symbols                        */
@@ -223,6 +225,16 @@ typedef struct {
  *   nqso_progress : QSO progress index (AP pass schedule)
  *   nfqso         : QSO/RX audio freq (Hz) being worked (WSJT-X nfqso); the deep
  *                   AP passes + sync center on it. 0 / out of [nfa,nfb] = band mid
+ *   nutc          : slot key for the a7 cross-cycle AP table = slot UTC
+ *                   seconds-of-day (slot*15 for FT8; 0..86399). A new nutc rolls
+ *                   the per-parity prior-slot table; parity = mod(nutc/5,2).
+ *                   A nutc BEHIND the last seen slot (redecode of an older
+ *                   capture) leaves all a7 state untouched. Constant nutc =>
+ *                   the prior-slot table never populates => a7 is inert.
+ *   la7final      : 1 = authoritative full-audio (boundary) pass: direct decodes
+ *                   are saved into the a7 table and the cross-cycle replay runs
+ *                   (recovered decodes report nap = 7). 0 = early partial pass:
+ *                   slot bookkeeping only, no save/replay.
  *   out           : caller array of ft8_decode_t (capacity max_out)
  *   max_out       : capacity of out
  *
@@ -233,7 +245,15 @@ int ft8_decode_frame(const int16_t *iwave /*[FT8_NMAX]*/,
                      int nfa, int nfb, int ndepth,
                      const char *mycall, const char *hiscall,
                      int nqso_progress, int nfqso,
+                     int nutc, int la7final,
                      ft8_decode_t *out, int max_out);
+
+/*
+ * Clear the a7 cross-cycle decode table (prior-slot call pairs + slot tracker).
+ * Call on band change / QSO change so stale prior-cycle pairs are not replayed
+ * as AP hypotheses against the new band's audio. Mirrors ft1_harq_reset.
+ */
+void ft8_a7_reset(void);
 
 /*===========================================================================
  * FT4: native decode/encode of the standard WSJT-X FT4 mode (7.5 s T/R,
