@@ -13,8 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logged.** The detector needed several distinct stations to call a VHF band open (right
   for a 6m Es cloud, impossible for 2m tropo/aurora, which are often ONE distant
   station): now a single genuine-DX station beyond 700 km — past the everyday
-  troposcatter ceiling, at the floor of the real opening modes — opens a VHF band.
-  On top of that:
+  troposcatter ceiling, at the floor of the real opening modes — opens a VHF band. Two
+  more graduated triggers round it out: **two distinct stations at 500 km+** catch the
+  quick short tropo lifts (one alone is routine scatter and stays quiet — corroboration
+  keeps false positives out), and **two independent receivers near you** each copying a
+  700 km+ path open the band even when you're parked on another band and transmitting
+  nothing — your neighbors' ears become your sentinel. On top of that:
   - **Tiered opening alerts by propagation mode.** Sporadic-E and F2 go loud (rare and
     brief — grab-it-now, with a beep); **Aurora** goes loud with operating guidance
     ("beam north — signals sound raspy, CW & SSB work best"); **tropo** raises an
