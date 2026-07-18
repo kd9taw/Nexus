@@ -3,6 +3,7 @@ import { getSpectrumRow } from '../api'
 import { sampleLut } from '../colormaps'
 import {
   agcRange,
+  applyGainZero,
   bakeLut,
   isRfScopeSource,
   isSymmetricMode,
@@ -129,6 +130,16 @@ export function PhoneScope({
   // Lifted out of the draw loop (updated only when it changes) so the badge can render it.
   const [source, setSource] = useState('')
   const sourceRef = useRef('')
+  // Operator visual Gain/Zero (the FT8 waterfall's controls, ported) + the live
+  // Δ-span readout. Session-only; defaults leave the smoothed AGC untouched.
+  const [gain, setGain] = useState(0)
+  const [zero, setZero] = useState(0)
+  const gainRef = useRef(0)
+  const zeroRef = useRef(0)
+  gainRef.current = gain
+  zeroRef.current = zero
+  const [spanDb, setSpanDb] = useState<number | null>(null)
+  const spanDbRef = useRef<number | null>(null)
   // Click/drag tuning state — the latest row + drawn view (captured each drawRow so the
   // pointer handlers can hit-test), the tune callback + math inputs, and the gesture.
   const onTuneRef = useRef(onTune)
@@ -336,6 +347,28 @@ export function PhoneScope({
         agcFloor += (floor - agcFloor) * AGC_ALPHA
         agcCeil += (ceil - agcCeil) * AGC_ALPHA
       }
+      // HONESTY CLAMP + operator Gain/Zero. A row with no strong signal has a tiny
+      // dynamic range; stretching it to the full palette painted stopband noise as
+      // full-width rainbow (the "stuff on the waterfall with a quiet band" report —
+      // CW and Phone both, this scope serves both cockpits). Enforce a 10 dB minimum
+      // visual span so noise-only rows sit dark at the palette bottom; rows with real
+      // signals span far more than 10 dB and render exactly as before. Gain/Zero then
+      // apply on top (same semantics as the FT8 waterfall's controls).
+      const MIN_DYN_RATIO = 3.16 // 10 dB in linear magnitude
+      const { floor: dispFloor, ceil: dispCeil } = applyGainZero(
+        agcFloor,
+        Math.max(agcCeil, agcFloor * MIN_DYN_RATIO),
+        gainRef.current,
+        zeroRef.current,
+      )
+      // Live Δ-span honesty readout: how much real dynamic range this view holds.
+      const db = Math.round(
+        20 * Math.log10(Math.max(agcCeil, 1e-12) / Math.max(agcFloor, 1e-12)),
+      )
+      if (Number.isFinite(db) && db !== spanDbRef.current) {
+        spanDbRef.current = db
+        setSpanDb(db)
+      }
 
       const Wd = devW
       const traceHd = Math.max(1, Math.round(devH * TRACE_FRAC))
@@ -373,7 +406,7 @@ export function PhoneScope({
         const b1 = Math.min(nBins - 1, b0 + 1)
         const frac = bin - b0
         const v = row[b0] * (1 - frac) + row[b1] * frac
-        const t = normalize(v, agcFloor, agcCeil)
+        const t = normalize(v, dispFloor, dispCeil)
         mag[x] = t
         const li = (t >= 1 ? 255 : Math.round(t * 255)) * 4
         const o = x * 4
@@ -770,6 +803,38 @@ export function PhoneScope({
             {source === 'flex' ? 'FLEX RF' : 'CI-V RF'}
           </span>
         )}
+        {spanDb != null && (
+          <span
+            className="ph-scope-dyn"
+            title="Real dynamic range in this view — a small Δ means the colors are mostly noise floor (a quiet band now renders dark instead of stretched rainbow)"
+          >
+            Δ{spanDb} dB
+          </span>
+        )}
+        <label className="ph-scope-gz" title="Visual gain — stretch (right) or flatten (left) the color contrast">
+          G
+          <input
+            type="range"
+            min={-1}
+            max={1}
+            step={0.05}
+            value={gain}
+            onChange={(e) => setGain(Number(e.target.value))}
+            aria-label="Scope visual gain"
+          />
+        </label>
+        <label className="ph-scope-gz" title="Visual zero — raise (right) to darken the noise floor, lower (left) to reveal weak texture">
+          Z
+          <input
+            type="range"
+            min={-1}
+            max={1}
+            step={0.05}
+            value={zero}
+            onChange={(e) => setZero(Number(e.target.value))}
+            aria-label="Scope visual zero (floor)"
+          />
+        </label>
       </div>
       <div className="ph-scope-canvas-wrap">
         <canvas

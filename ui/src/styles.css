@@ -12365,6 +12365,33 @@ select.settings-input {
   background: color-mix(in srgb, var(--text-dim) 12%, transparent);
 }
 
+/* ---- CW/Phone scope honesty controls (PhoneScope header row) ---- */
+.ph-scope-dyn {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+  white-space: nowrap;
+}
+.ph-scope-gz {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-faint);
+}
+.ph-scope-gz input[type='range'] {
+  width: 56px;
+  height: 10px;
+  accent-color: var(--accent);
+}
+
 /* ---- Chat CQ run control (TempoHeader) — the keep-calling toggle ---- */
 .cq-run {
   display: inline-flex;
