@@ -44,6 +44,12 @@ pub struct OpeningConfig {
     pub min_far_rx: usize,
     /// Min distinct far transmitters (who-I-heard) to clear the gate (OR side B).
     pub min_far_tx: usize,
+    /// VHF DX distance (km): on VHF, an operator-anchored path beyond this is genuine
+    /// DX rather than routine troposcatter, so a SINGLE such station opens the band.
+    /// Research-set to 700 km — past the everyday 2m troposcatter ceiling (~500–700 km
+    /// even for a strong station) and at the floor of the enhancement modes
+    /// (sporadic-E / tropo-ducting / aurora all ≥~800 km). Only applies on VHF.
+    pub vhf_dx_km: f64,
     /// Onset-slope reference (Δ rate, spots/min/window). Reserved as a rising-edge
     /// / terminator-ramp tuning knob — NOT a hard gate (see `raw_open`), since a
     /// plateauing opening has slope≈0 after its rising edge.
@@ -102,6 +108,7 @@ impl Default for OpeningConfig {
             sigma_floor: 0.05, // spots/min
             min_far_rx: 5,
             min_far_tx: 3,
+            vhf_dx_km: 700.0,
             slope_min: 0.0, // any positive onset; tune up to reject ramps
             kp_aurora: 6.0,
             sfi_tep: 150.0,
@@ -133,6 +140,11 @@ pub struct BandFeatures {
     pub unique_far_rx: usize,
     /// Distinct far transmitters across `Side::IHeard` spots ("who I heard").
     pub unique_far_tx: usize,
+    /// Distinct operator-anchored far stations (heard me OR I heard) whose path is
+    /// beyond `vhf_dx_km` — genuine VHF DX, past the routine troposcatter ceiling. On
+    /// VHF a single one opens the band (2m tropo/Es/aurora openings are often one
+    /// distant station; see [`BandFeatures::raw_open`]).
+    pub unique_far_dx: usize,
     /// Far stations confirmed BOTH ways with the operator (me→X and X→me).
     pub reciprocal_pairs: usize,
     /// Distinct stations participating on EITHER end of ALL spots — the regional
@@ -191,6 +203,7 @@ impl BandFeatures {
             spot_count: 0,
             unique_far_rx: 0,
             unique_far_tx: 0,
+            unique_far_dx: 0,
             reciprocal_pairs: 0,
             unique_stations: 0,
             reciprocal_pairs_regional: 0,
@@ -237,8 +250,15 @@ impl BandFeatures {
         } else {
             (cfg.min_far_rx, cfg.min_far_tx)
         };
-        // Operator-anchored gate (v1): enough far stations on either direction.
-        let op_gate = self.unique_far_rx >= far_rx || self.unique_far_tx >= far_tx;
+        // Operator-anchored gate (v1): enough far stations on either direction, OR —
+        // on VHF — a SINGLE genuine-DX station (path ≥ vhf_dx_km, past routine
+        // troposcatter). 2m tropo/Es/aurora openings are frequently one distant
+        // station, which the 6m-tuned multi-station bar could never surface. The
+        // anomaly-z gate above still applies, so routine scatter (baseline, no spike)
+        // can't fabricate an open even when it reaches DX distance.
+        let op_gate = self.unique_far_rx >= far_rx
+            || self.unique_far_tx >= far_tx
+            || (vhf && self.unique_far_dx >= 1);
         // Regional gate (Phase 2, opt-in): a band-wide surge near the operator.
         // Multi-condition so neither a single loud station (needs two-way pairs)
         // nor a uniform contest/Es lifting every band (needs band-specificity)
@@ -455,6 +475,9 @@ pub fn band_features(
 
     let mut far_rx: HashSet<String> = HashSet::new();
     let mut far_tx: HashSet<String> = HashSet::new();
+    // Operator-anchored far stations beyond the VHF DX distance (genuine DX, not
+    // routine troposcatter) — the single-station VHF open signal.
+    let mut far_dx: HashSet<String> = HashSet::new();
     let mut near_rx: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut all_stations: HashSet<String> = HashSet::new();
     let mut dists: Vec<f64> = Vec::new();
@@ -492,13 +515,31 @@ pub fn band_features(
         let geo_grid: Option<&str> = match side {
             Side::HeardMe => {
                 if let Some(c) = s.far_call(me_call) {
-                    far_rx.insert(c.to_ascii_uppercase());
+                    let cu = c.to_ascii_uppercase();
+                    // The far station here is the RECEIVER that heard me → its own grid.
+                    if s.rx_grid
+                        .as_deref()
+                        .and_then(|g| grid_distance_km(me_grid, g))
+                        .is_some_and(|d| d >= cfg.vhf_dx_km)
+                    {
+                        far_dx.insert(cu.clone());
+                    }
+                    far_rx.insert(cu);
                 }
                 s.rx_grid.as_deref()
             }
             Side::IHeard => {
                 if let Some(c) = s.far_call(me_call) {
-                    far_tx.insert(c.to_ascii_uppercase());
+                    let cu = c.to_ascii_uppercase();
+                    // The far station here is the TRANSMITTER I heard → its own grid.
+                    if s.tx_grid
+                        .as_deref()
+                        .and_then(|g| grid_distance_km(me_grid, g))
+                        .is_some_and(|d| d >= cfg.vhf_dx_km)
+                    {
+                        far_dx.insert(cu.clone());
+                    }
+                    far_tx.insert(cu);
                 }
                 s.tx_grid.as_deref()
             }
@@ -537,6 +578,7 @@ pub fn band_features(
 
     bf.unique_far_rx = far_rx.len();
     bf.unique_far_tx = far_tx.len();
+    bf.unique_far_dx = far_dx.len();
     bf.unique_near_rx = near_rx.len();
     bf.unique_stations = all_stations.len();
     let owned: Vec<PathSpot> = band_spots.iter().map(|s| (*s).clone()).collect();
@@ -1745,5 +1787,42 @@ mod tests {
             !superstation.raw_open(&cfg),
             "one big local receiver must not fabricate a regional opening"
         );
+    }
+
+    #[test]
+    fn a_single_distant_vhf_station_opens_the_band() {
+        let cfg = OpeningConfig::default();
+        // 2m with a real anomaly and ONE operator-anchored DX station (path ≥ 700 km):
+        // opens, even though the 6m-tuned multi-station bar is unmet. The fix for
+        // missed single-station 2m tropo/Es/aurora openings.
+        let mut dx = BandFeatures::empty(Band::B2);
+        dx.anomaly_z = 6.0;
+        dx.unique_far_dx = 1;
+        assert!(dx.raw_open(&cfg), "one genuine-DX 2m station opens the band");
+
+        // A single NON-DX station (local / routine troposcatter, no far_dx) below the
+        // multi-station bar stays closed — distance is what makes it an opening.
+        let mut local = BandFeatures::empty(Band::B2);
+        local.anomaly_z = 6.0;
+        local.unique_far_tx = 1; // heard one station, but not beyond vhf_dx_km
+        assert!(
+            !local.raw_open(&cfg),
+            "a single near/scatter 2m station must NOT open the band"
+        );
+
+        // A DX-distance station with NO anomaly (routine scatter is baseline) → closed.
+        let mut quiet = BandFeatures::empty(Band::B2);
+        quiet.anomaly_z = 0.0;
+        quiet.unique_far_dx = 1;
+        assert!(
+            !quiet.raw_open(&cfg),
+            "a DX-distance station with no anomaly must NOT open"
+        );
+
+        // The single-DX-station path is VHF-only: on HF one distant station is routine.
+        let mut hf = BandFeatures::empty(Band::B20);
+        hf.anomaly_z = 6.0;
+        hf.unique_far_dx = 1;
+        assert!(!hf.raw_open(&cfg), "the single-DX-station path is VHF-only");
     }
 }
