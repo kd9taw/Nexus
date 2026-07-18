@@ -444,7 +444,8 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
         // The lock is released before state.step (which takes its own).
         if let Ok(e) = engine.lock() {
             let s = e.settings();
-            if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str()) != (wsjtx_applied.0, wsjtx_applied.1.as_str())
+            if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str())
+                != (wsjtx_applied.0, wsjtx_applied.1.as_str())
             {
                 wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr);
                 wsjtx_applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
@@ -2215,7 +2216,8 @@ impl RadioLoop {
                     eng.cw_soundcard(),
                     eng.cw_pitch_hz(),
                     eng.cw_winkeyer_port(),
-                    eng.cw_serial_key_port().map(|p| (p, eng.cw_serial_key_line())),
+                    eng.cw_serial_key_port()
+                        .map(|p| (p, eng.cw_serial_key_line())),
                 )
             };
             #[cfg(not(feature = "serial"))]
@@ -4007,7 +4009,16 @@ fn open_serial_ptt(
     let ptt_port = t.ptt_port().to_string();
     let separate = t.rig_model != 0 && !ptt_port.eq_ignore_ascii_case(t.serial_port.trim());
     if separate {
-        open_cat(t, dial_hz, mode, PttMode::Serial { port: ptt_port, line }, allow_coexist)
+        open_cat(
+            t,
+            dial_hz,
+            mode,
+            PttMode::Serial {
+                port: ptt_port,
+                line,
+            },
+            allow_coexist,
+        )
     } else {
         probe_serial(&ptt_port, line)
     }
@@ -5397,29 +5408,44 @@ mod tests {
         // The SO2R fix: RTS/DTR keying uses a dedicated PTT COM port when set (a u2R/MK2R
         // routes keying on its own port), else the CAT serial port (prior single-port behavior).
         let mut t = cat_transport(4532, None); // serial_port = /dev/ttyUSB0, ptt_serial_port = ""
-        assert_eq!(t.ptt_port(), "/dev/ttyUSB0", "empty dedicated port → CAT serial port");
+        assert_eq!(
+            t.ptt_port(),
+            "/dev/ttyUSB0",
+            "empty dedicated port → CAT serial port"
+        );
         t.ptt_serial_port = "COM16".to_string();
         assert_eq!(t.ptt_port(), "COM16", "dedicated PTT port wins");
         t.ptt_serial_port = "   ".to_string();
-        assert_eq!(t.ptt_port(), "/dev/ttyUSB0", "whitespace-only → fall back to CAT port");
+        assert_eq!(
+            t.ptt_port(),
+            "/dev/ttyUSB0",
+            "whitespace-only → fall back to CAT port"
+        );
         // A changed PTT port must rebuild the rig so the keying line rebinds.
         let mut t2 = cat_transport(4532, None);
         t2.ptt_serial_port = "COM16".to_string();
-        assert!(t.rig_differs(&t2) || t2.rig_differs(&t), "PTT port change triggers a rig rebuild");
+        assert!(
+            t.rig_differs(&t2) || t2.rig_differs(&t),
+            "PTT port change triggers a rig rebuild"
+        );
     }
 
     #[test]
     fn report_ptt_surfaces_a_key_nak_and_respects_error_ownership() {
         let mut state = loop_state();
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
-        let banner = |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.audio_error.clone();
+        let banner =
+            |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.audio_error.clone();
 
         // A keying NAK surfaces a PTT status on the shared banner; a good key clears OUR status.
         state.report_ptt(&engine, true);
         assert!(banner(&engine).is_some(), "PTT NAK shows the banner");
         assert_eq!(state.err_owner, ErrOwner::Ptt);
         state.report_ptt(&engine, false);
-        assert!(banner(&engine).is_none(), "a good key clears the PTT status");
+        assert!(
+            banner(&engine).is_none(),
+            "a good key clears the PTT status"
+        );
         assert_eq!(state.err_owner, ErrOwner::None);
 
         // A PTT status must NOT clobber a higher-priority device error, and clearing PTT
@@ -5430,7 +5456,11 @@ mod tests {
             .unwrap()
             .set_audio_error(Some("Sound card failed".to_string()));
         state.report_ptt(&engine, true);
-        assert_eq!(banner(&engine).as_deref(), Some("Sound card failed"), "device error wins");
+        assert_eq!(
+            banner(&engine).as_deref(),
+            Some("Sound card failed"),
+            "device error wins"
+        );
         state.report_ptt(&engine, false);
         assert_eq!(
             banner(&engine).as_deref(),

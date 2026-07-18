@@ -285,10 +285,16 @@ fn tokenize(window: &[(char, f32)]) -> Vec<Tok> {
     for &(c, f) in window {
         if c.is_whitespace() {
             if !cur.text.is_empty() {
-                flush_tok(&mut toks, std::mem::replace(&mut cur, Tok {
-                    text: String::new(),
-                    conf: Vec::new(),
-                }));
+                flush_tok(
+                    &mut toks,
+                    std::mem::replace(
+                        &mut cur,
+                        Tok {
+                            text: String::new(),
+                            conf: Vec::new(),
+                        },
+                    ),
+                );
             }
         } else if c.is_ascii_graphic() {
             cur.text.push(c.to_ascii_uppercase());
@@ -362,8 +368,7 @@ fn call_matches(expected: &str, tok: &Tok) -> bool {
     }
     if e.len() == g.len() {
         let diffs: Vec<usize> = (0..e.len()).filter(|&i| e[i] != g[i]).collect();
-        return diffs.len() == 1
-            && tok.conf.get(diffs[0]).is_none_or(|&c| c < HIGH_CONF);
+        return diffs.len() == 1 && tok.conf.get(diffs[0]).is_none_or(|&c| c < HIGH_CONF);
     }
     if g.len() + 1 == e.len() {
         return one_deleted(&e, &g).is_some();
@@ -846,9 +851,8 @@ impl RttySeq {
                 && !call_matches(&self.mycall, &toks[i])
             {
                 let near_cq = toks[i.saturating_sub(3)..i].iter().any(|t| t.text == "CQ");
-                let answering_other = i >= 2
-                    && toks[i - 1].text == "DE"
-                    && !call_matches(&self.mycall, &toks[i - 2]);
+                let answering_other =
+                    i >= 2 && toks[i - 1].text == "DE" && !call_matches(&self.mycall, &toks[i - 2]);
                 if !near_cq && !answering_other {
                     found = Some(toks[i].text.clone());
                 }
@@ -1095,7 +1099,11 @@ mod tests {
         assert_eq!(field(&l[0].1, "NAME"), Some("BOB"));
         assert_eq!(field(&l[0].1, "QTH"), Some("BOSTON"));
         let s = sends(&a);
-        assert!(s[0].contains("TU") && s[0].contains("73"), "close: {}", s[0]);
+        assert!(
+            s[0].contains("TU") && s[0].contains("73"),
+            "close: {}",
+            s[0]
+        );
 
         // His 73 ends it.
         seq.feed_text("73 SK\n", 45_000);
@@ -1135,11 +1143,7 @@ mod tests {
         seq.answer("W1AW", 0);
         assert_eq!(seq.state(), SeqState::Answering);
         let s = sends(&seq.take_actions());
-        assert!(
-            s[0].contains("W1AW DE KD9TAW"),
-            "answer: {}",
-            s[0]
-        );
+        assert!(s[0].contains("W1AW DE KD9TAW"), "answer: {}", s[0]);
 
         // The runner comes back with his exchange.
         seq.feed_text(
@@ -1294,7 +1298,11 @@ mod tests {
         seq.answer("W1AW", 0);
         seq.take_actions();
         seq.feed_text("W9XYZ DE W1AW UR RST 599 599 NAME BOB K\n", 15_000);
-        assert_eq!(seq.state(), SeqState::Answering, "that exchange was not for us");
+        assert_eq!(
+            seq.state(),
+            SeqState::Answering,
+            "that exchange was not for us"
+        );
         assert!(seq.take_actions().is_empty());
     }
 
@@ -1306,7 +1314,11 @@ mod tests {
         seq.take_actions();
         // First over: class copied, section lost in a burst of static.
         seq.feed_text("KD9TAW DE W1XYZ R 4A K\n", 30_000);
-        assert_eq!(seq.state(), SeqState::ExchangeSent, "incomplete: keep waiting");
+        assert_eq!(
+            seq.state(),
+            SeqState::ExchangeSent,
+            "incomplete: keep waiting"
+        );
         // Timeout → AGN, but the window (and the copied 4A) survives.
         seq.tick(65_000);
         let s = sends(&seq.take_actions());
@@ -1356,11 +1368,7 @@ mod tests {
         // Nothing heard at all → repeat the answering call, not AGN.
         seq.tick(40_000);
         let s = sends(&seq.take_actions());
-        assert!(
-            s[0].contains("W1AW DE KD9TAW"),
-            "repeat the call: {}",
-            s[0]
-        );
+        assert!(s[0].contains("W1AW DE KD9TAW"), "repeat the call: {}", s[0]);
         seq.tick(80_000);
         seq.take_actions();
         seq.tick(120_000);

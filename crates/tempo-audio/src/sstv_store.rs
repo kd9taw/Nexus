@@ -32,7 +32,7 @@ pub fn encode_bmp(width: u32, height: u32, pixels: &[[u8; 3]]) -> Vec<u8> {
     out.extend_from_slice(&(file_size as u32).to_le_bytes());
     out.extend_from_slice(&[0u8; 4]); // reserved
     out.extend_from_slice(&54u32.to_le_bytes()); // pixel-data offset
-    // BITMAPINFOHEADER (40 bytes).
+                                                 // BITMAPINFOHEADER (40 bytes).
     out.extend_from_slice(&40u32.to_le_bytes());
     out.extend_from_slice(&(width as i32).to_le_bytes());
     out.extend_from_slice(&(height as i32).to_le_bytes()); // positive = bottom-up
@@ -44,7 +44,7 @@ pub fn encode_bmp(width: u32, height: u32, pixels: &[[u8; 3]]) -> Vec<u8> {
     out.extend_from_slice(&2835u32.to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes()); // palette colors
     out.extend_from_slice(&0u32.to_le_bytes()); // important colors
-    // Pixel rows, bottom-up, BGR, padded.
+                                                // Pixel rows, bottom-up, BGR, padded.
     for y in (0..height as usize).rev() {
         let row = &pixels[y * width as usize..(y + 1) * width as usize];
         for [r, g, b] in row {
@@ -131,7 +131,8 @@ mod tests {
 
     /// A unique per-test scratch dir under the OS temp dir.
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("nexus-sstv-store-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("nexus-sstv-store-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

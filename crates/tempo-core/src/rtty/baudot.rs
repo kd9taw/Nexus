@@ -378,7 +378,10 @@ mod tests {
             assert!(!encodable(c), "{c:?} has no ITA2 mapping");
         }
         // The filter and the encoder agree: a filtered string round-trips verbatim.
-        let kept: String = "UR 599 (50%) OK*".chars().filter(|&c| encodable(c)).collect();
+        let kept: String = "UR 599 (50%) OK*"
+            .chars()
+            .filter(|&c| encodable(c))
+            .collect();
         assert_eq!(kept, "UR 599 (50) OK");
         let codes = BaudotEncoder::new(true).encode(&kept);
         assert_eq!(decode_all(&mut BaudotDecoder::new(true), &codes), kept);

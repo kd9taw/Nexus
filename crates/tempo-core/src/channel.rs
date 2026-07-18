@@ -84,7 +84,11 @@ pub fn to_i16(samples: &[f32]) -> Vec<i16> {
 pub fn capture_to_i16(samples: &[f32]) -> Vec<i16> {
     samples
         .iter()
-        .map(|&x| (x * 32767.0).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+        .map(|&x| {
+            (x * 32767.0)
+                .round()
+                .clamp(i16::MIN as f32, i16::MAX as f32) as i16
+        })
         .collect()
 }
 

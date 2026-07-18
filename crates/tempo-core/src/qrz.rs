@@ -760,7 +760,10 @@ mod tests {
             f.adif,
             "<CALL:5>W1AW<QSO_DATE:8>20240101<APP_QRZLOG_STATUS:1>C<eor>\n"
         );
-        assert!(f.adif.contains("<eor>"), "records must have real ADIF markers");
+        assert!(
+            f.adif.contains("<eor>"),
+            "records must have real ADIF markers"
+        );
         assert!(f.reason.is_none());
     }
 

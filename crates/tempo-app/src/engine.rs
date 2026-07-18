@@ -4507,8 +4507,9 @@ impl Engine {
             return Err("Not in the RTTY section — enter the RTTY cockpit first".to_string());
         }
         if !self.tx_enabled {
-            return Err("TX is off — enable TX first (Stop TX / the watchdog disarmed it)"
-                .to_string());
+            return Err(
+                "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
+            );
         }
         if !self.tx_allowed() {
             return Err(
@@ -6767,7 +6768,10 @@ mod tests {
         assert_eq!(e.poll_rtty_one(), None);
         // Monitor off → refused with the reason (never a silent hold).
         e.set_tx_enabled(false);
-        assert!(e.rtty_send_text("CQ TEST").unwrap_err().contains("TX is off"));
+        assert!(e
+            .rtty_send_text("CQ TEST")
+            .unwrap_err()
+            .contains("TX is off"));
         e.set_tx_enabled(true);
         // Tune carrier up → refused.
         e.set_tune(true);
@@ -6777,15 +6781,15 @@ mod tests {
         e.set_license_class("technician");
         e.set_frequency(14.083, "20m", "LSB");
         assert!(!e.tx_allowed());
-        assert!(e
-            .rtty_send_text("CQ TEST")
-            .unwrap_err()
-            .contains("license"));
+        assert!(e.rtty_send_text("CQ TEST").unwrap_err().contains("license"));
         // ...but 10 m data (28.080–28.100 window) is the Tech HF grant → allowed.
         // (The cross-band QSY halts TX — the standing band-change invariant — so
         // the operator re-arms, exactly like the TopBar TX button.)
         e.set_frequency(28.083, "10m", "LSB");
-        assert!(!e.tx_enabled(), "a band change halts TX (existing invariant)");
+        assert!(
+            !e.tx_enabled(),
+            "a band change halts TX (existing invariant)"
+        );
         e.set_tx_enabled(true);
         assert!(e.tx_allowed());
         e.rtty_send_text("CQ TEST").unwrap();
@@ -6806,7 +6810,10 @@ mod tests {
         assert!(e.rtty_send_text("%*+=").is_err());
         // A single over is length-bounded, so one pasted blob can never key past
         // the watchdog ceiling on its own (the watchdog checks between messages).
-        assert!(e.rtty_send_text(&"A".repeat(1001)).unwrap_err().contains("too long"));
+        assert!(e
+            .rtty_send_text(&"A".repeat(1001))
+            .unwrap_err()
+            .contains("too long"));
         assert!(e.rtty_send_text(&"A".repeat(1000)).is_ok());
         assert_eq!(e.poll_rtty_one().unwrap().len(), 1000);
         // Disarming TX (Monitor off) aborts + DROPS the queue — nothing keys on a
@@ -6831,7 +6838,10 @@ mod tests {
         e.set_operating_mode("rtty", false);
         e.rtty_send_text("CQ CQ DE W9XYZ").unwrap();
         e.halt_tx();
-        assert!(e.take_rtty_abort(), "halt aborts the over in flight (unkey)");
+        assert!(
+            e.take_rtty_abort(),
+            "halt aborts the over in flight (unkey)"
+        );
         assert!(!e.tx_enabled(), "halt disarms TX — stopped stays stopped");
         assert_eq!(e.poll_rtty_one(), None, "nothing keys while disarmed");
         e.set_tx_enabled(true);
@@ -7030,7 +7040,11 @@ mod tests {
         assert!(e.take_rtty_audio().is_empty());
         let s = e.rtty_state();
         assert!(!s.armed);
-        assert_eq!(s.text.chars().count(), RTTY_TEXT_CAP, "transcript survives disarm");
+        assert_eq!(
+            s.text.chars().count(),
+            RTTY_TEXT_CAP,
+            "transcript survives disarm"
+        );
 
         // Re-arming starts a fresh transcript (a new copy session).
         e.set_rtty_armed(true);

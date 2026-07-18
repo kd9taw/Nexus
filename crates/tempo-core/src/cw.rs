@@ -374,7 +374,7 @@ mod tests {
         let dit = 60u32; // 1200/20 at 20 wpm
         assert_eq!(morse_key_events("E", 20), vec![(true, dit)]); // single dit
         assert_eq!(morse_key_events("T", 20), vec![(true, 3 * dit)]); // single dah
-        // "A" = ".-": dit, intra-char gap (1 dit), dah
+                                                                      // "A" = ".-": dit, intra-char gap (1 dit), dah
         assert_eq!(
             morse_key_events("A", 20),
             vec![(true, dit), (false, dit), (true, 3 * dit)]
@@ -393,7 +393,10 @@ mod tests {
         assert!(morse_key_events("   ", 20).is_empty());
         assert!(morse_key_events("", 20).is_empty());
         assert_eq!(morse_key_events("E#", 20), vec![(true, dit)]); // '#' skipped
-        assert!(morse_key_events("CQ", 20).first().unwrap().0, "no leading gap");
+        assert!(
+            morse_key_events("CQ", 20).first().unwrap().0,
+            "no leading gap"
+        );
     }
 
     #[test]

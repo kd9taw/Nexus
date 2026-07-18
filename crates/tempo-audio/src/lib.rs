@@ -44,6 +44,8 @@ pub mod rtty_fsk;
 #[cfg(feature = "device")]
 pub mod rttyrx;
 pub mod runtime;
+pub mod serial_keyer;
+pub mod slot;
 /// SSTV image/gallery persistence helpers (BMP writer, preview downscale,
 /// gallery.json load/save). Pure — no audio device, unit-tested.
 pub mod sstv_store;
@@ -51,8 +53,6 @@ pub mod sstv_store;
 /// RX ONLY — no TX path.
 #[cfg(feature = "device")]
 pub mod sstvrx;
-pub mod slot;
-pub mod serial_keyer;
 pub mod usbrig;
 pub mod voice;
 pub mod winkeyer;

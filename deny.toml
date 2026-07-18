@@ -10,7 +10,17 @@ all-features = true
 [advisories]
 version = 2
 # RustSec advisories are denied by default in v2; add IDs here only with a reason.
-ignore = []
+ignore = [
+    # `time` 0.3.41 RFC-2822 stack-exhaustion DoS. Unreachable here: `time` enters the
+    # graph ONLY as a build-dependency of the DeepCW ONNX toolchain (liquid → tract-linalg
+    # / tract-nnef template rendering at BUILD time) — it never parses untrusted input and
+    # ships no runtime code path. A bump is blocked by tract 0.21's pins; drop this ignore
+    # when tract updates past time 0.3.41.
+    "RUSTSEC-2026-0009",
+    # `paste` is unmaintained (archived) — a compile-time proc-macro with no runtime code,
+    # pulled in by the same tract 0.21 chain. No vulnerability; revisit with tract.
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 version = 2

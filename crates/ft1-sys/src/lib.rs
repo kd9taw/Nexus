@@ -302,8 +302,8 @@ extern "C" {
         mycall: *const c_char,
         hiscall: *const c_char,
         nqso_progress: c_int,
-        nfqso: c_int, // QSO/RX freq (Hz); deep AP + sync center; 0/oob ⇒ band mid
-        nutc: c_int,  // a7 slot key: slot UTC seconds-of-day (slot*15); see libft1.h
+        nfqso: c_int,    // QSO/RX freq (Hz); deep AP + sync center; 0/oob ⇒ band mid
+        nutc: c_int,     // a7 slot key: slot UTC seconds-of-day (slot*15); see libft1.h
         la7final: c_int, // 1 = authoritative pass (a7 save + replay); 0 = early pass
         out: *mut Ft8DecodeT,
         max_out: c_int,

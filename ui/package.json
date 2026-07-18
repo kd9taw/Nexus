@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.11.1",
   "type": "module",
-  "description": "Nexus web UI — unified ham digital-ops nerve center",
+  "description": "Nexus web UI \u2014 unified ham digital-ops nerve center",
   "author": "KD9TAW <kd9taw@protonmail.com>",
   "license": "GPL-3.0-only",
   "repository": {
@@ -44,6 +44,7 @@
     "typescript": "^5.6.3",
     "us-atlas": "^3.0.1",
     "vite": "^5.4.11",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "@types/node": "^24"
   }
 }

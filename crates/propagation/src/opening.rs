@@ -1965,7 +1965,10 @@ mod tests {
         let mut dx = BandFeatures::empty(Band::B2);
         dx.anomaly_z = 6.0;
         dx.unique_far_dx = 1;
-        assert!(dx.raw_open(&cfg), "one genuine-DX 2m station opens the band");
+        assert!(
+            dx.raw_open(&cfg),
+            "one genuine-DX 2m station opens the band"
+        );
 
         // A single NON-DX station (local / routine troposcatter, no far_dx) below the
         // multi-station bar stays closed — distance is what makes it an opening.
@@ -2002,25 +2005,34 @@ mod tests {
         one.anomaly_z = 6.0;
         one.unique_far_short_dx = 1;
         one.unique_far_tx = 1;
-        assert!(!one.raw_open(&cfg), "a single 500–700 km station is ambiguous");
+        assert!(
+            !one.raw_open(&cfg),
+            "a single 500–700 km station is ambiguous"
+        );
         // TWO distinct stations ≥500 km at once + the anomaly = a corroborated
         // short tropo lift → open (the quick-lift catch).
         let mut two = one.clone();
         two.unique_far_short_dx = 2;
         two.unique_far_tx = 2;
-        assert!(two.raw_open(&cfg), "two corroborating short-lift stations open");
+        assert!(
+            two.raw_open(&cfg),
+            "two corroborating short-lift stations open"
+        );
     }
 
     #[test]
     fn neighbor_ears_open_a_vhf_band_without_operator_participation() {
         let mut cfg = OpeningConfig::default();
         cfg.regional_scope = true; // the PSKR near-region feed is flowing
-        // The operator is parked on another band: NO operator-anchored evidence at
-        // all — but two distinct local receivers each copy a ≥700 km 2m path.
+                                   // The operator is parked on another band: NO operator-anchored evidence at
+                                   // all — but two distinct local receivers each copy a ≥700 km 2m path.
         let mut ears = BandFeatures::empty(Band::B2);
         ears.anomaly_z = 6.0;
         ears.unique_near_dx_rx = 2;
-        assert!(ears.raw_open(&cfg), "two neighbor ears open the band receive-only");
+        assert!(
+            ears.raw_open(&cfg),
+            "two neighbor ears open the band receive-only"
+        );
         // One ear alone = possibly a superstation — must NOT open.
         let mut one_ear = ears.clone();
         one_ear.unique_near_dx_rx = 1;
@@ -2031,7 +2043,10 @@ mod tests {
         assert!(no_feed.raw_open(&cfg));
         cfg.regional_scope = false;
         no_feed.anomaly_z = 6.0;
-        assert!(!no_feed.raw_open(&cfg), "sentinel requires the regional feed");
+        assert!(
+            !no_feed.raw_open(&cfg),
+            "sentinel requires the regional feed"
+        );
     }
 
     /// Helper: a raw-open BandSignal with the given peaks (tracker unit input).
@@ -2057,10 +2072,22 @@ mod tests {
         let mut tr = OpeningTracker::new(cfg);
         // Arm the grace clock, then jump past it so the onset is genuine.
         tr.update(0, &[]);
-        tr.update(8_000, &[open_sig_peaks(Band::B2, PropMode::Tropo, 5.0, 900.0, 1)]);
-        let evs = tr.update(8_600, &[open_sig_peaks(Band::B2, PropMode::Tropo, 6.0, 1200.0, 2)]);
-        assert!(evs.iter().any(|e| e.band == Band::B2 && e.is_new), "opens with is_new");
-        tr.update(9_200, &[open_sig_peaks(Band::B2, PropMode::Tropo, 5.0, 1500.0, 1)]);
+        tr.update(
+            8_000,
+            &[open_sig_peaks(Band::B2, PropMode::Tropo, 5.0, 900.0, 1)],
+        );
+        let evs = tr.update(
+            8_600,
+            &[open_sig_peaks(Band::B2, PropMode::Tropo, 6.0, 1200.0, 2)],
+        );
+        assert!(
+            evs.iter().any(|e| e.band == Band::B2 && e.is_new),
+            "opens with is_new"
+        );
+        tr.update(
+            9_200,
+            &[open_sig_peaks(Band::B2, PropMode::Tropo, 5.0, 1500.0, 1)],
+        );
         // Three consecutive closed windows past min-dwell → close + journal.
         for t in [9_800, 10_400, 11_000] {
             tr.update(t, &[]);
@@ -2084,13 +2111,34 @@ mod tests {
     fn close_all_flushes_an_in_progress_episode_at_exit() {
         let mut tr = OpeningTracker::new(OpeningConfig::default());
         tr.update(0, &[]);
-        tr.update(8_000, &[open_sig_peaks(Band::B6, PropMode::SporadicE, 5.0, 1400.0, 3)]);
-        tr.update(8_600, &[open_sig_peaks(Band::B6, PropMode::SporadicE, 7.0, 1800.0, 5)]);
+        tr.update(
+            8_000,
+            &[open_sig_peaks(
+                Band::B6,
+                PropMode::SporadicE,
+                5.0,
+                1400.0,
+                3,
+            )],
+        );
+        tr.update(
+            8_600,
+            &[open_sig_peaks(
+                Band::B6,
+                PropMode::SporadicE,
+                7.0,
+                1800.0,
+                5,
+            )],
+        );
         let eps = tr.close_all(9_000);
         assert_eq!(eps.len(), 1, "the live episode is flushed at exit");
         assert_eq!(eps[0].band, "6m");
         assert_eq!(eps[0].mode, "Sporadic-E");
         assert_eq!(eps[0].ended_utc, 9_000);
-        assert!(tr.close_all(9_100).is_empty(), "nothing left open after the flush");
+        assert!(
+            tr.close_all(9_100).is_empty(),
+            "nothing left open after the flush"
+        );
     }
 }

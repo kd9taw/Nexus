@@ -235,7 +235,10 @@ mod tests {
         assert_eq!(s.events.len(), 200);
         for k in 0..100 {
             let char_start = k as f64 * CHAR_MS;
-            assert!((s.events[2 * k].0 - char_start).abs() < 0.5, "char {k} start");
+            assert!(
+                (s.events[2 * k].0 - char_start).abs() < 0.5,
+                "char {k} start"
+            );
             assert!(
                 (s.events[2 * k + 1].0 - (char_start + BIT_MS)).abs() < 0.5,
                 "char {k} data edge"

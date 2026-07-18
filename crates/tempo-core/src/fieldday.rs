@@ -898,7 +898,10 @@ mod tests {
             restored.is_dupe_mode("K1ABC", "DIG"),
             "dupe key restored on the mode CLASS"
         );
-        assert!(restored.adif().contains("<MODE:4>RTTY"), "re-export keeps RTTY");
+        assert!(
+            restored.adif().contains("<MODE:4>RTTY"),
+            "re-export keeps RTTY"
+        );
         assert!(restored.cabrillo(14_080).contains(" RY "));
     }
 

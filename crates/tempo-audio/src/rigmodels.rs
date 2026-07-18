@@ -285,14 +285,22 @@ mod tests {
             assert!(is_slow_serial_rig(m), "Xiegu model {m} should be slow");
         }
         // Vintage Kenwood (4800/9600 IF-232C-era rigs — the same set as BAUD_BY_MODEL) → slow.
-        for m in [2001u32, 2002, 2003, 2005, 2007, 2009, 2011, 2013, 2025, 2004, 2010, 2016] {
-            assert!(is_slow_serial_rig(m), "vintage Kenwood model {m} should be slow");
+        for m in [
+            2001u32, 2002, 2003, 2005, 2007, 2009, 2011, 2013, 2025, 2004, 2010, 2016,
+        ] {
+            assert!(
+                is_slow_serial_rig(m),
+                "vintage Kenwood model {m} should be slow"
+            );
         }
         // Everything else keeps the fast 700 ms deadline — the working rigs are UNAFFECTED:
         // Icom 7300/9700, a Yaesu serial model (1042), MODERN Kenwood TS-590S (2031),
         // Flex SmartSDR (23005), Elecraft K4 (2048), and "none" (0).
         for m in [3073u32, 3081, 1042, 2031, 23005, 2048, 0] {
-            assert!(!is_slow_serial_rig(m), "fast/modern model {m} must stay fast");
+            assert!(
+                !is_slow_serial_rig(m),
+                "fast/modern model {m} must stay fast"
+            );
         }
     }
 
