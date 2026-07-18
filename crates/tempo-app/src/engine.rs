@@ -541,7 +541,7 @@ pub struct Engine {
     /// wrong-neighbor acquire-then-freeze recovers by re-acquiring from scratch).
     rtty_afc_reset: bool,
     /// Queued RTTY transmissions, one whole message per entry (already uppercased
-    /// + ITA2-filtered). Filled ONLY by [`Engine::rtty_send_text`] — an explicit
+    /// and ITA2-filtered). Filled ONLY by [`Engine::rtty_send_text`] — an explicit
     /// operator send — never on arm/launch. The radio loop keys ONE message at a
     /// time via [`Engine::poll_rtty_one`] (gated on tx_enabled + privileges +
     /// the Rtty operating mode + not tuning), pacing on the real bit-stream

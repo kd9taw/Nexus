@@ -320,7 +320,7 @@ mod tests {
         // whenever its state says letters; the diddles between digits break
         // that, so encode digit-by-digit fills would garble — this test pins
         // the DECODER contract: LTRS fill prints nothing.
-        assert!(!got.contains('\u{1f}' as char));
+        assert!(!got.contains('\u{1f}'));
         assert!(got.starts_with("TEST "));
     }
 

@@ -208,6 +208,7 @@ jobs:
             gcc-mingw-w64-x86-64 \
             g++-mingw-w64-x86-64 \
             gfortran-mingw-w64-x86-64 \
+            libboost-dev \
             cmake \
             ninja-build \
             build-essential

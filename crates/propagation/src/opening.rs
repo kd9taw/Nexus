@@ -2022,10 +2022,12 @@ mod tests {
 
     #[test]
     fn neighbor_ears_open_a_vhf_band_without_operator_participation() {
-        let mut cfg = OpeningConfig::default();
-        cfg.regional_scope = true; // the PSKR near-region feed is flowing
-                                   // The operator is parked on another band: NO operator-anchored evidence at
-                                   // all — but two distinct local receivers each copy a ≥700 km 2m path.
+        let mut cfg = OpeningConfig {
+            regional_scope: true, // the PSKR near-region feed is flowing
+            ..Default::default()
+        };
+        // The operator is parked on another band: NO operator-anchored evidence at
+        // all — but two distinct local receivers each copy a ≥700 km 2m path.
         let mut ears = BandFeatures::empty(Band::B2);
         ears.anomaly_z = 6.0;
         ears.unique_near_dx_rx = 2;

@@ -65,7 +65,10 @@ impl Default for AfskConfig {
 /// trailing partial group is ignored. Shared by the AFSK generator and the true-FSK
 /// keyer schedule ([`crate::rtty_fsk::fsk_schedule`]).
 pub fn baudot_frame(data_bits: &[bool]) -> Vec<(bool, f64)> {
-    debug_assert!(data_bits.len() % 5 == 0, "5 data bits per Baudot character");
+    debug_assert!(
+        data_bits.len().is_multiple_of(5),
+        "5 data bits per Baudot character"
+    );
     let mut out = Vec::with_capacity((data_bits.len() / 5) * 7);
     for ch in data_bits.chunks_exact(5) {
         out.push((false, 1.0)); // start bit: space

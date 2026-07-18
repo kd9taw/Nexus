@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(&rgb[3..6], &[2, 0, 0], "second sample from source col 2");
 
         // Already narrow → untouched dimensions.
-        let (w, h, rgb) = downscale_rgb(4, 3, &vec![[9, 9, 9]; 12], 160);
+        let (w, h, rgb) = downscale_rgb(4, 3, &[[9, 9, 9]; 12], 160);
         assert_eq!((w, h), (4, 3));
         assert_eq!(rgb.len(), 36);
     }

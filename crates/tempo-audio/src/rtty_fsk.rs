@@ -205,9 +205,9 @@ mod tests {
         // bit), back to mark one bit later (data + stop merge into one mark run).
         let s = fsk_schedule(&[true; 5], BAUD_45);
         assert_eq!(s.events.len(), 2);
-        assert_eq!(s.events[0].1, false);
+        assert!(!s.events[0].1);
         assert!(s.events[0].0.abs() < 1e-9);
-        assert_eq!(s.events[1].1, true);
+        assert!(s.events[1].1);
         assert!((s.events[1].0 - BIT_MS).abs() < 1e-3);
         assert!((s.total_ms - CHAR_MS).abs() < 1e-3);
     }

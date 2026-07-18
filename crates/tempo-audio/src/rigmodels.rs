@@ -236,6 +236,7 @@ pub(crate) fn icom_scope_model(model: u32) -> Option<crate::civ::commands::IcomM
 ///
 /// Every modern/fast rig is UNAFFECTED and keeps the 700 ms deadline: Yaesu, Icom via
 /// rigctld, modern Kenwood (TS-590/890/990), Flex, Elecraft.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
 pub(crate) fn is_slow_serial_rig(model: u32) -> bool {
     matches!(
         model,
