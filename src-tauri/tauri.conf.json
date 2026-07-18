@@ -39,7 +39,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$LOCALDATA/Nexus/sstv-gallery/**"]
+      }
     }
   },
   "bundle": {

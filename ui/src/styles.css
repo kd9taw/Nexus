@@ -15145,9 +15145,10 @@ select.settings-input {
 }
 
 /* ===========================================================================
-   RTTY cockpit + SSTV view — Digital-rail UI shells (decoder wiring lands next
-   build). Both mount in keep-alive hosts mirroring .operate-host so the future
-   decoders keep accumulating in the background across navigation.
+   RTTY cockpit + SSTV view — Digital-rail live-RX surfaces. Both mount in
+   keep-alive hosts mirroring .operate-host so the armed decoders keep
+   accumulating in the background across navigation. TX stays disabled (a
+   later, safety-reviewed wave).
    =========================================================================== */
 .rtty-host,
 .sstv-host {
@@ -15189,14 +15190,49 @@ select.settings-input {
   padding: 2px 10px;
   margin-left: var(--space-2);
 }
-/* RTTY decoded stream — reuses the CW transcript panel, taller (RTTY prints fast). */
+/* RTTY decoded stream — reuses the CW transcript panel, taller (RTTY prints fast).
+   Low-confidence characters render faint via inline opacity on the run spans. */
 .rtty-stream .cw-decode-text {
   height: 14em;
 }
 .rtty-macros .cw-macro:disabled {
   opacity: 0.4;
 }
-/* SSTV Arm toggle (header) — disabled until the armed VIS receiver lands. */
+/* RTTY RX arm toggle (stream head) — armed state must read at a glance. */
+.rtty-arm {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 1px var(--space-2);
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.rtty-arm:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+.rtty-arm.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* AFC readout pill — "+12 Hz 🔒" once acquired-then-frozen on a signal. */
+.rtty-afc-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+}
+.rtty-afc-pill.locked {
+  color: var(--ok, #2fbf71);
+  border-color: var(--ok, #2fbf71);
+}
+/* SSTV Arm toggle (header) — armed state must read at a glance. */
 .sstv-arm {
   padding: 6px var(--space-4);
   border-radius: var(--radius-sm);
@@ -15205,10 +15241,19 @@ select.settings-input {
   background: var(--bg-elev);
   border: 1px solid var(--border);
 }
+.sstv-arm:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+.sstv-arm.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
 .sstv-arm:disabled {
   opacity: 0.4;
 }
-/* SSTV live image canvas — the progressive decode area (empty state for now). */
+/* SSTV live image canvas — the in-flight decode area. */
 .sstv-canvas {
   flex: 1;
   min-height: 240px;
@@ -15226,7 +15271,31 @@ select.settings-input {
   text-align: center;
   padding: var(--space-6);
 }
-/* Gallery of received images (placeholder grid until the decoder lands). */
+/* In-flight decode: the preview canvas at its native (≤160 px) size, upscaled
+   CRISP by the browser — pixelated, never smoothed (putImageData doesn't
+   smooth; the CSS scale is the only smoothing risk). */
+.sstv-live {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  min-width: 0;
+}
+.sstv-live-canvas {
+  image-rendering: pixelated;
+  width: min(100%, 480px);
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+.sstv-live-caption {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+/* Gallery of received images (newest first). */
 .sstv-gallery {
   background: var(--bg-elev);
   border: 1px solid var(--border);
@@ -15253,4 +15322,41 @@ select.settings-input {
   padding: var(--space-4);
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
+}
+/* One completed image card: thumb (BMP via the asset protocol, or the canvas
+   fallback) + mode / UTC / frequency caption. */
+.sstv-thumb {
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.sstv-thumb-img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+.sstv-thumb-caption {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.sstv-thumb-mode {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sstv-thumb-meta {
+  font-size: 10px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

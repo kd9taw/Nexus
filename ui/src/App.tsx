@@ -2098,18 +2098,28 @@ export default function App() {
           />
         </div>
         {/* RTTY + SSTV keep-alive hosts (same pattern as .operate-host): the decoded
-            RTTY stream and the always-armed SSTV VIS receiver must keep accumulating
-            while the operator is on another section. Skeletons this build — these
-            hosts are the seam the decoders wire into. Gated on the feature toggle so
-            a disabled section mounts nothing. */}
+            RTTY stream and the always-armed SSTV VIS receiver keep accumulating in
+            the backend while the operator is on another section; `active` gates only
+            each view's display poll (the OperateCockpit pattern). Gated on the
+            feature toggle so a disabled section mounts nothing. */}
         {isViewEnabled('rtty') && (
           <div className="rtty-host" hidden={effectiveView !== 'rtty'}>
-            <RttyCockpit snap={snap} onSnap={setSnap} />
+            <RttyCockpit
+              snap={snap}
+              onSnap={setSnap}
+              active={effectiveView === 'rtty'}
+              onSetFrequency={handleSetFrequency}
+            />
           </div>
         )}
         {isViewEnabled('sstv') && (
           <div className="sstv-host" hidden={effectiveView !== 'sstv'}>
-            <SstvView snap={snap} onSnap={setSnap} />
+            <SstvView
+              snap={snap}
+              onSnap={setSnap}
+              active={effectiveView === 'sstv'}
+              onSetFrequency={handleSetFrequency}
+            />
           </div>
         )}
         {workspace}
