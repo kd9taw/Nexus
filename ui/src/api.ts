@@ -15,6 +15,8 @@ import type {
   CatProbeResult,
   CwDecodeResult,
   SkimHit,
+  RttyState,
+  SstvState,
   ClubLogPushResult,
   Activation,
   DetectedRig,
@@ -1037,6 +1039,27 @@ export async function previewCw(text: string): Promise<string> {
 /** Wideband CW skim of the recent RX audio: every distinct keyed signal across the band. */
 export async function cwSkim(): Promise<SkimHit[]> {
   return invoke<SkimHit[]>('cw_skim')
+}
+
+/** Arm/disarm the RTTY RX decoder (session-only; RX decode, never TX). */
+export async function rttyArm(on: boolean): Promise<RttyState> {
+  return invoke<RttyState>('rtty_arm', { on })
+}
+
+/** Live RTTY RX state (poll while the RTTY cockpit is visible). */
+export async function getRttyState(): Promise<RttyState> {
+  return invoke<RttyState>('get_rtty_state')
+}
+
+/** Arm/disarm the SSTV RX decoder (session-only; RX decode, never TX). */
+export async function sstvArm(on: boolean): Promise<SstvState> {
+  return invoke<SstvState>('sstv_arm', { on })
+}
+
+/** Live SSTV RX state: in-flight progress + preview + the saved-image gallery
+ * (poll while the SSTV view is visible). */
+export async function getSstvState(): Promise<SstvState> {
+  return invoke<SstvState>('get_sstv_state')
 }
 
 /** Set the TX period: true = even/"1st" slots, false = odd/"2nd". */

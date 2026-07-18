@@ -523,6 +523,31 @@ pub struct Engine {
     /// each logged QSO is tagged as your activation (POTA/SOTA). Transient (an
     /// activation ends), so not persisted. `None` = not activating.
     activation: Option<(String, String)>,
+    /// RTTY RX decoder armed (session-only runtime state, never persisted — the
+    /// decoder must never come up armed at launch). RX decode only; no TX path.
+    rtty_armed: bool,
+    /// Drain buffer for the RTTY decode thread: 12 kHz RX audio accumulates here
+    /// while armed; the thread empties it via [`Engine::take_rtty_audio`]. Empty
+    /// (zero cost) while disarmed.
+    rtty_audio: Vec<f32>,
+    /// Ring of decoded RTTY characters (+ per-char ATC confidence), capped at
+    /// [`RTTY_TEXT_CAP`] — the cockpit transcript. Pushed by the decode thread.
+    rtty_chars: VecDeque<tempo_core::rtty::DecodedChar>,
+    /// Latest AFC offset (Hz) reported by the RTTY demodulator.
+    rtty_afc_hz: f32,
+    /// Whether the RTTY demodulator's AFC has acquired-then-frozen (locked).
+    rtty_afc_locked: bool,
+    /// SSTV RX decoder armed (session-only runtime state, never persisted).
+    sstv_armed: bool,
+    /// Drain buffer for the SSTV decode thread (same pattern as `rtty_audio`).
+    sstv_audio: Vec<f32>,
+    /// In-flight SSTV decode progress (mode, lines, downscaled preview), pushed
+    /// by the decode thread. `None` = no image in flight.
+    sstv_progress: Option<SstvProgress>,
+    /// Session gallery of saved SSTV images, newest last. Seeded from the
+    /// persisted `gallery.json` at startup; the decode thread appends on each
+    /// completed image. Capped at [`SSTV_GALLERY_CAP`].
+    sstv_gallery: Vec<crate::dto::SstvGalleryEntry>,
 }
 
 /// Samples of recent audio kept for the live waterfall spectrum (~0.34 s at
@@ -535,6 +560,45 @@ const CW_WINDOW: usize = 72_000;
 const AI_CW_WINDOW: usize = 180_000;
 /// Per-QSO WAV ring: ~60 s at 12 kHz — captures the exchange around a logged contact.
 const QSO_WAV_WINDOW: usize = 720_000;
+/// RTTY decoded-character ring cap: ~4000 chars ≈ tens of minutes of copy at 45.45 baud.
+const RTTY_TEXT_CAP: usize = 4000;
+/// Cap on the armed RTTY/SSTV audio drain buffers (~10 s at 12 kHz). The decode
+/// threads normally empty these every ~100 ms; the cap only bites if a thread
+/// stalls, dropping oldest audio (garbling that decode) instead of growing RAM
+/// without bound.
+const RX_TAP_CAP: usize = 120_000;
+/// SSTV gallery session-list cap (mirrors the on-disk `gallery.json` cap).
+const SSTV_GALLERY_CAP: usize = 200;
+
+/// Live progress of an in-flight SSTV decode, pushed by the decode thread and
+/// read by the `get_sstv_state` poll.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SstvProgress {
+    /// Mode label, e.g. "Scottie 1".
+    pub mode: String,
+    /// Total scan lines in this mode's image.
+    pub lines_total: u32,
+    /// Scan lines decoded so far.
+    pub lines_done: u32,
+    /// Downscaled preview dimensions (0 until the first lines land).
+    pub preview_w: u32,
+    pub preview_h: u32,
+    /// Raw RGB preview bytes (`preview_w × preview_h × 3`), nearest-neighbor
+    /// downscale of the partial image.
+    pub preview_rgb: Vec<u8>,
+}
+
+/// Compact RTTY RX state for the `get_rtty_state` poll: armed flag, AFC, and
+/// the decoded-text ring with per-character confidence (0–100, parallel to
+/// `text`'s chars — render low values faint).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RttyRxState {
+    pub armed: bool,
+    pub afc_hz: f32,
+    pub afc_locked: bool,
+    pub text: String,
+    pub conf: Vec<u8>,
+}
 
 /// Window of recent decode DT samples used for the time-sync health median.
 /// Map a UI DSP-func name to its `[nb, nr, notch, comp, vox]` slot index (the same order the
@@ -745,6 +809,15 @@ impl Engine {
             last_eqsl_reconcile: None,
             last_qrz_reconcile: None,
             activation: None,
+            rtty_armed: false,
+            rtty_audio: Vec::new(),
+            rtty_chars: VecDeque::new(),
+            rtty_afc_hz: 0.0,
+            rtty_afc_locked: false,
+            sstv_armed: false,
+            sstv_audio: Vec::new(),
+            sstv_progress: None,
+            sstv_gallery: Vec::new(),
         }
     }
 
@@ -4146,6 +4219,23 @@ impl Engine {
             self.ai_cw_audio.clear();
             self.ai_cw_fed = 0;
         }
+        // The RTTY/SSTV RX taps: plain drain buffers the decode threads empty on
+        // their own cadence (`take_rtty_audio`/`take_sstv_audio`). Session-armed
+        // only — disarmed costs one branch, nothing else.
+        if self.rtty_armed {
+            self.rtty_audio.extend_from_slice(samples);
+            if self.rtty_audio.len() > RX_TAP_CAP {
+                let drop = self.rtty_audio.len() - RX_TAP_CAP;
+                self.rtty_audio.drain(0..drop);
+            }
+        }
+        if self.sstv_armed {
+            self.sstv_audio.extend_from_slice(samples);
+            if self.sstv_audio.len() > RX_TAP_CAP {
+                let drop = self.sstv_audio.len() - RX_TAP_CAP;
+                self.sstv_audio.drain(0..drop);
+            }
+        }
         // Feed the streaming CW decoder (retune first, cheaply, if the operator moved the
         // marker pitch) — it keeps a persistent transcript across polls + window slides.
         self.cw_stream.retune(self.settings.cw_pitch_hz);
@@ -4235,6 +4325,123 @@ impl Engine {
     /// of [`Self::cw_decode`].
     pub fn cw_skim(&self) -> Vec<tempo_core::cw_decode::SkimHit> {
         tempo_core::cw_decode::skim_cw(&self.cw_audio, ft1::SAMPLE_RATE, 300, 1500, 50)
+    }
+
+    // --- RTTY RX (armed decoder on the RX audio path; decode runs in the
+    // tempo-audio `rttyrx` thread). RX ONLY — no TX path touches any of this. ---
+
+    /// Arm/disarm the RTTY RX decoder. Session-only (never persisted, so the app
+    /// never launches armed). Arming starts a fresh transcript; disarming keeps
+    /// the transcript readable but stops the audio tap immediately.
+    pub fn set_rtty_armed(&mut self, on: bool) {
+        if on && !self.rtty_armed {
+            self.rtty_chars.clear();
+            self.rtty_afc_hz = 0.0;
+            self.rtty_afc_locked = false;
+        }
+        if !on {
+            self.rtty_audio.clear();
+        }
+        self.rtty_armed = on;
+    }
+
+    /// Whether the RTTY RX decoder is armed (read by the decode thread's gate).
+    pub fn rtty_armed(&self) -> bool {
+        self.rtty_armed
+    }
+
+    /// Drain the armed RTTY audio tap (12 kHz mono since the last take). The
+    /// decode thread calls this under a brief lock; the demod runs off-lock.
+    pub fn take_rtty_audio(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.rtty_audio)
+    }
+
+    /// Append freshly decoded RTTY characters + the demod's current AFC state.
+    /// Called by the decode thread; the ring caps at [`RTTY_TEXT_CAP`].
+    pub fn push_rtty_decode(
+        &mut self,
+        chars: &[tempo_core::rtty::DecodedChar],
+        afc_hz: f32,
+        afc_locked: bool,
+    ) {
+        self.rtty_chars.extend(chars.iter().copied());
+        while self.rtty_chars.len() > RTTY_TEXT_CAP {
+            self.rtty_chars.pop_front();
+        }
+        self.rtty_afc_hz = afc_hz;
+        self.rtty_afc_locked = afc_locked;
+    }
+
+    /// The compact RTTY RX state the UI polls (`get_rtty_state`).
+    pub fn rtty_state(&self) -> RttyRxState {
+        RttyRxState {
+            armed: self.rtty_armed,
+            afc_hz: self.rtty_afc_hz,
+            afc_locked: self.rtty_afc_locked,
+            text: self.rtty_chars.iter().map(|c| c.ch).collect(),
+            conf: self
+                .rtty_chars
+                .iter()
+                .map(|c| (c.confidence.clamp(0.0, 1.0) * 100.0).round() as u8)
+                .collect(),
+        }
+    }
+
+    // --- SSTV RX (armed decoder on the same tap; decode + image persistence run
+    // in the tempo-audio `sstvrx` thread). RX ONLY. ---
+
+    /// Arm/disarm the SSTV RX decoder. Session-only. Disarming drops the audio
+    /// tap and any in-flight decode progress; the gallery is untouched.
+    pub fn set_sstv_armed(&mut self, on: bool) {
+        if !on {
+            self.sstv_audio.clear();
+            self.sstv_progress = None;
+        }
+        self.sstv_armed = on;
+    }
+
+    /// Whether the SSTV RX decoder is armed (read by the decode thread's gate).
+    pub fn sstv_armed(&self) -> bool {
+        self.sstv_armed
+    }
+
+    /// Drain the armed SSTV audio tap (12 kHz mono since the last take).
+    pub fn take_sstv_audio(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.sstv_audio)
+    }
+
+    /// Publish (or clear) the in-flight SSTV decode progress. Decode-thread only.
+    pub fn set_sstv_progress(&mut self, p: Option<SstvProgress>) {
+        self.sstv_progress = p;
+    }
+
+    /// The in-flight SSTV decode progress, if an image is being received.
+    pub fn sstv_progress(&self) -> Option<&SstvProgress> {
+        self.sstv_progress.as_ref()
+    }
+
+    /// Append a completed SSTV image to the session gallery (newest last),
+    /// capped at [`SSTV_GALLERY_CAP`]. Decode-thread only.
+    pub fn push_sstv_gallery(&mut self, entry: crate::dto::SstvGalleryEntry) {
+        self.sstv_gallery.push(entry);
+        if self.sstv_gallery.len() > SSTV_GALLERY_CAP {
+            let excess = self.sstv_gallery.len() - SSTV_GALLERY_CAP;
+            self.sstv_gallery.drain(0..excess);
+        }
+    }
+
+    /// Seed the session gallery from the persisted `gallery.json` (startup).
+    pub fn load_sstv_gallery(&mut self, mut entries: Vec<crate::dto::SstvGalleryEntry>) {
+        if entries.len() > SSTV_GALLERY_CAP {
+            let excess = entries.len() - SSTV_GALLERY_CAP;
+            entries.drain(0..excess);
+        }
+        self.sstv_gallery = entries;
+    }
+
+    /// The session SSTV gallery, oldest first.
+    pub fn sstv_gallery(&self) -> &[crate::dto::SstvGalleryEntry] {
+        &self.sstv_gallery
     }
 
     /// Set the rig/CAT connection status the UI renders (and the Test-CAT result
@@ -6304,6 +6511,116 @@ mod tests {
         assert!(!e.is_qso_recording());
         assert!(e.qso_record_path().is_none(), "path cleared on stop");
         assert!(!e.snapshot().radio.qso_recording);
+    }
+
+    #[test]
+    fn rtty_arm_gates_tap_accumulates_ring_and_caps() {
+        use tempo_core::rtty::DecodedChar;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+
+        // Disarmed = zero added work: the tap stays empty however much audio flows.
+        e.set_spectrum_audio(&[0.0; 256]);
+        assert!(e.take_rtty_audio().is_empty(), "disarmed tap never fills");
+        assert!(!e.rtty_state().armed);
+
+        // Armed: RX audio accumulates; take() drains it for the decode thread.
+        e.set_rtty_armed(true);
+        e.set_spectrum_audio(&[0.0; 256]);
+        e.set_spectrum_audio(&[0.0; 100]);
+        assert_eq!(e.take_rtty_audio().len(), 356);
+        assert!(e.take_rtty_audio().is_empty(), "take drains");
+
+        // Synthesized decode push → state carries text + parallel confidence + AFC.
+        let chars: Vec<DecodedChar> = "CQ DE W1ABC"
+            .chars()
+            .map(|ch| DecodedChar {
+                ch,
+                confidence: 0.9,
+            })
+            .collect();
+        e.push_rtty_decode(&chars, -12.5, true);
+        let s = e.rtty_state();
+        assert!(s.armed);
+        assert_eq!(s.text, "CQ DE W1ABC");
+        assert_eq!(s.conf.len(), s.text.chars().count());
+        assert_eq!(s.conf[0], 90, "0..1 confidence maps to 0..100");
+        assert!((s.afc_hz + 12.5).abs() < 1e-6);
+        assert!(s.afc_locked);
+
+        // The ring caps at 4000 chars — oldest drop off the front.
+        let many = vec![
+            DecodedChar {
+                ch: 'X',
+                confidence: 1.0,
+            };
+            RTTY_TEXT_CAP + 500
+        ];
+        e.push_rtty_decode(&many, 0.0, true);
+        assert_eq!(e.rtty_state().text.chars().count(), RTTY_TEXT_CAP);
+
+        // Disarm: the tap stops immediately, but the transcript stays readable.
+        e.set_rtty_armed(false);
+        e.set_spectrum_audio(&[0.0; 64]);
+        assert!(e.take_rtty_audio().is_empty());
+        let s = e.rtty_state();
+        assert!(!s.armed);
+        assert_eq!(s.text.chars().count(), RTTY_TEXT_CAP, "transcript survives disarm");
+
+        // Re-arming starts a fresh transcript (a new copy session).
+        e.set_rtty_armed(true);
+        assert!(e.rtty_state().text.is_empty());
+    }
+
+    #[test]
+    fn sstv_arm_progress_and_gallery_cap() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+
+        // Disarmed = no tap fill, no progress.
+        e.set_spectrum_audio(&[0.0; 128]);
+        assert!(e.take_sstv_audio().is_empty());
+        assert!(e.sstv_progress().is_none());
+
+        // Armed: audio accumulates; the decode thread publishes progress.
+        e.set_sstv_armed(true);
+        e.set_spectrum_audio(&[0.0; 128]);
+        assert_eq!(e.take_sstv_audio().len(), 128);
+        e.set_sstv_progress(Some(SstvProgress {
+            mode: "Scottie 1".into(),
+            lines_total: 256,
+            lines_done: 40,
+            preview_w: 2,
+            preview_h: 1,
+            preview_rgb: vec![1, 2, 3, 4, 5, 6],
+        }));
+        assert_eq!(e.sstv_progress().unwrap().lines_done, 40);
+
+        // A completed image lands in the session gallery (newest last), capped.
+        for i in 0..(SSTV_GALLERY_CAP + 3) {
+            e.push_sstv_gallery(crate::dto::SstvGalleryEntry {
+                path: format!("/tmp/img{i}.bmp"),
+                mode: "Robot 36".into(),
+                finished_utc: "2026-07-17T00:00:00Z".into(),
+                freq_mhz: 14.230,
+                lines: 240,
+            });
+        }
+        assert_eq!(e.sstv_gallery().len(), SSTV_GALLERY_CAP, "gallery caps");
+        assert_eq!(
+            e.sstv_gallery().last().unwrap().path,
+            format!("/tmp/img{}.bmp", SSTV_GALLERY_CAP + 2),
+            "newest kept"
+        );
+
+        // Disarm drops the tap + in-flight progress but keeps the gallery.
+        e.set_sstv_armed(false);
+        e.set_spectrum_audio(&[0.0; 64]);
+        assert!(e.take_sstv_audio().is_empty());
+        assert!(e.sstv_progress().is_none());
+        assert_eq!(e.sstv_gallery().len(), SSTV_GALLERY_CAP);
+
+        // Startup seed replaces the session list (and caps defensively).
+        e.load_sstv_gallery(vec![crate::dto::SstvGalleryEntry::default()]);
+        assert_eq!(e.sstv_gallery().len(), 1);
     }
 
     #[test]

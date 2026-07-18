@@ -977,6 +977,19 @@ fn all_txt_location() -> String {
     all_txt_path().to_string_lossy().into_owned()
 }
 
+/// Where received SSTV images are saved — the same operator-findable local data
+/// dir as ALL.TXT (`%LOCALAPPDATA%\Nexus\sstv-gallery` on Windows,
+/// `~/.local/share/Nexus/sstv-gallery` on Unix). Each finished image lands here
+/// as `<UTC stamp>_<mode>.bmp` with a `gallery.json` metadata sidecar beside
+/// the images (written by the `sstvrx` decode thread).
+fn sstv_gallery_dir() -> PathBuf {
+    all_txt_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("sstv-gallery")
+}
+
 /// Open the ALL.TXT location so the operator can find the decode log: reveal the file
 /// when it exists, else open the (freshly-created) folder. Called from Rust via the
 /// opener plugin, so no JS package or ACL capability entry is required.
@@ -3908,6 +3921,125 @@ fn cw_skim(state: State<'_, SharedEngine>) -> Result<Vec<SkimHitDto>, String> {
             wpm: h.wpm,
         })
         .collect())
+}
+
+/// Live RTTY RX decoder state for the cockpit poll (armed + AFC + the decoded-
+/// character ring tail with per-char confidence). RX decode only — no TX path.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RttyStateDto {
+    armed: bool,
+    /// AFC offset from the nominal 2125/2295 Hz pair (Hz).
+    afc_hz: f32,
+    /// AFC has acquired-then-frozen on a signal.
+    afc_locked: bool,
+    /// The decoded-text ring tail (caps at ~4000 chars; oldest drop off).
+    text: String,
+    /// Per-character confidence 0–100, parallel to `text`'s chars — render low
+    /// values faint (the ATC soft metric).
+    char_conf: Vec<u8>,
+}
+
+fn rtty_state_dto(eng: &Engine) -> RttyStateDto {
+    let s = eng.rtty_state();
+    RttyStateDto {
+        armed: s.armed,
+        afc_hz: s.afc_hz,
+        afc_locked: s.afc_locked,
+        text: s.text,
+        char_conf: s.conf,
+    }
+}
+
+/// Arm/disarm the RTTY RX decoder (session-only runtime state — never persisted,
+/// so the app never launches armed). Returns the fresh state.
+#[tauri::command]
+fn rtty_arm(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_rtty_armed(on);
+    Ok(rtty_state_dto(&eng))
+}
+
+/// The live RTTY RX state (poll while the RTTY cockpit is visible).
+#[tauri::command]
+fn get_rtty_state(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(rtty_state_dto(&eng))
+}
+
+/// Live SSTV RX state: armed flag, in-flight decode progress (+ a downscaled
+/// raw-RGB preview), and the saved-image gallery. RX decode only — no TX path.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SstvStateDto {
+    armed: bool,
+    /// Mode label while an image is in flight (e.g. "Scottie 1"), else null.
+    mode: Option<String>,
+    lines_done: u32,
+    lines_total: u32,
+    /// Base64 of `preview_width × preview_height × 3` raw RGB bytes (the
+    /// in-progress thumbnail, ≤160 px wide), else null.
+    preview_rgb_base64: Option<String>,
+    preview_width: u32,
+    preview_height: u32,
+    /// Saved images, oldest first (persisted in the sstv-gallery folder).
+    gallery: Vec<tempo_app::dto::SstvGalleryEntry>,
+}
+
+fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
+    let p = eng.sstv_progress();
+    SstvStateDto {
+        armed: eng.sstv_armed(),
+        mode: p.map(|p| p.mode.clone()),
+        lines_done: p.map_or(0, |p| p.lines_done),
+        lines_total: p.map_or(0, |p| p.lines_total),
+        preview_rgb_base64: p
+            .filter(|p| !p.preview_rgb.is_empty())
+            .map(|p| b64_encode(&p.preview_rgb)),
+        preview_width: p.map_or(0, |p| p.preview_w),
+        preview_height: p.map_or(0, |p| p.preview_h),
+        gallery: eng.sstv_gallery().to_vec(),
+    }
+}
+
+/// Arm/disarm the SSTV RX decoder (session-only, like `rtty_arm`). Returns the
+/// fresh state.
+#[tauri::command]
+fn sstv_arm(state: State<'_, SharedEngine>, on: bool) -> Result<SstvStateDto, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_sstv_armed(on);
+    Ok(sstv_state_dto(&eng))
+}
+
+/// The live SSTV RX state (poll while the SSTV view is visible).
+#[tauri::command]
+fn get_sstv_state(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(sstv_state_dto(&eng))
+}
+
+/// Minimal standard-alphabet base64 (with padding) for the SSTV preview bytes —
+/// one encode-only call site doesn't justify a new dependency.
+fn b64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// Enable/disable normal slot transmit ("Monitor"). `false` mutes transmit and
@@ -9084,6 +9216,10 @@ pub fn run() {
             cw_clear,
             preview_cw,
             cw_skim,
+            rtty_arm,
+            get_rtty_state,
+            sstv_arm,
+            get_sstv_state,
             get_rig_models,
             get_all_rig_models,
             get_band_plan,
@@ -9302,6 +9438,32 @@ pub fn run() {
                 let eng = app.state::<SharedEngine>().inner().clone();
                 tempo_audio::aicw::spawn_ai_cw(eng, dir);
             }
+            // Seed the SSTV gallery session list from the persisted gallery.json
+            // so past images are browsable immediately (the decode thread only
+            // appends). Parsed here (not via tempo-audio) so non-radio builds
+            // still show the gallery.
+            {
+                let entries: Vec<tempo_app::dto::SstvGalleryEntry> =
+                    std::fs::read_to_string(sstv_gallery_dir().join("gallery.json"))
+                        .ok()
+                        .and_then(|text| serde_json::from_str(&text).ok())
+                        .unwrap_or_default();
+                if !entries.is_empty() {
+                    if let Ok(mut eng) = app.state::<SharedEngine>().inner().lock() {
+                        eng.load_sstv_gallery(entries);
+                    }
+                }
+            }
+            // RTTY + SSTV RX decode threads — RX ONLY (arming is per-session
+            // runtime state; nothing here can key PTT or emit TX audio).
+            #[cfg(feature = "radio")]
+            {
+                tempo_audio::rttyrx::spawn_rtty_rx(app.state::<SharedEngine>().inner().clone());
+                tempo_audio::sstvrx::spawn_sstv_rx(
+                    app.state::<SharedEngine>().inner().clone(),
+                    sstv_gallery_dir(),
+                );
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -9368,7 +9530,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::is_complete_lotw_body;
+    use super::{b64_encode, is_complete_lotw_body};
 
     // A full report ends with the documented `<APP_LoTW_EOF>` trailer.
     const COMPLETE_REPORT: &str = "ARRL Logbook of the World Status Report\n\
@@ -9404,5 +9566,17 @@ mod tests {
     #[test]
     fn eof_trailer_match_is_case_insensitive() {
         assert!(is_complete_lotw_body("...<eor>\n<app_lotw_eof>\n"));
+    }
+
+    // RFC 4648 vectors — the SSTV preview encoder must match standard base64
+    // exactly (the UI decodes it with atob()).
+    #[test]
+    fn b64_matches_rfc4648_vectors() {
+        assert_eq!(b64_encode(b""), "");
+        assert_eq!(b64_encode(b"f"), "Zg==");
+        assert_eq!(b64_encode(b"fo"), "Zm8=");
+        assert_eq!(b64_encode(b"foo"), "Zm9v");
+        assert_eq!(b64_encode(b"foobar"), "Zm9vYmFy");
+        assert_eq!(b64_encode(&[0xFF, 0xEF, 0xBE]), "/+++");
     }
 }

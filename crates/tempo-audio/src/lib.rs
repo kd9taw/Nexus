@@ -39,7 +39,18 @@ pub mod rigmodels;
 pub mod rotator;
 pub mod rtty_afsk;
 pub mod rtty_fsk;
+/// RTTY RX decode thread (armed-decoder-on-the-RX-path, the `aicw` pattern).
+/// RX ONLY — no TX path.
+#[cfg(feature = "device")]
+pub mod rttyrx;
 pub mod runtime;
+/// SSTV image/gallery persistence helpers (BMP writer, preview downscale,
+/// gallery.json load/save). Pure — no audio device, unit-tested.
+pub mod sstv_store;
+/// SSTV RX decode thread (VIS detect → progressive image → gallery save).
+/// RX ONLY — no TX path.
+#[cfg(feature = "device")]
+pub mod sstvrx;
 pub mod slot;
 pub mod serial_keyer;
 pub mod usbrig;

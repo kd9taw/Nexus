@@ -1351,6 +1351,25 @@ impl From<tempo_core::hrdlog::HrdLogPush> for HrdLogPushResultDto {
     }
 }
 
+/// One saved SSTV image in the operator-browsable local gallery. The session
+/// list lives on the engine; the decode thread persists it as `gallery.json`
+/// beside the images in the `sstv-gallery/` folder (atomic tmp+rename, the
+/// `openings_log.json` pattern).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SstvGalleryEntry {
+    /// Absolute path of the saved image file (24-bit BMP).
+    pub path: String,
+    /// Mode label, e.g. "Scottie 1".
+    pub mode: String,
+    /// ISO-8601 UTC completion time, e.g. "2026-07-17T15:30:00Z".
+    pub finished_utc: String,
+    /// The dial frequency (MHz) when the image finished.
+    pub freq_mhz: f64,
+    /// Decoded scan lines in the finished image (= image height).
+    pub lines: u32,
+}
+
 /// AI CW decoder state for the CW cockpit (beta side panel).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

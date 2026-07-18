@@ -12,7 +12,7 @@ description = "Nexus real-radio transport: sound-card audio (cpal) + PTT/CAT via
 # system deps. The `device` feature pulls in cpal for real sound-card I/O — gate
 # it on so the workspace test build needs no audio libraries.
 default = []
-device = ["dep:cpal", "dep:tempo-net"]
+device = ["dep:cpal", "dep:tempo-net", "dep:tempo-sstv"]
 # Serial PTT + COM-port enumeration via `serialport`. OFF by default: the
 # headless workspace build has no libudev. The station PC enables it.
 serial = ["dep:serialport"]
@@ -29,6 +29,11 @@ cpal = { version = "0.15", optional = true }
 serialport = { version = "4", optional = true }
 deepcw = { path = "../deepcw", optional = true }
 tempo-net = { path = "../tempo-net", optional = true }
+# SSTV RX decoder core (the `sstvrx` thread). Rides `device` like the rest of
+# the station-side transport.
+tempo-sstv = { path = "../tempo-sstv", optional = true }
+# SSTV gallery persistence (gallery.json load/save in `sstv_store`). Pure.
+serde_json = "1"
 
 # Windows-only: assign the launched rigctld to a Job Object so the OS kills it
 # (freeing the serial/COM port) whenever Tempo exits — even on a crash.

@@ -761,6 +761,52 @@ export interface SkimHit {
   wpm: number
 }
 
+/** Live RTTY RX decoder state (poll get_rtty_state while the RTTY cockpit is
+ * visible). RX decode only — arming never touches any TX path. */
+export interface RttyState {
+  armed: boolean
+  /** AFC offset from the nominal 2125/2295 Hz pair (Hz). */
+  afcHz: number
+  /** AFC has acquired-then-frozen on a signal. */
+  afcLocked: boolean
+  /** The decoded-text ring tail (caps at ~4000 chars; oldest drop off). */
+  text: string
+  /** Per-character confidence 0–100, parallel to `text`'s chars — render low
+   * values faint (the ATC soft metric). */
+  charConf: number[]
+}
+
+/** One saved SSTV image in the local gallery (a BMP in the sstv-gallery folder
+ * of the Nexus local data dir, beside its gallery.json metadata). */
+export interface SstvGalleryEntry {
+  /** Absolute path of the saved image file. */
+  path: string
+  /** Mode label, e.g. "Scottie 1". */
+  mode: string
+  /** ISO-8601 UTC completion time, e.g. "2026-07-17T15:30:00Z". */
+  finishedUtc: string
+  /** Dial frequency (MHz) when the image finished. */
+  freqMhz: number
+  /** Decoded scan lines (= image height). */
+  lines: number
+}
+
+/** Live SSTV RX state: armed flag, in-flight decode progress + preview, and
+ * the saved-image gallery (oldest first). RX decode only. */
+export interface SstvState {
+  armed: boolean
+  /** Mode label while an image is in flight, else null. */
+  mode: string | null
+  linesDone: number
+  linesTotal: number
+  /** Base64 of previewWidth×previewHeight×3 raw RGB bytes (the in-progress
+   * thumbnail, ≤160 px wide), else null. */
+  previewRgbBase64: string | null
+  previewWidth: number
+  previewHeight: number
+  gallery: SstvGalleryEntry[]
+}
+
 /** Result of "Auto-test ports": the working (port, baud, Hamlib model) the prober
  * auto-selected, or found=false with a detail message. */
 export interface CatProbeResult {
