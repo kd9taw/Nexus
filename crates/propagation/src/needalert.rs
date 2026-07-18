@@ -581,17 +581,23 @@ pub fn wanted_alert(
     Some(alert)
 }
 
-/// Band-aware "local to me" radius (km). An Es footprint (VHF) is far tighter than
-/// an F2 footprint (HF). 250 km on VHF: Es patches run ~100–400 km, so a receiver
-/// must be INSIDE the same patch footprint as the operator before its reception
-/// implies "you can likely hear this too" — likely, not certain (patches can be
-/// disjoint), which is why VHF additionally requires corroboration (see
-/// [`heard_near_me`]). HF F2 footprints are continent-scale; 1500 km holds.
+/// Band-aware "local to me" radius (km) — how close a receiver must be before its
+/// reception implies "you can likely hear this too" (likely, not certain, which is
+/// why VHF additionally requires corroboration — see [`heard_near_me`]).
+/// - 6m/4m (Es-dominant): 250 km — Es patches run ~100–400 km, so the receiver must
+///   share the operator's patch footprint.
+/// - 2m (tropo/aurora-dominant, NOT Es): 800 km — tropo enhancement rides synoptic
+///   high-pressure systems that span 1000 km+, and aurora illuminates a whole
+///   curtain-facing region, so a receiver hundreds of km away is routinely inside
+///   the same lift. The old Es-derived 250 km dropped nearly all real 2m opening
+///   evidence (paths run 300–1500 km). Matches the opening detector's
+///   `region_near_km` neighbor radius.
+/// - HF: F2 footprints are continent-scale; 1500 km holds.
 pub fn near_me_radius_km(band: Band) -> f64 {
-    if band.is_vhf() {
-        250.0
-    } else {
-        1500.0
+    match band {
+        Band::B2 => 800.0,
+        b if b.is_vhf() => 250.0,
+        _ => 1500.0,
     }
 }
 
@@ -1945,5 +1951,15 @@ mod tests {
             ranked[0].tags
         );
         assert_eq!(ranked[0].priority, 55);
+    }
+
+    #[test]
+    fn near_me_radius_is_per_band_not_one_vhf_bucket() {
+        // 2m evidence rides synoptic tropo/aurora (not Es patches) — its radius must
+        // be lift-scale, while the Es bands keep the tight patch footprint.
+        assert_eq!(near_me_radius_km(Band::B2), 800.0);
+        assert_eq!(near_me_radius_km(Band::B6), 250.0);
+        assert_eq!(near_me_radius_km(Band::B4), 250.0);
+        assert_eq!(near_me_radius_km(Band::B20), 1500.0);
     }
 }
