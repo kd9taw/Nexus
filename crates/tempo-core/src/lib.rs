@@ -33,6 +33,7 @@ pub mod qso;
 pub mod qsy;
 pub mod reconcile;
 pub mod roster;
+pub mod rtty;
 pub mod spectrum;
 pub mod store;
 pub mod text;
