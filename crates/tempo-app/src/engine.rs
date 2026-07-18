@@ -1124,6 +1124,9 @@ impl Engine {
         if !self.settings.band.eq_ignore_ascii_case(band) {
             self.clear_decode_context();
             self.app.clear_stations();
+            // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
+            // them as AP hypotheses on the new band would seed wrong-call decodes.
+            modes::reset_ft8_a7();
             // Band switch mid-QSO: without a halt the sequencer keeps calling a
             // station that isn't on the new band (operator report — directed
             // calls kept going out after a Needed-click QSY). Same semantics as
@@ -5353,7 +5356,12 @@ impl Engine {
                 nfqso: self.rx_offset_hz as i32,
                 frame_time_ms,
             };
-            self.source.decode(&req)
+            // The a7 extended path: cross-cycle AP replay (stations decoded in the
+            // previous same-parity slot recovered a few dB deeper). Nexus decodes
+            // once per COMPLETED slot with the full frame, so every call is the
+            // authoritative final pass. frame_time_ms above is real slot time —
+            // exactly the per-slot key the a7 table's shuffle needs.
+            self.source.decode_a7(&req, true)
         }
     }
 
