@@ -15,19 +15,25 @@
           var den = localStorage.getItem('nexus-density')
           if (den === 'guided' || den === 'standard' || den === 'dense') d.setAttribute('data-density', den)
           if (localStorage.getItem('nexus-motion') === 'reduce') d.setAttribute('data-motion', 'reduce')
-          // Auto-fit zoom from the screen when there's no saved preference — keep
-          // this logic in sync with pickInitialZoom() in src/useScale.ts.
-          var s = Number(localStorage.getItem('tempo-ui-scale'))
-          var zoom
-          if ([90, 100, 110, 125].indexOf(s) !== -1) {
-            zoom = s / 100
+          // First-paint zoom seed — keep in sync with useScale.ts (SCALE_STEPS,
+          // NAT_W/NAT_H fit model, keys nexus-ui-scale-mode / nexus-ui-scale-cap):
+          // a pinned Manual scale applies directly; otherwise auto-fit to the
+          // window (min(w/1200, h/900), snapped DOWN to a step, capped, floor 65).
+          var STEPS = [65, 70, 75, 80, 85, 90, 100, 110, 125, 150, 175]
+          var mode = Number(localStorage.getItem('nexus-ui-scale-mode'))
+          var z
+          if (STEPS.indexOf(mode) !== -1) {
+            z = mode
           } else {
-            var w = window.innerWidth, h = window.innerHeight
-            var z = w >= 3400 ? 125 : w >= 1600 ? 110 : w >= 1200 ? 100 : 90
-            if (h < 820 && z > 100) z = 100
-            if (h < 720 && z > 90) z = 90
-            zoom = z / 100
+            var cap = Number(localStorage.getItem('nexus-ui-scale-cap'))
+            if (STEPS.indexOf(cap) === -1) cap = 100
+            var target = Math.min(window.innerWidth / 1200, window.innerHeight / 900) * 100
+            z = 65
+            for (var i = 0; i < STEPS.length; i++) {
+              if (STEPS[i] <= cap && STEPS[i] <= target) z = STEPS[i]
+            }
           }
+          var zoom = z / 100
           d.style.setProperty('--ui-zoom', String(zoom))
           // Initial size class from EFFECTIVE width (mirror classifyViewport() in
           // src/useViewport.ts) so the first paint is already at the right breakpoint.

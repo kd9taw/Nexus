@@ -119,4 +119,18 @@ describe('SetupWizard starter-pack offer', () => {
     expect(screen.getByText(/What do you mostly want to do/)).toBeTruthy() // on the goals step
     expect(screen.queryByText(/Start with some channels/)).toBeNull()
   })
+
+  it('force-enables RTTY and SSTV when checked on the goals step', () => {
+    const { onApply } = renderWizard()
+    gotoGoals()
+    // Pick a goal so the completion button enables; modes ride on top of the profile.
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-goal')!)
+    fireEvent.click(screen.getByRole('button', { name: /RTTY/ }))
+    fireEvent.click(screen.getByRole('button', { name: /SSTV/ }))
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-go')!)
+    expect(onApply).toHaveBeenCalledTimes(1)
+    const modes = onApply.mock.calls[0][2] as string[]
+    expect(modes).toContain('rtty')
+    expect(modes).toContain('sstv')
+  })
 })

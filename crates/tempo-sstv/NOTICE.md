@@ -3,9 +3,10 @@
 `slowrx.rs` is a Rust port of [slowrx](https://github.com/windytan/slowrx),
 the SSTV decoder by Oona Räisänen (OH2EIQ). Significant portions of this
 crate's algorithms — VIS detection, mode-specification tables,
-frequency-to-pixel mappings, sync correlation — are translated from
-slowrx's C source code. Per-file headers in `src/` identify which
-modules are direct translations and credit the corresponding slowrx file.
+frequency-to-pixel mappings, sync correlation, FSK callsign-ID decoding
+(`src/fsk.rs`, from slowrx's `fsk.c`) — are translated from slowrx's C
+source code. Per-file headers in `src/` identify which modules are direct
+translations and credit the corresponding slowrx file.
 
 ## slowrx — ISC License
 

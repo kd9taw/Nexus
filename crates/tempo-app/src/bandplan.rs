@@ -127,78 +127,16 @@ pub fn ft4_band_plan() -> Vec<BandChannel> {
 /// policy handles FSK-mode rigs separately.
 pub fn rtty_band_plan() -> Vec<BandChannel> {
     vec![
-        ch(
-            "160m",
-            "HF",
-            1.838,
-            "LSB",
-            "160 m · RTTY",
-            "RTTY is rare here; shared with PSK31 1.838 — listen first",
-        ),
-        ch(
-            "80m",
-            "HF",
-            3.580,
-            "LSB",
-            "80 m · RTTY",
-            "the classic 3.580–3.600 RTTY window's low edge",
-        ),
-        ch(
-            "40m",
-            "HF",
-            7.080,
-            "LSB",
-            "40 m · RTTY",
-            "US activity 7.080–7.100; EU/DX runs ~7.043 — tune down for DX",
-        ),
-        ch(
-            "30m",
-            "HF",
-            10.142,
-            "LSB",
-            "30 m · RTTY",
-            "10.140–10.150 data half; secondary band — tread lightly",
-        ),
-        ch(
-            "20m",
-            "HF",
-            14.083,
-            "LSB",
-            "20 m · RTTY",
-            "the 14.080–14.090 RTTY window, above the FT4 cluster at 14.080",
-        ),
-        ch(
-            "17m",
-            "HF",
-            18.105,
-            "LSB",
-            "17 m · RTTY",
-            "18.100–18.108 window, above FT8 18.100's audio cluster",
-        ),
-        ch(
-            "15m",
-            "HF",
-            21.083,
-            "LSB",
-            "15 m · RTTY",
-            "the 21.080–21.100 RTTY window, above JS8 21.078",
-        ),
-        ch(
-            "12m",
-            "HF",
-            24.920,
-            "LSB",
-            "12 m · RTTY",
-            "24.910–24.930 data segment, clear of FT8 24.915",
-        ),
-        ch(
-            "10m",
-            "HF",
-            28.083,
-            "LSB",
-            "10 m · RTTY",
-            "the 28.080–28.100 RTTY window — Technician-accessible",
-        ),
+        ch("160m", "HF", 1.838, "LSB", "160 m · RTTY", "RTTY is rare here; shared with PSK31 1.838 — listen first"),
+        ch("80m", "HF", 3.590, "LSB", "80 m · RTTY", "the classic 3.580–3.600 RTTY window; 3.585/3.590 are the DX calling spots — 3.580 itself is PSK31's home"),
+        ch("40m", "HF", 7.080, "LSB", "40 m · RTTY (US)", "US activity 7.080–7.100 (ARRL RTTY/data 7.080–7.125)"),
+        ch("40m-dx", "HF", 7.045, "LSB", "40 m · RTTY (EU/DX)", "IARU R1 digimode window 7.040–7.047, DX calling 7.040/7.045; WSPR sits at 7.0386 — stay high"),
+        ch("30m", "HF", 10.142, "LSB", "30 m · RTTY", "10.140–10.150 data half; secondary band — tread lightly"),
+        ch("20m", "HF", 14.083, "LSB", "20 m · RTTY", "the 14.080–14.090 RTTY window, above the FT4 cluster at 14.080"),
+        ch("17m", "HF", 18.105, "LSB", "17 m · RTTY", "18.100–18.108 window, above FT8 18.100's audio cluster"),
+        ch("15m", "HF", 21.083, "LSB", "15 m · RTTY", "the 21.080–21.100 RTTY window, above JS8 21.078"),
+        ch("12m", "HF", 24.920, "LSB", "12 m · RTTY", "the 24.920–24.925 RTTY window (IARU digimodes 24.915–24.929), clear of FT8 24.915"),
+        ch("10m", "HF", 28.083, "LSB", "10 m · RTTY", "the 28.080–28.100 RTTY window — Technician-accessible"),
     ]
 }
 
@@ -207,62 +145,14 @@ pub fn rtty_band_plan() -> Vec<BandChannel> {
 /// PD120 on 145.800 FM). Phone-segment dials, phone sideband conventions.
 pub fn sstv_band_plan() -> Vec<BandChannel> {
     vec![
-        ch(
-            "80m",
-            "HF",
-            3.845,
-            "LSB",
-            "80 m · SSTV",
-            "US SSTV calling; EU runs 3.730",
-        ),
-        ch(
-            "40m",
-            "HF",
-            7.171,
-            "LSB",
-            "40 m · SSTV",
-            "US SSTV calling; EU runs 7.165",
-        ),
-        ch(
-            "20m",
-            "HF",
-            14.230,
-            "USB",
-            "20 m · SSTV",
-            "THE worldwide SSTV calling frequency (alt 14.233 when busy)",
-        ),
-        ch(
-            "15m",
-            "HF",
-            21.340,
-            "USB",
-            "15 m · SSTV",
-            "worldwide 15 m SSTV calling",
-        ),
-        ch(
-            "10m",
-            "HF",
-            28.680,
-            "USB",
-            "10 m · SSTV",
-            "worldwide 10 m SSTV calling",
-        ),
-        ch(
-            "2m",
-            "VHF",
-            145.800,
-            "FM",
-            "2 m · ISS downlink",
-            "ARISS events transmit PD120 images here — the SSTV event of the year, FM",
-        ),
-        ch(
-            "2m-call",
-            "VHF",
-            144.500,
-            "FM",
-            "2 m · SSTV calling",
-            "terrestrial VHF SSTV calling (regional conventions vary — check locally)",
-        ),
+        ch("80m", "HF", 3.845, "LSB", "80 m · SSTV (US)", "NA SSTV calling frequency"),
+        ch("80m-eu", "HF", 3.730, "LSB", "80 m · SSTV (EU)", "EU SSTV calling (IARU R1 image centre 3.735) — below US General phone; Extra-class or DX"),
+        ch("40m", "HF", 7.171, "LSB", "40 m · SSTV", "US SSTV calling; EU runs 7.165"),
+        ch("20m", "HF", 14.230, "USB", "20 m · SSTV", "THE worldwide SSTV calling frequency (alt 14.233 when busy)"),
+        ch("15m", "HF", 21.340, "USB", "15 m · SSTV", "worldwide 15 m SSTV calling"),
+        ch("10m", "HF", 28.680, "USB", "10 m · SSTV", "worldwide 10 m SSTV calling"),
+        ch("2m", "VHF", 145.800, "FM", "2 m · ISS downlink", "ARISS events transmit PD120 images here — the SSTV event of the year, FM"),
+        ch("2m-call", "VHF", 144.500, "FM", "2 m · SSTV calling", "terrestrial VHF SSTV calling (regional conventions vary — check locally)"),
     ]
 }
 
@@ -440,6 +330,18 @@ mod tests {
             rtty.iter().all(|c| c.mode == "LSB"),
             "RTTY channels are LSB"
         );
+        // 40 m runs 7.080+ in the US but 7.040–7.047 in IARU R1 / DX — both
+        // watering holes must be offered (three-persona rule: DX chasers too).
+        assert!(
+            rtty.iter()
+                .any(|c| c.band == "40m" && (c.dial_mhz - 7.080).abs() < 1e-9),
+            "40m US RTTY at 7.080"
+        );
+        assert!(
+            rtty.iter()
+                .any(|c| c.band == "40m-dx" && (c.dial_mhz - 7.045).abs() < 1e-9),
+            "40m EU/DX RTTY at 7.045"
+        );
         // SSTV: 14.230 is THE calling frequency; the ISS downlink must be present
         // (ARISS events are the biggest SSTV driver) and FM.
         let sstv = sstv_band_plan();
@@ -451,5 +353,12 @@ mod tests {
             "ISS downlink 145.800"
         );
         assert_eq!(iss.mode, "FM");
+        // 80 m SSTV splits US/EU: 3.845 NA and 3.730 EU — both entries, both LSB.
+        let s80 = sstv.iter().find(|c| c.band == "80m").unwrap();
+        assert!((s80.dial_mhz - 3.845).abs() < 1e-9, "80m US SSTV = 3.845");
+        let s80eu = sstv.iter().find(|c| c.band == "80m-eu").unwrap();
+        assert!((s80eu.dial_mhz - 3.730).abs() < 1e-9, "80m EU SSTV = 3.730");
+        assert_eq!(s80.mode, "LSB");
+        assert_eq!(s80eu.mode, "LSB");
     }
 }

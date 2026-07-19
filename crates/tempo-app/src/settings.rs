@@ -524,6 +524,17 @@ pub struct Settings {
     /// Conservative by default so it reads as a normal QSY, not a hopping pattern.
     pub qsy_cadence: u64,
 
+    // --- ISS SSTV auto-arm — a SEPARATE, opt-in convenience ---
+    /// Opt-in: at the start of an ISS pass, auto-tune 145.800 FM and arm the SSTV
+    /// decoder; at LOS, disarm and restore the operator's saved dial. **Off by
+    /// default** and fully gated — every rig-touching action lives behind this
+    /// flag, and it never retunes/disarms against the operator (the dial is
+    /// restored only while still on 145.800 FM). ISS SSTV is an event-only
+    /// downlink, so it fires on every pass; the arm/restore loop lives in the
+    /// frontend (issAutoArm.ts, mirroring the sat alarm) since SSTV RX only runs
+    /// while the app is open.
+    pub iss_sstv_auto_arm: bool,
+
     // --- alerts / comforts ---
     /// Alert (sound + visual) when your callsign is decoded (someone calling you).
     pub alert_my_call: bool,
@@ -1248,6 +1259,7 @@ impl Default for Settings {
             qsy_enabled: false,
             qsy_set: vec!["20m".to_string(), "40m".to_string(), "30m".to_string()],
             qsy_cadence: tempo_core::qsy::DEFAULT_CADENCE,
+            iss_sstv_auto_arm: false,
             alert_my_call: true,
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
@@ -1756,15 +1768,19 @@ impl Settings {
                 }
             }
             // RTTY: the mode follows the keying backend, like CW's keyer split. True FSK
-            // needs the rig in its RTTY mode (Hamlib "RTTY" → Yaesu RTTY-L etc.) so the
-            // FSK input keys the shift AND the rig's narrow RTTY filters unlock; AFSK is
-            // an audio tone pair through SSB — LSB on every band (the RTTY convention:
-            // mark = lower audio = higher RF; `rtty_reverse` flips the TONES, not the
-            // sideband, for operators who deliberately run the other side).
+            // needs the rig in its RTTY mode (Hamlib "RTTY" → Yaesu RTTY-L etc.) so the FSK
+            // input keys the shift AND the rig's narrow RTTY filters unlock. AFSK is an audio
+            // tone pair the SOUNDCARD plays, so — exactly like FT8 — it needs a DATA submode
+            // (PKTLSB → Yaesu DATA-L / Icom LSB-D / Kenwood DATA, rig-agnostically via Hamlib)
+            // to route the USB codec to the modulator: plain LSB takes TX audio from the MIC
+            // on the common Icom / default-Yaesu setup and radiates ZERO RF ("red light, no
+            // signal"). LSB-side keeps the RTTY convention (mark = lower audio = higher RF);
+            // `rtty_reverse` flips the TONES, not the sideband. A rig with no DATA submode is
+            // handled by the loop's bounded set_mode retry (tries, is rejected, gives up).
             OperatingMode::Rtty => if self.rtty_backend.eq_ignore_ascii_case("fsk") {
                 "RTTY"
             } else {
-                "LSB"
+                "PKTLSB"
             }
             .to_string(),
             // Digital: force the DATA submode (PKTUSB/PKTLSB → Yaesu DATA-U / Icom USB-D
@@ -1791,13 +1807,14 @@ mod tests {
     fn rtty_rig_mode_follows_the_keying_backend() {
         let mut s = Settings::default();
         s.operating_mode = OperatingMode::Rtty;
-        // AFSK (the default backend): audio tones through SSB — LSB on EVERY band
-        // (the RTTY convention), unlike Phone's band-aware sideband.
+        // AFSK (the default backend): soundcard audio tones, so a DATA submode (PKTLSB) on
+        // EVERY band — LSB-side keeps the RTTY convention, and DATA routes the USB codec to
+        // the modulator (plain LSB would take TX audio from the mic → no RF), like FT8.
         assert_eq!(s.rtty_backend, "afsk");
         s.dial_mhz = 14.083;
-        assert_eq!(s.rig_mode(), "LSB");
+        assert_eq!(s.rig_mode(), "PKTLSB");
         s.dial_mhz = 7.080;
-        assert_eq!(s.rig_mode(), "LSB");
+        assert_eq!(s.rig_mode(), "PKTLSB");
         // True FSK: the rig's RTTY mode (unlocks its narrow RTTY filters).
         s.rtty_backend = "fsk".to_string();
         assert_eq!(s.rig_mode(), "RTTY");

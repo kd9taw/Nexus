@@ -1,6 +1,7 @@
 //! # tempo-sstv
 //!
-//! Nexus SSTV receiver core, vendored from the MIT `slowrx` crate v0.5.3
+//! Nexus SSTV receiver **and transmitter** core. The receiver is vendored
+//! from the MIT `slowrx` crate v0.5.3
 //! (<https://github.com/jasonherald/slowrx.rs>, commit `aa384b4`) — itself a
 //! pure-Rust port of [slowrx](https://github.com/windytan/slowrx) by Oona
 //! Räisänen (OH2EIQ). Significant portions of the algorithms are translated
@@ -20,6 +21,13 @@
 //! `#[non_exhaustive]`-protected for additive growth as future
 //! mode-family epics land. See
 //! <https://github.com/jasonherald/slowrx.rs/issues/9> for the V2 roadmap.
+//!
+//! The **transmitter** ([`encode`]) is original Nexus code: it synthesizes
+//! the full on-air transmission — standard two-segment calibration/VIS
+//! header + per-mode scanlines — for all 15 modes, directly at the caller's
+//! sample rate. Every mode is TX↔RX self-loopback-validated against the
+//! decoder (`tests/tx_loopback.rs`). See [`encode_image`] and
+//! [`tx_duration_secs`].
 //!
 //! ## Example
 //!
@@ -44,7 +52,12 @@ pub(crate) mod demod;
 pub(crate) mod dsp;
 
 pub mod decoder;
+pub mod encode;
+pub(crate) mod encode_pd;
+pub(crate) mod encode_robot;
+pub(crate) mod encode_scottie;
 pub mod error;
+pub(crate) mod fsk;
 pub mod image;
 pub mod mode_pd;
 pub mod mode_robot;
@@ -54,21 +67,11 @@ pub mod resample;
 #[allow(dead_code)]
 pub(crate) mod snr;
 pub(crate) mod sync;
+pub(crate) mod tone;
 pub mod vis;
 
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) mod test_tone;
-
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) mod pd_test_encoder;
-
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) mod robot_test_encoder;
-
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) mod scottie_test_encoder;
-
 pub use crate::decoder::{SstvDecoder, SstvEvent};
+pub use crate::encode::{encode_image, tx_duration_secs, SourceImage};
 pub use crate::error::{Error, Result};
 pub use crate::image::SstvImage;
 pub use crate::modespec::{
@@ -88,33 +91,34 @@ pub mod __test_support {
     pub mod mode_pd {
         pub use crate::demod::ycbcr_to_rgb;
 
-        /// Thin wrapper around the now-`pub(crate)` `crate::pd_test_encoder::encode_pd`.
-        /// `__test_support` is the sole consumer-facing path for the synthetic
-        /// PD encoder (#86 B10).
+        /// Thin wrapper around the working-rate PD scanline encoder
+        /// (`crate::encode_pd::encode_pd`). `__test_support` is the sole
+        /// consumer-facing path for the synthetic PD encoder (#86 B10).
         #[doc(hidden)]
         #[must_use]
         pub fn encode_pd(mode: crate::modespec::SstvMode, ycrcb: &[[u8; 3]]) -> Vec<f32> {
-            crate::pd_test_encoder::encode_pd(mode, ycrcb)
+            crate::encode_pd::encode_pd(mode, ycrcb)
         }
     }
     pub mod mode_robot {
-        /// Thin wrapper around the now-`pub(crate)` `crate::robot_test_encoder::encode_robot`.
-        /// `__test_support` is the sole consumer-facing path for the synthetic
-        /// Robot encoder (#86 B10).
+        /// Thin wrapper around the working-rate Robot scanline encoder
+        /// (`crate::encode_robot::encode_robot`). `__test_support` is the sole
+        /// consumer-facing path for the synthetic Robot encoder (#86 B10).
         #[doc(hidden)]
         #[must_use]
         pub fn encode_robot(mode: crate::modespec::SstvMode, ycrcb: &[[u8; 3]]) -> Vec<f32> {
-            crate::robot_test_encoder::encode_robot(mode, ycrcb)
+            crate::encode_robot::encode_robot(mode, ycrcb)
         }
     }
     pub mod mode_scottie {
-        /// Thin wrapper around the now-`pub(crate)` `crate::scottie_test_encoder::encode_scottie`.
-        /// `__test_support` is the sole consumer-facing path for the synthetic
-        /// Scottie/Martin encoder (#86 B10).
+        /// Thin wrapper around the working-rate Scottie/Martin scanline encoder
+        /// (`crate::encode_scottie::encode_scottie`). `__test_support` is the
+        /// sole consumer-facing path for the synthetic Scottie/Martin encoder
+        /// (#86 B10).
         #[doc(hidden)]
         #[must_use]
         pub fn encode_scottie(mode: crate::modespec::SstvMode, rgb: &[[u8; 3]]) -> Vec<f32> {
-            crate::scottie_test_encoder::encode_scottie(mode, rgb)
+            crate::encode_scottie::encode_scottie(mode, rgb)
         }
     }
 }

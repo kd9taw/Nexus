@@ -2,7 +2,10 @@
 //!
 //! Opens the default input and output devices, downmixes input to mono, fans
 //! mono output to all channels, and resamples between the device's native rate
-//! and the modem's 12 kHz. The cpal callbacks (which run on an audio thread)
+//! and the modem's 12 kHz. The RX/decode path uses a stateful, anti-aliased
+//! decimator ([`crate::capture_resample::CaptureResampler`]); TX playback keeps
+//! the plain linear resample (upsampling has no aliasing hazard). The cpal
+//! callbacks (which run on an audio thread)
 //! exchange device-rate samples with this struct through lock-guarded rings;
 //! [`AudioBackend::capture`]/[`AudioBackend::play`] do the resampling on the
 //! caller's thread.
@@ -18,6 +21,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 
 use crate::backend::AudioBackend;
+use crate::capture_resample::CaptureResampler;
 use crate::monitor::{Monitor, SpscRing};
 use crate::resample::resample_linear;
 
@@ -79,7 +83,7 @@ pub fn available_devices() -> (Vec<String>, Vec<String>) {
         use std::sync::atomic::{AtomicU32, Ordering};
         static CAUGHT: AtomicU32 = AtomicU32::new(0);
         let n = CAUGHT.fetch_add(1, Ordering::Relaxed) + 1;
-        if n == 1 || n % 100 == 0 {
+        if n == 1 || n.is_multiple_of(100) {
             eprintln!(
                 "nexus: audio-device enumeration panicked (caught; occurrence {n}) — \
                  a broken/virtual audio device on this system; device lists returned empty"
@@ -155,8 +159,13 @@ pub struct CpalBackend {
     _out_stream: Stream,
     in_ring: Arc<Mutex<VecDeque<f32>>>,
     out_ring: Arc<Mutex<VecDeque<f32>>>,
-    in_rate: u32,
     out_rate: u32,
+    /// Anti-aliased device-rate → 12 kHz decimator for the RX/decode path,
+    /// carrying filter history + phase across [`capture`](AudioBackend::capture)
+    /// calls (vs the old stateless per-block linear resample that folded
+    /// 6–24 kHz energy into the decoder passband). Owned here so its state is
+    /// per-capture-stream and never reset mid-stream.
+    capture_rs: CaptureResampler,
     /// Smoothed RX input RMS (0.0–1.0), updated on the audio thread. Rendered as
     /// a WSJT-X-style dB level in the UI.
     rx_level: Arc<Mutex<f32>>,
@@ -527,8 +536,8 @@ impl CpalBackend {
             _out_stream: out_stream,
             in_ring,
             out_ring,
-            in_rate,
             out_rate,
+            capture_rs: CaptureResampler::new(in_rate, MODEM_RATE),
             rx_level,
             rx_gain,
             tx_level: 1.0,
@@ -557,7 +566,12 @@ impl AudioBackend for CpalBackend {
             let mut ring = self.in_ring.lock().unwrap_or_else(|e| e.into_inner());
             ring.drain(..).collect()
         };
-        resample_linear(&dev, self.in_rate, MODEM_RATE)
+        // Anti-aliased, stateful decimation to 12 kHz (see `capture_rs`). Carries
+        // filter history + fractional phase across calls, so no block-boundary
+        // discontinuity and no long-run drift. The voice-mic path below keeps the
+        // plain linear resample: that audio is a recorded voice message, not
+        // decoded, so aliasing is harmless there.
+        self.capture_rs.process(&dev)
     }
 
     fn play(&mut self, samples: &[f32]) {

@@ -58,6 +58,11 @@ export interface CockpitHeaderProps {
   onTune?: (on: boolean) => void
   /** Stop TX / abort (CW passes its combined stopCw()+haltTx()). */
   onStopTx?: () => void
+  /** Arm/disarm TX (WSJT-X "Enable Tx"). When provided, the TX/RX pill becomes a clickable
+   * arm control — the RTTY/SSTV cockpits have no other Enable-Tx affordance (the TopBar's is
+   * hidden with the digital chrome), so the send gate would sit at "TX is off" with no way to
+   * arm from those screens. Omit ⇒ display-only pill (Phone/CW/FT8 arm elsewhere). */
+  onSetTxEnabled?: (on: boolean) => void
   /** Override the derived CAT ✓/✗ pill. */
   catStatus?: ReactNode
 }
@@ -78,6 +83,7 @@ export function CockpitHeader({
   txActiveLabel = '▲ KEYING',
   onTune,
   onStopTx,
+  onSetTxEnabled,
   catStatus,
 }: CockpitHeaderProps) {
   const radio = snap.radio
@@ -142,9 +148,24 @@ export function CockpitHeader({
           </label>
         )}
 
-        {txState && (
-          <span className={`cockpit-txstate${radio.transmitting ? ' on' : ''}`}>{txPill}</span>
-        )}
+        {txState &&
+          (onSetTxEnabled && !radio.transmitting ? (
+            <button
+              type="button"
+              className={`cockpit-txstate cockpit-txarm${radio.txEnabled ? ' armed' : ''}`}
+              aria-pressed={radio.txEnabled}
+              onClick={() => onSetTxEnabled(!radio.txEnabled)}
+              title={
+                radio.txEnabled
+                  ? 'Transmit ARMED (WSJT-X "Enable Tx") — sends will key the rig. Click to disable.'
+                  : 'Transmit is OFF — click to ARM so RTTY/SSTV sends can key the rig (WSJT-X "Enable Tx").'
+              }
+            >
+              {radio.txEnabled ? '▼ TX On' : '■ TX Off'}
+            </button>
+          ) : (
+            <span className={`cockpit-txstate${radio.transmitting ? ' on' : ''}`}>{txPill}</span>
+          ))}
 
         {onTune && (
           <button

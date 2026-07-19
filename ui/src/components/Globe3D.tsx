@@ -16,6 +16,7 @@ import { bandColor, openingModeColor } from '../bandColors'
 import { subsolarPoint, usStateBorders, flareField, flareRScale, destinationPoint, rangeRing } from '../mapGeo'
 import { getAurora, getPca, getSatellites, getLog } from '../api'
 import cqzonesUrl from '../data/cqzones.geojson?url'
+import { spotTooltip } from '../propViz'
 import { MapInsightRail } from './prop/MapInsightRail'
 import type {
   PropagationSnapshot,
@@ -219,6 +220,8 @@ export default function Globe3D({
   const satMarkersRef = useRef<Record<string, THREE.Object3D>>({})
   const bloomRef = useRef<UnrealBloomPass | null>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
+  // Spot hover tooltip (mirrors the 2-D map's .map-hover) — text + wrap-relative position.
+  const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null)
   const [ready, setReady] = useState(false)
   const [ok] = useState(webglOk)
   const [spin, setSpin] = useState(false) // idle auto-rotate; OFF by default (continuous 60fps
@@ -267,7 +270,8 @@ export default function Globe3D({
 
   const qth = useMemo(() => gridToLatLon(myGrid), [myGrid])
 
-  // Spots → globe points (band-colored; green = heard me).
+  // Spots → globe points (band-colored; green = heard me). `label` carries the SAME
+  // hover-tooltip line the 2-D map shows (shared builder), so the two read identically.
   const points = useMemo(
     () =>
       spots.map((s) => ({
@@ -275,6 +279,7 @@ export default function Globe3D({
         lng: s.lon,
         call: s.call,
         color: s.heardMe ? GETTING_OUT : bandColor(s.band),
+        label: spotTooltip(s),
       })),
     [spots],
   )
@@ -800,6 +805,19 @@ export default function Globe3D({
     )
   }, [ready, qth, show.decodes, show.dxped, stations, prop])
 
+  // Pointer event → wrap LAYOUT coords (the .map-hover tooltip is positioned in the
+  // same layout space the globe is sized in). The .app UI zoom makes visual px ≠ layout
+  // px, so undo it via the rect ratio — same fix as the 2-D map's canvasXY. Reads the
+  // live client size off the ref so a window resize never strands a stale scale.
+  const wrapXY = (e: MouseEvent): [number, number] => {
+    const el = wrapRef.current
+    if (!el) return [e.clientX, e.clientY]
+    const rect = el.getBoundingClientRect()
+    const sx = rect.width > 0 ? el.clientWidth / rect.width : 1
+    const sy = rect.height > 0 ? el.clientHeight / rect.height : 1
+    return [(e.clientX - rect.left) * sx, (e.clientY - rect.top) * sy]
+  }
+
   if (!ok) {
     return (
       <div className="globe3d-fallback">
@@ -883,12 +901,20 @@ export default function Globe3D({
           htmlLng="lng"
           htmlAltitude={0.01}
           htmlElement={(d: object) => {
-            const p = d as { call: string; color: string }
+            const p = d as { call: string; color: string; label: string }
             const el = document.createElement('div')
             el.className = 'globe3d-spot'
             el.style.setProperty('--c', p.color)
-            el.title = p.call
             el.onclick = () => onSelectCall(p.call)
+            // Rich hover tooltip matching the 2-D map (call · band · mode · freq · age …),
+            // rendered as the shared .map-hover element near the cursor.
+            const showHover = (e: MouseEvent) => {
+              const [x, y] = wrapXY(e)
+              setHover({ x, y, text: p.label })
+            }
+            el.onmouseenter = showHover
+            el.onmousemove = showHover
+            el.onmouseleave = () => setHover(null)
             return el
           }}
           arcsData={show.arcs ? arcs : []}
@@ -909,6 +935,11 @@ export default function Globe3D({
           ringPropagationSpeed={0.7}
           ringRepeatPeriod={2600}
         />
+      )}
+      {hover && (
+        <div className="map-hover" style={{ left: hover.x + 12, top: hover.y + 12 }}>
+          {hover.text}
+        </div>
       )}
     </div>
   )

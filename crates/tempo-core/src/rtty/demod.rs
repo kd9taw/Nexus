@@ -9,6 +9,8 @@
 //! SNR-optimized ATC slicer → straddle-point bit-clock recovery → phase-
 //! difference AFC, here with acquire-then-freeze behavior (a locked decoder
 //! must never walk onto a stronger neighbor mid-QSO — the known MMTTY gotcha).
+//! A signal-presence squelch (in the spirit of fldigi's signal metric) gates
+//! the printed output so band noise stays silent instead of streaming garbage.
 //!
 //! Differences from fldigi: 12 kHz sample rate (the app modem rate, vs 8 kHz),
 //! 5-bit Baudot only (no ASCII/parity yet), and the ATC slicer's continuous
@@ -26,6 +28,20 @@ pub const SAMPLE_RATE: f32 = 12_000.0;
 /// Overlap-add FFT block (fldigi FILTLEN scaled to 12 kHz: 512 @ 8 kHz).
 const FLEN: usize = 1024;
 const FLEN2: usize = FLEN / 2;
+
+/// Squelch (signal-presence gate) thresholds on the tone-differential metric
+/// `|mark−space| / (mark+space)`, slow-averaged. In the spirit of fldigi
+/// rtty.cxx's signal metric, but taken from the mark/space matched-filter
+/// magnitudes this port already computes rather than the waterfall power-
+/// density fldigi reads. On a real FSK signal one tone always dominates, so the
+/// ratio rides ~0.6–0.98; on band noise the two magnitudes are independent and
+/// it sits ~0.25 (empirically ≤0.42). The open threshold is set in that gap so
+/// noise never opens the gate, while a −2 dB signal (metric ≥ ~0.60, the
+/// documented weak-signal floor) still prints. The lower close threshold is
+/// hysteresis: once a real signal has opened the gate, a brief selective fade
+/// won't chop the print — but noise, which never reaches OPEN, can't hold it.
+const SQUELCH_OPEN: f32 = 0.50;
+const SQUELCH_CLOSE: f32 = 0.45;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RttyConfig {
@@ -215,6 +231,12 @@ pub struct RttyDemodulator {
     afc_offset: f32,
     afc_frozen: bool,
     lock_run: u32,
+    // Squelch: slow followers of the mark/space tone differential and their
+    // total, whose ratio is the signal-presence metric; `sql_open` is the
+    // hysteretic gate state (see the SQUELCH_* consts).
+    sql_sig: f32,
+    sql_tot: f32,
+    sql_open: bool,
 }
 
 impl RttyDemodulator {
@@ -244,6 +266,9 @@ impl RttyDemodulator {
             afc_offset: 0.0,
             afc_frozen: false,
             lock_run: 0,
+            sql_sig: 0.0,
+            sql_tot: 0.0,
+            sql_open: false,
         }
     }
 
@@ -343,6 +368,20 @@ impl RttyDemodulator {
         let sclipped = sm.min(self.space_env).max(nf);
         let me = (self.mark_env - nf).max(0.0);
         let se = (self.space_env - nf).max(0.0);
+        // Squelch metric: slow-average the mark/space differential and their
+        // total (a two-symbol time constant — long enough to shrink the noise
+        // metric's variance below the open threshold, short enough to still
+        // open inside the leading diddle), then gate on the ratio with
+        // hysteresis. Purely an OUTPUT gate — it never touches the ATC/AFC math
+        // below, only whether frame_done is allowed to emit a character.
+        self.sql_sig = decayavg(self.sql_sig, (mm - sm).abs(), 2.0 * sl);
+        self.sql_tot = decayavg(self.sql_tot, mm + sm, 2.0 * sl);
+        let metric = self.sql_sig / (self.sql_tot + 1e-6);
+        if self.sql_open {
+            self.sql_open = metric >= SQUELCH_CLOSE;
+        } else {
+            self.sql_open = metric >= SQUELCH_OPEN;
+        }
         // W7AY SNR-optimized ATC (fldigi's "v3"): channel amplitudes weight
         // the clipped detector outputs, so the stronger-SNR channel dominates
         // the decision under selective fading.
@@ -465,7 +504,15 @@ impl RttyDemodulator {
     }
 
     fn frame_done(&mut self, data: u8, cmin: f32, out: &mut Vec<DecodedChar>) {
+        // AFC still tracks every valid frame (idle diddle included) — the
+        // squelch gates only the printed OUTPUT, never the tone/AFC math.
         self.update_afc();
+        // Signal-presence squelch: a valid Baudot frame sliced out of band
+        // noise still frames ~half the time (a coin-flip stop bit), so gate the
+        // print on the tone-presence metric. Below squelch = noise → drop it.
+        if !self.sql_open {
+            return;
+        }
         if let Some(ch) = self.baudot.decode(data) {
             // CR and LF both render as newline, collapsed — fldigi likewise
             // suppresses the doubled CR CR / LF LF contest software sends.
@@ -777,31 +824,71 @@ mod tests {
         assert!(!demod.afc_locked());
     }
 
-    #[test]
-    fn noise_only_emits_little_and_reset_reacquires() {
-        let cfg = RttyConfig::default();
-        // Pure band noise at a real level: the start-bit straddle test plus
-        // the stop-bit check reject nearly all of it (no squelch layer yet).
-        let mut seed = 0x0123456789ABCDEFu64;
+    /// Deterministic white noise, `secs` seconds at `amp` RMS-ish level.
+    fn white_noise(secs: f32, amp: f32, mut seed: u64) -> Vec<f32> {
         let mut rnd = move || {
             seed ^= seed << 13;
             seed ^= seed >> 7;
             seed ^= seed << 17;
             (seed >> 11) as f64 / (1u64 << 53) as f64
         };
-        let noise: Vec<f32> = (0..(SAMPLE_RATE * 5.0) as usize)
+        (0..(SAMPLE_RATE * secs) as usize)
             .map(|_| {
                 let g = (-2.0 * rnd().max(1e-12).ln()).sqrt()
                     * (2.0 * std::f64::consts::PI * rnd()).cos();
-                0.2 * g as f32
+                amp * g as f32
             })
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn noise_only_is_squelched_silent() {
+        // The garbage-gone proof. With no signal, just band noise, the Baudot
+        // slicer still frames the occasional coin-flip character — but the
+        // signal-presence squelch almost never opens on noise. Pre-squelch this
+        // emitted a continuous stream (tens of chars per 5 s); now it's a rare
+        // stray (measured ~0.08 chars per 5 s over a 200-seed sweep). Assert
+        // near-zero across several seeds — not exactly zero, which would only
+        // be overfitting to a lucky noise realization.
+        let cfg = RttyConfig::default();
+        for seed in [
+            0x0123456789ABCDEFu64,
+            0x2545F4914F6CDD1D,
+            0x9E3779B97F4A7C15,
+        ] {
+            let noise = white_noise(5.0, 0.2, seed);
+            let chars = decode_all(&mut RttyDemodulator::new(cfg), &noise);
+            assert!(
+                chars.len() <= 3,
+                "noise must be near-silent, got {} chars: {:?}",
+                chars.len(),
+                text_of(&chars)
+            );
+        }
+    }
+
+    #[test]
+    fn reset_reacquires_after_noise() {
+        let cfg = RttyConfig::default();
         let mut demod = RttyDemodulator::new(cfg);
-        let chars = decode_all(&mut demod, &noise);
-        assert!(chars.len() < 40, "noise-only chatter: {}", chars.len());
+        decode_all(&mut demod, &white_noise(2.0, 0.2, 0x0123456789ABCDEF));
         demod.reset();
         assert_eq!(demod.afc_offset_hz(), 0.0);
         assert!(!demod.afc_locked());
+    }
+
+    #[test]
+    fn squelch_still_opens_on_a_weak_signal() {
+        // No weak-signal regression: a −2 dB (in 3 kHz) signal is well above
+        // the matched-filter noise floor, so the squelch opens and the demod
+        // still copies. Pins that the gate protects noise-silence without
+        // eating real weak copy (the demod is documented solid to −2 dB).
+        let cfg = RttyConfig::default();
+        let mut audio = signal(MSG, &cfg, 8, 0.0);
+        add_awgn(&mut audio, -2.0, 0x2545F4914F6CDD1D);
+        let text = text_of(&decode_all(&mut RttyDemodulator::new(cfg), &audio));
+        let acc = accuracy(MSG, &text);
+        assert!(acc >= 0.5, "-2 dB copy after squelch: {acc} ({text:?})");
     }
 
     #[test]

@@ -249,6 +249,20 @@ pub(crate) fn is_slow_serial_rig(model: u32) -> bool {
     )
 }
 
+/// A serial CAT link that needs the LONG (2.5 s) command deadline: a known slow-backend
+/// rig ([`is_slow_serial_rig`]) — or ANY rig on a slow configured baud (≤ 19200). At
+/// 19200 a multi-frame Hamlib transaction (the Icom DATA-mode set: mode + data-mode
+/// frames, each echoed on the CI-V bus, plus per-frame rig processing and Hamlib's own
+/// read-back/retries) can legitimately outlast the 700 ms fast deadline — which then
+/// reports "rig reply incomplete", and the bounded mode retry misread that as a rig
+/// without the mode (the IC-7610 @ 19200 "rig has no PKTUSB mode" report; 19200 is that
+/// rig's CI-V default that the "Auto" USB baud tracks). Baud 0 = "backend default" is
+/// NOT slow — every affected slow-default model is already in the model list.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
+pub(crate) fn is_slow_serial_link(model: u32, baud: u32) -> bool {
+    is_slow_serial_rig(model) || (1..=19_200).contains(&baud)
+}
+
 /// Classify what native spectrum stream a radio offers, given its Hamlib model number and
 /// its connection kind (`"serial"` / `"network"`). This is the single gate both native
 /// panadapter workers consult:
@@ -303,6 +317,33 @@ mod tests {
                 "fast/modern model {m} must stay fast"
             );
         }
+    }
+
+    #[test]
+    fn slow_serial_link_adds_low_baud_on_any_model() {
+        // The model-based slow set stays slow at ANY configured baud.
+        assert!(
+            is_slow_serial_link(3088, 115_200),
+            "Xiegu is slow per model"
+        );
+        // ANY rig at ≤ 19200 baud is a slow link — the IC-7610 case: 19200 is that
+        // rig's CI-V default (tracked by the "Auto" USB baud), and Hamlib's multi-frame
+        // Icom DATA-mode set outlasts the 700 ms fast deadline there, which the mode
+        // retry then misread as "rig has no PKTUSB mode".
+        assert!(is_slow_serial_link(3078, 19_200), "IC-7610 @ 19200");
+        assert!(
+            is_slow_serial_link(1042, 9_600),
+            "even a Yaesu on a slow line"
+        );
+        // Fast rigs on fast serial keep the short deadline — unaffected.
+        assert!(
+            !is_slow_serial_link(3078, 115_200),
+            "IC-7610 @ 115200 is fast"
+        );
+        assert!(!is_slow_serial_link(1042, 38_400));
+        // Baud 0 = "backend default" — not slow (the slow-default models are already
+        // in the model list above).
+        assert!(!is_slow_serial_link(3078, 0));
     }
 
     #[test]

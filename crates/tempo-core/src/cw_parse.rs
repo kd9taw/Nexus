@@ -162,6 +162,33 @@ fn call_candidates(
     let mine = base_call(mycall);
     let mut scores: HashMap<String, u32> = HashMap::new();
     for (i, t) in toks.iter().enumerate() {
+        // Space-split recovery: CW decode routinely drops a gap mid-call ("W1 ABC"), so the
+        // clean call the operator SEES never lands as a single token and no chip appears.
+        // Rejoin each token with the next and accept the result ONLY when the join is a strict
+        // call that resolves to a real DXCC prefix — that prefix gate means two unrelated
+        // tokens can never fabricate a bogus callsign into the chips (or the log).
+        if i + 1 < toks.len() {
+            let next = &toks[i + 1];
+            // Only a genuine prefix|suffix split: `t` ends in the call-area digit and `next`
+            // is the all-letter suffix ("W1"+"ABC"). This excludes joining a prosign/word to a
+            // following call ("DE"+"W1ABC" → "DEW1ABC"), which is itself callsign-shaped.
+            let split_shaped = t.bytes().last().is_some_and(|b| b.is_ascii_digit())
+                && !next.is_empty()
+                && next.bytes().all(|b| b.is_ascii_uppercase());
+            if split_shaped {
+                let joined = format!("{t}{next}");
+                if joined.len() <= 8 && is_strict_callsign(&joined) {
+                    let jb = base_call(&joined);
+                    if jb != mine && !jb.is_empty() && is_real_prefix(&jb) {
+                        let mut s = 3; // recovered split call, real prefix
+                        if i > 0 && toks[i - 1] == "DE" {
+                            s += 2;
+                        }
+                        *scores.entry(jb).or_insert(0) += s;
+                    }
+                }
+            }
+        }
         if !is_strict_callsign(t) {
             continue;
         }
@@ -311,6 +338,22 @@ mod tests {
         assert_eq!(a.guidance.state, "cq");
         assert!(a.guidance.headline.contains("W1ABC"));
         assert_eq!(a.guidance.recommended.as_deref(), Some("F2"));
+    }
+
+    #[test]
+    fn recovers_a_space_split_call_when_the_prefix_is_real() {
+        // CW copy dropped a gap mid-call ("W1 ABC") — the join is a strict call with a real
+        // prefix, so it's recovered as a clickable candidate instead of vanishing.
+        let a = analyze("CQ DE W1 ABC K", &[], "KD9TAW", None, real);
+        assert!(a.candidates.iter().any(|c| c.call == "W1ABC"));
+    }
+
+    #[test]
+    fn join_recovery_never_fabricates_an_unresolvable_call() {
+        // "Q1"+"ABC" is callsign-SHAPED but Q1 isn't a real prefix → must NOT be recovered,
+        // so two random adjacent tokens can never invent a bogus call into the chips/log.
+        let a = analyze("DE Q1 ABC", &[], "KD9TAW", None, real);
+        assert!(a.candidates.iter().all(|c| c.call != "Q1ABC"));
     }
 
     #[test]

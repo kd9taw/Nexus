@@ -13,6 +13,23 @@ pub enum Error {
         /// The rate the caller passed.
         got: u32,
     },
+    /// Source image passed to [`crate::encode::encode_image`] is not the
+    /// target mode's exact geometry (`line_pixels × image_lines`).
+    #[error("image {got_w}×{got_h} ({got_len} px) does not match {mode} ({want_w}×{want_h})")]
+    ImageDimensionMismatch {
+        /// Human-readable target mode name.
+        mode: &'static str,
+        /// Required width (the mode's `line_pixels`).
+        want_w: u32,
+        /// Required height (the mode's `image_lines`).
+        want_h: u32,
+        /// Supplied image width.
+        got_w: u32,
+        /// Supplied image height.
+        got_h: u32,
+        /// Supplied pixel-buffer length.
+        got_len: usize,
+    },
 }
 
 /// Convenient `Result` alias used throughout the crate.

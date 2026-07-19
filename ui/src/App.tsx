@@ -85,6 +85,8 @@ import {
   getXrayNow,
   getDxpedWindows,
   getSatSchedule,
+  getIssPass,
+  sstvArm,
   setSettings as apiSetSettings,
   setSidebandOverride,
   testCat,
@@ -108,6 +110,7 @@ import { processFlare, effectiveXray } from './flareAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
+import { tickIssAutoArm } from './features/issAutoArm'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedTag, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult } from './types'
@@ -196,6 +199,12 @@ export default function App() {
   useEffect(() => {
     mycallRef.current = snap?.mycall ?? ''
   }, [snap?.mycall])
+  // Live mirror of the snapshot for the app-wide 30 s poll effect (empty deps —
+  // it can't read `snap` directly). The ISS SSTV auto-arm reads the current dial.
+  const snapRef = useRef<AppSnapshot | null>(null)
+  useEffect(() => {
+    snapRef.current = snap
+  }, [snap])
   // Click-to-work handoff: a Needed-board click on a voice/CW spot seeds this, the
   // matching cockpit consumes it to prefill the log. `ts` makes a re-click of the same
   // call refire the cockpit's prefill effect. Cleared once consumed.
@@ -419,6 +428,20 @@ export default function App() {
               .then((passes) => checkSatAlarms(passes, Date.now()))
               .catch(() => {})
           }
+          // ISS SSTV auto-arm (opt-in, default off): at AOS tune 145.800 FM + arm
+          // the decoder, at LOS restore the dial. Only fetch the pass when the
+          // opt-in is ON (no IPC otherwise); when OFF we still tick so an arm in
+          // flight unwinds — the disabled path ignores the pass.
+          const issDeps = { setFrequency: handleSetFrequency, sstvArm }
+          if (settingsRef.current?.issSstvAutoArm === true) {
+            getIssPass()
+              .then((issPass) =>
+                tickIssAutoArm(issPass, snapRef.current?.radio, true, issDeps, Date.now() / 1000),
+              )
+              .catch(() => {})
+          } else {
+            tickIssAutoArm(null, snapRef.current?.radio, false, issDeps, Date.now() / 1000)
+          }
           // One-shot alert when a band comes alive, TIERED by propagation mode:
           // Es/F2/aurora loud (rare + fleeting, aurora with operating guidance),
           // tropo an informative note (openingAlert.ts owns the tiering).
@@ -553,6 +576,7 @@ export default function App() {
   // exactly as before the feature.
   const cwEnabled = features.isOn('cw')
   const phoneEnabled = features.isOn('phone')
+  const rttyEnabled = features.isOn('rtty')
   // Work-a-spot navigation: whenever a spot is worked — from THIS window's
   // boards or a pop-out (which can't navigate the main window itself) — follow
   // to the matching cockpit (the operator's report: "if I click a contact, it
@@ -568,10 +592,16 @@ export default function App() {
     if (tick === workNavRef.current) return
     workNavRef.current = tick
     const v = snap?.workView
-    const target: View = v === 'cw' ? 'cw' : v === 'phone' ? 'phone' : 'operate'
+    const target: View =
+      v === 'cw' ? 'cw' : v === 'phone' ? 'phone' : v === 'rtty' ? 'rtty' : 'operate'
     // Never navigate into a feature-disabled (hidden) cockpit — same gate as
     // handleWorkNeeded; the rig already switched, the view just stays put.
-    if ((target === 'cw' && !cwEnabled) || (target === 'phone' && !phoneEnabled)) return
+    if (
+      (target === 'cw' && !cwEnabled) ||
+      (target === 'phone' && !phoneEnabled) ||
+      (target === 'rtty' && !rttyEnabled)
+    )
+      return
     // Sync the rig-mode guard BEFORE navigating (same as handleWorkNeeded) —
     // otherwise the [view] effect sees a mode change and re-homes the dial to
     // the segment start, yanking the rig OFF the exact spot frequency the
@@ -580,12 +610,13 @@ export default function App() {
     setView(target)
     // Prefill the log Call from a work action fired in ANOTHER window (e.g. the pop-out band
     // map), matching the prefill an in-window click gets via handleWorkNeeded. Digital
-    // auto-sequences on a decode double-click, so it takes no prefill.
+    // auto-sequences on a decode double-click, so it takes no prefill; RTTY's cockpit takes
+    // no prefill either (only the CW/Phone log forms consume pendingWork).
     const wc = snap?.workCall
-    if (wc && target !== 'operate') {
+    if (wc && (target === 'cw' || target === 'phone')) {
       setPendingWork({ call: wc, view: target, ts: Date.now() })
     }
-  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled])
+  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled])
   const visibleAlerts = useMemo(
     () => visibleNeeds(needAlerts, { cw: cwEnabled, phone: phoneEnabled }),
     [needAlerts, cwEnabled, phoneEnabled],
@@ -629,6 +660,12 @@ export default function App() {
   const [typingTick, setTypingTick] = useState(0)
   const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
+  // Live mirror for the app-wide 30 s poll effect — the ISS SSTV auto-arm reads
+  // its opt-in here (the effect's empty deps can't see `settings` directly).
+  const settingsRef = useRef<Settings | null>(null)
+  useEffect(() => {
+    settingsRef.current = settings
+  }, [settings])
   // Ding/dong when the dial crosses your TX privileges (default on).
   useBandEdgeTones(snap?.radio.txAllowed, settings?.bandEdgeTones ?? true)
   // User watch list (localStorage) — fed to the decode alerter. Re-synced when the manager
@@ -1202,28 +1239,55 @@ export default function App() {
         handleQsy(alert.band)
         return
       }
-      // 'operate' is the digital cockpit, so its operating mode is 'digital'.
-      const opMode: 'digital' | 'phone' | 'cw' = t.view === 'operate' ? 'digital' : t.view
-      void withErrorToast(
-        () => workSpot(opMode, t.freqMhz, t.band, t.call),
-        `Could not work ${t.call} — check CAT`,
-      ).then((s) => {
+      // RTTY is a Digital submode with an opt-in cockpit. When it's disabled, don't strand
+      // the operator on a hidden view — QSY to the spot's EXACT frequency (RTTY spots always
+      // carry one) so they can still work it from wherever they are.
+      if (t.view === 'rtty' && !rttyEnabled) {
+        handleQsy(alert.band, t.freqMhz)
+        return
+      }
+      // 'operate' is the digital cockpit, so its operating mode is 'digital'. RTTY passes
+      // through as 'rtty' — the backend + [view] rig-mode effect apply the RTTY policy.
+      const opMode: 'digital' | 'phone' | 'cw' | 'rtty' =
+        t.view === 'operate' ? 'digital' : t.view
+      void (async () => {
+        // A digital spot carries its protocol in alert.mode — switch the FT8/FT4 tier to
+        // match, else clicking an FT4 spot QSYs but leaves the decoder on FT8. set_tier moves
+        // the rig to the tier's DEFAULT dial (FT8 14.074 → FT4 14.080), so it must run BEFORE
+        // workSpot — whose QSY to the spot's exact frequency then wins over the tier default.
+        if (opMode === 'digital') {
+          const m = alert.mode?.toUpperCase()
+          if ((m === 'FT4' || m === 'FT8') && tierRef.current !== m) {
+            const st = await withErrorToast(
+              () => apiSetTier(m as Tier),
+              'Could not switch FT8/FT4',
+            )
+            if (st) {
+              setSnap(st)
+              tierRef.current = m as Tier
+            }
+          }
+        }
+        const s = await withErrorToast(
+          () => workSpot(opMode, t.freqMhz, t.band, t.call),
+          `Could not work ${t.call} — check CAT`,
+        )
         // On failure DON'T navigate or poison the guard ref — the backend made no change
         // (atomic), so the view-effect can still apply the mode on a later nav.
         if (!s) return
         setSnap(s)
         // Keep the rig-mode effect's guard in sync so it doesn't re-fire on the nav.
         lastOpModeRef.current = opMode
-        // CW/Phone cockpits consume a prefill; the digital cockpit auto-sequences on a decode
-        // double-click, so it gets no prefill — just the QSY + DATA-U.
-        if (t.view !== 'operate') {
+        // CW/Phone log forms consume a prefill; the digital + RTTY cockpits don't (digital
+        // auto-sequences on a decode double-click, RTTY has its own net picker) — just the QSY.
+        if (t.view === 'cw' || t.view === 'phone') {
           setPendingWork({ call: t.call, view: t.view, ts: Date.now() })
         }
         setView(t.view)
         pushToast(`▶ ${t.call} — ${alert.mode} ${t.band}, ready to log`, 'success', 4000)
-      })
+      })()
     },
-    [bandPlan, handleQsy, cwEnabled, phoneEnabled],
+    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled],
   )
 
   // Work a spot double-clicked on the MAP — the same atomic path as the Needed
@@ -2132,6 +2196,8 @@ export default function App() {
               onSnap={setSnap}
               active={effectiveView === 'rtty'}
               onSetFrequency={handleSetFrequency}
+              onSetTxEnabled={handleSetTxEnabled}
+              theme={theme}
             />
           </div>
         )}
@@ -2142,6 +2208,7 @@ export default function App() {
               onSnap={setSnap}
               active={effectiveView === 'sstv'}
               onSetFrequency={handleSetFrequency}
+              onSetTxEnabled={handleSetTxEnabled}
             />
           </div>
         )}

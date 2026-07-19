@@ -43,6 +43,30 @@ describe('fitScale', () => {
     expect(fitScale(3840, 2160, 175)).toBe(175)
   })
 
+  it('window-limited auto: raising the cap changes NOTHING when the window binds', () => {
+    // Win10 laptop reality — 1920×1080 at 125% OS display scaling = 1536×864 CSS px.
+    // Fit target is 96, below every cap chip Settings offers (100–175), so ALL of
+    // them yield the same 90%. This is the by-design "auto never upscales past fit"
+    // rule; the Settings hint must explain it (operator report: "scaling settings
+    // are not visually doing anything").
+    for (const cap of [100, 110, 125, 150, 175] as const) {
+      expect(fitScale(1536, 864, cap)).toBe(90)
+    }
+    // Same window, Manual mode is the escape hatch (no fit involved) — and on a
+    // big panel the cap DOES bite, so the chips are not globally inert.
+    expect(fitScale(3840, 2160, 150)).toBe(150)
+  })
+
+  it('exposes a window fit-ceiling (fitScale at max cap) that SettingsPanel disables above', () => {
+    // SettingsPanel computes autoCeil = fitScale(w, h, 175) and disables every cap
+    // chip whose value exceeds it (they would all yield this same scale). These are
+    // the exact ceilings that gate which chips are live.
+    expect(fitScale(1536, 864, 175)).toBe(90) // 1080p @125% OS → only ≤90 live (none, since chips start at 100)
+    expect(fitScale(1920, 1080, 175)).toBe(110) // 1080p → chips 100,110 live; 125+ dead
+    expect(fitScale(2560, 1440, 175)).toBe(150) // 1440p → up to 150 live; 175 dead
+    expect(fitScale(3840, 2160, 175)).toBe(175) // 4K → every chip live
+  })
+
   it('respects width when width is the binding axis', () => {
     // Very tall, narrow window: 900 wide / 1200 = 0.75 binds over height (2000/900).
     expect(fitScale(900, 2000)).toBe(75)

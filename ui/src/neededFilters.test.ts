@@ -113,6 +113,16 @@ describe('filterAlerts — mode (multi-select)', () => {
     expect(r.some((x) => x.mode === 'Phone')).toBe(true)
     expect(r.some((x) => x.mode === 'Digital')).toBe(true)
   })
+
+  it('RTTY is governed by the Digital chip (no separate RTTY chip)', () => {
+    const rtty = a('DL1RT', ['NewEntity'], '20m', 'RTTY')
+    // Digital off → the RTTY row is hidden along with the FT8/FT4 rows.
+    const off = filterAlerts([rtty], { ...DEFAULT_FILTERS, modes: only('CW') })
+    expect(off).toHaveLength(0)
+    // Digital on → the RTTY row shows.
+    const on = filterAlerts([rtty], { ...DEFAULT_FILTERS, modes: only('Digital') })
+    expect(on.map((x) => x.call)).toEqual(['DL1RT'])
+  })
 })
 
 describe('filterAlerts — AND composition', () => {

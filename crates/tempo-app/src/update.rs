@@ -1,9 +1,25 @@
-//! Self-update version check — the PURE parse/compare of SourceForge's `best_release.json`.
+//! Self-update version check — the PURE parse/compare of the release-version feeds.
+//!
+//! Two sources, tried in order by the shell: our own update endpoint
+//! (`hamradiotools.io/nexus/version.json`, a schema-1 doc with a direct `"latest"` field —
+//! parsed by [`parse_latest_from_endpoint`]), and, as a fallback, SourceForge's
+//! `best_release.json` (the filename-parsing path in [`parse_latest_version`]). The own endpoint
+//! is authoritative and GitHub-first; SF is the safety net so a site outage can't disable the check.
 //!
 //! The HTTP fetch (IO) lives in the Tauri shell; this module stays pure and unit-tested so the
 //! version logic is verifiable without a network — and without building `src-tauri`, which the
 //! dev environment can't compile. Phase 1 only tells the operator a newer build exists and opens
 //! the download page; it never downloads or runs anything.
+
+/// Parse the latest version from the Nexus update endpoint's `version.json` (schema 1): a top-level
+/// `"latest": "X.Y.Z"`. Tolerates a leading `v`. Returns `None` if the JSON is unparseable or
+/// `latest` isn't a recognizable version triple — the caller then falls back to the SF feed, never
+/// a phantom update.
+pub fn parse_latest_from_endpoint(json_body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json_body).ok()?;
+    let latest = v["latest"].as_str()?.trim().trim_start_matches('v');
+    parse_triple(latest).map(|_| latest.to_string())
+}
 
 /// Parse the latest Windows release version from a SourceForge `best_release.json` body.
 /// Reads `platform_releases.windows.filename`, falling back to `release.filename`, and pulls the
@@ -112,6 +128,35 @@ mod tests {
             None
         );
         assert_eq!(parse_latest_version("{}"), None);
+    }
+
+    // The live endpoint shape (schema 1): a direct `latest`, plus downloads/mirrors we ignore here.
+    const ENDPOINT_SAMPLE: &str = r#"{
+        "schema": 1,
+        "latest": "0.11.1",
+        "downloads": {"windows": {"url": "…"}, "linuxAppimage": {"url": "…"}},
+        "mirrors": {"github": "…", "sourceforge": "…"}
+    }"#;
+
+    #[test]
+    fn parses_latest_from_endpoint_json() {
+        assert_eq!(
+            parse_latest_from_endpoint(ENDPOINT_SAMPLE),
+            Some("0.11.1".to_string())
+        );
+        // tolerate a leading "v"
+        assert_eq!(
+            parse_latest_from_endpoint(r#"{"latest":"v0.12.0"}"#),
+            Some("0.12.0".to_string())
+        );
+    }
+
+    #[test]
+    fn endpoint_none_on_missing_or_bad_latest() {
+        assert_eq!(parse_latest_from_endpoint("not json"), None);
+        assert_eq!(parse_latest_from_endpoint(r#"{"schema":1}"#), None); // no `latest`
+        assert_eq!(parse_latest_from_endpoint(r#"{"latest":"soon"}"#), None); // not a version
+        assert_eq!(parse_latest_from_endpoint(r#"{"latest":123}"#), None); // wrong type
     }
 
     #[test]

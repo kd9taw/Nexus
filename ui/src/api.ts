@@ -162,6 +162,13 @@ export async function getSatSchedule(names: string[], hours: number): Promise<im
   return invoke<import('./types').SatPass[]>('get_sat_schedule', { names, hours })
 }
 
+/** The ISS's current-or-next pass over the QTH (keyed on NORAD 25544), or null
+ * when the grid is unset, no ISS elements are loaded, or no pass falls in the
+ * next ~3 h. Drives the SSTV auto-arm opt-in. */
+export async function getIssPass(): Promise<import('./types').SatPass | null> {
+  return invoke<import('./types').SatPass | null>('get_iss_pass')
+}
+
 /** Per-bird detail: SatNOGS status/frequencies (cached weekly; absent offline)
  * + the current/next pass with its polar-plot track. */
 export async function getSatDetail(name: string): Promise<import('./types').SatDetail> {
@@ -720,7 +727,7 @@ export async function setOperatingMode(
  * exact frequency atomically — one round-trip, so the rig can't end up in the new mode at the
  * old dial and the UI never sees a half-applied state. */
 export async function workSpot(
-  mode: 'digital' | 'phone' | 'cw',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty',
   freqMhz: number,
   band: string,
   call?: string,
@@ -1073,6 +1080,35 @@ export async function rttyAfcReset(): Promise<RttyState> {
   return invoke<RttyState>('rtty_afc_reset')
 }
 
+/** Net the RTTY decoder onto a new audio center (Hz) — a waterfall click. Rebuilds
+ * the demodulator around the new mark/space pair. RX only. */
+export async function rttyNet(hz: number): Promise<RttyState> {
+  return invoke<RttyState>('rtty_net', { hz })
+}
+
+/** Turn the RTTY auto-sequencer on/off (on builds the sequencer from your identity +
+ * active exchange, off aborts any live session and stops TX). NEVER transmits — a
+ * session only ever starts from an explicit CQ/Answer (the human-initiate gate). */
+export async function rttySetAuto(on: boolean): Promise<RttyState> {
+  return invoke<RttyState>('rtty_set_auto', { on })
+}
+
+/** Start an auto CQ run (a human-initiate gate; rejected with the reason if a TX
+ * gate is down). */
+export async function rttyAutoCq(): Promise<RttyState> {
+  return invoke<RttyState>('rtty_auto_cq')
+}
+
+/** Answer a surfaced CQ — search & pounce (a human-initiate gate). */
+export async function rttyAutoAnswer(call: string): Promise<RttyState> {
+  return invoke<RttyState>('rtty_auto_answer', { call })
+}
+
+/** Kill the live auto session: abort the sequencer, drop the queue, unkey. */
+export async function rttyAutoAbort(): Promise<RttyState> {
+  return invoke<RttyState>('rtty_auto_abort')
+}
+
 /** Arm/disarm the SSTV RX decoder (session-only; RX decode, never TX). */
 export async function sstvArm(on: boolean): Promise<SstvState> {
   return invoke<SstvState>('sstv_arm', { on })
@@ -1082,6 +1118,26 @@ export async function sstvArm(on: boolean): Promise<SstvState> {
  * (poll while the SSTV view is visible). */
 export async function getSstvState(): Promise<SstvState> {
   return invoke<SstvState>('get_sstv_state')
+}
+
+/** Transmit an SSTV image: the webview cover-crops the picture to the mode's exact
+ * dimensions and passes raw row-major RGB (base64). `mode` is the stable slug
+ * ("pd120", "scottie1", "scottiedx", "martin1", …). Resolves to the fresh state
+ * (sending=true); rejects — with the reason — on a dimension mismatch or any TX gate
+ * being down. Human-initiated only: nothing keys until this is called. */
+export async function sstvSend(
+  rgbB64: string,
+  width: number,
+  height: number,
+  mode: string,
+): Promise<SstvState> {
+  return invoke<SstvState>('sstv_send', { mode, width, height, rgbBase64: rgbB64 })
+}
+
+/** Stop the SSTV transmission now: abort the image in progress, drop the queued job,
+ * and unkey. */
+export async function sstvStop(): Promise<SstvState> {
+  return invoke<SstvState>('sstv_stop')
 }
 
 /** Set the TX period: true = even/"1st" slots, false = odd/"2nd". */

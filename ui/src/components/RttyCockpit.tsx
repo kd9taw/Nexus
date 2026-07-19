@@ -2,14 +2,20 @@ import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, RttyState } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { FrequencyControl } from './FrequencyControl'
+import { Waterfall } from './Waterfall'
 import {
   getLicensedBandPlan,
   getRttyState,
   haltTx,
   rttyAfcReset,
   rttyArm,
+  rttyAutoAbort,
+  rttyAutoAnswer,
+  rttyAutoCq,
   rttyClear,
+  rttyNet,
   rttySend,
+  rttySetAuto,
   rttyStop,
 } from '../api'
 import { bandLabelForMhz } from '../band'
@@ -28,6 +34,12 @@ interface Props {
   active?: boolean
   /** QSY to a band-plan channel (the shared App setFrequency path). */
   onSetFrequency?: (dialMhz: number, band: string, mode: string) => void
+  /** Arm/disarm TX (WSJT-X "Enable Tx") — the header pill becomes the arm control, since the
+   * TopBar's Enable-Tx is hidden with the digital chrome in this view. */
+  onSetTxEnabled?: (on: boolean) => void
+  /** Light/dark theme — passed straight through to the waterfall colormap.
+   * Optional (defaults to dark) so non-theme-aware callers/tests don't have to thread it. */
+  theme?: string
 }
 
 /** Standard casual RTTY F-key set (599-not-5NN comes with the contest schemas).
@@ -73,6 +85,24 @@ function fmtAfc(hz: number): string {
   return `${r >= 0 ? '+' : ''}${r} Hz`
 }
 
+/** Human label for the auto-sequencer's state string. */
+function seqLabel(s: string): string {
+  switch (s) {
+    case 'calling_cq':
+      return 'Calling CQ'
+    case 'answering':
+      return 'Answering'
+    case 'exchange_sent':
+      return 'Exchange sent'
+    case 'confirmed':
+      return 'Confirmed'
+    case 'done':
+      return 'Done'
+    default:
+      return 'Idle'
+  }
+}
+
 /**
  * RTTY operating cockpit (Digital rail: FT · Tempo · RTTY · SSTV) — live RX
  * (arm the decoder; the tempo_core::rtty demod prints with per-character
@@ -83,7 +113,7 @@ function fmtAfc(hz: number): string {
  * host (like Operate) so the decoded stream keeps accumulating while the
  * operator is on another section.
  */
-export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency }: Props) {
+export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark' }: Props) {
   // Live decoder state — polled at 2 Hz while this is the visible view. The
   // backend ring keeps decoding while we're hidden; the first tick on
   // re-activation catches the display up.
@@ -111,6 +141,36 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency }: Pro
     void rttyArm(!armed)
       .then(setRtty)
       .catch(() => pushToast('Could not switch the RTTY decoder', 'error'))
+  }
+
+  // Auto-sequencer: the pure RTTY QSO state machine wired to TX + the logbook.
+  // It NEVER keys on its own — toggling Auto only builds the machine; a QSO starts
+  // only when the operator clicks CQ (run) or Answer (a surfaced CQ).
+  const auto = rtty?.auto === true
+  const seqState = rtty?.seqState ?? 'idle'
+  const peer = rtty?.peer ?? null
+  const peerExchange = rtty?.peerExchange ?? []
+  const heardCq = rtty?.heardCq ?? null
+  const toggleAuto = () => {
+    void rttySetAuto(!auto)
+      .then(setRtty)
+      .catch(() => pushToast('Could not switch the RTTY auto-sequencer', 'error'))
+  }
+  const autoCq = () => {
+    void withErrorToast(() => rttyAutoCq(), 'Auto CQ refused').then((s) => {
+      if (s) setRtty(s)
+    })
+  }
+  const autoAnswer = () => {
+    if (!heardCq) return
+    void withErrorToast(() => rttyAutoAnswer(heardCq), 'Auto answer refused').then((s) => {
+      if (s) setRtty(s)
+    })
+  }
+  const autoAbort = () => {
+    void rttyAutoAbort()
+      .then(setRtty)
+      .catch(() => {})
   }
 
   // Licensed RTTY watering holes (built-in band plan, WSJT-X-style) — same
@@ -196,6 +256,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency }: Pro
           onSnap={onSnap}
           txActiveLabel="▲ RTTY"
           onStopTx={stop}
+          onSetTxEnabled={onSetTxEnabled}
           modeIndicator={
             <>
               <span
@@ -243,6 +304,22 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency }: Pro
         />
       )}
 
+      {rtty && (
+        <Waterfall
+          theme={theme}
+          active={active}
+          transmitting={snap?.radio.transmitting ?? false}
+          rxOffsetHz={(rtty.markHz + rtty.spaceHz) / 2}
+          txOffsetHz={0}
+          cursors={[
+            { hz: rtty.markHz, color: '#3ddc8c', label: 'M' },
+            { hz: rtty.spaceHz, color: '#ffb347', label: 'S' },
+          ]}
+          hint="click nets the decoder"
+          onTune={(hz) => void rttyNet(hz).then(setRtty).catch(() => {})}
+        />
+      )}
+
       {rtty?.keyerError && (
         <div className="cw-keyer-warn" role="alert">
           ⚠ {rtty.keyerError}
@@ -267,6 +344,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency }: Pro
             }
           >
             {armed ? 'RX armed' : 'Arm RX'}
+          </button>
+          <button
+            type="button"
+            className={`rtty-arm${auto ? ' on' : ''}`}
+            aria-pressed={auto}
+            onClick={toggleAuto}
+            title={
+              auto
+                ? 'Auto-sequencer ON — the RTTY QSO machine runs the exchange for you. It NEVER keys on its own; you start each QSO with CQ or Answer below. Click to turn off.'
+                : 'Auto — arm the RTTY auto-sequencer. It runs the QSO after you click CQ (run) or answer a heard CQ (search & pounce); it never transmits on its own.'
+            }
+          >
+            {auto ? 'Auto on' : 'Auto'}
           </button>
           {armed && rtty && (
             <span
@@ -321,6 +411,59 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency }: Pro
           )}
         </div>
       </div>
+
+      {auto && (
+        <div className="cw-macros rtty-auto-row" role="group" aria-label="RTTY auto-sequencer">
+          {seqState === 'idle' ? (
+            <>
+              <button
+                type="button"
+                className="cw-macro rtty-auto-cq"
+                onClick={autoCq}
+                title="Call CQ and auto-run the QSO — the engine keys only after you click, never on its own"
+              >
+                <span className="cw-macro-key">CQ</span>
+                <span className="cw-macro-label">Auto call</span>
+              </button>
+              <button
+                type="button"
+                className="cw-macro rtty-auto-answer"
+                onClick={autoAnswer}
+                disabled={!heardCq}
+                title={
+                  heardCq
+                    ? `Answer ${heardCq} and auto-run the exchange (search & pounce)`
+                    : 'No CQ heard yet — Answer lights up when the decoder surfaces one'
+                }
+              >
+                <span className="cw-macro-key">Answer</span>
+                <span className="cw-macro-label">{heardCq ?? '—'}</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="rtty-auto-status" aria-live="polite">
+                <span className="rtty-auto-state">{seqLabel(seqState)}</span>
+                {peer && <span className="rtty-auto-peer">{peer}</span>}
+                {peerExchange.length > 0 && (
+                  <span className="rtty-auto-exch">
+                    {peerExchange.map(([k, v]) => `${k} ${v}`).join('  ')}
+                  </span>
+                )}
+              </span>
+              <button
+                type="button"
+                className="cw-macro rtty-auto-stop"
+                onClick={autoAbort}
+                title="Abort the auto QSO — stop the sequencer, drop the queue, unkey"
+              >
+                <span className="cw-macro-key">Esc</span>
+                <span className="cw-macro-label">Abort</span>
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="cw-macros rtty-macros" role="group" aria-label="RTTY macros">
         <input

@@ -56,6 +56,12 @@ interface Props {
   /** Pop the waterfall into its own window. When set, a ⧉ button renders as the last
    * item of the header row (kept in-flow so it never overlaps the Gain/Zero knobs). */
   onPopOut?: () => void
+  /** Named vertical cursors (Hz + color + short label) drawn IN PLACE OF the RX/TX
+   * markers — e.g. RTTY mark/space. When set, the RX/TX marker block is skipped; the
+   * FT8 path is byte-identical when this is undefined. */
+  cursors?: { hz: number; color: string; label: string }[]
+  /** Header hint text override (default: the WSJT-X click/Shift/Ctrl legend). */
+  hint?: string
 }
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
@@ -83,6 +89,8 @@ export function Waterfall({
   onTune,
   active = true,
   onPopOut,
+  cursors,
+  hint,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -107,6 +115,7 @@ export function Waterfall({
   const themeRef = useRef(theme)
   const rxOffRef = useRef(rxOffsetHz)
   const txOffRef = useRef(txOffsetHz)
+  const cursorsRef = useRef(cursors)
   const activeRef = useRef(active)
   const gainRef = useRef(gain)
   const zeroRef = useRef(zero)
@@ -121,6 +130,7 @@ export function Waterfall({
   themeRef.current = theme
   rxOffRef.current = rxOffsetHz
   txOffRef.current = txOffsetHz
+  cursorsRef.current = cursors
   activeRef.current = active
   gainRef.current = gain
   zeroRef.current = zero
@@ -430,27 +440,41 @@ export function Waterfall({
       // spectrum clean; callsigns live in the Band Activity list. Only the
       // Rx/Tx markers are drawn.)
 
-      // --- TX marker (red) then RX marker (green), drawn last so they're on top ---
-      // Markers map through the same view; skip one that's scrolled outside a zoom
-      // window (else freqToX would clamp it misleadingly to the edge).
-      const txOff = txOffRef.current
-      if (txOff >= vlo && txOff <= vhi) {
-        const txx = freqToX(txOff, W, vlo, vhi)
-        octx.fillStyle = txRef.current ? 'rgba(255,70,70,0.95)' : 'rgba(255,90,90,0.7)'
-        octx.fillRect(txx - 1, 0, 2, wfH)
-        octx.fillStyle = '#ff5a5a'
+      // Named cursors (e.g. RTTY mark/space) REPLACE the RX/TX markers when
+      // supplied; the FT8 path (cursors undefined) keeps the existing draw.
+      const cursors = cursorsRef.current
+      if (cursors) {
         octx.font = '600 10px system-ui, sans-serif'
-        octx.fillText('TX', Math.min(W - 18, txx + 3), 9)
-      }
+        for (const c of cursors) {
+          if (c.hz < vlo || c.hz > vhi) continue // scrolled outside a zoom window
+          const cx = freqToX(c.hz, W, vlo, vhi)
+          octx.fillStyle = c.color
+          octx.fillRect(cx - 1, 0, 2, wfH)
+          octx.fillText(c.label, Math.min(W - 14, cx + 3), 9)
+        }
+      } else {
+        // --- TX marker (red) then RX marker (green), drawn last so they're on top ---
+        // Markers map through the same view; skip one that's scrolled outside a zoom
+        // window (else freqToX would clamp it misleadingly to the edge).
+        const txOff = txOffRef.current
+        if (txOff >= vlo && txOff <= vhi) {
+          const txx = freqToX(txOff, W, vlo, vhi)
+          octx.fillStyle = txRef.current ? 'rgba(255,70,70,0.95)' : 'rgba(255,90,90,0.7)'
+          octx.fillRect(txx - 1, 0, 2, wfH)
+          octx.fillStyle = '#ff5a5a'
+          octx.font = '600 10px system-ui, sans-serif'
+          octx.fillText('TX', Math.min(W - 18, txx + 3), 9)
+        }
 
-      const rxOff = rxOffRef.current
-      if (rxOff >= vlo && rxOff <= vhi) {
-        const rxx = freqToX(rxOff, W, vlo, vhi)
-        octx.fillStyle = 'rgba(60,220,140,0.9)'
-        octx.fillRect(rxx - 1, 0, 2, wfH)
-        octx.fillStyle = '#3ddc8c'
-        octx.font = '600 10px system-ui, sans-serif'
-        octx.fillText('RX', Math.min(W - 18, rxx + 3), wfH - 6)
+        const rxOff = rxOffRef.current
+        if (rxOff >= vlo && rxOff <= vhi) {
+          const rxx = freqToX(rxOff, W, vlo, vhi)
+          octx.fillStyle = 'rgba(60,220,140,0.9)'
+          octx.fillRect(rxx - 1, 0, 2, wfH)
+          octx.fillStyle = '#3ddc8c'
+          octx.font = '600 10px system-ui, sans-serif'
+          octx.fillText('RX', Math.min(W - 18, rxx + 3), wfH - 6)
+        }
       }
     }
 
@@ -514,7 +538,7 @@ export function Waterfall({
     <div className="waterfall-wrap">
       <div className="panel-header">
         <h2>Waterfall</h2>
-        <span className="wf-hint">click = RX · Shift = TX · Ctrl = both</span>
+        <span className="wf-hint">{hint ?? 'click = RX · Shift = TX · Ctrl = both'}</span>
         <PalettePicker />
         <select
           className="wf-palette wf-zoom"

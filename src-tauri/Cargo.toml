@@ -63,6 +63,11 @@ keyring = { version = "3.6", features = [
 # tempo-core for the pure LoTW URL/validate/high-water helpers used by the
 # download command (the reconcile path is reached via tempo-app).
 tempo-core = { path = "../crates/tempo-core" }
+# SSTV encoder for the transmit command: the webview sends raw RGB, the command
+# resolves the mode + validates dims via `for_mode` and encodes via `encode_image`
+# (off the engine lock). Already in the lockfile transitively via tempo-audio; a
+# direct dep here needs no new external crate.
+tempo-sstv = { path = "../crates/tempo-sstv" }
 # Real sound-card + rig transport (optional; enabled by the `radio` feature).
 tempo-audio = { path = "../crates/tempo-audio", optional = true }
 

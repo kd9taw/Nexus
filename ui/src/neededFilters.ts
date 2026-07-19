@@ -61,8 +61,9 @@ export function filterAlerts(alerts: NeedAlert[], filters: NeededFilters): NeedA
     }
 
     // ---- Mode multi-select: keep only the operator's enabled modes (an unknown mode
-    // class always shows, so the board never silently swallows a need it can't classify) ----
-    const cls = a.mode as ModeClass
+    // class always shows, so the board never silently swallows a need it can't classify).
+    // RTTY is a Digital submode (no separate chip), so the Digital toggle governs it. ----
+    const cls = (a.mode === 'RTTY' ? 'Digital' : a.mode) as ModeClass
     if (MODE_CLASSES.includes(cls) && !filters.modes[cls]) return false
 
     return true

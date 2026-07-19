@@ -25,7 +25,7 @@ pub fn available_ports() -> Vec<String> {
         use std::sync::atomic::{AtomicU32, Ordering};
         static CAUGHT: AtomicU32 = AtomicU32::new(0);
         let n = CAUGHT.fetch_add(1, Ordering::Relaxed) + 1;
-        if n == 1 || n % 100 == 0 {
+        if n == 1 || n.is_multiple_of(100) {
             eprintln!(
                 "nexus: serial-port enumeration panicked (caught; occurrence {n}) — \
                  a driver/udev issue on this system; ports list returned empty"

@@ -45,10 +45,12 @@ interface Props {
 const GOALS = PROFILE_LIST.filter((p) => p.id !== 'everything')
 
 // Operating modes are SEPARATE from goals (you can chase DX on any mode). Digital is
-// always on (the FT8/FT4 cockpit is the core spine); Phone/CW are opt-in sections.
+// always on (the FT8/FT4 cockpit is the core spine); Phone/CW/RTTY/SSTV are opt-in sections.
 const MODES: { id: FeatureId; label: string; blurb: string }[] = [
   { id: 'phone', label: 'Phone (SSB)', blurb: 'Voice — PTT, sideband, panadapter' },
   { id: 'cw', label: 'CW', blurb: 'Morse — keyboard + macros, any rig' },
+  { id: 'rtty', label: 'RTTY', blurb: 'Baudot — streaming decode, macros, FSK/AFSK' },
+  { id: 'sstv', label: 'SSTV', blurb: 'Slow-scan images — auto-decode into a gallery' },
 ]
 
 // License class → sets the transmit-privilege lockout + the licensed-segment band dropdown.

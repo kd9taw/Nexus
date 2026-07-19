@@ -38,7 +38,10 @@ pub struct Decode {
     pub qual: f32,
 }
 
-const MAX_DECODES: usize = 64;
+// Stock WSJT-X allows 200 decodes per period (decodedtext MAXDEC); matching it
+// (and F8_MAXDEC in ft8_cabi.f90) so busy-band slots don't silently drop the
+// weakest decodes. Also equals the vendored ft8_a7 table's MAXDEC.
+const MAX_DECODES: usize = 200;
 
 /// Encode a message (≤ 37 chars, standard 77-bit content) into FT8 channel tones
 /// {0..7}. Returns the 79-tone vector, or empty on a bad message.

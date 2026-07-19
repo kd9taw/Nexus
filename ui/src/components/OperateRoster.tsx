@@ -51,9 +51,21 @@ const NEED_RANK: Record<NeedTag, number> = {
 // The call roster shows only ACTIVELY-heard stations: a station drops off once
 // it hasn't been decoded for this many T/R cycles, so the list reflects who's
 // on the band right now rather than everyone heard since the last band change.
+// 3 cycles ≈ 45 s on FT8 / 22 s on FT4 — tight enough to read as "live now" while
+// still keeping anyone in an active QSO (a station is decoded every other slot, so
+// its age stays ≤ ~2 as long as it's transmitting).
 // (View-scoped — the backend roster is left intact so the Tempo/FT1 presence
 // and store-and-forward paths keep their longer retention.)
-const ACTIVE_ROSTER_CYCLES = 6
+const ACTIVE_ROSTER_CYCLES = 3
+
+/** Row freshness → opacity: full-strength when just heard, dimming as a station
+ * ages toward the drop-off, so live stations visually pop over lingering ones.
+ * Pure + exported for test. Floor 0.5 keeps an aging row readable. */
+export function freshness(age: number): number {
+  if (age <= 0) return 1
+  const t = Math.min(age / ACTIVE_ROSTER_CYCLES, 1)
+  return 1 - 0.5 * t // age 0 → 1.0, at the drop-off edge → 0.5
+}
 
 const snrClass = (snr: number) => (snr >= -10 ? 'good' : snr >= -18 ? 'ok' : 'weak')
 /** Shared empty set so the ignore checks stay allocation-free per render. */
@@ -240,6 +252,7 @@ export function OperateRoster({
                 className={`or-row${s.call === selectedCall ? ' selected' : ''}${s.worked ? ' worked' : ''}${
                   chip ? ` need-${chip.cls}` : ''
                 }${ignoredRow ? ' ignored' : ''}`}
+                style={{ opacity: s.call === selectedCall ? 1 : freshness(age) }}
                 onClick={() => {
                   roving.setActive(i)
                   onSelect(s.call)

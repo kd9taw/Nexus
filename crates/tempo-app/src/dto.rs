@@ -1368,6 +1368,11 @@ pub struct SstvGalleryEntry {
     pub freq_mhz: f64,
     /// Decoded scan lines in the finished image (= image height).
     pub lines: u32,
+    /// The FSK callsign ID trailing the image (slowrx `fsk.c`), if a plausible
+    /// one was recovered — else `None`. Optional: pre-FSK `gallery.json` files
+    /// load this as `None` via the struct-level `default`.
+    #[serde(default)]
+    pub fsk_id: Option<String>,
 }
 
 /// AI CW decoder state for the CW cockpit (beta side panel).

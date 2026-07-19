@@ -55,6 +55,9 @@ pub fn spawn_sstv_rx(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
 fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
     let mut decoder: Option<SstvDecoder> = None;
     let mut inflight: Option<InFlight> = None;
+    // Path of the most recently saved image — the target for a trailing
+    // `FskId` event, which arrives just after that image's `ImageComplete`.
+    let mut last_finished_path: Option<String> = None;
     loop {
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
             return;
@@ -122,8 +125,20 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
                 }
                 SstvEvent::ImageComplete { image, .. } => {
                     if let Some(img) = inflight.take() {
-                        finish_image(&engine, &gallery_dir, &img, &image);
+                        last_finished_path = finish_image(&engine, &gallery_dir, &img, &image);
                         progress_dirty = false; // finish_image cleared progress
+                    }
+                }
+                SstvEvent::FskId { text } => {
+                    // The callsign burst that trailed the just-saved image:
+                    // stamp it onto that gallery entry and re-persist the JSON.
+                    if let Some(path) = last_finished_path.clone() {
+                        if let Ok(mut e) = engine.lock() {
+                            e.set_sstv_gallery_fsk_id(&path, text);
+                            let snapshot = e.sstv_gallery().to_vec();
+                            drop(e);
+                            sstv_store::save_gallery(&gallery_dir, &snapshot);
+                        }
                     }
                 }
                 // `SstvEvent` is #[non_exhaustive]: future event kinds are
@@ -155,13 +170,15 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
 }
 
 /// Persist a completed image (BMP + gallery.json) and record it on the engine's
-/// session gallery, stamped with the dial frequency at completion time.
+/// session gallery, stamped with the dial frequency at completion time. Returns
+/// the saved image path on success (the anchor a trailing `FskId` event stamps),
+/// or `None` if the image couldn't be written / the engine lock was poisoned.
 fn finish_image(
     engine: &Arc<Mutex<Engine>>,
     gallery_dir: &std::path::Path,
     img: &InFlight,
     image: &tempo_sstv::SstvImage,
-) {
+) -> Option<String> {
     let unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -174,24 +191,28 @@ fn finish_image(
         if let Ok(mut e) = engine.lock() {
             e.set_sstv_progress(None);
         }
-        return;
+        return None;
     }
+    let path_str = path.to_string_lossy().into_owned();
     // Record on the session gallery (freq stamped under the same lock), then
     // persist the whole capped list beside the images.
     let snapshot: Vec<SstvGalleryEntry> = match engine.lock() {
         Ok(mut e) => {
             let entry = SstvGalleryEntry {
-                path: path.to_string_lossy().into_owned(),
+                path: path_str.clone(),
                 mode: img.mode_name.to_string(),
                 finished_utc: sstv_store::utc_iso(unix),
                 freq_mhz: e.settings().dial_mhz,
                 lines: image.height,
+                // Filled in later if the trailing FSK-ID burst decodes.
+                fsk_id: None,
             };
             e.push_sstv_gallery(entry);
             e.set_sstv_progress(None);
             e.sstv_gallery().to_vec()
         }
-        Err(_) => return,
+        Err(_) => return None,
     };
     sstv_store::save_gallery(gallery_dir, &snapshot);
+    Some(path_str)
 }

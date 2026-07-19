@@ -1,7 +1,15 @@
 # tempo-sstv
 
-Nexus SSTV receiver core (pure decode — no audio I/O, no UI, raw RGB
-buffers out).
+Nexus SSTV receiver + transmitter core (pure decode/encode — no audio I/O,
+no UI, raw RGB buffers in and out).
+
+The **receiver** is the vendored slowrx decode pipeline (see Provenance).
+The **transmitter** (`src/encode.rs`, `encode_image` / `tx_duration_secs`)
+is original Nexus code that synthesizes a full on-air transmission —
+standard two-segment 1900/1200 Hz calibration + VIS header followed by the
+per-mode scanlines — directly at the caller's sample rate (12 kHz for
+Nexus), for all 15 modes. Every mode is TX↔RX self-loopback-validated
+against the decoder (`tests/tx_loopback.rs`).
 
 ## Provenance
 

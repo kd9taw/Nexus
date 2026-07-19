@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tempo_app::engine::Engine;
-use tempo_core::rtty::{RttyConfig, RttyDemod, RttyDemodulator};
+use tempo_core::rtty::{tone_pair, RttyConfig, RttyDemod, RttyDemodulator};
 
 use crate::service::SHUTDOWN;
 
@@ -33,11 +33,13 @@ fn run(engine: Arc<Mutex<Engine>>) {
     // The demodulator lives here, not in the engine: its FFT state is decode-
     // thread-private, and dropping it on disarm makes every re-arm a clean
     // acquire (fresh AFC, fresh bit clock). Tone pair/baud follow the operator's
-    // RTTY settings (shift → space = 2125 + shift; reverse swaps the pair); a
-    // settings change or the cockpit's AFC-reset drops + rebuilds it the same
-    // clean-acquire way.
+    // RTTY settings + the netted audio center (mark/space straddle center by
+    // ±shift/2; reverse swaps the pair — see `tempo_core::rtty::tone_pair`); a
+    // settings change, a waterfall net, or the cockpit's AFC-reset drops +
+    // rebuilds it the same clean-acquire way.
     let mut demod: Option<RttyDemodulator> = None;
-    let mut applied = (0.0f64, 0u32, false); // (baud, shift, reverse) the demod was built with
+    // (baud, shift, reverse, center) the demod was built with
+    let mut applied = (0.0f64, 0u32, false, 0.0f32);
     loop {
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
             return;
@@ -46,7 +48,12 @@ fn run(engine: Arc<Mutex<Engine>>) {
         let (armed, cfg, reset) = match engine.lock() {
             Ok(mut e) => (
                 e.rtty_armed(),
-                (e.rtty_baud(), e.rtty_shift_hz(), e.rtty_reverse()),
+                (
+                    e.rtty_baud(),
+                    e.rtty_shift_hz(),
+                    e.rtty_reverse(),
+                    e.rtty_center_hz(),
+                ),
                 e.take_rtty_afc_reset(),
             ),
             Err(_) => continue,
@@ -67,11 +74,11 @@ fn run(engine: Arc<Mutex<Engine>>) {
             continue;
         }
         let d = demod.get_or_insert_with(|| {
-            let (baud, shift, reverse) = applied;
-            let (mark, space) = (2125.0f32, 2125.0 + shift as f32);
+            let (baud, shift, reverse, center) = applied;
+            let (mark, space) = tone_pair(center, shift as f32, reverse);
             RttyDemodulator::new(RttyConfig {
-                mark_hz: if reverse { space } else { mark },
-                space_hz: if reverse { mark } else { space },
+                mark_hz: mark,
+                space_hz: space,
                 baud: baud as f32,
                 ..RttyConfig::default()
             })

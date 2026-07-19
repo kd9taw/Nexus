@@ -22,6 +22,10 @@
 //! at build time and a sound card at runtime).
 
 pub mod backend;
+/// Stateful, anti-aliased capture-path resampler (device rate → 12 kHz). Pure
+/// DSP — no audio device — so it builds and unit-tests without the `device`
+/// feature; `device::CpalBackend` owns one per capture stream.
+pub mod capture_resample;
 pub mod civ;
 /// FlexRadio native panadapter orchestrator — needs tempo-net (SmartSDR/VITA parsers), so it
 /// rides the `device` feature like the rest of the station-side transport code.

@@ -85,6 +85,16 @@ pub enum SstvEvent {
         /// [`SstvDecoder::process`] for details.
         partial: bool,
     },
+    /// The FSK callsign-ID burst trailing the just-completed image was
+    /// decoded (slowrx `fsk.c`). Emitted after that image's `ImageComplete`,
+    /// at most once, and ONLY when a plausible ID survived the sanity gate in
+    /// [`crate::fsk::decode_fsk_id`] — an absent or garbled burst produces no
+    /// event, so the image always stands on its own. Best-effort, RX-only.
+    FskId {
+        /// The recovered ID text (typically a callsign), trimmed and
+        /// alphabet-gated to `[A-Z0-9/ ]`.
+        text: String,
+    },
 }
 
 /// Internal state of the decoder.
@@ -94,6 +104,24 @@ enum State {
     /// audio buffer and dwarfs the unit `AwaitingVis` variant; clippy
     /// warns about size disparity otherwise.
     Decoding(Box<DecodingState>),
+    /// Post-image: buffer the trailing audio (where the FSK callsign burst,
+    /// if any, lives) until `cap_samples`, then best-effort decode it before
+    /// re-arming VIS. Boxed for the same size-disparity reason as `Decoding`.
+    AwaitingFskId(Box<FskCapture>),
+}
+
+/// Trailing-audio capture for the post-image FSK-ID decode. Seeded with the
+/// image's carry-back tail (the FSK burst starts right after the last image
+/// line), grown with subsequent audio until `cap_samples`, then handed once
+/// to [`crate::fsk::decode_fsk_id`].
+struct FskCapture {
+    /// Working-rate audio from the image tail forward.
+    audio: Vec<f32>,
+    /// Radio-mistuning offset carried from VIS — shifts the 1900/2100 Hz
+    /// tone pair for the FSK slicer (slowrx `fsk.c`: `1900 + HedrShift`).
+    hedr_shift_hz: f64,
+    /// Stop buffering and decode once `audio` reaches this many samples.
+    cap_samples: usize,
 }
 
 /// Two-pass decoding state.
@@ -166,6 +194,12 @@ const FINDSYNC_AUDIO_HEADROOM: f64 = 1.00;
 /// lines plus trailing silence; the fresh detector finds nothing and waits
 /// for more audio.
 const MULTI_IMAGE_CARRYBACK_LINES: u32 = 4;
+
+/// How much trailing audio (seconds) to accumulate in `AwaitingFskId` before
+/// running the FSK-ID decode. The burst itself is short (<1 s); this absorbs
+/// the carried-back image tail ahead of it plus the burst, and comfortably
+/// exceeds slowrx's ≈2.2 s leader-scan horizon.
+const FSK_CAPTURE_SECONDS: f64 = 3.0;
 
 /// `|c| crate::modespec::lookup(c).is_some()` as an `fn` pointer — the
 /// "is this VIS code one we can decode?" predicate handed to every
@@ -388,31 +422,52 @@ impl SstvDecoder {
                         &mut out,
                     );
 
-                    // Image complete. Re-arm VIS detection in place (no
-                    // `break`! — the loop re-iterates into `AwaitingVis`) — a
-                    // back-to-back transmission's VIS leader starts right after
-                    // this image's last line, so feed the fresh detector only
-                    // the tail of the image audio (a few lines, to absorb a
-                    // fast TX clock) plus everything past it; the rest is
-                    // decoded video tones a VIS burst can't hide in. Falling
-                    // through (vs the old `break`) means that next VIS — and
-                    // the image after it — surface in this same `process()`
-                    // call, mirroring the known/unknown-code branches above.
-                    // Closes #31; #90 (A2 + D4). (`sample_offset` on detections
-                    // after the first is relative to the carry-forward start,
-                    // not absolute — #99.)
+                    // Image complete. The FSK callsign burst (if any) trails
+                    // this image's last line, so before re-arming VIS we hand
+                    // the tail forward to `AwaitingFskId`: it buffers a few
+                    // seconds, best-effort decodes the ID, THEN re-arms VIS
+                    // over the SAME window (no `break`! — the loop re-iterates)
+                    // so a back-to-back transmission's VIS leader — which sits
+                    // right after this image's last line, absorbing a fast TX
+                    // clock via the carry-back — is still caught in this same
+                    // `process()` call, mirroring the known/unknown-code
+                    // branches above. Closes #31; #90 (A2 + D4).
+                    // (`sample_offset` on detections after the first is
+                    // relative to the carry-forward start, not absolute — #99.)
                     let work_rate = f64::from(crate::resample::WORKING_SAMPLE_RATE_HZ);
                     let carryback = (f64::from(MULTI_IMAGE_CARRYBACK_LINES)
                         * d.spec.line_seconds
                         * work_rate) as usize;
                     let carry_from = d.target_audio_samples.saturating_sub(carryback);
+                    self.state = State::AwaitingFskId(Box::new(FskCapture {
+                        audio: d.audio[carry_from..].to_vec(),
+                        hedr_shift_hz: d.hedr_shift_hz,
+                        cap_samples: (FSK_CAPTURE_SECONDS * work_rate) as usize,
+                    }));
+                    remaining = &[]; // already folded into d.audio → now inside the FSK capture
+                }
+                State::AwaitingFskId(f) => {
+                    f.audio.extend_from_slice(remaining);
+                    remaining = &[];
+                    if f.audio.len() < f.cap_samples {
+                        break; // keep buffering until the trailing burst is in
+                    }
+                    // Best-effort decode; the sanity gate inside returns None
+                    // for anything implausible, so a garbled/absent burst adds
+                    // no event and the image stands on its own.
+                    if let Some(text) = crate::fsk::decode_fsk_id(&f.audio, f.hedr_shift_hz) {
+                        out.push(SstvEvent::FskId { text });
+                    }
+                    // Re-arm VIS over the WHOLE captured window so a
+                    // back-to-back transmission's leader (which may sit inside
+                    // this same tail) is preserved — then re-enter the loop
+                    // into `AwaitingVis`, which drains any such detection.
                     Self::restart_vis_detection(
                         &mut self.vis,
                         self.working_samples_emitted,
-                        &d.audio[carry_from..],
+                        &f.audio,
                     );
                     self.state = State::AwaitingVis;
-                    remaining = &[]; // already folded into d.audio → now inside the fresh detector
                 }
             }
         }

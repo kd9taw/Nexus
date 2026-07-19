@@ -174,7 +174,9 @@ pub fn unpack77(bits77: &[i8]) -> Option<String> {
         unsafe {
             ft1_sys::ft1_unpack(
                 bits77.as_ptr(),
-                buf.as_mut_ptr(),
+                // `c_char` is i8 on x86 but u8 on aarch64 (Raspberry Pi), so a bare *mut i8
+                // fails the *mut c_char FFI param there — cast to match on both arches.
+                buf.as_mut_ptr() as *mut std::os::raw::c_char,
                 buf.len() as i32,
                 &mut success,
             );
@@ -399,7 +401,8 @@ pub mod dx1 {
                     fsample,
                     0,
                     idt_hi,
-                    buf.as_mut_ptr(),
+                    // c_char = i8 on x86, u8 on aarch64 — cast to match the FFI on both.
+                    buf.as_mut_ptr() as *mut std::os::raw::c_char,
                     buf.len() as i32,
                     &mut snr,
                     &mut sync,

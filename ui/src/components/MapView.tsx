@@ -47,7 +47,7 @@ import {
   type MapView3,
 } from '../mapGeo'
 import { sampleLut } from '../colormaps'
-import { needMeta } from '../propViz'
+import { needMeta, spotTooltip } from '../propViz'
 import { modeClassOf } from '../features/needs'
 import { StateBlock } from './StateBlock'
 // Geochron-style shaded-relief basemap (Natural Earth I 50m, public domain),
@@ -1875,11 +1875,7 @@ export function MapView({
       }
       return `${hit.name} ${star} · ${when}${onSelectSat ? ' — click for passes' : ''} · dbl-click: favorite`
     }
-    const sp = hit.sp
-    const age = sp.ageSecs < 60 ? `${sp.ageSecs}s` : `${Math.round(sp.ageSecs / 60)}m`
-    const freq = sp.freqMhz ? ` · ${sp.freqMhz.toFixed(4).replace(/\.?0+$/, '')} MHz` : ''
-    const mode = sp.mode ? ` ${sp.mode}` : ''
-    return `${sp.call} · ${sp.band}${mode}${freq} · ${age} ago${sp.heardMe ? ' · heard YOU' : ''}${sp.approx ? ' · ~location' : ''}${workHint}`
+    return `${spotTooltip(hit.sp)}${workHint}`
   }
   // Drag = spin the Globe / pan the flat maps; a press that doesn't travel = a
   // click (select a station). Wheel zooms (the native listener, below).

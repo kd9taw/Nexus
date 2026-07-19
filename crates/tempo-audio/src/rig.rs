@@ -753,6 +753,10 @@ mod tests {
         assert_eq!(mode_line("FM", 0), "M FM 0\n");
         // -1 = RIG_PASSBAND_NOCHANGE: leave the rig's own filter width alone (no Width-OSD pop).
         assert_eq!(mode_line("USB", -1), "M USB -1\n");
+        // The mode-set resilience ladder's wire forms (service.rs): the full DATA
+        // passband, then the filter-agnostic retry, then the plain-sideband fallback.
+        assert_eq!(mode_line("PKTUSB", 3000), "M PKTUSB 3000\n");
+        assert_eq!(mode_line("PKTUSB", 0), "M PKTUSB 0\n");
         assert!(reply_ok("RPRT 0\n"));
         assert!(!reply_ok("RPRT -1\n"));
     }
@@ -1061,7 +1065,13 @@ mod tests {
             }
         });
         let mut rig = Rig::rigctld(&addr);
-        assert!(rig.set_mode("PKTUSB", 0).is_err());
+        let err = rig.set_mode("PKTUSB", 0).unwrap_err();
+        // The KIND is load-bearing: `Other` is the radio loop's "active rig rejection"
+        // signal (mode_saw_reject), the one case where the give-up may blame the rig
+        // and try the plain-sideband fallback — a timeout/refused link must never
+        // masquerade as it (that misdiagnosis produced "rig has no PKTUSB mode" on an
+        // IC-7610 whose CAT link was merely too slow).
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
 
         let (addr2, _l2) = mock_rigctld(ok_reply(14_074_000));
         let mut rig2 = Rig::rigctld(&addr2);

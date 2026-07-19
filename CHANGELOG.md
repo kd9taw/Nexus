@@ -5,6 +5,130 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] — 2026-07-18 — RTTY goes hands-free, SSTV FSK-ID + a real FT8 sensitivity fix
+
+### Fixed — on-air transmit pass (RTTY/SSTV) + Raspberry Pi
+
+- **RTTY and SSTV now key with power.** Both armed and asserted PTT but radiated nothing on
+  the common Icom / default-Yaesu setup: they commanded plain LSB/USB, where the rig takes TX
+  audio from the mic, not the USB codec. They now command a DATA submode (PKTLSB/PKTUSB)
+  before keying — the same routing FT8 uses — so the soundcard audio actually modulates.
+  Rig-agnostic through Hamlib (Yaesu DATA / Icom -D / Kenwood DATA).
+- **Enable-TX arm in the RTTY and SSTV cockpits.** Transmit is off by default (WSJT-X
+  "Enable Tx"), but those screens gave no way to arm it, so every send hit "TX is off." The
+  cockpit header's TX pill is now a click-to-arm control.
+- **Raspberry Pi (aarch64) support.** Nexus now builds an arm64 `.deb` for 64-bit Raspberry
+  Pi OS (Pi 3/4/5). On a slower Pi, Settings ▸ Decode depth ▸ Fast keeps FT8/FT4 decoding
+  real-time. (Fixed an ARM-only `c_char` signedness bug in the modem FFI.)
+- **CW copilot recovers space-split callsigns.** When CW copy dropped a gap mid-call
+  ("W1 ABC"), the clean call you read never became a clickable chip. It now rejoins a real
+  prefix|suffix split (validated against DXCC) so those calls are clickable again.
+- **Phone push-to-talk is a normal button, not a full-width bar** — reclaims the row.
+- **Clicking an FT4 spot switches the decoder to FT4** (then QSYs to the spot) instead of
+  leaving you on FT8.
+- **The live S-meter reading is ~3× larger** on the Phone and CW scopes.
+
+### Fixed — FT8/FT4 decode sensitivity (measured)
+
+- **Anti-aliased receive audio.** The capture path's 48 kHz→12 kHz conversion previously
+  took every 4th sample with no filtering, folding all supersonic noise (6–24 kHz) from
+  the soundcard/interface straight into the decode band. It now runs a proper 64-tap
+  anti-alias decimator (fc 4500 Hz — same spec as WSJT-X's, with deeper stopband).
+  Measured on paired test audio: up to **+4 dB of effective sensitivity** on a noisy
+  audio chain, and a doubled-to-tripled decode rate at the −21 dB weak tail even on a
+  clean chain. Benchmarked against stock WSJT-X's decoder on identical audio, Nexus's
+  decode floor now sits at −21.3 dB vs stock's −20.7, with zero false decodes.
+- **Busy slots no longer drop decodes.** The per-slot decode limit was 64 (weakest
+  arrivals silently discarded on crowded bands); now 200, matching WSJT-X. Applies to
+  FT8 and FT4.
+- **Cross-cycle deep recovery (a7) fixed**: the early decode pass was double-writing the
+  a7 candidate table (halving its capacity), and the table wasn't cleared on radio swap
+  or a VFO-knob band change. Both fixed — a7 recoveries now work at full strength.
+- **Field Day AP decoding**: your callsign now feeds the a-priori decoder during Field
+  Day operation, so "MyCall ???" deep recoveries work there like normal operation.
+
+### Fixed — rig control, RTTY, roster, scaling
+
+- **Dual same-model Icom radios now work.** With two Icoms configured, mode-setting
+  failed on both ("rig has no PKTUSB mode") and only worked after deselecting one — a
+  radio-handoff isolation bug that double-commanded the outgoing rig on every contended
+  switch. Fixed. (Plus: rigs on a slow CAT link — ≤19200 baud, the IC-7610's factory
+  default — now get a longer reply deadline, a mode-set fallback ladder, and honest
+  "link too slow / press the rig's DATA key" messages instead of a dead-end.)
+- **RTTY no longer prints garbage on an empty frequency.** The Baudot demod had no
+  squelch, so band noise decoded into a stream of random characters. Added a
+  signal-presence squelch (calibrated so noise is silent but a −2 dB signal still copies).
+- **The FT call roster reads as "live now."** Tightened the drop-off to 3 T/R cycles
+  (~45 s on FT8) and added an age fade — stations dim as they go quiet, so who's active
+  right now stands out.
+- **UI scaling controls work correctly.** The Manual scale strip no longer overflows its
+  container (options past 110% are reachable again), Auto's max-scale chips are disabled
+  when the window can't use them (no more "150% = 175%"), the Comfortable/Compact density
+  switch now actually changes row spacing, and Settings tabs can't be clipped at any scale.
+- **3-D globe (Connect) spot hover** now shows the same rich tooltip as the 2-D map
+  (callsign, band/mode, frequency, age, "heard you") instead of just the callsign.
+
+### Fixed — controls & frequencies
+
+- **TX Power controls now match and apply live.** The Settings "Tx Power" and the
+  cockpit "Pwr" slider are the same value (the audio drive into the rig — not the rig's
+  RF watts); Settings now applies on release and both stay in sync in both directions.
+- **RTTY/SSTV band-plan corrections** (checked against ARRL + IARU R1 + community
+  convention): RTTY 80 m moved 3.580 → 3.590 (3.580 is PSK31), RTTY 40 m split into
+  7.080 (US) + 7.045 (EU/DX), SSTV 80 m split into 3.845 (US) + 3.730 (EU), 12 m RTTY
+  segment note corrected.
+
+### Added
+
+- **SSTV transmit — send pictures on the air.** The SSTV cockpit now has a Transmit
+  panel: drop in an image, pick a mode (all 15 — Scottie, Martin, PD, Robot), see a live
+  preview cropped to that mode's exact resolution, and Send. It transmits as USB voice
+  audio through the safety-gated TX path (nothing keys until you press Send, guaranteed
+  unkey, a hard duration cap), with a progress bar and one-click Stop. Verified
+  end-to-end: every mode encodes and decodes back through Nexus's own receiver.
+- **RTTY auto-sequencer — hands-free QSOs.** Turn on **Auto** in the RTTY cockpit, then
+  click **CQ** to run or **Answer** a decoded caller: the exchange sends, the contact
+  auto-logs (mode RTTY), and the closing 73 goes out — the same operating discipline as
+  the FT8 sequencer, over the safety-gated RTTY keyer. Nothing ever transmits on launch
+  or on toggling Auto; only an explicit CQ/Answer keys up.
+- **RTTY waterfall with mark/space cursors + click-to-net.** The RTTY cockpit now shows a
+  waterfall with cursors marking the mark and space tones; click a signal to net the
+  decoder onto it (re-acquires AFC around the new center).
+- **RTTY spots on the Needed board.** Reverse Beacon Network RTTY skimmer spots now appear
+  as **RTTY** rows (governed by the Digital filter chip); one click QSYs and opens the RTTY
+  cockpit.
+- **RTTY & SSTV in the setup wizard.** The first-run wizard now offers RTTY and SSTV as
+  operating modes alongside Phone and CW.
+- **SSTV FSK-ID capture.** The callsign FSK ID that trails an SSTV image is decoded and
+  shown on the gallery entry (best-effort — a callsign appears only when cleanly recovered).
+- **Auto-arm SSTV for ISS passes (opt-in).** When enabled in Settings, Nexus tunes 145.800
+  FM and arms the SSTV decoder when the ISS is overhead, then restores your dial at LOS.
+  Off by default; never retunes without the opt-in.
+
+### Fixed
+
+- **The RX Gain slider now applies to the live audio as you use it.** Previously the
+  slider only updated its label and didn't reach the running capture stream until you
+  hit Save — so the RX Level meter never moved while dragging and the control looked
+  dead. It now commits the new gain to the live stream when you release the slider (or
+  after a keyboard adjustment), so the meter responds immediately. (Decoding was never
+  affected — the gain always applied on Save.)
+- **The "update available" notice now appears reliably on launch.** The launch check
+  was gated by a once-per-day throttle that also suppressed the *display* (not just the
+  network fetch), and every manual "Check for updates" reset that timer — so for anyone
+  who launches often or uses the button, the launch prompt was effectively never shown
+  while the manual check always worked. The check now runs on every launch (a single
+  small request) and surfaces the prompt whenever a newer build exists and that version
+  hasn't been dismissed via Download.
+
+### Changed
+
+- **Update checks now read the app's own endpoint** (`hamradiotools.io/nexus/version.json`),
+  falling back to SourceForge's `best_release.json` if it's unreachable — so update
+  accuracy no longer depends on the per-release SourceForge "Default Download" flip. The
+  "Download" button now opens the GitHub Releases page (primary distribution; SourceForge
+  mirrors it).
+
 ## [0.11.1] — 2026-07-18 — fill-to-bottom fix
 
 ### Fixed

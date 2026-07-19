@@ -61,6 +61,13 @@ const IDLE: RttyState = {
   backend: 'afsk',
   sending: false,
   keyerError: null,
+  markHz: 2125,
+  spaceHz: 2295,
+  auto: false,
+  seqState: 'idle',
+  peer: null,
+  peerExchange: [],
+  heardCq: null,
 }
 
 beforeEach(() => {

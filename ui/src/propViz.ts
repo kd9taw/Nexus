@@ -10,6 +10,7 @@ import type {
   GridRarity,
   Insight,
   InsightLevel,
+  MapSpot,
   NeedKind,
   TrendDir,
 } from './types'
@@ -263,4 +264,15 @@ export function dualStateLabel(
   const m: BandModeled = modeled ?? 'Open'
   if (m === 'Closed') return { word: 'Closed', sub: '' }
   return { word: m, sub: 'none heard' }
+}
+
+/** The map hover-tooltip line for a live cluster/RBN/PSKR spot — who/where/what
+ * (call · band mode · freq · age · heard-you · ~location). Shared by the 2-D map
+ * and the 3-D globe so both read identically. Any work-gesture hint is appended by
+ * the caller (only the 2-D map has that double-click-to-work gesture). */
+export function spotTooltip(sp: MapSpot): string {
+  const age = sp.ageSecs < 60 ? `${sp.ageSecs}s` : `${Math.round(sp.ageSecs / 60)}m`
+  const freq = sp.freqMhz ? ` · ${sp.freqMhz.toFixed(4).replace(/\.?0+$/, '')} MHz` : ''
+  const mode = sp.mode ? ` ${sp.mode}` : ''
+  return `${sp.call} · ${sp.band}${mode}${freq} · ${age} ago${sp.heardMe ? ' · heard YOU' : ''}${sp.approx ? ' · ~location' : ''}`
 }

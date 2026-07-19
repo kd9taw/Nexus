@@ -288,7 +288,16 @@ pub fn score(
         evidence: None,
         // The operating-mode class for routing/badging. `rank` attaches the exact
         // frequency from the Heard (score is frequency-agnostic award logic).
-        mode: ModeClass::from_adif(mode).label().to_string(),
+        // "RTTY" is carried through as a DISPLAY/ROUTING submode (never a ModeClass
+        // variant): the award .need() above already treated it as Digital
+        // (from_adif("RTTY") = Digital), so RTTY DXCC stays a Digital-class award —
+        // this only lets the row read "RTTY" and route to the RTTY cockpit, and keeps
+        // an RTTY row distinct from an FT8 row of the same call/band in rank()'s dedup.
+        mode: if mode.eq_ignore_ascii_case("RTTY") {
+            "RTTY".to_string()
+        } else {
+            ModeClass::from_adif(mode).label().to_string()
+        },
         freq_mhz: None,
         grid_rarity: rarity,
     })
@@ -1271,6 +1280,75 @@ mod tests {
         assert!(
             modes.contains(&"Digital"),
             "Digital opportunity kept: {modes:?}"
+        );
+    }
+
+    #[test]
+    fn rtty_carries_the_display_label_but_still_scores_as_a_digital_award() {
+        // An RBN RTTY skimmer spot enters score() with mode "RTTY". The award logic
+        // treats it as Digital (from_adif("RTTY") = Digital), so a brand-new entity
+        // still tags NewEntity — but the NeedAlert.mode reads "RTTY" for the row/routing.
+        let needs = LogNeeds::new(); // empty log → any DX is a new one
+        let a = score(
+            "3Y0J",
+            "20m",
+            "RTTY",
+            None,
+            None,
+            &needs,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
+        assert_eq!(a.mode, "RTTY", "display/routing submode preserved");
+        assert!(
+            a.tags.contains(&NeedTag::NewEntity),
+            "RTTY still scores the Digital-class DXCC award: {:?}",
+            a.tags
+        );
+    }
+
+    #[test]
+    fn rank_keeps_rtty_and_ft8_of_the_same_call_band_as_two_rows() {
+        // The (call, band, mode) dedup key must treat RTTY and FT8 as DISTINCT
+        // opportunities (different cockpits), exactly like CW vs FT8.
+        let needs = LogNeeds::new(); // empty log → any DX is a new one
+        let spots = vec![
+            Heard {
+                call: "3Y0J".into(),
+                band: "20m".into(),
+                mode: "RTTY".into(),
+                freq_mhz: Some(14.085),
+                admitted_at: None,
+                evidence: None,
+                grid: None,
+                us_state: None,
+            },
+            Heard {
+                call: "3Y0J".into(),
+                band: "20m".into(),
+                mode: "FT8".into(),
+                freq_mhz: Some(14.074),
+                admitted_at: None,
+                evidence: None,
+                grid: None,
+                us_state: None,
+            },
+        ];
+        let ranked = rank(
+            &spots,
+            &needs,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        assert_eq!(ranked.len(), 2, "RTTY and FT8 rows both kept");
+        let modes: Vec<&str> = ranked.iter().map(|a| a.mode.as_str()).collect();
+        assert!(modes.contains(&"RTTY"), "RTTY row kept: {modes:?}");
+        assert!(
+            modes.contains(&"Digital"),
+            "FT8 (Digital) row kept: {modes:?}"
         );
     }
 

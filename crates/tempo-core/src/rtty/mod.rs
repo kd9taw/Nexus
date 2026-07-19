@@ -24,3 +24,33 @@ pub mod seq;
 pub use baudot::{code_bits, encodable, BaudotDecoder, BaudotEncoder};
 pub use demod::{DecodedChar, RttyConfig, RttyDemod, RttyDemodulator};
 pub use seq::{Action, RttySeq, SeqState};
+
+/// The mark/space audio tone pair (Hz) for a netted `center_hz`, `shift_hz`, and
+/// sense — the SINGLE source of truth shared by the RX demod thread's tones and
+/// the cockpit's waterfall mark/space cursors, so the two can never disagree.
+/// The pair straddles the center by ±shift/2; in normal sense the mark is the
+/// LOWER tone (space the higher), and `reverse` swaps them. Returns `(mark, space)`.
+pub fn tone_pair(center_hz: f32, shift_hz: f32, reverse: bool) -> (f32, f32) {
+    let half = shift_hz / 2.0;
+    let (lo, hi) = (center_hz - half, center_hz + half);
+    if reverse {
+        (hi, lo)
+    } else {
+        (lo, hi)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tone_pair;
+
+    #[test]
+    fn tone_pair_straddles_center() {
+        // 2210 Hz center at the 170 Hz standard shift = today's nominal 2125/2295 pair.
+        assert_eq!(tone_pair(2210.0, 170.0, false), (2125.0, 2295.0));
+        // Reverse swaps mark and space.
+        assert_eq!(tone_pair(2210.0, 170.0, true), (2295.0, 2125.0));
+        // A netted-lower center keeps the same ±shift/2 straddle.
+        assert_eq!(tone_pair(1500.0, 170.0, false), (1415.0, 1585.0));
+    }
+}

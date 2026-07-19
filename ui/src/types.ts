@@ -769,6 +769,10 @@ export interface RttyState {
   afcHz: number
   /** AFC has acquired-then-frozen on a signal. */
   afcLocked: boolean
+  /** Current mark/space audio tones (Hz) the demod is netted on — the waterfall
+   * mark/space cursor positions. Un-netted = the nominal 2125/2295 pair. */
+  markHz: number
+  spaceHz: number
   /** The decoded-text ring tail (caps at ~4000 chars; oldest drop off). */
   text: string
   /** Per-character confidence 0–100, parallel to `text`'s chars — render low
@@ -785,6 +789,18 @@ export interface RttyState {
   sending: boolean
   /** A keyer failure to surface (FSK port wouldn't open / rig refused PTT), else null. */
   keyerError: string | null
+  /** The RTTY auto-sequencer is active (the operator's Auto toggle is on). */
+  auto: boolean
+  /** Live sequencer state: 'idle' | 'calling_cq' | 'answering' | 'exchange_sent' |
+   * 'confirmed' | 'done'. */
+  seqState: string
+  /** The station currently being worked, once one is locked, else null. */
+  peer: string | null
+  /** The peer's copied exchange in schema order, as [key, value] pairs. */
+  peerExchange: [string, string][]
+  /** A CQ surfaced from the transcript for the operator to click-to-answer (only
+   * while Auto is on), else null. Surfacing only — clicking it is the human gate. */
+  heardCq: string | null
 }
 
 /** One saved SSTV image in the local gallery (a BMP in the sstv-gallery folder
@@ -800,6 +816,8 @@ export interface SstvGalleryEntry {
   freqMhz: number
   /** Decoded scan lines (= image height). */
   lines: number
+  /** Decoded FSK callsign ID trailing the image (best-effort), if recovered. */
+  fskId?: string | null
 }
 
 /** Live SSTV RX state: armed flag, in-flight decode progress + preview, and
@@ -816,6 +834,15 @@ export interface SstvState {
   previewWidth: number
   previewHeight: number
   gallery: SstvGalleryEntry[]
+  /** An image is queued or streaming to the rig (the cockpit's TX indicator). */
+  sending: boolean
+  /** Mode label of the image being (or last) transmitted, else null. */
+  txMode: string | null
+  /** TX progress 0..1 (elapsed / total key-down), 0 when idle. */
+  txProgress: number
+  /** Seconds of key-down elapsed / total for the in-flight image. */
+  txElapsedSecs: number
+  txTotalSecs: number
 }
 
 /** Result of "Auto-test ports": the working (port, baud, Hamlib model) the prober
@@ -1172,8 +1199,9 @@ export interface NeedAlert {
   tags: NeedTag[]
   priority: number
   headline: string
-  /** Operating-mode class — 'CW' | 'Phone' | 'Digital'. Routes a click-to-work to the
-   * matching cockpit and drives the row's mode badge. */
+  /** Operating-mode class — 'CW' | 'Phone' | 'Digital' | 'RTTY'. Routes a click-to-work to
+   * the matching cockpit and drives the row's mode badge. 'RTTY' is a Digital submode label
+   * (RBN skimmer spots only) that routes to the RTTY cockpit; it filters as Digital. */
   mode: string
   /** Exact spot frequency in MHz when known (cluster/RBN), else null (band-level
    * reception needs). Lets click-to-work QSY to the spot, not just the band default. */
@@ -1784,6 +1812,9 @@ export interface Settings {
   qsySet: string[]
   /** Announce cadence: the initiator hops every this-many of its TX overs. */
   qsyCadence: number
+  /** Opt-in (off by default): at ISS AOS auto-tune 145.800 FM + arm SSTV RX, and
+   * restore the dial at LOS. Every rig-touching action is gated on this. */
+  issSstvAutoArm: boolean
   /** Alert (beep + flash) when a decode is directed at my callsign. */
   alertMyCall: boolean
   /** Alert when any station is calling CQ. */

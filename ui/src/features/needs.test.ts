@@ -77,6 +77,11 @@ describe('workTarget', () => {
   it('no frequency resolvable (unknown band, no spot freq) → null', () => {
     expect(workTarget(alert('A', 'CW', '60m', null), BAND_PLAN)).toBeNull()
   })
+
+  it('an RTTY need routes to the rtty cockpit at the exact spot freq', () => {
+    const t = workTarget(alert('DL1RT', 'RTTY', '20m', 14.085), BAND_PLAN)
+    expect(t).toEqual({ call: 'DL1RT', view: 'rtty', freqMhz: 14.085, band: '20m' })
+  })
 })
 
 describe('modeClassOf (map-spot → cockpit routing)', () => {

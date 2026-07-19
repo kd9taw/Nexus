@@ -184,6 +184,7 @@ mod tests {
             finished_utc: utc_iso(1_700_000_000),
             freq_mhz: 14.230,
             lines: 2,
+            fsk_id: None,
         };
         save_gallery(&dir, std::slice::from_ref(&entry));
         let loaded = load_gallery(&dir);

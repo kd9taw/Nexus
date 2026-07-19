@@ -27,7 +27,9 @@ import {
   setQrzLogbookKey,
   setQrzPassword,
   setRepeaterbookToken,
+  setRxGain,
   setSettings,
+  setTxLevel,
   addRadio,
   removeRadio,
   renameRadio,
@@ -54,7 +56,7 @@ import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup } from './SettingsGroup'
 import type { Scale, ScaleMode } from '../useScale'
-import { SCALE_STEPS } from '../useScale'
+import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
@@ -258,6 +260,20 @@ export function SettingsPanel({
   onRerunWizard,
 }: Props) {
   const [form, setForm] = useState<Settings | null>(null)
+  // Highest scale the CURRENT window can auto-fit (Auto never upscales past what
+  // fits). Cap chips above this are dead — they all yield this same scale — so we
+  // disable them and say why (operator report: "150 isn't bigger than 175"). Tracks
+  // live: a bigger window / monitor re-enables the higher chips.
+  const MAX_STEP = SCALE_STEPS[SCALE_STEPS.length - 1]
+  const [autoCeil, setAutoCeil] = useState<Scale>(() =>
+    fitScale(window.innerWidth, window.innerHeight, MAX_STEP),
+  )
+  useEffect(() => {
+    const onResize = () =>
+      setAutoCeil(fitScale(window.innerWidth, window.innerHeight, MAX_STEP))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [MAX_STEP])
   const [allTxtPath, setAllTxtPath] = useState('')
   const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'saved'>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -456,6 +472,32 @@ export function SettingsPanel({
     markDirty()
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
   }
+
+  // Apply RX capture gain to the LIVE audio stream (not just the form). Called on
+  // release — `set_rx_gain` persists + returns a snapshot, so we commit once the
+  // operator lets go of the slider rather than on every drag tick (which would
+  // disk-thrash). The RX Level meter then responds within a poll, so the control
+  // visibly "works" instead of appearing dead until a full Save.
+  const applyRxGainLive = (value: number) => {
+    void setRxGain(value).catch(() => pushToast('Could not apply RX gain', 'error'))
+  }
+
+  // Apply TX drive (Pwr) to the LIVE radio, the SAME value as the cockpit "Pwr" slider —
+  // set_tx_level persists + updates the snapshot, so the cockpit reflects it immediately.
+  // Commit on release (not per drag tick) to avoid disk-thrash.
+  const applyTxLevelLive = (value: number) => {
+    void setTxLevel(value).catch(() => pushToast('Could not set TX power', 'error'))
+  }
+
+  // Keep the Tx Power slider in step with the cockpit "Pwr" control — both are the SAME value
+  // (radio.txLevel). When the cockpit changes it, mirror the live value into the form so the slider
+  // tracks it (previously the form was a stale copy, so cockpit→Settings never showed). setForm
+  // directly (not updateNum) so this live-sync never spuriously marks the form dirty.
+  useEffect(() => {
+    const live = radio?.txLevel
+    if (live == null) return
+    setForm((prev) => (prev && Math.abs(prev.txLevel - live) > 1e-6 ? { ...prev, txLevel: live } : prev))
+  }, [radio?.txLevel])
 
   // Tracks unsaved flat-form edits, so switching the active radio (which reloads the form) can warn
   // before discarding them. A ref (not state) — read synchronously in the switch handler, no re-render.
@@ -1408,21 +1450,38 @@ export function SettingsPanel({
                   <>
                     <span className="settings-hint">Max scale (auto won&apos;t exceed)</span>
                     <div className="theme-switcher" role="group" aria-label="Maximum UI scale">
-                      {SCALE_STEPS.filter((s) => s >= 100).map((s) => (
-                        <button
-                          key={s}
-                          type="button"
-                          className={`theme-chip${scaleCap === s ? ' active' : ''}`}
-                          aria-pressed={scaleCap === s}
-                          onClick={() => onScaleCapChange(s)}
-                        >
-                          {s}%
-                        </button>
-                      ))}
+                      {SCALE_STEPS.filter((s) => s >= 100).map((s) => {
+                        // Disable chips this window can't reach: Auto never upscales
+                        // past the fit, so every chip > autoCeil yields the SAME scale
+                        // (the operator's "150 == 175" — a dead option). Re-enables
+                        // when the window/monitor grows.
+                        const unreachable = s > autoCeil
+                        return (
+                          <button
+                            key={s}
+                            type="button"
+                            className={`theme-chip${scaleCap === s ? ' active' : ''}`}
+                            aria-pressed={scaleCap === s}
+                            disabled={unreachable}
+                            title={
+                              unreachable
+                                ? `This window only fits up to ${autoCeil}% — a larger window or monitor unlocks ${s}%.`
+                                : undefined
+                            }
+                            onClick={() => onScaleCapChange(s)}
+                          >
+                            {s}%
+                          </button>
+                        )
+                      })}
                     </div>
                     <span className="settings-hint">
-                      Fits the whole interface to the window so nothing is cut off (currently {scale}%). The
-                      waterfall stays sharp. Raise the max for big monitors.
+                      Fits the whole interface to the window so nothing is cut off (currently {scale}%).
+                      {autoCeil < 100
+                        ? ` This window maxes out at ${autoCeil}% — raising the cap can't help until you enlarge the window, or switch to Manual to force a bigger scale.`
+                        : autoCeil < MAX_STEP
+                          ? ` This window fits up to ${autoCeil}%; bigger caps need a larger window or monitor. The waterfall stays sharp.`
+                          : ' The waterfall stays sharp. Raise the max for big monitors.'}
                     </span>
                   </>
                 ) : (
@@ -2233,6 +2292,22 @@ export function SettingsPanel({
                 />
               </div>
 
+              <label className="settings-field">
+                <span className="settings-label">ISS SSTV auto-arm</span>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    checked={!!form.issSstvAutoArm}
+                    onChange={(e) => updateBool('issSstvAutoArm', e.target.checked)}
+                    aria-label="Auto-arm SSTV for ISS passes"
+                  />
+                  <span className="settings-hint">
+                    Auto-arm SSTV for ISS passes — tunes 145.800 FM and arms the decoder when
+                    the ISS is overhead, restores your dial at LOS. Off by default.
+                  </span>
+                </span>
+              </label>
+
               <div className="settings-field">
                 <span className="settings-label">Split operation</span>
                 <div className="theme-switcher" role="group" aria-label="Split operation">
@@ -2579,9 +2654,15 @@ export function SettingsPanel({
                   step="0.01"
                   value={String(form.txLevel)}
                   onChange={(e) => updateNum('txLevel', Number(e.target.value))}
+                  onPointerUp={(e) => applyTxLevelLive(Number((e.target as HTMLInputElement).value))}
+                  onKeyUp={(e) => applyTxLevelLive(Number((e.target as HTMLInputElement).value))}
                   aria-label="Transmit drive level"
                 />
-                <span className="settings-hint">Transmit drive into the rig (avoid ALC overdrive).</span>
+                <span className="settings-hint">
+                  The audio <strong>drive</strong> into the rig — the SAME control as the cockpit{' '}
+                  <strong>Pwr</strong> slider (they always match now). Trim down until your rig&apos;s
+                  ALC is just zero. This is <em>not</em> the rig&apos;s RF watts — set those on the radio.
+                </span>
               </label>
 
               <div className="settings-field">
@@ -2611,12 +2692,14 @@ export function SettingsPanel({
                   step="0.1"
                   value={String(form.rxGain ?? 1)}
                   onChange={(e) => updateNum('rxGain', Number(e.target.value))}
+                  onPointerUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
+                  onKeyUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
                   aria-label="RX capture gain"
                 />
                 <span className="settings-hint">
-                  Boost a quiet interface until RX Level reads around 30 dB (applies on Save).
-                  Leave at ×1.0 unless the meter reads low (under ~15 dB) — FT8 decodes on a
-                  small signal, so you rarely need much.
+                  Boost a quiet interface until RX Level reads around 30 dB — the meter responds
+                  as you release the slider. Leave at ×1.0 unless the meter reads low (under ~15 dB)
+                  — FT8 decodes on a small signal, so you rarely need much.
                 </span>
               </label>
             </div>

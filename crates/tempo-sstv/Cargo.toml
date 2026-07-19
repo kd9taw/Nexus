@@ -8,7 +8,7 @@ authors.workspace = true
 # (see description) and keeps its upstream license. MIT is GPL-compatible, so
 # the combined Nexus work remains GPL-3.0-only.
 license = "MIT"
-description = "SSTV receiver core — vendored from the MIT `slowrx` crate v0.5.3 (jasonherald/slowrx.rs, commit aa384b4), a Rust port of slowrx by Oona Räisänen (ISC). VIS detect, sync/slant recovery, Martin/Scottie/Robot/PD decode; PD50/90/160/290 added locally."
+description = "SSTV receiver + transmitter core. Receiver vendored from the MIT `slowrx` crate v0.5.3 (jasonherald/slowrx.rs, commit aa384b4), a Rust port of slowrx by Oona Räisänen (ISC): VIS detect, sync/slant recovery, Martin/Scottie/Robot/PD decode; PD50/90/160/290 added locally. Transmitter is original Nexus code: full leader/VIS header + per-mode scanline encode for all 15 modes."
 
 [lints.rust]
 unsafe_code = "deny"

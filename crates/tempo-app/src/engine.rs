@@ -540,6 +540,12 @@ pub struct Engine {
     /// One-shot: drop + rebuild the RX demodulator (the AFC-reset command — a
     /// wrong-neighbor acquire-then-freeze recovers by re-acquiring from scratch).
     rtty_afc_reset: bool,
+    /// Audio center (Hz) the RTTY decoder is netted on — the mark/space midpoint.
+    /// `None` = un-netted, which resolves to the nominal 2125 Hz mark
+    /// (`center = 2125 + shift/2`) so the pair sits on today's 2125/2295 at any
+    /// shift. A waterfall click sets it via [`Engine::rtty_net`], which rebuilds
+    /// the demod around the new center. RX only; no TX path touches this.
+    rtty_center: Option<f32>,
     /// Queued RTTY transmissions, one whole message per entry (already uppercased
     /// and ITA2-filtered). Filled ONLY by [`Engine::rtty_send_text`] — an explicit
     /// operator send — never on arm/launch. The radio loop keys ONE message at a
@@ -555,6 +561,15 @@ pub struct Engine {
     rtty_sending: bool,
     /// An RTTY keyer failure to surface (FSK port wouldn't open / PTT refused).
     rtty_keyer_error: Option<String>,
+    /// The RTTY auto-sequencer, present ONLY while the operator has flipped Auto
+    /// on (`None` = the manual-only behavior). Driven by the RX feed (in
+    /// [`Engine::push_rtty_decode`]) + the service tick ([`Engine::rtty_auto_service`]);
+    /// it NEVER transmits without an explicit CQ/Answer initiate (ARRL FD 6.4).
+    rtty_seq: Option<tempo_core::rtty::RttySeq>,
+    /// True from the moment an auto-sequencer `SendText` is enqueued until that
+    /// over has fully keyed out — the edge the service tick turns into exactly one
+    /// `on_tx_complete` (restarting the sequencer's reply timer).
+    rtty_auto_over: bool,
     /// SSTV RX decoder armed (session-only runtime state, never persisted).
     sstv_armed: bool,
     /// Drain buffer for the SSTV decode thread (same pattern as `rtty_audio`).
@@ -566,6 +581,24 @@ pub struct Engine {
     /// persisted `gallery.json` at startup; the decode thread appends on each
     /// completed image. Capped at [`SSTV_GALLERY_CAP`].
     sstv_gallery: Vec<crate::dto::SstvGalleryEntry>,
+    /// An operator-initiated SSTV image TX waiting for the radio loop to key it:
+    /// the whole pre-encoded 12 kHz buffer + its exact duration + mode label.
+    /// Filled ONLY by [`Engine::sstv_send`] (an explicit operator send) — never on
+    /// arm/launch/mode-select. The radio loop takes it via [`Engine::poll_sstv_tx`]
+    /// behind every TX gate; one image in flight at a time (no queue). `None` = idle.
+    sstv_tx: Option<SstvTxJob>,
+    /// One-shot: abort the SSTV image in progress (the loop drops the feed, flushes
+    /// the output ring and unkeys PTT). Mirrors `rtty_abort`.
+    sstv_abort: bool,
+    /// True while the radio loop is streaming an SSTV image (stamped by the loop each
+    /// tick; the cockpit's TX indicator). Mirrors `rtty_sending`.
+    sstv_sending: bool,
+    /// Mode label of the image being (or last) transmitted, for the TX DTO. Set by
+    /// [`Engine::sstv_send`]; cleared by Stop / halt / TX-disarm.
+    sstv_tx_mode: Option<String>,
+    /// In-flight SSTV TX progress `(played_ms, total_ms)`, stamped by the radio loop.
+    /// `None` = no image queued or sending.
+    sstv_tx_progress: Option<(f64, f64)>,
 }
 
 /// Samples of recent audio kept for the live waterfall spectrum (~0.34 s at
@@ -590,6 +623,10 @@ const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
 const RX_TAP_CAP: usize = 120_000;
 /// SSTV gallery session-list cap (mirrors the on-disk `gallery.json` cap).
 const SSTV_GALLERY_CAP: usize = 200;
+/// Hard cap on a single SSTV image's key-down (seconds), watchdog-independent. The
+/// longest legitimate mode (PD290) is ~295 s; anything past this is a bug/abuse and is
+/// refused before keying — defense-in-depth above the per-send TX-watchdog budget.
+const SSTV_MAX_TX_SECS: f64 = 330.0;
 
 /// Live progress of an in-flight SSTV decode, pushed by the decode thread and
 /// read by the `get_sstv_state` poll.
@@ -609,6 +646,20 @@ pub struct SstvProgress {
     pub preview_rgb: Vec<u8>,
 }
 
+/// A ready-to-transmit SSTV image: the whole pre-encoded 12 kHz PCM buffer, the
+/// mode's human label, and the exact key-down duration. Built in the command
+/// layer (encode runs off the engine lock), handed to the engine by
+/// [`Engine::sstv_send`], and taken by the radio loop via [`Engine::poll_sstv_tx`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct SstvTxJob {
+    /// Full over-the-air waveform (`f32` PCM at 12 kHz = `ft1::SAMPLE_RATE`).
+    pub samples: Vec<f32>,
+    /// Human-readable mode label, e.g. "Scottie 1".
+    pub mode_name: String,
+    /// Exact duration of `samples` in milliseconds — the precomputed PTT hold.
+    pub duration_ms: f64,
+}
+
 /// Compact RTTY state for the `get_rtty_state` poll: armed flag, AFC, the
 /// decoded-text ring with per-character confidence (0–100, parallel to `text`'s
 /// chars — render low values faint), plus the TX side (configured baud/shift/
@@ -618,6 +669,10 @@ pub struct RttyRxState {
     pub armed: bool,
     pub afc_hz: f32,
     pub afc_locked: bool,
+    /// Current mark/space audio tones (Hz) the demod is netted on — the waterfall
+    /// mark/space cursor positions. Un-netted = the nominal 2125/2295 pair.
+    pub mark_hz: f32,
+    pub space_hz: f32,
     pub text: String,
     pub conf: Vec<u8>,
     pub baud: f64,
@@ -625,6 +680,47 @@ pub struct RttyRxState {
     pub backend: String,
     pub sending: bool,
     pub keyer_error: Option<String>,
+    // --- Auto-sequencer surface (meaningful only while `auto` is true) ---
+    /// The RTTY auto-sequencer is active (the operator's Auto toggle is on).
+    pub auto: bool,
+    /// Live sequencer state: `idle` | `calling_cq` | `answering` |
+    /// `exchange_sent` | `confirmed` | `done`.
+    pub seq_state: String,
+    /// The station currently being worked, once one is locked.
+    pub peer: Option<String>,
+    /// The peer's copied exchange in schema order, `(key, value)`.
+    pub peer_exchange: Vec<(String, String)>,
+    /// A CQ surfaced from the transcript for the operator to click-to-answer
+    /// (only while Auto is on). Surfacing ONLY — clicking it is the human gate;
+    /// it never transitions the machine on its own.
+    pub heard_cq: Option<String>,
+}
+
+/// One operation applied to the RTTY auto-sequencer via [`Engine::rtty_drive`].
+enum RttyOp {
+    /// Operator initiates a CQ run (a human-initiate gate).
+    StartCq,
+    /// Operator answers a surfaced CQ — search & pounce (the other gate).
+    Answer(String),
+    /// Freshly decoded characters arrived from the RX thread.
+    Feed(Vec<tempo_core::rtty::DecodedChar>),
+    /// Clock tick — drives the timeout → AGN / repeat / abort discipline.
+    Tick,
+    /// The engine finished keying the last over (restarts the reply timer).
+    TxComplete,
+}
+
+/// The `rtty_state` seq-state string the UI switches on.
+fn seq_state_label(s: tempo_core::rtty::SeqState) -> &'static str {
+    use tempo_core::rtty::SeqState;
+    match s {
+        SeqState::Idle => "idle",
+        SeqState::CallingCq => "calling_cq",
+        SeqState::Answering => "answering",
+        SeqState::ExchangeSent => "exchange_sent",
+        SeqState::Confirmed => "confirmed",
+        SeqState::Done => "done",
+    }
 }
 
 /// Window of recent decode DT samples used for the time-sync health median.
@@ -842,14 +938,22 @@ impl Engine {
             rtty_afc_hz: 0.0,
             rtty_afc_locked: false,
             rtty_afc_reset: false,
+            rtty_center: None,
             rtty_queue: VecDeque::new(),
             rtty_abort: false,
             rtty_sending: false,
             rtty_keyer_error: None,
+            rtty_seq: None,
+            rtty_auto_over: false,
             sstv_armed: false,
             sstv_audio: Vec::new(),
             sstv_progress: None,
             sstv_gallery: Vec::new(),
+            sstv_tx: None,
+            sstv_abort: false,
+            sstv_sending: false,
+            sstv_tx_mode: None,
+            sstv_tx_progress: None,
         }
     }
 
@@ -1135,6 +1239,9 @@ impl Engine {
         self.halt_tx();
         self.clear_decode_context();
         self.app.clear_stations();
+        // The a7 cross-cycle AP table holds the OLD radio's decodes — replaying
+        // them as AP hypotheses on the new radio's band would seed wrong-call decodes.
+        modes::reset_ft8_a7();
         self.sideband_override = None;
         // Flip active + mirror the new profile's CAT/audio into the flat fields — Transport::
         // from_settings then differs and the loop's existing swap tears down the old rig + opens
@@ -1287,6 +1394,9 @@ impl Engine {
             if !self.settings.band.eq_ignore_ascii_case(band) {
                 self.clear_decode_context();
                 self.app.clear_stations();
+                // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
+                // them as AP hypotheses on the new band would seed wrong-call decodes.
+                modes::reset_ft8_a7();
                 self.halt_tx();
                 self.clear_cw_decode(); // stale CW copy across a cross-band knob QSY
                                         // A knob QSY across bands drops the transient mode override too, exactly like an
@@ -1649,6 +1759,20 @@ impl Engine {
     /// else the band-derived policy (`settings.rig_mode`). Write-side canon for the rig `M` verb.
     pub fn rig_mode_effective(&self) -> String {
         if self.settings.operating_mode == crate::settings::OperatingMode::Phone {
+            // SSTV rides the Phone segment but transmits SOUNDCARD audio, so — exactly like
+            // FT8 — it needs a DATA submode (PKTUSB/PKTLSB → Yaesu DATA / Icom D / Kenwood
+            // DATA, rig-agnostically via Hamlib) to route the USB codec to the modulator;
+            // plain USB/LSB takes TX audio from the MIC and radiates ZERO RF ("red light, no
+            // signal"). Only while an image is queued or in flight, so live voice PTT keeps
+            // plain SSB. Driving it through the continuous mode-apply commands DATA BEFORE the
+            // SSTV PTT and restores plain SSB when the image ends — no Icom-only set_data_mode.
+            if self.sstv_tx.is_some() || self.sstv_sending {
+                let lsb = self
+                    .sideband_override
+                    .as_deref()
+                    .map_or(self.settings.dial_mhz < 10.0, |m| m.eq_ignore_ascii_case("lsb"));
+                return if lsb { "PKTLSB" } else { "PKTUSB" }.to_string();
+            }
             if let Some(m) = &self.sideband_override {
                 return m.clone();
             }
@@ -4003,6 +4127,13 @@ impl Engine {
         self.rtty_queue.clear();
         self.rtty_abort = true;
         self.voice_tx = None; // drop any queued voice-keyer audio too
+                              // Cut any in-progress SSTV image the same way: drop the queued job and arm the
+                              // one-shot abort so the radio loop drops the feed, flushes the output ring and
+                              // unkeys on its next tick.
+        self.sstv_tx = None;
+        self.sstv_abort = true;
+        self.sstv_tx_mode = None;
+        self.sstv_tx_progress = None;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
         self.own_tx.clear();
@@ -4161,6 +4292,11 @@ impl Engine {
             // queue, so nothing keys on a later re-enable.
             self.rtty_queue.clear();
             self.rtty_abort = true;
+            // Same for SSTV: a disarm aborts the image in flight and drops the job.
+            self.sstv_tx = None;
+            self.sstv_abort = true;
+            self.sstv_tx_mode = None;
+            self.sstv_tx_progress = None;
             self.tx_queue.clear();
             self.broadcast_queue.clear();
             self.app.set_transmitting(false);
@@ -4442,15 +4578,43 @@ impl Engine {
         }
         self.rtty_afc_hz = afc_hz;
         self.rtty_afc_locked = afc_locked;
+        // Feed the auto-sequencer when Auto is on. In Idle the machine only
+        // ACCUMULATES (the human-initiate gate), so this can never self-start.
+        if self.rtty_seq.is_some() {
+            self.rtty_drive(RttyOp::Feed(chars.to_vec()));
+        }
     }
 
     /// The compact RTTY state the UI polls (`get_rtty_state`).
     pub fn rtty_state(&self) -> RttyRxState {
+        let text: String = self.rtty_chars.iter().map(|c| c.ch).collect();
+        // Auto-sequencer surface: the live state, the peer + their copied exchange,
+        // and — only while Auto is on — a heard CQ the operator can click to answer.
+        // `find_cq` SURFACES only; it never drives the machine (the human gate).
+        let (auto, seq_state, peer, peer_exchange, heard_cq) = match &self.rtty_seq {
+            Some(seq) => (
+                true,
+                seq_state_label(seq.state()).to_string(),
+                seq.peer().map(|s| s.to_string()),
+                seq.peer_exchange().to_vec(),
+                tempo_core::rtty::seq::find_cq(&text),
+            ),
+            None => (false, "idle".to_string(), None, Vec::new(), None),
+        };
+        // Mark/space tones the demod is netted on (waterfall cursor positions) —
+        // the same tone_pair the decode thread builds its filters from, so the
+        // cursors and the actual decode tones can never disagree.
+        let (mark_hz, space_hz) = tempo_core::rtty::tone_pair(
+            self.rtty_center_hz(),
+            self.rtty_shift_hz() as f32,
+            self.rtty_reverse(),
+        );
         RttyRxState {
             armed: self.rtty_armed,
             afc_hz: self.rtty_afc_hz,
             afc_locked: self.rtty_afc_locked,
-            text: self.rtty_chars.iter().map(|c| c.ch).collect(),
+            mark_hz,
+            space_hz,
             conf: self
                 .rtty_chars
                 .iter()
@@ -4463,6 +4627,12 @@ impl Engine {
             // queued behind it — the cockpit's TX indicator.
             sending: self.rtty_sending || !self.rtty_queue.is_empty(),
             keyer_error: self.rtty_keyer_error.clone(),
+            text,
+            auto,
+            seq_state,
+            peer,
+            peer_exchange,
+            heard_cq,
         }
     }
 
@@ -4486,6 +4656,24 @@ impl Engine {
         std::mem::take(&mut self.rtty_afc_reset)
     }
 
+    /// The audio center (Hz) the RTTY demod nets around — the mark/space midpoint.
+    /// Un-netted resolves to the nominal 2125 Hz mark (`2125 + shift/2`), so an
+    /// un-netted decoder sits on today's 2125/2295 pair at any shift. RX only.
+    pub fn rtty_center_hz(&self) -> f32 {
+        self.rtty_center
+            .unwrap_or(2125.0 + self.rtty_shift_hz() as f32 / 2.0)
+    }
+
+    /// Net the RTTY decoder onto a new audio center (Hz) — a waterfall click.
+    /// Clamps into the audio passband, then rebuilds the demod around the new
+    /// center the same clean acquire-then-freeze way an AFC reset does. RX-only
+    /// decoder state, so this is safe during TX and needs no privilege gate.
+    pub fn rtty_net(&mut self, hz: f32) {
+        self.rtty_center = Some(hz.clamp(300.0, 3700.0));
+        // Rebuild the demod around the new center (zeros AFC + arms the reset).
+        self.request_rtty_afc_reset();
+    }
+
     // ----- RTTY transmit — operator-initiated, mirroring the CW send path. -----
     // Launch-safety: nothing here runs on startup or on arm. The queue fills ONLY
     // via `rtty_send_text` (an explicit operator command) and the radio loop keys
@@ -4502,6 +4690,14 @@ impl Engine {
     /// while RTTY itself is transmitting queues BEHIND the current over (type-ahead);
     /// Stop TX / halt drops the whole queue.
     pub fn rtty_send_text(&mut self, text: &str) -> Result<(), String> {
+        self.rtty_tx_gate()?;
+        self.rtty_enqueue(text, true)
+    }
+
+    /// The up-front RTTY TX gate: every reason a send would be refused, checked
+    /// before anything is queued so the operator learns WHY (never a silent hold).
+    /// Shared by the manual send path and the auto-sequencer's CQ/Answer initiate.
+    fn rtty_tx_gate(&self) -> Result<(), String> {
         use crate::settings::OperatingMode;
         if self.settings.operating_mode != OperatingMode::Rtty {
             return Err("Not in the RTTY section — enter the RTTY cockpit first".to_string());
@@ -4545,6 +4741,15 @@ impl Engine {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Uppercase + filter to the ITA2 charset, cap a single over, and enqueue.
+    /// `reset_watchdog` restarts the TX-watchdog clock — TRUE for an operator send
+    /// (and a genuine sequencer state advance, handled in `rtty_drive`), FALSE for
+    /// an auto-over that merely repeats, so an unanswered auto-CQ still trips the
+    /// watchdog ceiling. Assumes [`Engine::rtty_tx_gate`] has already passed.
+    fn rtty_enqueue(&mut self, text: &str, reset_watchdog: bool) -> Result<(), String> {
         let up: String = text
             .chars()
             .map(|c| c.to_ascii_uppercase())
@@ -4567,7 +4772,9 @@ impl Engine {
             ));
         }
         // An explicit operator send restarts the TX-watchdog clock (see poll_rtty_one).
-        self.reset_tx_watchdog();
+        if reset_watchdog {
+            self.reset_tx_watchdog();
+        }
         self.rtty_queue.push_back(up);
         Ok(())
     }
@@ -4620,6 +4827,217 @@ impl Engine {
     /// queued audio and unkeys).
     pub fn take_rtty_abort(&mut self) -> bool {
         std::mem::take(&mut self.rtty_abort)
+    }
+
+    // ----- RTTY auto-sequencer — the pure `tempo_core::rtty::RttySeq` state
+    // machine wired to the live TX path + logbook, gated behind the operator's
+    // Auto toggle and a human CQ/Answer initiate. It NEVER transmits on launch or
+    // on toggling Auto — only an explicit CQ/Answer keys up (ARRL FD 6.4). -----
+
+    /// Turn the RTTY auto-sequencer on/off. On builds a fresh `RttySeq` from the
+    /// operator's identity + the active exchange — Field Day class/section when the
+    /// FD master switch is on, else casual RST/name/QTH (mirroring `set_mode`'s
+    /// exchange selection). Off aborts any live session and stops TX. NEVER
+    /// transmits: a session only ever starts from `rtty_auto_cq` / `rtty_auto_answer`.
+    pub fn set_rtty_auto(&mut self, on: bool) {
+        if on {
+            let mycall = self.settings.mycall.clone();
+            let seq = if self.settings.fd_active {
+                let exch = [
+                    ("CLASS", self.settings.fd_class.trim()),
+                    ("SECTION", self.settings.fd_section.trim()),
+                ];
+                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::rtty::seq::FIELD_DAY, &exch)
+            } else {
+                let exch = [
+                    ("RST", "599"),
+                    ("NAME", self.settings.op_name.trim()),
+                    ("QTH", self.settings.op_state.trim()),
+                ];
+                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::rtty::seq::CASUAL, &exch)
+            };
+            self.rtty_seq = Some(seq);
+        } else {
+            if let Some(seq) = self.rtty_seq.as_mut() {
+                seq.abort();
+            }
+            self.rtty_stop();
+            self.rtty_seq = None;
+            self.rtty_auto_over = false;
+        }
+    }
+
+    /// Operator starts an auto CQ run (a human-initiate gate). Errors if Auto is
+    /// off or any TX gate is down.
+    pub fn rtty_auto_cq(&mut self) -> Result<(), String> {
+        if self.rtty_seq.is_none() {
+            return Err("Turn on Auto first".to_string());
+        }
+        self.rtty_tx_gate()?;
+        self.rtty_drive(RttyOp::StartCq);
+        Ok(())
+    }
+
+    /// Operator answers a heard CQ — search & pounce (a human-initiate gate).
+    /// Errors if Auto is off or any TX gate is down.
+    pub fn rtty_auto_answer(&mut self, call: &str) -> Result<(), String> {
+        if self.rtty_seq.is_none() {
+            return Err("Turn on Auto first".to_string());
+        }
+        self.rtty_tx_gate()?;
+        self.rtty_drive(RttyOp::Answer(call.to_string()));
+        Ok(())
+    }
+
+    /// Operator kills the live auto session: abort the sequencer (silent), drop the
+    /// TX queue + unkey the over in flight, and clear the pending-over latch.
+    pub fn rtty_auto_abort(&mut self) {
+        if let Some(seq) = self.rtty_seq.as_mut() {
+            seq.abort();
+        }
+        self.rtty_stop();
+        self.rtty_auto_over = false;
+    }
+
+    /// Service the auto-sequencer once per radio-loop tick (called under the engine
+    /// lock, right before `poll_rtty_one`). Fires `on_tx_complete` EXACTLY ONCE per
+    /// over — the instant our keyed over has fully played out (queue drained AND not
+    /// sending) — then ticks the timeout clock. No-op when Auto is off.
+    pub fn rtty_auto_service(&mut self) {
+        if self.rtty_seq.is_none() {
+            return;
+        }
+        if self.rtty_auto_over && !self.rtty_sending && self.rtty_queue.is_empty() {
+            self.rtty_auto_over = false;
+            self.rtty_drive(RttyOp::TxComplete);
+        }
+        self.rtty_drive(RttyOp::Tick);
+    }
+
+    /// Drive the auto-sequencer through one operation: capture the state, apply the
+    /// op, and drain its actions — all inside a scoped borrow of `rtty_seq` that is
+    /// dropped BEFORE the actions are applied (the borrow-checker seam). A genuine
+    /// state advance resets the TX watchdog; each drained action is then applied.
+    fn rtty_drive(&mut self, op: RttyOp) {
+        let now = now_unix_millis();
+        let (advanced, actions) = {
+            let seq = match self.rtty_seq.as_mut() {
+                Some(s) => s,
+                None => return,
+            };
+            let before = seq.state();
+            match op {
+                RttyOp::StartCq => seq.start_cq(now),
+                RttyOp::Answer(call) => seq.answer(&call, now),
+                RttyOp::Feed(chars) => seq.feed(&chars, now),
+                RttyOp::Tick => seq.tick(now),
+                RttyOp::TxComplete => seq.on_tx_complete(now),
+            }
+            (seq.state() != before, seq.take_actions())
+        };
+        // Genuine progress resets the watchdog (WSJT-X discipline); a bare CQ-repeat
+        // / AGN does NOT, so an unanswered auto-CQ still trips the ceiling.
+        if advanced {
+            self.reset_tx_watchdog();
+        }
+        for action in actions {
+            self.apply_rtty_action(action);
+        }
+    }
+
+    /// Apply one sequencer [`tempo_core::rtty::Action`] to the live engine.
+    /// `SendText` enqueues the over WITHOUT resetting the watchdog (only a state
+    /// advance does, in `rtty_drive`) and latches `rtty_auto_over`; a refused
+    /// enqueue kills the session so it can't spin against a closed gate. `LogQso`
+    /// writes a QSO record (honoring auto-log / prompt-to-log). `Abort` never keys.
+    fn apply_rtty_action(&mut self, action: tempo_core::rtty::Action) {
+        use tempo_core::rtty::Action;
+        match action {
+            Action::SendText(text) => {
+                if self.rtty_enqueue(&text, false).is_ok() {
+                    self.rtty_auto_over = true;
+                } else {
+                    self.set_rtty_keyer_error(Some(
+                        "RTTY auto-sequencer stopped — a transmission was refused (the TX gate \
+                         closed mid-QSO)."
+                            .to_string(),
+                    ));
+                    if let Some(seq) = self.rtty_seq.as_mut() {
+                        seq.abort();
+                    }
+                }
+            }
+            Action::LogQso { call, exchange } => {
+                if self.settings.auto_log {
+                    let rec = self.rtty_qso_record(&call, &exchange);
+                    if self.settings.prompt_to_log {
+                        // Hold for the operator's confirm-before-log popup.
+                        self.pending_log = Some(rec);
+                    } else {
+                        self.log_qso(rec);
+                    }
+                }
+            }
+            Action::Abort => {}
+        }
+    }
+
+    /// Build a [`QsoRecord`] for an auto-sequenced RTTY contact from the peer's
+    /// copied exchange + the current band/dial/settings. Mode is always "RTTY"
+    /// (award eligibility). Modeled on [`Engine::qso_record`]; the casual RST/name/
+    /// QTH map to their ADIF columns, and any other exchange fields (Field Day
+    /// class/section, a contest serial) ride the comment so nothing copied is lost.
+    fn rtty_qso_record(&self, call: &str, exchange: &[(String, String)]) -> QsoRecord {
+        let get = |key: &str| {
+            exchange
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        };
+        let country = self.dxcc_resolve.as_ref().and_then(|resolve| resolve(call));
+        // On-air RF = dial + the TX audio offset, sideband-signed (WSJT-X convention).
+        let off_mhz = self.tx_offset_hz as f64 / 1e6;
+        let freq_mhz = if self.settings.sideband.eq_ignore_ascii_case("LSB") {
+            self.settings.dial_mhz - off_mhz
+        } else {
+            self.settings.dial_mhz + off_mhz
+        };
+        // Exchange fields with no dedicated ADIF column (CLASS/SECTION/SERIAL) →
+        // comment, so a Field Day / contest exchange survives in the log.
+        let extras: Vec<String> = exchange
+            .iter()
+            .filter(|(k, _)| !matches!(k.as_str(), "RST" | "NAME" | "QTH"))
+            .map(|(_, v)| v.clone())
+            .collect();
+        let comment = (!extras.is_empty()).then(|| extras.join(" "));
+        let now = now_unix_secs();
+        QsoRecord {
+            call: call.to_string(),
+            grid: None,
+            country,
+            state: None,
+            band: self.settings.band.clone(),
+            freq_mhz,
+            mode: "RTTY".to_string(),
+            // RTTY reports are 599 by convention; the peer's copied report is rcvd.
+            rst_sent: Some("599".to_string()),
+            rst_rcvd: get("RST"),
+            name: get("NAME"),
+            qth: get("QTH"),
+            comment,
+            notes: None,
+            tx_power: None,
+            when_unix: now,
+            time_off_unix: Some(now),
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: Default::default(),
+            ota: Default::default(),
+        }
     }
 
     /// True if RTTY keys via the true-FSK serial keyline (vs the default soundcard
@@ -4724,6 +5142,17 @@ impl Engine {
         }
     }
 
+    /// Attach a decoded FSK callsign ID to the newest gallery entry whose
+    /// `path` matches (the image was just saved, so it's at/near the tail).
+    /// Best-effort — a no-op if no entry matches (e.g. the gallery rolled past
+    /// its cap before the burst decoded). Decode-thread only, like the other
+    /// `sstv_gallery` mutators.
+    pub fn set_sstv_gallery_fsk_id(&mut self, path: &str, fsk_id: String) {
+        if let Some(entry) = self.sstv_gallery.iter_mut().rev().find(|e| e.path == path) {
+            entry.fsk_id = Some(fsk_id);
+        }
+    }
+
     /// Seed the session gallery from the persisted `gallery.json` (startup).
     pub fn load_sstv_gallery(&mut self, mut entries: Vec<crate::dto::SstvGalleryEntry>) {
         if entries.len() > SSTV_GALLERY_CAP {
@@ -4736,6 +5165,169 @@ impl Engine {
     /// The session SSTV gallery, oldest first.
     pub fn sstv_gallery(&self) -> &[crate::dto::SstvGalleryEntry] {
         &self.sstv_gallery
+    }
+
+    // ----- SSTV transmit — operator-initiated, mirroring the RTTY/voice-keyer send
+    // path. Launch-safety: nothing here runs on startup, on arming RX, or on
+    // selecting the SSTV/Phone section. `sstv_tx` fills ONLY via `sstv_send` (an
+    // explicit operator command), and the radio loop keys ONLY what `poll_sstv_tx`
+    // hands it, behind every TX gate. One image in flight, no queue. -----
+
+    /// The up-front SSTV TX gate: every reason a send would be refused, checked before
+    /// any image is queued so the operator learns WHY (never a silent hold). SSTV is USB
+    /// **phone** audio (1200–2300 Hz), so it rides `OperatingMode::Phone` — whose
+    /// `tx_allowed` arm already judges the whole SSB passband at the dial, exactly bounding
+    /// the emission (no `Sstv` operating-mode variant needed). Unlike RTTY (which is
+    /// mode-exclusive with every other keyer), SSTV SHARES the Phone segment with the voice
+    /// keyer and live mic PTT — so mutual exclusion against those is checked explicitly here.
+    ///
+    /// Public (unlike `rtty_tx_gate`) because the SSTV encode runs in the command layer,
+    /// OFF the engine lock — the command pre-flights this gate so a refused send (wrong
+    /// frequency, TX off) fails fast BEFORE spending CPU encoding the image.
+    pub fn sstv_tx_gate(&self) -> Result<(), String> {
+        use crate::settings::OperatingMode;
+        if self.settings.operating_mode != OperatingMode::Phone {
+            return Err("Switch to Phone (USB) first — SSTV rides the phone segment".to_string());
+        }
+        if !self.tx_enabled {
+            return Err(
+                "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
+            );
+        }
+        if !self.tx_allowed() {
+            return Err(
+                "TX locked — this frequency is outside your license privileges".to_string(),
+            );
+        }
+        if self.tuning {
+            return Err("Tune carrier is up — stop tuning first".to_string());
+        }
+        if self.app.radio.transmitting {
+            return Err("Another transmission is in flight — stop it first".to_string());
+        }
+        // Phone-shared TX sources: a live mic key (ours or a foreign broker client), a
+        // queued/playing voice message, or a RTTY over must not overlap the image.
+        if self.manual_ptt || self.broker_ptt {
+            return Err("Mic PTT is held — release it first".to_string());
+        }
+        if self.voice_tx.is_some() {
+            return Err("A voice message is transmitting — stop it first".to_string());
+        }
+        if self.rtty_sending || !self.rtty_queue.is_empty() {
+            return Err("RTTY is transmitting — stop it first".to_string());
+        }
+        if self.sstv_tx.is_some() || self.sstv_sending {
+            return Err("Already transmitting an image — stop it first".to_string());
+        }
+        Ok(())
+    }
+
+    /// Queue a fully-encoded SSTV image for transmission — validating every TX gate UP
+    /// FRONT (so a refused send says why) plus a DURATION BUDGET the RTTY path doesn't
+    /// need: one image is ONE continuous keyed over up to ~4.9 min (PD290), with no
+    /// "between messages" for the wall-clock watchdog to bite. So the budget is enforced
+    /// here, before anything keys: an image whose key-down would out-run the TX-watchdog
+    /// ceiling (or the hard [`SSTV_MAX_TX_SECS`] cap) is refused UP FRONT rather than keyed
+    /// then guillotined mid-image. On accept, the watchdog clock restarts (an explicit
+    /// operator action, like `rtty_send_text`). `samples` are 12 kHz PCM from
+    /// `tempo_sstv::encode::encode_image`; `mode_name` is the human label for the DTO.
+    /// **Human-initiate only**: this is the ONLY writer of `sstv_tx`.
+    pub fn sstv_send(&mut self, samples: Vec<f32>, mode_name: String) -> Result<(), String> {
+        self.sstv_tx_gate()?;
+        if samples.is_empty() {
+            return Err("Nothing to send — the encoded image is empty".to_string());
+        }
+        let duration_secs = samples.len() as f64 / f64::from(ft1::SAMPLE_RATE);
+        // Hard cap, watchdog-independent: no legitimate SSTV image exceeds ~295 s (PD290),
+        // so anything past 330 s is a bug or an abuse — refuse it outright.
+        if duration_secs > SSTV_MAX_TX_SECS {
+            return Err(format!(
+                "Image too long — SSTV sends are capped at {SSTV_MAX_TX_SECS:.0} s of key-down"
+            ));
+        }
+        // Duration budget vs the TX-watchdog ceiling: refuse a send that couldn't finish
+        // before the wall-clock watchdog would trip (leave 15 s of head-room). The message
+        // names the fix so the operator isn't left guessing.
+        let ceiling_secs = f64::from(self.settings.tx_watchdog_min) * 60.0;
+        if ceiling_secs > 0.0 && duration_secs + 15.0 > ceiling_secs {
+            return Err(format!(
+                "{mode_name} needs ≈{duration_secs:.0} s of key-down, past your TX watchdog \
+                 ({} min) — raise Settings → TX watchdog or pick a faster mode",
+                self.settings.tx_watchdog_min
+            ));
+        }
+        let duration_ms = duration_secs * 1000.0;
+        // An explicit operator send restarts the TX-watchdog clock (same as rtty_send_text).
+        self.reset_tx_watchdog();
+        self.sstv_tx_mode = Some(mode_name.clone());
+        self.sstv_tx_progress = Some((0.0, duration_ms));
+        self.sstv_tx = Some(SstvTxJob {
+            samples,
+            mode_name,
+            duration_ms,
+        });
+        Ok(())
+    }
+
+    /// Take the queued SSTV image for the radio loop to stream, or `None` while any TX gate
+    /// is down (Monitor off / outside privileges / not Phone / tuning) — the job is then
+    /// HELD (not dropped), so nothing keys unexpectedly, mirroring `poll_rtty_one`'s
+    /// hold-don't-drop. No wall-clock watchdog check here: the over's length is bounded UP
+    /// FRONT by `sstv_send`'s budget, and the loop unkeys unconditionally at the precomputed
+    /// `tx_until_ms`, so the watchdog never needs to bite mid-image.
+    pub fn poll_sstv_tx(&mut self) -> Option<SstvTxJob> {
+        use crate::settings::OperatingMode;
+        if !self.tx_enabled
+            || !self.tx_allowed()
+            || self.tuning
+            || self.settings.operating_mode != OperatingMode::Phone
+            || self.sstv_tx.is_none()
+        {
+            return None;
+        }
+        self.sstv_tx.take()
+    }
+
+    /// Stop SSTV now: drop the queued image and abort the over in progress — the radio loop
+    /// consumes the one-shot abort, drops the feed, flushes the output ring and unkeys PTT
+    /// (the cockpit's Stop button; `halt_tx` and TX-disarm route here too).
+    pub fn sstv_stop(&mut self) {
+        self.sstv_tx = None;
+        self.sstv_abort = true;
+        self.sstv_tx_mode = None;
+        self.sstv_tx_progress = None;
+    }
+
+    /// Take + reset the one-shot SSTV abort flag (the loop drops the feed, flushes output
+    /// and unkeys).
+    pub fn take_sstv_abort(&mut self) -> bool {
+        std::mem::take(&mut self.sstv_abort)
+    }
+
+    /// Stamp whether the radio loop is currently streaming an SSTV image (loop-only).
+    pub fn set_sstv_sending(&mut self, on: bool) {
+        self.sstv_sending = on;
+    }
+
+    /// Publish the in-flight SSTV TX progress `(played_ms, total_ms)` (loop-only).
+    pub fn set_sstv_tx_progress(&mut self, played_ms: f64, total_ms: f64) {
+        self.sstv_tx_progress = Some((played_ms, total_ms));
+    }
+
+    /// Whether an SSTV image is queued or streaming — the cockpit's TX indicator (a queued
+    /// but not-yet-keyed job counts, mirroring RTTY's `sending || !queue.is_empty()`).
+    pub fn sstv_sending(&self) -> bool {
+        self.sstv_sending || self.sstv_tx.is_some()
+    }
+
+    /// The mode label of the image being (or last) transmitted, for the TX DTO.
+    pub fn sstv_tx_mode(&self) -> Option<&str> {
+        self.sstv_tx_mode.as_deref()
+    }
+
+    /// The in-flight SSTV TX progress `(played_ms, total_ms)`, if an image is queued/sending.
+    pub fn sstv_tx_progress(&self) -> Option<(f64, f64)> {
+        self.sstv_tx_progress
     }
 
     /// Set the rig/CAT connection status the UI renders (and the Test-CAT result
@@ -5659,7 +6251,7 @@ impl Engine {
     /// Decode a captured frame and fold it into the app *and* the active mode's
     /// sequencer. Returns the number of decodes.
     pub fn ingest(&mut self, frame: &[f32], slot: u64) -> usize {
-        let decodes = self.decode_frame(frame, slot);
+        let decodes = self.decode_frame(frame, slot, true);
         // If the early pass already ingested this boundary's messages, keep only
         // the stragglers the full-window decode newly found.
         let decodes = self.drop_early_dupes(decodes, slot);
@@ -5681,7 +6273,7 @@ impl Engine {
             // boundary's decodes); FT1/DX1 decode full frames only.
             return 0;
         }
-        let decodes = self.decode_frame(frame, slot);
+        let decodes = self.decode_frame(frame, slot, false);
         if decodes.is_empty() {
             // Nothing heard yet: leave ALL state untouched (advancing
             // last_decode_slot / the app slot counter early would skew the
@@ -5739,7 +6331,7 @@ impl Engine {
         let Some(slot) = self.last_decode_slot else {
             return 0;
         };
-        let decodes = self.decode_frame(&frame, slot);
+        let decodes = self.decode_frame(&frame, slot, false);
         let fresh: Vec<modes::Decode> = decodes
             .into_iter()
             .filter(|d| {
@@ -5784,8 +6376,11 @@ impl Engine {
     }
 
     /// Decode one capture window through the active source (the shared front
-    /// half of [`Engine::ingest`] / [`Engine::ingest_early`]).
-    fn decode_frame(&mut self, frame: &[f32], slot: u64) -> Vec<modes::Decode> {
+    /// half of [`Engine::ingest`] / [`Engine::ingest_early`]). `a7_final` is
+    /// true only on the authoritative boundary ingest; the early partial pass
+    /// and the F6 redecode pass false so they neither save into nor replay the
+    /// a7 cross-cycle table (a double save would halve its replay capacity).
+    fn decode_frame(&mut self, frame: &[f32], slot: u64, a7_final: bool) -> Vec<modes::Decode> {
         // Companion mode: decodes arrive over UDP from an upstream WSJT-X/JTDX/
         // MSHV — the captured audio is irrelevant. Drain the network source
         // regardless of the selected tier (the native/DX1 paths below are
@@ -5828,6 +6423,13 @@ impl Engine {
                     station.dxcall.clone().unwrap_or_default(),
                     station.state.nqso_progress(),
                 ),
+                // Field Day runs the whole session inside Mode::FieldDay, so the
+                // Qso arm never matches there — supply mycall anyway (stock
+                // WSJT-X always does) so the "MyCall ???" AP masks fire during
+                // FD. hiscall/nqso_progress stay QSO-gated.
+                (Mode::FieldDay { .. }, Tier::Ft8 | Tier::Ft4) => {
+                    (self.settings.mycall.clone(), String::new(), 0)
+                }
                 _ => (String::new(), String::new(), 0),
             };
             // Real captured audio → full-scale int16 (native soundcard level), so the
@@ -5861,11 +6463,12 @@ impl Engine {
                 frame_time_ms,
             };
             // The a7 extended path: cross-cycle AP replay (stations decoded in the
-            // previous same-parity slot recovered a few dB deeper). Nexus decodes
-            // once per COMPLETED slot with the full frame, so every call is the
-            // authoritative final pass. frame_time_ms above is real slot time —
+            // previous same-parity slot recovered a few dB deeper). Only the
+            // boundary ingest is the authoritative full-audio pass (save +
+            // replay); the early/partial pass and the F6 redecode pass false —
+            // slot bookkeeping only. frame_time_ms above is real slot time —
             // exactly the per-slot key the a7 table's shuffle needs.
-            self.source.decode_a7(&req, true)
+            self.source.decode_a7(&req, a7_final)
         }
     }
 
@@ -6508,6 +7111,17 @@ fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Current wall-clock time as Unix MILLISECONDS (UTC), 0 before the epoch. The
+/// RTTY auto-sequencer's SINGLE clock epoch: the RX-feed thread (`feed`) and the
+/// service tick (`tick` / `on_tx_complete`) MUST share it — never a service-loop
+/// local millisecond clock, or the sequencer's timeouts would run off two epochs.
+fn now_unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// One station answering my CQ this slot, distilled for best-caller ranking (W1.4).
 #[derive(Debug, Clone)]
 struct CqCaller {
@@ -6920,6 +7534,108 @@ mod tests {
         assert_eq!(st.shift_hz, 170);
     }
 
+    // -- RTTY auto-sequencer (the pure state machine wired to TX + the logbook) --
+
+    /// A headless RTTY engine armed for Auto: in the RTTY section (which arms TX),
+    /// at the default frequency the default license can key.
+    fn rtty_auto_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false); // arms TX (a manual mode, like CW)
+        assert!(e.tx_enabled() && e.tx_allowed(), "gate open for the tests");
+        e.set_rtty_auto(true);
+        e
+    }
+
+    fn rtty_decoded(text: &str) -> Vec<tempo_core::rtty::DecodedChar> {
+        text.chars()
+            .map(|ch| tempo_core::rtty::DecodedChar {
+                ch,
+                confidence: 0.9,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rtty_auto_never_self_starts_on_a_heard_cq() {
+        let mut e = rtty_auto_engine();
+        // A CQ arrives while Idle — the machine only ACCUMULATES it (ARRL 6.4):
+        // toggling Auto + feeding a CQ can NEVER key up.
+        e.push_rtty_decode(&rtty_decoded("CQ CQ CQ DE W1AW W1AW K\n"), 0.0, true);
+        let s = e.rtty_state();
+        assert!(s.auto);
+        assert_eq!(s.seq_state, "idle", "a heard CQ never transmits");
+        assert!(!s.sending, "nothing queued");
+        assert_eq!(e.poll_rtty_one(), None);
+        // ...but the CQ IS surfaced for the operator to click.
+        assert_eq!(s.heard_cq.as_deref(), Some("W1AW"));
+    }
+
+    #[test]
+    fn rtty_auto_cq_enqueues_a_cq_and_calls() {
+        let mut e = rtty_auto_engine();
+        e.rtty_auto_cq().unwrap();
+        assert_eq!(e.rtty_state().seq_state, "calling_cq");
+        let msg = e.poll_rtty_one().expect("a CQ is queued");
+        assert!(msg.contains("CQ") && msg.contains("W9XYZ"), "cq: {msg}");
+        // Auto off → refused with a reason (never a silent no-op).
+        let mut e2 = Engine::new("W9XYZ", "EN61", 0);
+        e2.set_operating_mode("rtty", false);
+        assert!(e2.rtty_auto_cq().unwrap_err().contains("Auto"));
+    }
+
+    #[test]
+    fn rtty_auto_answer_then_exchange_enqueues_our_exchange() {
+        let mut e = rtty_auto_engine();
+        e.rtty_auto_answer("W1AW").unwrap();
+        assert_eq!(e.rtty_state().seq_state, "answering");
+        assert!(e.poll_rtty_one().unwrap().contains("W1AW DE W9XYZ"));
+        // The runner comes back with his exchange → we send ours.
+        e.push_rtty_decode(
+            &rtty_decoded("W9XYZ DE W1AW UR RST 599 599 NAME BOB QTH BOSTON K\n"),
+            0.0,
+            true,
+        );
+        assert_eq!(e.rtty_state().seq_state, "exchange_sent");
+        let msg = e.poll_rtty_one().expect("our exchange is queued");
+        assert!(msg.contains("599"), "our exchange: {msg}");
+    }
+
+    #[test]
+    fn rtty_auto_full_runner_qso_logs_a_record() {
+        let mut e = rtty_auto_engine();
+        e.rtty_auto_cq().unwrap();
+        assert!(e.poll_rtty_one().is_some(), "drain the CQ");
+        // W1AW answers directed → we send the exchange.
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW W1AW K\n"), 0.0, true);
+        assert_eq!(e.rtty_state().peer.as_deref(), Some("W1AW"));
+        assert!(e.poll_rtty_one().is_some(), "drain our exchange");
+        // His exchange comes back → log the contact + send the closing.
+        e.push_rtty_decode(
+            &rtty_decoded("W9XYZ DE W1AW R UR RST 599 599 NAME BOB QTH BOSTON K\n"),
+            0.0,
+            true,
+        );
+        assert_eq!(e.rtty_state().seq_state, "confirmed");
+        let log = e.get_log();
+        assert_eq!(log.len(), 1, "the QSO was auto-logged exactly once");
+        assert_eq!(log[0].call, "W1AW");
+        assert_eq!(log[0].mode, "RTTY", "logs as RTTY (award eligibility)");
+        assert_eq!(log[0].rst_rcvd.as_deref(), Some("599"));
+        assert_eq!(log[0].name.as_deref(), Some("BOB"), "copied exchange");
+        assert_eq!(log[0].qth.as_deref(), Some("BOSTON"), "copied exchange");
+    }
+
+    #[test]
+    fn rtty_auto_abort_clears_the_queue_and_returns_to_idle() {
+        let mut e = rtty_auto_engine();
+        e.rtty_auto_cq().unwrap();
+        assert_eq!(e.rtty_state().seq_state, "calling_cq");
+        e.rtty_auto_abort();
+        assert_eq!(e.rtty_state().seq_state, "idle");
+        assert!(e.take_rtty_abort(), "abort unkeys the over in flight");
+        assert_eq!(e.poll_rtty_one(), None, "the queue was dropped");
+    }
+
     #[test]
     fn voice_keyer_plays_gated_and_aborts_and_records() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
@@ -7082,6 +7798,7 @@ mod tests {
                 finished_utc: "2026-07-17T00:00:00Z".into(),
                 freq_mhz: 14.230,
                 lines: 240,
+                fsk_id: None,
             });
         }
         assert_eq!(e.sstv_gallery().len(), SSTV_GALLERY_CAP, "gallery caps");
@@ -7101,6 +7818,241 @@ mod tests {
         // Startup seed replaces the session list (and caps defensively).
         e.load_sstv_gallery(vec![crate::dto::SstvGalleryEntry::default()]);
         assert_eq!(e.sstv_gallery().len(), 1);
+    }
+
+    /// A Phone-armed engine on a legal 20 m phone frequency — the precondition for
+    /// an SSTV send. Extra class + 14.290 USB clears `tx_allowed` for the whole SSB
+    /// passband; entering Phone arms TX (arming keys nothing by itself).
+    fn phone_armed_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.set_frequency(14.290, "20m", "USB");
+        e.set_operating_mode("phone", false);
+        assert!(e.tx_enabled(), "entering Phone arms TX");
+        assert!(e.tx_allowed(), "14.290 USB is a phone segment for Extra");
+        e
+    }
+
+    /// ~2 s of 12 kHz PCM — a stand-in for an encoded image, well under every budget.
+    fn sstv_img_samples() -> Vec<f32> {
+        vec![0.0; 24_000]
+    }
+
+    #[test]
+    fn sstv_send_commands_a_data_submode_so_the_codec_modulates() {
+        // SSTV rides Phone (plain USB/LSB = the rig takes TX audio from the MIC). While an
+        // image is queued or on the air the rig must be commanded a DATA submode
+        // (PKTUSB/PKTLSB) so the SOUNDCARD codec routes to the modulator — otherwise PTT keys
+        // with zero RF. It must revert to plain SSB when idle so live voice still uses the mic.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.set_frequency(14.290, "20m", "USB");
+        e.set_operating_mode("phone", false);
+        assert_eq!(e.rig_mode_effective(), "USB", "idle Phone → plain USB (voice = mic)");
+        // Queue an image → DATA submode commanded BEFORE the loop keys PTT.
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert_eq!(e.rig_mode_effective(), "PKTUSB", "queued SSTV → DATA-USB (codec-routed)");
+        // Loop takes the job (sstv_tx → None) and marks it sending → still DATA on the air.
+        let _ = e.poll_sstv_tx();
+        e.set_sstv_sending(true);
+        assert_eq!(e.rig_mode_effective(), "PKTUSB", "sending SSTV → still DATA");
+        // Image done → plain USB restores so the next voice PTT keys the mic, not the codec.
+        e.set_sstv_sending(false);
+        assert_eq!(e.rig_mode_effective(), "USB", "idle again → plain USB");
+    }
+
+    #[test]
+    fn sstv_send_validates_every_tx_gate() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Not in Phone → refused: SSTV rides the phone segment (USB voice audio).
+        assert!(e
+            .sstv_send(sstv_img_samples(), "PD-120".into())
+            .unwrap_err()
+            .contains("Phone"));
+
+        // Enter Phone on a phone freq → arms TX; arming keys NOTHING (launch-safety).
+        e.set_license_class("extra");
+        e.set_frequency(14.290, "20m", "USB");
+        e.set_operating_mode("phone", false);
+        assert!(e.tx_enabled());
+        assert!(
+            e.poll_sstv_tx().is_none(),
+            "arming a mode never queues an image"
+        );
+
+        // Monitor off → refused with the reason (never a silent hold).
+        e.set_tx_enabled(false);
+        assert!(e
+            .sstv_send(sstv_img_samples(), "PD-120".into())
+            .unwrap_err()
+            .contains("TX is off"));
+        e.set_tx_enabled(true);
+
+        // Tune carrier up → refused.
+        e.set_tune(true);
+        assert!(e
+            .sstv_send(sstv_img_samples(), "PD-120".into())
+            .unwrap_err()
+            .contains("Tune"));
+        e.set_tune(false);
+
+        // Outside privileges (drop to the 20 m data segment) → refused.
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tx_enabled(true); // a QSY halts TX (standing invariant) — re-arm
+        assert!(!e.tx_allowed());
+        assert!(e
+            .sstv_send(sstv_img_samples(), "PD-120".into())
+            .unwrap_err()
+            .contains("license"));
+
+        // Back on a legal phone freq → accepted; a SECOND send is refused (one in flight).
+        e.set_frequency(14.290, "20m", "USB");
+        e.set_tx_enabled(true);
+        assert!(e.tx_allowed());
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert!(e
+            .sstv_send(sstv_img_samples(), "PD-120".into())
+            .unwrap_err()
+            .contains("Already"));
+    }
+
+    #[test]
+    fn sstv_send_refuses_while_another_phone_tx_holds() {
+        // SSTV shares the Phone segment with the voice keyer + live mic PTT (unlike RTTY,
+        // which is mode-exclusive) — so those must be checked explicitly.
+        let mut e = phone_armed_engine();
+
+        // A queued voice-keyer message → refused.
+        e.send_voice(vec![0.1; 100]);
+        assert!(e
+            .sstv_send(sstv_img_samples(), "PD-120".into())
+            .unwrap_err()
+            .contains("voice"));
+        e.stop_voice();
+
+        // Live mic PTT held → refused.
+        e.set_ptt(true);
+        assert!(e
+            .sstv_send(sstv_img_samples(), "PD-120".into())
+            .unwrap_err()
+            .contains("PTT"));
+        e.set_ptt(false);
+
+        // A RTTY over on the air → refused (the loop stamps rtty_sending).
+        e.set_rtty_sending(true);
+        assert!(e
+            .sstv_send(sstv_img_samples(), "PD-120".into())
+            .unwrap_err()
+            .contains("RTTY"));
+        e.set_rtty_sending(false);
+
+        // All clear → accepted.
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+    }
+
+    #[test]
+    fn sstv_send_enforces_the_duration_budget_and_hard_cap() {
+        let mut e = phone_armed_engine();
+
+        // Budget: a 200 s image can't finish before a 3-min (180 s) watchdog trips → refused
+        // UP FRONT (not keyed then guillotined mid-image).
+        e.settings.tx_watchdog_min = 3;
+        let two_hundred_s = vec![0.0f32; 200 * 12_000];
+        assert!(e
+            .sstv_send(two_hundred_s, "PD-240".into())
+            .unwrap_err()
+            .contains("watchdog"));
+
+        // Hard cap: past 330 s, refused regardless of a huge watchdog.
+        e.settings.tx_watchdog_min = 30;
+        let over_cap = vec![0.0f32; 340 * 12_000];
+        assert!(e
+            .sstv_send(over_cap, "PD-290".into())
+            .unwrap_err()
+            .contains("capped"));
+
+        // A PD290-sized image (~290 s) fits under a generous watchdog → accepted.
+        let pd290 = vec![0.0f32; 290 * 12_000];
+        e.sstv_send(pd290, "PD-290".into()).unwrap();
+    }
+
+    #[test]
+    fn sstv_send_restarts_the_watchdog_clock() {
+        let mut e = phone_armed_engine();
+        // Pretend a prior over started the watchdog clock a while ago.
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(30));
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert!(
+            e.tx_watchdog_start.is_none(),
+            "an explicit send restarts the TX-watchdog clock"
+        );
+    }
+
+    #[test]
+    fn sstv_kill_switches_abort_and_unkey() {
+        // Stop, halt_tx, and TX-disarm all drop the job + raise the one-shot abort the
+        // radio loop turns into flush-output + unkey.
+        let mut e = phone_armed_engine();
+
+        // Stop button.
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert!(e.sstv_sending(), "a queued image counts as sending");
+        e.sstv_stop();
+        assert!(e.take_sstv_abort(), "stop raises the abort");
+        assert!(!e.sstv_sending(), "job dropped");
+        assert!(!e.take_sstv_abort(), "abort is one-shot");
+
+        // halt_tx (global Stop TX).
+        e.set_operating_mode("phone", false); // re-arm
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        e.halt_tx();
+        assert!(e.take_sstv_abort(), "halt_tx aborts the image in flight");
+        assert!(!e.sstv_sending());
+        assert!(!e.tx_enabled(), "halt_tx also disarms TX");
+
+        // TX disarm (Monitor off).
+        e.set_operating_mode("phone", false); // re-arm
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        e.set_tx_enabled(false);
+        assert!(e.take_sstv_abort(), "disarm aborts the image in flight");
+        assert!(!e.sstv_sending());
+    }
+
+    #[test]
+    fn sstv_launch_safety_nothing_keys_on_arm_or_mode_select() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Fresh engine: nothing queued.
+        assert!(e.poll_sstv_tx().is_none());
+        assert!(!e.sstv_sending());
+        // Arming RX queues no TX.
+        e.set_sstv_armed(true);
+        assert!(
+            e.poll_sstv_tx().is_none(),
+            "arming RX never queues a TX image"
+        );
+        // Selecting Phone (which arms TX) still keys nothing — no image is queued.
+        e.set_license_class("extra");
+        e.set_frequency(14.290, "20m", "USB");
+        e.set_operating_mode("phone", false);
+        assert!(e.tx_enabled());
+        assert!(
+            e.poll_sstv_tx().is_none(),
+            "arming a mode never queues an image — only an explicit sstv_send does"
+        );
+        assert!(!e.sstv_sending());
+    }
+
+    #[test]
+    fn poll_sstv_tx_holds_the_job_while_a_gate_is_down() {
+        // A queued image is HELD (not dropped) when a gate rung drops, so it can't
+        // silently vanish — and can't key while the gate is down either.
+        let mut e = phone_armed_engine();
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        e.set_tune(true); // tune carrier up → poll holds
+        assert!(e.poll_sstv_tx().is_none(), "held while tuning");
+        assert!(e.sstv_sending(), "the job is still queued, not dropped");
+        e.set_tune(false);
+        assert!(e.poll_sstv_tx().is_some(), "released once the gate clears");
     }
 
     #[test]
@@ -10048,6 +11000,50 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft1);
         assert_eq!(e.ingest_early(&[0.0f32; 48000], 1), 0);
+    }
+
+    /// The a7 cross-cycle flag plumb through [`Engine::decode_frame`]: only the
+    /// authoritative boundary ingest passes `a7_final = true`. The early
+    /// partial pass and the F6 redecode pass `false` — an early save would
+    /// double-book every decode in the a7 table (halving replay capacity) and
+    /// waste a full replay against zero-padded audio.
+    #[test]
+    fn a7_final_true_only_on_boundary_ingest() {
+        struct FlagRecorder(std::sync::Arc<std::sync::Mutex<Vec<bool>>>);
+        impl SignalSource for FlagRecorder {
+            fn label(&self) -> String {
+                "flag-recorder".into()
+            }
+            fn mode_kind(&self) -> Option<modes::ModeKind> {
+                Some(modes::ModeKind::Ft8)
+            }
+            fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+                Vec::new()
+            }
+            fn decode_a7(
+                &mut self,
+                _req: &modes::DecodeRequest,
+                a7_final: bool,
+            ) -> Vec<modes::Decode> {
+                self.0.lock().unwrap().push(a7_final);
+                Vec::new()
+            }
+        }
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let flags = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        e.source = Box::new(FlagRecorder(flags.clone()));
+        let frame = vec![0.0f32; 1024];
+        e.ingest(&frame, 3); // boundary: authoritative full-audio pass
+        e.ingest_early(&frame, 4); // early partial pass
+        e.last_rx = Some(frame.clone());
+        e.last_decode_slot = Some(4);
+        e.redecode(); // F6 review of retained (old) audio
+        assert_eq!(
+            *flags.lock().unwrap(),
+            vec![true, false, false],
+            "a7_final must be: ingest=true, ingest_early=false, redecode=false"
+        );
     }
 
     /// Like [`native_frame_for`] but at a target SNR with seeded AWGN (the repo

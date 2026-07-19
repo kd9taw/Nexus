@@ -509,7 +509,7 @@ pub mod tests {
     pub fn synth_vis_with_offset(code: u8, pre_silence_secs: f64, freq_offset_hz: f64) -> Vec<f32> {
         assert!(code < 0x80, "VIS codes are 7 bits");
         let sr = f64::from(WORKING_SAMPLE_RATE_HZ);
-        let mut tone = crate::test_tone::ToneWriter::with_pre_silence_samples(
+        let mut tone = crate::tone::ToneWriter::with_pre_silence_samples(
             (pre_silence_secs * sr).round() as usize,
         );
         let leader = LEADER_HZ + freq_offset_hz;
@@ -657,7 +657,7 @@ pub mod tests {
         // Hand-emit a 0x06 burst with the standard (uninverted) parity
         // bit. The detector should now reject it (post-fix), proving the
         // inversion is doing real work and not a no-op.
-        let mut tone = crate::test_tone::ToneWriter::new();
+        let mut tone = crate::tone::ToneWriter::new();
         let break_f = LEADER_HZ + BREAK_HZ_OFFSET;
         let bit_freq = |bit: u8| {
             LEADER_HZ

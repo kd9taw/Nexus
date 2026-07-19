@@ -8,6 +8,10 @@ import './styles.css'
 // and renders just that panel for multi-monitor use.
 const panel = new URLSearchParams(window.location.search).get('panel')
 
+// Tag the document so per-panel CSS can target a torn-off window (e.g. the Needed
+// window bumps its font/line size — the operator reads it from across the shack).
+if (panel) document.documentElement.dataset.panel = panel
+
 // Fresh main-window boot: clear any stale waterfall "popped out" flag. A detached panel window
 // never survives an app restart (only the main window is restored), so a leftover '1' — e.g. from
 // a crash while popped out — would otherwise hide the docked waterfall with no window to re-dock it.

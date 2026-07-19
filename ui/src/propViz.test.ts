@@ -16,8 +16,9 @@ import {
   dualStateLabel,
   bandTiming,
   rarityMeta,
+  spotTooltip,
 } from './propViz'
-import type { Insight } from './types'
+import type { Insight, MapSpot } from './types'
 
 describe('propViz', () => {
   it('maps workability words to tokens (good=open, closed=closed)', () => {
@@ -146,5 +147,30 @@ describe('rarityMeta', () => {
   it('every gem explains itself (tooltip present)', () => {
     expect(rarityMeta('rare')!.title).toMatch(/island|land/)
     expect(rarityMeta('ultraRare')!.title).toMatch(/open water|rover/i)
+  })
+})
+
+describe('spotTooltip', () => {
+  const base: MapSpot = {
+    call: 'DL1ABC',
+    lat: 50,
+    lon: 8,
+    band: '20m',
+    heardMe: false,
+    ageSecs: 30,
+    approx: false,
+  }
+  it('builds call · band mode · freq · age with fresh (<60s) age in seconds', () => {
+    expect(spotTooltip({ ...base, mode: 'FT8', freqMhz: 14.074 })).toBe(
+      'DL1ABC · 20m FT8 · 14.074 MHz · 30s ago',
+    )
+  })
+  it('rounds older ages to whole minutes and trims trailing freq zeros', () => {
+    expect(spotTooltip({ ...base, ageSecs: 125, freqMhz: 14.07 })).toBe('DL1ABC · 20m · 14.07 MHz · 2m ago')
+  })
+  it('flags heard-you and approximate location, and omits absent mode/freq', () => {
+    expect(spotTooltip({ ...base, heardMe: true, approx: true })).toBe(
+      'DL1ABC · 20m · 30s ago · heard YOU · ~location',
+    )
   })
 })

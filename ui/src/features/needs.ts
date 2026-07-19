@@ -26,8 +26,8 @@ export function visibleNeeds(
 export interface WorkTarget {
   call: string
   /** Cockpit view to open. 'operate' = the digital (FT8/FT4) cockpit; its operating-mode
-   * argument is 'digital'. CW/Phone map 1:1 to their cockpit + operating mode. */
-  view: 'cw' | 'phone' | 'operate'
+   * argument is 'digital'. CW/Phone/RTTY map 1:1 to their cockpit + operating mode. */
+  view: 'cw' | 'phone' | 'rtty' | 'operate'
   freqMhz: number
   band: string
 }
@@ -69,8 +69,8 @@ function modeDefaultMhz(band: string, mode: string): number | null {
 }
 
 export function workTarget(alert: NeedAlert, bandPlan: BandChannel[]): WorkTarget | null {
-  const view: 'cw' | 'phone' | 'operate' =
-    alert.mode === 'CW' ? 'cw' : alert.mode === 'Phone' ? 'phone' : 'operate'
+  const view: 'cw' | 'phone' | 'rtty' | 'operate' =
+    alert.mode === 'CW' ? 'cw' : alert.mode === 'Phone' ? 'phone' : alert.mode === 'RTTY' ? 'rtty' : 'operate'
   // Prefer the spot's exact frequency; for a freq-less CW/Phone need, the band's CW/phone
   // ACTIVITY freq — NOT the tier's digital dial (that's what sent CW/phone clicks to FT8).
   const freqMhz =

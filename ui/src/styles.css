@@ -3976,6 +3976,13 @@ select optgroup {
 
 .theme-switcher {
   display: flex;
+  /* WRAP: some switchers carry many chips (the Manual UI-scale strip has 11:
+     65…175%). Without wrapping, a nowrap flex row overflows the rounded pill and
+     the extra chips escape to the RIGHT — unstyled, floating over the next column,
+     un-clickable (operator report). Wrapping keeps every chip INSIDE the pill's
+     background at any width. No-op for the 2–4 chip switchers (they fit one row).
+     Pinned by styles-settings.test.ts. */
+  flex-wrap: wrap;
   gap: 2px;
   background: var(--bg-elev-2);
   border-radius: 999px;
@@ -3996,6 +4003,12 @@ select optgroup {
 .theme-chip.active {
   background: var(--accent);
   color: var(--accent-ink);
+}
+/* Unreachable option (e.g. an Auto max-scale the window can't fit) — dimmed, not
+   hittable, tooltip explains why. */
+.theme-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* ===========================================================================
@@ -6904,6 +6917,10 @@ select optgroup {
   text-align: right;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+  /* The live S reading is the operator's key glance value — ~3× the "S" label so it
+     reads at a distance (Phone + CW share this scope). */
+  font-size: 32px;
+  line-height: 1;
 }
 .ph-scope-smeter-track {
   flex: 1;
@@ -7056,10 +7073,14 @@ select optgroup {
   flex-wrap: wrap;
 }
 .ph-ptt {
-  flex: 1 1 auto;
-  min-height: 64px;
+  /* A prominent hold-target, but NOT a full-width bar — natural width so the row's
+     real estate isn't wasted (operator request). Sits next to the Lock toggle. */
+  flex: 0 1 auto;
+  min-width: 220px;
+  min-height: 48px;
+  padding: 0 var(--space-6);
   border-radius: var(--radius);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 800;
   letter-spacing: 0.04em;
   color: var(--accent-ink);
@@ -7773,7 +7794,8 @@ select optgroup {
   display: grid;
   grid-template-columns: 0.6fr 1fr 0.6fr 3fr;
   gap: 10px;
-  padding: 10px var(--space-4);
+  /* Density-aware row packing (see .decode-row) — ×1 at 'standard'. */
+  padding: calc(10px * var(--density-scale)) var(--space-4);
   align-items: center;
   border-bottom: 1px solid var(--border-soft);
   font-size: 13px;
@@ -7858,7 +7880,13 @@ select optgroup {
 }
 .settings-tabs {
   display: flex;
+  /* The rail must survive ANY zoom/resolution/aspect combo: tabs WRAP to more
+     rows as the effective width shrinks (never overflow:hidden here — a clipped
+     tab is an unreachable settings section), and flex-shrink:0 stops the column
+     flex from squashing the wrapped rail; .settings-scroll absorbs all the
+     vertical squeeze and scrolls instead. Pinned by styles-settings.test.ts. */
   flex-wrap: wrap;
+  flex-shrink: 0;
   gap: var(--space-1);
   padding: 10px 18px 0;
   border-bottom: 1px solid var(--border-soft);
@@ -9401,7 +9429,9 @@ select.settings-input {
   grid-template-columns: auto 52px 34px 38px 42px minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
-  padding: 5px var(--space-3);
+  /* Vertical padding rides --density-scale (Settings ▸ Workspace ▸ Density) —
+     identical at 'standard' (×1), tighter at 'dense', roomier at 'guided'. */
+  padding: calc(5px * var(--density-scale)) var(--space-3);
   font-size: 12px;
   border-left: 3px solid transparent;
 }
@@ -10598,6 +10628,26 @@ select.settings-input {
 .cockpit-txstate.on {
   color: var(--danger, #e5484d);
 }
+/* Clickable arm variant (RTTY/SSTV cockpits — WSJT-X "Enable Tx"). Looks like the Tune
+   button so it reads as an action, not a status pill. Green when armed. */
+.cockpit-txarm {
+  cursor: pointer;
+  font-family: inherit;
+  padding: 6px var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  transition: var(--transition);
+}
+.cockpit-txarm:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 40%, var(--text-dim));
+}
+.cockpit-txarm.armed {
+  background: var(--state-ok);
+  border-color: var(--state-ok);
+  color: var(--accent-ink);
+}
 
 .cockpit-modes {
   display: flex;
@@ -11397,6 +11447,14 @@ select.settings-input {
   flex: 1;
   min-height: 0;
 }
+/* The torn-off Needed window auto-opens on launch and is read from across the shack, so
+   bump its overall font + line size ~25%: the rem-based text scales off the root font-size
+   and every row's padding/gap scales off the --space-scale ladder. Scoped to that window
+   only — main.tsx tags <html data-panel="needed"> — so the in-app Needed board is untouched. */
+html[data-panel='needed'] {
+  font-size: 125%;
+  --space-scale: 1.25;
+}
 .np-grid {
   flex: 1;
   min-height: 0;
@@ -11596,6 +11654,11 @@ select.settings-input {
 .np-mode-col.np-mode-digital {
   background: var(--need-mode, #22d3ee);
 }
+/* RTTY is a Digital submode (RBN skimmer rows) — its own amber badge so an RTTY
+   opportunity reads distinctly from an FT8/FT4 one at a glance. */
+.np-mode-col.np-mode-rtty {
+  background: var(--need-mode-rtty, #f5a524);
+}
 .np-empty {
   padding: 22px 14px;
   color: var(--text-faint);
@@ -11757,7 +11820,8 @@ select.settings-input {
   grid-template-columns: minmax(88px, 1fr) minmax(105px, 1.13fr) minmax(50px, 0.85fr) 54px 56px 48px 44px 48px;
   align-items: center;
   gap: var(--space-2);
-  padding: 3px var(--space-2);
+  /* Density-aware row packing (see .decode-row) — ×1 at 'standard'. */
+  padding: calc(3px * var(--density-scale)) var(--space-2);
   font-size: 0.82rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
@@ -15235,6 +15299,16 @@ select.settings-input {
   overflow-y: auto;
   min-height: 0;
 }
+/* RTTY waterfall: a fixed-height stage (mirrors the CW/Phone .ph-scope-panel) so
+   the canvas has real device pixels to draw into. A flex:1 stage collapses to 0
+   in this scrolling cockpit column, and Waterfall's hidden-canvas guard would then
+   skip every row. */
+.rtty-cockpit .waterfall-wrap {
+  flex: 0 0 auto;
+  height: 22vh;
+  min-height: 120px;
+  max-height: 220px;
+}
 /* Muted dashed placeholder pill (band slot etc.) — reads as "not wired yet". */
 .cockpit-ph-pill {
   font-size: var(--fs-label);
@@ -15442,10 +15516,175 @@ select.settings-input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Decoded FSK callsign ID (only rendered when one was recovered). */
+.sstv-thumb-call {
+  font-size: var(--fs-label);
+  font-weight: 600;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sstv-thumb-meta {
   font-size: 10px;
   color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* --- Transmit panel: intake + live preview + mode picker + Send/Stop/progress.
+   Nothing here keys the rig until Send (the backend enforces this too). --- */
+.sstv-tx {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.sstv-tx-head {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+/* Drop zone doubles as the live cover-crop preview stage. */
+.sstv-tx-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+}
+.sstv-tx-drop.loaded {
+  border-style: solid;
+}
+/* Native-resolution preview (pixel-exact "what you send"), upscaled crisp. */
+.sstv-tx-preview {
+  image-rendering: pixelated;
+  width: auto;
+  max-width: 100%;
+  max-height: 320px;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+.sstv-tx-preview.empty {
+  display: none;
+}
+.sstv-tx-drop-hint {
+  color: var(--text-faint);
+  font-style: italic;
+  font-size: var(--fs-body);
+  text-align: center;
+}
+.sstv-tx-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+/* File input styled as a button; the raw input is hidden inside the label. */
+.sstv-tx-file {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px var(--space-4);
+  cursor: pointer;
+}
+.sstv-tx-file:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+.sstv-tx-file input {
+  display: none;
+}
+.sstv-tx-name {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 22em;
+}
+.sstv-tx-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.sstv-tx-mode select {
+  font-family: inherit;
+  font-size: var(--fs-label);
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+.sstv-tx-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+.sstv-tx-send {
+  font-weight: 800;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 6px var(--space-5);
+}
+.sstv-tx-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.sstv-tx-stop {
+  font-weight: 800;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px var(--space-5);
+}
+.sstv-tx-stop:not(:disabled) {
+  color: var(--danger, #e5484d);
+  border-color: var(--danger, #e5484d);
+}
+.sstv-tx-stop:disabled {
+  opacity: 0.4;
+}
+/* Live TX progress — "TX — Scottie 1 · 1:52 remaining" + a filling bar. */
+.sstv-tx-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.sstv-tx-progress-status {
+  font-size: var(--fs-label);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--danger, #e5484d);
+}
+.sstv-tx-progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.sstv-tx-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s linear;
 }

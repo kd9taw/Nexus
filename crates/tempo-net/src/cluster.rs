@@ -35,12 +35,35 @@ pub struct ClusterSpot {
     /// corroboration evidence — VHF admission requires multiple independent
     /// near spotters). Capped small; excludes `spotter` itself.
     pub corroborators: Vec<String>,
+    /// True only when this spot arrived on an RBN SKIMMER feed (machine-generated),
+    /// as opposed to a human DX-cluster node. Set by the feed that pushed it, NOT by
+    /// the parser (which can't tell the wire apart). Gates [`is_rbn_rtty`]: the leading
+    /// mode token is trusted ONLY on the skimmer wire, never on human free-text.
+    pub rbn: bool,
 }
 
 impl ClusterSpot {
     /// Spot frequency in MHz (kHz / 1000).
     pub fn freq_mhz(&self) -> f64 {
         self.freq_khz / 1000.0
+    }
+
+    /// Is this an RBN RTTY-skimmer spot? True ONLY when the spot came off the RBN
+    /// skimmer wire (`rbn`) AND its comment's LEADING token is exactly "RTTY". RBN RTTY
+    /// skimmers emit machine-generated lines that begin with the mode ("RTTY" / "CW" /
+    /// "FT8"), so reading that first token is trusted exactly like the OTA feed's
+    /// structured mode field — NOT a free-text parse. Deliberately narrow: this UPGRADES
+    /// the display label of a spot that is ALREADY Digital by frequency; it never
+    /// reclassifies the frequency-derived mode, and it is never consulted on the human
+    /// cluster wire (where `rbn` is false), preserving the anti-comment-classification
+    /// doctrine (the 21.074-CW bug).
+    pub fn is_rbn_rtty(&self) -> bool {
+        self.rbn
+            && self
+                .comment
+                .split_whitespace()
+                .next()
+                .is_some_and(|t| t.eq_ignore_ascii_case("RTTY"))
     }
 
     /// Split/QSX listening offset named in the spot comment, in kHz RELATIVE to
@@ -150,6 +173,7 @@ pub fn parse_dx_spot(line: &str) -> Option<ClusterSpot> {
         time_utc,
         received_unix: 0, // stamped at buffer insertion
         corroborators: Vec::new(),
+        rbn: false, // the pushing feed sets this true on the RBN skimmer path
     })
 }
 
@@ -529,6 +553,7 @@ mod tests {
             time_utc: None,
             received_unix: 0,
             corroborators: Vec::new(),
+            rbn: false,
         };
         assert_eq!(mk("CW UP 2").split_offset_khz(), Some(2.0));
         assert_eq!(mk("UP2 big pile").split_offset_khz(), Some(2.0));
@@ -571,6 +596,28 @@ mod tests {
         assert_eq!(s.freq_khz, 14074.0);
         assert!(s.comment.contains("FT8"));
         assert_eq!(s.time_utc.as_deref(), Some("0312Z"));
+    }
+
+    #[test]
+    fn is_rbn_rtty_trusts_the_leading_token_only_on_the_skimmer_wire() {
+        // A real RBN RTTY-skimmer line: leading comment token is the mode.
+        let mut s = parse_dx_spot("DX de W3LPL-#: 14085.0 DL1ABC RTTY 20 dB 0312Z").unwrap();
+        s.rbn = true;
+        assert!(s.is_rbn_rtty(), "rbn skimmer + leading RTTY → RTTY");
+        // DOCTRINE: the SAME comment on a HUMAN cluster node (rbn=false) is untrusted
+        // free-text — never promoted (this is the 21.074-CW-bug guard).
+        s.rbn = false;
+        assert!(
+            !s.is_rbn_rtty(),
+            "human free-text 'RTTY' must NOT be trusted"
+        );
+        // Other skimmer modes never read as RTTY.
+        let mut cw = parse_dx_spot("DX de W3LPL-#: 14025.0 UA9CDC CW 599 0312Z").unwrap();
+        cw.rbn = true;
+        assert!(!cw.is_rbn_rtty(), "leading CW is not RTTY");
+        let mut ft8 = parse_dx_spot("DX de KM3T-#: 14074.0 3Y0J FT8 -6 dB 0312Z").unwrap();
+        ft8.rbn = true;
+        assert!(!ft8.is_rbn_rtty(), "leading FT8 is not RTTY");
     }
 
     #[test]
@@ -661,6 +708,7 @@ mod tests {
             time_utc: None,
             received_unix: 0,
             corroborators: Vec::new(),
+            rbn: false,
         };
         let mut b = SpotBuffer::new(10);
         b.push_at(base, sp("OLD")); // stamped at base
@@ -685,6 +733,7 @@ mod tests {
             time_utc: None,
             received_unix: 0,
             corroborators: Vec::new(),
+            rbn: false,
         }
     }
 
@@ -780,6 +829,7 @@ mod tests {
             time_utc: None,
             received_unix: 0,
             corroborators: Vec::new(),
+            rbn: false,
         };
         b.push(mk("K9LC"));
         b.push(mk("N9CO"));
@@ -819,6 +869,7 @@ mod tests {
             time_utc: None,
             received_unix: 0,
             corroborators: Vec::new(),
+            rbn: false,
         };
         let mut b = SpotBuffer::new(2);
         b.push(sp("A"));

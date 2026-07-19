@@ -306,7 +306,12 @@ fn start_cluster_feed(
                 hp.cluster_last
                     .store(now_unix(), std::sync::atomic::Ordering::Relaxed);
                 if let Ok(mut b) = buf.lock() {
-                    b.push(sp.clone());
+                    // Mark the skimmer origin so a leading "RTTY" comment token can
+                    // UPGRADE the display label (is_rbn_rtty) — trusted only here, on
+                    // the machine-generated RBN wire, never on the human-node path.
+                    let mut s = sp.clone();
+                    s.rbn = true;
+                    b.push(s);
                 }
             },
             &CLUSTER_STOP,
@@ -2584,6 +2589,58 @@ async fn get_sat_schedule(
     Ok(out)
 }
 
+/// The ISS's current-or-next pass over the operator's QTH, or `None`. Keyed on
+/// NORAD **25544** (name-proof — the "ISS (ZARYA)" element name is not), so the
+/// SSTV auto-arm opt-in can never tune the rig off a mis-mapped bird. Requires a
+/// resolvable grid; scans from 30 min back (a pass already in progress keeps its
+/// real AOS) over a 3 h horizon and returns the first pass still above the
+/// horizon. Geometry only — no transponder claim (the ISS SSTV downlink is
+/// event-scheduled; the operator opts in per the auto-arm setting).
+#[tauri::command]
+async fn get_iss_pass(state: State<'_, SharedEngine>) -> Result<Option<SatPassDto>, String> {
+    let mygrid = {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        eng.settings().mygrid.clone()
+    };
+    let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
+        return Ok(None);
+    };
+    let tles = load_tles().await?;
+    if tles.is_empty() {
+        return Ok(None);
+    }
+    let now = now_unix();
+    tauri::async_runtime::spawn_blocking(move || iss_pass_from_tles(&tles, obs, now))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The ISS (NORAD 25544) pass that's up now or rises next, from `tles` over
+/// `obs`, at `now` (unix s). Filters by catalog number so a renamed element set
+/// still matches; 30 min backscan + 3 h horizon; first pass whose LOS is in the
+/// future. `None` when the ISS isn't in the set / has no usable elements / has
+/// no pass in the window. Pure — [`get_iss_pass`] wraps it; the tests drive it.
+fn iss_pass_from_tles(
+    tles: &[propagation::sat::Tle],
+    obs: (f64, f64),
+    now: i64,
+) -> Option<SatPassDto> {
+    use propagation::sat;
+    let tle = tles.iter().find(|t| sat::norad_id(&t.line1) == Some(25544))?;
+    sat::passes(tle, obs, now - 1800, 3)
+        .into_iter()
+        .find(|p| p.los_unix > now)
+        .map(|p| SatPassDto {
+            name: tle.name.clone(),
+            aos_unix: p.aos_unix,
+            los_unix: p.los_unix,
+            max_el_deg: p.max_el_deg,
+            aos_az_deg: p.aos_az_deg,
+            los_az_deg: p.los_az_deg,
+            status: None,
+        })
+}
+
 /// Per-bird detail for the Satellites section: SatNOGS status + transponders
 /// (absent fields when we've never fetched — offline honesty) and the
 /// current/next pass with its az/el sky track for the polar plot.
@@ -3934,6 +3991,10 @@ struct RttyStateDto {
     afc_hz: f32,
     /// AFC has acquired-then-frozen on a signal.
     afc_locked: bool,
+    /// Current mark/space audio tones (Hz) the demod is netted on — the waterfall
+    /// mark/space cursor positions. Un-netted = the nominal 2125/2295 pair.
+    mark_hz: f32,
+    space_hz: f32,
     /// The decoded-text ring tail (caps at ~4000 chars; oldest drop off).
     text: String,
     /// Per-character confidence 0–100, parallel to `text`'s chars — render low
@@ -3950,6 +4011,18 @@ struct RttyStateDto {
     sending: bool,
     /// A keyer failure to surface (FSK port wouldn't open / rig refused PTT), else null.
     keyer_error: Option<String>,
+    /// The RTTY auto-sequencer is active (the operator's Auto toggle is on).
+    auto: bool,
+    /// Live sequencer state: idle | calling_cq | answering | exchange_sent |
+    /// confirmed | done.
+    seq_state: String,
+    /// The station currently being worked, once one is locked, else null.
+    peer: Option<String>,
+    /// The peer's copied exchange in schema order, as `[key, value]` pairs.
+    peer_exchange: Vec<(String, String)>,
+    /// A CQ surfaced from the transcript for the operator to click-to-answer (only
+    /// while Auto is on), else null. Surfacing only — clicking it is the human gate.
+    heard_cq: Option<String>,
 }
 
 fn rtty_state_dto(eng: &Engine) -> RttyStateDto {
@@ -3958,6 +4031,8 @@ fn rtty_state_dto(eng: &Engine) -> RttyStateDto {
         armed: s.armed,
         afc_hz: s.afc_hz,
         afc_locked: s.afc_locked,
+        mark_hz: s.mark_hz,
+        space_hz: s.space_hz,
         text: s.text,
         char_conf: s.conf,
         baud: s.baud,
@@ -3965,6 +4040,11 @@ fn rtty_state_dto(eng: &Engine) -> RttyStateDto {
         backend: s.backend,
         sending: s.sending,
         keyer_error: s.keyer_error,
+        auto: s.auto,
+        seq_state: s.seq_state,
+        peer: s.peer,
+        peer_exchange: s.peer_exchange,
+        heard_cq: s.heard_cq,
     }
 }
 
@@ -4021,6 +4101,53 @@ fn rtty_afc_reset(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String
     Ok(rtty_state_dto(&eng))
 }
 
+/// Net the RTTY decoder onto a new audio center (Hz) from a waterfall click —
+/// rebuilds the demod around the new mark/space pair. RX-only decoder state, so
+/// it needs no TX/privilege gate and is safe during a transmission.
+#[tauri::command]
+fn rtty_net(state: State<'_, SharedEngine>, hz: f32) -> Result<RttyStateDto, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.rtty_net(hz);
+    Ok(rtty_state_dto(&eng))
+}
+
+/// Turn the RTTY auto-sequencer on/off. On builds the sequencer from the operator's
+/// identity + active exchange (Field Day class/section vs casual RST/name/QTH); off
+/// aborts any live session and stops TX. NEVER transmits — a session only ever
+/// starts from an explicit CQ/Answer (the human-initiate gate).
+#[tauri::command]
+fn rtty_set_auto(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_rtty_auto(on);
+    Ok(rtty_state_dto(&eng))
+}
+
+/// Operator starts an auto CQ run (a human-initiate gate). The engine re-checks every
+/// TX gate and returns WHY a start was refused (Auto off, TX locked, …).
+#[tauri::command]
+fn rtty_auto_cq(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.rtty_auto_cq()?;
+    Ok(rtty_state_dto(&eng))
+}
+
+/// Operator answers a surfaced CQ — search & pounce (a human-initiate gate). Same
+/// gate re-check + reason on refusal.
+#[tauri::command]
+fn rtty_auto_answer(state: State<'_, SharedEngine>, call: String) -> Result<RttyStateDto, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.rtty_auto_answer(&call)?;
+    Ok(rtty_state_dto(&eng))
+}
+
+/// Operator kills the live auto session: abort the sequencer, drop the queue, unkey.
+#[tauri::command]
+fn rtty_auto_abort(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.rtty_auto_abort();
+    Ok(rtty_state_dto(&eng))
+}
+
 /// Live SSTV RX state: armed flag, in-flight decode progress (+ a downscaled
 /// raw-RGB preview), and the saved-image gallery. RX decode only — no TX path.
 #[derive(serde::Serialize)]
@@ -4038,10 +4165,28 @@ struct SstvStateDto {
     preview_height: u32,
     /// Saved images, oldest first (persisted in the sstv-gallery folder).
     gallery: Vec<tempo_app::dto::SstvGalleryEntry>,
+    // ----- TX side (an operator-initiated image transmission) -----
+    /// An image is queued or streaming to the rig (the cockpit's TX indicator).
+    sending: bool,
+    /// Mode label of the image being (or last) transmitted, e.g. "Scottie 1", else null.
+    tx_mode: Option<String>,
+    /// TX progress 0.0–1.0 (elapsed / total key-down), 0 when idle.
+    tx_progress: f32,
+    /// Seconds of key-down elapsed / total for the in-flight image.
+    tx_elapsed_secs: f32,
+    tx_total_secs: f32,
 }
 
 fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
     let p = eng.sstv_progress();
+    let (tx_elapsed_secs, tx_total_secs, tx_progress) = match eng.sstv_tx_progress() {
+        Some((played_ms, total_ms)) if total_ms > 0.0 => (
+            (played_ms / 1000.0) as f32,
+            (total_ms / 1000.0) as f32,
+            (played_ms / total_ms).clamp(0.0, 1.0) as f32,
+        ),
+        _ => (0.0, 0.0, 0.0),
+    };
     SstvStateDto {
         armed: eng.sstv_armed(),
         mode: p.map(|p| p.mode.clone()),
@@ -4053,6 +4198,11 @@ fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
         preview_width: p.map_or(0, |p| p.preview_w),
         preview_height: p.map_or(0, |p| p.preview_h),
         gallery: eng.sstv_gallery().to_vec(),
+        sending: eng.sstv_sending(),
+        tx_mode: eng.sstv_tx_mode().map(str::to_string),
+        tx_progress,
+        tx_elapsed_secs,
+        tx_total_secs,
     }
 }
 
@@ -4070,6 +4220,129 @@ fn sstv_arm(state: State<'_, SharedEngine>, on: bool) -> Result<SstvStateDto, St
 fn get_sstv_state(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
     let eng = state.lock().map_err(|e| e.to_string())?;
     Ok(sstv_state_dto(&eng))
+}
+
+/// Resolve an SSTV mode slug (the stable `short_name`: "pd120", "scottie1",
+/// "scottiedx", "martin1", …) to its [`tempo_sstv::SstvMode`]. Case-insensitive.
+fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
+    use tempo_sstv::SstvMode::{
+        Martin1, Martin2, Pd120, Pd160, Pd180, Pd240, Pd290, Pd50, Pd90, Robot24, Robot36,
+        Robot72, Scottie1, Scottie2, ScottieDx,
+    };
+    Some(match slug.trim().to_ascii_lowercase().as_str() {
+        "pd50" => Pd50,
+        "pd90" => Pd90,
+        "pd120" => Pd120,
+        "pd160" => Pd160,
+        "pd180" => Pd180,
+        "pd240" => Pd240,
+        "pd290" => Pd290,
+        "robot24" => Robot24,
+        "robot36" => Robot36,
+        "robot72" => Robot72,
+        "scottie1" => Scottie1,
+        "scottie2" => Scottie2,
+        "scottiedx" => ScottieDx,
+        "martin1" => Martin1,
+        "martin2" => Martin2,
+        _ => return None,
+    })
+}
+
+/// Transmit an SSTV image. The webview decodes/resizes the operator's picture to the
+/// mode's EXACT dimensions (cover-crop) and sends raw row-major RGB as base64 — so no
+/// image-decode dependency enters the Rust tree. The command resolves the mode,
+/// validates the dimensions against the mode's `ModeSpec`, encodes the full over-the-air
+/// waveform OFF the engine lock, then hands it to the engine's gated TX path (which keys
+/// nothing until the radio loop takes it behind every safety gate). Returns the fresh
+/// state (with `sending` true). Refuses — with the reason — on an unknown mode, a
+/// dimension mismatch, or any TX gate being down.
+#[tauri::command]
+fn sstv_send(
+    state: State<'_, SharedEngine>,
+    mode: String,
+    width: u32,
+    height: u32,
+    rgb_base64: String,
+) -> Result<SstvStateDto, String> {
+    let sstv_mode = parse_sstv_mode(&mode).ok_or_else(|| format!("Unknown SSTV mode: {mode}"))?;
+    let spec = tempo_sstv::for_mode(sstv_mode);
+    // Dimensions must match the mode EXACTLY — the webview cover-crops to these; a
+    // mismatch means the wrong canvas size, so refuse rather than transmit a garbled frame.
+    if width != spec.line_pixels || height != spec.image_lines {
+        return Err(format!(
+            "Image is {width}×{height} but {} needs {}×{} — resize to the mode's exact size",
+            spec.name, spec.line_pixels, spec.image_lines
+        ));
+    }
+    let bytes = b64_decode(&rgb_base64)?;
+    let want = spec.line_pixels as usize * spec.image_lines as usize * 3;
+    if bytes.len() != want {
+        return Err(format!(
+            "Image data is {} bytes but {} needs {want} (width × height × 3)",
+            bytes.len(),
+            spec.name
+        ));
+    }
+    let rgb: Vec<[u8; 3]> = bytes.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+    let img = tempo_sstv::SourceImage { width, height, rgb };
+    // Pre-flight the TX gate under a SHORT lock so a refused send (wrong frequency, TX
+    // off, another over in flight) fails fast BEFORE we spend CPU on the encode.
+    {
+        let eng = state.lock().map_err(|e| e.to_string())?;
+        eng.sstv_tx_gate()?;
+    }
+    // Encode the whole 12 kHz waveform OFF the engine lock (tens of ms even for PD290).
+    let samples = tempo_sstv::encode_image(sstv_mode, &img, 12_000).map_err(|e| e.to_string())?;
+    // Re-take the lock and hand it to the gated engine path (re-runs the full gate + the
+    // duration-budget check; nothing keys until the radio loop takes it).
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.sstv_send(samples, spec.name.to_string())?;
+    Ok(sstv_state_dto(&eng))
+}
+
+/// Stop the SSTV transmission now: abort the image in progress, drop the queued job, and
+/// unkey (the radio loop flushes the output ring on its next tick). Mirrors `rtty_stop`.
+#[tauri::command]
+fn sstv_stop(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.sstv_stop();
+    Ok(sstv_state_dto(&eng))
+}
+
+/// Standard-alphabet base64 DECODE (RFC 4648, with or without padding) — the inverse of
+/// [`b64_encode`], for the raw RGB the webview sends on an SSTV transmit. Rejects any
+/// non-alphabet byte. One decode-only call site, so no new dependency.
+fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
+    fn val(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some(u32::from(c - b'A')),
+            b'a'..=b'z' => Some(u32::from(c - b'a') + 26),
+            b'0'..=b'9' => Some(u32::from(c - b'0') + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let clean: Vec<u8> = s.bytes().filter(|&c| c != b'=').collect();
+    let mut out = Vec::with_capacity(clean.len() / 4 * 3);
+    for chunk in clean.chunks(4) {
+        if chunk.len() == 1 {
+            return Err("Invalid base64 length".to_string());
+        }
+        let mut acc = 0u32;
+        for &c in chunk {
+            let v = val(c).ok_or_else(|| "Invalid base64 character".to_string())?;
+            acc = (acc << 6) | v;
+        }
+        // A 4/3/2-char group carries 3/2/1 output bytes; left-align the accumulator.
+        acc <<= 6 * (4 - chunk.len());
+        let n = chunk.len() - 1; // 4→3, 3→2, 2→1 output bytes
+        for i in 0..n {
+            out.push((acc >> (16 - 8 * i)) as u8);
+        }
+    }
+    Ok(out)
 }
 
 /// Minimal standard-alphabet base64 (with padding) for the SSTV preview bytes —
@@ -5757,7 +6030,16 @@ async fn get_need_alerts(
                 heard.push(propagation::Heard {
                     call: cs.dx_call.to_ascii_uppercase(),
                     band: band.label().to_string(),
-                    mode: class.label().to_string(),
+                    // The surface gate above used `class` (the frequency-derived class,
+                    // still Digital for RTTY). Here we only UPGRADE the display/routing
+                    // label of an RBN RTTY skimmer spot — the machine-generated wire's
+                    // leading mode token, trusted like the OTA feed. Everything else keeps
+                    // its frequency-derived class label.
+                    mode: if cs.is_rbn_rtty() {
+                        "RTTY".to_string()
+                    } else {
+                        class.label().to_string()
+                    },
                     freq_mhz: Some(freq),
                     // The spot's REAL receive time — stamping poll-time made
                     // every cluster row read "just now" forever.
@@ -8700,15 +8982,20 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
 
 // ---- Self-update check (Phase 1: notify + open the download page) ---------------------------
 //
-// Fetches SourceForge's best_release.json, parses the latest Windows installer version, and
-// compares it to this build (env!("CARGO_PKG_VERSION")). The frontend throttles how often it
-// calls this (once/day) and remembers a dismissed version. Nothing is ever downloaded or run —
+// Reads the latest released version from our own update endpoint (version.json), falling back to
+// SourceForge's best_release.json, and compares it to this build. The frontend surfaces a single
+// dismissible prompt (and remembers a dismissed version); nothing is ever downloaded or run —
 // signed auto-update is a later phase.
 
-/// SourceForge `best_release.json` for the Nexus project — the machine-readable "latest release".
+/// Our own update endpoint (schema 1): a `version.json` with a direct `"latest"` field. Primary,
+/// GitHub-first, and under our control — so update accuracy no longer depends on SourceForge's
+/// per-release "Default Download" flip.
+const VERSION_JSON_URL: &str = "https://hamradiotools.io/nexus/version.json";
+/// SourceForge `best_release.json` — the FALLBACK release feed if the endpoint is unreachable.
 const BEST_RELEASE_URL: &str = "https://sourceforge.net/projects/nexus-ham-radio/best_release.json";
-/// The human download page the "Download" button opens (files listing; returns HTTP 200).
-const DOWNLOAD_PAGE_URL: &str = "https://sourceforge.net/projects/nexus-ham-radio/files/";
+/// The download page the "Download" button opens — GitHub Releases (primary distribution), which
+/// lists every installer plus notes; SourceForge mirrors it.
+const DOWNLOAD_PAGE_URL: &str = "https://github.com/kd9taw/nexus/releases/latest";
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -8723,19 +9010,15 @@ struct UpdateInfo {
     download_url: String,
 }
 
-/// Blocking GET of best_release.json — mirrors the propagation crate's reqwest usage (rustls,
-/// short timeout, a UA). Returns the raw body; call it via `spawn_blocking` from the command.
-fn fetch_best_release() -> Result<String, String> {
+/// Blocking GET of a text/JSON URL — mirrors the propagation crate's reqwest usage (rustls, short
+/// timeout, a UA). Returns the raw body; call it via `spawn_blocking` from the command.
+fn fetch_text(url: &str) -> Result<String, String> {
     reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .user_agent(concat!(
-            "nexus/",
-            env!("CARGO_PKG_VERSION"),
-            " (+update-check)"
-        ))
+        .user_agent(concat!("nexus/", env!("CARGO_PKG_VERSION"), " (+update-check)"))
         .build()
         .map_err(|e| e.to_string())?
-        .get(BEST_RELEASE_URL)
+        .get(url)
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
@@ -8744,18 +9027,34 @@ fn fetch_best_release() -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Resolve the latest released version: try our own endpoint first (authoritative `latest`), then
+/// fall back to SourceForge's best_release.json. `Ok(None)` = a feed was reachable but carried no
+/// usable version; `Err` = BOTH feeds failed to fetch (treated as offline → the frontend stays
+/// silent). Runs blocking HTTP, so call via `spawn_blocking`.
+fn fetch_latest_version() -> Result<Option<String>, String> {
+    // Primary: our own endpoint.
+    if let Ok(body) = fetch_text(VERSION_JSON_URL) {
+        if let Some(v) = tempo_app::update::parse_latest_from_endpoint(&body) {
+            return Ok(Some(v));
+        }
+        // Reachable but unparseable — fall through to the SF feed as a cross-check.
+    }
+    // Fallback: SourceForge. An error here (with the endpoint also unavailable) means offline.
+    let body = fetch_text(BEST_RELEASE_URL)?;
+    Ok(tempo_app::update::parse_latest_version(&body))
+}
+
 /// Check SourceForge for a newer release. Returns the current/latest versions and whether an
 /// update exists; the frontend decides whether to show the dismissible prompt. Returns `Err`
 /// offline or on a fetch error — the frontend treats that as a silent no-op (offline honesty).
 #[tauri::command]
 async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
-    let body = tauri::async_runtime::spawn_blocking(fetch_best_release)
+    let latest = tauri::async_runtime::spawn_blocking(fetch_latest_version)
         .await
         .map_err(|e| e.to_string())??;
     // Compare against the version Tauri actually shipped (tauri.conf.json) — the SAME source the
     // bundler derives the installer filename from — so the two can never drift into a false nag.
     let current = app.package_info().version.to_string();
-    let latest = tempo_app::update::parse_latest_version(&body);
     let update_available = latest
         .as_deref()
         .is_some_and(|l| tempo_app::update::version_is_newer(l, &current));
@@ -8767,8 +9066,8 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
     })
 }
 
-/// Open the SourceForge download page in the operator's default browser. Opened from Rust via the
-/// opener plugin, so no JS package or ACL capability entry is required.
+/// Open the download page (GitHub Releases) in the operator's default browser. Opened from Rust via
+/// the opener plugin, so no JS package or ACL capability entry is required.
 #[tauri::command]
 fn open_download_page(app: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -9259,6 +9558,7 @@ pub fn run() {
             stop_rotator,
             discover_flex,
             get_sat_schedule,
+            get_iss_pass,
             get_sat_detail,
             start_sat_track,
             stop_sat_track,
@@ -9276,8 +9576,15 @@ pub fn run() {
             rtty_stop,
             rtty_clear,
             rtty_afc_reset,
+            rtty_net,
+            rtty_set_auto,
+            rtty_auto_cq,
+            rtty_auto_answer,
+            rtty_auto_abort,
             sstv_arm,
             get_sstv_state,
+            sstv_send,
+            sstv_stop,
             get_rig_models,
             get_all_rig_models,
             get_band_plan,
@@ -9588,7 +9895,53 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{b64_encode, is_complete_lotw_body};
+    use super::{b64_decode, b64_encode, is_complete_lotw_body, iss_pass_from_tles, parse_sstv_mode};
+
+    // Well-known 2008 ISS element set (NORAD 25544) — the same vectors the
+    // propagation sat tests use. Pure geometry, so a fixed epoch is deterministic.
+    const ISS_NAME: &str = "ISS (ZARYA)";
+    const ISS_L1: &str = "1 25544U 98067A   08264.51782528 -.00002182  00000-0 -11606-4 0  2927";
+    const ISS_L2: &str = "2 25544  51.6416 247.4627 0006703 130.5360 325.0288 15.72125391563537";
+    const ISS_EPOCH_UNIX: i64 = 1_221_913_539;
+    // EN52 — south-central Wisconsin, well inside the ISS ground track.
+    const EN52: (f64, f64) = (42.5, -89.0);
+
+    fn iss_tle() -> propagation::sat::Tle {
+        propagation::sat::Tle {
+            name: ISS_NAME.into(),
+            line1: ISS_L1.into(),
+            line2: ISS_L2.into(),
+        }
+    }
+
+    #[test]
+    fn iss_pass_requires_the_iss_by_norad_number() {
+        // A set with only a NON-ISS bird (NORAD 43017) — the 25544 filter rejects
+        // it, so the auto-arm can never tune off a name collision or wrong bird.
+        let ao91 = propagation::sat::Tle {
+            name: "AO-91".into(),
+            line1: "1 43017U 17073E   08264.51782528  .00000000  00000-0  00000-0 0  0000".into(),
+            line2: "2 43017  97.7000 000.0000 0000000 000.0000 000.0000 14.80000000000000".into(),
+        };
+        assert!(iss_pass_from_tles(&[ao91], EN52, ISS_EPOCH_UNIX).is_none());
+        // No elements at all → None (the no-TLE path get_iss_pass short-circuits).
+        assert!(iss_pass_from_tles(&[], EN52, ISS_EPOCH_UNIX).is_none());
+    }
+
+    #[test]
+    fn iss_pass_returns_the_in_progress_pass() {
+        // Anchor `now` one minute into the ISS's first modelled pass over EN52;
+        // the auto-arm helper must report that same still-open pass (LOS ahead).
+        let first = propagation::sat::passes(&iss_tle(), EN52, ISS_EPOCH_UNIX, 24)
+            .into_iter()
+            .next()
+            .expect("at least one ISS pass in 24 h");
+        let now = first.aos_unix + 60;
+        let got = iss_pass_from_tles(&[iss_tle()], EN52, now).expect("ISS pass found mid-pass");
+        assert_eq!(got.name, ISS_NAME);
+        assert!(got.los_unix > now, "the reported pass is still above the horizon");
+        assert!(got.status.is_none(), "geometry only — no status stamped");
+    }
 
     // A full report ends with the documented `<APP_LoTW_EOF>` trailer.
     const COMPLETE_REPORT: &str = "ARRL Logbook of the World Status Report\n\
@@ -9636,5 +9989,31 @@ mod tests {
         assert_eq!(b64_encode(b"foo"), "Zm9v");
         assert_eq!(b64_encode(b"foobar"), "Zm9vYmFy");
         assert_eq!(b64_encode(&[0xFF, 0xEF, 0xBE]), "/+++");
+    }
+
+    #[test]
+    fn b64_decode_inverts_encode_including_the_rfc_vectors() {
+        // RFC 4648 vectors, the inverse of the encode test above.
+        assert_eq!(b64_decode("").unwrap(), b"");
+        assert_eq!(b64_decode("Zg==").unwrap(), b"f");
+        assert_eq!(b64_decode("Zm8=").unwrap(), b"fo");
+        assert_eq!(b64_decode("Zm9v").unwrap(), b"foo");
+        assert_eq!(b64_decode("Zm9vYmFy").unwrap(), b"foobar");
+        assert_eq!(b64_decode("/+++").unwrap(), vec![0xFF, 0xEF, 0xBE]);
+        // Padding-optional + round-trips arbitrary bytes (the SSTV RGB payload).
+        let payload: Vec<u8> = (0u16..300).map(|n| (n * 7 % 256) as u8).collect();
+        assert_eq!(b64_decode(&b64_encode(&payload)).unwrap(), payload);
+        // Rejects a stray non-alphabet byte rather than silently mangling the image.
+        assert!(b64_decode("Zm9v!").is_err());
+    }
+
+    #[test]
+    fn parse_sstv_mode_resolves_slugs_case_insensitively() {
+        assert!(parse_sstv_mode("scottie1").is_some());
+        assert!(parse_sstv_mode("ScottieDX").is_some()); // case-insensitive
+        assert!(parse_sstv_mode("pd120").is_some());
+        assert!(parse_sstv_mode("martin2").is_some());
+        assert!(parse_sstv_mode("robot36").is_some());
+        assert!(parse_sstv_mode("nonsense").is_none());
     }
 }

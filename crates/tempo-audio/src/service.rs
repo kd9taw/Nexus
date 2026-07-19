@@ -200,6 +200,12 @@ fn agc_from_hamlib(v: u8) -> &'static str {
 /// 500 ms read timeout, so even a couple dozen tries spans seconds), then we stop
 /// retrying THAT mode until the target changes.
 const MODE_SET_MAX_TRIES: u32 = 30;
+/// After this many consecutive failures, DATA-mode retries drop their explicit 3 kHz
+/// passband and go filter-agnostic (`M PKTUSB 0`) — the middle rung of the mode-set
+/// resilience ladder (see [`retry_passband`]). A backend that chokes on the width→DATA-
+/// filter mapping (not the mode itself) then gets accepted instead of riding the whole
+/// budget into a bogus "no such mode" give-up.
+const MODE_SET_PASSBAND0_AFTER: u32 = 10;
 
 /// Station configuration for the radio loop.
 ///
@@ -417,6 +423,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
             backend.flush_output();
             let _ = rig.ptt(false);
+            // Drop any in-flight SSTV image feed too (the flush_output above already
+            // dumped its queued audio and ptt(false) unkeyed the carrier — this is
+            // symmetry with the CW/RTTY cuts below).
+            state.sstv_feed = None;
             // Cut any in-progress CW too: stop a CAT `send_morse` and flush a
             // WinKeyer's hardware buffer NOW, deterministically, rather than
             // relying on Drop running before the process is killed (a half-sent
@@ -573,7 +583,7 @@ fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
             rig.set_slow_transport(
                 network
                     || native_civ_addr(t).is_some()
-                    || crate::rigmodels::is_slow_serial_rig(t.rig_model),
+                    || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
             );
             let (ok, _d) = probe_cat(&mut rig, t.rigctld_port);
             (rig, Some(proc), ok)
@@ -835,6 +845,31 @@ fn handoff_if_switched(
         state.tuning_keyed = false;
         state.manual_ptt_applied = false;
         state.tune_started_ms = None; // a stale tune clock would auto-cancel the NEXT tune
+                                      // Own the switch's TX cut COMPLETELY. `set_active_radio`→`halt_tx` armed the engine's
+                                      // one-shot `cw_abort`/`rtty_abort` for the audio loop to act on; the physical unkey above
+                                      // IS that action for the outgoing rig. Drain them here so step() — which runs AFTER this
+                                      // handoff every tick and is otherwise blind to the deferral — doesn't re-issue a SECOND
+                                      // `stop_morse`/`ptt(false)` to the outgoing rig on the same switch. Without this, a
+                                      // contended switch (the pool held by the monitor's read burst — the steady state with two
+                                      // same-model Icoms) double-commands the old rig's CAT link: exactly the "commands the old
+                                      // rig … once per retry tick" isolation failure. Also stop the hardware keyers now, like the
+                                      // shutdown unkey, so a mid-CW/RTTY switch doesn't keep keying after the abort is consumed.
+        if let Ok(mut e) = engine.lock() {
+            let _ = e.take_cw_abort();
+            let _ = e.take_rtty_abort();
+            // Same for SSTV: this handoff already unkeyed (above), so consume the abort a
+            // switch-time halt raised — else step()'s SSTV block issues a SECOND ptt(false)
+            // to the outgoing rig (the "once per retry tick" double-command regression).
+            let _ = e.take_sstv_abort();
+        }
+        #[cfg(feature = "serial")]
+        if let Some((_, wk)) = state.winkeyer.as_mut() {
+            let _ = wk.clear();
+        }
+        #[cfg(feature = "serial")]
+        if let Some((_, _, k)) = state.rtty_keyer.as_ref() {
+            k.clear();
+        }
     }
     let mut p = match pool.try_lock() {
         Ok(p) => p,
@@ -945,6 +980,30 @@ struct Sinks<'a> {
     cfg_dial_hz: u64,
 }
 
+/// SSTV TX working rate (12 kHz = `ft1::SAMPLE_RATE`): the image is synthesized
+/// directly at the modem rate, so no resample is needed on the way to the backend.
+const SSTV_TX_RATE_HZ: f64 = 12_000.0;
+/// Chunk size for the SSTV look-ahead feed: ~2 s at 12 kHz.
+const SSTV_CHUNK_SAMPLES: usize = 24_000;
+/// How far ahead of playback we keep the SSTV output ring filled (ms). Bounds the
+/// unbounded `out_ring`: a 10 s look-ahead caps a PD290 at ~2 MB queued instead of the
+/// ~55 MB a one-shot `play` of the whole image would peak, and survives multi-second
+/// loop stalls (shared CAT reads) without underrunning.
+const SSTV_FEED_AHEAD_MS: f64 = 10_000.0;
+
+/// The SSTV image currently streaming to the rig: the whole pre-encoded 12 kHz buffer,
+/// a feed cursor (how many samples have been handed to the backend), and timing.
+struct SstvFeed {
+    /// Full over-the-air waveform (12 kHz `f32` PCM).
+    samples: Vec<f32>,
+    /// Next sample index to feed to the backend.
+    cursor: usize,
+    /// Loop-clock ms when the image started keying.
+    started_ms: f64,
+    /// Exact total duration of `samples` (ms) — the PTT hold and progress denominator.
+    total_ms: f64,
+}
+
 /// All persistent state of the radio loop. One iteration is [`RadioLoop::step`],
 /// generic over [`AudioBackend`] so a `MockBackend` (+ a `Rig::vox()` / mock
 /// rigctld) can drive the whole heartbeat in a test with no sound card.
@@ -997,6 +1056,13 @@ struct RadioLoop {
     /// section change that re-selects this mode (after a different mode succeeded) tries
     /// again. `None` = nothing suppressed.
     mode_giveup: Option<String>,
+    /// Whether any failure in the CURRENT mode-retry run was an active rig REJECTION
+    /// (`RPRT -1` → `ErrorKind::Other`) rather than a link fault (timeout/refused).
+    /// Decides the give-up outcome: a rejection means the rig really refused the mode
+    /// (→ try the plain-sideband fallback, tell the operator to press DATA); all link
+    /// faults mean the CAT link is too slow or mute — claiming "rig has no mode" there
+    /// sent an IC-7610 @ 19200 baud operator chasing a mode the rig has always had.
+    mode_saw_reject: bool,
     /// Last CW keyer speed (WPM) pushed to the rig, so we only `set_keyspd` on change.
     last_cw_wpm: u32,
     /// Unix-ms until which the current CW word is still keying — the next queued word is
@@ -1023,6 +1089,11 @@ struct RadioLoop {
     /// (line back to mark) when the operator switches to AFSK.
     #[cfg(feature = "serial")]
     rtty_keyer: Option<(String, String, crate::rtty_fsk::FskKeyer)>,
+    /// The SSTV image currently streaming to the rig (pre-encoded 12 kHz PCM + a feed
+    /// cursor + timing), fed to the output ring in chunked look-ahead slices so a
+    /// multi-minute image never dumps into the unbounded ring at once. `None` = no
+    /// image in flight. PTT is held for the whole image via `tx_until_ms`.
+    sstv_feed: Option<SstvFeed>,
     /// Last manual-PTT (live phone) state we applied to the rig — only key on change.
     manual_ptt_applied: bool,
     /// Last RF power fraction we pushed to the rig — only set on change.
@@ -1168,6 +1239,7 @@ impl RadioLoop {
             last_mode: cfg.mode.clone(),
             mode_fail_count: 0,
             mode_giveup: None,
+            mode_saw_reject: false,
             last_cw_wpm: 0, // 0 = unset → first send pushes the speed
             cw_busy_until: 0.0,
             last_fm: None,
@@ -1178,6 +1250,7 @@ impl RadioLoop {
             rtty_busy_until: 0.0,
             #[cfg(feature = "serial")]
             rtty_keyer: None,
+            sstv_feed: None,
             manual_ptt_applied: false,
             last_rf_power: None,
             last_mic_gain: None,
@@ -1319,6 +1392,7 @@ impl RadioLoop {
         self.last_mode = String::new(); // force the mode re-assert
         self.mode_fail_count = 0;
         self.mode_giveup = None;
+        self.mode_saw_reject = false;
         self.last_cw_wpm = 0;
         self.cw_busy_until = 0.0;
         self.rtty_busy_until = 0.0;
@@ -1473,6 +1547,7 @@ impl RadioLoop {
                 // re-apply until it sticks, instead of silently stranding the new rig off-frequency.
                 self.mode_fail_count = 0; // fresh rig — the retune retry budget resets
                 self.mode_giveup = None; // and a fresh rig may well accept what the old rejected
+                self.mode_saw_reject = false;
                 self.cat_ok = ok;
                 if let Ok(mut eng) = engine.lock() {
                     eng.set_cat_status(ok, detail);
@@ -1717,6 +1792,7 @@ impl RadioLoop {
                     // 750 ms read-back window — that would fight the VFO-knob mirroring.
                     self.mode_giveup = None;
                     self.mode_fail_count = 0;
+                    self.mode_saw_reject = false;
                     if dial != self.last_dial && rig.set_freq(dial).is_ok() {
                         self.last_dial = dial;
                         retuned = true;
@@ -1741,7 +1817,10 @@ impl RadioLoop {
                             // `last_mode` is unchanged, so the steady-state path below re-tries
                             // on later loops and re-gives-up past the budget — a non-supporting
                             // rig is still never spammed forever.
-                            Err(e) => retune_note = Some(mode_command_failed(&md, &e)),
+                            Err(e) => {
+                                self.mode_saw_reject |= e.kind() == std::io::ErrorKind::Other;
+                                retune_note = Some(mode_command_failed(&md, &e));
+                            }
                         }
                     }
                 } else {
@@ -1753,11 +1832,12 @@ impl RadioLoop {
                     // (rig kept rejecting it). `last_mode` only ever holds a mode actually
                     // applied, so a give-up never masquerades as success.
                     if md != self.last_mode && self.mode_giveup.as_deref() != Some(md.as_str()) {
-                        match rig.set_mode(&md, passband_for(&md)) {
+                        match rig.set_mode(&md, retry_passband(&md, self.mode_fail_count)) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
                                 self.mode_fail_count = 0;
                                 self.mode_giveup = None; // a success clears any prior give-up
+                                self.mode_saw_reject = false;
                                 retuned = true;
                                 retune_note = Some(mode_set_note(rig, &md));
                             }
@@ -1768,6 +1848,7 @@ impl RadioLoop {
                                 // later section change to a different mode still tries (md flips),
                                 // and once any mode sticks the give-up is cleared.
                                 self.mode_fail_count += 1;
+                                self.mode_saw_reject |= e.kind() == std::io::ErrorKind::Other;
                                 retune_note = Some(format!(
                                     "{} ({}/{MODE_SET_MAX_TRIES})",
                                     mode_command_failed(&md, &e),
@@ -1776,12 +1857,28 @@ impl RadioLoop {
                                 if self.mode_fail_count >= MODE_SET_MAX_TRIES {
                                     eprintln!(
                                         "tempo-audio: set_mode({md:?}) failed {} times — giving up \
-                                         (the rig may not support this mode).",
-                                        self.mode_fail_count
+                                         (rejected by rig: {}).",
+                                        self.mode_fail_count, self.mode_saw_reject
                                     );
                                     self.mode_giveup = Some(md.clone());
                                     self.mode_fail_count = 0;
-                                    retune_note = Some(format!("rig has no {md} mode — gave up"));
+                                    let saw_reject = std::mem::take(&mut self.mode_saw_reject);
+                                    // Last rung of the ladder: a rig that actively REFUSED a
+                                    // DATA submode still speaks the plain sideband — put it
+                                    // there (filter untouched) so the operator only has to
+                                    // press the rig's DATA key, instead of a dead-end note.
+                                    // Sent ONCE; link-fault give-ups skip it (the link, not
+                                    // the mode, is the problem — don't add more traffic).
+                                    let fallback = if saw_reject {
+                                        fallback_sideband(&md)
+                                            .filter(|base| rig.set_mode(base, -1).is_ok())
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(base) = fallback {
+                                        self.last_mode = base.to_string();
+                                    }
+                                    retune_note = Some(mode_giveup_note(&md, saw_reject, fallback));
                                 }
                             }
                         }
@@ -1864,11 +1961,11 @@ impl RadioLoop {
                 // Periodically re-probe a rig whose S-meter was found unsupported — a few
                 // STRENGTH misses can be a transient hiccup, not a real lack of support — so it
                 // recovers without needing a full CAT drop + reconfirm.
-                if self.smeter_supported == Some(false) && self.rig_poll_ticks % 40 == 0 {
+                if self.smeter_supported == Some(false) && self.rig_poll_ticks.is_multiple_of(40) {
                     self.smeter_supported = None;
                     self.smeter_misses = 0;
                 }
-                if self.rig_poll_ticks % 40 == 0 {
+                if self.rig_poll_ticks.is_multiple_of(40) {
                     for i in 0..RIG_FUNCS.len() {
                         if self.func_supported[i] == Some(false) {
                             self.func_supported[i] = None; // give a given-up func one retry
@@ -1994,7 +2091,7 @@ impl RadioLoop {
                         // touch stale on some backends — fine for a display-only hint.
                         // Mode changes rarely — read it on a slower sub-cadence (every 4th
                         // poll) to keep the fast dial/health check tight on slow serial links.
-                        if self.rig_poll_ticks % 4 == 0 {
+                        if self.rig_poll_ticks.is_multiple_of(4) {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
                             let (m, pb) = rig.read_mode_passband();
                             if let Ok(mut eng) = engine.lock() {
@@ -2388,6 +2485,12 @@ impl RadioLoop {
                 // Keep the cockpit's sending indicator honest each tick: an over is
                 // "sending" until its computed duration has fully played out.
                 eng.set_rtty_sending(now < self.rtty_busy_until);
+                // Service the RTTY auto-sequencer BEFORE poll_rtty_one, so any over it
+                // produces this tick (on_tx_complete → the next reply, or a silence
+                // timeout → AGN/CQ) is picked up by the poll below. on_tx_complete
+                // fires exactly once per over, gated on the sending flag just stamped
+                // above — which shares one Unix-millis clock epoch with the RX feed.
+                eng.rtty_auto_service();
                 (
                     eng.take_rtty_abort(),
                     if ready { eng.poll_rtty_one() } else { None },
@@ -2631,7 +2734,7 @@ impl RadioLoop {
                     self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                     // A NAK here means the modem audio above went out while the rig stayed in
                     // RX — surface it instead of silent dead air.
-                    self.report_ptt(&engine, ptt_err);
+                    self.report_ptt(engine, ptt_err);
                 }
             }
             // QSO recording (audio bridge): stream the live RX capture straight to a WAV on
@@ -2686,6 +2789,97 @@ impl RadioLoop {
             }
         }
 
+        // SSTV image transmit (phone): stream a pre-encoded 12 kHz image with PTT held for
+        // its exact, precomputed duration. Generate-then-stream — the whole buffer is
+        // encoded up front in the command layer; the loop feeds it to the output ring in
+        // chunked look-ahead slices (never one giant `play`, so a 4.8-min PD290 can't peak
+        // ~55 MB in the unbounded ring). Human-initiated only: the engine's `poll_sstv_tx`
+        // gates on tx_enabled + privileges + Phone ownership + not-tuning, and the over's
+        // length was bounded UP FRONT by `sstv_send`'s duration budget. PTT drops
+        // unconditionally at the precomputed `tx_until_ms` (below), or earlier on
+        // Stop/halt/disarm/exit via the abort. One image in flight, no queue.
+        {
+            let abort = {
+                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                eng.take_sstv_abort()
+            };
+            if abort {
+                // Stop TX mid-image (Stop button, halt_tx, TX disarm): drop the feed, dump
+                // any queued audio, and unkey immediately.
+                self.sstv_feed = None;
+                backend.flush_output();
+                let _ = rig.ptt(false);
+                self.tx_until_ms = None;
+                if let Ok(mut eng) = engine.lock() {
+                    eng.set_sstv_sending(false);
+                }
+            }
+            // Start a new image ONLY when the transmitter is otherwise idle — SSTV shares
+            // the Phone segment with the voice keyer + live mic PTT, so this backstop gives
+            // the mutual exclusion RTTY gets for free from mode-exclusivity. Polling only
+            // when idle also HOLDS the engine's job (poll_sstv_tx takes it) instead of
+            // dropping it, so a busy tick can't lose the image.
+            if self.sstv_feed.is_none()
+                && self.tx_until_ms.is_none()
+                && !self.tuning_keyed
+                && !self.manual_ptt_applied
+            {
+                let job = {
+                    let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                    eng.poll_sstv_tx()
+                };
+                if let Some(job) = job {
+                    self.publish_tx_intent_now(); // before keying — the fail-safe must already know
+                    let ptt_err = rig.ptt(true).is_err();
+                    // Hold PTT for the WHOLE image via the precomputed duration; the
+                    // tx_until_ms expiry below drops it even if every other mechanism fails.
+                    let until = now + job.duration_ms + crate::slot::TX_TAIL_MS;
+                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    if let Ok(mut eng) = engine.lock() {
+                        eng.set_sstv_sending(true);
+                    }
+                    // A NAK here means modem audio would go out into a receiving rig — surface it.
+                    self.report_ptt(engine, ptt_err);
+                    self.sstv_feed = Some(SstvFeed {
+                        samples: job.samples,
+                        cursor: 0,
+                        started_ms: now,
+                        total_ms: job.duration_ms,
+                    });
+                }
+            }
+            // Chunked look-ahead feed + progress + completion.
+            let done = if let Some(feed) = self.sstv_feed.as_mut() {
+                let elapsed = now - feed.started_ms;
+                // Keep ~SSTV_FEED_AHEAD_MS of audio queued ahead of playback, no more.
+                while feed.cursor < feed.samples.len() {
+                    let fed_ms = feed.cursor as f64 / SSTV_TX_RATE_HZ * 1000.0;
+                    if fed_ms - elapsed >= SSTV_FEED_AHEAD_MS {
+                        break;
+                    }
+                    let end = (feed.cursor + SSTV_CHUNK_SAMPLES).min(feed.samples.len());
+                    backend.play(&feed.samples[feed.cursor..end]);
+                    feed.cursor = end;
+                }
+                let played_ms = elapsed.clamp(0.0, feed.total_ms);
+                let total_ms = feed.total_ms;
+                if let Ok(mut eng) = engine.lock() {
+                    eng.set_sstv_tx_progress(played_ms, total_ms);
+                }
+                // Done once every sample is fed AND the audio has played out; the PTT drop
+                // rides the tx_until_ms expiry below (which never unkeys under a held mic).
+                feed.cursor >= feed.samples.len() && elapsed >= feed.total_ms
+            } else {
+                false
+            };
+            if done {
+                self.sstv_feed = None;
+                if let Ok(mut eng) = engine.lock() {
+                    eng.set_sstv_sending(false);
+                }
+            }
+        }
+
         // Manual PTT (live phone) + RF power — applied via the rig on change. Only the
         // Phone section drives these (the FT8 TX path is idle there), so no PTT clash.
         {
@@ -2700,7 +2894,7 @@ impl RadioLoop {
                 // Report only a KEYING failure (a failed unkey is the watchdog's job); a clean
                 // key or any unkey clears our own PTT status.
                 let ptt_failed = rig.ptt(ptt).is_err();
-                self.report_ptt(&engine, ptt && ptt_failed);
+                self.report_ptt(engine, ptt && ptt_failed);
                 self.manual_ptt_applied = ptt;
             }
             if let Some(p) = power {
@@ -3880,6 +4074,59 @@ fn passband_for(md: &str) -> i32 {
     }
 }
 
+/// The passband for attempt `prior_fails + 1` of the bounded mode-set retry — the middle
+/// rung of the resilience ladder. DATA modes start with the full 3 kHz passband
+/// ([`passband_for`]); once a run keeps failing past [`MODE_SET_PASSBAND0_AFTER`], later
+/// attempts send passband `0` (`M PKTUSB 0` — Hamlib's `RIG_PASSBAND_NORMAL`, the rig's
+/// own default width) so a backend that rejects the width→DATA-filter mapping, not the
+/// mode itself, still gets the mode set. Non-DATA modes keep `-1` (NOCHANGE) always —
+/// `0` would actively re-command the default width and pop the rig's Width display.
+fn retry_passband(md: &str, prior_fails: u32) -> i32 {
+    let pb = passband_for(md);
+    if pb > 0 && prior_fails >= MODE_SET_PASSBAND0_AFTER {
+        0
+    } else {
+        pb
+    }
+}
+
+/// The plain sideband underneath a DATA/PKT submode — the LAST rung of the mode-set
+/// ladder. A rig whose CAT refuses the DATA submode (or a Hamlib backend that garbles
+/// it) still takes plain USB/LSB; landing there leaves the operator one rig-front-panel
+/// DATA press from working, instead of stranded on whatever mode was active before.
+/// `None` for non-DATA modes — there is nothing sensible to fall back to.
+fn fallback_sideband(md: &str) -> Option<&'static str> {
+    match md.trim().to_ascii_uppercase().as_str() {
+        "PKTUSB" | "DATA-U" | "PKT-U" => Some("USB"),
+        "PKTLSB" | "DATA-L" | "PKT-L" => Some("LSB"),
+        _ => None,
+    }
+}
+
+/// The give-up note after [`MODE_SET_MAX_TRIES`] failures. The old note said
+/// "rig has no {md} mode" for EVERY exhausted budget — but a run of link faults
+/// (timeouts on a slow CI-V baud, a mute rig) proves nothing about the rig's modes,
+/// and that wording sent an IC-7610 operator chasing a missing PKTUSB the rig has
+/// always had (as USB-D). Only a run containing an active rejection (`RPRT -1`)
+/// may blame the rig, and even then the note says what to DO, not just what failed.
+fn mode_giveup_note(md: &str, saw_reject: bool, fallback: Option<&str>) -> String {
+    if !saw_reject {
+        return format!(
+            "couldn't set {md}: no reply over CAT — link too slow or rig mute; try raising \
+             the rig's CI-V baud (115200) and turning CI-V Transceive off — gave up"
+        );
+    }
+    match fallback {
+        Some(base) => format!(
+            "rig refused {md} — set {base} instead; press the rig's DATA key ({base}-D) to work digital"
+        ),
+        None if mode_is_data(md) => format!(
+            "rig refused {md} — couldn't set DATA mode; select USB-D/DATA on the rig by hand — gave up"
+        ),
+        None => format!("rig refused {md} — set the mode on the rig by hand — gave up"),
+    }
+}
+
 /// After commanding a mode, read it straight back from the rig and describe the outcome —
 /// the ONLY way to distinguish "rigctld answered RPRT 0 AND the rig actually changed" from
 /// "rigctld answered RPRT 0 but the rig is still in the old mode" (a Hamlib/rig no-op). The
@@ -4065,7 +4312,9 @@ fn open_cat(
         // reuses the port of the daemon we just killed (`allow_coexist == false`), so we never
         // reconnect through our own dying daemon and keep commanding the OLD radio.
         let mut rig = Rig::with_control(Some(addr.clone()), ptt_mode);
-        rig.set_slow_transport(t.is_network() || crate::rigmodels::is_slow_serial_rig(t.rig_model)); // network chains + slow serial rigs (Xiegu / vintage Kenwood) get the long command deadline
+        rig.set_slow_transport(
+            t.is_network() || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
+        ); // network chains + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long command deadline
         let _ = rig.set_freq(dial_hz);
         let _ = rig.set_mode(mode, passband_for(mode));
         let (ok, detail) = probe_cat(&mut rig, t.rigctld_port);
@@ -4094,8 +4343,8 @@ fn open_cat(
             rig.set_slow_transport(
                 network
                     || native_civ_addr(t).is_some()
-                    || crate::rigmodels::is_slow_serial_rig(t.rig_model),
-            ); // network chains + the native daemon + slow serial rigs (Xiegu / vintage Kenwood) get the long deadline
+                    || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
+            ); // network chains + the native daemon + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
             let _ = rig.set_freq(dial_hz);
             let _ = rig.set_mode(mode, passband_for(mode));
             let (ok, detail) = probe_cat(&mut rig, t.rigctld_port);
@@ -4272,6 +4521,61 @@ mod tests {
     }
 
     #[test]
+    fn retry_passband_goes_filter_agnostic_only_for_data_modes() {
+        // Rung 1 of the ladder: DATA modes open with the full 3 kHz passband…
+        assert_eq!(retry_passband("PKTUSB", 0), 3000);
+        assert_eq!(retry_passband("PKTLSB", MODE_SET_PASSBAND0_AFTER - 1), 3000);
+        // Rung 2: …then drop to 0 (the rig's own default width) once the run keeps
+        // failing — a backend that rejects the width→DATA-filter mapping (not the
+        // mode itself) still gets the MODE set.
+        assert_eq!(retry_passband("PKTUSB", MODE_SET_PASSBAND0_AFTER), 0);
+        assert_eq!(retry_passband("PKTLSB", MODE_SET_MAX_TRIES - 1), 0);
+        // Voice/CW never leave -1 (NOCHANGE): 0 would actively re-command the default
+        // width and pop the rig's Width display — the bug passband_for exists to avoid.
+        assert_eq!(retry_passband("USB", 0), -1);
+        assert_eq!(retry_passband("CW", MODE_SET_MAX_TRIES), -1);
+    }
+
+    #[test]
+    fn fallback_sideband_maps_data_submodes_to_their_plain_sideband() {
+        assert_eq!(fallback_sideband("PKTUSB"), Some("USB"));
+        assert_eq!(fallback_sideband(" pktlsb "), Some("LSB"));
+        assert_eq!(fallback_sideband("DATA-U"), Some("USB"));
+        assert_eq!(fallback_sideband("DATA-L"), Some("LSB"));
+        // Non-DATA modes have no sensible sideband fallback — give up in place.
+        assert_eq!(fallback_sideband("CW"), None);
+        assert_eq!(fallback_sideband("USB"), None);
+        assert_eq!(fallback_sideband("FM"), None);
+    }
+
+    #[test]
+    fn mode_giveup_note_blames_the_link_not_the_mode_on_timeouts() {
+        // An all-timeout run (the IC-7610 @ 19200 CI-V baud case) proves nothing about
+        // the rig's modes — the old "rig has no PKTUSB mode" wording sent the operator
+        // chasing a mode the rig has always had (USB-D). The note must blame the LINK
+        // and say what to do about it.
+        let n = mode_giveup_note("PKTUSB", false, None);
+        assert!(!n.contains("has no"), "must not blame the mode: {n}");
+        assert!(!n.contains("refused"), "must not blame the rig: {n}");
+        assert!(n.contains("CI-V baud"), "must be actionable: {n}");
+
+        // Active rejection + the plain-sideband fallback landed: one front-panel DATA
+        // press from working — the note says exactly that.
+        let n = mode_giveup_note("PKTUSB", true, Some("USB"));
+        assert!(n.contains("refused PKTUSB"), "{n}");
+        assert!(n.contains("USB-D"), "must name the rig-side mode: {n}");
+
+        // Active rejection and even plain USB failed: still actionable for DATA modes.
+        let n = mode_giveup_note("PKTUSB", true, None);
+        assert!(n.contains("USB-D/DATA"), "{n}");
+
+        // A non-DATA rejection: honest, no bogus DATA advice.
+        let n = mode_giveup_note("CW", true, None);
+        assert!(n.contains("refused CW"), "{n}");
+        assert!(!n.contains("USB-D"), "{n}");
+    }
+
+    #[test]
     fn build_decode_carries_decode_fields() {
         let d = build_decode("CQ W1AW FN31", -7, 0.1, 1200.0, "FT8", 5000, false);
         assert_eq!(d.message, "CQ W1AW FN31");
@@ -4425,6 +4729,47 @@ mod tests {
     }
     fn mock_reopen_rig() -> impl FnMut(&Transport, u64, &str, bool) -> RigOpen {
         |_t: &Transport, _d: u64, _m: &str, _coexist: bool| (Rig::vox(), None, None, String::new())
+    }
+
+    /// A rigctld that REJECTS every DATA-mode set (`M PKT*` → `RPRT -1`) but accepts
+    /// everything else — the "rig refused PKTUSB" shape of the IC-7610 report — while
+    /// logging every command line it was sent. Serves connections sequentially forever.
+    fn mock_pkt_rejecting_rigctld() -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let reply = if l == "f" {
+                        "14074000\n"
+                    } else if l.starts_with("M PKT") {
+                        "RPRT -1\n"
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
     }
 
     #[test]
@@ -5321,6 +5666,137 @@ mod tests {
         assert!(backend.flush_calls > 0, "queued TX audio was flushed");
     }
 
+    /// A Phone-armed engine on a legal 20 m phone frequency with an SSTV image queued.
+    fn sstv_ready_engine(samples: Vec<f32>) -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_frequency(14.290, "20m", "USB");
+            e.set_operating_mode("phone", false);
+            e.sstv_send(samples, "PD-120".to_string()).unwrap();
+        }
+        engine
+    }
+
+    #[test]
+    fn sstv_send_keys_streams_progress_and_stop_unkeys() {
+        // A ~3 s image (36 000 samples at 12 kHz) fits under the 10 s look-ahead → the
+        // whole buffer streams in one tick.
+        let engine = sstv_ready_engine(vec![0.2f32; 36_000]);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+
+        // Tick 1: keys PTT for the precomputed duration and streams the image.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                1000.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+        assert!(rig.keyed, "PTT keyed for the image");
+        assert!(
+            state.tx_until_ms.is_some(),
+            "PTT held for the precomputed duration"
+        );
+        assert_eq!(
+            backend.played.len(),
+            36_000,
+            "entire image streamed (fits the look-ahead window)"
+        );
+        {
+            let e = engine.lock().unwrap();
+            assert!(e.sstv_sending(), "engine marked sending");
+            let (_, total) = e.sstv_tx_progress().expect("progress published");
+            assert!(
+                (total - 3000.0).abs() < 1.0,
+                "progress total = 3 s of key-down"
+            );
+        }
+
+        // Operator hits Stop mid-hold → the next tick flushes queued audio + unkeys NOW.
+        engine.lock().unwrap().sstv_stop();
+        let flushes_before = backend.flush_calls;
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                1500.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+        assert!(!rig.keyed, "PTT dropped immediately on Stop");
+        assert!(state.tx_until_ms.is_none(), "hold cleared");
+        assert!(
+            backend.flush_calls > flushes_before,
+            "queued image audio flushed on Stop"
+        );
+        assert!(state.sstv_feed.is_none(), "feed dropped on Stop");
+        assert!(
+            !engine.lock().unwrap().sstv_sending(),
+            "sending cleared on Stop"
+        );
+    }
+
+    #[test]
+    fn sstv_image_unkeys_at_the_precomputed_duration() {
+        // The guaranteed unkey: PTT drops at the precomputed tx_until_ms even with no Stop.
+        let engine = sstv_ready_engine(vec![0.2f32; 36_000]); // 3 s
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+
+        // Tick 1 keys + streams; the hold is exactly image duration + the TX tail.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                1000.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+        assert!(rig.keyed);
+        let hold = state.tx_until_ms.unwrap();
+        assert!(
+            (hold - (1000.0 + 3000.0 + crate::slot::TX_TAIL_MS)).abs() < 1.0,
+            "PTT held exactly the image duration + TX tail"
+        );
+
+        // Tick 2 past the hold deadline → the guaranteed unkey fires; sending clears.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                hold + 1.0,
+                &mut ra,
+                &mut rr,
+            )
+            .unwrap();
+        assert!(!rig.keyed, "PTT dropped at the precomputed duration");
+        assert!(state.tx_until_ms.is_none());
+        assert!(state.sstv_feed.is_none(), "feed cleared on completion");
+        assert!(
+            !engine.lock().unwrap().sstv_sending(),
+            "sending cleared on completion"
+        );
+    }
+
     #[test]
     fn step_rebuilds_the_clock_on_a_tier_change() {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
@@ -5903,6 +6379,68 @@ mod tests {
             Some(false),
             "consecutive dial-read misses trip the breaker so the loop stops blocking \
              on a dead read every cycle"
+        );
+    }
+
+    #[test]
+    fn mode_retry_ladder_tries_passband0_then_falls_back_to_plain_usb() {
+        // A rig whose CAT actively refuses the DATA submode (RPRT -1 to every `M PKT*`,
+        // the IC-7610-report shape). The bounded retry must walk the resilience ladder:
+        //   rung 1: `M PKTUSB 3000` (the full DATA passband),
+        //   rung 2: `M PKTUSB 0` (filter-agnostic) past MODE_SET_PASSBAND0_AFTER fails,
+        //   rung 3: at the budget, ONE plain `M USB -1` — landing the operator a single
+        //           front-panel DATA press from working, not on a dead-end note.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = mock_pkt_rejecting_rigctld();
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        // The default section mode is PKTUSB (Digital); make it pending vs last_mode.
+        state.last_mode = String::new();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        for i in 0..MODE_SET_MAX_TRIES {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    f64::from(i),
+                    &mut ra,
+                    &mut rr,
+                )
+                .unwrap();
+        }
+
+        let cmds = log.lock().unwrap().clone();
+        let modes: Vec<&String> = cmds.iter().filter(|c| c.starts_with("M ")).collect();
+        assert_eq!(
+            modes.first().map(|s| s.as_str()),
+            Some("M PKTUSB 3000"),
+            "rung 1 — the normal DATA passband: {modes:?}"
+        );
+        assert!(
+            modes.iter().any(|c| c.as_str() == "M PKTUSB 0"),
+            "rung 2 — the filter-agnostic retry was sent: {modes:?}"
+        );
+        assert_eq!(
+            modes.last().map(|s| s.as_str()),
+            Some("M USB -1"),
+            "rung 3 — exactly one plain-sideband fallback, filter untouched: {modes:?}"
+        );
+        assert_eq!(
+            modes.iter().filter(|c| c.as_str() == "M USB -1").count(),
+            1,
+            "the fallback is sent ONCE (no CAT spam): {modes:?}"
+        );
+        assert_eq!(
+            state.mode_giveup.as_deref(),
+            Some("PKTUSB"),
+            "PKTUSB is given up — no further retries until the target mode changes"
+        );
+        assert_eq!(
+            state.last_mode, "USB",
+            "last_mode tracks what was actually applied (the fallback)"
         );
     }
 
