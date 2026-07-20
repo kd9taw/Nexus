@@ -42,7 +42,187 @@ pub struct RadioLive {
     pub cat_ok: Option<bool>,
 }
 use modes::{NativeSource, SignalSource, WsjtxUdpSource};
+use std::sync::{Arc, Mutex};
 use tempo_core::message::{same_call, Msg};
+
+/// The decoder ([`SignalSource`]) behind its OWN lock, independent of the engine
+/// mutex. The heavy per-slot decode runs on a persistent worker thread that locks
+/// only this mutex — never the engine mutex — so the engine stays free for the UI
+/// (`get_snapshot`) and the radio loop (waterfall feed) during the ~1–2 s decode.
+///
+/// The `Arc`/`Mutex` is created ONCE per [`Engine`] and never replaced; a tier /
+/// source switch swaps the boxed contents *under the lock* (waiting for any decode
+/// in flight). That one stable lock is the single serialization point for ALL
+/// process-global decode FFI state (the WSJT-X a7 table, the packjt77 hash table,
+/// and the FT1 IR-HARQ buffers), so nothing races the C decoder.
+pub type SharedSource = Arc<Mutex<Box<dyn SignalSource>>>;
+
+/// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
+/// the result folds back in. Mirrors the three synchronous entry points exactly:
+/// [`Engine::ingest`] (Boundary), [`Engine::ingest_early`] (Early), and
+/// [`Engine::redecode`] (Redecode).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodePass {
+    /// Authoritative slot-boundary ingest: `a7_final = true` (save + replay).
+    Boundary,
+    /// WSJT-X-style early partial pass: `a7_final = false`.
+    Early,
+    /// F6 review re-decode over retained audio: `a7_final = false`.
+    Redecode,
+}
+
+impl DecodePass {
+    fn a7_final(self) -> bool {
+        matches!(self, DecodePass::Boundary)
+    }
+}
+
+/// Which decode path the job runs — decided under the engine lock in
+/// [`Engine::build_decode_job`] so the worker needs no engine state.
+enum DecodeBranch {
+    /// Native FT1/FT8/FT4 through the [`SignalSource`] (AP context in the job).
+    Native,
+    /// DX1 robust full-band acquisition (`ft1::dx1::decode_band`, stateless).
+    Dx1,
+    /// Companion: drain the upstream WSJT-X/JTDX/MSHV UDP queue (audio ignored).
+    Companion,
+}
+
+/// One decode job: an OWNED snapshot built under the engine lock, plus an `Arc`
+/// clone of the decoder, handed to the worker thread. Self-contained — the worker
+/// touches no engine state. The `frame` rides through and comes back in the
+/// [`DecodeResult`] so the engine can fold it (`process_decodes` / WAV) with no copy.
+pub struct DecodeJob {
+    source: SharedSource,
+    frame: Vec<f32>,
+    branch: DecodeBranch,
+    // A-priori request context — native branch only (dx1/companion ignore it).
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: String,
+    hiscall: String,
+    nqso_progress: i32,
+    nfqso: i32,
+    frame_time_ms: i64,
+    /// Native branch: clear FT1 IR-HARQ buffers before decoding (HARQ disabled).
+    harq_reset: bool,
+    pass: DecodePass,
+    slot: u64,
+    /// Decode-context generation this job was built in. If the engine's epoch has
+    /// moved on (tier/source/context switch) by the time the result lands, the
+    /// result is stale and dropped — it belongs to a decode context that no longer
+    /// exists (slot indices / AP context are meaningless across the switch).
+    epoch: u64,
+}
+
+/// The worker's output for one [`DecodeJob`]: the decodes plus the round-tripped
+/// `frame` and the bookkeeping (`pass`/`slot`/`epoch`) the engine needs to fold it.
+pub struct DecodeResult {
+    decodes: Vec<modes::Decode>,
+    frame: Vec<f32>,
+    pass: DecodePass,
+    slot: u64,
+    epoch: u64,
+}
+
+impl DecodeResult {
+    /// Which pass produced this result (the loop routes Early vs Boundary).
+    pub fn pass(&self) -> DecodePass {
+        self.pass
+    }
+    /// The boundary slot this result belongs to.
+    pub fn slot(&self) -> u64 {
+        self.slot
+    }
+}
+
+/// Outcome of folding a [`DecodeResult`] back into the engine.
+pub enum DecodeApplied {
+    /// The decode context changed while this was in flight — dropped, no effect.
+    Stale,
+    /// Early partial pass folded (`n` = decodes ingested this pass).
+    Early { n: usize },
+    /// Boundary pass folded; the loop now runs the deferred TX decision for `slot`
+    /// (the retained `frame` comes back for the period-WAV save).
+    Boundary {
+        n: usize,
+        slot: u64,
+        frame: Vec<f32>,
+    },
+}
+
+/// Run one [`DecodeJob`] — the heavy decode, off the engine mutex.
+///
+/// Shared by the persistent worker thread AND the synchronous [`Engine::ingest`] /
+/// [`Engine::ingest_early`] / [`Engine::redecode`] paths, so both produce byte-for-byte
+/// identical decodes. Locks ONLY the decoder ([`SharedSource`]) — never the engine
+/// mutex — for the whole decode, serializing all process-global decode FFI state.
+pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
+    let DecodeJob {
+        source,
+        frame,
+        branch,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        frame_time_ms,
+        harq_reset,
+        pass,
+        slot,
+        epoch,
+    } = job;
+    // Hold the decoder lock across the ENTIRE decode: this is the single lock that
+    // serializes the a7 table, the packjt77 hash table and the FT1 IR-HARQ buffers
+    // against the engine thread's harq_reset / seed_hash_table / source swaps.
+    let mut src = source.lock().unwrap();
+    let decodes = match branch {
+        DecodeBranch::Companion => {
+            // Decodes arrive over UDP; the captured audio is irrelevant.
+            src.decode(&modes::DecodeRequest::full_band(&[]))
+        }
+        DecodeBranch::Dx1 => {
+            // Robust full-passband acquisition — no `modes::Mode`; normalize to the
+            // unified Decode. (The lock is held purely to serialize FFI state.)
+            ft1::dx1::decode_band(&frame, 200.0, 2900.0, ft1::SAMPLE_RATE)
+                .into_iter()
+                .map(modes::Decode::from)
+                .collect()
+        }
+        DecodeBranch::Native => {
+            // IR-HARQ off (or non-FT1 mode): clear buffered RV0 so nothing
+            // cross-frame-combines. Exactly where decode_frame reset it.
+            if harq_reset {
+                ft1::harq_reset();
+            }
+            let iwave = channel::capture_to_i16(&frame);
+            let req = modes::DecodeRequest {
+                iwave: &iwave,
+                nfa,
+                nfb,
+                ndepth,
+                mycall: &mycall,
+                hiscall: &hiscall,
+                nqso_progress,
+                nfqso,
+                frame_time_ms,
+            };
+            src.decode_a7(&req, pass.a7_final())
+        }
+    };
+    drop(src);
+    DecodeResult {
+        decodes,
+        frame,
+        pass,
+        slot,
+        epoch,
+    }
+}
 
 /// Default waterfall resolution (display bins). 512 over the 0–4000 Hz span ≈ 7.8 Hz/bin — ~3×
 /// finer than the old 120-bin/22.5 Hz bank, over a wider band. The row is resampled from a
@@ -161,7 +341,20 @@ pub struct Engine {
     /// the selected [`Tier`]; DX1 decodes via its own robust path (see [`ingest`]).
     ///
     /// [`ingest`]: Engine::ingest
-    source: Box<dyn SignalSource>,
+    ///
+    /// Behind its own lock (see [`SharedSource`]) so the heavy decode runs on the
+    /// decode-worker thread without ever taking the engine mutex. The `Arc`/`Mutex`
+    /// is stable for the engine's lifetime; a tier/source switch swaps the boxed
+    /// contents under the lock.
+    source: SharedSource,
+    /// Decode-context generation. Bumped by [`clear_decode_context`] (band QSY /
+    /// tier / source / mode switch) so a decode that was in flight across the switch
+    /// lands as stale and is dropped by [`apply_decode_result`] — its slot indices
+    /// and AP context no longer mean anything.
+    ///
+    /// [`clear_decode_context`]: Engine::clear_decode_context
+    /// [`apply_decode_result`]: Engine::apply_decode_result
+    decode_epoch: u64,
     /// Which kind of source [`source`](Self::source) currently is. Tracked so
     /// [`set_tier`](Engine::set_tier) only re-points the *native* source and a
     /// live companion isn't clobbered, and so [`ingest`](Engine::ingest) routes
@@ -809,7 +1002,10 @@ impl Engine {
             upload_ok: false,
             upload_tick: 0,
             // Default native source = FT8 (matches the default link tier).
-            source: Box::new(NativeSource::from_kind(modes::ModeKind::Ft8)),
+            source: Arc::new(Mutex::new(Box::new(NativeSource::from_kind(
+                modes::ModeKind::Ft8,
+            )))),
+            decode_epoch: 0,
             source_kind: SourceKind::Native,
             mode: Mode::Chat,
             // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
@@ -2493,7 +2689,7 @@ impl Engine {
             self.execute_qsy_token(&token);
             // Moving frequency invalidates any in-progress IR-HARQ combine
             // (stale RV frames from the old channel must not combine here).
-            ft1::harq_reset();
+            self.harq_reset_locked();
         }
     }
 
@@ -3541,7 +3737,7 @@ impl Engine {
         self.qso_start_unix = None; // a fresh QSO stamps its own start time
                                     // Clear stale receive-side IR-HARQ buffers so a new exchange never
                                     // joint-combines with retransmissions from a previous one.
-        ft1::harq_reset();
+        self.harq_reset_locked();
         Ok(())
     }
 
@@ -3759,7 +3955,7 @@ impl Engine {
         self.qso_logged = false;
         self.qso_report_sent = None;
         self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
-        ft1::harq_reset(); // fresh exchange: drop stale receive-side IR-HARQ state
+        self.harq_reset_locked(); // fresh exchange: drop stale receive-side IR-HARQ state
     }
 
     /// Drop everything answer-context derives from: the decode history (message
@@ -3769,6 +3965,19 @@ impl Engine {
         self.decode_history.clear();
         self.last_decode_slot = None;
         self.early_seen = None;
+        // Advance the decode-context generation so any decode still in flight on the
+        // worker (built in the OLD context) lands stale and is dropped — its slot
+        // indices / AP context are meaningless after the switch.
+        self.decode_epoch = self.decode_epoch.wrapping_add(1);
+    }
+
+    /// `ft1::harq_reset()` serialized behind the decoder lock, so it can never race
+    /// the worker thread's in-flight decode (which uses the same process-global FT1
+    /// IR-HARQ buffers). Every engine-thread reset goes through here; the decode
+    /// path's own reset already runs under the lock in [`run_decode_job`].
+    fn harq_reset_locked(&self) {
+        let _g = self.source.lock().unwrap();
+        ft1::harq_reset();
     }
 
     /// Clear the CW decode transcript + reset the stream decoder. A QSY (band change,
@@ -4046,7 +4255,10 @@ impl Engine {
         // clobber it; the tier still updates for TX / display.
         if self.source_kind == SourceKind::Native {
             if let Some(kind) = tier.mode_kind() {
-                self.source = Box::new(NativeSource::from_kind(kind));
+                // Swap the boxed decoder UNDER the lock (waits for any decode in
+                // flight) so the stable serialization mutex is preserved and no
+                // job can be reading the old mode as it's replaced.
+                *self.source.lock().unwrap() = Box::new(NativeSource::from_kind(kind));
             }
         }
         // WSJT-X-style: switching the mode moves the rig to the NEW mode's dial for the
@@ -4085,13 +4297,13 @@ impl Engine {
         match kind {
             SourceKind::Native => {
                 let mode_kind = self.tier().mode_kind().unwrap_or(modes::ModeKind::Ft1);
-                self.source = Box::new(NativeSource::from_kind(mode_kind));
+                *self.source.lock().unwrap() = Box::new(NativeSource::from_kind(mode_kind));
             }
             SourceKind::Companion => {
                 let addr = &self.settings.companion_addr;
                 let sock = WsjtxUdpSource::bind(addr)
                     .map_err(|e| format!("Can't listen on {addr} for WSJT-X UDP: {e}"))?;
-                self.source = Box::new(sock);
+                *self.source.lock().unwrap() = Box::new(sock);
             }
         }
         self.source_kind = kind;
@@ -5831,7 +6043,7 @@ impl Engine {
         s.radio.hold_tx_freq = self.hold_tx_freq;
         s.radio.clock_offset_ms = self.clock_offset_ms;
         s.radio.source = self.source_kind;
-        s.radio.source_label = self.source.label();
+        s.radio.source_label = self.source.lock().unwrap().label();
         // Multi-radio switcher summaries (dual-radio). Left empty for a single-radio station (the
         // UI then renders no switcher). The active radio carries the live state we just filled into
         // `s.radio`; the others show their last-known tune (they're not connected in the active-only
@@ -6315,12 +6527,170 @@ impl Engine {
 
     /// Decode a captured frame and fold it into the app *and* the active mode's
     /// sequencer. Returns the number of decodes.
+    ///
+    /// Synchronous: builds the job, runs the (heavy) decode inline, and folds the
+    /// result — the same three steps the radio loop runs asynchronously across the
+    /// decode-worker thread. The epoch can't move between build and apply here (one
+    /// thread, no await), so the result always applies. Used by the headless test
+    /// driver and as the in-process reference; the live loop uses the async split.
     pub fn ingest(&mut self, frame: &[f32], slot: u64) -> usize {
-        let decodes = self.decode_frame(frame, slot, true);
-        // If the early pass already ingested this boundary's messages, keep only
-        // the stragglers the full-window decode newly found.
-        let decodes = self.drop_early_dupes(decodes, slot);
-        self.process_decodes(frame, decodes, slot)
+        let job = self.build_decode_job(frame.to_vec(), slot, DecodePass::Boundary);
+        let result = run_decode_job(job);
+        match self.apply_decode_result(result) {
+            DecodeApplied::Boundary { n, .. } => n,
+            _ => 0,
+        }
+    }
+
+    /// Build the OWNED decode job for `frame`/`slot` under the engine lock: capture
+    /// the branch (Native / DX1 / Companion), the AP request context, the HARQ-reset
+    /// flag and the current decode epoch, plus an `Arc` clone of the decoder. No heavy
+    /// work — the actual decode runs later in [`run_decode_job`] off the engine mutex.
+    pub fn build_decode_job(&self, frame: Vec<f32>, slot: u64, pass: DecodePass) -> DecodeJob {
+        let source = self.source.clone();
+        let epoch = self.decode_epoch;
+        // Companion: decodes arrive over UDP; the audio is irrelevant. Drain the
+        // network source regardless of the selected tier.
+        if self.source_kind == SourceKind::Companion {
+            return DecodeJob {
+                source,
+                frame,
+                branch: DecodeBranch::Companion,
+                nfa: 0,
+                nfb: 0,
+                ndepth: 0,
+                mycall: String::new(),
+                hiscall: String::new(),
+                nqso_progress: 0,
+                nfqso: 0,
+                frame_time_ms: 0,
+                harq_reset: false,
+                pass,
+                slot,
+                epoch,
+            };
+        }
+        if self.app.tier() == Tier::Dx1 {
+            // DX1 full-passband acquisition — its own robust path, no AP context.
+            return DecodeJob {
+                source,
+                frame,
+                branch: DecodeBranch::Dx1,
+                nfa: 0,
+                nfb: 0,
+                ndepth: 0,
+                mycall: String::new(),
+                hiscall: String::new(),
+                nqso_progress: 0,
+                nfqso: 0,
+                frame_time_ms: 0,
+                harq_reset: false,
+                pass,
+                slot,
+                epoch,
+            };
+        }
+        // Native tiers (FT1/FT8/FT4) decode through the active SignalSource with
+        // the golden WSJT-X AP context. This block is the exact request-building
+        // that used to live inline in `decode_frame` — moved here unchanged so the
+        // heavy `decode_a7` call is all that crosses to the worker.
+        //
+        // IR-HARQ off (or a non-FT1 mode): the worker clears buffered FT1 RV0 so
+        // nothing cross-frame-combines (each frame decoded RV0-only).
+        let harq_reset = !self.settings.harq_enabled;
+        // Monotonic ms timestamp for cross-frame IR-HARQ keying (FT1); only
+        // differences (≤ 30 s) and the low 32 bits matter, so a slot-derived
+        // counter at the active slot period suffices.
+        let frame_time_ms = (slot as i64).wrapping_mul((self.active_slot_secs() * 1000.0) as i64);
+        // A-priori (AP) context for the golden WSJT-X FT8/FT4 decoder: our callsign,
+        // the station we're working, and the QSO-progress index (0..5). Only FT8/FT4
+        // use WSJT-X AP; FT1 ignores these and stays on the empty/0 path.
+        let (ap_mycall, ap_hiscall, ap_progress) = match (&self.mode, self.app.tier()) {
+            (Mode::Qso { station, .. }, Tier::Ft8 | Tier::Ft4) => (
+                self.settings.mycall.clone(),
+                station.dxcall.clone().unwrap_or_default(),
+                station.state.nqso_progress(),
+            ),
+            (Mode::FieldDay { .. }, Tier::Ft8 | Tier::Ft4) => {
+                (self.settings.mycall.clone(), String::new(), 0)
+            }
+            _ => (String::new(), String::new(), 0),
+        };
+        // Operator decode controls (WSJT-X F Low / F High / depth), clamped to the
+        // modem's real passband and kept ordered.
+        let nfa = self.settings.decode_flow_hz.clamp(200, 3900) as i32;
+        let nfb = self
+            .settings
+            .decode_fhigh_hz
+            .clamp(300, 4000)
+            .max(nfa as u32 + 100) as i32;
+        let ndepth = self.settings.decode_depth.clamp(1, 3) as i32;
+        DecodeJob {
+            source,
+            frame,
+            branch: DecodeBranch::Native,
+            nfa,
+            nfb,
+            ndepth,
+            mycall: ap_mycall,
+            hiscall: ap_hiscall,
+            nqso_progress: ap_progress,
+            // WSJT-X nfqso = the freq we're working/listening on. Centers the deep
+            // AP passes + sync there so the gain follows the worked station.
+            nfqso: self.rx_offset_hz as i32,
+            frame_time_ms,
+            harq_reset,
+            pass,
+            slot,
+            epoch,
+        }
+    }
+
+    /// Fold a completed [`DecodeResult`] back into the engine — the back half of the
+    /// async decode. Drops the result if the decode context changed while it was in
+    /// flight (epoch moved), preserving exactly the semantics of the synchronous
+    /// [`Engine::ingest`] / [`Engine::ingest_early`] for the case that survives.
+    pub fn apply_decode_result(&mut self, result: DecodeResult) -> DecodeApplied {
+        if result.epoch != self.decode_epoch {
+            // Built in a decode context that no longer exists (tier/source/band
+            // switch since dispatch) — its slot indices / AP context are meaningless.
+            return DecodeApplied::Stale;
+        }
+        let DecodeResult {
+            decodes,
+            frame,
+            pass,
+            slot,
+            ..
+        } = result;
+        match pass {
+            DecodePass::Boundary => {
+                // If the early pass already ingested this boundary's messages, keep
+                // only the stragglers the full-window decode newly found.
+                let decodes = self.drop_early_dupes(decodes, slot);
+                let n = self.process_decodes(&frame, decodes, slot);
+                DecodeApplied::Boundary { n, slot, frame }
+            }
+            DecodePass::Early => {
+                if decodes.is_empty() {
+                    // Nothing heard yet: leave ALL state untouched (advancing
+                    // last_decode_slot early would skew the parity fallback). The
+                    // boundary pass redecodes the full window from scratch.
+                    return DecodeApplied::Early { n: 0 };
+                }
+                self.early_seen = Some((
+                    slot,
+                    decodes
+                        .iter()
+                        .map(|d| d.message.trim().to_string())
+                        .collect(),
+                ));
+                let n = self.process_decodes(&frame, decodes, slot);
+                DecodeApplied::Early { n }
+            }
+            // The F6 redecode runs its own display-only fold in `redecode`, not here.
+            DecodePass::Redecode => DecodeApplied::Stale,
+        }
     }
 
     /// WSJT-X-style EARLY decode pass (FT8/FT4, native source only): decode the
@@ -6338,22 +6708,12 @@ impl Engine {
             // boundary's decodes); FT1/DX1 decode full frames only.
             return 0;
         }
-        let decodes = self.decode_frame(frame, slot, false);
-        if decodes.is_empty() {
-            // Nothing heard yet: leave ALL state untouched (advancing
-            // last_decode_slot / the app slot counter early would skew the
-            // parity fallback and the UI period for zero benefit). The
-            // boundary pass redecodes the full window from scratch.
-            return 0;
+        let job = self.build_decode_job(frame.to_vec(), slot, DecodePass::Early);
+        let result = run_decode_job(job);
+        match self.apply_decode_result(result) {
+            DecodeApplied::Early { n } => n,
+            _ => 0,
         }
-        self.early_seen = Some((
-            slot,
-            decodes
-                .iter()
-                .map(|d| d.message.trim().to_string())
-                .collect(),
-        ));
-        self.process_decodes(frame, decodes, slot)
     }
 
     /// Seed the decoder's SESSION hash table with compound calls from the
@@ -6366,6 +6726,11 @@ impl Engine {
         use tempo_core::message::is_compound;
         let mode = modes::make_mode(modes::ModeKind::Ft8);
         let mut seen = std::collections::HashSet::new();
+        // Each `encode` writes the process-global packjt77 hash table via FFI — the
+        // same table the worker's decode reads. Hold the decoder lock across the
+        // whole seed so it can't race an in-flight decode (may briefly wait if one
+        // is running; seeding is a one-shot startup task).
+        let _g = self.source.lock().unwrap();
         // Newest first; cap the work — each encode is one FFI round-trip.
         for rec in self.get_log().into_iter().rev() {
             let call = rec.call.trim().to_uppercase();
@@ -6396,7 +6761,10 @@ impl Engine {
         let Some(slot) = self.last_decode_slot else {
             return 0;
         };
-        let decodes = self.decode_frame(&frame, slot, false);
+        // Re-run the decode over the retained audio (a7_final = false — review pass,
+        // no a7 save/replay). Synchronous: an operator button press, not the hot loop.
+        let job = self.build_decode_job(frame, slot, DecodePass::Redecode);
+        let decodes = run_decode_job(job).decodes;
         let fresh: Vec<modes::Decode> = decodes
             .into_iter()
             .filter(|d| {
@@ -6437,103 +6805,6 @@ impl Engine {
                 .filter(|d| !seen.contains(d.message.trim()))
                 .collect(),
             _ => decodes,
-        }
-    }
-
-    /// Decode one capture window through the active source (the shared front
-    /// half of [`Engine::ingest`] / [`Engine::ingest_early`]). `a7_final` is
-    /// true only on the authoritative boundary ingest; the early partial pass
-    /// and the F6 redecode pass false so they neither save into nor replay the
-    /// a7 cross-cycle table (a double save would halve its replay capacity).
-    fn decode_frame(&mut self, frame: &[f32], slot: u64, a7_final: bool) -> Vec<modes::Decode> {
-        // Companion mode: decodes arrive over UDP from an upstream WSJT-X/JTDX/
-        // MSHV — the captured audio is irrelevant. Drain the network source
-        // regardless of the selected tier (the native/DX1 paths below are
-        // native-only).
-        if self.source_kind == SourceKind::Companion {
-            self.source.decode(&modes::DecodeRequest::full_band(&[]))
-        } else if self.app.tier() == Tier::Dx1 {
-            // DX1 full-passband acquisition (WS-B): one slot decodes EVERY signal
-            // across 200–2900 Hz (coarse chirp-correlation carrier scan → peak-
-            // pick → full decode per survivor, CRC-gated). The robust tier has no
-            // modes::Mode; decode directly and normalize to the unified Decode.
-            ft1::dx1::decode_band(frame, 200.0, 2900.0, ft1::SAMPLE_RATE)
-                .into_iter()
-                .map(modes::Decode::from)
-                .collect()
-        } else {
-            // Native tiers (FT1/FT8/FT4) decode through the active SignalSource.
-            // IR-HARQ off (or a non-FT1 mode): clear any buffered FT1 RV0 so
-            // nothing cross-frame-combines (each frame decoded RV0-only).
-            if !self.settings.harq_enabled {
-                ft1::harq_reset();
-            }
-            // Monotonic ms timestamp for cross-frame IR-HARQ keying (FT1); only
-            // differences (≤ 30 s) and the low 32 bits matter, so a slot-derived
-            // counter at the active slot period suffices.
-            let frame_time_ms =
-                (slot as i64).wrapping_mul((self.active_slot_secs() * 1000.0) as i64);
-            // A-priori (AP) context for the golden WSJT-X FT8/FT4 decoder: our
-            // callsign, the station we're working, and the QSO-progress index
-            // (0..5) that selects the decoder's AP pass schedule (naptypes/
-            // nappasses in ft8b/ft4_decode). This is exactly what WSJT-X supplies
-            // at this point in a QSO — the decoder itself is unmodified; we only
-            // feed it the inputs that let it predict messages addressed to us and
-            // recover them ~1-2 dB deeper. Only FT8/FT4 use WSJT-X AP; FT1 has its
-            // own IR-HARQ sensitivity lever and ignores these, so it stays on the
-            // empty/0 path (no behavioural change to the proven FT1 decode).
-            let (ap_mycall, ap_hiscall, ap_progress) = match (&self.mode, self.app.tier()) {
-                (Mode::Qso { station, .. }, Tier::Ft8 | Tier::Ft4) => (
-                    self.settings.mycall.clone(),
-                    station.dxcall.clone().unwrap_or_default(),
-                    station.state.nqso_progress(),
-                ),
-                // Field Day runs the whole session inside Mode::FieldDay, so the
-                // Qso arm never matches there — supply mycall anyway (stock
-                // WSJT-X always does) so the "MyCall ???" AP masks fire during
-                // FD. hiscall/nqso_progress stay QSO-gated.
-                (Mode::FieldDay { .. }, Tier::Ft8 | Tier::Ft4) => {
-                    (self.settings.mycall.clone(), String::new(), 0)
-                }
-                _ => (String::new(), String::new(), 0),
-            };
-            // Real captured audio → full-scale int16 (native soundcard level), so the
-            // decoder gets what WSJT-X gets. (channel::to_i16's ×100 is only for the
-            // synthetic loopback harness; on real audio it starved the decoder — the
-            // "no decodes unless RX is cranked to 60 dB" bug.)
-            let iwave = channel::capture_to_i16(frame);
-            // Operator decode controls (WSJT-X F Low / F High / depth), clamped
-            // to the modem's real passband and kept ordered.
-            let nfa = self.settings.decode_flow_hz.clamp(200, 3900) as i32;
-            // Ceiling = the 4 kHz spectrum span (waterfall HI_HZ). WSJT-X ops routinely call
-            // above the old 2.9 kHz cap; raising F High to 3.2 kHz+ lets those decode. The
-            // default (decode_fhigh_hz = 2900) is unchanged, so this is opt-in per operator.
-            let nfb = self
-                .settings
-                .decode_fhigh_hz
-                .clamp(300, 4000)
-                .max(nfa as u32 + 100) as i32;
-            let req = modes::DecodeRequest {
-                iwave: &iwave,
-                nfa,
-                nfb,
-                ndepth: self.settings.decode_depth.clamp(1, 3) as i32,
-                mycall: &ap_mycall,
-                hiscall: &ap_hiscall,
-                nqso_progress: ap_progress,
-                // WSJT-X nfqso = the freq we're working/listening on. Centers the
-                // deep AP passes + sync there so the gain follows the worked
-                // station across the band, not just band-center.
-                nfqso: self.rx_offset_hz as i32,
-                frame_time_ms,
-            };
-            // The a7 extended path: cross-cycle AP replay (stations decoded in the
-            // previous same-parity slot recovered a few dB deeper). Only the
-            // boundary ingest is the authoritative full-audio pass (save +
-            // replay); the early/partial pass and the F6 redecode pass false —
-            // slot bookkeeping only. frame_time_ms above is real slot time —
-            // exactly the per-slot key the a7 table's shuffle needs.
-            self.source.decode_a7(&req, a7_final)
         }
     }
 
@@ -11147,7 +11418,8 @@ mod tests {
         assert_eq!(e.ingest_early(&[0.0f32; 48000], 1), 0);
     }
 
-    /// The a7 cross-cycle flag plumb through [`Engine::decode_frame`]: only the
+    /// The a7 cross-cycle flag plumb through the decode split
+    /// ([`Engine::build_decode_job`] → [`run_decode_job`]): only the
     /// authoritative boundary ingest passes `a7_final = true`. The early
     /// partial pass and the F6 redecode pass `false` — an early save would
     /// double-book every decode in the a7 table (halving replay capacity) and
@@ -11177,7 +11449,7 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft8);
         let flags = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        e.source = Box::new(FlagRecorder(flags.clone()));
+        *e.source.lock().unwrap() = Box::new(FlagRecorder(flags.clone()));
         let frame = vec![0.0f32; 1024];
         e.ingest(&frame, 3); // boundary: authoritative full-audio pass
         e.ingest_early(&frame, 4); // early partial pass
@@ -11188,6 +11460,86 @@ mod tests {
             *flags.lock().unwrap(),
             vec![true, false, false],
             "a7_final must be: ingest=true, ingest_early=false, redecode=false"
+        );
+    }
+
+    /// Epoch guard: a decode that was in flight across a decode-context switch
+    /// (tier/source/band change) must land STALE and be dropped — its slot indices
+    /// and AP context belong to a context that no longer exists.
+    #[test]
+    fn decode_result_dropped_when_epoch_advances() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        // Full-size capture (the real FT8 decoder asserts a minimum length).
+        let frame = vec![0.0f32; e.active_capture_samples()];
+        // Build + DECODE the job in the current context (as the worker would finish
+        // it), THEN switch tier — the race the guard exists for: the operator switches
+        // after the decode ran but before its result is folded.
+        let job = e.build_decode_job(frame, 5, DecodePass::Boundary);
+        let result = run_decode_job(job);
+        e.set_tier(Tier::Ft4); // clear_decode_context bumps the epoch
+        assert!(
+            matches!(e.apply_decode_result(result), DecodeApplied::Stale),
+            "a result from the pre-switch context must be dropped as stale"
+        );
+    }
+
+    /// Control for the epoch guard: with no context switch, a boundary result folds
+    /// normally (the guard must not over-drop live results).
+    #[test]
+    fn decode_result_applies_when_epoch_unchanged() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let frame = vec![0.0f32; e.active_capture_samples()];
+        let job = e.build_decode_job(frame, 5, DecodePass::Boundary);
+        let result = run_decode_job(job);
+        assert!(
+            matches!(
+                e.apply_decode_result(result),
+                DecodeApplied::Boundary { .. }
+            ),
+            "an in-context boundary result folds (Boundary), even with zero decodes"
+        );
+    }
+
+    /// Source swap: `set_tier` replaces the boxed decoder UNDER its lock (the stable
+    /// serialization mutex is preserved). A decode built AFTER the swap must run
+    /// through the NEW decoder, never the one that was swapped away.
+    #[test]
+    fn set_tier_swaps_the_decoder_under_its_lock() {
+        struct Recorder(std::sync::Arc<std::sync::Mutex<u32>>);
+        impl SignalSource for Recorder {
+            fn label(&self) -> String {
+                "recorder".into()
+            }
+            fn mode_kind(&self) -> Option<modes::ModeKind> {
+                Some(modes::ModeKind::Ft8)
+            }
+            fn decode(&mut self, _r: &modes::DecodeRequest) -> Vec<modes::Decode> {
+                *self.0.lock().unwrap() += 1;
+                Vec::new()
+            }
+            fn decode_a7(&mut self, _r: &modes::DecodeRequest, _f: bool) -> Vec<modes::Decode> {
+                *self.0.lock().unwrap() += 1;
+                Vec::new()
+            }
+        }
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let hits = std::sync::Arc::new(std::sync::Mutex::new(0u32));
+        *e.source.lock().unwrap() = Box::new(Recorder(hits.clone()));
+        // Switch tiers: the recorder is swapped out for a real NativeSource(FT4).
+        e.set_tier(Tier::Ft4);
+        let job = e.build_decode_job(
+            vec![0.0f32; e.active_capture_samples()],
+            2,
+            DecodePass::Boundary,
+        );
+        let _ = run_decode_job(job);
+        assert_eq!(
+            *hits.lock().unwrap(),
+            0,
+            "the swapped-away decoder must never be invoked after the tier switch"
         );
     }
 

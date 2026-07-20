@@ -5,7 +5,18 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.13.0] — 2026-07-19 — Tester punch-list, a QSO that can't be lost, and honest message status
+## [0.13.0] — 2026-07-19 — Decode off the UI thread, a QSO that can't be lost, honest message status
+
+### Changed — the decode no longer stalls the interface
+
+- **FT8/FT4/FT1/DX1 decoding moved onto its own worker thread.** It used to run inside the
+  50 Hz radio loop *while holding the engine lock*, so for the 1–2 seconds a decode took, the
+  waterfall stopped receiving new spectrum rows and every UI poll blocked — the whole app went
+  sluggish once per slot, every slot. The decode now locks only the decoder, never the engine.
+  Waterfall stays fluid, buttons stay responsive.
+  Transmit timing is unchanged: the TX decision is still deferred until the boundary decode is
+  folded in, so FT1/DX1 (which have no early pass) still react to the slot that just ended
+  before keying. This is also groundwork for running two radios at once.
 
 ### Fixed — CW cockpit tester punch-list (SourceForge tickets #1–#3, tomsk666)
 
@@ -44,6 +55,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   messages transmitting — up to eight more attempts, and indefinitely for a station never heard.
   Deleting now cancels that traffic, confirms first, and persists immediately. The ✕ is also
   visible without hovering and reachable by keyboard.
+
+### Fixed — Linux serial ports
+
+- **Virtual serial ports now appear in the port list on Linux.** Only real hardware ports were
+  listed, so anyone bridging Nexus to another program through a virtual pair (a rigctld or flrig
+  bridge, WSJT-X interop, a GPS feed) saw an empty list — while CAT itself worked, because it
+  connects to a path or a network host and never needs the list. The underlying enumeration
+  cannot see PTY-backed ports at all, so Nexus now finds them itself. Ordinary terminal sessions
+  are deliberately excluded: listing those would bury your real ports.
+
+### Changed — smaller things
+
+- **The "confirmed" need tag reads `CNF`** instead of `CFM`, which scanned as "C-FM".
+- **The Stations roster gets a bigger share of the Classic cockpit rail**, so it shows several
+  calls instead of collapsing to about one row next to the (often empty) decode list.
 
 ### Fixed — layout
 

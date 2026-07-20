@@ -105,28 +105,56 @@ pub fn run_slot(
     currently_tx: bool,
     prev_was_tx: bool,
 ) -> SlotAction {
-    // 1. Decode the just-ended slot's RX audio first (so TX can react to it —
-    //    sub-second on a normal PC, within the per-slot slack; the single-threaded
-    //    tradeoff vs WSJT-X's concurrent decoder). Skip if we transmitted in that
-    //    slot or a TX tail is crossing the boundary — the ring then holds our own
-    //    carrier, so DROP it deterministically (don't rely on one-slot ring
-    //    eviction, which capture jitter / a loop stall could leave a carrier
-    //    fragment in to contaminate the next decode's sync region).
-    let own_carrier = prev_was_tx || currently_tx;
+    // 1. Decode the just-ended slot's RX audio first (so TX can react to it).
+    //    Synchronous reference form: the live loop instead DISPATCHES the decode to
+    //    the worker thread and runs step 2 only once the result lands (see
+    //    `service.rs`), which keeps the exact decode→TX ordering while freeing the
+    //    engine mutex + loop during the ~1–2 s decode.
     let mut rx_frame = None;
-    let did_rx = if !own_carrier && !rx.is_empty() {
+    let did_rx = if slot_wants_decode(currently_tx, prev_was_tx, rx.is_empty()) {
         let frame = rx.frame();
         eng.ingest(&frame, slot);
         rx_frame = Some(frame);
         true
     } else {
-        if own_carrier {
+        // Own carrier (we transmitted in the just-ended slot or a TX tail is
+        // crossing the boundary): the ring holds our own carrier — DROP it
+        // deterministically so a fragment can't contaminate the next decode.
+        if prev_was_tx || currently_tx {
             rx.clear();
         }
         false
     };
 
     // 2. Transmit decision for the NEW slot (now informed by the decode above).
+    slot_tx_phase(eng, rig, backend, rx, slot, now_ms, did_rx, rx_frame)
+}
+
+/// Whether this boundary should decode the just-ended slot's RX audio: only when
+/// we did NOT transmit in it (`prev_was_tx`), no TX tail is crossing the boundary
+/// (`currently_tx`), and the capture ring actually holds a period. When it holds
+/// our own carrier instead, the caller clears it. Extracted so the decode gate is
+/// identical between the synchronous [`run_slot`] and the async loop.
+pub fn slot_wants_decode(currently_tx: bool, prev_was_tx: bool, rx_empty: bool) -> bool {
+    !(prev_was_tx || currently_tx || rx_empty)
+}
+
+/// The transmit half of a slot boundary (step 2 of [`run_slot`]): make and, if due,
+/// key the transmission for `slot`. Called with the decode of the just-ended slot
+/// ALREADY folded in — either inline (synchronous [`run_slot`]) or via the worker
+/// result (the live loop) — so the auto-sequencer reacts to what we just heard. The
+/// `did_rx` / `rx_frame` describe that decode for the caller's reporting + WAV save.
+#[allow(clippy::too_many_arguments)]
+pub fn slot_tx_phase(
+    eng: &mut Engine,
+    rig: &mut Rig,
+    backend: &mut impl AudioBackend,
+    rx: &mut RxRing,
+    slot: u64,
+    now_ms: f64,
+    did_rx: bool,
+    rx_frame: Option<Vec<f32>>,
+) -> SlotAction {
     let waves = eng.poll_tx(slot);
     if !waves.is_empty() {
         // Split Operation: move the TX dial (if the engine reduced the audio)
@@ -165,12 +193,52 @@ pub fn run_slot(
 mod tests {
     use super::*;
     use crate::backend::MockBackend;
+    use tempo_app::engine::{run_decode_job, DecodeApplied, DecodePass};
+
+    /// Drive the async two-phase boundary synchronously (as the live loop does, but
+    /// in-line instead of across the worker thread): decide, dispatch, run the
+    /// decode, fold it, then run the TX phase. Returns the action + whether a
+    /// boundary decode was actually folded. This is the exact ordering the loop
+    /// preserves — decode of the just-ended slot ALWAYS folded before poll_tx.
+    #[allow(clippy::too_many_arguments)]
+    fn two_phase_boundary(
+        eng: &mut Engine,
+        rig: &mut Rig,
+        backend: &mut MockBackend,
+        rx: &mut RxRing,
+        slot: u64,
+        now_ms: f64,
+        currently_tx: bool,
+        prev_was_tx: bool,
+    ) -> (SlotAction, bool) {
+        if slot_wants_decode(currently_tx, prev_was_tx, rx.is_empty()) {
+            let frame = rx.frame();
+            // Phase 1: dispatch (build the owned job) + the heavy decode.
+            let job = eng.build_decode_job(frame, slot, DecodePass::Boundary);
+            let result = run_decode_job(job);
+            // Phase 2a: fold the result under the engine lock.
+            let (folded, rx_frame) = match eng.apply_decode_result(result) {
+                DecodeApplied::Boundary { slot: _, frame, .. } => (true, Some(frame)),
+                _ => (false, None),
+            };
+            // Phase 2b: the TX decision — now informed by the decode above.
+            let act = slot_tx_phase(eng, rig, backend, rx, slot, now_ms, true, rx_frame);
+            (act, folded)
+        } else {
+            if prev_was_tx || currently_tx {
+                rx.clear();
+            }
+            let act = slot_tx_phase(eng, rig, backend, rx, slot, now_ms, false, None);
+            (act, false)
+        }
+    }
 
     #[test]
     fn fake_it_split_reports_the_restore_dial() {
         // FakeIt: an out-of-window TX offset shifts the dial for the over and
         // the action carries the dial to RESTORE once the over finishes — the
         // loop applies it at PTT drop. Rig/None report nothing to restore.
+        // TX-only boundary (empty ring → no decode): the TX phase is called directly.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tier(tempo_app::dto::Tier::Ft8);
         let mut st = eng.settings().clone();
@@ -183,7 +251,7 @@ mod tests {
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
 
-        let act = run_slot(
+        let act = slot_tx_phase(
             &mut eng,
             &mut rig,
             &mut backend,
@@ -191,7 +259,7 @@ mod tests {
             0,
             1000.0,
             false,
-            false,
+            None,
         );
 
         assert!(act.tx_this_slot, "the CQ keyed");
@@ -212,7 +280,8 @@ mod tests {
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
 
-        let act = run_slot(
+        // No captured RX (empty ring) → the TX phase runs directly.
+        let (act, folded) = two_phase_boundary(
             &mut eng,
             &mut rig,
             &mut backend,
@@ -223,6 +292,7 @@ mod tests {
             false,
         );
 
+        assert!(!folded, "empty ring → no decode folded");
         assert!(rig.keyed, "PTT keyed for the TX over");
         assert!(
             !backend.played.is_empty(),
@@ -238,7 +308,8 @@ mod tests {
 
     #[test]
     fn rx_slot_decodes_without_keying() {
-        // Idle engine → nothing to send even on its TX slot → receive path.
+        // Idle engine → nothing to send even on its TX slot → receive path. The
+        // two-phase driver decodes the captured slot, folds it, THEN runs poll_tx.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tier(tempo_app::dto::Tier::Ft1); // FT1-modem slot test (default is FT8)
         let mut rig = Rig::vox();
@@ -246,7 +317,7 @@ mod tests {
         let mut rx = RxRing::new();
         rx.push(&vec![0.0; 4096]); // a captured RX slot sits in the ring
 
-        let act = run_slot(
+        let (act, folded) = two_phase_boundary(
             &mut eng,
             &mut rig,
             &mut backend,
@@ -257,9 +328,10 @@ mod tests {
             false,
         );
 
+        assert!(folded, "the RX frame was decoded + folded before poll_tx");
         assert!(!rig.keyed, "no PTT on a receive slot");
         assert!(backend.played.is_empty(), "no audio played on RX");
-        assert!(act.did_rx, "decoded the RX frame");
+        assert!(act.did_rx, "reported as a decode slot");
         assert!(!act.tx_this_slot);
         assert!(act.tx_until_ms.is_none());
     }
@@ -268,12 +340,16 @@ mod tests {
     fn mid_transmit_does_not_double_decode() {
         // While the PTT tail is still held (currently_tx), an idle slot is a no-op:
         // we must NOT decode (we'd be decoding our own tail) and not re-key.
+        assert!(
+            !slot_wants_decode(true, false, false),
+            "a TX tail crossing the boundary suppresses the decode"
+        );
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         let mut rig = Rig::vox();
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
 
-        let act = run_slot(
+        let (act, folded) = two_phase_boundary(
             &mut eng,
             &mut rig,
             &mut backend,
@@ -284,7 +360,8 @@ mod tests {
             false,
         );
 
-        assert!(!act.did_rx, "no RX decode mid-transmit");
+        assert!(!folded, "no RX decode mid-transmit");
+        assert!(!act.did_rx);
         assert!(act.tx_until_ms.is_none());
         assert!(!rig.keyed);
     }
@@ -305,7 +382,7 @@ mod tests {
         rx.push(&vec![0.0; 4096]); // the RX slot we just finished, captured
 
         // Even (TX) slot boundary, prior slot was RX (prev_was_tx=false).
-        let act = run_slot(
+        let (act, folded) = two_phase_boundary(
             &mut eng,
             &mut rig,
             &mut backend,
@@ -317,8 +394,8 @@ mod tests {
         );
 
         assert!(
-            act.did_rx,
-            "the RX slot's audio is decoded before we transmit again"
+            folded,
+            "the RX slot's audio is decoded + folded before we transmit again"
         );
         assert!(act.tx_this_slot, "and then we send our CQ");
         assert!(rig.keyed, "PTT keyed for the CQ over");
@@ -328,6 +405,10 @@ mod tests {
     fn own_transmit_slot_is_not_decoded_as_rx() {
         // After we transmitted (prev_was_tx=true) the ring holds our own carrier —
         // it must NOT be decoded, even though it is non-empty.
+        assert!(
+            !slot_wants_decode(false, true, false),
+            "our own transmit slot is never decoded as RX"
+        );
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tier(tempo_app::dto::Tier::Ft1);
         let mut rig = Rig::vox();
@@ -336,7 +417,7 @@ mod tests {
         rx.push(&vec![0.0; 4096]); // our own transmission's captured audio
 
         // Odd (RX) slot boundary; the slot that just ended was our TX.
-        let act = run_slot(
+        let (act, folded) = two_phase_boundary(
             &mut eng,
             &mut rig,
             &mut backend,
@@ -347,7 +428,33 @@ mod tests {
             true,
         );
 
-        assert!(!act.did_rx, "must not decode our own transmission");
+        assert!(!folded, "must not decode our own transmission");
+        assert!(!act.did_rx);
+        assert!(!act.tx_this_slot);
+        assert!(rx.is_empty(), "own-carrier ring is cleared, not decoded");
+    }
+
+    #[test]
+    fn run_slot_matches_two_phase_for_a_receive_slot() {
+        // The synchronous `run_slot` reference and the two-phase decomposition must
+        // agree: both decode the just-ended RX slot before the (no-op) TX decision.
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tier(tempo_app::dto::Tier::Ft1);
+        let mut rig = Rig::vox();
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
+        rx.push(&vec![0.0; 4096]);
+        let act = run_slot(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            1000.0,
+            false,
+            false,
+        );
+        assert!(act.did_rx, "run_slot decodes the RX slot");
         assert!(!act.tx_this_slot);
     }
 }

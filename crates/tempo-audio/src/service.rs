@@ -16,10 +16,12 @@
 //! });
 //! ```
 
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
-use tempo_app::engine::Engine;
+use tempo_app::engine::{DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine};
 use tempo_core::ft1;
 use tempo_core::timing::{now_unix_ms, SlotClock};
 
@@ -96,7 +98,7 @@ fn spawn_cat_daemon(t: &Transport, target: &str, network: bool) -> std::io::Resu
     spawn_rigctld(t.rig_model, target, t.baud, t.rigctld_port, network).map(CatDaemon::Spawned)
 }
 
-use tempo_app::dto::Tier;
+use tempo_app::dto::{SourceKind, Tier};
 use tempo_app::settings::{RadioProfile, Settings};
 use tempo_core::message::Msg;
 use tempo_net::pskreporter::{PskReporter, Spot};
@@ -1019,6 +1021,68 @@ enum ErrOwner {
     Ptt,
 }
 
+/// The persistent decode worker: one background thread that runs the heavy per-slot
+/// decode ([`tempo_app::engine::run_decode_job`]) OFF the radio-loop thread and OFF
+/// the engine mutex. The loop builds an owned job under the engine lock, sends it
+/// here, keeps ticking (feeding the waterfall), and drains the result on a later
+/// tick — so the ~1–2 s decode never freezes the UI or the waterfall.
+///
+/// The worker touches NO engine state: everything it needs (including an `Arc` clone
+/// of the decoder) travels in the job. Created once per loop; the [`Drop`] closes the
+/// job channel (ending the worker's `for` loop) and joins the thread for a clean exit.
+struct DecodeWorker {
+    /// `Option` only so [`Drop`] can drop the sender first, then join.
+    job_tx: Option<Sender<DecodeJob>>,
+    result_rx: Receiver<DecodeResult>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl DecodeWorker {
+    fn spawn() -> Self {
+        let (job_tx, job_rx) = std::sync::mpsc::channel::<DecodeJob>();
+        let (result_tx, result_rx) = std::sync::mpsc::channel::<DecodeResult>();
+        let handle = std::thread::Builder::new()
+            .name("nexus-decode".into())
+            .spawn(move || {
+                // Ends when the job sender drops (loop shutdown / RadioLoop drop).
+                for job in job_rx {
+                    let result = tempo_app::engine::run_decode_job(job);
+                    if result_tx.send(result).is_err() {
+                        break; // loop went away
+                    }
+                }
+            })
+            .expect("spawn decode worker");
+        Self {
+            job_tx: Some(job_tx),
+            result_rx,
+            handle: Some(handle),
+        }
+    }
+
+    /// Hand a job to the worker. Silently drops if the worker is gone (shutdown).
+    fn dispatch(&self, job: DecodeJob) {
+        if let Some(tx) = &self.job_tx {
+            let _ = tx.send(job);
+        }
+    }
+
+    /// Non-blocking: take the next completed result, if one is ready.
+    fn try_recv(&self) -> Option<DecodeResult> {
+        self.result_rx.try_recv().ok()
+    }
+}
+
+impl Drop for DecodeWorker {
+    fn drop(&mut self) {
+        // Close the job channel so the worker's `for job in job_rx` ends, then join.
+        self.job_tx = None;
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
 struct RadioLoop {
     cur_tier: Tier,
     clock: SlotClock,
@@ -1218,6 +1282,13 @@ struct RadioLoop {
     /// engine each loop and SUBTRACTED from the system clock so TX/RX slots land
     /// on the true UTC grid even when the OS clock is skewed. 0 until measured.
     clock_offset_ms: i64,
+    /// The persistent decode worker (heavy decode off this thread + the engine mutex).
+    decode: DecodeWorker,
+    /// A decode job (early OR boundary) is out on the worker. Guards against a second
+    /// dispatch while one is in flight — the boundary defers a tick if the early pass
+    /// is still running, so the early result is always folded (setting `early_seen`)
+    /// before the boundary decode filters against it. Cleared when a result drains.
+    decode_in_flight: bool,
 }
 
 impl RadioLoop {
@@ -1291,6 +1362,8 @@ impl RadioLoop {
             last_reported_bm: String::new(),
             fd_was_active: false,
             clock_offset_ms: 0,
+            decode: DecodeWorker::spawn(),
+            decode_in_flight: false,
         }
     }
 
@@ -3317,6 +3390,42 @@ impl RadioLoop {
             self.prev_slot_was_tx = false;
         }
 
+        // --- Decode-worker results: fold any completed decode, then act on it. The
+        // heavy decode ran on the worker thread (off this thread + the engine mutex);
+        // here we non-blockingly pick up finished results and run the DEFERRED back
+        // half under the engine lock. A Boundary result runs the slot's TX decision
+        // NOW that its decode is folded (preserving decode→TX ordering exactly); an
+        // Early result just publishes spots; a Stale result (tier/source switch since
+        // dispatch) is dropped. Draining BEFORE the new-boundary dispatch guarantees
+        // an early result's `early_seen` is set before the same-slot boundary filters
+        // against it. At most one decode is ever in flight (the in-flight guard).
+        while let Some(result) = self.decode.try_recv() {
+            self.decode_in_flight = false;
+            match eng.apply_decode_result(result) {
+                DecodeApplied::Boundary {
+                    slot: bslot, frame, ..
+                } => {
+                    self.finish_boundary(
+                        &mut eng,
+                        rig,
+                        backend,
+                        sinks,
+                        now,
+                        bslot,
+                        true,
+                        Some(frame),
+                    )?;
+                }
+                DecodeApplied::Early { n } => {
+                    if n > 0 {
+                        let cur_dial = eng.settings().dial_hz();
+                        emit_rx_decodes(sinks, &eng, &mut self.psk_spots, now, cur_dial);
+                    }
+                }
+                DecodeApplied::Stale => {}
+            }
+        }
+
         // --- WSJT-X-style early decode (FT8/FT4): a few seconds before the
         // boundary, decode the partial capture so callers appear while the
         // period is still running (stock decodes ~3×/period from ~11.8 s; our
@@ -3341,353 +3450,59 @@ impl RadioLoop {
                 // `< slot_ms` guards the exact-boundary tick (ms_to_next_slot
                 // returns 0 there, which would read as a FULL slot elapsed and
                 // early-decode the PREVIOUS slot's audio under the wrong index).
-                if elapsed_ms >= at && elapsed_ms < slot_ms && !self.rx.is_empty() {
+                // Native FT8/FT4 only, and only when the worker is free — the early
+                // result must fold in (setting `early_seen`) before the same-slot
+                // boundary decode, so we never let two decodes race the one worker.
+                if elapsed_ms >= at
+                    && elapsed_ms < slot_ms
+                    && !self.rx.is_empty()
+                    && !self.decode_in_flight
+                    && eng.source_kind() == SourceKind::Native
+                {
                     self.early_done_slot = Some(slot);
                     // Only THIS slot's audio, at its true position from the slot
                     // start, tail-padded — a rolling tail of the previous slot
                     // (or front-padding) would wreck the decoder's dt alignment.
                     let n = ((elapsed_ms / 1000.0) * ft1::SAMPLE_RATE as f64) as usize;
                     let frame = self.rx.frame_latest_padded(n);
-                    // Boundary-slot index (audio slot + 1): the parity/history
-                    // conventions match the boundary ingest exactly.
-                    if eng.ingest_early(&frame, slot + 1) > 0 {
-                        let cur_dial = eng.settings().dial_hz();
-                        emit_rx_decodes(sinks, &eng, &mut self.psk_spots, now, cur_dial);
-                    }
+                    // Dispatch the early partial decode (boundary-slot index = audio
+                    // slot + 1, matching the boundary ingest's parity/history). The
+                    // result folds in — and publishes its spots — via the drain block.
+                    let job = eng.build_decode_job(frame, slot + 1, DecodePass::Early);
+                    self.decode.dispatch(job);
+                    self.decode_in_flight = true;
                 }
             }
         }
 
+        // New slot boundary: decode the just-ended RX slot (async) or, when there
+        // is nothing to decode (own carrier / empty ring), run the TX decision now.
+        // A boundary that needs a decode DEFERS its TX decision until the worker
+        // result lands (drained above) — preserving decode->TX ordering while the
+        // loop keeps ticking. If the worker is still busy (an early pass in flight),
+        // retry next tick WITHOUT consuming the boundary, so no decode is ever lost.
         if Some(slot) != self.last_slot {
-            self.last_slot = Some(slot);
-            let cur_dial = eng.settings().dial_hz();
-            // Slot core (TX keying / RX decode), already unit-tested in slot.rs.
-            let action = crate::slot::run_slot(
-                &mut eng,
-                rig,
-                backend,
-                &mut self.rx,
-                slot,
-                now,
-                self.tx_until_ms.is_some(),
-                self.prev_slot_was_tx,
-            );
-            if let Some(t) = action.tx_until_ms {
-                self.tx_until_ms = Some(t);
-                // The slot core just keyed (slot.rs) — publish TX intent immediately rather
-                // than waiting for the next tick's scope-gate publish (~20 ms), so the broker's
-                // disconnect fail-safe can't race the fresh key-up.
-                self.publish_tx_intent_now();
-            }
-            if action.fake_it_restore.is_some() {
-                self.fake_it_restore = action.fake_it_restore;
-            }
-            if action.rig_split_engaged {
-                self.audio_rig_split = true;
-            }
-            // Remember whether THIS slot was a transmit slot so the next boundary
-            // knows not to decode our own carrier (and to decode it otherwise).
-            self.prev_slot_was_tx = action.tx_this_slot;
-            // Save the received period as a WAV when asked (WSJT-X's Save menu:
-            // "all" = every RX period, "decodes" = only periods that produced
-            // one). Best-effort — a full disk must never stall the radio loop.
-            if let Some(frame) = &action.rx_frame {
-                let mode = eng.settings().save_wav.clone();
-                let want = match mode.as_str() {
-                    "all" => true,
-                    // The WHOLE period's decode set (early pass + boundary
-                    // stragglers) — wire_decodes() alone is only the boundary
-                    // batch, which is empty when the early pass caught
-                    // everything (review catch: that skipped exactly the
-                    // cleanest, strongest-signal periods).
-                    "decodes" => !eng.current_period_decodes().is_empty(),
-                    _ => false,
-                };
-                if want {
-                    if let Some(dir) = eng.periods_dir() {
-                        let secs = (now / 1000.0) as i64;
-                        let (y, mo, d) = civil_from_days(secs.div_euclid(86_400));
-                        let (h, m, sec) = (
-                            secs.rem_euclid(86_400) / 3600,
-                            secs.rem_euclid(3600) / 60,
-                            secs.rem_euclid(60),
-                        );
-                        // WSJT-X-style stamp + the band for at-a-glance sorting.
-                        // Sanitize band first: settings.band is a free-form string
-                        // from settings.json, and a value containing a path
-                        // separator or ".." would make `join` escape periods_dir.
-                        let band: String = eng
-                            .settings()
-                            .band
-                            .chars()
-                            .filter(|c| c.is_ascii_alphanumeric())
-                            .collect();
-                        let name = format!("{y:04}{mo:02}{d:02}_{h:02}{m:02}{sec:02}_{band}.wav");
-                        let path = std::path::Path::new(&dir).join(name);
-                        if let Err(e) = crate::voice::write_wav_12k(&path, frame) {
-                            eng.set_audio_error(Some(format!("period WAV save failed: {e}")));
-                        }
-                    }
+            let currently_tx = self.tx_until_ms.is_some();
+            let prev_was_tx = self.prev_slot_was_tx;
+            if crate::slot::slot_wants_decode(currently_tx, prev_was_tx, self.rx.is_empty()) {
+                if !self.decode_in_flight {
+                    self.last_slot = Some(slot);
+                    let frame = self.rx.frame();
+                    let job = eng.build_decode_job(frame, slot, DecodePass::Boundary);
+                    self.decode.dispatch(job);
+                    self.decode_in_flight = true;
+                    // TX decision deferred until this result is drained (next ticks).
                 }
-            }
-            // The boundary owns the slot now — drain any still-pending immediate-TX
-            // request (it either just fired via the slot core's parity path, or its
-            // moment passed; leaving it set would key mid-slot LATER, off-cycle).
-            let _ = eng.take_immediate_tx();
-            let did_rx = action.did_rx;
-            let tx_this_slot = action.tx_this_slot;
-
-            // Snapshot once for BOTH the WSJT-X/PSK emission and the club-network
-            // Field Day push below. The club push has to run on every slot boundary
-            // an FD session is live — whether or not the WSJT-X/PSK sinks are on —
-            // so `field_day.is_some()` joins the gate. It used to be trapped INSIDE
-            // that gate, silently starving N3FJP/N1MM whenever both sinks were their
-            // default-off (the club master log simply never received the QSOs).
-            let snap = eng.snapshot();
-            // An FD session just (re)started: the journal restore repopulates
-            // qso_count from 0 in one jump — seed the cursor so restored rows are
-            // never re-pushed to the club network / WSJT-X sinks as newly logged.
-            if !self.fd_was_active {
-                if let Some(fd) = snap.field_day.as_ref() {
-                    self.last_fd_qsos = fd.qso_count;
+                // else: worker busy -> leave last_slot unset so we retry next tick.
+            } else {
+                self.last_slot = Some(slot);
+                // Own carrier: the ring holds our own transmission -> drop it so a
+                // fragment can't contaminate the next decode.
+                if currently_tx || prev_was_tx {
+                    self.rx.clear();
                 }
-            }
-            self.fd_was_active = snap.field_day.is_some();
-            // --- network emission (WSJT-X UDP API + PSK Reporter) ---
-            if sinks.wsjtx.is_some() || sinks.psk.is_some() || snap.field_day.is_some() {
-                let tier = tier_mode(snap.link.tier);
-                let _ms_mid = (now as u64 % 86_400_000) as u32;
-                let now_secs = (now / 1000.0) as i64;
-                if did_rx {
-                    emit_rx_decodes(sinks, &eng, &mut self.psk_spots, now, cur_dial);
-                }
-                if let Some(server) = sinks.wsjtx {
-                    let dx = snap
-                        .qso
-                        .as_ref()
-                        .and_then(|q| q.dxcall.clone())
-                        .unwrap_or_default();
-                    let _ = server.send_status(&WsjtxStatus {
-                        dial_freq: cur_dial,
-                        mode: tier,
-                        dx_call: &dx,
-                        report: "",
-                        tx_mode: tier,
-                        tx_enabled: false,
-                        transmitting: snap.radio.transmitting,
-                        // `decoding` and `transmitting` are disjoint phases in
-                        // WSJT-X: when we decode the prior RX slot AND transmit in
-                        // this one (calling CQ), report the transmit phase only.
-                        decoding: did_rx && !tx_this_slot,
-                        // REAL audio offsets (GridTracker/JTAlert show these) —
-                        // hardcoded 1500s confused every cooperating logger.
-                        rx_df: snap.radio.rx_offset_hz.max(0.0) as u32,
-                        tx_df: snap.radio.tx_offset_hz.max(0.0) as u32,
-                        de_call: &snap.mycall,
-                        de_grid: &snap.mygrid,
-                        dx_grid: "",
-                        tx_watchdog: false,
-                        sub_mode: "",
-                        fast_mode: false,
-                        // The LIVE mode wins: field_day is Some only while the
-                        // Field Day mode is actually RUNNING, whereas special_op
-                        // is a persistent setting an operator can forget to turn
-                        // off — a stale Hound flag must not misadvertise an
-                        // active FD session (review catch). 6=FOX stays unbuilt.
-                        special_op: if snap.field_day.is_some() {
-                            3
-                        } else if matches!(
-                            eng.settings().special_op,
-                            tempo_app::settings::SpecialOp::Hound
-                                | tempo_app::settings::SpecialOp::SuperHound
-                        ) {
-                            7
-                        } else {
-                            0
-                        },
-                        freq_tol: 0,
-                        // T/R period (s), mode-driven: FT1 = 4, FT4 ≈ 8, FT8/DX1 = 15.
-                        tr_period: eng.active_slot_secs().round() as u32,
-                        config_name: "Default",
-                        tx_message: "",
-                    });
-                    if let Some(fd) = snap.field_day.as_ref() {
-                        if fd.qso_count > self.last_fd_qsos {
-                            let sent = format!("{} {}", fd.my_class, fd.my_section);
-                            for q in &fd.log[self.last_fd_qsos.min(fd.log.len())..] {
-                                let recvd = format!("{} {}", q.class, q.section);
-                                let _ = server.send_qso_logged(&WsjtxQso {
-                                    time_off: now_secs,
-                                    dx_call: &q.call,
-                                    dx_grid: "",
-                                    tx_freq: sinks.cfg_dial_hz,
-                                    mode: tier,
-                                    report_sent: "",
-                                    report_recvd: "",
-                                    tx_power: "",
-                                    comments: "",
-                                    name: "",
-                                    time_on: now_secs,
-                                    op_call: &snap.mycall,
-                                    my_call: &snap.mycall,
-                                    my_grid: &snap.mygrid,
-                                    exchange_sent: &sent,
-                                    exchange_recvd: &recvd,
-                                    adif_propmode: "",
-                                });
-                            }
-                        }
-                    }
-                }
-                // Club-network push (independent of the WSJT-X sink): every NEW
-                // Field Day QSO goes to N3FJP (the club master log, TCP) and/or
-                // an N1MM-network dashboard (UDP <contactinfo>) when configured.
-                // Spawned: a parked N3FJP box must never stall the slot loop.
-                if let Some(fd) = snap.field_day.as_ref() {
-                    if fd.qso_count > self.last_fd_qsos {
-                        let st = eng.settings();
-                        let n3_host = st.n3fjp_host.trim().to_string();
-                        let n3_port = st.n3fjp_port;
-                        // Field Day contacts use the ENTER sequence (which scores
-                        // the contest log) unless the operator opts back to ADDDIRECT.
-                        let n3_use_enter = st.n3fjp_use_enter;
-                        let n1_addr = st.n1mm_addr.trim().to_string();
-                        if !n3_host.is_empty() || !n1_addr.is_empty() {
-                            let new_qsos: Vec<_> =
-                                fd.log[self.last_fd_qsos.min(fd.log.len())..].to_vec();
-                            let mycall = snap.mycall.clone();
-                            // The operator at the key (FD rotates ops) — the settable
-                            // fd_operator when set, else the station call.
-                            let operator = {
-                                let op = st.fd_operator.trim();
-                                if op.is_empty() {
-                                    mycall.clone()
-                                } else {
-                                    op.to_string()
-                                }
-                            };
-                            let myexch = format!("{} {}", fd.my_class, fd.my_section);
-                            let contest = if fd.event == "wfd" {
-                                "WFD"
-                            } else {
-                                "ARRL-FIELD-DAY"
-                            };
-                            let dial_mhz = cur_dial as f64 / 1e6;
-                            let fallback_unix = (now / 1000.0) as u64;
-                            std::thread::spawn(move || {
-                                for (i, q) in new_qsos.iter().enumerate() {
-                                    let mode_str = match q.mode.as_str() {
-                                        "CW" => "CW",
-                                        "PH" => "SSB",
-                                        _ => "FT8",
-                                    };
-                                    // Per-QSO log time (a multi-contact batch must not
-                                    // collapse onto one wall-clock second).
-                                    let when = if q.when_unix > 0 {
-                                        q.when_unix
-                                    } else {
-                                        fallback_unix
-                                    };
-                                    if !n3_host.is_empty() {
-                                        let push = tempo_net::n3fjp::N3fjpQso {
-                                            call: q.call.clone(),
-                                            class: q.class.clone(),
-                                            section: q.section.clone(),
-                                            band_meters: band_for_interop(&q.band),
-                                            mode: mode_str.to_string(),
-                                            freq_mhz: dial_mhz,
-                                            when_unix: when,
-                                            operator: operator.clone(),
-                                        };
-                                        let res = if n3_use_enter {
-                                            tempo_net::n3fjp::push_qso_enter(
-                                                &n3_host, n3_port, &push,
-                                            )
-                                            .map(|_| ())
-                                        } else {
-                                            tempo_net::n3fjp::push_qso(&n3_host, n3_port, &push)
-                                        };
-                                        if let Err(e) = res {
-                                            eprintln!("tempo: N3FJP push failed: {e}");
-                                        }
-                                    }
-                                    if !n1_addr.is_empty() {
-                                        let c = tempo_net::n1mm::N1mmContact {
-                                            mycall: mycall.clone(),
-                                            call: q.call.clone(),
-                                            band: band_for_interop(&q.band),
-                                            mode: mode_str.to_string(),
-                                            timestamp: {
-                                                let (d, t) = cabrillo_like_dt(when);
-                                                format!("{d} {t}")
-                                            },
-                                            section: q.section.clone(),
-                                            points: tempo_core::fieldday::qso_points_for_mode(
-                                                &q.mode,
-                                            ),
-                                            contestname: contest.to_string(),
-                                            freq_10hz: (dial_mhz * 1e5) as u64,
-                                            sent_exchange: myexch.clone(),
-                                            operator: operator.clone(),
-                                            // 32-hex dedup id: time + index + call hash.
-                                            id: format!(
-                                                "{:016x}{:016x}",
-                                                when.wrapping_mul(31).wrapping_add(i as u64),
-                                                q.call.bytes().fold(0u64, |a, b| {
-                                                    a.wrapping_mul(131).wrapping_add(b as u64)
-                                                })
-                                            ),
-                                        };
-                                        if let Err(e) = tempo_net::n1mm::send_contact(&n1_addr, &c)
-                                        {
-                                            eprintln!("tempo: N1MM broadcast failed: {e}");
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                    }
-                }
-            }
-            // Advance the FD cursor on EVERY boundary (independent of the sinks
-            // above) — so it also RESETS to 0 when a session ends, and a stale
-            // count can never later flood the club log after FD is re-armed.
-            self.last_fd_qsos = snap.field_day.as_ref().map(|f| f.qso_count).unwrap_or(0);
-
-            // Club band board (N3FJP Network Status Display): report THIS
-            // position's band without CAT so the club sees where we are. Fires
-            // on a band/mode change or a coarse heartbeat; spawned so a parked
-            // N3FJP box never stalls the slot loop. Opt-in (default off).
-            if eng.settings().n3fjp_report_band {
-                let host = eng.settings().n3fjp_host.trim().to_string();
-                if !host.is_empty() {
-                    let band_meters = band_for_interop(&snap.radio.band);
-                    let mode = snap.radio.sideband.clone();
-                    let bm_key = format!("{band_meters}|{mode}");
-                    if bm_key != self.last_reported_bm
-                        || now - self.last_reported_band >= N3FJP_BAND_REPORT_MS
-                    {
-                        self.last_reported_band = now;
-                        self.last_reported_bm = bm_key;
-                        let port = eng.settings().n3fjp_port;
-                        let freq_mhz = snap.radio.dial_mhz;
-                        std::thread::spawn(move || {
-                            // Nexus owns the rig, so N3FJP's own rig interface is
-                            // off → CHANGEBM (rig_iface_on = false), the no-CAT
-                            // local-bridge default.
-                            if let Err(e) = tempo_net::n3fjp::report_band(
-                                &host,
-                                port,
-                                &band_meters,
-                                &mode,
-                                freq_mhz,
-                                false,
-                            ) {
-                                eprintln!("tempo: N3FJP band report failed: {e}");
-                            }
-                        });
-                    }
-                }
+                // Nothing to decode -> run the TX decision + emission immediately.
+                self.finish_boundary(&mut eng, rig, backend, sinks, now, slot, false, None)?;
             }
         }
         drop(eng); // release before the PSK flush re-locks the engine
@@ -3706,6 +3521,351 @@ impl RadioLoop {
             }
         }
 
+        Ok(())
+    }
+
+    /// Finish a slot boundary once its RX decode is folded in: run the deferred
+    /// TX decision (`slot_tx_phase`) and then the WSJT-X/PSK/club-network emission
+    /// for the period. `did_rx`/`rx_frame` describe the just-folded decode (both
+    /// false/None when the boundary had nothing to decode — own carrier / empty
+    /// ring). Shared by the no-decode boundary path and the worker-result drain.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_boundary<B: AudioBackend>(
+        &mut self,
+        eng: &mut Engine,
+        rig: &mut Rig,
+        backend: &mut B,
+        sinks: &Sinks,
+        now: f64,
+        slot: u64,
+        did_rx: bool,
+        rx_frame: Option<Vec<f32>>,
+    ) -> Result<(), String> {
+        let cur_dial = eng.settings().dial_hz();
+        // TX decision, with the just-ended slot's decode ALREADY folded (inline
+        // when there was nothing to decode, or via the worker result otherwise).
+        let action = crate::slot::slot_tx_phase(
+            eng,
+            rig,
+            backend,
+            &mut self.rx,
+            slot,
+            now,
+            did_rx,
+            rx_frame,
+        );
+        if let Some(t) = action.tx_until_ms {
+            self.tx_until_ms = Some(t);
+            // The slot core just keyed (slot.rs) — publish TX intent immediately rather
+            // than waiting for the next tick's scope-gate publish (~20 ms), so the broker's
+            // disconnect fail-safe can't race the fresh key-up.
+            self.publish_tx_intent_now();
+        }
+        if action.fake_it_restore.is_some() {
+            self.fake_it_restore = action.fake_it_restore;
+        }
+        if action.rig_split_engaged {
+            self.audio_rig_split = true;
+        }
+        // Remember whether THIS slot was a transmit slot so the next boundary
+        // knows not to decode our own carrier (and to decode it otherwise).
+        self.prev_slot_was_tx = action.tx_this_slot;
+        // Save the received period as a WAV when asked (WSJT-X's Save menu:
+        // "all" = every RX period, "decodes" = only periods that produced
+        // one). Best-effort — a full disk must never stall the radio loop.
+        if let Some(frame) = &action.rx_frame {
+            let mode = eng.settings().save_wav.clone();
+            let want = match mode.as_str() {
+                "all" => true,
+                // The WHOLE period's decode set (early pass + boundary
+                // stragglers) — wire_decodes() alone is only the boundary
+                // batch, which is empty when the early pass caught
+                // everything (review catch: that skipped exactly the
+                // cleanest, strongest-signal periods).
+                "decodes" => !eng.current_period_decodes().is_empty(),
+                _ => false,
+            };
+            if want {
+                if let Some(dir) = eng.periods_dir() {
+                    let secs = (now / 1000.0) as i64;
+                    let (y, mo, d) = civil_from_days(secs.div_euclid(86_400));
+                    let (h, m, sec) = (
+                        secs.rem_euclid(86_400) / 3600,
+                        secs.rem_euclid(3600) / 60,
+                        secs.rem_euclid(60),
+                    );
+                    // WSJT-X-style stamp + the band for at-a-glance sorting.
+                    // Sanitize band first: settings.band is a free-form string
+                    // from settings.json, and a value containing a path
+                    // separator or ".." would make `join` escape periods_dir.
+                    let band: String = eng
+                        .settings()
+                        .band
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric())
+                        .collect();
+                    let name = format!("{y:04}{mo:02}{d:02}_{h:02}{m:02}{sec:02}_{band}.wav");
+                    let path = std::path::Path::new(&dir).join(name);
+                    if let Err(e) = crate::voice::write_wav_12k(&path, frame) {
+                        eng.set_audio_error(Some(format!("period WAV save failed: {e}")));
+                    }
+                }
+            }
+        }
+        // The boundary owns the slot now — drain any still-pending immediate-TX
+        // request (it either just fired via the slot core's parity path, or its
+        // moment passed; leaving it set would key mid-slot LATER, off-cycle).
+        let _ = eng.take_immediate_tx();
+        let did_rx = action.did_rx;
+        let tx_this_slot = action.tx_this_slot;
+
+        // Snapshot once for BOTH the WSJT-X/PSK emission and the club-network
+        // Field Day push below. The club push has to run on every slot boundary
+        // an FD session is live — whether or not the WSJT-X/PSK sinks are on —
+        // so `field_day.is_some()` joins the gate. It used to be trapped INSIDE
+        // that gate, silently starving N3FJP/N1MM whenever both sinks were their
+        // default-off (the club master log simply never received the QSOs).
+        let snap = eng.snapshot();
+        // An FD session just (re)started: the journal restore repopulates
+        // qso_count from 0 in one jump — seed the cursor so restored rows are
+        // never re-pushed to the club network / WSJT-X sinks as newly logged.
+        if !self.fd_was_active {
+            if let Some(fd) = snap.field_day.as_ref() {
+                self.last_fd_qsos = fd.qso_count;
+            }
+        }
+        self.fd_was_active = snap.field_day.is_some();
+        // --- network emission (WSJT-X UDP API + PSK Reporter) ---
+        if sinks.wsjtx.is_some() || sinks.psk.is_some() || snap.field_day.is_some() {
+            let tier = tier_mode(snap.link.tier);
+            let _ms_mid = (now as u64 % 86_400_000) as u32;
+            let now_secs = (now / 1000.0) as i64;
+            if did_rx {
+                emit_rx_decodes(sinks, &*eng, &mut self.psk_spots, now, cur_dial);
+            }
+            if let Some(server) = sinks.wsjtx {
+                let dx = snap
+                    .qso
+                    .as_ref()
+                    .and_then(|q| q.dxcall.clone())
+                    .unwrap_or_default();
+                let _ = server.send_status(&WsjtxStatus {
+                    dial_freq: cur_dial,
+                    mode: tier,
+                    dx_call: &dx,
+                    report: "",
+                    tx_mode: tier,
+                    tx_enabled: false,
+                    transmitting: snap.radio.transmitting,
+                    // `decoding` and `transmitting` are disjoint phases in
+                    // WSJT-X: when we decode the prior RX slot AND transmit in
+                    // this one (calling CQ), report the transmit phase only.
+                    decoding: did_rx && !tx_this_slot,
+                    // REAL audio offsets (GridTracker/JTAlert show these) —
+                    // hardcoded 1500s confused every cooperating logger.
+                    rx_df: snap.radio.rx_offset_hz.max(0.0) as u32,
+                    tx_df: snap.radio.tx_offset_hz.max(0.0) as u32,
+                    de_call: &snap.mycall,
+                    de_grid: &snap.mygrid,
+                    dx_grid: "",
+                    tx_watchdog: false,
+                    sub_mode: "",
+                    fast_mode: false,
+                    // The LIVE mode wins: field_day is Some only while the
+                    // Field Day mode is actually RUNNING, whereas special_op
+                    // is a persistent setting an operator can forget to turn
+                    // off — a stale Hound flag must not misadvertise an
+                    // active FD session (review catch). 6=FOX stays unbuilt.
+                    special_op: if snap.field_day.is_some() {
+                        3
+                    } else if matches!(
+                        eng.settings().special_op,
+                        tempo_app::settings::SpecialOp::Hound
+                            | tempo_app::settings::SpecialOp::SuperHound
+                    ) {
+                        7
+                    } else {
+                        0
+                    },
+                    freq_tol: 0,
+                    // T/R period (s), mode-driven: FT1 = 4, FT4 ≈ 8, FT8/DX1 = 15.
+                    tr_period: eng.active_slot_secs().round() as u32,
+                    config_name: "Default",
+                    tx_message: "",
+                });
+                if let Some(fd) = snap.field_day.as_ref() {
+                    if fd.qso_count > self.last_fd_qsos {
+                        let sent = format!("{} {}", fd.my_class, fd.my_section);
+                        for q in &fd.log[self.last_fd_qsos.min(fd.log.len())..] {
+                            let recvd = format!("{} {}", q.class, q.section);
+                            let _ = server.send_qso_logged(&WsjtxQso {
+                                time_off: now_secs,
+                                dx_call: &q.call,
+                                dx_grid: "",
+                                tx_freq: sinks.cfg_dial_hz,
+                                mode: tier,
+                                report_sent: "",
+                                report_recvd: "",
+                                tx_power: "",
+                                comments: "",
+                                name: "",
+                                time_on: now_secs,
+                                op_call: &snap.mycall,
+                                my_call: &snap.mycall,
+                                my_grid: &snap.mygrid,
+                                exchange_sent: &sent,
+                                exchange_recvd: &recvd,
+                                adif_propmode: "",
+                            });
+                        }
+                    }
+                }
+            }
+            // Club-network push (independent of the WSJT-X sink): every NEW
+            // Field Day QSO goes to N3FJP (the club master log, TCP) and/or
+            // an N1MM-network dashboard (UDP <contactinfo>) when configured.
+            // Spawned: a parked N3FJP box must never stall the slot loop.
+            if let Some(fd) = snap.field_day.as_ref() {
+                if fd.qso_count > self.last_fd_qsos {
+                    let st = eng.settings();
+                    let n3_host = st.n3fjp_host.trim().to_string();
+                    let n3_port = st.n3fjp_port;
+                    // Field Day contacts use the ENTER sequence (which scores
+                    // the contest log) unless the operator opts back to ADDDIRECT.
+                    let n3_use_enter = st.n3fjp_use_enter;
+                    let n1_addr = st.n1mm_addr.trim().to_string();
+                    if !n3_host.is_empty() || !n1_addr.is_empty() {
+                        let new_qsos: Vec<_> =
+                            fd.log[self.last_fd_qsos.min(fd.log.len())..].to_vec();
+                        let mycall = snap.mycall.clone();
+                        // The operator at the key (FD rotates ops) — the settable
+                        // fd_operator when set, else the station call.
+                        let operator = {
+                            let op = st.fd_operator.trim();
+                            if op.is_empty() {
+                                mycall.clone()
+                            } else {
+                                op.to_string()
+                            }
+                        };
+                        let myexch = format!("{} {}", fd.my_class, fd.my_section);
+                        let contest = if fd.event == "wfd" {
+                            "WFD"
+                        } else {
+                            "ARRL-FIELD-DAY"
+                        };
+                        let dial_mhz = cur_dial as f64 / 1e6;
+                        let fallback_unix = (now / 1000.0) as u64;
+                        std::thread::spawn(move || {
+                            for (i, q) in new_qsos.iter().enumerate() {
+                                let mode_str = match q.mode.as_str() {
+                                    "CW" => "CW",
+                                    "PH" => "SSB",
+                                    _ => "FT8",
+                                };
+                                // Per-QSO log time (a multi-contact batch must not
+                                // collapse onto one wall-clock second).
+                                let when = if q.when_unix > 0 {
+                                    q.when_unix
+                                } else {
+                                    fallback_unix
+                                };
+                                if !n3_host.is_empty() {
+                                    let push = tempo_net::n3fjp::N3fjpQso {
+                                        call: q.call.clone(),
+                                        class: q.class.clone(),
+                                        section: q.section.clone(),
+                                        band_meters: band_for_interop(&q.band),
+                                        mode: mode_str.to_string(),
+                                        freq_mhz: dial_mhz,
+                                        when_unix: when,
+                                        operator: operator.clone(),
+                                    };
+                                    let res = if n3_use_enter {
+                                        tempo_net::n3fjp::push_qso_enter(&n3_host, n3_port, &push)
+                                            .map(|_| ())
+                                    } else {
+                                        tempo_net::n3fjp::push_qso(&n3_host, n3_port, &push)
+                                    };
+                                    if let Err(e) = res {
+                                        eprintln!("tempo: N3FJP push failed: {e}");
+                                    }
+                                }
+                                if !n1_addr.is_empty() {
+                                    let c = tempo_net::n1mm::N1mmContact {
+                                        mycall: mycall.clone(),
+                                        call: q.call.clone(),
+                                        band: band_for_interop(&q.band),
+                                        mode: mode_str.to_string(),
+                                        timestamp: {
+                                            let (d, t) = cabrillo_like_dt(when);
+                                            format!("{d} {t}")
+                                        },
+                                        section: q.section.clone(),
+                                        points: tempo_core::fieldday::qso_points_for_mode(&q.mode),
+                                        contestname: contest.to_string(),
+                                        freq_10hz: (dial_mhz * 1e5) as u64,
+                                        sent_exchange: myexch.clone(),
+                                        operator: operator.clone(),
+                                        // 32-hex dedup id: time + index + call hash.
+                                        id: format!(
+                                            "{:016x}{:016x}",
+                                            when.wrapping_mul(31).wrapping_add(i as u64),
+                                            q.call.bytes().fold(0u64, |a, b| {
+                                                a.wrapping_mul(131).wrapping_add(b as u64)
+                                            })
+                                        ),
+                                    };
+                                    if let Err(e) = tempo_net::n1mm::send_contact(&n1_addr, &c) {
+                                        eprintln!("tempo: N1MM broadcast failed: {e}");
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        // Advance the FD cursor on EVERY boundary (independent of the sinks
+        // above) — so it also RESETS to 0 when a session ends, and a stale
+        // count can never later flood the club log after FD is re-armed.
+        self.last_fd_qsos = snap.field_day.as_ref().map(|f| f.qso_count).unwrap_or(0);
+
+        // Club band board (N3FJP Network Status Display): report THIS
+        // position's band without CAT so the club sees where we are. Fires
+        // on a band/mode change or a coarse heartbeat; spawned so a parked
+        // N3FJP box never stalls the slot loop. Opt-in (default off).
+        if eng.settings().n3fjp_report_band {
+            let host = eng.settings().n3fjp_host.trim().to_string();
+            if !host.is_empty() {
+                let band_meters = band_for_interop(&snap.radio.band);
+                let mode = snap.radio.sideband.clone();
+                let bm_key = format!("{band_meters}|{mode}");
+                if bm_key != self.last_reported_bm
+                    || now - self.last_reported_band >= N3FJP_BAND_REPORT_MS
+                {
+                    self.last_reported_band = now;
+                    self.last_reported_bm = bm_key;
+                    let port = eng.settings().n3fjp_port;
+                    let freq_mhz = snap.radio.dial_mhz;
+                    std::thread::spawn(move || {
+                        // Nexus owns the rig, so N3FJP's own rig interface is
+                        // off → CHANGEBM (rig_iface_on = false), the no-CAT
+                        // local-bridge default.
+                        if let Err(e) = tempo_net::n3fjp::report_band(
+                            &host,
+                            port,
+                            &band_meters,
+                            &mode,
+                            freq_mhz,
+                            false,
+                        ) {
+                            eprintln!("tempo: N3FJP band report failed: {e}");
+                        }
+                    });
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -4444,6 +4604,95 @@ fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
 mod tests {
     use super::*;
     use crate::backend::MockBackend;
+
+    /// The decode worker roundtrips a real job off the calling thread: build a job
+    /// under the "engine lock", dispatch it, receive the result, fold it. This is
+    /// the whole async path minus the radio loop — the decode ran on the worker
+    /// thread, never touching the engine.
+    #[test]
+    fn decode_worker_roundtrips_a_job() {
+        let mut eng = Engine::new("KD9TAW", "EN52", 0);
+        eng.set_tier(Tier::Ft8);
+        let worker = DecodeWorker::spawn();
+        let job = eng.build_decode_job(
+            vec![0.0f32; eng.active_capture_samples()],
+            4,
+            DecodePass::Boundary,
+        );
+        worker.dispatch(job);
+        // Wait (bounded) for the worker to finish — it runs on its own thread.
+        let mut result = None;
+        for _ in 0..500 {
+            if let Some(r) = worker.try_recv() {
+                result = Some(r);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let result = result.expect("worker returned a result");
+        assert!(
+            matches!(
+                eng.apply_decode_result(result),
+                DecodeApplied::Boundary { .. }
+            ),
+            "the worker's result folds as a boundary decode"
+        );
+        // Drop joins the worker thread cleanly (no leak).
+        drop(worker);
+    }
+
+    /// In-flight guard: at most one decode is dispatched at a time. This mirrors the
+    /// exact predicate `step` uses — a boundary that wants a decode dispatches only
+    /// when `!decode_in_flight`, so an early pass in flight defers the boundary a
+    /// tick (its `early_seen` folds first) instead of racing the single worker.
+    #[test]
+    fn in_flight_guard_serializes_dispatch() {
+        let mut eng = Engine::new("KD9TAW", "EN52", 0);
+        eng.set_tier(Tier::Ft8);
+        let worker = DecodeWorker::spawn();
+        let mut in_flight = false;
+
+        // First boundary that wants a decode: dispatched, flag raised.
+        let wants = crate::slot::slot_wants_decode(false, false, false);
+        assert!(wants);
+        let mut dispatched = 0;
+        if wants && !in_flight {
+            worker.dispatch(eng.build_decode_job(
+                vec![0.0f32; eng.active_capture_samples()],
+                1,
+                DecodePass::Boundary,
+            ));
+            in_flight = true;
+            dispatched += 1;
+        }
+        // A second boundary arriving before the first drains must NOT dispatch.
+        if wants && !in_flight {
+            worker.dispatch(eng.build_decode_job(
+                vec![0.0f32; eng.active_capture_samples()],
+                2,
+                DecodePass::Boundary,
+            ));
+            dispatched += 1;
+        }
+        assert_eq!(
+            dispatched, 1,
+            "the guard blocks a second concurrent dispatch"
+        );
+
+        // Drain the one result → flag clears → the next dispatch is allowed again.
+        let mut got = false;
+        for _ in 0..500 {
+            if let Some(r) = worker.try_recv() {
+                let _ = eng.apply_decode_result(r);
+                in_flight = false;
+                got = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(got, "the in-flight decode completed and drained");
+        assert!(!in_flight, "the guard is cleared once the result drains");
+    }
 
     #[test]
     fn tier_mode_maps_each_tier() {
