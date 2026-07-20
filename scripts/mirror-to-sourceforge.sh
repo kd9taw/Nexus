@@ -72,7 +72,10 @@ STAGED_TREE="$(git -C "$WT/sf" write-tree)"
   die "staged SF tree != GitHub tree — refusing to push"
 ok "tree matches GitHub exactly"
 git -C "$WT/sf" diff --cached --name-only | grep -q '^tasks/' && die "tasks/ staged — ABORT"
-git -C "$WT/sf" grep --cached -l 'srmccall' >/dev/null 2>&1 && die "home path in tree — ABORT"
+# Build the needle from fragments so this script does not match its own gate. Spelled
+# literally, the grep found THIS LINE and aborted every run (2026-07-20).
+NEEDLE="$(printf 'srmc'; printf 'call')"
+git -C "$WT/sf" grep --cached -l "$NEEDLE" >/dev/null 2>&1 && die "home path in tree — ABORT"
 ok "no internal notes, no home paths"
 
 if git -C "$WT/sf" diff --cached --quiet; then
