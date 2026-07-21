@@ -20,6 +20,7 @@
 //! no test ever touches the real network).
 
 pub mod cluster;
+pub mod dxkeeper;
 pub mod flexcat;
 pub mod flexdisc;
 pub mod flexvita;
