@@ -15853,3 +15853,17 @@ html[data-panel='needed'] {
   background: var(--accent);
   transition: width 0.4s linear;
 }
+
+/* Sortable schedule headers (Satellites) — the Logbook th() language on a real <table>. */
+.sats-th-btn {
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.sats-th-btn:hover {
+  color: var(--accent);
+}

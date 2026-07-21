@@ -33,7 +33,7 @@ interface Props {
   onSpot?: (call: string) => void
 }
 
-type SortKey = 'need' | 'call' | 'country' | 'dist' | 'bearing' | 'snr' | 'age'
+type SortKey = 'need' | 'call' | 'country' | 'grid' | 'dist' | 'bearing' | 'snr' | 'age'
 
 const NEED_RANK: Record<NeedTag, number> = {
   Wanted: 6,
@@ -144,6 +144,10 @@ export function OperateRoster({
         case 'country':
           c = (a.s.country ?? '~').localeCompare(b.s.country ?? '~')
           break
+        case 'grid':
+          // '~' sorts the grid-less to the end in both directions' ascending sense.
+          c = (a.s.grid ?? '~').localeCompare(b.s.grid ?? '~')
+          break
         case 'dist':
           c = a.distKm - b.distKm
           break
@@ -181,7 +185,7 @@ export function OperateRoster({
         setSort((p) =>
           p.key === key
             ? { key, dir: p.dir === 'asc' ? 'desc' : 'asc' }
-            : { key, dir: key === 'call' || key === 'country' || key === 'dist' ? 'asc' : 'desc' },
+            : { key, dir: key === 'call' || key === 'country' || key === 'grid' || key === 'dist' ? 'asc' : 'desc' },
         )
       }
     >
@@ -228,7 +232,7 @@ export function OperateRoster({
           {th('call', 'Call')}
           {th('need', 'Need')}
           {th('country', 'Country')}
-          <span className="or-th-static">Grid</span>
+          {th('grid', 'Grid')}
           {th('dist', 'Dist')}
           {th('bearing', 'Brg')}
           {th('snr', 'SNR')}

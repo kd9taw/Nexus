@@ -261,9 +261,53 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
     setAlarms(satAlarmMap())
   }
 
-  const upcoming = useMemo(
-    () => schedule.filter((p) => p.losUnix > nowSecs).sort((a, b) => a.aosUnix - b.aosUnix),
-    [schedule, nowSecs],
+  // Sortable schedule (sortable-everywhere principle, 2026-07-21): default = soonest
+  // AOS, click a header to rank by elevation / duration / bird instead.
+  type SchedSortKey = 'bird' | 'aos' | 'el' | 'dur' | 'status'
+  const [schedSort, setSchedSort] = useState<{ key: SchedSortKey; asc: boolean }>({ key: 'aos', asc: true })
+  const upcoming = useMemo(() => {
+    const val = (p: (typeof schedule)[number]): string | number => {
+      switch (schedSort.key) {
+        case 'bird':
+          return p.name.toUpperCase()
+        case 'aos':
+          return p.aosUnix
+        case 'el':
+          return p.maxElDeg
+        case 'dur':
+          return p.losUnix - p.aosUnix
+        case 'status':
+          return p.status ?? ''
+      }
+    }
+    const rows = schedule.filter((p) => p.losUnix > nowSecs)
+    rows.sort((a, b) => {
+      const va = val(a)
+      const vb = val(b)
+      const c = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
+      // Tiebreak: soonest pass first, always.
+      return (schedSort.asc ? c : -c) || a.aosUnix - b.aosUnix
+    })
+    return rows
+  }, [schedule, nowSecs, schedSort])
+  const schedTh = (label: string, key: SchedSortKey) => (
+    <th
+      aria-sort={schedSort.key === key ? (schedSort.asc ? 'ascending' : 'descending') : undefined}
+    >
+      <button
+        type="button"
+        className="sats-th-btn"
+        onClick={() =>
+          setSchedSort((s0) =>
+            s0.key === key ? { key, asc: !s0.asc } : { key, asc: key === 'bird' || key === 'status' },
+          )
+        }
+        title={`Sort by ${label}`}
+      >
+        {label}
+        {schedSort.key === key ? (schedSort.asc ? ' ▲' : ' ▼') : ''}
+      </button>
+    </th>
   )
   // "Your best passes": next 24 h, ranked by quality, top 3.
   const best = useMemo(
@@ -375,7 +419,15 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             <table>
               <thead>
                 <tr>
-                  <th>★</th><th>Bird</th><th>AOS local</th><th></th><th>Max el</th><th>Dur</th><th>Path</th><th>Status</th><th>⏰</th>{rotorOn && <th></th>}
+                  <th>★</th>
+                  {schedTh('Bird', 'bird')}
+                  {schedTh('AOS local', 'aos')}
+                  <th></th>
+                  {schedTh('Max el', 'el')}
+                  {schedTh('Dur', 'dur')}
+                  <th>Path</th>
+                  {schedTh('Status', 'status')}
+                  <th>⏰</th>{rotorOn && <th></th>}
                 </tr>
               </thead>
               <tbody>

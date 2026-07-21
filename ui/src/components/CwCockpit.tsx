@@ -171,7 +171,25 @@ export function CwCockpit({
 }: Props) {
   const catOk = snap.radio.catOk === true
   // Wheel-to-tune over the CW scope, sharing the tuning strip's step selector.
-  const [tuneStep, setTuneStep] = useState(100)
+  // Tuning step, persisted per cockpit ('nexus.cw.tuneStep'): the cockpit unmounts on every
+  // mode switch, so plain state reset the step to 100 Hz on each round-trip (FTDX10
+  // report 2026-07-21 — the third remount-state-loss bug today). localStorage so a
+  // CW operator's 10 Hz survives restarts too, like nexus.cw.sensitivity.
+  const [tuneStep, setTuneStep] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem('nexus.cw.tuneStep'))
+      return Number.isFinite(v) && v > 0 ? v : 100
+    } catch {
+      return 100
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('nexus.cw.tuneStep', String(tuneStep))
+    } catch {
+      /* ignore */
+    }
+  }, [tuneStep])
   // Spot-to-cluster popup, seeded from the LogEntry call field (operator ask: CW too).
   const [spotOpen, setSpotOpen] = useState(false)
   const [spotCall, setSpotCall] = useState('')

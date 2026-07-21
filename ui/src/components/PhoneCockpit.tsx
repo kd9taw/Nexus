@@ -219,7 +219,25 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const [spotOpen, setSpotOpen] = useState(false) // spot-to-cluster popup
   const [spotCall, setSpotCall] = useState('') // seed: '' from the toolbar, the typed call from LogEntry
   // Wheel-to-tune over the bandscope, sharing the tuning strip's step selector.
-  const [tuneStep, setTuneStep] = useState(100)
+  // Tuning step, persisted per cockpit ('nexus.phone.tuneStep'): the cockpit unmounts on every
+  // mode switch, so plain state reset the step to 100 Hz on each round-trip (FTDX10
+  // report 2026-07-21 — the third remount-state-loss bug today). localStorage so a
+  // CW operator's 10 Hz survives restarts too, like nexus.cw.sensitivity.
+  const [tuneStep, setTuneStep] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem('nexus.phone.tuneStep'))
+      return Number.isFinite(v) && v > 0 ? v : 100
+    } catch {
+      return 100
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('nexus.phone.tuneStep', String(tuneStep))
+    } catch {
+      /* ignore */
+    }
+  }, [tuneStep])
   const scopeRef = useRef<HTMLDivElement>(null)
   // Cockpit root: the scope-height splitter measures + writes its CSS var here.
   const cockpitRef = useRef<HTMLElement>(null)

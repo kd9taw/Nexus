@@ -94,7 +94,7 @@ function RotatorWidget() {
   )
 }
 
-type SortKey = 'priority' | 'call' | 'band' | 'entity'
+type SortKey = 'priority' | 'call' | 'band' | 'entity' | 'mode' | 'zone'
 
 // Persisted filter state key.
 const FILTER_KEY = 'neededFilters'
@@ -300,6 +300,13 @@ export function NeededPanel({
         case 'entity':
           c = a.entity.localeCompare(b.entity)
           break
+        case 'mode':
+          c = a.mode.localeCompare(b.mode)
+          break
+        case 'zone':
+          // zone 0 = unknown → keep at the end of ascending.
+          c = (a.zone || 99) - (b.zone || 99)
+          break
       }
       if (c === 0) c = b.priority - a.priority // tiebreak: hottest first
       return c * dir
@@ -489,8 +496,8 @@ export function NeededPanel({
           {th('call', 'Call')}
           {th('entity', 'Entity')}
           {th('band', 'Band')}
-          <span className="np-th-static">Mode</span>
-          <span className="np-th-static">Zone</span>
+          {th('mode', 'Mode')}
+          {th('zone', 'Zone')}
           <span className="np-th-static">Why</span>
         </div>
         {rows.length === 0 ? (

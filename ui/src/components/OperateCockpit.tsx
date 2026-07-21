@@ -222,7 +222,25 @@ export function OperateCockpit({
   const [recBusy, setRecBusy] = useState(false)
   // Tuning step (Hz) for the header's TuningStrip nudge/step — shared with the
   // step selector, same control CW/Phone carry (dial-nudge + VFO/RIT/XIT).
-  const [tuneStep, setTuneStep] = useState(100)
+  // Tuning step, persisted per cockpit ('nexus.operate.tuneStep'): the cockpit unmounts on every
+  // mode switch, so plain state reset the step to 100 Hz on each round-trip (FTDX10
+  // report 2026-07-21 — the third remount-state-loss bug today). localStorage so a
+  // CW operator's 10 Hz survives restarts too, like nexus.cw.sensitivity.
+  const [tuneStep, setTuneStep] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem('nexus.operate.tuneStep'))
+      return Number.isFinite(v) && v > 0 ? v : 100
+    } catch {
+      return 100
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('nexus.operate.tuneStep', String(tuneStep))
+    } catch {
+      /* ignore */
+    }
+  }, [tuneStep])
   // Skip Tx1 (WSJT-X parity) — session-only UI state; the backend flag is likewise not
   // persisted, so both reset to off each launch. The toggle pushes to the engine.
   const [skipTx1, setSkipTx1] = useState(false)
