@@ -78,3 +78,27 @@ describe('LogEntry Field Day exchange gate', () => {
     expect(mockedFdLog).toHaveBeenCalledWith('W1AW', '2A', 'WI', 'PH')
   })
 })
+
+describe('LogEntry standard variant — State + Country', () => {
+  function renderStd() {
+    render(<LogEntry snap={snap} mode="PH" defaultRst="59" fieldDay={null} fdMode={undefined} />)
+  }
+
+  it('shows editable State and Country fields in the main area', () => {
+    renderStd()
+    // They were previously write-only: auto-filled from QRZ and visible only in the summary
+    // line, so an operator who heard the state on air had to open the logbook to fix it.
+    expect(screen.getByPlaceholderText('State')).toBeTruthy()
+    expect(screen.getByPlaceholderText('Country')).toBeTruthy()
+  })
+
+  it('accepts operator edits to State and Country', () => {
+    renderStd()
+    const st = screen.getByPlaceholderText('State') as HTMLInputElement
+    const co = screen.getByPlaceholderText('Country') as HTMLInputElement
+    fireEvent.change(st, { target: { value: 'WI' } })
+    fireEvent.change(co, { target: { value: 'United States' } })
+    expect(st.value).toBe('WI')
+    expect(co.value).toBe('United States')
+  })
+})

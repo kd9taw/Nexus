@@ -677,6 +677,29 @@ export function LogEntry({
           placeholder="QTH (city)"
           autoComplete="off"
         />
+        {/* State + Country are auto-filled from the QRZ lookup / cty.dat country resolve and
+            were previously write-only — visible in the summary line but not editable here.
+            Surfaced beside QTH because they are the same class of information (city, state,
+            country) and an operator who hears the state on air should not have to open the
+            logbook afterwards to correct it. */}
+        <input
+          className="settings-input le-state"
+          value={logState}
+          onChange={(e) => setLogState(e.target.value)}
+          onKeyDown={onEnter}
+          placeholder="State"
+          autoComplete="off"
+          title="State / province — auto-filled by the QRZ lookup when available"
+        />
+        <input
+          className="settings-input le-country"
+          value={logCountry}
+          onChange={(e) => setLogCountry(e.target.value)}
+          onKeyDown={onEnter}
+          placeholder="Country"
+          autoComplete="off"
+          title="DXCC entity — auto-filled from the callsign when available"
+        />
         <input
           className="settings-input le-comment"
           value={logComment}

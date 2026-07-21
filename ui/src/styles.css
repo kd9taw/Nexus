@@ -6226,6 +6226,16 @@ input.cw-pitch::-webkit-inner-spin-button {
   max-width: 80px;
   flex: 0 0 auto !important;
 }
+/* State + Country sit beside QTH. Both are narrow and non-growing so adding them does not
+   squeeze the Comment field, which is the one that genuinely needs the room. */
+.le-state {
+  max-width: 90px;
+  flex: 0 0 auto !important;
+}
+.le-country {
+  max-width: 150px;
+  flex: 0 1 auto !important;
+}
 /* POTA/SOTA park row: a narrow program select + a flexible reference input. */
 .le-park-prog {
   max-width: 84px;
