@@ -28,14 +28,14 @@ broad wishes.
 
 <!-- Check all that apply. -->
 
-- [ ] **Operate — digital** (FT8/FT4 decodes, roster, sequencer, waterfall, FT1/DX1 chat)
+- [ ] **Operate — digital** (FT8/FT4 decodes, roster, sequencer, waterfall, TempoFast/TempoDeep chat)
 - [ ] **Phone / CW** (bandscope, voice keyer, CW keyer/decoder)
 - [ ] **Connect** (map, propagation, band openings, panes)
 - [ ] **DX chasing** (Needed board, DXpeditions, awards, Journey)
 - [ ] **Satellites / rotator**
 - [ ] **Logbook / QSL** (ADIF, LoTW / QRZ / ClubLog / eQSL / HRDLog)
 - [ ] **Rig control & setup** (CAT / PTT / audio, wizard, rig detection)
-- [ ] **Modem** (libft1 — FT1 / DX1 waveform, decode pipeline)
+- [ ] **Modem** (libtempo — TempoFast / TempoDeep waveform, decode pipeline)
 - [ ] **Interop** (WSJT-X UDP, GridTracker/JTAlert, N1MM/N3FJP, PSK Reporter, cluster)
 - [ ] **Field Day / POTA / SOTA**
 - [ ] Other / not sure

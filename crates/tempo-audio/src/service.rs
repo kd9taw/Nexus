@@ -22,7 +22,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use tempo_app::engine::{DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine};
-use tempo_core::ft1;
+use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
 
 use crate::backend::AudioBackend;
@@ -1006,7 +1006,7 @@ struct Sinks<'a> {
     cfg_dial_hz: u64,
 }
 
-/// SSTV TX working rate (12 kHz = `ft1::SAMPLE_RATE`): the image is synthesized
+/// SSTV TX working rate (12 kHz = `tempo_fast::SAMPLE_RATE`): the image is synthesized
 /// directly at the modem rate, so no resample is needed on the way to the backend.
 const SSTV_TX_RATE_HZ: f64 = 12_000.0;
 /// Chunk size for the SSTV look-ahead feed: ~2 s at 12 kHz.
@@ -1384,7 +1384,7 @@ struct RadioLoop {
 impl RadioLoop {
     fn new(applied: Transport, rigctld_proc: Option<CatDaemon>, cfg: &RadioConfig) -> Self {
         Self {
-            cur_tier: Tier::Ft1,
+            cur_tier: Tier::TempoFast,
             clock: SlotClock::ft1(),
             rx: RxRing::new(),
             last_slot: None,
@@ -2637,7 +2637,7 @@ impl RadioLoop {
                             &text,
                             wpm,
                             pitch,
-                            ft1::SAMPLE_RATE as u32,
+                            tempo_fast::SAMPLE_RATE as u32,
                         );
                         if !buf.is_empty() {
                             // Capture PTT: if the rig won't key, the tone still plays locally so
@@ -2947,7 +2947,7 @@ impl RadioLoop {
             }
             if let Some(buf) = samples {
                 if !buf.is_empty() {
-                    let secs = buf.len() as f32 / ft1::SAMPLE_RATE;
+                    let secs = buf.len() as f32 / tempo_fast::SAMPLE_RATE;
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                     let ptt_err = rig.ptt(true).is_err();
@@ -3306,8 +3306,8 @@ impl RadioLoop {
                 self.tune_started_ms = Some(now);
                 self.tx_until_ms = None; // a tune supersedes any pending slot TX tail
             }
-            let n = (ft1::SAMPLE_RATE * (TUNE_CHUNK_MS / 1000.0)) as usize;
-            let chunk = tune_carrier(TUNE_FREQ_HZ, n, ft1::SAMPLE_RATE, &mut self.tune_phase);
+            let n = (tempo_fast::SAMPLE_RATE * (TUNE_CHUNK_MS / 1000.0)) as usize;
+            let chunk = tune_carrier(TUNE_FREQ_HZ, n, tempo_fast::SAMPLE_RATE, &mut self.tune_phase);
             backend.play(&chunk);
             self.rx.clear(); // don't decode our own carrier
             return Ok(());
@@ -3482,7 +3482,7 @@ impl RadioLoop {
                 let _ = eng.take_immediate_tx();
                 let waves = eng.poll_tx(slot_now);
                 if !waves.is_empty() {
-                    let trim_samples = ((deficit_ms / 1000.0) * ft1::SAMPLE_RATE as f64) as usize;
+                    let trim_samples = ((deficit_ms / 1000.0) * tempo_fast::SAMPLE_RATE as f64) as usize;
                     // Must leave a transmittable remainder (always true within the
                     // per-tier budget — trimming ≤6 s of FT8's 12.6 s keeps ≥6.6 s).
                     let trimmable = waves
@@ -3520,7 +3520,7 @@ impl RadioLoop {
                                 let end = w2.iter().rposition(|&x| x != 0.0).map_or(0, |p| p + 1);
                                 w2 = &w2[..end];
                             }
-                            secs += w2.len() as f32 / ft1::SAMPLE_RATE;
+                            secs += w2.len() as f32 / tempo_fast::SAMPLE_RATE;
                             backend.play(w2);
                         }
                         self.rx.clear(); // our just-started carrier must not be decoded
@@ -3621,7 +3621,7 @@ impl RadioLoop {
                     // Only THIS slot's audio, at its true position from the slot
                     // start, tail-padded — a rolling tail of the previous slot
                     // (or front-padding) would wreck the decoder's dt alignment.
-                    let n = ((elapsed_ms / 1000.0) * ft1::SAMPLE_RATE as f64) as usize;
+                    let n = ((elapsed_ms / 1000.0) * tempo_fast::SAMPLE_RATE as f64) as usize;
                     let frame = self.rx.frame_latest_padded(n);
                     // Dispatch the early partial decode (boundary-slot index = audio
                     // slot + 1, matching the boundary ingest's parity/history). The
@@ -4185,8 +4185,8 @@ fn cabrillo_like_dt(unix: u64) -> (String, String) {
 
 fn tier_mode(tier: Tier) -> &'static str {
     match tier {
-        Tier::Ft1 => "FT1",
-        Tier::Dx1 => "DX1",
+        Tier::TempoFast => "TempoFast",
+        Tier::TempoDeep => "TempoDeep",
         Tier::Ft8 => "FT8",
         Tier::Ft4 => "FT4",
     }
@@ -4995,8 +4995,8 @@ mod tests {
 
     #[test]
     fn tier_mode_maps_each_tier() {
-        assert_eq!(tier_mode(Tier::Ft1), "FT1");
-        assert_eq!(tier_mode(Tier::Dx1), "DX1");
+        assert_eq!(tier_mode(Tier::TempoFast), "TempoFast");
+        assert_eq!(tier_mode(Tier::TempoDeep), "TempoDeep");
         assert_eq!(tier_mode(Tier::Ft8), "FT8");
         assert_eq!(tier_mode(Tier::Ft4), "FT4");
     }
@@ -6503,7 +6503,7 @@ mod tests {
         let mut backend = MockBackend::new();
         let mut rig = Rig::vox();
         let mut state = loop_state();
-        assert_eq!(state.cur_tier, Tier::Ft1);
+        assert_eq!(state.cur_tier, Tier::TempoFast);
         let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();
 

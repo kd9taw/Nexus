@@ -16,7 +16,7 @@
 #include <string.h>
 #include <math.h>
 
-#include "libft1.h"
+#include "libtempo.h"
 
 /* Box-Muller Gaussian, unit variance. */
 static float grandf(void) {

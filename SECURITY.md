@@ -3,7 +3,7 @@
 Nexus is a small, volunteer, open-source project — an all-mode amateur radio
 operations center (FT8/FT4 digital with WSJT-X parity, CW, SSB phone,
 propagation intelligence, logging/awards, POTA/SOTA, Field Day) that also
-carries the experimental Tempo FT1/DX1 chat layer. We take security seriously
+carries the experimental Tempo TempoFast/TempoDeep chat layer. We take security seriously
 within the limits of what a one-person hobby project can promise. Please read
 this whole page before reporting; it sets honest expectations.
 
@@ -15,7 +15,7 @@ this whole page before reporting; it sets honest expectations.
 | < 0.1.0 | No                   |
 
 Nexus 0.1.x is the current series. Published Windows binaries are
-cross-compiled. The FT8/FT4 tier is in daily production use; the FT1/DX1 modem
+cross-compiled. The FT8/FT4 tier is in daily production use; the TempoFast/TempoDeep modem
 has been validated in **simulation only** — not yet on-air. There is no
 separate "stable" branch; fixes land on the 0.1.x line.
 

@@ -22,7 +22,7 @@ pub use mode::{make_mode, Capabilities, Ft1Mode, Ft4Mode, Ft8Mode, Mode, ModeKin
 pub use source::{DecodeRequest, NativeSource, SignalSource, WsjtxUdpSource};
 
 /// Clear FT8's a7 cross-cycle decode table (prior-slot call pairs). The engine
-/// calls this on band QSY / tier switch — analogous to `ft1::harq_reset` — so a
+/// calls this on band QSY / tier switch — analogous to `tempo_fast::harq_reset` — so a
 /// new band's audio is not probed with stale prior-cycle AP hypotheses.
 pub use ft8::a7_reset as reset_ft8_a7;
 
@@ -56,7 +56,7 @@ mod tests {
         let off = match mode.kind() {
             ModeKind::Ft8 => 0,
             ModeKind::Ft4 => 0,
-            ModeKind::Ft1 => 4_800,
+            ModeKind::TempoFast => 4_800,
         };
         to_i16_frame(&wave, mode.frame_samples(), off, 1000.0)
     }
@@ -75,9 +75,9 @@ mod tests {
         assert_eq!(m4.frame_samples(), ft4::NMAX);
         assert!(!m4.capabilities().fox_hound);
 
-        let m1 = make_mode(ModeKind::Ft1);
+        let m1 = make_mode(ModeKind::TempoFast);
         assert_eq!(m1.slot_secs(), 4.0);
-        assert_eq!(m1.frame_samples(), ft1::NMAX);
+        assert_eq!(m1.frame_samples(), tempo_fast::NMAX);
         assert!(m1.capabilities().ir_harq);
 
         assert_eq!(ModeKind::ALL.len(), 3);
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn native_ft1_through_trait() {
-        native_roundtrip(ModeKind::Ft1);
+        native_roundtrip(ModeKind::TempoFast);
     }
 
     /// The extended a7 path (`SignalSource::decode_a7` -> `Mode::decode_frame_a7`

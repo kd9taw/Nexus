@@ -16,19 +16,19 @@ use crate::decode::Decode;
 pub enum ModeKind {
     Ft8,
     Ft4,
-    Ft1,
+    TempoFast,
 }
 
 impl ModeKind {
     /// All modes shipped today, in display order.
-    pub const ALL: [ModeKind; 3] = [ModeKind::Ft8, ModeKind::Ft4, ModeKind::Ft1];
+    pub const ALL: [ModeKind; 3] = [ModeKind::Ft8, ModeKind::Ft4, ModeKind::TempoFast];
 
     /// Short display name, e.g. `"FT8"`.
     pub fn as_str(self) -> &'static str {
         match self {
             ModeKind::Ft8 => "FT8",
             ModeKind::Ft4 => "FT4",
-            ModeKind::Ft1 => "FT1",
+            ModeKind::TempoFast => "TempoFast",
         }
     }
 
@@ -37,7 +37,7 @@ impl ModeKind {
         match self {
             ModeKind::Ft8 => 15.0,
             ModeKind::Ft4 => 7.5,
-            ModeKind::Ft1 => 4.0,
+            ModeKind::TempoFast => 4.0,
         }
     }
 
@@ -47,7 +47,7 @@ impl ModeKind {
         match self {
             ModeKind::Ft8 => ft8::NMAX,
             ModeKind::Ft4 => ft4::NMAX,
-            ModeKind::Ft1 => ft1::NMAX,
+            ModeKind::TempoFast => tempo_fast::NMAX,
         }
     }
 
@@ -57,7 +57,7 @@ impl ModeKind {
     /// ring must hold the WHOLE slot — the decoder then reads its HEAD (leading
     /// Costas sync). Capturing only NMAX keeps the slot TAIL and amputates sync.
     pub fn capture_samples(self) -> usize {
-        (self.slot_secs() * ft1::SAMPLE_RATE) as usize
+        (self.slot_secs() * tempo_fast::SAMPLE_RATE) as usize
     }
 }
 
@@ -179,7 +179,7 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
     match kind {
         ModeKind::Ft8 => Box::new(Ft8Mode),
         ModeKind::Ft4 => Box::new(Ft4Mode),
-        ModeKind::Ft1 => Box::new(Ft1Mode),
+        ModeKind::TempoFast => Box::new(Ft1Mode),
     }
 }
 
@@ -344,7 +344,7 @@ pub struct Ft1Mode;
 
 impl Mode for Ft1Mode {
     fn kind(&self) -> ModeKind {
-        ModeKind::Ft1
+        ModeKind::TempoFast
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -355,10 +355,10 @@ impl Mode for Ft1Mode {
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
-        ft1::encode(msg)
+        tempo_fast::encode(msg)
     }
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
-        ft1::gen_wave(itone, fsample, f0)
+        tempo_fast::gen_wave(itone, fsample, f0)
     }
     fn decode_frame(
         &self,
@@ -373,8 +373,8 @@ impl Mode for Ft1Mode {
         frame_time_ms: i64,
     ) -> Vec<Decode> {
         // FT1's decoder keys cross-frame IR-HARQ combining off frame_time_ms; the
-        // caller resets HARQ buffers (ft1::harq_reset) on band/QSO change.
-        ft1::decode_frame(
+        // caller resets HARQ buffers (tempo_fast::harq_reset) on band/QSO change.
+        tempo_fast::decode_frame(
             iwave,
             nfa,
             nfb,

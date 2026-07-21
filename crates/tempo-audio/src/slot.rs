@@ -5,7 +5,7 @@
 //! `run_radio`.
 
 use tempo_app::engine::Engine;
-use tempo_core::ft1;
+use tempo_core::tempo_fast;
 
 use crate::backend::AudioBackend;
 use crate::frames::RxRing;
@@ -163,7 +163,7 @@ pub fn slot_tx_phase(
         let _ = rig.ptt(true);
         let mut secs = 0.0f32;
         for w in &waves {
-            secs += w.len() as f32 / ft1::SAMPLE_RATE;
+            secs += w.len() as f32 / tempo_fast::SAMPLE_RATE;
             backend.play(w);
         }
         rx.clear(); // our just-started carrier must not be decoded next boundary
@@ -311,7 +311,7 @@ mod tests {
         // Idle engine → nothing to send even on its TX slot → receive path. The
         // two-phase driver decodes the captured slot, folds it, THEN runs poll_tx.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
-        eng.set_tier(tempo_app::dto::Tier::Ft1); // FT1-modem slot test (default is FT8)
+        eng.set_tier(tempo_app::dto::Tier::TempoFast); // FT1-modem slot test (default is FT8)
         let mut rig = Rig::vox();
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
@@ -374,7 +374,7 @@ mod tests {
         // a receive slot, so its audio (in the ring) is the other stations.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
-        eng.set_tier(tempo_app::dto::Tier::Ft1);
+        eng.set_tier(tempo_app::dto::Tier::TempoFast);
         eng.broadcast("CQ TEST W9XYZ EN37"); // something to send on our TX slot
         let mut rig = Rig::vox();
         let mut backend = MockBackend::new();
@@ -410,7 +410,7 @@ mod tests {
             "our own transmit slot is never decoded as RX"
         );
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
-        eng.set_tier(tempo_app::dto::Tier::Ft1);
+        eng.set_tier(tempo_app::dto::Tier::TempoFast);
         let mut rig = Rig::vox();
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
@@ -439,7 +439,7 @@ mod tests {
         // The synchronous `run_slot` reference and the two-phase decomposition must
         // agree: both decode the just-ended RX slot before the (no-op) TX decision.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
-        eng.set_tier(tempo_app::dto::Tier::Ft1);
+        eng.set_tier(tempo_app::dto::Tier::TempoFast);
         let mut rig = Rig::vox();
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();

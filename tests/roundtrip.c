@@ -1,5 +1,5 @@
 /*
- * Tempo: headless FT1 encode -> decode round-trip via the libft1 C ABI.
+ * Tempo: headless FT1 encode -> decode round-trip via the libtempo C ABI.
  *
  * Pipeline:
  *   ft1_encode -> ft1_gen_wave -> [add AWGN @ high SNR] -> ft1_decode_rt
@@ -12,7 +12,7 @@
 #include <string.h>
 #include <math.h>
 
-#include "libft1.h"
+#include "libtempo.h"
 
 /* Box-Muller Gaussian, unit variance. */
 static float grandf(void) {

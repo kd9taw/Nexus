@@ -7,10 +7,10 @@
 //! sub-sample alignment is not required here.
 
 use std::collections::VecDeque;
-use tempo_core::ft1;
+use tempo_core::tempo_fast;
 
-/// Samples in one 4-second frame at 12 kHz (= `ft1::NMAX`).
-pub const FRAME_LEN: usize = ft1::NMAX;
+/// Samples in one 4-second frame at 12 kHz (= `tempo_fast::NMAX`).
+pub const FRAME_LEN: usize = tempo_fast::NMAX;
 
 /// Rolling buffer holding the latest `cap` audio samples (one frame window).
 ///

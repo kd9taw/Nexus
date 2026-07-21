@@ -25,7 +25,7 @@ use serde_json::Value;
 use tempo_app::dto::Tier;
 use tempo_app::engine::Engine;
 use tempo_app::settings::Settings;
-use tempo_core::ft1;
+use tempo_core::tempo_fast;
 
 /// The engine keeps a 4096-sample rolling waterfall window (`SPECTRUM_WINDOW`); feeding
 /// exactly that many samples fills it without depending on the drain path.
@@ -56,7 +56,7 @@ fn native_frame_for(kind: modes::ModeKind, msg: &str, f0: f32) -> Vec<f32> {
     assert!(!tones.is_empty(), "{} encode failed", kind.as_str());
     // FT8/FT4 gen_wave is slot-positioned (it carries its own 0.5 s lead-in), so the
     // waveform drops in at the slot start with no manual offset.
-    let wave = mode.gen_wave(&tones, ft1::SAMPLE_RATE, f0);
+    let wave = mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0);
     let n = mode.frame_samples();
     let mut frame = vec![0f32; n];
     for (i, &s) in wave.iter().take(n).enumerate() {

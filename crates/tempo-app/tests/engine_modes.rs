@@ -5,7 +5,7 @@
 use tempo_app::dto::Tier;
 use tempo_app::engine::Engine;
 use tempo_core::channel::{VirtualAir, ON_TIME_OFFSET};
-use tempo_core::ft1;
+use tempo_core::tempo_fast;
 
 /// Real audio capture normalizes the soundcard int16 to f32 (÷32768); the VirtualAir
 /// harness instead emits f32 at the ×100 int16 scale (paired with channel::to_i16). The
@@ -21,8 +21,8 @@ fn to_capture(mut rx: Vec<f32>) -> Vec<f32> {
 /// Shuttle frames between two engines over the channel for `slots` slots.
 /// Engine `a` transmits on even slots, `b` on odd. Returns after `done(a,b)`.
 fn run(a: &mut Engine, b: &mut Engine, slots: u64, done: impl Fn(&Engine, &Engine) -> bool) {
-    let mut a2b = VirtualAir::new(ft1::SAMPLE_RATE, 11);
-    let mut b2a = VirtualAir::new(ft1::SAMPLE_RATE, 22);
+    let mut a2b = VirtualAir::new(tempo_fast::SAMPLE_RATE, 11);
+    let mut b2a = VirtualAir::new(tempo_fast::SAMPLE_RATE, 22);
     for slot in 0..slots {
         if slot % 2 == 0 {
             for w in a.poll_tx(slot) {
@@ -45,8 +45,8 @@ fn run(a: &mut Engine, b: &mut Engine, slots: u64, done: impl Fn(&Engine, &Engin
 fn qso_mode_completes_through_the_engine() {
     let mut a = Engine::new("W9XYZ", "EN37", 0);
     let mut b = Engine::new("K2DEF", "FN31", 1);
-    a.set_tier(Tier::Ft1); // FT1-modem loopback (default tier is now FT8)
-    b.set_tier(Tier::Ft1);
+    a.set_tier(Tier::TempoFast); // FT1-modem loopback (default tier is now FT8)
+    b.set_tier(Tier::TempoFast);
     a.set_mode("qso-run").unwrap(); // A RUNS (calls CQ)
                                     // B works A explicitly (Monitor is now passive — no auto-answer; the operator
                                     // double-clicks a decode, which is call_station).
@@ -80,8 +80,8 @@ fn qso_mode_completes_through_the_engine() {
 fn field_day_mode_logs_through_the_engine() {
     let mut run_st = Engine::new("W9XYZ", "EN37", 0);
     let mut sp = Engine::new("K2DEF", "FN31", 1);
-    run_st.set_tier(Tier::Ft1); // FT1-modem loopback (default tier is now FT8)
-    sp.set_tier(Tier::Ft1);
+    run_st.set_tier(Tier::TempoFast); // FT1-modem loopback (default tier is now FT8)
+    sp.set_tier(Tier::TempoFast);
     // Configure exchanges via settings, then enter Field Day mode.
     {
         let mut s = run_st.settings().clone();

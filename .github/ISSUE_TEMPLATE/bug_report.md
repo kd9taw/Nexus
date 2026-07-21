@@ -8,7 +8,7 @@ assignees: []
 
 <!--
 Thanks for helping improve Nexus. Please fill in every section you can.
-Reminder: Nexus is beta and the FT1/DX1 waveforms are validated by simulation,
+Reminder: Nexus is beta and the TempoFast/TempoDeep waveforms are validated by simulation,
 not yet on-air. A bug seen only on-air is still useful — just say so below.
 -->
 
@@ -22,7 +22,7 @@ not yet on-air. A bug seen only on-air is still useful — just say so below.
 
 ## Operating context
 
-- **Mode:** <!-- FT8 / FT4 / FT1 (Tempo chat) / DX1 / Phone (SSB/FM) / CW -->
+- **Mode:** <!-- FT8 / FT4 / TempoFast (Tempo chat) / TempoDeep / Phone (SSB/FM) / CW -->
 - **Band / dial frequency:** <!-- e.g. 40 m, 7.074 MHz USB -->
 - **Where in the app:** <!-- e.g. Operate roster / Connect / Needed board / Satellites / Logbook / Settings / Field Day -->
 - **On-air vs simulation/loopback:** <!-- Was this on a real RF path, or a loopback / simulated / file-based test? This matters a lot for triage. -->

@@ -31,7 +31,7 @@ const POLL: Duration = Duration::from_millis(100);
 const CONSTRUCT_RETRY: Duration = Duration::from_secs(30);
 /// Preview width cap for the in-progress thumbnail pushed to the UI.
 const PREVIEW_MAX_W: u32 = 160;
-/// The engine's RX audio rate (`ft1::SAMPLE_RATE`).
+/// The engine's RX audio rate (`tempo_fast::SAMPLE_RATE`).
 const INPUT_RATE_HZ: u32 = 12_000;
 
 /// A partial image being filled line-by-line from `LineDecoded` events.

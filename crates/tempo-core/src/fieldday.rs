@@ -727,7 +727,7 @@ pub fn run_loopback_fieldday(
     use crate::channel::{to_i16, VirtualAir, ON_TIME_OFFSET};
     use crate::tx;
 
-    let mut air = VirtualAir::new(ft1::SAMPLE_RATE, 0xFD0001);
+    let mut air = VirtualAir::new(tempo_fast::SAMPLE_RATE, 0xFD0001);
     for slot in 0..max_slots {
         let (txs, rxs): (&mut FieldDayStation, &mut FieldDayStation) = if slot % 2 == 0 {
             (&mut *running, &mut *sp)
@@ -736,9 +736,9 @@ pub fn run_loopback_fieldday(
         };
         if let Some(msg) = txs.outgoing() {
             let text = msg.to_text();
-            let frame = tx::build(&text, ft1::SAMPLE_RATE, 1500.0);
+            let frame = tx::build(&text, tempo_fast::SAMPLE_RATE, 1500.0);
             let rx_f32 = air.receive(&frame.wave, ON_TIME_OFFSET, snr_db);
-            let decodes: Vec<Decode> = ft1::decode_frame(
+            let decodes: Vec<Decode> = tempo_fast::decode_frame(
                 &to_i16(&rx_f32),
                 200,
                 2900,

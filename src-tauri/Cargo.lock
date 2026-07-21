@@ -1293,28 +1293,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "ft1"
-version = "0.2.0"
-dependencies = [
- "ft1-sys",
-]
-
-[[package]]
-name = "ft1-sys"
-version = "0.2.0"
-
-[[package]]
 name = "ft4"
 version = "0.1.0"
 dependencies = [
- "ft1-sys",
+ "tempo-fast-sys",
 ]
 
 [[package]]
 name = "ft8"
 version = "0.1.0"
 dependencies = [
- "ft1-sys",
+ "tempo-fast-sys",
 ]
 
 [[package]]
@@ -2584,9 +2573,9 @@ dependencies = [
 name = "modes"
 version = "0.1.0"
 dependencies = [
- "ft1",
  "ft4",
  "ft8",
+ "tempo-fast",
  "tempo-net",
 ]
 
@@ -4811,10 +4800,21 @@ dependencies = [
 name = "tempo-core"
 version = "0.2.0"
 dependencies = [
- "ft1",
  "microfft",
  "modes",
+ "tempo-fast",
 ]
+
+[[package]]
+name = "tempo-fast"
+version = "0.2.0"
+dependencies = [
+ "tempo-fast-sys",
+]
+
+[[package]]
+name = "tempo-fast-sys"
+version = "0.2.0"
 
 [[package]]
 name = "tempo-net"

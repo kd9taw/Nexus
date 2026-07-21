@@ -22,7 +22,7 @@ use tempo_core::fieldday::{Exchange, FieldDayStation};
 use tempo_core::logbook::{Logbook, QsoRecord};
 use tempo_core::qso::{State as QsoState, Station as QsoStation};
 use tempo_core::qsy::{Directive, Roamer};
-use tempo_core::{channel, ft1, spectrum, tx};
+use tempo_core::{channel, tempo_fast, spectrum, tx};
 
 use crate::dto::{
     AppSnapshot, DecodeRow, FieldDayQso, FieldDayStatus, OpMode, QsoStatus, QsyStatus,
@@ -82,8 +82,8 @@ impl DecodePass {
 enum DecodeBranch {
     /// Native FT1/FT8/FT4 through the [`SignalSource`] (AP context in the job).
     Native,
-    /// DX1 robust full-band acquisition (`ft1::dx1::decode_band`, stateless).
-    Dx1,
+    /// DX1 robust full-band acquisition (`tempo_fast::deep::decode_band`, stateless).
+    TempoDeep,
     /// Companion: drain the upstream WSJT-X/JTDX/MSHV UDP queue (audio ignored).
     Companion,
 }
@@ -96,7 +96,7 @@ pub struct DecodeJob {
     source: SharedSource,
     frame: Vec<f32>,
     branch: DecodeBranch,
-    // A-priori request context — native branch only (dx1/companion ignore it).
+    // A-priori request context — native branch only (tempodeep/companion ignore it).
     nfa: i32,
     nfb: i32,
     ndepth: i32,
@@ -221,10 +221,10 @@ pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
             // Decodes arrive over UDP; the captured audio is irrelevant.
             src.decode(&modes::DecodeRequest::full_band(&[]))
         }
-        DecodeBranch::Dx1 => {
+        DecodeBranch::TempoDeep => {
             // Robust full-passband acquisition — no `modes::Mode`; normalize to the
             // unified Decode. (The lock is held purely to serialize FFI state.)
-            ft1::dx1::decode_band(&frame, 200.0, 2900.0, ft1::SAMPLE_RATE)
+            tempo_fast::deep::decode_band(&frame, 200.0, 2900.0, tempo_fast::SAMPLE_RATE)
                 .into_iter()
                 .map(modes::Decode::from)
                 .collect()
@@ -233,7 +233,7 @@ pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
             // IR-HARQ off (or non-FT1 mode): clear buffered RV0 so nothing
             // cross-frame-combines. Exactly where decode_frame reset it.
             if harq_reset {
-                ft1::harq_reset();
+                tempo_fast::harq_reset();
             }
             let iwave = channel::capture_to_i16(&frame);
             let req = modes::DecodeRequest {
@@ -887,7 +887,7 @@ pub struct SstvProgress {
 /// [`Engine::sstv_send`], and taken by the radio loop via [`Engine::poll_sstv_tx`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SstvTxJob {
-    /// Full over-the-air waveform (`f32` PCM at 12 kHz = `ft1::SAMPLE_RATE`).
+    /// Full over-the-air waveform (`f32` PCM at 12 kHz = `tempo_fast::SAMPLE_RATE`).
     pub samples: Vec<f32>,
     /// Human-readable mode label, e.g. "Scottie 1".
     pub mode_name: String,
@@ -1161,7 +1161,7 @@ impl Engine {
             ai_cw_text: String::new(),
             ai_cw_fed: 0,
             ai_cw_status: String::new(),
-            cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(ft1::SAMPLE_RATE, 600.0),
+            cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
             cat_status: (None, String::new()),
             radio_live: std::collections::HashMap::new(),
@@ -3854,7 +3854,7 @@ impl Engine {
         // silently transmit nothing). Snap to FT1 when entering Chat on a
         // structured tier, so Chat can never silently fail.
         if matches!(self.mode, Mode::Chat) && matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4) {
-            self.set_tier(Tier::Ft1);
+            self.set_tier(Tier::TempoFast);
         }
         // Running modes (Call CQ / Field-Day run) auto-call CQ, so entering one
         // must ENABLE TX like WSJT-X's run start — otherwise, after a prior Halt Tx
@@ -3894,9 +3894,9 @@ impl Engine {
                 // MSG = FT1/DX1 free-text paradigm. Remember which structured
                 // tier we're leaving so a dx(FT4) → msg → dx round-trip returns
                 // to FT4 (it used to default back to FT8 — the tier was lost).
-                if !matches!(self.app.tier(), Tier::Ft1 | Tier::Dx1) {
+                if !matches!(self.app.tier(), Tier::TempoFast | Tier::TempoDeep) {
                     self.last_dx_tier = Some(self.app.tier());
-                    self.set_tier(self.last_msg_tier.unwrap_or(Tier::Ft1));
+                    self.set_tier(self.last_msg_tier.unwrap_or(Tier::TempoFast));
                 }
                 if !matches!(self.mode, Mode::Chat) {
                     let _ = self.set_mode("chat");
@@ -4113,13 +4113,13 @@ impl Engine {
         self.decode_epoch = self.decode_epoch.wrapping_add(1);
     }
 
-    /// `ft1::harq_reset()` serialized behind the decoder lock, so it can never race
+    /// `tempo_fast::harq_reset()` serialized behind the decoder lock, so it can never race
     /// the worker thread's in-flight decode (which uses the same process-global FT1
     /// IR-HARQ buffers). Every engine-thread reset goes through here; the decode
     /// path's own reset already runs under the lock in [`run_decode_job`].
     fn harq_reset_locked(&self) {
         let _g = self.source.lock().unwrap();
-        ft1::harq_reset();
+        tempo_fast::harq_reset();
     }
 
     /// Clear the CW decode transcript + reset the stream decoder. A QSY (band change,
@@ -4447,7 +4447,7 @@ impl Engine {
         self.clear_decode_context();
         match kind {
             SourceKind::Native => {
-                let mode_kind = self.tier().mode_kind().unwrap_or(modes::ModeKind::Ft1);
+                let mode_kind = self.tier().mode_kind().unwrap_or(modes::ModeKind::TempoFast);
                 *self.source.lock().unwrap() = Box::new(NativeSource::from_kind(mode_kind));
             }
             SourceKind::Companion => {
@@ -4791,13 +4791,13 @@ impl Engine {
             // loop actually plays). Must include the lead-in so the "snappy first over"
             // room check doesn't admit an over that overruns the next slot by 0.5 s.
             Tier::Ft8 => 13.14,
-            Tier::Dx1 => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
+            Tier::TempoDeep => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
             // FT4 = 0.5 s lead-in + 5.04 s tones (105 sym × 576 sa @ 12 kHz). The
             // generated buffer also carries ~1.0 s of TRAILING silence — that is
             // PTT-hold padding, not airtime, and the radio loop strips it on a
             // late (mid-slot) start so the over never bleeds into the next period.
             Tier::Ft4 => 5.54,
-            Tier::Ft1 => 3.55,
+            Tier::TempoFast => 3.55,
         }
     }
 
@@ -4967,7 +4967,7 @@ impl Engine {
     /// the 300–1500 Hz CW passband, each as (pitch, text, WPM). The multi-signal sibling
     /// of [`Self::cw_decode`].
     pub fn cw_skim(&self) -> Vec<tempo_core::cw_decode::SkimHit> {
-        tempo_core::cw_decode::skim_cw(&self.cw_audio, ft1::SAMPLE_RATE, 300, 1500, 50)
+        tempo_core::cw_decode::skim_cw(&self.cw_audio, tempo_fast::SAMPLE_RATE, 300, 1500, 50)
     }
 
     // --- RTTY RX (armed decoder on the RX audio path; decode runs in the
@@ -5673,7 +5673,7 @@ impl Engine {
         if samples.is_empty() {
             return Err("Nothing to send — the encoded image is empty".to_string());
         }
-        let duration_secs = samples.len() as f64 / f64::from(ft1::SAMPLE_RATE);
+        let duration_secs = samples.len() as f64 / f64::from(tempo_fast::SAMPLE_RATE);
         // Hard cap, watchdog-independent: no legitimate SSTV image exceeds ~295 s (PD290),
         // so anything past 330 s is a bug or an abuse — refuse it outright.
         if duration_secs > SSTV_MAX_TX_SECS {
@@ -6065,7 +6065,7 @@ impl Engine {
     /// tiers read it from their [`modes::ModeKind`] (FT1 = 4, FT8 = 15, FT4 = 7.5).
     pub fn active_slot_secs(&self) -> f64 {
         match self.app.tier() {
-            Tier::Dx1 => tempo_core::timing::DX1_PERIOD_S,
+            Tier::TempoDeep => tempo_core::timing::DX1_PERIOD_S,
             t => t
                 .mode_kind()
                 .map(|k| k.slot_secs() as f64)
@@ -6079,11 +6079,11 @@ impl Engine {
     /// + slot clock from this so a mode switch never mis-sizes the decode frame.
     pub fn active_frame_samples(&self) -> usize {
         match self.app.tier() {
-            Tier::Dx1 => ft1::dx1::capture_len(),
+            Tier::TempoDeep => tempo_fast::deep::capture_len(),
             t => t
                 .mode_kind()
                 .map(|k| k.frame_samples())
-                .unwrap_or(ft1::NMAX),
+                .unwrap_or(tempo_fast::NMAX),
         }
     }
 
@@ -6095,11 +6095,11 @@ impl Engine {
     /// [`active_frame_samples`]: Engine::active_frame_samples
     pub fn active_capture_samples(&self) -> usize {
         match self.app.tier() {
-            Tier::Dx1 => ft1::dx1::capture_len(),
+            Tier::TempoDeep => tempo_fast::deep::capture_len(),
             t => t
                 .mode_kind()
                 .map(|k| k.capture_samples())
-                .unwrap_or(ft1::NMAX),
+                .unwrap_or(tempo_fast::NMAX),
         }
     }
 
@@ -6672,21 +6672,21 @@ impl Engine {
                 // Both place the signal at the operator's TX audio offset.
                 let wave = match self.app.tier() {
                     // Robust tier: 8-FSK non-coherent.
-                    Tier::Dx1 => ft1::dx1::encode_wave(&t, self.tx_offset_hz, ft1::SAMPLE_RATE),
+                    Tier::TempoDeep => tempo_fast::deep::encode_wave(&t, self.tx_offset_hz, tempo_fast::SAMPLE_RATE),
                     // FT1: 4-CPM. QSO mode escalates tx_rv for IR-HARQ
                     // retransmissions; Chat/Field Day keep tx_rv = 0 (RV0 = tx::build).
-                    Tier::Ft1 => tx::build_rv(&t, ft1::SAMPLE_RATE, self.tx_offset_hz, tx_rv).wave,
+                    Tier::TempoFast => tx::build_rv(&t, tempo_fast::SAMPLE_RATE, self.tx_offset_hz, tx_rv).wave,
                     // FT8 / FT4: encode + synthesize via the active mode (no IR-HARQ).
                     // Split Operation reduces the audio into 1500–2000 Hz and
                     // leaves the matching dial shift for the slot core to apply
                     // before PTT — the on-air RF frequency is unchanged.
                     native => {
-                        let kind = native.mode_kind().unwrap_or(modes::ModeKind::Ft1);
+                        let kind = native.mode_kind().unwrap_or(modes::ModeKind::TempoFast);
                         let mode = modes::make_mode(kind);
                         let tones = mode.encode(&t);
                         let (f0, shift) = self.split_reduce(self.tx_offset_hz);
                         self.tx_dial_shift_hz = shift;
-                        mode.gen_wave(&tones, ft1::SAMPLE_RATE, f0)
+                        mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0)
                     }
                 };
                 vec![wave]
@@ -6743,12 +6743,12 @@ impl Engine {
                 epoch,
             };
         }
-        if self.app.tier() == Tier::Dx1 {
+        if self.app.tier() == Tier::TempoDeep {
             // DX1 full-passband acquisition — its own robust path, no AP context.
             return DecodeJob {
                 source,
                 frame,
-                branch: DecodeBranch::Dx1,
+                branch: DecodeBranch::TempoDeep,
                 nfa: 0,
                 nfb: 0,
                 ndepth: 0,
@@ -7386,10 +7386,10 @@ impl Engine {
         // ADIF mode must reflect the tier actually used — FT8/FT4 contacts log as
         // FT8/FT4 (award eligibility depends on it), not the native FT1 path.
         let mode = match self.app.tier() {
-            Tier::Dx1 => "DX1",
+            Tier::TempoDeep => "TempoDeep",
             Tier::Ft8 => "FT8",
             Tier::Ft4 => "FT4",
-            Tier::Ft1 => "FT1",
+            Tier::TempoFast => "TempoFast",
         }
         .to_string();
         // Resolve the DXCC entity (country) at log time — the key field for a
@@ -7574,7 +7574,7 @@ impl Engine {
         let row = if audio.is_empty() {
             Vec::new()
         } else {
-            spectrum::power_spectrum(audio, ft1::SAMPLE_RATE, LO_HZ, HI_HZ, SPECTRUM_BINS)
+            spectrum::power_spectrum(audio, tempo_fast::SAMPLE_RATE, LO_HZ, HI_HZ, SPECTRUM_BINS)
         };
         Spectrum {
             row,
@@ -9028,7 +9028,7 @@ mod tests {
 
         // FT1 free-text is exempt from the standard-message grid contract.
         let mut e = Engine::new("W9XYZ", "", 0);
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         assert!(e.structured_tx_ready(true).is_ok(), "FT1 is not grid-bound");
     }
 
@@ -9172,7 +9172,7 @@ mod tests {
     #[test]
     fn call_cq_emits_one_structured_cq_and_arms_tx() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         assert!(!e.tx_enabled(), "TX disarmed at start (launch safety)");
 
         e.call_cq(None).expect("call_cq with a valid grid");
@@ -9200,7 +9200,7 @@ mod tests {
         // directed token would force TRUNCATED free text (the bug). It must also be
         // allowed to call CQ WITHOUT a grid.
         let mut e = Engine::new("W9XYZ/P", "", 0);
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         e.call_cq(Some("DX"))
             .expect("compound CQ succeeds without a grid");
         assert_eq!(e.broadcast_queue.len(), 1);
@@ -9221,7 +9221,7 @@ mod tests {
     #[test]
     fn broadcast_arms_tx() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         assert!(!e.tx_enabled());
         e.broadcast("QRZ?");
         assert!(e.tx_enabled(), "an explicit broadcast arms TX too");
@@ -9234,7 +9234,7 @@ mod tests {
         // (half of the "reply won't send" bug). It stays store-and-forward gated: arming does
         // not put it on the air until the peer is present.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         assert!(!e.tx_enabled());
         e.send_message("W9XYZ", "MEET AT NOON");
         assert!(e.tx_enabled(), "sending a directed reply arms TX");
@@ -9243,7 +9243,7 @@ mod tests {
     #[test]
     fn band_activity_shows_logical_message_not_raw_chunks() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         e.broadcast("testing 123"); // -> "DE KD9TAW testing 123", chunked into wire frames
         for slot in [0u64, 2, 4, 6] {
             let _ = e.poll_tx(slot); // transmit the chunk frames over several TX slots
@@ -9270,7 +9270,7 @@ mod tests {
     #[test]
     fn short_broadcast_uses_one_bare_frame() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         e.broadcast("73"); // "DE KD9TAW 73" = 12 chars ≤ 13 → ONE bare frame (no header)
         assert_eq!(e.broadcast_queue.len(), 1, "single frame, not chunked");
         assert!(
@@ -9333,7 +9333,7 @@ mod tests {
     #[test]
     fn chat_reply_auto_picks_the_opposite_cycle() {
         let mut e = Engine::new("K2DEF", "FN31", 0); // starts Tx 1st (even)
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         assert!(e.tx_even() && e.tx_cycle_auto(), "starts even + auto");
         // W9XYZ decoded at slot 7 → answer on tx_parity 7%2=1 (odd) = the OPPOSITE of
         // their period, so we key while they listen.
@@ -9354,7 +9354,7 @@ mod tests {
         assert!(!e.tx_cycle_auto(), "a manual pick disables auto-cycle");
         assert!(!e.tx_even());
         // A later reply (whose slot would auto-pick EVEN) must NOT override the manual cycle.
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         e.decode_history.push_back((8, cq_decode_from("W9XYZ")));
         e.send_message("W9XYZ", "HI");
         assert!(!e.tx_even(), "manual cycle held — auto did not override it");
@@ -9385,7 +9385,7 @@ mod tests {
         // native decodes carry their own mode); an untagged decode (DX1's robust
         // path / unknown companion mode) falls back to the selected tier.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
 
         let mut d_ft8 = dec_snr("CQ F5RXL IN94", -3);
         d_ft8.mode = Some(modes::ModeKind::Ft8);
@@ -9409,7 +9409,7 @@ mod tests {
         );
         assert_eq!(
             tier_of("CQ W6PQR CM87"),
-            Tier::Ft1,
+            Tier::TempoFast,
             "untagged decode falls back to the selected tier"
         );
     }
@@ -9717,7 +9717,7 @@ mod tests {
     fn engine_dx1_tier_beacon_roundtrip() {
         let mut a = Engine::new("W9XYZ", "EN37", 0);
         a.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
-        a.set_tier(Tier::Dx1);
+        a.set_tier(Tier::TempoDeep);
         a.set_beacon(true); // beacon is off by default; this test exercises it
 
         // Slot 0 is a TX slot (parity 0) and a beacon slot → "CQ W9XYZ EN37".
@@ -9725,19 +9725,19 @@ mod tests {
         assert!(!waves.is_empty(), "DX1 beacon produced a waveform");
         assert_eq!(
             waves[0].len(),
-            ft1::dx1::frame_len(),
+            tempo_fast::deep::frame_len(),
             "TX wave is one DX1 frame"
         );
 
         // Embed the frame in a full DX1 capture window at a non-zero offset so
         // the chirp sync must find it.
-        let cap = ft1::dx1::capture_len();
+        let cap = tempo_fast::deep::capture_len();
         let mut window = vec![0f32; cap];
         let off = 6_000;
         window[off..off + waves[0].len()].copy_from_slice(&waves[0]);
 
         let mut b = Engine::new("K2DEF", "FN31", 1);
-        b.set_tier(Tier::Dx1);
+        b.set_tier(Tier::TempoDeep);
         let n = b.ingest(&window, 0);
         assert_eq!(n, 1, "DX1 station decoded the beacon");
 
@@ -9760,10 +9760,10 @@ mod tests {
             ("CQ K2DEF FN20", 1500.0, 6_000),
             ("CQ AA1BB FN42", 2300.0, 9_000),
         ];
-        let cap = ft1::dx1::capture_len();
+        let cap = tempo_fast::deep::capture_len();
         let mut window = vec![0f32; cap];
         for (msg, f0, off) in beacons {
-            let w = ft1::dx1::encode_wave(msg, f0, ft1::SAMPLE_RATE);
+            let w = tempo_fast::deep::encode_wave(msg, f0, tempo_fast::SAMPLE_RATE);
             for (i, &s) in w.iter().enumerate() {
                 if off + i < cap {
                     window[off + i] += s;
@@ -9772,7 +9772,7 @@ mod tests {
         }
 
         let mut rx = Engine::new("N0CALL", "DM79", 7);
-        rx.set_tier(Tier::Dx1);
+        rx.set_tier(Tier::TempoDeep);
         let n = rx.ingest(&window, 0);
         assert_eq!(n, 3, "all three band signals decoded in one slot");
 
@@ -9800,14 +9800,14 @@ mod tests {
     fn tier_switch_keeps_message_layer() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
-        e.set_tier(Tier::Ft1); // default is now FT8; this test compares FT1 vs DX1
+        e.set_tier(Tier::TempoFast); // default is now FT8; this test compares FT1 vs DX1
         e.set_beacon(true); // beacon off by default; this test compares beacon waveforms
         let ft1_wave = e.poll_tx(0);
-        e.set_tier(Tier::Dx1);
+        e.set_tier(Tier::TempoDeep);
         let dx1_wave = e.poll_tx(0);
         assert!(!ft1_wave.is_empty() && !dx1_wave.is_empty());
-        assert_eq!(ft1_wave[0].len(), ft1::NMAX); // 4 s FT1 frame
-        assert_eq!(dx1_wave[0].len(), ft1::dx1::frame_len()); // ~9.9 s DX1 frame
+        assert_eq!(ft1_wave[0].len(), tempo_fast::NMAX); // 4 s FT1 frame
+        assert_eq!(dx1_wave[0].len(), tempo_fast::deep::frame_len()); // ~9.9 s DX1 frame
         assert_ne!(ft1_wave[0].len(), dx1_wave[0].len());
     }
 
@@ -10420,7 +10420,7 @@ mod tests {
     #[test]
     fn completed_qso_auto_logs_one_record() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
-        e.set_tier(Tier::Ft1); // this test asserts the FT1 path (default is now FT8)
+        e.set_tier(Tier::TempoFast); // this test asserts the FT1 path (default is now FT8)
         assert!(e.settings().auto_log, "auto_log on by default");
         assert!(e.get_log().is_empty(), "log starts empty");
 
@@ -10438,7 +10438,7 @@ mod tests {
         let r = &log[0];
         assert_eq!(r.call, "W9XYZ");
         assert_eq!(r.band, "20m");
-        assert_eq!(r.mode, "FT1");
+        assert_eq!(r.mode, "TempoFast");
         assert_eq!(
             r.rst_rcvd.as_deref(),
             Some("-10"),
@@ -10465,7 +10465,7 @@ mod tests {
     #[test]
     fn every_log_path_queues_a_pending_upload() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
 
         // Auto-logged QSO (the engine path that used to skip connectors).
         e.call_station("W9XYZ");
@@ -11250,7 +11250,7 @@ mod tests {
         e.set_area("dx");
         e.set_tier(Tier::Ft4);
         e.set_area("msg");
-        assert_eq!(e.tier(), Tier::Ft1);
+        assert_eq!(e.tier(), Tier::TempoFast);
         e.set_area("dx");
         assert_eq!(
             e.tier(),
@@ -11259,12 +11259,12 @@ mod tests {
         );
         // And the msg side remembers DX1 the same way.
         e.set_area("msg");
-        e.set_tier(Tier::Dx1);
+        e.set_tier(Tier::TempoDeep);
         e.set_area("dx");
         e.set_area("msg");
         assert_eq!(
             e.tier(),
-            Tier::Dx1,
+            Tier::TempoDeep,
             "DX1 survives the round-trip through dx"
         );
     }
@@ -11274,7 +11274,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         // MSG → FT1 + Chat.
         e.set_area("msg");
-        assert_eq!(e.tier(), Tier::Ft1);
+        assert_eq!(e.tier(), Tier::TempoFast);
         assert_eq!(e.snapshot().mode, OpMode::Chat);
         // DX → FT8 + out of Chat.
         e.set_area("dx");
@@ -11285,11 +11285,11 @@ mod tests {
         e.set_area("dx");
         assert_eq!(e.tier(), Tier::Ft4, "DX keeps an already-structured tier");
         // MSG keeps DX1 if already there.
-        e.set_tier(Tier::Dx1);
+        e.set_tier(Tier::TempoDeep);
         e.set_area("msg");
         assert_eq!(
             e.tier(),
-            Tier::Dx1,
+            Tier::TempoDeep,
             "MSG keeps an already-chat-capable tier"
         );
     }
@@ -11301,11 +11301,11 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         assert_eq!(e.tier(), Tier::Ft8, "default is FT8");
         e.set_mode("chat").unwrap();
-        assert_eq!(e.tier(), Tier::Ft1, "Chat snapped to FT1");
+        assert_eq!(e.tier(), Tier::TempoFast, "Chat snapped to FT1");
         // DX1 is also chat-capable — entering Chat from DX1 leaves it on DX1.
-        e.set_tier(Tier::Dx1);
+        e.set_tier(Tier::TempoDeep);
         e.set_mode("chat").unwrap();
-        assert_eq!(e.tier(), Tier::Dx1, "Chat keeps a chat-capable tier");
+        assert_eq!(e.tier(), Tier::TempoDeep, "Chat keeps a chat-capable tier");
     }
 
     #[test]
@@ -11541,7 +11541,7 @@ mod tests {
         let mode = modes::make_mode(kind);
         let tones = mode.encode(msg);
         assert!(!tones.is_empty(), "{} encode failed", kind.as_str());
-        let wave = mode.gen_wave(&tones, ft1::SAMPLE_RATE, f0);
+        let wave = mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0);
         let n = mode.frame_samples();
         // FT8/FT4 gen_wave is now slot-positioned (includes the 0.5 s lead-in), so place
         // it at the slot start — no manual offset (a stale +6000 here would push FT8 to
@@ -11615,7 +11615,7 @@ mod tests {
         e.set_tier(Tier::Ft8);
         let full = native_frame_for(modes::ModeKind::Ft8, "CQ W1ABC FN42", 1500.0);
         // What the early site captures by 11.8 s: audio so far, zero tail.
-        let cut = (11.8 * ft1::SAMPLE_RATE as f64) as usize;
+        let cut = (11.8 * tempo_fast::SAMPLE_RATE as f64) as usize;
         let mut early = full.clone();
         for x in &mut early[cut..] {
             *x = 0.0;
@@ -11647,7 +11647,7 @@ mod tests {
     #[test]
     fn early_pass_gated_to_native_ft8_ft4() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         assert_eq!(e.ingest_early(&[0.0f32; 48000], 1), 0);
     }
 
@@ -11788,12 +11788,12 @@ mod tests {
         let mode = modes::make_mode(kind);
         let tones = mode.encode(msg);
         assert!(!tones.is_empty(), "{} encode failed", kind.as_str());
-        let wave = mode.gen_wave(&tones, ft1::SAMPLE_RATE, f0);
+        let wave = mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0);
         let n = mode.frame_samples();
         // FT8/FT4 gen_wave is now slot-positioned (includes the 0.5 s lead-in), so place
         // it at the slot start; the wave already carries its own offset.
         let off = 0;
-        let sig = tempo_core::channel::snr_to_scale(snr_db, ft1::SAMPLE_RATE);
+        let sig = tempo_core::channel::snr_to_scale(snr_db, tempo_fast::SAMPLE_RATE);
         let mut noise = tempo_core::channel::Awgn::new(seed);
         let mut frame = vec![0f32; n];
         for (i, &s) in wave.iter().enumerate() {
@@ -11886,7 +11886,7 @@ mod tests {
         // FT8/FT1: slot == decode frame, so capture == frame (no change).
         e.set_tier(Tier::Ft8);
         assert_eq!(e.active_capture_samples(), e.active_frame_samples());
-        e.set_tier(Tier::Ft1);
+        e.set_tier(Tier::TempoFast);
         assert_eq!(e.active_capture_samples(), e.active_frame_samples());
     }
 

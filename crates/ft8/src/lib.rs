@@ -1,4 +1,4 @@
-//! Safe Rust wrapper over `libft1`'s native FT8 decoder.
+//! Safe Rust wrapper over `libtempo`'s native FT8 decoder.
 //!
 //! FT8 (by K1JT/K9AN, in WSJT-X) is the dominant weak-signal HF digital mode:
 //! 15 s T/R, 8-GFSK, 79 channel symbols at 6.25 Bd, LDPC(174,91) + CRC-14, ~−21 dB
@@ -9,12 +9,12 @@
 //! # Thread safety
 //! The underlying Fortran modem is **not** thread-safe (process-global `SAVE`
 //! state + cached FFTW plans, shared with FT1/FT4/DX1). All entry points
-//! serialize behind [`ft1_sys::MODEM_LOCK`], the one lock shared across every
-//! mode that links `libft1`.
+//! serialize behind [`tempo_fast_sys::MODEM_LOCK`], the one lock shared across every
+//! mode that links `libtempo`.
 
-use ft1_sys::MODEM_LOCK;
+use tempo_fast_sys::MODEM_LOCK;
 
-pub use ft1_sys::{FT8_NMAX as NMAX, FT8_NN as NN, FT8_NZ as NZ};
+pub use tempo_fast_sys::{FT8_NMAX as NMAX, FT8_NN as NN, FT8_NZ as NZ};
 
 /// WSJT-X audio sample rate (Hz).
 pub const SAMPLE_RATE: f32 = 12_000.0;
@@ -51,7 +51,7 @@ pub fn encode(msg: &str) -> Vec<i32> {
     let mut nsym: i32 = 0;
     let _guard = MODEM_LOCK.lock().unwrap();
     unsafe {
-        ft1_sys::ft8_encode(
+        tempo_fast_sys::ft8_encode(
             bytes.as_ptr() as *const _,
             bytes.len() as i32,
             itone.as_mut_ptr(),
@@ -75,7 +75,7 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
     let mut nwave: i32 = cap as i32;
     let _guard = MODEM_LOCK.lock().unwrap();
     unsafe {
-        ft1_sys::ft8_gen_wave(
+        tempo_fast_sys::ft8_gen_wave(
             itone.as_ptr(),
             itone.len() as i32,
             fsample,
@@ -182,12 +182,12 @@ pub fn decode_frame_a7(
     );
     let myc = std::ffi::CString::new(mycall).unwrap_or_default();
     let hisc = std::ffi::CString::new(hiscall).unwrap_or_default();
-    let mut out = vec![ft1_sys::Ft8DecodeT::default(); MAX_DECODES];
+    let mut out = vec![tempo_fast_sys::Ft8DecodeT::default(); MAX_DECODES];
 
     let n = {
         let _guard = MODEM_LOCK.lock().unwrap();
         unsafe {
-            ft1_sys::ft8_decode_frame(
+            tempo_fast_sys::ft8_decode_frame(
                 iwave.as_ptr(),
                 nfa,
                 nfb,
@@ -222,11 +222,11 @@ pub fn decode_frame_a7(
 
 /// Clear the a7 cross-cycle decode table (prior-slot call pairs + slot
 /// tracker). Call on band change / QSO change so a new band's audio is not
-/// probed with stale prior-cycle hypotheses. Mirrors `ft1::harq_reset`.
+/// probed with stale prior-cycle hypotheses. Mirrors `tempo_fast::harq_reset`.
 pub fn a7_reset() {
     let _guard = MODEM_LOCK.lock().unwrap();
     unsafe {
-        ft1_sys::ft8_a7_reset();
+        tempo_fast_sys::ft8_a7_reset();
     }
 }
 

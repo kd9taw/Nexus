@@ -169,10 +169,10 @@ pub struct DecodeRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Tier {
     #[default]
-    #[serde(rename = "FT1")]
-    Ft1,
-    #[serde(rename = "DX1")]
-    Dx1,
+    #[serde(rename = "TempoFast")]
+    TempoFast,
+    #[serde(rename = "TempoDeep")]
+    TempoDeep,
     #[serde(rename = "FT8")]
     Ft8,
     #[serde(rename = "FT4")]
@@ -184,10 +184,10 @@ impl Tier {
     /// (FT1's robust non-coherent tier, handled outside the `modes::Mode` set).
     pub fn mode_kind(self) -> Option<ModeKind> {
         match self {
-            Tier::Ft1 => Some(ModeKind::Ft1),
+            Tier::TempoFast => Some(ModeKind::TempoFast),
             Tier::Ft8 => Some(ModeKind::Ft8),
             Tier::Ft4 => Some(ModeKind::Ft4),
-            Tier::Dx1 => None,
+            Tier::TempoDeep => None,
         }
     }
 
@@ -197,7 +197,7 @@ impl Tier {
     /// [`mode_kind`]: Tier::mode_kind
     pub fn from_mode_kind(kind: ModeKind) -> Tier {
         match kind {
-            ModeKind::Ft1 => Tier::Ft1,
+            ModeKind::TempoFast => Tier::TempoFast,
             ModeKind::Ft8 => Tier::Ft8,
             ModeKind::Ft4 => Tier::Ft4,
         }
@@ -719,7 +719,7 @@ pub struct LoggedQso {
     pub state: Option<String>,
     pub band: String,
     pub freq_mhz: f64,
-    /// Mode / tier label ("FT1" | "FT8" | "CW" | "SSB" | "USB" | "LSB" | "FM" …).
+    /// Mode / tier label ("TempoFast" | "FT8" | "CW" | "SSB" | "USB" | "LSB" | "FM" …).
     pub mode: String,
     /// Signal report sent / received as a string: CW "599" / phone "59" / digital "-12".
     pub rst_sent: Option<String>,

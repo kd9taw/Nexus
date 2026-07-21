@@ -25,21 +25,21 @@ asserting it.
 ### WSJT-X — Joe Taylor (K1JT) and the WSJT Development Group
 License: **GNU GPL, version 3** (GPLv3).
 
-Nexus's modem library, `libft1/`, is derived from WSJT-X. The WSJT-X-derived
-sources are **vendored in this repository** at `libft1/vendor/wsjtx/` — the
+Nexus's modem library, `libtempo/`, is derived from WSJT-X. The WSJT-X-derived
+sources are **vendored in this repository** at `libtempo/vendor/wsjtx/` — the
 complete corresponding source (GPL §6) for the modem compiled into the Nexus
 binary: a ~70-file subset of WSJT-X's `lib/` (no Qt/GUI code), with KD9TAW's
 modifications marked and the full provenance documented in
-`libft1/vendor/wsjtx/README.md`. From WSJT-X, `libft1` reuses:
+`libtempo/vendor/wsjtx/README.md`. From WSJT-X, `libtempo` reuses:
 
 - the **77-bit message packing/unpacking** (`packjt77`, used via `unpack77`
-  in `libft1/ft1_cabi.f90`), so Chat / QSO / Field Day forms carry the same
+  in `libtempo/tempofast_cabi.f90`), so Chat / QSO / Field Day forms carry the same
   77-bit payloads on either tier;
 - the **LDPC(174,91) codec** — `encode174_91` and the `bpdecode174_91`
   soft-decision belief-propagation decoder;
 - the **CRC-14** message check (`chkcrc14a.f90` plus `crc14.cpp`);
 - the **`four2a` FFT** routine and surrounding DSP infrastructure that
-  `libft1` reuses (alongside FFTW3, below).
+  `libtempo` reuses (alongside FFTW3, below).
 
 WSJT-X is the work of Joe Taylor (K1JT) and the WSJT Development Group,
 including Steve Franke (K9AN), Bill Somerville (G4WJS), Nico Palermo (IV3NWV),
@@ -51,20 +51,20 @@ Nexus treats WSJT-X as the reference standard for FT8/FT4 on-air behavior. It
 is an independent application and is **not affiliated with or endorsed by** the
 WSJT project.
 
-### FT1 waveform — KD9TAW
-License: **GPL-3.0** (part of Nexus / `libft1`; upstream WSJT-X is GPLv3 and
+### TempoFast waveform — KD9TAW
+License: **GPL-3.0** (part of Nexus / `libtempo`; upstream WSJT-X is GPLv3 and
 its `lib/` sources carry no "or later" boilerplate, so no later-version grant
 can be claimed for the derived work).
 
-The FT1 waveform (the 4-CPM coherent turbo modem with IR-HARQ used by the
-"Fast" tier) is original work by KD9TAW. The DX1 mode (`libft1/dx1/` — the
+The TempoFast waveform (the 4-CPM coherent turbo modem with IR-HARQ used by the
+"Fast" tier) is original work by KD9TAW. The TempoDeep mode (`libtempo/tempodeep/` — the
 non-coherent 8-FSK + soft LDPC(174,91) "Robust" tier) is likewise authored by
 KD9TAW. Both are GPLv3 by virtue of the shared WSJT-X-derived code they build
 on.
 
 > Validation status: **FT8/FT4** is the production digital core — operational
 > parity with stock WSJT-X behavior, wire formats pinned, field-verified.
-> **FT1 and DX1** are the new native waveforms and are **simulation-validated
+> **TempoFast and TempoDeep** are the new native waveforms and are **simulation-validated
 > only** (AWGN, with a fading penalty modeled); they have **not** yet been
 > validated on the air. Published Windows binaries are cross-compiled beta
 > builds.
@@ -149,14 +149,14 @@ implementation validated against the official WMM2025 test-value table.
 
 ### FFTW (FFTW3, single precision)
 License: **GPL-2.0-or-later** (the version Nexus builds and links —
-`libfftw3f`). See the FFTW upstream project for terms. Used by `libft1` for the
+`libfftw3f`). See the FFTW upstream project for terms. Used by `libtempo` for the
 FFT routines (`four2a` and related DSP). On the Linux/WSL2 cross build it is
 statically linked from a MinGW-built `libfftw3f.a`; on native MSYS2 builds it
 is located via `pkg-config`.
 
 ### Boost (header-only CRC)
 License: **Boost Software License 1.0** (SPDX: `BSL-1.0`). Only the
-**header-only** `<boost/crc.hpp>` is used, by `libft1`'s `crc14.cpp`. No
+**header-only** `<boost/crc.hpp>` is used, by `libtempo`'s `crc14.cpp`. No
 compiled Boost library is linked.
 
 ---
@@ -203,7 +203,7 @@ or FlexRadio.
 
 ## Rust dependencies
 
-Nexus's Rust workspace (`crates/ft1-sys`, `crates/ft1`, `crates/tempo-core`,
+Nexus's Rust workspace (`crates/tempofast-sys`, `crates/tempofast`, `crates/tempo-core`,
 `crates/tempo-app`, `crates/tempo-audio`, `crates/tempo-net`,
 `crates/propagation`) and the standalone Tauri shell (`src-tauri/`) depend on
 the crates below. Pull in the full transitive license set with `cargo about` /

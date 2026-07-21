@@ -34,8 +34,8 @@ permissions:
   contents: read
 
 jobs:
-  # Job 1 — Rust workspace: build the Fortran/C/C++ libft1 modem (via the
-  # ft1-sys build.rs CMake project) and run the headless modem/engine/net/DX1
+  # Job 1 — Rust workspace: build the Fortran/C/C++ libtempo modem (via the
+  # tempo-fast-sys build.rs CMake project) and run the headless modem/engine/net/TempoDeep
   # round-trip tests, then clippy across the whole workspace.
   test:
     name: Rust tests + clippy
@@ -44,7 +44,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # libft1 build deps. The native (host == target) CMake path locates the
+      # libtempo build deps. The native (host == target) CMake path locates the
       # FFTW3 single-precision library via pkg-config (`pkg_check_modules(FFTW3F
       # REQUIRED fftw3f)`) and Boost via `find_package(Boost REQUIRED)`:
       #   - gfortran        : the 4-CPM turbo modem is Fortran (gfortran runtime).
@@ -52,9 +52,9 @@ jobs:
       #                        SINGLE precision — used by four2a.f90 / fftw3 module).
       #   - libboost-dev     : ships <boost/crc.hpp> for the header-only CRC-14 in
       #                        crc14.cpp (find_package(Boost) config).
-      #   - cmake, ninja-build : drive the libft1 CMake project.
+      #   - cmake, ninja-build : drive the libtempo CMake project.
       #   - pkg-config       : required by find_package(PkgConfig REQUIRED).
-      - name: Install libft1 build dependencies
+      - name: Install libtempo build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -144,7 +144,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install libft1 build dependencies
+      - name: Install libtempo build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -187,7 +187,7 @@ jobs:
   # workspace and needs a WebView/MinGW toolchain the Linux test job lacks, so
   # `cargo test` never touches it. This job cross-compiles it to
   # x86_64-pc-windows-gnu with the MinGW-w64 toolchain — proving the Tauri command
-  # surface, the feature-gated `radio` audio/CAT path, and the libft1 Fortran/C/C++
+  # surface, the feature-gated `radio` audio/CAT path, and the libtempo Fortran/C/C++
   # modem all still LINK for Windows. It is a compile/link check, not the shipping
   # installer: no NSIS bundle, no WebView2/Hamlib download (those run out-of-band
   # via scripts/build-windows-cross.sh, which adds --bundles nsis).
@@ -199,7 +199,7 @@ jobs:
         uses: actions/checkout@v4
 
       # MinGW-w64 cross toolchain: gcc/g++/gfortran for the Fortran/C/C++ modem,
-      # cmake/ninja to drive the libft1 CMake project, and a host build-essential
+      # cmake/ninja to drive the libtempo CMake project, and a host build-essential
       # (cc/make) to cross-build FFTW3f for MinGW.
       - name: Install MinGW-w64 cross toolchain
         run: |
@@ -237,10 +237,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-wincross-
 
-      # Cross-build FFTW3f for MinGW + the libft1 modem self-test exes (win_smoke,
+      # Cross-build FFTW3f for MinGW + the libtempo modem self-test exes (win_smoke,
       # roundtrip, …). Proves the native modem chain links for Windows and produces
-      # target/fftw-mingw, which ft1-sys/build.rs reads on the src-tauri step below.
-      - name: Cross-build FFTW + libft1 modem exes
+      # target/fftw-mingw, which tempo-fast-sys/build.rs reads on the src-tauri step below.
+      - name: Cross-build FFTW + libtempo modem exes
         run: bash scripts/build-windows-cross.sh --no-gui
 
       # src-tauri embeds the web UI via the custom-protocol feature. `cargo build`
@@ -310,7 +310,7 @@ jobs:
       # full speed. The Debian base image supplies every build dep, so nothing
       # is installed on the runner itself.
       #
-      # The WSJT-X-derived modem source is vendored in-tree at libft1/vendor/wsjtx
+      # The WSJT-X-derived modem source is vendored in-tree at libtempo/vendor/wsjtx
       # and is CMake's default WX, so the checkout is self-contained — no external
       # tree to stage, which is what previously forced a dev-box path into the image.
       - name: Build .deb in a debian:${{ matrix.base }} container

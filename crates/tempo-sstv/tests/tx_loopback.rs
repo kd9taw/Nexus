@@ -2,7 +2,7 @@
 //!
 //! For every mode: build a known RGB test image at the mode's exact
 //! dimensions, run it through the **production** `encode_image` at 12 kHz
-//! (`ft1::SAMPLE_RATE`), then feed the very same `Vec<f32>` into the real
+//! (`tempo_fast::SAMPLE_RATE`), then feed the very same `Vec<f32>` into the real
 //! `SstvDecoder::new(12_000)` — VIS auto-detect + per-line decode +
 //! `ImageComplete`. The recovered image must match the source to a mean
 //! per-channel diff < 5.0 (the established `tests/roundtrip.rs` bar). This
@@ -21,7 +21,7 @@
 
 use tempo_sstv::{encode_image, for_mode, SourceImage, SstvDecoder, SstvEvent, SstvMode};
 
-/// Nexus TX/RX audio rate (Hz) — `ft1::SAMPLE_RATE`.
+/// Nexus TX/RX audio rate (Hz) — `tempo_fast::SAMPLE_RATE`.
 const RATE: u32 = 12_000;
 
 /// A known test image at the mode's exact geometry: horizontal red gradient,

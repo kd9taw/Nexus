@@ -1,6 +1,6 @@
 # Nexus Architecture — the Tempo chat layer and modem core
 
-> Deep design document for the **Tempo chat layer** (FT1/DX1 waveforms, chat,
+> Deep design document for the **Tempo chat layer** (TempoFast/TempoDeep waveforms, chat,
 > store-and-forward) and the modem/audio/rig substrate it shares with the rest
 > of **Nexus**, the all-mode amateur radio operations center this project became.
 >
@@ -16,12 +16,12 @@ WSJT-X-parity cockpit, CW/Phone, the Needed board, POTA/SOTA, Field Day, awards,
 and the Connect map — see the [README](../README.md) crate map and the
 [comprehensive overview](OVERVIEW.md).
 
-> **Validation status — read this first.** The FT1 and DX1 waveforms are validated
+> **Validation status — read this first.** The TempoFast and TempoDeep waveforms are validated
 > by **simulation and Windows cross-build only** (AWGN and Rayleigh-fading sweeps,
 > plus the Windows test exes), **not yet on-air / hardware-validated**. IR-HARQ
-> joint combining and full-passband DX1 receive are **live** (see §6), but their
+> joint combining and full-passband TempoDeep receive are **live** (see §6), but their
 > on-air gains are unproven. Nothing here should be read as an on-air sensitivity
-> claim for FT1/DX1 — **on-air decode-rate-vs-SNR is their open gate.**
+> claim for TempoFast/TempoDeep — **on-air decode-rate-vs-SNR is their open gate.**
 > (The **FT8/FT4 tier**, by contrast, is now fully wired — encode, decode, and a
 > WSJT-X-parity operating surface — and is the production core of Nexus; the
 > "Phase 2" framing in older revisions of this document is obsolete.)
@@ -46,12 +46,12 @@ top and an always-visible tier toggle.
 
 | Tier | Waveform | T/R | Character | Where it wins |
 |------|----------|-----|-----------|---------------|
-| **Fast** | **FT1** — 4-CPM (h=1/2, BT=0.3), turbo equalization, IR-HARQ | **4 s** | coherent, conversational | regional NVIS, good-condition national, Field Day rate |
-| **Robust** | **DX1** — non-coherent 8-FSK + soft LDPC(174,91) | **15 s** | fading-immune, deep | disturbed/multipath national paths, store-and-forward |
+| **Fast** | **TempoFast** — 4-CPM (h=1/2, BT=0.3), turbo equalization, IR-HARQ | **4 s** | coherent, conversational | regional NVIS, good-condition national, Field Day rate |
+| **Robust** | **TempoDeep** — non-coherent 8-FSK + soft LDPC(174,91) | **15 s** | fading-immune, deep | disturbed/multipath national paths, store-and-forward |
 
-### 1.2 FT1 — fast & coherent
+### 1.2 TempoFast — fast & coherent
 
-FT1 (the 4-CPM turbo waveform by KD9TAW) packs a 4 s T/R period: 99 channel
+TempoFast (the 4-CPM turbo waveform by KD9TAW) packs a 4 s T/R period: 99 channel
 symbols at ~28 Bd of 4-ary continuous-phase modulation, LDPC(174,91) plus
 iterative turbo equalization, with **incremental-redundancy HARQ live and on by
 default** (joint iterative turbo combining of RV0/RV1/RV2 — see §6.2). The
@@ -62,10 +62,10 @@ multipath/Doppler spreading destroys. In simulation its AWGN 50%-decode
 threshold sits near **−15 dB** (re-validated in the Rust suite by
 `crates/tempo-core/tests/awgn_threshold.rs`).
 
-### 1.3 DX1 — robust & non-coherent
+### 1.3 TempoDeep — robust & non-coherent
 
-DX1 (the DX1-S baseline, by KD9TAW) trades cycle time for fading immunity. Its
-parameters live in `libft1/dx1/dx1_params.f90`:
+TempoDeep (the TempoDeep-S baseline, by KD9TAW) trades cycle time for fading immunity. Its
+parameters live in `libtempo/tempodeep/tempodeep_params.f90`:
 
 - **M = 8** orthogonal FSK tones, 3 bits/symbol, Gray-coded.
 - **baud = 6.25 Hz**, tone spacing = baud = 6.25 Hz → occupied data BW = M·baud =
@@ -79,9 +79,9 @@ parameters live in `libft1/dx1/dx1_params.f90`:
   swept across the 50 Hz band, correlated at RX over a coarse time/freq grid to
   recover dt + df.
 
-Because it never relies on carrier phase, DX1 survives fading that collapses
-coherent modes. In the simulation harness (`libft1/dx1/dx1_test.f90`, which
-sweeps AWGN then per-symbol Rayleigh fading) DX1's AWGN 50% threshold is
+Because it never relies on carrier phase, TempoDeep survives fading that collapses
+coherent modes. In the simulation harness (`libtempo/tempodeep/tempodeep_test.f90`, which
+sweeps AWGN then per-symbol Rayleigh fading) TempoDeep's AWGN 50% threshold is
 ≈ **−18.6 dB** and it loses only ~**3.7 dB** under per-symbol Rayleigh fading,
 where FT8-class coherent modes lose 10+ dB. That small fading penalty is the
 entire reason the mode exists.
@@ -124,20 +124,20 @@ the DSP, not the decision.
 │                (rigctld / serial RTS-DTR / VOX, feature `serial`) +   │
 │                the slot-clock service loop                          │
 │   tempo-net    WSJT-X-compatible UDP API + PSK Reporter (pure std)   │
-│   ft1          safe wrapper over libft1 (+ dx1 module)              │
-│   ft1-sys      raw FFI; build.rs drives CMake on libft1             │
+│   tempofast          safe wrapper over libtempo (+ tempodeep module)              │
+│   tempofast-sys      raw FFI; build.rs drives CMake on libtempo             │
 ├────────────────────────────────────────────────────────────────────┤
 │ MODEM                                                                │
-│   libft1/      Fortran + C + C++, FFTW3 single precision, no Qt.    │
-│                ft1_cabi.f90 = the C ABI.                            │
-│                Fast tier: FT1 4-CPM turbo + IR-HARQ                  │
-│                Robust tier: DX1 non-coherent M-FSK + soft LDPC       │
-│                (libft1/dx1/)                                         │
+│   libtempo/      Fortran + C + C++, FFTW3 single precision, no Qt.    │
+│                tempofast_cabi.f90 = the C ABI.                            │
+│                Fast tier: TempoFast 4-CPM turbo + IR-HARQ                  │
+│                Robust tier: TempoDeep non-coherent M-FSK + soft LDPC       │
+│                (libtempo/tempodeep/)                                         │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
 The Cargo workspace (`Cargo.toml`) has six members:
-`ft1-sys`, `ft1`, `tempo-core`, `tempo-app`, `tempo-audio`, `tempo-net`. The
+`tempofast-sys`, `tempofast`, `tempo-core`, `tempo-app`, `tempo-audio`, `tempo-net`. The
 Tauri shell in `src-tauri/` is a **standalone crate with its own `[workspace]`**
 (so its heavy Tauri/WebView dependency tree does not pollute the headless
 workspace's `cargo test`). `[workspace.package]` pins the author, license, and
@@ -145,15 +145,15 @@ repository for the whole tree.
 
 ### 2.1 Crate responsibilities
 
-**`ft1-sys`** — Raw FFI bindings to `libft1` (`crates/ft1-sys/src/lib.rs`) and a
-`build.rs` that drives the `libft1` CMake project to produce `libft1.a` and emits
+**`tempofast-sys`** — Raw FFI bindings to `libtempo` (`crates/tempofast-sys/src/lib.rs`) and a
+`build.rs` that drives the `libtempo` CMake project to produce `libtempo.a` and emits
 Cargo's link directives. Exposes the C entry points
 `ft1_encode` / `ft1_gen_wave` / `ft1_decode_rt` / `ft1_unpack` /
-`ft1_decode_frame` and the DX1 entry points `dx1_frame_len` / `dx1_capture_len` /
+`ft1_decode_frame` and the TempoDeep entry points `dx1_frame_len` / `dx1_capture_len` /
 `dx1_encode_wave` / `dx1_decode_buf`, plus the `Ft1DecodeT` repr-C struct and
 frame constants (`FT1_NN = 99`, `FT1_NMAX = 48000`, etc.).
 
-**`ft1`** — The safe wrapper (`crates/ft1/src/lib.rs`). The underlying Fortran
+**`tempofast`** — The safe wrapper (`crates/tempofast/src/lib.rs`). The underlying Fortran
 modem uses process-global `SAVE` state (CPM pulse tables, the downsample window,
 cached FFTW plans) and is **not thread-safe**, so every entry point serializes
 behind a global `MODEM_LOCK: Mutex<()>`. Public API:
@@ -163,8 +163,8 @@ behind a global `MODEM_LOCK: Mutex<()>`. Public API:
 - `decode_frame` — the **full RX acquisition** path: Costas-sync candidate search
   across time *and* frequency, downconvert, turbo decode, OSD/AP fallback,
   successive-interference cancellation, IR-HARQ. Returns a `Vec<Decode>`.
-- `dx1` submodule — `encode_wave` / `decode` for the non-coherent robust tier
-  (default carrier `dx1::F0 = 1500.0`).
+- `tempodeep` submodule — `encode_wave` / `decode` for the non-coherent robust tier
+  (default carrier `tempodeep::F0 = 1500.0`).
 
 `Decode` is the common, modem-agnostic result type (message text + `sync`, `snr`,
 `dt`, `freq`, `nap`, `qual`, `rv`) that the whole stack above consumes.
@@ -174,17 +174,17 @@ application. No Tauri, no audio devices. Modules:
 
 | Module | Responsibility |
 |--------|----------------|
-| `timing` | `SlotClock` for FT1 (4 s) and DX1 (15 s); pure, `now_ms`-parameterized slot math. |
+| `timing` | `SlotClock` for TempoFast (4 s) and TempoDeep (15 s); pure, `now_ms`-parameterized slot math. |
 | `channel` | `VirtualAir` in-process channel: places a waveform at an offset, scales to a target SNR, adds deterministic AWGN — for headless loopback. |
 | `message` | The standard 77-bit QSO message forms (`Msg`) — CQ / grid / report / RR73 / Field-Day exchange — build + parse, round-tripped through the packer. |
-| `text` | Free-text chunking + reassembly over the 13-char FT1 free-text substrate. |
+| `text` | Free-text chunking + reassembly over the 13-char TempoFast free-text substrate. |
 | `qso` | The auto-sequenced QSO state machine (`Station`) + a loopback driver. |
 | `roster` | Presence: stations heard recently, built passively from decodes. |
 | `inbox` | Directed messaging: turns decodes into roster updates + attributed chat. |
 | `store` | Presence-gated store-and-forward queue (`StoreForward`). |
 | `fieldday` | Field Day exchange, dupe-checked log, scoring, ADIF/Cabrillo export. |
 | `spectrum` | Goertzel power-spectrum estimator for the waterfall (no FFT dep). |
-| `tx` | FT1 transmit path: text → symbols → waveform (`TxFrame`). |
+| `tx` | TempoFast transmit path: text → symbols → waveform (`TxFrame`). |
 
 **`tempo-app`** — The UI-facing layer (`crates/tempo-app/`). `AppState`
 (`lib.rs`) owns the operator identity, the `Inbox` (roster + attribution), the
@@ -253,37 +253,37 @@ The engine reads `app.tier()` to pick the waveform on **both** edges:
 ```rust
 // poll_tx — modulate
 let wave = if self.app.tier() == Tier::Dx1 {
-    ft1::dx1::encode_wave(&t, ft1::dx1::F0, ft1::SAMPLE_RATE)   // 8-FSK
+    tempofast::tempodeep::encode_wave(&t, tempofast::tempodeep::F0, tempofast::SAMPLE_RATE)   // 8-FSK
 } else {
-    tx::build(&t, ft1::SAMPLE_RATE, self.f0).wave              // 4-CPM
+    tx::build(&t, tempofast::SAMPLE_RATE, self.f0).wave              // 4-CPM
 };
 
 // ingest — demodulate
 let decodes = if self.app.tier() == Tier::Dx1 {
-    ft1::dx1::decode(frame, ft1::dx1::F0, ft1::SAMPLE_RATE).into_iter().collect()  // full-band scan
+    tempofast::tempodeep::decode(frame, tempofast::tempodeep::F0, tempofast::SAMPLE_RATE).into_iter().collect()  // full-band scan
 } else {
-    ft1::decode_frame(&channel::to_i16(frame), 200, 2900, 3, "", "", 0)  // full acquisition
+    tempofast::decode_frame(&channel::to_i16(frame), 200, 2900, 3, "", "", 0)  // full acquisition
 };
 ```
 
 The messaging layer above never changes — only the modem call and the frame
-length do. The engine's own tests (`crates/tempo-app/src/engine.rs`) prove a DX1
+length do. The engine's own tests (`crates/tempo-app/src/engine.rs`) prove a TempoDeep
 beacon round-trips end-to-end through `poll_tx`/`ingest`, and that switching tier
 keeps the message layer intact (only the waveform length differs:
-`ft1::NMAX` for FT1 vs `ft1::dx1::frame_len()` for DX1).
+`tempofast::NMAX` for TempoFast vs `tempofast::tempodeep::frame_len()` for TempoDeep).
 
 ### 3.4 The SlotClock and the matched RxRing
 
 `tempo_core::timing::SlotClock` is the UTC-aligned TDMA clock:
-`SlotClock::ft1()` runs a `PERIOD_MS = 4000` period; `SlotClock::dx1()` runs a
+`SlotClock::tempofast()` runs a `PERIOD_MS = 4000` period; `SlotClock::tempodeep()` runs a
 15 s period (`DX1_PERIOD_S`). It exposes `phase_ms`, `ms_to_next_slot`,
 `slot_index`, `next_boundary_ms`, and a `within_tolerance` window
 (`TIMING_TOLERANCE_MS = 80`), with a `PRE_TX_GUARD_MS = 200` pre-TX guard.
 
 The capture buffer must match the active tier's window. `tempo_audio::frames::RxRing`
 is a rolling buffer holding the latest `cap` samples (front-zero-padded until
-full): `FRAME_LEN = ft1::NMAX` (48000, 4 s) for FT1, or `ft1::dx1::capture_len()`
-(a full 15 s window) for DX1.
+full): `FRAME_LEN = tempofast::NMAX` (48000, 4 s) for TempoFast, or `tempofast::tempodeep::capture_len()`
+(a full 15 s window) for TempoDeep.
 
 The radio service loop (`tempo_audio::service::run_radio`, feature `device`) ties
 these together. When the operator changes tier, it rebuilds **both** the clock and
@@ -293,8 +293,8 @@ the ring to the new tier and re-anchors to the new slot grid:
 let tier_now = eng.tier();
 if tier_now != cur_tier {
     cur_tier = tier_now;
-    clock = if tier_now == Tier::Ft1 { SlotClock::ft1() } else { SlotClock::dx1() };
-    let cap = if tier_now == Tier::Ft1 { ft1::NMAX } else { ft1::dx1::capture_len() };
+    clock = if tier_now == Tier::Ft1 { SlotClock::tempofast() } else { SlotClock::tempodeep() };
+    let cap = if tier_now == Tier::Ft1 { tempofast::NMAX } else { tempofast::tempodeep::capture_len() };
     rx = RxRing::with_capacity(cap);
     last_slot = None; // re-anchor next iteration
 }
@@ -319,13 +319,13 @@ that both tiers carry.
 `CQ <de> <grid>`, `<to> <de> <grid>`, signal report (`<to> <de> -10`), rogered
 report (`R-12`), `RR73` / `RRR` / `73`, and the ARRL Field Day exchange
 `<to> <de> [R] <class> <section>`. Each form round-trips verbatim through the
-FT1 packer; `Msg::parse` recovers the structured form (and falls back to
+TempoFast packer; `Msg::parse` recovers the structured form (and falls back to
 `Msg::Other` for free text). `addressee()` / `sender()` expose the directed
 recipient and the originating callsign for attribution.
 
 ### 4.2 Free-text chunking + reassembly
 
-FT1's free-text frame holds ~13 chars of the WSJT-X alphabet
+TempoFast's free-text frame holds ~13 chars of the WSJT-X alphabet
 (`0-9 A-Z space + - . / ?`, uppercased) and **carries no callsign**. To send
 arbitrary-length messages, `tempo_core::text` splits text into chunks framed as
 `<id><seq><tot><payload>`:
@@ -380,7 +380,7 @@ feed as outbound.
 ### 4.6 Field Day: exchange / dupe / scoring / export
 
 `tempo_core::fieldday` implements ARRL Field Day. The exchange is **Class +
-ARRL/RAC Section** (e.g. `3A WI`), carried natively in one FT1 frame. The
+ARRL/RAC Section** (e.g. `3A WI`), carried natively in one TempoFast frame. The
 `FieldDayStation` auto-sequencer runs **operator-initiated** contacts (Field Day
 prohibits fully-automated QSOs) in *running* (calls CQ FD) or *search-and-pounce*
 roles. `FieldDayLog` is dupe-checked per `(call, band)`, counts **distinct
@@ -401,14 +401,14 @@ Tauri commands:
    #[serde(rename_all =                export interface             #[tauri::command]
      "camelCase")]                       AppSnapshot { ... }          fn get_snapshot(...)
    pub struct AppSnapshot { ... }      export type Tier =           fn send_message(...)
-   pub enum Tier { Ft1, Dx1, Ft8 }       'FT1'|'DX1'|'FT8'          fn set_tier(...) ...
+   pub enum Tier { Ft1, Dx1, Ft8 }       'TempoFast'|'TempoDeep'|'FT8'          fn set_tier(...) ...
 ```
 
 `dto.rs` is **pure data** (only `serde`); `AppState`/`Engine` project the richer
 `tempo-core` types into these for the UI. Key DTOs: `AppSnapshot` (the full UI
 state), `Station`/`Presence`, `ChatMessage`/`Conversation`, `LinkState`,
 `RadioStatus`, `Spectrum`, `OpMode`, `QsoStatus`, `FieldDayStatus`/`FieldDayQso`,
-and `Tier` (which serializes to the on-air names `"FT1"`/`"DX1"`/`"FT8"`).
+and `Tier` (which serializes to the on-air names `"TempoFast"`/`"TempoDeep"`/`"FT8"`).
 
 The contract is enforced from both ends: `tempo-app`'s tests assert the
 camelCase key set and a full JSON round-trip back into `AppSnapshot`, and
@@ -421,16 +421,16 @@ returns a DTO: `get_snapshot`, `send_message`, `select_peer`, `set_tier`,
 
 ---
 
-## 6. libft1: what is reused, and the two pipelines
+## 6. libtempo: what is reused, and the two pipelines
 
-`libft1` is a **standalone, Qt-free** static/shared library built by CMake
-(`libft1/CMakeLists.txt`) from Fortran + C + C++, linking FFTW3 single precision.
-`ft1_cabi.f90` exposes the C ABI (documented in `libft1/include/libft1.h`).
+`libtempo` is a **standalone, Qt-free** static/shared library built by CMake
+(`libtempo/CMakeLists.txt`) from Fortran + C + C++, linking FFTW3 single precision.
+`tempofast_cabi.f90` exposes the C ABI (documented in `libtempo/include/libtempo.h`).
 
 ### 6.1 Reused from WSJT-X (GPL heritage)
 
 Tempo derives from WSJT-X by Joe Taylor (K1JT) and the WSJT Development Group
-(GPLv3). `libft1` compiles a minimal subset of that source tree and reuses, among
+(GPLv3). `libtempo` compiles a minimal subset of that source tree and reuses, among
 others:
 
 - **77-bit packing** — `packjt77` (`pack77` / `unpack77`), plus `packjt`,
@@ -441,12 +441,12 @@ others:
   `crc14.cpp`). The same LDPC code is shared by **both** tiers.
 - **`four2a` / FFTW** — the FFT wrapper (`four2a.f90`, `fftw3mod.f90`) over FFTW3f.
 
-### 6.2 The FT1 fast tier (4-CPM turbo)
+### 6.2 The TempoFast fast tier (4-CPM turbo)
 
-The FT1 modem sources (`genft1`, `gen_ft1wave`, `ft1_downsample`,
+The TempoFast modem sources (`genft1`, `gen_ft1wave`, `ft1_downsample`,
 `turbo_decode_ft1`, the CPM trellis / matched-filter bank / BCJR, `ft1_sync`
 Costas search, the `ft1_rv_detect` RV discriminator, `ir_harq_combine`) compile
-into `libft1`. `ft1_cabi.f90` wraps them as the C entry points:
+into `libtempo`. `tempofast_cabi.f90` wraps them as the C entry points:
 
 - `ft1_encode` → 99 channel symbols; `ft1_gen_wave` → real audio.
 - `ft1_decode_rt` → known-timing turbo/OSD decode (`ntype`: 1 = turbo, 2 = OSD,
@@ -470,12 +470,12 @@ combine; through the full live pipeline ≈ **+2.5 dB** threshold shift and ~2×
 QSO completion in the −11…−13 dB zone. `Decode.rv` carries how many RVs were
 combined.
 
-### 6.3 The DX1 robust tier (non-coherent)
+### 6.3 The TempoDeep robust tier (non-coherent)
 
-DX1 lives in `libft1/dx1/` and reuses the same 77-bit message + LDPC(174,91) FEC,
+TempoDeep lives in `libtempo/tempodeep/` and reuses the same 77-bit message + LDPC(174,91) FEC,
 but a fully non-coherent receive chain (`dx1_decode.f90`). The RX is a
 **full-passband acquisition** decoder — it decodes *every* signal across
-**200–2900 Hz** per slot (like FT1's Costas search), in a three-stage scan
+**200–2900 Hz** per slot (like TempoFast's Costas search), in a three-stage scan
 (~3–4 s/slot):
 
 ```
@@ -509,8 +509,8 @@ but a fully non-coherent receive chain (`dx1_decode.f90`). The RX is a
 `rx_offset_hz` is no longer the single decode carrier; it is demoted to a
 waterfall marker / TX-pairing hint.
 
-The transmit side (`gen_dx1wave.f90`) builds `[ chirp sync | 58 data symbols ]`.
-The C ABI (`ft1_cabi.f90`) exposes:
+The transmit side (`gen_tempodeepwave.f90`) builds `[ chirp sync | 58 data symbols ]`.
+The C ABI (`tempofast_cabi.f90`) exposes:
 
 - `dx1_frame_len()` — TX waveform length (chirp + 58 symbols).
 - `dx1_capture_len()` — RX capture-window length (a full 15 s slot).
@@ -519,7 +519,7 @@ The C ABI (`ft1_cabi.f90`) exposes:
   snr_out, sync_out)` — non-coherent decode; returns the hard-error count
   (< 0 = decode/CRC failed).
 
-The Rust `ft1::dx1` module wraps these, running the full-passband scan over
+The Rust `tempofast::tempodeep` module wraps these, running the full-passband scan over
 **200–2900 Hz** (the coarse carrier sweep → peak-pick → CRC-14-gated decode per
 survivor described above) and letting the chirp sync search anywhere in the
 window (`idt_lo = 0`, `idt_hi = wave.len() − frame_len()`). The default carrier
@@ -568,7 +568,7 @@ Close to a target (WSJT-X default `127.0.0.1:2237`) and **parses inbound** Reply
 HaltTx / FreeText control datagrams. The service loop wires these to the engine:
 `HaltTx` → `engine.halt_tx()` + drop PTT; `FreeText { send: true }` →
 `engine.broadcast(text)`. Each RX slot's decodes are sent as Decode datagrams; a
-Status datagram reflects dial/mode/TX state (with `tr_period` = 4 for FT1, 15 for
+Status datagram reflects dial/mode/TX state (with `tr_period` = 4 for TempoFast, 15 for
 the robust tiers, and `special_op = 3` in Field Day); newly-logged Field Day
 contacts emit QSOLogged.
 
@@ -588,9 +588,9 @@ Nexus's **primary OS is Windows**, but the build host may be Linux/WSL2
 the **GNU toolchain** (MSVC has no Fortran) and the Rust **`x86_64-pc-windows-gnu`**
 target.
 
-### 9.1 ft1-sys/build.rs cross gating
+### 9.1 tempofast-sys/build.rs cross gating
 
-`crates/ft1-sys/build.rs` keeps the native path byte-for-byte and gates all cross
+`crates/tempofast-sys/build.rs` keeps the native path byte-for-byte and gates all cross
 logic behind `is_cross_to_windows_gnu()`. The subtlety: in a build script
 `cfg!(windows)` reflects the **host**, so the function returns false on a native
 Windows build and only triggers when host ≠ target *and*
@@ -604,19 +604,19 @@ Windows build and only triggers when host ≠ target *and*
    Linux / WSL2      x86_64-pc-windows-gnu         CROSS   (MinGW-w64 toolchain file)
 ```
 
-The cross path drives CMake with `libft1/mingw-w64.cmake` and a statically
-cross-built FFTW3f, and links **everything statically** (libft1 → gfortran →
+The cross path drives CMake with `libtempo/mingw-w64.cmake` and a statically
+cross-built FFTW3f, and links **everything statically** (libtempo → gfortran →
 quadmath → stdc++ → fftw3f) so the resulting Windows binary needs no MinGW
 runtime DLLs. `mingw_gcc_lib_dir()` asks the cross gcc (`-print-libgcc-file-name`)
 where the static gfortran/quadmath/stdc++ archives live.
 
 ### 9.2 The MinGW toolchain file
 
-`libft1/mingw-w64.cmake` sets `CMAKE_SYSTEM_NAME = Windows`, the
+`libtempo/mingw-w64.cmake` sets `CMAKE_SYSTEM_NAME = Windows`, the
 `x86_64-w64-mingw32-{gcc,g++,gfortran,windres}` compilers, and the find-root-path
 modes (programs on host; headers/libs only in the target root). It deliberately
 uses the **unsuffixed** (win32 thread-model) compilers so the whole stack —
-libft1, the win32 `libgfortran.a`, and Rust's `x86_64-pc-windows-gnu` target —
+libtempo, the win32 `libgfortran.a`, and Rust's `x86_64-pc-windows-gnu` target —
 agrees on one thread model. `CMakeLists.txt` mirrors this: under
 `CMAKE_CROSSCOMPILING`, it points FFTW at `FFTW_MINGW_PREFIX` instead of
 pkg-config, uses host header-only Boost via `-idirafter` (so it does not shadow
@@ -671,23 +671,23 @@ the bundled UI rather than a blank page).
 
 - **`cargo test`** (the headless workspace) exercises the modem FFI, the engine,
   the QSO and Field Day sequencers (including loopback over `VirtualAir`), the
-  networking byte layouts, and **DX1 round-trips**. It needs gfortran + FFTW3
-  single precision + Boost headers + CMake + Ninja (so `ft1-sys` can build
-  `libft1`). `cargo clippy --all-targets` is clean.
+  networking byte layouts, and **TempoDeep round-trips**. It needs gfortran + FFTW3
+  single precision + Boost headers + CMake + Ninja (so `tempofast-sys` can build
+  `libtempo`). `cargo clippy --all-targets` is clean.
 - **UI:** `npm --prefix ui install` then `npm --prefix ui run build` (tsc + vite).
-- **Modem sweeps:** `libft1` builds verification executables — `ft1_test_standalone`
-  (FT1 AWGN sweep), `dx1_test_standalone` (DX1 AWGN + Rayleigh-fading sweep), and
+- **Modem sweeps:** `libtempo` builds verification executables — `ft1_test_standalone`
+  (TempoFast AWGN sweep), `dx1_test_standalone` (TempoDeep AWGN + Rayleigh-fading sweep), and
   C-ABI harnesses (`roundtrip`, `acquire`). `crates/tempo-core/tests/awgn_threshold.rs`
-  re-checks FT1's ~−15 dB threshold inside the Rust suite.
+  re-checks TempoFast's ~−15 dB threshold inside the Rust suite.
 - **Windows cross-build:** all modem self-tests, `nexus.exe`, and the NSIS
-  installer cross-build clean, and **5/5 Windows test exes pass** (FT1 −15 dB,
-  DX1 −18.6 dB, the 3-signal full-band scan, and FT1 acquisition + IR-HARQ `rv`
+  installer cross-build clean, and **5/5 Windows test exes pass** (TempoFast −15 dB,
+  TempoDeep −18.6 dB, the 3-signal full-band scan, and TempoFast acquisition + IR-HARQ `rv`
   through the C-ABI). The test exes now **statically link the gfortran runtime**
   (self-contained). Released as **v0.2.0 (beta)**.
 
 **Validation status (the hard gate):** simulation- and Windows-cross-build-validated,
-**not yet on-air / hardware-validated**. FT1 AWGN 50% ≈ −15 dB; DX1 AWGN 50%
-≈ −18.6 dB with a ~3.7 dB fading penalty. IR-HARQ and full-passband DX1 are live
+**not yet on-air / hardware-validated**. TempoFast AWGN 50% ≈ −15 dB; TempoDeep AWGN 50%
+≈ −18.6 dB with a ~3.7 dB fading penalty. IR-HARQ and full-passband TempoDeep are live
 (§6) but their gains are simulation-measured only. **On-air decode-rate-vs-SNR is
 pending** and is the remaining gate before relying on Nexus operationally.
 Published binaries are cross-compiled beta.
@@ -701,17 +701,17 @@ Published binaries are cross-compiled beta.
 - **IR-HARQ RV soft-combining** — live end-to-end and on by default: joint
   iterative turbo combining of RV0/RV1/RV2 with reliable RV detection (§6.2).
   `Decode.rv` now carries how many RVs were combined.
-- **Full-band DX1 receive search** — the DX1 RX now decodes every signal across
+- **Full-band TempoDeep receive search** — the TempoDeep RX now decodes every signal across
   200–2900 Hz per slot rather than at the calling carrier (§6.3).
 
 Not yet built (tracked as Phase 2):
 
 - **On-air validation** — the gating item (decode-rate-vs-SNR on real paths),
-  including the on-air gains of IR-HARQ and full-band DX1.
-- **DX1 depth & breadth** — lower-rate LDPC for deeper thresholds, wider DX1
+  including the on-air gains of IR-HARQ and full-band TempoDeep.
+- **TempoDeep depth & breadth** — lower-rate LDPC for deeper thresholds, wider TempoDeep
   variants and multi-slot stacking.
 - **The FT8/FT4 tier** — the `Tier::Ft8` variant exists and the FT8/FT4 internals
-  are compiled into `libft1`, but **no decode pipeline is wired**.
+  are compiled into `libtempo`, but **no decode pipeline is wired**.
 - **macOS / Linux desktop builds** of the Tauri shell.
 
 ---
@@ -723,8 +723,8 @@ from its upstream lineage:
 
 - **WSJT-X** (Joe Taylor K1JT and the WSJT Development Group, GPLv3) — the FT8/FT4
   heritage and the reused 77-bit packing, LDPC(174,91) FEC, and `four2a`/FFTW DSP
-  infrastructure in `libft1`.
-- **FT1** — the 4-CPM turbo waveform, and **DX1** the non-coherent robust mode,
+  infrastructure in `libtempo`.
+- **TempoFast** — the 4-CPM turbo waveform, and **TempoDeep** the non-coherent robust mode,
   both by KD9TAW.
 - **Hamlib** — bundled `rigctld` for CAT (GPL/LGPL; its license ships in the
   installer under `resources/hamlib/`).

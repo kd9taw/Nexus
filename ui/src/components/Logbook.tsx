@@ -738,7 +738,7 @@ export function Logbook({
             </label>
             <label className="logbook-field">
               <span>Mode</span>
-              <input className="settings-input" value={draft.mode} onChange={(e) => setField('mode', e.target.value)} placeholder="FT1" autoComplete="off" />
+              <input className="settings-input" value={draft.mode} onChange={(e) => setField('mode', e.target.value)} placeholder="TempoFast" autoComplete="off" />
             </label>
             <label className="logbook-field">
               <span>RST Sent</span>

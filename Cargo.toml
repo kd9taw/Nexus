@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/ft1-sys",
-    "crates/ft1",
+    "crates/tempo-fast-sys",
+    "crates/tempo-fast",
     "crates/ft8",
     "crates/ft4",
     "crates/modes",

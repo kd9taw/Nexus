@@ -13,7 +13,7 @@
 
 use tempo_app::dto::AppSnapshot;
 use tempo_app::engine::Engine;
-use tempo_core::ft1;
+use tempo_core::tempo_fast;
 
 use crate::backend::AudioBackend;
 use crate::frames::RxRing;
@@ -71,7 +71,7 @@ impl<B: AudioBackend> Transceiver<B> {
         }
         // We are transmitting; don't decode our own audio this slot.
         self.rx.clear();
-        Some(samples as f32 / ft1::SAMPLE_RATE)
+        Some(samples as f32 / tempo_fast::SAMPLE_RATE)
     }
 
     /// Unkey the transmitter (call after the transmitted audio has finished).
@@ -114,7 +114,7 @@ mod tests {
     use super::*;
     use crate::backend::MockBackend;
     use tempo_core::channel::{VirtualAir, ON_TIME_OFFSET};
-    use tempo_core::{ft1 as core_ft1, tx};
+    use tempo_core::{tempo_fast as core_ft1, tx};
 
     fn cq_rx_frame(call: &str, grid: &str) -> Vec<f32> {
         let wave = tx::build(&format!("CQ {call} {grid}"), core_ft1::SAMPLE_RATE, 1500.0).wave;
@@ -145,7 +145,7 @@ mod tests {
     fn receive_slot_ingests_and_updates_roster() {
         // Station transmits on odd slots (parity 1), so slot 2 is a RECEIVE slot.
         let mut eng = Engine::new("W9XYZ", "EN37", 1);
-        eng.set_tier(tempo_app::dto::Tier::Ft1); // FT1-modem runtime test (default is FT8)
+        eng.set_tier(tempo_app::dto::Tier::TempoFast); // FT1-modem runtime test (default is FT8)
         let mut backend = MockBackend::new();
         backend.queue_capture(cq_rx_frame("N0XYZ", "EN52"));
         let mut trx = Transceiver::new(eng, backend, Rig::vox());

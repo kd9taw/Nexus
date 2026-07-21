@@ -37,7 +37,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
 ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /src
 COPY . .
-# The WSJT-X-derived modem source is vendored in-tree at libft1/vendor/wsjtx and is what
+# The WSJT-X-derived modem source is vendored in-tree at libtempo/vendor/wsjtx and is what
 # CMakeLists.txt uses by DEFAULT, so nothing needs staging here — the checkout is
 # self-contained. (This previously had to recreate an absolute dev-box path inside the
 # image because CMakeLists hardcoded it; WX is now an overridable CACHE PATH, so if you

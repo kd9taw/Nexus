@@ -1,6 +1,6 @@
 //! FT1 transmit path: message text → channel symbols → audio waveform.
 
-use ft1;
+use tempo_fast;
 
 /// A built FT1 transmission ready to be scheduled onto a slot boundary.
 #[derive(Debug, Clone)]
@@ -27,8 +27,8 @@ pub fn build(msg: &str, sample_rate: f32, f0: f32) -> TxFrame {
 /// alone could not. The QSO auto-sequencer escalates `rv` when a transmission
 /// goes unacknowledged (see [`crate::qso::Station::outgoing_rv`]).
 pub fn build_rv(msg: &str, sample_rate: f32, f0: f32, rv: i32) -> TxFrame {
-    let tones = ft1::encode_rv(msg, rv);
-    let wave = ft1::gen_wave(&tones, sample_rate, f0);
+    let tones = tempo_fast::encode_rv(msg, rv);
+    let wave = tempo_fast::gen_wave(&tones, sample_rate, f0);
     TxFrame {
         tones,
         wave,
@@ -43,11 +43,11 @@ mod tests {
 
     #[test]
     fn builds_99_symbol_frame_with_audio() {
-        let frame = build("CQ W9XYZ EN37", ft1::SAMPLE_RATE, 1500.0);
+        let frame = build("CQ W9XYZ EN37", tempo_fast::SAMPLE_RATE, 1500.0);
         assert_eq!(frame.tones.len(), 99);
         // 99 symbols * 3000/7 samples/symbol ≈ 42429 samples at 12 kHz.
         assert!(
-            frame.wave.len() > 40_000 && frame.wave.len() <= ft1::NMAX,
+            frame.wave.len() > 40_000 && frame.wave.len() <= tempo_fast::NMAX,
             "unexpected wave length {}",
             frame.wave.len()
         );

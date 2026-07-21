@@ -15,7 +15,7 @@ Closes #
 
 ## Checklist
 
-- [ ] `cargo test` passes on the workspace (headless modem + engine + net + DX1 round-trips).
+- [ ] `cargo test` passes on the workspace (headless modem + engine + net + TempoDeep round-trips).
 - [ ] `cargo clippy --all-targets` is clean (no new warnings).
 - [ ] UI touched? `npm --prefix ui run build` (`tsc -b && vite build`) passes. (Skip if no UI change.)
 - [ ] Docs updated where relevant (README, WINDOWS.md, code comments, DTO contract in `tempo-app/src/dto.rs` ↔ `ui/`).

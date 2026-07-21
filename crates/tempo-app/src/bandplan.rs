@@ -164,7 +164,7 @@ pub fn band_plan_for(tier: crate::dto::Tier) -> Vec<BandChannel> {
     match tier {
         Tier::Ft8 => ft8_band_plan(),
         Tier::Ft4 => ft4_band_plan(),
-        Tier::Ft1 | Tier::Dx1 => band_plan(),
+        Tier::TempoFast | Tier::TempoDeep => band_plan(),
     }
 }
 
@@ -304,7 +304,7 @@ mod tests {
             .unwrap();
         assert!((ft4_20.dial_mhz - 14.080).abs() < 1e-9, "FT4 20m = 14.080");
         // FT1/DX1 keep the native off-cluster plan (must avoid mutual QRM).
-        let ft1_20 = band_plan_for(Tier::Ft1)
+        let ft1_20 = band_plan_for(Tier::TempoFast)
             .into_iter()
             .find(|c| c.band == "20m")
             .unwrap();

@@ -20,7 +20,7 @@
 //! **Sample-rate parametric.** The writer carries its own `sample_rate_hz`
 //! so continuous-phase FM is rate-agnostic: the synthetic test paths
 //! construct at [`WORKING_SAMPLE_RATE_HZ`] (11 025 Hz) via [`ToneWriter::new`],
-//! production TX at 12 000 Hz (`ft1::SAMPLE_RATE`) via
+//! production TX at 12 000 Hz (`tempo_fast::SAMPLE_RATE`) via
 //! [`ToneWriter::with_pre_silence_samples_at`]. Direct synthesis at the
 //! caller's rate avoids any 11 025 → 12 000 resample image.
 
@@ -69,7 +69,7 @@ impl ToneWriter {
     }
 
     /// Construct at an arbitrary output rate with `n` leading zero samples.
-    /// Production TX passes `sample_rate_hz = 12_000` (`ft1::SAMPLE_RATE`).
+    /// Production TX passes `sample_rate_hz = 12_000` (`tempo_fast::SAMPLE_RATE`).
     /// Phase starts at 0.
     pub fn with_pre_silence_samples_at(n: usize, sample_rate_hz: u32) -> Self {
         Self {

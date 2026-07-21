@@ -8,7 +8,7 @@ authors.workspace = true
 description = "Nexus transceiver core — slot timing, virtual-air channel, TX/RX engine over the FT1 modem"
 
 [dependencies]
-ft1 = { path = "../ft1" }
+tempo-fast = { path = "../tempo-fast" }
 modes = { path = "../modes" }
 # Fixed-size real FFT for the waterfall power spectrum (MIT). Zero-alloc, ~2 transitive deps —
 # an exact fit for the compile-time 4096-sample window.

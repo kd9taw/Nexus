@@ -305,7 +305,7 @@ load while this layer earns its stripes.
   `tempo-app` (live engine, settings), `tempo-audio` (cpal audio, CAT, keyers, decode scheduling,
   CAT broker), `tempo-net` (WSJT-X UDP, PSK Reporter, cluster, LoTW/QRZ/ClubLog/eQSL, N3FJP,
   N1MM), `propagation` (needs, openings, space weather, awards, Journey), `ft1`/`ft1-sys` (FFI).
-- **libft1**: the modem library — Fortran → C ABI with FFTW3, no Qt — carrying FT8/FT4 encode +
+- **libtempo**: the modem library — Fortran → C ABI with FFTW3, no Qt — carrying FT8/FT4 encode +
   decode, FT1, and DX1.
 - **Tauri v2 + React/TypeScript** shell; Canvas2D map and waterfall rendering.
 - **Test posture**: 600+ Rust tests across the workspace + 230 UI tests; wire formats (WSJT-X UDP

@@ -1,13 +1,13 @@
 ---
 name: On-air report
-about: Report a real over-the-air FT1/DX1 result — the data the project needs most
+about: Report a real over-the-air TempoFast/TempoDeep result — the data the project needs most
 title: "[on-air] "
 labels: ["on-air report"]
 assignees: []
 ---
 
 <!--
-On-air validation is the open gate for Nexus's new protocols: the FT1/DX1 waveforms are proven in
+On-air validation is the open gate for Nexus's new protocols: the TempoFast/TempoDeep waveforms are proven in
 simulation but NOT yet on the air. A real result — success OR failure — is the
 single most useful contribution. Fill in what you can; partial reports help too.
 (For quick or conversational reports, a GitHub Discussion is also welcome.)
@@ -22,7 +22,7 @@ single most useful contribution. Fill in what you can; partial reports help too.
 
 ## The path
 
-- **Tier:** <!-- Fast (FT1) / Robust (DX1) -->
+- **Tier:** <!-- Fast (TempoFast) / Robust (TempoDeep) -->
 - **Band / dial / mode:** <!-- e.g. 40 m, 7.0455 MHz USB -->
 - **Date / time (UTC):** <!-- e.g. 2026-06-15 0130Z -->
 - **Other station's grid (if known):** <!-- e.g. EM10 -->
@@ -35,7 +35,7 @@ single most useful contribution. Fill in what you can; partial reports help too.
 - **Reported SNR (dB) and dT (s):** <!-- e.g. -14 dB, dT +0.1 -->
 - **Decode rate:** <!-- e.g. ~8 of 10 slots; or "1 of many" -->
 - **Round trip completed?** <!-- e.g. full QSO / one-way copy only / Field Day exchange / store-and-forward -->
-- **Compared to FT8/JS8 on the same path (if you tried):** <!-- how did FT1/DX1 compare? -->
+- **Compared to FT8/JS8 on the same path (if you tried):** <!-- how did TempoFast/TempoDeep compare? -->
 
 ## What worked / what didn't
 

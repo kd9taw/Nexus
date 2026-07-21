@@ -71,16 +71,16 @@ if [ "$GUI" = 1 ]; then
   ok "DeepCW model staged ($(du -h "$dcw/model.onnx" | cut -f1))"
 fi
 
-# 2 — libft1 native modem test exes (proves the native chain; system FFTW3f via pkg-config) --
-bold "2/4  libft1 native modem test exes"
+# 2 — libtempo native modem test exes (proves the native chain; system FFTW3f via pkg-config) --
+bold "2/4  libtempo native modem test exes"
 # WX selects the WSJT-X-derived modem source. Unset (the normal case) means the in-tree
-# vendored copy at libft1/vendor/wsjtx. Export WX=/path/to/wsjtx-source to build against a
+# vendored copy at libtempo/vendor/wsjtx. Export WX=/path/to/wsjtx-source to build against a
 # different checkout; ft1-sys/build.rs reads the same variable, so both stay in step.
-cmake -S "$REPO/libft1" -B "$REPO/libft1/build-linux" -G "$GEN" -DCMAKE_BUILD_TYPE=Release \
+cmake -S "$REPO/libtempo" -B "$REPO/libtempo/build-linux" -G "$GEN" -DCMAKE_BUILD_TYPE=Release \
   ${WX:+-DWX="$WX"} >/dev/null
-cmake --build "$REPO/libft1/build-linux" >/dev/null
-for e in dx1_test_standalone roundtrip ft1_test_standalone acquire; do
-  [ -f "$REPO/libft1/build-linux/$e" ] && ok "$e" || warn "$e not produced"
+cmake --build "$REPO/libtempo/build-linux" >/dev/null
+for e in tempodeep_test_standalone roundtrip tempofast_test_standalone acquire; do
+  [ -f "$REPO/libtempo/build-linux/$e" ] && ok "$e" || warn "$e not produced"
 done
 
 if [ "$GUI" = 0 ]; then bold "Modem exes done (--no-gui)."; exit 0; fi

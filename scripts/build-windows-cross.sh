@@ -4,7 +4,7 @@
 # Uses the MinGW-w64 cross toolchain to produce Windows .exe files right here:
 #   • src-tauri/target/x86_64-pc-windows-gnu/release/Nexus.exe        (the GUI app)
 #   • target/x86_64-pc-windows-gnu/release/examples/win_smoke.exe     (static modem self-test)
-#   • libft1/build-win/{dx1_test_standalone,roundtrip,ft1_test_standalone,acquire}.exe
+#   • libtempo/build-win/{tempodeep_test_standalone,roundtrip,tempofast_test_standalone,acquire}.exe
 #
 #   ./scripts/build-windows-cross.sh            # everything (modem exes + GUI)
 #   ./scripts/build-windows-cross.sh --modem    # only the modem exes (fast, fully static)
@@ -72,26 +72,26 @@ else
   [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ] && ok "built → $FFTW_MINGW_PREFIX" || die "FFTW cross-build failed"
 fi
 
-# 3 — libft1 modem test exes (proves the native chain on Windows) ------------
-bold "3/5  libft1 Windows test exes"
+# 3 — libtempo modem test exes (proves the native chain on Windows) ------------
+bold "3/5  libtempo Windows test exes"
 # Configure/build output goes to a log; on FAILURE the log is dumped so CI and
 # operators see the real error (a bare >/dev/null swallowed ninja/CMake errors).
-LIBFT1_LOG="$REPO/libft1/build-win-configure.log"
-if ! cmake -S "$REPO/libft1" -B "$REPO/libft1/build-win" -G "$GEN" \
-  -DCMAKE_TOOLCHAIN_FILE="$REPO/libft1/mingw-w64.cmake" \
+LIBFT1_LOG="$REPO/libtempo/build-win-configure.log"
+if ! cmake -S "$REPO/libtempo" -B "$REPO/libtempo/build-win" -G "$GEN" \
+  -DCMAKE_TOOLCHAIN_FILE="$REPO/libtempo/mingw-w64.cmake" \
   -DFFTW_MINGW_PREFIX="$FFTW_MINGW_PREFIX" -DCMAKE_BUILD_TYPE=Release >"$LIBFT1_LOG" 2>&1; then
-  cat "$LIBFT1_LOG"; die "libft1 CMake configure failed (log above)"
+  cat "$LIBFT1_LOG"; die "libtempo CMake configure failed (log above)"
 fi
-if ! cmake --build "$REPO/libft1/build-win" >"$LIBFT1_LOG" 2>&1; then
-  tail -n 80 "$LIBFT1_LOG"; die "libft1 build failed (last 80 lines above)"
+if ! cmake --build "$REPO/libtempo/build-win" >"$LIBFT1_LOG" 2>&1; then
+  tail -n 80 "$LIBFT1_LOG"; die "libtempo build failed (last 80 lines above)"
 fi
-for e in dx1_test_standalone roundtrip ft1_test_standalone acquire; do
-  [ -f "$REPO/libft1/build-win/$e.exe" ] && ok "$e.exe" || warn "$e.exe not produced"
+for e in tempodeep_test_standalone roundtrip tempofast_test_standalone acquire; do
+  [ -f "$REPO/libtempo/build-win/$e.exe" ] && ok "$e.exe" || warn "$e.exe not produced"
 done
 
 # 4 — win_smoke.exe : FT1 + DX1 round-trip, fully static (no DLLs) -----------
 bold "4/5  Rust modem self-test (win_smoke.exe)"
-cargo build --release --target "$TARGET" -p ft1 --example win_smoke
+cargo build --release --target "$TARGET" -p tempo-fast --example win_smoke
 ok "target/$TARGET/release/examples/win_smoke.exe"
 
 if [ "$MODEM_ONLY" = 1 ]; then bold "Modem exes done (--modem)."; exit 0; fi
@@ -115,7 +115,7 @@ bold "Done ✓  Windows artifacts:"
 echo "  installer (run this): src-tauri/target/$TARGET/release/bundle/nsis/Nexus_*_x64-setup.exe"
 echo "  GUI app             : src-tauri/target/$TARGET/release/Nexus.exe"
 echo "  modem self-test     : target/$TARGET/release/examples/win_smoke.exe   (fully static — runs anywhere)"
-echo "  modem test exes     : libft1/build-win/*.exe"
+echo "  modem test exes     : libtempo/build-win/*.exe"
 echo
 warn "Cross-compiled, NOT run here — smoke-test on Windows. The installer bundles"
 warn "the offline WebView2 runtime + Hamlib (rigctld), so it installs clean & CAT works."

@@ -1515,7 +1515,7 @@ Windows binaries are cross-compiled. Treat this build as experimental.
 
 - On-air validation is pending; all performance figures above are from
   simulation only.
-- The FT8/FT4 tier is Phase 2 — the internals are compiled in libft1, but no
+- The FT8/FT4 tier is Phase 2 — the internals are compiled in libtempo, but no
   decode pipeline is wired up yet.
 - Published Windows binaries are cross-compiled and should be treated as beta.
 

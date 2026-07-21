@@ -4,16 +4,16 @@
 //! low below it.
 
 use tempo_core::channel::VirtualAir;
-use tempo_core::{ft1, tx};
+use tempo_core::{tempo_fast, tx};
 
 fn decode_rate(snr_db: f32, trials: usize) -> f32 {
-    let frame = tx::build("CQ W9XYZ EN37", ft1::SAMPLE_RATE, 1500.0);
+    let frame = tx::build("CQ W9XYZ EN37", tempo_fast::SAMPLE_RATE, 1500.0);
     // Independent AWGN draws; offset 0 = known timing (mirrors ft1_test).
-    let mut air = VirtualAir::new(ft1::SAMPLE_RATE, (snr_db * -100.0) as u64 + 7);
+    let mut air = VirtualAir::new(tempo_fast::SAMPLE_RATE, (snr_db * -100.0) as u64 + 7);
     let mut ok = 0;
     for _ in 0..trials {
         let buf = air.receive(&frame.wave, 0, snr_db);
-        let d = ft1::decode_rt(&buf, 1500.0, snr_db);
+        let d = tempo_fast::decode_rt(&buf, 1500.0, snr_db);
         if d.ok() && d.message.as_deref() == Some("CQ W9XYZ EN37") {
             ok += 1;
         }

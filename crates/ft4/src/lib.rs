@@ -1,4 +1,4 @@
-//! Safe Rust wrapper over `libft1`'s native FT4 decoder.
+//! Safe Rust wrapper over `libtempo`'s native FT4 decoder.
 //!
 //! FT4 (WSJT-X) is the fast contest sibling of FT8: 7.5 s T/R, 4-GFSK, 103
 //! channel symbols, LDPC(174,91) + CRC-14. This wraps the vendored WSJT-X GPL
@@ -7,12 +7,12 @@
 //! subtract).
 //!
 //! # Thread safety
-//! Not thread-safe; serializes behind [`ft1_sys::MODEM_LOCK`] — the single lock
-//! shared across every mode (FT1/FT8/FT4/DX1) that links `libft1`.
+//! Not thread-safe; serializes behind [`tempo_fast_sys::MODEM_LOCK`] — the single lock
+//! shared across every mode (FT1/FT8/FT4/DX1) that links `libtempo`.
 
-use ft1_sys::MODEM_LOCK;
+use tempo_fast_sys::MODEM_LOCK;
 
-pub use ft1_sys::{FT4_NMAX as NMAX, FT4_NN as NN};
+pub use tempo_fast_sys::{FT4_NMAX as NMAX, FT4_NN as NN};
 
 /// WSJT-X audio sample rate (Hz).
 pub const SAMPLE_RATE: f32 = 12_000.0;
@@ -49,7 +49,7 @@ pub fn encode(msg: &str) -> Vec<i32> {
     let mut nsym: i32 = 0;
     let _guard = MODEM_LOCK.lock().unwrap();
     unsafe {
-        ft1_sys::ft4_encode(
+        tempo_fast_sys::ft4_encode(
             bytes.as_ptr() as *const _,
             bytes.len() as i32,
             itone.as_mut_ptr(),
@@ -72,7 +72,7 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
     let mut nwave: i32 = NMAX as i32;
     let _guard = MODEM_LOCK.lock().unwrap();
     unsafe {
-        ft1_sys::ft4_gen_wave(
+        tempo_fast_sys::ft4_gen_wave(
             itone.as_ptr(),
             itone.len() as i32,
             fsample,
@@ -114,12 +114,12 @@ pub fn decode_frame(
     );
     let myc = std::ffi::CString::new(mycall).unwrap_or_default();
     let hisc = std::ffi::CString::new(hiscall).unwrap_or_default();
-    let mut out = vec![ft1_sys::Ft4DecodeT::default(); MAX_DECODES];
+    let mut out = vec![tempo_fast_sys::Ft4DecodeT::default(); MAX_DECODES];
 
     let n = {
         let _guard = MODEM_LOCK.lock().unwrap();
         unsafe {
-            ft1_sys::ft4_decode_frame(
+            tempo_fast_sys::ft4_decode_frame(
                 iwave.as_ptr(),
                 nfa,
                 nfb,

@@ -33,9 +33,9 @@ rust_out
 ui/design/proof.png
 ui/design/proof.html
 
-# libft1 out-of-tree build output
-libft1/build-linux/
-libft1/build-win-configure.log
+# libtempo out-of-tree build output
+libtempo/build-linux/
+libtempo/build-win-configure.log
 .pi-vendor/
 
 # Build output — installers and Pi packages. `*.exe` was already covered; these were not,
@@ -48,7 +48,7 @@ pi-out/
 # here for convenience. They are deliberately NOT part of the published source.
 #
 # They used to be tracked here and removed from every publish by a manual scrub. That
-# scrub is what let a stale hand-merged libft1/CMakeLists.txt ship source that could
+# scrub is what let a stale hand-merged libtempo/CMakeLists.txt ship source that could
 # not compile for two releases (2026-07-20). Keeping notes out of this repo means the
 # published tree IS the tree that gets built and tested — nothing to strip, no drift.
 tasks/

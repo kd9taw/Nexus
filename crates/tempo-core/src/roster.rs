@@ -162,9 +162,9 @@ mod tests {
         assert_eq!(r.get("W9XYZ").unwrap().mode, Some(ModeKind::Ft8));
         // Heard again on FT1 → re-tagged (last-heard protocol wins).
         let mut d2 = dec("CQ W9XYZ EN37", -5);
-        d2.mode = Some(ModeKind::Ft1);
+        d2.mode = Some(ModeKind::TempoFast);
         r.observe(&d2, 2);
-        assert_eq!(r.get("W9XYZ").unwrap().mode, Some(ModeKind::Ft1));
+        assert_eq!(r.get("W9XYZ").unwrap().mode, Some(ModeKind::TempoFast));
     }
 
     #[test]

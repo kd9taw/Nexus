@@ -2,7 +2,7 @@
 
 You don't need to build Nexus to use it — most operators should just grab the installer (see [Getting Started](Getting-Started.md)). Build from source if you'd rather not run an unsigned binary, want to develop, or are porting.
 
-Nexus's modem (`libft1`) is **Fortran + C/C++ + FFTW**, so the Windows build uses the **GNU toolchain** (MSVC has no Fortran) and the Rust **`x86_64-pc-windows-gnu`** target. The full, authoritative build guide is [`WINDOWS.md`](../../WINDOWS.md); developer setup and crate layout are in [`CONTRIBUTING.md`](../../CONTRIBUTING.md). This page condenses both.
+Nexus's modem (`libtempo`) is **Fortran + C/C++ + FFTW**, so the Windows build uses the **GNU toolchain** (MSVC has no Fortran) and the Rust **`x86_64-pc-windows-gnu`** target. The full, authoritative build guide is [`WINDOWS.md`](../../WINDOWS.md); developer setup and crate layout are in [`CONTRIBUTING.md`](../../CONTRIBUTING.md). This page condenses both.
 
 ---
 
@@ -66,7 +66,7 @@ No MSYS2 needed; produces the same installer.
    ./scripts/build-windows-cross.sh
    ```
 
-   The script cross-builds a static single-precision **FFTW3f** for MinGW (cached), links the whole modem stack statically (libft1 → gfortran → quadmath → stdc++ → fftw3f) so the result needs no MinGW runtime DLLs, and produces the NSIS installer.
+   The script cross-builds a static single-precision **FFTW3f** for MinGW (cached), links the whole modem stack statically (libtempo → gfortran → quadmath → stdc++ → fftw3f) so the result needs no MinGW runtime DLLs, and produces the NSIS installer.
 
 > The **published binaries are produced this way** — cross-compiled beta. Treat them accordingly and report what breaks.
 
@@ -74,7 +74,7 @@ No MSYS2 needed; produces the same installer.
 
 ## Headless modem / engine tests (any platform)
 
-You don't need WebView2 or a radio to run the test suite — just the native modem toolchain so `ft1-sys` can build `libft1` via CMake.
+You don't need WebView2 or a radio to run the test suite — just the native modem toolchain so `ft1-sys` can build `libtempo` via CMake.
 
 On Debian/Ubuntu (or WSL2):
 

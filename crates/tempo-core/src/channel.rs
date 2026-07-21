@@ -2,11 +2,11 @@
 //!
 //! This models the received audio frame a station would capture: the
 //! transmitted waveform placed at some time offset within a 4-second
-//! ([`ft1::NMAX`]) window, scaled to a target SNR, plus additive white Gaussian
+//! ([`tempo_fast::NMAX`]) window, scaled to a target SNR, plus additive white Gaussian
 //! noise — the same construction the FT1 Fortran test harness uses. It lets us
 //! exercise the full TX/RX pipeline without sound hardware.
 
-use ft1::NMAX;
+use tempo_fast::NMAX;
 
 /// Deterministic unit-variance Gaussian source (LCG + Box-Muller, no deps).
 ///
@@ -61,7 +61,7 @@ pub fn snr_to_scale(snr_db: f32, sample_rate: f32) -> f32 {
 pub const ON_TIME_OFFSET: usize = 28 * 107; // 2996
 
 /// Convert f32 audio to int16 PCM for the acquisition decoder
-/// ([`ft1::decode_frame`]). Applies the ~×100 gain the FT1 harness uses before
+/// ([`tempo_fast::decode_frame`]). Applies the ~×100 gain the FT1 harness uses before
 /// casting; the decoder normalizes internally, so exact gain is not critical, but
 /// this keeps signal+noise comfortably within int16 range.
 pub fn to_i16(samples: &[f32]) -> Vec<i16> {
@@ -110,7 +110,7 @@ impl VirtualAir {
     /// Form a received frame: `wave` placed starting at `offset_samples`, scaled
     /// to `snr_db`, with AWGN added across the whole frame. Samples past the end
     /// of the frame are dropped. With `offset_samples == 0` this is the
-    /// known-timing (`dt0 = 0`) layout accepted by [`ft1::decode_rt`].
+    /// known-timing (`dt0 = 0`) layout accepted by [`tempo_fast::decode_rt`].
     pub fn receive(&mut self, wave: &[f32], offset_samples: usize, snr_db: f32) -> Vec<f32> {
         let sig = snr_to_scale(snr_db, self.sample_rate);
         let mut buf = vec![0f32; NMAX];

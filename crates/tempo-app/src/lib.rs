@@ -8,7 +8,7 @@
 //! [`dto`] types so the frontend renders directly from them.
 //!
 //! This crate is deliberately **pure logic**: no Tauri, no audio devices, no
-//! threads. A real engine pumps decoded [`ft1::Decode`]s in via [`AppState::observe`]
+//! threads. A real engine pumps decoded [`tempo_fast::Decode`]s in via [`AppState::observe`]
 //! and reads [`AppState::snapshot`] out; here those edges are exercised by unit
 //! tests over synthetic decodes.
 
@@ -193,7 +193,7 @@ impl AppState {
                 && !c.messages.is_empty()
                 && c.messages
                     .iter()
-                    .all(|m| !m.outbound && matches!(m.tier, Some(t) if t != Tier::Ft1));
+                    .all(|m| !m.outbound && matches!(m.tier, Some(t) if t != Tier::TempoFast));
             if phantom {
                 continue;
             }
@@ -516,7 +516,7 @@ impl AppState {
         // ACK-in: a directed RR73 addressed to us confirms a message we queued to that
         // sender arrived → mark it delivered (stops its resend) + stamp the conversation
         // for a real "Delivered ✓"; then drop spent queue entries. Chat (FT1) only.
-        if self.link.tier == Tier::Ft1 {
+        if self.link.tier == Tier::TempoFast {
             let mut acked: Vec<String> = decodes
                 .iter()
                 .filter_map(|d| ack_sender_for(&d.message, &self.mycall))
@@ -537,7 +537,7 @@ impl AppState {
         // Operate too), but only FOLD into conversations in FT1/Tempo; otherwise advance
         // the cursor so this slot's frames are discarded (and can't replay on an FT1
         // switch). Outbound chats (send_message) bypass this — they push directly.
-        if self.link.tier == Tier::Ft1 {
+        if self.link.tier == Tier::TempoFast {
             self.drain_inbox();
         } else {
             self.drained = self.inbox.messages.len();
@@ -993,7 +993,7 @@ mod tests {
     #[test]
     fn a_held_message_is_marked_stored_until_it_first_goes_on_the_air() {
         let mut app = AppState::new("K2DEF", "FN31");
-        app.set_tier(Tier::Ft1);
+        app.set_tier(Tier::TempoFast);
         app.send_message("W9XYZ", "HI");
 
         let held = |a: &AppState| a.conversation("W9XYZ").unwrap().messages[0].stored;
@@ -1106,7 +1106,7 @@ mod tests {
     #[test]
     fn observe_directed_decode_updates_roster_and_creates_attributed_inbound() {
         let mut app = AppState::new("K2DEF", "FN31");
-        app.set_tier(Tier::Ft1); // conversation folding is a Tempo (FT1) feature
+        app.set_tier(Tier::TempoFast); // conversation folding is a Tempo (FT1) feature
 
         // W9XYZ identifies via a directed grid frame to me (establishes context),
         // then sends a chunked free-text message.
@@ -1157,7 +1157,7 @@ mod tests {
             "roster still updates"
         );
         // Switching to FT1 resumes real chat folding (no replay of the FT8 frames).
-        app.set_tier(Tier::Ft1);
+        app.set_tier(Tier::TempoFast);
         app.observe(&[dec("K2DEF N0ABC EM48", -8)], 10);
         for (i, f) in text::chunk("HI SETH", 'B').iter().enumerate() {
             app.observe(&[dec(f, -8)], 11 + i as u64);
@@ -1193,7 +1193,7 @@ mod tests {
         };
         let outbound = ChatMessage {
             outbound: true,
-            ..inbound(Tier::Ft1)
+            ..inbound(Tier::TempoFast)
         };
         app.load_conversations(vec![
             // Phantom: all inbound, FT8 tier → dropped.
@@ -1204,7 +1204,7 @@ mod tests {
             // Real FT1 inbound chat → kept.
             Conversation {
                 peer: "REALRX".into(),
-                messages: vec![inbound(Tier::Ft1)],
+                messages: vec![inbound(Tier::TempoFast)],
             },
             // Operator participated (outbound), even if FT8 tier → kept.
             Conversation {
@@ -1222,7 +1222,7 @@ mod tests {
                 peer: "LEGACY".into(),
                 messages: vec![ChatMessage {
                     tier: None,
-                    ..inbound(Tier::Ft1)
+                    ..inbound(Tier::TempoFast)
                 }],
             },
         ]);
@@ -1260,7 +1260,7 @@ mod tests {
     fn set_tier_selects_all_modes() {
         // All tiers are now live-selectable: FT1/FT8/FT4 native, DX1 robust.
         let mut app = AppState::new("K2DEF", "FN31");
-        for t in [Tier::Dx1, Tier::Ft8, Tier::Ft4, Tier::Ft1] {
+        for t in [Tier::TempoDeep, Tier::Ft8, Tier::Ft4, Tier::TempoFast] {
             app.set_tier(t);
             assert_eq!(app.tier(), t);
         }

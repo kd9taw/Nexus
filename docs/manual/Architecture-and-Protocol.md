@@ -23,9 +23,9 @@ Nexus is a stack: a web UI on top, a Rust core in the middle, and a Fortran/C mo
 │               roster · inbox · store-and-forward · spectrum    │
 │   tempo-audio sound card (cpal) + rig control (rigctld/serial) │
 │   tempo-net   WSJT-X UDP API + PSK Reporter                    │
-│   ft1 / ft1-sys  safe wrapper + raw FFI over libft1           │
+│   ft1 / ft1-sys  safe wrapper + raw FFI over libtempo           │
 ├──────────────────────────────────────────────────────────────┤
-│ libft1 (Fortran → C ABI, FFTW3, no Qt)                         │
+│ libtempo (Fortran → C ABI, FFTW3, no Qt)                         │
 │   Fast tier: FT1 4-CPM turbo modem + IR-HARQ                   │
 │   Robust tier: DX1 non-coherent 8-FSK + soft LDPC(174,91)      │
 └──────────────────────────────────────────────────────────────┘
@@ -33,7 +33,7 @@ Nexus is a stack: a web UI on top, a Rust core in the middle, and a Fortran/C mo
 
 - **UI (React + Tauri):** the chat-first interface you see. It talks to the Rust core over Tauri commands using camelCase JSON DTOs.
 - **Rust core:** `tempo-core` is pure protocol/domain logic (no hardware); `tempo-app` glues it to the UI and runs the live **Engine**; `tempo-audio` owns the sound card and rig; `tempo-net` speaks the ham network protocols.
-- **`libft1`:** the actual modem — Fortran + C/C++ over FFTW3, with no Qt dependency, exposing a clean C ABI that the Rust `ft1`/`ft1-sys` crates wrap.
+- **`libtempo`:** the actual modem — Fortran + C/C++ over FFTW3, with no Qt dependency, exposing a clean C ABI that the Rust `ft1`/`ft1-sys` crates wrap.
 
 ---
 

@@ -11,7 +11,7 @@
 //! - `get_snapshot` -> `AppSnapshot`
 //! - `send_message { peer, text }` -> `AppSnapshot`
 //! - `select_peer { peer }` -> `AppSnapshot`
-//! - `set_tier { tier }` -> `AppSnapshot`  (tier is "FT1" | "FT8" | "FT4" | "DX1")
+//! - `set_tier { tier }` -> `AppSnapshot`  (tier is "TempoFast" | "FT8" | "FT4" | "TempoDeep")
 //! - `get_spectrum_row` -> `Spectrum`      (one waterfall row)
 //!
 //! ## Live radio (`--features radio`, built on the station PC)
@@ -1176,7 +1176,7 @@ fn archive_conversation(
     Ok(snap)
 }
 
-/// Switch the waveform mode/tier ("FT1" | "FT8" | "FT4" | "DX1"). Operator-
+/// Switch the waveform mode/tier ("TempoFast" | "FT8" | "FT4" | "TempoDeep"). Operator-
 /// visible via `LinkState.tier`. FT1 = fast 4 s coherent; FT8 = 15 s; FT4 =
 /// 7.5 s; DX1 = robust non-coherent 15 s. All decode/encode natively through the
 /// engine's signal source.
@@ -5642,7 +5642,7 @@ fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnaps
                 .unwrap_or(0);
             let safe: String = call.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
             let path = dir.join(format!("qso-{safe}-{ms}.wav"));
-            // 12 kHz: the engine's RX-audio rate (ft1::SAMPLE_RATE).
+            // 12 kHz: the engine's RX-audio rate (tempo_fast::SAMPLE_RATE).
             let _ = tempo_core::wavfile::write_wav_i16(&path, &pcm, 12_000);
         }
     }

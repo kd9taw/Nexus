@@ -70,8 +70,8 @@ WSJT-X muscle memory just works, inside a UI built this decade.
   want to do?”) shapes the app to you, and your declared license class becomes a real Part 97
   transmit lockout — Nexus refuses to key outside your privileges, a software guard in every
   TX path.
-- **💬 Novel weak-signal chat tiers.** The original Tempo layer: **FT1** (4-second conversational
-  cycle) and **DX1** (fading-resilient non-coherent 8-FSK) with IR-HARQ retransmission combining
+- **💬 Novel weak-signal chat tiers.** The original Tempo layer: **TempoFast** (4-second conversational
+  cycle) and **TempoDeep** (fading-resilient non-coherent 8-FSK) with IR-HARQ retransmission combining
   and presence-gated store-and-forward — simulation-validated, seeking on-air reports.
 - **🔌 Program your radios.** The **Program** section turns "load the local repeaters into my HT"
   from an evening with legacy per-radio software into minutes: pick a location (your grid, any
@@ -146,7 +146,7 @@ New here? Start with **[Getting Started](docs/manual/Getting-Started.md)**.
 - **CW and Phone cockpits** are casual/ragchew-grade by design: macros, voice keyer, scope, full
   logging — macros, voice keyer, live single-signal CW decoder, WinKeyer support, full
   logging — no contest exchanges yet.
-- The **FT1/DX1 chat tiers are simulation-validated, not yet proven on the air** — AWGN and fading
+- The **TempoFast/TempoDeep chat tiers are simulation-validated, not yet proven on the air** — AWGN and fading
   sweeps say they work; on-air decode-rate reports are the remaining gate and the single most
   useful contribution you can make.
 - **Windows installer** is the supported package today; the codebase is cross-platform Rust/Tauri
@@ -175,11 +175,11 @@ New here? Start with **[Getting Started](docs/manual/Getting-Started.md)**.
 │                LoTW/QRZ/ClubLog/eQSL · N3FJP · N1MM            │
 │   propagation  needs engine · opening detector · space wx ·    │
 │                awards · Journey                                │
-│   ft1/ft1-sys  safe wrapper + FFI over libft1                  │
+│   tempofast/tempofast-sys  safe wrapper + FFI over libtempo                  │
 ├────────────────────────────────────────────────────────────────┤
-│ libft1 (Fortran → C ABI, FFTW3, no Qt)                         │
-│   FT8/FT4 encode+decode · FT1 4-CPM turbo + IR-HARQ ·          │
-│   DX1 non-coherent 8-FSK + soft LDPC                           │
+│ libtempo (Fortran → C ABI, FFTW3, no Qt)                         │
+│   FT8/FT4 encode+decode · TempoFast 4-CPM turbo + IR-HARQ ·          │
+│   TempoDeep non-coherent 8-FSK + soft LDPC                           │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -196,28 +196,28 @@ cd ui && npm install && npx vitest run  # UI suites
 ./scripts/build-windows-cross.sh
 ```
 
-The FT1/FT8 modem is Fortran + C behind a Rust FFI, so the **GNU toolchain** is required — see
+The TempoFast/FT8 modem is Fortran + C behind a Rust FFI, so the **GNU toolchain** is required — see
 **[Building from Source](docs/manual/Building-from-Source.md)** and [WINDOWS.md](WINDOWS.md).
 
 ## Documentation
 
 - **[Comprehensive overview](docs/OVERVIEW.md)** — every surface, in depth
 - **[Operator manual](docs/manual/)** — setup, per-mode operating guides, integrations, troubleshooting
-- **[FT1 protocol specification](docs/FT1-Protocol.md)** — the native waveform, for implementers
-- **[Frequency plan](docs/FREQUENCIES.md)** — where the FT1/DX1 tiers live on the bands
+- **[TempoFast protocol specification](docs/TempoFast-Protocol.md)** — the native waveform, for implementers
+- **[Frequency plan](docs/FREQUENCIES.md)** — where the TempoFast/TempoDeep tiers live on the bands
 
 ## License & credits
 
 Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
 
 - **WSJT-X** — Joe Taylor **K1JT**, Steve Franke **K9AN**, Bill Somerville **G4WJS**, and the WSJT
-  Development Group. Nexus's digital modem (`libft1/`) is **derived from WSJT-X**: the FT8/FT4 codec,
+  Development Group. Nexus's digital modem (`libtempo/`) is **derived from WSJT-X**: the FT8/FT4 codec,
   the 77-bit message packing, the LDPC(174,91) FEC, and the CRC-14 check are their GPL-licensed work,
   vendored and reused unmodified via a foreign-function interface (see **[NOTICE](NOTICE)** for the
   full lineage and marked modifications). Nexus interoperates with their ecosystem over the standard
   WSJT-X UDP protocol; its auto-sequencer is original Rust modeled on WSJT-X's on-air behavior.
   **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.
-- **FT1 / DX1** — the native weak-signal waveforms by **KD9TAW**.
+- **TempoFast / TempoDeep** — the native weak-signal waveforms by **KD9TAW**.
 - **[Hamlib](https://hamlib.github.io/)** — bundled `rigctld` for CAT control (GPL/LGPL).
 - **[FFTW](https://www.fftw.org/)** (GPL), **[Tauri](https://tauri.app/)**, React,
   [cpal](https://github.com/RustAudio/cpal), Natural Earth basemap (public domain).

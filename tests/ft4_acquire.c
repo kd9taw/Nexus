@@ -14,7 +14,7 @@
 #include <string.h>
 #include <math.h>
 
-#include "libft1.h"
+#include "libtempo.h"
 
 static float grandf(void) {
     double u1 = (rand() + 1.0) / (RAND_MAX + 2.0);

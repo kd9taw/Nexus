@@ -9,7 +9,7 @@
 use tempo_app::dto::Tier;
 use tempo_app::engine::Engine;
 use tempo_core::channel::{VirtualAir, ON_TIME_OFFSET};
-use tempo_core::ft1;
+use tempo_core::tempo_fast;
 
 /// Real audio capture normalizes the soundcard int16 to f32 (÷32768); the VirtualAir
 /// harness instead emits f32 at the ×100 int16 scale (paired with channel::to_i16). The
@@ -31,10 +31,10 @@ fn two_engines_exchange_an_open_broadcast() {
     b.set_tx_enabled(true);
     // Open broadcast / free-text chat is an FT1-native feature (long free text);
     // the default tier is now FT8, so pin both ends to FT1 for this exchange.
-    a.set_tier(Tier::Ft1);
-    b.set_tier(Tier::Ft1);
-    let mut air_a2b = VirtualAir::new(ft1::SAMPLE_RATE, 1);
-    let mut air_b2a = VirtualAir::new(ft1::SAMPLE_RATE, 2);
+    a.set_tier(Tier::TempoFast);
+    b.set_tier(Tier::TempoFast);
+    let mut air_a2b = VirtualAir::new(tempo_fast::SAMPLE_RATE, 1);
+    let mut air_b2a = VirtualAir::new(tempo_fast::SAMPLE_RATE, 2);
 
     let body = "NET ON 7130 AT 0200Z";
     let mut sent = false;

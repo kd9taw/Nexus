@@ -2,19 +2,19 @@
 //! transmit path and channel model with the known-timing `decode_rt` (offset 0).
 //!
 //! The full-acquisition variant (nonzero time/frequency offset via
-//! `ft1_decode_frame`) is added once libft1 exposes the acquisition decoder.
+//! `ft1_decode_frame`) is added once libtempo exposes the acquisition decoder.
 
-use tempo_core::{channel::VirtualAir, ft1, tx};
+use tempo_core::{channel::VirtualAir, tempo_fast, tx};
 
 #[test]
 fn tx_through_channel_decodes() {
     let msg = "CQ W9XYZ EN37";
-    let frame = tx::build(msg, ft1::SAMPLE_RATE, 1500.0);
+    let frame = tx::build(msg, tempo_fast::SAMPLE_RATE, 1500.0);
 
-    let mut air = VirtualAir::new(ft1::SAMPLE_RATE, 2024);
+    let mut air = VirtualAir::new(tempo_fast::SAMPLE_RATE, 2024);
     let rx = air.receive(&frame.wave, 0, 10.0); // dt0 = 0, +10 dB SNR
 
-    let decoded = ft1::decode_rt(&rx, 1500.0, 10.0);
+    let decoded = tempo_fast::decode_rt(&rx, 1500.0, 10.0);
     assert!(
         decoded.ok(),
         "decode failed: ntype={} nharderror={}",

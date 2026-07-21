@@ -22,7 +22,7 @@ pub struct QsoRecord {
     pub state: Option<String>,
     pub band: String,
     pub freq_mhz: f64,
-    /// Mode / tier label ("FT1" | "DX1" | "FT8" | "CW" | "SSB" | "USB" | "LSB" | "FM" …).
+    /// Mode / tier label ("TempoFast" | "TempoDeep" | "FT8" | "CW" | "SSB" | "USB" | "LSB" | "FM" …).
     pub mode: String,
     /// Signal report SENT / RECEIVED, as a string (ADIF `RST_SENT`/`RST_RCVD` are
     /// type String). Holds a CW RST ("599"), a phone RS ("59"), OR a digital dB SNR
@@ -1199,7 +1199,7 @@ mod tests {
             state: None,
             band: band.into(),
             freq_mhz: 14.0905,
-            mode: "FT1".into(),
+            mode: "TempoFast".into(),
             rst_sent: Some("-10".into()),
             rst_rcvd: Some("-12".into()),
             name: None,
@@ -1884,7 +1884,7 @@ mod tests {
             "Call,Grid,Band,Freq_MHz,Mode,RST_Sent,RST_Rcvd,Name,QTH,Comment,DateTimeUTC,Confirmed"
         );
         let row = lines.next().unwrap();
-        assert!(row.starts_with("W9XYZ,EN37,20m,14.090500,FT1,-10,-12,,,,2023-11-14T22:13:20Z,N"));
+        assert!(row.starts_with("W9XYZ,EN37,20m,14.090500,TempoFast,-10,-12,,,,2023-11-14T22:13:20Z,N"));
     }
 
     #[test]

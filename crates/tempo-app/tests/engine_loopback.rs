@@ -7,7 +7,7 @@
 use tempo_app::dto::Tier;
 use tempo_app::engine::Engine;
 use tempo_core::channel::{VirtualAir, ON_TIME_OFFSET};
-use tempo_core::ft1;
+use tempo_core::tempo_fast;
 
 /// Real audio capture normalizes the soundcard int16 to f32 (÷32768); the VirtualAir
 /// harness instead emits f32 at the ×100 int16 scale (paired with channel::to_i16). The
@@ -34,13 +34,13 @@ fn two_engines_exchange_a_directed_message() {
     a.set_tx_cycle_auto(false);
     b.set_tx_cycle_auto(false);
     // Directed free-text chat is FT1-native; default tier is now FT8, so pin FT1.
-    a.set_tier(Tier::Ft1);
-    b.set_tier(Tier::Ft1);
+    a.set_tier(Tier::TempoFast);
+    b.set_tier(Tier::TempoFast);
     // Presence is established via beacons; enable them (off by default now).
     a.set_beacon(true);
     b.set_beacon(true);
-    let mut air_a2b = VirtualAir::new(ft1::SAMPLE_RATE, 1);
-    let mut air_b2a = VirtualAir::new(ft1::SAMPLE_RATE, 2);
+    let mut air_a2b = VirtualAir::new(tempo_fast::SAMPLE_RATE, 1);
+    let mut air_b2a = VirtualAir::new(tempo_fast::SAMPLE_RATE, 2);
 
     let body = "MEET AT THE REPEATER AT NOON ES 73";
     let mut sent = false;
@@ -108,16 +108,16 @@ fn directed_message_is_acked_and_marked_delivered() {
     let mut b = Engine::new("K2DEF", "FN31", 1); // Tx 2nd (odd)
     a.set_tx_enabled(true);
     b.set_tx_enabled(true);
-    a.set_tier(Tier::Ft1);
-    b.set_tier(Tier::Ft1);
+    a.set_tier(Tier::TempoFast);
+    b.set_tier(Tier::TempoFast);
     // This loopback ingests a decode in the SAME slot it was TXed (real radio decodes one
     // slot later), so pin the static parities and let the modem carry the exchange.
     a.set_tx_cycle_auto(false);
     b.set_tx_cycle_auto(false);
     a.set_beacon(true);
     b.set_beacon(true); // both announce presence so the queued message releases
-    let mut air_a2b = VirtualAir::new(ft1::SAMPLE_RATE, 1);
-    let mut air_b2a = VirtualAir::new(ft1::SAMPLE_RATE, 2);
+    let mut air_a2b = VirtualAir::new(tempo_fast::SAMPLE_RATE, 1);
+    let mut air_b2a = VirtualAir::new(tempo_fast::SAMPLE_RATE, 2);
 
     let mut sent = false;
     let mut delivered = false;

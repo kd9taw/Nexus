@@ -6,21 +6,21 @@
 //! over-the-air station must. Proves the acquisition decoder end to end.
 
 use tempo_core::channel::{self, VirtualAir, ON_TIME_OFFSET};
-use tempo_core::{ft1, tx};
+use tempo_core::{tempo_fast, tx};
 
 #[test]
 fn acquisition_recovers_signal_at_time_and_freq_offset() {
     let msg = "CQ W9XYZ EN37";
     let f0 = 1700.0; // arbitrary carrier — the receiver is NOT told this
-    let frame = tx::build(msg, ft1::SAMPLE_RATE, f0);
+    let frame = tx::build(msg, tempo_fast::SAMPLE_RATE, f0);
 
     // Place the signal ~0.25 s into the 4 s frame, at −3 dB SNR, plus AWGN.
-    let mut air = VirtualAir::new(ft1::SAMPLE_RATE, 7);
+    let mut air = VirtualAir::new(tempo_fast::SAMPLE_RATE, 7);
     let rx_f32 = air.receive(&frame.wave, ON_TIME_OFFSET, -3.0);
     let iwave = channel::to_i16(&rx_f32);
 
     // Full acquisition decode over the 200–2900 Hz audio range.
-    let decodes = ft1::decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0);
+    let decodes = tempo_fast::decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0);
 
     // The receiver found the signal on its own (no known timing/frequency).
     let d = decodes

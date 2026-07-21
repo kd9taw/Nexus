@@ -9,8 +9,8 @@ node_modules/
 ref/
 nexus-mirror-backup-2026-07-17.git/
 .nexus-detached-tempo-git/
-libft1/build-linux/
-libft1/build-win/
+libtempo/build-linux/
+libtempo/build-win/
 *.log
 *.png
 *.jpg

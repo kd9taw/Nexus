@@ -5,7 +5,7 @@
 //! the full over-the-air transmission: pre-silence, the standard
 //! calibration/VIS header, the per-mode scanlines (dispatched on
 //! [`ChannelLayout`]), and a trailing pad. Synthesis is direct at the
-//! caller's sample rate (production TX passes 12 000 Hz = `ft1::SAMPLE_RATE`)
+//! caller's sample rate (production TX passes 12 000 Hz = `tempo_fast::SAMPLE_RATE`)
 //! — continuous-phase FM is rate-agnostic, so no 11 025 → 12 000 resample
 //! is needed.
 //!

@@ -94,9 +94,9 @@ pub fn read_wav_i16(path: impl AsRef<Path>) -> io::Result<(Vec<i16>, u32)> {
 }
 
 /// Replay a captured `.wav` (12 kHz mono) through the full FT1 acquisition +
-/// decode pipeline (including IR-HARQ — call [`ft1::harq_reset`] first for a
+/// decode pipeline (including IR-HARQ — call [`tempo_fast::harq_reset`] first for a
 /// clean state, or replay a sequence to exercise combining). Pads/truncates to
-/// one frame ([`ft1::NMAX`] samples). Returns every decode found — deterministic
+/// one frame ([`tempo_fast::NMAX`] samples). Returns every decode found — deterministic
 /// for a given file, so captured slots become regression fixtures.
 pub fn decode_wav(path: impl AsRef<Path>) -> io::Result<Vec<modes::Decode>> {
     let (samples, sr) = read_wav_i16(path)?;
@@ -106,10 +106,10 @@ pub fn decode_wav(path: impl AsRef<Path>) -> io::Result<Vec<modes::Decode>> {
             format!("FT1 expects {SAMPLE_RATE_HZ} Hz audio, got {sr} Hz"),
         ));
     }
-    let mut frame = vec![0i16; ft1::NMAX];
-    let n = samples.len().min(ft1::NMAX);
+    let mut frame = vec![0i16; tempo_fast::NMAX];
+    let n = samples.len().min(tempo_fast::NMAX);
     frame[..n].copy_from_slice(&samples[..n]);
-    Ok(ft1::decode_frame(&frame, 200, 2900, 3, "", "", 0, 0)
+    Ok(tempo_fast::decode_frame(&frame, 200, 2900, 3, "", "", 0, 0)
         .into_iter()
         .map(Into::into)
         .collect())
@@ -125,14 +125,14 @@ mod tests {
     fn wav_roundtrip_decodes_captured_frame() {
         // Synthesize an off-air capture: a frame at −5 dB SNR placed in a slot.
         let msg = "CQ W9XYZ EN37";
-        let frame = tx::build(msg, ft1::SAMPLE_RATE, 1500.0);
-        let mut air = VirtualAir::new(ft1::SAMPLE_RATE, 11);
+        let frame = tx::build(msg, tempo_fast::SAMPLE_RATE, 1500.0);
+        let mut air = VirtualAir::new(tempo_fast::SAMPLE_RATE, 11);
         let rx = to_i16(&air.receive(&frame.wave, ON_TIME_OFFSET, -5.0));
 
         // Write it to a .wav, then replay that file through the decoder.
         let path = std::env::temp_dir().join("ft1_wav_fixture_test.wav");
         write_wav_i16(&path, &rx, 12_000).expect("write wav");
-        ft1::harq_reset();
+        tempo_fast::harq_reset();
         let decodes = decode_wav(&path).expect("decode wav");
         let _ = fs::remove_file(&path);
 

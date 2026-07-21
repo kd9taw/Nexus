@@ -9,13 +9,13 @@
 use tempo_core::channel::{to_i16, VirtualAir, ON_TIME_OFFSET};
 use tempo_core::inbox::Inbox;
 use tempo_core::message::Msg;
-use tempo_core::{ft1, modes, text, tx};
+use tempo_core::{tempo_fast, modes, text, tx};
 
 /// Transmit `text` once and return the decodes a receiver gets.
 fn transmit(air: &mut VirtualAir, text: &str) -> Vec<modes::Decode> {
-    let frame = tx::build(text, ft1::SAMPLE_RATE, 1500.0);
+    let frame = tx::build(text, tempo_fast::SAMPLE_RATE, 1500.0);
     let rx_f32 = air.receive(&frame.wave, ON_TIME_OFFSET, 15.0);
-    ft1::decode_frame(&to_i16(&rx_f32), 200, 2900, 3, "", "", 0, 0)
+    tempo_fast::decode_frame(&to_i16(&rx_f32), 200, 2900, 3, "", "", 0, 0)
         .into_iter()
         .map(Into::into)
         .collect()
@@ -36,7 +36,7 @@ fn send_until(air: &mut VirtualAir, rx: &mut Inbox, slot: u64, text: &str) -> bo
 
 #[test]
 fn directed_multiframe_message_over_the_air() {
-    let mut air = VirtualAir::new(ft1::SAMPLE_RATE, 0xBEEF);
+    let mut air = VirtualAir::new(tempo_fast::SAMPLE_RATE, 0xBEEF);
     let mut rx = Inbox::new("K2DEF"); // the receiving station
 
     let body = "MEET AT THE REPEATER AT NOON ES BRING COFFEE";

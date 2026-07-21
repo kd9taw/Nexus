@@ -88,7 +88,7 @@ The engine tracks a **session IR-HARQ rescue count** — the number of frames re
 - Combiner gain under 1 Hz/1 ms fading (3-TX): **+3.2 dB**
 - Through the full live pipeline: **~+2.5 dB threshold shift**, **~2× QSO completion** in the −11 to −13 dB marginal zone
 
-The combining state (`ft1::harq_reset`) is reset on Coordinated QSY, on starting a new QSO, and on working a station — not on a plain band change. A band change clears the UI decode history but does not reset libft1's IR-HARQ LLR buffers. The ±10 Hz figure is the receiver-side frequency tolerance for cross-frame combining within libft1, not a reset threshold.
+The combining state (`ft1::harq_reset`) is reset on Coordinated QSY, on starting a new QSO, and on working a station — not on a plain band change. A band change clears the UI decode history but does not reset libtempo's IR-HARQ LLR buffers. The ±10 Hz figure is the receiver-side frequency tolerance for cross-frame combining within libtempo, not a reset threshold.
 
 ---
 

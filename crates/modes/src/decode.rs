@@ -38,8 +38,8 @@ pub struct Decode {
     pub mode: Option<ModeKind>,
 }
 
-impl From<ft1::Decode> for Decode {
-    fn from(d: ft1::Decode) -> Self {
+impl From<tempo_fast::Decode> for Decode {
+    fn from(d: tempo_fast::Decode) -> Self {
         Self {
             message: d.message,
             sync: d.sync,

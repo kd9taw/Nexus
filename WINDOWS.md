@@ -1,16 +1,16 @@
 # Building & running Nexus on Windows
 
-Nexus's modem (`libft1`) is **Fortran + C/C++ + FFTW**, so the Windows build uses
+Nexus's modem (`libtempo`) is **Fortran + C/C++ + FFTW**, so the Windows build uses
 the **GNU toolchain** (MSVC has no Fortran). This is the same MinGW environment
-used to cross-compile FT1 for Windows. The Tauri shell uses the built-in
+used to cross-compile TempoFast for Windows. The Tauri shell uses the built-in
 **WebView2** runtime, audio uses **WASAPI** (via `cpal`, no extra libs), and
 PTT/CAT uses Hamlib's **`rigctld.exe`** over TCP.
 
 Nexus has two waveform tiers (the Tempo chat layer protocols), switched with the **Fast · Robust** toggle (never
 silently — the active tier is always shown):
-- **Fast = FT1** — 4 s T/R, coherent; regional NVIS / good-condition national /
+- **Fast = TempoFast** — 4 s T/R, coherent; regional NVIS / good-condition national /
   Field Day / conversational.
-- **Robust = DX1** — 15 s T/R, non-coherent 8-FSK; fading-resilient national
+- **Robust = TempoDeep** — 15 s T/R, non-coherent 8-FSK; fading-resilient national
   reach (≈3.7 dB fading penalty in simulation vs FT8's 10+ dB collapse). Both
   tiers carry the same messages, so Chat / QSO / Field Day work on either.
 
@@ -46,7 +46,7 @@ come with the gcc-fortran package.)
   Evergreen runtime from Microsoft.
 
 Build everything from the **MSYS2 UCRT64** shell so `gfortran`, `cmake`, `ninja`,
-FFTW and Boost are on `PATH` (this is what `ft1-sys/build.rs` invokes).
+FFTW and Boost are on `PATH` (this is what `tempofast-sys/build.rs` invokes).
 
 ## 3. Build & run
 

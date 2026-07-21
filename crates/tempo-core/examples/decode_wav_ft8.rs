@@ -39,7 +39,7 @@ use tempo_core::channel::capture_to_i16;
 use tempo_core::wavfile::read_wav_i16;
 
 /// FT8 full-slot frame length: 15 s * 12000 Hz. Equals `ft8::NMAX`
-/// (`ft1_sys::FT8_NMAX = 180_000`); hardcoded because tempo-core does not depend
+/// (`tempo_fast_sys::FT8_NMAX = 180_000`); hardcoded because tempo-core does not depend
 /// on the `ft8` crate directly.
 const FT8_NMAX: usize = 180_000;
 const MODEM_RATE: u32 = 12_000;

@@ -3,9 +3,9 @@
 Thanks for your interest in Nexus — an all-mode amateur radio operations center
 (FT8/FT4 digital with WSJT-X parity, CW, SSB phone, propagation intelligence,
 logging/awards, POTA/SOTA, Field Day) that also carries the experimental Tempo
-FT1/DX1 chat layer. Contributions of all kinds are welcome: code,
+TempoFast/TempoDeep chat layer. Contributions of all kinds are welcome: code,
 documentation, bug reports, and especially **real on-air decode-rate data from
-the FT1/DX1 tiers** (more on that below).
+the TempoFast/TempoDeep tiers** (more on that below).
 
 Nexus is maintained by KD9TAW
 &lt;kd9taw@protonmail.com&gt;. The canonical repo is
@@ -16,14 +16,14 @@ Nexus is maintained by KD9TAW
 ## What we value most
 
 The FT8/FT4 tier is in daily production use — it implements the WSJT-X
-protocol and is not what needs validation. The **FT1 and DX1 waveforms** are
-**validated by simulation only** — AWGN and fading sweeps. In simulation FT1
-reaches its 50% decode threshold around **-15 dB** (AWGN), and DX1 around
+protocol and is not what needs validation. The **TempoFast and TempoDeep waveforms** are
+**validated by simulation only** — AWGN and fading sweeps. In simulation TempoFast
+reaches its 50% decode threshold around **-15 dB** (AWGN), and TempoDeep around
 **-18.6 dB** with only a **~3.7 dB** fading penalty (versus 10+ dB for
 FT8-class coherent modes). These numbers have **not yet been confirmed on the
-air** — that is the FT1/DX1 tier's hard remaining gate.
+air** — that is the TempoFast/TempoDeep tier's hard remaining gate.
 
-So the single most useful thing you can contribute for the FT1/DX1 tiers is
+So the single most useful thing you can contribute for the TempoFast/TempoDeep tiers is
 **honest on-air observation**: decode rates, SNR/path notes,
 antenna/band/conditions, dupes, sequencer hiccups, and bug reports from real
 QSOs. Simulation tells us the modem *should* work; only operators can tell us
@@ -43,8 +43,8 @@ Fortran/C/C++ modem. The workspace members (`Cargo.toml`) are:
 
 | Crate | Path | Responsibility |
 |-------|------|----------------|
-| `ft1-sys` | `crates/ft1-sys` | Raw FFI to `libft1`. Its `build.rs` runs CMake to build the modem (cross-aware for `windows-gnu`). |
-| `ft1` | `crates/ft1` | Safe wrapper over `libft1`; includes a `dx1` module (DX1 mode, in `src/lib.rs`) and a `win_smoke` example (`examples/win_smoke.rs`). |
+| `tempofast-sys` | `crates/tempofast-sys` | Raw FFI to `libtempo`. Its `build.rs` runs CMake to build the modem (cross-aware for `windows-gnu`). |
+| `tempofast` | `crates/tempofast` | Safe wrapper over `libtempo`; includes a `tempodeep` module (TempoDeep mode, in `src/lib.rs`) and a `win_smoke` example (`examples/win_smoke.rs`). |
 | `tempo-core` | `crates/tempo-core` | Protocol/domain logic: slot timing, virtual channel, message, QSO, roster, inbox, store-and-forward, Field Day, spectrum, text chunking, TX. |
 | `tempo-app` | `crates/tempo-app` | UI-facing logic: serde DTOs (camelCase, `src/dto.rs`), settings, and the live TX/RX `Engine` (Chat / QSO / Field Day modes). Headless-testable. |
 | `tempo-audio` | `crates/tempo-audio` | Real transport: `cpal` sound card (feature `device`), rig control (`rigctld` launch / serial RTS-DTR / VOX, feature `serial`), rig models (`src/rigmodels.rs`), and the slot-clock service loop. |
@@ -58,8 +58,8 @@ Outside the workspace:
   `tempo_lib::run()`.
 - `ui/` — Vite + React + TypeScript web UI (npm). The TypeScript DTO contract
   in `ui/src/types.ts` mirrors `tempo-app/src/dto.rs` — keep the two in sync.
-- `libft1/` — the modem: Fortran + C + C++, FFTW3 single-precision, **no Qt**.
-  `ft1_cabi.f90` is the C ABI; `libft1/dx1/` is the DX1 mode; `mingw-w64.cmake`
+- `libtempo/` — the modem: Fortran + C + C++, FFTW3 single-precision, **no Qt**.
+  `tempofast_cabi.f90` is the C ABI; `libtempo/tempodeep/` is the TempoDeep mode; `mingw-w64.cmake`
   is the cross toolchain file.
 - `scripts/` — build and asset scripts (see below).
 - `WINDOWS.md` — the authoritative Windows build and setup guide.
@@ -75,8 +75,8 @@ Outside the workspace:
 - **Sound card / PTT / CAT transport** → `tempo-audio`.
 - **WSJT-X UDP or PSK Reporter changes** → `tempo-net`.
 - **UI** → `ui/src`.
-- **Modem / waveform changes (FT1, DX1, the C ABI)** → `libft1`, then surface
-  through `ft1-sys` (raw) and `ft1` (safe).
+- **Modem / waveform changes (TempoFast, TempoDeep, the C ABI)** → `libtempo`, then surface
+  through `tempofast-sys` (raw) and `tempofast` (safe).
 
 When in doubt, match the crate whose responsibility (table above) best fits the
 change, and keep the boundary clean — `tempo-core` stays free of I/O,
@@ -89,7 +89,7 @@ change, and keep the boundary clean — `tempo-core` stays free of I/O,
 ### Rust workspace (modem + core + engine + net)
 
 `cargo test --workspace` builds and runs the headless test suite (modem,
-engine, net, and DX1 round-trips). Because `ft1-sys` compiles `libft1` via
+engine, net, and TempoDeep round-trips). Because `tempofast-sys` compiles `libtempo` via
 CMake, the Rust build needs the native modem toolchain available. On
 Debian/Ubuntu (or WSL2):
 
@@ -103,7 +103,7 @@ Then, from the repo root:
 
 ```sh
 cargo build
-cargo test --workspace   # headless: modem + engine + net + DX1 round-trips
+cargo test --workspace   # headless: modem + engine + net + TempoDeep round-trips
 ```
 
 These tests run headless and do not require a sound card or radio.
@@ -217,5 +217,5 @@ have the right to submit the contribution under the project's license.
 
 ---
 
-Welcome aboard, and 73. The fastest way to help Nexus cross the FT1/DX1
+Welcome aboard, and 73. The fastest way to help Nexus cross the TempoFast/TempoDeep
 remaining gate is to get it on the air and tell us what you hear.

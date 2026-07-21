@@ -2,7 +2,7 @@
 #
 # This crate is deliberately STANDALONE — note the empty `[workspace]` table
 # below. It is NOT a member of the root `../Cargo.toml` workspace. Keeping it
-# out of the workspace means the workspace (ft1-sys / ft1 / tempo-core) keeps
+# out of the workspace means the workspace (tempo-fast-sys / ft1 / tempo-core) keeps
 # building on hosts that have no WebView toolchain (this dev box has no
 # webkit2gtk and no display, so Tauri cannot build here). The shell builds on a
 # machine that has the platform WebView runtime — see README.md.
