@@ -197,14 +197,15 @@ impl AppState {
             if phantom {
                 continue;
             }
-            // `StoreForward` is NOT persisted, so a restart silently drops the whole queue
-            // while conversations.json restores the bubbles. A message that was HELD when we
-            // closed will therefore never transmit — mark it ABANDONED rather than merely
-            // clearing `stored`, which left it rendering as a plain "Sent" and had the
-            // operator believing it went out. Messages that were already on the air
-            // (`stored == false`) are untouched: those genuinely were sent.
+            // The store-and-forward queue IS persisted now (pending_msgs.json journal;
+            // restore it BEFORE conversations). A held bubble stays HELD when its message
+            // really is still queued — it will transmit when the peer is next heard, which
+            // is the whole point of store-and-forward. Only a bubble whose message is NOT
+            // in the restored queue (pre-journal sessions, a missing/corrupt journal) is
+            // marked ABANDONED, so it can never render as a false "Sent". Messages already
+            // on the air (`stored == false`) are untouched: those genuinely were sent.
             for m in &mut c.messages {
-                if m.stored {
+                if m.stored && !self.store.has_pending(&c.peer, &m.text) {
                     m.stored = false;
                     m.abandoned = true;
                 }
@@ -430,6 +431,22 @@ impl AppState {
     }
 
     /// Mark all queued messages for `peer` delivered (e.g. on an ack).
+    /// Undelivered-message count (drives the engine's persist-on-change check).
+    pub fn pending_count(&self) -> usize {
+        self.store.pending()
+    }
+
+    /// The undelivered outbound queue, for the engine's restart journal.
+    pub fn export_pending(&self) -> Vec<tempo_core::store::Pending> {
+        self.store.export()
+    }
+
+    /// Restore the journaled outbound queue at startup — call BEFORE
+    /// [`Self::load_conversations`], whose held-vs-abandoned decision reads it.
+    pub fn restore_pending(&mut self, items: Vec<tempo_core::store::Pending>) {
+        self.store.restore(items);
+    }
+
     pub fn mark_delivered(&mut self, peer: &str) {
         self.store.mark_delivered(peer);
     }
@@ -1006,9 +1023,9 @@ mod tests {
 
     #[test]
     fn a_restored_held_message_is_marked_abandoned_not_sent() {
-        // StoreForward is not persisted, so a restart drops the queue while the bubbles come
-        // back. A message that was HELD can never transmit now. Clearing `stored` alone made it
-        // render as a plain "Sent" — an INVISIBLE broken promise, worse than the visible one:
+        // The queue journal is missing (pre-journal session, corrupt file): the bubbles come
+        // back but the queue didn't. A message that was HELD can never transmit now. Clearing
+        // `stored` alone made it render as a plain "Sent" — an INVISIBLE broken promise:
         // the operator believes it went out and never re-sends. It must say so instead.
         let mut app = AppState::new("K2DEF", "FN31");
         let mut sender = AppState::new("K2DEF", "FN31");
@@ -1034,6 +1051,54 @@ mod tests {
             m.abandoned,
             "and it must SAY it was abandoned — rendering a never-transmitted message as \
              'Sent' is the app asserting something false"
+        );
+    }
+
+    #[test]
+    fn a_journaled_held_message_survives_the_restart_still_held() {
+        // THE store-and-forward persistence fix (2026-07-21): when the queue journal
+        // survives, a held message comes back still HELD — it will transmit when the
+        // peer is next heard, which is the entire point of store-and-forward. Restore
+        // order matters: queue BEFORE conversations, since the held-vs-abandoned
+        // decision on each bubble reads the live queue.
+        let mut sender = AppState::new("K2DEF", "FN31");
+        sender.send_message("W9XYZ", "HI");
+        let convs = sender.export_conversations();
+        let journal = sender.export_pending();
+        assert_eq!(journal.len(), 1, "precondition: one journaled entry");
+
+        let mut app = AppState::new("K2DEF", "FN31");
+        app.restore_pending(journal);
+        app.load_conversations(convs);
+        assert_eq!(app.store.pending(), 1, "the queue survived the restart");
+        let m = &app.conversation("W9XYZ").unwrap().messages[0];
+        assert!(
+            m.stored,
+            "still 'waiting to send' — the queue really does hold it"
+        );
+        assert!(
+            !m.abandoned,
+            "a live queued message must not read as abandoned"
+        );
+
+        // And a SECOND bubble whose message is NOT in the journal still goes abandoned —
+        // the split is per-message, not per-session.
+        let mut sender2 = AppState::new("K2DEF", "FN31");
+        sender2.send_message("W9XYZ", "FIRST");
+        sender2.send_message("W9XYZ", "SECOND");
+        let convs2 = sender2.export_conversations();
+        let mut journal2 = sender2.export_pending();
+        journal2.retain(|p| p.text == "SECOND"); // FIRST's entry "lost"
+        let mut app2 = AppState::new("K2DEF", "FN31");
+        app2.restore_pending(journal2);
+        app2.load_conversations(convs2);
+        let msgs = &app2.conversation("W9XYZ").unwrap().messages;
+        let first = msgs.iter().find(|m| m.text == "FIRST").unwrap();
+        let second = msgs.iter().find(|m| m.text == "SECOND").unwrap();
+        assert!(first.abandoned && !first.stored, "lost entry → abandoned");
+        assert!(
+            second.stored && !second.abandoned,
+            "surviving entry → still held"
         );
     }
 

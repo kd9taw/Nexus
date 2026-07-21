@@ -20,7 +20,10 @@ pub struct Pending {
     pub attempts: u32,
     pub last_attempt_slot: Option<u64>,
     pub delivered: bool,
-    id: char,
+    /// Chunk message-id char ('A'..'Z') stamped on the outbound bubble; pub so the
+    /// engine can persist/restore the queue across restarts (the id must survive, or
+    /// a late ACK for a restored message wouldn't match its bubble).
+    pub id: char,
 }
 
 /// A presence-gated store-and-forward queue.
@@ -152,6 +155,38 @@ impl StoreForward {
         let before = self.queue.len();
         self.queue.retain(|p| p.to != to);
         before - self.queue.len()
+    }
+
+    /// The undelivered queue, cloned — the engine journals this to disk so queued
+    /// messages survive a restart (they used to die with the process and the bubbles
+    /// were marked "abandoned"). Delivered entries are history, not work — excluded.
+    pub fn export(&self) -> Vec<Pending> {
+        self.queue
+            .iter()
+            .filter(|p| !p.delivered)
+            .cloned()
+            .collect()
+    }
+
+    /// Restore a journaled queue at startup. Replaces the (empty) queue; `next_id`
+    /// advances past the highest restored id so new messages can't collide with a
+    /// restored message's chunk-id while its ACK may still arrive.
+    pub fn restore(&mut self, items: Vec<Pending>) {
+        if items.is_empty() {
+            return;
+        }
+        let max_id = items.iter().map(|p| p.id as u8).max().unwrap_or(b'A');
+        self.next_id = (max_id.saturating_sub(b'A') + 1) % 26;
+        self.queue = items;
+    }
+
+    /// Is this exact message still queued (undelivered) for `to`? Drives the restart
+    /// restore: a conversation bubble stays "held" only when its message really is
+    /// still in the queue; anything else is marked abandoned.
+    pub fn has_pending(&self, to: &str, text: &str) -> bool {
+        self.queue
+            .iter()
+            .any(|p| !p.delivered && p.to == to && p.text == text)
     }
 }
 

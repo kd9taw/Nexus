@@ -137,6 +137,42 @@ impl DecodeResult {
     }
 }
 
+/// One journaled store-and-forward entry (`pending_msgs.json`). Internal format —
+/// field-stable so an old journal still parses after upgrades.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingMsgJournal {
+    to: String,
+    text: String,
+    created_slot: u64,
+    attempts: u32,
+    last_attempt_slot: Option<u64>,
+    id: char,
+}
+
+impl PendingMsgJournal {
+    fn from(p: &tempo_core::store::Pending) -> Self {
+        Self {
+            to: p.to.clone(),
+            text: p.text.clone(),
+            created_slot: p.created_slot,
+            attempts: p.attempts,
+            last_attempt_slot: p.last_attempt_slot,
+            id: p.id,
+        }
+    }
+    fn into_pending(self) -> tempo_core::store::Pending {
+        tempo_core::store::Pending {
+            to: self.to,
+            text: self.text,
+            created_slot: self.created_slot,
+            attempts: self.attempts,
+            last_attempt_slot: self.last_attempt_slot,
+            delivered: false,
+            id: self.id,
+        }
+    }
+}
+
 /// Outcome of folding a [`DecodeResult`] back into the engine.
 pub enum DecodeApplied {
     /// The decode context changed while this was in flight — dropped, no effect.
@@ -397,6 +433,9 @@ pub struct Engine {
     fd_log_path: Option<PathBuf>,
     /// Durable journal for the single QSO held by the prompt-to-log popup.
     pending_qso_path: Option<PathBuf>,
+    /// Journal path for the store-and-forward outbound queue (pending_msgs.json) —
+    /// written on every queue mutation so held Tempo messages survive a restart.
+    pending_msgs_path: Option<PathBuf>,
     /// Callsign → DXCC entity resolver, injected by the command layer (which owns
     /// the cty.dat table) so tempo-app stays DXCC-free. `None` in headless tests
     /// (new-DXCC highlighting simply stays off). See [`Engine::set_dxcc_resolver`].
@@ -1026,6 +1065,7 @@ impl Engine {
             log_path: None,
             fd_log_path: None,
             pending_qso_path: None,
+            pending_msgs_path: None,
             dxcc_resolve: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
@@ -2760,6 +2800,57 @@ impl Engine {
         self.pending_qso_path = Some(path);
     }
 
+    pub fn set_pending_msgs_path(&mut self, path: PathBuf) {
+        self.pending_msgs_path = Some(path);
+    }
+
+    /// Journal the store-and-forward queue (write-tmp + fsync + rename, like the
+    /// pending-QSO journal). Written the MOMENT the queue changes — queue/release/
+    /// ACK/archive — so a crash or power cut can't silently drop a held message the
+    /// operator watched enter "waiting to send". An empty queue removes the file.
+    pub fn persist_pending_msgs(&self) {
+        let Some(path) = &self.pending_msgs_path else {
+            return;
+        };
+        let items = self.app.export_pending();
+        if items.is_empty() {
+            let _ = std::fs::remove_file(path);
+            return;
+        }
+        let dto: Vec<PendingMsgJournal> = items.iter().map(PendingMsgJournal::from).collect();
+        let Ok(text) = serde_json::to_string(&dto) else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let tmp = path.with_extension("json.tmp");
+        let res = std::fs::File::create(&tmp)
+            .and_then(|mut f| {
+                std::io::Write::write_all(&mut f, text.as_bytes())?;
+                f.sync_all()
+            })
+            .and_then(|()| std::fs::rename(&tmp, path));
+        if let Err(e) = res {
+            eprintln!("tempo: failed to journal pending messages: {e}");
+        }
+    }
+
+    /// Restore the journaled queue at startup. Call AFTER `set_pending_msgs_path`
+    /// and BEFORE `restore_conversations` — the held-vs-abandoned decision on each
+    /// restored bubble reads the live queue.
+    pub fn load_pending_msgs(&mut self, text: &str) {
+        let Ok(items) = serde_json::from_str::<Vec<PendingMsgJournal>>(text) else {
+            return;
+        };
+        self.app.restore_pending(
+            items
+                .into_iter()
+                .map(PendingMsgJournal::into_pending)
+                .collect(),
+        );
+    }
+
     /// Journal (or clear) the QSO held by the prompt-to-log popup.
     ///
     /// Written the MOMENT the hold changes, not at exit: a finished contact — exchange
@@ -4131,12 +4222,13 @@ impl Engine {
             self.chat_cq_paused = true;
         }
         self.app.send_message(peer, text);
-        // Sending a directed reply IS an explicit "put this on the air" action, exactly like
-        // broadcast() — so arm TX, or the queued message never transmits without a separate
-        // Enable-Tx click and the operator sees it sit in "waiting" forever (half of the
-        // "reply won't send" bug). It stays store-and-forward gated: poll_tx still only
-        // releases it once the peer is present (Roster::is_active), so arming here cannot put
-        // a message on the air for an absent peer — it just opens the path for when they are.
+        self.persist_pending_msgs(); // held message survives a crash from this instant
+                                     // Sending a directed reply IS an explicit "put this on the air" action, exactly like
+                                     // broadcast() — so arm TX, or the queued message never transmits without a separate
+                                     // Enable-Tx click and the operator sees it sit in "waiting" forever (half of the
+                                     // "reply won't send" bug). It stays store-and-forward gated: poll_tx still only
+                                     // releases it once the peer is present (Roster::is_active), so arming here cannot put
+                                     // a message on the air for an absent peer — it just opens the path for when they are.
         self.arm_tx_now();
         // NOTE: the own-TX band-activity row is recorded when the message is actually
         // RELEASED on the air (poll_tx, via due_frames' first-release body) — not here at
@@ -4238,6 +4330,7 @@ impl Engine {
     /// Archive (hide) a conversation thread (the recents-list hide affordance).
     pub fn archive_conversation(&mut self, peer: &str) {
         self.app.archive_conversation(peer);
+        self.persist_pending_msgs(); // drop_for removed this peer's queued messages
     }
     /// Export conversation threads for on-disk persistence (bounded per thread).
     pub fn export_conversations(&self) -> Vec<crate::dto::Conversation> {
@@ -6390,6 +6483,11 @@ impl Engine {
                         for f in frames {
                             self.tx_queue.push_back(f);
                         }
+                        if !self.tx_queue.is_empty() {
+                            // A release recorded attempts/backoff — journal so a restart
+                            // resumes the retry schedule instead of resetting it.
+                            self.persist_pending_msgs();
+                        }
                         // A directed message shows in band activity when it actually goes
                         // on the air (first release), not at compose time.
                         for b in bodies {
@@ -6802,7 +6900,13 @@ impl Engine {
         while self.decode_history.len() > 240 {
             self.decode_history.pop_front();
         }
+        let pend_before = self.app.pending_count();
         self.app.observe(&fresh, slot);
+        // An inbound ACK may have marked queued messages delivered (or purged spent
+        // ones) inside observe — journal only when the queue actually shrank.
+        if self.app.pending_count() != pend_before {
+            self.persist_pending_msgs();
+        }
         self.last_wire_decodes = fresh.clone();
         self.last_decodes = fresh;
         n
@@ -6865,7 +6969,13 @@ impl Engine {
                 self.recent_dt.pop_front();
             }
         }
+        let pend_before = self.app.pending_count();
         self.app.observe(&decodes, slot);
+        // An inbound ACK may have marked queued messages delivered (or purged spent
+        // ones) inside observe — journal only when the queue actually shrank.
+        if self.app.pending_count() != pend_before {
+            self.persist_pending_msgs();
+        }
         self.observe_modes(&decodes, slot);
         // Coordinated QSY (any role): reassemble + act on directives from our
         // partner, and track that the partner is still being heard. The directive
@@ -7310,7 +7420,13 @@ impl Engine {
                 self.recent_dt.pop_front();
             }
         }
+        let pend_before = self.app.pending_count();
         self.app.observe(decodes, slot);
+        // An inbound ACK may have marked queued messages delivered (or purged spent
+        // ones) inside observe — journal only when the queue actually shrank.
+        if self.app.pending_count() != pend_before {
+            self.persist_pending_msgs();
+        }
         self.observe_modes(decodes, slot);
         // Mirror the live `ingest` QSY hook so tests exercise the same path.
         if self.qsy_active() {

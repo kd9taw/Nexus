@@ -881,6 +881,16 @@ fn pending_qso_path() -> PathBuf {
         .join("pending_qso.json")
 }
 
+/// `<config dir>/pending_msgs.json` — the store-and-forward outbound-queue journal,
+/// beside the pending-QSO journal. Held Tempo messages survive a restart.
+fn pending_msgs_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("pending_msgs.json")
+}
+
 /// Where the grid-activity census is persisted (beside settings.json): a small
 /// bounded JSON of decayed per-grid heard counts — the demote-only refinement
 /// evidence for the rarity gems. Losing it is harmless (it re-accumulates).
@@ -9393,6 +9403,14 @@ pub fn run() {
         eng.restore_field_day_if_enabled();
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
+        // Restore the store-and-forward outbound queue BEFORE the conversation
+        // threads: each restored bubble's held-vs-abandoned decision reads the live
+        // queue (a held message whose journal entry survived stays "waiting to send"
+        // and transmits when its peer is next heard). Best-effort like the others.
+        eng.set_pending_msgs_path(pending_msgs_path());
+        if let Ok(text) = std::fs::read_to_string(pending_msgs_path()) {
+            eng.load_pending_msgs(&text);
+        }
         // Restore persisted Tempo conversation threads so chat history (and the `*`
         // band feed) survives an app restart. Best-effort: a missing/corrupt file
         // just yields an empty roster of threads.
