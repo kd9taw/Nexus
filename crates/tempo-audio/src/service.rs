@@ -357,8 +357,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
     let applied = Transport::from_cfg(&cfg);
     // Initial open: allow coexisting onto a pre-existing EXTERNAL rigctld (e.g. WSJT-X already sharing
     // the rig). Mid-session rig SWITCHES pass `allow_coexist=false` when they reuse their own port.
-    let (mut rig, rigctld_proc, init_probe) = open_rig(&applied, cfg.dial_hz, &cfg.mode, true);
-    let init_ok = init_probe.ok;
+    let (mut rig, rigctld_proc, init_probe) = open_rig(&applied, true);
     let init_freq = init_probe.freq_hz;
     if let Ok(mut eng) = engine.lock() {
         eng.set_cat_status(init_probe.ok, init_probe.detail);
@@ -511,9 +510,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
                     b
                 })
             },
-            &mut |t: &Transport, dial: u64, md: &str, allow_coexist: bool| {
-                open_rig(t, dial, md, allow_coexist)
-            },
+            &mut |t: &Transport, allow_coexist: bool| open_rig(t, allow_coexist),
         )?;
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -1248,6 +1245,17 @@ struct RadioLoop {
     /// the slot. Never cleared per-slot: slots are monotonic, so a stale entry can
     /// never match a future boundary; reset on a tier switch (new slot numbering).
     boundary_keyed: Option<KeyedBoundary>,
+    /// Read-only launch latch: has the rig's mode been COMMANDED (asserted) this
+    /// session? While `false`, `ensure_commanded` pushes dial/mode immediately before
+    /// any key-up — closing the silent-no-op-transmit hole that removing the launch
+    /// commands would otherwise open (FT8 tones into a rig left in LSB). `true` from
+    /// construction until the final flip lands, which makes every call a no-op — the
+    /// latch machinery ships inert first, per the plan.
+    rig_asserted: bool,
+    /// This tick's effective dial/mode policy (stashed where step derives them, read by
+    /// `ensure_commanded` at the key sites, which sit in narrower scopes).
+    cur_dial: u64,
+    cur_md: String,
     /// Fake-It split moved the VFO for the playing over — restore THIS dial
     /// (Hz) when the over ends (PTT drop / hard stop).
     fake_it_restore: Option<u64>,
@@ -1384,6 +1392,9 @@ impl RadioLoop {
             psk_spots: Vec::new(),
             early_done_slot: None,
             boundary_keyed: None,
+            rig_asserted: false, // read-only launch: nothing asserted until a real command
+            cur_dial: 0,
+            cur_md: String::new(),
             fake_it_restore: None,
             audio_rig_split: false,
             last_psk_flush: now_unix_ms(),
@@ -1506,9 +1517,46 @@ impl RadioLoop {
     /// active radio. Forces the retune block to re-assert the restored dial/mode (sentinel
     /// `last_dial`/`last_mode`) and the health / S-meter / DSP-func capabilities to re-probe for the
     /// new rig. Does NOT touch `applied`/`rigctld_proc` (the handoff set those) or the slot/TX clock.
+    /// One-shot lazy assert before a key-up (read-only launch): if the rig's mode has
+    /// never been commanded this session, push dial (only when it differs from
+    /// last_dial — never re-slam a hand-tuned freq inside the read-back window) and
+    /// mode NOW, immediately before the key. On mode success, credit last_mode and
+    /// latch; on failure leave the latch open and last_mode untouched so the
+    /// steady-state retune ladder retries with its full give-up/fallback machinery.
+    /// Failing OPEN (keying anyway) is the status quo — today's open-time commands are
+    /// also `let _ =` best-effort.
+    fn ensure_commanded(&mut self, rig: &mut Rig) {
+        if self.rig_asserted {
+            return;
+        }
+        // NEVER command during a deferred dual-radio switch: `rig` is still the OLD
+        // radio and cur_dial/cur_md are the NEW radio's settings — asserting here is
+        // exactly the cross-radio contamination the contended-switch test pins.
+        if self.handoff_deferred {
+            return;
+        }
+        let dial = self.cur_dial;
+        let md = self.cur_md.clone();
+        if dial != 0 && dial != self.last_dial && rig.set_freq(dial).is_ok() {
+            self.last_dial = dial;
+        }
+        if !md.trim().is_empty() {
+            match rig.set_mode(&md, passband_for(&md)) {
+                Ok(()) => {
+                    self.last_mode = md;
+                    self.rig_asserted = true;
+                }
+                Err(_) => { /* ladder retries; latch stays open */ }
+            }
+        } else {
+            // No mode policy yet (first tick hasn't derived one) — nothing to assert.
+        }
+    }
+
     fn reset_for_handoff(&mut self) {
         self.last_dial = 0; // != any real dial → force the retune to command the restored freq
         self.last_mode = String::new(); // force the mode re-assert
+        self.rig_asserted = false; // belt-and-braces: the retune re-asserts + re-latches same tick
         self.mode_fail_count = 0;
         self.mode_giveup = None;
         self.mode_saw_reject = false;
@@ -1555,7 +1603,7 @@ impl RadioLoop {
         now: f64,
         reopen_audio: &mut dyn FnMut(&Transport) -> Result<B, String>,
         // `allow_coexist`: may reuse a rigctld already on the port (external share) vs must spawn fresh.
-        reopen_rig: &mut dyn FnMut(&Transport, u64, &str, bool) -> RigOpen,
+        reopen_rig: &mut dyn FnMut(&Transport, bool) -> RigOpen,
     ) -> Result<(), String> {
         // Steer the slot clock to TRUE UTC: subtract the measured PC-clock-vs-UTC
         // offset (local − UTC) from the system clock, so TX keys and RX decode
@@ -1619,6 +1667,10 @@ impl RadioLoop {
                     fm,
                 )
             };
+            // Stash for the key-site latch (ensure_commanded) — the bindings above live in
+            // this block's scope; the key-ups happen in narrower ones.
+            self.cur_dial = dial;
+            self.cur_md = md.clone();
             if self.handoff_deferred {
                 // A radio switch is mid-flight but the handoff couldn't take the pool
                 // lock this tick — do NOT rebuild toward the new transport here, or we
@@ -1657,8 +1709,9 @@ impl RadioLoop {
                     want.rigctld_port,
                 );
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
-                let (new_rig, proc, probe) = reopen_rig(&want, dial, &md, allow_coexist);
+                let (new_rig, proc, probe) = reopen_rig(&want, allow_coexist);
                 let (ok, detail) = (probe.ok, probe.detail);
+                self.rig_asserted = false; // fresh rig: unclaimed caches make the retune re-assert this tick
                 *rig = new_rig;
                 self.rigctld_proc = proc;
                 // Do NOT claim last_dial/last_mode here: open_cat's set_freq/set_mode are best-effort
@@ -1926,6 +1979,7 @@ impl RadioLoop {
                         match rig.set_mode(&md, passband_for(&md)) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
+                                self.rig_asserted = true; // a real assert — credit the latch
                                 retuned = true;
                                 if mode_changed {
                                     // Read the mode straight back FROM the rig to confirm it
@@ -1955,6 +2009,7 @@ impl RadioLoop {
                         match rig.set_mode(&md, retry_passband(&md, self.mode_fail_count)) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
+                                self.rig_asserted = true; // a real assert — credit the latch
                                 self.mode_fail_count = 0;
                                 self.mode_giveup = None; // a success clears any prior give-up
                                 self.mode_saw_reject = false;
@@ -2011,7 +2066,11 @@ impl RadioLoop {
             // the tracker so the next FM entry re-applies. Best-effort (a rig without
             // repeater or CTCSS support no-ops the unsupported command). Same mid-TX guard
             // as the retune above.
-            if can_retune && md == "FM" {
+            // Read-only launch: the FM repeater config (shift/offset/CTCSS) must not be
+            // pushed before the first genuine assert — with last_fm starting None it
+            // would otherwise fire on the first FM tick with no operator action, i.e. a
+            // launch-time command surviving the flip.
+            if can_retune && md == "FM" && self.rig_asserted {
                 if self.last_fm.as_ref() != Some(&fm) {
                     let _ = rig.set_fm_repeater(&fm.0, fm.1, fm.2);
                     self.last_fm = Some(fm);
@@ -2551,6 +2610,7 @@ impl RadioLoop {
                             // it LOOKS like it sent while nothing reaches the air — surface that
                             // instead of the silent false-positive. (Audio-routing problems can't
                             // be detected here — see the Soundcard control's caveat.)
+                            self.ensure_commanded(rig); // read-only launch: assert before key
                             self.publish_tx_intent_now(); // before keying
                             let ptt_err = rig.ptt(true).is_err();
                             backend.play(&buf);
@@ -2574,6 +2634,7 @@ impl RadioLoop {
                         if wpm != self.last_cw_wpm && rig.set_keyspd(wpm).is_ok() {
                             self.last_cw_wpm = wpm;
                         }
+                        self.ensure_commanded(rig); // read-only launch: assert before key
                         let cw_err = rig.send_morse(&text).is_err();
                         if let Ok(mut eng) = engine.lock() {
                             eng.set_cw_keyer_error(cw_err.then(|| {
@@ -2680,6 +2741,11 @@ impl RadioLoop {
                         }
                         let open_err = self.rtty_keyer.is_none();
                         let mut ptt_err = false;
+                        if !open_err {
+                            // Hoisted out of the keyer borrow below (read-only launch):
+                            // assert dial/mode BEFORE the key, same as every other site.
+                            self.ensure_commanded(rig);
+                        }
                         if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                             // PTT immediately before the bits start; the computed
                             // duration rides tx_until_ms so the existing expiry
@@ -2731,6 +2797,7 @@ impl RadioLoop {
                         };
                         let buf = crate::rtty_afsk::afsk_char_samples(&bits, &cfg);
                         if !buf.is_empty() {
+                            self.ensure_commanded(rig); // read-only launch: assert before key
                             self.publish_tx_intent_now(); // before keying
                             let ptt_err = rig.ptt(true).is_err();
                             backend.play(&buf);
@@ -2847,6 +2914,7 @@ impl RadioLoop {
             if let Some(buf) = samples {
                 if !buf.is_empty() {
                     let secs = buf.len() as f32 / ft1::SAMPLE_RATE;
+                    self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                     let ptt_err = rig.ptt(true).is_err();
                     backend.play(&buf);
@@ -2949,6 +3017,7 @@ impl RadioLoop {
                     eng.poll_sstv_tx()
                 };
                 if let Some(job) = job {
+                    self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                     let ptt_err = rig.ptt(true).is_err();
                     // Hold PTT for the WHOLE image via the precomputed duration; the
@@ -3009,6 +3078,7 @@ impl RadioLoop {
             };
             if ptt != self.manual_ptt_applied {
                 if ptt {
+                    self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                 }
                 // Report only a KEYING failure (a failed unkey is the watchdog's job); a clean
@@ -3195,6 +3265,7 @@ impl RadioLoop {
                     d.set_scope_enabled(false);
                     d.set_data_mode(true);
                 }
+                self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                 let _ = rig.ptt(true);
                 self.tuning_keyed = true;
@@ -3395,6 +3466,7 @@ impl RadioLoop {
                         if split.rig_split_engaged {
                             self.audio_rig_split = true;
                         }
+                        self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying
                         let _ = rig.ptt(true);
                         let mut secs = 0.0f32;
@@ -3667,6 +3739,14 @@ impl RadioLoop {
         // Dial BEFORE keying: Split Operation may shift the TX dial inside
         // slot_tx_phase, and the deferred status emission reports the pre-shift dial.
         let dial_hz = eng.settings().dial_hz();
+        // Read-only launch: the slot sequencer's key-up must also assert first (slot_tx_phase
+        // keys inside slot.rs, so the latch runs here). Gated on TX being ARMED: this fn runs
+        // on EVERY boundary including pure-RX monitoring, and an unarmed boundary must stay
+        // read-only — asserting only when armed keeps "command on key-up" true while never
+        // commanding a rig the operator is merely listening to.
+        if eng.tx_enabled() {
+            self.ensure_commanded(rig);
+        }
         let action = crate::slot::slot_tx_phase(
             eng,
             rig,
@@ -4534,10 +4614,10 @@ fn ptt_mode_for(t: &Transport) -> PttMode {
 /// launches the bundled `rigctld`, sets the dial/mode, and probes by reading the
 /// frequency back; for serial PTT it opens the control line; for VOX `cat_ok` is
 /// `None` (not applicable). Mirrors WSJT-X's Test CAT.
-fn open_rig(t: &Transport, dial_hz: u64, mode: &str, allow_coexist: bool) -> RigOpen {
+fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
     match t.ptt_method.as_str() {
         // CAT PTT: control + keying both over rigctld.
-        "cat" if t.rig_model != 0 => open_cat(t, dial_hz, mode, PttMode::Cat, allow_coexist),
+        "cat" if t.rig_model != 0 => open_cat(t, PttMode::Cat, allow_coexist),
         "cat" => (
             Rig::vox(),
             None,
@@ -4550,8 +4630,8 @@ fn open_rig(t: &Transport, dial_hz: u64, mode: &str, allow_coexist: bool) -> Rig
         // port from CAT (an SO2R controller), we open CAT control too so freq/mode still
         // track; when it shares the CAT port, keying owns the port and there's no CAT
         // (launching rigctld there would fight for it).
-        "rts" => open_serial_ptt(t, dial_hz, mode, SerialLine::Rts, allow_coexist),
-        "dtr" => open_serial_ptt(t, dial_hz, mode, SerialLine::Dtr, allow_coexist),
+        "rts" => open_serial_ptt(t, SerialLine::Rts, allow_coexist),
+        "dtr" => open_serial_ptt(t, SerialLine::Dtr, allow_coexist),
         // VOX: the rig is keyed by its own VOX. But if a CAT rig is configured we STILL
         // open the control channel so freq/mode track the section — control is
         // INDEPENDENT of keying (the WSJT-X model). THIS is the fix for "the rig doesn't
@@ -4559,7 +4639,7 @@ fn open_rig(t: &Transport, dial_hz: u64, mode: &str, allow_coexist: bool) -> Rig
         // no `M`/`F` command at all because CAT was fused to the PTT method. (Matched
         // explicitly, not via the catch-all, so a typo'd/legacy ptt_method string
         // degrades safely to pure VOX below rather than silently grabbing the port.)
-        "vox" if t.rig_model != 0 => open_cat(t, dial_hz, mode, PttMode::Vox, allow_coexist),
+        "vox" if t.rig_model != 0 => open_cat(t, PttMode::Vox, allow_coexist),
         _ => (
             Rig::vox(),
             None,
@@ -4575,20 +4655,12 @@ fn open_rig(t: &Transport, dial_hz: u64, mode: &str, allow_coexist: bool) -> Rig
 /// exactly like the VOX+CAT path. When keying shares the CAT port (no dedicated PTT port),
 /// we can't also run rigctld there (it would fight for the port), so it stays pure serial
 /// keying with no CAT — the prior behavior.
-fn open_serial_ptt(
-    t: &Transport,
-    dial_hz: u64,
-    mode: &str,
-    line: SerialLine,
-    allow_coexist: bool,
-) -> RigOpen {
+fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigOpen {
     let ptt_port = t.ptt_port().to_string();
     let separate = t.rig_model != 0 && !ptt_port.eq_ignore_ascii_case(t.serial_port.trim());
     if separate {
         open_cat(
             t,
-            dial_hz,
-            mode,
             PttMode::Serial {
                 port: ptt_port,
                 line,
@@ -4610,16 +4682,11 @@ fn allow_coexist_on_swap(owns_daemon: bool, old_port: u16, new_port: u16) -> boo
 }
 
 /// Open a CAT control channel via the bundled `rigctld` (launching it, or sharing one
-/// already running), set the dial/mode, and probe it — layering `ptt_mode` on top so
-/// keying (CAT vs VOX) stays independent of control. Used for BOTH a CAT-PTT rig and a
-/// VOX-keyed rig that still has CAT freq/mode control.
-fn open_cat(
-    t: &Transport,
-    dial_hz: u64,
-    mode: &str,
-    ptt_mode: PttMode,
-    allow_coexist: bool,
-) -> RigOpen {
+/// already running) and PROBE it — read-only: the open commands nothing (read-only
+/// launch); the probe's read seeds the app. `ptt_mode` layers on top so keying (CAT vs
+/// VOX) stays independent of control. Used for BOTH a CAT-PTT rig and a VOX-keyed rig
+/// that still has CAT freq/mode control.
+fn open_cat(t: &Transport, ptt_mode: PttMode, allow_coexist: bool) -> RigOpen {
     let addr = format!("127.0.0.1:{}", t.rigctld_port);
     if t.broker_self_port == Some(t.rigctld_port) {
         // Misconfig: our own CAT broker and the launched rigctld want the same port.
@@ -4646,7 +4713,7 @@ fn open_cat(
         rig.set_slow_transport(
             t.is_network() || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
         ); // network chains + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long command deadline
-        let mut probe = finish_cat_open(&mut rig, t, dial_hz, mode);
+        let mut probe = finish_cat_open(&mut rig, t);
         probe.detail = format!(
             "Sharing the rigctld already on :{} — {}",
             t.rigctld_port, probe.detail
@@ -4673,7 +4740,7 @@ fn open_cat(
                     || native_civ_addr(t).is_some()
                     || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
             ); // network chains + the native daemon + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
-            let probe = finish_cat_open(&mut rig, t, dial_hz, mode);
+            let probe = finish_cat_open(&mut rig, t);
             (rig, Some(proc), probe)
         }
         Err(e) => (
@@ -4692,9 +4759,13 @@ fn open_cat(
 /// flip deletes the two commands here, and a duplicated tail is how a future edit
 /// silently resurrects one of them (the tests exercise the coexist branch; this shared
 /// seam is what makes them cover the spawn branch by construction).
-fn finish_cat_open(rig: &mut Rig, t: &Transport, dial_hz: u64, mode: &str) -> CatProbe {
-    let _ = rig.set_freq(dial_hz);
-    let _ = rig.set_mode(mode, passband_for(mode));
+fn finish_cat_open(rig: &mut Rig, t: &Transport) -> CatProbe {
+    // READ-ONLY LAUNCH (operator-approved): the open no longer commands the rig.
+    // The set_freq/set_mode that lived here for every session before 2026-07-21 are
+    // deleted — the probe below READS the rig's own dial+mode and that read seeds the
+    // app. The first genuine command happens when the operator enters a cockpit,
+    // clicks a spot, or keys up (ensure_commanded / the retune paths). Do NOT re-add
+    // a command here: launch_never_commands_the_rig pins this.
     probe_cat(rig, t.rigctld_port)
 }
 
@@ -5161,10 +5232,8 @@ mod tests {
     fn mock_reopen_audio() -> impl FnMut(&Transport) -> Result<MockBackend, String> {
         |_t: &Transport| Ok(MockBackend::new())
     }
-    fn mock_reopen_rig() -> impl FnMut(&Transport, u64, &str, bool) -> RigOpen {
-        |_t: &Transport, _d: u64, _m: &str, _coexist: bool| {
-            (Rig::vox(), None, CatProbe::status(None, ""))
-        }
+    fn mock_reopen_rig() -> impl FnMut(&Transport, bool) -> RigOpen {
+        |_t: &Transport, _coexist: bool| (Rig::vox(), None, CatProbe::status(None, ""))
     }
 
     /// A rigctld that REJECTS every DATA-mode set (`M PKT*` → `RPRT -1`) but accepts
@@ -5427,7 +5496,7 @@ mod tests {
         let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
         let calls = std::cell::Cell::new(0u32);
         let captured_port = std::cell::Cell::new(0u16);
-        let mut rr = |t: &Transport, _d: u64, _m: &str, _c: bool| {
+        let mut rr = |t: &Transport, _c: bool| {
             calls.set(calls.get() + 1);
             captured_port.set(t.rigctld_port);
             (Rig::vox(), None, CatProbe::status(None, ""))
@@ -6511,7 +6580,7 @@ mod tests {
         // CAT broker and the launched rigctld both on the same port → no self-connect,
         // no doomed spawn; a clear message instead. Pure (no I/O before the guard).
         let t = cat_transport(4532, Some(4532));
-        let (_rig, proc, probe) = open_rig(&t, 14_074_000, "USB", true);
+        let (_rig, proc, probe) = open_rig(&t, true);
         assert!(proc.is_none());
         assert_eq!(probe.ok, Some(false));
         assert!(
@@ -6556,7 +6625,7 @@ mod tests {
 
         // open_rig must SHARE it (no spawn), not fight for the serial port.
         let t = cat_transport(port, None);
-        let (_rig, proc, probe) = open_rig(&t, 14_074_000, "USB", true);
+        let (_rig, proc, probe) = open_rig(&t, true);
         let (ok, detail) = (probe.ok, probe.detail);
         assert!(
             proc.is_none(),
@@ -6564,6 +6633,118 @@ mod tests {
         );
         assert_eq!(ok, Some(true), "connected through it: {detail}");
         assert!(detail.contains("Sharing"), "got: {detail}");
+    }
+
+    /// Shared recording backend for the read-only-launch tests: a stand-in rig that
+    /// logs every COMMAND (set_freq/set_mode/set_ptt) in order while serving reads
+    /// from fixed state ("the rig was left on 40 m LSB last night").
+    struct RecordingRig {
+        log: Arc<Mutex<Vec<String>>>,
+    }
+    impl crate::rigctld_server::RigBackend for RecordingRig {
+        fn freq_hz(&self) -> u64 {
+            7_200_000 // 40 m — NOT the app's persisted 20 m dial
+        }
+        fn mode(&self) -> (String, u32) {
+            ("LSB".into(), 2400)
+        }
+        fn ptt(&self) -> bool {
+            false
+        }
+        fn set_freq(&self, hz: u64) -> bool {
+            self.log.lock().unwrap().push(format!("F {hz}"));
+            true
+        }
+        fn set_mode(&self, m: &str, _p: u32) -> bool {
+            self.log.lock().unwrap().push(format!("M {m}"));
+            true
+        }
+        fn set_ptt(&self, on: bool) -> bool {
+            self.log.lock().unwrap().push(format!("T {}", u8::from(on)));
+            true
+        }
+    }
+
+    fn recording_backend() -> (u16, Arc<Mutex<Vec<String>>>) {
+        let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn crate::rigctld_server::RigBackend> =
+            Arc::new(RecordingRig { log: log.clone() });
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || crate::rigctld_server::serve(listener, backend));
+        (port, log)
+    }
+
+    /// Read-only launch #2: the open reports the RIG's own dial/mode (the seed), not
+    /// the app's persisted values — the whole point of read-and-display.
+    #[test]
+    fn open_reports_the_rigs_own_dial_and_mode() {
+        let (port, _log) = recording_backend();
+        let t = cat_transport(port, None);
+        // The app's persisted dial is 20 m; the rig sits on 40 m LSB.
+        let (_rig, _proc, probe) = open_rig(&t, true);
+        assert_eq!(probe.ok, Some(true), "{}", probe.detail);
+        assert_eq!(
+            probe.freq_hz,
+            Some(7_200_000),
+            "the seed is the rig's own frequency, not the argument"
+        );
+        assert_eq!(probe.mode.as_deref(), Some("LSB"), "and the rig's own mode");
+    }
+
+    /// Read-only launch #1 (THE flip test): opening the rig performs NO commands —
+    /// no set_freq, no set_mode — while still READING (the probe succeeded above).
+    #[test]
+    fn launch_never_commands_the_rig() {
+        let (port, log) = recording_backend();
+        let t = cat_transport(port, None);
+        let (_rig, _proc, probe) = open_rig(&t, true);
+        assert_eq!(probe.ok, Some(true), "{}", probe.detail);
+        let lines = log.lock().unwrap().clone();
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.starts_with("F ") || l.starts_with("M ")),
+            "read-only launch: the open must not command freq/mode — commands seen: {lines:?}"
+        );
+    }
+
+    /// Read-only launch #6: a serial-PTT rig sharing the CAT port has NO control
+    /// channel — cat_ok may read true (the PTT line opened) but there is no read, so
+    /// the probe must carry no freq/mode and the engine stays rig-unconfirmed.
+    #[test]
+    fn serial_ptt_probe_carries_no_read_so_rig_stays_unconfirmed() {
+        let mut t = cat_transport(0, None);
+        t.ptt_method = "rts".to_string();
+        t.serial_port = String::new(); // shared/empty → pure serial keying, no CAT
+        let (_rig, _proc, probe) = open_rig(&t, true);
+        assert!(
+            probe.freq_hz.is_none() && probe.mode.is_none(),
+            "no control channel ⇒ no read ⇒ nothing to confirm"
+        );
+    }
+
+    /// Read-only launch #3/#4 (the latch): with the mode never asserted this session,
+    /// ensure_commanded pushes dial+mode ONCE; the second call is a no-op.
+    #[test]
+    fn latch_asserts_mode_once_before_keying() {
+        let (port, log) = recording_backend();
+        let mut rig = Rig::with_control(Some(format!("127.0.0.1:{port}")), PttMode::Cat);
+        let mut state = loop_state();
+        state.rig_asserted = false;
+        state.cur_dial = 14_074_000;
+        state.cur_md = "PKTUSB".to_string();
+        state.last_dial = 0;
+        state.ensure_commanded(&mut rig);
+        state.ensure_commanded(&mut rig); // second call: latched, no-op
+        let lines = log.lock().unwrap().clone();
+        let m_count = lines.iter().filter(|l| l.starts_with("M ")).count();
+        assert_eq!(m_count, 1, "exactly one mode assert: {lines:?}");
+        assert!(
+            lines.iter().any(|l| l == "F 14074000"),
+            "the dial was asserted too: {lines:?}"
+        );
+        assert!(state.rig_asserted, "latched after the successful assert");
     }
 
     #[test]
@@ -6580,7 +6761,7 @@ mod tests {
         let sinks = no_sinks();
         let reopened = std::cell::Cell::new(false);
         let mut ra = mock_reopen_audio();
-        let mut rr = |_t: &Transport, _d: u64, _m: &str, _c: bool| {
+        let mut rr = |_t: &Transport, _c: bool| {
             reopened.set(true);
             (Rig::vox(), None, CatProbe::status(None, "test"))
         };

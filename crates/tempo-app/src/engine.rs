@@ -4674,6 +4674,14 @@ impl Engine {
     }
 
     pub fn set_tx_enabled(&mut self, on: bool) {
+        // Read-only launch: arming TX is the moment the operator commits to
+        // transmitting — arm a retune NOW so the mode assert runs a tick BEFORE the
+        // key on the normal FT8 path (on a slow-serial rig an assert at the key
+        // instant can burn most of a slot). The key-site latch remains the backstop
+        // for Tune/manual PTT, which have no arm step.
+        if on {
+            self.immediate_retune = true;
+        }
         if !on {
             self.broker_ptt = false; // a TX kill switch drops a foreign key too
         }
@@ -9496,6 +9504,35 @@ mod tests {
         e.set_chat_cq(false).unwrap();
         assert_eq!(e.chat_cq_state(), "off");
         assert!(e.poll_tx(10).is_empty(), "stopped: silent again");
+    }
+
+    #[test]
+    fn launch_seed_does_not_halt_tx_or_clear_decode_context() {
+        // Read-only launch (LAUNCH-SAFETY family): seed_rig_dial is the boot seed from
+        // the rig's own frequency. It must be provably NOT observe_rig_freq — a
+        // cross-band seed must not wipe the roster, halt TX, or touch split state,
+        // even though those are coincidental no-ops on a fresh engine today.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        // Populate state a knob-QSY would wipe: a heard station + armed TX.
+        e.ingest_decodes_for_test(&[dec_snr("CQ K2DEF FN31", -7)], 1);
+        e.set_tx_enabled(true);
+        let stations_before = e.snapshot().stations.len();
+        assert!(stations_before > 0, "precondition: roster populated");
+
+        e.seed_rig_dial(7_074_000); // cross-band: 20 m default → 40 m
+        let s = e.snapshot();
+        assert_eq!(
+            s.stations.len(),
+            stations_before,
+            "seed must not clear the roster"
+        );
+        assert!(s.radio.tx_enabled, "seed must not halt TX");
+        assert_eq!(s.radio.band, "40m", "the dial/band did seed");
+        assert!(
+            (s.radio.dial_mhz - 7.074).abs() < 1e-9,
+            "dial seeded exactly"
+        );
     }
 
     #[test]
