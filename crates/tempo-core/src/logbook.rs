@@ -791,6 +791,7 @@ pub fn adif_record(r: &QsoRecord) -> String {
         "MY_SIG",
         "MY_SIG_INFO",
         "MY_SOTA_REF",
+        "MY_POTA_REF",
         &r.ota.my_program,
         &r.ota.my_ref,
     ));
@@ -798,6 +799,7 @@ pub fn adif_record(r: &QsoRecord) -> String {
         "SIG",
         "SIG_INFO",
         "SOTA_REF",
+        "POTA_REF",
         &r.ota.their_program,
         &r.ota.their_ref,
     ));
@@ -839,11 +841,21 @@ fn ota_fields(
     sig: &str,
     sig_info: &str,
     sota: &str,
+    pota: &str,
     program: &Option<String>,
     reference: &Option<String>,
 ) -> String {
     match (program.as_deref(), reference.as_deref()) {
         (Some(p), Some(r)) if p.eq_ignore_ascii_case("SOTA") => field(sota, r),
+        // POTA emits BOTH conventions. SIG/SIG_INFO is what pota.app's own exports use and
+        // is understood everywhere, but it is overloaded (WWFF and special events use it
+        // too), which is exactly why ADIF 3.1.4 added the dedicated POTA_REF/MY_POTA_REF.
+        // Loggers that key on the dedicated field — HRDLog among them — see no park at all
+        // from SIG_INFO alone. Emitting both is safe: an ADIF reader ignores tags it does
+        // not know. (Our own parser already READS POTA_REF; this closes the read/write gap.)
+        (Some(p), Some(r)) if p.eq_ignore_ascii_case("POTA") => {
+            field(sig, p) + &field(sig_info, r) + &field(pota, r)
+        }
         (Some(p), Some(r)) => field(sig, p) + &field(sig_info, r),
         _ => String::new(),
     }
@@ -1209,6 +1221,45 @@ mod tests {
     }
 
     #[test]
+    fn pota_emits_both_sig_info_and_the_dedicated_pota_ref() {
+        // HRDLog (and other loggers) key on the ADIF 3.1.4 dedicated POTA_REF and see
+        // nothing from SIG_INFO alone — that was a real "my park is missing" bug. pota.app
+        // still wants SIG/SIG_INFO, so both must go out.
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.ota.their_program = Some("POTA".into());
+        r.ota.their_ref = Some("K-1234".into());
+        r.ota.my_program = Some("POTA".into());
+        r.ota.my_ref = Some("K-5678".into());
+        let adif = adif_record(&r);
+        for tag in [
+            "SIG:",
+            "SIG_INFO:",
+            "POTA_REF:",
+            "MY_SIG:",
+            "MY_SIG_INFO:",
+            "MY_POTA_REF:",
+        ] {
+            assert!(adif.contains(tag), "missing {tag} in {adif}");
+        }
+        assert!(adif.contains("K-1234"), "their park ref missing");
+        assert!(adif.contains("K-5678"), "my park ref missing");
+    }
+
+    #[test]
+    fn sota_still_uses_only_its_dedicated_ref() {
+        // SOTA must NOT gain a POTA_REF — the dedicated-field branch is per-program.
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.ota.their_program = Some("SOTA".into());
+        r.ota.their_ref = Some("W7A/MN-001".into());
+        let adif = adif_record(&r);
+        assert!(adif.contains("SOTA_REF:"), "SOTA ref missing");
+        assert!(
+            !adif.contains("POTA_REF:"),
+            "SOTA must not emit POTA_REF: {adif}"
+        );
+    }
+
+    #[test]
     fn adif_record_with_station_injects_my_fields_before_eor() {
         let r = rec("W1AW", "20m", 1_700_000_000);
         let out = adif_record_with_station(&r, "KD9TAW", "EN61");
@@ -1448,7 +1499,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn stamp_ota_refs_stamps_matches_and_never_creates_or_overwrites() {
         let mut lb = Logbook::new();
         // Local log: a QSO with no park ref (14:03Z), one with a ref already, and a
@@ -1541,6 +1591,7 @@ mod tests {
         assert!(k40.ota.their_ref.is_none(), "band mismatch never stamps");
     }
 
+    #[test]
     fn clear_purges_all_and_reports_count() {
         let mut lb = Logbook::new();
         lb.add(rec("A", "20m", 1));
