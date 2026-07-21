@@ -10773,6 +10773,83 @@ select.settings-input {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+
+/* ⊞ Panels — show/hide this screen's panels. Menu-only removal (no per-panel ✕ an
+   inch from a decode list), with Undo + Reset in the footer. */
+.panels-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+.panels-menu-btn {
+  font-size: var(--fs-label);
+  font-weight: 600;
+  white-space: nowrap;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.panels-menu-btn:hover,
+.panels-menu-btn.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.panels-menu-pop {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 70;
+  margin-top: var(--space-1);
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--elev-3);
+}
+.panels-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-label);
+  cursor: pointer;
+}
+.panels-menu-tag {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: var(--fs-small);
+}
+.panels-menu-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+.panels-menu-actions button {
+  flex: 1;
+  font-size: var(--fs-small);
+  padding: var(--space-1);
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.panels-menu-actions button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.panels-menu-actions button:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
 .cockpit-txstate {
   font-size: 0.8rem;
   font-weight: 600;
@@ -11116,6 +11193,12 @@ select.settings-input {
   /* Rail widened for the FULL decode window (filter chips + sort need ~360px);
      the roster stays the centerpiece but no longer starves the decodes. */
   grid-template-columns: minmax(0, 1.4fr) minmax(360px, 1fr);
+}
+/* Panel removal (⊞ Panels): once the main cell OR the whole side rail is gone, the
+   region is a SINGLE column — otherwise the survivor keeps its old track and the
+   removed panel's space is never actually reclaimed, which is the whole point. */
+.cockpit-lower[data-cols='one'] {
+  grid-template-columns: minmax(0, 1fr);
 }
 .cockpit-side {
   display: flex;

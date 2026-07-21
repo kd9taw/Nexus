@@ -48,6 +48,10 @@ export interface CockpitHeaderProps {
   frequencyExtras?: ReactNode
   /** Mode-specific control cluster (consistent middle / second-row location). */
   children?: ReactNode
+  /** Extra controls pinned into the actions cluster, BEFORE the power/TX/Tune/Stop
+   *  group — the cluster is `margin-left:auto`, so adding at the front never moves the
+   *  base controls out from under the operator. */
+  actions?: ReactNode
   /** RF/drive power — OMIT for CW (no RF power); the region collapses. */
   power?: CockpitHeaderPower
   /** Show the compact TX/RX pill in the actions cluster. Default true. */
@@ -78,6 +82,7 @@ export function CockpitHeader({
   wheelSensitivity,
   frequencyExtras,
   children,
+  actions,
   power,
   txState = true,
   txActiveLabel = '▲ KEYING',
@@ -125,6 +130,8 @@ export function CockpitHeader({
       {children != null && <div className="ch-mode-extras">{children}</div>}
 
       <div className="ch-actions">
+        {actions}
+
         {power && (
           <label
             className={`cockpit-pwr${power.unit === '%' ? ' ph-power' : ''}`}

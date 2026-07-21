@@ -64,6 +64,7 @@ import { FieldDayScoreboard } from './components/FieldDayView'
 import { Waterfall } from './components/Waterfall'
 import { StationList } from './components/StationList'
 import { visibleNeeds, modeClassOf, workTarget } from './features/needs'
+import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { readEnabledModes } from './useFeatures'
 import { useTheme } from './useTheme'
 import { useScale } from './useScale'
@@ -113,6 +114,10 @@ export function DetachedPanel({ panel }: { panel: string }) {
   const [needAlerts, setNeedAlerts] = useState<NeedAlert[]>([])
   const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
   const [operateLayout, setOperateLayout] = useState<OperateLayout>(loadOperateLayout)
+  // This window is its OWN surface (instance `w1` by default), so its ⊞ Panels choices
+  // are independent of the docked cockpit's — that is the whole point of keying the
+  // record per surface instead of one app-global flag.
+  const operatePanels = usePanelLayout(OPERATE_PANELS)
   // Band-map pop-out only: the live spot feed + which calls are in the log (worked).
   const isBandMap = panel === 'bandmapPhone' || panel === 'bandmapCw'
   const [allSpots, setAllSpots] = useState<SpotRow[]>([])
@@ -482,6 +487,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
           onSelect={onSelect}
           layoutMode={operateLayout}
           onLayoutMode={changeLayout}
+          panels={operatePanels}
           active
         />
       </div>

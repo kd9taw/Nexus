@@ -32,6 +32,8 @@ import { SpotDialog } from './SpotDialog'
 import { OperateRoster } from './OperateRoster'
 import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
+import { PanelsMenu } from './PanelsMenu'
+import { WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from '../features/panelState'
 import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { FrequencyControl } from './FrequencyControl'
@@ -104,6 +106,10 @@ interface Props {
   onLayoutMode: (m: 'classic' | 'roster') => void
   /** Open Operate in its own window (omit when already standalone). */
   onPopOut?: () => void
+  /** Which panels this surface shows, hides, or has torn off. Owned by the HOST
+   * (App's `.operate-host` / DetachedPanel), never here — the cockpit remounts and
+   * would lose it. */
+  panels: PanelLayoutApi<OperatePanelId>
   /** Recall a saved memory (App applies settings + retune + cockpit switch).
    * Absent when the Memories feature is disabled — the MEM strip then hides. */
   onRecallMemory?: (m: Memory) => void
@@ -142,6 +148,29 @@ const SPECIAL_OPS: {
 ]
 
 const NO_MACROS: string[] = []
+
+/** Operator-facing names for the removable panels (the ⊞ Panels menu). */
+const PANEL_LABELS: Record<OperatePanelId, string> = {
+  waterfall: 'Waterfall',
+  bandActivity: 'Band Activity',
+  callRoster: 'Call Roster',
+  rxfreq: 'Rx Frequency',
+  txmsgs: 'Tx Messages',
+  stations: 'Stations',
+}
+
+/** What each layout actually renders — the menu lists only these, so a panel the
+ *  current layout has no place for can't be ticked into nowhere. */
+const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
+  classic: ['waterfall', 'bandActivity', 'txmsgs', 'rxfreq', 'stations'],
+  roster: ['waterfall', 'callRoster', 'bandActivity', 'rxfreq'],
+}
+
+/** Side-rail occupants per layout — the rail unmounts when all of them are removed. */
+const SIDE_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
+  classic: ['txmsgs', 'rxfreq', 'stations'],
+  roster: ['bandActivity', 'rxfreq'],
+}
 
 /**
  * The Operate cockpit — the nerve center's primary operating surface. The
@@ -185,6 +214,7 @@ export function OperateCockpit({
   layoutMode,
   onLayoutMode,
   onPopOut,
+  panels,
   active = true,
   companionAddr,
   onRecallMemory,
@@ -316,32 +346,37 @@ export function OperateCockpit({
   // Session-only ignore set (Alt-double-click a decode/roster row).
   const [ignored, setIgnored] = useState<ReadonlySet<string>>(() => new Set())
 
-  // Waterfall pop-out: when the waterfall is torn off into its own window, unmount the docked
-  // copy so the decode lists + roster reclaim the space (that's the whole point of popping it
-  // out). Synced across windows by a persisted flag + the `storage` event, so closing the
-  // pop-out re-docks automatically; a manual "re-dock" placeholder is the always-there fallback.
-  // The flag is app-global (one waterfall pop-out), so in the rare two-main-window case both
-  // main windows share it — an acceptable limitation for a single-pop-out feature. A stale flag
-  // from a crash-while-popped-out is cleared on the next main-window boot (see main.tsx).
-  const [wfDetached, setWfDetached] = useState(
-    () => localStorage.getItem('nexus.waterfall.detached') === '1',
-  )
+  // --- Panel visibility (⊞ Panels). The record is per-SURFACE and host-owned; here we
+  // only read it and render accordingly. A panel with no stored state is docked.
+  const { stateOf, setPanelState } = panels
+  const shown = (id: OperatePanelId) => stateOf(id) !== 'removed'
+  const wfState = stateOf('waterfall')
+  // The BIG pane only reclaims the space if the grid drops to one column, so track
+  // whether the main cell and the side rail still hold anything.
+  const mainShown = shown(layoutMode === 'roster' ? 'callRoster' : 'bandActivity')
+  const sideShown = SIDE_PANELS[layoutMode].some(shown)
+
+  // Waterfall pop-out: 'popped' unmounts the docked copy so the decode lists + roster
+  // reclaim the space (that's the whole point of popping it out) and leaves the re-dock
+  // bar behind; 'removed' renders nothing at all. The torn-off window still signals its
+  // close through the app-global legacy flag (localStorage is shared across Tauri
+  // windows), so closing it re-docks automatically — but only a POPPED waterfall
+  // follows, or that signal would resurrect one the operator deleted.
+  const wfStateRef = useRef(wfState)
+  wfStateRef.current = wfState
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key === 'nexus.waterfall.detached') setWfDetached(e.newValue === '1')
+      if (e.key !== WATERFALL_DETACHED_KEY || e.newValue === '1') return
+      if (wfStateRef.current === 'popped') setPanelState('waterfall', 'docked')
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
-  }, [])
+  }, [setPanelState])
   const popOutWaterfall = () => {
-    localStorage.setItem('nexus.waterfall.detached', '1')
-    setWfDetached(true)
+    setPanelState('waterfall', 'popped')
     void openPanelWindow('waterfall')
   }
-  const redockWaterfall = () => {
-    localStorage.setItem('nexus.waterfall.detached', '0')
-    setWfDetached(false)
-  }
+  const redockWaterfall = () => setPanelState('waterfall', 'docked')
 
   // RPT = the DX's current heard SNR (case-insensitive), −10 when unheard.
   const dxSnr = snrForCall(snap.stations, dxCall)
@@ -462,14 +497,17 @@ export function OperateCockpit({
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null
-      const tag = t?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return
+      // Escape is an ABORT key, not an editing key — it must halt TX even while the
+      // operator is typing in the Tx5 free-text field. It is checked BEFORE the
+      // typing guard; F4 / F6 / Alt+1–6 stay behind it.
       if (e.key === 'Escape') {
         e.preventDefault()
         keyRef.current.halt()
         return
       }
+      const t = e.target as HTMLElement | null
+      const tag = t?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return
       if (e.key === 'F4') {
         e.preventDefault()
         keyRef.current.clearDx()
@@ -568,6 +606,19 @@ export function OperateCockpit({
           />
         }
         onCommitDial={commitDial}
+        actions={
+          <PanelsMenu
+            items={LAYOUT_PANELS[layoutMode].map((id) => ({
+              id,
+              label: PANEL_LABELS[id],
+              state: stateOf(id),
+            }))}
+            onToggle={(id, show) => setPanelState(id as OperatePanelId, show ? 'docked' : 'removed')}
+            onUndo={panels.undo}
+            canUndo={panels.canUndo}
+            onReset={panels.reset}
+          />
+        }
         frequencyExtras={
           <TuningStrip
             snap={snap}
@@ -772,7 +823,7 @@ export function OperateCockpit({
       <div className="cockpit-body" ref={bodyRef}>
         {/* Waterfall: a short full-width strip (not a tall column) — the spectrum
             is a glance tool; the real estate goes to the decode lists + roster. */}
-        {wfDetached ? (
+        {wfState === 'popped' && (
           <button
             type="button"
             className="wf-redock"
@@ -781,7 +832,8 @@ export function OperateCockpit({
           >
             ⧉ Waterfall popped out — click to re-dock
           </button>
-        ) : (
+        )}
+        {wfState === 'docked' && (
           <>
             <section className="cockpit-waterfall panel">
               <Waterfall
@@ -826,34 +878,90 @@ export function OperateCockpit({
           onLog={onLog}
         />
 
-        <div className={`cockpit-lower ${layoutMode}`}>
+        {/* data-cols collapses the grid to ONE column once the main cell or the whole
+            side rail is gone — otherwise the survivor keeps its 2fr/1fr track and the
+            removed panel's space is never actually reclaimed. */}
+        <div
+          className={`cockpit-lower ${layoutMode}`}
+          data-cols={mainShown && sideShown ? 'two' : 'one'}
+        >
           {layoutMode === 'roster' ? (
             <>
               {/* Roster layout (GridTracker-style): the full sortable Call Roster is
                   the centerpiece; Band Activity + Rx Frequency move to a side rail. */}
-              <div className="cockpit-roster-main panel">
-                <OperateRoster
-                  stations={snap.stations}
-                  myGrid={snap.mygrid}
-                  currentSlot={snap.radio.slot}
-                  needByCall={needByCall}
-                  needAlertsByCall={needAlertsByCall}
-                  selectedCall={selectedCall}
-                  onSelect={onSelect}
-                  onCall={onCall}
-                  ignoredCalls={ignored}
-                  onToggleIgnore={handleToggleIgnore}
-                  // Open the reviewable Spot popup pre-filled with this station (posting to a public
-                  // cluster deserves a glance before it goes out); the dialog seeds the dial + a mode
-                  // comment itself.
-                  onSpot={(call) => openSpot(call)}
-                />
-              </div>
-              <aside className="cockpit-side">
-                <div className="cockpit-decodes-side panel">
-                  {/* The FULL decode window (filters + sort), not the compact
-                      strip — roster mode = decode window + roster on one page
-                      (operator request); only Rx Frequency stays compact. */}
+              {shown('callRoster') && (
+                <div className="cockpit-roster-main panel">
+                  <OperateRoster
+                    stations={snap.stations}
+                    myGrid={snap.mygrid}
+                    currentSlot={snap.radio.slot}
+                    needByCall={needByCall}
+                    needAlertsByCall={needAlertsByCall}
+                    selectedCall={selectedCall}
+                    onSelect={onSelect}
+                    onCall={onCall}
+                    ignoredCalls={ignored}
+                    onToggleIgnore={handleToggleIgnore}
+                    // Open the reviewable Spot popup pre-filled with this station (posting to a public
+                    // cluster deserves a glance before it goes out); the dialog seeds the dial + a mode
+                    // comment itself.
+                    onSpot={(call) => openSpot(call)}
+                  />
+                </div>
+              )}
+              {sideShown && (
+                <aside className="cockpit-side">
+                  {shown('bandActivity') && (
+                    <div className="cockpit-decodes-side panel">
+                      {/* The FULL decode window (filters + sort), not the compact
+                          strip — roster mode = decode window + roster on one page
+                          (operator request); only Rx Frequency stays compact. */}
+                      <OperateDecodes
+                        history={bandHistRef.current}
+                        decodes={snap.recentDecodes}
+                        slot={snap.radio.slot}
+                        rxOffsetHz={snap.radio.rxOffsetHz}
+                        band={snap.radio.band}
+                        tier={tier}
+                        harqRescues={snap.harqRescues}
+                        onCall={onCall}
+                        needAlertsByCall={needAlertsByCall}
+                        {...decodeClickProps}
+                        onErase={() => notifyErase(0)}
+                        title="Band Activity"
+                      />
+                    </div>
+                  )}
+                  {shown('rxfreq') && (
+                    <div className="cockpit-rxfreq panel">
+                      <OperateDecodes
+                        history={rxHistRef.current}
+                        decodes={snap.recentDecodes}
+                        slot={snap.radio.slot}
+                        rxOffsetHz={snap.radio.rxOffsetHz}
+                        band={snap.radio.band}
+                        tier={tier}
+                        harqRescues={snap.harqRescues}
+                        onCall={onCall}
+                        needAlertsByCall={needAlertsByCall}
+                        {...decodeClickProps}
+                        onErase={() => notifyErase(1)}
+                        lockedFilter="rx"
+                        compact
+                        title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
+                      />
+                    </div>
+                  )}
+                </aside>
+              )}
+            </>
+          ) : (
+            <>
+              {/* Classic layout (WSJT-X two-pane): Band Activity takes the full
+                  left column; the compact Tx1–Tx6 message machine, Rx Frequency,
+                  and the Stations roster ride the side rail. */}
+              {shown('bandActivity') && (
+                <div className="cockpit-decodes panel">
                   <OperateDecodes
                     history={bandHistRef.current}
                     decodes={snap.recentDecodes}
@@ -866,87 +974,53 @@ export function OperateCockpit({
                     needAlertsByCall={needAlertsByCall}
                     {...decodeClickProps}
                     onErase={() => notifyErase(0)}
-                    title="Band Activity"
                   />
                 </div>
-                <div className="cockpit-rxfreq panel">
-                  <OperateDecodes
-                    history={rxHistRef.current}
-                    decodes={snap.recentDecodes}
-                    slot={snap.radio.slot}
-                    rxOffsetHz={snap.radio.rxOffsetHz}
-                    band={snap.radio.band}
-                    tier={tier}
-                    harqRescues={snap.harqRescues}
-                    onCall={onCall}
-                    needAlertsByCall={needAlertsByCall}
-                    {...decodeClickProps}
-                    onErase={() => notifyErase(1)}
-                    lockedFilter="rx"
-                    compact
-                    title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
-                  />
-                </div>
-              </aside>
-            </>
-          ) : (
-            <>
-              {/* Classic layout (WSJT-X two-pane): Band Activity takes the full
-                  left column; the compact Tx1–Tx6 message machine, Rx Frequency,
-                  and the Stations roster ride the side rail. */}
-              <div className="cockpit-decodes panel">
-                <OperateDecodes
-                    history={bandHistRef.current}
-                  decodes={snap.recentDecodes}
-                  slot={snap.radio.slot}
-                  rxOffsetHz={snap.radio.rxOffsetHz}
-                  band={snap.radio.band}
-                  tier={tier}
-                  harqRescues={snap.harqRescues}
-                  onCall={onCall}
-                  needAlertsByCall={needAlertsByCall}
-                  {...decodeClickProps}
-                  onErase={() => notifyErase(0)}
-                />
-              </div>
-              <aside className="cockpit-side">
-                <TxPanel
-                  compact
-                  dxCall={dxCall}
-                  dxGrid={dxGrid}
-                  onDxCall={setDxCall}
-                  onDxGrid={setDxGrid}
-                  messages={msgs}
-                  tx5={tx5}
-                  onTx5={handleTx5}
-                  tx6={tx6}
-                  onTx6={handleTx6}
-                  nextIndex={nextIndex}
-                  onTx={doTx}
-                  onGenerate={handleGenerate}
-                  onClear={clearDx}
-                  qsoMacros={qsoMacros}
-                />
-                <div className="cockpit-rxfreq panel">
-                  <OperateDecodes
-                    history={rxHistRef.current}
-                    decodes={snap.recentDecodes}
-                    slot={snap.radio.slot}
-                    rxOffsetHz={snap.radio.rxOffsetHz}
-                    band={snap.radio.band}
-                    tier={tier}
-                    harqRescues={snap.harqRescues}
-                    onCall={onCall}
-                    needAlertsByCall={needAlertsByCall}
-                    {...decodeClickProps}
-                    onErase={() => notifyErase(1)}
-                    lockedFilter="rx"
-                    compact
-                    title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
-                  />
-                </div>
-                <div className="cockpit-roster panel">{roster}</div>
-              </aside>
+              )}
+              {sideShown && (
+                <aside className="cockpit-side">
+                  {shown('txmsgs') && (
+                    <TxPanel
+                      compact
+                      dxCall={dxCall}
+                      dxGrid={dxGrid}
+                      onDxCall={setDxCall}
+                      onDxGrid={setDxGrid}
+                      messages={msgs}
+                      tx5={tx5}
+                      onTx5={handleTx5}
+                      tx6={tx6}
+                      onTx6={handleTx6}
+                      nextIndex={nextIndex}
+                      onTx={doTx}
+                      onGenerate={handleGenerate}
+                      onClear={clearDx}
+                      qsoMacros={qsoMacros}
+                    />
+                  )}
+                  {shown('rxfreq') && (
+                    <div className="cockpit-rxfreq panel">
+                      <OperateDecodes
+                        history={rxHistRef.current}
+                        decodes={snap.recentDecodes}
+                        slot={snap.radio.slot}
+                        rxOffsetHz={snap.radio.rxOffsetHz}
+                        band={snap.radio.band}
+                        tier={tier}
+                        harqRescues={snap.harqRescues}
+                        onCall={onCall}
+                        needAlertsByCall={needAlertsByCall}
+                        {...decodeClickProps}
+                        onErase={() => notifyErase(1)}
+                        lockedFilter="rx"
+                        compact
+                        title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
+                      />
+                    </div>
+                  )}
+                  {shown('stations') && <div className="cockpit-roster panel">{roster}</div>}
+                </aside>
+              )}
             </>
           )}
         </div>

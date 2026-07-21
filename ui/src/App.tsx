@@ -55,6 +55,7 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { visibleNeeds, workTarget, modeClassOf } from './features/needs'
+import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
 import { StationList } from './components/StationList'
@@ -336,6 +337,11 @@ export default function App() {
       /* ignore persist failure */
     }
   }, [])
+  // Which Operate panels the operator keeps (⊞ Panels). Owned HERE, beside the
+  // `.operate-host` keep-alive below — never inside the cockpit, which remounts and
+  // would drop the record. Survives Classic ↔ Roster because visibility is keyed by
+  // panel id, not by layout.
+  const operatePanels = usePanelLayout(OPERATE_PANELS)
 
   // One-shot on launch: check SourceForge for a newer release (throttled to once/day + cached,
   // silent when offline). Surfaces a dismissible "update available" toast; nothing auto-downloads.
@@ -2275,6 +2281,7 @@ export default function App() {
             onSelect={handleSelect}
             layoutMode={operateLayout}
             onLayoutMode={handleOperateLayout}
+            panels={operatePanels}
             onPopOut={() => void openPanelWindow('operate')}
             active={effectiveView === 'operate'}
           />
