@@ -1,6 +1,17 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LoggedQso } from '../types'
+import { gpuCapableForGlobe } from '../gpu'
+
+// The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
+// Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
+// machine that fails `gpuCapableForGlobe` never pays for the chunk at all.
+const QsoGlobe = lazy(() => import('./QsoGlobe'))
+
+/** Height (px) of the globe band; must match `.log-globe-band` in styles.css. The
+ * virtualizer needs the number as `scrollMargin` so row windowing stays exact with
+ * the band occupying the top of the scroll container. */
+const GLOBE_BAND_H = 320
 import {
   deleteQso,
   editQso,
@@ -401,6 +412,11 @@ export function Logbook({
     return out
   }, [log, matchesSearch, sortKey, sortAsc])
 
+  // 3-D globe band, gated on a real GPU (software renderers would make the whole
+  // Logbook crawl — those machines just get the plain table). Probed once per mount.
+  const [globeOk] = useState(gpuCapableForGlobe)
+  const globeShown = globeOk && log.length > 0
+
   // Virtualize the row list: at 10k QSOs the old render put ~150k DOM nodes on screen (heavy scroll
   // + a full reconcile every dial-poll re-render). Now only the visible window mounts.
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -409,6 +425,10 @@ export function Logbook({
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 43, // ~row height; measureElement corrects per row
     overscan: 12,
+    // The globe band sits INSIDE the scroll container above the rows (so it scrolls
+    // away, per the operator's chosen layout). scrollMargin tells the virtualizer the
+    // list starts that far into the scroll space; the row transform subtracts it back.
+    scrollMargin: globeShown ? GLOBE_BAND_H : 0,
   })
 
   const submit = async (e: React.FormEvent) => {
@@ -709,6 +729,13 @@ export function Logbook({
           <span className="log-cell" role="columnheader" aria-label="Edit / delete"></span>
         </div>
         <div className="log-scroll" ref={scrollRef}>
+          {globeShown && (
+            <div className="log-globe-band">
+              <Suspense fallback={<div className="log-globe-loading">Loading globe…</div>}>
+                <QsoGlobe qsos={log} />
+              </Suspense>
+            </div>
+          )}
           {log.length === 0 && <p className="empty">No logged contacts yet.</p>}
           {log.length > 0 && rows.length === 0 && (
             <p className="empty">No contacts match “{deferredSearch.trim()}”.</p>
@@ -732,7 +759,10 @@ export function Logbook({
                       top: 0,
                       left: 0,
                       width: '100%',
-                      transform: `translateY(${vrow.start}px)`,
+                      // scrollMargin is baked into vrow.start (the globe band above);
+                      // subtract it because rows are positioned within THIS container,
+                      // which document flow already places below the band.
+                      transform: `translateY(${vrow.start - rowVirtualizer.options.scrollMargin}px)`,
                       // Stripe by REAL index (inline beats the nth-child rule, which would otherwise
                       // stripe by render order and appear to "move" as the virtual window scrolls).
                       background: vrow.index % 2 ? 'color-mix(in srgb, var(--bg-elev) 50%, transparent)' : 'transparent',

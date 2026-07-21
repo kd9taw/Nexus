@@ -7862,6 +7862,38 @@ input.cw-pitch::-webkit-inner-spin-button {
   flex: 1;
   overflow-y: auto;
 }
+/* 3-D QSO globe band atop the Logbook. Lives INSIDE .log-scroll so it scrolls away
+   with the list — prominent on arrival, full-height log once you scroll down. Height
+   must match GLOBE_BAND_H in Logbook.tsx (the virtualizer's scrollMargin). */
+.log-globe-band {
+  position: relative;
+  height: 320px;
+  min-height: 320px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  background: radial-gradient(ellipse at 50% 60%, rgba(30, 44, 62, 0.55), transparent 75%);
+}
+.qso-globe {
+  position: absolute;
+  inset: 0;
+}
+.qso-globe-count {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.log-globe-loading {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
 .log-row:not(.head):nth-child(odd) {
   background: color-mix(in srgb, var(--bg-elev) 50%, transparent);
 }
