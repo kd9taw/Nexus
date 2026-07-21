@@ -232,7 +232,9 @@ jobs:
   # ---------------------------------------------------------------------------------------
   publish:
     name: Publish GitHub Release
-    needs: [linux-x86, windows, pi]
+    # Windows + Linux gate the release (operator's release order); the Pi .debs attach
+    # in publish-pi as they finish and can never hold the primary artifacts hostage.
+    needs: [linux-x86, windows]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -243,6 +245,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: nexus-linux-x86
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: nexus-windows
           merge-multiple: true
 
       - name: Derive + cross-check the version
@@ -300,3 +308,30 @@ jobs:
             --title "Nexus ${{ steps.ver.outputs.ver }}" \
             --notes-file dist/NOTES.md \
             dist/Nexus_* dist/SHA256SUMS.txt
+
+  # Second wave (operator's release order: Windows + Linux first, then Pi): attach the
+  # Raspberry Pi .debs to the already-published release as their builds finish. Waits on
+  # publish so the release exists; a Pi failure never blocks the primary platforms.
+  publish-pi:
+    name: Attach Raspberry Pi .debs
+    needs: [publish, pi]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: pidist
+          pattern: nexus-pi-*
+          merge-multiple: true
+      - name: Upload to the release + extend SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          ls -la pidist/
+          gh release upload "$tag" --repo "${{ github.repository }}" pidist/Nexus_* --clobber
+          # Append the Pi sums to the published SHA256SUMS.txt so one file covers all.
+          gh release download "$tag" --repo "${{ github.repository }}" --pattern SHA256SUMS.txt --dir . --clobber
+          ( cd pidist && sha256sum Nexus_* ) >> SHA256SUMS.txt
+          gh release upload "$tag" --repo "${{ github.repository }}" SHA256SUMS.txt --clobber
