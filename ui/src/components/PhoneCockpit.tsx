@@ -217,6 +217,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
   const [spotOpen, setSpotOpen] = useState(false) // spot-to-cluster popup
+  const [spotCall, setSpotCall] = useState('') // seed: '' from the toolbar, the typed call from LogEntry
   // Wheel-to-tune over the bandscope, sharing the tuning strip's step selector.
   const [tuneStep, setTuneStep] = useState(100)
   const scopeRef = useRef<HTMLDivElement>(null)
@@ -559,14 +560,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         <RotorStrip />
         <button
           type="button"
-          className="ph-rec"
-          onClick={() => setSpotOpen(true)}
-          title="Spot a callsign to the DX cluster (opens a popup — call, frequency, comment)"
-        >
-          📢 Spot
-        </button>
-        <button
-          type="button"
           className={`ph-rec${recording ? ' on' : ''}`}
           onClick={toggleRecord}
           disabled={recBusy}
@@ -881,6 +874,10 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         snap={snap}
         mode={commandedMode === 'FM' ? 'FM' : 'SSB'}
         defaultRst="59"
+        onSpot={(call) => {
+          setSpotCall(call)
+          setSpotOpen(true)
+        }}
         pendingWork={pendingWork}
         onConsumeWork={onConsumeWork}
         fieldDay={fieldDay}
@@ -889,7 +886,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       <SpotDialog
         open={spotOpen}
         onClose={() => setSpotOpen(false)}
-        initialCall=""
+        initialCall={spotCall}
         freqMhz={snap.radio.dialMhz}
         defaultComment={commandedMode}
       />

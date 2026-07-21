@@ -6388,6 +6388,25 @@ input.cw-pitch::-webkit-inner-spin-button {
 .le-log-btn:disabled {
   opacity: 0.4;
 }
+/* Spot-to-cluster from the log entry (Phone/CW). Deliberately LOUD — the old top-strip
+   button was "hard to find and too small" (operator, 2026-07-21): Log-button sized, hot
+   amber so it can't be missed at a glance or with tired eyes. */
+.le-spot-btn {
+  flex: 0 0 auto;
+  padding: var(--space-2) 18px;
+  border-radius: var(--radius-sm);
+  font-weight: 800;
+  color: #1a1200;
+  background: #ffb52e;
+  border: 1px solid #ffb52e;
+}
+.le-spot-btn:hover {
+  background: #ffc95e;
+  border-color: #ffc95e;
+}
+.le-spot-btn:disabled {
+  opacity: 0.4;
+}
 .le-notes {
   width: 100%;
   resize: vertical;

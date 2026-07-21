@@ -20,6 +20,11 @@ interface Props {
   mode: string
   /** Default signal report for this mode ('599' / '59'). */
   defaultRst: string
+  /** Spot the typed call to the DX cluster: renders a 📢 Spot button beside Log that
+   * hands the CURRENT call field up (the host opens its SpotDialog seeded with it +
+   * the dial). Phone/CW ask (operator 2026-07-21); omitted = no button (FT8 has its
+   * own roster-side spot affordance). */
+  onSpot?: (call: string) => void
   /** Click-to-work handoff from the Needed board: the callsign to prefill + focus RST.
    * `ts` changes per click so re-working the same call refires the prefill. */
   pendingWork?: { call: string; ts: number } | null
@@ -62,6 +67,7 @@ export function LogEntry({
   snap,
   mode,
   defaultRst,
+  onSpot,
   pendingWork,
   onConsumeWork,
   cwLive,
@@ -646,6 +652,17 @@ export function LogEntry({
         <button type="button" className="le-log-btn" onClick={logIt} disabled={!logCall.trim()}>
           Log
         </button>
+        {onSpot && (
+          <button
+            type="button"
+            className="le-spot-btn"
+            onClick={() => onSpot(logCall.trim().toUpperCase())}
+            disabled={!logCall.trim()}
+            title="Spot this call to the DX cluster (pre-fills the call + your frequency)"
+          >
+            📢 Spot
+          </button>
+        )}
         <button type="button" className="le-qrz" onClick={reset} title="Clear the log fields">
           Clear
         </button>

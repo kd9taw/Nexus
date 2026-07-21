@@ -10,6 +10,7 @@ import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { Splitter } from './Splitter'
 import { LogEntry } from './LogEntry'
+import { SpotDialog } from './SpotDialog'
 import {
   getSettings,
   setSettings,
@@ -171,6 +172,9 @@ export function CwCockpit({
   const catOk = snap.radio.catOk === true
   // Wheel-to-tune over the CW scope, sharing the tuning strip's step selector.
   const [tuneStep, setTuneStep] = useState(100)
+  // Spot-to-cluster popup, seeded from the LogEntry call field (operator ask: CW too).
+  const [spotOpen, setSpotOpen] = useState(false)
+  const [spotCall, setSpotCall] = useState('')
   const scopeRef = useRef<HTMLElement>(null)
   useWheelTune(scopeRef, {
     dialMhz: snap.radio.dialMhz,
@@ -1122,6 +1126,10 @@ export function CwCockpit({
         snap={snap}
         mode="CW"
         defaultRst="599"
+        onSpot={(call) => {
+          setSpotCall(call)
+          setSpotOpen(true)
+        }}
         pendingWork={pendingWork}
         onConsumeWork={onConsumeWork}
         cwLive={{
@@ -1132,6 +1140,13 @@ export function CwCockpit({
         }}
         fieldDay={fieldDay}
         fdMode="CW"
+      />
+      <SpotDialog
+        open={spotOpen}
+        onClose={() => setSpotOpen(false)}
+        initialCall={spotCall}
+        freqMhz={snap.radio.dialMhz}
+        defaultComment="CW"
       />
     </main>
   )

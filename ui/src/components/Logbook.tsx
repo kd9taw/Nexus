@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffe
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LoggedQso } from '../types'
 import { gpuCapableForGlobe } from '../gpu'
+import { SpotDialog } from './SpotDialog'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
 // Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
@@ -151,6 +152,9 @@ export function Logbook({
   // Column sort — purely a VIEW concern; the backend `get_log` index is kept on each row so
   // edit/delete/mark still hit the right record. Default newest-first (the get_log order is
   // oldest-first, which the test user disliked).
+  // Re-spot a logged contact to the cluster (row 📢): seeded with the row's call,
+  // frequency and mode (operator ask 2026-07-21).
+  const [spotSeed, setSpotSeed] = useState<{ call: string; freq: number; mode: string } | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('time')
   const [sortAsc, setSortAsc] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -871,6 +875,15 @@ export function Logbook({
                   <button
                     type="button"
                     className="log-rowbtn"
+                    onClick={() => setSpotSeed({ call: q.call, freq: q.freqMhz, mode: q.mode })}
+                    title={`Spot ${q.call} to the DX cluster (pre-fills this QSO's call + frequency)`}
+                    aria-label={`Spot ${q.call} to the DX cluster`}
+                  >
+                    📢
+                  </button>
+                  <button
+                    type="button"
+                    className="log-rowbtn"
                     onClick={() => void onPushQrz(q)}
                     title={`Push ${q.call} to your QRZ logbook (re-push is safe — duplicates are detected)`}
                     aria-label={`Push ${q.call} to QRZ`}
@@ -1033,6 +1046,13 @@ export function Logbook({
           </div>
         </div>
       )}
+      <SpotDialog
+        open={spotSeed != null}
+        onClose={() => setSpotSeed(null)}
+        initialCall={spotSeed?.call ?? ''}
+        freqMhz={spotSeed?.freq ?? 0}
+        defaultComment={spotSeed?.mode ?? ''}
+      />
     </section>
   )
 }
