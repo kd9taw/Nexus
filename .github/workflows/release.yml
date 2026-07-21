@@ -1,0 +1,302 @@
+# Nexus release pipeline — tag → build every platform → verify → publish.
+#
+# GitHub is primary. Push a version tag and this builds Windows, Linux x86_64, and the
+# two Raspberry Pi bases, verifies each artifact, and publishes a GitHub Release with all
+# of them attached. No hand-assembly, no scrub — this repo IS the published source.
+#
+#   git tag v0.14.0 && git push origin v0.14.0     # full automatic release
+#   (Actions ▸ Release ▸ Run workflow)             # build + verify only, publishes NOTHING
+#
+# The manual (workflow_dispatch) path exists to prove a build green WITHOUT cutting a
+# release: every build/verify job runs, but the publish job is gated on a real tag push.
+#
+# SCOPE: this publishes to GitHub. SourceForge FRS upload and the version.json update
+# endpoint are a deliberate fast-follow (each needs its own secret + external system);
+# the SF *git* mirror is scripts/mirror-to-sourceforge.sh. See
+# nexus-notes/single-repo-pipeline-plan.md.
+#
+# WHY THE GATES: on 2026-07-20 a fully-green build shipped a .deb with the AI CW model
+# silently absent (14 MB light, no error anywhere). "Automatic on tag" here does NOT mean
+# "unchecked" — every artifact is proven (arch, model present + digest, version == tag)
+# before the release is created.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+# Creating a Release needs write access to the repo contents.
+permissions:
+  contents: write
+
+env:
+  # The DeepCW model is gitignored (AGPL-3.0 (c) e04); every build job stages it from this
+  # release and pins it by digest. One place to bump if it is ever re-folded.
+  DEEPCW_RELEASE: deepcw-model-v1
+  MODEL_SHA: a7b3b4aa2610d3e88b8c7d4420eceee31be2d0ae595b3413264334f3ffb1eab5
+  MODEL_JSON_SHA: b4342157b90229ee7380e165f3d8036179b80d1e6ae02f2557388b7fcd558c01
+
+jobs:
+  # ---------------------------------------------------------------------------------------
+  # Linux x86_64 — .deb + AppImage via the same scripts/build-linux.sh developers use.
+  # ---------------------------------------------------------------------------------------
+  linux-x86:
+    name: Linux x86_64 (.deb + AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$DEEPCW_RELEASE" --repo "${{ github.repository }}" \
+            --pattern 'model.onnx*' --dir src-tauri/resources/deepcw --clobber
+          echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
+          echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev libsoup-3.0-dev patchelf \
+            build-essential cmake ninja-build gfortran \
+            libfftw3-dev libboost-dev libasound2-dev libudev-dev \
+            libfuse2
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # AppImage's bundler (appimagetool) normally needs FUSE, which hosted runners lack.
+      # APPIMAGE_EXTRACT_AND_RUN makes it self-extract instead — the standard CI workaround.
+      - name: Build .deb + AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: bash scripts/build-linux.sh
+
+      - name: Verify artifacts
+        run: |
+          set -euo pipefail
+          deb=$(find src-tauri/target/release/bundle/deb -name '*.deb' -print -quit)
+          app=$(find src-tauri/target/release/bundle/appimage -name '*.AppImage' -print -quit)
+          [ -n "$deb" ] || { echo "no .deb produced"; exit 1; }
+          [ -n "$app" ] || { echo "no .AppImage produced"; exit 1; }
+          [ "$(dpkg-deb -f "$deb" Architecture)" = "amd64" ] || { echo "deb not amd64"; exit 1; }
+          # The model must be IN the package — the failure that shipped on 2026-07-20 is
+          # invisible to every check except looking inside the artifact.
+          dpkg-deb -x "$deb" /tmp/dc
+          m=/tmp/dc/usr/lib/Nexus/resources/deepcw/model.onnx
+          [ -s "$m" ] || { echo "DeepCW model missing from the .deb"; exit 1; }
+          echo "$MODEL_SHA  $m" | sha256sum -c -
+          mkdir -p out && cp "$deb" "$app" out/
+          ( cd out && sha256sum ./* )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-linux-x86
+          path: out/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------------------
+  # Windows — cross-compiled NSIS installer (offline WebView2 + Hamlib bundled).
+  # ---------------------------------------------------------------------------------------
+  windows:
+    name: Windows (NSIS installer)
+    runs-on: ubuntu-latest
+    env:
+      # Baked into the binary via option_env! (build.rs). Only referenced in this
+      # tag/dispatch-triggered job — NEVER in a pull_request job — so a fork PR cannot
+      # reach it. The key is extractable from any shipped binary regardless (it is a
+      # read-only ClubLog most-wanted token); the proper fix is a proxy — see
+      # nexus-notes/clublog-key-proxy-plan.md.
+      CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$DEEPCW_RELEASE" --repo "${{ github.repository }}" \
+            --pattern 'model.onnx*' --dir src-tauri/resources/deepcw --clobber
+          echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
+          echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
+
+      - name: Install MinGW-w64 cross toolchain + NSIS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gfortran-mingw-w64-x86-64 \
+            libboost-dev cmake ninja-build build-essential nsis
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          targets: x86_64-pc-windows-gnu
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Cross-build the NSIS installer
+        run: bash scripts/build-windows-cross.sh
+
+      - name: Verify installer
+        run: |
+          set -euo pipefail
+          exe=$(find src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis -name '*-setup.exe' -print -quit)
+          [ -n "$exe" ] || { echo "no NSIS installer produced"; exit 1; }
+          # It bundles the offline WebView2 runtime + Hamlib, so it is large by design; a
+          # runt file means a bundling step silently no-op'd.
+          sz=$(stat -c%s "$exe")
+          [ "$sz" -gt 50000000 ] || { echo "installer only $sz bytes — bundling likely failed"; exit 1; }
+          mkdir -p out && cp "$exe" out/
+          ( cd out && sha256sum ./* )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-windows
+          path: out/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------------------
+  # Raspberry Pi — one .deb per live Pi OS base, native on the hosted arm64 runner.
+  # (Same job as ci.yml's pi-deb; duplicated here so a tag builds everything in one run.)
+  # ---------------------------------------------------------------------------------------
+  pi:
+    name: Raspberry Pi .deb (${{ matrix.base }})
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        base: [bookworm, trixie]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$DEEPCW_RELEASE" --repo "${{ github.repository }}" \
+            --pattern 'model.onnx*' --dir src-tauri/resources/deepcw --clobber
+          echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
+          echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
+
+      - name: Build .deb in a debian:${{ matrix.base }} container
+        run: >
+          docker buildx build
+          --platform linux/arm64
+          -f scripts/Dockerfile.pi
+          --build-arg BASE=${{ matrix.base }}
+          --progress=plain
+          --target export
+          --output type=local,dest=pi-out/${{ matrix.base }}
+          .
+
+      - name: Tag the artifact with its base, and verify it
+        run: |
+          set -euo pipefail
+          deb=$(find pi-out/${{ matrix.base }} -name '*.deb' -print -quit)
+          [ -n "$deb" ] || { echo "no .deb produced"; exit 1; }
+          ver=$(dpkg-deb -f "$deb" Version)
+          [ "$(dpkg-deb -f "$deb" Architecture)" = "arm64" ] || { echo "not arm64"; exit 1; }
+          dpkg-deb -x "$deb" /tmp/debcheck
+          bin=$(find /tmp/debcheck/usr/bin -type f -print -quit)
+          file "$bin" | grep -q 'ARM aarch64' || { echo "payload is not ARM aarch64"; exit 1; }
+          m=/tmp/debcheck/usr/lib/Nexus/resources/deepcw/model.onnx
+          [ -s "$m" ] || { echo "DeepCW model missing from the package"; exit 1; }
+          echo "$MODEL_SHA  $m" | sha256sum -c -
+          mv "$deb" "pi-out/${{ matrix.base }}/Nexus_${ver}_arm64_${{ matrix.base }}.deb"
+          sha256sum pi-out/${{ matrix.base }}/*.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-pi-${{ matrix.base }}
+          path: pi-out/${{ matrix.base }}/*.deb
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------------------
+  # Publish — only on a real tag push. Gathers every artifact, proves version == tag across
+  # ALL of them, and creates the GitHub Release. A dispatch run stops before this.
+  # ---------------------------------------------------------------------------------------
+  publish:
+    name: Publish GitHub Release
+    needs: [linux-x86, windows, pi]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need tags + history for the notes range
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Derive + cross-check the version
+        id: ver
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          ver="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          # The tag must match the version in tauri.conf.json — the single source of truth
+          # every artifact is stamped from. A mismatch means someone forgot to bump.
+          conf=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          [ "$conf" = "$ver" ] || { echo "tag $tag ($ver) != tauri.conf.json ($conf)"; exit 1; }
+          # And every artifact filename must carry that exact version — catches a stale
+          # artifact from a cached/retried job sneaking into the release.
+          for f in dist/*; do
+            case "$(basename "$f")" in
+              *"$ver"*) : ;;
+              *) echo "artifact does not carry version $ver: $f"; exit 1 ;;
+            esac
+          done
+          echo "All artifacts stamped $ver:"; ls -la dist/
+
+      - name: Assemble release notes
+        run: |
+          set -euo pipefail
+          ver="${{ steps.ver.outputs.ver }}"
+          notes="dist/NOTES.md"
+          if [ -f "docs/RELEASE_NOTES-$ver.md" ]; then
+            cp "docs/RELEASE_NOTES-$ver.md" "$notes"
+          else
+            # Fall back to the commit range since the previous tag. Hand-written notes in
+            # docs/RELEASE_NOTES-<ver>.md take precedence when present.
+            prev=$(git describe --tags --abbrev=0 "${{ steps.ver.outputs.tag }}^" 2>/dev/null || true)
+            echo "# Nexus $ver" > "$notes"; echo >> "$notes"
+            if [ -n "$prev" ]; then
+              echo "Changes since $prev:" >> "$notes"; echo >> "$notes"
+              git log --no-merges --pretty='- %s' "$prev..${{ steps.ver.outputs.tag }}" >> "$notes"
+            else
+              git log --no-merges --pretty='- %s' -n 50 "${{ steps.ver.outputs.tag }}" >> "$notes"
+            fi
+          fi
+          echo "----- notes -----"; cat "$notes"
+
+      - name: Checksums
+        run: ( cd dist && sha256sum Nexus_* | tee SHA256SUMS.txt )
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            --title "Nexus ${{ steps.ver.outputs.ver }}" \
+            --notes-file dist/NOTES.md \
+            dist/Nexus_* dist/SHA256SUMS.txt
