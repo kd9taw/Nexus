@@ -116,12 +116,26 @@ interface Props {
 }
 
 export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
-  const [program, setProgram] = useState<Program>('POTA')
+  // Program + band filter persist for the same reason the sort and mode do: the operator
+  // filed "leaving and returning resets all filters" as a bug. A stale/hand-edited value
+  // falls back to the default rather than throwing.
+  const [program, setProgram] = useState<Program>(() => {
+    const raw = localStorage.getItem('nexus.ota.program')
+    return raw === 'POTA' || raw === 'SOTA' || raw === 'Both' ? raw : 'POTA'
+  })
   const [spots, setSpots] = useState<OtaSpot[]>([])
   const [loading, setLoading] = useState(false)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   // Band filter — set of band strings; empty = All.
-  const [bandFilter, setBandFilter] = useState<string[]>([])
+  const [bandFilter, setBandFilter] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('nexus.ota.bandFilter')
+      const v: unknown = raw == null ? null : JSON.parse(raw)
+      return Array.isArray(v) && v.every((x) => typeof x === 'string') ? v : []
+    } catch {
+      return []
+    }
+  })
   // Mode filter — a display-mode string or 'All'. Defaults to 'All' so phone/SSB
   // hunters (the POTA majority) see every spot out of the box, and REMEMBERS the
   // operator's last choice across reloads — so a CW hunter sets 'CW' once and it
@@ -140,6 +154,12 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
   useEffect(() => {
     localStorage.setItem('nexus.ota.sortAsc', sortAsc ? '1' : '0')
   }, [sortAsc])
+  useEffect(() => {
+    localStorage.setItem('nexus.ota.program', program)
+  }, [program])
+  useEffect(() => {
+    localStorage.setItem('nexus.ota.bandFilter', JSON.stringify(bandFilter))
+  }, [bandFilter])
   const [modeFilter, setModeFilter] = useState<string>(
     () => localStorage.getItem('nexus.ota.modeFilter') ?? 'All',
   )
