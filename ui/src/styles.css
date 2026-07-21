@@ -15867,3 +15867,24 @@ html[data-panel='needed'] {
 .sats-th-btn:hover {
   color: var(--accent);
 }
+
+/* Openings-log sortable header — span-header row atop the episode list. */
+.openings-log-head {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.openings-log-th {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.openings-log-th:hover,
+.openings-log-th.active {
+  color: var(--accent);
+}

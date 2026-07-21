@@ -300,6 +300,7 @@ export function OperateDecodes({
                 <option value="time">Time</option>
                 <option value="snr">SNR</option>
                 <option value="freq">Freq</option>
+                <option value="dt">DT</option>
               </select>
             </label>
             {eraseBtn}

@@ -5,7 +5,7 @@ import type { DecodeRow, Tier } from './types'
 // Rx-Frequency pane filter, and the band/tier history wipe — are unit-testable.
 
 export type DecodeFilter = 'all' | 'cq' | 'me' | 'rx' | 'b4' | 'new'
-export type DecodeSort = 'time' | 'snr' | 'freq'
+export type DecodeSort = 'time' | 'snr' | 'freq' | 'dt'
 
 /** A decode plus the slot + wall-clock time it was first heard (history bookkeeping). */
 export interface DecodeEntry extends DecodeRow {
@@ -79,6 +79,8 @@ export function orderEntries(list: DecodeEntry[], sort: DecodeSort): DecodeEntry
         return b.snr - a.snr
       case 'freq':
         return a.freqHz - b.freqHz
+      case 'dt':
+        return a.dtSec - b.dtSec
       default:
         return a.slot - b.slot || a.at - b.at
     }
