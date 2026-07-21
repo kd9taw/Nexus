@@ -25,7 +25,7 @@ import {
   uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { qrzPushQso, clublogPushQso, hrdlogPushQso, openQrzPage } from '../api'
+import { qrzPushQso, clublogPushQso, hrdlogPushQso, openQrzPage, syncQrz } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -555,6 +555,26 @@ export function Logbook({
             title="Reconcile a LoTW ADIF export into the log — upgrades confirmations + credit on existing QSOs"
           >
             Sync confirmations
+          </button>
+          <button
+            type="button"
+            className="export-btn"
+            onClick={async () => {
+              // Two-way QRZ Logbook sync existed but hid in Settings — the operator asked
+              // for exactly this and couldn't find it (2026-07-21). Same command, surfaced
+              // where log work happens; needs the per-logbook API key from Settings.
+              const r = await withErrorToast(() => syncQrz(), 'QRZ sync failed')
+              if (r) {
+                pushToast(
+                  `QRZ sync — ${r.added} new QSO${r.added === 1 ? '' : 's'}, ${r.newlyConfirmedAny} newly confirmed`,
+                  'success',
+                )
+                load()
+              }
+            }}
+            title="Fetch your online QRZ Logbook and merge it here — QSOs logged elsewhere plus QRZ confirmation status (needs the QRZ Logbook API key in Settings ▸ Logbook & QSL)"
+          >
+            Sync QRZ
           </button>
           <button
             type="button"
