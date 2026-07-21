@@ -7946,6 +7946,30 @@ fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), Str
     tempo_net::n3fjp::push_qso(&host, port, &push)
 }
 
+/// Forward ONE logged QSO to DXKeeper's TCP Network Service, off-thread.
+///
+/// Fire-and-forget by design. DXKeeper never acknowledges a directive, so there is nothing
+/// to wait for — and the connect carries a 3 s timeout, which inline would stall EVERY log
+/// by three seconds whenever DXKeeper simply is not running. That is the common case (the
+/// operator has Nexus open and DXLab closed), so it must not be on the logging path.
+///
+/// Failures land in the connector log rather than a toast: a logger that is not running is
+/// not an error worth interrupting an operator mid-QSO.
+fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String) {
+    std::thread::spawn(move || {
+        match tempo_net::dxkeeper::push_qso(&host, base_port, &adif, uploads) {
+            Ok(()) => conn_log(
+                "DXKeeper",
+                "ok",
+                // Deliberately not "logged" — we cannot know that. DXKeeper replies to
+                // nothing; its Server Log is the only place a rejection shows up.
+                format!("sent to {host}:{}", tempo_net::dxkeeper::port_for_base(base_port)),
+            ),
+            Err(e) => conn_log("DXKeeper", "error", e),
+        }
+    });
+}
+
 /// Forward ONE logged QSO to a Cloudlog/Wavelog instance (HTTP JSON ADIF POST). URL +
 /// station id come from Settings; the API key lives in the OS keychain (never
 /// settings.json), read here at push time.
@@ -9496,11 +9520,11 @@ pub fn run() {
         let push_engine = engine.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
-            let (recs, qrz_on, clublog_on, eqsl_on, hrdlog_on, n3fjp_on, cloudlog_on) = {
+            let (recs, qrz_on, clublog_on, eqsl_on, hrdlog_on, n3fjp_on, cloudlog_on, dxk) = {
                 // Recover a poisoned lock (conn_log pattern) — a panicked command
                 // holding the engine must not silently kill auto-upload forever.
                 let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
-                let (q, c, e, h, n, cl) = {
+                let (q, c, e, h, n, cl, dxk) = {
                     let s = eng.settings();
                     (
                         s.qrz_logbook_upload,
@@ -9509,15 +9533,27 @@ pub fn run() {
                         s.hrdlog_upload,
                         s.n3fjp_upload && !s.n3fjp_host.trim().is_empty(),
                         s.cloudlog_upload && !s.cloudlog_url.trim().is_empty(),
+                        // DXKeeper: empty host = off. Carried as (host, base_port, uploads)
+                        // rather than a bool because the push needs all three and re-locking
+                        // the engine per record just to re-read them would be wasteful.
+                        (!s.dxkeeper_host.trim().is_empty()).then(|| {
+                            (
+                                s.dxkeeper_host.trim().to_string(),
+                                s.dxkeeper_base_port,
+                                s.dxkeeper_uploads,
+                            )
+                        }),
                     )
                 };
-                if !(q || c || e || h || n || cl) {
+                // DXKeeper counts toward "anything enabled" — otherwise a station using ONLY
+                // DXKeeper would drain nothing and never forward a single QSO.
+                if !(q || c || e || h || n || cl || dxk.is_some()) {
                     // Nothing enabled: LEAVE the queue intact (bounded at 256) so
                     // flipping a toggle on later still uploads this session's
                     // recent QSOs — log-first-configure-later must not lose them.
                     continue;
                 }
-                (eng.take_pending_uploads(), q, c, e, h, n, cl)
+                (eng.take_pending_uploads(), q, c, e, h, n, cl, dxk)
             };
             // ClubLog suspended (403 latch): skip that leg instead of erroring
             // per QSO — the suspension was announced once; re-push covers later.
@@ -9525,6 +9561,18 @@ pub fn run() {
                 clublog_on && !CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed);
             for p in recs {
                 let rec = p.rec.clone();
+                // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
+                // acknowledges, so there is no success to distinguish from failure and
+                // nothing meaningful to retry. A failed connect almost always just means
+                // DXLab is not running. Fire it and move on.
+                if let Some((host, base, uploads)) = dxk.clone() {
+                    dxkeeper_push_async(
+                        host,
+                        base,
+                        uploads,
+                        tempo_core::logbook::adif_record(&rec),
+                    );
+                }
                 let failed = auto_push_one(
                     &push_engine,
                     LoggedQso::from(p.rec),

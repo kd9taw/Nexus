@@ -4467,6 +4467,79 @@ export function SettingsPanel({
           {tab === 'connections' && (
           <>
           <fieldset className="settings-section">
+            <legend>DXKeeper (DXLab Suite)</legend>
+            <p className="settings-note">
+              Pushes each logged QSO into <strong>DXKeeper</strong> over its TCP Network
+              Service. Enable it in DXKeeper under <em>Configuration ▸ Defaults ▸ Network
+              Service</em> first.
+            </p>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">DXKeeper host</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.dxkeeperHost ?? ''}
+                  placeholder="127.0.0.1 (empty = off)"
+                  onChange={(e) => update('dxkeeperHost', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  Usually 127.0.0.1 — same PC. Leave blank to disable.
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">DXLab Base Port</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  value={form.dxkeeperBasePort ?? 52000}
+                  placeholder="52000"
+                  onChange={(e) => {
+                    const n = Number(e.target.value)
+                    updateNum('dxkeeperBasePort', Number.isFinite(n) ? n : 52000)
+                  }}
+                />
+                {/* Deliberately labelled "Base Port", matching DXKeeper's own config panel.
+                    DXKeeper listens on base + 1; nothing listens on the base itself, and
+                    operators reliably report "52000" because that is the number their screen
+                    shows them. Asking for the base and adding 1 ourselves means the value
+                    they read off DXKeeper is the value that works. */}
+                <span className="settings-hint">
+                  The <em>Base Port</em> from DXKeeper&apos;s Network Service panel (default
+                  52000). DXKeeper itself listens on{' '}
+                  <strong>{(form.dxkeeperBasePort ?? 52000) + 1}</strong> — Nexus adds the 1 for
+                  you.
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Let DXKeeper do the uploads</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.dxkeeperUploads === true}
+                    className={`toggle${form.dxkeeperUploads === true ? ' on' : ''}`}
+                    onClick={() => updateBool('dxkeeperUploads', form.dxkeeperUploads !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Off by default: Nexus already uploads to LoTW / eQSL / ClubLog / QRZ, so
+                  turning this on would upload every QSO twice. Note DXKeeper ignores this for
+                  Club Log and QRZ if <em>Auto upload</em> is ticked on its own QSL
+                  Configuration tab — untick it there.
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="settings-section">
             <legend>N3FJP Integration (club master log)</legend>
             <p className="settings-note">
               Each FD contact lands in the club's{' '}

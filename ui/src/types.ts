@@ -1793,6 +1793,11 @@ export interface Settings {
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string
   n3fjpPort?: number
+  /** DXKeeper (DXLab) TCP push. Empty host = off. */
+  dxkeeperHost?: string
+  /** DXLab BASE port as shown in DXKeeper's own config panel; it listens on base + 1. */
+  dxkeeperBasePort?: number
+  dxkeeperUploads?: boolean
   /** Field Day push uses the contest-correct ENTER sequence (N3FJP scores it) vs ADDDIRECT. Default on. */
   n3fjpUseEnter?: boolean
   /** Report this position's band to N3FJP (no CAT) for the club Network Status Display board. Default off. */

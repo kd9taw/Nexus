@@ -131,6 +131,22 @@ pub struct Settings {
     /// Network Status Display band board shows where we are. Off by default.
     #[serde(default)]
     pub n3fjp_report_band: bool,
+    /// DXKeeper (DXLab Suite) real-time push: each logged QSO goes to DXKeeper's TCP
+    /// Network Service. Empty host = off.
+    #[serde(default)]
+    pub dxkeeper_host: String,
+    /// DXLab **Base Port** — the number DXKeeper's own Configuration ▸ Defaults ▸ Network
+    /// Service panel shows. DXKeeper listens on base + 1 (52001 by default); nothing
+    /// listens on the base itself. Stored as the base, not the resolved port, so it matches
+    /// what the operator reads off DXKeeper's screen — the single most common source of
+    /// "your integration doesn't work" reports.
+    #[serde(default = "default_dxkeeper_base_port")]
+    pub dxkeeper_base_port: u16,
+    /// Let DXKeeper do the LoTW/eQSL/ClubLog/QRZ uploads instead of Nexus. OFF by default:
+    /// Nexus owns those connectors, so leaving this on would upload every QSO twice to four
+    /// services.
+    #[serde(default)]
+    pub dxkeeper_uploads: bool,
     /// N1MM+ contact broadcast: emit the native <contactinfo> XML datagram per
     /// FD QSO. Empty = off; "host:port" or "host" (default port 12060).
     #[serde(default)]
@@ -809,6 +825,13 @@ fn default_fd_power() -> u32 {
     2
 }
 
+fn default_dxkeeper_base_port() -> u16 {
+    // DXLab's documented default Base Port. Mirrors tempo_net::dxkeeper::DEFAULT_BASE_PORT,
+    // duplicated because tempo-app does not depend on tempo-net (the push lives in the
+    // src-tauri orchestration layer, which depends on both).
+    52000
+}
+
 fn default_n3fjp_port() -> u16 {
     1100
 }
@@ -1181,6 +1204,9 @@ impl Default for Settings {
             // a real call: that call's owner would then have every feed gated off.
             mycall: String::new(),
             mygrid: String::new(),
+            dxkeeper_host: String::new(), // empty = off
+            dxkeeper_base_port: default_dxkeeper_base_port(),
+            dxkeeper_uploads: false, // Nexus owns the upload connectors
             op_name: String::new(),
             op_state: String::new(),
             cat_broker_ptt: false,
