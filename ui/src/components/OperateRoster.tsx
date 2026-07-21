@@ -4,6 +4,7 @@
 // "Roster" cockpit layout's primary surface — distinct from the waterfall-first
 // "Classic" layout, not just a reshaped pane.
 import { useEffect, useMemo, useState } from 'react'
+import { openQrzPage } from '../api'
 import { useRovingList } from '../useRovingList'
 import type { NeedAlert, NeedTag, Station } from '../types'
 import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, magneticDeg } from '../grid'
@@ -279,6 +280,18 @@ export function OperateRoster({
                       L
                     </span>
                   )}
+                  <button
+                    type="button"
+                    className="qrz-link"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void openQrzPage(s.call)
+                    }}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    title={`${s.call} on QRZ.com (opens your browser)`}
+                  >
+                    ↗
+                  </button>
                 </span>
                 <span
                   className="or-need"

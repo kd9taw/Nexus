@@ -28,7 +28,7 @@ import {
   uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { qrzPushQso, clublogPushQso, hrdlogPushQso } from '../api'
+import { qrzPushQso, clublogPushQso, hrdlogPushQso, openQrzPage } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -768,7 +768,16 @@ export function Logbook({
                       background: vrow.index % 2 ? 'color-mix(in srgb, var(--bg-elev) 50%, transparent)' : 'transparent',
                     }}
                   >
-                <span className="log-cell mono" title={q.call}>{q.call}</span>
+                <span className="log-cell mono">
+                  <button
+                    type="button"
+                    className="qrz-link-call"
+                    onClick={() => void openQrzPage(q.call)}
+                    title={`${q.call} on QRZ.com (opens your browser)`}
+                  >
+                    {q.call}
+                  </button>
+                </span>
                 <span className="log-cell log-country" title={q.country ?? ''}>{q.country ?? '—'}</span>
                 <span className="log-cell">{q.band}</span>
                 <span className="log-cell mono">{q.freqMhz.toFixed(4)}</span>

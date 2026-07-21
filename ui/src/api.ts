@@ -660,6 +660,11 @@ export async function allTxtLocation(): Promise<string> {
 }
 
 /** Reveal ALL.TXT (or its folder) in the OS file manager. */
+/** Open a station's QRZ.com profile in the system browser (roster/logbook affordance). */
+export async function openQrzPage(call: string): Promise<void> {
+  await invoke('open_qrz_page', { call })
+}
+
 export async function revealAllTxt(): Promise<void> {
   await invoke('reveal_all_txt')
 }

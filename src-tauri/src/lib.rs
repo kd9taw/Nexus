@@ -9117,6 +9117,31 @@ fn open_download_page(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Open a station's QRZ.com profile in the operator's default browser (the roster /
+/// logbook "who is this?" affordance). The call is sanitized to callsign characters
+/// so a crafted string can never smuggle a different URL through; a portable suffix
+/// ("PJ4/K1ABC") keeps only its base call, which is what QRZ's db pages key on.
+#[tauri::command]
+fn open_qrz_page(app: tauri::AppHandle, call: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    // Longest slash-separated token = the base call (portable prefixes/suffixes are
+    // shorter than the call itself in practice: PJ4/K1ABC, K1ABC/P).
+    let base = call
+        .split('/')
+        .max_by_key(|t| t.len())
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if base.is_empty() {
+        return Err("no callsign".into());
+    }
+    app.opener()
+        .open_url(format!("https://www.qrz.com/db/{base}"), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// Build and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -9597,6 +9622,7 @@ pub fn run() {
             civ_diagnostic_log,
             all_txt_location,
             reveal_all_txt,
+            open_qrz_page,
             set_skip_tx1,
             civ_diagnostic_status,
             broadcast,

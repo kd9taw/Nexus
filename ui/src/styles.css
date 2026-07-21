@@ -7906,6 +7906,46 @@ input.cw-pitch::-webkit-inner-spin-button {
 .qso-globe-band-pick:hover {
   border-color: var(--accent);
 }
+/* "Who is this?" → QRZ.com in the system browser. Three surfaces, one visual family:
+   a quiet affordance that never competes with Select/Work. */
+.station-qrz {
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+}
+.station-qrz:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.qrz-link {
+  font-size: 0.72rem;
+  padding: 0 3px;
+  margin-left: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  opacity: 0.55;
+}
+.qrz-link:hover {
+  color: var(--accent);
+  opacity: 1;
+}
+.qrz-link-call {
+  font: inherit;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.qrz-link-call:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
 .log-globe-loading {
   display: grid;
   place-items: center;

@@ -1,4 +1,5 @@
 import type { NeedTag, Station, Tier } from '../types'
+import { openQrzPage } from '../api'
 import { bearingLabel, distanceLabel } from '../grid'
 import { RarityChip } from './RarityChip'
 import { NEED_CHIP } from '../features/needVisuals'
@@ -96,6 +97,17 @@ export function StationCard({
         title={`Work ${station.call}`}
       >
         Work
+      </button>
+      <button
+        type="button"
+        className="station-qrz"
+        onClick={(e) => {
+          e.stopPropagation()
+          void openQrzPage(station.call)
+        }}
+        title={`${station.call} on QRZ.com (opens your browser)`}
+      >
+        QRZ
       </button>
     </div>
   )

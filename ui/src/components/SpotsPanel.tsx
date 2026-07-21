@@ -2,7 +2,7 @@
 // NOT needs-gated. This is the SpotCollector/DXHeat-style firehose view: see everything,
 // filter client-side. The Needed board stays the curated "what to work" list; this is the
 // "what's on the air" list. Single-click a row to QSY/work the spot.
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { BandChannel, SpotRow } from '../types'
 import { MODE_CLASSES, type ModeClass, type ModeSet, ALL_MODES_ON } from '../neededFilters'
 
@@ -30,15 +30,39 @@ interface Props {
   onPopOut?: () => void
 }
 
+/** View-session state: the Spots panel unmounts on every view switch, which wiped all
+ * filters mid-session (operator report 2026-07-21: "Leaving SPOT and returning resets
+ * all filters"). sessionStorage survives the remount and clears on app exit — exactly
+ * "retain them until application exit". Falls back to plain state if storage throws. */
+function useSessionState<T>(key: string, init: T): [T, React.Dispatch<React.SetStateAction<T>>] {
+  const [v, setV] = useState<T>(() => {
+    try {
+      const raw = sessionStorage.getItem(key)
+      if (raw != null) return JSON.parse(raw) as T
+    } catch {
+      /* ignore */
+    }
+    return init
+  })
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(key, JSON.stringify(v))
+    } catch {
+      /* ignore */
+    }
+  }, [key, v])
+  return [v, setV]
+}
+
 export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, onPopOut }: Props) {
-  const [modes, setModes] = useState<ModeSet>({ ...ALL_MODES_ON })
-  const [bands, setBands] = useState<string[]>([]) // empty = all
-  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'age', dir: 'asc' })
-  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [modes, setModes] = useSessionState<ModeSet>('nexus.spots.modes', { ...ALL_MODES_ON })
+  const [bands, setBands] = useSessionState<string[]>('nexus.spots.bands', []) // empty = all
+  const [sort, setSort] = useSessionState<{ key: SortKey; dir: 'asc' | 'desc' }>('nexus.spots.sort', { key: 'age', dir: 'asc' })
+  const [filtersOpen, setFiltersOpen] = useSessionState('nexus.spots.filtersOpen', false)
   // Freeform search over the firehose: space-separated terms AND together, each term
   // matching ANY field (call/entity/spotter/mode/band/frequency) — so "w1 20m cw"
   // narrows to W1-calls spotted on 20 m CW.
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useSessionState('nexus.spots.query', '')
 
   const knownBands = useMemo(() => new Set(bandPlan.map((b) => b.band)), [bandPlan])
 
