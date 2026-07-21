@@ -6163,13 +6163,15 @@ impl Engine {
         .to_string();
         s.radio.audio_error = self.audio_error.clone();
         s.radio.radio_config_warning =
-            crate::settings::serial_port_conflicts(&self.settings.radios).or_else(|| {
-                crate::settings::cw_key_port_conflict(
-                    self.settings.cw_keyer,
-                    &self.settings.cw_key_port,
-                    &self.settings.radios,
-                )
-            });
+            crate::settings::serial_port_conflicts(&self.settings.radios)
+                .or_else(|| {
+                    crate::settings::cw_key_port_conflict(
+                        self.settings.cw_keyer,
+                        &self.settings.cw_key_port,
+                        &self.settings.radios,
+                    )
+                })
+                .or_else(|| crate::settings::audio_device_conflicts(&self.settings.radios));
         s.radio.tx_even = self.tx_even();
         s.radio.tx_cycle_auto = self.tx_cycle_auto;
         s.radio.tr_period_secs = self.active_slot_secs();

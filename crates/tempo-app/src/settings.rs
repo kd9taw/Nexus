@@ -1093,6 +1093,50 @@ pub fn serial_port_conflicts(radios: &[RadioProfile]) -> Option<String> {
     None
 }
 
+/// Two enabled radios cannot share a sound card. Each radio's chain opens its OWN cpal capture and
+/// playback streams on that rig's codec, so a shared `audio_in` means both chains decode the SAME
+/// receiver and a shared `audio_out` means both rigs are fed both chains' transmit audio. Neither
+/// fails loudly — the operator just sees a second radio that hears (or says) the first radio's
+/// traffic. Same WARNING surface as [`serial_port_conflicts`]; it self-clears once the devices
+/// differ.
+///
+/// Compared on the exact stored name, which is the disambiguated picker string (`tempo-audio`
+/// appends " #2"/" #3" to identically-named devices), so two rigs that both enumerate as the
+/// generic "USB Audio CODEC" are correctly seen as DIFFERENT devices. A BLANK name means "the
+/// system default" and is not compared: a second radio configured for CAT only has no audio set
+/// and never opens a stream, so flagging blank-vs-blank would warn on a working config. The audio
+/// probe (`tempo-audio`'s `audio_probe` example) refuses to run on a blank name instead, which is
+/// where two defaults would actually collide. Returns the first collision, else `None`.
+pub fn audio_device_conflicts(radios: &[RadioProfile]) -> Option<String> {
+    shared_audio_device(radios, "input", |p| p.audio_in.as_str())
+        .or_else(|| shared_audio_device(radios, "output", |p| p.audio_out.as_str()))
+}
+
+/// The one-direction body of [`audio_device_conflicts`]. Case-insensitive — device names come back
+/// from the OS with inconsistent casing.
+fn shared_audio_device(
+    radios: &[RadioProfile],
+    kind: &str,
+    device: fn(&RadioProfile) -> &str,
+) -> Option<String> {
+    let mut used: Vec<(&str, &str)> = Vec::new(); // (device, radio name)
+    for p in radios.iter().filter(|p| p.enabled) {
+        let dev = device(p).trim();
+        if dev.is_empty() {
+            continue;
+        }
+        if let Some((_, other)) = used.iter().find(|(u, _)| u.eq_ignore_ascii_case(dev)) {
+            return Some(format!(
+                "{other} and {} are both using audio {kind} \"{dev}\" — each radio needs its own \
+                 sound card. Give them different devices (or disable one).",
+                p.name
+            ));
+        }
+        used.push((dev, p.name.as_str()));
+    }
+    None
+}
+
 /// A serial CW keyline aimed at a radio's CAT serial port is dangerous: opening that
 /// port toggles its DTR/RTS, which on most rigs is the PTT/keying line — so the keyer
 /// would fight rigctld for the port and can key the rig just by connecting. Warn (same
@@ -2665,6 +2709,53 @@ mod tests {
         .is_none());
         // VOX / no-rig (model 0) doesn't count.
         assert!(serial_port_conflicts(&[ftdx, rig("VOX", "COM3", "serial", 0, true)]).is_none());
+    }
+
+    #[test]
+    fn audio_device_conflicts_flags_two_radios_on_one_codec() {
+        let rig = |name: &str, ain: &str, aout: &str, enabled: bool| RadioProfile {
+            name: name.into(),
+            audio_in: ain.into(),
+            audio_out: aout.into(),
+            enabled,
+            ..Default::default()
+        };
+        // The operator's actual hardware: two rigs that BOTH enumerate as "USB Audio CODEC". The
+        // stored names carry the picker's " #N" ordinal, so these are distinct devices → no warning.
+        assert!(audio_device_conflicts(&[
+            rig("FTDX10", "USB Audio CODEC", "USB Audio CODEC", true),
+            rig("IC-9700", "USB Audio CODEC #2", "USB Audio CODEC #2", true),
+        ])
+        .is_none());
+        // The same codec on both radios: chain 2 would decode chain 1's receiver.
+        let msg = audio_device_conflicts(&[
+            rig("FTDX10", "USB Audio CODEC", "Speakers", true),
+            rig("IC-9700", "usb audio codec", "Headphones", true),
+        ])
+        .expect("input conflict expected");
+        assert!(
+            msg.contains("FTDX10") && msg.contains("IC-9700") && msg.contains("input"),
+            "message names both radios and the direction: {msg}"
+        );
+        // Outputs collide independently of inputs — both rigs would be fed both chains' TX audio.
+        let msg = audio_device_conflicts(&[
+            rig("FTDX10", "CODEC A", "USB Audio CODEC", true),
+            rig("IC-9700", "CODEC B", "USB Audio CODEC", true),
+        ])
+        .expect("output conflict expected");
+        assert!(msg.contains("output"), "{msg}");
+        // A disabled radio is ignored.
+        assert!(audio_device_conflicts(&[
+            rig("FTDX10", "USB Audio CODEC", "USB Audio CODEC", true),
+            rig("IC-9700", "USB Audio CODEC", "USB Audio CODEC", false),
+        ])
+        .is_none());
+        // Blank = "system default", which a CAT-only second radio has and never opens; not compared.
+        assert!(audio_device_conflicts(&[
+            rig("FTDX10", "", "", true),
+            rig("IC-9700", "", "", true),
+        ])
+        .is_none());
     }
 
     #[test]

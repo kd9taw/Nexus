@@ -20,6 +20,12 @@ serial = ["dep:serialport"]
 # station build (src-tauri `radio`). The model itself is an app resource, not a dep.
 ai-cw = ["dep:deepcw"]
 
+# Multi-radio Phase 0 probe: opens every enabled radio profile's codec at once.
+# Needs a real sound card, so it only exists with `device`.
+[[example]]
+name = "audio_probe"
+required-features = ["device"]
+
 [dependencies]
 tempo-app = { path = "../tempo-app" }
 tempo-core = { path = "../tempo-core" }
