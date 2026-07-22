@@ -16,7 +16,7 @@ pages say so.
 
 The left rail is your section switcher. At the top is the **FT8/FT4 ⇄ Tempo**
 mode switch — it swaps only the mode-specific operating cockpit (the digital
-FT8/FT4 cockpit vs. the Tempo FT1/DX1 chat cockpit). Everything else — the map,
+FT8/FT4 cockpit vs. the Tempo TempoFast/TempoDeep chat cockpit). Everything else — the map,
 the Needed board, the logbook, awards, settings — is shared across both modes.
 
 The **Now-Bar** runs across the top from every section: UTC clock, current band,
@@ -35,7 +35,7 @@ multi-monitor shack.
 - **[Phone (SSB)](phone.md)** — a traditional rig panel: live dial read-back,
   fast colored bandscope, voice keyer, QSO recording.
 - **[CW](cw.md)** — a casual/ragchew keyboard CW station with F-key macros.
-- **[Tempo chat (FT1/DX1)](operate-digital.md#the-tempo-chat-layer-ft1dx1)** — the
+- **[Tempo chat (TempoFast/TempoDeep)](operate-digital.md#the-tempo-chat-layer-ft1dx1)** — the
   original weak-signal chat tiers, covered at the end of the Operate guide.
 
 ### DX & awards

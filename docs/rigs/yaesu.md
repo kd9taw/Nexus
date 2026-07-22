@@ -44,7 +44,7 @@ the single most common Yaesu setup mistake. Two ways to get it right:
 Nexus enforces the right rig state when you enter each cockpit — you don't set
 mode by hand:
 
-- **Digital (FT8/FT4/FT1/DX1)** → the rig goes to **DATA-U** (Yaesu's
+- **Digital (FT8/FT4/TempoFast/TempoDeep)** → the rig goes to **DATA-U** (Yaesu's
   data/packet USB submode, Hamlib `PKTUSB`). Nexus also opens the rig to a wide
   data passband so FT8 decodes across the full waterfall aren't clipped by a
   narrow filter.

@@ -9,7 +9,7 @@ the *shell* around that behavior, never the protocol behavior other operators
 and tools depend on.
 
 This is the cockpit you land in when the mode switch (top of the left rail) is
-set to **FT8/FT4**. Flip it to **Tempo** for the FT1/DX1 chat cockpit, covered
+set to **FT8/FT4**. Flip it to **Tempo** for the TempoFast/TempoDeep chat cockpit, covered
 [at the end of this page](#the-tempo-chat-layer-ft1dx1).
 
 <!-- TODO: capture screenshot — the Operate cockpit — waterfall, Band Activity, QSO strip -->
@@ -135,11 +135,11 @@ the source in [Settings ▸ Connections](settings-reference.md#connections).
 - **Fox role is not implemented** — you can hound a DXpedition, not run one.
 - **No contest modes** in the digital cockpit beyond Field Day (no NA VHF,
   RTTY RU, WW Digi).
-- **No WSPR, Q65, or MSK144** — Nexus does FT8, FT4, and its own FT1/DX1.
+- **No WSPR, Q65, or MSK144** — Nexus does FT8, FT4, and its own TempoFast/TempoDeep.
 
 ---
 
-## The Tempo chat layer (FT1/DX1)
+## The Tempo chat layer (TempoFast/TempoDeep)
 
 Flip the mode switch to **Tempo** and the operating cockpit becomes a
 chat-first, per-station conversation surface. This is the original Tempo product,
@@ -149,10 +149,10 @@ bit-compatible with the FT8 ecosystem.
 
 Two tiers share the cockpit, selected on the dial:
 
-- **FT1** — a **4-second-cycle** coherent waveform (~−15 dB AWGN threshold in
+- **TempoFast** — a **4-second-cycle** coherent waveform (~−15 dB AWGN threshold in
   simulation). The short cycle is the point: keyboard chat that feels like a
   conversation instead of a slideshow.
-- **DX1** — a **15-second** non-coherent 8-FSK robust tier, built to shrug off
+- **TempoDeep** — a **15-second** non-coherent 8-FSK robust tier, built to shrug off
   fading (~3.7 dB fading penalty in simulation where coherent modes lose 10+).
 
 Nexus remembers your tier per area, so setting the dial to one tier and stepping
@@ -174,10 +174,10 @@ On top of the waveform:
   automatic return-home on lost sync. It is a net convenience, **not** privacy
   and **not** encryption; it is off by default.
 
-### Honest status of FT1/DX1
+### Honest status of TempoFast/TempoDeep
 
-Every FT1 and DX1 performance number above is **simulation-validated** (AWGN and
-fading sweeps); none are proven on the air yet. **FT1 does not beat FT8 on raw
+Every TempoFast and TempoDeep performance number above is **simulation-validated** (AWGN and
+fading sweeps); none are proven on the air yet. **TempoFast does not beat FT8 on raw
 sensitivity — it trades roughly 6 dB of raw single-shot sensitivity for a
 nearly 4× faster cycle plus HARQ.** On-air
 decode-rate-versus-SNR reports are the single most valuable thing a beta tester

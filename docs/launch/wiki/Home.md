@@ -11,7 +11,7 @@ built in Rust.
 
 > **Open beta.** The FT8/FT4 core is production-grade (800+ automated tests,
 > wire formats pinned) and field-verified on a Yaesu FTDX10 and FT-991A. The
-> newest features are fresh from the bench, and the FT1/DX1 protocols are
+> newest features are fresh from the bench, and the TempoFast/TempoDeep protocols are
 > simulation-validated, not yet on-air-proven — proving them on the air is what
 > this beta is for. The installer is unsigned; verify the SHA-256 on the
 > [download page](https://sourceforge.net/projects/nexus-ham-radio/files/).
@@ -52,12 +52,12 @@ or a K1EL WinKeyer), macros, and a live decoder. Satellites get pass schedules,
 polar plots, and rotor auto-track through a pass. Field Day, POTA, and SOTA are
 built in.
 
-**FT1 & DX1 — new protocols, honest numbers.** Nexus carries a chat layer on
-**FT1**, a 4-second-cycle weak-signal mode with IR-HARQ retransmission combining
+**TempoFast & TempoDeep — new protocols, honest numbers.** Nexus carries a chat layer on
+**TempoFast**, a 4-second-cycle weak-signal mode with IR-HARQ retransmission combining
 (a failed decode isn't wasted; retransmissions *combine* until the message
-lands), plus **DX1**, a fading-resilient robust tier. The honest framing: FT1
+lands), plus **TempoDeep**, a fading-resilient robust tier. The honest framing: TempoFast
 trades ~6 dB of raw single-shot sensitivity against FT8 (~−15 vs ~−21 dB,
-simulated) for a nearly 4× faster cycle — and every FT1/DX1 figure is
+simulated) for a nearly 4× faster cycle — and every TempoFast/TempoDeep figure is
 simulation-validated, not on-air-proven.
 
 ---
@@ -72,11 +72,11 @@ simulation-validated, not on-air-proven.
 
 ## Report a bug or an on-air result
 
-Bug reports and **FT1/DX1 on-air decode reports** are the most valuable thing
+Bug reports and **TempoFast/TempoDeep on-air decode reports** are the most valuable thing
 you can send during the beta. Open a ticket on the
 [SourceForge ticket tracker](https://sourceforge.net/p/nexus-ham-radio/tickets/). For an on-air report, include your
 call + grid, the other station's call + grid, band and dial frequency, tier
-(FT1 or DX1), reported SNR, dT, cycle count, and whether it decoded.
+(TempoFast or TempoDeep), reported SNR, dT, cycle count, and whether it decoded.
 
 ---
 

@@ -56,7 +56,7 @@ scheduler and rotor tracking do the pointing.
 
 ## What Nexus does automatically per section
 
-- **Digital (FT8/FT4/FT1/DX1)** → **USB-D** (Icom's data submode, Hamlib
+- **Digital (FT8/FT4/TempoFast/TempoDeep)** → **USB-D** (Icom's data submode, Hamlib
   `PKTUSB`), opened to a wide data passband so decodes aren't clipped.
 - **Phone (SSB)** → **USB** above 10 MHz, **LSB** below.
 - **CW** → **CW** on the CAT keyer (the rig generates Morse); **USB/LSB** on the

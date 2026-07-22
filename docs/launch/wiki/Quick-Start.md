@@ -7,7 +7,7 @@ live decodes, and one FT8 QSO in your log — in about 15 minutes.
 
 > **Open beta.** The FT8/FT4 core is built to WSJT-X's behavior and exercised on
 > the air daily — that's the production part of the app. The newer surfaces are
-> fresh from the bench, and the FT1/DX1 protocols are simulation-validated, not
+> fresh from the bench, and the TempoFast/TempoDeep protocols are simulation-validated, not
 > yet on-air-proven. Field reports are what this beta is for.
 
 ---

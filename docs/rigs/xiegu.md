@@ -55,7 +55,7 @@ the model yourself:
 
 Xiegu uses the Icom CI-V command set, so mode handling matches Icom:
 
-- **Digital (FT8/FT4/FT1/DX1)** → data submode (Hamlib `PKTUSB`) where the rig
+- **Digital (FT8/FT4/TempoFast/TempoDeep)** → data submode (Hamlib `PKTUSB`) where the rig
   supports it, opened to a wide passband.
 - **Phone (SSB)** → **USB** above 10 MHz, **LSB** below.
 - **CW** → **CW** on the CAT keyer; **USB/LSB** on the soundcard keyer.

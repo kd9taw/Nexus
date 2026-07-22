@@ -9,7 +9,7 @@ always-current version, updated alongside the code it documents.
 
 > **Open beta.** Where a feature is experimental, or a number comes from
 > simulation rather than the air, these pages say so. The FT8/FT4 core is
-> production-grade and built to WSJT-X's behavior; the FT1/DX1 protocols are
+> production-grade and built to WSJT-X's behavior; the TempoFast/TempoDeep protocols are
 > simulation-validated, not yet on-air-proven.
 
 New here? Start with [Quick Start](Quick-Start), [Install](Install), and
@@ -25,7 +25,7 @@ The per-section reference — pick the section you're working in.
 
 | Guide | What it covers |
 |---|---|
-| [Operate — FT8 / FT4 digital](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/guide/operate-digital.md) | The digital cockpit: WSJT-X-grade sequencing, country / worked-before flags, one-click "work it", and the Tempo FT1/DX1 chat layer |
+| [Operate — FT8 / FT4 digital](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/guide/operate-digital.md) | The digital cockpit: WSJT-X-grade sequencing, country / worked-before flags, one-click "work it", and the Tempo TempoFast/TempoDeep chat layer |
 | [Phone (SSB / FM)](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/guide/phone.md) | The traditional rig panel: live dial read-back, colored bandscope, voice keyer, QSO recording |
 | [CW](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/guide/cw.md) | The keyboard CW station: keyer back-ends, F-key macros, live decoder |
 
@@ -66,11 +66,11 @@ The weak-signal protocol references. Every performance figure is
 beta's headline goal.
 
 - [Protocol overview](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/protocols/index.md)
-  — how FT1 and DX1 relate to FT8/FT4 and to each other.
-- [FT1](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/protocols/ft1.md)
+  — how TempoFast and TempoDeep relate to FT8/FT4 and to each other.
+- [TempoFast](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/protocols/ft1.md)
   — the 4-second chat-speed tier with IR-HARQ retransmission combining (trades
   ~6 dB of single-shot sensitivity vs FT8 for a nearly 4× faster cycle).
-- [DX1](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/protocols/dx1.md)
+- [TempoDeep](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/protocols/dx1.md)
   — the robust non-coherent 8-FSK tier built to shrug off fading.
 
 ---

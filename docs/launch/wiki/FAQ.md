@@ -23,30 +23,30 @@ implement), and it runs on macOS and Linux where Nexus ships Windows only today.
 Nexus speaks WSJT-X's UDP protocol, so it isn't all-or-nothing — your
 GridTracker / JTAlert / logger workflow survives either way.
 
-### What is FT1, in one sentence?
+### What is TempoFast, in one sentence?
 
 FT8's message set on a 4-second cycle with cellular-style retransmission combining
 — keyboard chat at conversation speed, still down in the weak-signal noise (open
 beta; simulation-validated).
 
-### Is FT1 more sensitive than FT8?
+### Is TempoFast more sensitive than FT8?
 
-**No — and this is the most important thing to understand about it.** FT1 trades
+**No — and this is the most important thing to understand about it.** TempoFast trades
 roughly **6 dB** of raw single-shot sensitivity against FT8 (about 2.5 dB against
 FT4) for a nearly 4× faster cycle plus an IR-HARQ path that lets weak
 retransmissions combine instead of being wasted. FT8's ~−21 dB threshold is the
-most sensitive here; FT1's ~−15 dB sits about where FT4 does. Those numbers are
+most sensitive here; TempoFast's ~−15 dB sits about where FT4 does. Those numbers are
 **simulation-validated only.** If you want maximum reach in one shot, use FT8; if
-you want a conversation, use FT1. When the path is fading, use DX1.
+you want a conversation, use TempoFast. When the path is fading, use TempoDeep.
 
-### What is DX1?
+### What is TempoDeep?
 
 The robust tier: non-coherent 8-FSK on a 15-second cycle, built to shrug off the
 fading that collapses coherent modes (a ~3.7 dB fading penalty in simulation,
 where coherent modes lose 10+ dB). It gives up some raw sensitivity to stay
 decodable on NVIS, polar, and rough paths.
 
-### Are the FT1/DX1 performance numbers proven?
+### Are the TempoFast/TempoDeep performance numbers proven?
 
 They are **simulation-validated** — AWGN and Rayleigh-fading bench sweeps,
 re-checked in the test suite and the Windows cross-build. They are **not on-air
@@ -56,7 +56,7 @@ is labeled "simulated" for exactly this reason.
 
 ### How do I help the beta?
 
-Send honest on-air reports: band, dial frequency, which tier (FT1 or DX1),
+Send honest on-air reports: band, dial frequency, which tier (TempoFast or TempoDeep),
 distance and rough conditions, and what you decoded versus what you expected —
 including the surprises (false decodes, retransmissions that combined, stations
 you saw that others didn't). Field reports are the single most useful contribution
@@ -150,7 +150,7 @@ modes you already run.
 
 The repository is <https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/>. Contributions are welcome —
 issues, field reports, and pull requests all help. The most valuable contributions
-during beta are **on-air decode reports** for FT1 and DX1 and **rig confirmations**
+during beta are **on-air decode reports** for TempoFast and TempoDeep and **rig confirmations**
 for radios beyond the two the author has bench-verified.
 
 ### Mac or Linux?

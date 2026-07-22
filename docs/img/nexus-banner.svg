@@ -52,5 +52,5 @@
   <!-- wordmark -->
   <text x="48" y="104" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="64" font-weight="800" letter-spacing="10" fill="url(#wordmark)">NEXUS</text>
   <text x="50" y="138" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" font-weight="500" letter-spacing="2.2" fill="#94a3b8">THE ALL-MODE AMATEUR RADIO OPERATIONS CENTER</text>
-  <text x="50" y="166" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" letter-spacing="1.2" fill="#64748b">FT8 · FT4 · CW · SSB · FT1 · POTA · FIELD DAY · DXCC</text>
+  <text x="50" y="166" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" letter-spacing="1.2" fill="#64748b">FT8 · FT4 · CW · SSB · TempoFast · POTA · FIELD DAY · DXCC</text>
 </svg>

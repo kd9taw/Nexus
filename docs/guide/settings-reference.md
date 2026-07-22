@@ -113,7 +113,7 @@ listening volume only ("does not affect TX").
 
 ## Operating
 
-How the FT8/FT4 sequencer and the FT1/DX1 tiers behave. The highlights:
+How the FT8/FT4 sequencer and the TempoFast/TempoDeep tiers behave. The highlights:
 
 - **Station power (W)** — "Your transmit power in watts — unlocks the Journey
   miles-per-watt & QRP feats" and feeds the P.533 link budget. Leave blank if
@@ -123,7 +123,7 @@ How the FT8/FT4 sequencer and the FT1/DX1 tiers behave. The highlights:
 - **Beacon — announce presence (CQ)** — "Off = passive (hunt & pounce)… On =
   periodically calls CQ to announce you're on frequency."
 - **IR-HARQ — combine retransmissions** — on by default; "a weak frame that fails
-  is recovered by joint-combining its retransmissions (RV0+RV1+RV2)." (FT1/DX1 —
+  is recovered by joint-combining its retransmissions (RV0+RV1+RV2)." (TempoFast/TempoDeep —
   see [the Tempo chat layer](operate-digital.md#the-tempo-chat-layer-ft1dx1).)
 - **Transmit period — Tx 1st (even)** — "The two stations in a QSO must pick
   opposite periods." Also on the top bar.
@@ -144,8 +144,8 @@ How the FT8/FT4 sequencer and the FT1/DX1 tiers behave. The highlights:
 - **Clear DX call after logging** — wipe DX Call/Grid once a contact is logged.
 - **Tune timeout (s)** — "Auto-release the tune carrier… never leave a key-down
   unattended" (default 12).
-- **Clock check (NTP)** — check the PC clock against NTP and show the offset. "FT1/
-  DX1 are slot-timed to UTC — keep it within ~0.5 s." Turn off for fully offline
+- **Clock check (NTP)** — check the PC clock against NTP and show the offset. "TempoFast/
+  TempoDeep are slot-timed to UTC — keep it within ~0.5 s." Turn off for fully offline
   operation.
 - **Decode depth** — Fast / Normal / Deep. "Deep finds the most signals (WSJT-X
   default); Fast saves CPU on old hardware."

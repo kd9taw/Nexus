@@ -173,7 +173,7 @@
     <div class="pillar p1">
       <div class="pi">Faster two-way</div>
       <h3>Conversation, not a slideshow</h3>
-      <p>FT1's fast tier runs a <strong>4-second</strong> over — roughly <strong>4× quicker turnaround</strong> than the 15-second cycle behind FT8 and JS8. A keyboard QSO that actually flows back and forth.</p>
+      <p>TempoFast's fast tier runs a <strong>4-second</strong> over — roughly <strong>4× quicker turnaround</strong> than the 15-second cycle behind FT8 and JS8. A keyboard QSO that actually flows back and forth.</p>
     </div>
     <div class="pillar p2">
       <div class="pi">Modern experience</div>
@@ -183,7 +183,7 @@
     <div class="pillar p3">
       <div class="pi">Novel protocols</div>
       <h3>Built from scratch</h3>
-      <p>Not a reskin of an existing mode. <strong>Two purpose-built waveforms</strong> — a fast coherent tier (FT1) and a fading-robust tier (DX1) — engineered for resilient off-grid text, sharing standard messages.</p>
+      <p>Not a reskin of an existing mode. <strong>Two purpose-built waveforms</strong> — a fast coherent tier (TempoFast) and a fading-robust tier (TempoDeep) — engineered for resilient off-grid text, sharing standard messages.</p>
     </div>
   </section>
 
@@ -206,8 +206,8 @@
   <section>
     <div class="sec-label">Meet Tempo</div>
     <h2 class="sec">A messenger on top, a real radio underneath.</h2>
-    <p class="lead"><strong>Tempo is Nexus's modern, chat-first HF text layer for the off-grid / preparedness ham community.</strong> It looks and feels like a messaging app — presence, a live decode feed, a conversation thread — but it never hides the radio. Under that interface sit two purpose-built weak-signal waveforms and a one-tap toggle: <strong>FT1 (Fast)</strong> for conversation and <strong>DX1 (Robust)</strong> for reach. Both carry the same standard 77-bit messages, so Chat, auto-QSO, and Field Day work identically on either.</p>
-    <p>It's free and open source (GPL-3.0), authored by <strong>KD9TAW</strong>, who also designed the FT1 and DX1 waveforms.</p>
+    <p class="lead"><strong>Tempo is Nexus's modern, chat-first HF text layer for the off-grid / preparedness ham community.</strong> It looks and feels like a messaging app — presence, a live decode feed, a conversation thread — but it never hides the radio. Under that interface sit two purpose-built weak-signal waveforms and a one-tap toggle: <strong>TempoFast (Fast)</strong> for conversation and <strong>TempoDeep (Robust)</strong> for reach. Both carry the same standard 77-bit messages, so Chat, auto-QSO, and Field Day work identically on either.</p>
+    <p>It's free and open source (GPL-3.0), authored by <strong>KD9TAW</strong>, who also designed the TempoFast and TempoDeep waveforms.</p>
     <blockquote class="green">Tempo doesn't replace WSJT-X or JS8Call — it's a different tool for a different job. It runs <em>alongside</em> your existing setup, aimed at fast conversational text and fading-resilient reach for off-grid work.</blockquote>
   </section>
 
@@ -218,7 +218,7 @@
     <div class="tcards">
       <div class="tcard ft1">
         <div class="role">Fast tier</div>
-        <h3>FT1 — built for conversation</h3>
+        <h3>TempoFast — built for conversation</h3>
         <ul>
           <li><strong>4-second cycle</strong> (~3.5 s of waveform), ~150 Hz wide.</li>
           <li><strong>Coherent</strong> 4-CPM modulation — wrings the most information out of every second of air time. That's the speed lever.</li>
@@ -227,7 +227,7 @@
       </div>
       <div class="tcard dx1">
         <div class="role">Robust tier</div>
-        <h3>DX1 — built to survive the path</h3>
+        <h3>TempoDeep — built to survive the path</h3>
         <ul>
           <li><strong>Non-coherent 8-FSK</strong>, ~50 Hz wide, 15-second cycle.</li>
           <li>Never relies on carrier phase, so it <strong>rides through fading</strong> that collapses coherent modes.</li>
@@ -235,12 +235,12 @@
         </ul>
       </div>
     </div>
-    <blockquote><strong>An honest trade:</strong> FT1 gives up roughly 3 dB of raw sensitivity versus FT8 (a <em>simulated</em> ~−15 dB threshold vs ~−18 to −21 dB) to buy that conversational cycle. You can't have one waveform that's both the fastest <em>and</em> the most sensitive — so Tempo ships both, and you choose.</blockquote>
+    <blockquote><strong>An honest trade:</strong> TempoFast gives up roughly 3 dB of raw sensitivity versus FT8 (a <em>simulated</em> ~−15 dB threshold vs ~−18 to −21 dB) to buy that conversational cycle. You can't have one waveform that's both the fastest <em>and</em> the most sensitive — so Tempo ships both, and you choose.</blockquote>
   </section>
 
   <section>
     <table>
-      <thead><tr><th>&nbsp;</th><th class="c-ft1">FT1 — Fast</th><th class="c-dx1">DX1 — Robust</th></tr></thead>
+      <thead><tr><th>&nbsp;</th><th class="c-ft1">TempoFast — Fast</th><th class="c-dx1">TempoDeep — Robust</th></tr></thead>
       <tbody>
         <tr><th>Modulation</th><td>Coherent 4-CPM <span class="mono">(h = 1/2, BT = 0.3)</span></td><td>Non-coherent 8-FSK (Gray-coded)</td></tr>
         <tr><th>T/R cycle</th><td>4 s (~3.5 s of waveform)</td><td>15 s</td></tr>
@@ -261,7 +261,7 @@
       <div class="bar-row"><div class="bar-name">JS8 Normal</div><div class="bar-track"><div class="bar-fill slow" style="width:50%">15 s</div></div></div>
       <div class="bar-row"><div class="bar-name">JS8 Fast</div><div class="bar-track"><div class="bar-fill slow" style="width:33%">10 s</div></div></div>
       <div class="bar-row"><div class="bar-name">JS8 Turbo</div><div class="bar-track"><div class="bar-fill slow" style="width:20%">6 s</div></div></div>
-      <div class="bar-row"><div class="bar-name">Tempo FT1</div><div class="bar-track"><div class="bar-fill tempo" style="width:13.3%">4 s</div></div></div>
+      <div class="bar-row"><div class="bar-name">Tempo TempoFast</div><div class="bar-track"><div class="bar-fill tempo" style="width:13.3%">4 s</div></div></div>
     </div>
   </section>
 
@@ -295,9 +295,9 @@
       <p class="intro">We'd rather under-promise. Here's exactly where things stand:</p>
       <ul>
         <li><strong>The app is feature-complete and runs on Windows.</strong> The installer is a ~199 MB per-user, <strong>unsigned, cross-compiled</strong> build that bundles WebView2 and Hamlib offline — no admin rights, no internet needed. Expect a SmartScreen warning ("More info → Run anyway"), as with any unsigned beta. macOS / Linux desktop builds are Phase 2.</li>
-        <li><strong>The waveforms are validated by simulation only</strong> — AWGN and Rayleigh-fading sweeps in the test harness. They have <strong>not yet been confirmed on the air.</strong> The simulated thresholds (FT1 ~−15 dB, DX1 ~−18.6 dB) are bench numbers, not field results.</li>
+        <li><strong>The waveforms are validated by simulation only</strong> — AWGN and Rayleigh-fading sweeps in the test harness. They have <strong>not yet been confirmed on the air.</strong> The simulated thresholds (TempoFast ~−15 dB, TempoDeep ~−18.6 dB) are bench numbers, not field results.</li>
         <li><strong>On-air decode-rate-vs-SNR validation is the #1 remaining gate</strong> — the single biggest reason the project needs operators.</li>
-        <li><strong>Shipped in v0.2.0 (beta):</strong> <strong>IR-HARQ</strong> joint-turbo soft-combining is now live end-to-end and on by default; <strong>DX1 full-passband acquisition</strong> now decodes every signal across 200–2900 Hz per slot (the tuned RX offset is now just a waterfall marker / TX-pairing hint). The Windows cross-build is validated — modem self-tests, <span class="mono">tempo.exe</span>, and the NSIS installer all cross-build clean, with 5/5 Windows test exes passing. Still simulation- and cross-build-validated only — not yet confirmed on the air.</li>
+        <li><strong>Shipped in v0.2.0 (beta):</strong> <strong>IR-HARQ</strong> joint-turbo soft-combining is now live end-to-end and on by default; <strong>TempoDeep full-passband acquisition</strong> now decodes every signal across 200–2900 Hz per slot (the tuned RX offset is now just a waterfall marker / TX-pairing hint). The Windows cross-build is validated — modem self-tests, <span class="mono">tempo.exe</span>, and the NSIS installer all cross-build clean, with 5/5 Windows test exes passing. Still simulation- and cross-build-validated only — not yet confirmed on the air.</li>
         <li><strong>Known limits:</strong> the FT8/FT4 tier is Phase 2 (designed, not yet wired).</li>
       </ul>
     </div>
@@ -322,7 +322,7 @@
             <li><strong>Install and run it on your station</strong> — get on a Tempo calling frequency and start decoding.</li>
             <li><strong>Report on-air decode rate vs. SNR</strong> — the headline data we need.</li>
             <li><strong>Try a real exchange</strong> — a Chat QSO, an auto-sequenced QSO, or a Field Day exchange; tell us how the 4-second cadence <em>feels</em>.</li>
-            <li><strong>Test the rough edges</strong> — DX1 full-band acquisition, IR-HARQ rescues, Coordinated QSY, store-and-forward, rig control, audio.</li>
+            <li><strong>Test the rough edges</strong> — TempoDeep full-band acquisition, IR-HARQ rescues, Coordinated QSY, store-and-forward, rig control, audio.</li>
           </ol>
         </div>
       </div>
@@ -332,7 +332,7 @@
         <div class="badge-link"><span class="bl-k">Contact</span><span class="bl-v mono">kd9taw@protonmail.com</span></div>
       </div>
       <p class="closing"><strong>Getting started is quick:</strong> grab the Windows installer, get on a Tempo calling frequency, and start decoding. The best feedback is a GitHub issue with your <strong>rig, band, observed SNR, and decode result</strong> — but an email works too.</p>
-      <blockquote class="green" style="margin-bottom:0">If you've ever wished a weak-signal keyboard QSO moved at the speed of an actual conversation — get on the air and help us find out whether FT1 delivers.</blockquote>
+      <blockquote class="green" style="margin-bottom:0">If you've ever wished a weak-signal keyboard QSO moved at the speed of an actual conversation — get on the air and help us find out whether TempoFast delivers.</blockquote>
     </div>
   </section>
 
