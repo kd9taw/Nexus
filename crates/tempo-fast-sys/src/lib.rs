@@ -401,9 +401,16 @@ impl DecoderCtx {
             buf: vec![0u64; len.div_ceil(8)],
             len,
         };
-        // MUTATION: zero-fill instead of the load-time image.
-        let _ = ctx.as_ptr();
+        // Fills the caller's buffer only — no modem state is read or written.
+        unsafe { tempo_ctx_reset(ctx.as_ptr()) };
         ctx
+    }
+
+    /// The context's raw bytes, for tests that need to assert on its CONTENT — chiefly that a
+    /// fresh context carries the modem's load-time image rather than the zeroed allocation.
+    pub fn as_bytes(&self) -> &[u8] {
+        // Safe: `buf` is u64-backed and at least `len` bytes; we expose exactly `len`.
+        unsafe { std::slice::from_raw_parts(self.buf.as_ptr() as *const u8, self.len) }
     }
 
     /// Context size in bytes, as the library reported it.

@@ -107,17 +107,28 @@ module ft8_cabi
   ! vendor refresh that resizes a table resizes this context with it instead of
   ! silently truncating a copy.
   !
-  ! FRESH CONTEXTS ARE NOT ZERO. Several of these symbols are DATA/initialized
-  ! (.data, not .bss): ihash22 starts at -1 (0 means "hash slot 0 is occupied"),
-  ! every callsign table starts SPACE-filled (NULs would decode as a callsign of
-  ! NULs), and nutc0_a7 starts at -1 (0 is a valid slot key). Zero-filling a
-  ! context and restoring it would corrupt the modem, which is why
+  ! FRESH CONTEXTS ARE NOT ZERO. Several of these symbols are DATA-initialized
+  ! (.data, not .bss): ihash22 starts at -1 (0 means "hash slot 0 is OCCUPIED",
+  ! by a blank callsign), every callsign table starts SPACE-filled (NUL-filled,
+  ! `len(trim(...))` is 13 and hash10/hash12 return a callsign of NULs instead
+  ! of `<...>`), and nutc0_a7 starts at -1 (0 is a valid slot key). Zero-filling
+  ! a context and restoring it would corrupt the modem, which is why
   ! tempo_ctx_reset() exists and why every row of ctx_xfer's list carries its
-  ! own load-time value. The type itself deliberately declares NO default
-  ! initializers: gfortran materializes a large derived type's default
-  ! initializer as a STACK temporary at `allocate`, which overflows a 2 MiB
-  ! worker-thread stack for a 3.4 MiB context (measured: segfault at any stack
-  ! below ~4 MiB). CTX_INIT does the same job with no stack cost.
+  ! own load-time value.
+  !
+  ! Verified byte-for-byte against a virgin process (save the statics before
+  ! anything runs, reset a second buffer, memcmp): 3,474,476 of 3,504,084 bytes
+  ! are identical, and the two regions that differ are deliberate - a7_msg0 and
+  ! /pfxcom/ addpfx are blank-filled here where the loader leaves .bss NULs.
+  ! Blank is the correct empty for both (ft8_a7_reset below already assigns
+  ! `a7_msg0 = ' '`, and getpfx1 tests `index(addpfx,' ')`), and neither is read
+  ! before it is written in a fresh context.
+  !
+  ! The type deliberately declares NO default initializers: gfortran materializes
+  ! a large derived type's default initializer as a STACK temporary at
+  ! `allocate`, which overflows a 2 MiB worker-thread stack for a 3.4 MiB
+  ! context (measured: SIGSEGV at any stack below ~4 MiB, fine at 256 KiB once
+  ! the initializers were removed). CTX_INIT does the same job with no stack cost.
   !-------------------------------------------------------------------------
   type :: tempo_ctx_t
      ! --- FT8 -------------------------------------------------------------

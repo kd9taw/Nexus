@@ -12,6 +12,7 @@
 #ifndef LIBFT1_H
 #define LIBFT1_H
 
+#include <stddef.h>   /* size_t (tempo_ctx_size) */
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -388,6 +389,52 @@ typedef struct {
  */
 int dx1_decode_band(const float *wave, int nwave, float f_lo, float f_hi,
                     float fsample, dx1_decode_t *out, int max_out);
+
+/*===========================================================================
+ * PER-CHAIN DECODER CONTEXT (ft8_cabi.f90)
+ *
+ * The modem's decode state is process-global Fortran SAVE storage: the a7
+ * cross-cycle replay table, the packjt77 callsign hash tables, the IR-HARQ
+ * slot pool, the cached wideband spectra. Two radio chains decoding two bands
+ * in ONE process share every byte of it, and the result is not a crash - it is
+ * a CRC-valid, syntactically perfect, WRONG decode, logged and uploaded and
+ * indistinguishable afterwards from a real QSO.
+ *
+ * A context is one chain's private copy of that state. Give each chain one and
+ * wrap its decode:
+ *
+ *     void *ctx = malloc(tempo_ctx_size());   // 8-byte aligned or better
+ *     tempo_ctx_reset(ctx);
+ *     ...
+ *     tempo_ctx_restore(ctx);                 // install this chain's state
+ *     ft8_decode_frame(...);                  // (or ft4_/ft1_/dx1_)
+ *     tempo_ctx_save(ctx);                    // capture it back
+ *
+ * The buffer is opaque: sized by tempo_ctx_size(), never inspected, only ever
+ * handed back to these calls. Which symbols it carries is decided by
+ * libtempo/modem-state-manifest.toml (the class-1 rows).
+ *
+ * NOT thread-safe. restore -> decode -> save must run under the SAME lock that
+ * serializes every other modem call; another decode landing between the
+ * restore and the save is exactly the corruption a context exists to prevent.
+ *===========================================================================*/
+
+/* Bytes one per-chain context needs. Allocate from THIS, never from a
+ * hard-coded size: it is computed from the library's own declarations, so a
+ * modem-source refresh that resizes a table cannot silently desync callers. */
+size_t tempo_ctx_size(void);
+
+/* Write the modem's load-time state into ctx (tempo_ctx_size() bytes). A fresh
+ * context is NOT a zeroed one - the callsign tables are blank-filled and the
+ * 22-bit hash index starts at -1 - so this, not memset, is how one is made.
+ * Touches only the caller's buffer: reads and writes no modem state, no lock. */
+void tempo_ctx_reset(void *ctx);
+
+/* Copy the live modem state OUT into ctx. Caller holds the modem lock. */
+void tempo_ctx_save(void *ctx);
+
+/* Copy ctx IN over the live modem state. Caller holds the modem lock. */
+void tempo_ctx_restore(void *ctx);
 
 #ifdef __cplusplus
 }

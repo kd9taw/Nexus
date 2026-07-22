@@ -143,6 +143,38 @@ fn a7_session(ctx: Option<&Arc<Mutex<DecoderCtx>>>, wide: &[f32], narrow: &[f32]
 }
 
 #[test]
+fn a_fresh_context_is_the_load_time_image_not_zeros() {
+    // REGRESSION GUARD. A fresh DecoderCtx must be seeded by `tempo_ctx_reset` with the
+    // modem's LOAD-TIME image, never left as the zeroed allocation.
+    //
+    // This matters because the first thing `scoped` does is RESTORE, so a zero-filled fresh
+    // context installs zeros over the live modem state on a chain's very first decode. And
+    // zero is not neutral here: ihash22 starts at -1 (0 means "hash slot 0 is OCCUPIED" by a
+    // blank callsign), the callsign tables start SPACE-filled (NUL-filled, hash10/hash12
+    // return a callsign of NULs instead of `<...>`), and nutc0_a7 starts at -1 (0 is a valid
+    // slot key).
+    //
+    // The other tests in this file do NOT catch it — verified by mutation: replacing the
+    // tempo_ctx_reset call with a no-op leaves them all green, because they save live state
+    // into the context before they ever restore from it. This test is the one that fails.
+    let ctx = DecoderCtx::new();
+    let bytes = ctx.as_bytes();
+    assert!(!bytes.is_empty(), "context must have a nonzero size");
+    assert!(
+        bytes.iter().any(|&b| b != 0),
+        "a fresh context is entirely zeros — tempo_ctx_reset was not applied, and restoring \
+         this would corrupt the modem on the chain's first decode"
+    );
+    // Tighter: a second fresh context must be byte-identical, i.e. reset is deterministic
+    // and really is the load-time image rather than whatever happened to be live.
+    assert_eq!(
+        bytes,
+        DecoderCtx::new().as_bytes(),
+        "two fresh contexts differ — reset is capturing live state, not the load-time image"
+    );
+}
+
+#[test]
 fn ctx_round_trip_is_identical_to_no_ctx() {
     let _serial = SERIAL.lock().unwrap();
 
