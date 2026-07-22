@@ -47,7 +47,7 @@ Nexus accepts and acts on:
 | Replay | Re-emits decode history |
 | Location | Updates the operator grid |
 | HighlightCallsign | Applies bg/fg color to a row; shown inline as JTAlert highlight |
-| FreeText | When `send=true` and text is non-empty, immediately queues an open broadcast via the FT1 engine. When `send=false` or text is empty, no action is taken. |
+| FreeText | When `send=true` and text is non-empty, immediately queues an open broadcast via the TempoFast engine. When `send=false` or text is empty, no action is taken. |
 | Reply | Double-click equivalent — arms the sequencer for the named decode |
 
 ### JTAlert and GridTracker

@@ -242,7 +242,7 @@ immediately, and exports drop straight into any other ADIF-aware tool.
 
 ---
 
-**See also:** the [protocol overview](protocols/index.md) for FT8/FT4/FT1/DX1, and the
+**See also:** the [protocol overview](protocols/index.md) for FT8/FT4/TempoFast/TempoDeep, and the
 [FAQ](faq.md) for privacy, source access, and platform questions.
 
 *License: GPL-3.0 · Repository: <https://sourceforge.net/projects/nexus-ham-radio>*

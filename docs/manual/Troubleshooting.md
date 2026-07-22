@@ -76,11 +76,11 @@ If you hear the band by ear but Nexus decodes nothing, check in order:
 5. **Time sync** — the top-bar clock-offset indicator must be close to zero. Slots that are off by more than a second produce no decodes (see below).
 6. **Companion mode** — if you are riding a WSJT-X UDP decode stream, F6 (Redecode) is a no-op in companion mode; decodes come only from the upstream app.
 
-## No decodes (FT1/DX1)
+## No decodes (TempoFast/TempoDeep)
 
-1. Confirm you are on a **FT1 or DX1 calling frequency**, not an FT8/FT4 dial. The two tier waveforms decode nothing of each other.
-2. Both ends must be on the **same tier** (FT1 or DX1) — the tier toggle is in the top bar.
-3. All SNR performance figures for FT1/DX1 are simulation-validated only; on-air decode behavior may differ from the spec thresholds.
+1. Confirm you are on a **TempoFast or TempoDeep calling frequency**, not an FT8/FT4 dial. The two tier waveforms decode nothing of each other.
+2. Both ends must be on the **same tier** (TempoFast or TempoDeep) — the tier toggle is in the top bar.
+3. All SNR performance figures for TempoFast/TempoDeep are simulation-validated only; on-air decode behavior may differ from the spec thresholds.
 
 ---
 

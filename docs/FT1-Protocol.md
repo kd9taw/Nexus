@@ -1,22 +1,22 @@
-# The FT1 Protocol — How It Works & What Makes It Different
+# The TempoFast Protocol — How It Works & What Makes It Different
 
 *A technical companion to the Nexus documentation.*
 
-> **FT1** is the native weak-signal text waveform of **Nexus** (its off-grid "Tempo" calling layer), by KD9TAW. Repository: [sourceforge.net/projects/nexus-ham-radio](https://sourceforge.net/projects/nexus-ham-radio) · Manual: see `docs/manual/` in the repo · License: GPL-3.0.
+> **TempoFast** is the native weak-signal text waveform of **Nexus** (its off-grid "Tempo" calling layer), by KD9TAW. Repository: [sourceforge.net/projects/nexus-ham-radio](https://sourceforge.net/projects/nexus-ham-radio) · Manual: see `docs/manual/` in the repo · License: GPL-3.0.
 >
 > **Honesty banner, up front.** Every sensitivity number in this document is **simulation-validated only** — AWGN and Rayleigh-fading sweeps in the project's test harnesses (`ft1_test_standalone`, `dx1_test`, re-validated in the Rust test suite) — and is **not** on-air proven. Where the implementation does not yet expose a feature, that is stated plainly. On-air decode-rate-vs-SNR validation is the project's #1 remaining gate. Read accordingly.
 
 ---
 
-## 1. What makes FT1 different (the short version)
+## 1. What makes TempoFast different (the short version)
 
 If you already know FT8, FT4, and JS8, here is the entire pitch in three bullets. The rest of this document unpacks each one.
 
-- **It is coherent.** FT1 uses **4-CPM** — 4-ary *continuous-phase modulation* — and is designed to demodulate it **coherently** (tracking carrier phase), where FT8/FT4/JS8 demodulate Gaussian-smoothed FSK **non-coherently** (energy per tone, no phase tracking). Coherent detection extracts more information per second of air time. That is the lever FT1 pulls to make a fast cycle competitive.
-- **It has IR-HARQ — live.** FT1 runs an **incremental-redundancy hybrid-ARQ** scheme (on by default): a retransmission sends *new parity bits the receiver has never seen*, and the receiver **joint-turbo-combines** them with the original frame to decode a longer, lower-rate code. No FT8/FT4/JS8 mode does this — they are one-shot block codes per frame. This is the headline differentiator.
-- **It is conversational.** FT1 runs a **4-second** T/R (transmit/receive) cycle — versus 15 s for FT8, 7.5 s for FT4, and 15/10/6/30 s for JS8. Short cycles make a back-and-forth text exchange feel like a conversation instead of a slideshow.
+- **It is coherent.** TempoFast uses **4-CPM** — 4-ary *continuous-phase modulation* — and is designed to demodulate it **coherently** (tracking carrier phase), where FT8/FT4/JS8 demodulate Gaussian-smoothed FSK **non-coherently** (energy per tone, no phase tracking). Coherent detection extracts more information per second of air time. That is the lever TempoFast pulls to make a fast cycle competitive.
+- **It has IR-HARQ — live.** TempoFast runs an **incremental-redundancy hybrid-ARQ** scheme (on by default): a retransmission sends *new parity bits the receiver has never seen*, and the receiver **joint-turbo-combines** them with the original frame to decode a longer, lower-rate code. No FT8/FT4/JS8 mode does this — they are one-shot block codes per frame. This is the headline differentiator.
+- **It is conversational.** TempoFast runs a **4-second** T/R (transmit/receive) cycle — versus 15 s for FT8, 7.5 s for FT4, and 15/10/6/30 s for JS8. Short cycles make a back-and-forth text exchange feel like a conversation instead of a slideshow.
 
-The honest counterweight, stated here so it frames everything below: **FT1 trades roughly 6 dB of raw single-shot sensitivity against FT8 for that speed** (about 2.5 dB against FT4, whose own speed tradeoff costs ~3.5 dB vs FT8). Its simulated AWGN 50%-decode threshold is about **−15 dB** in a 2500 Hz reference bandwidth; FT8 is commonly cited at about **−21 dB**. **FT1 does not beat FT8 on raw sensitivity.** What it offers is *speed*, plus a now-live *IR-HARQ path* (joint turbo combining across retransmissions, on by default — see §6 and §9) that claws sensitivity back over multiple short transmissions instead of one long one. Through the full live pipeline that path measures **~+2.5 dB of threshold shift and ~2× QSO completion in the −11…−13 dB zone** (simulation- and cross-build-validated; not yet on-air — see §9).
+The honest counterweight, stated here so it frames everything below: **TempoFast trades roughly 6 dB of raw single-shot sensitivity against FT8 for that speed** (about 2.5 dB against FT4, whose own speed tradeoff costs ~3.5 dB vs FT8). Its simulated AWGN 50%-decode threshold is about **−15 dB** in a 2500 Hz reference bandwidth; FT8 is commonly cited at about **−21 dB**. **TempoFast does not beat FT8 on raw sensitivity.** What it offers is *speed*, plus a now-live *IR-HARQ path* (joint turbo combining across retransmissions, on by default — see §6 and §9) that claws sensitivity back over multiple short transmissions instead of one long one. Through the full live pipeline that path measures **~+2.5 dB of threshold shift and ~2× QSO completion in the −11…−13 dB zone** (simulation- and cross-build-validated; not yet on-air — see §9).
 
 > **Jargon, defined once.**
 > **T/R cycle** — the fixed clock that alternates transmit and receive, aligned to UTC.
@@ -35,21 +35,21 @@ You can integrate the signal over a long window to dig it out of the noise, or y
 
 This is why Tempo ships **two tiers** rather than one compromise waveform:
 
-- **FT1 (Fast tier)** — a 4 s cycle, coherent, the most information per second of air time, but it leans on carrier-phase stability that fading and Doppler spreading destroy.
-- **DX1 (Robust tier)** — a 15 s cycle, non-coherent, slower but survives the fading that collapses coherent modes.
+- **TempoFast (Fast tier)** — a 4 s cycle, coherent, the most information per second of air time, but it leans on carrier-phase stability that fading and Doppler spreading destroy.
+- **TempoDeep (Robust tier)** — a 15 s cycle, non-coherent, slower but survives the fading that collapses coherent modes.
 
 Both tiers carry the **identical 77-bit message payload** and the **same LDPC(174,91) FEC** (see §4). The tier is never silent: it is a deliberate, operator-driven toggle surfaced in the UI. The engine reads that choice to pick which waveform to modulate/decode and which slot clock to run. **The abstraction hides the DSP, not the decision.**
 
 ### 2.1 The signal chain at a glance
 
-Both tiers share the message and FEC layers; they diverge at modulation, sync, and the slot clock. The FT1 path:
+Both tiers share the message and FEC layers; they diverge at modulation, sync, and the slot clock. The TempoFast path:
 
 ```
                           ┌─────────────── shared message + FEC layer ───────────────┐
  text / form ──► 77-bit WSJT-X payload ──► +14-bit CRC = 91 bits ──► LDPC(174,91) ──► 174 coded bits
                           └──────────────────────────────────────────────────────────┘
                                                        │
-                          ┌──────────────────── FT1 physical layer ─────────────────────┐
+                          ┌──────────────────── TempoFast physical layer ─────────────────────┐
  174 bits ─► 2 bits/symbol ─► 87 data symbols + 12 Costas sync = 99 symbols @ 28 Bd
           ─► 4-CPM (h=1/2, BT=0.3) ─► 3.536 s waveform in a 4.0 s UTC slot ─► AIR
                           └──────────────────────────────────────────────────────────────┘
@@ -61,9 +61,9 @@ Both tiers share the message and FEC layers; they diverge at modulation, sync, a
 
 ---
 
-## 3. The FT1 waveform
+## 3. The TempoFast waveform
 
-FT1 is, in one line: *4-CPM, h=1/2, BT=0.3, 99 channel symbols at 28 Bd, designed for coherent demodulation with iterative turbo equalization.*
+TempoFast is, in one line: *4-CPM, h=1/2, BT=0.3, 99 channel symbols at 28 Bd, designed for coherent demodulation with iterative turbo equalization.*
 
 ### 3.1 Modulation: 4-ary continuous-phase modulation (4-CPM)
 
@@ -92,11 +92,11 @@ The 3.536 s waveform inside a 4.0 s frame leaves roughly **0.464 s** for receive
 
 ### 3.3 Occupied bandwidth
 
-FT1's occupied bandwidth is **not published as a constant in source** — there is no authoritative figure in `ft1_params.f90` or the Rust modem. Calculated estimates **range roughly 42–67 Hz depending on method**. Treat FT1's occupied bandwidth as *designed to be narrow* and quote it as **"not specified (est. ~42–67 Hz)"** rather than as a hard spec. (Older design discussion floated larger round numbers; none is grounded in source and none should be cited.)
+TempoFast's occupied bandwidth is **not published as a constant in source** — there is no authoritative figure in `ft1_params.f90` or the Rust modem. Calculated estimates **range roughly 42–67 Hz depending on method**. Treat TempoFast's occupied bandwidth as *designed to be narrow* and quote it as **"not specified (est. ~42–67 Hz)"** rather than as a hard spec. (Older design discussion floated larger round numbers; none is grounded in source and none should be cited.)
 
 ### 3.4 Coherent demodulation + turbo equalization
 
-This is where the "most information per second" claim comes from. FT1's receive chain is iterative:
+This is where the "most information per second" claim comes from. TempoFast's receive chain is iterative:
 
 1. **Costas sync candidate search** over time and frequency offsets (see §5).
 2. **Downconvert** the candidate to complex baseband. The modem **downsamples by 54** (`FT1_NDOWN = 54`), taking the audio frame to **~222.2 Hz** (12000 ÷ 54) and yielding **888 complex baseband samples** (`FT1_NDMAX = 888`) for the matched-filter bank. That is about **9 downsampled samples per channel symbol** (888 ÷ 99); the source comment rounds this to "~8 samples/symbol."
@@ -105,17 +105,17 @@ This is where the "most information per second" claim comes from. FT1's receive 
 5. **SIC** — successive interference cancellation (signal subtraction) to peel a decoded signal off and expose weaker ones.
 6. **IR-HARQ combining** — joint iterative turbo combining across retransmissions RV0/RV1/RV2 (see §6; live and on by default, with RV detection via a coherent CPM-Costas discriminator).
 
-The iterative loop (step 3) is where FT1's headroom over a vanilla one-shot LDPC decode is expected to come from. The project's **design estimate is ~1.5–2 dB** of gain from iterative turbo equalization — i.e., a baseline near **−15 dB with iterative detection** vs roughly **−14 dB without**. This is a **medium-confidence design estimate**, not a measured figure.
+The iterative loop (step 3) is where TempoFast's headroom over a vanilla one-shot LDPC decode is expected to come from. The project's **design estimate is ~1.5–2 dB** of gain from iterative turbo equalization — i.e., a baseline near **−15 dB with iterative detection** vs roughly **−14 dB without**. This is a **medium-confidence design estimate**, not a measured figure.
 
-> **Implementation note.** The FT1 modem uses process-global `SAVE` state (CPM pulse tables, the downsample window, cached FFTW plans) and is **not thread-safe**, so every entry point serializes behind a global `MODEM_LOCK: Mutex<()>`. The real-time path (`decode_rt`) assumes a frame-aligned buffer (`dt0 = 0`, ±3 downsampled-sample search); full over-the-air acquisition (Costas sync + frequency/time search) is implemented and exposed through the `libtempo` C ABI (validated in the cross-build self-tests), with `decode_rt` remaining the frame-aligned real-time fast path.
+> **Implementation note.** The TempoFast modem uses process-global `SAVE` state (CPM pulse tables, the downsample window, cached FFTW plans) and is **not thread-safe**, so every entry point serializes behind a global `MODEM_LOCK: Mutex<()>`. The real-time path (`decode_rt`) assumes a frame-aligned buffer (`dt0 = 0`, ±3 downsampled-sample search); full over-the-air acquisition (Costas sync + frequency/time search) is implemented and exposed through the `libtempo` C ABI (validated in the cross-build self-tests), with `decode_rt` remaining the frame-aligned real-time fast path.
 
 ---
 
 ## 4. The message layer
 
-FT1 deliberately reuses the **WSJT-X 77-bit message format**, which is the same source coding FT8, FT4, and JS8 all use. This is not an accident — it is the whole interoperability story.
+TempoFast deliberately reuses the **WSJT-X 77-bit message format**, which is the same source coding FT8, FT4, and JS8 all use. This is not an accident — it is the whole interoperability story.
 
-- **77-bit payload.** Structured messages (callsigns, grids, reports) and free text pack into 77 bits exactly as in WSJT-X. Because of this, **Chat, QSO, and Field-Day forms ride identically** on FT1 — and on DX1, and (eventually) on the FT8 tier.
+- **77-bit payload.** Structured messages (callsigns, grids, reports) and free text pack into 77 bits exactly as in WSJT-X. Because of this, **Chat, QSO, and Field-Day forms ride identically** on TempoFast — and on TempoDeep, and (eventually) on the FT8 tier.
 - **14-bit CRC.** Appended to the 77 message bits → **91 bits** total (`KK = 91`).
 - **LDPC(174,91) FEC.** The 91 bits encode to **174 coded bits** (83 parity bits added). At 2 bits per channel symbol, that is the 87 data symbols in §3.2.
 - The decoded result is the 91 bits back out (77 message + 14 CRC); the CRC confirms the codeword before the text is unpacked.
@@ -130,7 +130,7 @@ A single 77-bit payload holds only a short fragment of free text. Longer message
 
 ## 5. Synchronization and acquisition
 
-FT1 syncs on **three 4×4 Costas arrays** (12 sync symbols total). A *Costas array* is a frequency-hop pattern with a sharp, near-ideal autocorrelation — it lights up exactly once when time and frequency are aligned, which is what makes a 2-D search practical.
+TempoFast syncs on **three 4×4 Costas arrays** (12 sync symbols total). A *Costas array* is a frequency-hop pattern with a sharp, near-ideal autocorrelation — it lights up exactly once when time and frequency are aligned, which is what makes a 2-D search practical.
 
 > **Jargon.** **Costas array:** an N×N frequency-hop pattern with a single sharp autocorrelation peak, used as a sync marker that survives noise and frequency offset.
 
@@ -141,7 +141,7 @@ FT1 syncs on **three 4×4 Costas arrays** (12 sync symbols total). A *Costas arr
 
 ### 5.1 The dt convention
 
-FT1 reports time offset using the WSJT-X convention: **dt = t − 0.5**, where *t* is arrival time into the frame. So **dt ≈ −0.1 s means the signal arrived at 0.4 s** into the cycle. This centers the nominal frame boundary at dt = 0 and matches what WSJT-X operators already expect.
+TempoFast reports time offset using the WSJT-X convention: **dt = t − 0.5**, where *t* is arrival time into the frame. So **dt ≈ −0.1 s means the signal arrived at 0.4 s** into the cycle. This centers the nominal frame boundary at dt = 0 and matches what WSJT-X operators already expect.
 
 ---
 
@@ -158,11 +158,11 @@ When a weak-signal frame fails to decode, the obvious fix is to resend it. Two w
 - **Chase combining** — resend the *same* 174 coded bits. The receiver averages the two copies, gaining ~3 dB of energy per retransmission. Simple, but you are paying full air time to re-hear bits you already have.
 - **IR-HARQ (incremental redundancy)** — resend *new parity bits the receiver has never seen.* The receiver combines the original 174-bit LLR vector with the fresh parity LLRs, **effectively decoding a longer, lower-rate code.** You get *both* the energy accumulation of chase combining *and* extra coding gain from the lower effective code rate.
 
-IR-HARQ is the strictly-superior option, and it is FT1's signature.
+IR-HARQ is the strictly-superior option, and it is TempoFast's signature.
 
 ### 6.2 How the redundancy accumulates
 
-FT1's IR-HARQ is **rate-compatible**, built from a mother code extended above the baseline:
+TempoFast's IR-HARQ is **rate-compatible**, built from a mother code extended above the baseline:
 
 | Transmission | Bits sent this TX | Costas variant | Effective code | Cumulative |
 |---|---|---|---|---|
@@ -197,19 +197,19 @@ The redundancy version is carried by **Costas-array pattern variants** (RV0 = `[
 
 ---
 
-## 7. The two tiers: FT1 (Fast) vs DX1 (Robust)
+## 7. The two tiers: TempoFast (Fast) vs TempoDeep (Robust)
 
 Both tiers carry the **same 77-bit payload and the same LDPC(174,91) FEC.** Only the modem, frame length, and T/R clock differ.
 
-### 7.1 FT1 — Fast, coherent
+### 7.1 TempoFast — Fast, coherent
 
 - 4-CPM, coherent turbo equalization, 4 s cycle, ~−15 dB AWGN threshold (simulated).
 - **Wins** when the path is stable: short-to-medium haul, ground wave, quiet bands, and any time you want a real conversation cadence.
 - **Loses** under fading/multipath. Coherence is the Achilles heel: *because it is coherent it extracts the most information per second of air time — but coherence is exactly what multipath/Doppler spreading destroys.*
 
-### 7.2 DX1 — Robust, non-coherent
+### 7.2 TempoDeep — Robust, non-coherent
 
-DX1 (the DX1-S baseline) is the answer to FT1's fragility on bad paths.
+TempoDeep (the TempoDeep-S baseline) is the answer to TempoFast's fragility on bad paths.
 
 - **Modulation:** non-coherent **8-FSK** — M = 8 orthogonal tones, 3 bits/symbol, **Gray coded**.
 - **Rate / spacing:** baud = 6.25 Hz, tone spacing = baud = 6.25 Hz → **occupied data BW = 8 × 6.25 = 50 Hz**.
@@ -217,23 +217,23 @@ DX1 (the DX1-S baseline) is the answer to FT1's fragility on bad paths.
 - **Frame:** linear-**chirp preamble** (~0.64 s, 4 symbol periods, swept across the 50 Hz band for time/frequency sync) + **58 data symbols** (174 ÷ 3). On-air frame = **119,040 samples (9.92 s)** inside a **15 s** T/R slot (capture window 184,320 samples ≈ 15.36 s).
 - **Decode:** chirp sync → per-symbol FFT energy per bin → **soft-decision LDPC** belief propagation. No carrier phase tracked anywhere.
 
-Why it exists: *because it never relies on carrier phase, DX1 survives fading that collapses coherent modes.* In simulation, DX1's AWGN 50% threshold is **≈ −18.6 dB** and it loses only **~3.7 dB** under per-symbol Rayleigh fading — where phase-fragile coherent modes (like FT1) lose 10+ dB. **That small fading penalty is the entire reason the mode exists.**
+Why it exists: *because it never relies on carrier phase, TempoDeep survives fading that collapses coherent modes.* In simulation, TempoDeep's AWGN 50% threshold is **≈ −18.6 dB** and it loses only **~3.7 dB** under per-symbol Rayleigh fading — where phase-fragile coherent modes (like TempoFast) lose 10+ dB. **That small fading penalty is the entire reason the mode exists.**
 
-> **DX1 acquisition (now full-passband):** the DX1 receiver decodes **every signal across 200–2900 Hz per slot**, like FT1's Costas search — a three-stage scan (coarse chirp-correlation carrier sweep on a 12.5 Hz grid with pre-folded replicas → median-threshold peak-pick → full CRC-14-gated decode per survivor), ~3–4 s/slot. `rx_offset_hz` is demoted to a waterfall marker / TX-pairing hint rather than the sole decode carrier. (On-air decode-rate-vs-SNR validation still pending — see §9.)
+> **TempoDeep acquisition (now full-passband):** the TempoDeep receiver decodes **every signal across 200–2900 Hz per slot**, like TempoFast's Costas search — a three-stage scan (coarse chirp-correlation carrier sweep on a 12.5 Hz grid with pre-folded replicas → median-threshold peak-pick → full CRC-14-gated decode per survivor), ~3–4 s/slot. `rx_offset_hz` is demoted to a waterfall marker / TX-pairing hint rather than the sole decode carrier. (On-air decode-rate-vs-SNR validation still pending — see §9.)
 
 ### 7.3 When each wins
 
-- Stable path, want conversation speed → **FT1**.
-- Fading/multipath/marginal DX, willing to slow down for reliability → **DX1**.
+- Stable path, want conversation speed → **TempoFast**.
+- Fading/multipath/marginal DX, willing to slow down for reliability → **TempoDeep**.
 - Both reach roughly the same *messages*, just at different speed/robustness tradeoffs — and the operator picks, every transmission, from a visible toggle.
 
 ---
 
 ## 8. Fair comparison to FT8 / FT4 / JS8
 
-The honest framing: **FT1 trades raw sensitivity for speed and adds an IR-HARQ path.** It is *not* a sensitivity win over FT8.
+The honest framing: **TempoFast trades raw sensitivity for speed and adds an IR-HARQ path.** It is *not* a sensitivity win over FT8.
 
-| | **FT1** (Fast) | **DX1** (Robust) | **FT8** | **FT4** | **JS8 (Normal)** |
+| | **TempoFast** (Fast) | **TempoDeep** (Robust) | **FT8** | **FT4** | **JS8 (Normal)** |
 |---|---|---|---|---|---|
 | Modulation | 4-CPM (h=1/2, BT=0.3) | 8-FSK | 8-GFSK | 4-GFSK † | 8-FSK (JS8) ‡ |
 | Demodulation | **Coherent** (design) | Non-coherent | Non-coherent | Non-coherent | Non-coherent |
@@ -254,12 +254,12 @@ The honest framing: **FT1 trades raw sensitivity for speed and adds an IR-HARQ p
 
 Key reads from the table:
 
-- **Sensitivity.** FT8 (~−21 dB) is the most sensitive single-shot mode; FT1 (~−15 dB) sits roughly where FT4 does (~−17.5 dB), give or take. FT1 gives up ~6 dB to FT8 (~2.5 dB to FT4) in exchange for a *much* shorter cycle and the IR-HARQ path. This is directly analogous to how **FT4 itself trades ~3.5 dB of sensitivity vs FT8 for roughly half the cycle time** — FT1 just pushes that lever further and adds incremental redundancy. *(Note: some JS8 secondary sources quote FT8 theory near −24 dB; that is **not** the standard operational figure — use ~−21 dB.)*
-- **The structural difference.** Every one of FT8/FT4/JS8 is a **one-shot LDPC block code per frame** with **no HARQ**. Reliability comes from strong FEC plus the operator manually repeating whole transmissions. FT1's IR-HARQ — now **live and on by default** — is the only scheme here that *accumulates redundancy* across retransmissions via joint turbo combining; it is FT1's own design and has not been benchmarked head-to-head against these modes on the air.
-- **The other structural difference.** FT8/FT4/JS8 are **non-coherent** (no carrier-phase tracking — a fundamental property of incoherent FSK detection). FT1 is **coherent CPM** by design, which is what lets it be fast *and* useful — at the cost of fading fragility, which DX1 exists to cover.
+- **Sensitivity.** FT8 (~−21 dB) is the most sensitive single-shot mode; TempoFast (~−15 dB) sits roughly where FT4 does (~−17.5 dB), give or take. TempoFast gives up ~6 dB to FT8 (~2.5 dB to FT4) in exchange for a *much* shorter cycle and the IR-HARQ path. This is directly analogous to how **FT4 itself trades ~3.5 dB of sensitivity vs FT8 for roughly half the cycle time** — TempoFast just pushes that lever further and adds incremental redundancy. *(Note: some JS8 secondary sources quote FT8 theory near −24 dB; that is **not** the standard operational figure — use ~−21 dB.)*
+- **The structural difference.** Every one of FT8/FT4/JS8 is a **one-shot LDPC block code per frame** with **no HARQ**. Reliability comes from strong FEC plus the operator manually repeating whole transmissions. TempoFast's IR-HARQ — now **live and on by default** — is the only scheme here that *accumulates redundancy* across retransmissions via joint turbo combining; it is TempoFast's own design and has not been benchmarked head-to-head against these modes on the air.
+- **The other structural difference.** FT8/FT4/JS8 are **non-coherent** (no carrier-phase tracking — a fundamental property of incoherent FSK detection). TempoFast is **coherent CPM** by design, which is what lets it be fast *and* useful — at the cost of fading fragility, which TempoDeep exists to cover.
 - **JS8 context.** JS8Call is built directly on the FT8 frame (same LDPC(174,91)+CRC, 7×7 Costas) plus a directed-calling / keyboard-to-keyboard / heartbeat / relay / store-and-forward layer. It is the closest existing *conversational* analog to what Tempo does — but it inherits FT8's non-coherent, no-HARQ transport and its 15 s baseline cycle (with selectable 30/10/6 s modes).
 
-> **Comparison sourcing note.** The FT8/FT4/JS8 figures here are web-sourced. FT1/DX1 numbers are the project's own **simulation** figures and were *not* benchmarked against these modes on the air. Do not read FT8/FT4/JS8 thresholds beyond the cited ~−21 dB / ~−17.5 dB values.
+> **Comparison sourcing note.** The FT8/FT4/JS8 figures here are web-sourced. TempoFast/TempoDeep numbers are the project's own **simulation** figures and were *not* benchmarked against these modes on the air. Do not read FT8/FT4/JS8 thresholds beyond the cited ~−21 dB / ~−17.5 dB values.
 
 ---
 
@@ -267,24 +267,24 @@ Key reads from the table:
 
 This is a beta, and the project says so plainly. The relevant honest caveats:
 
-- **Simulation-only sensitivity.** Both FT1 (~−15 dB AWGN) and DX1 (~−18.6 dB AWGN, ~3.7 dB fading penalty) thresholds are **bench numbers** from AWGN and Rayleigh-fading sweeps (`ft1_test_standalone` / `dx1_test`, re-validated in the Rust suite). They are **not on-air proven.** Real propagation, QRM, and operator behavior are not in the simulation.
+- **Simulation-only sensitivity.** Both TempoFast (~−15 dB AWGN) and TempoDeep (~−18.6 dB AWGN, ~3.7 dB fading penalty) thresholds are **bench numbers** from AWGN and Rayleigh-fading sweeps (`ft1_test_standalone` / `dx1_test`, re-validated in the Rust suite). They are **not on-air proven.** Real propagation, QRM, and operator behavior are not in the simulation.
 - **On-air validation is the #1 gate.** Decode-rate-vs-SNR on real bands is the top Phase-2 roadmap item and the thing that blocks calling Tempo operationally reliable. Honest on-air reports (band, dial, tier, distance, conditions, decodes vs. expectations) are the single most useful contribution.
 - **IR-HARQ is live, but not on-air-proven.** Joint iterative turbo combining of RV0/RV1/RV2 is wired end-to-end and **on by default**; the QSO sequencer drives RV escalation, `Decode.rv` reports how many RVs were combined, and RV detection runs >99% accurate to −11 dB. The measured gains in §6 (combiner +1.3 dB AWGN / +3.2 dB fading at 3-TX; ~+2.5 dB threshold shift and ~2× completion through the full pipeline) are **simulation- and Windows-cross-build-validated, not yet demonstrated on the air.**
-- **FT8/FT4 operate is live.** The `Tier::Ft8` variant, the FT8/FT4 DSP sources in `libtempo`, and the decode/operate pipeline are wired end-to-end in the app. The remaining gap is chat: Tempo chat conversations run on the FT1 tier only, and carrying Tempo's chat/forms over the FT8/FT4 waveforms is future work.
-- **DX1 is full-passband.** It now decodes every signal across 200–2900 Hz per slot (three-stage chirp-correlation scan → peak-pick → CRC-gated decode, ~3–4 s/slot); `rx_offset_hz` is a waterfall marker / TX-pairing hint. On-air decode-rate-vs-SNR is still pending.
-- **Low-confidence details are flagged as such.** The ~1.5–2 dB turbo-equalization gain is a *medium-confidence design estimate.* FT1's exact occupied bandwidth is *not* a published constant (est. ~42–67 Hz). Where this document says "designed to" rather than "is," that wording is deliberate.
-- **Coherence is a design claim.** FT1's coherent CPM is the user's own protocol design; it is described here as designed and simulated behavior, not an independently measured property.
+- **FT8/FT4 operate is live.** The `Tier::Ft8` variant, the FT8/FT4 DSP sources in `libtempo`, and the decode/operate pipeline are wired end-to-end in the app. The remaining gap is chat: Tempo chat conversations run on the TempoFast tier only, and carrying Tempo's chat/forms over the FT8/FT4 waveforms is future work.
+- **TempoDeep is full-passband.** It now decodes every signal across 200–2900 Hz per slot (three-stage chirp-correlation scan → peak-pick → CRC-gated decode, ~3–4 s/slot); `rx_offset_hz` is a waterfall marker / TX-pairing hint. On-air decode-rate-vs-SNR is still pending.
+- **Low-confidence details are flagged as such.** The ~1.5–2 dB turbo-equalization gain is a *medium-confidence design estimate.* TempoFast's exact occupied bandwidth is *not* a published constant (est. ~42–67 Hz). Where this document says "designed to" rather than "is," that wording is deliberate.
+- **Coherence is a design claim.** TempoFast's coherent CPM is the user's own protocol design; it is described here as designed and simulated behavior, not an independently measured property.
 
 ### Architecture footnotes
 
-- **libtempo** is Qt-free, built from Fortran + C/C++ over FFTW3, exposing a clean C ABI. It reuses WSJT-X (GPLv3) infrastructure — 77-bit packing, LDPC(174,91), FFTW — and *adds* the FT1 CPM trellis, matched-filter bank, BCJR, Costas sync search, RV detection, and joint IR-HARQ turbo combining; DX1 adds the non-coherent M-FSK detector and full-passband acquisition. Rust crates (`ft1-sys`, `ft1`) provide the safe FFI wrapper.
-- **Published Windows binaries are cross-compiled beta** (built on Linux/WSL2 targeting Windows via mingw-w64, statically linked — including the gfortran runtime — so no MinGW runtime DLLs are needed). The v0.2.0 cross-build is validated: all modem self-tests, `tempo.exe`, and the NSIS installer cross-build clean, and 5/5 Windows test exes pass (FT1 −15 dB, DX1 −18.6 dB, the 3-signal full-band scan, and FT1 acquisition + IR-HARQ `rv` through the C-ABI).
+- **libtempo** is Qt-free, built from Fortran + C/C++ over FFTW3, exposing a clean C ABI. It reuses WSJT-X (GPLv3) infrastructure — 77-bit packing, LDPC(174,91), FFTW — and *adds* the TempoFast CPM trellis, matched-filter bank, BCJR, Costas sync search, RV detection, and joint IR-HARQ turbo combining; TempoDeep adds the non-coherent M-FSK detector and full-passband acquisition. Rust crates (`ft1-sys`, `ft1`) provide the safe FFI wrapper.
+- **Published Windows binaries are cross-compiled beta** (built on Linux/WSL2 targeting Windows via mingw-w64, statically linked — including the gfortran runtime — so no MinGW runtime DLLs are needed). The v0.2.0 cross-build is validated: all modem self-tests, `tempo.exe`, and the NSIS installer cross-build clean, and 5/5 Windows test exes pass (TempoFast −15 dB, TempoDeep −18.6 dB, the 3-signal full-band scan, and TempoFast acquisition + IR-HARQ `rv` through the C-ABI).
 
 ---
 
 ## 10. Summary
 
-FT1 is a coherent 4-CPM turbo modem on a 4-second conversational cycle, sharing the WSJT-X 77-bit payload and LDPC(174,91) FEC with the modes you already know — so the *messages* are familiar even though the *waveform* is not. Its distinguishing bets are **coherence** (more information per second, at the cost of fading fragility), the **4 s cycle** (conversation, not slideshow), and **IR-HARQ** (redundancy that *accumulates* across retransmissions via joint turbo combining — unique among amateur weak-signal text modes, now live and on by default, measured at ~+2.5 dB / ~2× completion in simulation though not yet on-air-proven). DX1 backstops the fading fragility with a non-coherent, fading-robust tier on the same payload. FT1 does not out-sensitize FT8; it trades ~6 dB of raw single-shot reach against FT8 (~2.5 dB against FT4) for speed and an incremental-redundancy path — and all of these numbers still await the on-air validation that is the project's next, gating step.
+TempoFast is a coherent 4-CPM turbo modem on a 4-second conversational cycle, sharing the WSJT-X 77-bit payload and LDPC(174,91) FEC with the modes you already know — so the *messages* are familiar even though the *waveform* is not. Its distinguishing bets are **coherence** (more information per second, at the cost of fading fragility), the **4 s cycle** (conversation, not slideshow), and **IR-HARQ** (redundancy that *accumulates* across retransmissions via joint turbo combining — unique among amateur weak-signal text modes, now live and on by default, measured at ~+2.5 dB / ~2× completion in simulation though not yet on-air-proven). TempoDeep backstops the fading fragility with a non-coherent, fading-robust tier on the same payload. TempoFast does not out-sensitize FT8; it trades ~6 dB of raw single-shot reach against FT8 (~2.5 dB against FT4) for speed and an incremental-redundancy path — and all of these numbers still await the on-air validation that is the project's next, gating step.
 
 ---
 

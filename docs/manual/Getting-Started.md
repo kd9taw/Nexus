@@ -1,6 +1,6 @@
 # Getting Started
 
-Nexus is an all-mode amateur-radio operations center (FT8/FT4, CW, Phone, and the Tempo FT1/DX1 chat layer) that installs in a single offline package and guides you from plug-in to first QSO.
+Nexus is an all-mode amateur-radio operations center (FT8/FT4, CW, Phone, and the Tempo TempoFast/TempoDeep chat layer) that installs in a single offline package and guides you from plug-in to first QSO.
 
 ---
 

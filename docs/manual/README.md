@@ -41,13 +41,13 @@ Nexus is a free, GPLv3, all-mode amateur radio operations center: FT8/FT4 digita
 | [Logbook and Awards](Logbook-and-Awards.md) | DXCC/Challenge/Honor Roll/WAS/WAZ computed offline, confirmation source rules, LoTW two-pull sync, Journey achievements |
 | [Connect — Propagation](Connect-Propagation.md) | World map, grayline, PSK Reporter/RBN/cluster fusion, opening detector, Now-Bar, space weather |
 | [Integrations](Integrations.md) | WSJT-X UDP protocol, CAT broker, Companion mode, LoTW, QRZ, ClubLog, eQSL, N3FJP, N1MM+, PSK Reporter |
-| [Tempo Chat](Tempo-Chat.md) | FT1 (4 s conversational) and DX1 (15 s fading-resilient) chat tiers, IR-HARQ, store-and-forward, presence |
+| [Tempo Chat](Tempo-Chat.md) | TempoFast (4 s conversational) and TempoDeep (15 s fading-resilient) chat tiers, IR-HARQ, store-and-forward, presence |
 
 ### Reference
 
 | Page | What you will do |
 |---|---|
-| [Frequency Plan](Frequency-Plan.md) | FT1/DX1 calling frequencies across HF and VHF/UHF |
+| [Frequency Plan](Frequency-Plan.md) | TempoFast/TempoDeep calling frequencies across HF and VHF/UHF |
 | [Privacy and Coordinated QSY](Privacy-and-Coordinated-QSY.md) | Legal announced channel hop (Part 97 compliant — not encryption, not secret) |
 | [Building from Source](Building-from-Source.md) | GNU toolchain, Fortran/C FFI, Windows cross-compile from Linux/WSL2 |
 | [Troubleshooting](Troubleshooting.md) | CAT not connecting, no audio, decode issues, PTT stuck, rigctld port conflicts |
@@ -57,4 +57,4 @@ Nexus is a free, GPLv3, all-mode amateur radio operations center: FT8/FT4 digita
 ---
 
 *Nexus is GPL-3.0. Author: KD9TAW. Source: [sourceforge.net/projects/nexus-ham-radio](https://sourceforge.net/projects/nexus-ham-radio).*
-*The FT8/FT4 tier is the production core. FT1/DX1 are simulation-validated, not yet proven on the air — on-air decode-rate reports are the remaining gate.*
+*The FT8/FT4 tier is the production core. TempoFast/TempoDeep are simulation-validated, not yet proven on the air — on-air decode-rate reports are the remaining gate.*

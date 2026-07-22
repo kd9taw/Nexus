@@ -2,7 +2,7 @@
 
 How the app is wired: a Rust core that owns all state and every real-time deadline,
 a web front-end that pulls a snapshot and paints it, and one lock where they meet.
-This is the app-level / runtime view; for the FT1 chat layer and modem internals see
+This is the app-level / runtime view; for the TempoFast chat layer and modem internals see
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 > **The one idea everything hangs on:** the UI is a pure function of a single
@@ -82,7 +82,7 @@ flowchart LR
   SND --> CAP["cpal capture<br/>48 kHz"]
   CAP --> RES["capture_resample<br/>64-tap anti-alias → 12 kHz"]
   RES --> RING["RX ring<br/>(per active mode)"]
-  RING --> SRC{"SignalSource.decode()<br/>FT8 · FT4 · FT1 · RTTY · SSTV · CW"}
+  RING --> SRC{"SignalSource.decode()<br/>FT8 · FT4 · TempoFast · RTTY · SSTV · CW"}
   SRC --> DEC["Decodes<br/>call · grid · SNR · dF"]
   DEC --> STATE[["Engine state<br/>roster · needs · list · S-meter"]]
   STATE --> SNAP["AppSnapshot"]
@@ -171,7 +171,7 @@ with one fail-safe instead of scattered across UI handlers.
 | **Pull, not push** | The UI polls `get_snapshot` every 300 ms rather than subscribing to events. Every render is a whole, self-consistent snapshot, never a stream of partial deltas. Command responses *also* return a snapshot, so an action updates instantly. |
 | **One mutex** | A single engine lock is easy to reason about and keeps the real-time loop and the UI consistent. The cost: `get_snapshot` does an `O(roster×log)` worked-before scan under the lock, which is why the poll sits at 300 ms and not faster. |
 | **Thin webview** | A stateless UI keeps transmit-safety logic in Rust, makes the front-end reproducible from a snapshot fixture (how its automated GUI QA works), and makes a torn-off multi-monitor window just the same app rendering one panel. |
-| **Trait-per-mode** | The `SignalSource` abstraction lets FT8, FT4, FT1, and a WSJT-X-companion feed share one loop, one snapshot, and one TX gauntlet — new modes plug in without touching the plumbing. |
+| **Trait-per-mode** | The `SignalSource` abstraction lets FT8, FT4, TempoFast, and a WSJT-X-companion feed share one loop, one snapshot, and one TX gauntlet — new modes plug in without touching the plumbing. |
 
 ---
 

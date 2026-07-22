@@ -10,9 +10,9 @@
 
 Three things make Tempo stand out as Nexus's off-grid calling layer, and they're the whole pitch:
 
-- **Faster two-way — conversation, not a slideshow.** FT1's fast tier runs a **4-second** over — roughly **4× quicker turnaround** than the 15-second cycle behind FT8 and JS8. A keyboard QSO that actually flows back and forth.
+- **Faster two-way — conversation, not a slideshow.** TempoFast's fast tier runs a **4-second** over — roughly **4× quicker turnaround** than the 15-second cycle behind FT8 and JS8. A keyboard QSO that actually flows back and forth.
 - **A modern experience — a messenger, not a lab bench.** A clean, chat-first window: people, threads, a live decode feed, one-tap controls, and three field themes including a night-vision **Amber**. The radio without the clutter.
-- **Built on novel protocols — from scratch.** Not a reskin of an existing mode. **Two purpose-built waveforms** — a fast coherent tier (FT1) and a fading-robust tier (DX1) — engineered for resilient off-grid text, sharing the same standard messages.
+- **Built on novel protocols — from scratch.** Not a reskin of an existing mode. **Two purpose-built waveforms** — a fast coherent tier (TempoFast) and a fading-robust tier (TempoDeep) — engineered for resilient off-grid text, sharing the same standard messages.
 
 > **One window, everything in view** — stations & presence, a real conversation thread, the live waterfall, and band activity. SNR, offset, dT, band/tier, and T/R timing stay first-class, never hidden behind menus. *(See `docs/img/app-dark.png`.)*
 
@@ -30,9 +30,9 @@ And almost all of it is wrapped in interfaces that feel like test equipment: den
 
 ## Meet Tempo
 
-**Tempo is Nexus's modern, chat-first HF text layer for the off-grid / preparedness ham community.** It looks and feels like a messaging app — presence, a live decode feed, a conversation thread — but it never hides the radio. Under that interface sit two purpose-built weak-signal waveforms and a one-tap toggle: **FT1 (Fast)** for conversation and **DX1 (Robust)** for reach. Both carry the same standard 77-bit messages, so Chat, auto-QSO, and Field Day work identically on either.
+**Tempo is Nexus's modern, chat-first HF text layer for the off-grid / preparedness ham community.** It looks and feels like a messaging app — presence, a live decode feed, a conversation thread — but it never hides the radio. Under that interface sit two purpose-built weak-signal waveforms and a one-tap toggle: **TempoFast (Fast)** for conversation and **TempoDeep (Robust)** for reach. Both carry the same standard 77-bit messages, so Chat, auto-QSO, and Field Day work identically on either.
 
-It's free and open source (GPL-3.0), authored by **KD9TAW**, who also designed the FT1 and DX1 waveforms.
+It's free and open source (GPL-3.0), authored by **KD9TAW**, who also designed the TempoFast and TempoDeep waveforms.
 
 > Tempo doesn't replace WSJT-X or JS8Call — it's a different tool for a different job. It runs *alongside* your existing setup, aimed at fast conversational text and fading-resilient reach for off-grid work.
 
@@ -42,18 +42,18 @@ It's free and open source (GPL-3.0), authored by **KD9TAW**, who also designed t
 
 The core isn't the interface — it's the waveforms. Tempo gives you a two-tier system and lets you pick the right one for the path you're on, then keep talking. Both share the same 77-bit message and LDPC(174,91) error correction; only the modem and the clock change.
 
-**FT1 — the fast tier, built for conversation**
+**TempoFast — the fast tier, built for conversation**
 - A **4-second cycle** (~3.5 s of waveform), designed to be narrow (est. **~42–67 Hz**).
 - A **coherent** 4-CPM waveform — wrings the most information out of every second of air time. That's the speed lever.
 - **Incremental-redundancy retransmission (IR-HARQ)** — live and on by default. A frame that fails standalone is buffered and joint-turbo-combined with its RV1/RV2 resends, accumulating coding gain across retransmits — unusual for amateur text modes. Measured ~+2.5 dB threshold shift and ~2× QSO completion in the −11…−13 dB zone through the full pipeline *(simulation-validated; not yet confirmed on the air)*.
 
-**DX1 — the robust tier, built to survive the path**
+**TempoDeep — the robust tier, built to survive the path**
 - **Non-coherent 8-FSK**, ~50 Hz wide, 15-second cycle. Never relies on carrier phase, so it **rides through fading** that collapses coherent modes.
-- In simulation it loses only **~3.7 dB** under Rayleigh fading — where coherent modes (like FT1) can lose 10+ dB.
+- In simulation it loses only **~3.7 dB** under Rayleigh fading — where coherent modes (like TempoFast) can lose 10+ dB.
 
-> **An honest trade:** FT1 gives up roughly 6 dB of raw single-shot sensitivity versus FT8 (a *simulated* ~−15 dB threshold vs ~−21 dB; ~2.5 dB versus FT4) to buy that conversational cycle. You can't have one waveform that's both the fastest *and* the most sensitive — so Tempo ships both, and you choose.
+> **An honest trade:** TempoFast gives up roughly 6 dB of raw single-shot sensitivity versus FT8 (a *simulated* ~−15 dB threshold vs ~−21 dB; ~2.5 dB versus FT4) to buy that conversational cycle. You can't have one waveform that's both the fastest *and* the most sensitive — so Tempo ships both, and you choose.
 
-|                          | **FT1 — Fast**                                  | **DX1 — Robust**                                       |
+|                          | **TempoFast — Fast**                                  | **TempoDeep — Robust**                                       |
 |--------------------------|-------------------------------------------------|--------------------------------------------------------|
 | Modulation               | Coherent 4-CPM (h = 1/2, BT = 0.3)              | Non-coherent 8-FSK (Gray-coded)                        |
 | T/R cycle                | 4 s (~3.5 s of waveform)                         | 15 s                                                   |
@@ -64,9 +64,9 @@ The core isn't the interface — it's the waveforms. Tempo gives you a two-tier 
 
 *Both tiers carry the same 77-bit, WSJT-X-compatible messages — switching tiers changes the timing and waveform, never the message format or your workflow. The tier is never switched silently: the operator picks Fast or Robust, and the toggle stays visible.*
 
-**Why "faster" is the headline — transmit/turnaround cycle per over** *(context, not a sensitivity benchmark — shorter = a snappier back-and-forth):* FT8 15 s · JS8 Normal 15 s · JS8 Fast 10 s · JS8 Turbo 6 s · **Tempo FT1 4 s**.
+**Why "faster" is the headline — transmit/turnaround cycle per over** *(context, not a sensitivity benchmark — shorter = a snappier back-and-forth):* FT8 15 s · JS8 Normal 15 s · JS8 Fast 10 s · JS8 Turbo 6 s · **Tempo TempoFast 4 s**.
 
-For the full protocol deep-dive, see [FT1-Protocol.md](FT1-Protocol.md).
+For the full protocol deep-dive, see [TempoFast-Protocol.md](TempoFast-Protocol.md).
 
 ---
 
@@ -95,10 +95,10 @@ For the full protocol deep-dive, see [FT1-Protocol.md](FT1-Protocol.md).
 We'd rather under-promise. Here's exactly where things stand:
 
 - **The app is feature-complete and runs on Windows.** The installer is a ~210 MB per-user, **unsigned, cross-compiled** build that bundles WebView2 and Hamlib offline — no admin rights, no internet needed. Expect a SmartScreen warning ("More info → Run anyway"), as with any unsigned beta. macOS / Linux desktop builds are Phase 2.
-- **The waveforms are validated by simulation only** — AWGN and Rayleigh-fading sweeps in the test harness. They have **not yet been confirmed on the air.** The simulated thresholds (FT1 ~−15 dB, DX1 ~−18.6 dB) are bench numbers, not field results.
+- **The waveforms are validated by simulation only** — AWGN and Rayleigh-fading sweeps in the test harness. They have **not yet been confirmed on the air.** The simulated thresholds (TempoFast ~−15 dB, TempoDeep ~−18.6 dB) are bench numbers, not field results.
 - **On-air decode-rate-vs-SNR validation is the #1 remaining gate** — the single biggest reason the project needs operators.
-- **Shipped in v0.2.0 (beta):** **IR-HARQ** joint-turbo soft-combining is now live end-to-end and on by default; **DX1 full-passband acquisition** now decodes every signal across 200–2900 Hz per slot (the tuned RX offset is now just a waterfall marker / TX-pairing hint). The Windows cross-build is validated — modem self-tests, `tempo.exe`, and the NSIS installer all cross-build clean, with 5/5 Windows test exes passing. **Still simulation- and cross-build-validated only — not yet confirmed on the air.**
-- **Known limits:** Tempo chat conversations run on the FT1 tier only; FT8/FT4 operating is a separate, fully live mode.
+- **Shipped in v0.2.0 (beta):** **IR-HARQ** joint-turbo soft-combining is now live end-to-end and on by default; **TempoDeep full-passband acquisition** now decodes every signal across 200–2900 Hz per slot (the tuned RX offset is now just a waterfall marker / TX-pairing hint). The Windows cross-build is validated — modem self-tests, `tempo.exe`, and the NSIS installer all cross-build clean, with 5/5 Windows test exes passing. **Still simulation- and cross-build-validated only — not yet confirmed on the air.**
+- **Known limits:** Tempo chat conversations run on the TempoFast tier only; FT8/FT4 operating is a separate, fully live mode.
 
 ---
 
@@ -115,7 +115,7 @@ This is an open invitation. If you have an HF station and a soundcard-mode workf
 1. **Install and run it on your station** — get on a Tempo calling frequency and start decoding.
 2. **Report on-air decode rate vs. SNR** — the headline data we need.
 3. **Try a real exchange** — a Chat QSO, an auto-sequenced QSO, or a Field Day exchange, and tell us how the 4-second cadence *feels*.
-4. **Test the rough edges** — DX1 full-band acquisition, IR-HARQ rescues, Coordinated QSY, store-and-forward, rig control, audio.
+4. **Test the rough edges** — TempoDeep full-band acquisition, IR-HARQ rescues, Coordinated QSY, store-and-forward, rig control, audio.
 
 ### Get involved
 
@@ -125,7 +125,7 @@ This is an open invitation. If you have an HF station and a soundcard-mode workf
 
 The best feedback is a GitHub issue with your **rig, band, observed SNR, and decode result** — but an email works too.
 
-> If you've ever wished a weak-signal keyboard QSO moved at the speed of an actual conversation — get on the air and help us find out whether FT1 delivers.
+> If you've ever wished a weak-signal keyboard QSO moved at the speed of an actual conversation — get on the air and help us find out whether TempoFast delivers.
 
 ---
 

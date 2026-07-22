@@ -97,7 +97,7 @@ Nexus enforces rig mode via CAT on every section entry. The mode is re-asserted 
 
 | Section | Mode commanded over CAT |
 |---|---|
-| **Digital (FT8/FT4/FT1/DX1)** | `PKTUSB` / `PKTLSB` (Hamlib DATA submode — Yaesu DATA-U, Icom USB-D, Kenwood DATA) |
+| **Digital (FT8/FT4/TempoFast/TempoDeep)** | `PKTUSB` / `PKTLSB` (Hamlib DATA submode — Yaesu DATA-U, Icom USB-D, Kenwood DATA) |
 | **Phone (SSB)** | `USB` if dial ≥ 10 MHz; `LSB` if dial < 10 MHz |
 | **Phone (FM sub-mode)** | `FM` commanded, then repeater shift (R/O) and CTCSS (C) applied after mode set |
 | **CW — CAT keyer** | `CW` |

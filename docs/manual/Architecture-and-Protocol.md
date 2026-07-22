@@ -1,10 +1,10 @@
 # Architecture and Protocol
 
-> **Scope:** This page covers the **FT1/DX1 protocol layer** (the Tempo chat layer) specifically — waveforms, message formats, HARQ, and ecosystem interop. For app-level architecture (the Nexus multi-mode desktop shell, all-mode stack, and component layout), see [`docs/ARCHITECTURE.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/ARCHITECTURE.md).
+> **Scope:** This page covers the **TempoFast/TempoDeep protocol layer** (the Tempo chat layer) specifically — waveforms, message formats, HARQ, and ecosystem interop. For app-level architecture (the Nexus multi-mode desktop shell, all-mode stack, and component layout), see [`docs/ARCHITECTURE.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/ARCHITECTURE.md).
 
-An operator-friendly tour of how the FT1/DX1 protocol layer is built and how its messages move. This is the *summary* — for the full design, the tiering rationale, and the DSP derivations, read the developer reference: [`docs/ARCHITECTURE.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/ARCHITECTURE.md).
+An operator-friendly tour of how the TempoFast/TempoDeep protocol layer is built and how its messages move. This is the *summary* — for the full design, the tiering rationale, and the DSP derivations, read the developer reference: [`docs/ARCHITECTURE.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/ARCHITECTURE.md).
 
-> **Validation status (v0.2.0 beta).** Nexus's two waveforms — including **live IR-HARQ** and **full-passband DX1 acquisition** — are validated by **simulation + Windows cross-build** (AWGN + fading), **not yet on-air**. On-air decode-rate-vs-SNR is the open gate. The FT8/FT4 tier is Phase 2 (internals compiled in, no decode wired). Nothing here is an on-air sensitivity claim.
+> **Validation status (v0.2.0 beta).** Nexus's two waveforms — including **live IR-HARQ** and **full-passband TempoDeep acquisition** — are validated by **simulation + Windows cross-build** (AWGN + fading), **not yet on-air**. On-air decode-rate-vs-SNR is the open gate. The FT8/FT4 tier is Phase 2 (internals compiled in, no decode wired). Nothing here is an on-air sensitivity claim.
 
 ---
 
@@ -26,8 +26,8 @@ Nexus is a stack: a web UI on top, a Rust core in the middle, and a Fortran/C mo
 │   ft1 / ft1-sys  safe wrapper + raw FFI over libtempo           │
 ├──────────────────────────────────────────────────────────────┤
 │ libtempo (Fortran → C ABI, FFTW3, no Qt)                         │
-│   Fast tier: FT1 4-CPM turbo modem + IR-HARQ                   │
-│   Robust tier: DX1 non-coherent 8-FSK + soft LDPC(174,91)      │
+│   Fast tier: TempoFast 4-CPM turbo modem + IR-HARQ                   │
+│   Robust tier: TempoDeep non-coherent 8-FSK + soft LDPC(174,91)      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -39,15 +39,15 @@ Nexus is a stack: a web UI on top, a Rust core in the middle, and a Fortran/C mo
 
 ## The two tiers
 
-The engine reads the operator's **tier** choice on both edges of each slot — it picks which waveform to modulate on transmit and which to decode on receive, and runs the matching slot clock (4 s for FT1, 15 s for DX1). The messaging layer above never changes — only the modem call and the frame length differ. That's why the tier toggle is a deliberate, **always-visible** operator decision: the abstraction hides the DSP, not the choice.
+The engine reads the operator's **tier** choice on both edges of each slot — it picks which waveform to modulate on transmit and which to decode on receive, and runs the matching slot clock (4 s for TempoFast, 15 s for TempoDeep). The messaging layer above never changes — only the modem call and the frame length differ. That's why the tier toggle is a deliberate, **always-visible** operator decision: the abstraction hides the DSP, not the choice.
 
 The live engine is **transport-agnostic**: the host drives it once per slot — on your TX slot it asks the engine for the audio to send (and keys PTT); otherwise it hands the captured audio to the engine to decode and fold into the roster, inbox, and the active mode's sequencer.
 
-**FT1 receive is a full Costas search**, and **DX1 receive now is too**: DX1 RX decodes *every* signal across the 200–2900 Hz passband per slot (it no longer single-carrier decodes only at the tuned RX offset — `rx_offset_hz` is now just a waterfall marker / TX-pairing hint). The DX1 acquisition is a three-stage scan: a coarse chirp-correlation carrier sweep (12.5 Hz grid, pre-folded replicas, trig-free hot loop) → median-threshold peak-pick → a full CRC-14-gated decode per survivor, at roughly 3–4 s/slot.
+**TempoFast receive is a full Costas search**, and **TempoDeep receive now is too**: TempoDeep RX decodes *every* signal across the 200–2900 Hz passband per slot (it no longer single-carrier decodes only at the tuned RX offset — `rx_offset_hz` is now just a waterfall marker / TX-pairing hint). The TempoDeep acquisition is a three-stage scan: a coarse chirp-correlation carrier sweep (12.5 Hz grid, pre-folded replicas, trig-free hot loop) → median-threshold peak-pick → a full CRC-14-gated decode per survivor, at roughly 3–4 s/slot.
 
 ### IR-HARQ (live, on by default)
 
-On the **FT1** fast tier, IR-HARQ (incremental-redundancy hybrid ARQ) is wired **end-to-end** and on by default. A frame that fails to decode standalone (RV0) is **buffered and joint-turbo-combined** with its retransmissions: each redundancy version carries a distinct Costas sync and punctured `LDPC(348,91)` parity (RV0 = the base 174 bits; RV1/RV2 = 87 new parity + 87 repeated systematic). Costas variants are RV0 `[0,2,3,1]`, RV1 `[1,3,2,0]`, RV2 `[3,0,2,1]`. Combiner slots expire after 30 s with a ±10 Hz frequency tolerance.
+On the **TempoFast** fast tier, IR-HARQ (incremental-redundancy hybrid ARQ) is wired **end-to-end** and on by default. A frame that fails to decode standalone (RV0) is **buffered and joint-turbo-combined** with its retransmissions: each redundancy version carries a distinct Costas sync and punctured `LDPC(348,91)` parity (RV0 = the base 174 bits; RV1/RV2 = 87 new parity + 87 repeated systematic). Costas variants are RV0 `[0,2,3,1]`, RV1 `[1,3,2,0]`, RV2 `[3,0,2,1]`. Combiner slots expire after 30 s with a ±10 Hz frequency tolerance.
 
 A coherent CPM-Costas discriminator (`ft1_rv_detect`) identifies which RV arrived (>99% accurate, <1% false to −11 dB), and the **QSO sequencer drives the escalation**: RV 0→1→2 on an implicit NAK, resetting on an implicit ACK. Measured combiner gain is +1.3 dB AWGN and +3.2 dB under 1 Hz / 1 ms fading (both 3-TX); through the full live pipeline that's ≈ +2.5 dB threshold shift and ≈ 2× QSO completion in the −11…−13 dB zone — **simulation-measured, not yet on-air.** The UI surfaces a `HARQ.RVn` decode badge, an on/off toggle (default on), and a session rescue counter; `Decode.rv` carries how many RVs were combined.
 
@@ -76,7 +76,7 @@ Nexus handles rig control in-app. For **CAT** it **launches Hamlib's `rigctld`**
 
 `tempo-net` speaks the wire protocols the ham ecosystem already understands, so JTAlert / GridTracker / N1MM+ / loggers interoperate unmodified:
 
-- **WSJT-X-compatible UDP API** — magic `0xADBCCBDA`, schema `3`, sender id `"Nexus"`, default target `127.0.0.1:2237`. Nexus **emits** Heartbeat / Status / Decode / QSOLogged / Close, and **listens for** inbound **Reply** (double-click-to-call), **HaltTx**, and **FreeText** control datagrams. Status reflects dial/mode/TX state with `tr_period` = 4 (FT1) or 15 (robust), and `special_op = 3` during Field Day.
+- **WSJT-X-compatible UDP API** — magic `0xADBCCBDA`, schema `3`, sender id `"Nexus"`, default target `127.0.0.1:2237`. Nexus **emits** Heartbeat / Status / Decode / QSOLogged / Close, and **listens for** inbound **Reply** (double-click-to-call), **HaltTx**, and **FreeText** control datagrams. Status reflects dial/mode/TX state with `tr_period` = 4 (TempoFast) or 15 (robust), and `special_op = 3` during Field Day.
 - **PSK Reporter** — uploads heard stations to `report.pskreporter.info:4739`, rate-limited (flushes at most every 5 minutes).
 
 ---

@@ -20,7 +20,7 @@ Yes. Nexus is **GPLv3** open-source software. Source lives at [kd9taw/nexus](htt
 
 Not exactly — the goal is parity, not replacement. The FT8/FT4 auto-sequencer in Nexus was modelled directly on WSJT-X's `processMessage` state table: same seven QSO states (Listening through Done), same AP pass schedule, same sender lock, same return-to-CQ, same double-click semantics, same keyboard shortcuts (`Esc`, `F4`, `F6`, `Alt+1`–`6`), same Band Activity flow (oldest at top, auto-scroll). A WSJT-X operator arriving in Nexus will hit the same gestures and see the same sequence.
 
-Deliberate differences: Nexus always decodes every RX slot (no Monitor-on/off toggle), adds a Classic/Roster layout toggle and in-app LoTW/QRZ/eQSL/ClubLog connectors, annotates every decode row with DXCC/worked-before/new-country tags, and adds the Tempo (FT1/DX1) and CW/Phone cockpits in the same session. If you run WSJT-X today and want to keep doing so, Nexus can act as a companion that shares your radio and log — see the next two questions.
+Deliberate differences: Nexus always decodes every RX slot (no Monitor-on/off toggle), adds a Classic/Roster layout toggle and in-app LoTW/QRZ/eQSL/ClubLog connectors, annotates every decode row with DXCC/worked-before/new-country tags, and adds the Tempo (TempoFast/TempoDeep) and CW/Phone cockpits in the same session. If you run WSJT-X today and want to keep doing so, Nexus can act as a companion that shares your radio and log — see the next two questions.
 
 ---
 
@@ -49,17 +49,17 @@ The bundled Hamlib model table covers approximately 50 radios (Icom, Yaesu, Kenw
 
 ---
 
-### Is FT1 legal to transmit?
+### Is TempoFast legal to transmit?
 
-FT1 and DX1 are digital data emissions and fall under Part 97 rules for data. Nexus ships **proposed, editable** default calling frequencies chosen to fall inside US General-class data privileges and clear of established watering holes (FT8/FT4/JS8/WSPR, CW calling, FM calling, APRS, satellite). **You are responsible for operating within your own license privileges and local/national band plan.** US Technician licensees: only the 10 m and 6 m Nexus channels are within your HF/VHF data privileges. R1/R3 operators must vet against their national plan.
+TempoFast and TempoDeep are digital data emissions and fall under Part 97 rules for data. Nexus ships **proposed, editable** default calling frequencies chosen to fall inside US General-class data privileges and clear of established watering holes (FT8/FT4/JS8/WSPR, CW calling, FM calling, APRS, satellite). **You are responsible for operating within your own license privileges and local/national band plan.** US Technician licensees: only the 10 m and 6 m Nexus channels are within your HF/VHF data privileges. R1/R3 operators must vet against their national plan.
 
 The Coordinated QSY (Roam) feature — if enabled — is plain-text, in-the-clear announced frequency coordination, not encryption or secret hopping. It is legal announced QSY under FCC Part 97. See [Frequency Plan](Frequency-Plan.md).
 
 ---
 
-### Is FT1 proven on-air?
+### Is TempoFast proven on-air?
 
-**Honestly: beta, simulation-validated only.** The simulated SNR thresholds (FT1 ≈ −15 dB AWGN, DX1 ≈ −18.6 dB AWGN, ~3.7 dB Rayleigh-fading penalty) and IR-HARQ gains (~+2.5 dB through the live pipeline) have not yet been confirmed over real propagation paths. The app itself is feature-complete and the modem library passes loopback integration tests, but on-air decode-rate-vs-SNR validation is the project's primary remaining gate.
+**Honestly: beta, simulation-validated only.** The simulated SNR thresholds (TempoFast ≈ −15 dB AWGN, TempoDeep ≈ −18.6 dB AWGN, ~3.7 dB Rayleigh-fading penalty) and IR-HARQ gains (~+2.5 dB through the live pipeline) have not yet been confirmed over real propagation paths. The app itself is feature-complete and the modem library passes loopback integration tests, but on-air decode-rate-vs-SNR validation is the project's primary remaining gate.
 
 If you get it on the air, honest decode reports (band, dial, distance, conditions, what you heard vs. what you expected) are the single most useful contribution. See [How to help](#how-do-i-help-the-project).
 
@@ -79,7 +79,7 @@ In your **OS keychain**, not in the settings file or any app directory. On Windo
 
 ### Will Nexus transmit on its own when I launch it?
 
-No. The engine starts passive on every launch regardless of saved settings. For FT8/FT4, no transmission fires until you double-click a decode. For Tempo (FT1/DX1), the CQ beacon is opt-in and is forced off at startup even if it was enabled in a previous session. Phone and CW cockpits arm TX on section entry (consistent with a live-key rig), but PTT does not close until you press the button or the spacebar. The TX watchdog halts all modes after 6 minutes of continuous unattended transmission.
+No. The engine starts passive on every launch regardless of saved settings. For FT8/FT4, no transmission fires until you double-click a decode. For Tempo (TempoFast/TempoDeep), the CQ beacon is opt-in and is forced off at startup even if it was enabled in a previous session. Phone and CW cockpits arm TX on section entry (consistent with a live-key rig), but PTT does not close until you press the button or the spacebar. The TX watchdog halts all modes after 6 minutes of continuous unattended transmission.
 
 ---
 
@@ -99,7 +99,7 @@ SuperFox mode is **permanently removed**: the QPC table file carries a license t
 
 ### What about contest modes?
 
-Nexus ships a dedicated **Field Day** mode for ARRL FD (June) and Winter Field Day (January): dupe-checked all-mode log, correct per-QSO scoring (CW/digital = 2 pts, phone = 1 pt), 15-bonus checklist, N3FJP TCP push, N1MM+ UDP broadcast, Cabrillo 3.0 and ADIF export. The FT1 digital exchange sequence is auto-handled once you initiate; fully unattended operation is intentionally not implemented.
+Nexus ships a dedicated **Field Day** mode for ARRL FD (June) and Winter Field Day (January): dupe-checked all-mode log, correct per-QSO scoring (CW/digital = 2 pts, phone = 1 pt), 15-bonus checklist, N3FJP TCP push, N1MM+ UDP broadcast, Cabrillo 3.0 and ADIF export. The TempoFast digital exchange sequence is auto-handled once you initiate; fully unattended operation is intentionally not implemented.
 
 Other contest modes (NA VHF, RTTY Roundup, WW Digi, ARRL Sweepstakes, etc.) are not yet implemented. Serial-number exchange fields, contest-specific dupe logic, and Cabrillo profiles for those events are not present. See [Field Day](Field-Day.md).
 
@@ -151,7 +151,7 @@ In Companion source mode, Nexus can also ride an upstream WSJT-X or JTDX decode 
 
 ### How do I help the project?
 
-**On-air FT1/DX1 reports are the highest-value contribution.** Report what you observed: band, dial frequency, mode/tier (FT1 or DX1), path distance, conditions (time UTC, solar conditions if notable), and what you decoded vs. what you expected. Open an issue at [kd9taw/nexus](https://sourceforge.net/projects/nexus-ham-radio) with that data. The simulation thresholds (FT1 ≈ −15 dB AWGN, DX1 ≈ −18.6 dB AWGN) need real-path confirmation before the beta label comes off.
+**On-air TempoFast/TempoDeep reports are the highest-value contribution.** Report what you observed: band, dial frequency, mode/tier (TempoFast or TempoDeep), path distance, conditions (time UTC, solar conditions if notable), and what you decoded vs. what you expected. Open an issue at [kd9taw/nexus](https://sourceforge.net/projects/nexus-ham-radio) with that data. The simulation thresholds (TempoFast ≈ −15 dB AWGN, TempoDeep ≈ −18.6 dB AWGN) need real-path confirmation before the beta label comes off.
 
 Bug reports, pull requests, and build feedback for non-Windows platforms are also welcome via the same repo.
 

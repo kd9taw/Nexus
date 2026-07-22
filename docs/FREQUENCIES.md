@@ -1,6 +1,6 @@
 # Nexus frequency plan
 
-Nexus uses a **new waveform** (FT1 / DX1 — the Tempo chat layer protocols), so it must **not** transmit on the
+Nexus uses a **new waveform** (TempoFast / TempoDeep — the Tempo chat layer protocols), so it must **not** transmit on the
 established FT8 / FT4 / JS8 / WSPR / PSK watering holes — it would QRM them and
 they would QRM it. Nexus therefore ships its own **calling frequencies**, chosen
 to sit clear of every existing narrowband convention while staying inside the
@@ -52,9 +52,9 @@ where relevant.
 | 40 m | **7.0430** | QRP CW 7.040 (−4.5 k); FT4 7.0475 (+3 k); FT8 7.074 | IARU NB segment; in the CW↔FT4 notch |
 | 30 m | **10.1425** | FT4 10.140 / PSK 10.141 (−3 k); edge 10.150 (+6 k); FT8 10.136 | secondary band — tread lightly |
 | 20 m | **14.0905** | cluster 14.074–14.083 (−9 k); WSPR 14.0956 (+3.6 k) | the flagship ".09 shoulder" |
-| 17 m | **18.0955** | FT8 18.100 (+3 k); QRP CW 18.096 (−1 k); FT4/JS8 18.104; WSPR 18.1046 | cramped — below the FT8/FT4/JS8/WSPR pileup; **DX1 (50 Hz) only** |
+| 17 m | **18.0955** | FT8 18.100 (+3 k); QRP CW 18.096 (−1 k); FT4/JS8 18.104; WSPR 18.1046 | cramped — below the FT8/FT4/JS8/WSPR pileup; **TempoDeep (50 Hz) only** |
 | 15 m | **21.0905** | JS8 21.078 (−14 k); WSPR 21.0946 (+2.6 k); FT4 far at 21.140 | |
-| 12 m | **24.9115** | FT8 24.915 (+2 k); SKCC CW 24.910 (−3 k); FT4 24.919; phone edge 24.930 | cramped — in the SKCC↔FT8 notch; **DX1 (50 Hz) only** |
+| 12 m | **24.9115** | FT8 24.915 (+2 k); SKCC CW 24.910 (−3 k); FT4 24.919; phone edge 24.930 | cramped — in the SKCC↔FT8 notch; **TempoDeep (50 Hz) only** |
 | 10 m | **28.1000** | cluster 28.074–28.080 (−20 k); PSK 28.120 (+18 k); FT4 28.180 | roomy — **Technician-OK** (≤200 W) |
 
 ## VHF / UHF
@@ -90,7 +90,7 @@ where relevant.
   FT8/FT4/JS8/WSPR packed at the top, so there is **no clean ≥2–3 kHz notch**: the
   Nexus dials (18.0955 / 24.9115) sit in the small gap below the FT8 cluster and
   above the CW calling spots (QRP CW 18.096, SKCC 24.910), leaving only ~1–3 kHz on
-  one side. Use **DX1's ~50 Hz** variant on these bands — a ~150 Hz FT1 signal does
+  one side. Use **TempoDeep's ~50 Hz** variant on these bands — a ~150 Hz TempoFast signal does
   not fit cleanly — and listen before transmitting.
 
 ## Sources

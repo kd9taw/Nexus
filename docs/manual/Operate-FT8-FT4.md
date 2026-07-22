@@ -233,7 +233,7 @@ At startup Nexus reads compound calls (slashed calls such as `W1AW/7`) from your
 - **SuperFox** is permanently removed — the QPC table license bars vendoring outside WSJT-X.
 - **Contest modes** (NA VHF, RTTY Roundup, WW Digi), frequency calibration, WSPR, Q65, and MSK144 are not implemented.
 - **F6 / Decode** is native-source only; silently a no-op in Companion mode.
-- **Early decode pass** runs only for FT8 and FT4 in native source mode. FT1, DX1, and Companion source decode at the period boundary only.
+- **Early decode pass** runs only for FT8 and FT4 in native source mode. TempoFast, TempoDeep, and Companion source decode at the period boundary only.
 - **Waterfall** is a compact horizontal strip (a spectrum glance tool), not a tall scrolling WSJT-X-style column.
 - **Decode row colors** follow the stock WSJT-X priority scheme but are not user-configurable in this version; the Colors customization tab is planned for a later phase.
 - **Desktop-only** (Tauri v2); no mobile or web client.

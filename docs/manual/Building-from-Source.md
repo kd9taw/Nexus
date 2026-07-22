@@ -86,7 +86,7 @@ You need **single-precision FFTW3** (in `libfftw3-dev`), **Boost headers**, **CM
 
 ```bash
 cargo build
-cargo test          # modem FFI, engine, QSO/Field Day, networking, DX1 round-trips
+cargo test          # modem FFI, engine, QSO/Field Day, networking, TempoDeep round-trips
 ```
 
 These run headless — no sound card or radio required. UI build: `npm --prefix ui install` then `npm --prefix ui run build`.

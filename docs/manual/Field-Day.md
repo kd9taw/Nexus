@@ -49,7 +49,7 @@ Nexus logs three mode classes, matching ARRL's mode-class dupe rule:
 
 | On-air mode | FD mode code | QSO points |
 |---|---|---|
-| FT8, FT4, FT1, DX1 | DIG | 2 |
+| FT8, FT4, TempoFast, TempoDeep | DIG | 2 |
 | CW | CW | 2 |
 | SSB / Phone | PH | 1 |
 
@@ -113,9 +113,9 @@ The bonus checklist models ARRL FD bonuses only. WFD has a different bonus struc
 
 ## All-Mode Logging
 
-### Digital (FT1 auto-sequencer)
+### Digital (TempoFast auto-sequencer)
 
-When the FD workspace is open and a digital contact is in progress, the FT1 auto-sequencer handles the 4-step exchange autonomously once you initiate:
+When the FD workspace is open and a digital contact is in progress, the TempoFast auto-sequencer handles the 4-step exchange autonomously once you initiate:
 
 - **S&P** (Search-and-Pounce): double-click a CQ decode → sequencer sends your exchange → accepts their roger → logs the QSO.
 - **Running**: answer an incoming exchange → roger with your exchange → accept their RR73 → log.
@@ -202,7 +202,7 @@ Both exports are available at any time during or after the event from the FieldD
 
 - Tags written per contact: `CALL`, `MODE` (CW / SSB / FT8), `BAND`, `CONTEST_ID` (ARRL-FIELD-DAY or WFD), `CLASS`, `ARRL_SECT`, `<EOR>`.
 - `PROGRAMID` is `Nexus`.
-- All digital contacts (FT8, FT4, FT1) map to `FT8` in the ADIF MODE tag; CW maps to `CW`, Phone maps to `SSB`.
+- All digital contacts (FT8, FT4, TempoFast) map to `FT8` in the ADIF MODE tag; CW maps to `CW`, Phone maps to `SSB`.
 
 Submit the Cabrillo file to the ARRL online submission system. ADIF can be imported into N3FJP or other loggers for cross-checking.
 
@@ -215,8 +215,8 @@ Submit the Cabrillo file to the ARRL online submission system. ADIF can be impor
 - **N3FJP errors are not surfaced in the UI** beyond the initial Test button; monitor N3FJP's own display to confirm pushes are landing.
 - **N1MM is emit-only**: Nexus does not receive inbound `<contactinfo>` from other network stations.
 - **CATEGORY-OPERATOR is hardcoded to MULTI-OP** in Cabrillo; single-op selection is not yet in the UI.
-- **ADIF MODE maps all digital modes to FT8** regardless of actual mode used (FT1, FT4, etc.).
-- **FT1 auto-sequencer requires operator initiation**: fully unattended automated operation is not implemented, consistent with ARRL FD rules requiring operator presence.
+- **ADIF MODE maps all digital modes to FT8** regardless of actual mode used (TempoFast, FT4, etc.).
+- **TempoFast auto-sequencer requires operator initiation**: fully unattended automated operation is not implemented, consistent with ARRL FD rules requiring operator presence.
 - **Desktop-only** (Tauri v2); no mobile companion.
 
 ---

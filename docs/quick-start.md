@@ -176,6 +176,6 @@ You're on the air. When you want to go deeper, each section has its own guide:
 - [Phone](manual/Phone.md) and [CW](manual/CW.md) — the voice and Morse cockpits.
 - [POTA / SOTA](manual/POTA-SOTA.md) and [Field Day](manual/Field-Day.md) — hunting and event operating.
 - [Logbook & awards](manual/Logbook-and-Awards.md) and [Integrations](manual/Integrations.md) — DXCC/WAS/WAZ math and the LoTW/QRZ/ClubLog/eQSL connectors.
-- [Tempo chat (FT1 / DX1)](manual/Tempo-Chat.md) — the experimental weak-signal chat tiers (simulation-validated; seeking on-air reports).
+- [Tempo chat (TempoFast / TempoDeep)](manual/Tempo-Chat.md) — the experimental weak-signal chat tiers (simulation-validated; seeking on-air reports).
 
 Stuck on something? Start with [Troubleshooting](troubleshooting.md).

@@ -12,7 +12,7 @@ Amateur radio is, by treaty and rule, an **open** service. The relevant US rules
 
 - **§97.113(a)(4)** prohibits *"messages encoded for the purpose of obscuring their meaning."* That bans **encryption and any secret code** — full stop. The mechanism that would give you real privacy (a secret key, a hidden hop sequence) is exactly what this rule targets.
 - **§97.119** requires you to **transmit your callsign in the clear at least every 10 minutes.** Your identity is never hidden.
-- **§97.309** requires data codes to be **publicly documented.** Nexus's waveforms (the FT1/DX1 protocols) and this QSY scheme are open-source (GPLv3) — that's the documentation.
+- **§97.309** requires data codes to be **publicly documented.** Nexus's waveforms (the TempoFast/TempoDeep protocols) and this QSY scheme are open-source (GPLv3) — that's the documentation.
 - **§97.311** allows genuine spread-spectrum / frequency hopping **only at 222 MHz and above**, and even then it must be publicly documented and must not obscure meaning. On HF / 6 m / 2 m, only a **plain, announced QSY** is legal.
 
 So the only lever Nexus can legally pull is **low-probability-of-intercept (LPI)** — making the QSO *harder to stumble onto*, not *harder to read*. The realistic benefit is against **casual** listeners: someone spinning the dial, a club member parked on the calling frequency, an HT scanner. Against a software-defined radio recording the whole band, **none of these techniques do anything** — and Nexus says so plainly in the app.

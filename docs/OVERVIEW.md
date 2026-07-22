@@ -4,7 +4,7 @@
 digital with WSJT-X operational parity, a CW keying station, an SSB phone cockpit, a live
 propagation map and opening detector, an evidence-backed needs board, a POTA/SOTA hunter, a
 club-ready Field Day mode, a DXCC-first logbook with online-service connectors, and the original
-Tempo FT1/DX1 weak-signal chat tiers — one window, one rig, one log.
+Tempo TempoFast/TempoDeep weak-signal chat tiers — one window, one rig, one log.
 
 This document is the long-form tour. The short version is the [README](../README.md); the
 how-to lives in the [operator manual](manual/).
@@ -274,11 +274,11 @@ General / Extra) activates a real transmit lockout against the Part 97 sub-band 
 the 2026 60 m rules); non-US operators select Open. Panels tear off into separate OS windows for
 multi-monitor shacks; three themes (dark, light, amber night-vision) and four UI scales.
 
-## The Tempo chat layer — FT1 and DX1
+## The Tempo chat layer — TempoFast and TempoDeep
 
-The original product, now one feature among many — and still the novel one. **FT1** is a
+The original product, now one feature among many — and still the novel one. **TempoFast** is a
 4-second-cycle coherent 4-CPM waveform (3.536 s frame, 28 Bd, ~−15 dB AWGN threshold in
-simulation); **DX1** is a 15-second non-coherent 8-FSK tier (~−18.6 dB simulated, and only
+simulation); **TempoDeep** is a 15-second non-coherent 8-FSK tier (~−18.6 dB simulated, and only
 ~3.7 dB Rayleigh fading penalty where coherent modes lose 10+). Both carry the WSJT-X 77-bit
 payload with LDPC(174,91), so structured exchanges are bit-compatible with the FT8 message set,
 and both decode the full 200–2900 Hz passband every slot.
@@ -292,7 +292,7 @@ joint-turbo-combines failed frames with their retransmissions (RV0→RV1→RV2) 
 frequency moves with deterministic timing and automatic return-home on lost sync. It is not
 privacy, not encryption, and is off by default.
 
-**Status, honestly:** every FT1/DX1 number above is simulation-validated (AWGN + fading sweeps);
+**Status, honestly:** every TempoFast/TempoDeep number above is simulation-validated (AWGN + fading sweeps);
 none are proven on the air yet. On-air decode-rate-vs-SNR reports are the project's open gate
 and the most valuable contribution a tester can make. The FT8/FT4 tier carries the daily-driver
 load while this layer earns its stripes.
@@ -306,7 +306,7 @@ load while this layer earns its stripes.
   CAT broker), `tempo-net` (WSJT-X UDP, PSK Reporter, cluster, LoTW/QRZ/ClubLog/eQSL, N3FJP,
   N1MM), `propagation` (needs, openings, space weather, awards, Journey), `ft1`/`ft1-sys` (FFI).
 - **libtempo**: the modem library — Fortran → C ABI with FFTW3, no Qt — carrying FT8/FT4 encode +
-  decode, FT1, and DX1.
+  decode, TempoFast, and TempoDeep.
 - **Tauri v2 + React/TypeScript** shell; Canvas2D map and waterfall rendering.
 - **Test posture**: 600+ Rust tests across the workspace + 230 UI tests; wire formats (WSJT-X UDP
   type numbers, N3FJP grammar, N1MM fields, ADIF round-trips, Cabrillo timestamps) are pinned by
@@ -319,7 +319,7 @@ POTA/SOTA hunter, Field Day mode, Connect map, setup/CAT.
 
 **Casual-grade by design:** CW and Phone cockpits (no contests).
 
-**Beta pending on-air validation:** FT1/DX1 chat tiers.
+**Beta pending on-air validation:** TempoFast/TempoDeep chat tiers.
 
 **Not yet:** Fox role, contest modes, WSPR-as-a-mode, Q65/MSK144, mobile/web clients. (Shipped since this list was first written: rotator control with
 satellite pass auto-track, the Satellites section, 23 cm/IC-9700 support, HRDLog.net, the
