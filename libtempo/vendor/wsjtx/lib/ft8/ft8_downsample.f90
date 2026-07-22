@@ -1,17 +1,32 @@
+! MODIFIED FOR NEXUS (KD9TAW, 2026): the SAVEd locals `x`/`cx` (the wideband spectrum, 768 kB
+! via the EQUIVALENCE) were hoisted into a module so a per-radio decoder context can save and
+! restore them. They are per-chain state: `x` is refreshed only under `newdat`, which is a
+! CALLER-owned flag that both call sites (ft8b.f90, ft8_a7.f90) pass as .false., so most calls
+! consume a spectrum they did not compute. Shared between two radios that decodes one chain's
+! audio at the other's frequency and logs its stations on the wrong band. A subroutine-local
+! SAVE is not addressable from another compilation unit, so hoisting is what makes the context
+! reachable at all. `taper`/`first` moved with them only because the EQUIVALENCE and the
+! first-call gate belong together; they are chain-INDEPENDENT and are not part of the context.
+module ft8_downsample_state
+  parameter (NFFT1=192000)
+  logical first
+  complex cx(0:NFFT1/2)
+  real x(NFFT1+2),taper(0:100)
+  data first/.true./
+  equivalence (x,cx)
+end module ft8_downsample_state
+
 subroutine ft8_downsample(dd,newdat,f0,c1)
 
 ! Downconvert to complex data sampled at 200 Hz ==> 32 samples/symbol
 
+  use ft8_downsample_state
   parameter (NMAX=15*12000,NSPS=1920)
-  parameter (NFFT1=192000,NFFT2=3200)      !192000/60 = 3200
-  
-  logical newdat,first
+  parameter (NFFT2=3200)                   !192000/60 = 3200
+
+  logical newdat
   complex c1(0:NFFT2-1)
-  complex cx(0:NFFT1/2)
-  real dd(NMAX),x(NFFT1+2),taper(0:100)
-  data first/.true./
-  save x,cx,first,taper
-  equivalence (x,cx)
+  real dd(NMAX)
 
   if(first) then
      pi=4.0*atan(1.0)

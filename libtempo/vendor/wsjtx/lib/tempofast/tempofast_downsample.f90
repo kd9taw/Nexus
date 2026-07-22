@@ -16,6 +16,22 @@
 ! You should have received a copy of the GNU General Public License
 ! along with WSJT-X. If not, see <https://www.gnu.org/licenses/>.
 !
+! MODIFIED FOR NEXUS (KD9TAW, 2026): SAVEd locals hoisted into a module so a per-radio decoder
+! context can save/restore them. `x`/`cx` (EQUIVALENCEd) hold this chain's wideband spectrum,
+! refreshed only under the caller-owned `newdata` flag — per-chain state. A subroutine-local
+! SAVE is not addressable from another compilation unit, which is why the hoist is required
+! rather than cosmetic. `first`/`window` follow because the first-call gate belongs with them;
+! both are chain-INDEPENDENT and are not part of the context.
+module tempofast_downsample_state
+  include 'tempofast_params.f90'
+  parameter (NDMAX=NMAX/NDOWN)              !48000/54 = 888
+  complex cx(0:NMAX/2)
+  real x(NMAX), window(0:NDMAX-1)
+  logical first
+  data first/.true./
+  equivalence (x,cx)
+end module tempofast_downsample_state
+
 subroutine ft1_downsample(dd,newdata,f0,c)
 
 ! Bandpass filter, downconvert, and downsample a raw audio signal
@@ -37,18 +53,12 @@ subroutine ft1_downsample(dd,newdata,f0,c)
 !   f0                Center frequency of candidate signal (Hz)
 !   c(0:NDMAX-1)      Complex downsampled output
 
-  include 'tempofast_params.f90'
-  parameter (NDMAX=NMAX/NDOWN)              !48000/54 = 888
+  use tempofast_downsample_state   ! also re-exports tempofast_params (NMAX, NDOWN, NDMAX, ...)
 
   real dd(NMAX)
   complex c(0:NDMAX-1)
   complex c1(0:NDMAX-1)
-  complex cx(0:NMAX/2)
-  real x(NMAX), window(0:NDMAX-1)
-  equivalence (x,cx)
-  logical first, newdata
-  data first/.true./
-  save first,window,x
+  logical newdata
 
   df=12000.0/NMAX                           !0.25 Hz/bin
   baud=12000.0/real(NSPS)                   !~28 Bd

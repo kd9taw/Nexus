@@ -1,16 +1,27 @@
+! MODIFIED FOR NEXUS (KD9TAW, 2026): SAVEd locals hoisted into a module so a per-radio
+! decoder context can save/restore them. `x`/`cx` (EQUIVALENCEd) hold this chain's wideband
+! spectrum and are refreshed only under the caller-owned `newdata` flag — per-chain state.
+! A subroutine-local SAVE is not addressable from another compilation unit, which is why the
+! hoist is required rather than cosmetic. `first`/`window` come along because the first-call
+! gate belongs with them; both are chain-INDEPENDENT and are not part of the context.
+module ft4_downsample_state
+   include 'ft4_params.f90'
+   parameter (NFFT2S=NMAX/NDOWN)
+   complex cx(0:NMAX/2)
+   real x(NMAX), window(0:NFFT2S-1)
+   logical first
+   data first/.true./
+   equivalence (x,cx)
+end module ft4_downsample_state
+
 subroutine ft4_downsample(dd,newdata,f0,c)
 
-   include 'ft4_params.f90'
+   use ft4_downsample_state   ! also re-exports ft4_params (NMAX, NDOWN, NSPS, ...)
    parameter (NFFT2=NMAX/NDOWN)
    real dd(NMAX)
    complex c(0:NMAX/NDOWN-1)
    complex c1(0:NFFT2-1)
-   complex cx(0:NMAX/2)
-   real x(NMAX), window(0:NFFT2-1)
-   equivalence (x,cx)
-   logical first, newdata
-   data first/.true./
-   save first,window,x
+   logical newdata
 
    df=12000.0/NMAX
    baud=12000.0/NSPS
