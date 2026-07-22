@@ -284,10 +284,22 @@ pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
         // Single radio: the process-global modem statics ARE this chain's state.
         None => decode(),
         // Two radios in one process: install this chain's modem state, decode,
-        // capture the result back — inside the ONE decoder-lock acquisition
-        // above, so no other decode can land between the restore and the save.
-        // Without this, chain A's a7 replay list / callsign hash table / IR-HARQ
-        // buffers feed chain B a CRC-valid, well-formed, WRONG decode.
+        // capture the result back — inside the ONE `source.lock()` acquisition above, so no
+        // other DECODE can land between the restore and the save. Without this, chain A's a7
+        // replay list / callsign hash table / IR-HARQ buffers feed chain B a CRC-valid,
+        // well-formed, WRONG decode.
+        //
+        // The guard is `source.lock()`, NOT `MODEM_LOCK` — engine.rs never takes MODEM_LOCK,
+        // which is acquired deeper in crates/ft8|ft4|tempo-fast. Taking it here would deadlock
+        // (std Mutex is not reentrant). `source.lock()` is the right guard anyway: this file
+        // already documents it as "the single serialization point for ALL process-global
+        // decode FFI state".
+        //
+        // KNOWN GAP, decode-vs-TX: a concurrent TX `encode()` on another thread takes only
+        // MODEM_LOCK, which this path releases when `decode()` returns — so a TX can write
+        // packjt77's hash table BETWEEN our restore and our save, and the save then captures
+        // it into this chain's context. Not reachable today (nothing builds a second chain),
+        // and pre-existing in shape, but it must be closed before two chains transmit.
         Some(ctx) => ctx.lock().unwrap().scoped(decode),
     };
     drop(src);
