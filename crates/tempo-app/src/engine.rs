@@ -13,7 +13,6 @@
 //!
 //! [`mode`]: Engine::set_mode
 
-use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -29,6 +28,7 @@ use crate::dto::{
     RadioSummary, SourceKind, Spectrum, Tier,
 };
 use crate::settings::Settings;
+use crate::station::StationCore;
 use crate::AppState;
 
 /// Live CAT read-back for one NON-active radio (dual-radio), fed by the monitor thread. `None` fields
@@ -343,7 +343,7 @@ struct OwnTx {
 
 /// Drives transmit/receive against the modem and updates [`AppState`].
 /// Callsign → "actively uploads to LoTW" (clippy type_complexity extraction).
-type LotwResolver = Box<dyn Fn(&str) -> bool + Send + Sync>;
+pub(crate) type LotwResolver = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Connector legs a queued upload still owes, as a bitmask. A transient-failure
 /// retry re-attempts ONLY the legs that failed (never a leg that already
@@ -377,14 +377,20 @@ pub const MAX_UPLOAD_RETRIES: u8 = 20;
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
+    /// Station-wide state (logbook, connector queues, DXCC/rarity/LoTW resolvers, POTA
+    /// activation, journal paths, PC-clock offset) — everything that is true of the
+    /// OPERATOR rather than of this receive/transmit chain. See [`StationCore`].
+    ///
+    /// Owned by value: today there is exactly one chain, so an `Arc<Mutex<_>>` would add
+    /// lock traffic to the single-radio TX path and buy nothing. Sharing arrives with the
+    /// second chain.
+    station: StationCore,
     /// Transmit audio offset (Hz) — where our signal sits in the SSB passband.
     tx_offset_hz: f32,
     /// Receive audio offset (Hz) — the green waterfall marker / where we focus.
     rx_offset_hz: f32,
     /// Keep TX offset fixed when RX changes (WSJT-X "Hold Tx Freq").
     hold_tx_freq: bool,
-    /// Real PC-clock-vs-UTC offset (ms) from the NTP probe, or None if disabled/offline.
-    clock_offset_ms: Option<i64>,
     tx_parity: u64,
     /// When true (default), answering a heard station in chat auto-picks the OPPOSITE
     /// T/R cycle (FT8-style); an explicit 1st/2nd selection clears it. A CQ run holds
@@ -408,22 +414,6 @@ pub struct Engine {
     /// Session count of IR-HARQ rescues: decodes recovered by joint-combining
     /// retransmissions (rv > 0). Surfaced as a stats readout.
     harq_rescues: u32,
-    /// WSJT-X-format ALL.TXT decode lines pending flush to disk (when
-    /// `settings.write_all_txt`). The engine is I/O-free, so the shell drains this via
-    /// [`Self::take_all_txt_pending`] and appends to the log file. Capped so a
-    /// never-draining shell can't grow it without bound.
-    all_txt_pending: Vec<String>,
-    /// Freshly-logged QSOs awaiting the shell's connector auto-upload worker
-    /// (QRZ / ClubLog / eQSL). EVERY [`Engine::log_qso`] path queues here — the
-    /// engine auto-log included — so "logged locally but never uploaded" can't
-    /// happen for any log path. Drained by [`Engine::take_pending_uploads`];
-    /// bounded so a worker outage can't grow it without limit.
-    pending_uploads: VecDeque<PendingUpload>,
-    /// Last connector-upload outcome (operator-facing toast text) + whether it
-    /// succeeded; `upload_tick` bumps on every note so the UI can toast changes.
-    upload_note: Option<String>,
-    upload_ok: bool,
-    upload_tick: u32,
     /// Active RX signal source — the user-selectable native-vs-companion switch.
     /// For native tiers (FT1/FT8/FT4) this is a [`NativeSource`] whose mode tracks
     /// the selected [`Tier`]; DX1 decodes via its own robust path (see [`ingest`]).
@@ -474,36 +464,9 @@ pub struct Engine {
     /// True once we've seen at least one decode (so time-sync is judged, not
     /// assumed-OK).
     seen_decode: bool,
-    /// Persistent QSO logbook (worked-before / ADIF), loaded from `log_path`.
-    logbook: Logbook,
-    /// ADIF file the logbook is persisted to, if the shell set one.
-    log_path: Option<PathBuf>,
-    /// ADIF journal for the Field Day contest log, if the shell set one — the
-    /// in-memory FD log (which lives only inside [`Mode::FieldDay`]) is
-    /// rewritten here on every logged contact and merged back in when a Field
-    /// Day mode starts, so a mid-event restart loses nothing.
-    fd_log_path: Option<PathBuf>,
-    /// Durable journal for the single QSO held by the prompt-to-log popup.
-    pending_qso_path: Option<PathBuf>,
-    /// Journal path for the store-and-forward outbound queue (pending_msgs.json) —
-    /// written on every queue mutation so held Tempo messages survive a restart.
-    pending_msgs_path: Option<PathBuf>,
     /// A rig read (freq) actually succeeded this session — the cockpit dial/mode are
     /// rig-confirmed rather than the persisted seed (read-only launch provenance).
     rig_confirmed: bool,
-    /// Callsign → DXCC entity resolver, injected by the command layer (which owns
-    /// the cty.dat table) so tempo-app stays DXCC-free. `None` in headless tests
-    /// (new-DXCC highlighting simply stays off). See [`Engine::set_dxcc_resolver`].
-    #[allow(clippy::type_complexity)]
-    dxcc_resolve: Option<Box<dyn Fn(&str) -> Option<String> + Send + Sync>>,
-    /// Grid → rarity tier (0–3) resolver, injected by the command layer (which
-    /// owns the geography table in the propagation crate) — same pattern as
-    /// [`Engine::set_dxcc_resolver`]. `None` in headless tests (gems stay off).
-    #[allow(clippy::type_complexity)]
-    grid_rarity_resolve: Option<Box<dyn Fn(&str) -> Option<u8> + Send + Sync>>,
-    /// Injected "is this call an active LoTW uploader" check (the shell owns the
-    /// ARRL user-activity file + recency window). Presentational only.
-    lotw_resolve: Option<LotwResolver>,
     /// Per-area tier memory: the structured tier (FT8/FT4) last used in the DX
     /// area and the chat tier (FT1/DX1) last used in MSG — so switching areas
     /// round-trips without losing the operator's pick (the "FT4 lost through
@@ -519,25 +482,6 @@ pub struct Engine {
     /// window (band map / board) can prefill the MAIN window's log Call field. Cleared on a
     /// call-less work so a stale call never prefills.
     work_call: Option<String>,
-    /// DXCC entities already worked (from the logbook) — for new-entity decode
-    /// highlighting. Rebuilt on log load + each log mutation.
-    worked_entities: HashSet<String>,
-    /// Maidenhead grids already worked (uppercased) — for new-grid highlighting.
-    worked_grids: HashSet<String>,
-    /// POTA/SOTA references already in the log (hunter side, `ota.their_ref`)
-    /// — drives the NEW PARK badge like worked_entities drives new-DXCC.
-    worked_parks: HashSet<String>,
-    /// Park references the operator imported from their POTA "Hunted Parks.CSV"
-    /// (uppercased). Unioned into `park_worked` so hunts made on CW — where the
-    /// park ref is never in the exchange, so the log can't know it — still count
-    /// as worked. Persisted by the shell; seeded on import + at startup.
-    hunted_parks_import: HashSet<String>,
-    /// Pending HUNT target (program, normalized ref, activator call, set-at
-    /// unix): set by a one-click hunt; the next QSO logged with that call
-    /// auto-tags SIG/SIG_INFO (their_*) and the pend clears. Expires after
-    /// [`HUNT_TTL_SECS`] — activations end; a forgotten pend must never stamp
-    /// a park on an unrelated contact hours later. Session-only.
-    pending_hunt: Option<(String, String, String, u64)>,
     /// The signal report I last sent the current QSO's DX station (RST sent),
     /// captured from the sequencer's outgoing (R)Report. Reset per QSO.
     qso_report_sent: Option<i32>,
@@ -611,10 +555,6 @@ pub struct Engine {
     /// The last ingest's decodes as they were ON AIR (pre hound-split/rewrite)
     /// — what UDP consumers receive. Identical to `last_decodes` outside Hound.
     last_wire_decodes: Vec<modes::Decode>,
-    /// Per-launch salt for the hound pileup spread (stock re-randomizes each
-    /// session; a pure callsign hash parked every operator on the same offset
-    /// at every event).
-    session_salt: u32,
     /// Directed-CQ token for CQ runs ("DX", "NA", "POTA", …): applied to the
     /// run's CQ message at start AND on the return-to-CQ after each pileup
     /// contact. None = plain CQ. Sticky until the operator starts a plain run
@@ -740,8 +680,6 @@ pub struct Engine {
     qso_recording: bool,
     /// Target WAV path for the in-progress QSO recording (set by `start_qso_recording`).
     qso_record_path: Option<String>,
-    /// Directory for saved RX-period WAVs (settings.save_wav) — set by the shell.
-    periods_dir: Option<String>,
     /// Rolling window of the most recent captured audio, fed continuously by the
     /// radio loop (independent of the decoder) so the waterfall reflects LIVE
     /// sound-card input — not just the once-per-slot decoded frame.
@@ -797,19 +735,6 @@ pub struct Engine {
     /// function. Fully inert unless `settings.qsy_enabled` is true, so the primary
     /// Chat/QSO/Field-Day paths are unaffected when the operator hasn't enabled it.
     qsy: Roamer,
-    /// The latest reconcile summary from the last LoTW / eQSL sync (in-memory,
-    /// this session) — its `orphans` drive the confirmation diagnostics. Per source
-    /// so a later eQSL sync doesn't clobber the LoTW orphans. Resets on restart
-    /// until the next sync.
-    last_lotw_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
-    last_eqsl_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
-    /// Orphans from the last QRZ two-way sync (own its slot so an eQSL/LoTW sync
-    /// doesn't clobber them). Resets on restart until the next sync.
-    last_qrz_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
-    /// Current Parks/Summits On The Air activation `(program, reference)` — when set,
-    /// each logged QSO is tagged as your activation (POTA/SOTA). Transient (an
-    /// activation ends), so not persisted. `None` = not activating.
-    activation: Option<(String, String)>,
     /// RTTY RX decoder armed (session-only runtime state, never persisted — the
     /// decoder must never come up armed at launch). RX decode only; no TX path.
     rtty_armed: bool,
@@ -864,10 +789,6 @@ pub struct Engine {
     /// In-flight SSTV decode progress (mode, lines, downscaled preview), pushed
     /// by the decode thread. `None` = no image in flight.
     sstv_progress: Option<SstvProgress>,
-    /// Session gallery of saved SSTV images, newest last. Seeded from the
-    /// persisted `gallery.json` at startup; the decode thread appends on each
-    /// completed image. Capped at [`SSTV_GALLERY_CAP`].
-    sstv_gallery: Vec<crate::dto::SstvGalleryEntry>,
     /// An operator-initiated SSTV image TX waiting for the radio loop to key it:
     /// the whole pre-encoded 12 kHz buffer + its exact duration + mode label.
     /// Filled ONLY by [`Engine::sstv_send`] (an explicit operator send) — never on
@@ -909,7 +830,7 @@ const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
 /// without bound.
 const RX_TAP_CAP: usize = 120_000;
 /// SSTV gallery session-list cap (mirrors the on-disk `gallery.json` cap).
-const SSTV_GALLERY_CAP: usize = 200;
+pub(crate) const SSTV_GALLERY_CAP: usize = 200;
 /// Hard cap on a single SSTV image's key-down (seconds), watchdog-independent. The
 /// longest legitimate mode (PD290) is ~295 s; anything past this is a bug/abuse and is
 /// refused before keying — defense-in-depth above the per-send TX-watchdog budget.
@@ -1026,7 +947,7 @@ fn func_index(func: &str) -> Option<usize> {
 
 /// A pending one-click POTA/SOTA hunt expires after this long — activations
 /// end; a stale pend must never stamp a park on an unrelated contact.
-const HUNT_TTL_SECS: u64 = 4 * 3600;
+pub(crate) const HUNT_TTL_SECS: u64 = 4 * 3600;
 
 const DT_WINDOW: usize = 16;
 /// Time-sync is considered OK while median(|dt|) is under this many seconds.
@@ -1076,10 +997,10 @@ impl Engine {
         Self {
             app,
             settings,
+            station: StationCore::new(),
             tx_offset_hz,
             rx_offset_hz,
             hold_tx_freq,
-            clock_offset_ms: None,
             tx_parity,
             tx_cycle_auto: true,
             beacon_every: 8,
@@ -1090,11 +1011,6 @@ impl Engine {
             last_rx: None,
             last_decodes: Vec::new(),
             harq_rescues: 0,
-            all_txt_pending: Vec::new(),
-            pending_uploads: VecDeque::new(),
-            upload_note: None,
-            upload_ok: false,
-            upload_tick: 0,
             // Default native source = FT8 (matches the default link tier).
             source: Arc::new(Mutex::new(Box::new(NativeSource::from_kind(
                 modes::ModeKind::Ft8,
@@ -1116,25 +1032,12 @@ impl Engine {
             tx_watchdog_start: None,
             recent_dt: VecDeque::new(),
             seen_decode: false,
-            logbook: Logbook::new(),
-            log_path: None,
-            fd_log_path: None,
-            pending_qso_path: None,
-            pending_msgs_path: None,
             rig_confirmed: false,
-            dxcc_resolve: None,
-            grid_rarity_resolve: None,
-            lotw_resolve: None,
             last_dx_tier: None,
             last_msg_tier: None,
             work_tick: 0,
             work_view: None,
             work_call: None,
-            worked_entities: HashSet::new(),
-            worked_grids: HashSet::new(),
-            worked_parks: HashSet::new(),
-            hunted_parks_import: HashSet::new(),
-            pending_hunt: None,
             qso_report_sent: None,
             pending_log: None,
             qso_logged: false,
@@ -1155,7 +1058,6 @@ impl Engine {
             pending_udp_clear: None,
             cq_dir: None,
             last_wire_decodes: Vec::new(),
-            session_salt: now_unix_secs() as u32,
             tx_dial_shift_hz: 0,
             split_tx_mhz: None,
             split_dirty: false,
@@ -1204,7 +1106,6 @@ impl Engine {
             record_buf: Vec::new(),
             qso_recording: false,
             qso_record_path: None,
-            periods_dir: None,
             spectrum_audio: Vec::new(),
             spectrum_cache: None,
             spectrum_rf: None,
@@ -1220,10 +1121,6 @@ impl Engine {
             cat_reprobe: false,
             audio_error: None,
             qsy,
-            last_lotw_reconcile: None,
-            last_eqsl_reconcile: None,
-            last_qrz_reconcile: None,
-            activation: None,
             rtty_armed: false,
             rtty_audio: Vec::new(),
             rtty_chars: VecDeque::new(),
@@ -1240,7 +1137,6 @@ impl Engine {
             sstv_armed: false,
             sstv_audio: Vec::new(),
             sstv_progress: None,
-            sstv_gallery: Vec::new(),
             sstv_tx: None,
             sstv_abort: false,
             sstv_sending: false,
@@ -2713,15 +2609,6 @@ impl Engine {
         self.qso_record_path.clone()
     }
 
-    /// Where saved RX-period WAVs go (the shell passes `<recordings>/periods`).
-    pub fn set_periods_dir(&mut self, dir: &str) {
-        self.periods_dir = Some(dir.to_string());
-    }
-
-    pub fn periods_dir(&self) -> Option<String> {
-        self.periods_dir.clone()
-    }
-
     // ----- coordinated QSY ("move together") ------------------------------
     //
     // A SEPARATE, opt-in function. Every method here is a no-op while the feature
@@ -2864,39 +2751,12 @@ impl Engine {
 
     // ----- logbook --------------------------------------------------------
 
-    /// Point the logbook at an ADIF file and load any existing contacts from it.
-    /// Called once by the shell at startup so `worked_before` highlighting and
-    /// the log view reflect prior sessions, and auto-log appends to this file.
-    pub fn set_log_path(&mut self, path: PathBuf) {
-        self.logbook = Logbook::load(&path);
-        self.log_path = Some(path);
-        self.backfill_country();
-        self.refresh_worked_index();
-    }
-
-    /// Point the Field Day contest log at its durable ADIF journal. Called once
-    /// by the shell at startup (beside [`Self::set_log_path`]); the journal is
-    /// rewritten on every FD contact and restored when FD mode starts.
-    pub fn set_fd_log_path(&mut self, path: PathBuf) {
-        self.fd_log_path = Some(path);
-    }
-
-    /// Point the prompt-to-log hold at its durable journal. Called once by the shell at
-    /// startup, beside [`Self::set_fd_log_path`].
-    pub fn set_pending_qso_path(&mut self, path: PathBuf) {
-        self.pending_qso_path = Some(path);
-    }
-
-    pub fn set_pending_msgs_path(&mut self, path: PathBuf) {
-        self.pending_msgs_path = Some(path);
-    }
-
     /// Journal the store-and-forward queue (write-tmp + fsync + rename, like the
     /// pending-QSO journal). Written the MOMENT the queue changes — queue/release/
     /// ACK/archive — so a crash or power cut can't silently drop a held message the
     /// operator watched enter "waiting to send". An empty queue removes the file.
     pub fn persist_pending_msgs(&self) {
-        let Some(path) = &self.pending_msgs_path else {
+        let Some(path) = &self.station.pending_msgs_path else {
             return;
         };
         let items = self.app.export_pending();
@@ -2950,7 +2810,7 @@ impl Engine {
     /// truncated record. `None` removes the file — a confirmed or discarded QSO must not come
     /// back on the next launch.
     pub fn persist_pending_qso(&self) {
-        let Some(path) = &self.pending_qso_path else {
+        let Some(path) = &self.station.pending_qso_path else {
             return;
         };
         let Some(rec) = &self.pending_log else {
@@ -2994,7 +2854,8 @@ impl Engine {
     /// Best-effort: a write hiccup must never take down a logging path. No-op
     /// with no path set, outside FD mode, or on an empty log.
     pub fn persist_fd_log(&self) {
-        let (Some(path), Some(text)) = (&self.fd_log_path, self.field_day_log_adif()) else {
+        let (Some(path), Some(text)) = (&self.station.fd_log_path, self.field_day_log_adif())
+        else {
             return;
         };
         if let Some(dir) = path.parent() {
@@ -3009,86 +2870,6 @@ impl Engine {
             .and_then(|()| std::fs::rename(&tmp, path));
         if let Err(e) = res {
             eprintln!("tempo: field day log save failed: {e}");
-        }
-    }
-
-    /// Inject the callsign → DXCC entity resolver (the command layer passes
-    /// `propagation::dxcc::resolve`-backed closure). Rebuilds the worked-entity
-    /// index so new-DXCC decode highlighting works from the next snapshot.
-    pub fn set_dxcc_resolver(
-        &mut self,
-        resolve: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
-    ) {
-        self.dxcc_resolve = Some(Box::new(resolve));
-        self.backfill_country();
-        self.refresh_worked_index();
-    }
-
-    /// Inject the grid → rarity-tier (0–3) resolver (the command layer passes a
-    /// `propagation::gridrarity::tier_u8`-backed closure). Purely presentational
-    /// — decodes/roster gain their rarity gems from the next snapshot.
-    pub fn set_grid_rarity_resolver(
-        &mut self,
-        resolve: impl Fn(&str) -> Option<u8> + Send + Sync + 'static,
-    ) {
-        self.grid_rarity_resolve = Some(Box::new(resolve));
-    }
-
-    /// Rarity of a heard grid via the injected resolver; `None` when unwired,
-    /// grid-less, or invalid.
-    fn rarity_of(&self, grid: Option<&str>) -> Option<crate::dto::GridRarity> {
-        let g = grid?.trim();
-        if g.is_empty() {
-            return None;
-        }
-        let f = self.grid_rarity_resolve.as_ref()?;
-        f(g).map(crate::dto::GridRarity::from_tier)
-    }
-
-    /// Inject the callsign → active-LoTW-uploader check (the shell backs it with
-    /// ARRL's lotw-user-activity.csv + the operator's recency window). Purely
-    /// presentational — decodes/roster gain their LoTW marks from the next snapshot.
-    pub fn set_lotw_resolver(&mut self, resolve: impl Fn(&str) -> bool + Send + Sync + 'static) {
-        self.lotw_resolve = Some(Box::new(resolve));
-    }
-
-    /// Whether a heard call uploads to LoTW (via the injected resolver); `false`
-    /// when unwired — the honest default is no highlight, never a guess.
-    fn lotw_user(&self, call: Option<&str>) -> bool {
-        let (Some(c), Some(f)) = (call, self.lotw_resolve.as_ref()) else {
-            return false;
-        };
-        !c.trim().is_empty() && f(c.trim())
-    }
-
-    /// Resolve a DXCC country for any logged record that lacks one (e.g. a log
-    /// loaded/imported from an ADIF without `COUNTRY`, or older Nexus records).
-    /// No-op without a resolver; persists the log if anything changed. Run after
-    /// load / import / resolver-set so the logbook + awards are country-complete.
-    fn backfill_country(&mut self) {
-        let Some(resolve) = self.dxcc_resolve.take() else {
-            return;
-        };
-        // Pull in any records a second instance appended BEFORE the full-log
-        // rewrite below, so backfill can't silently drop them (the M18 data-loss
-        // class). Doing it before the loop also backfills the recovered records.
-        self.recover_external_appends();
-        let mut changed = false;
-        for r in self.logbook.records_mut() {
-            if r.country.is_none() {
-                if let Some(c) = resolve(&r.call) {
-                    r.country = Some(c);
-                    changed = true;
-                }
-            }
-        }
-        self.dxcc_resolve = Some(resolve);
-        if changed {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: backfill_country save failed: {e}");
-                }
-            }
         }
     }
 
@@ -3133,94 +2914,6 @@ impl Engine {
         Some((qso_pts, powered, bonus))
     }
 
-    /// One-click HUNT: remember the activator + park so the NEXT QSO logged
-    /// with that call auto-tags `SIG`/`SIG_INFO` (POTA) / `SOTA_REF` — the
-    /// hunter-side ADIF credit. Validates like [`Engine::set_activation`].
-    pub fn set_hunt_target(
-        &mut self,
-        call: &str,
-        program: &str,
-        reference: &str,
-    ) -> Result<(), String> {
-        let prog = tempo_core::pota::OtaProgram::from_code(program)
-            .ok_or_else(|| format!("unknown program {program:?} (POTA/SOTA)"))?;
-        let normalized = tempo_core::pota::normalize_ref(prog, reference)
-            .ok_or_else(|| format!("invalid {} reference {reference:?}", prog.code()))?;
-        let c = call.trim().to_uppercase();
-        if c.is_empty() {
-            return Err("no activator callsign".into());
-        }
-        self.pending_hunt = Some((prog.code().to_string(), normalized, c, now_unix_secs()));
-        Ok(())
-    }
-
-    /// Drop the pending hunt target (operator cancelled / moved on).
-    pub fn clear_hunt_target(&mut self) {
-        self.pending_hunt = None;
-    }
-
-    /// The pending hunt (program, reference, activator call), for the UI chip.
-    /// An expired pend reads as None (and is dropped lazily).
-    pub fn hunt_target(&self) -> Option<(String, String, String)> {
-        self.pending_hunt
-            .as_ref()
-            .filter(|(_, _, _, at)| now_unix_secs().saturating_sub(*at) <= HUNT_TTL_SECS)
-            .map(|(p, r, c, _)| (p.clone(), r.clone(), c.clone()))
-    }
-
-    /// True when this POTA/SOTA reference is already worked — either in the log
-    /// (hunter side) OR in the operator's imported POTA "Hunted Parks.CSV" (which
-    /// covers CW hunts the log can't know about, since the park ref isn't exchanged).
-    pub fn park_worked(&self, reference: &str) -> bool {
-        let key = reference.trim().to_uppercase();
-        self.worked_parks.contains(&key) || self.hunted_parks_import.contains(&key)
-    }
-
-    /// Seed the imported hunted-parks set from a POTA "Hunted Parks.CSV" (the shell
-    /// parses the reference column). Replaces the set wholesale (a re-import is the
-    /// full current picture). References are uppercased to match `park_worked`.
-    pub fn set_hunted_parks_import(&mut self, refs: impl IntoIterator<Item = String>) {
-        self.hunted_parks_import = refs
-            .into_iter()
-            .filter_map(|r| {
-                let r = r.trim().to_uppercase();
-                (!r.is_empty()).then_some(r)
-            })
-            .collect();
-    }
-
-    /// How many parks the operator has imported from their Hunted Parks.CSV.
-    pub fn hunted_parks_import_count(&self) -> usize {
-        self.hunted_parks_import.len()
-    }
-
-    /// Recompute the worked-entity and worked-grid sets from the logbook. Cheap
-    /// (a few hundred records); run on log load and after each log mutation.
-    fn refresh_worked_index(&mut self) {
-        self.worked_grids.clear();
-        self.worked_entities.clear();
-        self.worked_parks.clear();
-        for r in self.logbook.records() {
-            if let Some(p) = &r.ota.their_ref {
-                let p = p.trim();
-                if !p.is_empty() {
-                    self.worked_parks.insert(p.to_uppercase());
-                }
-            }
-            if let Some(g) = &r.grid {
-                let g = g.trim();
-                if !g.is_empty() {
-                    self.worked_grids.insert(g.to_uppercase());
-                }
-            }
-            if let Some(resolve) = &self.dxcc_resolve {
-                if let Some(entity) = resolve(&r.call) {
-                    self.worked_entities.insert(entity);
-                }
-            }
-        }
-    }
-
     /// Manually add a contact to the logbook (the UI "Log QSO" button). Adds in
     /// memory and appends to the ADIF file if a log path is set.
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
@@ -3235,7 +2928,7 @@ impl Engine {
         // a different band), coarse enough to catch a burst of identical seeds. Covers
         // every path into the log (auto, cockpit button, manual Logbook, companion).
         const DEDUP_WINDOW_SECS: u64 = 300;
-        let is_dup = self.logbook.records().iter().any(|r| {
+        let is_dup = self.station.logbook.records().iter().any(|r| {
             tempo_core::message::same_call(&r.call, &rec.call)
                 && r.band.eq_ignore_ascii_case(&rec.band)
                 && r.mode.eq_ignore_ascii_case(&rec.mode)
@@ -3247,14 +2940,14 @@ impl Engine {
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs.
         if rec.country.is_none() {
-            if let Some(resolve) = &self.dxcc_resolve {
+            if let Some(resolve) = &self.station.dxcc_resolve {
                 rec.country = resolve(&rec.call);
             }
         }
         // Tag with the current POTA/SOTA activation (your side) if one is set and the
         // record doesn't already carry one — so the contact exports with the right
         // MY_SIG/MY_SOTA_REF and counts toward your activation.
-        if let Some((program, reference)) = &self.activation {
+        if let Some((program, reference)) = &self.station.activation {
             if rec.ota.my_ref.is_none() {
                 rec.ota.my_program = Some(program.clone());
                 rec.ota.my_ref = Some(reference.clone());
@@ -3266,17 +2959,17 @@ impl Engine {
         // consume the pend). Expired pends are dropped, never applied — an
         // activation is over within hours; stamping a park on an unrelated
         // same-call contact tomorrow would be a fabricated hunter credit.
-        if let Some((program, reference, call, at)) = &self.pending_hunt {
+        if let Some((program, reference, call, at)) = &self.station.pending_hunt {
             if now_unix_secs().saturating_sub(*at) > HUNT_TTL_SECS {
-                self.pending_hunt = None;
+                self.station.pending_hunt = None;
             } else if tempo_core::message::same_call(&rec.call, call) && rec.ota.their_ref.is_none()
             {
                 rec.ota.their_program = Some(program.clone());
                 rec.ota.their_ref = Some(reference.clone());
-                self.pending_hunt = None;
+                self.station.pending_hunt = None;
             }
         }
-        if let Some(path) = &self.log_path {
+        if let Some(path) = &self.station.log_path {
             if let Err(e) = Logbook::append(path, &rec) {
                 eprintln!("tempo: failed to append to logbook: {e}");
             }
@@ -3286,48 +2979,16 @@ impl Engine {
         // This is THE funnel: auto-logged FT8 QSOs, cockpit logs, and manual
         // Logbook entries all pass through here, so the Settings auto-upload
         // toggles can never be dead for one path again.
-        if self.pending_uploads.len() >= 256 {
-            self.pending_uploads.pop_front();
+        if self.station.pending_uploads.len() >= 256 {
+            self.station.pending_uploads.pop_front();
         }
-        self.pending_uploads.push_back(PendingUpload {
+        self.station.pending_uploads.push_back(PendingUpload {
             rec: rec.clone(),
             legs: upload_legs::ALL,
             attempts: 0,
         });
-        self.logbook.add(rec);
-        self.refresh_worked_index();
-    }
-
-    /// Drain the freshly-logged QSOs awaiting connector auto-upload (FIFO).
-    /// Called by the shell's upload worker; empty when nothing was logged.
-    pub fn take_pending_uploads(&mut self) -> Vec<PendingUpload> {
-        self.pending_uploads.drain(..).collect()
-    }
-
-    /// Re-queue an upload for ONLY the legs that transiently failed (network down,
-    /// service busy), so the worker retries them without re-pushing the legs that
-    /// already succeeded — a permanently-rejected or successful leg is never in
-    /// `legs`. Dropped once past [`MAX_UPLOAD_RETRIES`] or with nothing owed.
-    pub fn requeue_upload(&mut self, rec: tempo_core::logbook::QsoRecord, legs: u8, attempts: u8) {
-        if legs == 0 || attempts >= MAX_UPLOAD_RETRIES {
-            return;
-        }
-        if self.pending_uploads.len() >= 256 {
-            self.pending_uploads.pop_front();
-        }
-        self.pending_uploads.push_back(PendingUpload {
-            rec,
-            legs,
-            attempts,
-        });
-    }
-
-    /// Record a connector-upload outcome for the operator (toast text + level).
-    /// Bumps `upload_tick` so the UI's snapshot poll notices the change.
-    pub fn note_upload(&mut self, note: impl Into<String>, ok: bool) {
-        self.upload_note = Some(note.into());
-        self.upload_ok = ok;
-        self.upload_tick = self.upload_tick.wrapping_add(1);
+        self.station.logbook.add(rec);
+        self.station.refresh_worked_index();
     }
 
     /// Push a logged QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP
@@ -3363,400 +3024,9 @@ impl Engine {
         }
     }
 
-    /// Begin a Parks/Summits On The Air activation — every QSO logged afterward is
-    /// tagged as your activation until [`clear_activation`](Self::clear_activation).
-    /// Validates + normalizes the reference; returns the normalized `(program, ref)`
-    /// or an error string for an unknown program / malformed reference.
-    pub fn set_activation(
-        &mut self,
-        program: &str,
-        reference: &str,
-    ) -> Result<(String, String), String> {
-        let prog = tempo_core::pota::OtaProgram::from_code(program)
-            .ok_or_else(|| format!("Unknown program '{program}' — use POTA or SOTA."))?;
-        let normalized = tempo_core::pota::normalize_ref(prog, reference)
-            .ok_or_else(|| format!("'{reference}' isn't a valid {} reference.", prog.code()))?;
-        self.activation = Some((prog.code().to_string(), normalized.clone()));
-        Ok((prog.code().to_string(), normalized))
-    }
-
-    /// End the current activation (subsequent QSOs are untagged).
-    pub fn clear_activation(&mut self) {
-        self.activation = None;
-    }
-
-    /// The current activation `(program, reference)`, if any.
-    pub fn activation(&self) -> Option<(String, String)> {
-        self.activation.clone()
-    }
-
-    /// How many logged QSOs carry the current activation reference (the live count
-    /// for the activation panel). 0 when not activating.
-    pub fn activation_qso_count(&self) -> usize {
-        match &self.activation {
-            Some((_, reference)) => self
-                .logbook
-                .records()
-                .iter()
-                .filter(|r| r.ota.my_ref.as_deref() == Some(reference.as_str()))
-                .count(),
-            None => 0,
-        }
-    }
-
-    /// Before any full-log rewrite ([`Logbook::save`]), pull back any records that
-    /// another writer — a second Nexus instance sharing this `log.adi`, since there
-    /// is no single-instance guard — appended to the file after we loaded it. Our
-    /// in-memory copy is otherwise stale, and `save` would `rename()` a truncated
-    /// log over the file, silently discarding those QSOs.
-    ///
-    /// `import_adif` dedups by call+band+mode+UTC-day, so it only ever ADDS records
-    /// we lack (appended to the end, leaving existing indices valid) — it never
-    /// resurrects a record we just edited or deleted, PROVIDED callers run this
-    /// BEFORE their mutation, while our copy still holds the record being changed.
-    /// No-op without a log path or on a read error.
-    fn recover_external_appends(&mut self) {
-        let Some(path) = self.log_path.clone() else {
-            return;
-        };
-        let disk = std::fs::read_to_string(&path).unwrap_or_default();
-        if !disk.is_empty() {
-            self.logbook.import_adif(&disk);
-        }
-    }
-
-    /// Edit an existing logbook entry (a correction — busted call, wrong band, etc).
-    /// Sync-derived state is preserved by `Logbook::update_record`. Persists by
-    /// rewriting the whole ADIF (an edit can't be an append). Returns false if
-    /// `index` is out of range.
-    pub fn update_qso(&mut self, index: usize, mut rec: QsoRecord) -> bool {
-        // Keep country populated on edits (the edit form doesn't carry it).
-        if rec.country.is_none() {
-            if let Some(resolve) = &self.dxcc_resolve {
-                rec.country = resolve(&rec.call);
-            }
-        }
-        // Recover another instance's appends BEFORE applying the edit, so the
-        // full-log rewrite below can't drop them (and so the pre-edit record is
-        // still present to dedup against — no stale copy is re-added).
-        self.recover_external_appends();
-        let ok = self.logbook.update_record(index, rec);
-        if ok {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: update_qso save failed: {e}");
-                }
-            }
-            self.refresh_worked_index();
-        }
-        ok
-    }
-
-    /// Mark logbook entry `index` as QSL-sent (operator-declared: I sent a
-    /// card/request `via` bureau/direct/electronic, dated now). Only ADDS a request
-    /// — never touches confirmation state. Persists by rewriting the ADIF. Returns
-    /// false if `index` is out of range.
-    pub fn mark_qsl_sent(&mut self, index: usize, via: tempo_core::logbook::QslVia) -> bool {
-        self.recover_external_appends();
-        let ok = self.logbook.mark_qsl_sent(index, via, now_unix_secs());
-        if ok {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: mark_qsl_sent save failed: {e}");
-                }
-            }
-        }
-        ok
-    }
-
-    /// Delete a logbook entry (a mis-logged contact). Persists by rewriting the
-    /// ADIF. Returns false if `index` is out of range. Shifts later indices — the
-    /// caller must reload the log afterward.
-    pub fn delete_qso(&mut self, index: usize) -> bool {
-        // Recover another instance's appends BEFORE the delete, so the rewrite
-        // drops only THIS record (the deleted key is absent from our copy at save
-        // time, so recovery can't re-add it) and keeps the other writer's QSOs.
-        self.recover_external_appends();
-        let ok = self.logbook.delete(index);
-        if ok {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: delete_qso save failed: {e}");
-                }
-            }
-            self.refresh_worked_index();
-        }
-        ok
-    }
-
-    /// Purge the ENTIRE logbook (operator-confirmed, destructive, irreversible).
-    /// Clears every contact in memory, rewrites the ADIF file to an empty log, and
-    /// recomputes the worked-entity/grid sets (so the roster B4 highlighting and
-    /// the needs/awards model reset too). Returns the number of contacts removed.
-    pub fn clear_logbook(&mut self) -> usize {
-        let n = self.logbook.clear();
-        if n > 0 {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: clear_logbook save failed: {e}");
-                }
-            }
-            self.refresh_worked_index();
-        }
-        n
-    }
-
-    /// Import an external ADIF logbook: merge (deduped) into the persistent log,
-    /// append the newly-added records to the ADIF file, and return
-    /// `(added, skipped, total)`. The next propagation snapshot derives real
-    /// "needs" from the enlarged log (and roster B4 highlighting updates).
-    pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize) {
-        let (added, skipped) = self.logbook.import_adif(text);
-        if let Some(path) = &self.log_path {
-            for r in &added {
-                if let Err(e) = Logbook::append(path, r) {
-                    eprintln!("tempo: import_adif append failed: {e}");
-                }
-            }
-        }
-        self.backfill_country();
-        self.refresh_worked_index();
-        (added.len(), skipped, self.logbook.len())
-    }
-
-    /// Reconcile a confirmation/credit report (ADIF — e.g. a LoTW export) INTO the
-    /// existing log: monotonically upgrade matched QSOs' confirmation + credit
-    /// (which a plain dedup-import would skip and lose), rewrite the ADIF file, and
-    /// return the reconcile summary (newly confirmed/credited + unmatched orphans).
-    pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
-        self.recover_external_appends();
-        let summary = self.logbook.merge_report(text);
-        self.last_lotw_reconcile = Some(summary.clone());
-        if let Some(path) = &self.log_path {
-            if let Err(e) = self.logbook.save(path) {
-                eprintln!("tempo: merge_lotw_report save failed: {e}");
-            }
-        }
-        summary
-    }
-
-    /// Stamp POTA/SOTA park refs from a pota.app hunter/activator export onto matching
-    /// existing QSOs (stamp-only: never creates records, never overwrites a ref — the
-    /// reviewed-adds half is a separate feature). Returns (stamped, already, unmatched).
-    pub fn import_pota_log(&mut self, text: &str) -> (usize, usize, usize) {
-        self.recover_external_appends();
-        let out = self.logbook.stamp_ota_refs(text);
-        if out.0 > 0 {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: import_pota_log save failed: {e}");
-                }
-            }
-        }
-        out
-    }
-
-    /// Merge a LoTW own-QSO report (`qso_qsl=no`) INTO the log: promote in-flight
-    /// uploads (Pending / never-marked) to `Accepted` where LoTW confirms it holds
-    /// your record — the step that turns a just-uploaded QSO into "waiting on the
-    /// partner" (R2) and clears false "never uploaded" (R1) for out-of-band uploads.
-    /// Persists the log on any change. Returns the count newly promoted.
-    pub fn merge_lotw_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
-        self.recover_external_appends();
-        let promoted = self.logbook.merge_own_echo(text, when_unix);
-        if promoted > 0 {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: merge_lotw_own_echo save failed: {e}");
-                }
-            }
-        }
-        promoted
-    }
-
-    /// UTC date (`YYYY-MM-DD`) of the oldest QSO with an in-flight (Pending) LoTW
-    /// upload — the lower bound for the own-QSO pull. `None` → nothing in flight, so
-    /// the sync skips the own-echo step.
-    pub fn oldest_pending_lotw_date(&self) -> Option<String> {
-        self.logbook.oldest_pending_lotw_date()
-    }
-
-    /// Record a QRZ Logbook push outcome on the just-pushed QSO (`upload.qrz`), so
-    /// the diagnostics can show "never uploaded to QRZ" (R1) / "QRZ upload bounced"
-    /// (R9). Persists on change. Returns whether a record was stamped.
-    pub fn stamp_qrz_upload(
-        &mut self,
-        pushed: &QsoRecord,
-        outcome: tempo_core::logbook::UploadOutcome,
-        when_unix: i64,
-        detail: Option<String>,
-    ) -> bool {
-        let status = tempo_core::logbook::UploadStatus {
-            outcome,
-            when_unix,
-            detail,
-        };
-        self.recover_external_appends();
-        let changed = self.logbook.stamp_qrz_upload(pushed, status);
-        if changed {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: stamp_qrz_upload save failed: {e}");
-                }
-            }
-        }
-        changed
-    }
-
-    /// Record a ClubLog realtime push outcome on the just-pushed QSO
-    /// (`upload.clublog`). Persists on change. Returns whether a record was stamped.
-    pub fn stamp_clublog_upload(
-        &mut self,
-        pushed: &QsoRecord,
-        outcome: tempo_core::logbook::UploadOutcome,
-        when_unix: i64,
-        detail: Option<String>,
-    ) -> bool {
-        let status = tempo_core::logbook::UploadStatus {
-            outcome,
-            when_unix,
-            detail,
-        };
-        self.recover_external_appends();
-        let changed = self.logbook.stamp_clublog_upload(pushed, status);
-        if changed {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: stamp_clublog_upload save failed: {e}");
-                }
-            }
-        }
-        changed
-    }
-
-    /// Record an eQSL ADIF-upload outcome on the just-pushed QSO (`upload.eqsl`).
-    /// Persists on change. Returns whether a record was stamped.
-    pub fn stamp_eqsl_upload(
-        &mut self,
-        pushed: &QsoRecord,
-        outcome: tempo_core::logbook::UploadOutcome,
-        when_unix: i64,
-        detail: Option<String>,
-    ) -> bool {
-        let status = tempo_core::logbook::UploadStatus {
-            outcome,
-            when_unix,
-            detail,
-        };
-        self.recover_external_appends();
-        let changed = self.logbook.stamp_eqsl_upload(pushed, status);
-        if changed {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: stamp_eqsl_upload save failed: {e}");
-                }
-            }
-        }
-        changed
-    }
-
-    /// Merge an eQSL confirmation report into the log. Same generic reconcile path
-    /// as [`Engine::merge_lotw_report`]; the award-grade distinction lives in the
-    /// ADIF (eQSL carries `EQSL_QSL_RCVD`, not `QSL_RCVD`/`LOTW_QSL_RCVD`), so an
-    /// eQSL confirmation lands `confirmed` but NOT `award_confirmed` by construction.
-    pub fn merge_eqsl_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
-        self.recover_external_appends();
-        let summary = self.logbook.merge_report(text);
-        self.last_eqsl_reconcile = Some(summary.clone());
-        if let Some(path) = &self.log_path {
-            if let Err(e) = self.logbook.save(path) {
-                eprintln!("tempo: merge_eqsl_report save failed: {e}");
-            }
-        }
-        summary
-    }
-
-    /// Two-way QRZ Logbook sync: merge a QRZ **FETCH** ADIF (the operator's whole
-    /// book) INTO the log. QRZ returns both QSOs the operator logged elsewhere (e.g.
-    /// a phone app in the field) AND confirmation status, so this runs two passes:
-    /// first import genuinely-new QSOs (deduped), then reconcile confirmations onto
-    /// the QSOs already present. A QRZ-native confirmation (`APP_QRZLOG_STATUS`) lands
-    /// `confirmed` but NOT `award_confirmed`, by construction of the `qrz` channel, so
-    /// it can't inflate DXCC/WAS counts. Returns `(added, reconcile_summary)`.
-    pub fn merge_qrz_report(
-        &mut self,
-        text: &str,
-    ) -> (usize, tempo_core::reconcile::ReconcileSummary) {
-        self.recover_external_appends();
-        // ONE consume-once pass: add the QSOs QRZ has that we lack AND upgrade
-        // confirmations on the ones already present, keyed identically so a mode-
-        // spelling difference (e.g. a phone QSO re-uploaded as USB vs our SSB) can't
-        // double-log the same contact. A full save then captures both the appended
-        // rows and the reconciled confirmations.
-        let (added, summary) = self.logbook.merge_downloaded(text);
-        self.last_qrz_reconcile = Some(summary.clone());
-        if let Some(path) = &self.log_path {
-            if let Err(e) = self.logbook.save(path) {
-                eprintln!("tempo: merge_qrz_report save failed: {e}");
-            }
-        }
-        self.backfill_country();
-        self.refresh_worked_index();
-        (added.len(), summary)
-    }
-
-    /// A clone of all logbook records (oldest-first / newest-last).
-    pub fn get_log(&self) -> Vec<QsoRecord> {
-        self.logbook.records().to_vec()
-    }
-
-    /// Run the silent match-failure diagnostics over the log (Phase 1a). `resolve`
-    /// maps a callsign to its DXCC entity name (for R4d's US-family gate) — the
-    /// command layer passes `propagation::dxcc::resolve`, keeping the entity table
-    /// out of tempo-app. Reads the last LoTW + eQSL reconcile orphans (this session).
-    pub fn confirmation_diagnostics(
-        &self,
-        now: i64,
-        resolve: impl Fn(&str) -> Option<String>,
-    ) -> tempo_core::diagnostics::DiagnosticsReport {
-        let records = self.logbook.records();
-        let entities: Vec<Option<String>> = records.iter().map(|r| resolve(&r.call)).collect();
-        let mut recents: Vec<&tempo_core::reconcile::ReconcileSummary> = Vec::new();
-        if let Some(s) = &self.last_lotw_reconcile {
-            recents.push(s);
-        }
-        if let Some(s) = &self.last_eqsl_reconcile {
-            recents.push(s);
-        }
-        if let Some(s) = &self.last_qrz_reconcile {
-            recents.push(s);
-        }
-        tempo_core::diagnostics::diagnose(
-            records,
-            &entities,
-            &recents,
-            now,
-            &tempo_core::diagnostics::DiagCfg::default(),
-        )
-    }
-
-    /// Log indices (oldest-first) of QSOs not yet sent to LoTW: award-unconfirmed
-    /// AND either never uploaded or a prior bounce. `UploadState` IS the per-QSO
-    /// cursor — Pending/Accepted/Duplicate are excluded (don't re-send).
-    pub fn lotw_unsent_indices(&self) -> Vec<usize> {
-        self.logbook
-            .records()
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| !r.award_confirmed)
-            .filter(|(_, r)| r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent()))
-            .map(|(i, _)| i)
-            .collect()
-    }
-
     /// Build the ADIF upload payload (header + the records at `indices`) for TQSL.
     pub fn lotw_upload_adif(&self, indices: &[usize]) -> String {
-        let recs = self.logbook.records();
+        let recs = self.station.logbook.records();
         let mut out = tempo_core::logbook::adif_header();
         // In ADIF-location mode, stamp each record with STATION_CALLSIGN + MY_GRIDSQUARE so TQSL
         // can sign from the ADIF (no named `-l` location). Named-location mode is byte-identical
@@ -3778,43 +3048,15 @@ impl Engine {
         out
     }
 
-    /// Stamp `upload.lotw` on the given records after an upload attempt, then save.
-    pub fn stamp_lotw_upload(
-        &mut self,
-        indices: &[usize],
-        outcome: tempo_core::logbook::UploadOutcome,
-        when_unix: i64,
-        detail: Option<String>,
-    ) {
-        // Recover another instance's appends before the full-log rewrite; the
-        // recovered records land at the end, so `indices` still address the same
-        // rows.
-        self.recover_external_appends();
-        for &i in indices {
-            if let Some(r) = self.logbook.records_mut().get_mut(i) {
-                r.upload.lotw = Some(tempo_core::logbook::UploadStatus {
-                    outcome,
-                    when_unix,
-                    detail: detail.clone(),
-                });
-            }
-        }
-        if let Some(path) = &self.log_path {
-            if let Err(e) = self.logbook.save(path) {
-                eprintln!("tempo: lotw upload stamp save failed: {e}");
-            }
-        }
-    }
-
     /// Mark every QSO currently counted as un-uploaded to LoTW (the "Upload to LoTW (N)" set)
     /// as ALREADY on LoTW — the operator's declaration that an imported legacy log was uploaded
     /// through another tool (Ham2K Polo, TQSL, etc.). Stamps them `Accepted` so they drop out of
     /// the unsent count and a bulk upload never re-pushes them. Returns how many were marked.
     pub fn mark_lotw_uploaded_all(&mut self) -> usize {
-        let indices = self.lotw_unsent_indices();
+        let indices = self.station.lotw_unsent_indices();
         let n = indices.len();
         if n > 0 {
-            self.stamp_lotw_upload(
+            self.station.stamp_lotw_upload(
                 &indices,
                 tempo_core::logbook::UploadOutcome::Accepted,
                 now_unix_secs() as i64,
@@ -3894,7 +3136,7 @@ impl Engine {
         // backup with just the new session. Rows older than 4 days are a
         // previous event's journal and self-expire.
         if let Mode::FieldDay { station, .. } = &mut self.mode {
-            if let Some(path) = &self.fd_log_path {
+            if let Some(path) = &self.station.fd_log_path {
                 station.log.merge_adif(
                     &std::fs::read_to_string(path).unwrap_or_default(),
                     now_unix_secs().saturating_sub(4 * 86_400),
@@ -4126,7 +3368,7 @@ impl Engine {
                 .settings
                 .mycall
                 .bytes()
-                .fold(self.session_salt, |a, b| {
+                .fold(self.station.session_salt, |a, b| {
                     a.wrapping_mul(31).wrapping_add(b as u32)
                 });
             self.set_tx_offset(1000.0 + (spread % 1900) as f32);
@@ -5485,7 +4727,11 @@ impl Engine {
                 .find(|(k, _)| k == key)
                 .map(|(_, v)| v.clone())
         };
-        let country = self.dxcc_resolve.as_ref().and_then(|resolve| resolve(call));
+        let country = self
+            .station
+            .dxcc_resolve
+            .as_ref()
+            .and_then(|resolve| resolve(call));
         // On-air RF = dial + the TX audio offset, sideband-signed (WSJT-X convention).
         let off_mhz = self.tx_offset_hz as f64 / 1e6;
         let freq_mhz = if self.settings.sideband.eq_ignore_ascii_case("LSB") {
@@ -5621,41 +4867,6 @@ impl Engine {
     /// The in-flight SSTV decode progress, if an image is being received.
     pub fn sstv_progress(&self) -> Option<&SstvProgress> {
         self.sstv_progress.as_ref()
-    }
-
-    /// Append a completed SSTV image to the session gallery (newest last),
-    /// capped at [`SSTV_GALLERY_CAP`]. Decode-thread only.
-    pub fn push_sstv_gallery(&mut self, entry: crate::dto::SstvGalleryEntry) {
-        self.sstv_gallery.push(entry);
-        if self.sstv_gallery.len() > SSTV_GALLERY_CAP {
-            let excess = self.sstv_gallery.len() - SSTV_GALLERY_CAP;
-            self.sstv_gallery.drain(0..excess);
-        }
-    }
-
-    /// Attach a decoded FSK callsign ID to the newest gallery entry whose
-    /// `path` matches (the image was just saved, so it's at/near the tail).
-    /// Best-effort — a no-op if no entry matches (e.g. the gallery rolled past
-    /// its cap before the burst decoded). Decode-thread only, like the other
-    /// `sstv_gallery` mutators.
-    pub fn set_sstv_gallery_fsk_id(&mut self, path: &str, fsk_id: String) {
-        if let Some(entry) = self.sstv_gallery.iter_mut().rev().find(|e| e.path == path) {
-            entry.fsk_id = Some(fsk_id);
-        }
-    }
-
-    /// Seed the session gallery from the persisted `gallery.json` (startup).
-    pub fn load_sstv_gallery(&mut self, mut entries: Vec<crate::dto::SstvGalleryEntry>) {
-        if entries.len() > SSTV_GALLERY_CAP {
-            let excess = entries.len() - SSTV_GALLERY_CAP;
-            entries.drain(0..excess);
-        }
-        self.sstv_gallery = entries;
-    }
-
-    /// The session SSTV gallery, oldest first.
-    pub fn sstv_gallery(&self) -> &[crate::dto::SstvGalleryEntry] {
-        &self.sstv_gallery
     }
 
     // ----- SSTV transmit — operator-initiated, mirroring the RTTY/voice-keyer send
@@ -5956,20 +5167,6 @@ impl Engine {
         }
     }
 
-    /// Set the measured PC-clock-vs-UTC offset (ms) from the NTP probe (`None`
-    /// when the check is disabled or offline). Surfaced for the UI clock chip.
-    pub fn set_clock_offset_ms(&mut self, ms: Option<i64>) {
-        self.clock_offset_ms = ms;
-    }
-
-    /// The measured PC-clock-vs-UTC offset (ms), `local − UTC` (positive = the PC
-    /// clock is ahead of UTC). `None` when the NTP check is off / offline. The
-    /// radio loop subtracts this from the system clock so TX/RX slots land on the
-    /// true UTC grid even when the OS clock is skewed.
-    pub fn clock_offset_ms(&self) -> Option<i64> {
-        self.clock_offset_ms
-    }
-
     /// UDP HighlightCallsign (JTAlert): paint/clear a callsign in the decode
     /// panes. Both colors None = clear the entry.
     pub fn set_highlight(&mut self, call: &str, bg: Option<String>, fg: Option<String>) {
@@ -6186,14 +5383,14 @@ impl Engine {
         // (O(roster × log)). This snapshot runs under the engine mutex on the 300 ms UI poll and
         // again every slot boundary; the old multiplicative sweep held the lock long enough to
         // stall the waterfall's spectrum fetch (which needs the same lock) for 1–2 s at low CPU.
-        let worked = self.logbook.worked_call_set();
+        let worked = self.station.logbook.worked_call_set();
         for st in &mut s.stations {
             st.worked = worked.contains(&st.call.to_ascii_uppercase());
-            if let Some(resolve) = &self.dxcc_resolve {
+            if let Some(resolve) = &self.station.dxcc_resolve {
                 st.country = resolve(&st.call);
             }
-            st.grid_rarity = self.rarity_of(st.grid.as_deref());
-            st.lotw_user = self.lotw_user(Some(st.call.as_str()));
+            st.grid_rarity = self.station.rarity_of(st.grid.as_deref());
+            st.lotw_user = self.station.lotw_user(Some(st.call.as_str()));
         }
         // Reflect transmit-enable / tuning / watchdog and the DT-derived
         // time-sync health into the radio status the UI renders.
@@ -6264,7 +5461,7 @@ impl Engine {
         s.radio.xit_hz = self.xit_hz;
         s.radio.active_vfo = if self.active_vfo_b { "B" } else { "A" }.to_string();
         s.radio.hold_tx_freq = self.hold_tx_freq;
-        s.radio.clock_offset_ms = self.clock_offset_ms;
+        s.radio.clock_offset_ms = self.station.clock_offset_ms;
         s.radio.source = self.source_kind;
         s.radio.source_label = self.source.lock().unwrap().label();
         // Multi-radio switcher summaries (dual-radio). Left empty for a single-radio station (the
@@ -6404,7 +5601,7 @@ impl Engine {
                 // Worked-before (B4): the decode's sender is in the logbook.
                 let worked = from
                     .as_deref()
-                    .map(|c| self.logbook.worked_before(c))
+                    .map(|c| self.station.logbook.worked_before(c))
                     .unwrap_or(false);
                 // New-grid (B3): the decode carries a Maidenhead grid we've never
                 // worked. Grid is present on CQ/grid forms.
@@ -6413,32 +5610,34 @@ impl Engine {
                     _ => None,
                 };
                 let new_grid = grid
-                    .map(|g| !g.is_empty() && !self.worked_grids.contains(&g.to_uppercase()))
+                    .map(|g| {
+                        !g.is_empty() && !self.station.worked_grids.contains(&g.to_uppercase())
+                    })
                     .unwrap_or(false);
                 // Country + New-DXCC (B3): resolve the sender's DXCC entity once.
                 // `country` rides every decode (DX chasers scan by country); the
                 // entity also drives new-DXCC. Needs the injected resolver; both
                 // stay None/false in headless tests.
-                let entity = match (&from, &self.dxcc_resolve) {
+                let entity = match (&from, &self.station.dxcc_resolve) {
                     (Some(c), Some(resolve)) => resolve(c),
                     _ => None,
                 };
                 let new_dxcc = entity
                     .as_ref()
-                    .map(|e| !self.worked_entities.contains(e))
+                    .map(|e| !self.station.worked_entities.contains(e))
                     .unwrap_or(false);
                 // Rarity: prefer the grid on THIS frame, but on report/R/RR73/73
                 // frames (which carry no grid) fall back to the sender's grid
                 // remembered in the roster — so an ULTRA-rare station keeps its
                 // badge through the whole QSO, not just on its CQ. (Backfills only
                 // the rarity marker; the row's own `grid` text stays unchanged.)
-                let grid_rarity = self.rarity_of(grid.or_else(|| {
+                let grid_rarity = self.station.rarity_of(grid.or_else(|| {
                     from.as_deref()
                         .and_then(|c| self.app.inbox.roster.get(c))
                         .and_then(|h| h.grid.as_deref())
                 }));
                 DecodeRow {
-                    lotw_user: self.lotw_user(from.as_deref()),
+                    lotw_user: self.station.lotw_user(from.as_deref()),
                     from,
                     snr: d.snr,
                     dt_sec: d.dt,
@@ -6511,6 +5710,7 @@ impl Engine {
         s.work_view = self.work_view.clone();
         s.work_call = self.work_call.clone();
         s.hunt = self
+            .station
             .hunt_target() // TTL-filtered: an expired pend never shows a chip
             .map(|(program, reference, call)| crate::dto::HuntDto {
                 program,
@@ -6518,9 +5718,9 @@ impl Engine {
                 call,
             });
         s.harq_rescues = self.harq_rescues;
-        s.upload_note = self.upload_note.clone();
-        s.upload_ok = self.upload_ok;
-        s.upload_tick = self.upload_tick;
+        s.upload_note = self.station.upload_note.clone();
+        s.upload_ok = self.station.upload_ok;
+        s.upload_tick = self.station.upload_tick;
         s.pending_log = self.pending_log.clone().map(Into::into);
         s
     }
@@ -6971,7 +6171,7 @@ impl Engine {
         // is running; seeding is a one-shot startup task).
         let _g = self.source.lock().unwrap();
         // Newest first; cap the work — each encode is one FFI round-trip.
-        for rec in self.get_log().into_iter().rev() {
+        for rec in self.station.get_log().into_iter().rev() {
             let call = rec.call.trim().to_uppercase();
             if !is_compound(&call) || !seen.insert(call.clone()) {
                 continue;
@@ -7079,14 +6279,16 @@ impl Engine {
             let mode = format!("{:?}", self.app.tier()).to_uppercase();
             let now = now_unix_secs();
             for d in &decodes {
-                self.all_txt_pending.push(crate::alltxt::all_txt_line(
-                    now, dial, false, &mode, d.snr, d.dt, d.freq, &d.message,
-                ));
+                self.station
+                    .all_txt_pending
+                    .push(crate::alltxt::all_txt_line(
+                        now, dial, false, &mode, d.snr, d.dt, d.freq, &d.message,
+                    ));
             }
             // Bound memory if the shell never drains (e.g. headless): keep newest 5000.
-            let len = self.all_txt_pending.len();
+            let len = self.station.all_txt_pending.len();
             if len > 5000 {
-                self.all_txt_pending.drain(0..len - 5000);
+                self.station.all_txt_pending.drain(0..len - 5000);
             }
         }
         // Track recent decode DT magnitudes for the time-sync health estimate.
@@ -7461,6 +6663,7 @@ impl Engine {
         // Resolve the DXCC entity (country) at log time — the key field for a
         // DXer. Uses the injected resolver; None in headless tests.
         let country = self
+            .station
             .dxcc_resolve
             .as_ref()
             .and_then(|resolve| resolve(&dxcall));
@@ -7508,11 +6711,6 @@ impl Engine {
     /// Decodes from the most recent [`Engine::ingest`] (for the network layer).
     pub fn last_decodes(&self) -> &[modes::Decode] {
         &self.last_decodes
-    }
-    /// Drain the WSJT-X-format ALL.TXT lines buffered since the last call (the shell
-    /// appends them to the on-disk log). Empty when ALL.TXT logging is off.
-    pub fn take_all_txt_pending(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.all_txt_pending)
     }
     /// The last ingest's decodes as transmitted ON AIR (pre hound rewriting) —
     /// the only form that may leave over UDP.
@@ -7615,15 +6813,6 @@ impl Engine {
         Some(station.log.adif())
     }
 
-    /// Export the **general** logbook (Chat/QSO contacts, any mode) as ADIF or
-    /// CSV. Independent of Field Day's contest log ([`Engine::export_log`]).
-    pub fn export_logbook(&self, format: &str) -> String {
-        match format.to_ascii_lowercase().as_str() {
-            "csv" => self.logbook.csv(),
-            _ => self.logbook.adif(),
-        }
-    }
-
     /// One waterfall row: the Goertzel power spectrum of the **live** captured
     /// audio (the rolling window fed by the radio loop), so the waterfall tracks
     /// real sound-card input continuously. Falls back to the last decoded frame,
@@ -7686,6 +6875,303 @@ impl Engine {
         }
         Self::compute_spectrum(self.last_rx.as_deref().unwrap_or(&[]))
     }
+
+    // ---------------------------------------------------------------------------
+    // Station-wide delegates.
+    //
+    // These live on [`StationCore`]; the forwarders keep the Engine call surface
+    // (Tauri commands, tests) byte-identical to before the split.
+    // ---------------------------------------------------------------------------
+
+    /// See [`StationCore::set_periods_dir`].
+    pub fn set_periods_dir(&mut self, dir: &str) {
+        self.station.set_periods_dir(dir)
+    }
+
+    /// See [`StationCore::periods_dir`].
+    pub fn periods_dir(&self) -> Option<String> {
+        self.station.periods_dir()
+    }
+
+    /// See [`StationCore::set_log_path`].
+    pub fn set_log_path(&mut self, path: PathBuf) {
+        self.station.set_log_path(path)
+    }
+
+    /// See [`StationCore::set_fd_log_path`].
+    pub fn set_fd_log_path(&mut self, path: PathBuf) {
+        self.station.set_fd_log_path(path)
+    }
+
+    /// See [`StationCore::set_pending_qso_path`].
+    pub fn set_pending_qso_path(&mut self, path: PathBuf) {
+        self.station.set_pending_qso_path(path)
+    }
+
+    /// See [`StationCore::set_pending_msgs_path`].
+    pub fn set_pending_msgs_path(&mut self, path: PathBuf) {
+        self.station.set_pending_msgs_path(path)
+    }
+
+    /// See [`StationCore::set_dxcc_resolver`].
+    pub fn set_dxcc_resolver(
+        &mut self,
+        resolve: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.station.set_dxcc_resolver(resolve)
+    }
+
+    /// See [`StationCore::set_grid_rarity_resolver`].
+    pub fn set_grid_rarity_resolver(
+        &mut self,
+        resolve: impl Fn(&str) -> Option<u8> + Send + Sync + 'static,
+    ) {
+        self.station.set_grid_rarity_resolver(resolve)
+    }
+
+    /// See [`StationCore::set_lotw_resolver`].
+    pub fn set_lotw_resolver(&mut self, resolve: impl Fn(&str) -> bool + Send + Sync + 'static) {
+        self.station.set_lotw_resolver(resolve)
+    }
+
+    /// See [`StationCore::set_hunt_target`].
+    pub fn set_hunt_target(
+        &mut self,
+        call: &str,
+        program: &str,
+        reference: &str,
+    ) -> Result<(), String> {
+        self.station.set_hunt_target(call, program, reference)
+    }
+
+    /// See [`StationCore::clear_hunt_target`].
+    pub fn clear_hunt_target(&mut self) {
+        self.station.clear_hunt_target()
+    }
+
+    /// See [`StationCore::hunt_target`].
+    pub fn hunt_target(&self) -> Option<(String, String, String)> {
+        self.station.hunt_target()
+    }
+
+    /// See [`StationCore::park_worked`].
+    pub fn park_worked(&self, reference: &str) -> bool {
+        self.station.park_worked(reference)
+    }
+
+    /// See [`StationCore::set_hunted_parks_import`].
+    pub fn set_hunted_parks_import(&mut self, refs: impl IntoIterator<Item = String>) {
+        self.station.set_hunted_parks_import(refs)
+    }
+
+    /// See [`StationCore::hunted_parks_import_count`].
+    pub fn hunted_parks_import_count(&self) -> usize {
+        self.station.hunted_parks_import_count()
+    }
+
+    /// See [`StationCore::take_pending_uploads`].
+    pub fn take_pending_uploads(&mut self) -> Vec<PendingUpload> {
+        self.station.take_pending_uploads()
+    }
+
+    /// See [`StationCore::requeue_upload`].
+    pub fn requeue_upload(&mut self, rec: tempo_core::logbook::QsoRecord, legs: u8, attempts: u8) {
+        self.station.requeue_upload(rec, legs, attempts)
+    }
+
+    /// See [`StationCore::note_upload`].
+    pub fn note_upload(&mut self, note: impl Into<String>, ok: bool) {
+        self.station.note_upload(note, ok)
+    }
+
+    /// See [`StationCore::set_activation`].
+    pub fn set_activation(
+        &mut self,
+        program: &str,
+        reference: &str,
+    ) -> Result<(String, String), String> {
+        self.station.set_activation(program, reference)
+    }
+
+    /// See [`StationCore::clear_activation`].
+    pub fn clear_activation(&mut self) {
+        self.station.clear_activation()
+    }
+
+    /// See [`StationCore::activation`].
+    pub fn activation(&self) -> Option<(String, String)> {
+        self.station.activation()
+    }
+
+    /// See [`StationCore::activation_qso_count`].
+    pub fn activation_qso_count(&self) -> usize {
+        self.station.activation_qso_count()
+    }
+
+    /// See [`StationCore::update_qso`].
+    pub fn update_qso(&mut self, index: usize, rec: QsoRecord) -> bool {
+        self.station.update_qso(index, rec)
+    }
+
+    /// See [`StationCore::mark_qsl_sent`].
+    pub fn mark_qsl_sent(&mut self, index: usize, via: tempo_core::logbook::QslVia) -> bool {
+        self.station.mark_qsl_sent(index, via)
+    }
+
+    /// See [`StationCore::delete_qso`].
+    pub fn delete_qso(&mut self, index: usize) -> bool {
+        self.station.delete_qso(index)
+    }
+
+    /// See [`StationCore::clear_logbook`].
+    pub fn clear_logbook(&mut self) -> usize {
+        self.station.clear_logbook()
+    }
+
+    /// See [`StationCore::import_adif`].
+    pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize) {
+        self.station.import_adif(text)
+    }
+
+    /// See [`StationCore::merge_lotw_report`].
+    pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
+        self.station.merge_lotw_report(text)
+    }
+
+    /// See [`StationCore::import_pota_log`].
+    pub fn import_pota_log(&mut self, text: &str) -> (usize, usize, usize) {
+        self.station.import_pota_log(text)
+    }
+
+    /// See [`StationCore::merge_lotw_own_echo`].
+    pub fn merge_lotw_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
+        self.station.merge_lotw_own_echo(text, when_unix)
+    }
+
+    /// See [`StationCore::oldest_pending_lotw_date`].
+    pub fn oldest_pending_lotw_date(&self) -> Option<String> {
+        self.station.oldest_pending_lotw_date()
+    }
+
+    /// See [`StationCore::stamp_qrz_upload`].
+    pub fn stamp_qrz_upload(
+        &mut self,
+        pushed: &QsoRecord,
+        outcome: tempo_core::logbook::UploadOutcome,
+        when_unix: i64,
+        detail: Option<String>,
+    ) -> bool {
+        self.station
+            .stamp_qrz_upload(pushed, outcome, when_unix, detail)
+    }
+
+    /// See [`StationCore::stamp_clublog_upload`].
+    pub fn stamp_clublog_upload(
+        &mut self,
+        pushed: &QsoRecord,
+        outcome: tempo_core::logbook::UploadOutcome,
+        when_unix: i64,
+        detail: Option<String>,
+    ) -> bool {
+        self.station
+            .stamp_clublog_upload(pushed, outcome, when_unix, detail)
+    }
+
+    /// See [`StationCore::stamp_eqsl_upload`].
+    pub fn stamp_eqsl_upload(
+        &mut self,
+        pushed: &QsoRecord,
+        outcome: tempo_core::logbook::UploadOutcome,
+        when_unix: i64,
+        detail: Option<String>,
+    ) -> bool {
+        self.station
+            .stamp_eqsl_upload(pushed, outcome, when_unix, detail)
+    }
+
+    /// See [`StationCore::merge_eqsl_report`].
+    pub fn merge_eqsl_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
+        self.station.merge_eqsl_report(text)
+    }
+
+    /// See [`StationCore::merge_qrz_report`].
+    pub fn merge_qrz_report(
+        &mut self,
+        text: &str,
+    ) -> (usize, tempo_core::reconcile::ReconcileSummary) {
+        self.station.merge_qrz_report(text)
+    }
+
+    /// See [`StationCore::get_log`].
+    pub fn get_log(&self) -> Vec<QsoRecord> {
+        self.station.get_log()
+    }
+
+    /// See [`StationCore::confirmation_diagnostics`].
+    pub fn confirmation_diagnostics(
+        &self,
+        now: i64,
+        resolve: impl Fn(&str) -> Option<String>,
+    ) -> tempo_core::diagnostics::DiagnosticsReport {
+        self.station.confirmation_diagnostics(now, resolve)
+    }
+
+    /// See [`StationCore::lotw_unsent_indices`].
+    pub fn lotw_unsent_indices(&self) -> Vec<usize> {
+        self.station.lotw_unsent_indices()
+    }
+
+    /// See [`StationCore::stamp_lotw_upload`].
+    pub fn stamp_lotw_upload(
+        &mut self,
+        indices: &[usize],
+        outcome: tempo_core::logbook::UploadOutcome,
+        when_unix: i64,
+        detail: Option<String>,
+    ) {
+        self.station
+            .stamp_lotw_upload(indices, outcome, when_unix, detail)
+    }
+
+    /// See [`StationCore::push_sstv_gallery`].
+    pub fn push_sstv_gallery(&mut self, entry: crate::dto::SstvGalleryEntry) {
+        self.station.push_sstv_gallery(entry)
+    }
+
+    /// See [`StationCore::set_sstv_gallery_fsk_id`].
+    pub fn set_sstv_gallery_fsk_id(&mut self, path: &str, fsk_id: String) {
+        self.station.set_sstv_gallery_fsk_id(path, fsk_id)
+    }
+
+    /// See [`StationCore::load_sstv_gallery`].
+    pub fn load_sstv_gallery(&mut self, entries: Vec<crate::dto::SstvGalleryEntry>) {
+        self.station.load_sstv_gallery(entries)
+    }
+
+    /// See [`StationCore::sstv_gallery`].
+    pub fn sstv_gallery(&self) -> &[crate::dto::SstvGalleryEntry] {
+        self.station.sstv_gallery()
+    }
+
+    /// See [`StationCore::set_clock_offset_ms`].
+    pub fn set_clock_offset_ms(&mut self, ms: Option<i64>) {
+        self.station.set_clock_offset_ms(ms)
+    }
+
+    /// See [`StationCore::clock_offset_ms`].
+    pub fn clock_offset_ms(&self) -> Option<i64> {
+        self.station.clock_offset_ms()
+    }
+
+    /// See [`StationCore::take_all_txt_pending`].
+    pub fn take_all_txt_pending(&mut self) -> Vec<String> {
+        self.station.take_all_txt_pending()
+    }
+
+    /// See [`StationCore::export_logbook`].
+    pub fn export_logbook(&self, format: &str) -> String {
+        self.station.export_logbook(format)
+    }
 }
 
 /// The signal report carried by an outgoing `Report` / `RReport` message, if
@@ -7698,7 +7184,7 @@ fn report_in(msg: Option<Msg>) -> Option<i32> {
 }
 
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
-fn now_unix_secs() -> u64 {
+pub(crate) fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

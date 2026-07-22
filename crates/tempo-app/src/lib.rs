@@ -17,6 +17,7 @@ pub mod bandplan;
 pub mod dto;
 pub mod engine;
 pub mod privileges;
+pub mod station;
 pub mod update;
 
 use std::collections::HashMap;
