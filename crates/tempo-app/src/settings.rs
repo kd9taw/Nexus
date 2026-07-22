@@ -1839,11 +1839,27 @@ impl Settings {
                 }
             },
             // Phone: force the correct sideband for the band — the hard convention is
-            // LSB below 10 MHz (160/80/40 m), USB at 30 m and up. (FM/AM come later
-            // as an explicit choice in the Phone cockpit.)
+            // LSB below 10 MHz (160/80/40 m), USB at 30 m and up. (AM comes later as an
+            // explicit choice in the Phone cockpit.)
+            //
+            // FM is BAND-GATED, and that gate is a bug fix, not a preference. `phone_mode`
+            // is one station-wide field: nothing resets it when the operator changes band or
+            // switches radios (`sync_flat_from_active` does not touch it, and RadioProfile
+            // has no equivalent). So without the gate, working an FM repeater and then tuning
+            // to 20 m phone commands the rig into FM on 20 m — a wideband signal on a band
+            // whose plan has no room for it. Reachable on a SINGLE radio: an FT-991A or
+            // IC-7100 covers both, so that is an ordinary evening, not a corner case.
+            //
+            // 29.0 MHz is the floor because 29.0-29.7 is the 10 m FM segment; below it FM is
+            // not used. Above, every band an FM-capable rig reaches (10 m, 6 m, 2 m, 70 cm
+            // and up) is FM territory. Falling back to the band's sideband — rather than
+            // refusing or holding FM — matches what the operator would have set by hand, and
+            // is the same "force the correct thing for this band" rule the sideband
+            // convention above already applies. Pinned by
+            // `fm_does_not_follow_the_operator_down_to_hf`.
             OperatingMode::Phone => {
-                if self.phone_mode.eq_ignore_ascii_case("fm") {
-                    "FM".to_string() // FM voice (VHF/UHF simplex + repeaters)
+                if self.phone_mode.eq_ignore_ascii_case("fm") && self.dial_mhz >= 29.0 {
+                    "FM".to_string() // FM voice (10 m FM segment, VHF/UHF simplex + repeaters)
                 } else if self.dial_mhz < 10.0 {
                     "LSB".to_string()
                 } else {
@@ -1903,11 +1919,42 @@ mod tests {
         assert_eq!(s.rig_mode(), "RTTY");
     }
 
+    /// FM is a VHF/UHF (and 10 m) mode. Selecting it must NOT follow the operator down to an
+    /// HF band where it does not belong — see `rig_mode`.
+    ///
+    /// This is reachable on ONE radio: an FT-991A or IC-7100 covers 2 m and 20 m, so working
+    /// an FM repeater and then tuning to 20 m phone is an ordinary evening. It is not a
+    /// multi-radio bug, and it was found while mapping multi-radio.
+    #[test]
+    fn fm_does_not_follow_the_operator_down_to_hf() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Phone;
+        s.phone_mode = "fm".into();
+
+        // Where FM belongs, it is commanded.
+        for mhz in [146.520, 446.000, 52.525, 29.600] {
+            s.dial_mhz = mhz;
+            assert_eq!(s.rig_mode(), "FM", "FM is correct at {mhz} MHz");
+        }
+        // …and where it does not, the band's sideband convention wins. Commanding FM here
+        // puts a wideband signal on a band whose plan has no room for it.
+        s.dial_mhz = 14.250;
+        assert_eq!(s.rig_mode(), "USB", "FM must not survive a move to 20 m");
+        s.dial_mhz = 7.200;
+        assert_eq!(s.rig_mode(), "LSB", "FM must not survive a move to 40 m");
+        s.dial_mhz = 28.400;
+        assert_eq!(
+            s.rig_mode(),
+            "USB",
+            "28.4 is SSB — below the 10 m FM segment"
+        );
+    }
+
     #[test]
     fn phone_fm_forces_fm_mode_else_sideband_by_band() {
         let mut s = Settings::default();
         s.operating_mode = OperatingMode::Phone;
-        // FM sub-mode → FM regardless of band.
+        // FM sub-mode → FM on a band where FM is used.
         s.phone_mode = "fm".into();
         s.dial_mhz = 146.520;
         assert_eq!(s.rig_mode(), "FM");
