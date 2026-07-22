@@ -5,6 +5,103 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] — 2026-07-21 — TempoFast & TempoDeep, panels you can remove, DXKeeper, and two silent data-loss bugs found
+
+### Fixed — two ways QSOs were quietly being lost
+
+- **A QSO rejected by LoTW was stamped "sent" and never retried.** Nexus invokes TQSL with
+  `-x -a compliant`, which sets `ignore_err`, so a record TQSL refuses is skipped **silently
+  and unidentified**. Exit 9 (some suppressed) was mapped to `Pending` and exit 8 (none
+  processed) unconditionally to `Duplicate` — both count as *sent* — and one outcome is stamped
+  across the whole batch. The rejected QSO therefore left the unsent list permanently while
+  never reaching LoTW. Exit 9 is now `Rejected`, and exit 8 stays `Duplicate` only when the
+  stderr shows no rejection. Re-offering an accepted QSO costs nothing (LoTW dedupes); losing
+  one is forever. **This was never mode-specific — it could swallow any rejected record.**
+- **POTA park references never reached HRDLog, or anything else keying on `POTA_REF`.** Exports
+  wrote only `SIG`/`SIG_INFO`, the older overloaded convention that WWFF and special events
+  also use. ADIF 3.1.4 added dedicated `POTA_REF`/`MY_POTA_REF` precisely to disambiguate it.
+  Now both go out. The giveaway that this was an oversight rather than a choice: our own
+  importer already *read* the dedicated fields. We were reading modern and writing legacy.
+
+### Added — panels you can actually remove
+
+- **A panel can now be removed outright**, not merely popped out to another window. `⊞ Panels`
+  in the Operate header: untick and it is gone — no placeholder, no window, and the decode
+  lists and roster grow into the space. It stays gone across restarts. Removable: waterfall,
+  Band Activity, Call Roster, Rx Frequency, Stations, Tx Messages.
+  Because the component truly unmounts, a removed waterfall also stops its 120 ms spectrum
+  poll — a small performance win, not only a space win. **Undo last change** and **Reset
+  layout** ship in the same menu, so there is no state you can strand yourself in.
+  Layout is per-surface, so a popped-out Operate window keeps its own arrangement.
+- **DXKeeper (DXLab Suite) integration.** Settings ▸ Integrations. Each logged QSO is pushed
+  to DXKeeper's TCP Network Service.
+  Note the field asks for the **Base Port** (default 52000), matching DXKeeper's own config
+  panel — DXKeeper listens on base **+1**, and nothing listens on the base itself, which is why
+  "use port 52000" is such a common report. The hint shows the resolved port live.
+  Uploads default OFF, since Nexus already pushes to LoTW/eQSL/ClubLog/QRZ and enabling both
+  would upload every QSO twice to four services.
+- **State and Country are editable in Log this QSO.** Both were always auto-filled from the
+  QRZ lookup and written to the record — they were simply never shown, so correcting a
+  misheard state meant logging the QSO and then editing it in the Logbook.
+
+### Changed — FT1 is now TempoFast, DX1 is now TempoDeep
+
+- The two native protocols are renamed throughout: on screen, in the logbook, in the source
+  tree, and in the build. Nothing about the on-air protocols changed — grep confirms neither
+  name ever appeared in a transmitted payload, so a station worked before the rename is
+  unaffected.
+- **TempoFast QSOs now upload to LoTW as `MODE=MFSK` + `SUBMODE=TEMPOFAST`.** The ADIF Mode
+  enumeration is closed, so the previous bare `<MODE:9>TempoFast` was rejected outright by TQSL
+  ("Invalid MODE") — a TempoFast QSO could not have been confirmed anywhere. MFSK is the honest
+  family, not a flag of convenience: TempoFast is 4-CPM h=1/2 BT=0.3, the same continuous-phase
+  FSK family as FST4, which already lives under MFSK. Your local logbook still records
+  `TempoFast`, because MFSK would erase the distinction from TempoDeep.
+  Verified against live LoTW `config.xml` v11.34: MFSK resolves to the accepted `DATA` group.
+- **Band-edge tones moved from Digital to Rig settings.** The cue already fired on phone and CW
+  identically — it was only grouped under Digital by accident.
+- **POTA/SOTA spots are sortable** (workable-now, activator, reference, band, mode), and the
+  Sort / Band / Program / Mode filters now survive leaving and returning to the view.
+
+### Fixed — other
+
+- **POTA/SOTA default sort was inverted**, putting the least workable activators on top. The
+  arrow glyph also disagreed with the list on that one key.
+- Closed a latent `.bss` overflow in the FT8 a7 path. `ft8::decode_frame` documented itself as
+  "a7-inert" while passing `a7_final = true`, so its decode counter grew unbounded; `msg0` is
+  byte-adjacent to `jseq` in `.bss`. Unreachable in production, but one future call site away
+  from memory corruption.
+
+## [0.14.0] — 2026-07-21 — Read-only launch, a 3-D logbook globe, on-time FT8 transmit
+
+*(Backfilled: 0.14.0 shipped on all five artifacts but was never written up here.)*
+
+### Changed — launching Nexus no longer touches your rig
+
+- Nexus now opens the radio **read-only**: it reads the actual frequency and mode and displays
+  them, and commands nothing. Park on 40 m LSB for a net, open Nexus, and the rig stays put.
+  The first command happens when *you* act. Underneath, every transmit path now asserts the
+  correct mode immediately before keying, so a transmit can never silently key into the wrong
+  mode.
+- **FT8 transmits on the slot boundary**, like WSJT-X. Previously Nexus finished decoding the
+  prior slot before keying, costing ~1 s of your own over. Decoding now runs in parallel.
+- **TX audio is a clean, flat signal.** The transmit path gained a proper anti-aliased
+  resampler; the FT8/FT4 envelope previously carried a periodic amplitude ripple.
+
+### Added
+
+- **A 3-D globe of your contacts on the Logbook** — every worked grid a band-coloured dot, with
+  a per-band (VUCC-style) picker. It fully unloads when you leave the Logbook.
+- **Tempo messages survive restarts**, and a reply to a just-decoded station now transmits on
+  the next cycle. **Work keeps Tempo contacts in Tempo.**
+- Logbook: Sync QRZ, Fetch LoTW, Import POTA, every column sortable, click a callsign for QRZ,
+  and a per-row Spot.
+- Spots: a "My privileges" filter, and filters that survive leaving the view.
+
+### Fixed
+
+- Tuning step is remembered per cockpit; Classic ↔ Roster switching no longer clears decodes;
+  Icom IC-7760 added; the FT-710 setup no longer points at a dead Silicon Labs driver link.
+
 ## [0.13.0] — 2026-07-19 — Decode off the UI thread, a QSO that can't be lost, honest message status
 
 ### Changed — the decode no longer stalls the interface
