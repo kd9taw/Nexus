@@ -5699,6 +5699,21 @@ select optgroup {
   overflow-y: auto;
   min-height: 0;
 }
+/* The header must NEVER be the item this column squeezes. It is the one child whose
+   min-height is not `auto` (it pins 44px for cross-mode alignment — see `.cockpit-header`),
+   and a non-auto min-height forfeits the flex automatic minimum size, so it was the only
+   child allowed to shrink below its own content. On a 1366x768 display (~85% fit-to-window
+   zoom ⇒ ~1607x900 effective px) the CW header legitimately wraps to 2–3 rows, but the
+   column's vertical deficit landed entirely here and crushed it back to the 44px floor —
+   the wrapped rows then rendered OUTSIDE the header's border box and the opaque
+   `.ph-scope-panel` that follows painted over them, hiding the keyer Speed slider AND
+   Tune / Stop TX / CAT. Pin flex-shrink so the wrapped rows keep their space; the column
+   already scrolls, and the scope below is operator-resizable (--cw-scope-h) to reclaim it.
+   No-op when the header fits one row (its content height is then exactly the 44px floor),
+   so wide displays are unaffected. Guarded by cw-header-shrink.test.ts. */
+.cw-cockpit > .cockpit-header {
+  flex-shrink: 0;
+}
 .cw-bar {
   display: flex;
   align-items: center;
