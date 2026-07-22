@@ -1,3 +1,33 @@
+! MODIFIED FOR NEXUS (KD9TAW, 2026): the SAVEd locals apbits, mycall0 and hiscall0 (and their
+! two never-SAVEd siblings apmy_ru/aphis_fd) were hoisted out of ft4_decode::decode into this
+! module so a per-radio decoder context can save and restore them. A SAVEd local of a module
+! procedure is a FILE-LOCAL symbol (nm shows `apbits.5`, `mycall0.7`), so no other compilation
+! unit can name it — the hoist is what makes the context reachable at all, the same problem
+! and the same fix as the *_downsample_state modules.
+!
+! WHY PER-CHAIN. apbits is the a-priori LDPC codeword for THIS chain's (mycall,hiscall), and
+! mycall0/hiscall0 are its cache key. The key guard rebuilds on mismatch, so sharing does not
+! by itself put chain A's callsigns in chain B's AP mask — but the rebuild also re-seeds the
+! packjt77 hash tables (via pack77/unpack77), and THOSE are already per-chain. A shared cache
+! in front of per-chain side effects means one chain's cache hit suppresses the other chain's
+! table seeding: the partial split the state manifest warns about. Cache and key move together,
+! or neither moves.
+!
+! apmy_ru/aphis_fd were declared in `decode` but omitted from its SAVE list, so they were
+! stack-resident: written only inside the callsign-changed block yet read on every ncontest
+! 3/4 (Field Day / RTTY) AP pass, i.e. read-before-write. Hoisting them fixes that omission —
+! deterministic zeros instead of stack garbage — and is behavior-neutral today because
+! ft4_cabi.f90 hard-codes ncontest=0, which makes those reads unreachable.
+module ft4_decode_apstate
+   include 'ft4/ft4_params.f90'
+   integer :: apbits(2*ND)
+   integer :: apmy_ru(28),aphis_fd(28)
+! Blank-initialized rather than left as .bss NULs so a reset context and a virgin process
+! hold the SAME bytes. Behavior is unchanged either way: `decode`'s first-call block assigns
+! '' to both before any read, and neither NULs nor blanks can equal a real callsign.
+   character(len=12) :: mycall0='',hiscall0=''
+end module ft4_decode_apstate
+
 module ft4_decode
 
    type :: ft4_decoder
@@ -27,6 +57,10 @@ contains
       nfa,nfb,ndepth,lapcqonly,ncontest,mycall,hiscall)
       use timer_module, only: timer
       use packjt77
+! MODIFIED FOR NEXUS: the AP codeword cache and its callsign key live in
+! ft4_decode_apstate (top of this file) so the per-chain decoder context can reach them.
+! `only:` keeps that module's ft4_params re-export from colliding with the include below.
+      use ft4_decode_apstate, only: apbits, apmy_ru, aphis_fd, mycall0, hiscall0
       include 'ft4/ft4_params.f90'
       parameter (MAXCAND=100)
       class(ft4_decoder), intent(inout) :: this
@@ -37,7 +71,7 @@ contains
       character*37 decodes(100)
       character*17 cdatetime0
       character*12 mycall,hiscall
-      character*12 mycall0,hiscall0
+! MODIFIED FOR NEXUS: mycall0/hiscall0 hoisted to ft4_decode_apstate.
       character*6 hhmmss
 
       complex cd2(0:NDMAX-1)                  !Complex waveform
@@ -52,8 +86,7 @@ contains
       real candidate(2,MAXCAND)
       real savg(NH1),sbase(NH1)
 
-      integer apbits(2*ND)
-      integer apmy_ru(28),aphis_fd(28)
+! MODIFIED FOR NEXUS: apbits/apmy_ru/aphis_fd hoisted to ft4_decode_apstate.
       integer*2 iwave(NMAX)                 !Raw received data
       integer*1 message77(77),rvec(77),apmask(2*ND),cw(2*ND)
       integer*1 message91(91)
@@ -82,8 +115,9 @@ contains
       data rvec/0,1,0,0,1,0,1,0,0,1,0,1,1,1,1,0,1,0,0,0,1,0,0,1,1,0,1,1,0, &
          1,0,0,1,0,1,1,0,0,0,0,1,0,0,0,1,0,1,0,0,1,1,1,1,0,0,1,0,1, &
          0,1,0,1,0,1,1,0,1,1,1,1,1,0,0,0,1,0,1/
-      save fs,dt,tt,txt,twopi,h,first,apbits,nappasses,naptypes, &
-         mycall0,hiscall0,ctwk2
+! MODIFIED FOR NEXUS: apbits/mycall0/hiscall0 dropped from this SAVE — they are module
+! variables now (ft4_decode_apstate), which are implicitly SAVEd.
+      save fs,dt,tt,txt,twopi,h,first,nappasses,naptypes,ctwk2
 
       this%callback => callback
       hhmmss=cdatetime0(8:13)

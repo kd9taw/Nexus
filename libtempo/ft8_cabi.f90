@@ -52,7 +52,18 @@ module ft8_cabi
   use packjt77, only: cxv_calls10 => calls10, cxv_calls12 => calls12,   &
        cxv_calls22 => calls22, cxv_recent => recent_calls,              &
        cxv_mycall13 => mycall13, cxv_dxcall13 => dxcall13,              &
-       cxv_ihash22 => ihash22, cxv_nzhash => nzhash
+       cxv_ihash22 => ihash22, cxv_nzhash => nzhash,                    &
+       cxv_mycall13_0 => mycall13_0, cxv_dxcall13_0 => dxcall13_0,      &
+       cxv_mycall13_set => mycall13_set,                                &
+       cxv_dxcall13_set => dxcall13_set,                                &
+       cxv_hashmy10 => hashmy10, cxv_hashmy12 => hashmy12,              &
+       cxv_hashmy22 => hashmy22, cxv_hashdx10 => hashdx10,              &
+       cxv_hashdx12 => hashdx12, cxv_hashdx22 => hashdx22
+  use ft4_decode_apstate, only: cxv_ft4_apbits => apbits,               &
+       cxv_ft4_apmy_ru => apmy_ru, cxv_ft4_aphis_fd => aphis_fd,        &
+       cxv_ft4_mycall0 => mycall0, cxv_ft4_hiscall0 => hiscall0
+  use ft1_decode_apstate, only: cxv_ft1_apbits => apbits,               &
+       cxv_ft1_mycall0 => mycall0, cxv_ft1_hiscall0 => hiscall0
   implicit none
 
   ! Last slot key (nutc) seen by ft8_decode_frame; -1 = virgin/reset. Drives the
@@ -93,23 +104,54 @@ module ft8_cabi
   ! around a decode() call.
   !
   ! WHICH SYMBOLS. libtempo/modem-state-manifest.toml is authoritative: its
-  ! class-1 rows ARE this set. The components below are the class-1 symbols that
-  ! are EXTERNALLY ADDRESSABLE - module variables (plus one COMMON block). The
-  ! remaining class-1 rows are subroutine-local SAVE/DATA variables inside
-  ! the vendored tree, which gfortran emits as FILE-LOCAL symbols (`nm` shows
-  ! them lowercase: `mcq.34`, `apbits.5`, `hashmy10.13`, ...). No other
-  ! compilation unit can name them, so they cannot be swapped without hoisting
-  ! them into modules the way ft8/ft4/tempofast_downsample_state already were.
+  ! class-1 rows are the candidate set. Every one of them that carries
+  ! CHAIN-SPECIFIC content is a component below - 43 of the 68 rows.
   !
-  ! That leaves 43 of the manifest's 68 class-1 rows (26,598 B of 3,530,670)
-  ! OUT of this context, and they are NOT all harmless: ft4_decode.f90's
-  ! apbits/apmy_ru/aphis_fd/mycall0/hiscall0, tempofast_decode.f90's
-  ! apbits/mycall0/hiscall0 and packjt77 unpack77's mycall13_0/dxcall13_0 +
-  ! hashmy*/hashdx* are AP masks and hash memos latched on the live callsign
-  ! pair, so two chains working DIFFERENT stations still share them. Hoisting
-  ! those into modules is the next step, and until it happens two chains are
-  ! safe on the tables that fabricate callsigns from hashes and on the a7
-  ! replay, but not on the AP masks derived from hiscall.
+  ! Reaching them took hoisting. A SAVE/DATA local inside a vendored subroutine
+  ! is a FILE-LOCAL symbol (`nm` shows them lowercase: `apbits.5`,
+  ! `hashmy10.13`), which no other compilation unit can name, so it cannot be
+  ! swapped at all until it moves to module scope. Five vendored files carry a
+  ! MODIFIED FOR NEXUS header for exactly that: ft8/ft4/tempofast_downsample
+  ! (the wideband spectra), ft4_decode.f90 + tempofast_decode.f90 (the AP
+  ! codeword caches, into *_decode_apstate) and 77bit/packjt77.f90 (unpack77's
+  ! callsign hash memos, up to module scope).
+  !
+  ! The 25 class-1 rows deliberately NOT here, and why each is safe shared:
+  !   * ft8b.f90 mcq/mcqru/mcqfd/mcqtest/mcqww/mrrr/m73/mrr73 + first +
+  !     ncontest0. The mcq family's post-transform content is a fixed table -
+  !     `mcq=2*mcq-1` over a DATA literal - with no chain-specific input, so
+  !     there is nothing chain-specific to swap. The hazard the manifest files
+  !     them under is that the transform is NON-IDEMPOTENT and re-fires whenever
+  !     ncontest differs from the previous call's; that is an upstream WSJT-X
+  !     defect which corrupts a SINGLE chain just as surely (toggle contest mode
+  !     twice) and which per-chain copies would mask rather than fix. ncontest is
+  !     the literal 0 at ft8_decode_frame below, so the guard fires exactly once
+  !     per process. If ncontest ever becomes runtime state, fix the transform.
+  !   * gen_ft4wave.f90 dt and gen_tempofastwave.f90 pulse/first/twopi/dt/hmod/
+  !     npulse/nsps_real/dphi_peak/nramp_out. These latch the FIRST caller's
+  !     `fsample` for the life of the process. That IS a live defect - callers
+  !     disagree (48 kHz from the TX entry points, 12 kHz from subtractft1) -
+  !     but it is a defect WITHIN one chain, and per-chain copies would not fix
+  !     it because one chain both transmits and decodes. It also could not be
+  !     swapped here even in principle: the TX entry points are not bracketed by
+  !     tempo_ctx_restore/save. The fix is to recompute when fsample changes,
+  !     which is a waveform change and needs its own approval.
+  !   * osd174_91.f90 inext. A linked-list cursor within ONE osd174_91 call. It
+  !     is read before write on the first fetchit91 of a call, but the sibling
+  !     `lastpat` is force-reset to -1 on every entry and ipat is provably >= 0,
+  !     so the branch that would consume the stale value is unreachable. Its
+  !     partner is class 3; splitting the pair is worse than leaving both.
+  !   * ft4_decode.f90 napwid. Not static at all - a stack local (no `nm`
+  !     symbol), so there is no storage to save. It is a genuine upstream
+  !     read-before-write (`napwid=80` sits inside `if(ipass.gt.3)` while the
+  !     read at the OSD-depth test runs on every pass); fixing that changes which
+  !     codewords are accepted, so it is a decode-behavior change, not this one.
+  !   * tempofast_decode.f90 cur_rv/frame_time_ms/callback. Components of
+  !     `type(ft1_decoder)`, and tempofast_cabi.f90 declares that object as a
+  !     LOCAL of ft1_decode_frame - a fresh instance per decode call, so they are
+  !     already per-chain by construction. Keep it that way: a module-scope or
+  !     `save`d decoder object would deliver one band's decodes to the other
+  !     band's callback.
   !
   ! LAYOUT. Bounds and character lengths are taken from the LIVE declarations
   ! (`size(...)` / `len(...)` of the use-associated symbol), never re-typed, so a
@@ -126,9 +168,13 @@ module ft8_cabi
   ! own load-time value.
   !
   ! Verified byte-for-byte against a virgin process (save the statics before
-  ! anything runs, reset a second buffer, memcmp): 3,474,476 of 3,504,084 bytes
+  ! anything runs, reset a second buffer, memcmp): 3,476,200 of 3,505,808 bytes
   ! are identical, and the two regions that differ are deliberate - a7_msg0 and
   ! /pfxcom/ addpfx are blank-filled here where the loader leaves .bss NULs.
+  ! (Re-run 2026-07-21 after the AP-cache and hash-memo hoists: the context grew
+  ! by 1,724 bytes and the identical count grew by exactly 1,724, so every new
+  ! row's load-time value matches the loader's image and the differing byte
+  ! count is unchanged at 29,608.)
   ! Blank is the correct empty for both (ft8_a7_reset below already assigns
   ! `a7_msg0 = ' '`, and getpfx1 tests `index(addpfx,' ')`), and neither is read
   ! before it is written in a fresh context.
@@ -171,8 +217,24 @@ module ft8_cabi
      integer           :: cabi_nutc0_a7
      ! --- FT4 -------------------------------------------------------------
      complex           :: ft4_spec(size(cxv_ft4_spec))
+     ! ft4_decode_apstate: the a-priori LDPC codeword for THIS chain's
+     ! (mycall,hiscall), plus the two contest variants and the callsign pair
+     ! that keys them. The key guard rebuilds on mismatch, so the cache alone
+     ! cannot print chain A's callsign on chain B - but the rebuild re-seeds the
+     ! (already per-chain) packjt77 hash tables, so a shared cache would let one
+     ! chain's cache HIT suppress the other chain's seeding. Cache and key move
+     ! as one unit; a partial split is the failure mode, not a mitigation.
+     integer           :: ft4_apbits(size(cxv_ft4_apbits))
+     integer           :: ft4_apmy_ru(size(cxv_ft4_apmy_ru))
+     integer           :: ft4_aphis_fd(size(cxv_ft4_aphis_fd))
+     character(len=len(cxv_ft4_mycall0))  :: ft4_mycall0
+     character(len=len(cxv_ft4_hiscall0)) :: ft4_hiscall0
      ! --- FT1 / TempoFast --------------------------------------------------
      complex           :: ft1_spec(size(cxv_ft1_spec))
+     ! ft1_decode_apstate: same cache and same key, for TempoFast.
+     integer           :: ft1_apbits(size(cxv_ft1_apbits))
+     character(len=len(cxv_ft1_mycall0))  :: ft1_mycall0
+     character(len=len(cxv_ft1_hiscall0)) :: ft1_hiscall0
      ! IR-HARQ soft-combining pool - the single largest object here. Shared,
      ! chain A's RV0 frame combines with chain B's RV1.
      !
@@ -199,6 +261,20 @@ module ft8_cabi
      character(len=len(cxv_dxcall13)) :: dxcall13
      integer           :: ihash22(size(cxv_ihash22))
      integer           :: nzhash
+     ! unpack77's callsign-substitution memos, hoisted to packjt77 module scope.
+     ! Unlike the AP caches above these do NOT self-heal on a chain switch:
+     ! dxcall13_set latches .true. with no else-branch, so a chain calling CQ
+     ! with an empty hiscall keeps the OTHER chain's dxcall13_0 + hashdx* and
+     ! substitutes that station's callsign for a received 22-bit hash; and a
+     ! short mycall13 clears mycall13_set without clearing mycall13_0, so the
+     ! chain that owns the call never re-arms its own substitution. Both are
+     ! well-formed wrong output, which is why these are in the context.
+     character(len=len(cxv_mycall13_0)) :: mycall13_0
+     character(len=len(cxv_dxcall13_0)) :: dxcall13_0
+     logical           :: mycall13_set
+     logical           :: dxcall13_set
+     integer           :: hashmy10, hashmy12, hashmy22
+     integer           :: hashdx10, hashdx12, hashdx22
      ! COMMON /pfxcom/ - the add-on prefix used when packing/unpacking a
      ! compound call. Per-QSO; a wrong prefix is a well-formed WRONG callsign.
      ! Declared character*8 at packjt.f90:753 (re-declared in ctx_xfer).
@@ -681,10 +757,18 @@ contains
     call ctx_move(p%cabi_nutc0_a7, nutc0_a7,      mode, -1)
     ! --- FT4 ---
     call ctx_move(p%ft4_spec,      cxv_ft4_spec,  mode, (0.0, 0.0))
+    call ctx_move(p%ft4_apbits,    cxv_ft4_apbits,   mode, 0)
+    call ctx_move(p%ft4_apmy_ru,   cxv_ft4_apmy_ru,  mode, 0)
+    call ctx_move(p%ft4_aphis_fd,  cxv_ft4_aphis_fd, mode, 0)
+    call ctx_move(p%ft4_mycall0,   cxv_ft4_mycall0,  mode, ' ')
+    call ctx_move(p%ft4_hiscall0,  cxv_ft4_hiscall0, mode, ' ')
     ! --- FT1 / TempoFast ---
     call ctx_move(p%ft1_spec,      cxv_ft1_spec,  mode, (0.0, 0.0))
     call ctx_move(ctx_slots,       cxv_slots,     mode)
     call ctx_move(p%harq_init,     cxv_harq_init, mode, .false.)
+    call ctx_move(p%ft1_apbits,    cxv_ft1_apbits,   mode, 0)
+    call ctx_move(p%ft1_mycall0,   cxv_ft1_mycall0,  mode, ' ')
+    call ctx_move(p%ft1_hiscall0,  cxv_ft1_hiscall0, mode, ' ')
     ! --- shared 77-bit / callsign machinery ---
     call ctx_move(p%calls10,       cxv_calls10,   mode, ' ')
     call ctx_move(p%calls12,       cxv_calls12,   mode, ' ')
@@ -694,6 +778,16 @@ contains
     call ctx_move(p%dxcall13,      cxv_dxcall13,  mode, ' ')
     call ctx_move(p%ihash22,       cxv_ihash22,   mode, -1)
     call ctx_move(p%nzhash,        cxv_nzhash,    mode, 0)
+    call ctx_move(p%mycall13_0,    cxv_mycall13_0,   mode, ' ')
+    call ctx_move(p%dxcall13_0,    cxv_dxcall13_0,   mode, ' ')
+    call ctx_move(p%mycall13_set,  cxv_mycall13_set, mode, .false.)
+    call ctx_move(p%dxcall13_set,  cxv_dxcall13_set, mode, .false.)
+    call ctx_move(p%hashmy10,      cxv_hashmy10,  mode, 0)
+    call ctx_move(p%hashmy12,      cxv_hashmy12,  mode, 0)
+    call ctx_move(p%hashmy22,      cxv_hashmy22,  mode, 0)
+    call ctx_move(p%hashdx10,      cxv_hashdx10,  mode, 0)
+    call ctx_move(p%hashdx12,      cxv_hashdx12,  mode, 0)
+    call ctx_move(p%hashdx22,      cxv_hashdx22,  mode, 0)
     call ctx_move(p%addpfx,        addpfx,        mode, ' ')
   end subroutine ctx_xfer
 

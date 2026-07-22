@@ -13,6 +13,32 @@ module packjt77
   integer :: nzhash=0
   integer n28a,n28b
 
+! MODIFIED FOR NEXUS (KD9TAW, 2026): unpack77's SAVEd/DATA locals mycall13_0, dxcall13_0,
+! mycall13_set, dxcall13_set and the hashmy10/12/22 + hashdx10/12/22 memos were hoisted from
+! that subroutine to module scope so a per-radio decoder context can save and restore them.
+! A SAVEd local of a module procedure is a FILE-LOCAL symbol (nm shows `hashmy10.13`), so no
+! other compilation unit can name it — the hoist is what makes the context reachable at all,
+! exactly as it was for the *_downsample_state modules.
+!
+! They are per-chain state, and unlike the AP caches in ft4_decode/tempofast_decode their
+! guards do NOT self-heal on a chain switch:
+!   * dxcall13_set latches .true. and the `if(dxcall13.ne.dxcall13_0)` block has no
+!     else-branch, so a chain that calls CQ with an empty hiscall leaves the OTHER chain's
+!     dxcall13_0 and hashdx10/12/22 in place — and unpack77 then substitutes that foreign
+!     callsign for a matching received 22-bit hash. A well-formed WRONG decode.
+!   * a short mycall13 clears mycall13_set WITHOUT clearing mycall13_0, so when the chain
+!     that owns the call comes back its `mycall13.ne.mycall13_0` test is false, the block is
+!     skipped, and mycall13_set stays .false. — that chain silently loses its own MyCall
+!     substitution.
+! Declared with exactly the initial values the deleted DATA statements gave them (the hash
+! memos had none: .bss zeros), so the load-time image is byte-for-byte unchanged.
+  character(len=13) :: mycall13_0=''
+  character(len=13) :: dxcall13_0=''
+  logical :: mycall13_set=.false.
+  logical :: dxcall13_set=.false.
+  integer :: hashmy10,hashmy12,hashmy22
+  integer :: hashdx10,hashdx12,hashdx22
+
   contains
 
 subroutine hash10(n10,c13)
@@ -212,7 +238,7 @@ subroutine unpack77(c77,nrx,msg,unpk77_success)
   character*77 c77
   character*37 msg
   character*13 call_1,call_2,call_3,call_1a
-  character*13 mycall13_0,dxcall13_0
+! MODIFIED FOR NEXUS: mycall13_0/dxcall13_0 hoisted to module scope (see the header there).
   character*11 c11
   character*3 crpt,cntx,cpfx
   character*3 cmult(NUSCAN)
@@ -221,9 +247,9 @@ subroutine unpack77(c77,nrx,msg,unpk77_success)
   character*3 csec(NSEC)
   character*38 c
   character*36 a2
-  integer hashmy10,hashmy12,hashmy22,hashdx10,hashdx12,hashdx22
+! MODIFIED FOR NEXUS: hashmy10/12/22, hashdx10/12/22, mycall13_set and dxcall13_set hoisted
+! to module scope (see the header there).
   logical unpk28_success,unpk77_success,unpkg4_success
-  logical dxcall13_set,mycall13_set
 
   data a2/'0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'/,nzzz/46656/
   data c/' 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ/'/
@@ -256,12 +282,8 @@ subroutine unpack77(c77,nrx,msg,unpk77_success)
        "X79","X80","X81","X82","X83","X84","X85","X86","X87","X88",  &
        "X89","X90","X91","X92","X93","X94","X95","X96","X97","X98",  &
        "X99"/
-  data dxcall13_set/.false./
-  data mycall13_set/.false./
-  data mycall13_0/''/
-  data dxcall13_0/''/
-
-  save hashmy10,hashmy12,hashmy22,hashdx10,hashdx12,hashdx22
+! MODIFIED FOR NEXUS: the DATA initializers for dxcall13_set/mycall13_set/mycall13_0/
+! dxcall13_0 and the SAVE of the six hash memos moved to the module-scope declarations.
 
   if(mycall13.ne.mycall13_0) then
     if(len(trim(mycall13)).gt.2) then

@@ -16,6 +16,33 @@
 ! You should have received a copy of the GNU General Public License
 ! along with WSJT-X. If not, see <https://www.gnu.org/licenses/>.
 !
+! MODIFIED FOR NEXUS (KD9TAW, 2026): the SAVEd locals apbits, mycall0 and hiscall0 were
+! hoisted out of ft1_decode::decode into this module so a per-radio decoder context can save
+! and restore them. A SAVEd local of a module procedure is a FILE-LOCAL symbol, so no other
+! compilation unit can name it — the hoist is what makes the context reachable at all, the
+! same problem and the same fix as the *_downsample_state modules.
+!
+! WHY PER-CHAIN. apbits is the a-priori bit pattern for THIS chain's (mycall,hiscall) and
+! mycall0/hiscall0 are its cache key. The key guard rebuilds on mismatch, so sharing does not
+! by itself hand chain A's callsigns to chain B — but the rebuild also re-seeds the packjt77
+! hash tables through pack77/unpack77, and those are already per-chain, so a shared cache in
+! front of per-chain side effects lets one chain's cache HIT suppress the other chain's table
+! seeding. Cache and key move as one unit or not at all.
+!
+! NOT hoisted: apmy_ru/aphis_fd, which stay stack locals of `decode`. They are class 3 in
+! libtempo/modem-state-manifest.toml precisely BECAUSE they are stack-resident; making them
+! static would create the cross-chain AP leak that classification rules out. Their genuine
+! read-before-write defect (written only under the callsign-changed guard, read on every
+! ncontest 3/4 pass) is unreachable here — tempofast_cabi.f90 hard-codes ncontest=0 — and
+! fixing it is a decode-behavior change, not a state-scoping one.
+module ft1_decode_apstate
+   include 'tempofast/tempofast_params.f90'
+   integer :: apbits(2*ND)
+! Blank-initialized rather than left as .bss NULs so a reset context and a virgin process
+! hold the SAME bytes; `decode`'s first-call block assigns '' to both before any read.
+   character(len=12) :: mycall0='',hiscall0=''
+end module ft1_decode_apstate
+
 module ft1_decode
 
    type :: ft1_decoder
@@ -63,6 +90,10 @@ contains
       use ir_harq_combine_mod
       use cpm_trellis_mod
       use matched_filter_bank_mod
+! MODIFIED FOR NEXUS: the AP bit cache and its callsign key live in ft1_decode_apstate (top
+! of this file) so the per-chain decoder context can reach them. `only:` keeps that module's
+! tempofast_params re-export from colliding with the include below.
+      use ft1_decode_apstate, only: apbits, mycall0, hiscall0
       include 'tempofast/tempofast_params.f90'
 
       class(ft1_decoder), intent(inout) :: this
@@ -76,7 +107,7 @@ contains
       character*37 decodes(100)
       character*17 cdatetime0
       character*12 mycall,hiscall
-      character*12 mycall0,hiscall0
+! MODIFIED FOR NEXUS: mycall0/hiscall0 hoisted to ft1_decode_apstate.
       character*6 hhmmss
 
       complex cd2(0:NDMAX-1)                  !Complex downsampled waveform
@@ -99,7 +130,8 @@ contains
       real candidate(3,MAXCAND)               !(freq, snr, rv_index)
       real savg(NH1),sbase(NH1)
 
-      integer apbits(2*ND)
+! MODIFIED FOR NEXUS: apbits hoisted to ft1_decode_apstate; apmy_ru/aphis_fd deliberately
+! left as stack locals (see the header at the top of this file).
       integer apmy_ru(28),aphis_fd(28)
       integer*2 iwave(NMAX)                   !Raw received data
       integer*1 message77(77),rvec(77),apmask(174),cw(174)
@@ -202,8 +234,9 @@ contains
 ! FT1 does NOT use XOR scrambling (rvec=0), unlike FT4
       data rvec/77*0/
 
-      save fs,dt_samp,tt,txt,twopi,h,first,apbits,nappasses,naptypes, &
-         mycall0,hiscall0
+! MODIFIED FOR NEXUS: apbits/mycall0/hiscall0 dropped from this SAVE — they are module
+! variables now (ft1_decode_apstate), which are implicitly SAVEd.
+      save fs,dt_samp,tt,txt,twopi,h,first,nappasses,naptypes
 
       this%callback => callback
       hhmmss=cdatetime0(8:13)

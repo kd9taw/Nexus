@@ -86,6 +86,34 @@
 # logged. Every symbol here must live in the per-chain context and be swapped at the
 # decode() boundary. Rows with size_bytes = 0 are EQUIVALENCE aliases or cross-file write
 # sites whose storage is counted once under the owning row - do not allocate them twice.
+#
+# IMPLEMENTATION STATUS (2026-07-21). Every class-1 row below now carries an explicit verdict
+# at the END of its `reason`: either "IN THE PER-CHAIN CONTEXT as <component>" or "NOT IN
+# CONTEXT" plus why. 43 of the 68 rows are in tempo_ctx_t (libtempo/ft8_cabi.f90); 25 are not.
+#
+# Getting to 43 required HOISTING 18 symbols out of vendored subroutines into modules, because
+# a SAVE/DATA local of a subroutine is a FILE-LOCAL symbol (nm: `apbits.5`, `hashmy10.13`) that
+# no other compilation unit can name - it cannot be swapped until it moves to module scope.
+# The hoists, each marked with a MODIFIED FOR NEXUS header a vendor refresh must re-apply:
+#   ft4_decode.f90        -> module ft4_decode_apstate  (apbits, apmy_ru, aphis_fd,
+#                                                        mycall0, hiscall0)
+#   tempofast_decode.f90  -> module ft1_decode_apstate  (apbits, mycall0, hiscall0)
+#   77bit/packjt77.f90    -> module scope, out of unpack77 (mycall13_0, dxcall13_0,
+#                            mycall13_set, dxcall13_set, hashmy10/12/22, hashdx10/12/22)
+# (ft8/ft4/tempofast_downsample.f90 -> *_downsample_state were hoisted in the earlier pass.)
+#
+# The 25 NOT in the context are not an admission of risk, they are a finding: this pass
+# re-derived each from the source rather than inheriting the audit's tie-break, and each is
+# either chain-INDEPENDENT in content, not statically allocated at all, or already per-chain by
+# construction. Three of them are REAL DEFECTS that a memcpy would have hidden rather than
+# fixed, and they are recorded here so they are not lost:
+#   * ft8b.f90's `mcq=2*mcq-1` family - non-idempotent transform re-fires if ncontest ever
+#     alternates. Corrupts a SINGLE chain too. Fix the transform, not the scoping.
+#   * gen_ft4wave.f90 / gen_tempofastwave.f90 - the whole first-call block latches the FIRST
+#     caller's fsample, and callers genuinely disagree (48 kHz TX vs 12 kHz subtract) WITHIN
+#     one chain. Recompute on fsample change; that is a waveform change needing approval.
+#   * ft4_decode.f90 `napwid` - assigned inside `if(ipass.gt.3)`, read on every pass to pick
+#     OSD depth. Upstream read-before-write; fixing it changes which codewords are accepted.
 # =============================================================================================
 
 # --- group A ---
@@ -96,7 +124,7 @@ file = "ft8/ft8_downsample.f90"
 line = 11
 class = 1
 size_bytes = 768008
-reason = "WRITTEN only under `if(newdat)` (:23-29); READ unconditionally at :40 (`c1(k)=cx(i)`) on EVERY call. The write gate is a DUMMY argument that this routine itself clears at :28, so whether the buffer is refreshed is decided by CALLER-owned state, not by entry. Both callers hard-code a non-refresh path: ft8b.f90:140 and ft8_a7.f90:172 pass the literal .false., so the majority of calls consume a spectrum they did not compute. Contents = one chain's ENTIRE 192000-point wideband audio spectrum. If chain B refreshes it and chain A's next candidate reuses it, chain A downsamples chain B's audio at chain A's frequency and logs chain B's stations on chain A's band -- precisely the plausible-wrong-decode failure. It self-heals ONLY if every chain re-enters via ft8_cabi.f90:266/:351 (newdat=.true. per pass) with no interleave finer than a whole ft8_decode_frame; nothing in this file enforces that. nm: `b equiv.0.0` 0xbb808 = 768008 B .bss. Upholds first pass class 1."
+reason = "WRITTEN only under `if(newdat)` (:23-29); READ unconditionally at :40 (`c1(k)=cx(i)`) on EVERY call. The write gate is a DUMMY argument that this routine itself clears at :28, so whether the buffer is refreshed is decided by CALLER-owned state, not by entry. Both callers hard-code a non-refresh path: ft8b.f90:140 and ft8_a7.f90:172 pass the literal .false., so the majority of calls consume a spectrum they did not compute. Contents = one chain's ENTIRE 192000-point wideband audio spectrum. If chain B refreshes it and chain A's next candidate reuses it, chain A downsamples chain B's audio at chain A's frequency and logs chain B's stations on chain A's band -- precisely the plausible-wrong-decode failure. It self-heals ONLY if every chain re-enters via ft8_cabi.f90:266/:351 (newdat=.true. per pass) with no interleave finer than a whole ft8_decode_frame; nothing in this file enforces that. nm: `b equiv.0.0` 0xbb808 = 768008 B .bss. Upholds first pass class 1. IN THE PER-CHAIN CONTEXT as p%ft8_spec (the cx face of the EQUIVALENCE carries the whole block) (ft8_cabi.f90)."
 
 [[symbol]]
 name = "cx"
@@ -104,7 +132,7 @@ file = "ft8/ft8_downsample.f90"
 line = 10
 class = 1
 size_bytes = 0
-reason = "EQUIVALENCE alias of x (association declared at :14); identical 768008-byte block (nm equiv.0.0) -- complex(0:NFFT1/2)=96001 elems = exactly x's 192002 reals. cx is the READ face of the cache (:40) while x is the WRITE face (:25-26), so an alias-blind scan that only looked for the written name would classify the read side as untouched. Save/restore the block once under either name. First pass keyed the group only at :11 and never at :10; recorded separately here. sizeBytes 0 to avoid double-counting the shared storage."
+reason = "EQUIVALENCE alias of x (association declared at :14); identical 768008-byte block (nm equiv.0.0) -- complex(0:NFFT1/2)=96001 elems = exactly x's 192002 reals. cx is the READ face of the cache (:40) while x is the WRITE face (:25-26), so an alias-blind scan that only looked for the written name would classify the read side as untouched. Save/restore the block once under either name. First pass keyed the group only at :11 and never at :10; recorded separately here. sizeBytes 0 to avoid double-counting the shared storage. IN THE PER-CHAIN CONTEXT as p%ft8_spec (ft8_cabi.f90)."
 
 [[symbol]]
 name = "mcq"
@@ -112,7 +140,7 @@ file = "ft8/ft8b.f90"
 line = 39
 class = 1
 size_bytes = 116
-reason = "OVERTURNS first pass (class 2). DATA {0,1} at :39, then transformed IN PLACE by `mcq=2*mcq-1` at :52 -- a NON-IDEMPOTENT write (-1 -> -3 -> -7, never recoverable). The write is gated by `if(first.or.(ncontest.ne.ncontest0))` at :51, i.e. by two OTHER pieces of persistent state, one of which (ncontest0) is an argument echo. Read at :303/:309 as `llrz(1:29)=apmag*mcq(1:29)` with apmask(1:29)=1, forcing 29 callsign bits before OSD in decode174_91 -- wrong signs/magnitudes here manufacture CRC-valid but WRONG callsigns, the exact logged-false-decode mode. First pass's class 2 rests on 'ncontest is the literal 0 at ft8_cabi.f90:207' -- a property of today's caller, not of this symbol (the same reasoning that mis-filed ir_harq_combine `slots`). Worse, ANY partial split (per-chain `first` with shared mcq, or the reverse) re-fires the transform and corrupts the AP table for the life of the process. nm: `d mcq.34` 0x74 in .DATA, not .bss -- a per-chain copy MUST be seeded from the load-time image, never zero-filled (zero-filled -> all bits become -1 -> forced wrong CQ mask). Move the whole :39-:47 + :29 cluster per-chain; total cost 816 B."
+reason = "OVERTURNS first pass (class 2). DATA {0,1} at :39, then transformed IN PLACE by `mcq=2*mcq-1` at :52 -- a NON-IDEMPOTENT write (-1 -> -3 -> -7, never recoverable). The write is gated by `if(first.or.(ncontest.ne.ncontest0))` at :51, i.e. by two OTHER pieces of persistent state, one of which (ncontest0) is an argument echo. Read at :303/:309 as `llrz(1:29)=apmag*mcq(1:29)` with apmask(1:29)=1, forcing 29 callsign bits before OSD in decode174_91 -- wrong signs/magnitudes here manufacture CRC-valid but WRONG callsigns, the exact logged-false-decode mode. First pass's class 2 rests on 'ncontest is the literal 0 at ft8_cabi.f90:207' -- a property of today's caller, not of this symbol (the same reasoning that mis-filed ir_harq_combine `slots`). Worse, ANY partial split (per-chain `first` with shared mcq, or the reverse) re-fires the transform and corrupts the AP table for the life of the process. nm: `d mcq.34` 0x74 in .DATA, not .bss -- a per-chain copy MUST be seeded from the load-time image, never zero-filled (zero-filled -> all bits become -1 -> forced wrong CQ mask). Move the whole :39-:47 + :29 cluster per-chain; total cost 816 B. NOT IN CONTEXT (2026-07-21). Content is chain-INDEPENDENT: the post-transform table is a fixed function of the DATA literal, with no per-call, per-band or per-chain input, so there is nothing chain-specific to swap. The hazard this row was filed under is that `mcq=2*mcq-1` is NON-IDEMPOTENT and re-fires whenever ncontest differs from the previous call's -- an upstream WSJT-X defect that corrupts a SINGLE chain just as surely (toggle contest mode twice) and that per-chain copies would MASK rather than fix. ncontest is the literal 0 at ft8_cabi.f90's ft8_decode_frame, so the :51 guard fires exactly once per process. If ncontest ever becomes runtime state, fix the transform (make it idempotent or move it out of the guarded block); do not paper over it with a memcpy. Whole cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73} stays shared TOGETHER -- a partial split is the one configuration that really does corrupt."
 
 [[symbol]]
 name = "mcqru"
@@ -120,7 +148,7 @@ file = "ft8/ft8b.f90"
 line = 40
 class = 1
 size_bytes = 116
-reason = "OVERTURNS first pass (class 2). Same mechanism as mcq: DATA {0,1}, non-idempotent in-place transform at :54 under the :51 guard, read at :307 as a forced 29-bit AP mask (ncontest=4/RTTY). Shareability was justified only by the caller's hardcoded ncontest; the transform's once-ness is not enforced in this file. nm: `d mcqru.32` 0x74 .data -- per-chain copy must be seeded from the load image. Belongs to the indivisible ft8b init cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73}."
+reason = "OVERTURNS first pass (class 2). Same mechanism as mcq: DATA {0,1}, non-idempotent in-place transform at :54 under the :51 guard, read at :307 as a forced 29-bit AP mask (ncontest=4/RTTY). Shareability was justified only by the caller's hardcoded ncontest; the transform's once-ness is not enforced in this file. nm: `d mcqru.32` 0x74 .data -- per-chain copy must be seeded from the load image. Belongs to the indivisible ft8b init cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73}. NOT IN CONTEXT (2026-07-21). Content is chain-INDEPENDENT: the post-transform table is a fixed function of the DATA literal, with no per-call, per-band or per-chain input, so there is nothing chain-specific to swap. The hazard this row was filed under is that `mcq=2*mcq-1` is NON-IDEMPOTENT and re-fires whenever ncontest differs from the previous call's -- an upstream WSJT-X defect that corrupts a SINGLE chain just as surely (toggle contest mode twice) and that per-chain copies would MASK rather than fix. ncontest is the literal 0 at ft8_cabi.f90's ft8_decode_frame, so the :51 guard fires exactly once per process. If ncontest ever becomes runtime state, fix the transform (make it idempotent or move it out of the guarded block); do not paper over it with a memcpy. Whole cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73} stays shared TOGETHER -- a partial split is the one configuration that really does corrupt."
 
 [[symbol]]
 name = "mcqfd"
@@ -128,7 +156,7 @@ file = "ft8/ft8b.f90"
 line = 41
 class = 1
 size_bytes = 116
-reason = "OVERTURNS first pass (class 2). DATA {0,1}, non-idempotent in-place transform at :53 under the :51 guard, read at :306 as a forced 29-bit AP mask (ncontest=3/Field Day). Nexus ships a Field Day mode, so ncontest becoming per-chain runtime state is a live possibility -- the moment it does, this array and its siblings rescale on every alternating call and never recover. nm: `d mcqfd.33` 0x74 .data; seed per-chain copies from the load image. Part of the ft8b init cluster."
+reason = "OVERTURNS first pass (class 2). DATA {0,1}, non-idempotent in-place transform at :53 under the :51 guard, read at :306 as a forced 29-bit AP mask (ncontest=3/Field Day). Nexus ships a Field Day mode, so ncontest becoming per-chain runtime state is a live possibility -- the moment it does, this array and its siblings rescale on every alternating call and never recover. nm: `d mcqfd.33` 0x74 .data; seed per-chain copies from the load image. Part of the ft8b init cluster. NOT IN CONTEXT (2026-07-21). Content is chain-INDEPENDENT: the post-transform table is a fixed function of the DATA literal, with no per-call, per-band or per-chain input, so there is nothing chain-specific to swap. The hazard this row was filed under is that `mcq=2*mcq-1` is NON-IDEMPOTENT and re-fires whenever ncontest differs from the previous call's -- an upstream WSJT-X defect that corrupts a SINGLE chain just as surely (toggle contest mode twice) and that per-chain copies would MASK rather than fix. ncontest is the literal 0 at ft8_cabi.f90's ft8_decode_frame, so the :51 guard fires exactly once per process. If ncontest ever becomes runtime state, fix the transform (make it idempotent or move it out of the guarded block); do not paper over it with a memcpy. Whole cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73} stays shared TOGETHER -- a partial split is the one configuration that really does corrupt."
 
 [[symbol]]
 name = "mcqtest"
@@ -136,7 +164,7 @@ file = "ft8/ft8b.f90"
 line = 42
 class = 1
 size_bytes = 116
-reason = "OVERTURNS first pass (class 2). DATA {0,1}, non-idempotent in-place transform at :55 under the :51 guard, read at :304/:305/:310 as a forced 29-bit AP mask (ncontest=1,2,8). nm: `d mcqtest.31` 0x74 .data; per-chain copy must be seeded from the load image, not zeroed. Part of the ft8b init cluster."
+reason = "OVERTURNS first pass (class 2). DATA {0,1}, non-idempotent in-place transform at :55 under the :51 guard, read at :304/:305/:310 as a forced 29-bit AP mask (ncontest=1,2,8). nm: `d mcqtest.31` 0x74 .data; per-chain copy must be seeded from the load image, not zeroed. Part of the ft8b init cluster. NOT IN CONTEXT (2026-07-21). Content is chain-INDEPENDENT: the post-transform table is a fixed function of the DATA literal, with no per-call, per-band or per-chain input, so there is nothing chain-specific to swap. The hazard this row was filed under is that `mcq=2*mcq-1` is NON-IDEMPOTENT and re-fires whenever ncontest differs from the previous call's -- an upstream WSJT-X defect that corrupts a SINGLE chain just as surely (toggle contest mode twice) and that per-chain copies would MASK rather than fix. ncontest is the literal 0 at ft8_cabi.f90's ft8_decode_frame, so the :51 guard fires exactly once per process. If ncontest ever becomes runtime state, fix the transform (make it idempotent or move it out of the guarded block); do not paper over it with a memcpy. Whole cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73} stays shared TOGETHER -- a partial split is the one configuration that really does corrupt."
 
 [[symbol]]
 name = "mcqww"
@@ -144,7 +172,7 @@ file = "ft8/ft8b.f90"
 line = 43
 class = 1
 size_bytes = 116
-reason = "OVERTURNS first pass (class 2). DATA {0,1}, non-idempotent in-place transform at :56 under the :51 guard, read at :308 as a forced 29-bit AP mask (ncontest=5/WW_DIGI). nm: `d mcqww.30` 0x74 .data; seed per-chain copies from the load image. Part of the ft8b init cluster."
+reason = "OVERTURNS first pass (class 2). DATA {0,1}, non-idempotent in-place transform at :56 under the :51 guard, read at :308 as a forced 29-bit AP mask (ncontest=5/WW_DIGI). nm: `d mcqww.30` 0x74 .data; seed per-chain copies from the load image. Part of the ft8b init cluster. NOT IN CONTEXT (2026-07-21). Content is chain-INDEPENDENT: the post-transform table is a fixed function of the DATA literal, with no per-call, per-band or per-chain input, so there is nothing chain-specific to swap. The hazard this row was filed under is that `mcq=2*mcq-1` is NON-IDEMPOTENT and re-fires whenever ncontest differs from the previous call's -- an upstream WSJT-X defect that corrupts a SINGLE chain just as surely (toggle contest mode twice) and that per-chain copies would MASK rather than fix. ncontest is the literal 0 at ft8_cabi.f90's ft8_decode_frame, so the :51 guard fires exactly once per process. If ncontest ever becomes runtime state, fix the transform (make it idempotent or move it out of the guarded block); do not paper over it with a memcpy. Whole cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73} stays shared TOGETHER -- a partial split is the one configuration that really does corrupt."
 
 [[symbol]]
 name = "mrrr"
@@ -152,7 +180,7 @@ file = "ft8/ft8b.f90"
 line = 44
 class = 1
 size_bytes = 76
-reason = "OVERTURNS first pass (class 2). DATA 19x{0,1}, non-idempotent in-place transform at :57 under the :51 guard. Read at :387 as `llrz(59:77)=apmag*mrrr` with apmask(1:77)=1 -- iaptype=4 forces the ENTIRE 77-bit message including MyCall+DxCall+RRR, the most aggressive AP mask in the decoder. This one is LIVE on today's ncontest=0 path, so a corrupted copy directly fabricates full messages. nm: `d mrrr.29` 0x4c .data; seed per-chain copies from the load image. Part of the ft8b init cluster."
+reason = "OVERTURNS first pass (class 2). DATA 19x{0,1}, non-idempotent in-place transform at :57 under the :51 guard. Read at :387 as `llrz(59:77)=apmag*mrrr` with apmask(1:77)=1 -- iaptype=4 forces the ENTIRE 77-bit message including MyCall+DxCall+RRR, the most aggressive AP mask in the decoder. This one is LIVE on today's ncontest=0 path, so a corrupted copy directly fabricates full messages. nm: `d mrrr.29` 0x4c .data; seed per-chain copies from the load image. Part of the ft8b init cluster. NOT IN CONTEXT (2026-07-21). Content is chain-INDEPENDENT: the post-transform table is a fixed function of the DATA literal, with no per-call, per-band or per-chain input, so there is nothing chain-specific to swap. The hazard this row was filed under is that `mcq=2*mcq-1` is NON-IDEMPOTENT and re-fires whenever ncontest differs from the previous call's -- an upstream WSJT-X defect that corrupts a SINGLE chain just as surely (toggle contest mode twice) and that per-chain copies would MASK rather than fix. ncontest is the literal 0 at ft8_cabi.f90's ft8_decode_frame, so the :51 guard fires exactly once per process. If ncontest ever becomes runtime state, fix the transform (make it idempotent or move it out of the guarded block); do not paper over it with a memcpy. Whole cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73} stays shared TOGETHER -- a partial split is the one configuration that really does corrupt."
 
 [[symbol]]
 name = "m73"
@@ -160,7 +188,7 @@ file = "ft8/ft8b.f90"
 line = 45
 class = 1
 size_bytes = 76
-reason = "OVERTURNS first pass (class 2). DATA 19x{0,1}, non-idempotent in-place transform at :58 under the :51 guard. Read at :388 (iaptype=5, full 77-bit forced mask, `... 73`). Live on the ncontest=0 path. nm: `d m73.28` 0x4c .data; seed per-chain copies from the load image. Part of the ft8b init cluster."
+reason = "OVERTURNS first pass (class 2). DATA 19x{0,1}, non-idempotent in-place transform at :58 under the :51 guard. Read at :388 (iaptype=5, full 77-bit forced mask, `... 73`). Live on the ncontest=0 path. nm: `d m73.28` 0x4c .data; seed per-chain copies from the load image. Part of the ft8b init cluster. NOT IN CONTEXT (2026-07-21). Content is chain-INDEPENDENT: the post-transform table is a fixed function of the DATA literal, with no per-call, per-band or per-chain input, so there is nothing chain-specific to swap. The hazard this row was filed under is that `mcq=2*mcq-1` is NON-IDEMPOTENT and re-fires whenever ncontest differs from the previous call's -- an upstream WSJT-X defect that corrupts a SINGLE chain just as surely (toggle contest mode twice) and that per-chain copies would MASK rather than fix. ncontest is the literal 0 at ft8_cabi.f90's ft8_decode_frame, so the :51 guard fires exactly once per process. If ncontest ever becomes runtime state, fix the transform (make it idempotent or move it out of the guarded block); do not paper over it with a memcpy. Whole cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73} stays shared TOGETHER -- a partial split is the one configuration that really does corrupt."
 
 [[symbol]]
 name = "mrr73"
@@ -168,7 +196,7 @@ file = "ft8/ft8b.f90"
 line = 46
 class = 1
 size_bytes = 76
-reason = "OVERTURNS first pass (class 2). DATA 19x{0,1}, non-idempotent in-place transform at :59 under the :51 guard. Read at :389 (iaptype=6, full 77-bit forced mask, `... RR73`). Live on the ncontest=0 path. nm: `d mrr73.27` 0x4c .data; seed per-chain copies from the load image. Part of the ft8b init cluster."
+reason = "OVERTURNS first pass (class 2). DATA 19x{0,1}, non-idempotent in-place transform at :59 under the :51 guard. Read at :389 (iaptype=6, full 77-bit forced mask, `... RR73`). Live on the ncontest=0 path. nm: `d mrr73.27` 0x4c .data; seed per-chain copies from the load image. Part of the ft8b init cluster. NOT IN CONTEXT (2026-07-21). Content is chain-INDEPENDENT: the post-transform table is a fixed function of the DATA literal, with no per-call, per-band or per-chain input, so there is nothing chain-specific to swap. The hazard this row was filed under is that `mcq=2*mcq-1` is NON-IDEMPOTENT and re-fires whenever ncontest differs from the previous call's -- an upstream WSJT-X defect that corrupts a SINGLE chain just as surely (toggle contest mode twice) and that per-chain copies would MASK rather than fix. ncontest is the literal 0 at ft8_cabi.f90's ft8_decode_frame, so the :51 guard fires exactly once per process. If ncontest ever becomes runtime state, fix the transform (make it idempotent or move it out of the guarded block); do not paper over it with a memcpy. Whole cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73} stays shared TOGETHER -- a partial split is the one configuration that really does corrupt."
 
 [[symbol]]
 name = "first"
@@ -176,7 +204,7 @@ file = "ft8/ft8b.f90"
 line = 47
 class = 1
 size_bytes = 4
-reason = "OVERTURNS first pass (class 2). Declared :37, DATA .true. :47, latched .false. :89. Unlike the other `first` latches in this group, what it guards is NOT uniformly idempotent: the same block performs the non-idempotent mcq-family transform (:52-59) and writes ncontest0 from an ARGUMENT (:90). Its correctness is therefore a JOINT property with those symbols, and the dangerous configurations are the partial splits: shared `first` + per-chain mcq leaves chain B's mcq at raw {0,1} (all-positive forced CQ mask -> fabricated callsigns); per-chain `first` + shared mcq re-fires the transform (-1 -> -3) permanently. Make it per-chain together with ncontest0 and the eight mcq-family arrays, or none of them. nm: `d first.36` 4 B .data -- a per-chain copy must start .true., so seed from the load image, not zero-fill."
+reason = "OVERTURNS first pass (class 2). Declared :37, DATA .true. :47, latched .false. :89. Unlike the other `first` latches in this group, what it guards is NOT uniformly idempotent: the same block performs the non-idempotent mcq-family transform (:52-59) and writes ncontest0 from an ARGUMENT (:90). Its correctness is therefore a JOINT property with those symbols, and the dangerous configurations are the partial splits: shared `first` + per-chain mcq leaves chain B's mcq at raw {0,1} (all-positive forced CQ mask -> fabricated callsigns); per-chain `first` + shared mcq re-fires the transform (-1 -> -3) permanently. Make it per-chain together with ncontest0 and the eight mcq-family arrays, or none of them. nm: `d first.36` 4 B .data -- a per-chain copy must start .true., so seed from the load image, not zero-fill. NOT IN CONTEXT (2026-07-21). Content is chain-INDEPENDENT: the post-transform table is a fixed function of the DATA literal, with no per-call, per-band or per-chain input, so there is nothing chain-specific to swap. The hazard this row was filed under is that `mcq=2*mcq-1` is NON-IDEMPOTENT and re-fires whenever ncontest differs from the previous call's -- an upstream WSJT-X defect that corrupts a SINGLE chain just as surely (toggle contest mode twice) and that per-chain copies would MASK rather than fix. ncontest is the literal 0 at ft8_cabi.f90's ft8_decode_frame, so the :51 guard fires exactly once per process. If ncontest ever becomes runtime state, fix the transform (make it idempotent or move it out of the guarded block); do not paper over it with a memcpy. Whole cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73} stays shared TOGETHER -- a partial split is the one configuration that really does corrupt."
 
 [[symbol]]
 name = "ncontest0"
@@ -184,7 +212,7 @@ file = "ft8/ft8b.f90"
 line = 29
 class = 1
 size_bytes = 4
-reason = "OVERTURNS first pass (class 2). Textbook class 1 by definition: written at :90 as `ncontest0=ncontest` -- a verbatim copy of a per-call ARGUMENT -- and read on the NEXT call at :51. It literally carries the previous call's input across the call boundary; that is what class 1 means, independent of what value the input happens to hold. The first pass's defence ('constant 0 at ft8_cabi.f90:207, the only ft8b call site -- verified, only ft8_cabi.f90:295 calls ft8b') is a fact about the caller, not the symbol, and is the same reasoning that mis-filed `slots`. If ncontest ever differs per chain (contest/Field Day on one radio, casual on the other -- Nexus ships FD mode), this flip-flops every call, re-firing the :51 guard and rescaling the whole mcq family without limit. nm: `b ncontest0.35` 4 B .bss. Cost of being safe: 4 bytes."
+reason = "OVERTURNS first pass (class 2). Textbook class 1 by definition: written at :90 as `ncontest0=ncontest` -- a verbatim copy of a per-call ARGUMENT -- and read on the NEXT call at :51. It literally carries the previous call's input across the call boundary; that is what class 1 means, independent of what value the input happens to hold. The first pass's defence ('constant 0 at ft8_cabi.f90:207, the only ft8b call site -- verified, only ft8_cabi.f90:295 calls ft8b') is a fact about the caller, not the symbol, and is the same reasoning that mis-filed `slots`. If ncontest ever differs per chain (contest/Field Day on one radio, casual on the other -- Nexus ships FD mode), this flip-flops every call, re-firing the :51 guard and rescaling the whole mcq family without limit. nm: `b ncontest0.35` 4 B .bss. Cost of being safe: 4 bytes. NOT IN CONTEXT (2026-07-21). Content is chain-INDEPENDENT: the post-transform table is a fixed function of the DATA literal, with no per-call, per-band or per-chain input, so there is nothing chain-specific to swap. The hazard this row was filed under is that `mcq=2*mcq-1` is NON-IDEMPOTENT and re-fires whenever ncontest differs from the previous call's -- an upstream WSJT-X defect that corrupts a SINGLE chain just as surely (toggle contest mode twice) and that per-chain copies would MASK rather than fix. ncontest is the literal 0 at ft8_cabi.f90's ft8_decode_frame, so the :51 guard fires exactly once per process. If ncontest ever becomes runtime state, fix the transform (make it idempotent or move it out of the guarded block); do not paper over it with a memcpy. Whole cluster {first, ncontest0, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73} stays shared TOGETHER -- a partial split is the one configuration that really does corrupt."
 
 [[symbol]]
 name = "mycall13 (packjt77 module var, WRITTEN here)"
@@ -192,7 +220,7 @@ file = "ft8/ft8b.f90"
 line = 94
 class = 1
 size_bytes = 13
-reason = "Cross-file: declared `character(len=13) :: mycall13=''` at 77bit/packjt77.f90:9 (module scope => implicit SAVE), but WRITTEN at ft8b.f90:94 from this call's mycall12 argument. Also written from ft4_decode.f90:91 and tempofast_decode.f90:211 -- three modes stamping one global. It is read inside packjt77 at :94/:97 (`cw.ne.mycall13` suppresses self-hashing) and at :266-270, so it steers what enters the shared callsign hash tables. It carries a per-call argument between calls => class 1. Storage is owned by the packjt77 group; recorded here because the WRITE site is in this group's file and a scan keyed on packjt77.f90 alone would not see who mutates it."
+reason = "Cross-file: declared `character(len=13) :: mycall13=''` at 77bit/packjt77.f90:9 (module scope => implicit SAVE), but WRITTEN at ft8b.f90:94 from this call's mycall12 argument. Also written from ft4_decode.f90:91 and tempofast_decode.f90:211 -- three modes stamping one global. It is read inside packjt77 at :94/:97 (`cw.ne.mycall13` suppresses self-hashing) and at :266-270, so it steers what enters the shared callsign hash tables. It carries a per-call argument between calls => class 1. Storage is owned by the packjt77 group; recorded here because the WRITE site is in this group's file and a scan keyed on packjt77.f90 alone would not see who mutates it. IN THE PER-CHAIN CONTEXT as p%mycall13 (storage owned by the packjt77 row) (ft8_cabi.f90)."
 
 [[symbol]]
 name = "dxcall13 (packjt77 module var, WRITTEN here)"
@@ -200,7 +228,7 @@ file = "ft8/ft8b.f90"
 line = 93
 class = 1
 size_bytes = 13
-reason = "Cross-file: declared 77bit/packjt77.f90:10 (module scope => implicit SAVE), WRITTEN at ft8b.f90:93 from this call's hiscall12 argument (also ft4_decode.f90:90, tempofast_decode.f90:210). Consumed by unpack77 (called ft8b.f90:429) when resolving hashed `<...>` callsigns. Per-call argument held across calls => class 1. Storage owned by the packjt77 group; logged here to name the mutation site."
+reason = "Cross-file: declared 77bit/packjt77.f90:10 (module scope => implicit SAVE), WRITTEN at ft8b.f90:93 from this call's hiscall12 argument (also ft4_decode.f90:90, tempofast_decode.f90:210). Consumed by unpack77 (called ft8b.f90:429) when resolving hashed `<...>` callsigns. Per-call argument held across calls => class 1. Storage owned by the packjt77 group; logged here to name the mutation site. IN THE PER-CHAIN CONTEXT as p%dxcall13 (storage owned by the packjt77 row) (ft8_cabi.f90)."
 
 [[symbol]]
 name = "packjt77 hash tables (calls10/calls12/calls22/ihash22/nzhash) SEEDED here"
@@ -208,7 +236,7 @@ file = "ft8/ft8apset.f90"
 line = 28
 class = 1
 size_bytes = 0
-reason = "ft8apset.f90 has ZERO static data symbols of its own (nm on ft8apset.f90.o shows only .LC literals and U refs), but :28 `call save_hash_call(hc13,n10,n12,n22)` writes the operator's DX callsign into packjt77's process-global tables (77bit/packjt77.f90:5-13; writes at packjt77.f90:94/:97/:103-105). Those tables are then read by unpack77 (ft8b.f90:429) to expand hashed `<...>` callsigns. Shared across chains, a callsign only ever heard on band A resolves a 10/12/22-bit hash decoded on band B, yielding a WELL-FORMED WRONG CALLSIGN that passes CRC and gets logged -- this application's worst failure mode, reached from this group's file. Storage belongs to the packjt77 group; flagged here because the seeding call lives in ft8apset."
+reason = "ft8apset.f90 has ZERO static data symbols of its own (nm on ft8apset.f90.o shows only .LC literals and U refs), but :28 `call save_hash_call(hc13,n10,n12,n22)` writes the operator's DX callsign into packjt77's process-global tables (77bit/packjt77.f90:5-13; writes at packjt77.f90:94/:97/:103-105). Those tables are then read by unpack77 (ft8b.f90:429) to expand hashed `<...>` callsigns. Shared across chains, a callsign only ever heard on band A resolves a 10/12/22-bit hash decoded on band B, yielding a WELL-FORMED WRONG CALLSIGN that passes CRC and gets logged -- this application's worst failure mode, reached from this group's file. Storage belongs to the packjt77 group; flagged here because the seeding call lives in ft8apset. IN THE PER-CHAIN CONTEXT as p%calls10/calls12/calls22/ihash22/nzhash (storage owned by the packjt77 rows) (ft8_cabi.f90)."
 
 # --- group B ---
 
@@ -218,7 +246,7 @@ file = "ft8/osd174_91.f90"
 line = 378
 class = 1
 size_bytes = 4
-reason = "UPGRADED 3->1. Implicitly-typed integer, no declaration line; exists only via `save lastpat,inext` (:378). nm: `b inext.2`, 4 bytes. It is the linked-list cursor for the fetchit91 chain walk. Written at :396/:400/:404; READ at :397 (`lastpat.eq.ipat .and. inext.gt.0`) and :400. Unlike its partner `lastpat`, inext is NOT in the reset block (:380-383 resets ONLY lastpat), so on the first fetchit91 call of every osd174_91 invocation it still holds the PREVIOUS invocation's (previous chain's) value. It therefore fails the literal class-3 predicate: it is read before being written on entry. The leak is currently benign, and I can prove it: reset forces lastpat=-1 at :381, and ipat (:385-390, a sum of ishft(1,ntau-i)) is provably >=0, so `lastpat.eq.ipat` is always .false. on the first call, making the `.and.` false regardless of the stale inext, and the branch body at :398-400 that would consume it unreachable. But Fortran does not mandate short-circuit `.and.`, so gfortran may genuinely load the stale value, and the safety rests on a non-local invariant in a DIFFERENT subroutine rather than on the symbol being overwritten. Textbook when-in-doubt: cost of per-chain is 4 bytes; cost of being wrong is a mis-walked index chain feeding a wrong-but-well-formed codeword to the CRC. Save/restore it as a pair with `lastpat`."
+reason = "UPGRADED 3->1. Implicitly-typed integer, no declaration line; exists only via `save lastpat,inext` (:378). nm: `b inext.2`, 4 bytes. It is the linked-list cursor for the fetchit91 chain walk. Written at :396/:400/:404; READ at :397 (`lastpat.eq.ipat .and. inext.gt.0`) and :400. Unlike its partner `lastpat`, inext is NOT in the reset block (:380-383 resets ONLY lastpat), so on the first fetchit91 call of every osd174_91 invocation it still holds the PREVIOUS invocation's (previous chain's) value. It therefore fails the literal class-3 predicate: it is read before being written on entry. The leak is currently benign, and I can prove it: reset forces lastpat=-1 at :381, and ipat (:385-390, a sum of ishft(1,ntau-i)) is provably >=0, so `lastpat.eq.ipat` is always .false. on the first call, making the `.and.` false regardless of the stale inext, and the branch body at :398-400 that would consume it unreachable. But Fortran does not mandate short-circuit `.and.`, so gfortran may genuinely load the stale value, and the safety rests on a non-local invariant in a DIFFERENT subroutine rather than on the symbol being overwritten. Textbook when-in-doubt: cost of per-chain is 4 bytes; cost of being wrong is a mis-walked index chain feeding a wrong-but-well-formed codeword to the CRC. Save/restore it as a pair with `lastpat`. NOT IN CONTEXT (2026-07-21). A linked-list cursor WITHIN one osd174_91 call, over the /boxes/ tables that call rebuilds. The read-before-write on entry is real but provably unreachable: the sole caller sets reset=.true. immediately before the loop, which forces lastpat=-1, and ipat is a sum of ishft(1,...) so it is >= 0 -- `lastpat.eq.ipat` is false on the first call regardless of the stale cursor. Its partner `lastpat` is class 3, and this row's own advice is to move the pair or neither; moving only the cursor is worse than leaving both."
 
 # --- group C ---
 
@@ -228,7 +256,7 @@ file = "ft8/ft8_a7.f90"
 line = 11
 class = 1
 size_bytes = 29600
-reason = "THE a7 cross-cycle AP payload. WRITTEN ft8_a7.f90:50/52/57 (plane k=1) from each direct decode; rolled k=1->k=0 at ft8_cabi.f90:244; cleared only by ft8_a7_reset (ft8_cabi.f90:417). READ ft8_cabi.f90:355-356 in slot N+2 and fed to ft8_a7d as ~206 QSO-continuation AP hypotheses, and READ at ft8_a7.f90:66 for the -98.0 suppression match. This is decoded callsign text from THIS chain's band replayed as a decode prior on a later slot: shared, 20 m callsigns become AP masks against 40 m audio and can synthesize a well-formed, loggable wrong-band decode. Exactly the failure mode this audit exists to prevent. Note also that the k=1 plane is NEVER cleared on the roll (ft8_cabi.f90:247-248 zero dt0/f0 but not msg0), so stale text past ndec(j,1) persists and is bounded only by ndec -- msg0 must be saved/restored ATOMICALLY with ndec. Confirmed 29600 B as __ft8_a7_MOD_msg0 in nm."
+reason = "THE a7 cross-cycle AP payload. WRITTEN ft8_a7.f90:50/52/57 (plane k=1) from each direct decode; rolled k=1->k=0 at ft8_cabi.f90:244; cleared only by ft8_a7_reset (ft8_cabi.f90:417). READ ft8_cabi.f90:355-356 in slot N+2 and fed to ft8_a7d as ~206 QSO-continuation AP hypotheses, and READ at ft8_a7.f90:66 for the -98.0 suppression match. This is decoded callsign text from THIS chain's band replayed as a decode prior on a later slot: shared, 20 m callsigns become AP masks against 40 m audio and can synthesize a well-formed, loggable wrong-band decode. Exactly the failure mode this audit exists to prevent. Note also that the k=1 plane is NEVER cleared on the roll (ft8_cabi.f90:247-248 zero dt0/f0 but not msg0), so stale text past ndec(j,1) persists and is bounded only by ndec -- msg0 must be saved/restored ATOMICALLY with ndec. Confirmed 29600 B as __ft8_a7_MOD_msg0 in nm. IN THE PER-CHAIN CONTEXT as p%a7_msg0 (ft8_cabi.f90)."
 
 [[symbol]]
 name = "f0"
@@ -236,7 +264,7 @@ file = "ft8/ft8_a7.f90"
 line = 10
 class = 1
 size_bytes = 3200
-reason = "Per-decode audio frequency of the previous same-parity slot PLUS in-band sentinel state. WRITTEN ft8_a7.f90:49 (k=1) and critically ft8_a7.f90:68 writes -98.0 into the PREVIOUS plane (k=0) to mark 'already worked, do not replay'; also ft8_cabi.f90:243/248/416. READ ft8_a7.f90:65/67 and ft8_cabi.f90:353/354/365, where f1 seeds ft8_a7d's downsample/sync search. Two hazards, both per-chain: (a) an audio frequency from band A is a plausible-but-wrong replay hypothesis on band B; (b) chain A's -98.0 sentinel silently suppresses chain B's legitimate replay. Also note -99.0 is READ as an end-marker at ft8_cabi.f90:353 but is NEVER WRITTEN anywhere (the roll zeroes to 0.0, not -99.0), so that exit never fires and the loop is bounded solely by ndec -- reinforcing that f0 and ndec must move as one unit. Confirmed 3200 B as __ft8_a7_MOD_f0 in nm."
+reason = "Per-decode audio frequency of the previous same-parity slot PLUS in-band sentinel state. WRITTEN ft8_a7.f90:49 (k=1) and critically ft8_a7.f90:68 writes -98.0 into the PREVIOUS plane (k=0) to mark 'already worked, do not replay'; also ft8_cabi.f90:243/248/416. READ ft8_a7.f90:65/67 and ft8_cabi.f90:353/354/365, where f1 seeds ft8_a7d's downsample/sync search. Two hazards, both per-chain: (a) an audio frequency from band A is a plausible-but-wrong replay hypothesis on band B; (b) chain A's -98.0 sentinel silently suppresses chain B's legitimate replay. Also note -99.0 is READ as an end-marker at ft8_cabi.f90:353 but is NEVER WRITTEN anywhere (the roll zeroes to 0.0, not -99.0), so that exit never fires and the loop is bounded solely by ndec -- reinforcing that f0 and ndec must move as one unit. Confirmed 3200 B as __ft8_a7_MOD_f0 in nm. IN THE PER-CHAIN CONTEXT as p%a7_f0 (ft8_cabi.f90)."
 
 [[symbol]]
 name = "dt0"
@@ -244,7 +272,7 @@ file = "ft8/ft8_a7.f90"
 line = 9
 class = 1
 size_bytes = 3200
-reason = "Per-decode time offset (xdt-0.5) of the previous same-parity slot. WRITTEN ft8_a7.f90:48 (plane k=1), rolled to k=0 at ft8_cabi.f90:242, zeroed at :247, reset at :415. READ ft8_cabi.f90:364 as xdt, passed straight into ft8_a7d where it becomes i0=nint((xdt+0.5)*fs2), the initial guess for start-of-signal (ft8_a7.f90:140). A foreign chain's dt seeds the +/- quarter-symbol sync search at the wrong sample offset for this chain's audio. Carries data between calls by construction. Confirmed 3200 B as __ft8_a7_MOD_dt0 in nm."
+reason = "Per-decode time offset (xdt-0.5) of the previous same-parity slot. WRITTEN ft8_a7.f90:48 (plane k=1), rolled to k=0 at ft8_cabi.f90:242, zeroed at :247, reset at :415. READ ft8_cabi.f90:364 as xdt, passed straight into ft8_a7d where it becomes i0=nint((xdt+0.5)*fs2), the initial guess for start-of-signal (ft8_a7.f90:140). A foreign chain's dt seeds the +/- quarter-symbol sync search at the wrong sample offset for this chain's audio. Carries data between calls by construction. Confirmed 3200 B as __ft8_a7_MOD_dt0 in nm. IN THE PER-CHAIN CONTEXT as p%a7_dt0 (ft8_cabi.f90)."
 
 [[symbol]]
 name = "ndec"
@@ -252,7 +280,7 @@ file = "ft8/ft8_a7.f90"
 line = 15
 class = 1
 size_bytes = 16
-reason = "Valid-entry count per (parity j, prev/cur k) plane; DATA-initialized to 0 at ft8_a7.f90:16 but then mutated every slot, so the DATA init does NOT make it class 2. WRITTEN ft8_a7.f90:44 (increment per decode) and ft8_cabi.f90:245/246/413. READ ft8_a7.f90:64 and ft8_cabi.f90:241/350/352 as the loop bound for the entire replay. It is the ONLY bound on dt0/f0/msg0 reads (the -99.0 end sentinel is never written, see f0), so a shared/mismatched ndec makes one chain's decode count index into rows the other chain never wrote -- reading zeroed or stale entries as if they were decodes. Must be saved/restored ATOMICALLY with dt0/f0/msg0. Confirmed 16 B as __ft8_a7_MOD_ndec in nm."
+reason = "Valid-entry count per (parity j, prev/cur k) plane; DATA-initialized to 0 at ft8_a7.f90:16 but then mutated every slot, so the DATA init does NOT make it class 2. WRITTEN ft8_a7.f90:44 (increment per decode) and ft8_cabi.f90:245/246/413. READ ft8_a7.f90:64 and ft8_cabi.f90:241/350/352 as the loop bound for the entire replay. It is the ONLY bound on dt0/f0/msg0 reads (the -99.0 end sentinel is never written, see f0), so a shared/mismatched ndec makes one chain's decode count index into rows the other chain never wrote -- reading zeroed or stale entries as if they were decodes. Must be saved/restored ATOMICALLY with dt0/f0/msg0. Confirmed 16 B as __ft8_a7_MOD_ndec in nm. IN THE PER-CHAIN CONTEXT as p%a7_ndec (ft8_cabi.f90)."
 
 [[symbol]]
 name = "jseq"
@@ -260,7 +288,7 @@ file = "ft8/ft8_a7.f90"
 line = 14
 class = 1
 size_bytes = 4
-reason = "Even/odd slot-parity selector; DATA-initialized 0 at ft8_a7.f90:16 but reassigned every slot. WRITTEN ft8_a7.f90:41 (j=mod(nutc/5,2)), ft8_cabi.f90:255 (only when .not.is_stale), :414. Decisively READ-BEFORE-WRITTEN within each decode call: ft8_cabi.f90:241-248 performs the k=1->k=0 roll using the value left by the PREVIOUS call (the comment at :225 says so explicitly), and :350-365 index the replay with it. That read-before-write is the signature of cross-call state. If chains sit at different slot phases, or one is idle a slot, chain A's parity picks chain B's table half and the whole ping-pong inverts -- silently replaying the wrong slot's decodes. COUPLING WARNING: jseq must be saved/restored together with ft8_cabi.f90:46 nutc0_a7 (module-scope, initialized -1), which gates whether the roll and the jseq assignment happen at all; splitting them desynchronizes the rollover. nutc0_a7 is outside this group's files but is class 1 for the same reason. Confirmed 4 B as __ft8_a7_MOD_jseq in nm."
+reason = "Even/odd slot-parity selector; DATA-initialized 0 at ft8_a7.f90:16 but reassigned every slot. WRITTEN ft8_a7.f90:41 (j=mod(nutc/5,2)), ft8_cabi.f90:255 (only when .not.is_stale), :414. Decisively READ-BEFORE-WRITTEN within each decode call: ft8_cabi.f90:241-248 performs the k=1->k=0 roll using the value left by the PREVIOUS call (the comment at :225 says so explicitly), and :350-365 index the replay with it. That read-before-write is the signature of cross-call state. If chains sit at different slot phases, or one is idle a slot, chain A's parity picks chain B's table half and the whole ping-pong inverts -- silently replaying the wrong slot's decodes. COUPLING WARNING: jseq must be saved/restored together with ft8_cabi.f90:46 nutc0_a7 (module-scope, initialized -1), which gates whether the roll and the jseq assignment happen at all; splitting them desynchronizes the rollover. nutc0_a7 is outside this group's files but is class 1 for the same reason. Confirmed 4 B as __ft8_a7_MOD_jseq in nm. IN THE PER-CHAIN CONTEXT as p%a7_jseq (ft8_cabi.f90)."
 
 # --- group D ---
 
@@ -270,7 +298,7 @@ file = "ft4/ft4_downsample.f90"
 line = 8
 class = 1
 size_bytes = 290312
-reason = "complex cx(0:NMAX/2)=36289*8. EQUIVALENCEd with x at :10; x is in the SAVE at :13, so the whole group is static (nm: equiv.0.0 = 290312 bytes in .bss — exactly the union size, confirming x and cx are ONE block). Written ONLY at :34 (four2a on the r2c FFT of x) and ONLY when the caller passes newdata=.true.; read unconditionally at :38/:40/:41 on EVERY call. It therefore carries the full-band receive spectrum of one chain BETWEEN calls by design — that is the literal definition of class 1. The refresh guarantee does not live in this file at all: it lives in ft4_decode.f90:223 (dobigfft=.true. once per subtraction pass) and :230 (cleared after the first candidate). Every subsequent ft4_downsample in that pass (:228 per candidate, :284 for the final downsample) reads a spectrum it did not compute. If a chain switch ever lands between candidates rather than between decode() calls, chain B correlates chain A's spectrum and emits well-formed callsigns at chain A's frequencies labelled with chain B's band. A context must copy the 290312-byte block ONCE — do not also copy the x row below or you double-copy the same memory."
+reason = "complex cx(0:NMAX/2)=36289*8. EQUIVALENCEd with x at :10; x is in the SAVE at :13, so the whole group is static (nm: equiv.0.0 = 290312 bytes in .bss — exactly the union size, confirming x and cx are ONE block). Written ONLY at :34 (four2a on the r2c FFT of x) and ONLY when the caller passes newdata=.true.; read unconditionally at :38/:40/:41 on EVERY call. It therefore carries the full-band receive spectrum of one chain BETWEEN calls by design — that is the literal definition of class 1. The refresh guarantee does not live in this file at all: it lives in ft4_decode.f90:223 (dobigfft=.true. once per subtraction pass) and :230 (cleared after the first candidate). Every subsequent ft4_downsample in that pass (:228 per candidate, :284 for the final downsample) reads a spectrum it did not compute. If a chain switch ever lands between candidates rather than between decode() calls, chain B correlates chain A's spectrum and emits well-formed callsigns at chain A's frequencies labelled with chain B's band. A context must copy the 290312-byte block ONCE — do not also copy the x row below or you double-copy the same memory. IN THE PER-CHAIN CONTEXT as p%ft4_spec (ft8_cabi.f90)."
 
 [[symbol]]
 name = "x"
@@ -278,55 +306,55 @@ file = "ft4/ft4_downsample.f90"
 line = 9
 class = 1
 size_bytes = 290304
-reason = "real x(NMAX)=72576*4, named in the SAVE at :13, EQUIVALENCEd with cx at :10 — SAME STORAGE as the cx row above (union 290312). Written only at :33 (x=dd) under if(newdata); handed to four2a at :34 which overwrites it in place with the packed r2c spectrum. Class 1 for the identical reason as cx. SIZING NOTE: a context that copies the literal SAVE list and sizes it from `real x(NMAX)` copies 290304 and truncates the last 8 bytes of the equivalence block (cx element 36289); copy 290312 once for the pair."
+reason = "real x(NMAX)=72576*4, named in the SAVE at :13, EQUIVALENCEd with cx at :10 — SAME STORAGE as the cx row above (union 290312). Written only at :33 (x=dd) under if(newdata); handed to four2a at :34 which overwrites it in place with the packed r2c spectrum. Class 1 for the identical reason as cx. SIZING NOTE: a context that copies the literal SAVE list and sizes it from `real x(NMAX)` copies 290304 and truncates the last 8 bytes of the equivalence block (cx element 36289); copy 290312 once for the pair. IN THE PER-CHAIN CONTEXT as p%ft4_spec (EQUIVALENCE alias of cx) (ft8_cabi.f90)."
 
 [[symbol]]
 name = "apbits"
 file = "ft4_decode.f90"
-line = 55
+line = 23
 class = 1
 size_bytes = 696
-reason = "integer apbits(2*ND)=174*4 (nm: apbits.5, 696 bytes .bss), SAVEd at :85. The a-priori LDPC codeword for THIS chain's (mycall,hiscall). Written at :152-154 and :177-178 ONLY when the callsign pair differs from mycall0/hiscall0; read at :354,:355,:372,:375,:378,:389,:392,:397,:405 on every AP pass of every call. Textbook cross-call chain-specific cache. Note the aliasing trap at :177: `apbits=2*cw-1` reads the LOCAL integer*1 cw(2*ND) declared at :58 — NOT the 580608-byte COMMON /heap4/ cw in subtractft4.f90:19. Two different symbols named cw in one call chain. MUST MOVE AS ONE GROUP with mycall0, hiscall0, apmy_ru, aphis_fd: if apbits is per-chain while mycall0/hiscall0 are shared, chain B sees a cache hit, skips the recompute, and runs AP decoding against an all-zero apbits — apmask=1 on up to 77 positions with zero-magnitude LLRs, which is a plausible-wrong-decode generator, not a crash."
+reason = "integer apbits(2*ND)=174*4 (nm: apbits.5, 696 bytes .bss), SAVEd at :85. The a-priori LDPC codeword for THIS chain's (mycall,hiscall). Written at :152-154 and :177-178 ONLY when the callsign pair differs from mycall0/hiscall0; read at :354,:355,:372,:375,:378,:389,:392,:397,:405 on every AP pass of every call. Textbook cross-call chain-specific cache. Note the aliasing trap at :177: `apbits=2*cw-1` reads the LOCAL integer*1 cw(2*ND) declared at :58 — NOT the 580608-byte COMMON /heap4/ cw in subtractft4.f90:19. Two different symbols named cw in one call chain. MUST MOVE AS ONE GROUP with mycall0, hiscall0, apmy_ru, aphis_fd: if apbits is per-chain while mycall0/hiscall0 are shared, chain B sees a cache hit, skips the recompute, and runs AP decoding against an all-zero apbits — apmask=1 on up to 77 positions with zero-magnitude LLRs, which is a plausible-wrong-decode generator, not a crash. IN THE PER-CHAIN CONTEXT as p%ft4_apbits (ft8_cabi.f90). HOISTED 2026-07-21 to module ft4_decode_apstate at the top of this file -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "apmy_ru"
 file = "ft4_decode.f90"
-line = 56
+line = 24
 class = 1
 size_bytes = 112
-reason = "integer apmy_ru(28)=112 bytes. Design intent is a per-(mycall,hiscall) cache exactly like apbits, but the declaration does not deliver it: apmy_ru is ABSENT from the SAVE list at :85-86 and, at 112 bytes, is far below the 65536 stack threshold — nm on ft4_decode.f90.o has no apmy_ru symbol, so it is stack-resident. Written only at :155 and :173 inside the `mycall/hiscall changed` block; read at :381 and :396 on every ncontest==4 (RTTY) AP pass, INCLUDING calls where that block was skipped, i.e. read before written. Class 1: a per-chain context must own it and the missing SAVE must be fixed. Currently masked in Nexus because ft4_cabi.f90:189 hardcodes ncontest=0, making :381/:396 unreachable — but crates/modes/src/mode.rs:294 advertises Capabilities{contest:true} for FT4, so wiring ncontest 3/4 arms this."
+reason = "integer apmy_ru(28)=112 bytes. Design intent is a per-(mycall,hiscall) cache exactly like apbits, but the declaration does not deliver it: apmy_ru is ABSENT from the SAVE list at :85-86 and, at 112 bytes, is far below the 65536 stack threshold — nm on ft4_decode.f90.o has no apmy_ru symbol, so it is stack-resident. Written only at :155 and :173 inside the `mycall/hiscall changed` block; read at :381 and :396 on every ncontest==4 (RTTY) AP pass, INCLUDING calls where that block was skipped, i.e. read before written. Class 1: a per-chain context must own it and the missing SAVE must be fixed. Currently masked in Nexus because ft4_cabi.f90:189 hardcodes ncontest=0, making :381/:396 unreachable — but crates/modes/src/mode.rs:294 advertises Capabilities{contest:true} for FT4, so wiring ncontest 3/4 arms this. IN THE PER-CHAIN CONTEXT as p%ft4_apmy_ru (ft8_cabi.f90). HOISTED 2026-07-21 to module ft4_decode_apstate at the top of this file -- which also supplies the SAVE the declaration was missing. It was not merely unaddressable, it was a STACK local with no symbol at all: read-before-write within a chain and unreachable from any other compilation unit. Module scope fixes both, and the per-chain context is what keeps the now-static storage from becoming the cross-band AP leak this file warns about for its tempofast_decode.f90 twins. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "aphis_fd"
 file = "ft4_decode.f90"
-line = 56
+line = 24
 class = 1
 size_bytes = 112
-reason = "integer aphis_fd(28)=112 bytes. Identical defect to apmy_ru on the same declaration line: absent from the SAVE at :85-86, stack-resident (no nm symbol), written only at :156/:174 under the callsign-changed guard, read at :393 on every ncontest==3 (Field Day) AP pass regardless of whether that guard fired. Class 1 — per-chain cache by intent, read-before-write by construction. Same ncontest=0 masking applies today."
+reason = "integer aphis_fd(28)=112 bytes. Identical defect to apmy_ru on the same declaration line: absent from the SAVE at :85-86, stack-resident (no nm symbol), written only at :156/:174 under the callsign-changed guard, read at :393 on every ncontest==3 (Field Day) AP pass regardless of whether that guard fired. Class 1 — per-chain cache by intent, read-before-write by construction. Same ncontest=0 masking applies today. IN THE PER-CHAIN CONTEXT as p%ft4_aphis_fd (ft8_cabi.f90). HOISTED 2026-07-21 to module ft4_decode_apstate at the top of this file -- which also supplies the SAVE the declaration was missing. It was not merely unaddressable, it was a STACK local with no symbol at all: read-before-write within a chain and unreachable from any other compilation unit. Module scope fixes both, and the per-chain context is what keeps the now-static storage from becoming the cross-band AP leak this file warns about for its tempofast_decode.f90 twins. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "mycall0"
 file = "ft4_decode.f90"
-line = 40
+line = 28
 class = 1
 size_bytes = 12
-reason = "character*12 (nm: mycall0.7, 12 bytes .bss), SAVEd at :86. Written '' at :142 under if(first) and =mycall at :181; read at :151 as half the AP cache key. Its whole job is to remember which chain's operator callsign the cached apbits belongs to. Class 1, and it must move together with hiscall0, apbits, apmy_ru and aphis_fd — sharing the key while splitting the value (or vice versa) gives chain B a false cache hit on a codeword built for chain A."
+reason = "character*12 (nm: mycall0.7, 12 bytes .bss), SAVEd at :86. Written '' at :142 under if(first) and =mycall at :181; read at :151 as half the AP cache key. Its whole job is to remember which chain's operator callsign the cached apbits belongs to. Class 1, and it must move together with hiscall0, apbits, apmy_ru and aphis_fd — sharing the key while splitting the value (or vice versa) gives chain B a false cache hit on a codeword built for chain A. IN THE PER-CHAIN CONTEXT as p%ft4_mycall0 (ft8_cabi.f90). HOISTED 2026-07-21 to module ft4_decode_apstate at the top of this file -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "hiscall0"
 file = "ft4_decode.f90"
-line = 40
+line = 28
 class = 1
 size_bytes = 12
-reason = "character*12 (nm: hiscall0.6, 12 bytes .bss), SAVEd at :86. The other half of the AP cache key and by far the more chain-specific of the two: in two-radio operation mycall is usually common but hiscall is the per-chain QSO partner. Written at :143 (if first), :161, :163 (`hiscall0=mycall` dummy substitution when hiscall is short) and :182; read at :151, :162, :166. Note it is used as scratch inside the recompute block at :161-166 and only restored to the true hiscall at :182 — so the value that persists across calls is exactly `hiscall`. Class 1, same group as mycall0/apbits."
+reason = "character*12 (nm: hiscall0.6, 12 bytes .bss), SAVEd at :86. The other half of the AP cache key and by far the more chain-specific of the two: in two-radio operation mycall is usually common but hiscall is the per-chain QSO partner. Written at :143 (if first), :161, :163 (`hiscall0=mycall` dummy substitution when hiscall is short) and :182; read at :151, :162, :166. Note it is used as scratch inside the recompute block at :161-166 and only restored to the true hiscall at :182 — so the value that persists across calls is exactly `hiscall`. Class 1, same group as mycall0/apbits. IN THE PER-CHAIN CONTEXT as p%ft4_hiscall0 (ft8_cabi.f90). HOISTED 2026-07-21 to module ft4_decode_apstate at the top of this file -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "napwid"
 file = "ft4_decode.f90"
-line = 352
+line = 386
 class = 1
 size_bytes = 4
-reason = "OVERTURNS THE FIRST PASS, WHICH FILED THIS CLASS 2. It is not init-once and it is read before its only write. Implicit integer, no declaration; assigned napwid=80 at :352, which sits INSIDE `if(ipass .gt. 3)` (the block runs :337-410). It is read at :353 (inside the block, fine) and at :416, which is OUTSIDE the block and executes on EVERY pass including ipass=1,2,3. Since the loop starts at ipass=1, the very first evaluation of :416 in a process reads an undefined value; thereafter it holds 80 only because a previous ipass>3 iteration happened to run. The read at :416 selects maxosd=3 versus 2, i.e. whether deep OSD runs — a control decision that changes which codewords get ACCEPTED, so a stale/garbage value biases the false-decode rate. Stack-resident in this build (4 bytes, no nm symbol), so there is no cross-chain leak today; class 1 per the asymmetry rule because it is one compile flag (-fno-automatic / -fmax-stack-var-size=0) away from being static, at which point chain A's value silently sets chain B's OSD depth. Real upstream defect: the napwid=80 assignment belongs above the ipass loop."
+reason = "OVERTURNS THE FIRST PASS, WHICH FILED THIS CLASS 2. It is not init-once and it is read before its only write. Implicit integer, no declaration; assigned napwid=80 at :352, which sits INSIDE `if(ipass .gt. 3)` (the block runs :337-410). It is read at :353 (inside the block, fine) and at :416, which is OUTSIDE the block and executes on EVERY pass including ipass=1,2,3. Since the loop starts at ipass=1, the very first evaluation of :416 in a process reads an undefined value; thereafter it holds 80 only because a previous ipass>3 iteration happened to run. The read at :416 selects maxosd=3 versus 2, i.e. whether deep OSD runs — a control decision that changes which codewords get ACCEPTED, so a stale/garbage value biases the false-decode rate. Stack-resident in this build (4 bytes, no nm symbol), so there is no cross-chain leak today; class 1 per the asymmetry rule because it is one compile flag (-fno-automatic / -fmax-stack-var-size=0) away from being static, at which point chain A's value silently sets chain B's OSD depth. Real upstream defect: the napwid=80 assignment belongs above the ipass loop. NOT IN CONTEXT (2026-07-21). Not static at all -- an ordinary stack local with no `nm` symbol -- so there is no storage to save or restore and nothing for a context to own. The genuine defect (napwid=80 sits inside `if(ipass.gt.3)` while the OSD-depth test reads it on every pass) is an upstream read-before-write whose fix changes which codewords are ACCEPTED: a decode-behavior change, out of scope for state scoping. Re-file this class 1 the moment the build gains -fno-automatic / -fmax-stack-var-size=0."
 
 [[symbol]]
 name = "dt"
@@ -334,7 +362,7 @@ file = "ft4/gen_ft4wave.f90"
 line = 10
 class = 1
 size_bytes = 4
-reason = "OVERTURNS THE FIRST PASS, WHOSE STATED JUSTIFICATION IS FACTUALLY WRONG. implicit real*4, SAVE-only at :10 (nm: dt.3, .bss). Written ONCE at :14 as dt=1.0/fsample, where fsample is a DUMMY ARGUMENT, then read at :36 (dphi = dphi + twopi*f0*dt) on every later call regardless of that call's fsample. The first pass justified class 2 with 'the single caller (subtractft4.f90:28) always passes fs=12000.0'. There are TWO callers: subtractft4.f90:28 (fs hard-coded 12000.0) and libtempo/ft4_cabi.f90:110, which passes fs_l=fsample straight through from the public C entry point `void ft4_gen_wave(const int*, int nsym, float fsample, float f0, ...)` declared in libtempo/include/libtempo.h:287 and from Rust's ft4::gen_wave(itone, fsample, f0) at crates/ft4/src/lib.rs:75. Every current production call site happens to pass tempo_fast::SAMPLE_RATE=12000.0 (crates/tempo-app/src/engine.rs:6698/11553/11800 via crates/modes/src/mode.rs:308), so the latched value is 8.3333e-5 today — but that is a caller convention, not a compile-time invariant, and it is first-caller-wins across the whole process. If any chain or consumer generates at another rate first, subtractft4's reconstruction is mis-tuned, the subtraction leaves a residual carrier, and the residual is re-decoded on the next isp pass as a ghost signal. Class 1 per the asymmetry: 4 bytes of memcpy versus silent wrong decodes."
+reason = "OVERTURNS THE FIRST PASS, WHOSE STATED JUSTIFICATION IS FACTUALLY WRONG. implicit real*4, SAVE-only at :10 (nm: dt.3, .bss). Written ONCE at :14 as dt=1.0/fsample, where fsample is a DUMMY ARGUMENT, then read at :36 (dphi = dphi + twopi*f0*dt) on every later call regardless of that call's fsample. The first pass justified class 2 with 'the single caller (subtractft4.f90:28) always passes fs=12000.0'. There are TWO callers: subtractft4.f90:28 (fs hard-coded 12000.0) and libtempo/ft4_cabi.f90:110, which passes fs_l=fsample straight through from the public C entry point `void ft4_gen_wave(const int*, int nsym, float fsample, float f0, ...)` declared in libtempo/include/libtempo.h:287 and from Rust's ft4::gen_wave(itone, fsample, f0) at crates/ft4/src/lib.rs:75. Every current production call site happens to pass tempo_fast::SAMPLE_RATE=12000.0 (crates/tempo-app/src/engine.rs:6698/11553/11800 via crates/modes/src/mode.rs:308), so the latched value is 8.3333e-5 today — but that is a caller convention, not a compile-time invariant, and it is first-caller-wins across the whole process. If any chain or consumer generates at another rate first, subtractft4's reconstruction is mis-tuned, the subtraction leaves a residual carrier, and the residual is re-decoded on the next isp pass as a ghost signal. Class 1 per the asymmetry: 4 bytes of memcpy versus silent wrong decodes. NOT IN CONTEXT (2026-07-21). This block latches the FIRST caller's `fsample` for the life of the process, and that IS a live defect -- but a defect WITHIN one chain, since one chain both transmits (48 kHz path) and decodes (subtractft1/subtractft4 hard-code 12 kHz). Per-chain copies would not fix it. It also cannot be swapped here even in principle: the gen-wave C entry points are not bracketed by tempo_ctx_restore/save. The real fix is to recompute when fsample changes, which is a transmitted-waveform change and needs its own approval."
 
 # --- group E ---
 
@@ -344,7 +372,7 @@ file = "tempofast/tempofast_downsample.f90"
 line = 47
 class = 1
 size_bytes = 192008
-reason = "THE WORST ONE IN THE GROUP, and first pass filed nothing here. `save first,window,x` (line 51) + `equivalence (x,cx)` (line 48) puts the ENTIRE 48000-point received-audio spectrum in static storage. It is written ONLY inside `if(newdata)` (lines 97-100: x=dd; four2a(cx,NMAX,1,-1,0)); cx is read UNCONDITIONALLY at lines 105-108 on every call regardless of newdata. So a call with newdata=.false. returns baseband cut from whatever audio the PREVIOUS call FFT'd. tempofast_decode.f90:376 passes dobigfft, which is .true. only for the FIRST candidate of each subtraction pass (set at :359, cleared at :378) - candidates 2..N deliberately reuse the cache. Two chains interleaved anywhere inside that candidate loop hand chain B chain A's band spectrum, producing well-formed decodes at the wrong band. sizeBytes is the equivalence-group union: cx(0:24000)=192008 > x(48000)=192000; saving x saves cx."
+reason = "THE WORST ONE IN THE GROUP, and first pass filed nothing here. `save first,window,x` (line 51) + `equivalence (x,cx)` (line 48) puts the ENTIRE 48000-point received-audio spectrum in static storage. It is written ONLY inside `if(newdata)` (lines 97-100: x=dd; four2a(cx,NMAX,1,-1,0)); cx is read UNCONDITIONALLY at lines 105-108 on every call regardless of newdata. So a call with newdata=.false. returns baseband cut from whatever audio the PREVIOUS call FFT'd. tempofast_decode.f90:376 passes dobigfft, which is .true. only for the FIRST candidate of each subtraction pass (set at :359, cleared at :378) - candidates 2..N deliberately reuse the cache. Two chains interleaved anywhere inside that candidate loop hand chain B chain A's band spectrum, producing well-formed decodes at the wrong band. sizeBytes is the equivalence-group union: cx(0:24000)=192008 > x(48000)=192000; saving x saves cx. IN THE PER-CHAIN CONTEXT as p%ft1_spec (EQUIVALENCE alias of cx) (ft8_cabi.f90)."
 
 [[symbol]]
 name = "cx"
@@ -352,7 +380,7 @@ file = "tempofast/tempofast_downsample.f90"
 line = 46
 class = 1
 size_bytes = 0
-reason = "EQUIVALENCE alias of the saved `x` (line 48). SAME STORAGE - do not allocate twice; it is counted once under x above. Listed separately because a name-keyed scan sees `cx` as an unsaved local (it is absent from the `save` statement at line 51) and would file it class 3. It is the read side of the leak: lines 105-108 read cx(i0), cx(i0+/-i) with no guard on newdata."
+reason = "EQUIVALENCE alias of the saved `x` (line 48). SAME STORAGE - do not allocate twice; it is counted once under x above. Listed separately because a name-keyed scan sees `cx` as an unsaved local (it is absent from the `save` statement at line 51) and would file it class 3. It is the read side of the leak: lines 105-108 read cx(i0), cx(i0+/-i) with no guard on newdata. IN THE PER-CHAIN CONTEXT as p%ft1_spec (ft8_cabi.f90)."
 
 [[symbol]]
 name = "slots"
@@ -360,7 +388,7 @@ file = "tempofast/ir_harq_combine.f90"
 line = 61
 class = 1
 size_bytes = 2134000
-reason = "Confirms the stated calibration miss. type(harq_slot) :: slots(100) is the IR-HARQ buffer: harq_store_rv0 (:101-109) writes cd_rv0 on a failed RV0 frame and it is read many T/R periods later by harq_combine_rv1 (:180) / harq_combine_rv2 (:228). Persistence across calls IS the feature. Slots are keyed by (freq +/-10 Hz, timestamp) ONLY - there is no band or chain field, so a 20 m RV0 at 1500 Hz and a 40 m RV1 at 1503 Hz match each other and joint-turbo-combine into a plausible LDPC(261,91) decode. Size: per slot 28 B scalars (7 x 4) + 3 x complex(888) = 21340 B, x MAX_HARQ_SLOTS=100."
+reason = "Confirms the stated calibration miss. type(harq_slot) :: slots(100) is the IR-HARQ buffer: harq_store_rv0 (:101-109) writes cd_rv0 on a failed RV0 frame and it is read many T/R periods later by harq_combine_rv1 (:180) / harq_combine_rv2 (:228). Persistence across calls IS the feature. Slots are keyed by (freq +/-10 Hz, timestamp) ONLY - there is no band or chain field, so a 20 m RV0 at 1500 Hz and a 40 m RV1 at 1503 Hz match each other and joint-turbo-combine into a plausible LDPC(261,91) decode. Size: per slot 28 B scalars (7 x 4) + 3 x complex(888) = 21340 B, x MAX_HARQ_SLOTS=100. IN THE PER-CHAIN CONTEXT as p%harq_pool (ft8_cabi.f90)."
 
 [[symbol]]
 name = "harq_initialized"
@@ -368,7 +396,7 @@ file = "tempofast/ir_harq_combine.f90"
 line = 62
 class = 1
 size_bytes = 4
-reason = "Written .true. once in harq_init (:73), tested at :91, :126, :163, :213, :246 - by the letter a class-2 write-once flag. Classified 1 because it is inseparable from the class-1 `slots` it guards: if slots is per-chain but this flag is shared, a second chain's harq_init() is skipped. Today the harq_slot default component initializers (active=.false., rv_count=-1) make that benign, but the flag must travel with the buffer. 4 bytes."
+reason = "Written .true. once in harq_init (:73), tested at :91, :126, :163, :213, :246 - by the letter a class-2 write-once flag. Classified 1 because it is inseparable from the class-1 `slots` it guards: if slots is per-chain but this flag is shared, a second chain's harq_init() is skipped. Today the harq_slot default component initializers (active=.false., rv_count=-1) make that benign, but the flag must travel with the buffer. 4 bytes. IN THE PER-CHAIN CONTEXT as p%harq_init (ft8_cabi.f90)."
 
 [[symbol]]
 name = "pulse"
@@ -376,7 +404,7 @@ file = "tempofast/gen_tempofastwave.f90"
 line = 53
 class = 1
 size_bytes = 24000
-reason = "In the `save` list at :63, computed only inside `if(first)` (:90-106). Content is a function of nsps_real = (fsample/12000)*nsps_num/nsps_den, i.e. of the FIRST caller's fsample - and callers DISAGREE: tempofast_cabi.f90:185 (ft1_gen_wave) forwards the host's fsample verbatim (48000 for the WSJT-X TX path), tempofast_decode.f90:1160 (subtractft1) hardcodes 12000.0, tempofast_decode.f90:1266 hardcodes 12000.0, tempofast_test.f90:93 passes a variable. Whichever runs first latches the pulse for the process; every later caller at a different rate gets a silently wrong waveform. This is a live single-chain bug, not only a multi-chain one. real(MAXPULSE=6000)."
+reason = "In the `save` list at :63, computed only inside `if(first)` (:90-106). Content is a function of nsps_real = (fsample/12000)*nsps_num/nsps_den, i.e. of the FIRST caller's fsample - and callers DISAGREE: tempofast_cabi.f90:185 (ft1_gen_wave) forwards the host's fsample verbatim (48000 for the WSJT-X TX path), tempofast_decode.f90:1160 (subtractft1) hardcodes 12000.0, tempofast_decode.f90:1266 hardcodes 12000.0, tempofast_test.f90:93 passes a variable. Whichever runs first latches the pulse for the process; every later caller at a different rate gets a silently wrong waveform. This is a live single-chain bug, not only a multi-chain one. real(MAXPULSE=6000). NOT IN CONTEXT (2026-07-21). This block latches the FIRST caller's `fsample` for the life of the process, and that IS a live defect -- but a defect WITHIN one chain, since one chain both transmits (48 kHz path) and decodes (subtractft1/subtractft4 hard-code 12 kHz). Per-chain copies would not fix it. It also cannot be swapped here even in principle: the gen-wave C entry points are not bracketed by tempo_ctx_restore/save. The real fix is to recompute when fsample changes, which is a transmitted-waveform change and needs its own approval."
 
 [[symbol]]
 name = "first"
@@ -384,7 +412,7 @@ file = "tempofast/gen_tempofastwave.f90"
 line = 62
 class = 1
 size_bytes = 4
-reason = "`data first/.true./` (:65), in the save list (:63), cleared at :115. It is the latch that freezes the whole fsample-dependent block (:70-116) to the first caller. Must travel with pulse/dt/nsps_real/npulse/dphi_peak/nramp_out as one unit."
+reason = "`data first/.true./` (:65), in the save list (:63), cleared at :115. It is the latch that freezes the whole fsample-dependent block (:70-116) to the first caller. Must travel with pulse/dt/nsps_real/npulse/dphi_peak/nramp_out as one unit. NOT IN CONTEXT (2026-07-21). This block latches the FIRST caller's `fsample` for the life of the process, and that IS a live defect -- but a defect WITHIN one chain, since one chain both transmits (48 kHz path) and decodes (subtractft1/subtractft4 hard-code 12 kHz). Per-chain copies would not fix it. It also cannot be swapped here even in principle: the gen-wave C entry points are not bracketed by tempo_ctx_restore/save. The real fix is to recompute when fsample changes, which is a transmitted-waveform change and needs its own approval."
 
 [[symbol]]
 name = "twopi"
@@ -392,7 +420,7 @@ file = "tempofast/gen_tempofastwave.f90"
 line = 55
 class = 1
 size_bytes = 4
-reason = "Saved (:63), set at :71 to 8*atan(1). The VALUE is a true constant, but it is written only under the `first` latch, so it must be restored together with the rest of that block or a per-chain context restored with first=.false. and a zeroed twopi silently produces DC. Class 1 by unit-of-restore, not by content."
+reason = "Saved (:63), set at :71 to 8*atan(1). The VALUE is a true constant, but it is written only under the `first` latch, so it must be restored together with the rest of that block or a per-chain context restored with first=.false. and a zeroed twopi silently produces DC. Class 1 by unit-of-restore, not by content. NOT IN CONTEXT (2026-07-21). This block latches the FIRST caller's `fsample` for the life of the process, and that IS a live defect -- but a defect WITHIN one chain, since one chain both transmits (48 kHz path) and decodes (subtractft1/subtractft4 hard-code 12 kHz). Per-chain copies would not fix it. It also cannot be swapped here even in principle: the gen-wave C entry points are not bracketed by tempo_ctx_restore/save. The real fix is to recompute when fsample changes, which is a transmitted-waveform change and needs its own approval."
 
 [[symbol]]
 name = "dt"
@@ -400,7 +428,7 @@ file = "tempofast/gen_tempofastwave.f90"
 line = 55
 class = 1
 size_bytes = 4
-reason = "Saved (:63), dt=1.0/fsample at :72 - directly the first caller's sample rate. Read at :142 (dphi_carrier = twopi*f0*dt) on EVERY call including calls with a different fsample. A 48 kHz TX call followed by subtractft1's 12 kHz call emits the carrier at 1/4 the requested frequency. Name collides with 5 other `dt` in this tree; key by file:line."
+reason = "Saved (:63), dt=1.0/fsample at :72 - directly the first caller's sample rate. Read at :142 (dphi_carrier = twopi*f0*dt) on EVERY call including calls with a different fsample. A 48 kHz TX call followed by subtractft1's 12 kHz call emits the carrier at 1/4 the requested frequency. Name collides with 5 other `dt` in this tree; key by file:line. NOT IN CONTEXT (2026-07-21). This block latches the FIRST caller's `fsample` for the life of the process, and that IS a live defect -- but a defect WITHIN one chain, since one chain both transmits (48 kHz path) and decodes (subtractft1/subtractft4 hard-code 12 kHz). Per-chain copies would not fix it. It also cannot be swapped here even in principle: the gen-wave C entry points are not bracketed by tempo_ctx_restore/save. The real fix is to recompute when fsample changes, which is a transmitted-waveform change and needs its own approval."
 
 [[symbol]]
 name = "hmod"
@@ -408,7 +436,7 @@ file = "tempofast/gen_tempofastwave.f90"
 line = 55
 class = 1
 size_bytes = 4
-reason = "Saved (:63), set 0.5 at :73 under the `first` latch, read at :110. Value is genuinely constant; class 1 only because it shares the latch and must be restored as part of that block."
+reason = "Saved (:63), set 0.5 at :73 under the `first` latch, read at :110. Value is genuinely constant; class 1 only because it shares the latch and must be restored as part of that block. NOT IN CONTEXT (2026-07-21). This block latches the FIRST caller's `fsample` for the life of the process, and that IS a live defect -- but a defect WITHIN one chain, since one chain both transmits (48 kHz path) and decodes (subtractft1/subtractft4 hard-code 12 kHz). Per-chain copies would not fix it. It also cannot be swapped here even in principle: the gen-wave C entry points are not bracketed by tempo_ctx_restore/save. The real fix is to recompute when fsample changes, which is a transmitted-waveform change and needs its own approval."
 
 [[symbol]]
 name = "npulse"
@@ -416,7 +444,7 @@ file = "tempofast/gen_tempofastwave.f90"
 line = 57
 class = 1
 size_bytes = 4
-reason = "Saved (:63), npulse = nint(3.0*nsps_real) at :82 - first caller's fsample. Read at :126, :131 to size the dphi window and at :134-137 as the pulse loop bound. Wrong rate = wrong pulse span = wrong modulation."
+reason = "Saved (:63), npulse = nint(3.0*nsps_real) at :82 - first caller's fsample. Read at :126, :131 to size the dphi window and at :134-137 as the pulse loop bound. Wrong rate = wrong pulse span = wrong modulation. NOT IN CONTEXT (2026-07-21). This block latches the FIRST caller's `fsample` for the life of the process, and that IS a live defect -- but a defect WITHIN one chain, since one chain both transmits (48 kHz path) and decodes (subtractft1/subtractft4 hard-code 12 kHz). Per-chain copies would not fix it. It also cannot be swapped here even in principle: the gen-wave C entry points are not bracketed by tempo_ctx_restore/save. The real fix is to recompute when fsample changes, which is a transmitted-waveform change and needs its own approval."
 
 [[symbol]]
 name = "nsps_real"
@@ -424,7 +452,7 @@ file = "tempofast/gen_tempofastwave.f90"
 line = 56
 class = 1
 size_bytes = 4
-reason = "Saved (:63), = upsample_ratio * nsps_num/nsps_den at :79 where upsample_ratio = fsample/12000.0 (:68). Read at :120 (ntotal) and :130 (symbol start positions) on every call. This is the single value that makes gen_ft1wave rate-dependent state rather than a pure function."
+reason = "Saved (:63), = upsample_ratio * nsps_num/nsps_den at :79 where upsample_ratio = fsample/12000.0 (:68). Read at :120 (ntotal) and :130 (symbol start positions) on every call. This is the single value that makes gen_ft1wave rate-dependent state rather than a pure function. NOT IN CONTEXT (2026-07-21). This block latches the FIRST caller's `fsample` for the life of the process, and that IS a live defect -- but a defect WITHIN one chain, since one chain both transmits (48 kHz path) and decodes (subtractft1/subtractft4 hard-code 12 kHz). Per-chain copies would not fix it. It also cannot be swapped here even in principle: the gen-wave C entry points are not bracketed by tempo_ctx_restore/save. The real fix is to recompute when fsample changes, which is a transmitted-waveform change and needs its own approval."
 
 [[symbol]]
 name = "dphi_peak"
@@ -432,7 +460,7 @@ file = "tempofast/gen_tempofastwave.f90"
 line = 55
 class = 1
 size_bytes = 4
-reason = "Saved (:63), reused as a scratch accumulator at :97-106 then overwritten at :110 with twopi*hmod/nsps_real - again first-caller fsample. Read at :136 as the per-sample frequency deviation scale."
+reason = "Saved (:63), reused as a scratch accumulator at :97-106 then overwritten at :110 with twopi*hmod/nsps_real - again first-caller fsample. Read at :136 as the per-sample frequency deviation scale. NOT IN CONTEXT (2026-07-21). This block latches the FIRST caller's `fsample` for the life of the process, and that IS a live defect -- but a defect WITHIN one chain, since one chain both transmits (48 kHz path) and decodes (subtractft1/subtractft4 hard-code 12 kHz). Per-chain copies would not fix it. It also cannot be swapped here even in principle: the gen-wave C entry points are not bracketed by tempo_ctx_restore/save. The real fix is to recompute when fsample changes, which is a transmitted-waveform change and needs its own approval."
 
 [[symbol]]
 name = "nramp_out"
@@ -440,55 +468,55 @@ file = "tempofast/gen_tempofastwave.f90"
 line = 57
 class = 1
 size_bytes = 4
-reason = "Saved (:63), = nint(24.0*upsample_ratio) at :113, read at :158 and :164 for the rise/fall envelope taper. First-caller fsample again; a 96-sample ramp applied to a 12 kHz waveform is an 8 ms taper instead of 2 ms."
+reason = "Saved (:63), = nint(24.0*upsample_ratio) at :113, read at :158 and :164 for the rise/fall envelope taper. First-caller fsample again; a 96-sample ramp applied to a 12 kHz waveform is an 8 ms taper instead of 2 ms. NOT IN CONTEXT (2026-07-21). This block latches the FIRST caller's `fsample` for the life of the process, and that IS a live defect -- but a defect WITHIN one chain, since one chain both transmits (48 kHz path) and decodes (subtractft1/subtractft4 hard-code 12 kHz). Per-chain copies would not fix it. It also cannot be swapped here even in principle: the gen-wave C entry points are not bracketed by tempo_ctx_restore/save. The real fix is to recompute when fsample changes, which is a transmitted-waveform change and needs its own approval."
 
 [[symbol]]
 name = "apbits"
 file = "tempofast_decode.f90"
-line = 102
+line = 40
 class = 1
 size_bytes = 696
-reason = "integer apbits(174), in the save list at :205. Holds the a-priori bit pattern derived from (mycall,hiscall) at :297, read by the AP decode passes. It IS a cross-call cache of chain-specific data. Being precise: the guard at :271 re-compares the live mycall/hiscall against the saved key on every entry and rebuilds on mismatch, so sharing is CURRENTLY correct even with two chains alternating different hiscall. Classified 1 as cheap insurance (696 B) because this is the exact machinery that manufactures plausible callsigns, and any future weakening of that guard turns it into a silent mis-attribution."
+reason = "integer apbits(174), in the save list at :205. Holds the a-priori bit pattern derived from (mycall,hiscall) at :297, read by the AP decode passes. It IS a cross-call cache of chain-specific data. Being precise: the guard at :271 re-compares the live mycall/hiscall against the saved key on every entry and rebuilds on mismatch, so sharing is CURRENTLY correct even with two chains alternating different hiscall. Classified 1 as cheap insurance (696 B) because this is the exact machinery that manufactures plausible callsigns, and any future weakening of that guard turns it into a silent mis-attribution. IN THE PER-CHAIN CONTEXT as p%ft1_apbits (ft8_cabi.f90). HOISTED 2026-07-21 to module ft1_decode_apstate at the top of this file -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "mycall0"
 file = "tempofast_decode.f90"
-line = 79
+line = 43
 class = 1
 size_bytes = 12
-reason = "character*12, saved (:205-206). The cache key for apbits, written at :301, compared at :271. Same reasoning as apbits - must be restored as one unit with it; a key from chain A paired with apbits from chain B is the failure this classification exists to prevent."
+reason = "character*12, saved (:205-206). The cache key for apbits, written at :301, compared at :271. Same reasoning as apbits - must be restored as one unit with it; a key from chain A paired with apbits from chain B is the failure this classification exists to prevent. IN THE PER-CHAIN CONTEXT as p%ft1_mycall0 (ft8_cabi.f90). HOISTED 2026-07-21 to module ft1_decode_apstate at the top of this file -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "hiscall0"
 file = "tempofast_decode.f90"
-line = 79
+line = 43
 class = 1
 size_bytes = 12
-reason = "character*12, saved (:205-206). Second half of the apbits cache key (:271, :302), and doubles as a working variable inside the rebuild block (:281, :283). Restore as one unit with mycall0/apbits."
+reason = "character*12, saved (:205-206). Second half of the apbits cache key (:271, :302), and doubles as a working variable inside the rebuild block (:281, :283). Restore as one unit with mycall0/apbits. IN THE PER-CHAIN CONTEXT as p%ft1_hiscall0 (ft8_cabi.f90). HOISTED 2026-07-21 to module ft1_decode_apstate at the top of this file -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "cur_rv"
 file = "tempofast_decode.f90"
-line = 23
+line = 50
 class = 1
 size_bytes = 4
-reason = "Component of type ft1_decoder with default initializer -1. Written at :368 (reset to 0 per candidate) and :924/:928 (set to 1/2 on a successful HARQ combine), read by the callback. Class 1 in the sense that matters MOST for this project: it is per-decoder-instance state that must NOT become shared. It is already correctly scoped - it lives in the derived type, so each chain that owns its own ft1_decoder gets its own copy for free. Listed so the per-chain design keeps one ft1_decoder object per chain rather than one global."
+reason = "Component of type ft1_decoder with default initializer -1. Written at :368 (reset to 0 per candidate) and :924/:928 (set to 1/2 on a successful HARQ combine), read by the callback. Class 1 in the sense that matters MOST for this project: it is per-decoder-instance state that must NOT become shared. It is already correctly scoped - it lives in the derived type, so each chain that owns its own ft1_decoder gets its own copy for free. Listed so the per-chain design keeps one ft1_decoder object per chain rather than one global. NOT IN CONTEXT (2026-07-21), and correctly so: tempofast_cabi.f90 declares `type(ft1_decoder) :: decoder` as a LOCAL of ft1_decode_frame, so a fresh instance exists per decode call and these components are already per-chain by construction. Verified at the declaration, not assumed. A module-scope or `save`d decoder object would break this."
 
 [[symbol]]
 name = "frame_time_ms"
 file = "tempofast_decode.f90"
-line = 26
+line = 53
 class = 1
 size_bytes = 4
-reason = "Component of type ft1_decoder, default 0, set by the host before decode() and read at :883 and :961 as the IR-HARQ slot key and expiry clock. Chain-specific by definition. Like cur_rv it is already per-instance; the requirement is one ft1_decoder per chain. Note the coupling: this timestamp keys into the class-1 global `slots`, so a per-chain frame_time_ms feeding a SHARED slots array is exactly the mis-attribution path."
+reason = "Component of type ft1_decoder, default 0, set by the host before decode() and read at :883 and :961 as the IR-HARQ slot key and expiry clock. Chain-specific by definition. Like cur_rv it is already per-instance; the requirement is one ft1_decoder per chain. Note the coupling: this timestamp keys into the class-1 global `slots`, so a per-chain frame_time_ms feeding a SHARED slots array is exactly the mis-attribution path. NOT IN CONTEXT (2026-07-21), and correctly so: tempofast_cabi.f90 declares `type(ft1_decoder) :: decoder` as a LOCAL of ft1_decode_frame, so a fresh instance exists per decode call and these components are already per-chain by construction. Verified at the declaration, not assumed. A module-scope or `save`d decoder object would break this."
 
 [[symbol]]
 name = "callback"
 file = "tempofast_decode.f90"
-line = 22
+line = 49
 class = 1
 size_bytes = 8
-reason = "`procedure(ft1_decode_callback), pointer` component of ft1_decoder, assigned at :208 on every decode() entry and invoked at :949. Per-instance, and it is the sink that receives decoded messages - if two chains ever shared one ft1_decoder, decodes would be delivered to the wrong band's handler directly. Already correctly per-instance; keep it that way. 8 bytes on 64-bit."
+reason = "`procedure(ft1_decode_callback), pointer` component of ft1_decoder, assigned at :208 on every decode() entry and invoked at :949. Per-instance, and it is the sink that receives decoded messages - if two chains ever shared one ft1_decoder, decodes would be delivered to the wrong band's handler directly. Already correctly per-instance; keep it that way. 8 bytes on 64-bit. NOT IN CONTEXT (2026-07-21), and correctly so: tempofast_cabi.f90 declares `type(ft1_decoder) :: decoder` as a LOCAL of ft1_decode_frame, so a fresh instance exists per decode call and these components are already per-chain by construction. Verified at the declaration, not assumed. A module-scope or `save`d decoder object would break this."
 
 # --- group F ---
 
@@ -498,7 +526,7 @@ file = "77bit/packjt77.f90"
 line = 5
 class = 1
 size_bytes = 13312
-reason = "WRITTEN save_hash_call:94 (calls10(n10)=cw) on every hashed callsign seen; READ hash10:24-25, which is the ONLY way a 10-bit hashed callsign in a received message resolves to text. Chain A hearing W1ABC on 20m installs it at slot n10; chain B on 40m decoding a different station whose 10-bit hash collides prints W1ABC. Well-formed, loggable, wrong. The canonical cross-band contamination vector. 1024 elems x char*13."
+reason = "WRITTEN save_hash_call:94 (calls10(n10)=cw) on every hashed callsign seen; READ hash10:24-25, which is the ONLY way a 10-bit hashed callsign in a received message resolves to text. Chain A hearing W1ABC on 20m installs it at slot n10; chain B on 40m decoding a different station whose 10-bit hash collides prints W1ABC. Well-formed, loggable, wrong. The canonical cross-band contamination vector. 1024 elems x char*13. IN THE PER-CHAIN CONTEXT as p%calls10 (ft8_cabi.f90)."
 
 [[symbol]]
 name = "calls12"
@@ -506,7 +534,7 @@ file = "77bit/packjt77.f90"
 line = 6
 class = 1
 size_bytes = 53248
-reason = "WRITTEN save_hash_call:97; READ hash12:38-39. Identical mechanism to calls10 with a 12-bit key. save_hash_call is reached from pack28:700,728,736 — i.e. from BOTH decode (AP re-encode / subtract) and transmit-message packing, so both chains pollute it constantly. 4096 elems x char*13."
+reason = "WRITTEN save_hash_call:97; READ hash12:38-39. Identical mechanism to calls10 with a 12-bit key. save_hash_call is reached from pack28:700,728,736 — i.e. from BOTH decode (AP re-encode / subtract) and transmit-message packing, so both chains pollute it constantly. 4096 elems x char*13. IN THE PER-CHAIN CONTEXT as p%calls12 (ft8_cabi.f90)."
 
 [[symbol]]
 name = "calls22"
@@ -514,7 +542,7 @@ file = "77bit/packjt77.f90"
 line = 7
 class = 1
 size_bytes = 13000
-reason = "WRITTEN save_hash_call:101 (where(ihash22.eq.n22) calls22=cw), :109 (shift-down) and :111 (new head); READ hash22:54 via unpack28:800 for every 22-bit hashed callsign. LRU-ordered per-chain callsign memory. Sharing it means chain B resolves <...> to a callsign only chain A ever heard. 1000 elems x char*13."
+reason = "WRITTEN save_hash_call:101 (where(ihash22.eq.n22) calls22=cw), :109 (shift-down) and :111 (new head); READ hash22:54 via unpack28:800 for every 22-bit hashed callsign. LRU-ordered per-chain callsign memory. Sharing it means chain B resolves <...> to a callsign only chain A ever heard. 1000 elems x char*13. IN THE PER-CHAIN CONTEXT as p%calls22 (ft8_cabi.f90)."
 
 [[symbol]]
 name = "recent_calls"
@@ -522,7 +550,7 @@ file = "77bit/packjt77.f90"
 line = 8
 class = 1
 size_bytes = 130
-reason = "WRITTEN add_call_to_recent_calls:1542,1544, called from unpack77:477,484,566,579 on RECEIVED messages only; READ only at :1537 (its own dedup test). Currently write-only w.r.t. decoding, so contamination is invisible TODAY — but it is an accumulating per-band heard-list with per-chain dedup semantics, exported via `use packjt77` for exactly the purpose of being read. 10 elems x char*13. Cost of per-chain is 130 bytes; do not share."
+reason = "WRITTEN add_call_to_recent_calls:1542,1544, called from unpack77:477,484,566,579 on RECEIVED messages only; READ only at :1537 (its own dedup test). Currently write-only w.r.t. decoding, so contamination is invisible TODAY — but it is an accumulating per-band heard-list with per-chain dedup semantics, exported via `use packjt77` for exactly the purpose of being read. 10 elems x char*13. Cost of per-chain is 130 bytes; do not share. IN THE PER-CHAIN CONTEXT as p%recent_calls (ft8_cabi.f90)."
 
 [[symbol]]
 name = "mycall13"
@@ -530,7 +558,7 @@ file = "77bit/packjt77.f90"
 line = 9
 class = 1
 size_bytes = 13
-reason = "WRITTEN from OUTSIDE the module by every decoder entry: ft8b.f90:94, ft4_decode.f90:91, tempofast_decode.f90:211 (mycall13=mycall). READ save_hash_call:94,97 (suppresses self-hashing) and unpack77:266,269-270. Last-writer-wins across chains; also the cache key that gates the hashmy* recompute at unpack77:266."
+reason = "WRITTEN from OUTSIDE the module by every decoder entry: ft8b.f90:94, ft4_decode.f90:91, tempofast_decode.f90:211 (mycall13=mycall). READ save_hash_call:94,97 (suppresses self-hashing) and unpack77:266,269-270. Last-writer-wins across chains; also the cache key that gates the hashmy* recompute at unpack77:266. IN THE PER-CHAIN CONTEXT as p%mycall13 (ft8_cabi.f90)."
 
 [[symbol]]
 name = "dxcall13"
@@ -538,7 +566,7 @@ file = "77bit/packjt77.f90"
 line = 10
 class = 1
 size_bytes = 13
-reason = "WRITTEN from outside at ft8b.f90:93, ft4_decode.f90:90, tempofast_decode.f90:210 (dxcall13=hiscall). READ unpack77:276-282 to derive hashdx10/12/22, which are then matched against received hash fields to substitute the DX callsign into a decode. hiscall is the station THIS chain is working — necessarily different per band. Sharing produces a decode on 40m carrying the 20m QSO partner's callsign. Highest-severity symbol in this group per byte."
+reason = "WRITTEN from outside at ft8b.f90:93, ft4_decode.f90:90, tempofast_decode.f90:210 (dxcall13=hiscall). READ unpack77:276-282 to derive hashdx10/12/22, which are then matched against received hash fields to substitute the DX callsign into a decode. hiscall is the station THIS chain is working — necessarily different per band. Sharing produces a decode on 40m carrying the 20m QSO partner's callsign. Highest-severity symbol in this group per byte. IN THE PER-CHAIN CONTEXT as p%dxcall13 (ft8_cabi.f90)."
 
 [[symbol]]
 name = "ihash22"
@@ -546,7 +574,7 @@ file = "77bit/packjt77.f90"
 line = 12
 class = 1
 size_bytes = 4000
-reason = "WRITTEN save_hash_call:106 (shift), :110 (new head); READ :100 (any(ihash22.eq.n22)), :101 (where mask) and hash22:53 — the key array that pairs with calls22. Must move per-chain in lockstep with calls22 and nzhash or the table is internally inconsistent. 1000 x integer."
+reason = "WRITTEN save_hash_call:106 (shift), :110 (new head); READ :100 (any(ihash22.eq.n22)), :101 (where mask) and hash22:53 — the key array that pairs with calls22. Must move per-chain in lockstep with calls22 and nzhash or the table is internally inconsistent. 1000 x integer. IN THE PER-CHAIN CONTEXT as p%ihash22 (ft8_cabi.f90)."
 
 [[symbol]]
 name = "nzhash"
@@ -554,87 +582,87 @@ file = "77bit/packjt77.f90"
 line = 13
 class = 1
 size_bytes = 4
-reason = "WRITTEN save_hash_call:112 (monotone up to MAXHASH); READ hash22:52 as the search bound. If shared while calls22/ihash22 are swapped per-chain, hash22 scans past the restored chain's valid entries into stale slots — a partial-swap of this triple is worse than no swap. Swap all three together."
+reason = "WRITTEN save_hash_call:112 (monotone up to MAXHASH); READ hash22:52 as the search bound. If shared while calls22/ihash22 are swapped per-chain, hash22 scans past the restored chain's valid entries into stale slots — a partial-swap of this triple is worse than no swap. Swap all three together. IN THE PER-CHAIN CONTEXT as p%nzhash (ft8_cabi.f90)."
 
 [[symbol]]
 name = "dxcall13_set"
 file = "77bit/packjt77.f90"
-line = 259
+line = 38
 class = 1
 size_bytes = 4
-reason = "DATA .false. (implicit SAVE) in unpack77; WRITTEN :278 when dxcall13 changes; READ :465 (with hashmy22) and in the i3=4 paths to decide whether to substitute the DX call into a decode. Its value is a function of THIS chain's hiscall. Latches true and never clears (there is no else-branch at :277-283), so once either chain sets it, the other chain also gets DX substitution enabled."
+reason = "DATA .false. (implicit SAVE) in unpack77; WRITTEN :278 when dxcall13 changes; READ :465 (with hashmy22) and in the i3=4 paths to decide whether to substitute the DX call into a decode. Its value is a function of THIS chain's hiscall. Latches true and never clears (there is no else-branch at :277-283), so once either chain sets it, the other chain also gets DX substitution enabled. IN THE PER-CHAIN CONTEXT as p%dxcall13_set (ft8_cabi.f90). HOISTED 2026-07-21 to packjt77 module scope, out of unpack77 -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "mycall13_set"
 file = "77bit/packjt77.f90"
-line = 260
+line = 37
 class = 1
 size_bytes = 4
-reason = "DATA .false. (implicit SAVE); WRITTEN unpack77:268/272; READ :465 to gate substituting MyCall for a matching 22-bit hash. Chain-specific gate derived from mycall13."
+reason = "DATA .false. (implicit SAVE); WRITTEN unpack77:268/272; READ :465 to gate substituting MyCall for a matching 22-bit hash. Chain-specific gate derived from mycall13. IN THE PER-CHAIN CONTEXT as p%mycall13_set (ft8_cabi.f90). HOISTED 2026-07-21 to packjt77 module scope, out of unpack77 -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "mycall13_0"
 file = "77bit/packjt77.f90"
-line = 261
+line = 35
 class = 1
 size_bytes = 13
-reason = "DATA '' (implicit SAVE); WRITTEN unpack77:269; READ :266 as the cache-invalidation key for the hashmy* recompute. Shared, it records the LAST chain's callsign, so the other chain's :266 test compares against foreign state."
+reason = "DATA '' (implicit SAVE); WRITTEN unpack77:269; READ :266 as the cache-invalidation key for the hashmy* recompute. Shared, it records the LAST chain's callsign, so the other chain's :266 test compares against foreign state. IN THE PER-CHAIN CONTEXT as p%mycall13_0 (ft8_cabi.f90). HOISTED 2026-07-21 to packjt77 module scope, out of unpack77 -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "dxcall13_0"
 file = "77bit/packjt77.f90"
-line = 262
+line = 36
 class = 1
 size_bytes = 13
-reason = "DATA '' (implicit SAVE); WRITTEN unpack77:279; READ :276. This is the memo key for hashdx10/12/22. THE contamination path: chain A sets dxcall13_0='W1ABC'; chain B then sets dxcall13='W1ABC' too only if it happens to match — otherwise it recomputes, but between the two the hashdx* trio belongs to whichever chain ran last, and unpack77:465-470 substitutes on it."
+reason = "DATA '' (implicit SAVE); WRITTEN unpack77:279; READ :276. This is the memo key for hashdx10/12/22. THE contamination path: chain A sets dxcall13_0='W1ABC'; chain B then sets dxcall13='W1ABC' too only if it happens to match — otherwise it recomputes, but between the two the hashdx* trio belongs to whichever chain ran last, and unpack77:465-470 substitutes on it. IN THE PER-CHAIN CONTEXT as p%dxcall13_0 (ft8_cabi.f90). HOISTED 2026-07-21 to packjt77 module scope, out of unpack77 -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "hashmy10"
 file = "77bit/packjt77.f90"
-line = 264
+line = 39
 class = 1
 size_bytes = 4
-reason = "Explicit SAVE at :264; WRITTEN via save_hash_call(mycall13,...) at unpack77:270; read in the AP/substitution tests. Derived from this chain's mycall13."
+reason = "Explicit SAVE at :264; WRITTEN via save_hash_call(mycall13,...) at unpack77:270; read in the AP/substitution tests. Derived from this chain's mycall13. IN THE PER-CHAIN CONTEXT as p%hashmy10 (ft8_cabi.f90). HOISTED 2026-07-21 to packjt77 module scope, out of unpack77 -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "hashmy12"
 file = "77bit/packjt77.f90"
-line = 264
+line = 39
 class = 1
 size_bytes = 4
-reason = "Explicit SAVE :264; written unpack77:270 (out-arg n12 of save_hash_call); chain-specific hash of mycall13."
+reason = "Explicit SAVE :264; written unpack77:270 (out-arg n12 of save_hash_call); chain-specific hash of mycall13. IN THE PER-CHAIN CONTEXT as p%hashmy12 (ft8_cabi.f90). HOISTED 2026-07-21 to packjt77 module scope, out of unpack77 -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "hashmy22"
 file = "77bit/packjt77.f90"
-line = 264
+line = 39
 class = 1
 size_bytes = 4
-reason = "Explicit SAVE :264; written unpack77:270; READ :465 — `hashmy22.eq.(n28a-2063592)` is the exact test that replaces a received 22-bit hash with MyCall. Cross-chain staleness here silently rewrites a decoded callsign."
+reason = "Explicit SAVE :264; written unpack77:270; READ :465 — `hashmy22.eq.(n28a-2063592)` is the exact test that replaces a received 22-bit hash with MyCall. Cross-chain staleness here silently rewrites a decoded callsign. IN THE PER-CHAIN CONTEXT as p%hashmy22 (ft8_cabi.f90). HOISTED 2026-07-21 to packjt77 module scope, out of unpack77 -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "hashdx10"
 file = "77bit/packjt77.f90"
-line = 264
+line = 40
 class = 1
 size_bytes = 4
-reason = "Explicit SAVE :264; WRITTEN unpack77:280 (ihashcall(dxcall13,10)); read in the DX-substitution tests. Pure function of the per-chain hiscall."
+reason = "Explicit SAVE :264; WRITTEN unpack77:280 (ihashcall(dxcall13,10)); read in the DX-substitution tests. Pure function of the per-chain hiscall. IN THE PER-CHAIN CONTEXT as p%hashdx10 (ft8_cabi.f90). HOISTED 2026-07-21 to packjt77 module scope, out of unpack77 -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "hashdx12"
 file = "77bit/packjt77.f90"
-line = 264
+line = 40
 class = 1
 size_bytes = 4
-reason = "Explicit SAVE :264; WRITTEN unpack77:281; per-chain hiscall hash."
+reason = "Explicit SAVE :264; WRITTEN unpack77:281; per-chain hiscall hash. IN THE PER-CHAIN CONTEXT as p%hashdx12 (ft8_cabi.f90). HOISTED 2026-07-21 to packjt77 module scope, out of unpack77 -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 [[symbol]]
 name = "hashdx22"
 file = "77bit/packjt77.f90"
-line = 264
+line = 40
 class = 1
 size_bytes = 4
-reason = "Explicit SAVE :264; WRITTEN unpack77:282; used to substitute the DX callsign for a received 22-bit hash. Guarded by dxcall13_0 which is itself shared — so the guard does NOT protect against cross-chain use."
+reason = "Explicit SAVE :264; WRITTEN unpack77:282; used to substitute the DX callsign for a received 22-bit hash. Guarded by dxcall13_0 which is itself shared — so the guard does NOT protect against cross-chain use. IN THE PER-CHAIN CONTEXT as p%hashdx22 (ft8_cabi.f90). HOISTED 2026-07-21 to packjt77 module scope, out of unpack77 -- as a SAVEd local of a subroutine it was a FILE-LOCAL symbol that no other compilation unit could name, so it could not be swapped at all. See the MODIFIED FOR NEXUS header in that file."
 
 
 # =============================================================================================
@@ -932,7 +960,7 @@ reason = "logical, DATA .true. at :12, SAVEd at :13 (nm: first.2, 4 bytes in .da
 [[symbol]]
 name = "nappasses"
 file = "ft4_decode.f90"
-line = 62
+line = 95
 class = 2
 size_bytes = 24
 reason = "integer nappasses(0:5)=6*4 (nm: nappasses.15, 24 bytes .bss), SAVEd at :85. Written only at :119-124 inside if(first), all six elements, all integer literals — no chain input. Read at :324 (npasses=3+nappasses(nQSOProgress)). Class 2. Must carry the same class as `first` at :68."
@@ -940,7 +968,7 @@ reason = "integer nappasses(0:5)=6*4 (nm: nappasses.15, 24 bytes .bss), SAVEd at
 [[symbol]]
 name = "naptypes"
 file = "ft4_decode.f90"
-line = 63
+line = 96
 class = 2
 size_bytes = 96
 reason = "integer naptypes(0:5,4)=24*4 (nm: naptypes.13, 96 bytes .bss), SAVEd at :85. Written only at :135-140 inside if(first), all 24 elements via literal array constructors. Read at :339. Class 2, coupled to `first` at :68."
@@ -948,7 +976,7 @@ reason = "integer naptypes(0:5,4)=24*4 (nm: naptypes.13, 96 bytes .bss), SAVEd a
 [[symbol]]
 name = "mcq"
 file = "ft4_decode.f90"
-line = 64
+line = 97
 class = 2
 size_bytes = 116
 reason = "integer mcq(29)=116 (nm: mcq.24, 116 bytes in .data — DATA-initialized, hence static, even though it is NOT in the SAVE list at :85-86). DATA at :74 gives raw 0/1 bits; :111 `mcq=2*mod(mcq+rvec(1:29),2)-1` transforms it IN PLACE to +-1 inside if(first); read at :360. Class 2 only under the coupling below. CRITICAL, AND THIS IS THE ONE THAT BITES: the transform is NOT idempotent. If `first` at :68 is made per-chain while mcq stays shared, chain 2 re-runs :111 on already-transformed data: mod(-1+0,2) is -1 in Fortran, so entries become -3 and the whole CQ a-priori vector is garbage, injecting garbage LLRs at apmag scale into every iaptype==1 pass. If instead `first` is shared and mcq is made per-chain, chain 2's copy stays in raw 0/1 form and the AP magnitudes are wrong the other way. Either mixed classification produces plausible wrong decodes that get logged. first, mcq, mcqru, mcqfd, mcqtest, mcqww, mrrr, m73, mrr73, fs, dt, tt, txt, twopi, h, ctwk2, nappasses, naptypes, mycall0, hiscall0 form ONE atomic init group."
@@ -956,7 +984,7 @@ reason = "integer mcq(29)=116 (nm: mcq.24, 116 bytes in .data — DATA-initializ
 [[symbol]]
 name = "mcqru"
 file = "ft4_decode.f90"
-line = 64
+line = 97
 class = 2
 size_bytes = 116
 reason = "integer mcqru(29)=116 (nm: mcqru.22, .data). DATA at :75, non-idempotent in-place +-1 transform at :112 under if(first), read at :364 (ncontest==4). Class 2 subject to the same atomic-init-group constraint documented on mcq at :64."
@@ -964,7 +992,7 @@ reason = "integer mcqru(29)=116 (nm: mcqru.22, .data). DATA at :75, non-idempote
 [[symbol]]
 name = "mcqfd"
 file = "ft4_decode.f90"
-line = 64
+line = 97
 class = 2
 size_bytes = 116
 reason = "integer mcqfd(29)=116 (nm: mcqfd.21, .data). DATA at :76, non-idempotent transform at :113 under if(first), read at :363 (ncontest==3). Class 2 subject to the atomic-init-group constraint on mcq at :64."
@@ -972,7 +1000,7 @@ reason = "integer mcqfd(29)=116 (nm: mcqfd.21, .data). DATA at :76, non-idempote
 [[symbol]]
 name = "mcqtest"
 file = "ft4_decode.f90"
-line = 64
+line = 97
 class = 2
 size_bytes = 116
 reason = "integer mcqtest(29)=116 (nm: mcqtest.20, .data). DATA at :77, non-idempotent transform at :114 under if(first), read at :361 and :362 (ncontest==1 and 2). Class 2 subject to the atomic-init-group constraint on mcq at :64."
@@ -980,7 +1008,7 @@ reason = "integer mcqtest(29)=116 (nm: mcqtest.20, .data). DATA at :77, non-idem
 [[symbol]]
 name = "mcqww"
 file = "ft4_decode.f90"
-line = 64
+line = 97
 class = 2
 size_bytes = 116
 reason = "integer mcqww(29)=116 (nm: mcqww.19, .data). DATA at :78, non-idempotent transform at :115 under if(first), read at :365 (ncontest==5). Class 2 subject to the atomic-init-group constraint on mcq at :64."
@@ -988,7 +1016,7 @@ reason = "integer mcqww(29)=116 (nm: mcqww.19, .data). DATA at :78, non-idempote
 [[symbol]]
 name = "mrrr"
 file = "ft4_decode.f90"
-line = 65
+line = 98
 class = 2
 size_bytes = 76
 reason = "integer mrrr(19)=76 (nm: mrrr.18, .data). DATA at :79, transformed at :116, and NEVER READ — grep of ft4_decode.f90 for mrrr returns only :65, :79, :116. Dead storage carried over from the FT8 decoder. Class 2 (and harmless either way), but it still shares the `first` gate, so leave it in the atomic init group rather than splitting it out."
@@ -996,7 +1024,7 @@ reason = "integer mrrr(19)=76 (nm: mrrr.18, .data). DATA at :79, transformed at 
 [[symbol]]
 name = "m73"
 file = "ft4_decode.f90"
-line = 65
+line = 98
 class = 2
 size_bytes = 76
 reason = "integer m73(19)=76 (nm: m73.17, .data). DATA at :80, transformed at :117, never read (only :65/:80/:117 in the file). Dead. Class 2, same atomic init group as mcq at :64."
@@ -1004,7 +1032,7 @@ reason = "integer m73(19)=76 (nm: m73.17, .data). DATA at :80, transformed at :1
 [[symbol]]
 name = "mrr73"
 file = "ft4_decode.f90"
-line = 65
+line = 98
 class = 2
 size_bytes = 76
 reason = "integer mrr73(19)=76 (nm: mrr73.16, .data). DATA at :81, transformed at :118, never read (only :65/:81/:118). Dead. Class 2, same atomic init group as mcq at :64."
@@ -1012,7 +1040,7 @@ reason = "integer mrr73(19)=76 (nm: mrr73.16, .data). DATA at :81, transformed a
 [[symbol]]
 name = "first"
 file = "ft4_decode.f90"
-line = 68
+line = 101
 class = 2
 size_bytes = 4
 reason = "logical, declared at :68, DATA .true. at :73, SAVEd at :85 (nm: first.32, 4 bytes .data). Written .false. exactly once at :144; no reset path anywhere. Class 2. THIS IS THE HIGHEST-LEVERAGE SYMBOL IN THE GROUP: it alone gates :97-144, which (a) performs the NON-IDEMPOTENT +-1 transforms on mcq/mcqru/mcqfd/mcqtest/mcqww/mrrr/m73/mrr73, (b) builds ctwk2 via 33 twkfreq1 calls, (c) fills nappasses/naptypes/fs/dt/tt/txt/twopi/h, and (d) blanks mycall0/hiscall0. Any classification that puts `first` in a different class from (a) or (b) silently corrupts the AP a-priori vectors. Note mycall0/hiscall0 are class 1 while `first` is class 2 — that combination is SAFE and deliberate: chain 2 skips the :142-143 blanking, but its own context's mycall0 is .bss NULs which never equals a real callsign, so the :151 guard fires and apbits is recomputed. Distinct storage from the 8 other `first` symbols in this group (ft4_downsample:11, gen_ft4wave:9, get_ft4_bitmetrics:12, getcandidates4:14, subtractft4:17, sync4d:12) — never key by name."
@@ -1020,7 +1048,7 @@ reason = "logical, declared at :68, DATA .true. at :73, SAVEd at :85 (nm: first.
 [[symbol]]
 name = "ctwk2"
 file = "ft4_decode.f90"
-line = 46
+line = 80
 class = 2
 size_bytes = 16896
 reason = "complex ctwk2(2*NSS,-16:16), NSS=NSPS/NDOWN=32, so 64*33=2112 elements *8 = 16896 (nm: ctwk2.25, 16896 bytes .bss), SAVEd at :86. Written ONLY in the if(first) loop at :104-109 — 33 twkfreq1 calls, one per idf. Verified fully written: twkfreq1 (ft8/twkfreq1.f90) writes cb(i) for i=1..npts with npts=2*NSS=64, so every element of every column is set; no partial-write leak. Content depends only on NSS and fs=12000/NDOWN, both compile-time constants. The only other mention is :268, which passes ctwk2(:,idf) to sync4d's `ctwk` dummy — read-only there (sync4d uses it solely as a multiplicand at :61/:74/:77/:80). Class 2, coupled to `first` at :68."
@@ -1028,7 +1056,7 @@ reason = "complex ctwk2(2*NSS,-16:16), NSS=NSPS/NDOWN=32, so 64*33=2112 elements
 [[symbol]]
 name = "fs"
 file = "ft4_decode.f90"
-line = 85
+line = 120
 class = 2
 size_bytes = 4
 reason = "implicit real*4, no declaration — exists only in the SAVE list at :85 (nm: fs.31, 4 bytes .bss). Written at :97 (12000.0/NDOWN = 666.667, compile-time derivable); read at :98 and :108 — BOTH inside if(first). A full grep for the token in the file returns only :85, :97, :98, :108, so it is never read after the first call. Class 2, coupled to `first` at :68."
@@ -1036,7 +1064,7 @@ reason = "implicit real*4, no declaration — exists only in the SAVE list at :8
 [[symbol]]
 name = "tt"
 file = "ft4_decode.f90"
-line = 85
+line = 120
 class = 2
 size_bytes = 4
 reason = "implicit real*4, SAVE-only at :85. Written at :99 (NSPS*dt) and NEVER READ — token grep of the file returns only :85 and :99. Dead SAVE; -O3 dead-store-eliminated it entirely (no tt symbol in ft4_decode.f90.o, whose .bss of 308104 bytes is fully accounted for by dd+ctwk2+apbits+naptypes+nappasses+mycall0+hiscall0+fs+dt). Chain-independent value. Class 2; sizeBytes is the declared 4, but the Release build allocates nothing."
@@ -1044,7 +1072,7 @@ reason = "implicit real*4, SAVE-only at :85. Written at :99 (NSPS*dt) and NEVER 
 [[symbol]]
 name = "txt"
 file = "ft4_decode.f90"
-line = 85
+line = 120
 class = 2
 size_bytes = 4
 reason = "implicit real*4, SAVE-only at :85. Written at :100 (NZ*dt) and never read — token grep gives only :85 and :100. Dead SAVE, eliminated by -O3 (absent from nm). Class 2."
@@ -1052,7 +1080,7 @@ reason = "implicit real*4, SAVE-only at :85. Written at :100 (NZ*dt) and never r
 [[symbol]]
 name = "twopi"
 file = "ft4_decode.f90"
-line = 85
+line = 120
 class = 2
 size_bytes = 4
 reason = "implicit real*4, SAVE-only at :85. Written at :101 (8*atan(1)) and never read — token grep gives only :85 and :101. Dead SAVE, eliminated by -O3. Class 2. Distinct storage from gen_ft4wave.f90:10 and sync4d.f90:19, which are live."
@@ -1060,7 +1088,7 @@ reason = "implicit real*4, SAVE-only at :85. Written at :101 (8*atan(1)) and nev
 [[symbol]]
 name = "h"
 file = "ft4_decode.f90"
-line = 85
+line = 120
 class = 2
 size_bytes = 4
 reason = "implicit real*4, SAVE-only at :85. Written h=1.0 at :102 and never read — a standalone-token grep for h in ft4_decode.f90 returns only :85 and :102. Dead SAVE (the FT8/FT4 modulation index, unused by this decoder), eliminated by -O3. Class 2."
@@ -1590,7 +1618,7 @@ reason = "ft1_bm_prep's own copy, DATA at :403 => implicit SAVE, read-only. Dist
 [[symbol]]
 name = "first"
 file = "tempofast_decode.f90"
-line = 114
+line = 146
 class = 2
 size_bytes = 4
 reason = "`data first/.true./` (:192), saved (:205), cleared at :260. Guards the block at :216-261, whose every output is derived from compile-time parameters and the DATA-initialized AP masks - no per-call, per-band or per-chain input. Shareable. IMPORTANT RESTORE CONSTRAINT: this flag and the mcq/mcqru/mcqfd/mcqtest/mcqww/mrrr/m73/mrr73 family are ONE unit, because :226-233 transform those arrays IN PLACE from {0,1} to {-1,+1}. A per-chain context that restores the pristine post-DATA image while first is already .true. leaves them in raw {0,1} form and every AP LLR is silently wrong in sign and scale. Share all nine together, or restore all nine together."
@@ -1598,7 +1626,7 @@ reason = "`data first/.true./` (:192), saved (:205), cleared at :260. Guards the
 [[symbol]]
 name = "mcq"
 file = "tempofast_decode.f90"
-line = 110
+line = 142
 class = 2
 size_bytes = 116
 reason = "integer(29), DATA at :193, then REWRITTEN IN PLACE at :226 (`mcq=2*mod(mcq+rvec(1:29),2)-1`) under the `first` latch. This is a second write with different content than the DATA - the class-2 test the first pass is told to re-examine - but it happens exactly once and the transform is deterministic (rvec is all zeros, :203). Shareable; see the unit-of-restore warning on `first`."
@@ -1606,7 +1634,7 @@ reason = "integer(29), DATA at :193, then REWRITTEN IN PLACE at :226 (`mcq=2*mod
 [[symbol]]
 name = "mcqru"
 file = "tempofast_decode.f90"
-line = 110
+line = 142
 class = 2
 size_bytes = 116
 reason = "integer(29), DATA at :194, transformed in place once at :227 under `first`. Deterministic. Shareable as part of the `first` unit."
@@ -1614,7 +1642,7 @@ reason = "integer(29), DATA at :194, transformed in place once at :227 under `fi
 [[symbol]]
 name = "mcqfd"
 file = "tempofast_decode.f90"
-line = 110
+line = 142
 class = 2
 size_bytes = 116
 reason = "integer(29), DATA at :195, transformed once at :228 under `first`. Shareable as part of the `first` unit."
@@ -1622,7 +1650,7 @@ reason = "integer(29), DATA at :195, transformed once at :228 under `first`. Sha
 [[symbol]]
 name = "mcqtest"
 file = "tempofast_decode.f90"
-line = 110
+line = 142
 class = 2
 size_bytes = 116
 reason = "integer(29), DATA at :196, transformed once at :229 under `first`. Shareable as part of the `first` unit."
@@ -1630,7 +1658,7 @@ reason = "integer(29), DATA at :196, transformed once at :229 under `first`. Sha
 [[symbol]]
 name = "mcqww"
 file = "tempofast_decode.f90"
-line = 110
+line = 142
 class = 2
 size_bytes = 116
 reason = "integer(29), DATA at :197, transformed once at :230 under `first`. Shareable as part of the `first` unit."
@@ -1638,7 +1666,7 @@ reason = "integer(29), DATA at :197, transformed once at :230 under `first`. Sha
 [[symbol]]
 name = "mrrr"
 file = "tempofast_decode.f90"
-line = 111
+line = 143
 class = 2
 size_bytes = 76
 reason = "integer(19), DATA at :198, transformed once at :231 using rvec(59:77). Deterministic, shareable as part of the `first` unit."
@@ -1646,7 +1674,7 @@ reason = "integer(19), DATA at :198, transformed once at :231 using rvec(59:77).
 [[symbol]]
 name = "m73"
 file = "tempofast_decode.f90"
-line = 111
+line = 143
 class = 2
 size_bytes = 76
 reason = "integer(19), DATA at :199, transformed once at :232. Shareable as part of the `first` unit."
@@ -1654,7 +1682,7 @@ reason = "integer(19), DATA at :199, transformed once at :232. Shareable as part
 [[symbol]]
 name = "mrr73"
 file = "tempofast_decode.f90"
-line = 111
+line = 143
 class = 2
 size_bytes = 76
 reason = "integer(19), DATA at :200, transformed once at :233. Shareable as part of the `first` unit."
@@ -1662,7 +1690,7 @@ reason = "integer(19), DATA at :200, transformed once at :233. Shareable as part
 [[symbol]]
 name = "rvec"
 file = "tempofast_decode.f90"
-line = 105
+line = 137
 class = 2
 size_bytes = 77
 reason = "integer*1(77), DATA `77*0` at :203 (implicit SAVE). FT1 deliberately does not XOR-scramble, so this is permanently zero and read-only (:226-233, :293-295). Shareable."
@@ -1670,7 +1698,7 @@ reason = "integer*1(77), DATA `77*0` at :203 (implicit SAVE). FT1 deliberately d
 [[symbol]]
 name = "icos_rv"
 file = "tempofast_decode.f90"
-line = 160
+line = 192
 class = 2
 size_bytes = 48
 reason = "integer(0:3,0:2), DATA at :161 (implicit SAVE), read-only at :426 (`icos_rv(0:3,0)` into sync1d_ft1). All three RV Costas arrays in one table; distinct storage from the five other copies in this group. Shareable."
@@ -1678,7 +1706,7 @@ reason = "integer(0:3,0:2), DATA at :161 (implicit SAVE), read-only at :426 (`ic
 [[symbol]]
 name = "nappasses"
 file = "tempofast_decode.f90"
-line = 108
+line = 140
 class = 2
 size_bytes = 24
 reason = "integer(0:5), saved (:205). Written only at :236-241 under `first`, with literal constants - no dependence on arguments, band, or QSO state at write time (nQSOProgress only INDEXES it later). Shareable."
@@ -1686,7 +1714,7 @@ reason = "integer(0:5), saved (:205). Written only at :236-241 under `first`, wi
 [[symbol]]
 name = "naptypes"
 file = "tempofast_decode.f90"
-line = 109
+line = 141
 class = 2
 size_bytes = 96
 reason = "integer(0:5,4), saved (:205). Written only at :251-256 under `first` with literal array constructors. Read-only afterwards. Shareable."
@@ -1694,7 +1722,7 @@ reason = "integer(0:5,4), saved (:205). Written only at :251-256 under `first` w
 [[symbol]]
 name = "fs"
 file = "tempofast_decode.f90"
-line = 205
+line = 239
 class = 2
 size_bytes = 4
 reason = "Implicitly-typed real, saved (:205), set at :217 to 12000.0/NDOWN under `first`. Pure compile-time constant. Read at :734, :751, :850, :865, :947 to convert sample index to xdt. Shareable. Declared only by appearing in the save statement - no type declaration line exists, hence the :205 key."
@@ -1702,7 +1730,7 @@ reason = "Implicitly-typed real, saved (:205), set at :217 to 12000.0/NDOWN unde
 [[symbol]]
 name = "dt_samp"
 file = "tempofast_decode.f90"
-line = 205
+line = 239
 class = 2
 size_bytes = 4
 reason = "Implicit real, saved, set at :218 to 1.0/fs under `first`. Constant. Read at :417, :502, :704 for the frequency-shift ramp. Shareable. Name collides with 5 other `dt`-family symbols in this tree."
@@ -1710,7 +1738,7 @@ reason = "Implicit real, saved, set at :218 to 1.0/fs under `first`. Constant. R
 [[symbol]]
 name = "tt"
 file = "tempofast_decode.f90"
-line = 205
+line = 239
 class = 2
 size_bytes = 4
 reason = "Implicit real, saved, set at :219 to NSPS/12000. Constant, and in fact DEAD - grepped the whole subroutine, never read after :219. Shareable."
@@ -1718,7 +1746,7 @@ reason = "Implicit real, saved, set at :219 to NSPS/12000. Constant, and in fact
 [[symbol]]
 name = "txt"
 file = "tempofast_decode.f90"
-line = 205
+line = 239
 class = 2
 size_bytes = 4
 reason = "Implicit real, saved, set at :220 to NZ/12000. Constant and dead - never read. Shareable."
@@ -1726,7 +1754,7 @@ reason = "Implicit real, saved, set at :220 to NZ/12000. Constant and dead - nev
 [[symbol]]
 name = "twopi"
 file = "tempofast_decode.f90"
-line = 205
+line = 239
 class = 2
 size_bytes = 4
 reason = "Implicit real, saved, set at :221 to 8*atan(1) under `first`. Constant, read at :419-420, :504-505, :560, :615, :706-707. Shareable. Distinct storage from the identically-named local in ft1_freq_est_acorr (:1234) and the saved one in gen_tempofastwave.f90:55 - 11 `twopi` in this tree."
@@ -1734,7 +1762,7 @@ reason = "Implicit real, saved, set at :221 to 8*atan(1) under `first`. Constant
 [[symbol]]
 name = "h"
 file = "tempofast_decode.f90"
-line = 205
+line = 239
 class = 2
 size_bytes = 4
 reason = "Implicit real, saved, set 0.5 at :222. Constant and dead - never read after assignment (the only later `h` hits are inside comments). Shareable."
@@ -1742,7 +1770,7 @@ reason = "Implicit real, saved, set 0.5 at :222. Constant and dead - never read 
 [[symbol]]
 name = "freq_est_ref_ready"
 file = "tempofast_decode.f90"
-line = 139
+line = 171
 class = 2
 size_bytes = 4
 reason = "`logical, save :: freq_est_ref_ready=.false.` - declared and initialized, then NEVER referenced again anywhere in the tree (grepped all .f90/.rs outside build dirs: one hit, this line). Its comment reads 'Track if ref generation clobbered FFT', so it is the abandoned guard for exactly the tempofast_downsample.f90:47 hazard I filed class 1. Dead as written, therefore trivially shareable - but it is a marker that the FFT-clobber problem was known."
@@ -1750,7 +1778,7 @@ reason = "`logical, save :: freq_est_ref_ready=.false.` - declared and initializ
 [[symbol]]
 name = "ref_cd"
 file = "tempofast_decode.f90"
-line = 1225
+line = 1258
 class = 2
 size_bytes = 7104
 reason = "`complex, save :: ref_cd(0:887)` in ft1_freq_est_acorr, written once under ref_init (:1255-1278). Content is a SYNTHETIC self-reference: fixed Costas tones (:1257-1262) through gen_ft1wave at hardcoded 12000.0/1500.0 (:1266-1267) - no dependence on the received signal, band, or chain. Also: ft1_freq_est_acorr is DEAD CODE, defined at :1192 and called from nowhere in the tree. Shareable. TWO CAVEATS if it is ever wired up: (1) its generation calls ft1_downsample with newdata=.true. at :1271, which CLOBBERS the class-1 FFT cache mid-decode - that is what freq_est_ref_ready was for; (2) its content also depends on gen_ft1wave's first-caller-latched sample rate."
@@ -1758,7 +1786,7 @@ reason = "`complex, save :: ref_cd(0:887)` in ft1_freq_est_acorr, written once u
 [[symbol]]
 name = "ref_init"
 file = "tempofast_decode.f90"
-line = 1226
+line = 1259
 class = 2
 size_bytes = 4
 reason = "`logical, save :: ref_init = .false.`, set .true. at :1277, guards ref_cd. Sharing is not merely acceptable but SAFER than per-chain here: a per-chain copy would make each chain regenerate the reference, and each regeneration clobbers the FFT cache. Currently unreachable (dead subroutine)."
@@ -1766,7 +1794,7 @@ reason = "`logical, save :: ref_init = .false.`, set .true. at :1277, guards ref
 [[symbol]]
 name = "icos"
 file = "tempofast_decode.f90"
-line = 1217
+line = 1250
 class = 2
 size_bytes = 16
 reason = "integer(0:3) local of ft1_freq_est_acorr, DATA at :1218 => implicit SAVE, read-only at :1260. Dead subroutine. Shareable."
@@ -1774,7 +1802,7 @@ reason = "integer(0:3) local of ft1_freq_est_acorr, DATA at :1218 => implicit SA
 [[symbol]]
 name = "isync_pos"
 file = "tempofast_decode.f90"
-line = 1221
+line = 1254
 class = 2
 size_bytes = 12
 reason = "integer(3) local of ft1_freq_est_acorr, DATA /0,47,95/ at :1222 => implicit SAVE, read-only at :1260, :1288, :1301. Distinct storage from tempofast_sync.f90:63. Shareable."
@@ -1800,7 +1828,7 @@ reason = "Declaration-initialized to '' at :11; READ once at pack77:130 (msg='$D
 [[symbol]]
 name = "ii1"
 file = "77bit/packjt77.f90"
-line = 1488
+line = 1510
 class = 2
 size_bytes = 4
 reason = "Explicit SAVE. WRITTEN only in entry mp_short_init:1494 (byte-order probe on ireg/creg EQUIVALENCE); READ in entry mp_short_add:1503 and mp_short_mult:1512. Rewritten on every packtext77:1445 call but ALWAYS to the same machine-determined value, and packtext77 unconditionally calls mp_short_init before any add/mult. unpacktext77 never touches it (mp_short_div ignores ii1/ii2). Deterministic constant in practice; shareable."
@@ -1808,7 +1836,7 @@ reason = "Explicit SAVE. WRITTEN only in entry mp_short_init:1494 (byte-order pr
 [[symbol]]
 name = "ii2"
 file = "77bit/packjt77.f90"
-line = 1488
+line = 1510
 class = 2
 size_bytes = 4
 reason = "Explicit SAVE; written mp_short_init:1495, read :1502,1505,1511,1514. Same argument as ii1 — byte-order probe, identical value for both chains, always re-established before use."
@@ -2243,7 +2271,7 @@ reason = "complex c1(0:NFFT2-1)=4032*8. NOT SAVEd and 32256 < gfortran's 65536 d
 [[symbol]]
 name = "dd"
 file = "ft4_decode.f90"
-line = 50
+line = 84
 class = 3
 size_bytes = 290304
 reason = "real dd(NMAX)=72576*4. THE FIRST PASS'S GREP METHOD CANNOT SEE THIS ONE: it is not in the SAVE at :85-86, not in a DATA, not in a COMMON — yet nm on ft4_decode.f90.o shows `dd.4` at 290304 bytes in .bss, because it exceeds gfortran's 65536-byte stack-var threshold. It is the largest shared static in the group and it holds the raw receive audio of whichever chain last called decode(). Class 3 holds because :188 `dd=iwave` is an unconditional FULL overwrite executed on entry, before the first read at :220; grep of the file shows no dd reference between the entry at :88 and :188. It is then mutated in place by subtractft4 at :438 and re-read by the isp loop. HARD PRECONDITION for sharing: the chain switch must happen at a decode() boundary, never mid-call. That holds today only because every Rust entry point serializes on tempo_fast_sys::MODEM_LOCK (crates/ft4/src/lib.rs) and ft4_cabi.f90:155 documents the routine as not thread-safe."
@@ -2251,7 +2279,7 @@ reason = "real dd(NMAX)=72576*4. THE FIRST PASS'S GREP METHOD CANNOT SEE THIS ON
 [[symbol]]
 name = "ctwk"
 file = "ft4_decode.f90"
-line = 46
+line = 80
 class = 3
 size_bytes = 512
 reason = "complex ctwk(2*NSS)=64*8=512, on the SAME declaration line as ctwk2 but deliberately NOT in the SAVE at :85-86 — and at 512 bytes it stays on the stack (no ctwk symbol in nm). Written `ctwk=1.` at :107 and read at :108 within the same if(first) iteration; no reference outside the init block. Class 3. Listed because its neighbour on the declaration line is a 16896-byte class-2 static and a context generator working from declaration lines could sweep it in."
@@ -2259,7 +2287,7 @@ reason = "complex ctwk(2*NSS)=64*8=512, on the SAME declaration line as ctwk2 bu
 [[symbol]]
 name = "decodes"
 file = "ft4_decode.f90"
-line = 37
+line = 71
 class = 3
 size_bytes = 3700
 reason = "character*37 decodes(100)=3700 bytes. Not SAVEd, under the 65536 stack threshold, absent from nm — stack-resident. Fully blanked at :185 (`decodes=' '`) together with ndecodes=0 at :184, before the only reads at :443 (dupe check) and the write at :447. The per-call duplicate-suppression table resets every call, so it cannot leak chain A's decoded text into chain B's dupe test. Class 3."
@@ -2267,7 +2295,7 @@ reason = "character*37 decodes(100)=3700 bytes. Not SAVEd, under the 65536 stack
 [[symbol]]
 name = "cdatetime0"
 file = "ft4_decode.f90"
-line = 38
+line = 72
 class = 3
 size_bytes = 17
 reason = "character*17. Read at :89 (hhmmss=cdatetime0(8:13)) and WRITTEN NOWHERE — a tree-wide grep finds only this declaration and this read (plus the identical dead pair in tempofast_decode.f90:77/:209). Stack-resident (17 bytes, no nm symbol), so it is a read of uninitialised stack whose result lands in `hhmmss`, which is itself never read again (grep: only :41 and :89). Pure dead code inherited from upstream WSJT-X, where cdatetime0 is a global carrying the decode timestamp. Zero decode impact today, so class 3. FLAG FOR THE FUTURE: if an upstream merge reintroduces the global that defines it, it becomes shared per-decode timestamp state and jumps to class 1."
@@ -2275,7 +2303,7 @@ reason = "character*17. Read at :89 (hhmmss=cdatetime0(8:13)) and WRITTEN NOWHER
 [[symbol]]
 name = "dt"
 file = "ft4_decode.f90"
-line = 85
+line = 120
 class = 3
 size_bytes = 4
 reason = "implicit real*4, SAVE-only at :85 (nm: dt.30, 4 bytes .bss). DUAL-PURPOSE, which is why the first pass filed it twice with two different classes: at :98 it is the init constant 1/fs (read at :99/:100 inside if(first)), and at :436 it is REASSIGNED per decode to real(ibest)/666.67 and immediately passed to subtractft4 at :438. Exhaustive token grep of the file gives exactly :85, :98, :99, :100, :436, :438 (the :10/:16 hits are the callback interface's own dummy, a different scope). So on every call after the first, the only read is :438 and it is always preceded by the :436 write in the same iteration — no path reads the value carried over from another chain. Class 3. It does carry chain A's last ibest across calls, but that value is provably dead."
@@ -2283,7 +2311,7 @@ reason = "implicit real*4, SAVE-only at :85 (nm: dt.30, 4 bytes .bss). DUAL-PURP
 [[symbol]]
 name = "nharderror"
 file = "ft4_decode.f90"
-line = 424
+line = 458
 class = 3
 size_bytes = 4
 reason = "OVERTURNS THE FIRST PASS, WHICH FILED THIS CLASS 1 on the grounds that it is 'read on a path where it may not have been written'. Traced every path: it is intent(out) of decode174_91 at :423-424; reads are at :429, :455 and :460. npasses is 3, 4, or 3+nappasses(nQSOProgress) — never 0 — so ipass=1 always executes, and for ipass<=3 the whole `if(ipass .gt. 3)` block at :337-410 (which contains the only cycles that could skip :423) is not entered. Therefore :423 always runs before :429. Line :460 sits in the iseg loop after the ipass loop; every earlier bail-out (:279, :280, :282, :299, :307) uses `cycle`, which skips :460 entirely, so :460 is reachable only when the ipass loop ran and wrote it. Written-before-read on every reachable path. Also stack-resident (4 bytes, no nm symbol), so not shared state at all in this build. Class 3."
@@ -2461,7 +2489,7 @@ reason = "Plain local, no SAVE/DATA. Set unconditionally on every entry path bef
 [[symbol]]
 name = "apmy_ru"
 file = "tempofast_decode.f90"
-line = 103
+line = 135
 class = 3
 size_bytes = 112
 reason = "integer(28), NOT in the save list at :205-206 - stack local. Assigned ONLY inside the `if(mycall.ne.mycall0 .or. hiscall.ne.hiscall0)` block (:275 zero, :293 real value) but READ UNCONDITIONALLY at :805 and :821. When the guard does not fire - the normal steady state, calls unchanged since last decode - it is read undefined. Class 3 only because it is stack-resident so there is no cross-chain leak; but this is a genuine uninitialized-read bug inherited from ft4_decode.f90 (whose save list at :85-86 also omits it). If a per-chain refactor ever moves these to static or per-chain storage, it silently becomes a class-1 cross-band AP leak. Fix the guard, do not just copy the byte."
@@ -2469,7 +2497,7 @@ reason = "integer(28), NOT in the save list at :205-206 - stack local. Assigned 
 [[symbol]]
 name = "aphis_fd"
 file = "tempofast_decode.f90"
-line = 103
+line = 135
 class = 3
 size_bytes = 112
 reason = "integer(28), same defect as apmy_ru: written only under the :271 guard (:276, :294), read unconditionally at :818. Stack-resident so no cross-chain carry today. Same warning about a future move to per-chain storage."
@@ -2477,7 +2505,7 @@ reason = "integer(28), same defect as apmy_ru: written only under the :271 guard
 [[symbol]]
 name = "dobigfft"
 file = "tempofast_decode.f90"
-line = 114
+line = 146
 class = 3
 size_bytes = 4
 reason = "logical, NOT saved (absent from :205). Set .true. at :359 at the top of every subtraction pass, passed to ft1_downsample at :376, cleared at :378. Correctly scratch in itself - but it is the ONLY thing that currently re-primes the class-1 FFT cache in tempofast_downsample.f90. Any per-chain design must preserve the invariant 'the first ft1_downsample of each decode() pass has newdata=.true.', or save/restore the cache."
@@ -2485,7 +2513,7 @@ reason = "logical, NOT saved (absent from :205). Set .true. at :359 at the top o
 [[symbol]]
 name = "dd"
 file = "tempofast_decode.f90"
-line = 97
+line = 128
 class = 3
 size_bytes = 192000
 reason = "real(48000) received audio, not saved, fully overwritten at :318 (`dd=iwave`) before any read. Mutated in place by subtractft1 (:736, :852) between passes, which is intended. Large enough to attract a wrong per-chain verdict; it is genuinely scratch."
@@ -2493,7 +2521,7 @@ reason = "real(48000) received audio, not saved, fully overwritten at :318 (`dd=
 [[symbol]]
 name = "decodes"
 file = "tempofast_decode.f90"
-line = 76
+line = 107
 class = 3
 size_bytes = 3700
 reason = "character*37(100) duplicate-suppression list, not saved. Blanket-cleared at :315 before the pass loop; read at :941 only for i=1..ndecodes, and ndecodes is zeroed at :314. Scratch per decode() call - note this means duplicate suppression is intentionally per-call, not cross-call."
@@ -2501,7 +2529,7 @@ reason = "character*37(100) duplicate-suppression list, not saved. Blanket-clear
 [[symbol]]
 name = "all_corr"
 file = "tempofast_decode.f90"
-line = 144
+line = 176
 class = 3
 size_bytes = 202752
 reason = "complex(64,0:3,99) matched-filter correlation cube, not saved, ~198 KB stack local. Recomputed per candidate inside the Viterbi sweep. Largest non-persistent array in decode(); listed so it is not mistaken for shareable static state."
@@ -2509,7 +2537,7 @@ reason = "complex(64,0:3,99) matched-filter correlation cube, not saved, ~198 KB
 [[symbol]]
 name = "cd2"
 file = "tempofast_decode.f90"
-line = 82
+line = 113
 class = 3
 size_bytes = 7104
 reason = "complex(0:887) downsampled baseband, not saved; wholly written by ft1_downsample at :376 (and again at :906) before use. Scratch."
@@ -2517,7 +2545,7 @@ reason = "complex(0:887) downsampled baseband, not saved; wholly written by ft1_
 [[symbol]]
 name = "cb"
 file = "tempofast_decode.f90"
-line = 83
+line = 114
 class = 3
 size_bytes = 7104
 reason = "complex(0:887) frequency-corrected working copy, not saved; fully rewritten per trial frequency at :418-421, :502-506, :704-708. Scratch."
@@ -2525,7 +2553,7 @@ reason = "complex(0:887) frequency-corrected working copy, not saved; fully rewr
 [[symbol]]
 name = "cd_harq"
 file = "tempofast_decode.f90"
-line = 84
+line = 115
 class = 3
 size_bytes = 7104
 reason = "complex(0:887) RV-aligned baseband handed to the HARQ store/combine calls. Not saved; zeroed at :897 and :909 before each fill. Scratch - the persistence lives in ir_harq_combine's `slots`, not here."
@@ -2533,7 +2561,7 @@ reason = "complex(0:887) RV-aligned baseband handed to the HARQ store/combine ca
 [[symbol]]
 name = "candidate"
 file = "tempofast_decode.f90"
-line = 99
+line = 130
 class = 3
 size_bytes = 2400
 reason = "real(3,200), not saved, zeroed at :352 each pass then filled by ft1_sync. Scratch."
@@ -2541,7 +2569,7 @@ reason = "real(3,200), not saved, zeroed at :352 each pass then filled by ft1_sy
 [[symbol]]
 name = "savg"
 file = "tempofast_decode.f90"
-line = 100
+line = 131
 class = 3
 size_bytes = 2048
 reason = "real(512), not saved; fully written by ft1_sync (tempofast_sync.f90:78, :88-90) as an output argument on every call. Scratch."
@@ -2549,7 +2577,7 @@ reason = "real(512), not saved; fully written by ft1_sync (tempofast_sync.f90:78
 [[symbol]]
 name = "sbase"
 file = "tempofast_decode.f90"
-line = 100
+line = 131
 class = 3
 size_bytes = 2048
 reason = "real(512), not saved; written by ft1_baseline via ft1_sync. Partial-fill check: ft1_baseline writes sbase(ia:ib) at :304 (or all of it at :297 on the degenerate path), and ft1_sync reads only sbase(nfa:nfb) at :109-110 with ia=max(...,nfa), ib=min(NH1,nfb) - read span is inside the written span. Scratch."
@@ -3362,7 +3390,7 @@ reason = "`parameter (NTEST=48)` -- compile-time constant, no storage; the count
 [[symbol]]
 name = "rvec"
 file = "ft4_decode.f90"
-line = 58
+line = 91
 class = 4
 size_bytes = 77
 reason = "integer*1 rvec(77), DATA at :82-84. Read at :173, :174, :175 and :430; grep of the file shows no assignment to rvec anywhere — the statements that mention it all write message77/apmy_ru/aphis_fd. -O3 folded it into anonymous .rodata (no nm symbol). True constant, safe to share. Name collides with genft4.f90:26 which holds the SAME 77 values in a different program unit — key by file, not name."
@@ -4348,7 +4376,7 @@ reason = "parameter 174, local to compute_bp_beliefs (a pure pass-through wrappe
 [[symbol]]
 name = "NFREQ"
 file = "tempofast_decode.f90"
-line = 123
+line = 155
 class = 4
 size_bytes = 4
 reason = "parameter 49 coarse frequency trials. Constant."
@@ -4356,7 +4384,7 @@ reason = "parameter 49 coarse frequency trials. Constant."
 [[symbol]]
 name = "NFSWEEP"
 file = "tempofast_decode.f90"
-line = 134
+line = 166
 class = 4
 size_bytes = 4
 reason = "parameter 101 fine frequency candidates. Constant."
@@ -4364,7 +4392,7 @@ reason = "parameter 101 fine frequency candidates. Constant."
 [[symbol]]
 name = "NPROBE"
 file = "tempofast_decode.f90"
-line = 171
+line = 203
 class = 4
 size_bytes = 4
 reason = "parameter 11 frequency probes. Constant."
@@ -4372,7 +4400,7 @@ reason = "parameter 11 frequency probes. Constant."
 [[symbol]]
 name = "NTOP"
 file = "tempofast_decode.f90"
-line = 182
+line = 214
 class = 4
 size_bytes = 4
 reason = "parameter 3 Phase-1 peaks. Constant."
@@ -4380,7 +4408,7 @@ reason = "parameter 3 Phase-1 peaks. Constant."
 [[symbol]]
 name = "NDMAX"
 file = "tempofast_decode.f90"
-line = 72
+line = 103
 class = 4
 size_bytes = 4
 reason = "parameter NMAX/NDOWN = 888, local to decode(). Constant."
@@ -4388,7 +4416,7 @@ reason = "parameter NMAX/NDOWN = 888, local to decode(). Constant."
 [[symbol]]
 name = "NFRAME"
 file = "tempofast_decode.f90"
-line = 1149
+line = 1182
 class = 4
 size_bytes = 4
 reason = "parameter NN*NSPS+2*NSPS, local to subtractft1. Constant. subtractft1 has no persistent state - waveref (:1152) is fully written by gen_ft1wave at :1160 before the reads at :1169-1184."
@@ -4396,7 +4424,7 @@ reason = "parameter NN*NSPS+2*NSPS, local to subtractft1. Constant. subtractft1 
 [[symbol]]
 name = "NP"
 file = "tempofast_decode.f90"
-line = 990
+line = 1023
 class = 4
 size_bytes = 4
 reason = "parameter NMAX/NDOWN = 888, local to sync1d_ft1. Constant. sync1d_ft1 holds no persistent state: csync/csync2 (:992-993) are rebuilt from mf_bank on every state trial before each correlation."
@@ -4404,7 +4432,7 @@ reason = "parameter NMAX/NDOWN = 888, local to sync1d_ft1. Constant. sync1d_ft1 
 [[symbol]]
 name = "NSS_DS"
 file = "tempofast_decode.f90"
-line = 990
+line = 1023
 class = 4
 size_bytes = 4
 reason = "parameter = NSS = 8, local to sync1d_ft1. Constant."
@@ -4412,7 +4440,7 @@ reason = "parameter = NSS = 8, local to sync1d_ft1. Constant."
 [[symbol]]
 name = "NP"
 file = "tempofast_decode.f90"
-line = 1209
+line = 1242
 class = 4
 size_bytes = 4
 reason = "parameter 888, local to ft1_freq_est_acorr - separate declaration from :990. Constant; dimensions ref_cd."
@@ -4420,7 +4448,7 @@ reason = "parameter 888, local to ft1_freq_est_acorr - separate declaration from
 [[symbol]]
 name = "NSS_DS"
 file = "tempofast_decode.f90"
-line = 1209
+line = 1242
 class = 4
 size_bytes = 4
 reason = "parameter = NSS = 8, local to ft1_freq_est_acorr. Constant."
@@ -4428,7 +4456,7 @@ reason = "parameter = NSS = 8, local to ft1_freq_est_acorr. Constant."
 [[symbol]]
 name = "NMEAS"
 file = "tempofast_decode.f90"
-line = 1210
+line = 1243
 class = 4
 size_bytes = 4
 reason = "parameter 8 phase measurements. Constant."
@@ -4436,7 +4464,7 @@ reason = "parameter 8 phase measurements. Constant."
 [[symbol]]
 name = "NWRAP_MAX"
 file = "tempofast_decode.f90"
-line = 1240
+line = 1273
 class = 4
 size_bytes = 4
 reason = "parameter 3 phase-wrap search range. Constant."
@@ -4510,7 +4538,7 @@ reason = "PARAMETER (=10). No storage."
 [[symbol]]
 name = "c"
 file = "77bit/packjt77.f90"
-line = 69
+line = 95
 class = 4
 size_bytes = 38
 reason = "ihashcall's alphabet, DATA-initialized ' 0123...Z/'; read only at :73 (index(c,...)). No assignment anywhere. char*38."
@@ -4518,7 +4546,7 @@ reason = "ihashcall's alphabet, DATA-initialized ' 0123...Z/'; read only at :73 
 [[symbol]]
 name = "a2"
 file = "77bit/packjt77.f90"
-line = 228
+line = 254
 class = 4
 size_bytes = 36
 reason = "unpack77 alphabet, DATA-initialized, read-only. char*36."
@@ -4526,7 +4554,7 @@ reason = "unpack77 alphabet, DATA-initialized, read-only. char*36."
 [[symbol]]
 name = "nzzz"
 file = "77bit/packjt77.f90"
-line = 228
+line = 254
 class = 4
 size_bytes = 4
 reason = "unpack77 constant 46656 via DATA; never assigned."
@@ -4534,7 +4562,7 @@ reason = "unpack77 constant 46656 via DATA; never assigned."
 [[symbol]]
 name = "c"
 file = "77bit/packjt77.f90"
-line = 229
+line = 255
 class = 4
 size_bytes = 38
 reason = "unpack77 callsign alphabet, DATA-initialized, read-only. char*38."
@@ -4542,7 +4570,7 @@ reason = "unpack77 callsign alphabet, DATA-initialized, read-only. char*38."
 [[symbol]]
 name = "csec"
 file = "77bit/packjt77.f90"
-line = 230
+line = 256
 class = 4
 size_bytes = 258
 reason = "unpack77 ARRL section table, DATA-initialized, indexed read-only. NSEC=86 x char*3."
@@ -4550,7 +4578,7 @@ reason = "unpack77 ARRL section table, DATA-initialized, indexed read-only. NSEC
 [[symbol]]
 name = "cmult"
 file = "77bit/packjt77.f90"
-line = 240
+line = 266
 class = 4
 size_bytes = 513
 reason = "unpack77 state/province multiplier table, DATA-initialized, read-only. NUSCAN=171 x char*3."
@@ -4558,7 +4586,7 @@ reason = "unpack77 state/province multiplier table, DATA-initialized, read-only.
 [[symbol]]
 name = "a1"
 file = "77bit/packjt77.f90"
-line = 636
+line = 658
 class = 4
 size_bytes = 37
 reason = "pack28 base-37 alphabet, DATA-initialized; read only at :739 (index(a1,...)). char*37."
@@ -4566,7 +4594,7 @@ reason = "pack28 base-37 alphabet, DATA-initialized; read only at :739 (index(a1
 [[symbol]]
 name = "a2"
 file = "77bit/packjt77.f90"
-line = 637
+line = 659
 class = 4
 size_bytes = 36
 reason = "pack28 base-36 alphabet, DATA-initialized, read-only at :740. char*36."
@@ -4574,7 +4602,7 @@ reason = "pack28 base-36 alphabet, DATA-initialized, read-only at :740. char*36.
 [[symbol]]
 name = "a3"
 file = "77bit/packjt77.f90"
-line = 638
+line = 660
 class = 4
 size_bytes = 10
 reason = "pack28 digit alphabet, DATA-initialized, read-only at :741. char*10."
@@ -4582,7 +4610,7 @@ reason = "pack28 digit alphabet, DATA-initialized, read-only at :741. char*10."
 [[symbol]]
 name = "a4"
 file = "77bit/packjt77.f90"
-line = 639
+line = 661
 class = 4
 size_bytes = 27
 reason = "pack28 letter alphabet, DATA-initialized, read-only at :742-744. char*27."
@@ -4590,7 +4618,7 @@ reason = "pack28 letter alphabet, DATA-initialized, read-only at :742-744. char*
 [[symbol]]
 name = "c1"
 file = "77bit/packjt77.f90"
-line = 763
+line = 785
 class = 4
 size_bytes = 37
 reason = "unpack28 base-37 alphabet, DATA-initialized, read-only at :816. char*37."
@@ -4598,7 +4626,7 @@ reason = "unpack28 base-37 alphabet, DATA-initialized, read-only at :816. char*3
 [[symbol]]
 name = "c2"
 file = "77bit/packjt77.f90"
-line = 764
+line = 786
 class = 4
 size_bytes = 36
 reason = "unpack28 base-36 alphabet, DATA-initialized, read-only at :816. char*36."
@@ -4606,7 +4634,7 @@ reason = "unpack28 base-36 alphabet, DATA-initialized, read-only at :816. char*3
 [[symbol]]
 name = "c3"
 file = "77bit/packjt77.f90"
-line = 765
+line = 787
 class = 4
 size_bytes = 10
 reason = "unpack28 digit alphabet, DATA-initialized, read-only at :816. char*10."
@@ -4614,7 +4642,7 @@ reason = "unpack28 digit alphabet, DATA-initialized, read-only at :816. char*10.
 [[symbol]]
 name = "c4"
 file = "77bit/packjt77.f90"
-line = 766
+line = 788
 class = 4
 size_bytes = 27
 reason = "unpack28 letter alphabet, DATA-initialized, read-only at :790,816-817. char*27."
@@ -4622,7 +4650,7 @@ reason = "unpack28 letter alphabet, DATA-initialized, read-only at :790,816-817.
 [[symbol]]
 name = "csec"
 file = "77bit/packjt77.f90"
-line = 931
+line = 953
 class = 4
 size_bytes = 258
 reason = "pack77_03 ARRL section table, DATA-initialized, read-only. SEPARATE storage from the identically-named csec at :230 (different procedure) — key this by line, not name. 86 x char*3."
@@ -4630,7 +4658,7 @@ reason = "pack77_03 ARRL section table, DATA-initialized, read-only. SEPARATE st
 [[symbol]]
 name = "a2"
 file = "77bit/packjt77.f90"
-line = 994
+line = 1016
 class = 4
 size_bytes = 36
 reason = "pack77_06 alphabet, DATA-initialized, read-only. Distinct storage from a2 at :228 and :637."
@@ -4638,7 +4666,7 @@ reason = "pack77_06 alphabet, DATA-initialized, read-only. Distinct storage from
 [[symbol]]
 name = "nzzz"
 file = "77bit/packjt77.f90"
-line = 994
+line = 1016
 class = 4
 size_bytes = 4
 reason = "pack77_06 constant 46656 via DATA; never assigned. Distinct storage from nzzz at :228."
@@ -4646,7 +4674,7 @@ reason = "pack77_06 constant 46656 via DATA; never assigned. Distinct storage fr
 [[symbol]]
 name = "cmult"
 file = "77bit/packjt77.f90"
-line = 1234
+line = 1256
 class = 4
 size_bytes = 513
 reason = "pack77_3 multiplier table, DATA-initialized, read-only. Distinct storage from cmult at :240. 171 x char*3."
@@ -4654,7 +4682,7 @@ reason = "pack77_3 multiplier table, DATA-initialized, read-only. Distinct stora
 [[symbol]]
 name = "c"
 file = "77bit/packjt77.f90"
-line = 1317
+line = 1339
 class = 4
 size_bytes = 38
 reason = "pack77_4 alphabet, DATA-initialized, read-only. char*38."
@@ -4662,7 +4690,7 @@ reason = "pack77_4 alphabet, DATA-initialized, read-only. char*38."
 [[symbol]]
 name = "c"
 file = "77bit/packjt77.f90"
-line = 1443
+line = 1465
 class = 4
 size_bytes = 42
 reason = "packtext77 42-char alphabet, DATA-initialized, read-only at :1449. char*42."
@@ -4670,7 +4698,7 @@ reason = "packtext77 42-char alphabet, DATA-initialized, read-only at :1449. cha
 [[symbol]]
 name = "c"
 file = "77bit/packjt77.f90"
-line = 1469
+line = 1491
 class = 4
 size_bytes = 42
 reason = "unpacktext77 42-char alphabet, DATA-initialized, read-only at :1477. char*42."
@@ -4944,7 +4972,7 @@ file = "packjt.f90"
 line = 753
 class = 1
 size_bytes = 8
-reason = "common/pfxcom/ character*8. CALLSIGN state — the add-on prefix used when packing/unpacking a compound call. Per-QSO and therefore per-chain, and a wrong prefix yields a well-formed WRONG callsign, exactly the failure this manifest exists to prevent. Class 1 under the asymmetry rule."
+reason = "common/pfxcom/ character*8. CALLSIGN state — the add-on prefix used when packing/unpacking a compound call. Per-QSO and therefore per-chain, and a wrong prefix yields a well-formed WRONG callsign, exactly the failure this manifest exists to prevent. Class 1 under the asymmetry rule. IN THE PER-CHAIN CONTEXT as p%addpfx (COMMON /pfxcom/, re-declared in ctx_xfer) (ft8_cabi.f90)."
 
 [[symbol]]
 name = "p1"

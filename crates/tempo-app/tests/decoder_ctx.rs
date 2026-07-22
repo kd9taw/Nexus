@@ -18,6 +18,11 @@
 //!   The SAME scenario is then replayed with one SHARED context, which must
 //!   cross-contaminate. Without that control the test would pass just as well if the
 //!   contexts were never wired up at all.
+//! * [`two_chains_do_not_share_ap_callsign_state`] — the same shape for the OTHER
+//!   population: the state the modem latches on the callsign pair the operator is
+//!   WORKING (a-priori masks and callsign-substitution memos), which the test above
+//!   cannot reach because its engines carry an empty pair. Chain A works a
+//!   nonstandard DX, chain B calls CQ, and chain B must not decode chain A's station.
 //!
 //! Everything here is deterministic: audio is generated arithmetically, the noise floor
 //! is a fixed xorshift, no wall clock, no filesystem.
@@ -58,8 +63,14 @@ fn fresh_ctx() -> Arc<Mutex<DecoderCtx>> {
 /// A engine wired for headless FT8 decoding over `flow..=fhigh` Hz. Only a job
 /// factory — nothing here folds results back into engine state.
 fn chain(flow: u32, fhigh: u32) -> Engine {
+    chain_as("W9XYZ", flow, fhigh)
+}
+
+/// [`chain`] with an explicit operator callsign — the AP test gives each chain its
+/// own, because the callsign pair IS what the a-priori masks are keyed on.
+fn chain_as(mycall: &str, flow: u32, fhigh: u32) -> Engine {
     let mut eng = Engine::with_settings(Settings {
-        mycall: "W9XYZ".to_string(),
+        mycall: mycall.to_string(),
         mygrid: "EN37".to_string(),
         band: "20m".to_string(),
         dial_mhz: 14.074,
@@ -374,6 +385,214 @@ fn two_chains_do_not_cross_contaminate() {
     assert_ne!(
         solo_a, bad_a,
         "NEGATIVE CONTROL FAILED: a shared context left chain A's decodes unchanged."
+    );
+    assert_ne!(
+        solo_b, bad_b,
+        "NEGATIVE CONTROL FAILED: a shared context left chain B's decodes unchanged."
+    );
+}
+
+// ===========================================================================
+// TEST 4 — the A-PRIORI (AP) callsign pair, with its negative control
+// ===========================================================================
+
+// [`two_chains_do_not_cross_contaminate`] drives the packjt77 hash TABLES, which a
+// chain fills from the messages it decodes. The AP state is a different population:
+// the modem also latches state on the callsign pair the operator is WORKING
+// (`mycall`/`hiscall`), independently of anything decoded, and those symbols were
+// SAVEd locals inside bare subroutines until the 2026-07-21 hoist. Two chains
+// working two different stations shared them, and the existing test could not see it
+// because its engines are in `Mode::Chat` — `build_decode_job` then sends an EMPTY
+// pair, so the whole AP path is inert there. Hence a second scenario.
+
+/// The nonstandard station chain A is working. Nonstandard (a `/` prefix) is what
+/// makes it observable: a compound call does not fit a 28-bit message field, so it
+/// travels as a 10/12/22-bit HASH and the receiver has to substitute a callsign for
+/// it — or print `<...>` when it has never heard the station.
+const AP_DX: &str = "PJ4/K1ABC";
+/// Chain A's operator callsign, and chain B's. Different pairs, as two radios are.
+const AP_MY_A: &str = "W9AAA";
+const AP_MY_B: &str = "K2BBB";
+
+/// A 15 s FT8 capture of `msg`, one per chain per slot.
+///
+/// Chain A hears its own QSO with the nonstandard DX. Chain B — calling CQ on
+/// another band, so `hiscall` is empty — hears third-party traffic that happens to
+/// reference a station it has NEVER heard. Chain B's correct answer for that station
+/// is `<...>` in both messages, and only its own AP pair may change that.
+///
+/// Chain A's slot 1 and chain B's slot 0 are the SAME message at different audio
+/// frequencies. That pair is the experiment: identical bits in, `<PJ4/K1ABC>` out of
+/// the chain working the station and `<...>` out of the chain that is not. The AP
+/// callsign pair is the only input that differs, so anything that makes those two
+/// answers converge is the two chains sharing it.
+fn ap_bands() -> Bands {
+    Bands {
+        a: vec![
+            // i3=4: the TO call travels as a 12-bit hash. Chain A resolves it ONLY
+            // because ft8apset seeded its hash table from the AP hiscall — chain A
+            // never decoded PJ4/K1ABC in a form that teaches it the call.
+            frame(&format!("<{AP_DX}> {AP_MY_A} RR73"), 1500.0, 0x7777_7777),
+            // i3=0 n3=1 (DXpedition): the third call travels as a 10-bit hash. The
+            // ONLY reader of the hoisted `hashdx10` memo.
+            frame(
+                &format!("K1ABC RR73; W9XYZ <{AP_DX}> -11"),
+                1700.0,
+                0x8888_8888,
+            ),
+        ],
+        b: vec![
+            frame(
+                &format!("K1ABC RR73; W9XYZ <{AP_DX}> -11"),
+                1900.0,
+                0x9999_9999,
+            ),
+            frame(&format!("<{AP_DX}> K2DEF RR73"), 2100.0, 0xAAAA_AAAA),
+        ],
+    }
+}
+
+/// Chain A: working `AP_DX`, so its decode jobs carry `hiscall = PJ4/K1ABC`.
+fn ap_chain_a() -> Engine {
+    let mut eng = chain_as(AP_MY_A, 200, 2900);
+    eng.call_station(AP_DX);
+    eng
+}
+
+/// Chain B: calling CQ on its own band — `mycall = K2BBB`, `hiscall` EMPTY.
+///
+/// That empty hiscall is not a convenience, it is the whole failure mode, and it is
+/// measured rather than assumed: with two FULLY populated pairs this same scenario
+/// does NOT leak, because `if(dxcall13.ne.dxcall13_0)` in unpack77 then fires on every
+/// alternation and rebuilds the memos, so even a shared copy self-heals. The leak is
+/// in that guard's inner `if(len(trim(dxcall13)).gt.2)`, which has NO else-branch: a
+/// chain whose hiscall is empty leaves the OTHER chain's `dxcall13_set` + `hashdx10`
+/// installed and then decodes against them. One radio calling CQ while the other
+/// works a station is the ordinary two-radio case, not a corner.
+fn ap_chain_b() -> Engine {
+    let mut eng = chain_as(AP_MY_B, 200, 2900);
+    eng.set_mode("qso-run").expect("qso-run is a valid mode");
+    eng
+}
+
+/// What each chain must decode. Chain A resolves the DX it is working; chain B, which
+/// has never heard that station, must say so — from the SAME hash, on both message
+/// types. (The `-12` is the decoder's quantized report for the encoded `-11`.)
+fn ap_expected_a() -> Vec<Vec<Row>> {
+    vec![
+        vec![(format!("<{AP_DX}> {AP_MY_A} RR73"), 0)],
+        vec![(format!("K1ABC RR73; W9XYZ <{AP_DX}> -12"), 0)],
+    ]
+}
+fn ap_expected_b() -> Vec<Vec<Row>> {
+    vec![
+        vec![("K1ABC RR73; W9XYZ <...> -12".to_string(), 0)],
+        vec![("<...> K2DEF RR73".to_string(), 0)],
+    ]
+}
+
+/// Decode both chains' bands on interleaved slots, each through its OWN engine (and
+/// therefore its own AP callsign pair). Same shape as [`interleaved`], which shares
+/// one engine because that scenario has no AP context to differ.
+fn ap_interleaved(
+    bands: &Bands,
+    ctx_a: Option<&Arc<Mutex<DecoderCtx>>>,
+    ctx_b: Option<&Arc<Mutex<DecoderCtx>>>,
+) -> (Vec<Vec<Row>>, Vec<Vec<Row>>) {
+    let (eng_a, eng_b) = (ap_chain_a(), ap_chain_b());
+    let (mut out_a, mut out_b) = (Vec::new(), Vec::new());
+    for slot in 0..bands.a.len() {
+        out_a.push(decode(&eng_a, &bands.a[slot], slot as u64, ctx_a));
+        out_b.push(decode(&eng_b, &bands.b[slot], slot as u64, ctx_b));
+    }
+    (out_a, out_b)
+}
+
+fn ap_solo(eng: &Engine, slots: &[Vec<f32>]) -> Vec<Vec<Row>> {
+    wipe_process_modem_state();
+    slots
+        .iter()
+        .enumerate()
+        .map(|(slot, audio)| decode(eng, audio, slot as u64, None))
+        .collect()
+}
+
+#[test]
+fn two_chains_do_not_share_ap_callsign_state() {
+    let _serial = SERIAL.lock().unwrap();
+
+    // All audio up front — encoding seeds the process-global hash table.
+    let bands = ap_bands();
+
+    // ---- the two references ---------------------------------------------------
+    // Each chain alone in a wiped process. These also prove the scenario is not
+    // vacuous: chain A can only produce `<PJ4/K1ABC>` through the AP path, and
+    // chain B decoding the SAME hash must produce `<...>`.
+    //
+    // Chain B goes FIRST, deliberately. Chain A's run installs the AP hiscall state,
+    // and only a context that actually covers that state can take it back out — so
+    // running A first would fold "a previous SESSION leaked" into the same assertion
+    // as "the other chain leaked", and blur which one failed.
+    let solo_b = ap_solo(&ap_chain_b(), &bands.b);
+    let solo_a = ap_solo(&ap_chain_a(), &bands.a);
+    assert_eq!(
+        solo_a,
+        ap_expected_a(),
+        "chain A alone must resolve the station it is WORKING from its AP hiscall — if it \
+         prints <...> the a-priori path is not running and everything below is vacuous"
+    );
+    assert_eq!(
+        solo_b,
+        ap_expected_b(),
+        "chain B alone must print <...> for a station it has never heard"
+    );
+
+    // ---- the real thing: one context per chain --------------------------------
+    wipe_process_modem_state();
+    let (a, b) = ap_interleaved(&bands, Some(&fresh_ctx()), Some(&fresh_ctx()));
+
+    assert!(
+        !mentions(&b, AP_DX) && !mentions(&b, AP_MY_A),
+        "chain B decoded chain A's callsign pair. Chain B has never heard {AP_DX}; the only \
+         copy of it in the process is chain A's a-priori hiscall. Got {b:?}"
+    );
+    assert!(
+        !mentions(&a, AP_MY_B) && !mentions(&a, "K2DEF"),
+        "chain A decoded chain B's callsigns. Got {a:?}"
+    );
+    // Absolute, not just equal-to-solo: before the AP hoist the leaking symbols were
+    // outside the context entirely, so `wipe_process_modem_state` could not reset them
+    // either — a polluted solo run could match a polluted interleaved run and an
+    // equality-only assertion would pass. Pin the expected text.
+    assert_eq!(
+        b,
+        ap_expected_b(),
+        "chain B's decodes changed because a second chain is working a station in the same \
+         process. Slot 0 is the tell: `<...>` becoming `<>` means chain B substituted against \
+         chain A's hiscall hash (unpack77's dxcall13_set/hashdx10), and `<...>` becoming \
+         `<{AP_DX}>` means it read chain A's hash table."
+    );
+    assert_eq!(
+        a,
+        ap_expected_a(),
+        "chain A's decodes changed because a second chain shares the process."
+    );
+    assert_eq!(solo_a, a, "chain A: interleaved differs from solo");
+    assert_eq!(solo_b, b, "chain B: interleaved differs from solo");
+
+    // ---- NEGATIVE CONTROL -----------------------------------------------------
+    // The identical scenario with ONE context shared by both chains. It MUST bias
+    // chain B toward chain A's hiscall. If it ever stops doing so, the assertions
+    // above prove nothing: STOP and find out why.
+    wipe_process_modem_state();
+    let shared = fresh_ctx();
+    let (_bad_a, bad_b) = ap_interleaved(&bands, Some(&shared), Some(&shared));
+
+    assert!(
+        mentions(&bad_b, AP_DX),
+        "NEGATIVE CONTROL FAILED: with one shared context chain B did NOT pick up {AP_DX} — \
+         the station only chain A is working — so the isolation assertions above prove \
+         nothing. Got {bad_b:?}"
     );
     assert_ne!(
         solo_b, bad_b,
