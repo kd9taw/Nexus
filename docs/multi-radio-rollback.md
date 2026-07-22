@@ -15,6 +15,8 @@ Every step to date is **inert at runtime**, verified rather than asserted:
 | `StationCore` is a pure relocation | owned **by value** on `Engine`, no `Arc`/`Mutex`, chain count effectively one |
 | The vendored Fortran hoists change no logic | `watch_identity` byte-identical + ft8/ft4/tempo-fast decode parity green |
 | Station-wide behaviour is unchanged | `station_identity` byte-identical (built specifically because `watch_identity` is blind to it) |
+| The chain **addressing** layer is unreachable | `Chains` is not `.manage()`d, so no command can obtain one; `Chains::add` always errors; `chain_of` has no production caller; `r<id>` and `w<n>` windows are both refused by `open_panel_window` |
+| Every window openable today is byte-identical | same label, same URL, same `bandmap-window-<slug>.json` filename — `panel_key` maps a legacy `panel-bandmapCw` to `("bandmapCw", Main)` |
 
 Anchor tag: **`multiradio-foundation-inert`**.
 
@@ -34,8 +36,19 @@ commit is behaviour-neutral and ships safely inside a normal release. The moment
 chain can spawn, real behaviour changes: two decoders, two rigs, contended locks, and TX
 arbitration.
 
-That cap **does not exist yet** — the `Chains` registry has not been built, so a second chain
-cannot spawn at all today.
+**Status: the cap now exists and holds.** The `Chains` registry was built as part of the
+addressing step (`src-tauri/src/chains.rs`), capped at `MAX_CHAINS = 1`, and `Chains::add`
+errors unconditionally. It holds harder than that in practice: the registry is deliberately
+**not** registered as Tauri managed state, so no command can obtain one at all.
+
+That last point is a correction worth keeping. The registry was briefly `.manage()`d keyed by a
+boot snapshot of `settings.active_radio` — but switching radios in Settings does *not* rebuild
+the engine (`Engine::set_active_radio` mutates in place), so the entry would have sat filed
+under a dead profile id with no refresh hook. Storing a knowably-wrong radio→engine association
+is precisely the wrong-rig class this layer exists to prevent, one level below where the token
+grammar guards it. Nothing read the registry, so managing it bought nothing. Re-keying on
+radio-switch is the **cap-lift's** first problem, and the cap-lift is where the registry gets
+its first reader.
 
 ## What we are doing differently past that line
 
@@ -65,6 +78,7 @@ the LoTW and POTA fixes). A blanket range revert would take those with it. Rever
 first — later ones depend on earlier ones, so revert in this order:
 
 ```
+(pending)  Phase 1b step 2: chain addressing (chains.rs + lib.rs geometry re-key)
 50b4c177  Phase 1b step 1: StationCore
 c2f9d229  Phase 1a COMPLETE: AP masks
 4fe8d425  CORRECTION: decode guard / TX gap        (comment-only, can keep)
@@ -80,6 +94,22 @@ c374864c  manifest authoritative
 The manifest and build gate (`c374864c`, `165a435a`, `3e5faf18`) are worth **keeping even if
 multi-radio dies**: they document 615 modem state symbols and fail the build when a vendor
 refresh introduces unclassified state. That is useful on its own.
+
+So is the **src-tauri CI gate** added alongside the addressing step. `src-tauri` declares an
+empty `[workspace]` table, so it is its own workspace root and `cargo test --workspace` /
+`cargo clippy --workspace -D warnings` never reach it — verified by planting a type error there
+and watching both exit clean. The Windows job only runs `cargo build --release`, which never
+compiles `#[cfg(test)] mod tests`. The entire Tauri command layer therefore had **no automated
+gate at all**; that is now fixed and is independent of multi-radio.
+
+Two caveats on that gate, so nobody reads more into it than is there:
+- The clippy step is **not** `-D warnings`. `src-tauri` carries **15 pre-existing lints**
+  (MSRV, type complexity, redundant casts) — a direct consequence of never having been linted.
+  Denying crate-wide would fail on day one, and burning it down is unrelated churn in a
+  10k-line `lib.rs`. **Backlog item**, tracked here.
+- `chains.rs` therefore carries `#![deny(warnings, clippy::all)]` itself, so the addressing code
+  *is* held to the standard while the backlog stays visible. Verified by planting a dead
+  function in it: `cargo clippy` exits 101.
 
 ## The honest risk that is not covered by any of this
 

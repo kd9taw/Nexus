@@ -103,6 +103,30 @@ jobs:
       - name: cargo test tempo-audio --features device,serial
         run: cargo test -p tempo-audio --features device,serial
 
+      # src-tauri is its OWN workspace root (empty `[workspace]` table in its
+      # Cargo.toml), so `--workspace` above does NOT reach it — verified by
+      # planting a type error in src-tauri and watching both `cargo test
+      # --workspace` and `cargo clippy --workspace -D warnings` exit CLEAN.
+      # Nothing else in CI type-checks it either: the Windows job only runs
+      # `cargo build --release`, which never compiles `#[cfg(test)] mod tests`.
+      #
+      # That left the ENTIRE Tauri command layer — every window label, the
+      # geometry store, and the multi-radio chain addressing whose whole job is
+      # to make a wrong-rig bug unrepresentable — with no automated gate at all.
+      # `--features radio` is required; src-tauri does not compile without it.
+      - name: cargo test src-tauri --features radio
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio
+
+      # NOT `-D warnings`: src-tauri carries 15 pre-existing lints (MSRV, type
+      # complexity, redundant casts) precisely BECAUSE it was never linted, so
+      # denying crate-wide would fail on day one and burning that down is
+      # unrelated churn in a 10k-line lib.rs. Instead `chains.rs` denies warnings
+      # itself (`#![deny(warnings, clippy::all)]`), so a regression in the
+      # multi-radio addressing code is a hard error here while the backlog stays
+      # visible as warnings. Verified: planting a dead fn in chains.rs exits 101.
+      - name: cargo clippy src-tauri --features radio
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib --features radio
+
   # Job 2 — Web UI (Vite + React + TypeScript). `npm run build` is `tsc -b &&
   # vite build`, so this also type-checks the DTO contract that mirrors
   # crates/tempo-app/src/dto.rs.

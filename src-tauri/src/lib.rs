@@ -27,6 +27,12 @@
 //! Windows: WebView2; macOS: WKWebView): `cargo tauri dev` /
 //! `cargo tauri build --features radio`.
 
+/// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label
+/// parser both the geometry store and the (future) chain resolver share, and the one-entry
+/// chain registry. Inert at runtime — see the module docs.
+mod chains;
+
+use chains::{panel_key, panel_label, Instance};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -746,31 +752,44 @@ struct BandmapWindow {
     dock: String,
 }
 
-/// Per-window geometry file — keyed by slug (bandmapCw / bandmapPhone) so the two band maps
-/// DON'T clobber each other's saved size/position/dock when both are torn off.
-fn bandmap_window_path(slug: &str) -> PathBuf {
-    settings_path().with_file_name(format!("bandmap-window-{slug}.json"))
+/// Per-window geometry file — keyed by `(slug, instance)` so the two band maps DON'T clobber
+/// each other's saved size/position/dock when both are torn off, and so a band map bound to a
+/// second radio gets its own rect rather than fighting the first one's.
+///
+/// `main` keeps the historic `bandmap-window-<slug>.json` name byte-for-byte (zero migration:
+/// every rect an operator has already saved keeps loading). `None` means this surface's
+/// geometry must NOT be persisted at all — see [`Instance::persists_geometry`].
+fn bandmap_window_path(slug: &str, inst: Instance) -> Option<PathBuf> {
+    if !inst.persists_geometry() {
+        return None;
+    }
+    let name = match inst {
+        Instance::Main => format!("bandmap-window-{slug}.json"),
+        other => format!("bandmap-window-{slug}-{other}.json"),
+    };
+    Some(settings_path().with_file_name(name))
 }
 
-/// The band-map slug ("bandmapCw"/"bandmapPhone") for a window, or None for any other window.
-fn bandmap_slug(window: &tauri::WebviewWindow) -> Option<String> {
-    window
-        .label()
-        .strip_prefix("panel-")
-        .filter(|s| s.starts_with("bandmap"))
-        .map(String::from)
+/// The band-map surface ("bandmapCw"/"bandmapPhone" + its instance) for a window, or None for
+/// any other window.
+fn bandmap_key(window: &tauri::WebviewWindow) -> Option<(&str, Instance)> {
+    let (slug, inst) = panel_key(window.label())?;
+    slug.starts_with("bandmap").then_some((slug, inst))
 }
 
-fn load_bandmap_window(slug: &str) -> Option<BandmapWindow> {
+fn load_bandmap_window(slug: &str, inst: Instance) -> Option<BandmapWindow> {
     let g: BandmapWindow =
-        serde_json::from_str(&std::fs::read_to_string(bandmap_window_path(slug)).ok()?).ok()?;
+        serde_json::from_str(&std::fs::read_to_string(bandmap_window_path(slug, inst)?).ok()?)
+            .ok()?;
     // Reject a degenerate/blank record so a corrupt file falls back to the default size.
     (g.w >= 200.0 && g.h >= 200.0).then_some(g)
 }
 
-fn save_bandmap_window(slug: &str, g: &BandmapWindow) {
+fn save_bandmap_window(slug: &str, inst: Instance, g: &BandmapWindow) {
+    let Some(p) = bandmap_window_path(slug, inst) else {
+        return;
+    };
     if let Ok(txt) = serde_json::to_string(g) {
-        let p = bandmap_window_path(slug);
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -778,21 +797,22 @@ fn save_bandmap_window(slug: &str, g: &BandmapWindow) {
     }
 }
 
-/// Snapshot a band-map window's current size+position to its own per-slug file (logical px),
+/// Snapshot a band-map window's current size+position to its own per-surface file (logical px),
 /// preserving its dock choice. Called on close so the next open restores it. No-op otherwise.
 fn capture_bandmap_window(window: &tauri::WebviewWindow) {
-    let Some(slug) = bandmap_slug(window) else {
+    let Some((slug, inst)) = bandmap_key(window) else {
         return;
     };
     let scale = window.scale_factor().unwrap_or(1.0);
     let (Ok(size), Ok(pos)) = (window.inner_size(), window.outer_position()) else {
         return;
     };
-    let dock = load_bandmap_window(&slug)
+    let dock = load_bandmap_window(slug, inst)
         .map(|g| g.dock)
         .unwrap_or_default();
     save_bandmap_window(
-        &slug,
+        slug,
+        inst,
         &BandmapWindow {
             w: size.width as f64 / scale,
             h: size.height as f64 / scale,
@@ -842,8 +862,8 @@ fn snap_bandmap_to_edge(
     window
         .set_position(tauri::LogicalPosition::new(x, my))
         .map_err(|e| e.to_string())?;
-    if let Some(slug) = bandmap_slug(window) {
-        save_bandmap_window(&slug, &g);
+    if let Some((slug, inst)) = bandmap_key(window) {
+        save_bandmap_window(slug, inst, &g);
     }
     Ok(g)
 }
@@ -5415,8 +5435,16 @@ fn set_hold_tx_freq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnaps
 /// Open (or focus) a standalone OS window showing one panel — multi-monitor
 /// tear-off. The detached window loads the app at `?panel=<panel>` and renders just
 /// that panel against the same shared engine the main window uses.
+///
+/// `instance` addresses WHICH surface of that panel (see [`chains`]): absent/`main` is the one
+/// window that has always existed, `w<n>` is an extra unbound board. Omitting it is the entire
+/// existing call surface, and produces a byte-identical label and URL — zero migration.
 #[tauri::command]
-async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), String> {
+async fn open_panel_window(
+    app: tauri::AppHandle,
+    panel: String,
+    instance: Option<String>,
+) -> Result<(), String> {
     let slug: String = panel
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
@@ -5424,8 +5452,20 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
     if slug.is_empty() {
         return Err("invalid panel".into());
     }
-    let label = format!("panel-{slug}");
-    // Already open → just focus it (one window per panel).
+    // The instance is REJECTED when malformed, never stripped. The slug filter above is the
+    // cautionary tale: it silently drops non-alphanumerics, which is why `operate-2`,
+    // `operate:2` and `operate2` all collapse onto one window. That is now harmless (the slug
+    // can never contain the `-` that separates an instance) but must not be repeated here — a
+    // typo'd token that got coerced would address a different radio.
+    let inst = match instance.as_deref() {
+        None => Instance::Main,
+        Some(token) => Instance::parse(token)?,
+    };
+    // HARD GATE — see `chains::openable`.
+    chains::openable(inst)?;
+    let label = panel_label(&slug, inst);
+    // Already open → just focus it (one window per SURFACE — distinct instances of the same
+    // panel are distinct windows).
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.set_focus();
         return Ok(());
@@ -5448,7 +5488,7 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
     // The band map reopens where the operator left it (size + position), so a Windows-snapped
     // vertical strip on the side survives restarts. Other pop-outs keep their fixed defaults.
     let saved = if is_bandmap {
-        load_bandmap_window(&slug)
+        load_bandmap_window(&slug, inst)
     } else {
         None
     };
@@ -5472,10 +5512,17 @@ async fn open_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), S
     } else {
         (760.0, 660.0)
     };
+    // `instance` is a SEPARATE query parameter, never baked into the slug — the slug filter
+    // would strip the separator and alias it. Appended only above `main`, so every window that
+    // is openable today keeps the exact URL it has always had.
+    let url = match inst {
+        Instance::Main => format!("index.html?panel={slug}"),
+        other => format!("index.html?panel={slug}&instance={other}"),
+    };
     let mut builder = tauri::WebviewWindowBuilder::new(
         &app,
         &label,
-        tauri::WebviewUrl::App(format!("index.html?panel={slug}").into()),
+        tauri::WebviewUrl::App(url.into()),
     )
     .title(title)
     .inner_size(w, h)
@@ -5512,13 +5559,20 @@ fn dock_bandmap_window(window: tauri::WebviewWindow, side: String) -> Result<(),
         snap_bandmap_to_edge(&window, &side)?;
         return Ok(());
     }
-    // Un-dock: leave the window where it is, just clear the dock flag (per-slug) so a later
+    // Un-dock: leave the window where it is, just clear the dock flag (per-surface) so a later
     // open doesn't re-snap it. Persist the current geometry.
+    //
+    // NOTE for a non-persisting surface (`w<n>`): dock rides in the same file as the rect, so
+    // both load and save no-op and the un-dock is in-memory only — the surface re-docks on every
+    // open. That is the accepted price of "never persist a recycled instance" (the alternative,
+    // GC-on-boot, risks a later `w3` inheriting a stranger's rect). Safe either way: the path is
+    // `None` on BOTH sides, so a `w<n>` can never read or clobber `main`'s file. Unreachable
+    // today — `w<n>` windows are refused in `open_panel_window`.
     capture_bandmap_window(&window);
-    if let Some(slug) = bandmap_slug(&window) {
-        let mut g = load_bandmap_window(&slug).unwrap_or_default();
+    if let Some((slug, inst)) = bandmap_key(&window) {
+        let mut g = load_bandmap_window(slug, inst).unwrap_or_default();
         g.dock = String::new();
-        save_bandmap_window(&slug, &g);
+        save_bandmap_window(slug, inst, &g);
     }
     Ok(())
 }
@@ -9286,6 +9340,15 @@ pub fn run() {
     let cluster_call = settings.mycall.clone();
     let region_grid = settings.mygrid.clone();
     let region_enabled = settings.opening_regional;
+    // Which RadioProfile the one chain is registered under. `Settings::load` runs
+    // `ensure_radio_profiles`, so this always names a real profile (0 for a migrated
+    // single-radio station).
+    //
+    // KNOWN AND DELIBERATE: this is a BOOT SNAPSHOT. Today the single engine follows whichever
+    // radio is active, so switching radios in Settings leaves the registry keyed under the old
+    // profile. That is harmless only because nothing reads the registry and the cap forbids a
+    // second chain — and re-registering chains when the radio set changes is the first thing the
+    // cap-lift has to solve. It is not papered over here, where it would be untestable.
     let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(settings)));
     // Re-seed the decoder's hash table from the logbook so <...> compound-call
     // tokens resolve right after launch (the Fortran table dies with the process).
@@ -9698,6 +9761,20 @@ pub fn run() {
     let proton_cache: ProtonCache = Arc::new(Mutex::new(None));
     let scales_cache: ScalesCache = Arc::new(Mutex::new(None));
 
+    // NOT registered as managed state, deliberately. `Chains` would have to be keyed by
+    // `RadioProfile::id`, and the only id available here is a BOOT SNAPSHOT of
+    // `settings.active_radio`. Switching radios in Settings does not rebuild the engine —
+    // `Engine::set_active_radio` mutates settings in place on the same engine — so the entry
+    // would sit filed under a dead profile id the moment the operator switches, with no refresh
+    // hook and no assertion. The first caller writing the obvious
+    // `chains.get(chain_of(w).unwrap_or(active))` would then get `None` for the LIVE radio: the
+    // exact wrong-rig class this addressing layer exists to make unrepresentable, reintroduced
+    // one layer down.
+    //
+    // Nothing reads the registry yet, so managing it buys nothing and stores a fact that is
+    // knowably wrong. Re-keying on radio-switch is the cap-lift's problem, and the cap-lift is
+    // where the registry acquires its first reader. The type and its tests stay — they are the
+    // proven artifact that branch starts from.
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(engine)
