@@ -227,7 +227,10 @@ pub fn score(
     // That asymmetry is deliberate: an unknown band can produce a spurious alert the operator
     // dismisses, or silently swallow a genuine new grid. The first is noise; the second loses
     // the thing the Needed board exists for. Pinned by
-    // `an_unparseable_band_is_treated_as_needed_not_worked`.
+    // `an_unparseable_band_is_treated_as_needed_not_worked` (a garbage string) and
+    // `an_unmodelled_band_still_alerts_rather_than_going_silent` (a REAL band we do not
+    // model, e.g. 70 cm — reachable for an IC-9700 operator, since the band plan ships FT8
+    // channels there). Two inputs, same rule: fail open.
     if let Some(g) = &g4 {
         if !heard_on.is_some_and(|b| worked_grids.contains(&(g.clone(), b))) {
             tags.push(NeedTag::NewGrid);

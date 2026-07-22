@@ -367,9 +367,9 @@ impl StationCore {
             }
             let band = band_key(&r.band);
             if let Some(g) = &r.grid {
-                let g = g.trim();
-                if !g.is_empty() {
-                    self.worked_grids.insert((g.to_uppercase(), band.clone()));
+                // Index at 4-char granularity so a 6-char logged grid matches a 4-char decode.
+                if let Some(g4) = Self::grid4(g) {
+                    self.worked_grids.insert((g4, band.clone()));
                 }
             }
             if let Some(resolve) = &self.dxcc_resolve {
@@ -380,12 +380,24 @@ impl StationCore {
         }
     }
 
+    /// The 4-character Maidenhead field+square, upper-cased — the granularity grids are
+    /// AWARDED at (VUCC counts squares, not subsquares).
+    ///
+    /// Both the index and the lookup MUST go through this. They did not: the log stores
+    /// whatever was logged ("FN31PR" from a QRZ import), while a decode carries 4 characters
+    /// ("FN31"), so the compare never matched and every such square reported NOT worked —
+    /// a NEW GRID badge that fires forever. Mirrors `needalert::grid4`, which already did
+    /// this correctly on the alerting side; only this index disagreed.
+    fn grid4(grid: &str) -> Option<String> {
+        let g: String = grid.trim().to_ascii_uppercase().chars().take(4).collect();
+        (g.len() == 4).then_some(g)
+    }
+
     /// Is this grid already worked ON THIS BAND? (`band` is the raw band label —
     /// canonicalized here.) A grid worked only on another band reads as NOT worked,
     /// which is the point: per-band is how grids are awarded.
     pub(crate) fn grid_worked_on(&self, grid: &str, band: &str) -> bool {
-        self.worked_grids
-            .contains(&(grid.trim().to_uppercase(), band_key(band)))
+        Self::grid4(grid).is_some_and(|g4| self.worked_grids.contains(&(g4, band_key(band))))
     }
 
     /// Is this DXCC entity already worked ON THIS BAND? Per band, like
@@ -908,5 +920,71 @@ impl StationCore {
             "csv" => self.logbook.csv(),
             _ => self.logbook.adif(),
         }
+    }
+}
+
+#[cfg(test)]
+mod grid_tests {
+    use super::*;
+    use tempo_core::logbook::QsoRecord;
+
+    fn rec(call: &str, band: &str, grid: &str) -> QsoRecord {
+        QsoRecord {
+            call: call.into(),
+            grid: Some(grid.into()),
+            country: None,
+            state: None,
+            band: band.into(),
+            freq_mhz: 14.074,
+            mode: "FT8".into(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            qth: None,
+            comment: None,
+            notes: None,
+            tx_power: None,
+            when_unix: 1_700_000_000,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: Default::default(),
+            ota: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_six_char_logged_grid_matches_a_four_char_decode() {
+        // The bug this pins: QRZ/LoTW imports log "FN31PR" while a decode carries "FN31",
+        // so the index and the lookup never met and NEW GRID fired forever on every such
+        // square. Both sides now normalize to the 4-char square grids are awarded at.
+        let mut sc = StationCore::new();
+        sc.logbook.add(rec("W1AW", "20m", "FN31PR"));
+        sc.refresh_worked_index();
+
+        assert!(
+            sc.grid_worked_on("FN31", "20m"),
+            "a 6-char logged grid must satisfy a 4-char decode on the same band"
+        );
+        // And the per-band rule still holds on top of it.
+        assert!(
+            !sc.grid_worked_on("FN31", "2m"),
+            "worked on 20m only — still NEW on 2m"
+        );
+    }
+
+    #[test]
+    fn a_malformed_grid_never_counts_as_worked() {
+        let mut sc = StationCore::new();
+        sc.logbook.add(rec("W1AW", "20m", "FN"));
+        sc.refresh_worked_index();
+        assert!(
+            !sc.grid_worked_on("FN", "20m"),
+            "a 2-char fragment is not a square"
+        );
     }
 }
