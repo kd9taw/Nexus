@@ -241,14 +241,16 @@ pub struct ChatMessage {
     /// nowhere" and "transmitted, awaiting ACK" both used to render an identical "✓ Sent".
     #[serde(default)]
     pub stored: bool,
-    /// For an OUTBOUND directed message: it was still HELD when the app last closed, and the
-    /// store-and-forward queue does not survive a restart — so it will never transmit. Set at
-    /// load time; the operator must re-send it themselves.
+    /// For an OUTBOUND directed message: it was HELD when the app last closed and could NOT be
+    /// restored to the store-and-forward queue — so it will never transmit, and the operator
+    /// must re-send it. Set at load time. With the pending_msgs.json journal now persisting the
+    /// queue, this is RARE: it fires only for a message queued before the journal existed, or a
+    /// missing/corrupt journal. A held message that IS restored keeps `stored` and transmits
+    /// when the peer is next heard (the point of store-and-forward).
     ///
     /// This exists so the app stops asserting something false. Clearing `stored` alone made a
     /// never-transmitted message render as a plain "Sent" — trading a VISIBLE broken promise
-    /// for an INVISIBLE one, which is worse: the operator believes it went out and never
-    /// re-sends. Persisting the queue is the real fix (see the backlog); until then, say so.
+    /// for an INVISIBLE one, which is worse: the operator believes it went out and never re-sends.
     #[serde(default)]
     pub abandoned: bool,
 }
