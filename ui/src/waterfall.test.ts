@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, isSymmetricMode, scopeView, sidebandSign, zoomRange, WF_F_MIN, WF_F_MAX } from './waterfall'
+import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, isSymmetricMode, scopeView, sidebandSign, zoomRange, WF_F_MIN, WF_F_MAX, WF_STD_HI } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -92,8 +92,12 @@ describe('applyGainZero (manual contrast)', () => {
 })
 
 describe('zoomRange (waterfall span/zoom)', () => {
-  it('span 0 (or ≥ full) → the full passband', () => {
-    expect(zoomRange(1500, 0)).toEqual({ lo: WF_F_MIN, hi: WF_F_MAX })
+  it('span 0 → the default Std 0–3 kHz view (WSJT-X-like)', () => {
+    expect(zoomRange(1500, 0)).toEqual({ lo: WF_F_MIN, hi: WF_STD_HI })
+  })
+
+  it('span < 0 or ≥ full → the full 0–4 kHz passband', () => {
+    expect(zoomRange(1500, -1)).toEqual({ lo: WF_F_MIN, hi: WF_F_MAX })
     expect(zoomRange(1500, 9999)).toEqual({ lo: WF_F_MIN, hi: WF_F_MAX })
   })
 

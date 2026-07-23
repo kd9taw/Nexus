@@ -37,10 +37,11 @@ function loadKnob(key: string): number {
     return 0
   }
 }
-/** Load the persisted zoom span (Hz); missing/blocked → 0 (full band). */
+/** Load the persisted waterfall view; missing/blocked → 0 (the default 0–3 kHz "Std" view).
+ * Any finite value is kept: -1 = Full (0–4 kHz), positive = an RX-centered zoom span. */
 function loadZoom(): number {
   const v = parseFloat(surfaceGet(ZOOM_KEY) ?? '')
-  return Number.isFinite(v) && v > 0 ? v : 0
+  return Number.isFinite(v) ? v : 0
 }
 
 interface Props {
@@ -107,9 +108,9 @@ export function Waterfall({
   const [palette] = useWaterfallPalette()
   const [gain, setGain] = useState<number>(() => loadKnob(GAIN_KEY))
   const [zero, setZero] = useState<number>(() => loadKnob(ZERO_KEY))
-  // Span/zoom: a sub-window of the audio band centered (at pick time) on the RX marker.
-  // 0 = full band. The window only moves when the operator picks a zoom level, so the
-  // accumulated waterfall doesn't kink on every RX retune.
+  // Span/zoom: the displayed audio-band window. 0 = the default Std 0–3 kHz view, -1 = Full
+  // 0–4 kHz, positive = a sub-window centered (at pick time) on the RX marker. The window only
+  // moves when the operator picks a level, so the accumulated waterfall doesn't kink on retune.
   const [zoomSpan, setZoomSpan] = useState<number>(loadZoom)
   const [view, setView] = useState<{ lo: number; hi: number }>(() =>
     zoomRange(rxOffsetHz, loadZoom()),
@@ -548,7 +549,7 @@ export function Waterfall({
           className="wf-palette wf-zoom"
           value={zoomSpan}
           aria-label="Waterfall zoom span"
-          title="Waterfall zoom — narrow the displayed audio range around the RX marker"
+          title="Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–4 kHz), or zoom in around the RX marker"
           onChange={(e) => {
             const span = Number(e.target.value)
             setZoomSpan(span)

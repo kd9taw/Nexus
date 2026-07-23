@@ -119,13 +119,19 @@ export function themeColormap(theme: string): ColormapName {
  * stations calling above ~2.9 kHz are visible + clickable, not off the top edge). */
 export const WF_F_MIN = 200
 export const WF_F_MAX = 4000
+/** The default resting view: the WSJT-X-familiar 0–3 kHz window. FT8/FT4 (and RTTY/SSTV)
+ * activity clusters here, so the wider 200–4000 passband made the default view feel sparse;
+ * the top of the band stays one click away via the "Full" option. */
+export const WF_STD_HI = 3000
 
-/** A zoom view window of `spanHz` centered on `centerHz`, clamped inside the full
- * passband so the window never runs off either edge (the displaced half is taken from
- * the other side). `spanHz<=0` or ≥ the full span → the full band. */
+/** A zoom view window for the waterfall. `spanHz === 0` → the default "Std" 0–3 kHz view
+ * (a FIXED window, not RX-centered); `spanHz < 0` or ≥ the full passband → "Full" 0–4 kHz;
+ * any positive value → a `spanHz`-wide window centered on `centerHz`, clamped inside the
+ * passband so it never runs off either edge (the displaced half is taken from the other). */
 export function zoomRange(centerHz: number, spanHz: number): { lo: number; hi: number } {
   const full = WF_F_MAX - WF_F_MIN
-  if (!(spanHz > 0) || spanHz >= full) return { lo: WF_F_MIN, hi: WF_F_MAX }
+  if (spanHz === 0) return { lo: WF_F_MIN, hi: WF_STD_HI }
+  if (spanHz < 0 || spanHz >= full) return { lo: WF_F_MIN, hi: WF_F_MAX }
   let lo = centerHz - spanHz / 2
   if (lo < WF_F_MIN) lo = WF_F_MIN
   if (lo + spanHz > WF_F_MAX) lo = WF_F_MAX - spanHz
@@ -208,9 +214,11 @@ export function scopeView(
   }
 }
 
-/** Zoom span options (Hz) for the waterfall picker; 0 = full passband. */
+/** Waterfall view options for the picker. 0 = the default "Std" 0–3 kHz view (WSJT-X-like);
+ * -1 = "Full" 0–4 kHz; the rest are `spanHz`-wide windows zoomed around the RX marker. */
 export const WATERFALL_ZOOMS: { value: number; label: string }[] = [
-  { value: 0, label: 'Full' },
+  { value: 0, label: 'Std' },
+  { value: -1, label: 'Full' },
   { value: 2000, label: '2 kHz' },
   { value: 1500, label: '1.5 kHz' },
   { value: 1000, label: '1 kHz' },
