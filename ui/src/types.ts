@@ -1354,6 +1354,15 @@ export interface WasProgress {
   fiveBandConfirmed: number
 }
 
+/** VUCC (grid-square) progress — distinct Maidenhead grids worked / confirmed,
+ * overall and per band (VUCC proper = 100 grids on 6m/2m). */
+export interface VuccProgress {
+  worked: number
+  confirmed: number
+  /** Per-band grid-square counts, 160m → 2m. */
+  bands: BandAward[]
+}
+
 /** DXCC Honor Roll standing — current-entity, confirmed. (ARRL: confirmed ≥
  * currentTotal − 9 = Honor Roll; all current entities = #1 Honor Roll.) */
 export interface HonorRollProgress {
@@ -1454,6 +1463,8 @@ export interface AwardSummary {
   honorRoll: HonorRollProgress
   /** Worked All States (50 US states) + 5-Band WAS. */
   was: WasProgress
+  /** VUCC — Maidenhead grid squares worked / confirmed, overall and per band. */
+  vucc: VuccProgress
   /** WORK chase: entities worked on most award bands but missing a few — the
    * listed bands are ones to WORK (a new contact). Closest-to-complete first. */
   bandTargets: EntityNeed[]

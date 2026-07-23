@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud } from 'lucide-react'
+import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud, Grid3x3 } from 'lucide-react'
 import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, QsoDiagnosis, UploadReport, LoggedQso } from '../types'
 import {
   getAwards,
@@ -20,6 +20,8 @@ const CHALLENGE_AWARD = 1000
 const WAZ_ZONES = 40
 /** US states for the Worked All States (WAS) award. */
 const WAS_STATES = 50
+/** Grid squares for VUCC (6m/2m — the headline VHF grid award). */
+const VUCC_GRIDS = 100
 
 type NeedSort = 'entity' | 'bands'
 
@@ -336,6 +338,7 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
   const challengePct = Math.min(100, Math.round((aw.slotsConfirmed / CHALLENGE_AWARD) * 100))
   const bandMax = Math.max(1, ...aw.bands.map((b) => b.worked))
   const modeMax = Math.max(1, ...aw.modes.map((m) => m.worked))
+  const gridBandMax = Math.max(1, ...aw.vucc.bands.map((b) => b.worked))
 
   return (
     <section className="awards">
@@ -465,6 +468,28 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
             · {aw.was.worked} worked · {aw.was.fiveBandConfirmed} on 5 bands (5BWAS)
           </span>
         </div>
+
+        <div className={`aw-card${aw.vucc.confirmed >= VUCC_GRIDS ? ' aw-card-elite' : ''}`}>
+          <span className="aw-k">
+            <Grid3x3 size={13} aria-hidden="true" /> VUCC
+          </span>
+          <span className="aw-v">
+            {aw.vucc.confirmed}
+            <span className="aw-of"> / {VUCC_GRIDS}</span>
+          </span>
+          <div className="aw-bar">
+            <div
+              className="aw-fill good"
+              style={{ width: `${Math.min(100, (aw.vucc.confirmed / VUCC_GRIDS) * 100)}%` }}
+            />
+          </div>
+          <span className="aw-note">
+            {aw.vucc.confirmed >= VUCC_GRIDS
+              ? 'VUCC ✓'
+              : `${VUCC_GRIDS - aw.vucc.confirmed} grids to go`}{' '}
+            · {aw.vucc.worked} worked (all bands)
+          </span>
+        </div>
       </div>
 
       <div className="awards-body">
@@ -491,6 +516,31 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
               ))}
             </div>
           </div>
+
+          {aw.vucc.bands.length > 0 && (
+            <div className="aw-panel">
+              <h3>Grids by band (VUCC)</h3>
+              <div className="aw-bands">
+                {aw.vucc.bands.map((b) => (
+                  <div className="aw-bandrow" key={b.band}>
+                    <span className="aw-band">{b.band}</span>
+                    <div className="aw-bandbar" title={`${b.confirmed} confirmed / ${b.worked} worked grids`}>
+                      <div className="aw-worked" style={{ width: `${(b.worked / gridBandMax) * 100}%` }}>
+                        <div
+                          className="aw-confirmed"
+                          style={{ width: `${b.worked ? (b.confirmed / b.worked) * 100 : 0}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className="aw-bandnum">
+                      {b.confirmed}
+                      <span className="aw-of">/{b.worked}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="aw-panel">
             <h3>DXCC by mode</h3>

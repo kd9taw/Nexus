@@ -5788,6 +5788,7 @@ fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummar
             q.award_confirmed,
             credited,
             q.state.as_deref(),
+            q.grid.as_deref(),
         );
     }
     Ok(awards.summary())
