@@ -1,4 +1,4 @@
-# Nexus 0.15.13 — run two radios at once, a New-State hint on every spot, and a much richer Memories section
+# Nexus 0.15.14 — run two radios at once, a New-State hint on every spot, and a much richer Memories section
 
 *2026-07-23*
 

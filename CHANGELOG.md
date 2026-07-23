@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.15.13] — 2026-07-23 — Run two radios at once, a New-State hint on every spot, and a much richer Memories section
+## [0.15.14] — 2026-07-23 — Run two radios at once, a New-State hint on every spot, and a much richer Memories section
 
 _A batched release consolidating the work since 0.15.1 (0.15.2–0.15.11)._
 
@@ -46,6 +46,10 @@ _A batched release consolidating the work since 0.15.1 (0.15.2–0.15.11)._
 
 ### Fixed
 
+- **The two-radio launch picker can't trap you anymore.** If you turned multi-radio on, the picker
+  showed on every launch — and because it blocked the base window's Settings, turning it back off
+  never took. Now the off toggle works from any window, and the picker itself has a **"Use one
+  radio (follow bands)"** escape that drops straight into the single-window band-following mode.
 - **ADIF import no longer silently drops QSOs.** Imports deduplicated on the UTC *day*, so a second
   contact with the same station on the same day could be discarded. Dedup is now on the exact time,
   and the store-and-forward path keeps its journal — no more quiet log loss.
