@@ -326,17 +326,22 @@ impl SpotBuffer {
     }
     /// As [`push`](Self::push) with an explicit timestamp (for tests).
     pub fn push_at(&mut self, at: Instant, mut spot: ClusterSpot) {
-        // Dedup key: same call AND ~same frequency (rounded to 1 kHz). CW (band bottom)
-        // and SSB (band top) of one call differ in freq → both kept; true repeats collapse.
-        let fk = spot.freq_khz.round() as i64;
+        // Same-station key: same call AND within MERGE_KHZ of each other. A 1 kHz ROUNDED
+        // key split two skimmers' small calibration disagreement about ONE CW carrier
+        // (e.g. 50313.4 vs 50313.6 → buckets 50313 vs 50314) into two single-voice rows that
+        // each failed the VHF ≥2-near-spotter gate, suppressing a genuinely corroborated
+        // opening. A proximity WINDOW has no bucket boundary to straddle, and since it only
+        // ever matches the SAME call it can never merge two different stations; CW (band
+        // bottom) and SSB (band top) of one call are hundreds of kHz apart, so they stay
+        // distinct rows as before.
+        const MERGE_KHZ: f64 = 2.0;
+        let dx = spot.dx_call.clone();
+        let fk = spot.freq_khz;
+        let same = move |s: &ClusterSpot| s.dx_call == dx && (s.freq_khz - fk).abs() <= MERGE_KHZ;
         // Carry the replaced spot's spotter (and ITS corroborators) forward —
         // "who else reported this DX" is the multi-endpoint evidence the VHF
         // gate needs; plain replacement silently reduced every DX to one voice.
-        if let Some((_, old)) = self
-            .spots
-            .iter()
-            .find(|(_, s)| s.dx_call == spot.dx_call && s.freq_khz.round() as i64 == fk)
-        {
+        if let Some((_, old)) = self.spots.iter().find(|(_, s)| same(s)) {
             let mut set: Vec<String> = old
                 .corroborators
                 .iter()
@@ -350,8 +355,7 @@ impl SpotBuffer {
             spot.corroborators.append(&mut set);
             spot.corroborators.truncate(8);
         }
-        self.spots
-            .retain(|(_, s)| !(s.dx_call == spot.dx_call && s.freq_khz.round() as i64 == fk));
+        self.spots.retain(|(_, s)| !same(s));
         self.spots.push_back((at, spot));
         // Age-based retention is PRIMARY: drop spots older than `max_age` so a sparse
         // source (human SSB) survives the read window even while the RBN firehose floods.
@@ -819,6 +823,30 @@ mod tests {
             b.recent().iter().filter(|s| s.dx_call == "DL1ABC").count(),
             2,
             "repeat CW (same ~freq) dedups — still 2 distinct entries"
+        );
+    }
+
+    #[test]
+    fn skimmer_frequency_jitter_merges_into_one_corroborated_row() {
+        // Two RBN skimmers hear the SAME 6m CW carrier a few hundred Hz apart, straddling a
+        // 1 kHz boundary (50313.4 vs 50313.6). The old rounded key split them into two
+        // single-voice rows that each failed the VHF ≥2-near-spotter gate; the proximity
+        // window merges them into ONE row carrying BOTH skimmers.
+        let mut b = SpotBuffer::new(100);
+        let t = Instant::now();
+        b.push_at(t, mk_spot("K1ABC", 50313.4, "CW", "SKIMMER1"));
+        b.push_at(
+            t + Duration::from_secs(1),
+            mk_spot("K1ABC", 50313.6, "CW", "SKIMMER2"),
+        );
+        let rows: Vec<_> = b.recent().into_iter().filter(|s| s.dx_call == "K1ABC").collect();
+        assert_eq!(rows.len(), 1, "same station, sub-kHz apart → one row");
+        assert!(
+            rows[0].spotter == "SKIMMER2"
+                && rows[0].corroborators.iter().any(|c| c == "SKIMMER1"),
+            "both skimmers on the surviving row so the ≥2 gate clears: spotter={}, corrob={:?}",
+            rows[0].spotter,
+            rows[0].corroborators
         );
     }
 
