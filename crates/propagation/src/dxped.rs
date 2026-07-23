@@ -152,6 +152,14 @@ pub struct LogNeeds {
     /// band)`, from the logged ADIF STATE. Canonicalized to the 50 WAS codes;
     /// junk/territory states dropped.
     worked_states: HashSet<(String, Band)>,
+    /// CQ zones / grids / states CONFIRMED (QSL/LoTW), per band — the subset of the
+    /// `worked_*` sets whose contact carried a confirmation. Mirrors `confirmed_band`
+    /// for DXCC: a zone/grid/state worked-but-unconfirmed is a genuine CONFIRMATION
+    /// opportunity (WAZ/VUCC/WAS all need a confirmation), and the need scorer raises a
+    /// Confirm row for it just as it already does for DXCC.
+    confirmed_zones: HashSet<(u8, Band)>,
+    confirmed_grids: HashSet<(String, Band)>,
+    confirmed_states: HashSet<(String, Band)>,
 }
 
 impl LogNeeds {
@@ -180,7 +188,10 @@ impl LogNeeds {
         let worked_on = Band::from_band_token(band).or_else(|| Band::from_mhz(parse_mhz(band)));
         // A worked grid is independent of call resolution / DXCC — track it first.
         if let (Some(g), Some(b)) = (grid.and_then(crate::needalert::grid4), worked_on) {
-            self.worked_grids.insert((g, b));
+            self.worked_grids.insert((g.clone(), b));
+            if confirmed {
+                self.confirmed_grids.insert((g, b));
+            }
         }
         let Some(info) = dxcc::resolve(call) else {
             return;
@@ -193,6 +204,9 @@ impl LogNeeds {
         if matches!(info.entity, "United States" | "Alaska" | "Hawaii") {
             if let (Some(s), Some(b)) = (state.and_then(crate::awards::valid_state), worked_on) {
                 self.worked_states.insert((s.to_string(), b));
+                if confirmed {
+                    self.confirmed_states.insert((s.to_string(), b));
+                }
             }
         }
         // WAZ zone is valid even on a WAE/CQ-only entity, so track it BEFORE the
@@ -200,6 +214,9 @@ impl LogNeeds {
         if (1..=40).contains(&info.cq_zone) {
             if let Some(b) = worked_on {
                 self.worked_zones.insert((info.cq_zone, b));
+                if confirmed {
+                    self.confirmed_zones.insert((info.cq_zone, b));
+                }
             }
         }
         // The needs model is DXCC-oriented (a "new one" = a new DXCC entity), and
@@ -238,6 +255,34 @@ impl LogNeeds {
     /// US states the operator has worked, per band (the WAS "new state" need).
     pub fn worked_states(&self) -> &HashSet<(String, Band)> {
         &self.worked_states
+    }
+
+    /// CQ zones the operator has CONFIRMED, per band (the WAZ Confirm opportunity).
+    pub fn confirmed_zones(&self) -> &HashSet<(u8, Band)> {
+        &self.confirmed_zones
+    }
+
+    /// Grids the operator has CONFIRMED, per band (the VUCC Confirm opportunity).
+    pub fn confirmed_grids(&self) -> &HashSet<(String, Band)> {
+        &self.confirmed_grids
+    }
+
+    /// US states the operator has CONFIRMED, per band (the WAS Confirm opportunity).
+    pub fn confirmed_states(&self) -> &HashSet<(String, Band)> {
+        &self.confirmed_states
+    }
+
+    /// The worked+confirmed zone/grid/state slots the need scorer consults, bundled so
+    /// callers pass one argument instead of six.
+    pub fn slots(&self) -> crate::needalert::AwardSlots<'_> {
+        crate::needalert::AwardSlots {
+            worked_zones: &self.worked_zones,
+            confirmed_zones: &self.confirmed_zones,
+            worked_grids: &self.worked_grids,
+            confirmed_grids: &self.confirmed_grids,
+            worked_states: &self.worked_states,
+            confirmed_states: &self.confirmed_states,
+        }
     }
 }
 

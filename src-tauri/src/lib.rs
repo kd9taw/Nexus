@@ -6228,13 +6228,7 @@ async fn get_need_alerts(
             }
         }
     }
-    let mut alerts = propagation::rank_needs(
-        &heard,
-        &needs,
-        needs.worked_zones(),
-        needs.worked_grids(),
-        needs.worked_states(),
-    );
+    let mut alerts = propagation::rank_needs(&heard, &needs, &needs.slots());
     // Never alert on the operator's own call (their PSKR "heard me" echoes can
     // otherwise surface it as a phantom row).
     let me_up = snap.mycall.to_uppercase();
@@ -6320,13 +6314,7 @@ async fn get_need_alerts(
             .collect();
         drop(cache);
         for sp in &fresh {
-            let Some(alert) = propagation::activation_alert(
-                sp,
-                &needs,
-                needs.worked_zones(),
-                needs.worked_grids(),
-                needs.worked_states(),
-            ) else {
+            let Some(alert) = propagation::activation_alert(sp, &needs, &needs.slots()) else {
                 continue;
             };
             if alert.call == me_up {
@@ -6383,9 +6371,7 @@ async fn get_need_alerts(
                 None,
                 &wcfg,
                 &needs,
-                needs.worked_zones(),
-                needs.worked_grids(),
-                needs.worked_states(),
+                &needs.slots(),
             ) {
                 // wanted_alert doesn't know the spot metadata — carry it over.
                 a.freq_mhz = h.freq_mhz;

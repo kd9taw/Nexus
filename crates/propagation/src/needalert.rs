@@ -169,8 +169,22 @@ pub(crate) fn grid4(grid: &str) -> Option<String> {
     (g.len() == 4).then_some(g)
 }
 
-/// Score one heard station. Returns `None` for an unresolvable call or a fully
-/// satisfied one (nothing worth alerting).
+/// The per-band worked/confirmed award slots the need scorer consults for WAZ zones,
+/// VUCC grids, and WAS states. Bundled so the scoring functions take one argument instead
+/// of six, and so worked+confirmed for each award always travel together. Build one with
+/// [`crate::dxped::LogNeeds::slots`].
+pub struct AwardSlots<'a> {
+    pub worked_zones: &'a HashSet<(u8, Band)>,
+    pub confirmed_zones: &'a HashSet<(u8, Band)>,
+    pub worked_grids: &'a HashSet<(String, Band)>,
+    pub confirmed_grids: &'a HashSet<(String, Band)>,
+    pub worked_states: &'a HashSet<(String, Band)>,
+    pub confirmed_states: &'a HashSet<(String, Band)>,
+}
+
+/// Score one heard station from just the WORKED sets, treating every worked slot as also
+/// confirmed (so no zone/grid/state Confirm rows). The pre-confirmation-tracking entry point,
+/// kept for callers/tests that don't carry confirmation data.
 #[allow(clippy::too_many_arguments)]
 pub fn score(
     call: &str,
@@ -183,8 +197,41 @@ pub fn score(
     worked_grids: &HashSet<(String, Band)>,
     worked_states: &HashSet<(String, Band)>,
 ) -> Option<NeedAlert> {
+    score_slots(
+        call,
+        band,
+        mode,
+        grid,
+        us_state,
+        needs,
+        &AwardSlots {
+            worked_zones,
+            confirmed_zones: worked_zones,
+            worked_grids,
+            confirmed_grids: worked_grids,
+            worked_states,
+            confirmed_states: worked_states,
+        },
+    )
+}
+
+/// Score one heard station. Returns `None` for an unresolvable call or a fully
+/// satisfied one (nothing worth alerting). A zone/grid/state worked-but-unconfirmed
+/// (per `slots`) raises a Confirm row, mirroring the DXCC Confirm tier.
+pub fn score_slots(
+    call: &str,
+    band: &str,
+    mode: &str,
+    grid: Option<&str>,
+    us_state: Option<&str>,
+    needs: &dyn OperatorNeeds,
+    slots: &AwardSlots,
+) -> Option<NeedAlert> {
     let info = dxcc::resolve(call)?;
     let mut tags: Vec<NeedTag> = Vec::new();
+    // Set when a zone/grid/state axis is worked-but-unconfirmed; folded into a SINGLE Confirm
+    // tag after the axes are scored (the DXCC path emits its own Confirm — don't double it).
+    let mut wants_confirm = false;
     // The heard station's 4-char grid, when the source carried one — for the NewGrid need.
     let g4 = grid.and_then(grid4);
     // The heard station's canonical US state, when a callsign lookup resolved one — for
@@ -212,11 +259,18 @@ pub fn score(
             }
         }
     }
-    // WAZ need — valid even on a WAE entity (the CQ zone still counts).
-    if (1..=40).contains(&info.cq_zone)
-        && !heard_on.is_some_and(|b| worked_zones.contains(&(info.cq_zone, b)))
-    {
-        tags.push(NeedTag::NewZone);
+    // WAZ need — valid even on a WAE entity (the CQ zone still counts). Unworked on this
+    // band → NewZone; worked-but-unconfirmed → a confirmation opportunity (5BWAZ needs a QSL).
+    if (1..=40).contains(&info.cq_zone) {
+        match heard_on {
+            Some(b) if slots.worked_zones.contains(&(info.cq_zone, b)) => {
+                if !slots.confirmed_zones.contains(&(info.cq_zone, b)) {
+                    wants_confirm = true;
+                }
+            }
+            // Worked-but-not-on-this-band, or an unparseable band → fail open (a new zone).
+            _ => tags.push(NeedTag::NewZone),
+        }
     }
     // Grid need — a 4-char Maidenhead square never worked ON THIS BAND, independent
     // of the entity (like a zone). Only when the source carried a grid (own decodes
@@ -232,8 +286,13 @@ pub fn score(
     // model, e.g. 70 cm — reachable for an IC-9700 operator, since the band plan ships FT8
     // channels there). Two inputs, same rule: fail open.
     if let Some(g) = &g4 {
-        if !heard_on.is_some_and(|b| worked_grids.contains(&(g.clone(), b))) {
-            tags.push(NeedTag::NewGrid);
+        match heard_on {
+            Some(b) if slots.worked_grids.contains(&(g.clone(), b)) => {
+                if !slots.confirmed_grids.contains(&(g.clone(), b)) {
+                    wants_confirm = true;
+                }
+            }
+            _ => tags.push(NeedTag::NewGrid),
         }
     }
     // State need — a US state never worked on this band (WAS). Gate on a US-family
@@ -242,11 +301,22 @@ pub fn score(
     // Canadian provinces), so a resolved state on a foreign entity must NOT count
     // toward WAS. The worked-states set holds canonical (valid_state) codes.
     if let Some(s) = st {
-        if matches!(info.entity, "United States" | "Alaska" | "Hawaii")
-            && !heard_on.is_some_and(|b| worked_states.contains(&(s.to_string(), b)))
-        {
-            tags.push(NeedTag::NewState);
+        if matches!(info.entity, "United States" | "Alaska" | "Hawaii") {
+            match heard_on {
+                Some(b) if slots.worked_states.contains(&(s.to_string(), b)) => {
+                    if !slots.confirmed_states.contains(&(s.to_string(), b)) {
+                        wants_confirm = true;
+                    }
+                }
+                _ => tags.push(NeedTag::NewState),
+            }
         }
+    }
+
+    // Fold the worked-but-unconfirmed axes into ONE Confirm row (the DXCC path may have
+    // already added Confirm — don't duplicate the pill).
+    if wants_confirm && !tags.contains(&NeedTag::Confirm) {
+        tags.push(NeedTag::Confirm);
     }
 
     if tags.is_empty() {
@@ -335,28 +405,20 @@ pub fn score(
 
 /// Score + rank a batch of heard stations: highest need value first, deduped by
 /// (call, band) keeping the top-priority alert.
-pub fn rank(
-    spots: &[Heard],
-    needs: &dyn OperatorNeeds,
-    worked_zones: &HashSet<(u8, Band)>,
-    worked_grids: &HashSet<(String, Band)>,
-    worked_states: &HashSet<(String, Band)>,
-) -> Vec<NeedAlert> {
+pub fn rank(spots: &[Heard], needs: &dyn OperatorNeeds, slots: &AwardSlots) -> Vec<NeedAlert> {
     let mut scored: Vec<NeedAlert> = spots
         .iter()
         .filter_map(|s| {
             // score() owns the award logic + mode class; attach the exact frequency
             // (when this Heard carried one) so click-to-work can QSY to the spot.
-            score(
+            score_slots(
                 &s.call,
                 &s.band,
                 &s.mode,
                 s.grid.as_deref(),
                 s.us_state.as_deref(),
                 needs,
-                worked_zones,
-                worked_grids,
-                worked_states,
+                slots,
             )
             .map(|mut a| {
                 a.freq_mhz = s.freq_mhz;
@@ -411,9 +473,7 @@ fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
 pub fn activation_alert(
     spot: &crate::pota::OtaSpot,
     needs: &dyn OperatorNeeds,
-    worked_zones: &HashSet<(u8, Band)>,
-    worked_grids: &HashSet<(String, Band)>,
-    worked_states: &HashSet<(String, Band)>,
+    slots: &AwardSlots,
 ) -> Option<NeedAlert> {
     let freq_mhz = spot.freq_khz / 1000.0;
     let band = Band::from_mhz(freq_mhz)?;
@@ -427,16 +487,14 @@ pub fn activation_alert(
     let prog = if is_sota { "SOTA" } else { "POTA" };
 
     // Any DX award this activator ALSO satisfies (ATNO / new band / zone / grid).
-    let award = score(
+    let award = score_slots(
         &spot.activator,
         band.label(),
         mode.label(),
         spot.grid.as_deref(),
         None, // an OTA spot carries no US state
         needs,
-        worked_zones,
-        worked_grids,
-        worked_states,
+        slots,
     );
     let had_award = award.is_some();
     let info = dxcc::resolve(&spot.activator);
@@ -561,24 +619,20 @@ pub fn wanted_alert(
     snr: Option<i32>,
     cfg: &WantedConfig,
     needs: &dyn OperatorNeeds,
-    worked_zones: &HashSet<(u8, Band)>,
-    worked_grids: &HashSet<(String, Band)>,
-    worked_states: &HashSet<(String, Band)>,
+    slots: &AwardSlots,
 ) -> Option<NeedAlert> {
     if !wanted_match(call, is_cq, snr, cfg) {
         return None;
     }
     // Any DX award this wanted station ALSO satisfies (merged, like activation_alert).
-    let award = score(
+    let award = score_slots(
         call,
         band,
         mode,
         grid,
         None, // the wanted path doesn't resolve a US state
         needs,
-        worked_zones,
-        worked_grids,
-        worked_states,
+        slots,
     );
     let info = dxcc::resolve(call);
     let mut alert = award.unwrap_or_else(|| NeedAlert {
@@ -855,6 +909,24 @@ pub fn skimmer_grid(call: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build AwardSlots from worked sets with confirmed == worked — the pre-confirmation
+    /// behaviour (a worked slot is fully satisfied, no Confirm row). Confirm-specific tests
+    /// build AwardSlots explicitly with distinct worked/confirmed sets.
+    fn slots<'a>(
+        z: &'a HashSet<(u8, Band)>,
+        g: &'a HashSet<(String, Band)>,
+        s: &'a HashSet<(String, Band)>,
+    ) -> AwardSlots<'a> {
+        AwardSlots {
+            worked_zones: z,
+            confirmed_zones: z,
+            worked_grids: g,
+            confirmed_grids: g,
+            worked_states: s,
+            confirmed_states: s,
+        }
+    }
     use crate::dxped::LogNeeds;
 
     fn heard(call: &str, band: &str) -> Heard {
@@ -1220,7 +1292,7 @@ mod tests {
             heard("3Y0J", "20m"),   // Bouvet — ATNO (100)
             heard("3Y0J", "20m"),   // duplicate → collapsed
         ];
-        let ranked = rank(&spots, &n, &z, n.worked_grids(), &HashSet::new());
+        let ranked = rank(&spots, &n, &slots(&z, n.worked_grids(), &HashSet::new()));
         assert_eq!(ranked.len(), 2, "duplicate (call,band) collapsed");
         assert_eq!(ranked[0].call, "3Y0J"); // highest priority first
         assert!(ranked[0].priority >= ranked[1].priority);
@@ -1254,9 +1326,7 @@ mod tests {
         let ranked = rank(
             &spots,
             &needs,
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
+            &slots(&HashSet::new(), &HashSet::new(), &HashSet::new()),
         );
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].mode, "CW");
@@ -1308,9 +1378,7 @@ mod tests {
         let ranked = rank(
             &spots,
             &needs,
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
+            &slots(&HashSet::new(), &HashSet::new(), &HashSet::new()),
         );
         assert_eq!(ranked.len(), 2, "same call+band, two modes → two rows");
         let modes: Vec<&str> = ranked.iter().map(|a| a.mode.as_str()).collect();
@@ -1377,9 +1445,7 @@ mod tests {
         let ranked = rank(
             &spots,
             &needs,
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
+            &slots(&HashSet::new(), &HashSet::new(), &HashSet::new()),
         );
         assert_eq!(ranked.len(), 2, "RTTY and FT8 rows both kept");
         let modes: Vec<&str> = ranked.iter().map(|a| a.mode.as_str()).collect();
@@ -1732,6 +1798,93 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_worked_but_unconfirmed_zone_raises_a_confirm_row() {
+        // You worked CQ zone 5 on 20 m once but never got the QSL/LoTW match; a new zone-5
+        // station on 20 m is a confirmation opportunity — SpotCollector shows it for every
+        // multiplier, and now so does Nexus (previously a worked zone was just dropped).
+        let mut needs = LogNeeds::new();
+        needs.add("W1AW", "20m", "CW", None, None, true); // USA/zone5/20m CW worked+CONFIRMED → entity satisfied
+        let worked_zones: HashSet<(u8, Band)> = HashSet::from([(5, Band::B20)]);
+        let eg: HashSet<(String, Band)> = HashSet::new();
+        let es: HashSet<(String, Band)> = HashSet::new();
+        // Zone worked on 20 m but NOT confirmed.
+        let unconfirmed = HashSet::new();
+        let a = score_slots(
+            "W1XZ",
+            "20m",
+            "CW",
+            None,
+            None,
+            &needs,
+            &AwardSlots {
+                worked_zones: &worked_zones,
+                confirmed_zones: &unconfirmed,
+                worked_grids: &eg,
+                confirmed_grids: &eg,
+                worked_states: &es,
+                confirmed_states: &es,
+            },
+        )
+        .expect("a worked-but-unconfirmed zone is a confirmation opportunity");
+        assert_eq!(a.tags, vec![NeedTag::Confirm], "just the zone Confirm: {:?}", a.tags);
+
+        // Once the zone is confirmed on this band, the same station raises nothing.
+        assert!(
+            score_slots(
+                "W1XZ",
+                "20m",
+                "CW",
+                None,
+                None,
+                &needs,
+                &AwardSlots {
+                    worked_zones: &worked_zones,
+                    confirmed_zones: &worked_zones,
+                    worked_grids: &eg,
+                    confirmed_grids: &eg,
+                    worked_states: &es,
+                    confirmed_states: &es,
+                },
+            )
+            .is_none(),
+            "zone confirmed on this band → nothing to alert"
+        );
+    }
+
+    #[test]
+    fn confirm_is_not_duplicated_when_dxcc_and_a_zone_both_need_confirming() {
+        let mut needs = LogNeeds::new();
+        needs.add("W1AW", "20m", "CW", None, None, false); // USA worked but UNCONFIRMED → DXCC Confirm
+        let worked_zones: HashSet<(u8, Band)> = HashSet::from([(5, Band::B20)]);
+        let unconfirmed = HashSet::new();
+        let eg: HashSet<(String, Band)> = HashSet::new();
+        let es: HashSet<(String, Band)> = HashSet::new();
+        let a = score_slots(
+            "W1XZ",
+            "20m",
+            "CW",
+            None,
+            None,
+            &needs,
+            &AwardSlots {
+                worked_zones: &worked_zones,
+                confirmed_zones: &unconfirmed,
+                worked_grids: &eg,
+                confirmed_grids: &eg,
+                worked_states: &es,
+                confirmed_states: &es,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            a.tags.iter().filter(|t| **t == NeedTag::Confirm).count(),
+            1,
+            "one Confirm pill even though DXCC and the zone both need confirming: {:?}",
+            a.tags
+        );
+    }
+
     /// A band label [`Band`] doesn't model (70 cm, 23 cm) can't be proven worked, so
     /// the per-band needs fail OPEN and still alert — the pre-existing behaviour, kept
     /// deliberately: silencing an IC-9700 operator's UHF grids would be the opposite
@@ -1810,9 +1963,7 @@ mod tests {
         let a = activation_alert(
             &ota("POTA", "K-1234", "K1ABC", 14_250.0, "SSB"),
             &needs,
-            needs.worked_zones(),
-            needs.worked_grids(),
-            &HashSet::new(),
+            &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
         )
         .unwrap();
         assert!(
@@ -1846,9 +1997,7 @@ mod tests {
         let a = activation_alert(
             &ota("POTA", "K-1234", "W1ABC", 14_250.0, "SSB"),
             &n,
-            n.worked_zones(),
-            n.worked_grids(),
-            &HashSet::new(),
+            &slots(n.worked_zones(), n.worked_grids(), &HashSet::new()),
         )
         .unwrap();
         assert_eq!(
@@ -1873,9 +2022,7 @@ mod tests {
         let s = activation_alert(
             &ota("SOTA", "VK3/VN-012", "VK3KR", 7_033.0, "CW"),
             &needs,
-            needs.worked_zones(),
-            needs.worked_grids(),
-            &HashSet::new(),
+            &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
         )
         .unwrap();
         assert!(s.tags.contains(&NeedTag::Sota), "SOTA chip: {:?}", s.tags);
@@ -1884,9 +2031,7 @@ mod tests {
         assert!(activation_alert(
             &ota("POTA", "K-1", "K1ABC", 2_500.0, "SSB"),
             &needs,
-            needs.worked_zones(),
-            needs.worked_grids(),
-            &HashSet::new(),
+            &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
         )
         .is_none());
     }
@@ -2034,9 +2179,7 @@ mod tests {
             None,
             &cfg,
             &n,
-            n.worked_zones(),
-            n.worked_grids(),
-            &HashSet::new(),
+            &slots(n.worked_zones(), n.worked_grids(), &HashSet::new()),
         )
         .unwrap();
         assert_eq!(
@@ -2068,9 +2211,7 @@ mod tests {
             None,
             &cfg,
             &n,
-            n.worked_zones(),
-            n.worked_grids(),
-            &HashSet::new(),
+            &slots(n.worked_zones(), n.worked_grids(), &HashSet::new()),
         )
         .unwrap();
         assert_eq!(
@@ -2113,9 +2254,7 @@ mod tests {
             None,
             &wcfg(&calls, false, None),
             &n,
-            n.worked_zones(),
-            n.worked_grids(),
-            &HashSet::new(),
+            &slots(n.worked_zones(), n.worked_grids(), &HashSet::new()),
         )
         .is_none());
         // On the list, but the cq_only gate fails → no alert.
@@ -2128,9 +2267,7 @@ mod tests {
             None,
             &wcfg(&calls, true, None),
             &n,
-            n.worked_zones(),
-            n.worked_grids(),
-            &HashSet::new(),
+            &slots(n.worked_zones(), n.worked_grids(), &HashSet::new()),
         )
         .is_none());
     }
@@ -2288,9 +2425,7 @@ mod tests {
         let ranked = rank(
             &spots,
             &n,
-            n.worked_zones(),
-            n.worked_grids(),
-            &worked_states,
+            &slots(n.worked_zones(), n.worked_grids(), &worked_states),
         );
         assert_eq!(ranked.len(), 1);
         assert!(
