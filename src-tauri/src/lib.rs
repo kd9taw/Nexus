@@ -9537,16 +9537,6 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
-    // Windows/WebView2: two instances of the same app share ONE user-data folder (keyed on the
-    // app identifier), and the second instance's webview cannot initialize while the first holds
-    // it locked — the window shell + splash appear but the main webview never loads. Give each
-    // NAMED profile (a per-radio window) its own folder so both instances' webviews come up. The
-    // default profile keeps WebView2's default location, so a single instance is byte-identical.
-    // Must be set before the webview environment is created — hence here, first thing after DMABUF.
-    #[cfg(windows)]
-    if active_profile().is_some() && std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").is_none() {
-        std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", config_dir().join("webview"));
-    }
 
     // Take this profile's advisory lock (named profiles only — the default single-instance is a
     // no-op). Lets the launch picker grey out a radio already open in another window, and marks
