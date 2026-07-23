@@ -705,6 +705,12 @@ export async function chooseRadio(radioId: number): Promise<void> {
   await invoke('choose_radio', { radioId })
 }
 
+/** Picker escape: turn simultaneous-radios off (in the base config the picker reads) and proceed
+ *  as the single band-following window — the pre-picker behavior. */
+export async function useSingleRadio(): Promise<void> {
+  await invoke('use_single_radio')
+}
+
 /** Reveal ALL.TXT (or its folder) in the OS file manager. */
 /** Stamp POTA/SOTA park refs from a pota.app export onto matching logged QSOs. */
 export interface PotaStampResult {

@@ -10076,6 +10076,20 @@ select.settings-input {
   display: grid;
   gap: var(--space-3);
 }
+.radio-picker-single {
+  display: block;
+  margin: var(--space-4) auto 0;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.radio-picker-single:hover {
+  color: var(--text);
+}
 .radio-picker-btn {
   display: flex;
   align-items: center;

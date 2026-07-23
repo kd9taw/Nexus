@@ -9,9 +9,12 @@ import type { RadioLaunchInfo } from '../api'
 export function RadioPicker({
   info,
   onChoose,
+  onSingleRadio,
 }: {
   info: RadioLaunchInfo
   onChoose: (id: number) => void
+  /** Escape hatch: turn multi-radio off and run this one window with band-follow (the old way). */
+  onSingleRadio: () => void
 }) {
   return (
     <div className="radio-picker-overlay" role="dialog" aria-modal="true" aria-label="Choose radio">
@@ -39,6 +42,9 @@ export function RadioPicker({
             </button>
           ))}
         </div>
+        <button type="button" className="radio-picker-single" onClick={onSingleRadio}>
+          Use one radio (follow bands on a single window)
+        </button>
       </div>
     </div>
   )

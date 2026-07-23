@@ -906,6 +906,29 @@ fn choose_radio(app: tauri::AppHandle, radio_id: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Write the fleet-level `simultaneous_radios` flag into the BASE profile's settings.json — the
+/// one a fresh, profile-less launch reads to decide whether to show the radio picker. The picker
+/// blocks the base window's Settings, so a per-radio window is the ONLY place the operator can
+/// reach the toggle; without mirroring it here, the base config keeps the flag ON forever and the
+/// picker can never be turned off (the trap). Best-effort; a failure just leaves the old value.
+fn persist_simultaneous_to_base(enabled: bool) {
+    let base = config_dir_for(None).join("settings.json");
+    let mut s = Settings::load(&base);
+    if s.simultaneous_radios != enabled {
+        s.simultaneous_radios = enabled;
+        let _ = s.save(&base);
+    }
+}
+
+/// The picker's "use one radio" escape: turn simultaneous-radios OFF (in the base config the picker
+/// reads) and let this window proceed as the single, band-following instance — the pre-picker
+/// behavior. Frontend dismisses the picker after this resolves.
+#[tauri::command]
+fn use_single_radio() -> Result<(), String> {
+    persist_simultaneous_to_base(false);
+    Ok(())
+}
+
 /// The SHARED data directory that holds the ONE unified logbook across all instances.
 /// Default = `<base>/tempo` (the default profile's dir — i.e. the pre-profile location, so an
 /// existing `log.adi` stays put and simply becomes the shared one, no migration). Override
@@ -3602,6 +3625,12 @@ fn set_settings(
         eng.apply_settings(settings);
         if let Err(e) = eng.settings().save(&settings_path()) {
             eprintln!("tempo: failed to persist settings: {e}");
+        }
+        // Mirror the fleet-level multi-radio toggle to the BASE config from a per-radio window, so
+        // turning it off here actually stops the launch picker (the base config drives that, and
+        // the picker otherwise blocks the base window's Settings — the trap). No-op in the base.
+        if active_profile().is_some() {
+            persist_simultaneous_to_base(eng.settings().simultaneous_radios);
         }
         eng.snapshot()
     }; // release the engine lock before spawning feed threads
@@ -10305,6 +10334,7 @@ pub fn run() {
             app_version,
             radio_launch_info,
             choose_radio,
+            use_single_radio,
             import_pota_log,
             set_skip_tx1,
             civ_diagnostic_status,

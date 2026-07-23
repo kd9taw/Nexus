@@ -100,6 +100,7 @@ import {
   qsySetEnabled as apiQsySetEnabled,
   radioLaunchInfo,
   chooseRadio,
+  useSingleRadio,
   type RadioLaunchInfo,
 } from './api'
 import {
@@ -2328,7 +2329,11 @@ export default function App() {
       {radioPicker?.showPicker && (
         // First screen for a two-radio setup — pick which radio this window drives. Choosing
         // relaunches the window bound to that radio (no shortcuts/env for the operator).
-        <RadioPicker info={radioPicker} onChoose={(id) => void chooseRadio(id)} />
+        <RadioPicker
+          info={radioPicker}
+          onChoose={(id) => void chooseRadio(id)}
+          onSingleRadio={() => void useSingleRadio().finally(() => setRadioPicker(null))}
+        />
       )}
 
       {showWizard && settings && (
