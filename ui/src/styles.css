@@ -6459,6 +6459,74 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-size: var(--fs-micro);
   color: var(--text-faint);
 }
+/* "Log a contact from another radio" — opt-in override of band / freq / mode / UTC time for a
+   QSO made on a rig NOT connected to Nexus (e.g. a V/UHF radio). Collapsed by default; the
+   closed form logs the live rig + now, exactly as before. */
+.le-override {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-2);
+}
+.le-override-toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.le-override-toggle:hover {
+  color: var(--text);
+}
+.le-override-caret {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.le-override-sub {
+  font-weight: 400;
+  color: var(--text-faint);
+}
+.le-override-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.le-ov-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  cursor: text;
+}
+.le-ov-field .settings-input {
+  min-width: 0;
+}
+.le-ov-date {
+  max-width: 150px;
+}
+.le-ov-time {
+  max-width: 110px;
+}
+.le-ov-band {
+  max-width: 96px;
+}
+.le-ov-freq {
+  max-width: 120px;
+}
+.le-ov-mode {
+  max-width: 100px;
+}
+.le-ov-warn {
+  flex: 1 1 100%;
+  font-size: var(--fs-micro);
+  color: var(--warn, #e8a33d);
+}
 /* In-QSO recall panel — the prominent rag-chew "who is this + our history" card. */
 .recall-card {
   margin-top: var(--space-3);
@@ -9257,7 +9325,7 @@ select.settings-input {
   font-style: italic;
 }
 .stats-hour-note {
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
   font-size: 11px;
   color: var(--text-faint);
 }

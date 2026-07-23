@@ -14,6 +14,61 @@ const FD_SECTION_CODES = new Set(
   ARRL_SECTIONS_BY_DIVISION.flatMap((d) => d.sections).map((s) => s.code),
 )
 
+// Manual-override band picker for logging a contact made on a radio NOT connected to Nexus
+// (V/UHF especially). One ordered table drives BOTH directions so band and freq can never
+// disagree ("2m band / 14.2 MHz"): picking a band fills its representative in-band frequency,
+// typing a frequency snaps the band to the plan it lands in. Spans 160m through 23 cm; the
+// VHF/UHF edges intentionally match radioprog.bandOfMhz (which itself covers only those 5
+// bands, hence the fuller table here).
+const LOG_BANDS: { band: string; rep: number; lo: number; hi: number }[] = [
+  { band: '160m', rep: 1.84, lo: 1.8, hi: 2.0 },
+  { band: '80m', rep: 3.573, lo: 3.5, hi: 4.0 },
+  { band: '60m', rep: 5.357, lo: 5.3, hi: 5.45 },
+  { band: '40m', rep: 7.074, lo: 7.0, hi: 7.3 },
+  { band: '30m', rep: 10.136, lo: 10.1, hi: 10.15 },
+  { band: '20m', rep: 14.074, lo: 14.0, hi: 14.35 },
+  { band: '17m', rep: 18.1, lo: 18.068, hi: 18.168 },
+  { band: '15m', rep: 21.074, lo: 21.0, hi: 21.45 },
+  { band: '12m', rep: 24.915, lo: 24.89, hi: 24.99 },
+  { band: '10m', rep: 28.074, lo: 28.0, hi: 29.7 },
+  { band: '6m', rep: 50.313, lo: 50.0, hi: 54.0 },
+  { band: '2m', rep: 146.52, lo: 144.0, hi: 148.0 },
+  { band: '1.25m', rep: 223.5, lo: 219.0, hi: 225.0 },
+  { band: '33cm', rep: 902.1, lo: 902.0, hi: 928.0 },
+  { band: '70cm', rep: 446.0, lo: 420.0, hi: 450.0 },
+  { band: '23cm', rep: 1296.1, lo: 1240.0, hi: 1300.0 },
+]
+
+/** The ham band whose plan contains `mhz`, or '' when it falls outside every band above. */
+function bandForMhz(mhz: number): string {
+  return LOG_BANDS.find((b) => mhz >= b.lo && mhz <= b.hi)?.band ?? ''
+}
+
+/** MODE values for the manual log override — every one a member of the CLOSED ADIF Mode
+ * enumeration, so TQSL accepts the record. USB/LSB are deliberately ABSENT: they are ADIF
+ * SUBMODEs, not Modes, and writing `<MODE>USB` gets the whole QSO rejected on LoTW upload —
+ * the same closed-enumeration trap that rejected a bare `<MODE>TempoFast` (see
+ * logbook.rs adif_submode). SSB is the generic phone Mode; FM/AM cover the rest of phone. The
+ * cockpits only ever pass SSB/FM/CW as the default, all present here. */
+const LOG_MODES = ['SSB', 'FM', 'AM', 'CW', 'RTTY', 'FT8', 'FT4'] as const
+
+/** Now, split into a UTC date (YYYY-MM-DD) + time (HH:MM) for the override's inputs. */
+function utcNowParts(): { date: string; time: string } {
+  const iso = new Date().toISOString()
+  return { date: iso.slice(0, 10), time: iso.slice(11, 16) }
+}
+
+/** Parse the UTC date + time inputs to Unix seconds, or null when either is malformed.
+ * Amateur logs are UTC: parsing via Date.UTC keeps the browser's local zone out of it — a
+ * naive `datetime-local` read as UTC would silently log hours off. */
+function utcPartsToUnix(date: string, time: string): number | null {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
+  const t = /^(\d{1,2}):(\d{2})$/.exec(time)
+  if (!d || !t) return null
+  const ms = Date.UTC(+d[1], +d[2] - 1, +d[3], +t[1], +t[2], 0)
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null
+}
+
 interface Props {
   snap: AppSnapshot
   /** ADIF mode logged ('CW' / 'SSB'). */
@@ -100,6 +155,16 @@ export function LogEntry({
   const [parkDetailLive, setParkDetailLive] = useState(false)
   const [qrzBusy, setQrzBusy] = useState(false)
   const [allLog, setAllLog] = useState<LoggedQso[]>([])
+  // Opt-in manual override (standard-log path only) for a contact made on a radio NOT
+  // connected to Nexus — e.g. a V/UHF rig. CLOSED = log the live rig + now, byte-identical
+  // to before this existed. OPEN = the operator sets band / freq / mode / UTC time by hand,
+  // each field pre-filled from the current live/now value at the moment it's opened.
+  const [overrideOpen, setOverrideOpen] = useState(false)
+  const [ovDate, setOvDate] = useState('')
+  const [ovTime, setOvTime] = useState('')
+  const [ovBand, setOvBand] = useState('')
+  const [ovFreq, setOvFreq] = useState('')
+  const [ovMode, setOvMode] = useState('')
   const rstRef = useRef<HTMLInputElement>(null)
   // The callsign field (FD + standard layouts share this ref — only one is mounted
   // at a time), so a completed log can snap focus back for the next contact.
@@ -381,6 +446,33 @@ export function LogEntry({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logCall, fdActive])
 
+  // Open the override, seeding every field from the LIVE rig + NOW so an unedited-but-open
+  // override still logs today's values. Re-seeds on each open (the cockpit stays mounted
+  // across nav, so a once-at-mount default would go stale).
+  const openOverride = () => {
+    const { date, time } = utcNowParts()
+    setOvDate(date)
+    setOvTime(time)
+    setOvBand(snap.radio.band)
+    setOvFreq(String(snap.radio.dialMhz))
+    setOvMode(mode)
+    setOverrideOpen(true)
+  }
+
+  // Keep band ↔ freq consistent. Picking a band fills its representative in-band frequency;
+  // typing a frequency snaps the band to the plan it lands in (leaving the band untouched when
+  // the frequency is off-plan — the operator still sees a non-blocking warning).
+  const onPickOvBand = (b: string) => {
+    setOvBand(b)
+    const rep = LOG_BANDS.find((x) => x.band === b)?.rep
+    if (rep != null) setOvFreq(String(rep))
+  }
+  const onEditOvFreq = (v: string) => {
+    setOvFreq(v)
+    const b = bandForMhz(Number(v))
+    if (b) setOvBand(b)
+  }
+
   const reset = () => {
     setLogCall('')
     setLogRstSent(defaultRst)
@@ -395,6 +487,14 @@ export function LogEntry({
     setLogImage(null)
     setLogParkRef('')
     void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
+    // When the other-radio override is open, refresh its UTC time to now for the next contact
+    // (a run of live V/UHF contacts each get the current time, never a silently-reused stale
+    // one) while KEEPING band/freq/mode — like fdClass/fdSection, so they aren't re-entered.
+    if (overrideOpen) {
+      const { date, time } = utcNowParts()
+      setOvDate(date)
+      setOvTime(time)
+    }
     // Keep fdClass/fdSection across resets for speed in FD runs.
     // Snap focus back to the callsign field so the operator can type the next
     // contact immediately (rapid logging / a Field Day run), like WSJT-X/N1MM.
@@ -409,9 +509,26 @@ export function LogEntry({
   const fdExchangeOk =
     fdClass.trim() !== '' && FD_SECTION_CODES.has(fdSection.trim().toUpperCase())
 
+  // The band / freq / mode this standard-log QSO will record: the hand-entered override when
+  // it's open, else the live rig (byte-identical to before). When the override IS open it is
+  // all-or-nothing — band, freq, mode AND time come from it together. A blank/garbage freq does
+  // NOT silently fall back to the live rig for band+freq while keeping the override mode+time:
+  // that logs a mismatched record (e.g. live 20m/14.2 MHz tagged FM at a past UTC time). Instead
+  // logging is BLOCKED until the freq is valid or the override is closed (`overrideBlocked`).
+  const ovFreqNum = Number(ovFreq)
+  const ovFreqOk = overrideOpen && Number.isFinite(ovFreqNum) && ovFreqNum > 0
+  const overrideBlocked = overrideOpen && !ovFreqOk
+  const effBand = overrideOpen ? ovBand : snap.radio.band
+  const effFreqMhz = overrideOpen ? ovFreqNum : snap.radio.dialMhz
+  const effMode = overrideOpen ? ovMode : mode
+
   const logIt = async () => {
     const call = logCall.trim().toUpperCase()
     if (!call) return
+    if (overrideBlocked) {
+      pushToast('Enter a valid frequency for the override, or close it', 'error')
+      return
+    }
 
     if (fdActive) {
       // FD path: fdLogManual rejects on band+mode dupe. Class + section are MANDATORY — never log
@@ -435,21 +552,26 @@ export function LogEntry({
     // Standard logbook path.
     const rstSent = logRstSent.trim() || defaultRst
     const rstRcvd = logRstRcvd.trim() || defaultRst
+    // Override open → the hand-entered UTC instant (falling back to now if a field was
+    // cleared to something unparseable); closed → now, exactly as before.
+    const whenUnix = overrideOpen
+      ? (utcPartsToUnix(ovDate, ovTime) ?? Math.floor(Date.now() / 1000))
+      : Math.floor(Date.now() / 1000)
     const rec: LoggedQso = {
       call,
       grid: logGrid.trim() || null,
       country: logCountry.trim() || null,
       state: logState.trim() || null,
-      band: snap.radio.band,
-      freqMhz: snap.radio.dialMhz,
-      mode,
+      band: effBand,
+      freqMhz: effFreqMhz,
+      mode: effMode,
       rstSent,
       rstRcvd,
       name: logName.trim() || null,
       qth: logQth.trim() || null,
       comment: logComment.trim() || null,
       notes: logNotes.trim() || null,
-      whenUnix: Math.floor(Date.now() / 1000),
+      whenUnix,
       confirmed: false,
       awardConfirmed: false,
       // Only send an EXPLICIT park. A hunt-PREFILLED ref (still equal to the pending hunt) is left
@@ -463,7 +585,7 @@ export function LogEntry({
     }
     const r = await withErrorToast(() => logQso(rec), 'Could not log the QSO')
     if (r) {
-      pushToast(`Logged ${call} (${mode})`, 'success')
+      pushToast(`Logged ${call} (${effMode})`, 'success')
       reset()
       refreshLog()
     }
@@ -649,7 +771,13 @@ export function LogEntry({
           placeholder="Name"
           autoComplete="off"
         />
-        <button type="button" className="le-log-btn" onClick={logIt} disabled={!logCall.trim()}>
+        <button
+          type="button"
+          className="le-log-btn"
+          onClick={logIt}
+          disabled={!logCall.trim() || overrideBlocked}
+          title={overrideBlocked ? 'Enter a valid frequency for the override, or close it' : undefined}
+        >
           Log
         </button>
         {onSpot && (
@@ -785,11 +913,107 @@ export function LogEntry({
         spellCheck
       />
 
+      {/* Opt-in override for a contact made on a radio not connected to Nexus (a V/UHF rig,
+          say). Collapsed by default: the common "log the QSO I just made on the connected rig"
+          flow is untouched. Open it to hand-enter band / freq / mode / UTC time. */}
+      <div className="le-override">
+        <button
+          type="button"
+          className="le-override-toggle"
+          aria-expanded={overrideOpen}
+          onClick={() => (overrideOpen ? setOverrideOpen(false) : openOverride())}
+          title="Log a contact you made on another radio that isn't connected to Nexus — set the band, frequency, mode, and UTC time by hand"
+        >
+          <span className="le-override-caret" aria-hidden="true">
+            {overrideOpen ? '▾' : '▸'}
+          </span>
+          Log a contact from another radio
+          <span className="le-override-sub"> · adjust band · freq · mode · time (UTC)</span>
+        </button>
+
+        {overrideOpen && (
+          <div className="le-override-fields">
+            <label className="le-ov-field">
+              <span className="le-rst-cap">Date (UTC)</span>
+              <input
+                type="date"
+                className="settings-input le-ov-date"
+                value={ovDate}
+                onChange={(e) => setOvDate(e.target.value)}
+              />
+            </label>
+            <label className="le-ov-field">
+              <span className="le-rst-cap">Time (UTC)</span>
+              <input
+                type="time"
+                className="settings-input le-ov-time"
+                value={ovTime}
+                onChange={(e) => setOvTime(e.target.value)}
+              />
+            </label>
+            <label className="le-ov-field">
+              <span className="le-rst-cap">Band</span>
+              <select
+                className="settings-input le-ov-band"
+                value={ovBand}
+                onChange={(e) => onPickOvBand(e.target.value)}
+              >
+                {LOG_BANDS.map((b) => (
+                  <option key={b.band} value={b.band}>
+                    {b.band}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="le-ov-field">
+              <span className="le-rst-cap">Freq (MHz)</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                className="settings-input mono le-ov-freq"
+                value={ovFreq}
+                onChange={(e) => onEditOvFreq(e.target.value)}
+                placeholder="MHz"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <label className="le-ov-field">
+              <span className="le-rst-cap">Mode</span>
+              <select
+                className="settings-input le-ov-mode"
+                value={ovMode}
+                onChange={(e) => setOvMode(e.target.value)}
+              >
+                {LOG_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {ovFreq.trim() !== '' && bandForMhz(ovFreqNum) !== ovBand && (
+              <span className="le-ov-warn" role="alert">
+                {Number.isFinite(ovFreqNum) && ovFreqNum > 0
+                  ? `${ovFreq} MHz is outside ${ovBand} — logged as entered`
+                  : 'Enter a numeric frequency'}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
       <span className="le-hint">
-        Logs to the shared logbook as {mode} · {snap.radio.band} ·{' '}
-        {snap.radio.dialMhz.toFixed(3)} MHz
-        {logGrid ? ` · ${logGrid}` : ''}
-        {logCountry ? ` · ${logCountry}` : ''}
+        {overrideBlocked ? (
+          <span className="le-ov-warn">Enter a frequency for the override to log</span>
+        ) : (
+          <>
+            Logs to the shared logbook as {effMode} · {effBand} ·{' '}
+            {effFreqMhz.toFixed(3)} MHz
+            {logGrid ? ` · ${logGrid}` : ''}
+            {logCountry ? ` · ${logCountry}` : ''}
+          </>
+        )}
       </span>
 
       <RecallPanel
