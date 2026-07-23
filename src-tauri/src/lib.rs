@@ -6607,10 +6607,19 @@ async fn get_need_alerts(
                         "spotted by {} via cluster/RBN",
                         spotters.join(" + ")
                     )),
-                    grid: None,     // cluster/RBN spots carry no grid
-                    us_state: None, // no grid → no state hint from a cluster spot
+                    grid: None,     // cluster/RBN spots carry no grid…
+                    us_state: None, // …and the FCC state hint is filled in below (all sources)
                 });
             }
+        }
+    }
+    // Fill in the US-state hint from the FCC callsign→state index for every heard call that
+    // doesn't already carry one. This is the whole point of the FCC index: a needed New State
+    // lights up across the grid-less firehose (cluster / CW / SSB spots, near-me + getting-out
+    // reception Heards). A grid-derived state (own decodes) is already set and left untouched.
+    for h in heard.iter_mut() {
+        if h.us_state.is_none() {
+            h.us_state = fcc_state_for_call(&h.call).map(str::to_string);
         }
     }
     let mut alerts = propagation::rank_needs(&heard, &needs, &needs.slots());
