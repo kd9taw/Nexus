@@ -4,7 +4,18 @@
 import type { NeedAlert, NeedTag } from './types'
 
 /** Need-type filter buckets surfaced in the filter bar. */
-export type NeedTypeFilter = 'all' | 'atno' | 'newBand' | 'newMode' | 'newGrid' | 'dxped' | 'pota' | 'sota'
+export type NeedTypeFilter =
+  | 'all'
+  | 'atno'
+  | 'newBand'
+  | 'newMode'
+  | 'newZone'
+  | 'newGrid'
+  | 'newState'
+  | 'confirm'
+  | 'dxped'
+  | 'pota'
+  | 'sota'
 
 /** The operating-mode classes a need can carry. */
 export type ModeClass = 'Digital' | 'CW' | 'Phone'
@@ -32,7 +43,10 @@ const TAG_TO_BUCKET: Partial<Record<NeedTag, NeedTypeFilter>> = {
   NewEntity: 'atno',
   NewBand:   'newBand',
   NewMode:   'newMode',
+  NewZone:   'newZone',
   NewGrid:   'newGrid',
+  NewState:  'newState',
+  Confirm:   'confirm',
   Dxped:     'dxped',
   Pota:      'pota',
   Sota:      'sota',
@@ -42,7 +56,7 @@ const TAG_TO_BUCKET: Partial<Record<NeedTag, NeedTypeFilter>> = {
  * from an older build; an unknown value must fall back to 'all', not silently
  * empty the board with no active chip. */
 export const NEED_TYPE_VALUES: readonly NeedTypeFilter[] = [
-  'all', 'atno', 'newBand', 'newMode', 'newGrid', 'dxped', 'pota', 'sota',
+  'all', 'atno', 'newBand', 'newMode', 'newZone', 'newGrid', 'newState', 'confirm', 'dxped', 'pota', 'sota',
 ]
 
 /** True when the alert matches the given filter set (all filters AND together). */
