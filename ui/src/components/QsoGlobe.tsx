@@ -24,7 +24,7 @@ import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
 import { qsoGridPoints } from '../features/qsoPoints'
 import { BAND_COLOR, bandColor } from '../bandColors'
-import { subsolarPoint } from '../mapGeo'
+import { subsolarPoint, usStateBorders } from '../mapGeo'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import type { LoggedQso } from '../types'
 
@@ -100,6 +100,14 @@ export default function QsoGlobe({ qsos }: { qsos: LoggedQso[] }) {
   // two views plot identical points). The dedupe is what keeps a 50k-QSO FT8 log at ~a thousand
   // points instead of 50k.
   const points = useMemo(() => qsoGridPoints(qsos, band), [qsos, band])
+
+  // US state borders as a static reference overlay (the SAME us-atlas mesh Connect's Globe3D
+  // draws) — most logs are WAS-minded, so seeing which state a dot sits in is the point. One
+  // decode, [lat,lng] pairs for react-globe.gl's path layer; drawn once, no animation.
+  const statePaths = useMemo(() => {
+    const geo = usStateBorders() as unknown as { coordinates?: [number, number][][] }
+    return (geo.coordinates ?? []).map((line) => line.map(([lon, lat]) => [lat, lon] as [number, number]))
+  }, [])
 
   // Same material recipe as the Connect globe (Globe3D) so the two read as one app:
   // day relief darkened to the cool blue-grey, city lights as a dim night-side glow.
@@ -277,6 +285,12 @@ export default function QsoGlobe({ qsos }: { qsos: LoggedQso[] }) {
           showAtmosphere
           atmosphereColor="#68a8e2"
           atmosphereAltitude={0.18}
+          pathsData={statePaths}
+          pathPointLat={(p: unknown) => (p as [number, number])[0]}
+          pathPointLng={(p: unknown) => (p as [number, number])[1]}
+          pathColor={() => 'rgba(126,158,180,0.5)'}
+          pathStroke={0.9}
+          pathTransitionDuration={0}
         />
       )}
     </div>
