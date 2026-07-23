@@ -20,9 +20,12 @@ import {
   Settings,
   Type,
   Image as ImageIcon,
+  RotateCcw,
 } from 'lucide-react'
+import { useState, type DragEvent } from 'react'
 import { Tooltip, TooltipProvider } from './ui/Tooltip'
 import { type FeatureId, type View } from '../features/registry'
+import { orderNav, moveNav, loadNavOrder, saveNavOrder, resetNavOrder } from '../navOrder'
 
 // `View` now lives in the feature registry (features ARE the views); re-export so
 // existing `import { type View } from './ModeNav'` call-sites keep working.
@@ -146,9 +149,38 @@ const MODE_LABEL: Record<OpMode, string> = {
 }
 
 export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode }: Props) {
+  // Operator's drag-and-drop rail order for the global sections (shared across windows).
+  // `order` is the persisted id list; `orderNav` folds it over the shipped ITEMS so a new
+  // section is never lost and a deleted one is dropped.
+  const [order, setOrder] = useState<string[]>(loadNavOrder)
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
+
   // Sections show purely by feature-enable now (no workspace/area gating) — the old
-  // dx/msg split is gone; FT8/FT4/Tempo live in the Digital group instead.
-  const items = ITEMS.filter((it) => enabled[it.id] !== false)
+  // dx/msg split is gone; FT8/FT4/Tempo live in the Digital group instead. Reorder by the
+  // operator's saved order first, THEN drop disabled ones (so the saved order is stable
+  // regardless of which sections are currently enabled).
+  const orderedIds = orderNav(
+    ITEMS.map((it) => it.id),
+    order,
+  )
+  const items = orderedIds
+    .map((id) => ITEMS.find((it) => it.id === id)!)
+    .filter((it) => enabled[it.id] !== false)
+  const customized = order.length > 0
+
+  const dropOn = (targetId: string | null) => {
+    if (!dragId) return
+    const next = moveNav(orderedIds, dragId, targetId)
+    setOrder(next)
+    saveNavOrder(next)
+    setDragId(null)
+    setOverId(null)
+  }
+  const resetOrder = () => {
+    resetNavOrder()
+    setOrder([])
+  }
   // A plain view button (used for Phone, CW, and the global sections).
   const navBtn = (it: Item) => {
     const Icon = it.icon
@@ -204,8 +236,48 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode }: 
               )
             })}
           </div>
-          {/* Global situational/logging surfaces + opt-in extras. */}
-          {items.map((it) => navBtn(it))}
+          {/* Global situational/logging surfaces + opt-in extras — drag to reorder. */}
+          {items.map((it) => (
+            <div
+              key={it.id}
+              className={`mode-nav-drag${dragId === it.id ? ' dragging' : ''}${
+                overId === it.id ? ' dragover' : ''
+              }`}
+              draggable
+              onDragStart={(e: DragEvent) => {
+                setDragId(it.id)
+                e.dataTransfer.effectAllowed = 'move'
+              }}
+              onDragOver={(e: DragEvent) => {
+                if (dragId && dragId !== it.id) {
+                  e.preventDefault()
+                  setOverId(it.id)
+                }
+              }}
+              onDragLeave={() => setOverId((o) => (o === it.id ? null : o))}
+              onDrop={(e: DragEvent) => {
+                e.preventDefault()
+                dropOn(it.id)
+              }}
+              onDragEnd={() => {
+                setDragId(null)
+                setOverId(null)
+              }}
+            >
+              {navBtn(it)}
+            </div>
+          ))}
+          {customized && (
+            <button
+              type="button"
+              className="mode-nav-reset"
+              title="Reset the section order to default"
+              onClick={resetOrder}
+            >
+              <RotateCcw size={13} strokeWidth={1.75} aria-hidden="true" />
+              <span className="mode-label">Reset order</span>
+            </button>
+          )}
         </div>
 
         <div className="mode-nav-bottom">

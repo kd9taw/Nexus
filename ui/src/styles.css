@@ -3323,6 +3323,36 @@ body.resizing {
   border-color: var(--accent);
   color: var(--text);
 }
+/* Drag-to-reorder wrapper for the global section buttons. `display: contents` would drop the
+   drag box, so it's a real flex item that stretches full-width like the bare buttons it
+   replaced (mode-nav-top stretches its children). */
+.mode-nav-drag {
+  display: flex;
+  cursor: grab;
+}
+.mode-nav-drag.dragging {
+  opacity: 0.45;
+}
+.mode-nav-drag.dragover {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+/* Only appears once the operator has customized the order. */
+.mode-nav-reset {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding: var(--space-1);
+  font-size: 10px;
+  color: var(--text-faint);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.mode-nav-reset:hover {
+  color: var(--text);
+}
 .mode-glyph {
   font-size: 18px;
   line-height: 1;
