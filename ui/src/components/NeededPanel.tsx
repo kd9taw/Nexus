@@ -106,13 +106,20 @@ function loadFilters(): NeededFilters {
   try {
     const raw = surfaceGet(FILTER_KEY)
     if (!raw) return { ...DEFAULT_FILTERS }
-    const parsed = JSON.parse(raw) as Partial<NeededFilters>
-    // Sanitize against the KNOWN enum values — a stale bucket name from an
-    // older build must fall back to 'all', not silently empty the board with
-    // no active chip to explain why.
-    const needType = NEED_TYPE_VALUES.includes(parsed.needType as NeedTypeFilter)
-      ? (parsed.needType as NeedTypeFilter)
-      : DEFAULT_FILTERS.needType
+    const parsed = JSON.parse(raw) as Partial<NeededFilters> & { needType?: unknown }
+    // Need-type is now a multi-select array (empty = All). Accept the new `needTypes`
+    // array, else migrate the old single `needType` string. Sanitize each entry against
+    // the KNOWN buckets — drop 'all' and any stale name from an older build so the board
+    // never silently empties with no chip to explain why.
+    const rawTypes: unknown[] = Array.isArray(parsed.needTypes)
+      ? parsed.needTypes
+      : parsed.needType != null
+        ? [parsed.needType]
+        : []
+    const needTypes = rawTypes.filter(
+      (t): t is NeedTypeFilter =>
+        typeof t === 'string' && t !== 'all' && NEED_TYPE_VALUES.includes(t as NeedTypeFilter),
+    )
     // Modes: each class independently on/off; missing/old persisted shapes default ON so
     // the board never silently hides a mode (the old single-select 'mode' is ignored —
     // upgrading users get all modes back, which is the point of this change).
@@ -123,7 +130,7 @@ function loadFilters(): NeededFilters {
       Phone: typeof pm.Phone === 'boolean' ? pm.Phone : true,
     }
     return {
-      needType,
+      needTypes,
       bands: Array.isArray(parsed.bands) ? parsed.bands.filter((b) => typeof b === 'string') : [],
       modes,
     }
@@ -254,6 +261,21 @@ export function NeededPanel({
     saveFilters(next)
   }, [])
 
+  const toggleNeedType = useCallback((value: NeedTypeFilter) => {
+    setFilters((prev) => {
+      // 'all' is the clear chip — it empties the multi-select. Every other value
+      // toggles in/out, so several need types can be shown at once (like bands).
+      const next: NeededFilters =
+        value === 'all'
+          ? { ...prev, needTypes: [] }
+          : prev.needTypes.includes(value)
+            ? { ...prev, needTypes: prev.needTypes.filter((t) => t !== value) }
+            : { ...prev, needTypes: [...prev.needTypes, value] }
+      saveFilters(next)
+      return next
+    })
+  }, [])
+
   const toggleBand = useCallback((band: string) => {
     setFilters((prev) => {
       const next: NeededFilters = prev.bands.includes(band)
@@ -280,7 +302,7 @@ export function NeededPanel({
   }, [updateFilters])
 
   const hasActiveFilters =
-    filters.needType !== 'all' ||
+    filters.needTypes.length > 0 ||
     filters.bands.length > 0 ||
     MODE_CLASSES.some((c) => !filters.modes[c])
 
@@ -427,16 +449,22 @@ export function NeededPanel({
         <div className="np-filters" role="group" aria-label="Filter needed alerts">
           {/* Need type chips */}
           <div className="np-filter-group">
-            {NEED_TYPE_OPTS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                className={`np-chip${filters.needType === opt.value ? ' active' : ''}`}
-                onClick={() => updateFilters({ ...filters, needType: opt.value })}
-              >
-                {opt.label}
-              </button>
-            ))}
+            {NEED_TYPE_OPTS.map((opt) => {
+              const active =
+                opt.value === 'all'
+                  ? filters.needTypes.length === 0
+                  : filters.needTypes.includes(opt.value)
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`np-chip${active ? ' active' : ''}`}
+                  onClick={() => toggleNeedType(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              )
+            })}
           </div>
 
           <div className="np-filter-sep" aria-hidden="true" />

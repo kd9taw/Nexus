@@ -27,13 +27,13 @@ export type ModeSet = Record<ModeClass, boolean>
 export const ALL_MODES_ON: ModeSet = { Digital: true, CW: true, Phone: true }
 
 export interface NeededFilters {
-  needType: NeedTypeFilter
-  bands: string[]      // empty = All
-  modes: ModeSet       // each mode independently on/off; default all on
+  needTypes: NeedTypeFilter[]  // multi-select; empty = All. Never contains 'all'.
+  bands: string[]              // multi-select; empty = All
+  modes: ModeSet               // each mode independently on/off; default all on
 }
 
 export const DEFAULT_FILTERS: NeededFilters = {
-  needType: 'all',
+  needTypes: [],
   bands: [],
   modes: { ...ALL_MODES_ON },
 }
@@ -62,10 +62,12 @@ export const NEED_TYPE_VALUES: readonly NeedTypeFilter[] = [
 /** True when the alert matches the given filter set (all filters AND together). */
 export function filterAlerts(alerts: NeedAlert[], filters: NeededFilters): NeedAlert[] {
   return alerts.filter((a) => {
-    // ---- Need-type filter ----
-    if (filters.needType !== 'all') {
-      const bucket = filters.needType
-      const matches = a.tags.some((t) => TAG_TO_BUCKET[t] === bucket)
+    // ---- Need-type multi-select (OR across the picked buckets; empty = all) ----
+    if (filters.needTypes.length > 0) {
+      const matches = a.tags.some((t) => {
+        const bucket = TAG_TO_BUCKET[t]
+        return bucket !== undefined && filters.needTypes.includes(bucket)
+      })
       if (!matches) return false
     }
 

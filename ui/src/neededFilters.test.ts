@@ -33,32 +33,42 @@ describe('filterAlerts — needType', () => {
   })
 
   it('atno: returns only NewEntity rows', () => {
-    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needType: 'atno' })
+    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['atno'] })
     expect(r.map((a) => a.call)).toEqual(['3Y0J', 'K7RX'])
   })
 
   it('newBand: returns only NewBand rows', () => {
-    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needType: 'newBand' })
+    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['newBand'] })
     expect(r.map((a) => a.call)).toEqual(['JA1X'])
   })
 
   it('newMode: returns only NewMode rows', () => {
-    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needType: 'newMode' })
+    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['newMode'] })
     expect(r.map((a) => a.call)).toEqual(['VK2AB'])
   })
 
   it('newGrid: returns nothing (no NewGrid tag yet)', () => {
-    expect(filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needType: 'newGrid' })).toHaveLength(0)
+    expect(filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['newGrid'] })).toHaveLength(0)
   })
 
   it('pota: returns only Pota-tagged rows', () => {
-    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needType: 'pota' })
+    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['pota'] })
     expect(r.map((a) => a.call)).toEqual(['K1ABC'])
   })
 
   it('sota: returns only Sota-tagged rows', () => {
-    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needType: 'sota' })
+    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['sota'] })
     expect(r.map((a) => a.call)).toEqual(['W7B'])
+  })
+
+  it('multi-select ORs the picked buckets (atno + pota)', () => {
+    const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['atno', 'pota'] })
+    // NewEntity rows (3Y0J, K7RX) plus the Pota row (K1ABC).
+    expect(r.map((a) => a.call)).toEqual(['3Y0J', 'K7RX', 'K1ABC'])
+  })
+
+  it('empty needTypes = All (same as no need-type filter)', () => {
+    expect(filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: [] })).toHaveLength(7)
   })
 })
 
@@ -127,30 +137,30 @@ describe('filterAlerts — mode (multi-select)', () => {
 
 describe('filterAlerts — AND composition', () => {
   it('atno + 20m', () => {
-    const f: NeededFilters = { needType: 'atno', bands: ['20m'], modes: ALL_MODES_ON }
+    const f: NeededFilters = { needTypes: ['atno'], bands: ['20m'], modes: ALL_MODES_ON }
     const r = filterAlerts(ALERTS, f)
     expect(r.map((a) => a.call)).toEqual(['3Y0J'])
   })
 
   it('atno + CW', () => {
-    const f: NeededFilters = { needType: 'atno', bands: [], modes: only('CW') }
+    const f: NeededFilters = { needTypes: ['atno'], bands: [], modes: only('CW') }
     const r = filterAlerts(ALERTS, f)
     expect(r.map((a) => a.call)).toEqual(['K7RX'])
   })
 
   it('newMode + CW + 40m = empty (VK2AB is on 15m)', () => {
-    const f: NeededFilters = { needType: 'newMode', bands: ['40m'], modes: only('CW') }
+    const f: NeededFilters = { needTypes: ['newMode'], bands: ['40m'], modes: only('CW') }
     expect(filterAlerts(ALERTS, f)).toHaveLength(0)
   })
 
   it('pota + 20m = K1ABC', () => {
-    const f: NeededFilters = { needType: 'pota', bands: ['20m'], modes: ALL_MODES_ON }
+    const f: NeededFilters = { needTypes: ['pota'], bands: ['20m'], modes: ALL_MODES_ON }
     const r = filterAlerts(ALERTS, f)
     expect(r.map((a) => a.call)).toEqual(['K1ABC'])
   })
 
   it('sota + 20m = empty (W7B is on 40m)', () => {
-    const f: NeededFilters = { needType: 'sota', bands: ['20m'], modes: ALL_MODES_ON }
+    const f: NeededFilters = { needTypes: ['sota'], bands: ['20m'], modes: ALL_MODES_ON }
     expect(filterAlerts(ALERTS, f)).toHaveLength(0)
   })
 })
@@ -169,7 +179,7 @@ describe('ageLabel', () => {
 
 describe('review-pinned edges', () => {
   it('dxped bucket filters to DXpedition-tagged rows (the old toggle, restored)', () => {
-    const out = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needType: 'dxped' })
+    const out = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['dxped'] })
     expect(out.map((x) => x.call)).toEqual(['K7RX'])
   })
   it('ageLabel treats 0 / negative as no-evidence, not "56 years ago"', () => {
