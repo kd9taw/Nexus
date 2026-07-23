@@ -10069,18 +10069,18 @@ select.settings-input {
 }
 .radio-picker-sub {
   color: var(--text-dim);
-  margin: 10px 0 20px;
+  margin: 10px 0 var(--space-5);
   line-height: 1.5;
 }
 .radio-picker-list {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .radio-picker-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 20px;
+  padding: 18px var(--space-5);
   font-size: 18px;
   font-weight: 700;
   background: var(--bg-elev-2);

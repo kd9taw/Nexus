@@ -125,8 +125,10 @@ describe('SetupWizard starter-pack offer', () => {
     gotoGoals()
     // Pick a goal so the completion button enables; modes ride on top of the profile.
     fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-goal')!)
-    fireEvent.click(screen.getByRole('button', { name: /RTTY/ }))
-    fireEvent.click(screen.getByRole('button', { name: /SSTV/ }))
+    // Anchor to the start of the accessible name so these match the mode toggles, not a
+    // starter-pack offer whose name happens to list "RTTY"/"SSTV" (e.g. the digital pack).
+    fireEvent.click(screen.getByRole('button', { name: /^RTTY/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^SSTV/ }))
     fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-go')!)
     expect(onApply).toHaveBeenCalledTimes(1)
     const modes = onApply.mock.calls[0][2] as string[]
