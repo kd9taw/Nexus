@@ -1728,6 +1728,7 @@ export interface Settings {
   flexRadioIp: string
   /** Opt-in to the Flex native SmartSDR panadapter (unverified on hardware; off by default). */
   flexNativePan: boolean
+  flexNativeAudio: boolean
   /** Let a broker client (WSJT-X/N1MM) key PTT when Nexus is idle. OFF by
    * default — Nexus owns TX unless the operator opts in. */
   catBrokerPtt?: boolean

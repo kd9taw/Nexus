@@ -2461,6 +2461,29 @@ export function SettingsPanel({
                   </label>
                 )}
 
+              {form.rigConn === 'network' &&
+                (/flex/i.test(form.rigModelName ?? '') || (form.flexRadioIp ?? '').trim() !== '') && (
+                  <label className="settings-field">
+                    <span className="settings-label">Flex native DAX audio (early access)</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.flexNativeAudio ?? false}
+                      className={`toggle${form.flexNativeAudio ? ' on' : ''}`}
+                      onClick={() => updateBool('flexNativeAudio', !form.flexNativeAudio)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                    <span className="settings-hint">
+                      Take this FlexRadio's RX audio straight off the network (VITA-49 DAX) instead of
+                      the "DAX Audio RX" sound device — which is <strong>invisible under Remote
+                      Desktop</strong>. Decoders then read the rig's audio directly.{' '}
+                      <strong>Unverified on hardware</strong>, RX-only, opt-in: needs the Flex IP set
+                      and SmartSDR reachable. If decodes stop, turn it back off. Save to apply.
+                    </span>
+                  </label>
+                )}
+
               {form.rigConn !== 'network' &&
                 /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') &&
                 form.icomNativeCat && (

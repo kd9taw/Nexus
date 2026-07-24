@@ -31,6 +31,9 @@ pub mod civ;
 /// rides the `device` feature like the rest of the station-side transport code.
 #[cfg(feature = "device")]
 pub mod flexspectrum;
+/// FlexRadio native DAX RX audio orchestrator (Phase 2) — same VITA-49 path as flexspectrum.
+#[cfg(feature = "device")]
+pub mod flexdax;
 pub mod frames;
 pub mod monitor;
 pub mod port_prober;

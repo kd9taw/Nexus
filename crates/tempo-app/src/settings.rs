@@ -302,6 +302,13 @@ pub struct Settings {
     /// Takes effect on the next tick for an active network Flex.
     #[serde(default)]
     pub flex_native_pan: bool,
+    /// Opt-in to native FlexRadio DAX RX audio (VITA-49 audio stream) instead of the WDM-KS "DAX
+    /// Audio RX" soundcard device — which breaks under Remote Desktop. OFF by default: the worker +
+    /// SmartSDR command syntax are UNVERIFIED on a real Flex, so a tester enables it here. When on,
+    /// the rig's RX audio comes straight off the network and feeds the decoders like soundcard
+    /// audio. Mirrors `flex_native_pan`. RX only — DAX TX stays on the existing path.
+    #[serde(default)]
+    pub flex_native_audio: bool,
 
     // --- multi-radio (dual-radio) ---
     /// Configured radios. EMPTY in older settings files → migrated to a single profile 0 mirroring
@@ -1299,6 +1306,7 @@ impl Default for Settings {
             cat_broker_port: 4532,
             flex_radio_ip: String::new(),
             flex_native_pan: false,
+            flex_native_audio: false,
             radios: Vec::new(), // migrated to a single profile on load()
             active_radio: 0,
             radio_pegged: false,

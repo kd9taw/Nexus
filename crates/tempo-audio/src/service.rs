@@ -1281,6 +1281,12 @@ struct RadioLoop {
     /// The (radio-model, network?) key the current `spectrum_src` was started for, so a switch to a
     /// different native-scope rig tears down + restarts it, and same-radio ticks are a no-op.
     spectrum_src_key: Option<(u32, bool)>,
+    /// Native FlexRadio DAX RX audio worker (Phase 2). `Some` only while `flex_native_audio` is on
+    /// and a network Flex is active; its 12 kHz audio then replaces the soundcard as the RX source.
+    /// Opt-in + unverified-on-hardware, exactly like `spectrum_src`.
+    dax_src: Option<crate::flexdax::FlexDax>,
+    /// The key the current `dax_src` was started for (same tear-down/no-op discipline as spectrum).
+    dax_src_key: Option<(u32, bool)>,
     /// We wrote the current audio-error line with a voice-mic open failure, so we clear
     /// Slot index whose WSJT-X-style EARLY decode pass already ran (once per
     /// RX slot; the boundary decode then ingests only the stragglers).
@@ -1425,6 +1431,8 @@ impl RadioLoop {
             force_audio_rebuild: false,
             spectrum_src: None,
             spectrum_src_key: None,
+            dax_src: None,
+            dax_src_key: None,
             err_owner: ErrOwner::None,
             early_done_slot: None,
             boundary_keyed: None,
@@ -1484,26 +1492,44 @@ impl RadioLoop {
             Some(SpectrumKind::FlexVita) if !flex_enabled => None, // opt-in off → no worker
             Some(_) => Some((rig_model, is_network)),
         };
-        if key == self.spectrum_src_key {
-            return; // unchanged — no-op (the common case, every tick)
+        // Native DAX RX audio is its OWN opt-in (`flex_native_audio`), independent of the pan — a
+        // Flex user can want native audio without the native pan, or vice versa. Same short-circuit
+        // discipline: only read the toggle when a scope-capable Flex is active.
+        let dax_enabled = matches!(kind, Some(SpectrumKind::FlexVita))
+            && engine
+                .lock()
+                .map(|e| e.settings().flex_native_audio)
+                .unwrap_or(false);
+        let dax_key = if dax_enabled { Some((rig_model, is_network)) } else { None };
+        if key == self.spectrum_src_key && dax_key == self.dax_src_key {
+            return; // both unchanged — no-op (the common case, every tick)
         }
-        // The active radio's native-scope situation changed: tear down the old worker (its Drop
-        // stops the threads + removes the pan) before starting the new one.
-        self.spectrum_src = None;
-        self.spectrum_src_key = key;
-        if flex_enabled {
-            // Read the Flex API IP + current dial once, at start (a later IP edit takes effect on the
-            // next radio re-select). Lock only on this rare transition, never per tick.
-            let (ip, dial_hz) = match engine.lock() {
-                Ok(e) => (
-                    e.settings().flex_radio_ip.trim().to_string(),
-                    (e.settings().dial_mhz * 1_000_000.0) as u64,
-                ),
-                Err(_) => return,
-            };
-            if !ip.is_empty() {
+        // Read the Flex API IP once for whichever worker (re)starts (a later IP edit takes effect on
+        // the next radio re-select). Lock only on this rare transition, never per tick.
+        let (ip, dial_hz) = match engine.lock() {
+            Ok(e) => (
+                e.settings().flex_radio_ip.trim().to_string(),
+                (e.settings().dial_mhz * 1_000_000.0) as u64,
+            ),
+            Err(_) => return,
+        };
+        // Panadapter worker: tear down the old (its Drop stops threads + removes the pan) before
+        // starting the new one.
+        if key != self.spectrum_src_key {
+            self.spectrum_src = None;
+            self.spectrum_src_key = key;
+            if flex_enabled && !ip.is_empty() {
                 self.spectrum_src =
-                    crate::flexspectrum::FlexSpectrum::start(engine.clone(), ip, dial_hz).ok();
+                    crate::flexspectrum::FlexSpectrum::start(engine.clone(), ip.clone(), dial_hz)
+                        .ok();
+            }
+        }
+        // DAX RX audio worker: same tear-down/restart (Drop removes the DAX stream).
+        if dax_key != self.dax_src_key {
+            self.dax_src = None;
+            self.dax_src_key = dax_key;
+            if dax_enabled && !ip.is_empty() {
+                self.dax_src = crate::flexdax::FlexDax::start(engine.clone(), ip).ok();
             }
         }
     }
@@ -1647,8 +1673,14 @@ impl RadioLoop {
         // uses (slot index, next-slot countdown, TX-hold deadlines) consistently.
         let now = now - self.clock_offset_ms as f64;
 
-        // Continuously fold captured audio into the rolling RX window.
-        let captured = backend.capture();
+        // Continuously fold captured audio into the rolling RX window. Always drain the soundcard
+        // ring (so it can't overflow), but when native Flex DAX RX audio is the active source, use
+        // its 12 kHz stream as the RX audio instead of the soundcard.
+        let soundcard = backend.capture();
+        let captured = match self.dax_src.as_ref() {
+            Some(dax) => dax.take_audio(),
+            None => soundcard,
+        };
         if !captured.is_empty() {
             self.rx.push(&captured);
         }
