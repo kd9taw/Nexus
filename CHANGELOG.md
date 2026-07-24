@@ -5,6 +5,21 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.17] — 2026-07-24 — CW follows the band, pop-out Memories, live-now roster
+
+### Fixed
+
+- **CW now follows the band sideband convention** — CW-L (reverse) on 160/80/40 m, CW-U at
+  30 m and up. 40 m CW was commanding CW-U.
+- **The FT Stations panel shows who's on the band NOW** — a station drops off after 3 missed
+  decode cycles (the Call Roster rule) instead of lingering for minutes on time buckets. The
+  Tempo chat roster keeps its long retention (store-and-forward needs it).
+
+### Added
+
+- **Memories pops out into its own window** (↗ Pop out) — like Needed/Connect/Operate; edits
+  sync live between windows.
+
 ## [0.15.16] — 2026-07-23 — Tempo chats like a chat app now
 
 ### Changed
