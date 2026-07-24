@@ -5,6 +5,28 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-07-24 — APRS messaging (send, threaded, auto-ack) + decode coverage
+
+Rounds out the APRS feature after a completeness review, and cuts a minor release.
+
+### Added
+
+- **Send APRS text messages.** The APRS cockpit has a Message box: enter a callsign and up to 67
+  characters and send. Each message carries a rolling line number so the recipient can acknowledge
+  it — same up-front TX gate as a beacon (TX must be enabled and the frequency in your privileges),
+  so nothing keys unexpectedly.
+- **Auto-acknowledge.** An incoming message addressed to your callsign that asks for an ack is
+  acknowledged automatically — but only when TX is enabled and allowed; with TX off, Nexus stays
+  silent (RX-only), exactly as before.
+- **More decode coverage.** Compressed position reports (base-91), object reports (`;`), and
+  third-party / I-gated traffic (`}`) now decode to the real originating station.
+
+### Changed
+
+- **Messages are threaded, not collapsed.** Received messages get their own chronological list
+  instead of being folded into the sender's position row, so a multi-line exchange all shows
+  (previously only the last message per station survived).
+
 ## [0.15.24] — 2026-07-24 — Native Flex, the rest of it (meters, slice, DAX TX)
 
 ### Added
