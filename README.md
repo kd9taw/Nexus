@@ -218,6 +218,11 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   WSJT-X UDP protocol; its auto-sequencer is original Rust modeled on WSJT-X's on-air behavior.
   **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.
 - **TempoFast / TempoDeep** — the native weak-signal waveforms by **KD9TAW**.
+- **[AetherSDR](https://github.com/aethersdr/AetherSDR)** (GPLv3) — the waterfall's 3D
+  stacked-spectrum view (`ui/src/dss.ts`) and retained-history model
+  (`ui/src/waterfallHistory.ts`) are ported from AetherSDR's `DssRenderer` /
+  `WaterfallHistoryBuffer`; its `PanadapterStream` was a wire-format reference for the
+  native Flex DAX/VITA path (see **[NOTICE](NOTICE)**).
 - **[Hamlib](https://hamlib.github.io/)** — bundled `rigctld` for CAT control (GPL/LGPL).
 - **[FFTW](https://www.fftw.org/)** (GPL), **[Tauri](https://tauri.app/)**, React,
   [cpal](https://github.com/RustAudio/cpal), Natural Earth basemap (public domain).

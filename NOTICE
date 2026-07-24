@@ -69,6 +69,29 @@ on.
 > validated on the air. Published Windows binaries are cross-compiled beta
 > builds.
 
+### AetherSDR — waterfall history + 3D stacked-spectrum
+License: **GNU GPL, version 3** (GPLv3). <https://github.com/aethersdr/AetherSDR>
+
+Two of Nexus's waterfall components are **ported from AetherSDR** (a GPLv3 Qt6/C++
+FlexRadio workstation) and reimplemented for Nexus's normalized history rows:
+
+- **`ui/src/dss.ts`** — the 3D stacked-spectrum ("3DSS") *alternate waterfall*
+  renderer, ported from AetherSDR's `src/gui/DssRenderer.cpp` (a perspective
+  back-to-front stacked-trace surface). Reimplemented on HTML canvas-2D; the
+  deliberate differences from the C++ original are documented in the file header.
+- **`ui/src/waterfallHistory.ts`** — the retained-history ring buffer behind the
+  pause/scrollback and instant-palette-recolor waterfall, a reimplementation of
+  AetherSDR's `WaterfallHistoryBuffer`.
+
+Both files carry header-level attribution to their AetherSDR origin. AetherSDR is
+GPLv3 and Nexus is GPLv3-only, so the ported code combines cleanly into the GPLv3
+whole. Additionally, Nexus's native FlexRadio DAX / VITA-49 code
+(`crates/tempo-net/src/flexvita.rs`, `crates/tempo-audio/src/flexdax.rs`) used
+AetherSDR's `PanadapterStream` as a **reference for the public wire-format layout**
+(VITA-49 packet-class codes and DAX audio framing — protocol facts); the
+implementation itself is original (see the FlexRadio SmartSDR note below). AetherSDR
+is an independent project; Nexus is not affiliated with it.
+
 ---
 
 ## Bundled components (shipped in the Windows installer)
