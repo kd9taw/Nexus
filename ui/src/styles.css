@@ -14759,6 +14759,11 @@ html[data-panel='needed'] {
   font-size: var(--fs-small);
   line-height: 1.6;
 }
+/* Waterfall pause toggle — same chrome as the pop-out button; amber when engaged. */
+.wf-pause.on {
+  color: var(--state-weak, #e0a030);
+  border-color: var(--state-weak, #e0a030);
+}
 .wf-popout:hover {
   color: var(--text);
 }
