@@ -53,12 +53,16 @@ export function AprsCockpit({
   active,
   onTune,
   radio,
+  onSetTxEnabled,
 }: {
   active: boolean
   /** QSY to an APRS dial (MHz): 2 m FM simplex, auto-routing to the 2 m-capable radio. */
   onTune?: (dialMhz: number) => void
-  /** Live rig readout (dial/band/mode) — the TopBar's is hidden on this view, so APRS shows its own. */
-  radio?: { dialMhz: number; band: string; sideband: string }
+  /** Live rig readout (dial/band/mode + TX-enable) — the TopBar's is hidden on this view. */
+  radio?: { dialMhz: number; band: string; sideband: string; txEnabled: boolean }
+  /** Arm/disarm TX (the TopBar's Enable-Tx is hidden here, so APRS carries its own — otherwise a
+   * beacon/message is gated off with no way to turn TX on). */
+  onSetTxEnabled?: (on: boolean) => void
 }) {
   const [armed, setArmed] = useState(false)
   const [freq, setFreq] = useState(144.39)
@@ -239,6 +243,21 @@ export function AprsCockpit({
           >
             {radio.dialMhz.toFixed(3)} MHz · {radio.band} · {radio.sideband || '—'}
           </span>
+        )}
+        {onSetTxEnabled && radio && (
+          <button
+            type="button"
+            className={`np-chip${radio.txEnabled ? ' active' : ''}`}
+            aria-pressed={radio.txEnabled}
+            onClick={() => onSetTxEnabled(!radio.txEnabled)}
+            title={
+              radio.txEnabled
+                ? 'Transmit ENABLED — beacons/messages will go out. Click to disable.'
+                : 'Transmit is OFF — enable it before a beacon or message can send.'
+            }
+          >
+            {radio.txEnabled ? 'TX On' : 'TX Off'}
+          </button>
         )}
         <button
           type="button"

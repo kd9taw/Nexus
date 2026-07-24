@@ -5,6 +5,13 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4] — 2026-07-24 — APRS gets its own TX-enable
+
+- **The APRS window now has a TX On/Off toggle.** This view hides the top bar's transmit controls,
+  so there was no way to enable TX from APRS — a beacon or message was silently gated off with
+  *"TX is off"* on a fresh launch (TX defaults off and isn't remembered). RTTY/SSTV already carry
+  their own; APRS now does too.
+
 ## [0.16.3] — 2026-07-24 — APRS frequency dropdown tunes on select
 
 - **Picking an APRS frequency now tunes the rig immediately** (band-picker behavior) instead of

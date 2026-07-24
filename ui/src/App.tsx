@@ -2394,6 +2394,7 @@ export default function App() {
               active={effectiveView === 'aprs'}
               onTune={handleAprsTune}
               radio={snap.radio}
+              onSetTxEnabled={handleSetTxEnabled}
             />
           </div>
         )}
