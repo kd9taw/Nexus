@@ -207,8 +207,14 @@ export function AprsCockpit({
             <select
               className="np-chip aprs-freq"
               value={freq}
-              onChange={(e) => setFreq(Number(e.target.value))}
-              title="APRS frequency by region (2 m FM, AFSK-1200)"
+              onChange={(e) => {
+                // Selecting a frequency retunes the rig immediately (band-picker behavior) — no
+                // separate Tune click needed. Switches to the 2 m radio + FM simplex via onTune.
+                const f = Number(e.target.value)
+                setFreq(f)
+                onTune(f)
+              }}
+              title="APRS frequency by region — selecting one tunes the rig (2 m FM, AFSK-1200)"
             >
               {APRS_FREQS.map(([f, region]) => (
                 <option key={f} value={f}>
@@ -220,9 +226,9 @@ export function AprsCockpit({
               type="button"
               className="np-chip"
               onClick={() => onTune(freq)}
-              title="Tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)"
+              title="Re-tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)"
             >
-              Tune
+              Re-tune
             </button>
           </>
         )}

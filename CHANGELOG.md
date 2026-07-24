@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3] — 2026-07-24 — APRS frequency dropdown tunes on select
+
+- **Picking an APRS frequency now tunes the rig immediately** (band-picker behavior) instead of
+  only setting a selection you then had to "Tune". The button remains as an explicit **Re-tune**.
+
 ## [0.16.2] — 2026-07-24 — APRS defaults to your VHF radio on entry + shows the dial
 
 - **Opening APRS now defaults to your 2 m radio.** Entering the APRS section auto-tunes: it hands
