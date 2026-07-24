@@ -13,7 +13,7 @@ import { ITEMS } from './components/ModeNav'
 // SSTV are Digital-group sub-buttons), so they are reachable without an ITEMS
 // entry. Core sections (operate/chat/connect/needed/logbook/settings) are
 // excluded by the non-core filter below.
-const DEDICATED_BUTTON_VIEWS: FeatureId[] = ['phone', 'cw', 'rtty', 'sstv']
+const DEDICATED_BUTTON_VIEWS: FeatureId[] = ['phone', 'cw', 'rtty', 'sstv', 'aprs']
 
 describe('ModeNav rail covers every opt-in section', () => {
   it('every enable-able (non-core) section view has a way into it from the rail', () => {

@@ -20,6 +20,7 @@ import {
   Settings,
   Type,
   Image as ImageIcon,
+  MapPin,
   RotateCcw,
 } from 'lucide-react'
 import { useState, type ButtonHTMLAttributes } from 'react'
@@ -48,7 +49,7 @@ interface Props {
 }
 
 /** The cockpits grouped under "Digital" in the rail (FT · Tempo · RTTY · SSTV). */
-export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'sstv'
+export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'sstv' | 'aprs'
 
 interface DigitalSub {
   mode: DigitalMode
@@ -94,6 +95,13 @@ const DIGITAL_SUBS: DigitalSub[] = [
     icon: ImageIcon,
     title: 'SSTV — slow-scan TV: received images decode into the gallery',
     active: (v) => v === 'sstv',
+  },
+  {
+    mode: 'aprs',
+    label: 'APRS',
+    icon: MapPin,
+    title: 'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon',
+    active: (v) => v === 'aprs',
   },
 ]
 

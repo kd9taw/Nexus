@@ -72,6 +72,7 @@ import { CwCockpit } from './components/CwCockpit'
 import { PhoneCockpit } from './components/PhoneCockpit'
 import { RttyCockpit } from './components/RttyCockpit'
 import { SstvView } from './components/SstvView'
+import { AprsCockpit } from './components/AprsCockpit'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
 import { StatsView } from './components/StatsView'
 import { DxpeditionsView } from './components/DxpeditionsView'
@@ -1566,6 +1567,11 @@ export default function App() {
         setView(m)
         return
       }
+      if (m === 'aprs') {
+        // APRS is RX-first — monitoring asserts nothing on the rig (a beacon is an explicit send).
+        setView(m)
+        return
+      }
       if (m === 'rtty') {
         // Navigate; the [view] rig-mode effect asserts the RTTY policy (FSK
         // backend → rig RTTY mode, AFSK → LSB) and re-homes to the band's RTTY
@@ -2046,9 +2052,10 @@ export default function App() {
       break
     case 'rtty':
     case 'sstv':
-      // Same keep-alive pattern as Operate: RTTY's decoded stream and SSTV's
-      // always-armed VIS receiver must survive navigation, so both live in
-      // persistent hosts below. Nothing in the slot.
+    case 'aprs':
+      // Same keep-alive pattern as Operate: RTTY's decoded stream, SSTV's
+      // always-armed VIS receiver, and APRS's decode list must survive
+      // navigation, so all three live in persistent hosts below. Nothing in the slot.
       workspace = null
       break
     case 'connect':
@@ -2366,6 +2373,11 @@ export default function App() {
               onSetFrequency={handleSetFrequency}
               onSetTxEnabled={handleSetTxEnabled}
             />
+          </div>
+        )}
+        {isViewEnabled('aprs') && (
+          <div className="aprs-host" hidden={effectiveView !== 'aprs'}>
+            <AprsCockpit active={effectiveView === 'aprs'} />
           </div>
         )}
         {workspace}

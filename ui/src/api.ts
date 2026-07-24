@@ -1127,6 +1127,53 @@ export async function cwSkim(): Promise<SkimHit[]> {
   return invoke<SkimHit[]>('cw_skim')
 }
 
+/** One decoded APRS packet for the cockpit list (from `get_aprs_heard`). */
+export interface AprsHeard {
+  source: string
+  dest: string
+  path: string[]
+  lat: number | null
+  lon: number | null
+  symbolTable: string
+  symbolCode: string
+  /** "position" | "mice" | "message" | "status" | "other". */
+  kind: string
+  text: string
+  speedKnots: number | null
+  courseDeg: number | null
+  atUnix: number
+}
+
+/** Arm/disarm the APRS RX decoder (session-only; RX decode). Returns the current heard list. */
+export async function aprsArm(on: boolean): Promise<AprsHeard[]> {
+  return invoke<AprsHeard[]>('aprs_arm', { on })
+}
+
+/** The decoded-APRS list, newest last (poll while the APRS cockpit is visible). */
+export async function getAprsHeard(): Promise<AprsHeard[]> {
+  return invoke<AprsHeard[]>('get_aprs_heard')
+}
+
+/** Queue an APRS position beacon — an explicit operator send (the engine validates TX-enable /
+ * privileges / no other over and rejects with the reason). Symbols are single chars. */
+export async function aprsSendBeacon(
+  lat: number,
+  lon: number,
+  symbolTable: string,
+  symbolCode: string,
+  comment: string,
+  path: string[],
+): Promise<void> {
+  return invoke<void>('aprs_send_beacon', {
+    lat,
+    lon,
+    symbolTable,
+    symbolCode,
+    comment,
+    path,
+  })
+}
+
 /** Arm/disarm the RTTY RX decoder (session-only; RX decode, never TX). */
 export async function rttyArm(on: boolean): Promise<RttyState> {
   return invoke<RttyState>('rtty_arm', { on })

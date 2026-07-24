@@ -16426,3 +16426,92 @@ html[data-panel='needed'] {
 .pota-sort-pick:hover {
   border-color: var(--accent);
 }
+
+/* ── APRS cockpit ─────────────────────────────────────────────────────────── */
+.aprs-beacon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.aprs-beacon-title {
+  font-weight: 700;
+  font-size: var(--fs-small);
+  color: var(--text-dim);
+}
+.aprs-beacon label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.aprs-beacon input,
+.aprs-beacon select {
+  background: var(--surface-2, transparent);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-1);
+  font-size: 12px;
+}
+.aprs-beacon-comment {
+  flex: 1;
+  min-width: 120px;
+}
+.aprs-beacon-comment input {
+  flex: 1;
+}
+.aprs-status {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.aprs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.aprs-table th {
+  text-align: left;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  padding: var(--space-1) 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.aprs-table td {
+  padding: var(--space-1) 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.aprs-from {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.aprs-age,
+.aprs-pos {
+  font-variant-numeric: tabular-nums;
+}
+.aprs-age {
+  color: var(--text-faint);
+}
+.aprs-pos {
+  font-family: var(--font-mono);
+}
+.aprs-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.aprs-kind-position,
+.aprs-kind-mice {
+  color: var(--need-mode, #22d3ee);
+}
+.aprs-kind-message {
+  color: var(--need-mode-rtty, #f5a524);
+}
+.aprs-kind-status,
+.aprs-info {
+  color: var(--text-dim);
+}

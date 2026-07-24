@@ -20,6 +20,7 @@ const EXPECTED_SECTIONS: FeatureId[] = [
   'phone',
   'rtty',
   'sstv',
+  'aprs',
   'connect',
   'needed',
   'spots',

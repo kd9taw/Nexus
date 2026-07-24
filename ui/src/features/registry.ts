@@ -16,6 +16,7 @@ export type View =
   | 'phone'
   | 'rtty'
   | 'sstv'
+  | 'aprs'
   | 'connect'
   | 'dxped'
   | 'sats'
@@ -151,6 +152,19 @@ export const FEATURES: FeatureDef[] = [
     view: 'sstv',
     // Global (no workspace — RX-first): viewing the gallery never touches the rig.
     oneLine: 'SSTV — slow-scan images auto-decode into a gallery (Martin/Scottie/Robot/PD).',
+  },
+  {
+    id: 'aprs',
+    label: 'APRS',
+    kind: 'section',
+    category: 'Operate',
+    core: false, // toggleable in Settings ▸ Features (on by default, like every non-staged section)
+    dependsOn: [],
+    // Mode, not a goal — same doctrine as CW/Phone/RTTY: a goal profile never auto-enables it.
+    intents: [],
+    view: 'aprs',
+    // Global (no workspace — RX-first): monitoring decodes packets; a beacon is an explicit send.
+    oneLine: 'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon.',
   },
   {
     id: 'logbook',
