@@ -12261,4 +12261,80 @@ mod tests {
         assert_eq!(e.get_log().len(), 2);
         assert_eq!(summary2.newly_confirmed_any, 0, "already confirmed");
     }
+
+    /// Capture the engine's transmitted FRAME TEXT per slot — the TX-schedule probe used by
+    /// the FT8/FT4 golden below. Reads the own-TX rows the snapshot appends (mine == true),
+    /// pairing each newly-appeared row with the slot whose poll_tx produced it.
+    fn tx_schedule_for(tier: Tier) -> Vec<(u64, String)> {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tier(tier);
+        e.set_tx_cycle_auto(false); // deterministic: transmit on even slots
+        // Hear K2DEF calling CQ, then answer (the WSJT-X double-click S&P entry).
+        e.ingest_decodes_for_test(&[dec_snr("CQ K2DEF FN31", -5)], 1);
+        e.call_station("K2DEF");
+        let mut sched = Vec::new();
+        let mut seen = 0usize;
+        for slot in 2..=14u64 {
+            let _ = e.poll_tx(slot);
+            let mine: Vec<String> = e
+                .snapshot()
+                .recent_decodes
+                .iter()
+                .filter(|d| d.mine)
+                .map(|d| d.message.clone())
+                .collect();
+            for m in mine.iter().skip(seen) {
+                sched.push((slot, m.clone()));
+            }
+            seen = mine.len();
+            // Scripted peer: NO reply for two of our overs (slots 2 + 4 — pins the
+            // uncapped WSJT-X repeat), then the report, then RR73.
+            if slot == 5 {
+                e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF -10", -8)], slot);
+            }
+            if slot == 9 {
+                e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF RR73", -8)], slot);
+            }
+        }
+        sched
+    }
+
+    /// GOLDEN: the FT8/FT4 transmit schedule is WSJT-X behavior and MUST NOT change.
+    /// Pinned from the tree at 2026-07-23 (pre-Tempo-cadence-rework): the S&P call repeats
+    /// every own-parity slot while unanswered (uncapped — stock WSJT-X), the R-report repeats
+    /// until RR73, then the single 73. If the Tempo cadence work (or anything else) perturbs
+    /// these (slot, frame) pairs, THAT is the bug — do not re-pin without operator sign-off.
+    #[test]
+    fn ft8_ft4_tx_schedule_is_wsjtx_golden() {
+        let expect: Vec<(u64, &str)> = vec![
+            (3, "K2DEF W9XYZ EN61"),
+            (5, "K2DEF W9XYZ EN61"),
+            (7, "K2DEF W9XYZ R-08"),
+            (9, "K2DEF W9XYZ R-08"),
+            (11, "K2DEF W9XYZ 73"),
+        ];
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let got = tx_schedule_for(tier);
+            let got_ref: Vec<(u64, &str)> = got.iter().map(|(s, t)| (*s, t.as_str())).collect();
+            assert_eq!(got_ref, expect, "{tier:?} TX schedule drifted from the WSJT-X golden");
+        }
+    }
+
+    /// GOLDEN companion: Chat mode at an FT8 tier (the engine's BOOT state, also recreated by
+    /// apply_settings/set_tier) transmits NOTHING with no queued traffic — armed or not. The
+    /// Tempo chat-cadence rework must keep this exact silence: new chat behaviors must be
+    /// unreachable (or inert) when the tier is Ft8/Ft4.
+    #[test]
+    fn chat_mode_at_ft8_tier_stays_silent() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tier(Tier::Ft8); // boot mode is Chat; tier explicitly FT8 (the probe)
+        e.set_tx_enabled(true);
+        for slot in 0..8u64 {
+            assert!(
+                e.poll_tx(slot).is_empty(),
+                "Chat+Ft8 with nothing queued transmitted on slot {slot}"
+            );
+        }
+        assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
+    }
 }
