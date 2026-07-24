@@ -482,6 +482,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
         myGrid={snap.mygrid}
         currentSlot={snap.radio.slot}
         activePeer={selected}
+        dropAfterCycles={3}
         unreadByPeer={{}}
         needByCall={needByCall}
         needAlertsByCall={needAlertsByCall}

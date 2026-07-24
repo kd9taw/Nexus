@@ -1750,6 +1750,9 @@ export default function App() {
   // roster. Every other view (Operate, Field Day) shows the full roster.
   const rosterStations =
     effectiveView === 'chat' ? snap.stations.filter((s) => s.tier === 'TempoFast') : snap.stations
+  // Two roster surfaces off one component: the Tempo chat roster keeps the long
+  // presence retention (store-and-forward delivery needs it); the FT cockpit's
+  // Stations panel flushes after 3 missed decode cycles (the Call Roster rule).
   const stationsPanel = (
     <StationList
       stations={rosterStations}
@@ -1766,6 +1769,25 @@ export default function App() {
       bandActive={activePeer === '*'}
       bandUnread={bandUnread}
       onSelectBand={() => handleSelect('*')}
+    />
+  )
+  const operateStationsPanel = (
+    <StationList
+      stations={rosterStations}
+      myGrid={snap.mygrid}
+      currentSlot={snap.radio.slot}
+      activePeer={activePeer}
+      unreadByPeer={unreadByPeer}
+      needByCall={needByCall}
+      needAlertsByCall={needAlertsByCall}
+      onSelect={handleSelect}
+      onCall={handleWorkStation}
+      conversations={snap.conversations}
+      onArchive={handleArchive}
+      bandActive={activePeer === '*'}
+      bandUnread={bandUnread}
+      onSelectBand={() => handleSelect('*')}
+      dropAfterCycles={3}
     />
   )
 
@@ -2301,7 +2323,7 @@ export default function App() {
             onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
             preferRrr={settings?.preferRrr ?? false}
             qsoMacros={macros.qso}
-            roster={stationsPanel}
+            roster={operateStationsPanel}
             needByCall={needByCall}
             needAlertsByCall={needAlertsByCall}
             selectedCall={activePeer}

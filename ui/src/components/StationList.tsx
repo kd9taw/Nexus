@@ -30,6 +30,11 @@ interface Props {
   bandUnread: number
   /** Select the "*" band feed (Call CQ + open broadcasts). */
   onSelectBand: () => void
+  /** FT-mode roster flush (operator 2026-07-24): drop a station once it hasn't been
+   * decoded for this many T/R cycles — the same 3-cycle rule as the Call Roster, so
+   * the list shows who's on the band NOW. Unset (the Tempo chat roster) keeps the
+   * long presence retention that store-and-forward delivery depends on. */
+  dropAfterCycles?: number
 }
 
 const FILTERS: { id: Filter; label: string }[] = [
@@ -54,6 +59,7 @@ export function StationList({
   bandActive,
   bandUnread,
   onSelectBand,
+  dropAfterCycles,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all')
 
@@ -94,6 +100,10 @@ export function StationList({
 
   const filtered = useMemo(() => {
     let list = stations
+    // Decode-cycle flush (FT cockpit only): count MISSED DECODE CYCLES, not wall time.
+    if (dropAfterCycles != null) {
+      list = list.filter((s) => currentSlot - s.lastHeardSlot <= dropAfterCycles)
+    }
     if (filter === 'heard-now') list = list.filter((s) => s.presence === 'active')
     else if (filter === 'beaconing') list = list.filter((s) => s.heardCount >= 3)
     else if (filter === 'needed') list = list.filter((s) => needByCall.has(s.call.toUpperCase()))
