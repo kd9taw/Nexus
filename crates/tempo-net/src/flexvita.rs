@@ -18,6 +18,14 @@
 pub const FLEX_OUI: u32 = 0x00_1C_2D;
 /// VITA packet class code for panadapter FFT data.
 pub const FFT_PACKET_CLASS: u16 = 0x8003;
+/// DAX RX audio, uncompressed: **float32 interleaved stereo, big-endian, 24 kHz**. NOTE: this class
+/// is shared with plain remote-network audio — a packet is DAX only when its stream id is one the
+/// radio registered as a `dax_rx` stream, so dispatch must filter on stream id too.
+pub const DAX_AUDIO_CLASS: u16 = 0x03E3;
+/// DAX RX audio, reduced-bandwidth: **int16 mono, big-endian, 24 kHz**.
+pub const DAX_AUDIO_REDUCED_CLASS: u16 = 0x0123;
+/// DAX (and Flex network) audio sample rate.
+pub const DAX_SAMPLE_RATE: u32 = 24_000;
 
 /// A decoded VITA-49 packet envelope (header fields + payload slice). Borrows the datagram.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +36,8 @@ pub struct VitaPacket<'a> {
     pub class_oui: Option<u32>,
     /// Packet class code (`0x8003` = FFT), if a class id was present.
     pub packet_class: Option<u16>,
+    /// A 4-byte VITA trailer follows the payload (word0 bit 26). The audio decoders strip it.
+    pub has_trailer: bool,
     pub payload: &'a [u8],
 }
 
@@ -46,6 +56,7 @@ pub fn parse_vita(dg: &[u8]) -> Option<VitaPacket<'_>> {
     let w0 = be_u32(dg, 0)?;
     let packet_type = ((w0 >> 28) & 0xF) as u8;
     let class_present = (w0 >> 27) & 1 == 1;
+    let has_trailer = (w0 >> 26) & 1 == 1;
     let tsi = (w0 >> 22) & 0x3; // integer-seconds timestamp mode
     let tsf = (w0 >> 20) & 0x3; // fractional-seconds timestamp mode
     let mut off = 4usize;
@@ -83,8 +94,46 @@ pub fn parse_vita(dg: &[u8]) -> Option<VitaPacket<'_>> {
         stream_id,
         class_oui,
         packet_class,
+        has_trailer,
         payload: &dg[off..],
     })
+}
+
+/// Decode a DAX RX audio payload into **mono 24 kHz f32** samples (−1.0..1.0). `packet_class` selects
+/// the format: [`DAX_AUDIO_CLASS`] `0x03E3` = big-endian float32 interleaved stereo (L+R averaged to
+/// mono); [`DAX_AUDIO_REDUCED_CLASS`] `0x0123` = big-endian int16 mono. A 4-byte VITA trailer, when
+/// present, is stripped first. Pure — mirrors AetherSDR's PanadapterStream audio decode. `None` for
+/// a non-audio class.
+pub fn parse_dax_audio(packet_class: u16, payload: &[u8], has_trailer: bool) -> Option<Vec<f32>> {
+    let body = if has_trailer {
+        payload.get(..payload.len().checked_sub(4)?)?
+    } else {
+        payload
+    };
+    match packet_class {
+        DAX_AUDIO_CLASS => {
+            // float32 big-endian, interleaved stereo → average each L/R pair to mono.
+            let stereo: Vec<f32> = body
+                .chunks_exact(4)
+                .map(|c| f32::from_be_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            Some(
+                stereo
+                    .chunks_exact(2)
+                    .map(|lr| 0.5 * (lr[0] + lr[1]))
+                    .collect(),
+            )
+        }
+        DAX_AUDIO_REDUCED_CLASS => {
+            // int16 big-endian, mono → normalize to −1.0..1.0.
+            Some(
+                body.chunks_exact(2)
+                    .map(|c| i16::from_be_bytes([c[0], c[1]]) as f32 / 32768.0)
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
 }
 
 /// One FFT payload fragment (a contiguous slice `start_bin..start_bin+num_bins` of the sweep).
@@ -226,5 +275,46 @@ mod tests {
         let next = parse_fft(&fft_payload(0, 4, 4, 8, &[5, 6, 7, 8])).unwrap(); // frame 8, complete
         assert_eq!(r.push(&stale), None);
         assert_eq!(r.push(&next), Some(vec![5, 6, 7, 8])); // resynced on the new frame
+    }
+
+    #[test]
+    fn decodes_dax_float32_stereo_to_mono() {
+        // Two stereo frames: (0.5,0.5)→0.5 and (1.0,0.0)→0.5.
+        let mut p = Vec::new();
+        for v in [0.5f32, 0.5, 1.0, 0.0] {
+            p.extend_from_slice(&v.to_be_bytes());
+        }
+        let mono = parse_dax_audio(DAX_AUDIO_CLASS, &p, false).unwrap();
+        assert_eq!(mono.len(), 2);
+        assert!((mono[0] - 0.5).abs() < 1e-6);
+        assert!((mono[1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn decodes_dax_int16_mono() {
+        let mut p = Vec::new();
+        for s in [16384i16, -32768, 0] {
+            p.extend_from_slice(&s.to_be_bytes());
+        }
+        let mono = parse_dax_audio(DAX_AUDIO_REDUCED_CLASS, &p, false).unwrap();
+        assert_eq!(mono, vec![0.5, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn dax_strips_the_vita_trailer_before_decoding() {
+        // One float32 stereo frame (0.25, 0.75) + a 4-byte trailer.
+        let mut p = Vec::new();
+        for v in [0.25f32, 0.75] {
+            p.extend_from_slice(&v.to_be_bytes());
+        }
+        p.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // trailer, must not be decoded as audio
+        let mono = parse_dax_audio(DAX_AUDIO_CLASS, &p, true).unwrap();
+        assert_eq!(mono.len(), 1);
+        assert!((mono[0] - 0.5).abs() < 1e-6); // (0.25 + 0.75) / 2
+    }
+
+    #[test]
+    fn parse_dax_audio_rejects_a_non_audio_class() {
+        assert!(parse_dax_audio(FFT_PACKET_CLASS, &[0u8; 8], false).is_none());
     }
 }
