@@ -1880,8 +1880,14 @@ impl Settings {
                 // CAT, WinKeyer, and the serial keyline all key the rig in CW mode (the rig
                 // shapes the envelope); only the soundcard keyer keys an audio tone, so that
                 // one needs the rig in SSB (band-aware sideband).
+                //
+                // BAND-AWARE CW SIDEBAND (operator 2026-07-24, "40 m sets CW-U, should be
+                // CW-L"): same 10 MHz convention as the sideband rules below — CW-L
+                // (Hamlib `CWR`, Icom 0x07, Yaesu CW-L) on 160/80/40 m, CW-U (plain `CW`)
+                // at 30 m and up. The waterfall/zero-beat math already signs CWR as
+                // LSB-side, and the mode-apply helpers treat CWR exactly like CW.
                 CwKeyerBackend::Cat | CwKeyerBackend::WinKeyer | CwKeyerBackend::Serial => {
-                    "CW".to_string()
+                    if self.dial_mhz < 10.0 { "CWR" } else { "CW" }.to_string()
                 }
                 CwKeyerBackend::Soundcard => {
                     if self.dial_mhz < 10.0 { "LSB" } else { "USB" }.to_string()
@@ -1997,6 +2003,27 @@ mod tests {
             "USB",
             "28.4 is SSB — below the 10 m FM segment"
         );
+    }
+
+    #[test]
+    fn cw_follows_the_band_sideband_convention() {
+        // Operator 2026-07-24: 40 m CW must command CW-L (Hamlib CWR), not CW-U.
+        // Same 10 MHz rule as phone LSB/USB and the soundcard-keyer arm.
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Cw;
+        s.cw_keyer = CwKeyerBackend::Cat;
+        s.dial_mhz = 7.030; // 40 m
+        assert_eq!(s.rig_mode(), "CWR", "40 m CW is CW-L");
+        s.dial_mhz = 3.550; // 80 m
+        assert_eq!(s.rig_mode(), "CWR", "80 m CW is CW-L");
+        s.dial_mhz = 14.030; // 20 m
+        assert_eq!(s.rig_mode(), "CW", "20 m CW is CW-U");
+        s.dial_mhz = 10.110; // 30 m — at/above the 10 MHz line
+        assert_eq!(s.rig_mode(), "CW", "30 m CW is CW-U");
+        // The soundcard keyer keeps its SSB mapping (audio-tone keying).
+        s.cw_keyer = CwKeyerBackend::Soundcard;
+        s.dial_mhz = 7.030;
+        assert_eq!(s.rig_mode(), "LSB");
     }
 
     #[test]
