@@ -44,6 +44,8 @@ pub enum AprsInfo {
     Position(Position),
     Status { timestamp: Option<String>, text: String },
     Message(Message),
+    /// An object report (`;`) — a named point (repeater, NWS alert, event…) with its own position.
+    Object { name: String, killed: bool, position: Position },
     /// Any type this parser doesn't decode — the DTI plus the raw remainder, preserved.
     Other { dti: char, body: String },
 }
@@ -97,6 +99,18 @@ fn format_dm(value: f64, deg_width: usize, pos: char, neg: char) -> String {
     format!("{:0deg_width$}{:02}.{:02}{}", deg, rem / 100, rem % 100, hemi, deg_width = deg_width)
 }
 
+/// Decode 4 base-91 chars (each `!`..`{`) to their integer value. `None` on an out-of-range byte.
+fn base91(b: &[u8]) -> Option<f64> {
+    let mut v = 0.0;
+    for &c in b {
+        if !(0x21..=0x7b).contains(&c) {
+            return None;
+        }
+        v = v * 91.0 + f64::from(c - 33);
+    }
+    Some(v)
+}
+
 impl Position {
     fn parse(body: &str, messaging: bool, has_ts: bool) -> Option<Position> {
         let (timestamp, rest) = if has_ts {
@@ -107,6 +121,15 @@ impl Position {
         } else {
             (None, body)
         };
+        // Uncompressed positions start with a digit (the latitude's tens); compressed positions
+        // start with the symbol-table char. Route on the first byte.
+        match rest.as_bytes().first()? {
+            b'0'..=b'9' => Self::parse_uncompressed(rest, timestamp, messaging),
+            _ => Self::parse_compressed(rest, timestamp, messaging),
+        }
+    }
+
+    fn parse_uncompressed(rest: &str, timestamp: Option<String>, messaging: bool) -> Option<Position> {
         // lat(8) + symtable(1) + lon(9) + symcode(1) = 19 fixed chars, then the comment.
         if rest.len() < 19 || !rest.is_char_boundary(19) {
             return None;
@@ -123,6 +146,32 @@ impl Position {
             timestamp,
             messaging,
             comment: rest[19..].to_string(),
+        })
+    }
+
+    /// Compressed (base-91) position: `<sym-table><YYYY lat><XXXX lon><sym-code><cs><T>` = 13 chars,
+    /// then the comment. `lat = 90 − Y/380926`, `lon = −180 + X/190463` (APRS 1.0.1 §9).
+    fn parse_compressed(rest: &str, timestamp: Option<String>, messaging: bool) -> Option<Position> {
+        let b = rest.as_bytes();
+        if b.len() < 13 || !rest.is_char_boundary(13) {
+            return None;
+        }
+        let symbol_table = b[0] as char;
+        let lat = 90.0 - base91(&b[1..5])? / 380_926.0;
+        let lon = -180.0 + base91(&b[5..9])? / 190_463.0;
+        if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+            return None;
+        }
+        let symbol_code = b[9] as char;
+        // b[10..13] = compression type (course/speed, altitude, or range) — kept out of the comment.
+        Some(Position {
+            lat,
+            lon,
+            symbol_table,
+            symbol_code,
+            timestamp,
+            messaging,
+            comment: rest[13..].to_string(),
         })
     }
 }
@@ -145,9 +194,26 @@ pub fn parse(info: &[u8]) -> AprsInfo {
         '@' => Position::parse(body, true, true).map(AprsInfo::Position),
         ':' => parse_message(body),
         '>' => Some(parse_status(body)),
+        ';' => parse_object(body),
         _ => None,
     };
     parsed.unwrap_or(AprsInfo::Other { dti, body: body.to_string() })
+}
+
+/// Parse an object report body: `NNNNNNNNN` (9-char name) + `*` (live) / `_` (killed) + a
+/// timestamped position (uncompressed or compressed).
+fn parse_object(body: &str) -> Option<AprsInfo> {
+    if body.len() < 10 || !body.is_char_boundary(9) {
+        return None;
+    }
+    let name = body[..9].trim_end().to_string();
+    let killed = match body.as_bytes()[9] {
+        b'*' => false,
+        b'_' => true,
+        _ => return None,
+    };
+    let position = Position::parse(&body[10..], false, true)?;
+    Some(AprsInfo::Object { name, killed, position })
 }
 
 fn parse_message(body: &str) -> Option<AprsInfo> {
@@ -196,6 +262,17 @@ impl AprsInfo {
                 out.push_str(&format_dm(p.lon, 3, 'E', 'W'));
                 out.push(p.symbol_code);
                 out.push_str(&p.comment);
+            }
+            AprsInfo::Object { name, killed, position } => {
+                out.push(';');
+                out.push_str(&format!("{name:<9}"));
+                out.push(if *killed { '_' } else { '*' });
+                out.push_str(position.timestamp.as_deref().unwrap_or("000000z"));
+                out.push_str(&format_dm(position.lat, 2, 'N', 'S'));
+                out.push(position.symbol_table);
+                out.push_str(&format_dm(position.lon, 3, 'E', 'W'));
+                out.push(position.symbol_code);
+                out.push_str(&position.comment);
             }
             AprsInfo::Status { timestamp, text } => {
                 out.push('>');
@@ -317,6 +394,58 @@ mod tests {
         let info = parse(b"!nonsense");
         assert!(matches!(info, AprsInfo::Other { dti: '!', .. }));
         assert_eq!(info.encode(), b"!nonsense");
+    }
+
+    fn b91(mut v: u32) -> [u8; 4] {
+        let mut o = [0u8; 4];
+        for i in (0..4).rev() {
+            o[i] = (v % 91) as u8 + 33;
+            v /= 91;
+        }
+        o
+    }
+
+    #[test]
+    fn decodes_a_compressed_position() {
+        let (lat, lon) = (49.05833_f64, -72.02917_f64);
+        let mut info = vec![b'!', b'/'];
+        info.extend_from_slice(&b91(((90.0 - lat) * 380_926.0).round() as u32));
+        info.extend_from_slice(&b91(((lon + 180.0) * 190_463.0).round() as u32));
+        info.push(b'>'); // symbol code
+        info.extend_from_slice(b"  A"); // cs + compression type (ignored)
+        info.extend_from_slice(b"compressed");
+        match parse(&info) {
+            AprsInfo::Position(p) => {
+                assert!((p.lat - lat).abs() < 1e-4, "lat {}", p.lat);
+                assert!((p.lon - lon).abs() < 1e-4, "lon {}", p.lon);
+                assert_eq!(p.symbol_table, '/');
+                assert_eq!(p.symbol_code, '>');
+                assert_eq!(p.comment, "compressed");
+            }
+            o => panic!("expected a compressed position, got {o:?}"),
+        }
+    }
+
+    #[test]
+    fn decodes_an_object_report() {
+        match parse(b";LEIXLIGHT*092345z4903.50N/07201.75W-object here") {
+            AprsInfo::Object { name, killed, position } => {
+                assert_eq!(name, "LEIXLIGHT");
+                assert!(!killed);
+                assert!((position.lat - 49.0583333).abs() < 1e-6);
+                assert!((position.lon - (-72.029166)).abs() < 1e-5);
+                assert_eq!(position.comment, "object here");
+            }
+            o => panic!("expected an object, got {o:?}"),
+        }
+        // A killed object.
+        match parse(b";EVENT    _092345z4903.50N/07201.75W-") {
+            AprsInfo::Object { killed, name, .. } => {
+                assert!(killed);
+                assert_eq!(name, "EVENT");
+            }
+            o => panic!("expected a killed object, got {o:?}"),
+        }
     }
 
     #[test]

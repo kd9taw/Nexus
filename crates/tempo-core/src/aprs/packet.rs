@@ -32,6 +32,13 @@ impl AprsPacket {
     /// Decode a received AX.25 UI frame into a structured APRS packet (never fails — an
     /// unrecognized info field becomes [`AprsInfo::Other`]).
     pub fn from_frame(frame: &Frame) -> AprsPacket {
+        // Third-party traffic ('}') wraps a whole inner packet in TNC2 text (e.g. an I-gated or
+        // digipeated station) — decode the REAL originator, not the '}' wrapper.
+        if frame.info.first() == Some(&b'}') {
+            if let Some(inner) = parse_third_party(&String::from_utf8_lossy(&frame.info[1..])) {
+                return inner;
+            }
+        }
         let body = if mice::is_mic_e(&frame.info) {
             match mice::decode(&frame.dest.call, &frame.info) {
                 Some(m) => AprsBody::MicE(m),
@@ -61,10 +68,32 @@ impl AprsPacket {
     pub fn position(&self) -> Option<(f64, f64)> {
         match &self.body {
             AprsBody::Info(AprsInfo::Position(p)) => Some((p.lat, p.lon)),
+            AprsBody::Info(AprsInfo::Object { position, .. }) => Some((position.lat, position.lon)),
             AprsBody::MicE(m) => Some((m.lat, m.lon)),
             _ => None,
         }
     }
+}
+
+/// Parse a third-party payload — a whole inner packet in TNC2 text: `SRC>DEST,digi1,digi2,…:info`.
+/// The wrapped station's source/dest/path/info replace the wrapper's. `None` if it isn't well-formed.
+fn parse_third_party(text: &str) -> Option<AprsPacket> {
+    let (header, info) = text.split_once(':')?;
+    let (src, dest_path) = header.split_once('>')?;
+    let mut parts = dest_path.split(',');
+    let dest = Address::parse(parts.next()?)?;
+    let source = Address::parse(src)?;
+    let path: Vec<Address> = parts.filter_map(Address::parse).collect();
+    let info_bytes = info.as_bytes();
+    let body = if mice::is_mic_e(info_bytes) {
+        match mice::decode(&dest.call, info_bytes) {
+            Some(m) => AprsBody::MicE(m),
+            None => AprsBody::Info(parser::parse(info_bytes)),
+        }
+    } else {
+        AprsBody::Info(parser::parse(info_bytes))
+    };
+    Some(AprsPacket { source, dest, path, body })
 }
 
 /// The Nexus experimental APRS TOCALL (destination) for beacons we originate. `APZxxx` is the
@@ -142,6 +171,22 @@ mod tests {
         let (lat, lon) = pkt.position().unwrap();
         assert!((lat - 33.427333).abs() < 1e-5);
         assert!((lon - (-112.124)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn unwraps_a_third_party_packet_to_the_real_originator() {
+        // A gateway relays N0CALL's position wrapped in a '}' third-party frame.
+        let frame = Frame::ui(
+            Address::new("IGATE", 0),
+            Address::new("APRS", 0),
+            vec![],
+            b"}N0CALL>APRS,TCPIP*:!4903.50N/07201.75W-relayed",
+        );
+        let pkt = AprsPacket::from_frame(&frame);
+        assert_eq!(pkt.source.call, "N0CALL"); // the REAL station, not the IGATE wrapper
+        let (lat, lon) = pkt.position().unwrap();
+        assert!((lat - 49.0583333).abs() < 1e-6);
+        assert!((lon - (-72.029166)).abs() < 1e-5);
     }
 
     #[test]

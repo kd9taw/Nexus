@@ -16524,3 +16524,6 @@ html[data-panel='needed'] {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+.aprs-kind-object {
+  color: var(--need-mode, #22d3ee);
+}

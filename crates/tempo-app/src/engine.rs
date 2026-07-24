@@ -905,6 +905,14 @@ impl AprsHeard {
             AprsBody::Info(AprsInfo::Position(p)) => {
                 ("position", p.comment.clone(), p.symbol_table, p.symbol_code, None, None)
             }
+            AprsBody::Info(AprsInfo::Object { name, killed, position }) => {
+                let label = if *killed {
+                    format!("{name} (killed) {}", position.comment)
+                } else {
+                    format!("{name} {}", position.comment)
+                };
+                ("object", label, position.symbol_table, position.symbol_code, None, None)
+            }
             AprsBody::Info(AprsInfo::Message(msg)) => (
                 "message",
                 format!("\u{2192}{}: {}", msg.addressee, msg.text),
