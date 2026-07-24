@@ -172,6 +172,37 @@ pub fn dbm_to_watts(dbm: f32) -> f32 {
     10f32.powf(dbm / 10.0) / 1000.0
 }
 
+/// FlexRadio VITA information-class code ("SL"), the upper half of the class-id word on TX packets.
+pub const FLEX_INFO_CLASS: u16 = 0x534C;
+
+/// Build a DAX **TX** VITA-49 packet carrying `samples` as big-endian int16 mono (PCC
+/// [`DAX_AUDIO_REDUCED_CLASS`] `0x0123`, the radio-native DAX-TX route). Header per AetherSDR's
+/// `buildVitaTxPacket`: type 1 (IFDataWithStream), class present, no trailer, TSI=3, TSF=1, a 4-bit
+/// `packet_count`, and the 16-bit size in 32-bit words. `samples.len()` must be even (a whole number
+/// of 32-bit words); the DAX-TX packetizer sends 128 samples/packet. 24 kHz. Pure.
+pub fn build_dax_tx_packet(stream_id: u32, packet_count: u8, samples: &[i16]) -> Vec<u8> {
+    let payload_bytes = samples.len() * 2;
+    let total_words = 7 + payload_bytes / 4; // 7 header words + payload words
+    let mut w0: u32 = 0;
+    w0 |= 0x1 << 28; // packet_type = 1 (IFDataWithStream)
+    w0 |= 1 << 27; // class id present
+    w0 |= 0x3 << 22; // TSI = 3 (Other)
+    w0 |= 0x1 << 20; // TSF = 1 (SampleCount)
+    w0 |= (u32::from(packet_count) & 0xF) << 16;
+    w0 |= (total_words as u32) & 0xFFFF;
+    let class_word = (u32::from(FLEX_INFO_CLASS) << 16) | u32::from(DAX_AUDIO_REDUCED_CLASS);
+    let mut out = Vec::with_capacity(total_words * 4);
+    out.extend_from_slice(&w0.to_be_bytes());
+    out.extend_from_slice(&stream_id.to_be_bytes());
+    out.extend_from_slice(&FLEX_OUI.to_be_bytes()); // word2: OUI (upper byte 0)
+    out.extend_from_slice(&class_word.to_be_bytes()); // word3: info class | PCC
+    out.extend_from_slice(&[0u8; 12]); // words 4-6: timestamps zero
+    for &s in samples {
+        out.extend_from_slice(&s.to_be_bytes());
+    }
+    out
+}
+
 /// One FFT payload fragment (a contiguous slice `start_bin..start_bin+num_bins` of the sweep).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FftFrame {
@@ -362,6 +393,24 @@ mod tests {
             p.extend_from_slice(&raw.to_be_bytes());
         }
         assert_eq!(parse_meter_values(&p, false), vec![(7, 1280), (12, -256)]);
+    }
+
+    #[test]
+    fn dax_tx_packet_round_trips_through_the_vita_parser() {
+        let samples: Vec<i16> = vec![100, -200, 16384, -16384]; // even count = whole words
+        let dg = build_dax_tx_packet(0x0600_0000, 3, &samples);
+        let pkt = parse_vita(&dg).unwrap();
+        assert_eq!(pkt.packet_type, 1);
+        assert_eq!(pkt.stream_id, Some(0x0600_0000));
+        assert_eq!(pkt.class_oui, Some(FLEX_OUI));
+        assert_eq!(pkt.packet_class, Some(DAX_AUDIO_REDUCED_CLASS));
+        assert!(!pkt.has_trailer);
+        // The payload decodes back to the same samples (as normalized f32).
+        let back = parse_dax_audio(DAX_AUDIO_REDUCED_CLASS, pkt.payload, pkt.has_trailer).unwrap();
+        assert_eq!(back.len(), samples.len());
+        for (a, b) in back.iter().zip(&samples) {
+            assert!((a - *b as f32 / 32768.0).abs() < 1e-4);
+        }
     }
 
     #[test]

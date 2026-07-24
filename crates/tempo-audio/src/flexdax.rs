@@ -68,6 +68,20 @@ pub fn dax_remove_command(stream_id: u32) -> String {
     format!("stream remove 0x{stream_id:08X}")
 }
 
+// ---- DAX TX control (protocol built; the TX-audio routing tee is a hardware-pass follow-up) ----
+
+/// Create a DAX **TX** audio stream (the outbound half; the encoder is
+/// [`tempo_net::flexvita::build_dax_tx_packet`]).
+pub fn dax_tx_create_command() -> String {
+    "stream create type=dax_tx".to_string()
+}
+
+/// Route the rig's transmit audio to the DAX TX stream (`on` → modulator reads our VITA packets) or
+/// back to the physical mic path (`!on` → the radio discards DAX TX packets). `dax=1` vs `dax=0`.
+pub fn transmit_set_dax_command(on: bool) -> String {
+    format!("transmit set dax={}", u8::from(on))
+}
+
 // ---- orchestrator ----
 
 /// A running Flex DAX RX audio feed. Keep it while native Flex audio is the RX source; dropping it
@@ -226,5 +240,12 @@ mod tests {
         assert_eq!(cmds[0], "client program Nexus");
         assert_eq!(cmds[1], "client udpport 52002");
         assert_eq!(cmds[2], "sub slice all");
+    }
+
+    #[test]
+    fn dax_tx_command_strings() {
+        assert_eq!(dax_tx_create_command(), "stream create type=dax_tx");
+        assert_eq!(transmit_set_dax_command(true), "transmit set dax=1");
+        assert_eq!(transmit_set_dax_command(false), "transmit set dax=0");
     }
 }
