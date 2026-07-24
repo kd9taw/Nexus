@@ -51,11 +51,11 @@ function ageLabel(atUnix: number, nowSec: number): string {
  */
 export function AprsCockpit({
   active,
-  onSetFrequency,
+  onTune,
 }: {
   active: boolean
-  /** QSY to a dial (MHz) / band / mode — the shared App setFrequency path. */
-  onSetFrequency?: (dialMhz: number, band: string, mode: string) => void
+  /** QSY to an APRS dial (MHz): 2 m FM simplex, auto-routing to the 2 m-capable radio. */
+  onTune?: (dialMhz: number) => void
 }) {
   const [armed, setArmed] = useState(false)
   const [freq, setFreq] = useState(144.39)
@@ -184,7 +184,7 @@ export function AprsCockpit({
           <span className="np-count np-count-filtered">{heard.length} pkts</span>
         )}
         <span className="np-hint">AFSK-1200 packet — decode positions/messages, send a beacon</span>
-        {onSetFrequency && (
+        {onTune && (
           <>
             <select
               className="np-chip aprs-freq"
@@ -201,8 +201,8 @@ export function AprsCockpit({
             <button
               type="button"
               className="np-chip"
-              onClick={() => onSetFrequency(freq, '2m', 'FM')}
-              title="Tune the rig to the selected APRS frequency (2 m FM)"
+              onClick={() => onTune(freq)}
+              title="Tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)"
             >
               Tune
             </button>

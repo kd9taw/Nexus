@@ -810,6 +810,12 @@ pub struct Engine {
     aprs_tx_queue: VecDeque<Vec<f32>>,
     /// Rolling APRS message line-number (001..999) for outgoing messages, so the recipient can ack.
     aprs_msg_seq: u16,
+    /// APRS holds the rig in FM SIMPLEX (session-only, never persisted). Set by [`Engine::aprs_tune`];
+    /// makes `rig_mode_effective` command FM and forces the repeater config to simplex (APRS is not
+    /// a Phone/Digital operating section, so it can't ride the Phone-FM override). Cleared by any
+    /// `set_frequency` (a normal QSY) or `set_operating_mode` — i.e. the moment the operator leaves
+    /// APRS — so FM never follows them onto another band/mode.
+    aprs_fm: bool,
     /// SSTV RX decoder armed (session-only runtime state, never persisted).
     sstv_armed: bool,
     /// Drain buffer for the SSTV decode thread (same pattern as `rtty_audio`).
@@ -1280,6 +1286,7 @@ impl Engine {
             aprs_heard: Vec::new(),
             aprs_tx_queue: VecDeque::new(),
             aprs_msg_seq: 0,
+            aprs_fm: false,
             sstv_armed: false,
             sstv_audio: Vec::new(),
             sstv_progress: None,
@@ -1554,6 +1561,10 @@ impl Engine {
         if id == self.settings.active_radio || !self.settings.radios.iter().any(|p| p.id == id) {
             return;
         }
+        // Switching rigs leaves the APRS FM-simplex context (the new radio has its own band/mode).
+        // The band-gate in `rig_mode_effective` already prevents an FM leak onto a non-2 m band;
+        // this clears the flag outright so it never lingers pointed at a different radio.
+        self.aprs_fm = false;
         // Fold the OUTGOING radio's live flat CAT/audio edits into its own profile BEFORE we mirror
         // the new radio in — otherwise an unsaved flat change made while this radio was active (e.g. a
         // live Pwr/tx_level tweak) is discarded by `sync_flat_from_active` below. `active_radio` still
@@ -1654,6 +1665,9 @@ impl Engine {
     }
 
     pub fn set_frequency(&mut self, dial_mhz: f64, band: &str, mode: &str) {
+        // A normal QSY leaves the APRS FM-simplex context (aprs_tune re-sets it right after its own
+        // set_frequency call), so FM never lingers onto the next band the operator tunes.
+        self.aprs_fm = false;
         // Dual-Radio P4 auto band-routing: a commanded band pick (dropdown / manual entry) that a
         // DIFFERENT radio covers better hands off to that radio FIRST, then the tune below lands it on
         // the requested dial — so selecting 2 m activates the IC-9700 (which has 2 m configured) and
@@ -1954,6 +1968,8 @@ impl Engine {
     /// manual tune within a mode survives non-operating nav.
     pub fn set_operating_mode(&mut self, mode: &str, follow_freq: bool) {
         use crate::settings::OperatingMode;
+        // Entering a real operating section ends the APRS FM-simplex context.
+        self.aprs_fm = false;
         let om = match mode.to_ascii_lowercase().as_str() {
             "phone" => OperatingMode::Phone,
             "cw" => OperatingMode::Cw,
@@ -2134,6 +2150,15 @@ impl Engine {
     /// The mode the radio loop should COMMAND: the operator's transient Phone override when set,
     /// else the band-derived policy (`settings.rig_mode`). Write-side canon for the rig `M` verb.
     pub fn rig_mode_effective(&self) -> String {
+        // APRS parks the rig in FM regardless of the operating section it was navigated from — a
+        // 2 m packet signal demodulated as USB is garbage, so this is a correctness gate, not a
+        // preference. Gated on STILL being on 2 m: a knob-QSY (`observe_rig_freq`) or a manual
+        // radio switch (`set_active_radio`) that moves off 2 m without clearing the flag can then
+        // never leave FM forced on another band (the `fm_does_not_follow_the_operator_down_to_hf`
+        // invariant). The flag is also cleared by every QSY / section change / radio switch.
+        if self.aprs_fm && self.settings.band.eq_ignore_ascii_case("2m") {
+            return "FM".to_string();
+        }
         if self.settings.operating_mode == crate::settings::OperatingMode::Phone {
             // SSTV rides the Phone segment but transmits SOUNDCARD audio, so — exactly like
             // FT8 — it needs a DATA submode (PKTUSB/PKTLSB → Yaesu DATA / Icom D / Kenwood
@@ -2161,6 +2186,21 @@ impl Engine {
     /// The active Phone mode override for the cockpit picker (`None` = AUTO / band-derived).
     pub fn sideband_override(&self) -> Option<String> {
         self.sideband_override.clone()
+    }
+
+    /// The FM repeater plumbing (shift, offset Hz, CTCSS tone) the radio loop should command while
+    /// the rig is in FM. APRS forces SIMPLEX / no tone so it never inherits the operator's
+    /// Phone-section repeater shift (which would transmit the beacon off-frequency).
+    pub fn fm_repeater_config(&self) -> (String, i64, f32) {
+        if self.aprs_fm {
+            ("simplex".to_string(), 0, 0.0)
+        } else {
+            (
+                self.settings.rptr_shift.clone(),
+                self.settings.rptr_offset_hz(),
+                self.settings.ctcss_tone_hz,
+            )
+        }
     }
 
     /// Set the operator's amateur license class (drives the TX-privilege lockout + the
@@ -4607,6 +4647,19 @@ impl Engine {
         self.reset_tx_watchdog();
         self.aprs_tx_queue.push_back(audio);
         Ok(())
+    }
+
+    /// Tune the rig for APRS: QSY to `dial_mhz` on 2 m in **FM simplex**, auto-routing to the radio
+    /// that covers 2 m (the same dual-radio band-routing every QSY uses — so a 2-radio HF+VHF setup
+    /// hands off to the VHF rig). Distinct from the raw `set_frequency` the mode dropdowns use
+    /// because APRS is not a Phone/Digital operating section: without this the rig kept the previous
+    /// section's mode (DATA/USB) and a 2 m packet signal never demodulated. Cleared by the next QSY.
+    pub fn aprs_tune(&mut self, dial_mhz: f64) {
+        // set_frequency does the radio hand-off + dial + band and clears aprs_fm; re-arm FM after so
+        // the loop commands FM (via rig_mode_effective) with simplex plumbing (via fm_repeater_config).
+        self.set_frequency(dial_mhz, "2m", "FM");
+        self.aprs_fm = true;
+        self.immediate_retune = true;
     }
 
     /// Queue one APRS text message to `addressee` — an explicit operator send. Assigns a rolling
@@ -12539,6 +12592,49 @@ mod tests {
         assert_eq!(
             e.settings.active_radio, 0,
             "pegged → band selection never switches radios"
+        );
+    }
+
+    #[test]
+    fn aprs_tune_commands_fm_simplex_and_clears_on_the_next_qsy() {
+        // APRS is not a Phone/Digital operating section, so the rig would keep the prior section's
+        // mode (DATA/USB) and a 2 m packet never demodulates. aprs_tune must force FM + simplex,
+        // and that context must evaporate the instant the operator QSYs elsewhere.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        // Seed a Phone-section repeater shift the way an operator with a local machine would — APRS
+        // must NOT inherit it (an offset would transmit the beacon off-frequency).
+        e.settings.operating_mode = crate::settings::OperatingMode::Digital;
+        e.settings.rptr_shift = "minus".into();
+        e.settings.ctcss_tone_hz = 100.0;
+
+        e.aprs_tune(144.390);
+        assert_eq!(e.settings.band, "2m");
+        assert!((e.settings.dial_mhz - 144.390).abs() < 1e-9);
+        assert_eq!(e.rig_mode_effective(), "FM", "APRS parks the rig in FM");
+        assert_eq!(
+            e.fm_repeater_config(),
+            ("simplex".to_string(), 0, 0.0),
+            "APRS forces simplex / no CTCSS, ignoring the Phone-section repeater config"
+        );
+
+        // Leak guard (review finding): a VFO-knob QSY off 2 m goes through observe_rig_freq, which
+        // does NOT clear aprs_fm — the band-gate in rig_mode_effective must still stop FM following
+        // onto HF. aprs_fm is deliberately left set here; only the band moves.
+        e.observe_rig_freq(14_074_000);
+        assert_eq!(e.settings.band, "20m");
+        assert_ne!(
+            e.rig_mode_effective(),
+            "FM",
+            "FM must not follow a knob-QSY off 2 m even with aprs_fm still set"
+        );
+
+        // A normal QSY away from APRS also drops the flag outright.
+        e.aprs_tune(144.390); // re-arm
+        e.set_frequency(14.074, "20m", "USB");
+        assert_ne!(
+            e.rig_mode_effective(),
+            "FM",
+            "FM does not follow the operator off APRS onto HF"
         );
     }
 

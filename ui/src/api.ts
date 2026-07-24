@@ -1184,6 +1184,13 @@ export async function aprsSendMessage(addressee: string, text: string): Promise<
   return invoke<void>('aprs_send_message', { addressee, text })
 }
 
+/** Tune the rig for APRS: QSY to `dialMhz` on 2 m FM simplex, auto-routing to the 2 m-capable radio
+ * (dual-radio hand-off). Unlike a plain frequency dropdown this establishes the FM context APRS
+ * needs — a 2 m packet demodulated as USB/DATA never decodes. Returns the updated snapshot. */
+export async function aprsTune(dialMhz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('aprs_tune', { dialMhz })
+}
+
 /** Arm/disarm the RTTY RX decoder (session-only; RX decode, never TX). */
 export async function rttyArm(on: boolean): Promise<RttyState> {
   return invoke<RttyState>('rtty_arm', { on })

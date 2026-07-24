@@ -4585,6 +4585,19 @@ fn aprs_send_message(
     eng.aprs_send_message(&addressee, &text)
 }
 
+/// Tune the rig for APRS: QSY to `dial_mhz` on 2 m FM simplex, auto-routing to the 2 m-capable radio
+/// (dual-radio hand-off). Unlike the plain frequency dropdowns, this establishes the FM context APRS
+/// needs — a 2 m packet signal demodulated as USB/DATA never decodes. Persists + returns the snapshot.
+#[tauri::command]
+fn aprs_tune(state: State<'_, SharedEngine>, dial_mhz: f64) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.aprs_tune(dial_mhz);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist frequency: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Queue RTTY text to transmit — an explicit operator send, the ONLY way RTTY TX
 /// starts. The engine validates every gate up front (TX armed, license privileges
 /// at the current dial, the RTTY section owning the rig, no tune carrier, no other
@@ -10449,6 +10462,7 @@ pub fn run() {
             get_aprs_heard,
             aprs_send_beacon,
             aprs_send_message,
+            aprs_tune,
             rtty_send,
             rtty_stop,
             rtty_clear,

@@ -20,6 +20,7 @@ import {
   setChatCq as apiSetChatCq,
   resumeChatCq as apiResumeChatCq,
   setFrequency as apiSetFrequency,
+  aprsTune,
   setMode as apiSetMode,
   setTier as apiSetTier,
   setSource as apiSetSource,
@@ -1084,6 +1085,16 @@ export default function App() {
     },
     [],
   )
+
+  // APRS Tune: QSY to the APRS frequency on 2 m FM simplex, auto-routing to the 2 m-capable radio.
+  // A dedicated verb (not handleSetFrequency) because APRS isn't an operating section, so the rig
+  // must be put in FM explicitly — otherwise it keeps the prior section's DATA/USB mode and the
+  // 2 m packet never demodulates. Clearing the mode override is handled backend-side on the next QSY.
+  const handleAprsTune = useCallback((dialMhz: number) => {
+    void withErrorToast(() => aprsTune(dialMhz), 'Could not tune to APRS').then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
 
   const handleSetTxEnabled = useCallback((enabled: boolean) => {
     void withErrorToast(
@@ -2245,16 +2256,18 @@ export default function App() {
           effectiveView === 'operate' ||
           effectiveView === 'chat' ||
           effectiveView === 'rtty' ||
-          effectiveView === 'sstv'
+          effectiveView === 'sstv' ||
+          effectiveView === 'aprs'
         }
         hideDigitalChrome={
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||
-          // RTTY/SSTV are free-running modes with their OWN band selectors — the
+          // RTTY/SSTV/APRS are free-running modes with their OWN band selectors — the
           // top control is fed the DIGITAL (FT8) plan, and the tier tiles / slot
           // clock / DT readout are slot-sync furniture that means nothing here.
           effectiveView === 'rtty' ||
-          effectiveView === 'sstv'
+          effectiveView === 'sstv' ||
+          effectiveView === 'aprs'
         }
         tier={tier}
         onTierChange={handleTier}
@@ -2377,7 +2390,7 @@ export default function App() {
         )}
         {isViewEnabled('aprs') && (
           <div className="aprs-host" hidden={effectiveView !== 'aprs'}>
-            <AprsCockpit active={effectiveView === 'aprs'} onSetFrequency={handleSetFrequency} />
+            <AprsCockpit active={effectiveView === 'aprs'} onTune={handleAprsTune} />
           </div>
         )}
         {workspace}
