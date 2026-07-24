@@ -3,6 +3,10 @@
 
 use std::collections::VecDeque;
 
+/// A TX-audio tee: invoked with each 12 kHz buffer handed to [`AudioBackend::play`], to send TX
+/// audio over Flex native DAX in parallel with the soundcard.
+pub type TxTee = std::sync::Arc<dyn Fn(&[f32]) + Send + Sync>;
+
 /// A 12 kHz mono audio source/sink.
 pub trait AudioBackend {
     /// 12 kHz mono samples captured since the last call (possibly empty).
@@ -18,6 +22,11 @@ pub trait AudioBackend {
     /// Set the TX audio level (0.0–1.0) applied to played samples. No-op default
     /// for non-hardware backends (the real sound card overrides it).
     fn set_tx_level(&mut self, _level: f32) {}
+    /// Install (or clear with `None`) a TX-audio tee: while set, every [`AudioBackend::play`] also
+    /// hands the same 12 kHz samples to this closure. Used to send TX audio over Flex native DAX in
+    /// parallel with the soundcard, WITHOUT changing the TX schedule. Default no-op; the real sound
+    /// card overrides it.
+    fn set_tx_tee(&mut self, _tee: Option<TxTee>) {}
     /// Set the RX capture gain (a multiplier ≥ 1.0 applied to the captured samples
     /// before decode). Headroom for a low-output interface — e.g. a rig codec whose
     /// line-out reads quiet in Nexus. No-op default; the real sound card overrides it.

@@ -1287,6 +1287,9 @@ struct RadioLoop {
     dax_src: Option<crate::flexdax::FlexDax>,
     /// The key the current `dax_src` was started for (same tear-down/no-op discipline as spectrum).
     dax_src_key: Option<(u32, bool)>,
+    /// Whether the DAX TX-audio tee is currently installed in the backend — installed when `dax_src`
+    /// starts, cleared when it stops, so TX audio routes over DAX exactly while native audio is on.
+    dax_tee_set: bool,
     /// We wrote the current audio-error line with a voice-mic open failure, so we clear
     /// Slot index whose WSJT-X-style EARLY decode pass already ran (once per
     /// RX slot; the boundary decode then ingests only the stragglers).
@@ -1433,6 +1436,7 @@ impl RadioLoop {
             spectrum_src_key: None,
             dax_src: None,
             dax_src_key: None,
+            dax_tee_set: false,
             err_owner: ErrOwner::None,
             early_done_slot: None,
             boundary_keyed: None,
@@ -1683,6 +1687,19 @@ impl RadioLoop {
         };
         if !captured.is_empty() {
             self.rx.push(&captured);
+        }
+        // Keep the DAX TX tee in sync with the DAX source: install it when native audio starts (so
+        // backend.play also sends TX over DAX), clear it when it stops. TX schedule is unchanged.
+        match (self.dax_src.as_ref(), self.dax_tee_set) {
+            (Some(dax), false) => {
+                backend.set_tx_tee(Some(dax.tx_tee()));
+                self.dax_tee_set = true;
+            }
+            (None, true) => {
+                backend.set_tx_tee(None);
+                self.dax_tee_set = false;
+            }
+            _ => {}
         }
 
         // --- Live rig/PTT/audio reconfiguration (operator hit Save) + Test-CAT

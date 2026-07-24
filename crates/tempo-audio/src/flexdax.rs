@@ -17,16 +17,19 @@
 //! Flex. Only channel 1 is ever created (the "DAX starvation" gotcha: unused streams make the radio
 //! round-robin audio across all of them, starving the active one).
 
-use std::net::UdpSocket;
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tempo_app::engine::Engine;
-use tempo_net::flexcat::{parse_dax_stream_status, parse_slice_status, FlexCat, FlexMsg};
+use tempo_net::flexcat::{
+    parse_create_stream_id, parse_dax_stream_status, parse_slice_status, FlexCat, FlexMsg,
+};
 use tempo_net::flexvita::{
-    parse_dax_audio, parse_vita, DAX_AUDIO_CLASS, DAX_AUDIO_REDUCED_CLASS, DAX_SAMPLE_RATE,
+    build_dax_tx_packet, parse_dax_audio, parse_vita, DAX_AUDIO_CLASS, DAX_AUDIO_REDUCED_CLASS,
+    DAX_SAMPLE_RATE,
 };
 
 use crate::capture_resample::CaptureResampler;
@@ -40,6 +43,10 @@ const MODEM_RATE: u32 = 12_000;
 const RING_CAP: usize = 120_000;
 /// Keep the SmartSDR client session alive with periodic traffic.
 const KEEPALIVE: Duration = Duration::from_secs(5);
+/// The radio's VITA-49 UDP port (where we SEND DAX TX packets). Standard SmartSDR VITA port.
+const FLEX_VITA_PORT: u16 = 4993;
+/// Audio frames per DAX TX packet (AetherSDR `TX_SAMPLES_PER_PACKET`).
+const TX_SAMPLES_PER_PACKET: usize = 128;
 
 // ---- pure command helpers (unit-tested; exact SmartSDR syntax verified on a Flex) ----
 
@@ -82,15 +89,57 @@ pub fn transmit_set_dax_command(on: bool) -> String {
     format!("transmit set dax={}", u8::from(on))
 }
 
+// ---- DAX TX sender ----
+
+/// Encodes the modem's 12 kHz mono TX audio into DAX VITA-49 packets and sends them to the radio.
+/// Fed from `CpalBackend::play` via a tee closure while native Flex audio is active — so it carries
+/// exactly the audio the soundcard path would, leaving the TX schedule untouched. Upsamples 12k→24k,
+/// converts to int16 mono, and packetizes 128 samples per VITA packet. A no-op until the dax_tx
+/// stream id is learned (and `transmit set dax=1` taken), so nothing reaches the air prematurely.
+pub struct DaxTxSender {
+    sock: UdpSocket,
+    radio: SocketAddr,
+    stream_id: Arc<Mutex<Option<u32>>>,
+    state: Mutex<TxSendState>,
+}
+
+struct TxSendState {
+    resampler: CaptureResampler,
+    accum: Vec<i16>,
+    counter: u8,
+}
+
+impl DaxTxSender {
+    fn feed(&self, mono12: &[f32]) {
+        let Some(sid) = *self.stream_id.lock().unwrap() else {
+            return; // stream not up yet → nothing on the air
+        };
+        let mut st = self.state.lock().unwrap();
+        let up = st.resampler.process(mono12); // 12k → 24k
+        for &s in &up {
+            st.accum.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
+        }
+        while st.accum.len() >= TX_SAMPLES_PER_PACKET {
+            let chunk: Vec<i16> = st.accum.drain(..TX_SAMPLES_PER_PACKET).collect();
+            let counter = st.counter;
+            st.counter = (st.counter + 1) & 0x0F;
+            let pkt = build_dax_tx_packet(sid, counter, &chunk);
+            let _ = self.sock.send_to(&pkt, self.radio);
+        }
+    }
+}
+
 // ---- orchestrator ----
 
-/// A running Flex DAX RX audio feed. Keep it while native Flex audio is the RX source; dropping it
-/// stops both threads and removes the DAX stream.
+/// A running Flex DAX audio feed (RX + TX). Keep it while native Flex audio is active; dropping it
+/// stops the threads, routes TX audio back to the mic, and removes the DAX streams.
 pub struct FlexDax {
     stop: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,
     /// 12 kHz mono RX audio accumulated since the last [`FlexDax::take_audio`].
     ring: Arc<Mutex<Vec<f32>>>,
+    /// The TX-audio encoder/sender, teed into `CpalBackend::play`.
+    tx: Arc<DaxTxSender>,
 }
 
 impl FlexDax {
@@ -105,12 +154,29 @@ impl FlexDax {
         let stop = Arc::new(AtomicBool::new(false));
         let stream_id = Arc::new(Mutex::new(None::<u32>));
         let ring = Arc::new(Mutex::new(Vec::<f32>::new()));
+        // TX: a send-side clone of the VITA socket + the learned dax_tx stream id + the encoder.
+        let tx_sock = udp.try_clone()?;
+        let radio: SocketAddr = format!("{ip}:{FLEX_VITA_PORT}").parse().map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid Flex IP")
+        })?;
+        let tx_stream_id = Arc::new(Mutex::new(None::<u32>));
+        let tx = Arc::new(DaxTxSender {
+            sock: tx_sock,
+            radio,
+            stream_id: tx_stream_id.clone(),
+            state: Mutex::new(TxSendState {
+                resampler: CaptureResampler::new(MODEM_RATE, DAX_SAMPLE_RATE), // 12k → 24k
+                accum: Vec::new(),
+                counter: 0,
+            }),
+        });
         let mut handles = Vec::new();
 
         // --- TCP control thread ---
         {
             let stop = stop.clone();
             let stream_id = stream_id.clone();
+            let tx_stream_id = tx_stream_id.clone();
             handles.push(std::thread::spawn(move || {
                 let Ok(mut flex) = FlexCat::connect(&ip) else {
                     return;
@@ -119,6 +185,18 @@ impl FlexDax {
                     let _ = flex.send(&cmd);
                 }
                 let _ = flex.send(&dax_rx_create_command(DAX_CHANNEL));
+                // DAX TX: create the outbound stream (its create reply carries the stream id) and
+                // route the rig's transmit audio to it. Torn down on stop (TX back to the mic).
+                let mut tx_created: Option<u32> = None;
+                if let Ok((_, reply)) =
+                    flex.command(&dax_tx_create_command(), Duration::from_millis(600))
+                {
+                    if let Some(sid) = parse_create_stream_id(&reply) {
+                        *tx_stream_id.lock().unwrap() = Some(sid);
+                        tx_created = Some(sid);
+                    }
+                }
+                let _ = flex.send(&transmit_set_dax_command(true));
                 let mut created: Option<u32> = None;
                 let mut bound_slice: Option<u32> = None;
                 let mut last_ka = Instant::now();
@@ -152,6 +230,11 @@ impl FlexDax {
                         let _ = flex.send("ping");
                         last_ka = Instant::now();
                     }
+                }
+                // Teardown: route TX back to the mic, then remove both DAX streams.
+                if let Some(sid) = tx_created {
+                    let _ = flex.send(&transmit_set_dax_command(false));
+                    let _ = flex.send(&dax_remove_command(sid));
                 }
                 if let Some(sid) = created {
                     let _ = flex.send(&dax_remove_command(sid));
@@ -201,7 +284,7 @@ impl FlexDax {
             }));
         }
 
-        Ok(FlexDax { stop, handles, ring })
+        Ok(FlexDax { stop, handles, ring, tx })
     }
 
     /// Drain the 12 kHz mono RX audio accumulated since the last call (the engine's RX-source read,
@@ -211,6 +294,14 @@ impl FlexDax {
             .lock()
             .map(|mut g| std::mem::take(&mut *g))
             .unwrap_or_default()
+    }
+
+    /// A tee closure that encodes + sends TX audio over DAX. Install it into `CpalBackend` via
+    /// [`crate::backend::AudioBackend::set_tx_tee`] while native Flex audio is active; every
+    /// `backend.play()` then also reaches the radio over DAX (the TX schedule is unchanged).
+    pub fn tx_tee(&self) -> crate::backend::TxTee {
+        let sender = self.tx.clone();
+        Arc::new(move |buf: &[f32]| sender.feed(buf))
     }
 }
 

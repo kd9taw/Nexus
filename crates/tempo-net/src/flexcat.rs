@@ -228,6 +228,19 @@ pub fn parse_slice_status(body: &str) -> Option<SliceStatus> {
     Some(st)
 }
 
+/// Parse the stream id from a `stream create …` command REPLY body — `stream=0x…`, `id=0x…`, or a
+/// bare `0x…`/decimal handle. Used to learn our dax_tx stream id from the create reply. Pure.
+pub fn parse_create_stream_id(body: &str) -> Option<u32> {
+    for tok in body.split_whitespace() {
+        if let Some(v) = tok.strip_prefix("stream=").or_else(|| tok.strip_prefix("id=")) {
+            if let Some(id) = parse_hex_id(v) {
+                return Some(id);
+            }
+        }
+    }
+    parse_hex_id(body.split_whitespace().next()?)
+}
+
 /// Parse a `display pan 0x<id> key=value …` status body into the fields we track. Pure.
 /// Returns `None` when the body isn't a `display pan` line.
 pub fn parse_pan_status(body: &str) -> Option<PanStatus> {
@@ -470,5 +483,13 @@ mod tests {
         // Removal + non-slice lines.
         assert_eq!(parse_slice_status("slice 0 in_use=0").unwrap().in_use, Some(false));
         assert!(parse_slice_status("meter 7.src=SLC").is_none());
+    }
+
+    #[test]
+    fn parses_a_create_stream_reply() {
+        assert_eq!(parse_create_stream_id("stream=0x84000000"), Some(0x8400_0000));
+        assert_eq!(parse_create_stream_id("id=0x84000001"), Some(0x8400_0001));
+        assert_eq!(parse_create_stream_id("0x84000002"), Some(0x8400_0002));
+        assert_eq!(parse_create_stream_id(""), None);
     }
 }

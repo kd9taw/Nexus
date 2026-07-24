@@ -193,6 +193,9 @@ pub struct CpalBackend {
     /// progress. `None` = no mic stream (recordings read the shared input). Opening /
     /// closing it never touches the main capture/TX streams.
     voice_mic: Option<CaptureStream>,
+    /// Optional TX-audio tee (Flex native DAX): when set, every [`Self::play`] also hands the 12 kHz
+    /// samples to this closure so TX audio reaches the radio over DAX in parallel with the soundcard.
+    tx_tee: Option<crate::backend::TxTee>,
 }
 
 /// A named mono capture stream + its ring. Downmixes the device to mono at its native
@@ -567,6 +570,7 @@ impl CpalBackend {
             tx_level: 1.0,
             monitor: Monitor::new(mon_ring, mon_enabled, mon_level, in_rate),
             voice_mic: None,
+            tx_tee: None,
         })
     }
 }
@@ -599,6 +603,11 @@ impl AudioBackend for CpalBackend {
     }
 
     fn play(&mut self, samples: &[f32]) {
+        // Flex native DAX TX: also hand the modem's 12 kHz TX audio to the DAX encoder (parallel to
+        // the soundcard; the TX schedule is untouched — this is the same audio, another route).
+        if let Some(tee) = &self.tx_tee {
+            tee(samples);
+        }
         // Anti-aliased, stateful UPsample 12 kHz → device rate (see `tx_rs`). The old
         // `resample_linear` here put a periodic amplitude ripple on the constant-envelope
         // FT8/FT4 waveform; the polyphase reconstruction keeps it flat like WSJT-X.
@@ -606,6 +615,10 @@ impl AudioBackend for CpalBackend {
         let level = self.tx_level;
         let mut ring = self.out_ring.lock().unwrap_or_else(|e| e.into_inner());
         ring.extend(dev.iter().map(|s| s * level));
+    }
+
+    fn set_tx_tee(&mut self, tee: Option<crate::backend::TxTee>) {
+        self.tx_tee = tee;
     }
 
     /// Current RX input level (0.0–1.0): a decaying peak meter sampled on the
