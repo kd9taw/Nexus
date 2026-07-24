@@ -1478,7 +1478,10 @@ export default function App() {
         tags: [],
         priority: 0,
         headline: '',
-        mode: s.mode,
+        // Forward the SPECIFIC digital submode (FT4/FT8) so handleWorkNeeded's tier-switch
+        // guard fires — else clicking an FT4 spot QSYs but leaves the decoder on FT8. The
+        // frequency-class `s.mode` ('Digital') never matched that guard, so it was dead.
+        mode: s.submode === 'FT4' || s.submode === 'FT8' ? s.submode : s.mode,
         freqMhz: s.freqMhz,
       })
     },
