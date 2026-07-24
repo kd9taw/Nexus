@@ -27,6 +27,19 @@ Rounds out the APRS feature after a completeness review, and cuts a minor releas
   instead of being folded into the sender's position row, so a multi-line exchange all shows
   (previously only the last message per station survived).
 
+### Fixed
+
+- **APRS Tune now switches to your VHF radio and sets FM.** On a dual-radio (HF + VHF) setup,
+  tuning an APRS frequency hands off to the 2 m-capable radio and puts it in **FM simplex** — APRS
+  isn't a Phone/Digital section, so it previously kept the prior mode (DATA/USB) and the packet
+  never decoded. FM is band-guarded, so it never follows you onto another band.
+- **The APRS window no longer shows the FT8/FT4 tier chrome** (it's a packet mode with its own
+  band picker) — same treatment as RTTY/SSTV.
+- **Clearer CAT failures.** When the rig stops answering, Nexus now says *which* rig, on *which*
+  port and baud, isn't responding — and for an Icom points at the two-USB-port / CI-V-baud gotcha —
+  instead of a silent reconnect loop. The rig-control diagnostic also captures rigctld's own error
+  output and the launch config, so a "rig never answered" fault is finally diagnosable.
+
 ## [0.15.24] — 2026-07-24 — Native Flex, the rest of it (meters, slice, DAX TX)
 
 ### Added
