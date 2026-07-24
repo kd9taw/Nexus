@@ -25,5 +25,5 @@ pub use frame::{fcs, Address, Frame, CONTROL_UI, PID_NO_L3};
 pub use hdlc::{deframe, encode_frame, nrzi_decode, nrzi_encode, Deframer, FLAG};
 pub use mice::{is_mic_e, MicE};
 pub use modem::{demodulate, modulate, Demod};
-pub use packet::{position_beacon, AprsBody, AprsPacket, NEXUS_TOCALL};
+pub use packet::{message_frame, position_beacon, AprsBody, AprsPacket, NEXUS_TOCALL};
 pub use parser::{parse, AprsInfo, Message, Position};

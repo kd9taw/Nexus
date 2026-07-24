@@ -74,6 +74,13 @@ fn run(engine: Arc<Mutex<Engine>>) {
         if !heard.is_empty() {
             if let Ok(mut e) = engine.lock() {
                 for h in heard {
+                    // Auto-ack a message addressed to us that carries a line number. The engine's
+                    // gate decides whether it actually keys (our call / TX enabled / privileges).
+                    if h.kind == "message" {
+                        if let (Some(id), Some(to)) = (&h.msg_id, &h.addressee) {
+                            e.aprs_auto_ack(&h.source, to, id);
+                        }
+                    }
                     e.push_aprs_heard(h);
                 }
             }

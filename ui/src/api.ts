@@ -1141,6 +1141,10 @@ export interface AprsHeard {
   text: string
   speedKnots: number | null
   courseDeg: number | null
+  /** For a `message` kind: who it was addressed to (base call). */
+  addressee: string | null
+  /** For a `message` kind: the sender's line number, if any. */
+  msgId: string | null
   atUnix: number
 }
 
@@ -1172,6 +1176,12 @@ export async function aprsSendBeacon(
     comment,
     path,
   })
+}
+
+/** Queue an APRS text message to `addressee` — an explicit operator send (the engine validates
+ * TX-enable / privileges / no other over and rejects with the reason). Capped at 67 chars. */
+export async function aprsSendMessage(addressee: string, text: string): Promise<void> {
+  return invoke<void>('aprs_send_message', { addressee, text })
 }
 
 /** Arm/disarm the RTTY RX decoder (session-only; RX decode, never TX). */

@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { aprsArm, aprsSendBeacon, getAprsHeard, getSettings, type AprsHeard } from '../api'
+import {
+  aprsArm,
+  aprsSendBeacon,
+  aprsSendMessage,
+  getAprsHeard,
+  getSettings,
+  type AprsHeard,
+} from '../api'
 import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
@@ -58,6 +65,8 @@ export function AprsCockpit({
   const [comment, setComment] = useState('Nexus APRS')
   const [symbol, setSymbol] = useState('>')
   const [path, setPath] = useState('WIDE1-1,WIDE2-1')
+  const [msgTo, setMsgTo] = useState('')
+  const [msgText, setMsgText] = useState('')
   const [status, setStatus] = useState<string | null>(null)
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
   const [me, setMe] = useState<LatLon | null>(null)
@@ -122,11 +131,37 @@ export function AprsCockpit({
       .catch((e) => setStatus(String(e)))
   }
 
-  // Collapse the packet stream to ONE row per station (latest packet wins — `heard` is
-  // oldest→newest), newest first, with distance + bearing from the operator's grid.
+  const sendMessage = () => {
+    const to = msgTo.trim()
+    const text = msgText.trim()
+    if (!to || !text) {
+      setStatus('Enter a callsign and a message first.')
+      return
+    }
+    setStatus('Sending message…')
+    void aprsSendMessage(to, text)
+      .then(() => {
+        setStatus(`Message to ${to.toUpperCase()} queued — keying now.`)
+        setMsgText('')
+      })
+      .catch((e) => setStatus(String(e)))
+  }
+
+  // Messages get their OWN chronological list (newest first) — never collapsed by source, so a
+  // conversation of several lines from one station all show. Positions are the roster below.
+  const messages = useMemo(
+    () => heard.filter((h) => h.kind === 'message').slice().reverse(),
+    [heard],
+  )
+
+  // Collapse the POSITION stream to ONE row per station (latest wins — `heard` is oldest→newest),
+  // newest first, with distance + bearing from the operator's grid. Messages are excluded (above).
   const rows = useMemo(() => {
     const bySource = new Map<string, AprsHeard>()
-    for (const h of heard) bySource.set(h.source, h)
+    for (const h of heard) {
+      if (h.kind === 'message') continue
+      bySource.set(h.source, h)
+    }
     return [...bySource.values()]
       .sort((a, b) => b.atUnix - a.atUnix)
       .map((h) => {
@@ -217,6 +252,53 @@ export function AprsCockpit({
         </button>
         {status && <span className="aprs-status">{status}</span>}
       </div>
+
+      <div className="aprs-beacon aprs-message-compose">
+        <span className="aprs-beacon-title">Message</span>
+        <label>
+          To
+          <input
+            value={msgTo}
+            onChange={(e) => setMsgTo(e.target.value)}
+            placeholder="callsign"
+            size={9}
+          />
+        </label>
+        <label className="aprs-beacon-comment">
+          Text
+          <input
+            value={msgText}
+            onChange={(e) => setMsgText(e.target.value)}
+            maxLength={67}
+            placeholder="up to 67 chars"
+            onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+          />
+        </label>
+        <span className="aprs-msg-count">{msgText.length}/67</span>
+        <button type="button" className="np-chip aprs-beacon-send" onClick={sendMessage}>
+          Send message
+        </button>
+      </div>
+
+      {messages.length > 0 && (
+        <div className="aprs-messages">
+          <span className="aprs-beacon-title">Messages</span>
+          <ul className="aprs-msg-list">
+            {messages.map((m, i) => (
+              <li key={`${m.source}-${m.msgId ?? i}-${m.atUnix}`} className="aprs-msg-row">
+                <span className="aprs-age">{ageLabel(m.atUnix, now)}</span>
+                <span className="aprs-from">{m.source}</span>
+                <span className="aprs-msg-arrow">→</span>
+                <span className="aprs-msg-to">{m.addressee ?? '?'}</span>
+                {m.msgId && <span className="aprs-msg-id">#{m.msgId}</span>}
+                <span className="aprs-msg-text">
+                  {m.text.replace(/^→[^:]*:\s*/, '')}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <div className="np-empty">

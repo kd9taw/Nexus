@@ -4573,6 +4573,18 @@ fn aprs_send_beacon(
     eng.aprs_beacon(lat, lon, table, code, &comment, &path)
 }
 
+/// Queue an APRS text message to `addressee` — an explicit operator send. The engine validates the
+/// same TX gate as the beacon, assigns a line number for acking, and returns WHY a send was refused.
+#[tauri::command]
+fn aprs_send_message(
+    state: State<'_, SharedEngine>,
+    addressee: String,
+    text: String,
+) -> Result<(), String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.aprs_send_message(&addressee, &text)
+}
+
 /// Queue RTTY text to transmit — an explicit operator send, the ONLY way RTTY TX
 /// starts. The engine validates every gate up front (TX armed, license privileges
 /// at the current dial, the RTTY section owning the rig, no tune carrier, no other
@@ -10436,6 +10448,7 @@ pub fn run() {
             aprs_arm,
             get_aprs_heard,
             aprs_send_beacon,
+            aprs_send_message,
             rtty_send,
             rtty_stop,
             rtty_clear,

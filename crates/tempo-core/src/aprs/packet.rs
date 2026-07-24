@@ -7,7 +7,7 @@
 
 use super::frame::{Address, Frame};
 use super::mice::{self, MicE};
-use super::parser::{self, AprsInfo, Position};
+use super::parser::{self, AprsInfo, Message, Position};
 
 /// The decoded payload of an APRS packet.
 #[derive(Debug, Clone, PartialEq)]
@@ -117,8 +117,27 @@ pub fn position_beacon(
         symbol_table,
         symbol_code,
         timestamp: None,
-        messaging: false,
+        messaging: true, // advertise that we accept APRS messages (Nexus can receive + ack them)
         comment: comment.to_string(),
+    })
+    .encode();
+    Frame::ui(Address::new(NEXUS_TOCALL, 0), mycall, path, &info)
+}
+
+/// Build a ready-to-key APRS text-message [`Frame`]: `:ADDRESSEE:text{id`. `id` (≤5 chars) is the
+/// message line number for acking — empty = no id/no ack expected. An ACK is just a message whose
+/// text is `ack<their-id>` addressed back to the sender.
+pub fn message_frame(
+    mycall: Address,
+    addressee: &str,
+    text: &str,
+    id: &str,
+    path: Vec<Address>,
+) -> Frame {
+    let info = AprsInfo::Message(Message {
+        addressee: addressee.trim().to_ascii_uppercase(),
+        text: text.to_string(),
+        id: (!id.is_empty()).then(|| id.to_string()),
     })
     .encode();
     Frame::ui(Address::new(NEXUS_TOCALL, 0), mycall, path, &info)
@@ -198,6 +217,30 @@ mod tests {
             b":WIDE2-1  :hi",
         );
         assert!(AprsPacket::from_frame(&frame).position().is_none());
+    }
+
+    #[test]
+    fn message_frame_round_trips_through_a_frame() {
+        let frame = message_frame(
+            Address::new("N0CALL", 0),
+            "kd9taw",
+            "hi from Nexus",
+            "007",
+            vec![Address::new("WIDE1", 1)],
+        );
+        let bytes = frame.encode();
+        let pkt = AprsPacket::from_bytes(&bytes).expect("message is a valid frame");
+        assert_eq!(pkt.source.call, "N0CALL");
+        assert_eq!(pkt.dest.call, NEXUS_TOCALL);
+        assert!(pkt.position().is_none());
+        match &pkt.body {
+            AprsBody::Info(AprsInfo::Message(m)) => {
+                assert_eq!(m.addressee, "KD9TAW"); // upper-cased
+                assert_eq!(m.text, "hi from Nexus");
+                assert_eq!(m.id.as_deref(), Some("007"));
+            }
+            other => panic!("expected message, got {other:?}"),
+        }
     }
 
     #[test]

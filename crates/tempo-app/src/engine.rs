@@ -805,9 +805,11 @@ pub struct Engine {
     /// Recently-decoded APRS packets, newest last, capped at [`APRS_HEARD_CAP`]. Pushed by the
     /// decode thread; polled by the cockpit.
     aprs_heard: Vec<AprsHeard>,
-    /// Pre-rendered APRS beacon audio (12 kHz), one entry per explicit operator beacon. The radio
-    /// loop keys ONE at a time via [`Engine::poll_aprs_tx`]; Stop TX / halt clears it.
+    /// Pre-rendered APRS TX audio (12 kHz) — beacons, messages, acks. The radio loop keys ONE at a
+    /// time via [`Engine::poll_aprs_tx`]; Stop TX / halt clears it.
     aprs_tx_queue: VecDeque<Vec<f32>>,
+    /// Rolling APRS message line-number (001..999) for outgoing messages, so the recipient can ack.
+    aprs_msg_seq: u16,
     /// SSTV RX decoder armed (session-only runtime state, never persisted).
     sstv_armed: bool,
     /// Drain buffer for the SSTV decode thread (same pattern as `rtty_audio`).
@@ -876,6 +878,11 @@ pub struct AprsHeard {
     pub text: String,
     pub speed_knots: Option<u16>,
     pub course_deg: Option<u16>,
+    /// For a `message` kind: who it was addressed to (base call, no SSID). Lets the UI thread
+    /// messages by conversation instead of collapsing them under the sender.
+    pub addressee: Option<String>,
+    /// For a `message` kind: the sender's line number, if any (used to ack).
+    pub msg_id: Option<String>,
     /// Unix seconds the packet was decoded (drives the age column).
     pub at_unix: i64,
 }
@@ -888,11 +895,20 @@ fn fmt_aprs_addr(a: &tempo_core::aprs::Address) -> String {
     }
 }
 
+/// Render an APRS frame to 12 kHz TX audio (~32 opening flags ≈ 0.2 s TXDELAY so the receiver's DCD
+/// locks before the data). Shared by the beacon / message / ack senders.
+fn render_aprs_frame(frame: &tempo_core::aprs::Frame) -> Vec<f32> {
+    use tempo_core::aprs;
+    aprs::modulate(&aprs::nrzi_encode(&aprs::encode_frame(&frame.encode(), 32, 3)))
+}
+
 impl AprsHeard {
     /// Flatten a decoded packet for display, stamped with its decode time.
     pub fn from_packet(pkt: &tempo_core::aprs::AprsPacket, at_unix: i64) -> Self {
         use tempo_core::aprs::{AprsBody, AprsInfo};
         let pos = pkt.position();
+        let mut addressee = None;
+        let mut msg_id = None;
         let (kind, text, sym_t, sym_c, spd, crs) = match &pkt.body {
             AprsBody::MicE(m) => (
                 "mice",
@@ -913,14 +929,18 @@ impl AprsHeard {
                 };
                 ("object", label, position.symbol_table, position.symbol_code, None, None)
             }
-            AprsBody::Info(AprsInfo::Message(msg)) => (
-                "message",
-                format!("\u{2192}{}: {}", msg.addressee, msg.text),
-                ' ',
-                ' ',
-                None,
-                None,
-            ),
+            AprsBody::Info(AprsInfo::Message(msg)) => {
+                addressee = Some(msg.addressee.clone());
+                msg_id = msg.id.clone();
+                (
+                    "message",
+                    format!("\u{2192}{}: {}", msg.addressee, msg.text),
+                    ' ',
+                    ' ',
+                    None,
+                    None,
+                )
+            }
             AprsBody::Info(AprsInfo::Status { text, .. }) => {
                 ("status", text.clone(), ' ', ' ', None, None)
             }
@@ -940,6 +960,8 @@ impl AprsHeard {
             text,
             speed_knots: spd,
             course_deg: crs,
+            addressee,
+            msg_id,
             at_unix,
         }
     }
@@ -1257,6 +1279,7 @@ impl Engine {
             aprs_audio: Vec::new(),
             aprs_heard: Vec::new(),
             aprs_tx_queue: VecDeque::new(),
+            aprs_msg_seq: 0,
             sstv_armed: false,
             sstv_audio: Vec::new(),
             sstv_progress: None,
@@ -4577,14 +4600,81 @@ impl Engine {
             );
         }
         let frame = aprs::position_beacon(src, lat, lon, symbol_table, symbol_code, comment, digis);
-        // ~32 opening flags ≈ 0.2 s TXDELAY so the receiver's DCD locks before the data.
-        let audio = aprs::modulate(&aprs::nrzi_encode(&aprs::encode_frame(&frame.encode(), 32, 3)));
+        let audio = render_aprs_frame(&frame);
         if audio.is_empty() {
             return Err("Beacon rendered no audio".to_string());
         }
         self.reset_tx_watchdog();
         self.aprs_tx_queue.push_back(audio);
         Ok(())
+    }
+
+    /// Queue one APRS text message to `addressee` — an explicit operator send. Assigns a rolling
+    /// line number (001..999) so the recipient can ack, and the sender can retry until acked. Same
+    /// TX gate as the beacon; the path defaults to `WIDE1-1,WIDE2-1` so it digipeats like a beacon.
+    pub fn aprs_send_message(&mut self, addressee: &str, text: &str) -> Result<(), String> {
+        use tempo_core::aprs;
+        self.aprs_tx_gate()?;
+        let addressee = addressee.trim();
+        if addressee.is_empty() {
+            return Err("Enter a callsign to message".to_string());
+        }
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("Enter a message".to_string());
+        }
+        // APRS caps message text at 67 chars (spec §14); reject rather than silently truncate.
+        if text.chars().count() > 67 {
+            return Err("APRS messages are limited to 67 characters".to_string());
+        }
+        let mycall = self.settings.mycall.trim();
+        let src = aprs::Address::parse(mycall)
+            .ok_or_else(|| "Set a valid callsign in Settings first".to_string())?;
+        // Roll 001..999 (never 000 — a zero id reads as "no ack expected").
+        self.aprs_msg_seq = self.aprs_msg_seq % 999 + 1;
+        let id = format!("{:03}", self.aprs_msg_seq);
+        let path = vec![aprs::Address::new("WIDE1", 1), aprs::Address::new("WIDE2", 1)];
+        let frame = aprs::message_frame(src, addressee, text, &id, path);
+        let audio = render_aprs_frame(&frame);
+        if audio.is_empty() {
+            return Err("Message rendered no audio".to_string());
+        }
+        self.reset_tx_watchdog();
+        self.aprs_tx_queue.push_back(audio);
+        Ok(())
+    }
+
+    /// Auto-ack an incoming message addressed to us — called by the RX decode thread. An ACK is a
+    /// message whose text is `ack<their-id>` sent back to `from`. Silent no-op unless the message
+    /// truly targets our base callsign AND TX is enabled/allowed (we never key an ack on our own).
+    pub fn aprs_auto_ack(&mut self, from: &str, addressee: &str, msg_id: &str) {
+        use tempo_core::aprs;
+        if msg_id.is_empty() {
+            return; // no id → sender isn't asking for an ack
+        }
+        // Match on base call, SSID-agnostic (the addressee field carries no SSID).
+        let base = |c: &str| c.split('-').next().unwrap_or("").trim().to_ascii_uppercase();
+        let mine = base(&self.settings.mycall);
+        if mine.is_empty() || base(addressee) != mine {
+            return; // not addressed to us
+        }
+        if base(from) == mine {
+            return; // never ack ourselves (a digipeated loopback)
+        }
+        if self.aprs_tx_gate().is_err() {
+            return; // TX off / outside privileges / busy → don't auto-ack
+        }
+        let Some(src) = aprs::Address::parse(self.settings.mycall.trim()) else {
+            return;
+        };
+        // The ack itself carries no id (an ack is never itself acked).
+        let path = vec![aprs::Address::new("WIDE1", 1), aprs::Address::new("WIDE2", 1)];
+        let frame = aprs::message_frame(src, from, &format!("ack{msg_id}"), "", path);
+        let audio = render_aprs_frame(&frame);
+        if !audio.is_empty() {
+            self.reset_tx_watchdog();
+            self.aprs_tx_queue.push_back(audio);
+        }
     }
 
     /// Pop the next queued APRS beacon audio for the radio loop to key, or `None` while any TX gate

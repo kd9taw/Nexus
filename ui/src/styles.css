@@ -16468,6 +16468,46 @@ html[data-panel='needed'] {
   font-size: 11px;
   color: var(--text-dim);
 }
+.aprs-msg-count {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.aprs-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.aprs-msg-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.aprs-msg-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  font-size: 12px;
+}
+.aprs-msg-arrow {
+  color: var(--text-faint);
+}
+.aprs-msg-to {
+  font-weight: 600;
+}
+.aprs-msg-id {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.aprs-msg-text {
+  color: var(--text);
+}
 .aprs-table {
   width: 100%;
   border-collapse: collapse;
