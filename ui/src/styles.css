@@ -15401,6 +15401,34 @@ html[data-panel='needed'] {
   flex-direction: column;
   gap: 2px;
 }
+/* HF / VHF-UHF band-range section headers in the memories list + table. */
+.mv-section {
+  padding: var(--space-2) var(--space-1) 2px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  margin-top: var(--space-2);
+}
+.mv-list .mv-section:first-child {
+  margin-top: 0;
+}
+.mv-section-row td {
+  padding: var(--space-2) var(--space-1) 2px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: var(--bg-elev-1);
+}
+.mv-section-count {
+  color: var(--text-dim);
+  opacity: 0.7;
+  font-weight: 400;
+}
 .mv-row {
   border: 1px solid transparent;
   border-radius: var(--radius-sm);

@@ -327,7 +327,10 @@ export function LogEntry({
     if (!pendingWork) return
     setLogCall(pendingWork.call.toUpperCase())
     humanCallEditRef.current = false // a clicked spot is not a human keystroke — no auto-lookup
-    rstRef.current?.focus()
+    // preventScroll: focusing the RST readies it for the report, but must NOT scroll the log
+    // into view — the operator works from the decode feed/roster scrolled up, and a click
+    // snapping the window down to the log every time is the reported bug.
+    rstRef.current?.focus({ preventScroll: true })
     rstRef.current?.select()
     onConsumeWork?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -5,7 +5,7 @@
 // and auto-switches to the right cockpit); full CHIRP CSV round-trip so channels
 // flow Nexus ⇄ CHIRP ⇄ real radios. Store + model live in features/memories.ts
 // (shared with the cockpit MemoryStrip and the Program section's save).
-import { useEffect, useRef, useState, type InputHTMLAttributes } from 'react'
+import { Fragment, useEffect, useRef, useState, type InputHTMLAttributes } from 'react'
 import {
   addGroup,
   addMemory,
@@ -160,6 +160,17 @@ export function MemoriesView({ dialMhz, dialMode, onRecall }: MemoriesViewProps)
         return c * sort.dir
       })
     : filtered
+
+  // Organize the list cleanly by band range: HF (< 30 MHz — 10 m at 28-29.7 stays HF) then
+  // VHF/UHF (>= 30 MHz — 6 m at 50 up). Applies everywhere this list shows: All memories AND a
+  // pack/group's channels. The active sort is preserved within each section; a section header
+  // only shows when the view actually spans both ranges (an all-HF group needs no label).
+  const HF_MAX_MHZ = 30
+  const bandSections = [
+    { key: 'hf', label: 'HF', rows: shown.filter((m) => m.rxMhz < HF_MAX_MHZ) },
+    { key: 'vu', label: 'VHF / UHF', rows: shown.filter((m) => m.rxMhz >= HF_MAX_MHZ) },
+  ].filter((s) => s.rows.length > 0)
+  const showSectionHeaders = bandSections.length > 1
 
   const commit = (fn: (b: typeof bank) => typeof bank) => memoriesStore.update(fn)
 
@@ -804,7 +815,16 @@ export function MemoriesView({ dialMhz, dialMode, onRecall }: MemoriesViewProps)
                 </tr>
               </thead>
               <tbody>
-                {shown.map((m) => (
+                {bandSections.map((sec) => (
+                  <Fragment key={sec.key}>
+                    {showSectionHeaders && (
+                      <tr className="mv-section-row">
+                        <td colSpan={8}>
+                          {sec.label} <span className="mv-section-count">{sec.rows.length}</span>
+                        </td>
+                      </tr>
+                    )}
+                    {sec.rows.map((m) => (
                   <tr key={m.id} className={invalidRow(m) ? 'invalid' : undefined}>
                     <td>
                       <button
@@ -861,13 +881,22 @@ export function MemoriesView({ dialMhz, dialMode, onRecall }: MemoriesViewProps)
                       </button>
                     </td>
                   </tr>
+                    ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
           </div>
         ) : (
           <ul className="mv-list mv-scroll">
-            {shown.map((m) => (
+            {bandSections.map((sec) => (
+              <Fragment key={sec.key}>
+                {showSectionHeaders && (
+                  <li className="mv-section" aria-hidden="true">
+                    {sec.label} <span className="mv-section-count">{sec.rows.length}</span>
+                  </li>
+                )}
+                {sec.rows.map((m) => (
               <li key={m.id} className={`mv-row${invalidRow(m) ? ' invalid' : ''}`}>
                 <div className="mv-row-line">
                   <button
@@ -945,6 +974,8 @@ export function MemoriesView({ dialMhz, dialMode, onRecall }: MemoriesViewProps)
                 </div>
                 {editingId === m.id && editor(m)}
               </li>
+                ))}
+              </Fragment>
             ))}
           </ul>
         )}
