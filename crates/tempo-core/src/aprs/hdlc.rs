@@ -16,7 +16,7 @@ pub const FLAG: u8 = 0x7E;
 /// NRZI reference level shared by [`nrzi_encode`]/[`nrzi_decode`] so a round-trip is exact. (On a
 /// real receiver the leading flags re-sync this; NRZI is differential, so the absolute level of
 /// this reference is immaterial once framing locks.)
-const NRZI_INIT: bool = true;
+pub(super) const NRZI_INIT: bool = true;
 
 fn push_byte_lsb(bits: &mut Vec<bool>, byte: u8) {
     for i in 0..8 {
@@ -91,55 +91,76 @@ fn bits_to_bytes(bits: &[bool]) -> Option<Vec<u8>> {
     )
 }
 
-/// Recover frames from a logical (already NRZI-decoded) bit stream: hunt for flags, de-stuff the
-/// data, and reassemble bytes. Returns every byte-aligned frame found between flag pairs (each is
-/// AX.25 addresses…info + the 2-byte FCS, ready for `Frame::decode`). Runs of ≥7 ones (abort) and
-/// non-byte-aligned segments are discarded.
-pub fn deframe(bits: &[bool]) -> Vec<Vec<u8>> {
-    let mut frames = Vec::new();
-    let mut frame: Vec<bool> = Vec::new();
-    let mut ones = 0u32;
-    let mut in_frame = false;
-    for &b in bits {
+/// Streaming HDLC deframer: hunt for flags, de-stuff, and reassemble bytes, carrying its state
+/// across [`Deframer::push`] calls so a frame split over several audio chunks is still recovered.
+/// Each returned buffer is AX.25 addresses…info + the 2-byte FCS (ready for `Frame::decode`); runs
+/// of ≥7 ones (abort) and non-byte-aligned segments are discarded.
+#[derive(Default)]
+pub struct Deframer {
+    frame: Vec<bool>,
+    ones: u32,
+    in_frame: bool,
+}
+
+impl Deframer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed more logical (NRZI-decoded) bits; returns any frames completed by them.
+    pub fn push(&mut self, bits: &[bool]) -> Vec<Vec<u8>> {
+        let mut frames = Vec::new();
+        for &b in bits {
+            self.push_bit(b, &mut frames);
+        }
+        frames
+    }
+
+    fn push_bit(&mut self, b: bool, frames: &mut Vec<Vec<u8>>) {
         if b {
-            if ones < 5 {
-                if in_frame {
-                    frame.push(true);
+            if self.ones < 5 {
+                if self.in_frame {
+                    self.frame.push(true);
                 }
-                ones += 1;
+                self.ones += 1;
             } else {
-                ones += 1; // sixth-or-later 1: part of a flag/abort, never data — don't collect
+                self.ones += 1; // sixth-or-later 1: part of a flag/abort, never data
             }
-        } else {
-            let run = ones;
-            ones = 0;
-            match run {
-                5 => {} // stuffed zero → discard
-                6 => {
-                    // Flag: the tentatively-collected opening `0` + five `1`s (6 bits) belong to
-                    // this flag, not the frame — trim them, then emit whatever preceded.
-                    if in_frame {
-                        frame.truncate(frame.len().saturating_sub(6));
-                        if let Some(bytes) = bits_to_bytes(&frame) {
-                            frames.push(bytes);
-                        }
+            return;
+        }
+        let run = self.ones;
+        self.ones = 0;
+        match run {
+            5 => {} // stuffed zero → discard
+            6 => {
+                // Flag: the tentatively-collected opening `0` + five `1`s (6 bits) belong to this
+                // flag, not the frame — trim them, then emit whatever preceded.
+                if self.in_frame {
+                    self.frame.truncate(self.frame.len().saturating_sub(6));
+                    if let Some(bytes) = bits_to_bytes(&self.frame) {
+                        frames.push(bytes);
                     }
-                    frame.clear();
-                    in_frame = true;
                 }
-                r if r >= 7 => {
-                    in_frame = false; // abort → resync on the next flag
-                    frame.clear();
-                }
-                _ => {
-                    if in_frame {
-                        frame.push(false);
-                    }
+                self.frame.clear();
+                self.in_frame = true;
+            }
+            r if r >= 7 => {
+                self.in_frame = false; // abort → resync on the next flag
+                self.frame.clear();
+            }
+            _ => {
+                if self.in_frame {
+                    self.frame.push(false);
                 }
             }
         }
     }
-    frames
+}
+
+/// Recover frames from a complete logical bit stream in one shot (a thin wrapper over
+/// [`Deframer`]). Prefer `Deframer` for live/streamed audio.
+pub fn deframe(bits: &[bool]) -> Vec<Vec<u8>> {
+    Deframer::new().push(bits)
 }
 
 #[cfg(test)]

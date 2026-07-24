@@ -13,6 +13,8 @@
 
 use core::f32::consts::TAU;
 
+use super::hdlc::NRZI_INIT;
+
 /// Modem sample rate (Hz). Matches the app's 12 kHz internal audio; 12000/1200 = 10 samples/bit.
 pub const SAMPLE_RATE: f32 = 12_000.0;
 /// AFSK baud rate.
@@ -44,53 +46,127 @@ pub fn modulate(levels: &[bool]) -> Vec<f32> {
     out
 }
 
-/// Demodulate 12 kHz AFSK audio back into NRZI tone levels (`true` = mark), one per bit.
+/// Timing-recovery PLL gain: fraction of the phase error pulled out at each tone transition.
+const PLL_GAIN: f32 = 0.30;
+
+/// Quadrature reference taps `(cos_mark, sin_mark, cos_space, sin_space)`, one per bit-window sample.
+type RefTaps = [(f32, f32, f32, f32); SAMPLES_PER_BIT];
+
+fn ref_tables() -> RefTaps {
+    let mut t = [(0.0f32, 0.0f32, 0.0f32, 0.0f32); SAMPLES_PER_BIT];
+    for (k, slot) in t.iter_mut().enumerate() {
+        let am = TAU * MARK_HZ * k as f32 / SAMPLE_RATE;
+        let asp = TAU * SPACE_HZ * k as f32 / SAMPLE_RATE;
+        *slot = (am.cos(), am.sin(), asp.cos(), asp.sin());
+    }
+    t
+}
+
+/// Discriminator over one bit window (chronological order): mark energy − space energy.
+fn discriminate(win: &[f32], t: &RefTaps) -> f32 {
+    let (mut mi, mut mq, mut si, mut sq) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    for (&x, &(cm, sm, cs, ss)) in win.iter().zip(t.iter()) {
+        mi += x * cm;
+        mq += x * sm;
+        si += x * cs;
+        sq += x * ss;
+    }
+    (mi * mi + mq * mq) - (si * si + sq * sq)
+}
+
+/// Stateful streaming AFSK demodulator: feed audio chunks, get the logical (NRZI-decoded) bits back.
+/// Carries the correlator window, the timing PLL, and the NRZI reference across calls, so a frame
+/// spread over several audio drains decodes seamlessly (the shape the live RX thread needs).
+pub struct Demod {
+    tables: RefTaps,
+    ring: [f32; SAMPLES_PER_BIT],
+    pos: usize,
+    filled: usize,
+    clk: f32,
+    prev_sign: bool,
+    started: bool,
+    nrzi_prev: bool,
+}
+
+impl Default for Demod {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Demod {
+    pub fn new() -> Self {
+        Self {
+            tables: ref_tables(),
+            ring: [0.0; SAMPLES_PER_BIT],
+            pos: 0,
+            filled: 0,
+            clk: 0.0,
+            prev_sign: false,
+            started: false,
+            nrzi_prev: NRZI_INIT,
+        }
+    }
+
+    /// Feed audio; return the logical bits recovered (NRZI already decoded), ready for a
+    /// [`Deframer`](super::hdlc::Deframer).
+    pub fn feed(&mut self, samples: &[f32]) -> Vec<bool> {
+        let spb = SAMPLES_PER_BIT;
+        let half = spb as f32 / 2.0;
+        let mut out = Vec::new();
+        for &x in samples {
+            self.ring[self.pos] = x;
+            self.pos = (self.pos + 1) % spb;
+            if self.filled < spb {
+                self.filled += 1;
+                if self.filled < spb {
+                    continue;
+                }
+            }
+            // Window in chronological order (oldest at self.pos).
+            let mut win = [0.0f32; SAMPLES_PER_BIT];
+            for (k, w) in win.iter_mut().enumerate() {
+                *w = self.ring[(self.pos + k) % spb];
+            }
+            let sign = discriminate(&win, &self.tables) >= 0.0;
+            if !self.started {
+                self.prev_sign = sign;
+                self.started = true;
+            }
+            if sign != self.prev_sign {
+                self.clk += (half - self.clk) * PLL_GAIN;
+                self.prev_sign = sign;
+            }
+            self.clk += 1.0;
+            if self.clk >= spb as f32 {
+                self.clk -= spb as f32;
+                out.push(sign == self.nrzi_prev); // NRZI decode: no change = 1
+                self.nrzi_prev = sign;
+            }
+        }
+        out
+    }
+}
+
+/// One-shot AFSK demodulation → NRZI tone LEVELS (`true` = mark), one per bit. Prefer [`Demod`]
+/// for streamed/live audio; this stays for whole-buffer decoding + tests.
 pub fn demodulate(samples: &[f32]) -> Vec<bool> {
     let spb = SAMPLES_PER_BIT;
     if samples.len() < spb {
         return Vec::new();
     }
-    // Quadrature reference tables over one bit window (the absolute phase reference is immaterial —
-    // only the magnitude at each tone is used).
-    let mut cos_m = [0.0f32; SAMPLES_PER_BIT];
-    let mut sin_m = [0.0f32; SAMPLES_PER_BIT];
-    let mut cos_s = [0.0f32; SAMPLES_PER_BIT];
-    let mut sin_s = [0.0f32; SAMPLES_PER_BIT];
-    for k in 0..spb {
-        let am = TAU * MARK_HZ * k as f32 / SAMPLE_RATE;
-        let as_ = TAU * SPACE_HZ * k as f32 / SAMPLE_RATE;
-        cos_m[k] = am.cos();
-        sin_m[k] = am.sin();
-        cos_s[k] = as_.cos();
-        sin_s[k] = as_.sin();
-    }
-
-    // Per-sample discriminator over a trailing one-bit window: mark energy − space energy.
-    let n = samples.len();
-    let mut disc = vec![0.0f32; n];
-    for i in (spb - 1)..n {
-        let w = &samples[i + 1 - spb..=i];
-        let (mut mi, mut mq, mut si, mut sq) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-        for k in 0..spb {
-            let x = w[k];
-            mi += x * cos_m[k];
-            mq += x * sin_m[k];
-            si += x * cos_s[k];
-            sq += x * sin_s[k];
-        }
-        disc[i] = (mi * mi + mq * mq) - (si * si + sq * sq);
-    }
-
-    // Timing-recovery PLL: `clk` runs 0..spb and samples the tone decision when it wraps (bit
-    // centre). A tone transition marks a bit boundary → nudge `clk` toward spb/2 so the wrap lands
-    // mid-bit. Preamble flags give many transitions to lock before data arrives.
-    const PLL_GAIN: f32 = 0.30;
+    let tables = ref_tables();
     let half = spb as f32 / 2.0;
     let mut clk = 0.0f32;
-    let mut prev = disc[spb - 1] >= 0.0;
-    let mut out = Vec::with_capacity(n / spb + 2);
-    for &d in disc.iter().skip(spb - 1) {
-        let sign = d >= 0.0;
+    let mut prev = false;
+    let mut started = false;
+    let mut out = Vec::with_capacity(samples.len() / spb + 2);
+    for i in (spb - 1)..samples.len() {
+        let sign = discriminate(&samples[i + 1 - spb..=i], &tables) >= 0.0;
+        if !started {
+            prev = sign;
+            started = true;
+        }
         if sign != prev {
             clk += (half - clk) * PLL_GAIN;
             prev = sign;
@@ -164,6 +240,37 @@ mod tests {
         assert_eq!(frames.len(), 1, "one frame recovered from clean audio");
         assert_eq!(frames[0], bytes);
         assert_eq!(Frame::decode(&frames[0]), Some(f));
+    }
+
+    #[test]
+    fn streaming_demod_matches_the_one_shot_and_is_chunk_invariant() {
+        use super::super::hdlc::nrzi_decode;
+        let audio = modulate(&nrzi_encode(&encode_frame(&sample_frame().encode(), 16, 2)));
+        // Whole-buffer Demod == nrzi_decode(demodulate(whole)).
+        let expected = nrzi_decode(&demodulate(&audio));
+        assert_eq!(Demod::new().feed(&audio), expected, "whole-buffer streaming matches one-shot");
+        // Fed in awkward chunks, the carried state yields the exact same bits.
+        let mut d = Demod::new();
+        let mut got = Vec::new();
+        for chunk in audio.chunks(37) {
+            got.extend(d.feed(chunk));
+        }
+        assert_eq!(got, expected, "chunked feed is invariant");
+    }
+
+    #[test]
+    fn streaming_demod_plus_deframer_recovers_a_split_frame() {
+        use super::super::hdlc::Deframer;
+        let bytes = sample_frame().encode();
+        let audio = modulate(&nrzi_encode(&encode_frame(&bytes, 16, 2)));
+        let mut demod = Demod::new();
+        let mut deframer = Deframer::new();
+        let mut frames = Vec::new();
+        // 50 ms-ish drains (600 samples) — a frame spans many of them.
+        for chunk in audio.chunks(600) {
+            frames.extend(deframer.push(&demod.feed(chunk)));
+        }
+        assert!(frames.iter().any(|f| f == &bytes), "frame recovered across streamed chunks");
     }
 
     #[test]
