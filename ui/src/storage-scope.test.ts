@@ -44,6 +44,7 @@ export const PER_SURFACE = [
   'nexus.split.operate.waterfall',
   'nexus.split.phone.scope',
   'nexus.view',
+  'nexus.waterfall.dss',
   'nexus.waterfall.zoom',
   'tempo-left-rail-w',
   'tempo-right-rail-w',

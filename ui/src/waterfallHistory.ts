@@ -101,6 +101,13 @@ export class WaterfallHistory {
     return this.data[idx * this.cols + col]
   }
 
+  /** Public read of the stored intensity (0..255) at (`age` rows back, column) — for the 3D
+   * (3DSS) renderer, which samples rows directly. Bounds-checked → 0 out of range. */
+  intensityAt(age: number, col: number): number {
+    if (age < 0 || age >= this.count || col < 0 || col >= this.cols) return 0
+    return this.at(age, col)
+  }
+
   /**
    * Render a viewport FROM DATA into an RGBA buffer (width `outW` × height `outH`,
    * newest row at the BOTTOM), mapping each output column through the requested view

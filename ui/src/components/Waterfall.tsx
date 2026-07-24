@@ -14,6 +14,7 @@ import {
 } from '../waterfall'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { WaterfallHistory, ageLabel } from '../waterfallHistory'
+import { drawDss } from '../dss'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { PalettePicker } from './PalettePicker'
 
@@ -29,6 +30,9 @@ const ZERO_KEY = 'nexus.waterfall.zero'
 /** PER-SURFACE: a wide overview docked plus a zoomed-in torn-off waterfall is the reason
  *  to pop the waterfall out at all. */
 const ZOOM_KEY = 'nexus.waterfall.zoom'
+/** PER-SURFACE: 2D scroll vs 3D stacked-spectrum (3DSS) view. A torn-off 3D display next to a
+ *  docked 2D one is a legitimate multi-monitor setup, so this is per-surface like the zoom. */
+const THREED_KEY = 'nexus.waterfall.dss'
 /** Load a persisted [-1,1] slider value (gain/zero); missing/blocked → 0 (= auto). */
 function loadKnob(key: string): number {
   try {
@@ -139,6 +143,11 @@ export function Waterfall({
   const [paused, setPaused] = useState(false)
   const pausedRef = useRef(paused)
   pausedRef.current = paused
+  // 3DSS: the perspective stacked-spectrum "alternate waterfall", drawn from the SAME history
+  // ring. Per-surface persisted.
+  const [dss, setDss] = useState<boolean>(() => surfaceGet(THREED_KEY) === '1')
+  const dssRef = useRef(dss)
+  dssRef.current = dss
   /** Scrollback offset in rows while paused (0 = live tail). */
   const offsetRef = useRef(0)
   /** Cold-path re-render hook, owned by the canvas effect (null until mounted). */
@@ -246,23 +255,32 @@ export function Waterfall({
       }
       return retImg
     }
-    // Cold-path re-render: palette/theme switch, zoom change, scrollback, resize.
+    // Cold-path re-render: palette/theme switch, zoom change, scrollback, resize, 2D↔3D.
     const rebuildFromHistory = () => {
-      if (retBuf && retW > 0 && retH > 0) {
-        historyRef.current.renderInto(
-          retBuf,
-          retW,
-          retH,
-          viewLoRef.current,
-          viewHiRef.current,
-          lutRef.current,
-          offsetRef.current,
-        )
-        try {
-          ctx.putImageData(retImg!, 0, 0)
-        } catch {
-          /* zero-size mid-layout */
-        }
+      if (!(retW > 0 && retH > 0)) return
+      const lut = lutRef.current
+      if (dssRef.current) {
+        // 3D stacked-spectrum: redraw the whole surface directly on the canvas.
+        drawDss(ctx, retW, retH, historyRef.current, lut, [lut[0], lut[1], lut[2]], {
+          loHz: viewLoRef.current,
+          hiHz: viewHiRef.current,
+        })
+        return
+      }
+      if (!retBuf) return
+      historyRef.current.renderInto(
+        retBuf,
+        retW,
+        retH,
+        viewLoRef.current,
+        viewHiRef.current,
+        lut,
+        offsetRef.current,
+      )
+      try {
+        ctx.putImageData(retImg!, 0, 0)
+      } catch {
+        /* zero-size mid-layout */
       }
     }
     rebuildRef.current = rebuildFromHistory
@@ -413,6 +431,19 @@ export function Waterfall({
       // PAUSED: history keeps accumulating (nothing is lost) but the VIEW is frozen —
       // the scroll/blit below is skipped. drawOverlay renders the pause chip + time tape.
       if (pausedRef.current) return
+
+      // 3DSS: redraw the whole stacked-spectrum surface from history each new row (it's a
+      // rebuild by nature — cheap at the 8 Hz row cadence). The retained-buffer 2D scroll
+      // below is skipped.
+      if (dssRef.current) {
+        const lut = lutRef.current
+        // (retBuf stays allocated from resize() for a clean switch back to 2D.)
+        drawDss(ctx, Wd, wfHd, historyRef.current, lut, [lut[0], lut[1], lut[2]], {
+          loHz: viewLoRef.current,
+          hiHz: viewHiRef.current,
+        })
+        return
+      }
 
       // Scroll the retained RGBA buffer up one row with copyWithin (pure CPU — the old
       // getImageData readback stall is gone; the canvas is write-only now), write the new
@@ -693,6 +724,25 @@ export function Waterfall({
             }}
           />
         </label>
+        <button
+          type="button"
+          className={`wf-popout wf-dss${dss ? ' on' : ''}`}
+          aria-pressed={dss}
+          onClick={() => {
+            const next = !dss
+            setDss(next)
+            dssRef.current = next
+            surfaceSet(THREED_KEY, next ? '1' : '0')
+            rebuildRef.current?.() // repaint immediately in the new view
+          }}
+          title={
+            dss
+              ? 'Switch to the flat 2D waterfall'
+              : 'Switch to the 3D stacked-spectrum view (a rolling perspective of the last ~96 rows)'
+          }
+        >
+          {dss ? '▤' : '◭'}
+        </button>
         <button
           type="button"
           className={`wf-popout wf-pause${paused ? ' on' : ''}`}

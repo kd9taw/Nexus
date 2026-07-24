@@ -14759,10 +14759,14 @@ html[data-panel='needed'] {
   font-size: var(--fs-small);
   line-height: 1.6;
 }
-/* Waterfall pause toggle — same chrome as the pop-out button; amber when engaged. */
+/* Waterfall pause + 3D toggles — same chrome as the pop-out button; accent when engaged. */
 .wf-pause.on {
   color: var(--state-weak, #e0a030);
   border-color: var(--state-weak, #e0a030);
+}
+.wf-dss.on {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .wf-popout:hover {
   color: var(--text);
