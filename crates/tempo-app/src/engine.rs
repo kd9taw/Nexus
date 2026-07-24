@@ -2091,6 +2091,15 @@ impl Engine {
     pub fn send_cw(&mut self, text: &str) {
         let expanded = self.expand_cw(text);
         if !expanded.trim().is_empty() {
+            // A deliberate CW send (F-key macro or typed text) IS the transmit action, so RE-ARM
+            // TX — exactly like entering a manual mode arms it (`set_operating_mode`). Without this,
+            // a prior Stop TX / halt_tx (which disables tx_enabled to stop the FT8 auto-sequencer)
+            // leaves `poll_cw_one` gated off, so the next F-key silently queues but never keys until
+            // the operator re-enters the mode (a band/contact switch). CW is manual keying: hitting
+            // the key must always transmit (privilege permitting — tx_allowed still gates). FT8 is
+            // unaffected: it never calls send_cw and keeps its Monitor/double-click keying gate.
+            self.tx_enabled = true;
+            self.cw_abort = false; // a fresh send supersedes a pending one-shot abort
             // TX echo: show the operator what actually went out (tokens resolved).
             self.cw_sent.push_back(expanded.clone());
             while self.cw_sent.len() > 50 {
@@ -7530,15 +7539,15 @@ mod tests {
         }
         assert_eq!(e.poll_cw_one(), None, "drained");
 
-        // Gated by Monitor: with TX disabled nothing keys; the queue is held.
+        // A deliberate CW send always transmits: even after Stop TX disabled it, send_cw RE-ARMS
+        // TX and the word keys immediately (the F-key fidelity fix — manual keying is never held).
         e.set_tx_enabled(false);
         e.send_cw("TEST");
-        assert_eq!(e.poll_cw_one(), None, "no CW keyed while TX is disabled");
-        e.set_tx_enabled(true);
+        assert!(e.tx_enabled(), "a deliberate CW send re-arms TX");
         assert_eq!(
             e.poll_cw_one(),
             Some("TEST".to_string()),
-            "held until TX re-enabled"
+            "the send keys immediately — no held-queue trap after a halt"
         );
 
         // Abort clears the WHOLE remaining queue (the un-keyed words) and raises the one-shot
@@ -8834,6 +8843,29 @@ mod tests {
             "stays stopped across slots — the sequencer does NOT re-arm"
         );
         assert!(!e.snapshot().radio.transmitting);
+    }
+
+    #[test]
+    fn cw_send_re_arms_tx_after_a_halt() {
+        // The reported CW-fidelity bug: after Stop TX, an F-key / typed CW send silently queued
+        // but never keyed until a band/contact switch re-entered the mode. A deliberate CW send
+        // must ALWAYS transmit (privilege permitting) — no ifs, ands, or buts.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("cw", false); // manual mode arms tx on entry
+        e.set_frequency(7.03, "40m", "CW"); // a CW freq we have privileges on
+        assert!(e.tx_allowed(), "on a CW freq we can key");
+
+        e.halt_tx(); // operator hits Stop TX
+        assert!(!e.tx_enabled(), "halt disarms");
+        assert!(e.poll_cw_one().is_none(), "nothing keys while halted");
+
+        e.send_cw("TEST"); // operator hits an F-key / types
+        assert!(e.tx_enabled(), "a deliberate CW send re-arms TX");
+        assert_eq!(
+            e.poll_cw_one().as_deref(),
+            Some("TEST"),
+            "the queued word now keys — the F-key took effect"
+        );
     }
 
     #[test]
