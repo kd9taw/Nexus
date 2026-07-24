@@ -242,6 +242,15 @@ pub struct ChatMessage {
     /// + broadcasts.
     #[serde(default)]
     pub ack_id: Option<char>,
+    /// For an OUTBOUND directed message: transmit cycles used so far (bounded by
+    /// `chat_max_cycles`) — drives the bubble's "sending k/N". 0 while still held.
+    #[serde(default)]
+    pub attempts: u32,
+    /// For an OUTBOUND directed message: terminal "sent N times, never acknowledged".
+    /// The resend schedule stopped; a LATE RR73 within the grace window may still flip
+    /// this to `delivered`. Drives the bubble's "no ack" state + tap-to-resend.
+    #[serde(default)]
+    pub no_ack: bool,
     /// For an OUTBOUND directed message: still HELD in the store-and-forward queue, never
     /// yet released on the air because the recipient hasn't been heard. Cleared the moment
     /// the message first transmits. `false` for inbound + broadcasts.

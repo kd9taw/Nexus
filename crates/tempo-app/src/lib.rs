@@ -329,6 +329,8 @@ impl AppState {
             dt_sec: None,
             tier: Some(self.link.tier),
             delivered: false, // flips true when the recipient's id-bearing ACK arrives
+            attempts: 0,   // bumped per release ("sending k/N")
+            no_ack: false, // terminal after chat_max_cycles unacknowledged
             ack_id: Some(ack_id), // confirm THIS message by its store chunk-id
             stored: true,     // HELD until the peer is heard and the queue releases it
             abandoned: false,
@@ -355,6 +357,8 @@ impl AppState {
             dt_sec: None,
             tier: Some(tier),
             delivered: false, // broadcasts have no per-recipient ACK
+            attempts: 0,
+            no_ack: false,
             ack_id: None,
             stored: false, // broadcasts go out directly, never via the store queue
             abandoned: false,
@@ -410,6 +414,7 @@ impl AppState {
         slot: u64,
         window: u64,
         backoff: u64,
+        max_attempts: u32,
     ) -> (Vec<String>, Vec<String>) {
         // `self.store` and `self.inbox.roster` are disjoint fields, so this
         // mutable/immutable split borrow is sound.
@@ -419,17 +424,59 @@ impl AppState {
         // held bubble stops saying "waiting". Collected here and applied AFTER the loop:
         // calling a `&mut self` helper inside would break the split borrow above.
         let mut released_to = Vec::new();
-        for (to, body, fs) in self.store.due(&self.inbox.roster, slot, window, backoff) {
+        let mut released_attempts = Vec::new();
+        for (to, body, fs, id, attempts) in
+            self.store
+                .due(&self.inbox.roster, slot, window, backoff, max_attempts)
+        {
             if let Some(b) = body {
                 bodies.push(b);
-                released_to.push(to);
+                released_to.push(to.clone());
             }
+            released_attempts.push((to, id, attempts));
             frames.extend(fs);
         }
         for peer in released_to {
             self.mark_conversation_on_air(&peer);
         }
+        // Stamp each released bubble's cycle count (exact ack_id match — "sending k/N").
+        for (peer, id, attempts) in released_attempts {
+            self.mark_conversation_attempts(&peer, id, attempts);
+        }
+        // Messages that just exhausted their budget go terminal: stamp the bubble
+        // "no-ack" (exact id match). The store entry stays briefly ACK-matchable so a
+        // late RR73 can still flip it to Delivered; purge_stale (ACK-in path) bounds it.
+        for (peer, id) in self.store.take_no_acks(max_attempts) {
+            self.mark_conversation_no_ack(&peer, id);
+        }
         (frames, bodies)
+    }
+
+    /// Stamp a released outbound bubble's transmit-cycle count (exact ack-id match).
+    fn mark_conversation_attempts(&mut self, peer: &str, id: char, attempts: u32) {
+        if let Some(conv) = self.conversations.get_mut(peer) {
+            if let Some(m) = conv
+                .messages
+                .iter_mut()
+                .find(|m| m.outbound && m.ack_id == Some(id))
+            {
+                m.attempts = attempts;
+            }
+        }
+    }
+
+    /// Stamp an outbound bubble terminal "no-ack" (exact ack-id match). A late RR73 that
+    /// still matches the store entry flips `delivered` — the UI shows Delivered over no-ack.
+    fn mark_conversation_no_ack(&mut self, peer: &str, id: char) {
+        if let Some(conv) = self.conversations.get_mut(peer) {
+            if let Some(m) = conv
+                .messages
+                .iter_mut()
+                .find(|m| m.outbound && m.ack_id == Some(id) && !m.delivered)
+            {
+                m.no_ack = true;
+            }
+        }
     }
 
     /// Mark all queued messages for `peer` delivered (e.g. on an ack).
@@ -532,6 +579,11 @@ impl AppState {
                 }
             }
             self.store.purge(MAX_SEND_ATTEMPTS);
+            // Bound the no-ack late-ACK grace: a terminal message stays ACK-matchable
+            // for ~150 slots after its last transmission (10 min at FT1's 4 s), then
+            // drops — so stale terminals can't accumulate as FIFO zombies that would
+            // eat an ACK meant for a newer message.
+            self.store.purge_stale(self.slot, 150);
         }
         // Conversation threads are a Tempo feature. FT8 / FT4 decodes are QSO traffic —
         // folding their CQ/exchange/free-text fragments into per-peer threads turned the
@@ -558,7 +610,8 @@ impl AppState {
     }
 
     /// Stamp the OLDEST still-undelivered outbound message to `peer` as delivered (one
-    /// RR73 confirms one message, FIFO) — drives the real "Delivered ✓".
+    /// RR73 confirms one message, FIFO) — drives the real "Delivered ✓". A late ACK that
+    /// lands on a no-ack bubble clears the no-ack (Delivered wins).
     fn mark_conversation_delivered(&mut self, peer: &str) {
         if let Some(conv) = self.conversations.get_mut(peer) {
             if let Some(m) = conv
@@ -567,6 +620,7 @@ impl AppState {
                 .find(|m| m.outbound && !m.delivered)
             {
                 m.delivered = true;
+                m.no_ack = false;
             }
         }
     }
@@ -615,6 +669,8 @@ impl AppState {
                 dt_sec: None,
                 tier: Some(self.link.tier),
                 delivered: false,
+                attempts: 0,
+                no_ack: false,
                 ack_id: None,  // inbound — no outbound id to confirm
                 stored: false, // inbound — nothing of ours is queued
                 abandoned: false,
@@ -987,7 +1043,7 @@ mod tests {
         // The surviving message must still be releasable: prove it by hearing K7ABC and
         // draining the queue. If drop_for had over-matched, there'd be no frames here.
         app.observe(&[dec("K2DEF K7ABC EN61", -5)], 1);
-        let (frames, _) = app.due_frames(1, 30, 4);
+        let (frames, _) = app.due_frames(1, 30, 4, 8);
         assert!(
             frames.iter().any(|f| f.contains("K7ABC")),
             "K7ABC's message still releases after W9XYZ's thread was deleted: {frames:?}"
@@ -1007,13 +1063,13 @@ mod tests {
         );
 
         // Peer still unheard: the queue releases nothing, so it stays held.
-        let (frames, _) = app.due_frames(1, 30, 4);
+        let (frames, _) = app.due_frames(1, 30, 4, 8);
         assert!(frames.is_empty(), "nothing releases for an absent peer");
         assert!(held(&app), "still held while the peer is absent");
 
         // Hear the peer → the message releases → the bubble stops claiming "waiting".
         app.observe(&[dec("K2DEF W9XYZ EN61", -5)], 2);
-        let (frames, bodies) = app.due_frames(2, 30, 4);
+        let (frames, bodies) = app.due_frames(2, 30, 4, 8);
         assert!(!frames.is_empty(), "released once the peer is present");
         assert_eq!(bodies.len(), 1, "one first-release body");
         assert!(
@@ -1191,6 +1247,8 @@ mod tests {
             dt_sec: None,
             tier: Some(tier),
             delivered: false,
+            attempts: 0,
+            no_ack: false,
             ack_id: None,
             stored: false,
             abandoned: false,

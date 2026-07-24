@@ -195,6 +195,9 @@ impl PendingMsgJournal {
             last_attempt_slot: self.last_attempt_slot,
             delivered: false,
             id: self.id,
+            // Not journaled: a restored entry at attempts >= cap is re-flagged by the
+            // next take_no_acks pass (self-healing), so the format stays field-stable.
+            no_acked: false,
         }
     }
 }
@@ -5861,7 +5864,19 @@ impl Engine {
                     Some(f)
                 } else {
                     if self.tx_queue.is_empty() {
-                        let (frames, bodies) = self.app.due_frames(slot, 30, 4);
+                        // Cadence windows are WALL-CLOCK, converted to slots by the active
+                        // tier's period (4 s TempoFast / 15 s TempoDeep): presence window
+                        // 120 s, listening backoff 16 s after the burst's last frame. The
+                        // cycle cap is the bounded-ARQ budget — TempoFast rides HARQ-era
+                        // defaults (3); TempoDeep has no HARQ, so plain repeats get 5.
+                        let period = self.active_slot_secs().max(1.0);
+                        let window = ((120.0 / period).ceil() as u64).max(1);
+                        let backoff = ((16.0 / period).ceil() as u64).max(1);
+                        let cap = self.settings.chat_max_cycles.unwrap_or(match self.app.tier() {
+                            Tier::TempoDeep => 5,
+                            _ => 3,
+                        });
+                        let (frames, bodies) = self.app.due_frames(slot, window, backoff, cap);
                         for f in frames {
                             self.tx_queue.push_back(f);
                         }
