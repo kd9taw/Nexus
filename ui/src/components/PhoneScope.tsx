@@ -15,6 +15,7 @@ import {
 import { boxEdges, boxWidthFor, clampBoxCenterHz, clickTuneTarget, dialFromBoxCenter } from '../tuneSnap'
 import type { ScopeTuneRequest } from '../useScopeTune'
 import { useWaterfallPalette } from '../waterfallPalette'
+import { WaterfallHistory } from '../waterfallHistory'
 
 interface Props {
   transmitting: boolean
@@ -126,6 +127,12 @@ export function PhoneScope({
   const dialRef = useRef(dialHz)
   const onFeedRef = useRef(onFeed)
   const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme)))
+  // Retained waterfall-band history (bottom region only). Same model as the FT waterfall:
+  // the hot path scrolls a retained RGBA buffer (no getImageData readback), and a palette/
+  // resize change re-renders the accumulated history instead of losing it. No pause UI here
+  // — this is a live rig scope, and the trace/waterfall share one canvas with inline markers.
+  const historyRef = useRef(new WaterfallHistory(1024))
+  const rebuildRef = useRef<(() => void) | null>(null)
   // Which scope feed is live: '' / 'audio' = soundcard FFT, 'flex'/'civ' = a native RF panadapter.
   // Lifted out of the draw loop (updated only when it changes) so the badge can render it.
   const [source, setSource] = useState('')
@@ -193,6 +200,7 @@ export function PhoneScope({
 
   useLayoutEffect(() => {
     lutRef.current = bakeLut(resolveColormap(palette, theme))
+    rebuildRef.current?.() // recolor the accumulated waterfall history in the new palette
   }, [palette, theme])
 
   // Unmount safety: a mid-drag nav away must not leave the edge-scan rAF running.
@@ -206,10 +214,11 @@ export function PhoneScope({
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    // willReadFrequently: the scope scrolls via getImageData/putImageData every ~50ms
-    // (20×/sec); on a GPU-backed canvas that readback stalls the main thread. Keeping it
-    // CPU-backed removes the stall (the big laptop-slowness cause).
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    // Write-only now: the waterfall band scrolls in a retained CPU-side RGBA buffer
+    // (copyWithin) + one putImageData, and the trace region is redrawn each frame — so the
+    // getImageData-per-row readback that forced this canvas CPU-backed (willReadFrequently,
+    // the 20 Hz laptop stall) is gone and it may be GPU-backed again.
+    const ctx = canvas.getContext('2d')
     if (!ctx) return
 
     let running = true
@@ -240,12 +249,42 @@ export function PhoneScope({
     let agcInit = false
     let lastFeed = '' // last onFeed-reported "source:lo:hi" (fire only on change)
 
-    let rowBuf: Uint8ClampedArray<ArrayBuffer> | null = null
-    let rowImg: ImageData | null = null
     let magBuf: Float32Array | null = null // reused per-column magnitudes (no per-tick garbage)
     let holdBuf: Float32Array | null = null // per-column trace peak-hold (decays, see TRACE_FADE_TAU_MS)
     let lastHoldTs = 0
-    let rowBufW = 0
+    let magBufW = 0
+    // Retained RGBA buffer for the WATERFALL BAND only (Wd × wfHd, drawn at y=traceHd). The
+    // trace region above it is redrawn each frame and is not part of this buffer.
+    let retBuf: Uint8ClampedArray<ArrayBuffer> | null = null
+    let retImg: ImageData | null = null
+    let retW = 0
+    let retH = 0
+    let lastViewLo = 0 // the view the retained buffer's newest rows were rendered at
+    let lastViewHi = 0
+    const retained = (Wd: number, wfHd: number, vLo: number, vHi: number): ImageData => {
+      if (!retBuf || !retImg || retW !== Wd || retH !== wfHd) {
+        retBuf = new Uint8ClampedArray(Wd * wfHd * 4)
+        retImg = new ImageData(retBuf, Wd, wfHd)
+        retW = Wd
+        retH = wfHd
+        historyRef.current.renderInto(retBuf, Wd, wfHd, vLo, vHi, lutRef.current, 0)
+      }
+      return retImg
+    }
+    // Cold-path re-render (palette/theme switch, resize): re-render the accumulated history
+    // at the buffer's last view into the waterfall band and blit it.
+    const rebuildFromHistory = () => {
+      if (retBuf && retW > 0 && retH > 0 && devH > 0) {
+        const traceHd = Math.max(1, Math.round(devH * TRACE_FRAC))
+        historyRef.current.renderInto(retBuf, retW, retH, lastViewLo, lastViewHi, lutRef.current, 0)
+        try {
+          ctx.putImageData(retImg!, 0, traceHd)
+        } catch {
+          /* zero-size mid-layout */
+        }
+      }
+    }
+    rebuildRef.current = rebuildFromHistory
 
     // Device-pixel backing store (correct under the app's CSS zoom), mirroring Waterfall.
     let devW = 0
@@ -274,6 +313,10 @@ export function PhoneScope({
       ctx.fillRect(0, 0, dW, dH)
       devW = dW
       devH = dH
+      // Re-render the waterfall history at the new geometry (smear-free), then blit it.
+      const traceHd = Math.max(1, Math.round(dH * TRACE_FRAC))
+      retained(dW, Math.max(1, dH - traceHd), lastViewLo || 200, lastViewHi || 2900)
+      rebuildFromHistory()
     }
     resize()
     const ro = new ResizeObserver((entries) => resize(entries[0]))
@@ -376,29 +419,20 @@ export function PhoneScope({
       if (Wd <= 0 || devH <= 0) return
       if (Wd > canvas.width || devH > canvas.height) return
 
-      // ---- Waterfall (bottom region): scroll up 1 device px within [traceHd, devH) ----
-      if (wfHd > 1) {
-        try {
-          ctx.putImageData(ctx.getImageData(0, traceHd + 1, Wd, wfHd - 1), 0, traceHd)
-        } catch {
-          /* mid-resize */
-        }
-      }
-      if (rowBufW !== Wd || !rowBuf || !rowImg || !magBuf || !holdBuf) {
-        rowBuf = new Uint8ClampedArray(Wd * 4)
-        rowImg = new ImageData(rowBuf, Wd, 1)
-        magBuf = new Float32Array(Wd)
-        holdBuf = new Float32Array(Wd)
-        rowBufW = Wd
-      }
-      const out = rowBuf
-      const mag = magBuf
       const lut = lutRef.current
       const nBins = row.length
       // normalized magnitude per device column (shared by waterfall + trace), reused buffer
       // over the projected view window (audio Hz or absolute RF Hz per the feed source).
       const lo = view.loHz
       const hi = view.hiHz
+      lastViewLo = lo
+      lastViewHi = hi
+      if (magBufW !== Wd || !magBuf || !holdBuf) {
+        magBuf = new Float32Array(Wd)
+        holdBuf = new Float32Array(Wd)
+        magBufW = Wd
+      }
+      const mag = magBuf
       for (let x = 0; x < Wd; x++) {
         const hz = lo + (x / Wd) * (hi - lo)
         const bin = ((hz - rowLo) / span) * (nBins - 1)
@@ -408,14 +442,31 @@ export function PhoneScope({
         const v = row[b0] * (1 - frac) + row[b1] * frac
         const t = normalize(v, dispFloor, dispCeil)
         mag[x] = t
-        const li = (t >= 1 ? 255 : Math.round(t * 255)) * 4
-        const o = x * 4
+      }
+
+      // Append this row to the retained history over its OWN view window (so a palette
+      // switch / resize re-renders accumulated history frequency-honestly).
+      historyRef.current.push(mag, lo, hi, Date.now())
+
+      // ---- Waterfall (bottom region): scroll the RETAINED buffer up 1 row + write the new
+      // bottom row from the LUT, then blit at y=traceHd. No getImageData readback. ----
+      const img = retained(Wd, wfHd, lo, hi)
+      const out = retBuf!
+      out.copyWithin(0, Wd * 4)
+      const base = (wfHd - 1) * Wd * 4
+      for (let x = 0; x < Wd; x++) {
+        const li = (mag[x] >= 1 ? 255 : Math.round(mag[x] * 255)) * 4
+        const o = base + x * 4
         out[o] = lut[li]
         out[o + 1] = lut[li + 1]
         out[o + 2] = lut[li + 2]
         out[o + 3] = 255
       }
-      ctx.putImageData(rowImg, 0, devH - 1)
+      try {
+        ctx.putImageData(img, 0, traceHd)
+      } catch {
+        /* mid-resize */
+      }
 
       // Fast-attack / slow-decay hold for the trace: a new signal jumps up instantly,
       // a pause fades down over ~TRACE_FADE_TAU_MS instead of strobing per frame.
