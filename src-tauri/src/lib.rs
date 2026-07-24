@@ -4532,6 +4532,27 @@ fn get_rtty_state(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String
     Ok(rtty_state_dto(&eng))
 }
 
+/// Arm/disarm the APRS (AFSK-1200 / AX.25) RX decoder (session-only; never launches armed). The
+/// aprs-rx thread starts decoding the 12 kHz RX tap into the heard list. Returns it (empty on arm).
+#[tauri::command]
+fn aprs_arm(
+    state: State<'_, SharedEngine>,
+    on: bool,
+) -> Result<Vec<tempo_app::engine::AprsHeard>, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_aprs_armed(on);
+    Ok(eng.aprs_heard())
+}
+
+/// The decoded-APRS list, newest last (poll while the APRS cockpit is visible).
+#[tauri::command]
+fn get_aprs_heard(
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<tempo_app::engine::AprsHeard>, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(eng.aprs_heard())
+}
+
 /// Queue RTTY text to transmit — an explicit operator send, the ONLY way RTTY TX
 /// starts. The engine validates every gate up front (TX armed, license privileges
 /// at the current dial, the RTTY section owning the rig, no tune carrier, no other
@@ -10392,6 +10413,8 @@ pub fn run() {
             cw_skim,
             rtty_arm,
             get_rtty_state,
+            aprs_arm,
+            get_aprs_heard,
             rtty_send,
             rtty_stop,
             rtty_clear,
@@ -10646,6 +10669,7 @@ pub fn run() {
             #[cfg(feature = "radio")]
             {
                 tempo_audio::rttyrx::spawn_rtty_rx(app.state::<SharedEngine>().inner().clone());
+                tempo_audio::aprsrx::spawn_aprs_rx(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::sstvrx::spawn_sstv_rx(
                     app.state::<SharedEngine>().inner().clone(),
                     sstv_gallery_dir(),

@@ -47,6 +47,9 @@ pub mod rtty_fsk;
 /// RX ONLY — no TX path.
 #[cfg(feature = "device")]
 pub mod rttyrx;
+/// APRS (AFSK-1200 / AX.25) RX decode thread — same armed-decoder pattern, RX ONLY.
+#[cfg(feature = "device")]
+pub mod aprsrx;
 pub mod runtime;
 pub mod serial_keyer;
 pub mod slot;

@@ -798,6 +798,13 @@ pub struct Engine {
     /// over has fully keyed out — the edge the service tick turns into exactly one
     /// `on_tx_complete` (restarting the sequencer's reply timer).
     rtty_auto_over: bool,
+    /// APRS (AFSK-1200 / AX.25) RX decoder armed (session-only, never persisted). RX decode only.
+    aprs_armed: bool,
+    /// Drain buffer for the APRS decode thread (same pattern as `rtty_audio`). Empty while disarmed.
+    aprs_audio: Vec<f32>,
+    /// Recently-decoded APRS packets, newest last, capped at [`APRS_HEARD_CAP`]. Pushed by the
+    /// decode thread; polled by the cockpit.
+    aprs_heard: Vec<AprsHeard>,
     /// SSTV RX decoder armed (session-only runtime state, never persisted).
     sstv_armed: bool,
     /// Drain buffer for the SSTV decode thread (same pattern as `rtty_audio`).
@@ -845,6 +852,87 @@ const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
 /// stalls, dropping oldest audio (garbling that decode) instead of growing RAM
 /// without bound.
 const RX_TAP_CAP: usize = 120_000;
+/// Cap on the decoded-APRS list kept for the cockpit (oldest dropped past this).
+const APRS_HEARD_CAP: usize = 300;
+
+/// One decoded APRS packet, flattened for the cockpit list. Built from a
+/// [`tempo_core::aprs::AprsPacket`] by the RX decode thread (kept out of the hot path).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AprsHeard {
+    pub source: String,
+    pub dest: String,
+    pub path: Vec<String>,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub symbol_table: char,
+    pub symbol_code: char,
+    /// "position" | "mice" | "message" | "status" | "other".
+    pub kind: &'static str,
+    /// Comment / message / status text, ready to show.
+    pub text: String,
+    pub speed_knots: Option<u16>,
+    pub course_deg: Option<u16>,
+    /// Unix seconds the packet was decoded (drives the age column).
+    pub at_unix: i64,
+}
+
+fn fmt_aprs_addr(a: &tempo_core::aprs::Address) -> String {
+    if a.ssid == 0 {
+        a.call.clone()
+    } else {
+        format!("{}-{}", a.call, a.ssid)
+    }
+}
+
+impl AprsHeard {
+    /// Flatten a decoded packet for display, stamped with its decode time.
+    pub fn from_packet(pkt: &tempo_core::aprs::AprsPacket, at_unix: i64) -> Self {
+        use tempo_core::aprs::{AprsBody, AprsInfo};
+        let pos = pkt.position();
+        let (kind, text, sym_t, sym_c, spd, crs) = match &pkt.body {
+            AprsBody::MicE(m) => (
+                "mice",
+                m.comment.clone(),
+                m.symbol_table,
+                m.symbol_code,
+                Some(m.speed_knots),
+                Some(m.course_deg),
+            ),
+            AprsBody::Info(AprsInfo::Position(p)) => {
+                ("position", p.comment.clone(), p.symbol_table, p.symbol_code, None, None)
+            }
+            AprsBody::Info(AprsInfo::Message(msg)) => (
+                "message",
+                format!("\u{2192}{}: {}", msg.addressee, msg.text),
+                ' ',
+                ' ',
+                None,
+                None,
+            ),
+            AprsBody::Info(AprsInfo::Status { text, .. }) => {
+                ("status", text.clone(), ' ', ' ', None, None)
+            }
+            AprsBody::Info(AprsInfo::Other { body, .. }) => {
+                ("other", body.clone(), ' ', ' ', None, None)
+            }
+        };
+        AprsHeard {
+            source: fmt_aprs_addr(&pkt.source),
+            dest: fmt_aprs_addr(&pkt.dest),
+            path: pkt.path.iter().map(fmt_aprs_addr).collect(),
+            lat: pos.map(|(la, _)| la),
+            lon: pos.map(|(_, lo)| lo),
+            symbol_table: sym_t,
+            symbol_code: sym_c,
+            kind,
+            text,
+            speed_knots: spd,
+            course_deg: crs,
+            at_unix,
+        }
+    }
+}
 /// SSTV gallery session-list cap (mirrors the on-disk `gallery.json` cap).
 pub(crate) const SSTV_GALLERY_CAP: usize = 200;
 /// Hard cap on a single SSTV image's key-down (seconds), watchdog-independent. The
@@ -1154,6 +1242,9 @@ impl Engine {
             rtty_keyer_error: None,
             rtty_seq: None,
             rtty_auto_over: false,
+            aprs_armed: false,
+            aprs_audio: Vec::new(),
+            aprs_heard: Vec::new(),
             sstv_armed: false,
             sstv_audio: Vec::new(),
             sstv_progress: None,
@@ -4257,6 +4348,13 @@ impl Engine {
                 self.rtty_audio.drain(0..drop);
             }
         }
+        if self.aprs_armed {
+            self.aprs_audio.extend_from_slice(samples);
+            if self.aprs_audio.len() > RX_TAP_CAP {
+                let drop = self.aprs_audio.len() - RX_TAP_CAP;
+                self.aprs_audio.drain(0..drop);
+            }
+        }
         if self.sstv_armed {
             self.sstv_audio.extend_from_slice(samples);
             if self.sstv_audio.len() > RX_TAP_CAP {
@@ -4382,6 +4480,41 @@ impl Engine {
     /// decode thread calls this under a brief lock; the demod runs off-lock.
     pub fn take_rtty_audio(&mut self) -> Vec<f32> {
         std::mem::take(&mut self.rtty_audio)
+    }
+
+    /// Arm/disarm the APRS RX decoder. Session-only (never persisted). Disarming stops the audio
+    /// tap immediately but keeps the heard list readable.
+    pub fn set_aprs_armed(&mut self, on: bool) {
+        if !on {
+            self.aprs_audio.clear();
+        }
+        self.aprs_armed = on;
+    }
+
+    /// Whether the APRS RX decoder is armed (read by the decode thread's gate).
+    pub fn aprs_armed(&self) -> bool {
+        self.aprs_armed
+    }
+
+    /// Drain the armed APRS audio tap (12 kHz mono since the last take). Called by the decode
+    /// thread under a brief lock; the demod runs off-lock.
+    pub fn take_aprs_audio(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.aprs_audio)
+    }
+
+    /// Record a freshly decoded APRS packet (newest last), capped at [`APRS_HEARD_CAP`]. Called by
+    /// the decode thread.
+    pub fn push_aprs_heard(&mut self, heard: AprsHeard) {
+        self.aprs_heard.push(heard);
+        if self.aprs_heard.len() > APRS_HEARD_CAP {
+            let drop = self.aprs_heard.len() - APRS_HEARD_CAP;
+            self.aprs_heard.drain(0..drop);
+        }
+    }
+
+    /// Snapshot of the decoded-APRS list for the cockpit poll (newest last).
+    pub fn aprs_heard(&self) -> Vec<AprsHeard> {
+        self.aprs_heard.clone()
     }
 
     /// Append freshly decoded RTTY characters + the demod's current AFC state.
@@ -12583,5 +12716,35 @@ mod tests {
             );
         }
         assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
+    }
+
+    #[test]
+    fn aprs_heard_flattens_position_and_mice_packets() {
+        use tempo_core::aprs::{Address, AprsPacket, Frame};
+        // A position report.
+        let pos = Frame::ui(
+            Address::new("APRS", 0),
+            Address::new("N0CALL", 9),
+            vec![Address::new("WIDE1", 1)],
+            b"!4903.50N/07201.75W-Home",
+        );
+        let h = AprsHeard::from_packet(&AprsPacket::from_frame(&pos), 1000);
+        assert_eq!(h.source, "N0CALL-9");
+        assert_eq!(h.kind, "position");
+        assert_eq!(h.text, "Home");
+        assert_eq!(h.path, vec!["WIDE1-1".to_string()]);
+        assert!(h.lat.unwrap() > 49.0 && h.lon.unwrap() < 0.0);
+        assert_eq!(h.at_unix, 1000);
+        // A Mic-E report (the hand-worked vector) — speed/course flatten through.
+        let mice = Frame::ui(
+            Address::new("SSRUVT", 0),
+            Address::new("N0CALL", 7),
+            vec![],
+            &[0x60, b'(', b'#', b'H', 0x1e, 0x1e, b'O', b'>', b'/'],
+        );
+        let hm = AprsHeard::from_packet(&AprsPacket::from_frame(&mice), 2000);
+        assert_eq!(hm.kind, "mice");
+        assert_eq!(hm.speed_knots, Some(20));
+        assert_eq!(hm.course_deg, Some(251));
     }
 }
