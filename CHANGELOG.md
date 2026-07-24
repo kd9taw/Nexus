@@ -5,6 +5,21 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.22] — 2026-07-24 — APRS, and an Icom auto-test fix
+
+### Added
+
+- **APRS (AFSK-1200 packet).** A new APRS section (Digital group) monitors the band and decodes
+  position reports, Mic-E (what most mobile/tracker radios send), messages, and status packets —
+  showing who, where, speed/course, and their comment. You can also send a **position beacon**
+  (your grid pre-fills the coordinates; pick a symbol, add a comment and digipeater path). RX-first
+  and self-contained; a beacon is an explicit, gated one-shot send. Tune to 144.390 FM (NA).
+
+### Fixed
+
+- **CAT Auto-test finds an Icom set to 19200.** The IC-7300/7610/9700 auto-test seeds now try both
+  115200 and 19200 baud, so a rig whose CI-V USB baud isn't the default still connects.
+
 ## [0.15.21] — 2026-07-24 — Mode designation on the boards, one clean Spots filter
 
 ### Added
