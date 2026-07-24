@@ -5,6 +5,21 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.24] — 2026-07-24 — Native Flex, the rest of it (meters, slice, DAX TX)
+
+### Added
+
+Rounding out native FlexRadio support (all **opt-in, off by default**, and **unverified on
+hardware** — for testers with a Flex):
+
+- **Native meters.** With the native panadapter on, the S-meter, forward power, SWR, and ALC read
+  straight off the radio's VITA stream (no CAT polling).
+- **Native DAX TX audio.** With the native-DAX-audio toggle on, your *transmit* audio also goes to
+  the rig over the network (VITA-49 DAX) — the driverless, RDP-proof complement to DAX RX. The TX
+  schedule/timing is unchanged; it's the same audio on another route.
+- **Slice awareness.** DAX binds the *active* receive slice instead of assuming slice A, so it's
+  correct on multi-slice setups.
+
 ## [0.15.23] — 2026-07-24 — APRS station roster, native Flex DAX audio
 
 ### Added
