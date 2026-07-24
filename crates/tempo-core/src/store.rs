@@ -37,6 +37,21 @@ pub struct Pending {
     pub confirmed: bool,
 }
 
+/// One releasable message from [`StoreForward::due`]: the burst to transmit now plus
+/// the bookkeeping the engine stamps onto the conversation bubble.
+#[derive(Debug)]
+pub struct Release {
+    pub to: String,
+    /// `Some` ONLY on the message's FIRST release (drives the one own-TX band-activity row).
+    pub body: Option<String>,
+    /// The on-air burst: `[identify, chunk…]`.
+    pub frames: Vec<String>,
+    /// Chunk message-id — the bubble's exact-match key.
+    pub id: char,
+    /// Cycle count AFTER this release ("sending k/N").
+    pub attempts: u32,
+}
+
 /// A presence-gated store-and-forward queue.
 #[derive(Debug)]
 pub struct StoreForward {
@@ -110,7 +125,7 @@ impl StoreForward {
         window: u64,
         backoff: u64,
         max_attempts: u32,
-    ) -> Vec<(String, Option<String>, Vec<String>, char, u32)> {
+    ) -> Vec<Release> {
         let mut out = Vec::new();
         for p in self
             .queue
@@ -139,7 +154,13 @@ impl StoreForward {
             } else {
                 None
             };
-            out.push((p.to.clone(), body, frames, p.id, p.attempts));
+            out.push(Release {
+                to: p.to.clone(),
+                body,
+                frames,
+                id: p.id,
+                attempts: p.attempts,
+            });
         }
         out
     }
@@ -297,16 +318,16 @@ mod tests {
         roster.observe(&dec("CQ N0XYZ EN52"), 5);
         let due = sf.due(&roster, 6, 10, 3, 8);
         assert_eq!(due.len(), 1);
-        assert_eq!(due[0].0, "N0XYZ");
+        assert_eq!(due[0].to, "N0XYZ");
         assert_eq!(
-            due[0].1.as_deref(),
+            due[0].body.as_deref(),
             Some("QSY TO 40M AT 0200Z PSE"),
             "body on first release"
         );
         // identify frame + at least one chunk.
-        let burst_len = due[0].2.len() as u64;
+        let burst_len = due[0].frames.len() as u64;
         assert!(burst_len >= 2);
-        assert!(due[0].2[0].contains("N0XYZ") && due[0].2[0].contains("W9XYZ"));
+        assert!(due[0].frames[0].contains("N0XYZ") && due[0].frames[0].contains("W9XYZ"));
 
         // Backoff runs from the burst's END (release slot + 2·(frames−1); one frame per
         // own-parity slot) so there's a real LISTENING gap after the last frame — from the
@@ -319,7 +340,7 @@ mod tests {
         roster.observe(&dec("CQ N0XYZ EN52"), burst_end + 2); // keep the peer present
         let resend = sf.due(&roster, burst_end + 3, 60, 3, 8);
         assert_eq!(resend.len(), 1, "past backoff → resent");
-        assert_eq!(resend[0].1, None, "no body on a resend");
+        assert_eq!(resend[0].body, None, "no body on a resend");
 
         // Delivered → no longer due, pending drops.
         sf.mark_delivered("N0XYZ");

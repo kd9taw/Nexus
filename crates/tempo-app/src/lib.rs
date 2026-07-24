@@ -436,16 +436,16 @@ impl AppState {
         // calling a `&mut self` helper inside would break the split borrow above.
         let mut released_to = Vec::new();
         let mut released_attempts = Vec::new();
-        for (to, body, fs, id, attempts) in
-            self.store
-                .due(&self.inbox.roster, slot, window, backoff, max_attempts)
+        for r in self
+            .store
+            .due(&self.inbox.roster, slot, window, backoff, max_attempts)
         {
-            if let Some(b) = body {
+            if let Some(b) = r.body {
                 bodies.push(b);
-                released_to.push(to.clone());
+                released_to.push(r.to.clone());
             }
-            released_attempts.push((to, id, attempts));
-            frames.extend(fs);
+            released_attempts.push((r.to, r.id, r.attempts));
+            frames.extend(r.frames);
         }
         for peer in released_to {
             self.mark_conversation_on_air(&peer);
