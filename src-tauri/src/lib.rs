@@ -4553,6 +4553,26 @@ fn get_aprs_heard(
     Ok(eng.aprs_heard())
 }
 
+/// Queue an APRS position beacon to transmit — an explicit operator send, the ONLY way APRS TX
+/// keys. The engine validates every gate (TX armed, privileges, no tune carrier, no other over)
+/// and returns WHY a send was refused; the radio loop keys the rendered AFSK audio with PTT.
+/// `symbol_table`/`symbol_code` are single chars (default `/` and `>`); `path` is the digi aliases.
+#[tauri::command]
+fn aprs_send_beacon(
+    state: State<'_, SharedEngine>,
+    lat: f64,
+    lon: f64,
+    symbol_table: String,
+    symbol_code: String,
+    comment: String,
+    path: Vec<String>,
+) -> Result<(), String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let table = symbol_table.chars().next().unwrap_or('/');
+    let code = symbol_code.chars().next().unwrap_or('>');
+    eng.aprs_beacon(lat, lon, table, code, &comment, &path)
+}
+
 /// Queue RTTY text to transmit — an explicit operator send, the ONLY way RTTY TX
 /// starts. The engine validates every gate up front (TX armed, license privileges
 /// at the current dial, the RTTY section owning the rig, no tune carrier, no other
@@ -10415,6 +10435,7 @@ pub fn run() {
             get_rtty_state,
             aprs_arm,
             get_aprs_heard,
+            aprs_send_beacon,
             rtty_send,
             rtty_stop,
             rtty_clear,

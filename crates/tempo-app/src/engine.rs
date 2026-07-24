@@ -805,6 +805,9 @@ pub struct Engine {
     /// Recently-decoded APRS packets, newest last, capped at [`APRS_HEARD_CAP`]. Pushed by the
     /// decode thread; polled by the cockpit.
     aprs_heard: Vec<AprsHeard>,
+    /// Pre-rendered APRS beacon audio (12 kHz), one entry per explicit operator beacon. The radio
+    /// loop keys ONE at a time via [`Engine::poll_aprs_tx`]; Stop TX / halt clears it.
+    aprs_tx_queue: VecDeque<Vec<f32>>,
     /// SSTV RX decoder armed (session-only runtime state, never persisted).
     sstv_armed: bool,
     /// Drain buffer for the SSTV decode thread (same pattern as `rtty_audio`).
@@ -1245,6 +1248,7 @@ impl Engine {
             aprs_armed: false,
             aprs_audio: Vec::new(),
             aprs_heard: Vec::new(),
+            aprs_tx_queue: VecDeque::new(),
             sstv_armed: false,
             sstv_audio: Vec::new(),
             sstv_progress: None,
@@ -4028,6 +4032,7 @@ impl Engine {
         // the AFSK audio ring and unkeys on its next tick.
         self.rtty_queue.clear();
         self.rtty_abort = true;
+        self.aprs_tx_queue.clear(); // drop any queued APRS beacon so Stop TX cancels it
         self.voice_tx = None; // drop any queued voice-keyer audio too
                               // Cut any in-progress SSTV image the same way: drop the queued job and arm the
                               // one-shot abort so the radio loop drops the feed, flushes the output ring and
@@ -4515,6 +4520,73 @@ impl Engine {
     /// Snapshot of the decoded-APRS list for the cockpit poll (newest last).
     pub fn aprs_heard(&self) -> Vec<AprsHeard> {
         self.aprs_heard.clone()
+    }
+
+    /// The up-front APRS-TX gate: every reason a beacon would be refused, checked before anything is
+    /// queued so the operator learns WHY. No operating-mode gate (a beacon is a one-shot manual
+    /// action on whatever the rig is set to — typically FM on 144.390); the `transmitting` check
+    /// keeps it from ever keying over another mode's over.
+    fn aprs_tx_gate(&self) -> Result<(), String> {
+        if !self.tx_enabled {
+            return Err("TX is off — enable TX first".to_string());
+        }
+        if !self.tx_allowed() {
+            return Err("TX locked — this frequency is outside your license privileges".to_string());
+        }
+        if self.tuning {
+            return Err("Tune carrier is up — stop tuning first".to_string());
+        }
+        if self.app.radio.transmitting {
+            return Err("Another transmission is in flight — stop it first".to_string());
+        }
+        Ok(())
+    }
+
+    /// Queue one APRS position beacon for transmission — an explicit operator send (the ONLY way
+    /// APRS TX keys). Renders the frame to AFSK-1200 audio up front; the radio loop keys it via
+    /// [`Engine::poll_aprs_tx`]. `path` is the digipeater aliases (e.g. `["WIDE1-1","WIDE2-1"]`).
+    pub fn aprs_beacon(
+        &mut self,
+        lat: f64,
+        lon: f64,
+        symbol_table: char,
+        symbol_code: char,
+        comment: &str,
+        path: &[String],
+    ) -> Result<(), String> {
+        use tempo_core::aprs;
+        self.aprs_tx_gate()?;
+        let mycall = self.settings.mycall.trim();
+        if mycall.is_empty() {
+            return Err("Set your callsign in Settings before beaconing".to_string());
+        }
+        let src = aprs::Address::parse(mycall)
+            .ok_or_else(|| "Your callsign isn't a valid APRS source address".to_string())?;
+        let mut digis = Vec::new();
+        for p in path.iter().filter(|p| !p.trim().is_empty()) {
+            digis.push(
+                aprs::Address::parse(p).ok_or_else(|| format!("Invalid digipeater '{p}'"))?,
+            );
+        }
+        let frame = aprs::position_beacon(src, lat, lon, symbol_table, symbol_code, comment, digis);
+        // ~32 opening flags ≈ 0.2 s TXDELAY so the receiver's DCD locks before the data.
+        let audio = aprs::modulate(&aprs::nrzi_encode(&aprs::encode_frame(&frame.encode(), 32, 3)));
+        if audio.is_empty() {
+            return Err("Beacon rendered no audio".to_string());
+        }
+        self.reset_tx_watchdog();
+        self.aprs_tx_queue.push_back(audio);
+        Ok(())
+    }
+
+    /// Pop the next queued APRS beacon audio for the radio loop to key, or `None` while any TX gate
+    /// is down (Monitor off / outside privileges / a tune carrier up / another over in flight) —
+    /// the queue is then HELD, so a beacon never keys unexpectedly.
+    pub fn poll_aprs_tx(&mut self) -> Option<Vec<f32>> {
+        if !self.tx_enabled || !self.tx_allowed() || self.tuning || self.app.radio.transmitting {
+            return None;
+        }
+        self.aprs_tx_queue.pop_front()
     }
 
     /// Append freshly decoded RTTY characters + the demod's current AFC state.
@@ -12746,5 +12818,15 @@ mod tests {
         assert_eq!(hm.kind, "mice");
         assert_eq!(hm.speed_knots, Some(20));
         assert_eq!(hm.course_deg, Some(251));
+    }
+
+    #[test]
+    fn aprs_beacon_is_refused_when_tx_is_off() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Default is TX-disarmed → the beacon gate refuses with a clear reason, never a silent
+        // queue (nothing can key without an explicit TX-enable).
+        let err = e.aprs_beacon(41.9, -87.6, '/', '>', "test", &[]).unwrap_err();
+        assert!(err.contains("TX is off"), "expected a TX-off refusal, got: {err}");
+        assert!(e.poll_aprs_tx().is_none(), "nothing queued");
     }
 }
