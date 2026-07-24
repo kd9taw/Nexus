@@ -158,13 +158,14 @@ const PANEL_LABELS: Record<OperatePanelId, string> = {
   rxfreq: 'Rx Frequency',
   txmsgs: 'Tx Messages',
   stations: 'Stations',
+  txmeters: 'TX Meters',
 }
 
 /** What each layout actually renders — the menu lists only these, so a panel the
  *  current layout has no place for can't be ticked into nowhere. */
 const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['waterfall', 'bandActivity', 'txmsgs', 'rxfreq', 'stations'],
-  roster: ['waterfall', 'callRoster', 'bandActivity', 'rxfreq'],
+  classic: ['waterfall', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'txmeters'],
+  roster: ['waterfall', 'callRoster', 'bandActivity', 'rxfreq', 'txmeters'],
 }
 
 /** Side-rail occupants per layout — the rail unmounts when all of them are removed. */
@@ -879,10 +880,10 @@ export function OperateCockpit({
           onLog={onLog}
         />
 
-        {/* Live transmit meters (SWR / ALC / Po / COMP) — self-gating, so they appear under
-            the operating bar only while keyed (e.g. an FT8 slot) and only for meters the rig
-            reports. Useful for catching high SWR on a VHF rover session before a long run. */}
-        <TxMeters radio={snap.radio} />
+        {/* Transmit meters (SWR / ALC / Po / COMP) — PINNED: rendered permanently (live while
+            keyed, last readings dimmed between overs) so the FT TX cycle doesn't bounce the
+            layout every 15 s. A ⊞ Panels entry, so it can be hidden entirely. */}
+        {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
 
         {/* data-cols collapses the grid to ONE column once the main cell or the whole
             side rail is gone — otherwise the survivor keeps its 2fr/1fr track and the

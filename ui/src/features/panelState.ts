@@ -239,6 +239,7 @@ export const OPERATE_PANEL_IDS = [
   'rxfreq',
   'txmsgs',
   'stations',
+  'txmeters',
 ] as const
 export type OperatePanelId = (typeof OPERATE_PANEL_IDS)[number]
 

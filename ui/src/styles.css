@@ -7266,6 +7266,38 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-variant-numeric: tabular-nums;
   font-size: 0.86rem;
 }
+/* Pinned variant (FT Operate cockpit): a permanent, COMPACT strip — one row, thinner bars,
+ * smaller type — so it takes minimal space and the layout never moves with the TX cycle. */
+.ph-txmeters.pinned {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 2px var(--space-3);
+  padding: 2px var(--space-2);
+}
+.ph-txmeters.pinned .ph-txmeter-track {
+  height: 6px;
+  border-radius: 3px;
+}
+.ph-txmeters.pinned .ph-txmeter-label {
+  font-size: 10px;
+  min-width: 2.4em;
+}
+.ph-txmeters.pinned .ph-txmeter-value {
+  font-size: 0.74rem;
+  min-width: 3.2em;
+}
+/* Between overs: keep the last readings visible but clearly not live. */
+.ph-txmeters.idle .ph-txmeter-fill {
+  opacity: 0.35;
+}
+.ph-txmeters.idle .ph-txmeter-value,
+.ph-txmeters.idle .ph-txmeter-label {
+  opacity: 0.55;
+}
+.ph-txmeters-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 1px var(--space-1);
+}
 .ph-ptt-row {
   display: flex;
   align-items: center;

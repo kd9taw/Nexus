@@ -1,10 +1,17 @@
+import { useRef } from 'react'
 import type { RadioStatus } from '../types'
 
-/** Transmit meters (SWR / ALC / Po / COMP) — the mirror image of the RX S-meter: shown only
- *  while transmitting, and only the meters the rig actually reports over CAT (each is
- *  independently capability-gated, so a rig that reports just SWR shows just SWR). Values are
- *  already in engineering units from the backend; the tiny helpers below turn each into a bar
- *  fraction, a display value, and a severity zone for color. */
+/** Transmit meters (SWR / ALC / Po / COMP) — the mirror image of the RX S-meter: only the
+ *  meters the rig actually reports over CAT (each independently capability-gated, so a rig
+ *  that reports just SWR shows just SWR). Values are already in engineering units from the
+ *  backend; the tiny helpers below turn each into a bar fraction, a display value, and a
+ *  severity zone for color.
+ *
+ *  Two mount modes: default (Phone/CW) appears only while keyed — a manual TX lasts as long
+ *  as the operator talks/keys, so the flash-in is fine. `pinned` (the FT Operate cockpit)
+ *  renders a compact strip PERMANENTLY: live while transmitting, the last-read values dimmed
+ *  between overs. FT cycles key every other slot, and a strip that mounts/unmounts every
+ *  15 s made the whole cockpit jump — the operator's "too much movement on screen". */
 
 type Zone = 'ok' | 'warn' | 'hot'
 
@@ -42,9 +49,15 @@ export function compBar(db: number): { frac: number; value: string; zone: Zone }
   return { frac, value: `${Math.round(db)} dB`, zone }
 }
 
-export function TxMeters({ radio }: { radio: RadioStatus }) {
-  if (!radio.transmitting) return null
-  const rows: { label: string; title: string; bar: ReturnType<typeof swrBar> }[] = []
+type MeterRow = { label: string; title: string; bar: ReturnType<typeof swrBar> }
+
+export function TxMeters({ radio, pinned = false }: { radio: RadioStatus; pinned?: boolean }) {
+  // Retain the last live readings so the pinned strip has something to show between overs.
+  // A plain ref (not state): the poll re-renders us anyway, and retention must never
+  // itself cause a render. Unconditional hook — declared before any early return.
+  const lastRows = useRef<MeterRow[]>([])
+
+  const rows: MeterRow[] = []
   if (radio.txSwr != null)
     rows.push({ label: 'SWR', title: 'Antenna match — keep it under 2:1', bar: swrBar(radio.txSwr) })
   if (radio.txAlc != null)
@@ -57,11 +70,31 @@ export function TxMeters({ radio }: { radio: RadioStatus }) {
     rows.push({ label: 'PO', title: 'Actual output power', bar: poBar(radio.txPoW) })
   if (radio.txCompDb != null)
     rows.push({ label: 'COMP', title: 'Speech compression', bar: compBar(radio.txCompDb) })
-  if (rows.length === 0) return null
 
+  const live = radio.transmitting && rows.length > 0
+  if (live) lastRows.current = rows
+
+  if (!pinned) {
+    // Default (Phone/CW): appear only while keyed, exactly as before.
+    if (!radio.transmitting || rows.length === 0) return null
+  } else if (!live && lastRows.current.length === 0) {
+    // Pinned but no reading has EVER arrived (rig reports no meters, or hasn't keyed yet):
+    // a fixed-height hint keeps the panel discoverable without inventing numbers.
+    return (
+      <div className="ph-txmeters pinned idle" role="group" aria-label="Transmit meters">
+        <span className="ph-txmeters-hint">TX meters — readings appear on transmit</span>
+      </div>
+    )
+  }
+
+  const shown = live || !pinned ? rows : lastRows.current
   return (
-    <div className="ph-txmeters" role="group" aria-label="Transmit meters">
-      {rows.map((r) => (
+    <div
+      className={`ph-txmeters${pinned ? ' pinned' : ''}${!live && pinned ? ' idle' : ''}`}
+      role="group"
+      aria-label="Transmit meters"
+    >
+      {shown.map((r) => (
         <div key={r.label} className="ph-txmeter" title={r.title}>
           <span className="ph-txmeter-label">{r.label}</span>
           <div className="ph-txmeter-track">
