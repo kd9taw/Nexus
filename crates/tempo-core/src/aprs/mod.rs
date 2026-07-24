@@ -4,7 +4,10 @@
 //! (12000 / 1200 baud = exactly 10 samples/bit):
 //!   * [`frame`] — AX.25 UI frames + the CRC-16/X.25 FCS.
 //!   * [`hdlc`]  — flag framing, bit-stuffing, NRZI.
-//!   * modem     — AFSK-1200 mark/space modulate + demodulate, in `tempo-audio` (next).
+//!   * [`modem`] — AFSK-1200 (Bell 202) modulate + demodulate at 12 kHz.
+//!
+//! What remains for a live feature: the tempo-audio glue (RX decode thread + PTT-framed TX to the
+//! soundcard, mirroring `rttyrx`/`rtty_afsk`) and an APRS information-field parser/formatter.
 //!
 //! No external crate: the CRC and the bit-level address codec are implemented here with inline
 //! round-trip + known-vector tests, matching the house convention (see `rtty/`, `tempo-sstv`).
@@ -13,6 +16,8 @@
 
 pub mod frame;
 pub mod hdlc;
+pub mod modem;
 
 pub use frame::{fcs, Address, Frame, CONTROL_UI, PID_NO_L3};
 pub use hdlc::{deframe, encode_frame, nrzi_decode, nrzi_encode, FLAG};
+pub use modem::{demodulate, modulate};
