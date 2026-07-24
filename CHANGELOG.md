@@ -5,6 +5,14 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] — 2026-07-24 — Rebuild so testers can confirm the 0.16.0 fixes
+
+Same content as 0.16.0. The first 0.16.0 installer was built *before* the APRS radio-switch/FM
+fix and the CAT-diagnostics landed, but carried the same version number — so a tester who installed
+it saw the pre-fix behavior and couldn't tell the builds apart. 0.16.1 exists purely so the wordmark
+is an unambiguous marker: **if it says 0.16.1, you have the APRS Tune → FM + VHF-radio-switch fix,
+the FT-chrome removed from the APRS window, and the model-aware CAT-failure message.**
+
 ## [0.16.0] — 2026-07-24 — APRS messaging (send, threaded, auto-ack) + decode coverage
 
 Rounds out the APRS feature after a completeness review, and cuts a minor release.
