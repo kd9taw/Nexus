@@ -108,6 +108,40 @@ pub struct PanStatus {
     pub x_pixels: Option<u32>,
 }
 
+/// A `stream 0x<id> type=dax_rx dax_channel=<n> …` status object — how the radio tells us the VITA
+/// stream id assigned to a DAX RX channel we created.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DaxStreamStatus {
+    pub stream_id: Option<u32>,
+    pub dax_channel: Option<u8>,
+    /// The `client_handle` the stream belongs to (so we only accept OUR streams).
+    pub client_handle: Option<u32>,
+}
+
+/// Parse a `stream 0x<id> type=dax_rx dax_channel=<n> client_handle=0x<h> …` status body. Returns
+/// `None` unless it's a `stream …` line whose `type` is `dax_rx`. Pure.
+pub fn parse_dax_stream_status(body: &str) -> Option<DaxStreamStatus> {
+    let rest = body.strip_prefix("stream ")?;
+    let mut it = rest.split_whitespace();
+    let mut st = DaxStreamStatus::default();
+    if let Some(first) = it.next() {
+        st.stream_id = parse_hex_id(first);
+    }
+    let mut is_dax_rx = false;
+    for tok in it {
+        let Some((k, v)) = tok.split_once('=') else {
+            continue;
+        };
+        match k {
+            "type" => is_dax_rx = v == "dax_rx",
+            "dax_channel" | "daxiq_channel" => st.dax_channel = v.parse().ok(),
+            "client_handle" => st.client_handle = parse_hex_id(v),
+            _ => {}
+        }
+    }
+    is_dax_rx.then_some(st)
+}
+
 /// Parse a `display pan 0x<id> key=value …` status body into the fields we track. Pure.
 /// Returns `None` when the body isn't a `display pan` line.
 pub fn parse_pan_status(body: &str) -> Option<PanStatus> {
@@ -303,5 +337,19 @@ mod tests {
             encode_command(5, "display pan create x=1200 y=512"),
             "C5|display pan create x=1200 y=512\n"
         );
+    }
+
+    #[test]
+    fn parses_a_dax_rx_stream_status() {
+        let st = parse_dax_stream_status(
+            "stream 0x04000000 type=dax_rx dax_channel=1 client_handle=0xABCD1234 in_use=1",
+        )
+        .unwrap();
+        assert_eq!(st.stream_id, Some(0x0400_0000));
+        assert_eq!(st.dax_channel, Some(1));
+        assert_eq!(st.client_handle, Some(0xABCD_1234));
+        // A non-dax_rx stream (e.g. dax_tx / a pan) → None.
+        assert!(parse_dax_stream_status("stream 0x05000000 type=dax_tx dax_channel=1").is_none());
+        assert!(parse_dax_stream_status("display pan 0x40000000 center=14.1").is_none());
     }
 }
