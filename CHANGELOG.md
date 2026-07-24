@@ -5,6 +5,24 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.20] — 2026-07-24 — Pause + 3D on the Voice/CW scope, FT4 spot fix
+
+### Added
+
+- **Pause, rewind, and 3D on the Voice and CW rig scope too.** The ⏸ (pause + mouse-wheel
+  scrollback) and ◭ (3D stacked-spectrum) buttons that arrived on the FT8/Tempo waterfall now
+  live on the Phone and CW cockpit scope. Because that scope is a panadapter (live trace on top,
+  waterfall band below), the 3D view *maximizes* — it hides the trace and draws the stacked
+  spectrum over the whole panel; ▤ brings the trace back. Your choice is remembered per window.
+
+### Fixed
+
+- **Clicking an FT4 spot now switches the decoder to FT4.** Previously it tuned to the right
+  frequency but left the decoder on FT8. The spot's specific mode is now honored, so FT8↔FT4
+  follows the spot you click (spots list / cluster / cockpit spot panels).
+- **The waterfall's ⏸ / ◭ / pop-out buttons no longer get clipped** off the docked Operate
+  cockpit when the panel is narrow — the header wraps instead of hiding controls.
+
 ## [0.15.18] — 2026-07-24 — A waterfall you can pause and rewind, plus a 3D view
 
 ### Added
