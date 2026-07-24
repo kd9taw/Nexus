@@ -185,6 +185,16 @@ pub enum Tier {
 }
 
 impl Tier {
+    /// True for the Tempo CHAT-capable tiers (TempoFast/TempoDeep). The chat cadence —
+    /// store-and-forward resends, delivery ACKs, conversation folding, and every behavior the
+    /// 2026-07 cadence rework adds — runs ONLY on these tiers. Mode::Chat at an FT tier is a
+    /// legitimate RESTING state (it's the boot state, pinned silent by
+    /// `chat_mode_at_ft8_tier_stays_silent`), and it must stay inert: gate on this, never on
+    /// `mode == Chat` alone.
+    pub fn is_chat(self) -> bool {
+        matches!(self, Tier::TempoFast | Tier::TempoDeep)
+    }
+
     /// The native decode/encode mode this tier maps to, or `None` for `Dx1`
     /// (FT1's robust non-coherent tier, handled outside the `modes::Mode` set).
     pub fn mode_kind(self) -> Option<ModeKind> {

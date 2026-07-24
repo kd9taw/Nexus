@@ -12320,6 +12320,25 @@ mod tests {
         }
     }
 
+    /// Invariant pin: ENTERING Chat mode via set_mode reconciles an FT tier down to
+    /// TempoFast (the chat-capable tier) — the one direction the engine actively snaps.
+    /// The reverse (tier set to FT8 while resting in Chat) is legitimate (boot state) and
+    /// stays inert via Tier::is_chat() gating on every chat-cadence behavior.
+    #[test]
+    fn entering_chat_mode_snaps_an_ft_tier_to_tempofast() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_mode("chat").expect("chat mode");
+        assert_eq!(e.snapshot().link.tier, Tier::TempoFast, "set_mode(chat) snaps Ft8 → TempoFast");
+        e.set_tier(Tier::Ft4);
+        e.set_mode("chat").expect("chat mode");
+        assert_eq!(e.snapshot().link.tier, Tier::TempoFast, "set_mode(chat) snaps Ft4 → TempoFast");
+        // TempoDeep is chat-capable — entering Chat must NOT clobber it to TempoFast.
+        e.set_tier(Tier::TempoDeep);
+        e.set_mode("chat").expect("chat mode");
+        assert_eq!(e.snapshot().link.tier, Tier::TempoDeep, "a chat tier survives set_mode(chat)");
+    }
+
     /// GOLDEN companion: Chat mode at an FT8 tier (the engine's BOOT state, also recreated by
     /// apply_settings/set_tier) transmits NOTHING with no queued traffic — armed or not. The
     /// Tempo chat-cadence rework must keep this exact silence: new chat behaviors must be
