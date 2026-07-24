@@ -18,10 +18,12 @@ pub mod frame;
 pub mod hdlc;
 pub mod mice;
 pub mod modem;
+pub mod packet;
 pub mod parser;
 
 pub use frame::{fcs, Address, Frame, CONTROL_UI, PID_NO_L3};
 pub use hdlc::{deframe, encode_frame, nrzi_decode, nrzi_encode, FLAG};
 pub use mice::{is_mic_e, MicE};
 pub use modem::{demodulate, modulate};
+pub use packet::{position_beacon, AprsBody, AprsPacket, NEXUS_TOCALL};
 pub use parser::{parse, AprsInfo, Message, Position};
