@@ -81,15 +81,15 @@ describe('SpotsPanel submode + state filters', () => {
   beforeEach(() => sessionStorage.clear())
   afterEach(cleanup)
   const openFilters = () =>
-    fireEvent.click(screen.getByTitle('Filter spots by band, mode, submode, state, or privileges'))
+    fireEvent.click(screen.getByTitle('Filter spots by band, mode, state, or privileges'))
 
-  it('narrows to a specific submode (FT8) within Digital', () => {
+  it('hides a specific mode (FT4) when its chip is toggled off (flat show/hide filter)', () => {
     render(
       <SpotsPanel
         spots={[
           spot({ call: 'K1FT8', mode: 'Digital', submode: 'FT8' }),
           spot({ call: 'K1FT4', mode: 'Digital', submode: 'FT4' }),
-          spot({ call: 'W6SSB', mode: 'Phone' }), // no submode
+          spot({ call: 'W6SSB', mode: 'Phone' }), // no submode → effective mode "Phone"
         ]}
         bandPlan={[]}
         selectedCall={null}
@@ -98,10 +98,11 @@ describe('SpotsPanel submode + state filters', () => {
       />,
     )
     openFilters()
-    fireEvent.click(screen.getByTitle('Show only FT8 spots'))
+    // Every mode shows by default; clicking a mode chip HIDES just that mode.
+    fireEvent.click(screen.getByTitle('Hide FT4 spots'))
     expect(screen.getByText('K1FT8')).toBeTruthy()
     expect(screen.queryByText('K1FT4')).toBeNull()
-    expect(screen.queryByText('W6SSB')).toBeNull() // effective mode "Phone" ≠ FT8
+    expect(screen.getByText('W6SSB')).toBeTruthy() // other modes unaffected
   })
 
   it('filters by US state and hides state-less spots', () => {
