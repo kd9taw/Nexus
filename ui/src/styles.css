@@ -8914,6 +8914,23 @@ select.settings-input {
   display: flex;
   flex-direction: column;
 }
+/* The waterfall header carries a lot of controls (palette, zoom, gain/zero, 3D, pause, pop-out).
+   In the narrow DOCKED cockpit the single row overflows and .cockpit-waterfall's overflow:hidden
+   would clip the rightmost controls out of sight (that's how the 3D/pause buttons went missing).
+   Let THIS header wrap so no control is ever lost — the hint text gives first (truncates), and
+   only then does the control cluster wrap to a second visible row. Wide/popped-out: never wraps,
+   so it looks unchanged. */
+.waterfall-wrap > .panel-header {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+}
+.waterfall-wrap > .panel-header .wf-hint {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .wf-hint {
   font-size: 10px;
   color: var(--text-faint);
