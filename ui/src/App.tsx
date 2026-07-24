@@ -1429,7 +1429,9 @@ export default function App() {
         tags: [],
         priority: 0,
         headline: '',
-        mode: modeClassOf(t.mode),
+        // Keep FT4/FT8 specific so the tier-switch guard fires (same as handleWorkSpot);
+        // everything else collapses to its class for cockpit routing.
+        mode: t.mode === 'FT4' || t.mode === 'FT8' ? t.mode : modeClassOf(t.mode),
         freqMhz: t.freqMhz,
       })
     },
