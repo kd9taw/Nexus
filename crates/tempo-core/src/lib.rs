@@ -11,6 +11,7 @@
 //! [`channel::VirtualAir`]. A real `cpal` audio backend slots in behind the same
 //! frame-in/frame-out boundary later (see task #10).
 
+pub mod aprs;
 pub mod channel;
 pub mod clublog;
 pub mod cw;
