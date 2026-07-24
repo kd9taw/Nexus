@@ -5,6 +5,25 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.18] — 2026-07-24 — A waterfall you can pause and rewind, plus a 3D view
+
+### Added
+
+- **Pause and scroll back through the waterfall.** Hit ⏸ and roll the mouse wheel to look
+  back through the last few minutes of the band — a time tape down the right edge shows how far
+  back you are. Great for "did anyone call while I was logging?" History keeps recording while
+  paused; ▶ snaps back to live.
+- **3D stacked-spectrum view.** The ◭ button flips the waterfall into a rolling perspective
+  "3DSS" display — the last ~96 lines stacked front-to-back, newest across the front. An
+  alternate way to read band activity at a glance. (Ported, with attribution, from AetherSDR.)
+
+### Changed
+
+- **The waterfall renders from data now, not pixels.** Switching palettes recolors the WHOLE
+  visible waterfall instantly (not just new lines), zooming and resizing re-render without
+  smearing, and — the quiet win — the per-line canvas readback that caused the "everything gets
+  laggy" stall on laptop GPUs is gone. Same treatment on the Phone/CW scope's waterfall band.
+
 ## [0.15.17] — 2026-07-24 — CW follows the band, pop-out Memories, live-now roster
 
 ### Fixed
