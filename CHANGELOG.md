@@ -5,6 +5,23 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.15] — 2026-07-23 — CW keying fidelity, no more log-click window jump, and Memories grouped by band
+
+### Fixed
+
+- **CW: a deliberate send always transmits.** After Stop TX, hitting an F-key macro (or typing CW
+  and sending) did nothing until you switched contact/band and back. CW is manual keying — the
+  key press *is* the transmit action, so it now always keys (privilege permitting). The FT8
+  auto-sequencer is untouched.
+- **Clicking a contact in CW no longer snaps the window down.** The log prefill focused the RST
+  field, which scrolled the log into view — yanking you down from the decode feed every time.
+  It now readies the RST field without moving your scroll.
+
+### Changed
+
+- **Memories are grouped by band — HF, then VHF/UHF.** The channel list (on the main Memories
+  screen and inside each pack) now organizes into clean HF (< 30 MHz) and VHF/UHF sections.
+
 ## [0.15.14] — 2026-07-23 — Run two radios at once, a New-State hint on every spot, and a much richer Memories section
 
 _A batched release consolidating the work since 0.15.1 (0.15.2–0.15.11)._
