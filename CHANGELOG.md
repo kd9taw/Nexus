@@ -5,6 +5,22 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.21] — 2026-07-24 — Mode designation on the boards, one clean Spots filter
+
+### Added
+
+- **The Needed board now names the specific digital mode.** An FT4 opportunity reads **FT4**,
+  an FT8 one reads **FT8** (RBN skimmer wire), instead of both showing "Digital." FT4 and FT8 of
+  the same station/band are listed as separate rows, and clicking a board row switches the
+  decoder to that mode. The Digital filter chip still governs all of them.
+
+### Changed
+
+- **The Spots panel has ONE mode filter now.** It used to show two overlapping rows with
+  opposite behavior (one hid a class, the other showed only a submode, and they duplicated
+  CW/Phone/Digital). Now it's a single row of the modes actually on the band (CW, Phone, FT8,
+  FT4, RTTY, …) — every chip a plain show/hide toggle, all on by default.
+
 ## [0.15.20] — 2026-07-24 — Pause + 3D on the Voice/CW scope, FT4 spot fix
 
 ### Added
