@@ -37,6 +37,8 @@ export interface MemoriesViewProps {
   dialMode: string
   /** Recall = tune (App's recallMemory: settings + retune + cockpit switch). */
   onRecall: (m: Memory) => void
+  /** Pop this section out into its own window (hidden when already detached). */
+  onPopOut?: () => void
 }
 
 /** The sidebar's built-in views ahead of the custom groups. */
@@ -122,7 +124,7 @@ function rowSummary(m: Memory): string {
   return parts.join(' · ')
 }
 
-export function MemoriesView({ dialMhz, dialMode, onRecall }: MemoriesViewProps) {
+export function MemoriesView({ dialMhz, dialMode, onRecall, onPopOut }: MemoriesViewProps) {
   const bank = useMemories()
   const [sel, setSel] = useState<Selection>('all')
   const [q, setQ] = useState('')
@@ -759,6 +761,16 @@ export function MemoriesView({ dialMhz, dialMode, onRecall }: MemoriesViewProps)
           >
             Export CSV ({shown.length})
           </button>
+          {onPopOut && (
+            <button
+              type="button"
+              className="mv-tool"
+              onClick={onPopOut}
+              title="Pop Memories out into its own window (multi-monitor)"
+            >
+              ↗ Pop out
+            </button>
+          )}
           <button
             type="button"
             className="mv-tool"

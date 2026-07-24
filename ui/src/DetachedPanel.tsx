@@ -52,7 +52,11 @@ import {
   setHoldTxFreq,
   dockBandmapWindow,
   setSettings as persistSettings,
+  setSidebandOverride,
 } from './api'
+import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
+import { bandLabelForMhz } from './band'
+import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
 import { BandMap } from './components/BandMap'
 import { ConnectView } from './components/ConnectView'
@@ -341,6 +345,51 @@ export function DetachedPanel({ panel }: { panel: string }) {
             const opMode = t.view === 'operate' ? 'digital' : t.view
             apply(workSpot(opMode, t.freqMhz, t.band, t.call))
           }}
+        />
+      </div>
+    )
+  }
+
+  if (panel === 'memories') {
+    // Memories, torn off. The bank lives in localStorage and the store already syncs
+    // across windows via the 'storage' event, so edits here appear in the main window
+    // live (and vice versa). Recall mirrors App's recallMemory minus navigation: the
+    // atomic workSpot tunes the shared engine, and the MAIN window follows to the
+    // right cockpit via the same snapshot nav-hint the Needed pop-out uses.
+    const recall = (m: Memory) => {
+      const plan = planRecall(m)
+      const target = plan.view
+      const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
+      const modes = readEnabledModes()
+      if ((target === 'cw' && !modes.cw) || (target === 'phone' && !modes.phone)) {
+        return // cockpit disabled — the main window's Settings gate applies
+      }
+      const mode = m.mode.toUpperCase()
+      const band = bandLabelForMhz(plan.freqMhz)
+      void (async () => {
+        const patch = plan.settingsPatch
+        if (patch) {
+          const cur = await getSettings()
+          const isFm = patch.rptrShift !== undefined
+          if (isFm || patch.phoneMode !== cur.phoneMode) {
+            await persistSettings({ ...cur, ...patch })
+          }
+        }
+        const s2 = await workSpot(opMode, plan.freqMhz, band)
+        if (!s2) return
+        apply(Promise.resolve(s2))
+        if (target === 'phone' && (mode === 'USB' || mode === 'LSB')) {
+          await setSidebandOverride(mode as 'USB' | 'LSB')
+        }
+        memoriesStore.update((b) => markRecalled(b, m.id, Math.floor(Date.now() / 1000)))
+      })()
+    }
+    return (
+      <div className="app detached">
+        <MemoriesView
+          dialMhz={snap?.radio.dialMhz ?? 0}
+          dialMode={snap?.radio.rigMode || snap?.radio.sideband || 'USB'}
+          onRecall={recall}
         />
       </div>
     )

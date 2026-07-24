@@ -2085,6 +2085,7 @@ export default function App() {
       workspace = (
         <main className="layout single">
           <MemoriesView
+            onPopOut={() => void openPanelWindow('memories')}
             dialMhz={snap.radio.dialMhz}
             dialMode={
               lastOpModeRef.current === 'cw'
