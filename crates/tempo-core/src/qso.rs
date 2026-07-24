@@ -416,9 +416,12 @@ impl Station {
     }
 
     /// The message **and IR-HARQ redundancy version** to transmit on my next TX
-    /// slot. Returns `None` when there is nothing to send OR the current step has
-    /// been retransmitted [`MAX_TX_PER_STEP`] times without acknowledgement (the
-    /// step has failed — the caller should time out or return to listening).
+    /// slot. Returns `None` only when there is nothing to send. There is NO per-step
+    /// retransmit cap in here — stock WSJT-X repeats an in-QSO step until the partner
+    /// advances it (the wall-clock Tx watchdog is the backstop), and the only internal
+    /// stop is the opt-in capped-CQ budget below. ([`MAX_TX_PER_STEP`] is a
+    /// caller/test-side convention, not enforced here; the Tempo chat tiers apply
+    /// their own step cap in the engine.)
     pub fn outgoing_rv(&self) -> Option<(Msg, u8)> {
         // Stock WSJT-X: a CQ repeats indefinitely (the Tx watchdog is the
         // backstop). `cq_call_cap` is the opt-in "stop after N unanswered calls"

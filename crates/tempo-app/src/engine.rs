@@ -6778,6 +6778,39 @@ impl Engine {
                 }
                 _ => false,
             };
+        // Tempo (chat tiers) S&P step cap — the QSO-side half of the 2026-07 cadence
+        // rework. On FT8/FT4 the WSJT-X rule stands: an in-QSO step repeats until the
+        // partner advances it or the wall-clock watchdog trips (the golden pins it). On a
+        // 4 s chat-first mode that reads as "keeps sending and sending", so a chat-tier
+        // S&P QSO step stops after TEMPO_QSO_STEP_CAP unanswered overs (≈ WSJT-X-patience
+        // 6, NOT chat's 3) and returns cleanly to monitoring — the QSO strip clears, RX
+        // continues, nothing hangs with a stuck pending. A chat-tier CQ RUN is already
+        // covered by `abandon_stalled` above. Tier-gated at USE time: FT8 can never hit it.
+        const TEMPO_QSO_STEP_CAP: u32 = 6;
+        let tempo_step_capped = self.app.tier().is_chat()
+            && !self.cq_running
+            && match &self.mode {
+                Mode::Qso { station, .. } => {
+                    station.dxcall.is_some()
+                        && matches!(
+                            station.state,
+                            QsoState::AwaitReport | QsoState::AwaitRoger | QsoState::AwaitRr73
+                        )
+                        && station.tx_count >= TEMPO_QSO_STEP_CAP
+                }
+                _ => false,
+            };
+        if tempo_step_capped {
+            let mycall = self.settings.mycall.clone();
+            let mygrid = self.settings.mygrid.clone();
+            self.mode = Mode::Qso {
+                station: Box::new(QsoStation::monitoring(&mycall, &mygrid)),
+                running: false,
+            };
+            self.qso_report_sent = None;
+            self.qso_start_unix = None;
+            self.reset_tx_watchdog();
+        }
         if resume_cq || abandon_stalled {
             let mycall = self.settings.mycall.clone();
             let mygrid = self.settings.mygrid.clone();
@@ -12386,6 +12419,41 @@ mod tests {
             let got = tx_schedule_for(tier);
             let got_ref: Vec<(u64, &str)> = got.iter().map(|(s, t)| (*s, t.as_str())).collect();
             assert_eq!(got_ref, expect, "{tier:?} TX schedule drifted from the WSJT-X golden");
+        }
+    }
+
+    /// Tempo S&P step cap: on a chat tier an unanswered in-QSO step stops after 6 overs
+    /// and returns cleanly to monitoring (no stuck pending, no silent hang). The same
+    /// script on FT8 keeps repeating — pinned by the TX-schedule golden.
+    #[test]
+    fn tempo_qso_step_caps_and_returns_to_monitoring() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tier(Tier::TempoFast);
+        e.set_tx_cycle_auto(false);
+        e.ingest_decodes_for_test(&[dec_snr("CQ K2DEF FN31", -5)], 1);
+        e.call_station("K2DEF"); // we call → AwaitReport; K2DEF never answers
+        let mut sent = 0;
+        for slot in 2..40u64 {
+            if !e.poll_tx(slot).is_empty() {
+                sent += 1;
+            }
+            // The cap check runs on the RX path (observe tail) — feed an unrelated
+            // decode each slot so it evaluates, like real RX traffic would.
+            e.ingest_decodes_for_test(&[dec_snr("CQ N0ABC EN52", -12)], slot);
+        }
+        assert!(
+            (1..=6).contains(&sent),
+            "chat-tier step capped at 6 overs, got {sent}"
+        );
+        let s = e.snapshot();
+        let q = s.qso.expect("Mode::Qso projects a status even when monitoring");
+        assert_eq!(q.dxcall, None, "the abandoned call is cleared");
+        assert_eq!(q.tx_now, None, "nothing pending — no stuck step");
+        assert!(!q.running, "not a run");
+        assert!(!s.radio.transmitting);
+        // And it STAYS silent — no zombie re-transmit on later slots.
+        for slot in 40..48u64 {
+            assert!(e.poll_tx(slot).is_empty(), "monitoring transmits nothing");
         }
     }
 

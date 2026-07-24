@@ -897,7 +897,7 @@ export default function App() {
       // which is what wrongly yanked an TempoFast contact into FT8. `handleWorkspace('msg')` switches
       // area+view to Tempo the same way the mode picker does. (tier null/undefined = keep the
       // current FT8/digital behaviour below — the "tier: None = keep" convention.)
-      if (tier === 'TempoFast') {
+      if (tier === 'TempoFast' || tier === 'TempoDeep') {
         handleWorkspace('msg')
         void withErrorToast(() => apiSelectPeer(call), `Could not open ${call}`).then((s) => {
           if (s) setSnap(s)
@@ -947,7 +947,10 @@ export default function App() {
       snap.recentDecodes,
       settings,
       (d) => {
-        if (d.from) handleCall(d.from, undefined, d.message, d.snr, d.freqHz)
+        // Pass the decode's TIER — without it an FT1/Tempo decode alert ran the FT8
+        // call sequence (the "Work on FT1 wrongly switches to FT8" bug); handleCall
+        // routes chat tiers to the Tempo conversation instead.
+        if (d.from) handleCall(d.from, undefined, d.message, d.snr, d.freqHz, d.tier)
       },
       // Field Day runs its own sequencer (snap.qso is null there) — its state
       // strings (CallingCq/AwaitExchange/AwaitConfirm/Done) gate identically.
