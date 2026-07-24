@@ -58,19 +58,22 @@ pub struct Candidate {
 /// chip's name in the USB descriptor, so Detect can't identify them; that's the whole reason
 /// Auto-test exists, but it used to find nothing until a model was picked (chicken-and-egg). Kept
 /// to one representative per popular family so the sweep stays quick (the first that answers wins).
-/// `(hamlib_model, display_name, family_default_baud)`. Seeded probes try only the family baud.
-pub const COMMON_CAT_MODELS: &[(u32, &str, u32)] = &[
-    (1042, "Yaesu FTDX10", 38400),
-    (1035, "Yaesu FT-991 / FT-991A", 38400),
-    (1049, "Yaesu FT-710", 38400),
-    (1040, "Yaesu FTDX101D", 38400),
+/// `(hamlib_model, display_name, seed_bauds)`. A seeded probe tries each listed baud (first answer
+/// wins), kept short per family so the no-answer worst case stays quick.
+pub const COMMON_CAT_MODELS: &[(u32, &str, &[u32])] = &[
+    (1042, "Yaesu FTDX10", &[38400]),
+    (1035, "Yaesu FT-991 / FT-991A", &[38400]),
+    (1049, "Yaesu FT-710", &[38400]),
+    (1040, "Yaesu FTDX101D", &[38400]),
     // Icom CI-V rigs each answer only at their OWN CI-V address, so the 7300 seed (0x94)
     // can't find a 7610 (0x98) or 9700 (0xA2) — each popular Icom model needs its own seed.
-    (3073, "Icom IC-7300", 115200),
-    (3078, "Icom IC-7610", 115200),
-    (3081, "Icom IC-9700", 115200),
-    (2037, "Kenwood TS-590SG", 115200),
-    (2029, "Elecraft K3", 38400),
+    // Try 115200 AND 19200: USB CI-V defaults to 115200, but the rig-menu "CI-V USB Baud Rate"
+    // is operator-settable — a 7610 left at 19200 answered nothing on a 115200-only seed.
+    (3073, "Icom IC-7300", &[115200, 19200]),
+    (3078, "Icom IC-7610", &[115200, 19200]),
+    (3081, "Icom IC-9700", &[115200, 19200]),
+    (2037, "Kenwood TS-590SG", &[115200]),
+    (2029, "Elecraft K3", &[38400]),
 ];
 
 /// Build probe candidates from enumerated USB ports. A native-USB rig (IC-705, FT-710…)
@@ -103,16 +106,18 @@ pub fn candidates_from(ports: &[UsbPort], fallback_model: u32) -> Vec<Candidate>
                 baud: None,
                 seeded: false,
             }],
-            // Bridge chip, no model yet → try the common rigs (family baud only) so Auto-test can
-            // still find the PORT; the model is a guess (flagged seeded).
+            // Bridge chip, no model yet → try the common rigs (each at its seed bauds) so Auto-test
+            // can still find the PORT; the model is a guess (flagged seeded).
             None => COMMON_CAT_MODELS
                 .iter()
-                .map(|(m, name, baud)| Candidate {
-                    port_name: p.port_name.clone(),
-                    model: *m,
-                    model_name: (*name).to_string(),
-                    baud: Some(*baud),
-                    seeded: true,
+                .flat_map(|(m, name, bauds)| {
+                    bauds.iter().map(move |b| Candidate {
+                        port_name: p.port_name.clone(),
+                        model: *m,
+                        model_name: (*name).to_string(),
+                        baud: Some(*b),
+                        seeded: true,
+                    })
                 })
                 .collect(),
         })
@@ -235,8 +240,13 @@ mod tests {
             &[usb("COM3", "CP2102 USB to UART Bridge", "Silicon Labs")],
             0,
         );
-        assert_eq!(cands.len(), COMMON_CAT_MODELS.len());
+        // One candidate per (model, seed-baud) pair — the Icom models carry two bauds each.
+        let expected: usize = COMMON_CAT_MODELS.iter().map(|(_, _, b)| b.len()).sum();
+        assert_eq!(cands.len(), expected);
         assert!(cands.iter().all(|c| c.port_name == "COM3"));
         assert!(cands.iter().any(|c| c.model == 1042)); // FTDX10 is seeded
+        // The 7610 is now seeded at both 115200 and 19200 so a non-default CI-V baud still connects.
+        assert!(cands.iter().any(|c| c.model == 3078 && c.baud == Some(115200)));
+        assert!(cands.iter().any(|c| c.model == 3078 && c.baud == Some(19200)));
     }
 }
