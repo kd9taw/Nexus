@@ -12596,6 +12596,29 @@ mod tests {
     }
 
     #[test]
+    fn aprs_tune_switches_to_the_2m_radio_like_every_other_qsy() {
+        // The operator's exact setup: FTDX10 (HF, active) + IC-9700 (2 m). APRS Tune must hand off
+        // to the 9700 just like the band picker does — aprs_tune routes through the same
+        // set_frequency/radio_for_band as every working mode.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.rig_model = 1042; // FTDX10 on radio 0 (catch-all coverage)
+        e.settings.band = "20m".into();
+        e.settings.dial_mhz = 14.074;
+        e.settings.sync_active_from_flat();
+        let r1 = e.add_radio(); // IC-9700, now active
+        e.settings.rig_model = 3081;
+        e.settings.sync_active_from_flat();
+        e.set_radio_bands(r1, vec!["2m".into()]); // 9700 covers 2 m (operator confirmed this is ON)
+        e.set_active_radio(0); // back on the FTDX10, as when the operator opens APRS
+
+        e.aprs_tune(144.390);
+        assert_eq!(e.settings.active_radio, r1, "APRS Tune switched to the IC-9700");
+        assert!((e.settings.dial_mhz - 144.390).abs() < 1e-9, "landed on the APRS dial");
+        assert_eq!(e.rig_mode_effective(), "FM");
+    }
+
+    #[test]
     fn aprs_tune_commands_fm_simplex_and_clears_on_the_next_qsy() {
         // APRS is not a Phone/Digital operating section, so the rig would keep the prior section's
         // mode (DATA/USB) and a 2 m packet never demodulates. aprs_tune must force FM + simplex,

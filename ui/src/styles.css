@@ -16473,6 +16473,16 @@ html[data-panel='needed'] {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
+.aprs-dial {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
 .aprs-messages {
   display: flex;
   flex-direction: column;

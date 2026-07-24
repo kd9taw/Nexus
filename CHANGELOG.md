@@ -5,6 +5,14 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] — 2026-07-24 — APRS defaults to your VHF radio on entry + shows the dial
+
+- **Opening APRS now defaults to your 2 m radio.** Entering the APRS section auto-tunes: it hands
+  off to the 2 m-capable rig (e.g. the IC-9700), lands on the selected APRS frequency, and sets FM —
+  you no longer have to click Tune first. (Still RX-only; nothing keys.)
+- **APRS shows its own dial readout** (`144.390 MHz · 2m · FM`) in the header, since this view hides
+  the top bar's frequency readout — so you can see the hand-off and tune actually land.
+
 ## [0.16.1] — 2026-07-24 — Rebuild so testers can confirm the 0.16.0 fixes
 
 Same content as 0.16.0. The first 0.16.0 installer was built *before* the APRS radio-switch/FM

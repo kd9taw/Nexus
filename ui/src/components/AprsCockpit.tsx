@@ -52,10 +52,13 @@ function ageLabel(atUnix: number, nowSec: number): string {
 export function AprsCockpit({
   active,
   onTune,
+  radio,
 }: {
   active: boolean
   /** QSY to an APRS dial (MHz): 2 m FM simplex, auto-routing to the 2 m-capable radio. */
   onTune?: (dialMhz: number) => void
+  /** Live rig readout (dial/band/mode) — the TopBar's is hidden on this view, so APRS shows its own. */
+  radio?: { dialMhz: number; band: string; sideband: string }
 }) {
   const [armed, setArmed] = useState(false)
   const [freq, setFreq] = useState(144.39)
@@ -71,6 +74,21 @@ export function AprsCockpit({
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
   const [me, setMe] = useState<LatLon | null>(null)
   const prefilled = useRef(false)
+  const autoTuned = useRef(false)
+
+  // Default to the APRS radio on ENTERING the view: hand off to the 2 m-capable rig, land on the
+  // selected APRS frequency in FM. This is the operator's "hitting APRS should default to the 9700"
+  // — done once per entry (rising edge of `active`), never on every render, and never keys TX.
+  useEffect(() => {
+    if (!active) {
+      autoTuned.current = false
+      return
+    }
+    if (!autoTuned.current && onTune) {
+      autoTuned.current = true
+      onTune(freq)
+    }
+  }, [active, onTune, freq])
 
   // Prefill the beacon lat/lon from the operator's grid (and remember it for distance/bearing), once.
   useEffect(() => {
@@ -207,6 +225,14 @@ export function AprsCockpit({
               Tune
             </button>
           </>
+        )}
+        {radio && (
+          <span
+            className="aprs-dial"
+            title="The rig's current dial / band / mode (this view hides the top bar's readout)"
+          >
+            {radio.dialMhz.toFixed(3)} MHz · {radio.band} · {radio.sideband || '—'}
+          </span>
         )}
         <button
           type="button"
