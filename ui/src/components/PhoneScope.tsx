@@ -16,6 +16,13 @@ import { boxEdges, boxWidthFor, clampBoxCenterHz, clickTuneTarget, dialFromBoxCe
 import type { ScopeTuneRequest } from '../useScopeTune'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { WaterfallHistory } from '../waterfallHistory'
+import { drawDss } from '../dss'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
+
+/** Persisted 3D-view toggle for the rig scope (shared by the Phone + CW cockpits; per-surface
+ * so a popped-out cockpit keeps its own choice). Static literal — the storage-scope test
+ * classifies surfaceGet/Set keys by matching this declaration. */
+const PHSCOPE_DSS_KEY = 'nexus.phonescope.dss'
 
 interface Props {
   transmitting: boolean
@@ -133,6 +140,16 @@ export function PhoneScope({
   // — this is a live rig scope, and the trace/waterfall share one canvas with inline markers.
   const historyRef = useRef(new WaterfallHistory(1024))
   const rebuildRef = useRef<(() => void) | null>(null)
+
+  // Pause + scrollback (review a moment you just missed) and the 3D stacked-spectrum view.
+  const [paused, setPaused] = useState(false)
+  const pausedRef = useRef(paused)
+  pausedRef.current = paused
+  const [dss, setDss] = useState<boolean>(() => surfaceGet(PHSCOPE_DSS_KEY) === '1')
+  const dssRef = useRef(dss)
+  dssRef.current = dss
+  /** Scrollback offset in history rows while paused (0 = live tail). */
+  const offsetRef = useRef(0)
   // Which scope feed is live: '' / 'audio' = soundcard FFT, 'flex'/'civ' = a native RF panadapter.
   // Lifted out of the draw loop (updated only when it changes) so the badge can render it.
   const [source, setSource] = useState('')
@@ -274,10 +291,24 @@ export function PhoneScope({
     // Cold-path re-render (palette/theme switch, resize): re-render the accumulated history
     // at the buffer's last view into the waterfall band and blit it.
     const rebuildFromHistory = () => {
-      if (retBuf && retW > 0 && retH > 0 && devH > 0) {
+      if (!(devW > 0 && devH > 0)) return
+      const lut = lutRef.current
+      if (dssRef.current) {
+        // 3D maximize: redraw the whole canvas (trace hidden) from history.
+        drawDss(ctx, devW, devH, historyRef.current, lut, [lut[0], lut[1], lut[2]], {
+          loHz: lastViewLo || 200,
+          hiHz: lastViewHi || 2900,
+        })
+        return
+      }
+      if (retBuf && retW > 0 && retH > 0) {
         const traceHd = Math.max(1, Math.round(devH * TRACE_FRAC))
-        historyRef.current.renderInto(retBuf, retW, retH, lastViewLo, lastViewHi, lutRef.current, 0)
+        historyRef.current.renderInto(retBuf, retW, retH, lastViewLo, lastViewHi, lut, offsetRef.current)
         try {
+          // Clear the trace band to floor first — while paused/scrolled (or just back from 3D)
+          // the live trace isn't being repainted, so wipe stale pixels before the band blit.
+          ctx.fillStyle = `rgb(${lut[0]}, ${lut[1]}, ${lut[2]})`
+          ctx.fillRect(0, 0, retW, traceHd)
           ctx.putImageData(retImg!, 0, traceHd)
         } catch {
           /* zero-size mid-layout */
@@ -414,7 +445,9 @@ export function PhoneScope({
       }
 
       const Wd = devW
-      const traceHd = Math.max(1, Math.round(devH * TRACE_FRAC))
+      // 3D maximize hides the trace so the stacked-spectrum hill fills the whole panel.
+      const dssOn = dssRef.current
+      const traceHd = dssOn ? 0 : Math.max(1, Math.round(devH * TRACE_FRAC))
       const wfHd = Math.max(1, devH - traceHd)
       if (Wd <= 0 || devH <= 0) return
       if (Wd > canvas.width || devH > canvas.height) return
@@ -447,6 +480,17 @@ export function PhoneScope({
       // Append this row to the retained history over its OWN view window (so a palette
       // switch / resize re-renders accumulated history frequency-honestly).
       historyRef.current.push(mag, lo, hi, Date.now())
+
+      // PAUSED = review mode: history keeps filling (nothing is lost) but the scope is frozen;
+      // the mouse wheel scrolls the band back via rebuildFromHistory. Skip the live draw.
+      if (pausedRef.current) return
+
+      // 3D maximize: redraw the whole stacked-spectrum surface from history each row (the trace
+      // is hidden so the hill uses the full panel). Skips the 2D band + trace below.
+      if (dssOn) {
+        drawDss(ctx, Wd, devH, historyRef.current, lut, [lut[0], lut[1], lut[2]], { loHz: lo, hiHz: hi })
+        return
+      }
 
       // ---- Waterfall (bottom region): scroll the RETAINED buffer up 1 row + write the new
       // bottom row from the LUT, then blit at y=traceHd. No getImageData readback. ----
@@ -886,6 +930,44 @@ export function PhoneScope({
             aria-label="Scope visual zero (floor)"
           />
         </label>
+        <button
+          type="button"
+          className={`ph-scope-btn${dss ? ' on' : ''}`}
+          aria-pressed={dss}
+          title={
+            dss
+              ? 'Back to the flat trace + waterfall'
+              : 'Switch to the 3D stacked-spectrum view (fills the panel; hides the trace)'
+          }
+          onClick={() => {
+            const next = !dss
+            setDss(next)
+            dssRef.current = next
+            surfaceSet(PHSCOPE_DSS_KEY, next ? '1' : '0')
+            rebuildRef.current?.()
+          }}
+        >
+          {dss ? '▤' : '◭'}
+        </button>
+        <button
+          type="button"
+          className={`ph-scope-btn${paused ? ' on' : ''}`}
+          aria-pressed={paused}
+          title={
+            paused
+              ? 'Resume the live scope (history kept filling while paused)'
+              : 'Pause the waterfall — then scroll back through it with the mouse wheel'
+          }
+          onClick={() => {
+            const next = !paused
+            setPaused(next)
+            pausedRef.current = next
+            if (!next) offsetRef.current = 0
+            rebuildRef.current?.()
+          }}
+        >
+          {paused ? '▶' : '⏸'}
+        </button>
       </div>
       <div className="ph-scope-canvas-wrap">
         <canvas
@@ -900,7 +982,20 @@ export function PhoneScope({
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={endGesture}
+          onWheel={(e) => {
+            // Only in pause/review mode: wheel up = back in time, down = toward live.
+            if (!pausedRef.current) return
+            const h = historyRef.current
+            const step = e.deltaY < 0 ? 3 : -3
+            const cur = offsetRef.current
+            const next = Math.max(0, Math.min(h.maxOffset(1), cur + step))
+            if (next !== cur) {
+              offsetRef.current = next
+              rebuildRef.current?.()
+            }
+          }}
         />
+        {paused && <div className="ph-scope-paused">⏸ paused · wheel to rewind</div>}
         {/* The drag passband box — imperatively positioned (60 fps), never intercepts events. */}
         <div ref={boxRef} className="ph-scope-box" aria-hidden="true" />
       </div>

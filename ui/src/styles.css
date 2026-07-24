@@ -7111,6 +7111,47 @@ input.cw-pitch::-webkit-inner-spin-button {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  /* Wrap rather than clip when the strip gets crowded (S-meter + Δ + G/Z + 3D/pause) in a
+     narrow cockpit — same lesson as the FT8 waterfall header. */
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+}
+/* 3D + pause toggles on the rig scope's control strip. */
+.ph-scope-btn {
+  flex: 0 0 auto;
+  background: var(--bg-raised, rgba(0, 0, 0, 0.35));
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+  line-height: 1.4;
+  cursor: pointer;
+  font-size: 11px;
+}
+.ph-scope-btn:hover {
+  color: var(--text);
+}
+.ph-scope-btn.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+/* "Paused · wheel to rewind" chip, over the scope canvas (which is position:relative). */
+.ph-scope-paused {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-elev-2, #000) 78%, transparent);
+  border: 1px solid var(--border-soft);
+  pointer-events: none;
+  white-space: nowrap;
 }
 /* Native-RF-feed badge: a FlexRadio/Icom panadapter is driving the scope, not the soundcard FFT. */
 .ph-scope-src {
