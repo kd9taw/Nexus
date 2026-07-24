@@ -98,6 +98,35 @@ fn spawn_cat_daemon(t: &Transport, target: &str, network: bool) -> std::io::Resu
     spawn_rigctld(t.rig_model, target, t.baud, t.rigctld_port, network).map(CatDaemon::Spawned)
 }
 
+/// A clear, model-aware "CAT is down" message for when the rig stops answering — the field-report
+/// fix for a tester who ran hours not knowing CAT was dead and a silent "reply incomplete" loop.
+/// It NAMES the config (model / port / baud) so the operator can see a baud/port mismatch at a
+/// glance, and for an Icom adds the dual-USB-port gotcha (the IC-7610/9700 expose two serial ports,
+/// only one of which carries CI-V — picking the wrong one looks exactly like this).
+fn cat_down_message(t: &Transport, err: &std::io::Error) -> String {
+    if t.is_network() {
+        return format!(
+            "CAT can't reach the rig — no reply from {} ({err}). Check the radio is powered on \
+             and the network CAT address/port is correct.",
+            t.rig_addr
+        );
+    }
+    let name = crate::rigmodels::rig_model_name(t.rig_model).unwrap_or("the rig");
+    let hint = if crate::rigmodels::rig_model_name(t.rig_model)
+        .is_some_and(|n| n.starts_with("Icom"))
+    {
+        " Icom rigs expose TWO USB serial ports — make sure the CAT port is the CI-V one, and that \
+         the rig's CI-V baud matches this setting."
+    } else {
+        ""
+    };
+    format!(
+        "CAT can't reach the rig — {name} on {} @ {} baud isn't answering ({err}). Check the COM \
+         port, that the CAT baud matches the rig, and that the radio is on.{hint}",
+        t.serial_port, t.baud
+    )
+}
+
 use tempo_app::dto::{SourceKind, Tier};
 use tempo_app::settings::{RadioProfile, Settings};
 use tempo_core::message::Msg;
@@ -1724,12 +1753,9 @@ impl RadioLoop {
                 let mut eng = engine.lock().map_err(|e| e.to_string())?;
                 // FM repeater config (shift, band-offset magnitude, CTCSS) — applied below
                 // only when the mode policy resolves to FM. Computed first (owned) so the
-                // mutable take_* calls that follow don't fight the settings borrow.
-                let fm = (
-                    eng.settings().rptr_shift.clone(),
-                    eng.settings().rptr_offset_hz(),
-                    eng.settings().ctcss_tone_hz,
-                );
+                // mutable take_* calls that follow don't fight the settings borrow. APRS forces
+                // simplex here (see `fm_repeater_config`) so a beacon never keys through a shift.
+                let fm = eng.fm_repeater_config();
                 (
                     Transport::from_settings(eng.settings()),
                     eng.settings().dial_hz(),
@@ -2472,6 +2498,17 @@ impl RadioLoop {
                             self.func_supported = [None; 5];
                             self.func_misses = [0; 5];
                             self.func_state = [None; 5];
+                            // Name the rig config in the diagnostic too, so a capture taken while
+                            // the fault is ongoing records model/port/baud (the spawn note may
+                            // predate logging being armed).
+                            crate::civ::diag::note(&format!(
+                                "CAT down: model={} port={:?} baud={} conn={}",
+                                self.applied.rig_model,
+                                self.applied.serial_port,
+                                self.applied.baud,
+                                self.applied.rig_conn
+                            ));
+                            let msg = cat_down_message(&self.applied, &e);
                             if let Ok(mut eng) = engine.lock() {
                                 // Clear the read-backs so a dead link doesn't freeze the
                                 // S-meter needle or flash a stale mode-mismatch tag.
@@ -2479,10 +2516,7 @@ impl RadioLoop {
                                 eng.clear_rig_mode();
                                 eng.clear_rig_funcs();
                                 eng.clear_rig_passband();
-                                eng.set_cat_status(
-                                    Some(false),
-                                    format!("CAT read-back stopped — rig not answering ({e})"),
-                                );
+                                eng.set_cat_status(Some(false), msg);
                             }
                         }
                     }

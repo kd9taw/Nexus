@@ -6,7 +6,8 @@
 //! unit-tested; [`spawn_rigctld`] launches it and returns a kill-on-drop
 //! [`Child`] so the daemon dies with Tempo.
 
-use std::process::{Child, Command};
+use std::io::BufRead;
+use std::process::{Child, Command, Stdio};
 
 /// Build the `rigctld` argument vector.
 ///
@@ -221,6 +222,10 @@ pub fn spawn_rigctld(
     let args = rigctld_args(model, addr, baud, tcp_port, network);
     let mut cmd = Command::new(resolve_rigctld());
     cmd.args(&args);
+    // Capture the daemon's own stderr so Hamlib's connection errors (port open failed, read
+    // timeout, wrong model) land IN the CI-V diagnostic — for a Hamlib/Icom rig the byte-level
+    // tap can't see the serial link, so without this a "rig never answered" fault is invisible.
+    cmd.stderr(Stdio::piped());
     // On Windows, don't pop a console window for the daemon (Tempo is a GUI app).
     #[cfg(windows)]
     {
@@ -228,7 +233,29 @@ pub fn spawn_rigctld(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let child = cmd.spawn()?;
+    let mut child = cmd.spawn()?;
+    // Record the exact launch (model / port / baud) so a diagnostic capture names the rig config
+    // even when logging is armed AFTER the daemon started. A no-op line when logging is off.
+    crate::civ::diag::note(&format!(
+        "rigctld spawn: {} (network={network})",
+        args.join(" ")
+    ));
+    // Drain the daemon's stderr on a detached thread → the diagnostic. `note` is a cheap relaxed
+    // load when logging is off, so this idles for free; the thread ends when the daemon exits.
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::Builder::new()
+            .name("rigctld-stderr".into())
+            .spawn(move || {
+                let reader = std::io::BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    let line = line.trim();
+                    if !line.is_empty() {
+                        crate::civ::diag::note(&format!("rigctld: {line}"));
+                    }
+                }
+            })
+            .ok();
+    }
     // On Windows, bind the daemon to a kill-on-close Job Object so it can't
     // outlive Tempo and keep the COM port locked.
     #[cfg(windows)]
