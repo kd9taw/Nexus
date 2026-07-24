@@ -393,10 +393,17 @@ pub fn score_slots(
         // (from_adif("RTTY") = Digital), so RTTY DXCC stays a Digital-class award —
         // this only lets the row read "RTTY" and route to the RTTY cockpit, and keeps
         // an RTTY row distinct from an FT8 row of the same call/band in rank()'s dedup.
-        mode: if mode.eq_ignore_ascii_case("RTTY") {
-            "RTTY".to_string()
-        } else {
-            ModeClass::from_adif(mode).label().to_string()
+        // Carry the SPECIFIC digital submode (RTTY/FT8/FT4) as the display+routing label so the
+        // Needed board designates the exact mode and keeps them as distinct rows in rank()'s
+        // dedup. The award .need() above already treated each as Digital (from_adif), so this
+        // changes only the badge/routing, not the award class. Everything else keeps its class.
+        mode: {
+            let up = mode.to_ascii_uppercase();
+            if up == "RTTY" || up == "FT8" || up == "FT4" {
+                up
+            } else {
+                ModeClass::from_adif(mode).label().to_string()
+            }
         },
         freq_mhz: None,
         grid_rarity: rarity,
@@ -1459,8 +1466,8 @@ mod tests {
         let modes: Vec<&str> = ranked.iter().map(|a| a.mode.as_str()).collect();
         assert!(modes.contains(&"CW"), "CW opportunity kept: {modes:?}");
         assert!(
-            modes.contains(&"Digital"),
-            "Digital opportunity kept: {modes:?}"
+            modes.contains(&"FT8"),
+            "FT8 opportunity kept with its specific label: {modes:?}"
         );
     }
 
@@ -1526,8 +1533,8 @@ mod tests {
         let modes: Vec<&str> = ranked.iter().map(|a| a.mode.as_str()).collect();
         assert!(modes.contains(&"RTTY"), "RTTY row kept: {modes:?}");
         assert!(
-            modes.contains(&"Digital"),
-            "FT8 (Digital) row kept: {modes:?}"
+            modes.contains(&"FT8"),
+            "FT8 row kept with its specific label: {modes:?}"
         );
     }
 

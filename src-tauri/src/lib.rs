@@ -6643,15 +6643,19 @@ async fn get_need_alerts(
                 heard.push(propagation::Heard {
                     call: cs.dx_call.to_ascii_uppercase(),
                     band: band.label().to_string(),
-                    // The surface gate above used `class` (the frequency-derived class,
-                    // still Digital for RTTY). Here we only UPGRADE the display/routing
-                    // label of an RBN RTTY skimmer spot — the machine-generated wire's
-                    // leading mode token, trusted like the OTA feed. Everything else keeps
-                    // its frequency-derived class label.
-                    mode: if cs.is_rbn_rtty() {
-                        "RTTY".to_string()
-                    } else {
-                        class.label().to_string()
+                    // UPGRADE the display/routing label from the RBN skimmer wire's structured
+                    // mode token (RTTY/FT8/FT4) so the board designates the SPECIFIC digital
+                    // mode, not just "Digital" — the machine-generated wire's leading token,
+                    // trusted like the OTA feed. Guard on the Digital class so a mistokened wire
+                    // can never RECLASSIFY across classes (the anti-comment doctrine, 21.074-CW
+                    // bug); everything else keeps its frequency-derived class label.
+                    mode: match cs.skimmer_mode() {
+                        Some(m @ ("RTTY" | "FT8" | "FT4"))
+                            if class == propagation::ModeClass::Digital =>
+                        {
+                            m.to_string()
+                        }
+                        _ => class.label().to_string(),
                     },
                     freq_mhz: Some(freq),
                     // The spot's REAL receive time — stamping poll-time made

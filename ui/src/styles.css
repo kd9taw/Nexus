@@ -12303,6 +12303,14 @@ html[data-panel='needed'] {
 .np-mode-col.np-mode-rtty {
   background: var(--need-mode-rtty, #f5a524);
 }
+/* FT8 keeps the digital cyan (the prototypical data mode); FT4 gets its own green so the
+   two read apart at a glance now that the board designates the specific mode. */
+.np-mode-col.np-mode-ft8 {
+  background: var(--need-mode, #22d3ee);
+}
+.np-mode-col.np-mode-ft4 {
+  background: var(--need-mode-ft4, #4ade80);
+}
 .np-empty {
   padding: 22px 14px;
   color: var(--text-faint);
