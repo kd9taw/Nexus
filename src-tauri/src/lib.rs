@@ -6455,9 +6455,18 @@ async fn get_need_alerts(
     // from the digital modem, so the truthful mode label is the active TIER (FT8/FT4/
     // FT1/DX1) — all of which map to the Digital class for click-to-work routing.
     let tier_mode = format!("{:?}", snap.link.tier).to_uppercase();
+    // FRESHNESS GATE (operator 2026-07-23, "decoded 11 minutes ago is too long"): the roster
+    // never evicts — a station decoded once stays in snap.stations until a band change clears
+    // it — so without an age cut a single decode feeds the Needed board indefinitely. "Heard by
+    // MY radio" is the board's strongest claim and must mean NOW: cap it at 2 minutes of wall
+    // clock, converted to slots by the active tier's T/R period (8 FT8 slots, 30 FT1 slots).
+    const OWN_DECODE_MAX_AGE_SECS: f64 = 120.0;
+    let slot_now = snap.radio.slot;
+    let period = snap.radio.tr_period_secs.max(1.0);
     let mut heard: Vec<propagation::Heard> = snap
         .stations
         .iter()
+        .filter(|s| slot_now.saturating_sub(s.last_heard_slot) as f64 * period <= OWN_DECODE_MAX_AGE_SECS)
         .map(|s| propagation::Heard {
             call: s.call.clone(),
             band: band.clone(),
