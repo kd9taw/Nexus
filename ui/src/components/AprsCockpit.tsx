@@ -8,6 +8,17 @@ function compass(deg: number): string {
   return COMPASS[Math.round(deg / 45) % 8]
 }
 
+/** The regional 2 m FM APRS frequencies (MHz) — all AFSK-1200, what this decoder handles. */
+const APRS_FREQS: [number, string][] = [
+  [144.39, 'N. America'],
+  [144.8, 'Europe / Africa'],
+  [145.175, 'Australia'],
+  [144.575, 'New Zealand'],
+  [144.66, 'Japan'],
+  [144.93, 'Argentina'],
+  [145.57, 'Brazil'],
+]
+
 /** Common APRS symbols (primary table `/`): [code, label]. */
 const SYMBOLS: [string, string][] = [
   ['>', 'Car'],
@@ -31,8 +42,16 @@ function ageLabel(atUnix: number, nowSec: number): string {
  * APRS cockpit — monitor decoded packets and send a position beacon. RX-first: arming starts the
  * AFSK-1200 decoder; a beacon is an explicit, gated one-shot send (never automatic).
  */
-export function AprsCockpit({ active }: { active: boolean }) {
+export function AprsCockpit({
+  active,
+  onSetFrequency,
+}: {
+  active: boolean
+  /** QSY to a dial (MHz) / band / mode — the shared App setFrequency path. */
+  onSetFrequency?: (dialMhz: number, band: string, mode: string) => void
+}) {
   const [armed, setArmed] = useState(false)
+  const [freq, setFreq] = useState(144.39)
   const [heard, setHeard] = useState<AprsHeard[]>([])
   const [lat, setLat] = useState('')
   const [lon, setLon] = useState('')
@@ -130,12 +149,36 @@ export function AprsCockpit({ active }: { active: boolean }) {
           <span className="np-count np-count-filtered">{heard.length} pkts</span>
         )}
         <span className="np-hint">AFSK-1200 packet — decode positions/messages, send a beacon</span>
+        {onSetFrequency && (
+          <>
+            <select
+              className="np-chip aprs-freq"
+              value={freq}
+              onChange={(e) => setFreq(Number(e.target.value))}
+              title="APRS frequency by region (2 m FM, AFSK-1200)"
+            >
+              {APRS_FREQS.map(([f, region]) => (
+                <option key={f} value={f}>
+                  {f.toFixed(3)} · {region}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="np-chip"
+              onClick={() => onSetFrequency(freq, '2m', 'FM')}
+              title="Tune the rig to the selected APRS frequency (2 m FM)"
+            >
+              Tune
+            </button>
+          </>
+        )}
         <button
           type="button"
           className={`np-chip${armed ? ' active' : ''}`}
           aria-pressed={armed}
           onClick={toggleArm}
-          title="Arm the APRS decoder on the RX audio (144.390 FM in North America)"
+          title="Arm the APRS decoder on the RX audio"
         >
           {armed ? '● Monitoring' : 'Monitor'}
         </button>

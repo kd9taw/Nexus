@@ -16520,3 +16520,7 @@ html[data-panel='needed'] {
 .aprs-info {
   color: var(--text-dim);
 }
+.aprs-freq {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}

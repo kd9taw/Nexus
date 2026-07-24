@@ -2377,7 +2377,7 @@ export default function App() {
         )}
         {isViewEnabled('aprs') && (
           <div className="aprs-host" hidden={effectiveView !== 'aprs'}>
-            <AprsCockpit active={effectiveView === 'aprs'} />
+            <AprsCockpit active={effectiveView === 'aprs'} onSetFrequency={handleSetFrequency} />
           </div>
         )}
         {workspace}
