@@ -600,6 +600,16 @@ export interface ChatMessage {
    * store-and-forward queue does not survive a restart, so it will NEVER transmit —
    * the operator must re-send. Shown as "Not sent" rather than a misleading "Sent". */
   abandoned?: boolean
+  /** Outbound: chunk-id of the queued store entry (matches an id-bearing ACK). */
+  ackId?: string | null
+  /** Outbound: transmit cycles used (bounded by chatMaxCycles) — "sending k/N". */
+  attempts?: number
+  /** Outbound: implicitly confirmed — the peer sent a complete directed message back
+   * after ours transmitted (they hear us; resends stopped). NOT "Delivered ✓". */
+  confirmed?: boolean
+  /** Outbound terminal: sent its full cycle budget, never acknowledged. Resends
+   * stopped; tap to re-send. A late RR73 can still flip it to delivered. */
+  noAck?: boolean
 }
 
 export interface Conversation {
@@ -1807,6 +1817,10 @@ export interface Settings {
   /** Stop a CQ run after N unanswered calls; null/undefined = stock WSJT-X
    * (CQ repeats until you stop it — the Tx watchdog is the backstop). */
   cqMaxCalls?: number | null
+  /** Tempo chat: max transmit cycles per message before terminal no-ack (null = default 3). */
+  chatMaxCycles?: number | null
+  /** Tempo chat: a peer's completed reply implicitly confirms in-flight messages (default on). */
+  chatImplicitAck?: boolean
   /** Auto-CQ run: abandon a caller who answered then went silent, after N unanswered
    * overs, and resume CQ. null/undefined = default (3); 0 = never abandon (wait for you). */
   cqStallOvers?: number | null

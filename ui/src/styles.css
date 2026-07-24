@@ -4655,6 +4655,26 @@ select optgroup {
   color: var(--state-good);
   opacity: 1;
 }
+/* Mid-schedule: released, cycle budget not exhausted ("sending — try k"). */
+.delivery.sending {
+  color: var(--text-dim);
+  opacity: 0.9;
+  letter-spacing: 0;
+}
+/* Terminal: sent its full cycle budget, never acknowledged — needs operator action
+   (tap the bubble to re-send), so it earns the warn colour like `abandoned`. */
+.delivery.no-ack {
+  color: var(--state-bad, var(--alert-warning, var(--accent)));
+  opacity: 1;
+}
+/* A tappable terminal bubble (no-ack / abandoned): affordance cue. */
+.bubble.resendable {
+  cursor: pointer;
+  outline: 1px dashed var(--border);
+}
+.bubble.resendable:hover {
+  outline-color: var(--accent);
+}
 /* A real on-air RR73 ACK — strongest delivery affirmation. */
 /* Presence heartbeat toggle — launchpad button + compact header chip. */
 .heartbeat-btn {

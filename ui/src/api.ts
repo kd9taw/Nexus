@@ -254,6 +254,12 @@ export async function sendMessage(peer: string, text: string): Promise<AppSnapsh
   return invoke<AppSnapshot>('send_message', { peer, text })
 }
 
+/** One-click resend of a terminal (no-ack / abandoned) chat bubble — re-queues the same
+ * text with a fresh cycle budget on the SAME bubble. ackId targets the exact bubble. */
+export async function resendChat(peer: string, ackId?: string | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('resend_chat', { peer, ackId: ackId ?? null })
+}
+
 /**
  * Send an open broadcast to everyone on frequency (not directed at a peer).
  * Lands in the "*" band-activity feed. Returns the fresh snapshot.

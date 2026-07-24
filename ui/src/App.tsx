@@ -101,6 +101,7 @@ import {
   radioLaunchInfo,
   chooseRadio,
   useSingleRadio,
+  resendChat,
   type RadioLaunchInfo,
 } from './api'
 import {
@@ -1014,6 +1015,21 @@ export default function App() {
     setSnap(s)
     void withErrorToast(() => apiSelectPeer('*'), 'Could not open the band feed').then(
       (s2) => s2 && setSnap(s2),
+    )
+  }, [])
+
+  // Tap-to-resend a terminal (no-ack / abandoned) bubble: same text, fresh cycle budget,
+  // same bubble (the backend re-points it at the new queue entry).
+  const handleResend = useCallback((m: import('./types').ChatMessage) => {
+    const peer = m.to
+    if (!peer) return
+    void withErrorToast(() => resendChat(peer, m.ackId ?? null), `Could not re-send to ${peer}`).then(
+      (s) => {
+        if (s) {
+          setSnap(s)
+          pushToast(`↻ Re-sending to ${peer}`, 'success', 3000)
+        }
+      },
     )
   }, [])
 
@@ -2108,6 +2124,7 @@ export default function App() {
               fieldDay={snap.fieldDay}
               macros={macros}
               onSend={handleSend}
+              onResend={handleResend}
               onBroadcast={handleBroadcast}
               onCallCq={handleCallCq}
               beaconOn={snap.radio.beacon ?? false}

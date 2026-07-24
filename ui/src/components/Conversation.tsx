@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type {
+  ChatMessage,
   Conversation as Conv,
   FieldDayStatus,
   OpMode,
@@ -17,6 +18,8 @@ interface Props {
   fieldDay: FieldDayStatus | null
   macros: Settings['macros']
   onSend: (text: string) => void
+  /** Tap-to-resend a terminal (no-ack / abandoned) bubble — re-queues the same text. */
+  onResend?: (m: ChatMessage) => void
   /** Open broadcast (band chips) — free text, not directed at a peer. */
   onBroadcast: (text: string) => void
   /** Call CQ — sends ONE structured `CQ <call> <grid>` frame + arms TX (NOT a chunked
@@ -50,30 +53,23 @@ function deliveryStage(
 ): DeliveryStage | undefined {
   const m = conv.messages[index]
   if (!m.outbound) return undefined
-  // A real RR73 ACK came back → genuinely delivered (not a heuristic).
+  // BACKEND-TRUTH states first (the 2026-07 cadence rework made the engine authoritative):
+  //   delivered = the id-bearing RR73 ACK came back — the only source of "Delivered ✓".
+  //   no-ack    = sent its full cycle budget, never acknowledged. Terminal; tap to re-send.
+  //   confirmed = the peer sent a COMPLETE directed message back after ours transmitted —
+  //               they hear us, resends stopped. Shown as confirmed, never Delivered.
   if (m.delivered) return 'delivered'
-  // Two known-truth states, both checked BEFORE the guesses below. 'on-air' in particular
-  // only means "newest outbound bubble while the radio is keying SOMETHING" — a beacon, a
-  // broadcast, another peer's traffic — so without these, a message that never went out
-  // could claim to be going out.
-  //   abandoned = it was held when the app closed; the queue didn't survive, so it NEVER
-  //               transmits and the operator must re-send. Terminal.
-  //   held      = still queued this session, waiting for the peer to be heard.
+  if (m.noAck) return 'no-ack'
   if (m.abandoned) return 'abandoned'
   if (m.stored) return 'held'
-  const isLastOutbound =
-    conv.messages.slice(index + 1).every((x) => !x.outbound)
-  // The "a later inbound implies they heard us" guess only holds for a DIRECTED thread.
-  // In the open band feed ('*') every other station's broadcast lands inbound here, so it
-  // must NOT flip our broadcast to a false "confirmed".
-  const isBroadcast = conv.peer === '*' || m.to == null
-  const hasLaterInbound = conv.messages
-    .slice(index + 1)
-    .some((x) => !x.outbound)
-  if (hasLaterInbound && !isBroadcast) return 'confirmed'
+  if (m.confirmed) return 'confirmed'
+  // Mid-schedule: released at least once, budget not exhausted → "sending, try k".
+  if ((m.attempts ?? 0) > 0 && m.to != null) return 'sending'
+  const isLastOutbound = conv.messages.slice(index + 1).every((x) => !x.outbound)
   if (isLastOutbound && transmitting) return 'on-air'
   // Sent but unacknowledged (incl. open broadcasts, which never get an ACK) — show a
-  // single ✓ rather than a misleading "confirmed".
+  // single ✓ rather than a misleading "confirmed". (The old "a later inbound implies
+  // they heard us" guess is gone: the backend's narrowed implicit-ACK replaces it.)
   return 'sent'
 }
 
@@ -85,6 +81,7 @@ export function Conversation({
   fieldDay,
   macros,
   onSend,
+  onResend,
   onBroadcast,
   onCallCq,
   beaconOn,
@@ -269,6 +266,7 @@ export function Conversation({
                 ? deliveryStage(conversation, i, radio.transmitting)
                 : undefined
             }
+            onResend={onResend}
           />
         ))}
       </div>

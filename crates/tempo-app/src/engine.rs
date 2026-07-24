@@ -3621,6 +3621,21 @@ impl Engine {
 
     // ----- command delegates ----------------------------------------------
 
+    /// One-click resend of a terminal (no-ack / abandoned) chat bubble — same policy
+    /// side-effects as a fresh send (parity, CQ-run pause, journal), fresh cycle budget.
+    pub fn resend_message(&mut self, peer: &str, ack_id: Option<char>) -> bool {
+        if !self.app.resend_message(peer, ack_id) {
+            return false;
+        }
+        self.reset_tx_watchdog();
+        if self.chat_cq {
+            self.chat_cq_paused = true;
+        }
+        self.persist_pending_msgs(); // the re-queued entry must survive a restart
+        // (Conversations are persisted by the shell's periodic exporter.)
+        true
+    }
+
     pub fn send_message(&mut self, peer: &str, text: &str) {
         self.reset_tx_watchdog();
         // Smart cycle (FT8-style): when auto and not in a CQ run, answer a heard station

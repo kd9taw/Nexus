@@ -463,6 +463,38 @@ impl AppState {
         (frames, bodies)
     }
 
+    /// One-click RESEND of a no-ack / abandoned outbound bubble: re-queue the same text
+    /// through store-and-forward with a FRESH cycle budget and re-point the SAME bubble at
+    /// the new queue entry (new ack_id; attempts/flags reset) — no re-typing, no duplicate
+    /// bubble. Returns false if no matching outbound bubble exists.
+    pub fn resend_message(&mut self, peer: &str, ack_id: Option<char>) -> bool {
+        let peer_up = peer.to_uppercase();
+        let slot = self.slot;
+        let Some(conv) = self.conversations.get_mut(&peer_up) else {
+            return false;
+        };
+        // Match by exact id when given; else the newest terminal (no-ack/abandoned) bubble.
+        let Some(m) = conv.messages.iter_mut().rev().find(|m| {
+            m.outbound
+                && match ack_id {
+                    Some(id) => m.ack_id == Some(id),
+                    None => m.no_ack || m.abandoned,
+                }
+        }) else {
+            return false;
+        };
+        let text = m.text.clone();
+        let new_id = self.store.queue(&peer_up, &text, slot);
+        m.ack_id = Some(new_id);
+        m.attempts = 0;
+        m.no_ack = false;
+        m.confirmed = false;
+        m.delivered = false;
+        m.abandoned = false;
+        m.stored = true; // held until the peer is heard, exactly like a fresh send
+        true
+    }
+
     /// Stamp a released outbound bubble's transmit-cycle count (exact ack-id match).
     fn mark_conversation_attempts(&mut self, peer: &str, id: char, attempts: u32) {
         if let Some(conv) = self.conversations.get_mut(peer) {

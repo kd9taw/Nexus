@@ -2992,6 +2992,43 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     Blank = WSJT-X behavior: CQ repeats until you stop it (the TX watchdog is the
                     backstop). Set a number to auto-stop an unanswered CQ run after that many calls.
+                    The Tempo chat CQ run always stops (default 10 unanswered) — this number
+                    overrides that budget too.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label>
+                    <span className="settings-label">Tempo chat: send cycles per message</span>
+                    <input
+                      className="settings-input"
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={form.chatMaxCycles ?? ''}
+                      placeholder="3"
+                      onChange={(e) => updateNullableNum('chatMaxCycles', e.target.value, 1)}
+                    />
+                  </label>
+                  <span className="settings-hint">
+                    A chat message transmits at most this many cycles, then shows "no ack" (tap the
+                    bubble to re-send). Blank = 3 (TempoDeep uses 5). Never affects FT8/FT4.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={form.chatImplicitAck ?? true}
+                      onChange={(e) => updateBool('chatImplicitAck', e.target.checked)}
+                    />
+                    <span className="settings-label">Tempo chat: a reply counts as received</span>
+                  </label>
+                  <span className="settings-hint">
+                    When the station you messaged sends a complete message back, stop re-sending and
+                    mark yours "confirmed" (works even when the other side isn't Nexus). A real ACK
+                    still upgrades it to "Delivered ✓".
                   </span>
                 </div>
 

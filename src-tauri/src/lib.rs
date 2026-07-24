@@ -1356,6 +1356,22 @@ fn send_message(
     Ok(eng.snapshot())
 }
 
+/// One-click resend of a terminal (no-ack / abandoned) chat bubble: re-queues the same
+/// text with a fresh cycle budget, re-pointing the SAME bubble (no re-typing). `ack_id`
+/// targets the exact bubble; omitted = the newest terminal one.
+#[tauri::command]
+fn resend_chat(
+    state: State<'_, SharedEngine>,
+    peer: String,
+    ack_id: Option<char>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    if !eng.resend_message(&peer, ack_id) {
+        return Err(format!("no resendable message for {peer}"));
+    }
+    Ok(eng.snapshot())
+}
+
 /// Select `peer` as the active conversation. Returns the refreshed snapshot.
 #[tauri::command]
 fn select_peer(
@@ -10325,6 +10341,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             send_message,
+            resend_chat,
             select_peer,
             archive_conversation,
             set_tier,
