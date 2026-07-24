@@ -17,7 +17,9 @@
 pub mod frame;
 pub mod hdlc;
 pub mod modem;
+pub mod parser;
 
 pub use frame::{fcs, Address, Frame, CONTROL_UI, PID_NO_L3};
 pub use hdlc::{deframe, encode_frame, nrzi_decode, nrzi_encode, FLAG};
 pub use modem::{demodulate, modulate};
+pub use parser::{parse, AprsInfo, Message, Position};
