@@ -136,6 +136,42 @@ pub fn parse_dax_audio(packet_class: u16, payload: &[u8], has_trailer: bool) -> 
     }
 }
 
+/// VITA meter-data packet class.
+pub const METER_PACKET_CLASS: u16 = 0x8002;
+
+/// Decode a meter VITA payload (`PCC 0x8002`) into `(meter_id, raw_value)` pairs — `uint16` id +
+/// `int16` raw, both big-endian. Strips the optional VITA trailer. The raw value is scaled to a real
+/// unit by [`convert_meter_raw`], keyed on the meter's UNIT (learned from the control-plane meter
+/// definition, [`crate::flexcat::parse_meter_defs`]). Pure.
+pub fn parse_meter_values(payload: &[u8], has_trailer: bool) -> Vec<(u16, i16)> {
+    let body = if has_trailer {
+        payload.get(..payload.len().saturating_sub(4)).unwrap_or(&[])
+    } else {
+        payload
+    };
+    body.chunks_exact(4)
+        .map(|c| (u16::from_be_bytes([c[0], c[1]]), i16::from_be_bytes([c[2], c[3]])))
+        .collect()
+}
+
+/// Convert a raw int16 meter value to its real unit, keyed on the meter's unit string (from FlexLib
+/// `Meter.cs`): `dBm`/`dB`/`dBFS`/`SWR` → ÷128; `Volts`/`Amps` → ÷256; `degF`/`degC` → ÷64; else the
+/// raw value unscaled.
+pub fn convert_meter_raw(unit: &str, raw: i16) -> f32 {
+    let raw = raw as f32;
+    match unit {
+        "dBm" | "dB" | "dBFS" | "SWR" => raw / 128.0,
+        "Volts" | "Amps" => raw / 256.0,
+        "degF" | "degC" => raw / 64.0,
+        _ => raw,
+    }
+}
+
+/// FlexRadio forward/reflected power meters report **dBm**; convert to watts. `w = 10^(dBm/10)/1000`.
+pub fn dbm_to_watts(dbm: f32) -> f32 {
+    10f32.powf(dbm / 10.0) / 1000.0
+}
+
 /// One FFT payload fragment (a contiguous slice `start_bin..start_bin+num_bins` of the sweep).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FftFrame {
@@ -316,5 +352,26 @@ mod tests {
     #[test]
     fn parse_dax_audio_rejects_a_non_audio_class() {
         assert!(parse_dax_audio(FFT_PACKET_CLASS, &[0u8; 8], false).is_none());
+    }
+
+    #[test]
+    fn parses_meter_value_pairs() {
+        let mut p = Vec::new();
+        for (id, raw) in [(7u16, 1280i16), (12, -256)] {
+            p.extend_from_slice(&id.to_be_bytes());
+            p.extend_from_slice(&raw.to_be_bytes());
+        }
+        assert_eq!(parse_meter_values(&p, false), vec![(7, 1280), (12, -256)]);
+    }
+
+    #[test]
+    fn meter_raw_conversions_follow_the_unit() {
+        assert!((convert_meter_raw("dBm", 1280) - 10.0).abs() < 1e-4); // 1280/128 dBm
+        assert!((convert_meter_raw("SWR", 192) - 1.5).abs() < 1e-4); // 192/128 ratio
+        assert!((convert_meter_raw("Volts", 3520) - 13.75).abs() < 1e-3); // 3520/256 V
+        assert!((convert_meter_raw("degC", 1600) - 25.0).abs() < 1e-3); // 1600/64 °C
+        assert_eq!(convert_meter_raw("Percent", 42), 42.0); // unscaled
+        // Forward power: raw 1280 → 10 dBm → 10 mW.
+        assert!((dbm_to_watts(convert_meter_raw("dBm", 1280)) - 0.01).abs() < 1e-4);
     }
 }

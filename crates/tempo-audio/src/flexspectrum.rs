@@ -22,10 +22,15 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use std::collections::HashMap;
+
 use tempo_app::dto::Spectrum;
 use tempo_app::engine::Engine;
-use tempo_net::flexcat::{parse_pan_status, FlexCat, FlexMsg};
-use tempo_net::flexvita::{parse_fft, parse_vita, FftReassembler, FFT_PACKET_CLASS};
+use tempo_net::flexcat::{parse_meter_defs, parse_pan_status, FlexCat, FlexMsg, MeterDef};
+use tempo_net::flexvita::{
+    convert_meter_raw, dbm_to_watts, parse_fft, parse_meter_values, parse_vita, FftReassembler,
+    FFT_PACKET_CLASS, METER_PACKET_CLASS,
+};
 
 /// Panadapter span: a 200 kHz window centered on the dial.
 const SPAN_HZ: f64 = 200_000.0;
@@ -50,13 +55,22 @@ pub fn rf_span_hz(center_mhz: f64, span_hz: f64) -> (f64, f64) {
     (center - span_hz / 2.0, center + span_hz / 2.0)
 }
 
-/// The static SmartSDR commands to register Nexus as a client and route the UDP FFT to us.
+/// The static SmartSDR commands to register Nexus as a client and route the UDP FFT + meters to us.
 pub fn register_commands(udp_port: u16) -> Vec<String> {
     vec![
         "client program Nexus".to_string(),
         format!("client udpport {udp_port}"),
         "sub pan all".to_string(),
+        "sub meter all".to_string(),
     ]
+}
+
+/// Convert a Flex S-meter reading (dBm, from the `SLC`/`LEVEL` meter) to Nexus's "dB relative to S9"
+/// convention (what `observe_rig_smeter` + the cockpit S-meter expect). S9 is −73 dBm on HF and
+/// −93 dBm at/above 30 MHz (VHF/UHF). Pure.
+pub fn smeter_dbm_to_rel_s9(dbm: f32, dial_hz: u64) -> i32 {
+    let s9_dbm = if dial_hz >= 30_000_000 { -93.0 } else { -73.0 };
+    (dbm - s9_dbm).round() as i32
 }
 
 /// Command to create a panadapter `x_pixels` wide, centered at `center_mhz`, spanning `span_hz`
@@ -123,6 +137,46 @@ fn engine_flex_controls(engine: &Arc<Mutex<Engine>>) -> (f64, Option<i32>) {
         .unwrap_or((SPAN_HZ, None))
 }
 
+/// Decode a batch of meter `(id, raw)` pairs against the registry and push the ones Nexus displays
+/// (S-meter / SWR / ALC / forward power) into the engine. Matches by source+name (ids are
+/// per-session), converts by unit. NOTE: the dBm→S9 and dBFS→ALC mappings are calibrated against the
+/// SmartSDR docs, verified on hardware pending.
+fn route_meters(
+    engine: &Arc<Mutex<Engine>>,
+    meters: &Arc<Mutex<HashMap<u16, MeterDef>>>,
+    pairs: &[(u16, i16)],
+    dial_hz: u64,
+) {
+    let (mut smeter, mut swr, mut alc, mut po_w) = (None, None, None, None);
+    {
+        let defs = meters.lock().unwrap();
+        for &(id, raw) in pairs {
+            let Some(def) = defs.get(&id) else {
+                continue;
+            };
+            let v = convert_meter_raw(&def.unit, raw);
+            match (def.source.as_str(), def.name.as_str()) {
+                ("SLC", "LEVEL") => smeter = Some(smeter_dbm_to_rel_s9(v, dial_hz)),
+                (s, "FWDPWR") if s.starts_with("TX") => po_w = Some(dbm_to_watts(v)),
+                (s, "SWR") if s.starts_with("TX") => swr = Some(v),
+                ("TX", "ALC") => alc = Some(10f32.powf(v / 20.0).clamp(0.0, 1.0)),
+                _ => {}
+            }
+        }
+    }
+    if smeter.is_none() && swr.is_none() && alc.is_none() && po_w.is_none() {
+        return;
+    }
+    if let Ok(mut e) = engine.lock() {
+        if let Some(db) = smeter {
+            e.observe_rig_smeter(db);
+        }
+        if swr.is_some() || alc.is_some() || po_w.is_some() {
+            e.observe_rig_tx_meters(swr, alc, po_w, None);
+        }
+    }
+}
+
 // ---- orchestrator ----
 
 /// A running Flex panadapter feed. Keep it alive while the Flex radio is the active scope
@@ -154,6 +208,9 @@ impl FlexSpectrum {
         // applies changes to the rig, the UDP thread reads it to label the emitted RF span.
         let (init_span, init_ref) = engine_flex_controls(&engine);
         let span_hz = Arc::new(Mutex::new(init_span));
+        // Meter registry (id → definition), learned from the control plane; the UDP thread decodes
+        // 0x8002 value packets against it (match by source+name — ids are per-session).
+        let meters = Arc::new(Mutex::new(HashMap::<u16, MeterDef>::new()));
         let mut handles = Vec::new();
 
         // --- TCP control thread ---
@@ -163,6 +220,7 @@ impl FlexSpectrum {
             let center = center.clone();
             let span_hz = span_hz.clone();
             let engine = engine.clone();
+            let meters = meters.clone();
             handles.push(std::thread::spawn(move || {
                 let Ok(mut flex) = FlexCat::connect(&ip) else {
                     return;
@@ -194,6 +252,10 @@ impl FlexSpectrum {
                             if let Some(sid) = st.stream_id {
                                 *stream_id.lock().unwrap() = Some(sid);
                             }
+                        }
+                        // Learn meter definitions (id → source/name/unit) as they arrive.
+                        for def in parse_meter_defs(&body) {
+                            meters.lock().unwrap().insert(def.index, def);
                         }
                     }
                     if let Some(pid) = pan_id {
@@ -235,6 +297,7 @@ impl FlexSpectrum {
             let stream_id = stream_id.clone();
             let center = center.clone();
             let span_hz = span_hz.clone();
+            let meters = meters.clone();
             handles.push(std::thread::spawn(move || {
                 let mut asm = FftReassembler::new();
                 let mut dg = vec![0u8; 16 * 1024];
@@ -245,30 +308,42 @@ impl FlexSpectrum {
                     let Some(pkt) = parse_vita(&dg[..n]) else {
                         continue;
                     };
-                    if pkt.packet_class != Some(FFT_PACKET_CLASS) {
-                        continue;
-                    }
-                    // Filter to our pan's stream once it's known (accept all until then).
-                    if let (Some(want), Some(got)) = (*stream_id.lock().unwrap(), pkt.stream_id) {
-                        if want != got {
-                            continue;
+                    match pkt.packet_class {
+                        Some(FFT_PACKET_CLASS) => {
+                            // Filter to our pan's stream once it's known (accept all until then).
+                            if let (Some(want), Some(got)) =
+                                (*stream_id.lock().unwrap(), pkt.stream_id)
+                            {
+                                if want != got {
+                                    continue;
+                                }
+                            }
+                            let Some(frame) = parse_fft(pkt.payload) else {
+                                continue;
+                            };
+                            if let Some(bins) = asm.push(&frame) {
+                                let (lo, hi) =
+                                    rf_span_hz(*center.lock().unwrap(), *span_hz.lock().unwrap());
+                                let spec = Spectrum {
+                                    row: fft_to_row(&bins),
+                                    lo_hz: lo,
+                                    hi_hz: hi,
+                                    source: "flex".into(),
+                                };
+                                if let Ok(mut e) = engine.lock() {
+                                    e.set_spectrum_rf(spec);
+                                }
+                            }
                         }
-                    }
-                    let Some(frame) = parse_fft(pkt.payload) else {
-                        continue;
-                    };
-                    if let Some(bins) = asm.push(&frame) {
-                        let (lo, hi) =
-                            rf_span_hz(*center.lock().unwrap(), *span_hz.lock().unwrap());
-                        let spec = Spectrum {
-                            row: fft_to_row(&bins),
-                            lo_hz: lo,
-                            hi_hz: hi,
-                            source: "flex".into(),
-                        };
-                        if let Ok(mut e) = engine.lock() {
-                            e.set_spectrum_rf(spec);
+                        Some(METER_PACKET_CLASS) => {
+                            route_meters(
+                                &engine,
+                                &meters,
+                                &parse_meter_values(pkt.payload, pkt.has_trailer),
+                                (*center.lock().unwrap() * 1_000_000.0) as u64,
+                            );
                         }
+                        _ => {}
                     }
                 }
             }));
@@ -309,6 +384,16 @@ mod tests {
         assert_eq!(cmds[0], "client program Nexus");
         assert_eq!(cmds[1], "client udpport 52001");
         assert_eq!(cmds[2], "sub pan all");
+        assert_eq!(cmds[3], "sub meter all");
+    }
+
+    #[test]
+    fn smeter_dbm_maps_to_rel_s9_by_band() {
+        // HF: S9 = −73 dBm → a −73 dBm reading is 0 dB rel S9; −53 dBm is +20.
+        assert_eq!(smeter_dbm_to_rel_s9(-73.0, 14_074_000), 0);
+        assert_eq!(smeter_dbm_to_rel_s9(-53.0, 14_074_000), 20);
+        // VHF: S9 = −93 dBm.
+        assert_eq!(smeter_dbm_to_rel_s9(-93.0, 144_174_000), 0);
     }
 
     #[test]

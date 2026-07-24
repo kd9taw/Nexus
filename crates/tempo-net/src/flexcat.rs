@@ -142,6 +142,51 @@ pub fn parse_dax_stream_status(body: &str) -> Option<DaxStreamStatus> {
     is_dax_rx.then_some(st)
 }
 
+/// One meter DEFINITION from the control plane — the `id → (source, name, unit)` registry the VITA
+/// `0x8002` value packets are decoded against. Flex meter ids are per-session, so consumers match on
+/// `source` + `name` (e.g. SLC/LEVEL = S-meter), never the numeric id.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MeterDef {
+    pub index: u16,
+    /// Meter source: `SLC` (slice), `TX`/`TX-…`, `RAD`, `AMP`, `COD-…`.
+    pub source: String,
+    /// Meter name: `LEVEL` (S-meter), `FWDPWR`, `REFPWR`, `SWR`, `ALC`, `MICPEAK`, `PATEMP`, …
+    pub name: String,
+    /// Unit string driving [`crate::flexvita::convert_meter_raw`]: `dBm`/`dBFS`/`SWR`/`Volts`/…
+    pub unit: String,
+}
+
+/// Parse a `meter <i>.src=…#<i>.nam=…#<i>.unit=…#…` status body into meter definitions. Unusually,
+/// the tokens are `#`-separated (not space-separated) and prefixed by the meter index, and a line
+/// can define several meters at once — grouped here by index. A `meter <i> removed` line yields
+/// nothing. Pure.
+pub fn parse_meter_defs(body: &str) -> Vec<MeterDef> {
+    let Some(rest) = body.strip_prefix("meter ") else {
+        return Vec::new();
+    };
+    let mut by_index: std::collections::BTreeMap<u16, MeterDef> = std::collections::BTreeMap::new();
+    for tok in rest.split('#') {
+        let Some((lhs, value)) = tok.split_once('=') else {
+            continue; // e.g. "<i> removed" — not a key=value
+        };
+        let Some((idx_str, key)) = lhs.split_once('.') else {
+            continue;
+        };
+        let Ok(idx) = idx_str.trim().parse::<u16>() else {
+            continue;
+        };
+        let def = by_index.entry(idx).or_default();
+        def.index = idx;
+        match key {
+            "src" => def.source = value.to_string(),
+            "nam" => def.name = value.to_string(),
+            "unit" => def.unit = value.to_string(),
+            _ => {}
+        }
+    }
+    by_index.into_values().collect()
+}
+
 /// Parse a `display pan 0x<id> key=value …` status body into the fields we track. Pure.
 /// Returns `None` when the body isn't a `display pan` line.
 pub fn parse_pan_status(body: &str) -> Option<PanStatus> {
@@ -351,5 +396,21 @@ mod tests {
         // A non-dax_rx stream (e.g. dax_tx / a pan) → None.
         assert!(parse_dax_stream_status("stream 0x05000000 type=dax_tx dax_channel=1").is_none());
         assert!(parse_dax_stream_status("display pan 0x40000000 center=14.1").is_none());
+    }
+
+    #[test]
+    fn parses_meter_definitions() {
+        // The S-meter definition + a forward-power meter in one status line.
+        let defs = parse_meter_defs(
+            "meter 7.src=SLC#7.num=0#7.nam=LEVEL#7.unit=dBm#7.low=-150.0#7.hi=20.0#\
+             12.src=TX#12.nam=FWDPWR#12.unit=dBm",
+        );
+        assert_eq!(defs.len(), 2);
+        assert_eq!(defs[0], super::MeterDef { index: 7, source: "SLC".into(), name: "LEVEL".into(), unit: "dBm".into() });
+        assert_eq!(defs[1].index, 12);
+        assert_eq!(defs[1].name, "FWDPWR");
+        // Removal / non-meter lines yield nothing.
+        assert!(parse_meter_defs("meter 7 removed").is_empty());
+        assert!(parse_meter_defs("slice 0 in_use=1").is_empty());
     }
 }
