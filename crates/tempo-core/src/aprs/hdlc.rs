@@ -81,7 +81,7 @@ pub fn nrzi_decode(levels: &[bool]) -> Vec<bool> {
 }
 
 fn bits_to_bytes(bits: &[bool]) -> Option<Vec<u8>> {
-    if bits.is_empty() || bits.len() % 8 != 0 {
+    if bits.is_empty() || !bits.len().is_multiple_of(8) {
         return None; // not byte-aligned → misframed, drop it (the FCS would reject it anyway)
     }
     Some(
