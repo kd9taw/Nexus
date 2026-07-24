@@ -16491,8 +16491,13 @@ html[data-panel='needed'] {
   font-weight: 700;
 }
 .aprs-age,
-.aprs-pos {
+.aprs-pos,
+.aprs-dist {
   font-variant-numeric: tabular-nums;
+}
+.aprs-dist {
+  color: var(--text-faint);
+  white-space: nowrap;
 }
 .aprs-age {
   color: var(--text-faint);

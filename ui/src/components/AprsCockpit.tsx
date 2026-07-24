@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { aprsArm, aprsSendBeacon, getAprsHeard, getSettings, type AprsHeard } from '../api'
-import { gridToLatLon } from '../grid'
+import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
+
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+function compass(deg: number): string {
+  return COMPASS[Math.round(deg / 45) % 8]
+}
 
 /** Common APRS symbols (primary table `/`): [code, label]. */
 const SYMBOLS: [string, string][] = [
@@ -36,9 +41,10 @@ export function AprsCockpit({ active }: { active: boolean }) {
   const [path, setPath] = useState('WIDE1-1,WIDE2-1')
   const [status, setStatus] = useState<string | null>(null)
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
+  const [me, setMe] = useState<LatLon | null>(null)
   const prefilled = useRef(false)
 
-  // Prefill the beacon lat/lon from the operator's grid, once.
+  // Prefill the beacon lat/lon from the operator's grid (and remember it for distance/bearing), once.
   useEffect(() => {
     if (prefilled.current) return
     prefilled.current = true
@@ -48,6 +54,7 @@ export function AprsCockpit({ active }: { active: boolean }) {
         if (ll) {
           setLat(ll.lat.toFixed(4))
           setLon(ll.lon.toFixed(4))
+          setMe(ll)
         }
       })
       .catch(() => {})
@@ -96,14 +103,32 @@ export function AprsCockpit({ active }: { active: boolean }) {
       .catch((e) => setStatus(String(e)))
   }
 
-  // Newest first for the list.
-  const rows = useMemo(() => [...heard].reverse(), [heard])
+  // Collapse the packet stream to ONE row per station (latest packet wins — `heard` is
+  // oldest→newest), newest first, with distance + bearing from the operator's grid.
+  const rows = useMemo(() => {
+    const bySource = new Map<string, AprsHeard>()
+    for (const h of heard) bySource.set(h.source, h)
+    return [...bySource.values()]
+      .sort((a, b) => b.atUnix - a.atUnix)
+      .map((h) => {
+        const hasPos = h.lat != null && h.lon != null
+        const there = hasPos ? { lat: h.lat as number, lon: h.lon as number } : null
+        return {
+          h,
+          dist: me && there ? haversineKm(me, there) : null,
+          brg: me && there ? bearingDeg(me, there) : null,
+        }
+      })
+  }, [heard, me])
 
   return (
     <main className="layout single needed-panel aprs-cockpit">
       <div className="np-head">
         <h2>APRS</h2>
-        <span className="np-count">{heard.length}</span>
+        <span className="np-count">{rows.length}</span>
+        {heard.length !== rows.length && (
+          <span className="np-count np-count-filtered">{heard.length} pkts</span>
+        )}
         <span className="np-hint">AFSK-1200 packet — decode positions/messages, send a beacon</span>
         <button
           type="button"
@@ -162,12 +187,13 @@ export function AprsCockpit({ active }: { active: boolean }) {
               <th>From</th>
               <th>Type</th>
               <th>Position</th>
+              <th>Dist</th>
               <th>Info</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((h, i) => (
-              <tr key={`${h.source}-${h.atUnix}-${i}`}>
+            {rows.map(({ h, dist, brg }) => (
+              <tr key={h.source}>
                 <td className="aprs-age">{ageLabel(h.atUnix, now)}</td>
                 <td className="aprs-from">{h.source}</td>
                 <td className={`aprs-kind aprs-kind-${h.kind}`}>{h.kind}</td>
@@ -177,6 +203,9 @@ export function AprsCockpit({ active }: { active: boolean }) {
                         h.speedKnots ? ` · ${h.speedKnots}kt ${h.courseDeg}°` : ''
                       }`
                     : '—'}
+                </td>
+                <td className="aprs-dist">
+                  {dist != null ? `${Math.round(dist)} km ${brg != null ? compass(brg) : ''}` : ''}
                 </td>
                 <td className="aprs-info">{h.text}</td>
               </tr>
