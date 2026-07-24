@@ -29,6 +29,12 @@ pub struct Pending {
     /// still flip the bubble to Delivered (see [`Self::take_no_acks`] / `purge_stale`).
     /// NOT journaled — a restart re-derives it from `attempts >= cap`, self-healing.
     pub no_acked: bool,
+    /// Implicitly confirmed: after this message went on the air, the peer transmitted a
+    /// COMPLETE directed message back to us — they demonstrably hear us, so the resend
+    /// schedule stops. Weaker than `delivered` (no id-bearing ACK; the bubble shows
+    /// "confirmed", never "Delivered ✓") and still ACK-matchable for the real RR73.
+    /// NOT journaled (re-resolves after restart via resend → their next reply).
+    pub confirmed: bool,
 }
 
 /// A presence-gated store-and-forward queue.
@@ -73,6 +79,7 @@ impl StoreForward {
             delivered: false,
             id,
             no_acked: false,
+            confirmed: false,
         });
         id
     }
@@ -108,7 +115,7 @@ impl StoreForward {
         for p in self
             .queue
             .iter_mut()
-            .filter(|p| !p.delivered && !p.no_acked && p.attempts < max_attempts)
+            .filter(|p| !p.delivered && !p.no_acked && !p.confirmed && p.attempts < max_attempts)
         {
             if !roster.is_active(&p.to, slot, window) {
                 continue;
@@ -148,10 +155,26 @@ impl StoreForward {
         for p in self
             .queue
             .iter_mut()
-            .filter(|p| !p.delivered && !p.no_acked && p.attempts >= max_attempts)
+            .filter(|p| !p.delivered && !p.no_acked && !p.confirmed && p.attempts >= max_attempts)
         {
             p.no_acked = true;
             out.push((p.to.clone(), p.id));
+        }
+        out
+    }
+
+    /// Implicit ACK: the peer just transmitted a COMPLETE directed message to us, so they
+    /// demonstrably hear us — stop resending every in-flight (released, unresolved) message
+    /// to them. Returns the chunk-ids confirmed so the engine can stamp the bubbles
+    /// "confirmed" (NOT Delivered — only the id-bearing RR73 earns that). Held (never
+    /// released) messages are untouched: nothing was heard, nothing to confirm.
+    pub fn confirm_in_flight(&mut self, to: &str) -> Vec<char> {
+        let mut out = Vec::new();
+        for p in self.queue.iter_mut().filter(|p| {
+            !p.delivered && !p.no_acked && !p.confirmed && p.attempts > 0 && p.to == to
+        }) {
+            p.confirmed = true;
+            out.push(p.id);
         }
         out
     }
@@ -162,7 +185,7 @@ impl StoreForward {
     pub fn purge_stale(&mut self, slot: u64, horizon: u64) -> usize {
         let before = self.queue.len();
         self.queue.retain(|p| {
-            !(p.no_acked
+            !((p.no_acked || p.confirmed)
                 && p.last_attempt_slot
                     .is_some_and(|last| slot.saturating_sub(last) > horizon))
         });

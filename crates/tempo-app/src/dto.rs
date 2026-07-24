@@ -246,6 +246,12 @@ pub struct ChatMessage {
     /// `chat_max_cycles`) — drives the bubble's "sending k/N". 0 while still held.
     #[serde(default)]
     pub attempts: u32,
+    /// For an OUTBOUND directed message: implicitly confirmed — after it transmitted, the
+    /// peer sent a COMPLETE directed message back to us (they demonstrably hear us). The
+    /// resend schedule stopped. Weaker than `delivered` (shown as "confirmed", never
+    /// "Delivered ✓" — that stays reserved for the id-bearing RR73).
+    #[serde(default)]
+    pub confirmed: bool,
     /// For an OUTBOUND directed message: terminal "sent N times, never acknowledged".
     /// The resend schedule stopped; a LATE RR73 within the grace window may still flip
     /// this to `delivered`. Drives the bubble's "no ack" state + tap-to-resend.

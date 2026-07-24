@@ -93,6 +93,9 @@ pub struct AppState {
     /// while TX was off don't flush as a stale burst). Re-incurred on a heard resend, so a
     /// lost ACK recovers; the id lets the sender confirm exactly that message.
     pending_acks: Vec<(String, char, u64)>,
+    /// Implicit-ACK enabled (Settings `chat_implicit_ack`, default on): a peer's completed
+    /// directed message to us confirms our in-flight messages to them (stops resends).
+    implicit_ack: bool,
 }
 
 impl AppState {
@@ -115,6 +118,11 @@ impl AppState {
         self.mygrid = mygrid.to_string();
         self.inbox.mycall = mycall.to_string();
         self.store.set_identity(mycall, mygrid);
+    }
+
+    /// Toggle implicit-ACK (Settings `chat_implicit_ack`).
+    pub fn set_implicit_ack(&mut self, on: bool) {
+        self.implicit_ack = on;
     }
 
     /// Forget the heard-stations roster (band QSY: the old band's stations aren't
@@ -296,6 +304,7 @@ impl AppState {
             },
             drained: 0,
             pending_acks: Vec::new(),
+            implicit_ack: true,
         }
     }
 
@@ -330,6 +339,7 @@ impl AppState {
             tier: Some(self.link.tier),
             delivered: false, // flips true when the recipient's id-bearing ACK arrives
             attempts: 0,   // bumped per release ("sending k/N")
+            confirmed: false,
             no_ack: false, // terminal after chat_max_cycles unacknowledged
             ack_id: Some(ack_id), // confirm THIS message by its store chunk-id
             stored: true,     // HELD until the peer is heard and the queue releases it
@@ -358,6 +368,7 @@ impl AppState {
             tier: Some(tier),
             delivered: false, // broadcasts have no per-recipient ACK
             attempts: 0,
+            confirmed: false,
             no_ack: false,
             ack_id: None,
             stored: false, // broadcasts go out directly, never via the store queue
@@ -465,6 +476,19 @@ impl AppState {
         }
     }
 
+    /// Stamp an outbound bubble "confirmed" (exact ack-id match) — the implicit ACK.
+    fn mark_conversation_confirmed(&mut self, peer: &str, id: char) {
+        if let Some(conv) = self.conversations.get_mut(peer) {
+            if let Some(m) = conv
+                .messages
+                .iter_mut()
+                .find(|m| m.outbound && m.ack_id == Some(id) && !m.delivered)
+            {
+                m.confirmed = true;
+            }
+        }
+    }
+
     /// Stamp an outbound bubble terminal "no-ack" (exact ack-id match). A late RR73 that
     /// still matches the store entry flips `delivered` — the UI shows Delivered over no-ack.
     fn mark_conversation_no_ack(&mut self, peer: &str, id: char) {
@@ -555,7 +579,19 @@ impl AppState {
         // attribution, never folded as chat, so it can't itself owe an ACK — no loop.)
         const MAX_PENDING_ACKS: usize = 32;
         for (from, id) in self.inbox.take_owed_acks() {
-            self.pending_acks.push((from.to_uppercase(), id, self.slot));
+            let peer = from.to_uppercase();
+            // IMPLICIT ACK (narrowed per the 2026-07 review): a COMPLETED inbound directed
+            // message from this peer — the same event that makes us owe them an ACK — proves
+            // they hear us. Stop resending our in-flight messages to them; the bubbles show
+            // "confirmed" (inferred), never "Delivered ✓" (the id-bearing RR73 alone earns
+            // that). A peer's bare Grid identify frame does NOT reach here (no completion),
+            // so a leading burst frame can't false-confirm.
+            if self.implicit_ack {
+                for cid in self.store.confirm_in_flight(&peer) {
+                    self.mark_conversation_confirmed(&peer, cid);
+                }
+            }
+            self.pending_acks.push((peer, id, self.slot));
         }
         if self.pending_acks.len() > MAX_PENDING_ACKS {
             let drop = self.pending_acks.len() - MAX_PENDING_ACKS;
@@ -670,6 +706,7 @@ impl AppState {
                 tier: Some(self.link.tier),
                 delivered: false,
                 attempts: 0,
+                confirmed: false,
                 no_ack: false,
                 ack_id: None,  // inbound — no outbound id to confirm
                 stored: false, // inbound — nothing of ours is queued
@@ -1164,6 +1201,65 @@ mod tests {
     }
 
     #[test]
+    fn implicit_ack_confirms_in_flight_but_never_claims_delivered() {
+        // The narrowed implicit ACK: a COMPLETED inbound directed message from the peer
+        // stops our in-flight resends ("confirmed"), but only the id-bearing RR73 may
+        // show "Delivered". A bare identify frame must NOT confirm anything.
+        let mut app = AppState::new("K2DEF", "FN31");
+        app.set_tier(Tier::TempoFast);
+
+        // Queue + release one message to W9XYZ (peer present → releases).
+        app.observe(&[dec("CQ W9XYZ EN37", -8)], 0);
+        app.send_message("W9XYZ", "HOW COPY?");
+        let (frames, _) = app.due_frames(1, 30, 4, 3);
+        assert!(!frames.is_empty(), "released");
+        let bubble = |a: &AppState| a.conversation("W9XYZ").unwrap().messages[0].clone();
+        assert!(!bubble(&app).confirmed && !bubble(&app).delivered);
+
+        // A bare identify frame from the peer (the burst-leading Grid frame) does NOT
+        // complete a message — no confirmation may fire from it alone.
+        app.observe(&[dec("K2DEF W9XYZ EN37", -8)], 2);
+        assert!(
+            !bubble(&app).confirmed,
+            "an identify frame alone must not implicitly ACK"
+        );
+
+        // The peer's chunked reply COMPLETES → implicit ACK: confirmed, resends stop,
+        // but NOT delivered (no RR73 came).
+        for (i, f) in text::chunk("QRV ES 73", 'B').iter().enumerate() {
+            app.observe(&[dec(f, -8)], 3 + i as u64);
+        }
+        assert!(bubble(&app).confirmed, "completed reply confirms in flight");
+        assert!(!bubble(&app).delivered, "confirmed is NOT Delivered");
+        let (resend, _) = app.due_frames(40, 60, 1, 3);
+        assert!(
+            !resend.iter().any(|f| f.contains('!') || f.contains("HOW")),
+            "confirmed message no longer resends: {resend:?}"
+        );
+
+        // The real RR73 still upgrades it to Delivered (and delivered wins over states).
+        app.observe(&[dec("K2DEF W9XYZ RR73", -8)], 50);
+        assert!(bubble(&app).delivered, "the id-bearing ACK still lands");
+    }
+
+    #[test]
+    fn implicit_ack_off_keeps_resending() {
+        let mut app = AppState::new("K2DEF", "FN31");
+        app.set_tier(Tier::TempoFast);
+        app.set_implicit_ack(false);
+        app.observe(&[dec("CQ W9XYZ EN37", -8)], 0);
+        app.send_message("W9XYZ", "HOW COPY?");
+        let _ = app.due_frames(1, 30, 4, 3);
+        for (i, f) in text::chunk("QRV", 'B').iter().enumerate() {
+            app.observe(&[dec(f, -8)], 2 + i as u64);
+        }
+        assert!(
+            !app.conversation("W9XYZ").unwrap().messages[0].confirmed,
+            "toggle off: no implicit confirmation"
+        );
+    }
+
+    #[test]
     fn observe_directed_decode_updates_roster_and_creates_attributed_inbound() {
         let mut app = AppState::new("K2DEF", "FN31");
         app.set_tier(Tier::TempoFast); // conversation folding is a Tempo (FT1) feature
@@ -1248,6 +1344,7 @@ mod tests {
             tier: Some(tier),
             delivered: false,
             attempts: 0,
+            confirmed: false,
             no_ack: false,
             ack_id: None,
             stored: false,

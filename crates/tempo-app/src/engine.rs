@@ -198,6 +198,8 @@ impl PendingMsgJournal {
             // Not journaled: a restored entry at attempts >= cap is re-flagged by the
             // next take_no_acks pass (self-healing), so the format stays field-stable.
             no_acked: false,
+            // Not journaled either: re-resolves via resend → the peer's next reply.
+            confirmed: false,
         }
     }
 }
@@ -514,6 +516,17 @@ pub struct Engine {
     /// Slot of the last directed-traffic activity (send or owed-ACK) — drives the
     /// idle auto-resume above.
     chat_cq_last_directed: u64,
+    /// Consecutive UNANSWERED chat-CQ transmissions. Resets on any directed activity or
+    /// operator (re)start; at the budget (cq_max_calls, default 10) the run STOPS —
+    /// bounded like every other chat transmission after the 2026-07 cadence rework.
+    chat_cq_unanswered: u32,
+    /// Yield-to-RX: set when a directed burst is released; once the burst finishes
+    /// draining, the chat arm skips `chat_yield_slots` own-parity TX slots — a real
+    /// listening window between overs, so a conversation alternates instead of the
+    /// queue immediately grabbing the next slot. NEVER touches tx_parity (that's the
+    /// collision-avoidance contract with the peer).
+    chat_yield_pending: bool,
+    chat_yield_slots: u8,
     /// The slot index of the most recent decoded frame — used to set TX parity to
     /// the OPPOSITE period when working a clicked station (WSJT-X double-click).
     last_decode_slot: Option<u64>,
@@ -980,6 +993,7 @@ impl Engine {
         settings.beacon = false;
         let mut app = AppState::new(&settings.mycall, &settings.mygrid);
         app.set_radio(settings.dial_mhz, &settings.band, &settings.sideband);
+        app.set_implicit_ack(settings.chat_implicit_ack);
         // Derive the TX-slot parity + audio offsets from settings (read before
         // `settings` is moved into the struct).
         let tx_parity = if settings.tx_even { 0 } else { 1 };
@@ -1049,6 +1063,9 @@ impl Engine {
             chat_cq: false,
             chat_cq_paused: false,
             chat_cq_last_directed: 0,
+            chat_cq_unanswered: 0,
+            chat_yield_pending: false,
+            chat_yield_slots: 0,
             last_decode_slot: None,
             immediate_tx: false,
             immediate_retune: false,
@@ -1193,6 +1210,8 @@ impl Engine {
             s.active_radio
         };
         self.settings = s;
+        // Implicit-ACK toggle lives app-side (the observe loop consumes it).
+        self.app.set_implicit_ack(self.settings.chat_implicit_ack);
         self.settings.source = live_source;
         self.settings.radios = live_source_radios;
         self.settings.radio_pegged = live_pegged;
@@ -4011,6 +4030,7 @@ impl Engine {
             self.call_cq(None)?; // identity-validated immediate first call
             self.chat_cq = true;
             self.chat_cq_paused = false;
+            self.chat_cq_unanswered = 0; // an operator (re)start refills the budget
         } else {
             self.chat_cq = false;
             self.chat_cq_paused = false;
@@ -5863,6 +5883,21 @@ impl Engine {
                 if let Some(f) = self.broadcast_queue.pop_front() {
                     Some(f)
                 } else {
+                    // The released burst has fully drained: arm the listening window
+                    // (≈ one full over each way = 2 own-parity slots).
+                    if self.tx_queue.is_empty() && self.chat_yield_pending {
+                        self.chat_yield_pending = false;
+                        self.chat_yield_slots = 2;
+                    }
+                    if self.tx_queue.is_empty() && self.chat_yield_slots > 0 {
+                        // Yield-to-RX: spend this own-parity slot LISTENING instead of
+                        // immediately grabbing it for more traffic (CQ resume + beacon
+                        // included). Broadcast ACKs above still go out — the peer's
+                        // receipt never waits. tx_parity is untouched: parity separation
+                        // is the collision-avoidance contract with the peer.
+                        self.chat_yield_slots -= 1;
+                        None
+                    } else {
                     if self.tx_queue.is_empty() {
                         // Cadence windows are WALL-CLOCK, converted to slots by the active
                         // tier's period (4 s TempoFast / 15 s TempoDeep): presence window
@@ -5891,9 +5926,13 @@ impl Engine {
                             self.record_own_tx(b);
                         }
                         // Directed traffic released this slot: stamp the CQ run's idle
-                        // clock so a paused run doesn't resume mid-conversation.
+                        // clock so a paused run doesn't resume mid-conversation, refill
+                        // the CQ budget (the run is conversing, not calling unanswered),
+                        // and arm the yield-to-RX listening window for when it drains.
                         if !self.tx_queue.is_empty() {
                             self.chat_cq_last_directed = slot;
+                            self.chat_cq_unanswered = 0;
+                            self.chat_yield_pending = true;
                         }
                         // Chat CQ RUN: an idle own-parity TX slot re-sends the
                         // structured CQ (the "keep calling until answered" loop).
@@ -5910,8 +5949,17 @@ impl Engine {
                                 self.chat_cq_paused = false;
                             }
                             if !self.chat_cq_paused {
-                                if let Some(cq) = self.chat_cq_text() {
+                                // Budget: stop after N consecutive unanswered calls
+                                // (cq_max_calls; default 10 ≈ 80 s of calling at 4 s
+                                // slots). Any directed activity refills it; the operator
+                                // restarting CQ refills it. Bounded like everything else
+                                // after the cadence rework — no more calling forever.
+                                let budget = self.settings.cq_max_calls.unwrap_or(10).max(1);
+                                if self.chat_cq_unanswered >= budget {
+                                    self.chat_cq = false; // run stops; snapshot shows it
+                                } else if let Some(cq) = self.chat_cq_text() {
                                     self.tx_queue.push_back(cq);
+                                    self.chat_cq_unanswered += 1;
                                 }
                             }
                         }
@@ -5934,6 +5982,7 @@ impl Engine {
                         }
                     }
                     self.tx_queue.pop_front()
+                    }
                 }
             }
             Mode::Qso { station, .. } => {
@@ -12338,6 +12387,61 @@ mod tests {
             let got_ref: Vec<(u64, &str)> = got.iter().map(|(s, t)| (*s, t.as_str())).collect();
             assert_eq!(got_ref, expect, "{tier:?} TX schedule drifted from the WSJT-X golden");
         }
+    }
+
+    /// Yield-to-RX: after a directed burst drains, the chat arm spends two own-parity
+    /// slots LISTENING before any further traffic (CQ resume / beacon included) — the
+    /// alternate-overs chat feel. TX parity itself is never touched.
+    #[test]
+    fn chat_burst_yields_to_rx_after_draining() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0); // TX on even slots
+        e.set_mode("chat").expect("chat");
+        e.set_tier(Tier::TempoFast);
+        e.set_tx_enabled(true);
+        e.set_tx_cycle_auto(false);
+        e.ingest_decodes_for_test(&[dec_snr("CQ K2DEF FN31", -5)], 1);
+        e.send_message("K2DEF", "HI");
+        // Drain the burst: own-parity (even) slots transmit until the queue empties.
+        let mut sent = 0;
+        let mut slot = 2u64;
+        while sent == 0 || !e.poll_tx(slot).is_empty() {
+            if !e.poll_tx(slot).is_empty() {
+                sent += 1;
+            }
+            if sent > 0 && e.poll_tx(slot + 2).is_empty() {
+                slot += 2;
+                break;
+            }
+            slot += 2;
+            assert!(slot < 60, "burst never drained");
+        }
+        assert!(sent >= 1, "the burst transmitted");
+        // The two slots after the drain stay SILENT even with the beacon armed.
+        e.set_beacon(true);
+        assert!(e.poll_tx(slot + 2).is_empty(), "yield slot 1 listens");
+    }
+
+    /// The chat CQ run is BUDGETED: after N consecutive unanswered calls it stops
+    /// (snapshot flips to "off") instead of calling forever.
+    #[test]
+    fn chat_cq_run_stops_at_its_budget() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_mode("chat").expect("chat");
+        e.set_tier(Tier::TempoFast);
+        e.set_tx_cycle_auto(false);
+        e.set_chat_cq(true).expect("cq run starts");
+        let mut transmissions = 0;
+        for slot in (2..120u64).step_by(2) {
+            if !e.poll_tx(slot).is_empty() {
+                transmissions += 1;
+            }
+        }
+        // 1 immediate call (set_chat_cq → call_cq broadcast) + at most the budget (10).
+        assert!(
+            (2..=11).contains(&transmissions),
+            "bounded CQ run, got {transmissions}"
+        );
+        assert_eq!(e.chat_cq_state(), "off", "run stopped at the budget");
     }
 
     /// TempoDeep delivery — the widened chat gate. The old `tier == TempoFast` gate left a
