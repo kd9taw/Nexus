@@ -5,6 +5,22 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.23] — 2026-07-24 — APRS station roster, native Flex DAX audio
+
+### Added
+
+- **Native FlexRadio DAX RX audio (early access).** Settings ▸ Rig, for a network Flex, now has a
+  "Flex native DAX audio" toggle: take the rig's receive audio straight off the network (VITA-49
+  DAX) instead of the "DAX Audio RX" sound device — which is invisible under Remote Desktop.
+  Decoders read the rig's audio directly. RX-only, opt-in, off by default; unverified on hardware
+  (turn it back off if decodes stop).
+
+### Changed
+
+- **The APRS list is a station roster now.** Instead of a firehose of repeated packets, it shows
+  one row per station (latest position), newest first, with a distance + bearing column from your
+  grid.
+
 ## [0.15.22] — 2026-07-24 — APRS, and an Icom auto-test fix
 
 ### Added
