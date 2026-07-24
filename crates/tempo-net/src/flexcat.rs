@@ -187,6 +187,47 @@ pub fn parse_meter_defs(body: &str) -> Vec<MeterDef> {
     by_index.into_values().collect()
 }
 
+/// A `slice <n> key=value …` status object — which slice is the focused RX (`active=1`), which is
+/// the TX slice (`tx=1`, distinct from active), and its DAX channel. Used to bind DAX to the REAL
+/// active slice instead of assuming slice 0.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SliceStatus {
+    /// Slice index (decimal, e.g. `slice 0`).
+    pub num: u32,
+    /// Slice occupied (`in_use=1`); `in_use=0` = removed.
+    pub in_use: Option<bool>,
+    /// The focused RX slice.
+    pub active: Option<bool>,
+    /// THE TX slice (`tx=1`) — may differ from the active RX slice, and is NOT PTT.
+    pub tx_slice: Option<bool>,
+    /// The slice's DAX RX channel assignment (`dax=<n>`).
+    pub dax_channel: Option<u8>,
+    /// Owning client (hex) — a slice is ours iff this matches our client handle.
+    pub client_handle: Option<u32>,
+}
+
+/// Parse a `slice <n> key=value …` status body. `None` if it isn't a `slice` line. Pure.
+pub fn parse_slice_status(body: &str) -> Option<SliceStatus> {
+    let rest = body.strip_prefix("slice ")?;
+    let mut it = rest.split_whitespace();
+    let num = it.next()?.parse::<u32>().ok()?;
+    let mut st = SliceStatus { num, ..Default::default() };
+    for tok in it {
+        let Some((k, v)) = tok.split_once('=') else {
+            continue;
+        };
+        match k {
+            "in_use" => st.in_use = Some(v == "1"),
+            "active" => st.active = Some(v == "1"),
+            "tx" => st.tx_slice = Some(v == "1"),
+            "dax" => st.dax_channel = v.parse().ok(),
+            "client_handle" => st.client_handle = parse_hex_id(v),
+            _ => {}
+        }
+    }
+    Some(st)
+}
+
 /// Parse a `display pan 0x<id> key=value …` status body into the fields we track. Pure.
 /// Returns `None` when the body isn't a `display pan` line.
 pub fn parse_pan_status(body: &str) -> Option<PanStatus> {
@@ -412,5 +453,22 @@ mod tests {
         // Removal / non-meter lines yield nothing.
         assert!(parse_meter_defs("meter 7 removed").is_empty());
         assert!(parse_meter_defs("slice 0 in_use=1").is_empty());
+    }
+
+    #[test]
+    fn parses_a_slice_status() {
+        let st = parse_slice_status(
+            "slice 2 in_use=1 RF_frequency=14.074 mode=DIGU active=1 tx=1 dax=1 client_handle=0xABCD0001",
+        )
+        .unwrap();
+        assert_eq!(st.num, 2);
+        assert_eq!(st.in_use, Some(true));
+        assert_eq!(st.active, Some(true));
+        assert_eq!(st.tx_slice, Some(true));
+        assert_eq!(st.dax_channel, Some(1));
+        assert_eq!(st.client_handle, Some(0xABCD_0001));
+        // Removal + non-slice lines.
+        assert_eq!(parse_slice_status("slice 0 in_use=0").unwrap().in_use, Some(false));
+        assert!(parse_slice_status("meter 7.src=SLC").is_none());
     }
 }

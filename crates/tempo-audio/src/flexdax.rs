@@ -24,7 +24,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tempo_app::engine::Engine;
-use tempo_net::flexcat::{parse_dax_stream_status, FlexCat, FlexMsg};
+use tempo_net::flexcat::{parse_dax_stream_status, parse_slice_status, FlexCat, FlexMsg};
 use tempo_net::flexvita::{
     parse_dax_audio, parse_vita, DAX_AUDIO_CLASS, DAX_AUDIO_REDUCED_CLASS, DAX_SAMPLE_RATE,
 };
@@ -33,9 +33,6 @@ use crate::capture_resample::CaptureResampler;
 
 /// The one DAX channel we use (never open all four — see the starvation note above).
 const DAX_CHANNEL: u8 = 1;
-/// The slice whose audio we bind to the DAX channel. Slice A (`0`) is the RX slice on a typical
-/// single-slice digital setup.
-const DAX_SLICE: u32 = 0;
 /// The 12 kHz modem rate the decoders consume (mirrors `capture_resample::MODEM_RATE`).
 const MODEM_RATE: u32 = 12_000;
 /// Cap the audio ring so a stalled engine drops oldest audio instead of growing without bound
@@ -108,21 +105,32 @@ impl FlexDax {
                     let _ = flex.send(&cmd);
                 }
                 let _ = flex.send(&dax_rx_create_command(DAX_CHANNEL));
-                let _ = flex.send(&slice_dax_command(DAX_SLICE, DAX_CHANNEL));
                 let mut created: Option<u32> = None;
+                let mut bound_slice: Option<u32> = None;
                 let mut last_ka = Instant::now();
                 while !stop.load(Ordering::Relaxed) {
-                    // Learn OUR dax_rx stream id from the async status (the create reply / status
-                    // echo carries it). We created exactly one stream on DAX_CHANNEL, so a status
-                    // for that channel is ours.
                     if let Some(FlexMsg::Status { body, .. }) = flex.recv(Duration::from_millis(300))
                     {
+                        // Learn OUR dax_rx stream id from the async status (the create reply echoes
+                        // it). We created exactly one stream on DAX_CHANNEL, so a status for that
+                        // channel is ours.
                         if let Some(st) = parse_dax_stream_status(&body) {
                             if st.dax_channel == Some(DAX_CHANNEL) {
                                 if let Some(sid) = st.stream_id {
                                     *stream_id.lock().unwrap() = Some(sid);
                                     created = Some(sid);
                                 }
+                            }
+                        }
+                        // Bind the ACTIVE RX slice's audio to our DAX channel (never assume slice 0;
+                        // re-bind if the operator switches the active slice).
+                        if let Some(sl) = parse_slice_status(&body) {
+                            if sl.in_use == Some(true)
+                                && sl.active == Some(true)
+                                && bound_slice != Some(sl.num)
+                            {
+                                let _ = flex.send(&slice_dax_command(sl.num, DAX_CHANNEL));
+                                bound_slice = Some(sl.num);
                             }
                         }
                     }
