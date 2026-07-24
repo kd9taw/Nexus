@@ -516,8 +516,10 @@ impl AppState {
         }
         // ACK-in: a directed RR73 addressed to us confirms a message we queued to that
         // sender arrived → mark it delivered (stops its resend) + stamp the conversation
-        // for a real "Delivered ✓"; then drop spent queue entries. Chat (FT1) only.
-        if self.link.tier == Tier::TempoFast {
+        // for a real "Delivered ✓"; then drop spent queue entries. Chat tiers only —
+        // WAS `== TempoFast`, which left TempoDeep chat resending unbounded and
+        // permanently undeliverable (2026-07 cadence review; Deep shares the Chat path).
+        if self.link.tier.is_chat() {
             let mut acked: Vec<String> = decodes
                 .iter()
                 .filter_map(|d| ack_sender_for(&d.message, &self.mycall))
@@ -531,14 +533,15 @@ impl AppState {
             }
             self.store.purge(MAX_SEND_ATTEMPTS);
         }
-        // Conversation threads are a Tempo (FT1) feature. FT8 / FT4 / DX1 decodes are
-        // QSO traffic — folding their CQ/exchange/free-text fragments into per-peer
-        // threads turned the recents list into a feed of phantom "chats" the operator
-        // never started. Keep `inbox.observe` above (it feeds the shared roster used by
-        // Operate too), but only FOLD into conversations in FT1/Tempo; otherwise advance
-        // the cursor so this slot's frames are discarded (and can't replay on an FT1
-        // switch). Outbound chats (send_message) bypass this — they push directly.
-        if self.link.tier == Tier::TempoFast {
+        // Conversation threads are a Tempo feature. FT8 / FT4 decodes are QSO traffic —
+        // folding their CQ/exchange/free-text fragments into per-peer threads turned the
+        // recents list into a feed of phantom "chats" the operator never started. Keep
+        // `inbox.observe` above (it feeds the shared roster used by Operate too), but only
+        // FOLD into conversations on the chat tiers (TempoFast AND TempoDeep — Deep chats
+        // were silently discarded by the old `== TempoFast` gate); otherwise advance the
+        // cursor so this slot's frames are discarded (and can't replay on a tier switch).
+        // Outbound chats (send_message) bypass this — they push directly.
+        if self.link.tier.is_chat() {
             self.drain_inbox();
         } else {
             self.drained = self.inbox.messages.len();

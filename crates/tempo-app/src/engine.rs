@@ -6851,6 +6851,11 @@ impl Engine {
     /// Test-only: fold synthetic decodes through the same DT-tracking + observe
     /// path as [`Engine::ingest`], without needing a real audio frame.
     #[cfg(test)]
+    fn app_pending_count_for_test(&self) -> usize {
+        self.app.pending_count()
+    }
+
+    #[cfg(test)]
     fn ingest_decodes_for_test(&mut self, decodes: &[modes::Decode], slot: u64) {
         // Mirror the live path's Hound multi-payload split.
         let decodes: Vec<modes::Decode> = self.hound_split(decodes.to_vec());
@@ -12318,6 +12323,27 @@ mod tests {
             let got_ref: Vec<(u64, &str)> = got.iter().map(|(s, t)| (*s, t.as_str())).collect();
             assert_eq!(got_ref, expect, "{tier:?} TX schedule drifted from the WSJT-X golden");
         }
+    }
+
+    /// TempoDeep delivery — the widened chat gate. The old `tier == TempoFast` gate left a
+    /// TempoDeep chat message resending unbounded and permanently undeliverable: an inbound
+    /// RR73 ACK was ignored, so "Delivered" never lit. Deep shares the whole Chat path.
+    #[test]
+    fn tempodeep_chat_message_can_be_marked_delivered() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_mode("chat").expect("chat mode");
+        e.set_tier(Tier::TempoDeep);
+        // Hear the peer (roster presence gates the store's release) then message them.
+        e.ingest_decodes_for_test(&[dec_snr("CQ K2DEF FN31", -5)], 1);
+        e.send_message("K2DEF", "HELLO DEEP");
+        assert!(e.app_pending_count_for_test() > 0, "message queued");
+        // Their id-bearing ACK arrives → the queue entry is marked delivered.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF RR73", -8)], 3);
+        assert_eq!(
+            e.app_pending_count_for_test(),
+            0,
+            "the RR73 marked the Deep chat message delivered (old gate ignored it)"
+        );
     }
 
     /// Invariant pin: ENTERING Chat mode via set_mode reconciles an FT tier down to

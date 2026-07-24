@@ -484,6 +484,18 @@ pub struct Settings {
     /// The earlier always-on 6-call cap is preserved as this opt-in.
     #[serde(default)]
     pub cq_max_calls: Option<u32>,
+    /// Tempo chat: max transmit cycles per directed message before it goes terminal
+    /// "no-ack" (bounded ARQ — the fix for "it keeps sending and sending"). Applies on
+    /// the chat tiers only (never FT8/FT4). `None` = the built-in default (3 on
+    /// TempoFast; TempoDeep uses a higher plain-repeat budget since it has no HARQ).
+    #[serde(default)]
+    pub chat_max_cycles: Option<u32>,
+    /// Tempo chat: treat a COMPLETED inbound directed message from the peer (heard after
+    /// our message last went out) as an implicit "they can hear me" — stop the resend
+    /// schedule and show "confirmed". The id-bearing RR73 remains the only source of
+    /// "Delivered ✓". Default ON (also works against non-Nexus peers that never ACK).
+    #[serde(default = "default_true")]
+    pub chat_implicit_ack: bool,
     /// Auto-CQ run resilience: if a caller answers but then goes silent mid-QSO,
     /// abandon them and resume calling CQ after this many unanswered overs of the
     /// same in-QSO step (so a dead caller can't stall the run). `None` = the built-in
@@ -1348,6 +1360,8 @@ impl Default for Settings {
             save_qso_wav: false,
             prefer_rrr: false,
             cq_max_calls: None,
+            chat_max_cycles: None,
+            chat_implicit_ack: true,
             cq_stall_overs: None,
             disable_tx_after_73: true,
             band_edge_tones: true,
