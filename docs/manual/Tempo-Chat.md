@@ -49,7 +49,14 @@ TempoFast free-text frames carry **no embedded callsign**. The inbox attributes 
 
 ### Directed messaging and store-and-forward
 
-Sending a directed message to a specific callsign queues it for **presence-gated store-and-forward**: the message is held and released as a burst only once the recipient is heard active (within 30 slots). Retransmission attempts back off by 4 slots between tries. On release, Tempo prepends a directed `TO DE FROM` frame so attribution is unambiguous at the receiver. This is the core off-grid net feature — you don't have to be in sync; queue a message and Tempo delivers it when the other station appears.
+Sending a directed message to a specific callsign queues it for **presence-gated store-and-forward**: the message is held and released as a burst only once the recipient is heard active (within a 120-second presence window). On release, Tempo prepends a directed `TO DE FROM` frame so attribution is unambiguous at the receiver. This is the core off-grid net feature — you don't have to be in sync; queue a message and Tempo delivers it when the other station appears.
+
+**Bounded chat cadence (2026-07 rework).** A message transmits at most **`chat_max_cycles`** times (default 3 on TempoFast, 5 on TempoDeep), with a real **16-second listening gap** measured from the *end* of each burst, and Tempo **yields two of its own TX slots to RX after every burst** so a conversation alternates overs instead of monopolizing the channel. The resend schedule stops early on either of two signals:
+
+- **Delivered ✓** — the recipient's id-bearing `RR73` ACK came back. The only source of "Delivered".
+- **Confirmed** (implicit, on by default via `chat_implicit_ack`) — after your message transmitted, the peer sent a *complete directed message* back to you. They demonstrably hear you, so resends stop — shown as "confirmed", never "Delivered ✓". This works even when the other station isn't running Nexus. A bare identify frame never counts.
+
+A message that exhausts its budget shows **"no ack"** — tap the bubble to re-send it with a fresh budget (same bubble, no re-typing). A late ACK within the grace window still upgrades a no-ack bubble to Delivered. The chat **CQ run is budgeted** too: it stops after N consecutive unanswered calls (the `cq_max_calls` setting; default 10). Chat cadence never affects FT8/FT4 — the WSJT-X repeat rules there are pinned by a byte-level golden test.
 
 ### Broadcast
 
@@ -128,7 +135,9 @@ For full legal framing and Part 97 citations see [Privacy and Coordinated QSY](P
 | `qsy_enabled` | `false` | Coordinated QSY fully inert until operator opts in |
 | `qsy_set` | `['20m', '40m', '30m']` | Default channel token set for Roam |
 | `qsy_cadence` | `6` | Initiator announces a hop every 6 TX overs |
-| Store-and-forward window | 30 slots | Presence window; backoff 4 slots between retries |
+| Store-and-forward window | 120 s | Presence window (slots derived per tier); 16 s listening backoff from burst END |
+| `chat_max_cycles` | `3` (TempoFast) / `5` (TempoDeep) | Transmit-cycle budget per message; terminal "no ack" after |
+| `chat_implicit_ack` | `true` | A peer's completed reply stops resends ("confirmed", never "Delivered ✓") |
 | `tx_watchdog_min` | `6` | Auto-halt TX after 6 minutes of continuous keying |
 | `decode_flow_hz` / `decode_fhigh_hz` | `200` / `2900` | TempoFast/TempoDeep passband search range |
 

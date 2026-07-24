@@ -5,6 +5,26 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Tempo chats like a chat app now
+
+### Changed
+
+- **Tempo stops "sending and sending."** A chat message now transmits a bounded number of
+  cycles (default 3; Settings ▸ Auto-CQ) with a real 16-second listening gap after each burst,
+  then shows **"no ack"** — tap the bubble to re-send, no re-typing. Resends also stop the
+  moment the other station **answers** (shown as *confirmed*) or their **ACK** arrives
+  (**Delivered ✓** — still the only source of that checkmark). After every burst Tempo yields
+  two of its own transmit slots to listening, so a conversation alternates like a real chat.
+  The chat **CQ run stops after 10 unanswered calls** instead of calling forever, and an
+  unanswered Tempo QSO step gives up cleanly after 6 overs. Message bubbles now show the real
+  lifecycle: *waiting → sending (try k) → confirmed / Delivered ✓ / no ack*.
+- **Working an FT1/Tempo station from a decode alert now opens the Tempo conversation** —
+  it no longer wrongly launched the FT8 call sequence.
+- **TempoDeep chat is a first-class citizen:** its messages can now be marked delivered,
+  fold into conversation threads, and get a 5-cycle resend budget (it was unbounded before).
+- **FT8/FT4 are untouched** — their WSJT-X transmit behavior is now pinned by a byte-level
+  golden test that fails if anything perturbs it.
+
 ## [0.15.15] — 2026-07-23 — CW keying fidelity, no more log-click window jump, and Memories grouped by band
 
 ### Fixed

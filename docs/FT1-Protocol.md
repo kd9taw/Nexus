@@ -195,6 +195,24 @@ The redundancy version is carried by **Costas-array pattern variants** (RV0 = `[
 - **Cheap to track:** at most **348 bytes** of 8-bit LLRs per in-progress station (174 + 87 + 87). 100 simultaneous in-progress decodes ≈ 34 KB. LLRs are discarded after a **30 s slot expiry** (no matching transmission), and the combine resets per slot to keep stale state out (freq tolerance ±10 Hz).
 - **Surfaced in the UI:** a **HARQ.RVn decode badge** (how many RVs were combined), a **HARQ on/off toggle** (default on), and a **session rescue counter** that tallies frames recovered by combining.
 
+### 6.6 IR-HARQ is not an acknowledgement (the app-layer ACK)
+
+Nothing in the waveform tells a **sender** their frame was received: IR-HARQ is receive-side
+combining, and RV escalation is the sender *guessing* the partner didn't copy. Delivery
+confirmation is an **application-layer** contract layered above the protocol:
+
+- **Explicit ACK ("Delivered ✓"):** when a chunked directed message fully reassembles, the
+  receiving app owes an id-bearing `RR73` back to the sender; matching it marks exactly that
+  message delivered. Tempo-to-Tempo only.
+- **Implicit confirmation ("confirmed"):** a *complete* directed message from the peer,
+  arriving after ours transmitted, proves they hear us — the app stops resending but shows
+  only "confirmed" (works against any FT1 station, not just Nexus).
+- **Bounded resends:** each chat message transmits at most `chat_max_cycles` times (default 3)
+  at RV0 — the chunk reassembler accumulates per-chunk successes across cycles, which is
+  effective selective repeat. (Escalating RV per *cycle of a multi-frame burst* would defeat
+  the combiner: it is frequency-keyed with one stored baseband per slot, so cross-cycle
+  per-frame combining of a burst is not available — see §6.5 "combine resets per slot".)
+
 ---
 
 ## 7. The two tiers: TempoFast (Fast) vs TempoDeep (Robust)

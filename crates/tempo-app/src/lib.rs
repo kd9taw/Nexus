@@ -1233,6 +1233,59 @@ mod tests {
     }
 
     #[test]
+    fn restart_mid_burst_resumes_the_cycle_schedule_and_honors_the_cap() {
+        // A message that transmitted once, journaled, and restored after a restart must
+        // RESUME its schedule (attempts intact — not reset to a fresh budget) and still
+        // go terminal at the cap.
+        let mut app = AppState::new("K2DEF", "FN31");
+        app.set_tier(Tier::TempoFast);
+        app.observe(&[dec("CQ W9XYZ EN37", -8)], 0);
+        app.send_message("W9XYZ", "SURVIVES RESTART");
+        let (frames, _) = app.due_frames(1, 30, 4, 3);
+        assert!(!frames.is_empty(), "released once (attempts = 1)");
+        let journal = app.export_pending();
+        assert_eq!(journal.len(), 1);
+        assert_eq!(journal[0].attempts, 1, "the journal carries the used cycle");
+
+        // "Restart": a fresh AppState restores the journal.
+        let mut app2 = AppState::new("K2DEF", "FN31");
+        app2.set_tier(Tier::TempoFast);
+        app2.restore_pending(journal);
+        assert_eq!(app2.pending_count(), 1);
+        // Peer present again → exactly the REMAINING budget (2 of 3) releases.
+        let mut releases = 0;
+        for slot in 0..200u64 {
+            app2.observe(&[dec("CQ W9XYZ EN37", -8)], slot);
+            releases += usize::from(!app2.due_frames(slot, 60, 2, 3).0.is_empty());
+        }
+        assert_eq!(releases, 2, "resumed at attempts=1, capped at 3 total");
+    }
+
+    #[test]
+    fn late_ack_after_cap_flips_no_ack_to_delivered() {
+        // The cap+ACK race: the peer's RR73 lands AFTER the message went terminal
+        // no-ack — within the grace window it must still upgrade to Delivered ✓.
+        let mut app = AppState::new("K2DEF", "FN31");
+        app.set_tier(Tier::TempoFast);
+        app.observe(&[dec("CQ W9XYZ EN37", -8)], 0);
+        app.send_message("W9XYZ", "LATE ACK");
+        let mut slot = 1u64;
+        for _ in 0..60 {
+            app.observe(&[dec("CQ W9XYZ EN37", -8)], slot);
+            let _ = app.due_frames(slot, 60, 2, 3);
+            slot += 1;
+        }
+        let bubble = |a: &AppState| a.conversation("W9XYZ").unwrap().messages[0].clone();
+        assert!(bubble(&app).no_ack, "terminal after the cap");
+        assert!(!bubble(&app).delivered);
+        // The late RR73 arrives inside the grace window.
+        app.observe(&[dec("K2DEF W9XYZ RR73", -8)], slot);
+        let b = bubble(&app);
+        assert!(b.delivered, "late ACK still upgrades to Delivered");
+        assert!(!b.no_ack, "Delivered wins — the no-ack warning clears");
+    }
+
+    #[test]
     fn implicit_ack_confirms_in_flight_but_never_claims_delivered() {
         // The narrowed implicit ACK: a COMPLETED inbound directed message from the peer
         // stops our in-flight resends ("confirmed"), but only the id-bearing RR73 may
