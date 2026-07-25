@@ -16545,6 +16545,10 @@ html[data-panel='needed'] {
 .setup-health .health-item.unknown .health-dot {
   background: var(--text-faint);
 }
+.setup-health .health-prove {
+  margin-left: auto;
+  font-size: 11px;
+}
 .aprs-messages {
   display: flex;
   flex-direction: column;

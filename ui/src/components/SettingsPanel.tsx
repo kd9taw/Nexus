@@ -75,6 +75,9 @@ interface Props {
   /** The live active radio id (dual-radio). The form reloads when this changes so a switch made from
    * the always-visible TopBar pills while Settings is open can't leave the Rig form stale. */
   activeRadioId?: number
+  /** Prove the TX path — keys a bounded tune carrier (behind a confirm dialog) for the Setup Health
+   * strip's "Prove TX" button. */
+  onProveTx?: () => void
   /** Workspace scale prefs (UI-only — applied live, not via setSettings). */
   scale: Scale
   scaleMode: ScaleMode
@@ -262,6 +265,7 @@ function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
 function SetupHealth({
   radio,
   catResult,
+  onProveTx,
 }: {
   radio?: {
     catOk?: boolean | null
@@ -269,14 +273,22 @@ function SetupHealth({
     rxLevel: number
     audioError?: string | null
     txEnabled: boolean
+    tuning?: boolean
+    txPower?: number | null
   }
   catResult: CatTestResult | null
+  /** Key a bounded tune carrier to prove the CAT→PTT→RF path (behind a confirm dialog). */
+  onProveTx?: () => void
 }) {
   const rigOk = catResult ? catResult.ok : radio?.catOk
   const rigDetail = catResult ? catResult.detail : radio?.catDetail
   const rxDb = radio ? Math.round(rxLevelDb(radio.rxLevel)) : null
   const rxLive = rxDb != null && rxDb > -60 && !radio?.audioError
   const cls = (ok?: boolean | null) => (ok === true ? 'ok' : ok === false ? 'bad' : 'unknown')
+  const tuning = !!radio?.tuning
+  const watts = radio?.txPower ?? null
+  // While keying: green once forward power registers (RF is being made → CAT/PTT/rig all work).
+  const txClass = tuning ? (watts != null && watts > 0 ? 'ok' : 'bad') : 'unknown'
   return (
     <div className="setup-health" role="status" aria-label="Setup health">
       <span className="setup-health-title">Setup health</span>
@@ -297,11 +309,40 @@ function SetupHealth({
         {radio?.audioError ? 'error' : rxDb != null ? `${rxDb} dB` : '—'}
       </span>
       <span
-        className={`health-item ${radio?.txEnabled ? 'ok' : 'unknown'}`}
-        title={radio?.txEnabled ? 'Transmit is enabled' : 'Transmit is off'}
+        className={`health-item ${txClass}`}
+        title={
+          tuning
+            ? 'Keying a tune carrier — forward power confirms the CAT → PTT → RF path'
+            : radio?.txEnabled
+              ? 'Transmit is enabled'
+              : 'Transmit is off'
+        }
       >
-        <span className="health-dot" /> TX {radio?.txEnabled ? 'on' : 'off'}
+        <span className="health-dot" /> TX{' '}
+        {tuning
+          ? `keying${watts != null ? ` · ${watts.toFixed(0)} W` : '…'}`
+          : radio?.txEnabled
+            ? 'on'
+            : 'off'}
       </span>
+      {onProveTx && !tuning && (
+        <button
+          type="button"
+          className="np-chip health-prove"
+          onClick={() => {
+            if (
+              window.confirm(
+                'Prove the transmit path?\n\nThis keys your transmitter for ~2 seconds at your tune ' +
+                  'power. Make sure an antenna or dummy load is connected.',
+              )
+            )
+              onProveTx()
+          }}
+          title="Key a 2 s tune carrier to verify CAT → PTT → RF (asks first, every time)"
+        >
+          Prove TX
+        </button>
+      )}
     </div>
   )
 }
@@ -321,6 +362,7 @@ export function SettingsPanel({
   onSaved,
   radio,
   activeRadioId,
+  onProveTx,
   scale,
   scaleMode,
   scaleCap,
@@ -1853,7 +1895,7 @@ export function SettingsPanel({
           {/* ---- Rig control ---- */}
           {tab === 'radio' && (
           <>
-          <SetupHealth radio={radio} catResult={catResult} />
+          <SetupHealth radio={radio} catResult={catResult} onProveTx={onProveTx} />
           {/* Dual-radio roster (P2). Always shown — the "+ Add radio" button is the discovery
               affordance a single-radio operator sees; the per-radio list + band coverage only
               matter once there's a 2nd radio. */}

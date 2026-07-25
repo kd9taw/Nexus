@@ -1117,6 +1117,20 @@ export default function App() {
     })
   }, [])
 
+  // Prove-TX-path: key the tune carrier for ~2.5 s then auto-drop — a BOUNDED transmit that lets the
+  // operator verify CAT→PTT→RF (forward power registers). Always invoked from behind a confirm
+  // dialog (operator's TX-approval condition); the TX watchdog backs up the auto-unkey.
+  const handleProveTx = useCallback(() => {
+    void withErrorToast(() => apiSetTune(true), 'Could not key the transmitter').then((s) => {
+      if (s) setSnap(s)
+      window.setTimeout(() => {
+        void apiSetTune(false)
+          .then((s2) => s2 && setSnap(s2))
+          .catch(() => {})
+      }, 2500)
+    })
+  }, [])
+
   const handleHaltTx = useCallback(() => {
     void withErrorToast(() => apiHaltTx(), 'Could not stop transmit').then((s) => {
       if (s) setSnap(s)
@@ -2041,6 +2055,7 @@ export default function App() {
             onSaved={handleSettingsSaved}
             radio={snap.radio}
             activeRadioId={snap.activeRadioId}
+            onProveTx={handleProveTx}
             scale={scale}
             scaleMode={scaleMode}
             scaleCap={scaleCap}
