@@ -40,6 +40,7 @@
     "comp": null,
     "cwKeyer": "cat",
     "cwWpm": 25,
+    "decodeDepth": 3,
     "dialMhz": 14.08,
     "filterWidthHz": null,
     "holdTxFreq": false,

@@ -225,10 +225,16 @@ mod tests {
     fn a_steady_mark_sits_near_1200_hz() {
         // 20 mark bits → count zero crossings → frequency. 1200 Hz over 200 samples @ 12 kHz.
         let audio = modulate(&[true; 20]);
-        let crossings = audio.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
+        let crossings = audio
+            .windows(2)
+            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+            .count();
         let secs = audio.len() as f32 / SAMPLE_RATE;
         let freq = crossings as f32 / 2.0 / secs;
-        assert!((freq - MARK_HZ).abs() < 60.0, "mark tone ~1200 Hz, got {freq}");
+        assert!(
+            (freq - MARK_HZ).abs() < 60.0,
+            "mark tone ~1200 Hz, got {freq}"
+        );
     }
 
     #[test]
@@ -248,7 +254,11 @@ mod tests {
         let audio = modulate(&nrzi_encode(&encode_frame(&sample_frame().encode(), 16, 2)));
         // Whole-buffer Demod == nrzi_decode(demodulate(whole)).
         let expected = nrzi_decode(&demodulate(&audio));
-        assert_eq!(Demod::new().feed(&audio), expected, "whole-buffer streaming matches one-shot");
+        assert_eq!(
+            Demod::new().feed(&audio),
+            expected,
+            "whole-buffer streaming matches one-shot"
+        );
         // Fed in awkward chunks, the carried state yields the exact same bits.
         let mut d = Demod::new();
         let mut got = Vec::new();
@@ -270,7 +280,10 @@ mod tests {
         for chunk in audio.chunks(600) {
             frames.extend(deframer.push(&demod.feed(chunk)));
         }
-        assert!(frames.iter().any(|f| f == &bytes), "frame recovered across streamed chunks");
+        assert!(
+            frames.iter().any(|f| f == &bytes),
+            "frame recovered across streamed chunks"
+        );
     }
 
     #[test]

@@ -336,7 +336,10 @@ impl Awards {
         }
         // IOTA — island groups (independent of DXCC/band). The ref is validated at parse
         // time; trim + uppercase for a canonical key.
-        if let Some(i) = iota.map(|s| s.trim().to_ascii_uppercase()).filter(|s| !s.is_empty()) {
+        if let Some(i) = iota
+            .map(|s| s.trim().to_ascii_uppercase())
+            .filter(|s| !s.is_empty())
+        {
             self.worked_iota.insert(i.clone());
             if confirmed {
                 self.confirmed_iota.insert(i);
@@ -501,10 +504,16 @@ impl Awards {
             .collect();
 
         // VUCC — distinct grid squares overall (deduped across bands) + per band.
-        let vucc_worked: HashSet<&str> =
-            self.worked_grid_band.iter().map(|(g, _)| g.as_str()).collect();
-        let vucc_confirmed: HashSet<&str> =
-            self.confirmed_grid_band.iter().map(|(g, _)| g.as_str()).collect();
+        let vucc_worked: HashSet<&str> = self
+            .worked_grid_band
+            .iter()
+            .map(|(g, _)| g.as_str())
+            .collect();
+        let vucc_confirmed: HashSet<&str> = self
+            .confirmed_grid_band
+            .iter()
+            .map(|(g, _)| g.as_str())
+            .collect();
         let mut vucc_wb: HashMap<Band, HashSet<&str>> = HashMap::new();
         let mut vucc_cb: HashMap<Band, HashSet<&str>> = HashMap::new();
         for (g, b) in &self.worked_grid_band {
@@ -858,8 +867,8 @@ mod tests {
         a.add_with_credit("W1AW", "20m", "CW", true, false, Some("CT"), None, None);
         a.add_with_credit("K5XYZ", "20m", "FT8", false, false, Some("TX"), None, None); // worked, unconf
         a.add_with_credit("DL1ABC", "20m", "FT8", true, false, Some("ZZ"), None, None); // junk → ignored
-                                                                            // Australian "WA" (Western Australia) must NOT credit Washington — WAS is
-                                                                            // gated on a US-family entity, so a VK6 contact never advances WA.
+                                                                                        // Australian "WA" (Western Australia) must NOT credit Washington — WAS is
+                                                                                        // gated on a US-family entity, so a VK6 contact never advances WA.
         a.add_with_credit("VK6AA", "20m", "FT8", true, false, Some("WA"), None, None);
         let s = a.summary();
         assert_eq!(s.was.confirmed, 3, "HI, AK, CT confirmed (VK6/WA rejected)");
@@ -888,13 +897,38 @@ mod tests {
         a.add_with_credit("K1ABC", "6m", "FT8", false, false, None, Some("FN31"), None); // dup grid
         a.add_with_credit("W2DEF", "6m", "FT8", false, false, None, Some("FN20"), None);
         a.add_with_credit("K1ABC", "2m", "FT8", false, false, None, Some("FN31"), None); // same grid, new band
-        a.add_with_credit("W3GHI", "6m", "FT8", false, false, None, Some("FN31aa"), None); // 6-char → FN31 square
-        a.add_with_credit("W4JKL", "6m", "FT8", false, false, None, Some("garbage"), None); // rejected
+        a.add_with_credit(
+            "W3GHI",
+            "6m",
+            "FT8",
+            false,
+            false,
+            None,
+            Some("FN31aa"),
+            None,
+        ); // 6-char → FN31 square
+        a.add_with_credit(
+            "W4JKL",
+            "6m",
+            "FT8",
+            false,
+            false,
+            None,
+            Some("garbage"),
+            None,
+        ); // rejected
         let s = a.summary();
-        assert_eq!(s.vucc.worked, 2, "FN31 + FN20 = 2 distinct grids overall (FN31 not double-counted across bands)");
+        assert_eq!(
+            s.vucc.worked, 2,
+            "FN31 + FN20 = 2 distinct grids overall (FN31 not double-counted across bands)"
+        );
         assert_eq!(s.vucc.confirmed, 1, "only FN31 was confirmed");
         let six = s.vucc.bands.iter().find(|b| b.band == "6m").unwrap();
-        assert_eq!((six.worked, six.confirmed), (2, 1), "6m: FN31 + FN20, one confirmed");
+        assert_eq!(
+            (six.worked, six.confirmed),
+            (2, 1),
+            "6m: FN31 + FN20, one confirmed"
+        );
         let two = s.vucc.bands.iter().find(|b| b.band == "2m").unwrap();
         assert_eq!(two.worked, 1, "2m: FN31 only");
     }
@@ -902,9 +936,36 @@ mod tests {
     #[test]
     fn iota_counts_distinct_island_groups_worked_and_confirmed() {
         let mut a = Awards::new();
-        a.add_with_credit("GM0ABC", "20m", "CW", true, false, None, None, Some("EU-008")); // confirmed
-        a.add_with_credit("GM1DEF", "40m", "FT8", false, false, None, None, Some("EU-008")); // same group
-        a.add_with_credit("KH6XYZ", "20m", "FT8", false, false, None, None, Some("OC-019"));
+        a.add_with_credit(
+            "GM0ABC",
+            "20m",
+            "CW",
+            true,
+            false,
+            None,
+            None,
+            Some("EU-008"),
+        ); // confirmed
+        a.add_with_credit(
+            "GM1DEF",
+            "40m",
+            "FT8",
+            false,
+            false,
+            None,
+            None,
+            Some("EU-008"),
+        ); // same group
+        a.add_with_credit(
+            "KH6XYZ",
+            "20m",
+            "FT8",
+            false,
+            false,
+            None,
+            None,
+            Some("OC-019"),
+        );
         a.add_with_credit("W1AW", "20m", "CW", true, false, None, None, None); // no island
         let s = a.summary();
         assert_eq!(s.iota.worked, 2, "EU-008 + OC-019 distinct groups");

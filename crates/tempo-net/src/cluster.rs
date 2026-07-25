@@ -648,8 +648,16 @@ mod tests {
             s.rbn = rbn;
             s
         };
-        assert_eq!(ft8(true).skimmer_mode(), Some("FT8"), "rbn wire: leading FT8 → FT8");
-        assert_eq!(ft8(false).skimmer_mode(), None, "human free-text mode is untrusted");
+        assert_eq!(
+            ft8(true).skimmer_mode(),
+            Some("FT8"),
+            "rbn wire: leading FT8 → FT8"
+        );
+        assert_eq!(
+            ft8(false).skimmer_mode(),
+            None,
+            "human free-text mode is untrusted"
+        );
         let mut cw = parse_dx_spot("DX de W3LPL-#: 14025.0 UA9CDC CW 599 0312Z").unwrap();
         cw.rbn = true;
         assert_eq!(cw.skimmer_mode(), Some("CW"));
@@ -839,11 +847,14 @@ mod tests {
             t + Duration::from_secs(1),
             mk_spot("K1ABC", 50313.6, "CW", "SKIMMER2"),
         );
-        let rows: Vec<_> = b.recent().into_iter().filter(|s| s.dx_call == "K1ABC").collect();
+        let rows: Vec<_> = b
+            .recent()
+            .into_iter()
+            .filter(|s| s.dx_call == "K1ABC")
+            .collect();
         assert_eq!(rows.len(), 1, "same station, sub-kHz apart → one row");
         assert!(
-            rows[0].spotter == "SKIMMER2"
-                && rows[0].corroborators.iter().any(|c| c == "SKIMMER1"),
+            rows[0].spotter == "SKIMMER2" && rows[0].corroborators.iter().any(|c| c == "SKIMMER1"),
             "both skimmers on the surviving row so the ≥2 gate clears: spotter={}, corrob={:?}",
             rows[0].spotter,
             rows[0].corroborators

@@ -245,8 +245,12 @@ mod tests {
         assert_eq!(cands.len(), expected);
         assert!(cands.iter().all(|c| c.port_name == "COM3"));
         assert!(cands.iter().any(|c| c.model == 1042)); // FTDX10 is seeded
-        // The 7610 is now seeded at both 115200 and 19200 so a non-default CI-V baud still connects.
-        assert!(cands.iter().any(|c| c.model == 3078 && c.baud == Some(115200)));
-        assert!(cands.iter().any(|c| c.model == 3078 && c.baud == Some(19200)));
+                                                        // The 7610 is now seeded at both 115200 and 19200 so a non-default CI-V baud still connects.
+        assert!(cands
+            .iter()
+            .any(|c| c.model == 3078 && c.baud == Some(115200)));
+        assert!(cands
+            .iter()
+            .any(|c| c.model == 3078 && c.baud == Some(19200)));
     }
 }

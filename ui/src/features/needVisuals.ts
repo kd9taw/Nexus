@@ -61,13 +61,14 @@ export const NEED_VISUALS: Record<NeedCat, NeedVisual> = {
 export const NEED_PRECEDENCE: NeedCat[] = [
   // MUST mirror the backend NeedTag::tier() descending (needalert.rs) so the decode feed's
   // lead pill + row colour match the Needed board for every multi-need station: the board
-  // sorts by tier and colours from tags[0]. tier(): entity 100 > zone 70 > grid 60 > state
+  // sorts by tier and colours from tags[0]. tier(): entity 100 > zone 70 > state 60 > grid
   // 55 > band 50 > mode 30 > confirm 10 (wanted pinned top; dxped/pota/sota are icon-only).
+  // A rare grid still floats above via the backend rarity_boost; a *plain* grid < state.
   'wanted',
   'entity',
   'zone',
-  'grid',
   'state',
+  'grid',
   'band',
   'mode',
   'dxped',

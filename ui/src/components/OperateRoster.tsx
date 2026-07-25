@@ -35,12 +35,16 @@ interface Props {
 
 type SortKey = 'need' | 'call' | 'country' | 'grid' | 'dist' | 'bearing' | 'snr' | 'age'
 
+// Mirrors the backend NeedTag::tier() gradient (needalert.rs) so "sort by need" is the
+// SAME ranking here as on the Needed board: entity > zone > state > grid > band > mode.
+// A new state outranks a bare new grid (the operator's WAS-over-VUCC gradient); these
+// used to be tied at 4, which let grids sort alongside/above states.
 const NEED_RANK: Record<NeedTag, number> = {
-  Wanted: 6,
-  NewEntity: 5,
-  NewZone: 4,
+  Wanted: 8,
+  NewEntity: 7,
+  NewZone: 6,
+  NewState: 5,
   NewGrid: 4,
-  NewState: 4,
   NewBand: 3,
   NewMode: 2,
   Confirm: 1,

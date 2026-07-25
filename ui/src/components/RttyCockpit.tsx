@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, RttyState } from '../types'
 import { CockpitHeader } from './CockpitHeader'
+import { PanelsMenu } from './PanelsMenu'
+import { panelHost } from '../features/panelHost'
+import { RTTY_PANEL_IDS, type RttyPanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
 import { Waterfall } from './Waterfall'
 import {
@@ -40,6 +43,14 @@ interface Props {
   /** Light/dark theme — passed straight through to the waterfall colormap.
    * Optional (defaults to dark) so non-theme-aware callers/tests don't have to thread it. */
   theme?: string
+  /** Panel visibility record — host-owned (App) so it survives remounts. Optional: without it
+   *  the decode stream shows and there's no ⊞ menu. */
+  panels?: PanelLayoutApi<RttyPanelId>
+}
+
+/** Display labels for the RTTY removable panels (the ⊞ Panels menu). */
+const RTTY_PANEL_LABELS: Record<RttyPanelId, string> = {
+  stream: 'Decoded Text',
 }
 
 /** Standard casual RTTY F-key set (599-not-5NN comes with the contest schemas).
@@ -113,7 +124,13 @@ function seqLabel(s: string): string {
  * host (like Operate) so the decoded stream keeps accumulating while the
  * operator is on another section.
  */
-export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark' }: Props) {
+export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', panels }: Props) {
+  // Panels (Phase 3): the waterfall + all TX chrome (header, auto-seq strip, macros, send) are
+  // pinned; only the decoded-text stream is removable, filling the space between them.
+  const host = panels
+    ? panelHost(panels, { menu: RTTY_PANEL_IDS, side: [], main: 'stream', labels: RTTY_PANEL_LABELS })
+    : null
+  const shown = (id: RttyPanelId) => (host ? host.shown(id) : true)
   // Live decoder state — polled at 2 Hz while this is the visible view. The
   // backend ring keeps decoding while we're hidden; the first tick on
   // re-activation catches the display up.
@@ -301,6 +318,17 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             )
           }
           onCommitDial={onSetFrequency ? commitDial : undefined}
+          actions={
+            host && panels ? (
+              <PanelsMenu
+                items={host.menuItems}
+                onToggle={(id, show) => panels.setPanelState(id as RttyPanelId, show ? 'docked' : 'removed')}
+                onUndo={panels.undo}
+                canUndo={panels.canUndo}
+                onReset={panels.reset}
+              />
+            ) : undefined
+          }
         />
       )}
 
@@ -326,6 +354,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
       )}
 
+      {shown('stream') && (
       <div
         className="cw-decode rtty-stream"
         title="Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)"
@@ -411,6 +440,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           )}
         </div>
       </div>
+      )}
 
       {auto && (
         <div className="cw-macros rtty-auto-row" role="group" aria-label="RTTY auto-sequencer">

@@ -491,6 +491,13 @@ pub struct Settings {
     /// The earlier always-on 6-call cap is preserved as this opt-in.
     #[serde(default)]
     pub cq_max_calls: Option<u32>,
+    /// Stop calling a specific station after this many unanswered overs of a directed
+    /// in-QSO step (AwaitReport/Roger/Rr73) — prevents endless recalling a station that
+    /// went silent in FT8/FT4 S&P. `Some(8)` by default (operator preference); `None`
+    /// = stock WSJT-X (repeat until answered, only the Tx watchdog stops it). Distinct
+    /// from `cq_max_calls`, which governs a CQ run.
+    #[serde(default = "default_directed_max_calls")]
+    pub directed_max_calls: Option<u32>,
     /// Tempo chat: max transmit cycles per directed message before it goes terminal
     /// "no-ack" (bounded ARQ — the fix for "it keeps sending and sending"). Applies on
     /// the chat tiers only (never FT8/FT4). `None` = the built-in default (3 on
@@ -807,6 +814,10 @@ fn default_on() -> bool {
 
 fn default_tune_timeout() -> u32 {
     12
+}
+
+fn default_directed_max_calls() -> Option<u32> {
+    Some(8)
 }
 
 fn default_rotator_baud() -> u32 {
@@ -1423,6 +1434,7 @@ impl Default for Settings {
             save_qso_wav: false,
             prefer_rrr: false,
             cq_max_calls: None,
+            directed_max_calls: Some(8),
             chat_max_cycles: None,
             chat_implicit_ack: true,
             cq_stall_overs: None,

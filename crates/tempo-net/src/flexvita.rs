@@ -145,12 +145,19 @@ pub const METER_PACKET_CLASS: u16 = 0x8002;
 /// definition, [`crate::flexcat::parse_meter_defs`]). Pure.
 pub fn parse_meter_values(payload: &[u8], has_trailer: bool) -> Vec<(u16, i16)> {
     let body = if has_trailer {
-        payload.get(..payload.len().saturating_sub(4)).unwrap_or(&[])
+        payload
+            .get(..payload.len().saturating_sub(4))
+            .unwrap_or(&[])
     } else {
         payload
     };
     body.chunks_exact(4)
-        .map(|c| (u16::from_be_bytes([c[0], c[1]]), i16::from_be_bytes([c[2], c[3]])))
+        .map(|c| {
+            (
+                u16::from_be_bytes([c[0], c[1]]),
+                i16::from_be_bytes([c[2], c[3]]),
+            )
+        })
         .collect()
 }
 
@@ -420,7 +427,7 @@ mod tests {
         assert!((convert_meter_raw("Volts", 3520) - 13.75).abs() < 1e-3); // 3520/256 V
         assert!((convert_meter_raw("degC", 1600) - 25.0).abs() < 1e-3); // 1600/64 °C
         assert_eq!(convert_meter_raw("Percent", 42), 42.0); // unscaled
-        // Forward power: raw 1280 → 10 dBm → 10 mW.
+                                                            // Forward power: raw 1280 → 10 dBm → 10 mW.
         assert!((dbm_to_watts(convert_meter_raw("dBm", 1280)) - 0.01).abs() < 1e-4);
     }
 }

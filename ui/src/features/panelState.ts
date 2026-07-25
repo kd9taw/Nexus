@@ -170,15 +170,45 @@ export function redockStalePopouts<P extends string>(
   if (changed) savePanelLayout(panelStorageKey(spec.view, instance), { ...layout, state })
 }
 
+/** A pane can never be resized below this flex share — a seam drag clamps here so a pane
+ *  stays grabbable and can't vanish. Removal (via the Panels menu) is the ONLY route to
+ *  gone, which keeps the "a removed panel is unrepresentable-as-resurrectable" guarantee. */
+export const MIN_SHARE = 0.15
+
+/**
+ * Split a region between two adjacent panes from the seam position, given as a fraction
+ * (0..1) of the region from the top/left. Returns `[aboveShare, belowShare]` normalized to
+ * sum to 2 — so the centre (0.5) is the stock `[1, 1]` — and clamped so neither pane drops
+ * below `MIN_SHARE`. Pure + monotonic in `fraction`, which is why it can't oscillate: the
+ * output depends only on the pointer position, never on the current size it is setting.
+ */
+export function seamShares(fraction: number): [number, number] {
+  const f = Math.min(1, Math.max(0, fraction))
+  // Clamp BOTH output shares to the MIN_SHARE floor (not the fraction) so the floor holds
+  // exactly with no float-rounding slack; the pair still sums to ~2 (relative flex, so the
+  // region stays full).
+  const above = Math.max(MIN_SHARE, Math.min(2 - MIN_SHARE, 2 * f))
+  const below = Math.max(MIN_SHARE, 2 - above)
+  return [above, below]
+}
+
 export interface PanelLayoutApi<P extends string> {
   layout: PanelLayout<P>
   /** Absent ⇒ docked. */
   stateOf: (id: P) => PanelState
   setPanelState: (id: P, state: PanelState) => void
+  /** Flex-grow share for a pane within its region (default 1). A sole surviving pane
+   *  auto-fills because grow is relative; two co-resident panes split by their ratio. */
+  shareOf: (id: P) => number
+  /** Set one pane's flex share (clamped to at least MIN_SHARE). */
+  setShare: (id: P, value: number) => void
+  /** Set several panes' shares in ONE undoable step — a seam drag redistributes the two
+   *  adjacent panes it sits between atomically (a single save + one undo entry). */
+  setShares: (updates: Partial<Record<P, number>>) => void
   /** Restore the layout as it was before the last change (one level deep). */
   undo: () => void
   canUndo: boolean
-  /** Back to stock — every panel docked. Undoable like any other change. */
+  /** Back to stock — every panel docked, every share reset. Undoable like any change. */
   reset: () => void
 }
 
@@ -218,6 +248,29 @@ export function usePanelLayout<P extends string>(
       }),
     [apply],
   )
+  const shareOf = useCallback((id: P) => hist.cur.share[id] ?? 1, [hist.cur])
+  const setShare = useCallback(
+    (id: P, value: number) =>
+      apply((cur) => {
+        const share: Partial<Record<P, number>> = { ...cur.share }
+        share[id] = Math.max(MIN_SHARE, value)
+        return { ...cur, share }
+      }),
+    [apply],
+  )
+  const setShares = useCallback(
+    (updates: Partial<Record<P, number>>) =>
+      apply((cur) => {
+        const share: Partial<Record<P, number>> = { ...cur.share }
+        for (const [id, v] of Object.entries(updates)) {
+          if (typeof v === 'number' && Number.isFinite(v)) {
+            share[id as P] = Math.max(MIN_SHARE, v)
+          }
+        }
+        return { ...cur, share }
+      }),
+    [apply],
+  )
   const undo = useCallback(
     () =>
       setHist((h) => {
@@ -228,7 +281,17 @@ export function usePanelLayout<P extends string>(
     [key],
   )
   const reset = useCallback(() => apply(() => emptyPanelLayout<P>()), [apply])
-  return { layout: hist.cur, stateOf, setPanelState, undo, canUndo: hist.prev != null, reset }
+  return {
+    layout: hist.cur,
+    stateOf,
+    setPanelState,
+    shareOf,
+    setShare,
+    setShares,
+    undo,
+    canUndo: hist.prev != null,
+    reset,
+  }
 }
 
 /** The Operate cockpit's removable panels — the first consumer's vocabulary. */
@@ -246,4 +309,55 @@ export type OperatePanelId = (typeof OPERATE_PANEL_IDS)[number]
 export const OPERATE_PANELS: PanelVocabulary<OperatePanelId> = {
   view: 'operate',
   panelIds: OPERATE_PANEL_IDS,
+}
+
+/** SSTV view's removable panels (Phase 3). The RX image (scope), the TX bar (mode/Send/Stop/
+ *  progress) and all header chrome are NOT panels — TX-safety by construction. */
+export const SSTV_PANEL_IDS = ['txcompose', 'gallery'] as const
+export type SstvPanelId = (typeof SSTV_PANEL_IDS)[number]
+
+export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
+  view: 'sstv',
+  panelIds: SSTV_PANEL_IDS,
+}
+
+/** Phone cockpit's removable panels (Phase 3) — the panes UNDER the scope. The scope, the
+ *  whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT/mic/BW), the PTT row, the voice
+ *  keyer, and the log strip are NOT panels (TX-safety by construction). */
+export const PHONE_PANEL_IDS = ['rigscope', 'txmeters', 'dsp', 'dspLevels', 'bandActivity'] as const
+export type PhonePanelId = (typeof PHONE_PANEL_IDS)[number]
+
+export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
+  view: 'phone',
+  panelIds: PHONE_PANEL_IDS,
+}
+
+/** CW cockpit's removable panels (Phase 3) — the panes under the scope. The scope, the whole
+ *  CockpitHeader + keyer (WPM/backend/pitch/BW/Tune/StopTX), the F-key macros, the type-to-send
+ *  input, and the log strip are NOT panels (TX-safety by construction). */
+export const CW_PANEL_IDS = [
+  'scopeCtl',
+  'dsp',
+  'txmeters',
+  'rxdsp',
+  'bandActivity',
+  'copilot',
+  'decode',
+  'sent',
+] as const
+export type CwPanelId = (typeof CW_PANEL_IDS)[number]
+
+export const CW_PANELS: PanelVocabulary<CwPanelId> = {
+  view: 'cw',
+  panelIds: CW_PANEL_IDS,
+}
+
+/** RTTY cockpit's removable panels (Phase 3). The waterfall, the CockpitHeader + StopTX + TX-arm,
+ *  the auto-sequence QSO strip, the F-key macros, and the type-to-send compose are NOT panels. */
+export const RTTY_PANEL_IDS = ['stream'] as const
+export type RttyPanelId = (typeof RTTY_PANEL_IDS)[number]
+
+export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
+  view: 'rtty',
+  panelIds: RTTY_PANEL_IDS,
 }

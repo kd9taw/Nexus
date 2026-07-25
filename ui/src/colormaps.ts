@@ -34,7 +34,10 @@ const STOPS: Record<ColormapName, string[]> = {
   inferno: ['#000004', '#1b0c41', '#4a0c6b', '#781c6d', '#a52c60', '#cf4446', '#ed6925', '#fb9a06', '#fcffa4'],
   viridis: ['#440154', '#472d7b', '#3b528b', '#2c728e', '#21918c', '#28ae80', '#5ec962', '#addc30', '#fde725'],
   cividis: ['#00224e', '#123570', '#3b496c', '#575d6d', '#707173', '#8a8779', '#a59c74', '#c3b369', '#fee838'],
-  turbo: ['#30123b', '#4145ab', '#4675ed', '#39a2fc', '#1bcfd4', '#24eca6', '#61fc6c', '#a4fc3b', '#d1e834', '#f9ba38', '#fb7e21', '#e4460a', '#b11901', '#7a0403'],
+  // Turbo with a BLACK noise floor (operator preference): the canonical low stop is a dark
+  // maroon-purple (#30123b) which tinted the waterfall background; force it to black so the
+  // floor reads black and the low end interpolates black→blue.
+  turbo: ['#000000', '#4145ab', '#4675ed', '#39a2fc', '#1bcfd4', '#24eca6', '#61fc6c', '#a4fc3b', '#d1e834', '#f9ba38', '#fb7e21', '#e4460a', '#b11901', '#7a0403'],
   'sdr-green': ['#000000', '#002800', '#005800', '#009000', '#30d030', '#b8ffb8'],
   'amber-crt': ['#000000', '#1a0e00', '#4a2c00', '#8a5a00', '#d09000', '#ffc233', '#fff0c8'],
   blue: ['#000010', '#001440', '#003078', '#0058b0', '#2090e0', '#80c8ff', '#ffffff'],

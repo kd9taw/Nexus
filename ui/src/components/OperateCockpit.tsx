@@ -26,6 +26,7 @@ import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { Waterfall } from './Waterfall'
 import { Splitter } from './Splitter'
+import { SplitterSeam } from './SplitterSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
@@ -36,6 +37,7 @@ import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
 import { WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from '../features/panelState'
+import { panelHost, type PanelHostSpec } from '../features/panelHost'
 import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { FrequencyControl } from './FrequencyControl'
@@ -225,6 +227,16 @@ export function OperateCockpit({
 }: Props) {
   // Container the waterfall-height splitter measures + writes its CSS var on.
   const bodyRef = useRef<HTMLDivElement>(null)
+  // The two resizable side-rail panes in roster mode (Band Activity above, Rx Frequency
+  // below) + the seam that splits them. A sole survivor auto-fills because flex-grow is
+  // share-driven (`--pane-share`), so deleting Band Activity grows Rx Frequency to fill.
+  const decodesSideRef = useRef<HTMLDivElement>(null)
+  const rxfreqRef = useRef<HTMLDivElement>(null)
+  // Only apply a stored share; an un-dragged pane keeps the CSS default proportions.
+  const shareStyle = (id: OperatePanelId): React.CSSProperties | undefined => {
+    const s = panels.layout.share[id]
+    return s != null ? ({ '--pane-share': s } as React.CSSProperties) : undefined
+  }
   const source = snap.radio.source
 
   // Live next-slot countdown: the snapshot's nextSlotMs only updates each poll,
@@ -350,14 +362,18 @@ export function OperateCockpit({
   const [ignored, setIgnored] = useState<ReadonlySet<string>>(() => new Set())
 
   // --- Panel visibility (⊞ Panels). The record is per-SURFACE and host-owned; here we
-  // only read it and render accordingly. A panel with no stored state is docked.
+  // only read it and render accordingly. A panel with no stored state is docked. The
+  // render glue (shown/sideShown/mainShown/dataCols/menuItems) is derived by the reusable
+  // panelHost primitive from this layout's spec — so a new cockpit is a spec, not a copy.
   const { stateOf, setPanelState } = panels
-  const shown = (id: OperatePanelId) => stateOf(id) !== 'removed'
+  const panelSpec: PanelHostSpec<OperatePanelId> = {
+    menu: LAYOUT_PANELS[layoutMode],
+    side: SIDE_PANELS[layoutMode],
+    main: layoutMode === 'roster' ? 'callRoster' : 'bandActivity',
+    labels: PANEL_LABELS,
+  }
+  const { shown, sideShown, dataCols, menuItems } = panelHost(panels, panelSpec)
   const wfState = stateOf('waterfall')
-  // The BIG pane only reclaims the space if the grid drops to one column, so track
-  // whether the main cell and the side rail still hold anything.
-  const mainShown = shown(layoutMode === 'roster' ? 'callRoster' : 'bandActivity')
-  const sideShown = SIDE_PANELS[layoutMode].some(shown)
 
   // Waterfall pop-out: 'popped' unmounts the docked copy so the decode lists + roster
   // reclaim the space (that's the whole point of popping it out) and leaves the re-dock
@@ -638,11 +654,7 @@ export function OperateCockpit({
               ))}
             </div>
             <PanelsMenu
-              items={LAYOUT_PANELS[layoutMode].map((id) => ({
-                id,
-                label: PANEL_LABELS[id],
-                state: stateOf(id),
-              }))}
+              items={menuItems}
               onToggle={(id, show) => setPanelState(id as OperatePanelId, show ? 'docked' : 'removed')}
               onUndo={panels.undo}
               canUndo={panels.canUndo}
@@ -917,10 +929,7 @@ export function OperateCockpit({
         {/* data-cols collapses the grid to ONE column once the main cell or the whole
             side rail is gone — otherwise the survivor keeps its 2fr/1fr track and the
             removed panel's space is never actually reclaimed. */}
-        <div
-          className={`cockpit-lower ${layoutMode}`}
-          data-cols={mainShown && sideShown ? 'two' : 'one'}
-        >
+        <div className={`cockpit-lower ${layoutMode}`} data-cols={dataCols}>
           {layoutMode === 'roster' ? (
             <>
               {/* Roster layout (GridTracker-style): the full sortable Call Roster is
@@ -948,7 +957,7 @@ export function OperateCockpit({
               {sideShown && (
                 <aside className="cockpit-side">
                   {shown('bandActivity') && (
-                    <div className="cockpit-decodes-side panel">
+                    <div className="cockpit-decodes-side panel" ref={decodesSideRef} style={shareStyle('bandActivity')}>
                       {/* The FULL decode window (filters + sort), not the compact
                           strip — roster mode = decode window + roster on one page
                           (operator request); only Rx Frequency stays compact. */}
@@ -968,8 +977,17 @@ export function OperateCockpit({
                       />
                     </div>
                   )}
+                  {shown('bandActivity') && shown('rxfreq') && (
+                    <SplitterSeam
+                      above={decodesSideRef}
+                      below={rxfreqRef}
+                      varName="--pane-share"
+                      onCommit={(av, bv) => panels.setShares({ bandActivity: av, rxfreq: bv })}
+                      label="Band Activity / Rx Frequency"
+                    />
+                  )}
                   {shown('rxfreq') && (
-                    <div className="cockpit-rxfreq panel">
+                    <div className="cockpit-rxfreq panel" ref={rxfreqRef} style={shareStyle('rxfreq')}>
                       <OperateDecodes
                         history={rxHistRef.current}
                         decodes={snap.recentDecodes}

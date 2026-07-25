@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvState } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { FrequencyControl } from './FrequencyControl'
+import { PanelsMenu } from './PanelsMenu'
+import { SplitterSeam } from './SplitterSeam'
+import { panelHost } from '../features/panelHost'
+import { SSTV_PANEL_IDS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
 import {
   getLicensedBandPlan,
   getSstvState,
@@ -94,6 +98,15 @@ interface Props {
    * TopBar's Enable-Tx is hidden with the digital chrome in this view. Without it, an SSTV
    * send sits at the "TX is off" gate with no way to arm from this screen. */
   onSetTxEnabled?: (on: boolean) => void
+  /** Panel visibility/resize record — host-owned (App), so it survives this view's remounts.
+   *  Optional: without it the panels all show and there's no ⊞ menu. */
+  panels?: PanelLayoutApi<SstvPanelId>
+}
+
+/** Display labels for the SSTV removable panels (the ⊞ Panels menu). */
+const SSTV_PANEL_LABELS: Record<SstvPanelId, string> = {
+  txcompose: 'Transmit',
+  gallery: 'Gallery',
 }
 
 /** Tauri v2 convertFileSrc without the npm package (this app talks to the
@@ -200,7 +213,17 @@ function GalleryThumb({ entry }: { entry: SstvGalleryEntry }) {
  * receiver keeps listening while the operator is on another section.
  * txState=false: nothing here transmits.
  */
-export function SstvView({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled }: Props) {
+export function SstvView({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, panels }: Props) {
+  // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
+  // Transmit composer and the Gallery are removable + seam-resizable in the bounded lower region.
+  const host = panels ? panelHost(panels, { menu: SSTV_PANEL_IDS, side: [], main: 'gallery', labels: SSTV_PANEL_LABELS }) : null
+  const shown = (id: SstvPanelId) => (host ? host.shown(id) : true)
+  const composeRef = useRef<HTMLElement>(null)
+  const galleryRef = useRef<HTMLElement>(null)
+  const shareStyle = (id: SstvPanelId): React.CSSProperties | undefined => {
+    const s = panels?.layout.share[id]
+    return s != null ? ({ '--pane-share': s } as React.CSSProperties) : undefined
+  }
   // Live decoder state — polled at 1 Hz while this is the visible view (the
   // backend keeps decoding while hidden; the first tick catches the display up).
   const [sstv, setSstv] = useState<SstvState | null>(null)
@@ -475,6 +498,17 @@ export function SstvView({ snap, onSnap, active = true, onSetFrequency, onSetTxE
             )
           }
           onCommitDial={onSetFrequency ? commitDial : undefined}
+          actions={
+            host && panels ? (
+              <PanelsMenu
+                items={host.menuItems}
+                onToggle={(id, show) => panels.setPanelState(id as SstvPanelId, show ? 'docked' : 'removed')}
+                onUndo={panels.undo}
+                canUndo={panels.canUndo}
+                onReset={panels.reset}
+              />
+            ) : undefined
+          }
         >
           <label
             className="cw-wpm"
@@ -523,93 +557,52 @@ export function SstvView({ snap, onSnap, active = true, onSetFrequency, onSetTxE
         )}
       </section>
 
-      <section className="sstv-tx" aria-label="Transmit an image">
-        <div className="sstv-tx-head">Transmit</div>
-        <div
-          className={`sstv-tx-drop${packed ? ' loaded' : ''}`}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault()
-            const f = e.dataTransfer.files?.[0]
-            if (f) loadImage(f)
-          }}
-        >
-          <canvas
-            ref={txCanvasRef}
-            className={`sstv-tx-preview${packed ? '' : ' empty'}`}
-            role="img"
-            aria-label={packed ? `Transmit preview, ${packed.width}×${packed.height}` : 'No image chosen'}
-          />
-          {!packed && (
-            <div className="sstv-tx-drop-hint">
-              Drop an image here, or choose one below. Cover-cropped to the mode size.
-            </div>
-          )}
+      {/* Pinned TX bar — transmit mode + Send + Stop + progress. TX-LOCKED: never a removable
+          panel, so Stop is ALWAYS reachable (paramount SSTV TX-safety). */}
+      <div className="sstv-tx-bar" aria-label="SSTV transmit controls">
+        <label className="sstv-tx-mode">
+          <span>Mode</span>
+          <select
+            value={modeSlug}
+            onChange={(e) => changeMode(e.target.value)}
+            aria-label="SSTV transmit mode"
+            title="Transmit mode. VHF/2 m images use PD-120 (ARISS); HF uses Scottie 1 (NA) or Martin 1 (EU)."
+          >
+            {TX_MODE_GROUPS.map((g) => (
+              <optgroup key={g} label={g}>
+                {SSTV_TX_MODES.filter((m) => m.group === g).map((m) => (
+                  <option key={m.slug} value={m.slug}>
+                    {m.name} · ≈{m.seconds}s · {m.width}×{m.height}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        <div className="sstv-tx-actions">
+          <button
+            type="button"
+            className="sstv-tx-send"
+            onClick={sendImage}
+            disabled={!packed || sending}
+            title={
+              packed
+                ? 'Transmit this image — switches to Phone (USB/LSB) and keys the rig'
+                : 'Choose an image to transmit first'
+            }
+          >
+            Send
+          </button>
+          <button
+            type="button"
+            className="sstv-tx-stop"
+            onClick={stopTx}
+            disabled={!sending}
+            title="Stop the transmission in progress and unkey"
+          >
+            Stop
+          </button>
         </div>
-
-        <div className="sstv-tx-controls">
-          <label className="sstv-tx-file">
-            <span>{imageName ? 'Change image…' : 'Choose image…'}</span>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                if (f) loadImage(f)
-                e.target.value = ''
-              }}
-            />
-          </label>
-          {imageName && txMode && (
-            <span className="sstv-tx-name" title={imageName}>
-              {imageName} → {txMode.width}×{txMode.height}
-            </span>
-          )}
-          <label className="sstv-tx-mode">
-            <span>Mode</span>
-            <select
-              value={modeSlug}
-              onChange={(e) => changeMode(e.target.value)}
-              aria-label="SSTV transmit mode"
-              title="Transmit mode. VHF/2 m images use PD-120 (ARISS); HF uses Scottie 1 (NA) or Martin 1 (EU)."
-            >
-              {TX_MODE_GROUPS.map((g) => (
-                <optgroup key={g} label={g}>
-                  {SSTV_TX_MODES.filter((m) => m.group === g).map((m) => (
-                    <option key={m.slug} value={m.slug}>
-                      {m.name} · ≈{m.seconds}s · {m.width}×{m.height}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </label>
-          <div className="sstv-tx-actions">
-            <button
-              type="button"
-              className="sstv-tx-send"
-              onClick={sendImage}
-              disabled={!packed || sending}
-              title={
-                packed
-                  ? 'Transmit this image — switches to Phone (USB/LSB) and keys the rig'
-                  : 'Choose an image to transmit first'
-              }
-            >
-              Send
-            </button>
-            <button
-              type="button"
-              className="sstv-tx-stop"
-              onClick={stopTx}
-              disabled={!sending}
-              title="Stop the transmission in progress and unkey"
-            >
-              Stop
-            </button>
-          </div>
-        </div>
-
         {sending && (
           <div
             className="sstv-tx-progress"
@@ -627,32 +620,101 @@ export function SstvView({ snap, onSnap, active = true, onSetFrequency, onSetTxE
             </div>
           </div>
         )}
-      </section>
+      </div>
 
-      <section className="sstv-gallery" aria-label="Received images">
-        <div className="sstv-gallery-head">Gallery</div>
-        <div className="sstv-gallery-grid">
-          {gallery.length === 0 ? (
-            <div className="sstv-gallery-empty">
-              Received images collect here — auto-saved with callsign (FSK ID), mode, frequency, and
-              time.
+      {/* Bounded lower region — the two removable, seam-resizable panels under the canvas. */}
+      <div className="sstv-lower">
+        {shown('txcompose') && (
+          <section
+            className="sstv-compose panel"
+            ref={composeRef}
+            style={shareStyle('txcompose')}
+            aria-label="Transmit an image"
+          >
+            <div className="sstv-tx-head">Transmit</div>
+            <div
+              className={`sstv-tx-drop${packed ? ' loaded' : ''}`}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault()
+                const f = e.dataTransfer.files?.[0]
+                if (f) loadImage(f)
+              }}
+            >
+              <canvas
+                ref={txCanvasRef}
+                className={`sstv-tx-preview${packed ? '' : ' empty'}`}
+                role="img"
+                aria-label={packed ? `Transmit preview, ${packed.width}×${packed.height}` : 'No image chosen'}
+              />
+              {!packed && (
+                <div className="sstv-tx-drop-hint">
+                  Drop an image here, or choose one below. Cover-cropped to the mode size.
+                </div>
+              )}
             </div>
-          ) : (
-            gallery.map((g) => (
-              <figure key={g.path} className="sstv-thumb" title={g.path}>
-                <GalleryThumb entry={g} />
-                <figcaption className="sstv-thumb-caption">
-                  <span className="sstv-thumb-mode">{g.mode}</span>
-                  {g.fskId && <span className="sstv-thumb-call">{g.fskId}</span>}
-                  <span className="sstv-thumb-meta">
-                    {fmtUtc(g.finishedUtc)} · {g.freqMhz.toFixed(3)} MHz
-                  </span>
-                </figcaption>
-              </figure>
-            ))
-          )}
-        </div>
-      </section>
+            <label className="sstv-tx-file">
+              <span>{imageName ? 'Change image…' : 'Choose image…'}</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) loadImage(f)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+            {imageName && txMode && (
+              <span className="sstv-tx-name" title={imageName}>
+                {imageName} → {txMode.width}×{txMode.height}
+              </span>
+            )}
+          </section>
+        )}
+
+        {shown('txcompose') && shown('gallery') && (
+          <SplitterSeam
+            above={composeRef}
+            below={galleryRef}
+            varName="--pane-share"
+            onCommit={(a, b) => panels?.setShares({ txcompose: a, gallery: b })}
+            label="Transmit / Gallery"
+          />
+        )}
+
+        {shown('gallery') && (
+          <section
+            className="sstv-gallery panel"
+            ref={galleryRef}
+            style={shareStyle('gallery')}
+            aria-label="Received images"
+          >
+            <div className="sstv-gallery-head">Gallery</div>
+            <div className="sstv-gallery-grid">
+              {gallery.length === 0 ? (
+                <div className="sstv-gallery-empty">
+                  Received images collect here — auto-saved with callsign (FSK ID), mode, frequency,
+                  and time.
+                </div>
+              ) : (
+                gallery.map((g) => (
+                  <figure key={g.path} className="sstv-thumb" title={g.path}>
+                    <GalleryThumb entry={g} />
+                    <figcaption className="sstv-thumb-caption">
+                      <span className="sstv-thumb-mode">{g.mode}</span>
+                      {g.fskId && <span className="sstv-thumb-call">{g.fskId}</span>}
+                      <span className="sstv-thumb-meta">
+                        {fmtUtc(g.finishedUtc)} · {g.freqMhz.toFixed(3)} MHz
+                      </span>
+                    </figcaption>
+                  </figure>
+                ))
+              )}
+            </div>
+          </section>
+        )}
+      </div>
     </main>
   )
 }

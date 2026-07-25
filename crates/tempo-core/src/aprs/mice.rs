@@ -92,8 +92,10 @@ pub fn decode(dest_call: &str, info: &[u8]) -> Option<MicE> {
         digits[i] = dest_digit(dc[i]).unwrap_or(0); // ambiguity → 0 (precision loss, per spec)
     }
     let lat_deg = digits[0] as f64 * 10.0 + digits[1] as f64;
-    let lat_min =
-        digits[2] as f64 * 10.0 + digits[3] as f64 + digits[4] as f64 / 10.0 + digits[5] as f64 / 100.0;
+    let lat_min = digits[2] as f64 * 10.0
+        + digits[3] as f64
+        + digits[4] as f64 / 10.0
+        + digits[5] as f64 / 100.0;
     let mut lat = lat_deg + lat_min / 60.0;
     if dc[3] <= 0x4c {
         lat = -lat; // char 3 ≤ 'L' → South
@@ -102,8 +104,14 @@ pub fn decode(dest_call: &str, info: &[u8]) -> Option<MicE> {
     // Message code from chars 0..2: any '2' means custom (normalize 2→1 for the index).
     let bits = [msg_bit(dc[0]), msg_bit(dc[1]), msg_bit(dc[2])];
     let custom = bits.contains(&2);
-    let idx = bits.iter().fold(0usize, |acc, &b| (acc << 1) | usize::from(b != 0));
-    let message = if custom { MSG_CUSTOM[idx] } else { MSG_STD[idx] };
+    let idx = bits
+        .iter()
+        .fold(0usize, |acc, &b| (acc << 1) | usize::from(b != 0));
+    let message = if custom {
+        MSG_CUSTOM[idx]
+    } else {
+        MSG_STD[idx]
+    };
 
     // --- Longitude, speed, course, symbol from the information field ---
     // info[0] is the DTI; the 8 data bytes are info[1..9], symbol at info[7..9].
@@ -199,7 +207,11 @@ mod tests {
         //   → no offset; char5 '6'(54)<'P' → East.
         // info: lon deg 'I'(73)-28=45; min '"'(34)-28=6; hundredths 'j'(106)-28=78 → 6.78'
         //   → 45°06.78' East = +45.113°. speed/course bytes all 0x1c(28) → 0/0.
-        let m = decode("123456", &[0x60, b'I', b'"', b'j', 0x1c, 0x1c, 0x1c, b'>', b'/']).unwrap();
+        let m = decode(
+            "123456",
+            &[0x60, b'I', b'"', b'j', 0x1c, 0x1c, 0x1c, b'>', b'/'],
+        )
+        .unwrap();
         assert!((m.lat - (-12.576)).abs() < 1e-3, "lat {}", m.lat);
         assert!((m.lon - 45.113).abs() < 1e-3, "lon {}", m.lon);
         assert_eq!(m.speed_knots, 0);
@@ -217,6 +229,10 @@ mod tests {
     #[test]
     fn a_short_info_field_is_rejected() {
         assert!(decode("SSRUVT", &[0x60, b'(', b'#']).is_none());
-        assert!(decode("SSR", &[0x60, b'(', b'#', b'H', 0x1e, 0x1e, b'O', b'>', b'/']).is_none());
+        assert!(decode(
+            "SSR",
+            &[0x60, b'(', b'#', b'H', 0x1e, 0x1e, b'O', b'>', b'/']
+        )
+        .is_none());
     }
 }

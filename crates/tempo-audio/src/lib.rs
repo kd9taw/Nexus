@@ -21,19 +21,22 @@
 //! backend on the station PC with `--features device` (needs ALSA/CoreAudio/WASAPI
 //! at build time and a sound card at runtime).
 
+/// APRS (AFSK-1200 / AX.25) RX decode thread — same armed-decoder pattern, RX ONLY.
+#[cfg(feature = "device")]
+pub mod aprsrx;
 pub mod backend;
 /// Stateful, anti-aliased capture-path resampler (device rate → 12 kHz). Pure
 /// DSP — no audio device — so it builds and unit-tests without the `device`
 /// feature; `device::CpalBackend` owns one per capture stream.
 pub mod capture_resample;
 pub mod civ;
+/// FlexRadio native DAX RX audio orchestrator (Phase 2) — same VITA-49 path as flexspectrum.
+#[cfg(feature = "device")]
+pub mod flexdax;
 /// FlexRadio native panadapter orchestrator — needs tempo-net (SmartSDR/VITA parsers), so it
 /// rides the `device` feature like the rest of the station-side transport code.
 #[cfg(feature = "device")]
 pub mod flexspectrum;
-/// FlexRadio native DAX RX audio orchestrator (Phase 2) — same VITA-49 path as flexspectrum.
-#[cfg(feature = "device")]
-pub mod flexdax;
 pub mod frames;
 pub mod monitor;
 pub mod port_prober;
@@ -50,9 +53,6 @@ pub mod rtty_fsk;
 /// RX ONLY — no TX path.
 #[cfg(feature = "device")]
 pub mod rttyrx;
-/// APRS (AFSK-1200 / AX.25) RX decode thread — same armed-decoder pattern, RX ONLY.
-#[cfg(feature = "device")]
-pub mod aprsrx;
 pub mod runtime;
 pub mod serial_keyer;
 pub mod slot;

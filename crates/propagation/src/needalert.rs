@@ -21,7 +21,9 @@ use std::sync::LazyLock;
 pub enum NeedTag {
     /// A DXCC entity never worked (All-Time New One) — the top prize.
     NewEntity,
-    /// A CQ zone never worked (WAZ) — independent of the entity need.
+    /// A CQ zone not worked ON THIS BAND (5BWAZ / per-band zone chasing) — independent of
+    /// the entity need. Suppressed once the operator holds complete any-band WAZ (all 40
+    /// zones worked on some band), so a WAZ holder isn't flooded with per-band zone slots.
     NewZone,
     /// The entity worked, but not on this band (Challenge slot).
     NewBand,
@@ -71,11 +73,12 @@ impl NeedTag {
             NeedTag::Wanted => 120,
             NeedTag::NewEntity => 100,
             NeedTag::NewZone => 70,
-            NeedTag::NewGrid => 60,
-            // A new US state (Worked All States) — a real domestic chase. Sits just
-            // under NewGrid (a grid square can additionally be rare DX, a state is
-            // always US-domestic) and above a NewBand slot-fill.
-            NeedTag::NewState => 55,
+            // A new US state (Worked All States) — a real domestic chase — outranks a
+            // bare new grid: the operator ranks WAS above VUCC/grid chasing. A grid that
+            // is *also* rare DX still floats up via the rarity_boost applied below, so a
+            // genuinely rare grid can still edge a NewZone; a plain grid sits under state.
+            NeedTag::NewState => 60,
+            NeedTag::NewGrid => 55,
             NeedTag::NewBand => 50,
             NeedTag::NewMode => 30,
             NeedTag::Confirm => 10,
@@ -182,6 +185,16 @@ pub struct AwardSlots<'a> {
     pub confirmed_states: &'a HashSet<(String, Band)>,
 }
 
+impl AwardSlots<'_> {
+    /// True once ALL 40 CQ zones have been worked on SOME band (classic any-band WAZ is
+    /// complete). Used to stop surfacing per-band 5BWAZ "new zone" slots to an operator who
+    /// already holds WAZ. Derived from the per-band `worked_zones` set (cheap: ≤ 40×bands).
+    pub fn waz_complete(&self) -> bool {
+        let distinct: HashSet<u8> = self.worked_zones.iter().map(|(z, _)| *z).collect();
+        (1..=40u8).all(|z| distinct.contains(&z))
+    }
+}
+
 /// Score one heard station from just the WORKED sets, treating every worked slot as also
 /// confirmed (so no zone/grid/state Confirm rows). The pre-confirmation-tracking entry point,
 /// kept for callers/tests that don't carry confirmation data.
@@ -260,7 +273,10 @@ pub fn score_slots(
         }
     }
     // WAZ need — valid even on a WAE entity (the CQ zone still counts). Unworked on this
-    // band → NewZone; worked-but-unconfirmed → a confirmation opportunity (5BWAZ needs a QSL).
+    // band → NewZone (5BWAZ per-band chasing); worked-but-unconfirmed → a confirmation
+    // opportunity (5BWAZ needs a QSL). Once the operator holds complete any-band WAZ, the
+    // per-band NewZone is suppressed — a WAZ holder isn't chasing zones by band, and it was
+    // flooding the board with "New CQ zone N on <band>" for zones long since worked.
     if (1..=40).contains(&info.cq_zone) {
         match heard_on {
             Some(b) if slots.worked_zones.contains(&(info.cq_zone, b)) => {
@@ -268,6 +284,8 @@ pub fn score_slots(
                     wants_confirm = true;
                 }
             }
+            // WAZ complete → this zone is worked on some band, so it's not a new zone.
+            _ if slots.waz_complete() => {}
             // Worked-but-not-on-this-band, or an unparseable band → fail open (a new zone).
             _ => tags.push(NeedTag::NewZone),
         }
@@ -323,15 +341,16 @@ pub fn score_slots(
         return None;
     }
     tags.sort_by_key(|t| std::cmp::Reverse(t.tier()));
-    // Rarity spice: a NEEDED rare grid outranks plain grid/band needs — an
-    // ultra-rare (water-only, rover/maritime) needed grid lands between
-    // NewZone (70) and NewEntity (100). Rarity alone never creates an alert.
-    // Display tier = geography refined by the activity census (demote-only).
+    // Rarity spice: a NEEDED rare grid outranks plain grid/state/band needs — a rare
+    // (55+20=75) or ultra-rare (55+30=85) needed grid lands between NewZone (70) and
+    // NewEntity (100), so a genuinely rare grid still floats above a new state/zone even
+    // though a *plain* grid (55) now sits below state (60). Rarity alone never creates an
+    // alert. Display tier = geography refined by the activity census (demote-only).
     let rarity = g4.as_deref().and_then(crate::gridrarity::effective_rarity);
     let rarity_boost = if tags.contains(&NeedTag::NewGrid) {
         match rarity {
             Some(crate::gridrarity::GridRarity::UltraRare) => 30,
-            Some(crate::gridrarity::GridRarity::Rare) => 15,
+            Some(crate::gridrarity::GridRarity::Rare) => 20,
             _ => 0,
         }
     } else {
@@ -633,13 +652,8 @@ pub fn wanted_alert(
     }
     // Any DX award this wanted station ALSO satisfies (merged, like activation_alert).
     let award = score_slots(
-        call,
-        band,
-        mode,
-        grid,
-        None, // the wanted path doesn't resolve a US state
-        needs,
-        slots,
+        call, band, mode, grid, None, // the wanted path doesn't resolve a US state
+        needs, slots,
     );
     let info = dxcc::resolve(call);
     let mut alert = award.unwrap_or_else(|| NeedAlert {
@@ -1330,6 +1344,60 @@ mod tests {
     }
 
     #[test]
+    fn waz_complete_suppresses_per_band_new_zone() {
+        // A holder of complete any-band WAZ (all 40 CQ zones worked on SOME band) should NOT
+        // be flooded with per-band 5BWAZ "new zone" slots. A USA (entity worked) station in
+        // zone 3, worked on 20m but HEARD on 15m, is a per-band zone miss — suppressed once
+        // WAZ is complete, still flagged while WAZ is incomplete.
+        let mut n = LogNeeds::new();
+        n.add("W1AW", "15m", "FT8", None, None, false); // USA worked → entity is not new
+        let mut complete: HashSet<(u8, Band)> = HashSet::new();
+        for z in 1..=40u8 {
+            complete.insert((z, Band::B20)); // every zone on 20m = full any-band WAZ
+        }
+        // WAZ complete → W6 (USA, zone 3) heard on 15m is not a new zone (likely no alert).
+        let a = score(
+            "W6XX",
+            "15m",
+            "FT8",
+            None,
+            None,
+            &n,
+            &complete,
+            n.worked_grids(),
+            &HashSet::new(),
+        );
+        let has_newzone = a
+            .as_ref()
+            .is_some_and(|x| x.tags.contains(&NeedTag::NewZone));
+        assert!(
+            !has_newzone,
+            "WAZ complete should suppress the per-band new zone"
+        );
+
+        // WAZ incomplete (missing zone 40) → the same per-band zone-3 miss IS a new zone.
+        let mut incomplete = complete.clone();
+        incomplete.retain(|(z, _)| *z != 40);
+        let b = score(
+            "W6XX",
+            "15m",
+            "FT8",
+            None,
+            None,
+            &n,
+            &incomplete,
+            n.worked_grids(),
+            &HashSet::new(),
+        )
+        .expect("zone-3-on-15m is a need while WAZ is incomplete");
+        assert!(
+            b.tags.contains(&NeedTag::NewZone),
+            "incomplete WAZ keeps per-band 5BWAZ chasing: {:?}",
+            b.tags
+        );
+    }
+
+    #[test]
     fn fully_satisfied_spot_yields_no_alert() {
         let mut n = LogNeeds::new();
         n.add("W1AW", "20m", "FT8", None, None, true); // worked + confirmed, zone 5 worked
@@ -1909,7 +1977,12 @@ mod tests {
             },
         )
         .expect("a worked-but-unconfirmed zone is a confirmation opportunity");
-        assert_eq!(a.tags, vec![NeedTag::Confirm], "just the zone Confirm: {:?}", a.tags);
+        assert_eq!(
+            a.tags,
+            vec![NeedTag::Confirm],
+            "just the zone Confirm: {:?}",
+            a.tags
+        );
 
         // Once the zone is confirmed on this band, the same station raises nothing.
         assert!(
@@ -2385,7 +2458,7 @@ mod tests {
             NeedTag::NewState,
             "state leads when it's the only need"
         );
-        assert_eq!(a.priority, 55);
+        assert_eq!(a.priority, 60);
         assert!(a.headline.contains("New state — VT"), "{}", a.headline);
     }
 
@@ -2482,10 +2555,15 @@ mod tests {
             a.tags
         );
         assert_eq!(a.tags[0], NeedTag::NewEntity, "a new one still leads");
-        // Within the tier-sorted list, NewState (55) sits below NewZone (70).
+        // Within the tier-sorted list, NewState (60) sits below NewZone (70).
         let zone_i = a.tags.iter().position(|t| *t == NeedTag::NewZone).unwrap();
         let state_i = a.tags.iter().position(|t| *t == NeedTag::NewState).unwrap();
         assert!(state_i > zone_i, "state ranks below zone: {:?}", a.tags);
+        // Guard the operator's gradient: a new state outranks a bare new grid.
+        assert!(
+            NeedTag::NewState.tier() > NeedTag::NewGrid.tier(),
+            "state must outrank a plain grid"
+        );
     }
 
     #[test]
@@ -2515,7 +2593,7 @@ mod tests {
             "{:?}",
             ranked[0].tags
         );
-        assert_eq!(ranked[0].priority, 55);
+        assert_eq!(ranked[0].priority, 60);
     }
 
     #[test]

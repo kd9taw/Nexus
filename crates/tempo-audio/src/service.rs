@@ -1533,7 +1533,11 @@ impl RadioLoop {
                 .lock()
                 .map(|e| e.settings().flex_native_audio)
                 .unwrap_or(false);
-        let dax_key = if dax_enabled { Some((rig_model, is_network)) } else { None };
+        let dax_key = if dax_enabled {
+            Some((rig_model, is_network))
+        } else {
+            None
+        };
         if key == self.spectrum_src_key && dax_key == self.dax_src_key {
             return; // both unchanged — no-op (the common case, every tick)
         }

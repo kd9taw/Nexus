@@ -339,11 +339,11 @@ impl AppState {
             dt_sec: None,
             tier: Some(self.link.tier),
             delivered: false, // flips true when the recipient's id-bearing ACK arrives
-            attempts: 0,   // bumped per release ("sending k/N")
+            attempts: 0,      // bumped per release ("sending k/N")
             confirmed: false,
-            no_ack: false, // terminal after chat_max_cycles unacknowledged
+            no_ack: false,        // terminal after chat_max_cycles unacknowledged
             ack_id: Some(ack_id), // confirm THIS message by its store chunk-id
-            stored: true,     // HELD until the peer is heard and the queue releases it
+            stored: true,         // HELD until the peer is heard and the queue releases it
             abandoned: false,
         };
         self.conversation_mut(peer).messages.push(msg);

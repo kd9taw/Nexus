@@ -201,7 +201,8 @@ impl FlexDax {
                 let mut bound_slice: Option<u32> = None;
                 let mut last_ka = Instant::now();
                 while !stop.load(Ordering::Relaxed) {
-                    if let Some(FlexMsg::Status { body, .. }) = flex.recv(Duration::from_millis(300))
+                    if let Some(FlexMsg::Status { body, .. }) =
+                        flex.recv(Duration::from_millis(300))
                     {
                         // Learn OUR dax_rx stream id from the async status (the create reply echoes
                         // it). We created exactly one stream on DAX_CHANNEL, so a status for that
@@ -284,7 +285,12 @@ impl FlexDax {
             }));
         }
 
-        Ok(FlexDax { stop, handles, ring, tx })
+        Ok(FlexDax {
+            stop,
+            handles,
+            ring,
+            tx,
+        })
     }
 
     /// Drain the 12 kHz mono RX audio accumulated since the last call (the engine's RX-source read,
@@ -320,7 +326,10 @@ mod tests {
 
     #[test]
     fn dax_command_strings() {
-        assert_eq!(dax_rx_create_command(1), "stream create type=dax_rx dax_channel=1");
+        assert_eq!(
+            dax_rx_create_command(1),
+            "stream create type=dax_rx dax_channel=1"
+        );
         assert_eq!(slice_dax_command(0, 1), "slice set 0 dax=1");
         assert_eq!(dax_remove_command(0x0400_0000), "stream remove 0x04000000");
     }

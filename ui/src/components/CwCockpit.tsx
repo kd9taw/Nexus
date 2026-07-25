@@ -10,6 +10,9 @@ import { CockpitHeader } from './CockpitHeader'
 import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { Splitter } from './Splitter'
+import { PanelsMenu } from './PanelsMenu'
+import { panelHost } from '../features/panelHost'
+import { CW_PANEL_IDS, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
 import { LogEntry } from './LogEntry'
 import { SpotDialog } from './SpotDialog'
 import {
@@ -104,6 +107,21 @@ interface Props {
   onRecallMemory?: (m: Memory) => void
   /** Open the Memories section (manage/groups/import). */
   onOpenMemories?: () => void
+  /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
+   *  Optional: without it every pane shows and there's no ⊞ menu. */
+  panels?: PanelLayoutApi<CwPanelId>
+}
+
+/** Display labels for the CW removable panels (the ⊞ Panels menu). */
+const CW_PANEL_LABELS: Record<CwPanelId, string> = {
+  scopeCtl: 'Scope Controls',
+  dsp: 'DSP Toggles',
+  txmeters: 'TX Meters',
+  rxdsp: 'RX DSP Levels',
+  bandActivity: 'Band Activity',
+  copilot: 'CW Copilot',
+  decode: 'CW Decode',
+  sent: 'Sent Echo',
 }
 
 /** Default CASUAL/ragchew macro set (no contest serial/exchange). Standard CW QSO flow:
@@ -169,6 +187,7 @@ export function CwCockpit({
   onWorkSpot,
   onRecallMemory,
   onOpenMemories,
+  panels,
 }: Props) {
   const catOk = snap.radio.catOk === true
   // Wheel-to-tune over the CW scope, sharing the tuning strip's step selector.
@@ -290,6 +309,12 @@ export function CwCockpit({
   const decodeRef = useRef<HTMLDivElement>(null)
   // Cockpit root: the scope-height splitter measures + writes its CSS var here.
   const cockpitRef = useRef<HTMLElement>(null)
+  // Panels (Phase 3): scope + keyer/macros/send/log stay pinned; the panes under the scope are
+  // removable, and the four content panes (Band Activity / Copilot / Decode / Sent) seam-resize.
+  const host = panels
+    ? panelHost(panels, { menu: CW_PANEL_IDS, side: [], main: 'decode', labels: CW_PANEL_LABELS })
+    : null
+  const shown = (id: CwPanelId) => (host ? host.shown(id) : true)
   // Decode sensitivity for the internal pitch decoder (now WPM-estimation + AI-off
   // fallback only — the slider left with the classic pane; the stored value still applies).
   const sensitivityRef = useRef<number>(
@@ -333,14 +358,8 @@ export function CwCockpit({
   }, [sent])
   // A CW-keyer failure surfaced by the radio loop (e.g. the rig rejected CAT send_morse).
   const [keyerError, setKeyerError] = useState<string | null>(null)
-  // --- CW copilot: decoded-call chips + guided next-step (configurable Guided/Expert) ---
-  const [assistMode, setAssistMode] = useState<'guided' | 'expert'>(
-    () => (localStorage.getItem('nexus.cwAssist') as 'guided' | 'expert') || 'guided',
-  )
-  const setAssist = (m: 'guided' | 'expert') => {
-    setAssistMode(m)
-    localStorage.setItem('nexus.cwAssist', m)
-  }
+  // --- CW copilot: decoded-call chips only (Expert). The Guided/Expert selector + its bar were
+  //     removed to reclaim vertical space for the decode transcript (operator ask). ---
   const [cand, setCand] = useState<{ call: string; best: boolean }[]>([])
   const [guide, setGuide] = useState<{
     state: string
@@ -592,6 +611,17 @@ export function CwCockpit({
         }
         bandControl={<BandPicker snap={snap} mode="cw" onSnap={onSnap} />}
         onCommitDial={commitDial}
+        actions={
+          host && panels ? (
+            <PanelsMenu
+              items={host.menuItems}
+              onToggle={(id, show) => panels.setPanelState(id as CwPanelId, show ? 'docked' : 'removed')}
+              onUndo={panels.undo}
+              canUndo={panels.canUndo}
+              onReset={panels.reset}
+            />
+          ) : undefined
+        }
         wheelTune
         wheelStepHz={tuneStep}
         wheelSensitivity={wheelSensitivity}
@@ -801,15 +831,19 @@ export function CwCockpit({
         varName="--cw-scope-h"
         target={cockpitRef}
         storageKey="nexus.split.cw.scope"
-        minPx={100}
+        minPx={90}
         maxPx={420}
-        defaultPct={22}
+        defaultPct={13}
         label="scope height"
       />
 
+      {/* Bounded lower region (Phase 3): the removable panes under the scope. The four content
+          panes (Band Activity / Copilot / Decode / Sent) seam-resize; the keyer/macros/send/log
+          below stay pinned + always reachable. */}
+      <div className="cw-lower">
       {/* Rig scope controls (native Icom CI-V only) — command the RADIO's real panadapter:
           span sets the hardware sweep width, ref sets weak-signal visibility. Parity with Phone. */}
-      {civScope && (
+      {shown('scopeCtl') && civScope && (
         <div className="ph-rigscope" role="group" aria-label="Rig scope control">
           <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
             Rig&nbsp;scope
@@ -844,7 +878,7 @@ export function CwCockpit({
       )}
 
       {/* FlexRadio SmartSDR panadapter controls — bandwidth + reference. Parity with Phone. */}
-      {flexScope && (
+      {shown('scopeCtl') && flexScope && (
         <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
           <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
             Flex&nbsp;pan
@@ -879,7 +913,7 @@ export function CwCockpit({
       )}
 
       {/* DSP toggles (NB/NR/Notch) — capability-gated; only funcs the rig reports render. */}
-      {(() => {
+      {shown('dsp') && (() => {
         const supported = CW_DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
         if (supported.length === 0) return null
         return (
@@ -910,11 +944,11 @@ export function CwCockpit({
 
       {/* Live transmit meters (SWR / ALC / Po / COMP) — self-gating: shown only while keyed,
           and only the meters the rig reports. A CW op wants SWR + Po as they send. */}
-      <TxMeters radio={snap.radio} />
+      {shown('txmeters') && <TxMeters radio={snap.radio} />}
 
       {/* RX DSP levels — NR depth + AGC speed, each shown only when the rig reports it. Parity
           with the Phone cockpit; a CW op leans on AGC speed and NR depth heavily. */}
-      {(snap.radio.nrLevel != null || snap.radio.agc != null) && (
+      {shown('rxdsp') && (snap.radio.nrLevel != null || snap.radio.agc != null) && (
         <div className="ph-dsp-levels" role="group" aria-label="RX DSP levels">
           {snap.radio.nrLevel != null && (
             <label className="ph-dsplev" title="Noise-reduction depth — raise until the noise floor drops, back off if the tone gets watery">
@@ -956,53 +990,27 @@ export function CwCockpit({
       )}
 
       {/* CW spot band-activity strip; ⧉ pops the vertical band map into its own window. */}
-      {onWorkSpot && (
-        <BandStrip
-          band={snap.radio.band}
-          dialMhz={snap.radio.dialMhz}
-          txAllowed={snap.radio.txAllowed}
-          spots={spots ?? []}
-          spotMode="CW"
-          needByCall={needByCall}
-          typeByCall={typeByCall}
-          onWorkSpot={onWorkSpot}
-          onPopOut={() => void openPanelWindow('bandmapCw')}
-        />
+      {shown('bandActivity') && onWorkSpot && (
+        <div className="cw-lower-pane panel">
+          <BandStrip
+            band={snap.radio.band}
+            dialMhz={snap.radio.dialMhz}
+            txAllowed={snap.radio.txAllowed}
+            spots={spots ?? []}
+            spotMode="CW"
+            needByCall={needByCall}
+            typeByCall={typeByCall}
+            onWorkSpot={onWorkSpot}
+            onPopOut={() => void openPanelWindow('bandmapCw')}
+          />
+        </div>
       )}
 
       {/* CW copilot — decoded-call chips + (Guided) the next-step prompt. Configurable for
           new hams (Guided: plain-English prompts + the next key highlighted) vs experienced
           ops (Expert: just the chips). Nothing here transmits — the operator always keys. */}
-      <div className={`cw-copilot ${assistMode}`}>
-        <div className="cw-copilot-mode" role="group" aria-label="CW assist mode">
-          <button
-            type="button"
-            className={assistMode === 'guided' ? 'active' : ''}
-            onClick={() => setAssist('guided')}
-            title="Guided: plain-English prompts + the next key highlighted — great if you don't know CW"
-          >
-            Guided
-          </button>
-          <button
-            type="button"
-            className={assistMode === 'expert' ? 'active' : ''}
-            onClick={() => setAssist('expert')}
-            title="Expert: just the decoded-call chips, no prompts"
-          >
-            Expert
-          </button>
-        </div>
-        {assistMode === 'guided' && guide.headline && (
-          <div className="cw-copilot-guide">
-            <span className="cw-copilot-state">{guide.headline}</span>
-            {guide.prompt && <span className="cw-copilot-prompt">{guide.prompt}</span>}
-            {guide.recommended && previews[guide.recommended] && (
-              <span className="cw-copilot-preview" title="What that key will transmit">
-                → sends: {previews[guide.recommended]}
-              </span>
-            )}
-          </div>
-        )}
+      {shown('copilot') && (
+      <div className="cw-copilot panel expert">
         <div className="cw-copilot-chips">
           {guide.workedCall ? (
             <span className="cw-copilot-label">Working</span>
@@ -1033,9 +1041,11 @@ export function CwCockpit({
             ))}
         </div>
       </div>
+      )}
 
+      {shown('decode') && (
       <div
-        className="cw-decode"
+        className="cw-decode panel"
         title="Live CW decode — the AI (neural-net) decoder reads the whole 400–1200 Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder."
       >
         <div className="cw-decode-head">
@@ -1091,10 +1101,11 @@ export function CwCockpit({
           {decoded.text}
         </div>
       </div>
+      )}
 
-      {sent.length > 0 && (
+      {shown('sent') && sent.length > 0 && (
         <div
-          className="cw-decode cw-sent-panel"
+          className="cw-decode cw-sent-panel panel"
           title="What you've transmitted (F-key macros expanded to the real text)"
         >
           <div className="cw-decode-head">
@@ -1109,13 +1120,14 @@ export function CwCockpit({
           </div>
         </div>
       )}
+      </div>
 
       <div className="cw-macros" role="group" aria-label="CW macros">
         {macros.map((m) => (
           <button
             key={m.key}
             type="button"
-            className={`cw-macro${assistMode === 'guided' && guide.recommended === m.key ? ' recommended' : ''}`}
+            className="cw-macro"
             onClick={() => send(m.text)}
             title={previews[m.key] || m.text}
           >

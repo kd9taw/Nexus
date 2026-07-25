@@ -3265,7 +3265,11 @@ body.resizing {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  /* Bounded: the mode-icon section (top) scrolls when there are more sections than fit; the
+     bottom cluster stays pinned + always reachable. The rail keeps its 88px and NEVER grows
+     out of view or shrinks the whole UI (the operator's "left icons overflow" report). */
+  min-height: 0;
+  overflow: hidden;
   padding: 10px var(--space-2);
 }
 .mode-nav-top,
@@ -3273,6 +3277,27 @@ body.resizing {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+/* The mode/section icons scroll within the rail when there are more than fit — a thin scrollbar
+   so the icons keep their full width. flex:1 pushes the bottom cluster to the bottom edge. */
+.mode-nav-top {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.mode-nav-top::-webkit-scrollbar {
+  width: 4px;
+}
+.mode-nav-top::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+/* The bottom cluster (settings, help, theme…) never scrolls off — always reachable. */
+.mode-nav-bottom {
+  flex: 0 0 auto;
+  margin-top: 6px;
 }
 /* The "Digital" group in the rail: a labelled box holding the FT8 / FT4 / Tempo
    sub-items (the three digital tiers), so FT8/FT4 read as distinct modes UNDER
@@ -5761,8 +5786,55 @@ select optgroup {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  overflow-y: auto;
+  /* Bounded (Phase 3): scope pinned, keyer/macros/send/log pinned; the lower region holds the
+     removable + seam-resizable content panes and scrolls inside them — the view never scrolls. */
+  overflow: hidden;
   min-height: 0;
+}
+/* Bounded lower region: the removable panes under the scope. The four content panes carry the
+   `panel` class → share-driven flex + seam-resizable; the thin control strips sit at content height. */
+.cw-lower {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* Scroll (don't clip): turning on DSP inserts the levels pane and pushes the band-activity
+     strip down — overflow:hidden was clipping it out of view ("band activity covered up"). */
+  overflow-y: auto;
+}
+.cw-lower > * {
+  /* Every child sits at content height and never shrinks below its content, so nothing gets
+     crushed/clipped ("band activity covered up when decode is on"); a real vertical deficit flows
+     to `.cw-lower { overflow-y:auto }` and scrolls instead. Covers the DSP / RX-level control rows
+     (.ph-*) too, not just the .panel panes. Only DECODE grows (rule below). */
+  flex: 0 0 auto;
+  min-height: 0;
+}
+.cw-lower > .panel {
+  /* the removable content panes scroll internally if their own content overflows */
+  overflow: auto;
+}
+/* DECODE is the sole grower and the primary area: it fills the lower region and floors large so it
+   stays the dominant pane. The seam-resize sliders were removed (little value in CW), so there is
+   no per-pane --pane-share any more — decode simply grows. */
+.cw-lower > .cw-decode.panel {
+  flex: 1 1 0;
+  min-height: 8em;
+}
+/* SENT echo: content height, capped + scrolls internally — it must not steal DECODE's grow. */
+.cw-lower > .cw-decode.cw-sent-panel.panel {
+  flex: 0 0 auto;
+  max-height: 9em;
+}
+/* CW: keep the pinned log strip compact so the DECODE (the primary content) keeps the vertical
+   real estate (operator: "log qso is big… decode still squished"). No fields are hidden — this
+   only tightens the padding between the log rows, freeing height that flows to the decode pane. */
+.cw-cockpit > .log-entry {
+  padding: var(--space-2) var(--space-3);
+}
+.cw-cockpit > .log-entry .le-row {
+  margin-bottom: var(--space-1);
 }
 /* The header must NEVER be the item this column squeezes. It is the one child whose
    min-height is not `auto` (it pins 44px for cross-mode alignment — see `.cockpit-header`),
@@ -6123,14 +6195,14 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-macros {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 .cw-macro {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 1px;
-  padding: var(--space-2) 10px;
+  gap: 0;
+  padding: 3px 9px;
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
   border: 1px solid var(--border);
@@ -6528,15 +6600,15 @@ input.cw-pitch::-webkit-inner-spin-button {
    QSO made on a rig NOT connected to Nexus (e.g. a V/UHF radio). Collapsed by default; the
    closed form logs the live rig + now, exactly as before. */
 .le-override {
-  margin-top: var(--space-2);
+  margin-top: var(--space-1);
   border-top: 1px solid var(--border-soft);
-  padding-top: var(--space-2);
+  padding-top: var(--space-1);
 }
 .le-override-toggle {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  padding: 2px 0;
+  padding: 0;
   font-size: var(--fs-label);
   font-weight: 700;
   color: var(--text-dim);
@@ -6774,8 +6846,39 @@ input.cw-pitch::-webkit-inner-spin-button {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  overflow-y: auto;
+  /* Bounded (Phase 3): scope pinned, TX chrome pinned, the lower region fills + scrolls
+     inside Band Activity — the whole view never scrolls. */
+  overflow: hidden;
   min-height: 0;
+}
+/* Bounded lower region: the removable panes under the scope. Band Activity fills; the thin
+   control strips (rig scope / DSP) sit at content height above it. */
+.ph-lower {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* Scroll (don't clip) — same fix as `.cw-lower`: overflow:hidden was cutting the stacked
+     control panes + the Band Activity spot lines off the bottom with no way to reach them. */
+  overflow-y: auto;
+}
+/* Pin every control pane to content height so it can't be crushed below its content (which the
+   pane's own overflow:auto would then clip); the deficit flows to `.ph-lower`'s scroll instead.
+   The band-pane grower is excluded so it still fills / floors. Mirrors `.cw-lower > .panel`. */
+.ph-lower > *:not(.ph-band-pane) {
+  flex-shrink: 0;
+}
+.ph-band-pane {
+  flex: var(--pane-share, 1) 1 0;
+  /* Floor the sole grower so it can never collapse to 0 (flex-basis:0 gets no free space when
+     the control panes fill the region) — mirrors `.cw-lower > .cw-decode.panel { min-height:6em }`. */
+  min-height: 6em;
+  overflow: auto;
+}
+/* The PTT row never shrinks/clips — push-to-talk stays reachable no matter the window. */
+.phone-cockpit .ph-ptt-row {
+  flex: 0 0 auto;
 }
 .ph-bar {
   display: flex;
@@ -9865,10 +9968,12 @@ select.settings-input {
   grid-template-columns: auto 52px 34px 38px 42px minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
-  /* Vertical padding rides --density-scale (Settings ▸ Workspace ▸ Density) —
-     identical at 'standard' (×1), tighter at 'dense', roomier at 'guided'. */
-  padding: calc(5px * var(--density-scale)) var(--space-3);
+  /* WSJT-X row density: the line is only as tall as its content (tier/need chips ~16px) plus
+     a hair of padding — NOT a tall block. Vertical padding rides --density-scale (Settings ▸
+     Workspace ▸ Density): tight at ×1, tighter at 'dense', a touch roomier at 'guided'. */
+  padding: calc(1px * var(--density-scale)) var(--space-3);
   font-size: 12px;
+  line-height: 1.15;
   border-left: 3px solid transparent;
 }
 .decode-utc {
@@ -10139,9 +10244,10 @@ select.settings-input {
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.03em;
-  padding: 2px 6px;
+  padding: 1px 6px;
   border-radius: var(--radius-sm);
-  min-height: 28px;
+  /* No 28px min-height — it was the tallest cell and pinned every row tall. The QRZ chip is
+     now its natural ~15px so the decode row reads as a single WSJT-X-tight line. */
 }
 .decode-qrz:hover {
   color: var(--accent);
@@ -11860,8 +11966,12 @@ select.settings-input {
 }
 
 .cockpit-rxfreq {
-  flex: 0 0 auto;
-  max-height: 42%;
+  /* Roster mode: share-driven + growable (was fixed `0 0 auto` capped at 42%, which pinned
+     Rx Frequency to a small box — the operator's complaint). Now it grows to its --pane-share
+     (default 1), splits with Band Activity via the seam, and AUTO-FILLS the rail when it's the
+     sole survivor (Band Activity deleted). The classic-mode override keeps its own sizing. */
+  flex: var(--pane-share, 1) 1 0;
+  max-height: none;
   min-height: 0;
   display: flex;
   overflow: hidden;
@@ -11941,8 +12051,11 @@ select.settings-input {
   min-width: 0;
 }
 .cockpit-decodes-side {
-  /* The full decode window dominates the rail; Rx Frequency keeps a slimmer share. */
-  flex: 1.6 1 0;
+  /* The full decode window dominates the rail; Rx Frequency keeps a slimmer share. Share is
+     drag-resizable via the seam (--pane-share, default 1.6); flex-grow so a sole survivor
+     auto-fills. NO px min-height floor (cockpit-floors guards this — px floors were the
+     root cause of the old vertical-clipping bug). */
+  flex: var(--pane-share, 1.6) 1 0;
   min-height: 0;
   display: flex;
   overflow: hidden;
@@ -14893,17 +15006,20 @@ html[data-panel='needed'] {
 /* Per-cockpit scope heights: scoped vars so dragging one cockpit's scope never
    resizes the other (they share .ph-scope-panel). The splitter clamps 100–420 px. */
 .cw-cockpit .ph-scope-panel {
-  height: var(--cw-scope-h, 22vh);
+  /* Pinned scope (Phase 3): exactly the operator-dragged --cw-scope-h; the bounded lower region
+     takes the rest. No px floor (px floors on flex children are the documented vertical-clip bug). */
+  flex: 0 0 var(--cw-scope-h, 22vh);
+  height: auto;
+  min-height: 0;
   max-height: none;
 }
 .phone-cockpit .ph-scope-panel {
-  /* Grow the bandscope into any spare vertical room so the cockpit fills the window
-     instead of leaving dead space at the bottom on a tall/wide screen. The
-     operator-resized height (--ph-scope-h) is the FLOOR: on a crowded/short window it
-     holds that height and the rest scrolls; on a roomy window the scope expands. */
-  flex: 1 1 var(--ph-scope-h, 22vh);
+  /* Pinned scope (Phase 3): its height is exactly the operator-dragged --ph-scope-h (the
+     Splitter sets it); the bounded lower region takes the rest. No px floor (px floors on
+     flex children are the documented vertical-clip bug). */
+  flex: 0 0 var(--ph-scope-h, 22vh);
   height: auto;
-  min-height: var(--ph-scope-h, 22vh);
+  min-height: 0;
   max-height: none;
 }
 /* Horizontal (height-dragging) splitter variant of the workspace .pane-splitter. */
@@ -14913,6 +15029,12 @@ html[data-panel='needed'] {
   height: 8px;
   margin: calc(var(--space-1) * -1) 0;
   align-self: stretch;
+}
+/* Sibling-seam variant (SplitterSeam): the grab line BETWEEN two share-driven flex panes in
+   a column. Fixed — never grows or shrinks, so it stays a clean divider while the panes it
+   splits do the flexing. */
+.pane-splitter.seam {
+  flex: 0 0 auto;
 }
 
 /* --- MiniSpectrum: compact live spectrum (Settings audio check + Connect pane) --- */
@@ -15985,8 +16107,36 @@ html[data-panel='needed'] {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  overflow-y: auto;
+  /* Bounded (Phase 3): the RX canvas + TX bar are pinned; the lower region holds the two
+     resizable panels and scrolls INSIDE them — the whole view never scrolls. */
+  overflow: hidden;
   min-height: 0;
+}
+/* Pinned TX bar — mode/Send/Stop/progress. Never a panel; Stop always reachable. */
+.sstv-tx-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+/* Bounded lower region: the two removable, seam-resizable panels (compose / gallery). */
+.sstv-lower {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow: hidden;
+}
+.sstv-lower > .panel {
+  flex: var(--pane-share, 1) 1 0;
+  min-height: 0;
+  overflow: auto; /* scroll inside the pane, never the whole view */
 }
 /* RTTY waterfall: a fixed-height stage (mirrors the CW/Phone .ph-scope-panel) so
    the canvas has real device pixels to draw into. A flex:1 stage collapses to 0
@@ -16019,10 +16169,25 @@ html[data-panel='needed'] {
   padding: 2px 10px;
   margin-left: var(--space-2);
 }
-/* RTTY decoded stream — reuses the CW transcript panel, taller (RTTY prints fast).
-   Low-confidence characters render faint via inline opacity on the run spans. */
+/* RTTY decoded stream — reuses the CW transcript panel. RTTY (unlike CW/SSTV) has no bounded
+   `-lower` wrapper: the stream + macros + send are bare children of the overflow:hidden cockpit
+   column with NO grower, so a tall display left a void below the Send bar and a short/zoomed one
+   crushed the macro row (RTTY 'Stop') + Send bar off the bottom with nothing to scroll. Make the
+   stream the grower that scrolls INTERNALLY and pin the strips — the whole view stays put and
+   Stop/Send stay reachable (mirrors `.cw-lower`/`.sstv-lower`). */
+.rtty-cockpit > .cw-decode.rtty-stream {
+  flex: 1 1 0;
+  min-height: 6em;
+}
 .rtty-stream .cw-decode-text {
-  height: 14em;
+  /* was height:14em — let it fill the pane and scroll internally (it already has overflow-y:auto). */
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+.rtty-cockpit > .cw-macros,
+.rtty-cockpit > .cw-send {
+  flex: 0 0 auto;
 }
 .rtty-macros .cw-macro:disabled {
   opacity: 0.4;
@@ -16107,11 +16272,14 @@ html[data-panel='needed'] {
 }
 /* SSTV live image canvas — the in-flight decode area. */
 .sstv-canvas {
-  flex: 1;
-  min-height: 240px;
+  /* The RX image is the pinned "scope" at the top — a flex share of the bounded view, no px
+     floor (px floors on flex children are the documented vertical-clip bug). */
+  flex: 1.1 1 0;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   background: var(--surface-2, rgba(0, 0, 0, 0.2));
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -16223,7 +16391,9 @@ html[data-panel='needed'] {
 }
 /* --- Transmit panel: intake + live preview + mode picker + Send/Stop/progress.
    Nothing here keys the rig until Send (the backend enforces this too). --- */
-.sstv-tx {
+/* The Transmit composer panel (image intake/preview + file picker + name). Renamed from
+   .sstv-tx now that the TX keying controls moved to the pinned .sstv-tx-bar. */
+.sstv-compose {
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius);

@@ -459,6 +459,9 @@ export function OperateDecodes({
                   {d.country && <span className="decode-country">{d.country}</span>}
                 </span>
                 {d.from && (
+                  // WSJT-X style: DOUBLE-CLICK the row to work the station (see onDoubleClick) — no
+                  // per-row Work button, so each decode stays a single tight line. QRZ opens the
+                  // callsign's page.
                   <button
                     type="button"
                     className="qrz-link-call decode-qrz"
@@ -466,20 +469,6 @@ export function OperateDecodes({
                     title={`${d.from} on QRZ.com (opens your browser)`}
                   >
                     QRZ
-                  </button>
-                )}
-                {d.from && (
-                  <button
-                    type="button"
-                    className="decode-work"
-                    onClick={(e) => {
-                      // Don't let the work button's click double as a row select.
-                      e.stopPropagation()
-                      onCall(d.from as string, undefined, d.message, d.snr, d.freqHz)
-                    }}
-                    title={`Answer ${d.from}`}
-                  >
-                    {d.isCq ? 'Call' : 'Work'}
                   </button>
                 )}
               </div>

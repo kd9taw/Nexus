@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import {
+  MIN_SHARE,
   OPERATE_PANELS,
   WATERFALL_DETACHED_KEY,
   coercePanelLayout,
@@ -9,7 +10,12 @@ import {
   panelStorageKey,
   redockStalePopouts,
   savePanelLayout,
+  seamShares,
   usePanelLayout,
+  SSTV_PANELS,
+  PHONE_PANELS,
+  CW_PANELS,
+  RTTY_PANELS,
   type PanelLayout,
   type OperatePanelId,
 } from './panelState'
@@ -152,5 +158,97 @@ describe('usePanelLayout', () => {
     act(() => result.current.undo())
     expect(result.current.stateOf('waterfall')).toBe('removed')
     expect(result.current.stateOf('stations')).toBe('removed')
+  })
+})
+
+describe('share (seam resize)', () => {
+  it('defaults to 1, setShare persists synchronously and clamps to MIN_SHARE', () => {
+    const { result, unmount } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    expect(result.current.shareOf('rxfreq')).toBe(1)
+    act(() => result.current.setShare('rxfreq', 1.6))
+    expect(result.current.shareOf('rxfreq')).toBe(1.6)
+    // Saved by the updater itself, so a remount keeps the size (the remount-loss bug class).
+    expect(JSON.parse(localStorage.getItem(KEY)!).share.rxfreq).toBe(1.6)
+    // A seam can never drive a pane below MIN_SHARE — removal is the only route to gone.
+    act(() => result.current.setShare('rxfreq', 0))
+    expect(result.current.shareOf('rxfreq')).toBe(MIN_SHARE)
+    unmount()
+    const again = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    expect(again.result.current.shareOf('rxfreq')).toBe(MIN_SHARE)
+  })
+
+  it('setShares redistributes two adjacent panes in ONE undoable step', () => {
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    act(() => result.current.setShares({ bandActivity: 1.4, rxfreq: 0.6 }))
+    expect(result.current.shareOf('bandActivity')).toBe(1.4)
+    expect(result.current.shareOf('rxfreq')).toBe(0.6)
+    // A seam drag is a single history entry — one undo restores BOTH panes.
+    act(() => result.current.undo())
+    expect(result.current.shareOf('bandActivity')).toBe(1)
+    expect(result.current.shareOf('rxfreq')).toBe(1)
+  })
+
+  it('reset clears shares back to default', () => {
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    act(() => result.current.setShare('rxfreq', 1.8))
+    act(() => result.current.reset())
+    expect(result.current.shareOf('rxfreq')).toBe(1)
+  })
+})
+
+describe('cockpit vocabularies (Phase 3 TX-safety)', () => {
+  // TX-safety BY CONSTRUCTION: keying/stop/tune/arm/macro controls have NO panel id, so no menu
+  // entry, stored value, or coercion rule can ever remove them from any cockpit.
+  const txCritical = [
+    'send', 'stop', 'stopTx', 'tune', 'arm', 'ptt', 'enableTx', 'txbar',
+    'keyer', 'wpm', 'macros', 'macro', 'compose', 'send', 'header', 'band', 'mode',
+  ]
+  const cases: Array<[string, readonly string[]]> = [
+    ['SSTV', SSTV_PANELS.panelIds],
+    ['Phone', PHONE_PANELS.panelIds],
+    ['CW', CW_PANELS.panelIds],
+    ['RTTY', RTTY_PANELS.panelIds],
+  ]
+  it.each(cases)('%s vocabulary excludes every TX control', (_name, ids) => {
+    for (const id of txCritical) {
+      expect((ids as readonly string[]).includes(id)).toBe(false)
+    }
+  })
+
+  it('lists the expected content panels per cockpit', () => {
+    expect([...SSTV_PANELS.panelIds]).toEqual(['txcompose', 'gallery'])
+    expect([...PHONE_PANELS.panelIds]).toEqual(['rigscope', 'txmeters', 'dsp', 'dspLevels', 'bandActivity'])
+    expect([...RTTY_PANELS.panelIds]).toEqual(['stream'])
+    expect([...CW_PANELS.panelIds]).toEqual([
+      'scopeCtl', 'dsp', 'txmeters', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
+    ])
+  })
+})
+
+describe('seamShares', () => {
+  it('centres to the stock [1, 1]', () => {
+    expect(seamShares(0.5)).toEqual([1, 1])
+  })
+
+  it('is monotonic — dragging down grows the pane above', () => {
+    const [aboveLo] = seamShares(0.3)
+    const [aboveHi] = seamShares(0.7)
+    expect(aboveHi).toBeGreaterThan(aboveLo)
+  })
+
+  it('always sums to 2 (relative flex, so the region stays full)', () => {
+    for (const f of [0, 0.1, 0.42, 0.5, 0.88, 1]) {
+      const [a, b] = seamShares(f)
+      expect(a + b).toBeCloseTo(2, 10)
+    }
+  })
+
+  it('clamps both extremes so neither pane drops below MIN_SHARE', () => {
+    const [aTop, bTop] = seamShares(0) // dragged fully up
+    expect(aTop).toBeGreaterThanOrEqual(MIN_SHARE)
+    expect(bTop).toBeGreaterThanOrEqual(MIN_SHARE)
+    const [aBot, bBot] = seamShares(1) // dragged fully down
+    expect(aBot).toBeGreaterThanOrEqual(MIN_SHARE)
+    expect(bBot).toBeGreaterThanOrEqual(MIN_SHARE)
   })
 })

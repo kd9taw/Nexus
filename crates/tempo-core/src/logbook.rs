@@ -923,7 +923,13 @@ pub fn adif_record(r: &QsoRecord) -> String {
     ));
     // IOTA island-group reference — the standard ADIF `IOTA` field, so exports round-trip
     // and upload cleanly (LoTW/QRZ/ClubLog all recognize it).
-    if let Some(iota) = r.ota.iota.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(iota) = r
+        .ota
+        .iota
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         out.push_str(&field("IOTA", iota));
     }
     out.push_str("<EOR>\n");
@@ -1365,13 +1371,21 @@ mod tests {
         let adif = format!("Nexus\n<EOH>\n{}{}", mk(14 * 3600), mk(15 * 3600));
         let mut lb = Logbook::new();
         let (added, skipped) = lb.import_adif(&adif);
-        assert_eq!(added.len(), 2, "two distinct-time QSOs must both import (was 1 — data loss)");
+        assert_eq!(
+            added.len(),
+            2,
+            "two distinct-time QSOs must both import (was 1 — data loss)"
+        );
         assert_eq!(skipped, 0);
         // An identical second (a true re-import of the very same QSO) still collapses to one.
         let same = format!("Nexus\n<EOH>\n{}{}", mk(14 * 3600), mk(14 * 3600));
         let mut lb2 = Logbook::new();
         let (added2, skipped2) = lb2.import_adif(&same);
-        assert_eq!(added2.len(), 1, "identical-timestamp duplicate must dedup to one");
+        assert_eq!(
+            added2.len(),
+            1,
+            "identical-timestamp duplicate must dedup to one"
+        );
         assert_eq!(skipped2, 1);
     }
 
@@ -1435,7 +1449,10 @@ mod tests {
         assert_eq!(mem.len(), 2, "the other instance's new QSO Y is added");
         let gx = mem.records().iter().find(|r| r.call == "DL1ABC").unwrap();
         // UNION: B's ClubLog stamp AND A's LoTW confirmation AND A's QRZ stamp all survive.
-        assert!(gx.award_confirmed && gx.qsl_rcvd.lotw, "A's LoTW confirmation folded in");
+        assert!(
+            gx.award_confirmed && gx.qsl_rcvd.lotw,
+            "A's LoTW confirmation folded in"
+        );
         assert_eq!(
             gx.upload.qrz.as_ref().map(|u| u.outcome),
             Some(UploadOutcome::Accepted),
@@ -1450,16 +1467,37 @@ mod tests {
 
     #[test]
     fn upload_state_merge_keeps_the_more_recent_per_source() {
-        let older = UploadStatus { outcome: UploadOutcome::Pending, when_unix: 100, detail: None };
-        let newer = UploadStatus { outcome: UploadOutcome::Accepted, when_unix: 200, detail: None };
-        let mut a = UploadState { lotw: Some(older.clone()), ..Default::default() };
-        let b = UploadState { lotw: Some(newer.clone()), qrz: Some(newer.clone()), ..Default::default() };
+        let older = UploadStatus {
+            outcome: UploadOutcome::Pending,
+            when_unix: 100,
+            detail: None,
+        };
+        let newer = UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 200,
+            detail: None,
+        };
+        let mut a = UploadState {
+            lotw: Some(older.clone()),
+            ..Default::default()
+        };
+        let b = UploadState {
+            lotw: Some(newer.clone()),
+            qrz: Some(newer.clone()),
+            ..Default::default()
+        };
         a.merge_recent(&b);
         assert_eq!(a.lotw, Some(newer.clone()), "newer LoTW status wins");
         assert_eq!(a.qrz, Some(newer.clone()), "absent-locally qrz is adopted");
         // A more-recent local status is NOT downgraded by an older incoming one.
-        let mut c = UploadState { lotw: Some(newer.clone()), ..Default::default() };
-        c.merge_recent(&UploadState { lotw: Some(older), ..Default::default() });
+        let mut c = UploadState {
+            lotw: Some(newer.clone()),
+            ..Default::default()
+        };
+        c.merge_recent(&UploadState {
+            lotw: Some(older),
+            ..Default::default()
+        });
         assert_eq!(c.lotw.map(|u| u.outcome), Some(UploadOutcome::Accepted));
     }
 

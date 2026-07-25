@@ -637,8 +637,8 @@ mod tests {
         assert_eq!(classify_spot_mode(14.250), ModeClass::Phone); // 20m phone segment
         assert_eq!(classify_spot_mode(14.025), ModeClass::Cw); // 20m CW segment
         assert_eq!(classify_spot_mode(7.030), ModeClass::Cw); // 40m CW (below the data edge)
-        // 40m CW DX window (7.040–7.070) — classic split-CW DXpedition territory. cw_top is
-        // 7.070 (the x.070 pattern), so these are CW, not Digital. FT4 (7.0475) stays a hole.
+                                                              // 40m CW DX window (7.040–7.070) — classic split-CW DXpedition territory. cw_top is
+                                                              // 7.070 (the x.070 pattern), so these are CW, not Digital. FT4 (7.0475) stays a hole.
         assert_eq!(classify_spot_mode(7.055), ModeClass::Cw); // 40m CW DX window
         assert_eq!(classify_spot_mode(7.045), ModeClass::Cw); // 40m CW DX window
         assert_eq!(classify_spot_mode(7.0475), ModeClass::Digital); // FT4 hole stays Digital

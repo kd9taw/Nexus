@@ -14,10 +14,13 @@ export const WF_PALETTE_KEY = 'nexus.waterfall.palette'
 const WF_PALETTE_EVENT = 'nexus:wf-palette'
 
 export function getWaterfallPalette(): string {
+  // Default is Turbo (operator preference) — a fresh/unset install shows the Turbo
+  // palette; existing installs keep whatever the operator last picked. `'auto'` (ride
+  // the theme) is still available in the picker.
   try {
-    return localStorage.getItem(WF_PALETTE_KEY) ?? 'auto'
+    return localStorage.getItem(WF_PALETTE_KEY) ?? 'turbo'
   } catch {
-    return 'auto'
+    return 'turbo'
   }
 }
 

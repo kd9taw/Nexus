@@ -42,12 +42,22 @@ pub struct Message {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AprsInfo {
     Position(Position),
-    Status { timestamp: Option<String>, text: String },
+    Status {
+        timestamp: Option<String>,
+        text: String,
+    },
     Message(Message),
     /// An object report (`;`) — a named point (repeater, NWS alert, event…) with its own position.
-    Object { name: String, killed: bool, position: Position },
+    Object {
+        name: String,
+        killed: bool,
+        position: Position,
+    },
     /// Any type this parser doesn't decode — the DTI plus the raw remainder, preserved.
-    Other { dti: char, body: String },
+    Other {
+        dti: char,
+        body: String,
+    },
 }
 
 fn parse_lat(s: &str) -> Option<f64> {
@@ -96,7 +106,14 @@ fn format_dm(value: f64, deg_width: usize, pos: char, neg: char) -> String {
     let hmin = (value.abs() * 6000.0).round() as u64; // hundredths of a minute
     let deg = hmin / 6000;
     let rem = hmin % 6000;
-    format!("{:0deg_width$}{:02}.{:02}{}", deg, rem / 100, rem % 100, hemi, deg_width = deg_width)
+    format!(
+        "{:0deg_width$}{:02}.{:02}{}",
+        deg,
+        rem / 100,
+        rem % 100,
+        hemi,
+        deg_width = deg_width
+    )
 }
 
 /// Decode 4 base-91 chars (each `!`..`{`) to their integer value. `None` on an out-of-range byte.
@@ -129,7 +146,11 @@ impl Position {
         }
     }
 
-    fn parse_uncompressed(rest: &str, timestamp: Option<String>, messaging: bool) -> Option<Position> {
+    fn parse_uncompressed(
+        rest: &str,
+        timestamp: Option<String>,
+        messaging: bool,
+    ) -> Option<Position> {
         // lat(8) + symtable(1) + lon(9) + symcode(1) = 19 fixed chars, then the comment.
         if rest.len() < 19 || !rest.is_char_boundary(19) {
             return None;
@@ -151,7 +172,11 @@ impl Position {
 
     /// Compressed (base-91) position: `<sym-table><YYYY lat><XXXX lon><sym-code><cs><T>` = 13 chars,
     /// then the comment. `lat = 90 − Y/380926`, `lon = −180 + X/190463` (APRS 1.0.1 §9).
-    fn parse_compressed(rest: &str, timestamp: Option<String>, messaging: bool) -> Option<Position> {
+    fn parse_compressed(
+        rest: &str,
+        timestamp: Option<String>,
+        messaging: bool,
+    ) -> Option<Position> {
         let b = rest.as_bytes();
         if b.len() < 13 || !rest.is_char_boundary(13) {
             return None;
@@ -180,7 +205,10 @@ impl Position {
 /// [`AprsInfo::Other`]).
 pub fn parse(info: &[u8]) -> AprsInfo {
     let Some(&dti_byte) = info.first() else {
-        return AprsInfo::Other { dti: '\0', body: String::new() };
+        return AprsInfo::Other {
+            dti: '\0',
+            body: String::new(),
+        };
     };
     let s = String::from_utf8_lossy(info);
     let dti = dti_byte as char;
@@ -197,7 +225,10 @@ pub fn parse(info: &[u8]) -> AprsInfo {
         ';' => parse_object(body),
         _ => None,
     };
-    parsed.unwrap_or(AprsInfo::Other { dti, body: body.to_string() })
+    parsed.unwrap_or(AprsInfo::Other {
+        dti,
+        body: body.to_string(),
+    })
 }
 
 /// Parse an object report body: `NNNNNNNNN` (9-char name) + `*` (live) / `_` (killed) + a
@@ -213,7 +244,11 @@ fn parse_object(body: &str) -> Option<AprsInfo> {
         _ => return None,
     };
     let position = Position::parse(&body[10..], false, true)?;
-    Some(AprsInfo::Object { name, killed, position })
+    Some(AprsInfo::Object {
+        name,
+        killed,
+        position,
+    })
 }
 
 fn parse_message(body: &str) -> Option<AprsInfo> {
@@ -229,16 +264,29 @@ fn parse_message(body: &str) -> Option<AprsInfo> {
         }
         _ => (payload.to_string(), None),
     };
-    Some(AprsInfo::Message(Message { addressee, text, id }))
+    Some(AprsInfo::Message(Message {
+        addressee,
+        text,
+        id,
+    }))
 }
 
 fn parse_status(body: &str) -> AprsInfo {
     // A status may open with a zulu day/hour/min timestamp "DDHHMMz".
-    if body.len() >= 7 && body.is_char_boundary(7) && body.as_bytes()[6] == b'z' && body[..6].bytes().all(|b| b.is_ascii_digit())
+    if body.len() >= 7
+        && body.is_char_boundary(7)
+        && body.as_bytes()[6] == b'z'
+        && body[..6].bytes().all(|b| b.is_ascii_digit())
     {
-        AprsInfo::Status { timestamp: Some(body[..7].to_string()), text: body[7..].to_string() }
+        AprsInfo::Status {
+            timestamp: Some(body[..7].to_string()),
+            text: body[7..].to_string(),
+        }
     } else {
-        AprsInfo::Status { timestamp: None, text: body.to_string() }
+        AprsInfo::Status {
+            timestamp: None,
+            text: body.to_string(),
+        }
     }
 }
 
@@ -263,7 +311,11 @@ impl AprsInfo {
                 out.push(p.symbol_code);
                 out.push_str(&p.comment);
             }
-            AprsInfo::Object { name, killed, position } => {
+            AprsInfo::Object {
+                name,
+                killed,
+                position,
+            } => {
                 out.push(';');
                 out.push_str(&format!("{name:<9}"));
                 out.push(if *killed { '_' } else { '*' });
@@ -313,7 +365,9 @@ mod tests {
             AprsInfo::Position(p) => p,
             other => panic!("expected position, got {other:?}"),
         });
-        let AprsInfo::Position(p) = &info else { unreachable!() };
+        let AprsInfo::Position(p) = &info else {
+            unreachable!()
+        };
         assert!((p.lat - 49.0583333).abs() < 1e-6);
         assert!((p.lon - (-72.029166)).abs() < 1e-5);
         assert_eq!(p.symbol_table, '/');
@@ -349,7 +403,10 @@ mod tests {
             }
             other => panic!("expected message, got {other:?}"),
         }
-        assert_eq!(String::from_utf8(info.encode()).unwrap(), ":N0CALL   :Hello, APRS{042");
+        assert_eq!(
+            String::from_utf8(info.encode()).unwrap(),
+            ":N0CALL   :Hello, APRS{042"
+        );
     }
 
     #[test]
@@ -376,7 +433,13 @@ mod tests {
             other => panic!("expected status, got {other:?}"),
         }
         let plain = parse(b">Just a status");
-        assert_eq!(plain, AprsInfo::Status { timestamp: None, text: "Just a status".into() });
+        assert_eq!(
+            plain,
+            AprsInfo::Status {
+                timestamp: None,
+                text: "Just a status".into()
+            }
+        );
         assert_eq!(String::from_utf8(plain.encode()).unwrap(), ">Just a status");
     }
 
@@ -429,7 +492,11 @@ mod tests {
     #[test]
     fn decodes_an_object_report() {
         match parse(b";LEIXLIGHT*092345z4903.50N/07201.75W-object here") {
-            AprsInfo::Object { name, killed, position } => {
+            AprsInfo::Object {
+                name,
+                killed,
+                position,
+            } => {
                 assert_eq!(name, "LEIXLIGHT");
                 assert!(!killed);
                 assert!((position.lat - 49.0583333).abs() < 1e-6);

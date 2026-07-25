@@ -5,6 +5,122 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.11] — 2026-07-25 — Decode-first CW cockpit + cross-mode layout fixes
+
+- **The CW decode transcript is now the dominant pane.** It grows to fill the space under the
+  waterfall and floors large, so the live decode is the biggest thing on screen instead of the last
+  one fighting for room. What it means on the air: you can actually read a run of copy without the
+  decode being a two-line sliver.
+- **Removed the CW inter-pane resize sliders** (the drag-seams between Band Activity / Copilot /
+  Decode / Sent added in 0.17.4). They proved low-value in CW and made the layout fragile; the CW
+  lower region is now a simple, predictable stack. Removable panels (⊞ menu) and the
+  waterfall-height slider stay. (SSTV keeps its seams.)
+- **CW copilot is Expert-only.** The Guided/Expert selector box + bar are gone, reclaiming that
+  vertical space for the decode; the copilot is just the decoded-call chips.
+- **Panes no longer step on each other (CW / Phone / RTTY).** A layout audit across every cockpit
+  fixed a class of bug where a side pane got crushed below its content and clipped: the CW Band
+  Activity spot lines were covered when the decode was on; Phone's control panes + spot strip could
+  be cut off with the DSP panes open; RTTY's Stop/Send could be clipped off the bottom. Panes now
+  keep their size and the region scrolls instead of covering. SSTV and Operate were already correct.
+- **Fixed the "First contact — new station" status line** cluttering the log area (it duplicated the
+  Previous-contacts list) and tightened the F-key + log spacing so the decode gets the height.
+
+## [0.17.6] — 2026-07-25 — WSJT-X-tight decode rows
+
+- **FT8 decode rows are now a single tight line each** (Band Activity / Rx Frequency), like WSJT-X.
+  The per-row **Work button is gone** — double-click a decode to work it (the row already worked
+  that way) — which removed the second line every decode was carrying, and the QRZ chip no longer
+  forces a 28px row height. You now see many more decodes per screen.
+
+## [0.17.5] — 2026-07-25 — Left rail scrolls instead of overflowing
+
+- **The left mode rail no longer overflows.** With many sections enabled, the icons used to grow
+  out of view and push the layout. Now the mode-icon column scrolls within the rail (thin
+  scrollbar) while the bottom cluster (settings, etc.) stays pinned and always reachable — the rail
+  keeps its width and the rest of the UI never shrinks or scrolls to accommodate it.
+
+## [0.17.4] — 2026-07-25 — Panels everywhere: CW + RTTY
+
+- **CW panels.** The waterfall stays pinned with the keyer / macros / send / log always reachable
+  below; the scope controls, DSP toggles, RX DSP levels, TX meters, and the four content panes
+  (Band Activity, Copilot, Decode, Sent) are removable, and you can drag the seams between the
+  content panes to size each one.
+- **RTTY panels.** The decoded-text stream is now removable via the ⊞ Panels menu.
+- Panels are now everywhere under the waterfall — Operate, SSTV, Phone, CW, and RTTY — with TX
+  controls locked in place in every cockpit by construction.
+
+## [0.17.3] — 2026-07-25 — Panels reach Phone; tighter decode rows
+
+- **Phone panels.** The bandscope stays pinned on top with the PTT row / voice keyer / log always
+  reachable below; the rig-scope controls, DSP toggles, RX DSP levels, TX meters, and Band Activity
+  are now removable (⊞ Panels menu), and Band Activity fills the space when you hide the rest.
+- **WSJT-X decode density.** FT8 decode rows in Band Activity and Rx Frequency were far too tall;
+  they're now a tight single line each (like WSJT-X), so you see many more decodes at once.
+- Panels rollout continues: SSTV + Phone done, CW and RTTY next.
+
+## [0.17.2] — 2026-07-24 — Removable + resizable panels reach SSTV
+
+- **SSTV panels.** The RX image stays pinned at top with the transmit bar (mode / Send / Stop /
+  progress) always reachable below it; the **Transmit composer** and the **Gallery** are now
+  removable (⊞ Panels menu) and drag-resizable at the seam between them. First cockpit in the
+  "panels everywhere under the waterfall" rollout — Phone, CW, and RTTY follow.
+
+## [0.17.1] — 2026-07-24 — Settings & auto-detect + a batch of needed/roster fixes
+
+This release reworks Settings and radio auto-detection end to end — the setup flow that new
+operators hit first, and the multi-radio configuration that was the clunkiest part of the app —
+plus a batch of needed-intelligence, roster, and FT-sequencing fixes.
+
+**Needed & roster**
+
+- **"Sort by need" now ranks states above grids.** The chase gradient is force-ranked
+  consistently everywhere — Wanted > new DXCC/ATNO > new zone > new state > new grid > new band —
+  so the most valuable need surfaces first (a genuinely rare grid still floats up via its rarity
+  boost). Fixed across the backend and every board that had drifted out of sync.
+- **New-zone floods stop once you've worked all zones.** The board no longer keeps flagging
+  per-band "new CQ zone" slots once you hold complete any-band Worked-All-Zones; zone-chasers still
+  working toward WAZ keep seeing them.
+- **A worked station drops off the roster immediately.** Logging now refreshes the needed board at
+  once instead of leaving the just-worked call flagged for up to 30 seconds.
+
+**FT operating**
+
+- **Calling a station now stops after 8 unanswered overs.** In FT8/FT4 search-and-pounce, calling a
+  station that goes silent used to repeat indefinitely (only the 6-minute watchdog stopped it). It
+  now stalls after 8 overs (adjustable); Resend re-arms it. CQ behavior is unchanged.
+
+**Waterfall & layout**
+
+- **FT8 waterfall defaults to the Turbo palette, with a black background** (the low end was a dark
+  maroon).
+- **Resizable side-rail panes in Operate (roster mode).** Band Activity and Rx Frequency can be
+  drag-resized at the seam between them, and Rx Frequency auto-fills the rail when Band Activity is
+  removed — no more being pinned to a small box.
+- Tightened the spacing of the "log a contact from another radio" line so it eats less room.
+
+**Settings & auto-detect** (from the 0.17.0 work)
+
+This reworks Settings and radio auto-detection end to end — the setup flow that new
+operators hit first, and the multi-radio configuration that was the clunkiest part of the app.
+
+- **Settings went from 14 tabs to 8.** Grouped into Station, Radio, Modes, Frequencies, Spots,
+  Logging, Contesting, and Appearance. The catch-all "Features" tab is gone — its switches moved to
+  where they belong (Field Day's master toggle now lives on Contesting).
+- **Per-radio configuration no longer hijacks your active radio.** Editing a radio profile used to
+  silently switch the app onto that radio. Now "Configure" edits a radio's settings in place and
+  "Make active" is a separate, deliberate action — so setting up radio 2 doesn't take you off
+  radio 1.
+- **A setup-health strip** shows Rig / RX / TX status at a glance, with a **"Prove TX"** button that
+  keys the radio briefly (with a confirmation) so you can confirm transmit is wired correctly
+  without guessing.
+- **Auto-detect fixes.** Detected radios now suggest the correct **transmit** audio device (it was
+  pairing TX to the wrong output — audio came out the speakers); Flex radios fill in their IP
+  correctly; port auto-testing chains through candidates instead of stopping at the first; and a
+  detection failure now surfaces an error instead of looking like "nothing found."
+- **Decode depth moved to the Operate cockpit.** Fast / Normal / Deep is now a set of chips right in
+  the operating view, so you can trade decode sensitivity against CPU on the fly instead of digging
+  into Settings.
+
 ## [0.16.4] — 2026-07-24 — APRS gets its own TX-enable
 
 - **The APRS window now has a TX On/Off toggle.** This view hides the top bar's transmit controls,

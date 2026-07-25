@@ -1044,7 +1044,10 @@ mod grid_tests {
         sc.log_path = Some(path.clone());
 
         // First look (last mtime = None) folds X in and indexes it.
-        assert!(sc.sync_shared_log_if_changed(), "first look reads the shared log");
+        assert!(
+            sc.sync_shared_log_if_changed(),
+            "first look reads the shared log"
+        );
         assert_eq!(sc.logbook.len(), 1);
         assert!(sc.grid_worked_on("JO31", "20m"), "X is now worked-before");
 
@@ -1054,11 +1057,21 @@ mod grid_tests {
         write(&[x, y]);
         sc.last_log_mtime = None;
         assert!(sc.sync_shared_log_if_changed(), "a changed log is re-read");
-        assert_eq!(sc.logbook.len(), 2, "the other instance's new QSO is folded in");
-        assert!(sc.grid_worked_on("PM95", "40m"), "Y is now worked-before without a restart");
+        assert_eq!(
+            sc.logbook.len(),
+            2,
+            "the other instance's new QSO is folded in"
+        );
+        assert!(
+            sc.grid_worked_on("PM95", "40m"),
+            "Y is now worked-before without a restart"
+        );
 
         // Nothing changed → a cheap no-op (stat only), so it's safe on every Needed-board poll.
-        assert!(!sc.sync_shared_log_if_changed(), "unchanged mtime → no re-read");
+        assert!(
+            !sc.sync_shared_log_if_changed(),
+            "unchanged mtime → no re-read"
+        );
 
         let _ = std::fs::remove_file(&path);
     }

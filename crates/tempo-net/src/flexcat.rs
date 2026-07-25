@@ -211,7 +211,10 @@ pub fn parse_slice_status(body: &str) -> Option<SliceStatus> {
     let rest = body.strip_prefix("slice ")?;
     let mut it = rest.split_whitespace();
     let num = it.next()?.parse::<u32>().ok()?;
-    let mut st = SliceStatus { num, ..Default::default() };
+    let mut st = SliceStatus {
+        num,
+        ..Default::default()
+    };
     for tok in it {
         let Some((k, v)) = tok.split_once('=') else {
             continue;
@@ -232,7 +235,10 @@ pub fn parse_slice_status(body: &str) -> Option<SliceStatus> {
 /// bare `0x…`/decimal handle. Used to learn our dax_tx stream id from the create reply. Pure.
 pub fn parse_create_stream_id(body: &str) -> Option<u32> {
     for tok in body.split_whitespace() {
-        if let Some(v) = tok.strip_prefix("stream=").or_else(|| tok.strip_prefix("id=")) {
+        if let Some(v) = tok
+            .strip_prefix("stream=")
+            .or_else(|| tok.strip_prefix("id="))
+        {
             if let Some(id) = parse_hex_id(v) {
                 return Some(id);
             }
@@ -460,7 +466,15 @@ mod tests {
              12.src=TX#12.nam=FWDPWR#12.unit=dBm",
         );
         assert_eq!(defs.len(), 2);
-        assert_eq!(defs[0], super::MeterDef { index: 7, source: "SLC".into(), name: "LEVEL".into(), unit: "dBm".into() });
+        assert_eq!(
+            defs[0],
+            super::MeterDef {
+                index: 7,
+                source: "SLC".into(),
+                name: "LEVEL".into(),
+                unit: "dBm".into()
+            }
+        );
         assert_eq!(defs[1].index, 12);
         assert_eq!(defs[1].name, "FWDPWR");
         // Removal / non-meter lines yield nothing.
@@ -481,13 +495,19 @@ mod tests {
         assert_eq!(st.dax_channel, Some(1));
         assert_eq!(st.client_handle, Some(0xABCD_0001));
         // Removal + non-slice lines.
-        assert_eq!(parse_slice_status("slice 0 in_use=0").unwrap().in_use, Some(false));
+        assert_eq!(
+            parse_slice_status("slice 0 in_use=0").unwrap().in_use,
+            Some(false)
+        );
         assert!(parse_slice_status("meter 7.src=SLC").is_none());
     }
 
     #[test]
     fn parses_a_create_stream_reply() {
-        assert_eq!(parse_create_stream_id("stream=0x84000000"), Some(0x8400_0000));
+        assert_eq!(
+            parse_create_stream_id("stream=0x84000000"),
+            Some(0x8400_0000)
+        );
         assert_eq!(parse_create_stream_id("id=0x84000001"), Some(0x8400_0001));
         assert_eq!(parse_create_stream_id("0x84000002"), Some(0x8400_0002));
         assert_eq!(parse_create_stream_id(""), None);

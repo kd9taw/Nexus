@@ -93,7 +93,12 @@ fn parse_third_party(text: &str) -> Option<AprsPacket> {
     } else {
         AprsBody::Info(parser::parse(info_bytes))
     };
-    Some(AprsPacket { source, dest, path, body })
+    Some(AprsPacket {
+        source,
+        dest,
+        path,
+        body,
+    })
 }
 
 /// The Nexus experimental APRS TOCALL (destination) for beacons we originate. `APZxxx` is the

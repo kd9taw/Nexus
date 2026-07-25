@@ -86,7 +86,11 @@ fn bits_to_bytes(bits: &[bool]) -> Option<Vec<u8>> {
     }
     Some(
         bits.chunks(8)
-            .map(|c| c.iter().enumerate().fold(0u8, |acc, (i, &b)| acc | (u8::from(b) << i)))
+            .map(|c| {
+                c.iter()
+                    .enumerate()
+                    .fold(0u8, |acc, (i, &b)| acc | (u8::from(b) << i))
+            })
             .collect(),
     )
 }
@@ -185,7 +189,11 @@ mod tests {
         // Only the flags may contain six 1s; the stuffed data region never does. Since the flags
         // are exactly six-1 runs, the max run across the whole stream is 6 (from flags), and no
         // run exceeds 6 (which would mean data leaked a sixth 1).
-        assert_eq!(max_run(&bits), 6, "only flags reach six 1s; stuffed data caps at five");
+        assert_eq!(
+            max_run(&bits),
+            6,
+            "only flags reach six 1s; stuffed data caps at five"
+        );
     }
 
     #[test]
@@ -194,12 +202,18 @@ mod tests {
         let bits = encode_frame(&[0x1F], 0, 0);
         // Strip the single opening + closing flag (8 bits each).
         let data = &bits[8..bits.len() - 8];
-        assert_eq!(&data[..6], &[true, true, true, true, true, false], "stuffed 0 after five 1s");
+        assert_eq!(
+            &data[..6],
+            &[true, true, true, true, true, false],
+            "stuffed 0 after five 1s"
+        );
     }
 
     #[test]
     fn nrzi_round_trips() {
-        let logical = vec![true, false, false, true, true, true, false, true, false, false];
+        let logical = vec![
+            true, false, false, true, true, true, false, true, false, false,
+        ];
         assert_eq!(nrzi_decode(&nrzi_encode(&logical)), logical);
     }
 
@@ -222,14 +236,33 @@ mod tests {
         let tx = nrzi_encode(&encode_frame(&frame_bytes, 8, 2));
         let got = deframe(&nrzi_decode(&tx));
         assert_eq!(got.len(), 1, "exactly one frame recovered");
-        assert_eq!(got[0], frame_bytes, "frame bytes survive the HDLC/NRZI round trip");
-        assert_eq!(Frame::decode(&got[0]), Some(f), "and reparse to the original frame");
+        assert_eq!(
+            got[0], frame_bytes,
+            "frame bytes survive the HDLC/NRZI round trip"
+        );
+        assert_eq!(
+            Frame::decode(&got[0]),
+            Some(f),
+            "and reparse to the original frame"
+        );
     }
 
     #[test]
     fn recovers_two_back_to_back_frames() {
-        let a = Frame::ui(Address::new("APRS", 0), Address::new("N0CALL", 1), vec![], b">first").encode();
-        let b = Frame::ui(Address::new("APRS", 0), Address::new("N0CALL", 2), vec![], b">second").encode();
+        let a = Frame::ui(
+            Address::new("APRS", 0),
+            Address::new("N0CALL", 1),
+            vec![],
+            b">first",
+        )
+        .encode();
+        let b = Frame::ui(
+            Address::new("APRS", 0),
+            Address::new("N0CALL", 2),
+            vec![],
+            b">second",
+        )
+        .encode();
         // Share flags between them: flag … A … flag … B … flag.
         let mut bits = encode_frame(&a, 1, 1);
         bits.extend(encode_frame(&b, 0, 1));

@@ -93,7 +93,8 @@ impl FccStates {
 /// used by the offline generator AND the tests. Skips invalid calls / out-of-range state codes,
 /// dedups by call key (last wins), and emits the header + callsign-sorted entries.
 pub fn build_index(pairs: &[(String, u8)]) -> Vec<u8> {
-    let mut keyed: std::collections::BTreeMap<[u8; CALL_LEN], u8> = std::collections::BTreeMap::new();
+    let mut keyed: std::collections::BTreeMap<[u8; CALL_LEN], u8> =
+        std::collections::BTreeMap::new();
     for (call, code) in pairs {
         if *code < 1 || *code as usize > WAS_STATES.len() {
             continue;
@@ -132,7 +133,7 @@ mod tests {
         assert_eq!(db.count(), 3);
         assert_eq!(db.state_for_call("W1AW"), Some("CT"));
         assert_eq!(db.state_for_call("kd9taw"), Some("IL")); // case-insensitive
-        // Portable prefixes/suffixes resolve to the base call's home state (the licensed state).
+                                                             // Portable prefixes/suffixes resolve to the base call's home state (the licensed state).
         assert_eq!(db.state_for_call("KD9TAW/9"), Some("IL"));
         assert_eq!(db.state_for_call("W4/KD9TAW"), Some("IL"));
         assert_eq!(db.state_for_call("K7ABC/QRP"), Some("AZ"));

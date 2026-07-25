@@ -905,7 +905,11 @@ fn fmt_aprs_addr(a: &tempo_core::aprs::Address) -> String {
 /// locks before the data). Shared by the beacon / message / ack senders.
 fn render_aprs_frame(frame: &tempo_core::aprs::Frame) -> Vec<f32> {
     use tempo_core::aprs;
-    aprs::modulate(&aprs::nrzi_encode(&aprs::encode_frame(&frame.encode(), 32, 3)))
+    aprs::modulate(&aprs::nrzi_encode(&aprs::encode_frame(
+        &frame.encode(),
+        32,
+        3,
+    )))
 }
 
 impl AprsHeard {
@@ -924,16 +928,32 @@ impl AprsHeard {
                 Some(m.speed_knots),
                 Some(m.course_deg),
             ),
-            AprsBody::Info(AprsInfo::Position(p)) => {
-                ("position", p.comment.clone(), p.symbol_table, p.symbol_code, None, None)
-            }
-            AprsBody::Info(AprsInfo::Object { name, killed, position }) => {
+            AprsBody::Info(AprsInfo::Position(p)) => (
+                "position",
+                p.comment.clone(),
+                p.symbol_table,
+                p.symbol_code,
+                None,
+                None,
+            ),
+            AprsBody::Info(AprsInfo::Object {
+                name,
+                killed,
+                position,
+            }) => {
                 let label = if *killed {
                     format!("{name} (killed) {}", position.comment)
                 } else {
                     format!("{name} {}", position.comment)
                 };
-                ("object", label, position.symbol_table, position.symbol_code, None, None)
+                (
+                    "object",
+                    label,
+                    position.symbol_table,
+                    position.symbol_code,
+                    None,
+                    None,
+                )
             }
             AprsBody::Info(AprsInfo::Message(msg)) => {
                 addressee = Some(msg.addressee.clone());
@@ -2303,7 +2323,7 @@ impl Engine {
             // unaffected: it never calls send_cw and keeps its Monitor/double-click keying gate.
             self.tx_enabled = true;
             self.cw_abort = false; // a fresh send supersedes a pending one-shot abort
-            // TX echo: show the operator what actually went out (tokens resolved).
+                                   // TX echo: show the operator what actually went out (tokens resolved).
             self.cw_sent.push_back(expanded.clone());
             while self.cw_sent.len() > 50 {
                 self.cw_sent.pop_front();
@@ -2512,7 +2532,10 @@ impl Engine {
         let mut force = false;
         if ceiling < 1.0 {
             // 0.02 epsilon absorbs rig readback rounding so a settled cap doesn't re-command.
-            if self.rig_rf_power.is_some_and(|observed| observed > ceiling + 0.02) {
+            if self
+                .rig_rf_power
+                .is_some_and(|observed| observed > ceiling + 0.02)
+            {
                 self.rf_power = Some(ceiling);
                 force = true;
             }
@@ -2546,7 +2569,11 @@ impl Engine {
     /// if any — the same backfill the decode feed uses. Lets a caller resolve the station's US
     /// state or grid rarity for a cluster/RBN spot, which carries no grid of its own.
     pub fn roster_grid(&self, call: &str) -> Option<&str> {
-        self.app.inbox.roster.get(call).and_then(|h| h.grid.as_deref())
+        self.app
+            .inbox
+            .roster
+            .get(call)
+            .and_then(|h| h.grid.as_deref())
     }
     /// Adopt the rig's reported mic gain (radio-loop poll). Observed-only.
     pub fn observe_rig_mic_gain(&mut self, frac: f32) {
@@ -3820,7 +3847,7 @@ impl Engine {
             self.chat_cq_paused = true;
         }
         self.persist_pending_msgs(); // the re-queued entry must survive a restart
-        // (Conversations are persisted by the shell's periodic exporter.)
+                                     // (Conversations are persisted by the shell's periodic exporter.)
         true
     }
 
@@ -4624,7 +4651,9 @@ impl Engine {
             return Err("TX is off — enable TX first".to_string());
         }
         if !self.tx_allowed() {
-            return Err("TX locked — this frequency is outside your license privileges".to_string());
+            return Err(
+                "TX locked — this frequency is outside your license privileges".to_string(),
+            );
         }
         if self.tuning {
             return Err("Tune carrier is up — stop tuning first".to_string());
@@ -4657,9 +4686,7 @@ impl Engine {
             .ok_or_else(|| "Your callsign isn't a valid APRS source address".to_string())?;
         let mut digis = Vec::new();
         for p in path.iter().filter(|p| !p.trim().is_empty()) {
-            digis.push(
-                aprs::Address::parse(p).ok_or_else(|| format!("Invalid digipeater '{p}'"))?,
-            );
+            digis.push(aprs::Address::parse(p).ok_or_else(|| format!("Invalid digipeater '{p}'"))?);
         }
         let frame = aprs::position_beacon(src, lat, lon, symbol_table, symbol_code, comment, digis);
         let audio = render_aprs_frame(&frame);
@@ -4708,7 +4735,10 @@ impl Engine {
         // Roll 001..999 (never 000 — a zero id reads as "no ack expected").
         self.aprs_msg_seq = self.aprs_msg_seq % 999 + 1;
         let id = format!("{:03}", self.aprs_msg_seq);
-        let path = vec![aprs::Address::new("WIDE1", 1), aprs::Address::new("WIDE2", 1)];
+        let path = vec![
+            aprs::Address::new("WIDE1", 1),
+            aprs::Address::new("WIDE2", 1),
+        ];
         let frame = aprs::message_frame(src, addressee, text, &id, path);
         let audio = render_aprs_frame(&frame);
         if audio.is_empty() {
@@ -4728,7 +4758,13 @@ impl Engine {
             return; // no id → sender isn't asking for an ack
         }
         // Match on base call, SSID-agnostic (the addressee field carries no SSID).
-        let base = |c: &str| c.split('-').next().unwrap_or("").trim().to_ascii_uppercase();
+        let base = |c: &str| {
+            c.split('-')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_uppercase()
+        };
         let mine = base(&self.settings.mycall);
         if mine.is_empty() || base(addressee) != mine {
             return; // not addressed to us
@@ -4743,7 +4779,10 @@ impl Engine {
             return;
         };
         // The ack itself carries no id (an ack is never itself acked).
-        let path = vec![aprs::Address::new("WIDE1", 1), aprs::Address::new("WIDE2", 1)];
+        let path = vec![
+            aprs::Address::new("WIDE1", 1),
+            aprs::Address::new("WIDE2", 1),
+        ];
         let frame = aprs::message_frame(src, from, &format!("ack{msg_id}"), "", path);
         let audio = render_aprs_frame(&frame);
         if !audio.is_empty() {
@@ -6292,76 +6331,79 @@ impl Engine {
                         self.chat_yield_slots -= 1;
                         None
                     } else {
-                    if self.tx_queue.is_empty() {
-                        // Cadence windows are WALL-CLOCK, converted to slots by the active
-                        // tier's period (4 s TempoFast / 15 s TempoDeep): presence window
-                        // 120 s, listening backoff 16 s after the burst's last frame. The
-                        // cycle cap is the bounded-ARQ budget — TempoFast rides HARQ-era
-                        // defaults (3); TempoDeep has no HARQ, so plain repeats get 5.
-                        let period = self.active_slot_secs().max(1.0);
-                        let window = ((120.0 / period).ceil() as u64).max(1);
-                        let backoff = ((16.0 / period).ceil() as u64).max(1);
-                        let cap = self.settings.chat_max_cycles.unwrap_or(match self.app.tier() {
-                            Tier::TempoDeep => 5,
-                            _ => 3,
-                        });
-                        let (frames, bodies) = self.app.due_frames(slot, window, backoff, cap);
-                        for f in frames {
-                            self.tx_queue.push_back(f);
-                        }
-                        if !self.tx_queue.is_empty() {
-                            // A release recorded attempts/backoff — journal so a restart
-                            // resumes the retry schedule instead of resetting it.
-                            self.persist_pending_msgs();
-                        }
-                        // A directed message shows in band activity when it actually goes
-                        // on the air (first release), not at compose time.
-                        for b in bodies {
-                            self.record_own_tx(b);
-                        }
-                        // Directed traffic released this slot: stamp the CQ run's idle
-                        // clock so a paused run doesn't resume mid-conversation, refill
-                        // the CQ budget (the run is conversing, not calling unanswered),
-                        // and arm the yield-to-RX listening window for when it drains.
-                        if !self.tx_queue.is_empty() {
-                            self.chat_cq_last_directed = slot;
-                            self.chat_cq_unanswered = 0;
-                            self.chat_yield_pending = true;
-                        }
-                        // Chat CQ RUN: an idle own-parity TX slot re-sends the
-                        // structured CQ (the "keep calling until answered" loop).
-                        // Directed frames always win the slot (the queue check above);
-                        // a pause set by answering auto-resumes once directed traffic
-                        // has been quiet for CHAT_CQ_RESUME_SLOTS. Supersedes the
-                        // presence beacon while running.
-                        if self.chat_cq && self.tx_queue.is_empty() {
-                            const CHAT_CQ_RESUME_SLOTS: u64 = 8; // ~32 s at FT1's 4 s slots
-                            if self.chat_cq_paused
-                                && slot.saturating_sub(self.chat_cq_last_directed)
-                                    >= CHAT_CQ_RESUME_SLOTS
-                            {
-                                self.chat_cq_paused = false;
+                        if self.tx_queue.is_empty() {
+                            // Cadence windows are WALL-CLOCK, converted to slots by the active
+                            // tier's period (4 s TempoFast / 15 s TempoDeep): presence window
+                            // 120 s, listening backoff 16 s after the burst's last frame. The
+                            // cycle cap is the bounded-ARQ budget — TempoFast rides HARQ-era
+                            // defaults (3); TempoDeep has no HARQ, so plain repeats get 5.
+                            let period = self.active_slot_secs().max(1.0);
+                            let window = ((120.0 / period).ceil() as u64).max(1);
+                            let backoff = ((16.0 / period).ceil() as u64).max(1);
+                            let cap =
+                                self.settings
+                                    .chat_max_cycles
+                                    .unwrap_or(match self.app.tier() {
+                                        Tier::TempoDeep => 5,
+                                        _ => 3,
+                                    });
+                            let (frames, bodies) = self.app.due_frames(slot, window, backoff, cap);
+                            for f in frames {
+                                self.tx_queue.push_back(f);
                             }
-                            if !self.chat_cq_paused {
-                                // Budget: stop after N consecutive unanswered calls
-                                // (cq_max_calls; default 10 ≈ 80 s of calling at 4 s
-                                // slots). Any directed activity refills it; the operator
-                                // restarting CQ refills it. Bounded like everything else
-                                // after the cadence rework — no more calling forever.
-                                let budget = self.settings.cq_max_calls.unwrap_or(10).max(1);
-                                if self.chat_cq_unanswered >= budget {
-                                    self.chat_cq = false; // run stops; snapshot shows it
-                                } else if let Some(cq) = self.chat_cq_text() {
-                                    self.tx_queue.push_back(cq);
-                                    self.chat_cq_unanswered += 1;
+                            if !self.tx_queue.is_empty() {
+                                // A release recorded attempts/backoff — journal so a restart
+                                // resumes the retry schedule instead of resetting it.
+                                self.persist_pending_msgs();
+                            }
+                            // A directed message shows in band activity when it actually goes
+                            // on the air (first release), not at compose time.
+                            for b in bodies {
+                                self.record_own_tx(b);
+                            }
+                            // Directed traffic released this slot: stamp the CQ run's idle
+                            // clock so a paused run doesn't resume mid-conversation, refill
+                            // the CQ budget (the run is conversing, not calling unanswered),
+                            // and arm the yield-to-RX listening window for when it drains.
+                            if !self.tx_queue.is_empty() {
+                                self.chat_cq_last_directed = slot;
+                                self.chat_cq_unanswered = 0;
+                                self.chat_yield_pending = true;
+                            }
+                            // Chat CQ RUN: an idle own-parity TX slot re-sends the
+                            // structured CQ (the "keep calling until answered" loop).
+                            // Directed frames always win the slot (the queue check above);
+                            // a pause set by answering auto-resumes once directed traffic
+                            // has been quiet for CHAT_CQ_RESUME_SLOTS. Supersedes the
+                            // presence beacon while running.
+                            if self.chat_cq && self.tx_queue.is_empty() {
+                                const CHAT_CQ_RESUME_SLOTS: u64 = 8; // ~32 s at FT1's 4 s slots
+                                if self.chat_cq_paused
+                                    && slot.saturating_sub(self.chat_cq_last_directed)
+                                        >= CHAT_CQ_RESUME_SLOTS
+                                {
+                                    self.chat_cq_paused = false;
+                                }
+                                if !self.chat_cq_paused {
+                                    // Budget: stop after N consecutive unanswered calls
+                                    // (cq_max_calls; default 10 ≈ 80 s of calling at 4 s
+                                    // slots). Any directed activity refills it; the operator
+                                    // restarting CQ refills it. Bounded like everything else
+                                    // after the cadence rework — no more calling forever.
+                                    let budget = self.settings.cq_max_calls.unwrap_or(10).max(1);
+                                    if self.chat_cq_unanswered >= budget {
+                                        self.chat_cq = false; // run stops; snapshot shows it
+                                    } else if let Some(cq) = self.chat_cq_text() {
+                                        self.tx_queue.push_back(cq);
+                                        self.chat_cq_unanswered += 1;
+                                    }
                                 }
                             }
-                        }
-                        // Presence beacon ("CQ <call> <grid>") only when the
-                        // operator has enabled it. Default off → the app starts
-                        // passive (hunt-and-pounce): it never calls CQ on its own.
-                        // The CQ run supersedes it (never both in one slot).
-                        if !self.chat_cq
+                            // Presence beacon ("CQ <call> <grid>") only when the
+                            // operator has enabled it. Default off → the app starts
+                            // passive (hunt-and-pounce): it never calls CQ on its own.
+                            // The CQ run supersedes it (never both in one slot).
+                            if !self.chat_cq
                             && self.settings.beacon
                             && self.tx_queue.is_empty()
                             // Every Nth of OUR TX slots. The outer `slot%2 !=
@@ -6371,15 +6413,20 @@ impl Engine {
                             // (the old `slot % N == tx_parity` never fired for
                             // odd parity, since N's multiples are all even).
                             && (slot / 2).is_multiple_of(self.beacon_every)
-                        {
-                            self.tx_queue.push_back(self.app.beacon_text());
+                            {
+                                self.tx_queue.push_back(self.app.beacon_text());
+                            }
                         }
-                    }
-                    self.tx_queue.pop_front()
+                        self.tx_queue.pop_front()
                     }
                 }
             }
             Mode::Qso { station, .. } => {
+                // Directed-call cap: a station that goes silent stops being called after
+                // this many unanswered overs of a directed step (settings; default 8).
+                // Refreshed here every TX slot so it always tracks the live setting,
+                // regardless of how this station was created (CQ answer / S&P / monitoring).
+                station.call_cap = self.settings.directed_max_calls;
                 match station.outgoing_rv() {
                     Some((m, rv)) => {
                         station.after_tx();
@@ -10618,12 +10665,16 @@ mod tests {
         // SSB, so the operator caps power PER MODE. Two guarantees, both here.
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.settings.max_power_digital = Some(0.30); // 30% cap for the data modes
-        // No cap on phone/CW.
+                                                   // No cap on phone/CW.
 
         // (1) The set chokepoint clamps. In a digital mode, a 100% request is held to 30%.
         e.set_operating_mode("digital", false);
         e.set_rf_power(1.0);
-        assert_eq!(e.rf_power(), Some(0.30), "digital request clamped to the 30% cap");
+        assert_eq!(
+            e.rf_power(),
+            Some(0.30),
+            "digital request clamped to the 30% cap"
+        );
         // A request UNDER the cap is untouched.
         e.set_rf_power(0.10);
         assert_eq!(e.rf_power(), Some(0.10), "under-cap request passes through");
@@ -10644,7 +10695,11 @@ mod tests {
         );
         // And back to an uncapped mode leaves the (now-low) power put — it does not push it up.
         e.set_operating_mode("cw", false);
-        assert_eq!(e.rf_power(), Some(0.30), "uncapped mode never RAISES power on its own");
+        assert_eq!(
+            e.rf_power(),
+            Some(0.30),
+            "uncapped mode never RAISES power on its own"
+        );
     }
 
     #[test]
@@ -10656,7 +10711,11 @@ mod tests {
         e.settings.max_power_phone = Some(0.75);
         e.set_operating_mode("phone", false);
         e.set_rf_power(0.75); // commanded at the cap
-        assert_eq!(e.rf_power_to_command(), Some((0.75, false)), "settled at the cap → no force");
+        assert_eq!(
+            e.rf_power_to_command(),
+            Some((0.75, false)),
+            "settled at the cap → no force"
+        );
 
         // The operator turns the RIG's own knob up to 100% (OBSERVED, not commanded). The old loop
         // saw the commanded value unchanged and never re-commanded — the rig stayed hot. Now the
@@ -10676,12 +10735,20 @@ mod tests {
         // A knob-DOWN below the cap is the operator's choice — never forced back up.
         e.set_rf_power(0.40);
         e.observe_rig_power(0.40);
-        assert_eq!(e.rf_power_to_command(), Some((0.40, false)), "below the cap is left alone");
+        assert_eq!(
+            e.rf_power_to_command(),
+            Some((0.40, false)),
+            "below the cap is left alone"
+        );
 
         // No cap on CW → never forces, even with the rig at 100%.
         e.set_operating_mode("cw", false);
         e.observe_rig_power(1.0);
-        assert_eq!(e.rf_power_to_command().map(|(_, f)| f), Some(false), "uncapped mode never forces");
+        assert_eq!(
+            e.rf_power_to_command().map(|(_, f)| f),
+            Some(false),
+            "uncapped mode never forces"
+        );
     }
 
     #[test]
@@ -12636,8 +12703,14 @@ mod tests {
         e.set_active_radio(0); // back on the FTDX10, as when the operator opens APRS
 
         e.aprs_tune(144.390);
-        assert_eq!(e.settings.active_radio, r1, "APRS Tune switched to the IC-9700");
-        assert!((e.settings.dial_mhz - 144.390).abs() < 1e-9, "landed on the APRS dial");
+        assert_eq!(
+            e.settings.active_radio, r1,
+            "APRS Tune switched to the IC-9700"
+        );
+        assert!(
+            (e.settings.dial_mhz - 144.390).abs() < 1e-9,
+            "landed on the APRS dial"
+        );
         assert_eq!(e.rig_mode_effective(), "FM");
     }
 
@@ -12721,7 +12794,13 @@ mod tests {
         assert_eq!(e.settings.active_radio, r1);
 
         // Edit the NON-active radio (r0) — operating on r1 the whole time.
-        let r0_profile = e.settings.radios.iter().find(|p| p.id == r0).unwrap().clone();
+        let r0_profile = e
+            .settings
+            .radios
+            .iter()
+            .find(|p| p.id == r0)
+            .unwrap()
+            .clone();
         e.update_radio_profile(r0, patch_with_port(&r0_profile, "COM_R0_EDITED"));
 
         // r0's profile changed…
@@ -12730,8 +12809,14 @@ mod tests {
         // …the active radio is STILL r1, its profile untouched, and the flat mirror still points at it.
         assert_eq!(e.settings.active_radio, r1, "active radio unchanged");
         let r1_now = e.settings.radios.iter().find(|p| p.id == r1).unwrap();
-        assert_eq!(r1_now.serial_port, "COM_R1", "active radio's profile untouched");
-        assert_eq!(e.settings.serial_port, "COM_R1", "flat mirror still mirrors the active radio");
+        assert_eq!(
+            r1_now.serial_port, "COM_R1",
+            "active radio's profile untouched"
+        );
+        assert_eq!(
+            e.settings.serial_port, "COM_R1",
+            "flat mirror still mirrors the active radio"
+        );
     }
 
     #[test]
@@ -12881,7 +12966,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_tier(tier);
         e.set_tx_cycle_auto(false); // deterministic: transmit on even slots
-        // Hear K2DEF calling CQ, then answer (the WSJT-X double-click S&P entry).
+                                    // Hear K2DEF calling CQ, then answer (the WSJT-X double-click S&P entry).
         e.ingest_decodes_for_test(&[dec_snr("CQ K2DEF FN31", -5)], 1);
         e.call_station("K2DEF");
         let mut sched = Vec::new();
@@ -12928,7 +13013,10 @@ mod tests {
         for tier in [Tier::Ft8, Tier::Ft4] {
             let got = tx_schedule_for(tier);
             let got_ref: Vec<(u64, &str)> = got.iter().map(|(s, t)| (*s, t.as_str())).collect();
-            assert_eq!(got_ref, expect, "{tier:?} TX schedule drifted from the WSJT-X golden");
+            assert_eq!(
+                got_ref, expect,
+                "{tier:?} TX schedule drifted from the WSJT-X golden"
+            );
         }
     }
 
@@ -12956,7 +13044,9 @@ mod tests {
             "chat-tier step capped at 6 overs, got {sent}"
         );
         let s = e.snapshot();
-        let q = s.qso.expect("Mode::Qso projects a status even when monitoring");
+        let q = s
+            .qso
+            .expect("Mode::Qso projects a status even when monitoring");
         assert_eq!(q.dxcall, None, "the abandoned call is cleared");
         assert_eq!(q.tx_now, None, "nothing pending — no stuck step");
         assert!(!q.running, "not a run");
@@ -13052,14 +13142,26 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_tier(Tier::Ft8);
         e.set_mode("chat").expect("chat mode");
-        assert_eq!(e.snapshot().link.tier, Tier::TempoFast, "set_mode(chat) snaps Ft8 → TempoFast");
+        assert_eq!(
+            e.snapshot().link.tier,
+            Tier::TempoFast,
+            "set_mode(chat) snaps Ft8 → TempoFast"
+        );
         e.set_tier(Tier::Ft4);
         e.set_mode("chat").expect("chat mode");
-        assert_eq!(e.snapshot().link.tier, Tier::TempoFast, "set_mode(chat) snaps Ft4 → TempoFast");
+        assert_eq!(
+            e.snapshot().link.tier,
+            Tier::TempoFast,
+            "set_mode(chat) snaps Ft4 → TempoFast"
+        );
         // TempoDeep is chat-capable — entering Chat must NOT clobber it to TempoFast.
         e.set_tier(Tier::TempoDeep);
         e.set_mode("chat").expect("chat mode");
-        assert_eq!(e.snapshot().link.tier, Tier::TempoDeep, "a chat tier survives set_mode(chat)");
+        assert_eq!(
+            e.snapshot().link.tier,
+            Tier::TempoDeep,
+            "a chat tier survives set_mode(chat)"
+        );
     }
 
     /// GOLDEN companion: Chat mode at an FT8 tier (the engine's BOOT state, also recreated by
@@ -13115,8 +13217,13 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         // Default is TX-disarmed → the beacon gate refuses with a clear reason, never a silent
         // queue (nothing can key without an explicit TX-enable).
-        let err = e.aprs_beacon(41.9, -87.6, '/', '>', "test", &[]).unwrap_err();
-        assert!(err.contains("TX is off"), "expected a TX-off refusal, got: {err}");
+        let err = e
+            .aprs_beacon(41.9, -87.6, '/', '>', "test", &[])
+            .unwrap_err();
+        assert!(
+            err.contains("TX is off"),
+            "expected a TX-off refusal, got: {err}"
+        );
         assert!(e.poll_aprs_tx().is_none(), "nothing queued");
     }
 }

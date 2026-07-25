@@ -191,9 +191,11 @@ impl StoreForward {
     /// released) messages are untouched: nothing was heard, nothing to confirm.
     pub fn confirm_in_flight(&mut self, to: &str) -> Vec<char> {
         let mut out = Vec::new();
-        for p in self.queue.iter_mut().filter(|p| {
-            !p.delivered && !p.no_acked && !p.confirmed && p.attempts > 0 && p.to == to
-        }) {
+        for p in self
+            .queue
+            .iter_mut()
+            .filter(|p| !p.delivered && !p.no_acked && !p.confirmed && p.attempts > 0 && p.to == to)
+        {
             p.confirmed = true;
             out.push(p.id);
         }

@@ -1,6 +1,5 @@
 import type { LoggedQso } from '../types'
 import type { CallHistory } from '../features/callHistory'
-import { historySummary } from '../features/callHistory'
 import { distanceLabel, bearingLabel } from '../grid'
 
 interface Props {
@@ -119,7 +118,6 @@ export function RecallPanel({ call, band, name, qth, grid, country, image, myGri
         </div>
       </div>
 
-      <div className="recall-hist">{historySummary(hist)}</div>
       {lastNote && (
         <div className="recall-note" title="Your most recent note on this station">
           📝 {lastNote}

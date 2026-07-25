@@ -93,11 +93,17 @@ pub struct Station {
     /// the partner advancing (implicit NAK). Reset to 0 when the partner advances
     /// (implicit ACK). Lets the receiver joint-combine retransmissions.
     pub rv_count: u8,
-    /// Transmissions of the current step so far (resets when the step advances).
     /// Optional CQ-run call budget: stop calling CQ after this many unanswered
     /// calls. `None` = stock WSJT-X (repeat indefinitely; the Tx watchdog is the
-    /// backstop). In-QSO steps are NEVER capped either way.
+    /// backstop).
     pub cq_call_cap: Option<u32>,
+    /// Optional DIRECTED-CALL budget: stop after this many unanswered transmissions of
+    /// an in-QSO step (calling a specific station / awaiting the partner to advance the
+    /// exchange). `None` = stock WSJT-X (repeat until answered; the Tx watchdog is the
+    /// only backstop). Distinct from `cq_call_cap` (which only governs CallingCq); the
+    /// engine defaults this to Some(8) so a station that goes silent stops being called.
+    pub call_cap: Option<u32>,
+    /// Transmissions of the current step so far (resets when the step advances).
     pub tx_count: u32,
     /// Operator preference: roger the final report with `RRR` (acknowledge only,
     /// partner still owes a 73) instead of the combined `RR73`. Default `false`
@@ -129,6 +135,7 @@ impl Station {
             rv_count: 0,
             tx_count: 0,
             cq_call_cap: None,
+            call_cap: None,
             confirm_with_rrr: false,
             quiet_finish: false,
             transcript: Vec::new(),
@@ -148,6 +155,7 @@ impl Station {
             rv_count: 0,
             tx_count: 0,
             cq_call_cap: None,
+            call_cap: None,
             confirm_with_rrr: false,
             quiet_finish: false,
             transcript: Vec::new(),
@@ -328,6 +336,7 @@ impl Station {
             rv_count: 0,
             tx_count: 0,
             cq_call_cap: None,
+            call_cap: None,
             confirm_with_rrr: prefer_rrr,
             quiet_finish: false,
             transcript: vec![log_line],
@@ -415,22 +424,34 @@ impl Station {
         self.pending.clone().map(|m| self.compound_form(m))
     }
 
-    /// The message **and IR-HARQ redundancy version** to transmit on my next TX
-    /// slot. Returns `None` only when there is nothing to send. There is NO per-step
-    /// retransmit cap in here — stock WSJT-X repeats an in-QSO step until the partner
-    /// advances it (the wall-clock Tx watchdog is the backstop), and the only internal
-    /// stop is the opt-in capped-CQ budget below. ([`MAX_TX_PER_STEP`] is a
-    /// caller/test-side convention, not enforced here; the Tempo chat tiers apply
-    /// their own step cap in the engine.)
+    /// True when the current step's transmission budget is exhausted, so the next over
+    /// must be withheld. Two independent budgets, each governing its own state(s):
+    /// `cq_call_cap` caps a CQ run (CallingCq only; `None` = stock indefinite), and
+    /// `call_cap` caps a directed in-QSO step the partner has stopped advancing
+    /// (AwaitReport/AwaitRoger/AwaitRr73/Confirming; the engine defaults it to Some(8)
+    /// so a station that goes silent stops being called). A normal QSO never trips
+    /// `call_cap` because each step advances (resetting tx_count) within a few overs;
+    /// only a stuck/unanswered step accumulates to the cap. Listening/Done never send.
+    fn tx_capped(&self) -> bool {
+        match self.state {
+            State::CallingCq => self.cq_call_cap.is_some_and(|cap| self.tx_count >= cap),
+            // The establishing steps of a directed QSO — calling a station and waiting for
+            // it to advance the exchange. Confirming is excluded: by then the QSO is made
+            // and auto-logged, so it is not "calling someone" (matches the engine's own
+            // abandon-stalled state set).
+            State::AwaitReport | State::AwaitRoger | State::AwaitRr73 => {
+                self.call_cap.is_some_and(|cap| self.tx_count >= cap)
+            }
+            State::Confirming | State::Listening | State::Done => false,
+        }
+    }
+
+    /// The message **and IR-HARQ redundancy version** to transmit on my next TX slot.
+    /// Returns `None` when there is nothing to send OR the step's [`tx_capped`] budget is
+    /// spent. ([`MAX_TX_PER_STEP`] is a separate caller/test-side convention; the Tempo
+    /// chat tiers apply their own step cap in the engine.)
     pub fn outgoing_rv(&self) -> Option<(Msg, u8)> {
-        // Stock WSJT-X: a CQ repeats indefinitely (the Tx watchdog is the
-        // backstop). `cq_call_cap` is the opt-in "stop after N unanswered calls"
-        // budget; it applies ONLY to CallingCq — a directed call / in-QSO step
-        // you're working always repeats until the station responds (or the
-        // operator / watchdog stops it).
-        if self.state == State::CallingCq
-            && self.cq_call_cap.is_some_and(|cap| self.tx_count >= cap)
-        {
+        if self.tx_capped() {
             return None;
         }
         self.pending
@@ -438,16 +459,12 @@ impl Station {
             .map(|m| (self.compound_form(m), self.rv_count))
     }
 
-    /// True when the current step has hit the retransmission limit without the
-    /// partner advancing — i.e. we have an outgoing message but [`outgoing_rv`]
-    /// is withholding it. The app may time out the QSO at this point.
+    /// True when the current step has hit its transmission budget without the partner
+    /// advancing — i.e. we have an outgoing message but [`outgoing_rv`] is withholding
+    /// it. The app may time out the QSO at this point (stop the CQ run, or abandon a
+    /// directed call the station never answered).
     pub fn stalled(&self) -> bool {
-        // Only a capped CQ "stalls" (stops after its opt-in call budget); a
-        // station you're working keeps calling until it answers or the watchdog
-        // trips, and an uncapped CQ (stock) never stalls.
-        self.state == State::CallingCq
-            && self.pending.is_some()
-            && self.cq_call_cap.is_some_and(|cap| self.tx_count >= cap)
+        self.pending.is_some() && self.tx_capped()
     }
 
     /// The current outgoing message as on-air text (the "Now sending" readout),
@@ -1167,6 +1184,31 @@ mod start_context_tests {
             s.after_tx();
         }
         assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW EN61"));
+    }
+
+    #[test]
+    fn capped_directed_call_stops_after_its_budget() {
+        // With `call_cap` set (the engine defaults it to Some(8)), a directed step the
+        // partner never advances STOPS after the budget instead of calling forever — the
+        // fix for "endless recalling a station that went silent" in FT8/FT4 S&P. A normal
+        // QSO never trips it because each step advances (resetting tx_count) within a few
+        // overs; only a stuck/unanswered step accumulates to the cap.
+        let mut s = Station::answering(ME, MY_GRID, DX); // AwaitReport: sending my grid
+        s.call_cap = Some(4);
+        for _ in 0..4 {
+            assert!(s.outgoing_rv().is_some(), "calls up to the budget");
+            assert!(!s.stalled(), "not stalled before the budget");
+            s.after_tx();
+        }
+        assert!(
+            s.outgoing_rv().is_none(),
+            "a capped directed call stops after its budget"
+        );
+        assert!(s.stalled(), "a capped directed call reports stalled");
+        // Operator Resend re-arms the step (resets the count) so it tries again.
+        s.resend();
+        assert!(!s.stalled(), "Resend clears the directed-call stall");
+        assert!(s.outgoing_rv().is_some(), "and it calls again");
     }
 }
 

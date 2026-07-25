@@ -56,7 +56,7 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { visibleNeeds, workTarget, modeClassOf } from './features/needs'
-import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
+import { OPERATE_PANELS, PHONE_PANELS, CW_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
@@ -351,6 +351,12 @@ export default function App() {
   // would drop the record. Survives Classic ↔ Roster because visibility is keyed by
   // panel id, not by layout.
   const operatePanels = usePanelLayout(OPERATE_PANELS)
+  // Host SSTV's panel record above its keep-alive view so removals + share edits survive the
+  // view's remounts (panelState.ts: owned by a host that outlives the view).
+  const sstvPanels = usePanelLayout(SSTV_PANELS)
+  const phonePanels = usePanelLayout(PHONE_PANELS)
+  const cwPanels = usePanelLayout(CW_PANELS)
+  const rttyPanels = usePanelLayout(RTTY_PANELS)
 
   // One-shot on launch: check SourceForge for a newer release (throttled to once/day + cached,
   // silent when offline). Surfaces a dismissible "update available" toast; nothing auto-downloads.
@@ -602,21 +608,19 @@ export default function App() {
     }
   }, [])
   const [needAlerts, setNeedAlerts] = useState<NeedAlert[]>([])
-  useEffect(() => {
-    let live = true
-    const load = () =>
-      getNeedAlerts()
-        .then((alerts) => {
-          if (live) setNeedAlerts(alerts)
-        })
-        .catch(() => {})
-    load()
-    const id = setInterval(load, 30_000)
-    return () => {
-      live = false
-      clearInterval(id)
-    }
+  // Refetch the needed board. Called on a 30 s poll AND immediately after any log so a
+  // just-worked station drops off the roster/needs at once (the backend rebuilds needs
+  // from the full log, excluding the QSO we just wrote) instead of lingering up to 30 s.
+  const refreshNeeds = useCallback(() => {
+    getNeedAlerts()
+      .then((alerts) => setNeedAlerts(alerts))
+      .catch(() => {})
   }, [])
+  useEffect(() => {
+    refreshNeeds()
+    const id = setInterval(refreshNeeds, 30_000)
+    return () => clearInterval(id)
+  }, [refreshNeeds])
   // Raw spot firehose for the Spots panel (ungated, all modes). Polled faster than needs
   // since it's a live "what's on the air" view; the backend command just reads the buffer.
   const [allSpots, setAllSpots] = useState<SpotRow[]>([])
@@ -980,12 +984,13 @@ export default function App() {
         if (s) {
           setSnap(s)
           noteLoggedForDxClear()
+          refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
         }
       })
     },
-    [noteLoggedForDxClear],
+    [noteLoggedForDxClear, refreshNeeds],
   )
 
   const handleDiscardLog = useCallback(() => {
@@ -1548,11 +1553,12 @@ export default function App() {
         setSnap(s)
         pushToast('Logged QSO', 'success', 2500)
         noteLoggedForDxClear()
+        refreshNeeds() // drop the just-worked station from the roster/needs immediately
         // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
         // (every log path, auto-log included); outcomes toast via uploadTick.
       }
     })
-  }, [noteLoggedForDxClear])
+  }, [noteLoggedForDxClear, refreshNeeds])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Settings are pure UI
@@ -2013,6 +2019,7 @@ export default function App() {
           onWorkSpot={handleWorkSpot}
           onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
           onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+          panels={cwPanels}
         />
       )
       break
@@ -2033,6 +2040,7 @@ export default function App() {
           onWorkSpot={handleWorkSpot}
           onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
           onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+          panels={phonePanels}
         />
       )
       break
@@ -2389,6 +2397,7 @@ export default function App() {
               onSetFrequency={handleSetFrequency}
               onSetTxEnabled={handleSetTxEnabled}
               theme={theme}
+              panels={rttyPanels}
             />
           </div>
         )}
@@ -2400,6 +2409,7 @@ export default function App() {
               active={effectiveView === 'sstv'}
               onSetFrequency={handleSetFrequency}
               onSetTxEnabled={handleSetTxEnabled}
+              panels={sstvPanels}
             />
           </div>
         )}

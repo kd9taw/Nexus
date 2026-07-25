@@ -21,7 +21,11 @@ pub fn fcs(data: &[u8]) -> u16 {
     for &byte in data {
         crc ^= byte as u16;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0x8408 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0x8408
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
@@ -49,7 +53,11 @@ pub struct Address {
 impl Address {
     /// A plain address (C-bit clear). `call` is trimmed + uppercased; `ssid` is masked to 0..=15.
     pub fn new(call: &str, ssid: u8) -> Self {
-        Address { call: call.trim().to_ascii_uppercase(), ssid: ssid & 0x0F, cbit: false }
+        Address {
+            call: call.trim().to_ascii_uppercase(),
+            ssid: ssid & 0x0F,
+            cbit: false,
+        }
     }
 
     /// Parse `"N0CALL-9"` / `"APRS"` / `"WIDE1-1*"` (a trailing `*` marks a used digi → C-bit set).
@@ -67,7 +75,10 @@ impl Address {
             Some((c, n)) => (c, n.parse::<u8>().ok()?),
             None => (s, 0),
         };
-        if call.is_empty() || call.len() > 6 || ssid > 15 || !call.bytes().all(|b| b.is_ascii_alphanumeric())
+        if call.is_empty()
+            || call.len() > 6
+            || ssid > 15
+            || !call.bytes().all(|b| b.is_ascii_alphanumeric())
         {
             return None;
         }
@@ -85,7 +96,8 @@ impl Address {
             *slot = c << 1;
         }
         // SSID octet: C/H | reserved(11) | ssid(4) | extension(1).
-        out[6] = (if self.cbit { 0x80 } else { 0 }) | 0x60 | ((self.ssid & 0x0F) << 1) | u8::from(last);
+        out[6] =
+            (if self.cbit { 0x80 } else { 0 }) | 0x60 | ((self.ssid & 0x0F) << 1) | u8::from(last);
         out
     }
 
@@ -100,7 +112,11 @@ impl Address {
             }
         }
         let ssid_octet = field[6];
-        let addr = Address { call, ssid: (ssid_octet >> 1) & 0x0F, cbit: ssid_octet & 0x80 != 0 };
+        let addr = Address {
+            call,
+            ssid: (ssid_octet >> 1) & 0x0F,
+            cbit: ssid_octet & 0x80 != 0,
+        };
         Some((addr, ssid_octet & 1 != 0))
     }
 }
@@ -119,7 +135,12 @@ pub struct Frame {
 impl Frame {
     /// A UI frame ready for APRS (control = UI, PID = no-layer-3 are implied by the encoding).
     pub fn ui(dest: Address, source: Address, path: Vec<Address>, info: &[u8]) -> Frame {
-        Frame { dest, source, path, info: info.to_vec() }
+        Frame {
+            dest,
+            source,
+            path,
+            info: info.to_vec(),
+        }
     }
 
     /// Encode to the AX.25 byte sequence WITHOUT HDLC flags/bit-stuffing, WITH the 2-byte FCS
@@ -181,7 +202,12 @@ impl Frame {
         let dest = it.next()?;
         let source = it.next()?;
         let path: Vec<Address> = it.collect();
-        Some(Frame { dest, source, path, info })
+        Some(Frame {
+            dest,
+            source,
+            path,
+            info,
+        })
     }
 }
 
@@ -212,9 +238,30 @@ mod tests {
 
     #[test]
     fn address_parse_handles_ssid_and_used_marker() {
-        assert_eq!(Address::parse("N0CALL-9"), Some(Address { call: "N0CALL".into(), ssid: 9, cbit: false }));
-        assert_eq!(Address::parse("APRS"), Some(Address { call: "APRS".into(), ssid: 0, cbit: false }));
-        assert_eq!(Address::parse("WIDE1-1*"), Some(Address { call: "WIDE1".into(), ssid: 1, cbit: true }));
+        assert_eq!(
+            Address::parse("N0CALL-9"),
+            Some(Address {
+                call: "N0CALL".into(),
+                ssid: 9,
+                cbit: false
+            })
+        );
+        assert_eq!(
+            Address::parse("APRS"),
+            Some(Address {
+                call: "APRS".into(),
+                ssid: 0,
+                cbit: false
+            })
+        );
+        assert_eq!(
+            Address::parse("WIDE1-1*"),
+            Some(Address {
+                call: "WIDE1".into(),
+                ssid: 1,
+                cbit: true
+            })
+        );
         assert_eq!(Address::parse("TOOLONGCALL"), None);
         assert_eq!(Address::parse("N0CALL-16"), None);
         assert_eq!(Address::parse(""), None);
@@ -245,7 +292,12 @@ mod tests {
 
     #[test]
     fn frame_round_trips_with_empty_path_and_empty_info() {
-        let f = Frame::ui(Address::new("APRS", 0), Address::new("N0CALL", 0), vec![], b"");
+        let f = Frame::ui(
+            Address::new("APRS", 0),
+            Address::new("N0CALL", 0),
+            vec![],
+            b"",
+        );
         let back = Frame::decode(&f.encode()).unwrap();
         assert_eq!(back, f);
         assert!(back.path.is_empty());
@@ -254,16 +306,29 @@ mod tests {
 
     #[test]
     fn a_single_bit_flip_fails_the_fcs() {
-        let f = Frame::ui(Address::new("APRS", 0), Address::new("N0CALL", 7), vec![], b"payload");
+        let f = Frame::ui(
+            Address::new("APRS", 0),
+            Address::new("N0CALL", 7),
+            vec![],
+            b"payload",
+        );
         let mut bytes = f.encode();
         let mid = bytes.len() / 2;
         bytes[mid] ^= 0x01; // corrupt one bit in the info field
-        assert!(Frame::decode(&bytes).is_none(), "corrupted frame must fail the FCS");
+        assert!(
+            Frame::decode(&bytes).is_none(),
+            "corrupted frame must fail the FCS"
+        );
     }
 
     #[test]
     fn a_truncated_frame_is_rejected() {
-        let f = Frame::ui(Address::new("APRS", 0), Address::new("N0CALL", 0), vec![], b"x");
+        let f = Frame::ui(
+            Address::new("APRS", 0),
+            Address::new("N0CALL", 0),
+            vec![],
+            b"x",
+        );
         let bytes = f.encode();
         assert!(Frame::decode(&bytes[..bytes.len() - 1]).is_none());
         assert!(Frame::decode(&[]).is_none());
