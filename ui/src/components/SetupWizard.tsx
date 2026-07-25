@@ -121,6 +121,7 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
   const [detected, setDetected] = useState<DetectedRig[] | null>(null)
   const [detectedFlex, setDetectedFlex] = useState<{ model: string; nickname: string; ip: string }[]>([])
   const [detecting, setDetecting] = useState(false)
+  const [detectError, setDetectError] = useState<string | null>(null)
   const [flexNote, setFlexNote] = useState<string | null>(null)
   const [catResult, setCatResult] = useState<CatTestResult | null>(null)
   const [catTesting, setCatTesting] = useState(false)
@@ -210,17 +211,25 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
 
   const runDetect = () => {
     setDetecting(true)
-    // One scan, every radio kind: USB enumeration + Flex LAN discovery run
-    // together; either probe may fail without killing the other's results.
-    Promise.all([
-      detectRigs().catch(() => [] as DetectedRig[]),
-      discoverFlex().catch(() => []),
-    ])
-      .then(([rigs, flexes]) => {
-        setDetected(rigs)
-        setDetectedFlex(flexes)
-      })
-      .finally(() => setDetecting(false))
+    setDetectError(null)
+    // One scan, every radio kind: USB enumeration + Flex LAN discovery run together; either probe
+    // may fail without killing the other's results. Failures are SURFACED (not swallowed to an
+    // empty list that reads as "no radios found") so a newcomer isn't left staring at nothing.
+    Promise.allSettled([detectRigs(), discoverFlex()]).then(([rigsR, flexR]) => {
+      const errs: string[] = []
+      if (rigsR.status === 'fulfilled') setDetected(rigsR.value)
+      else {
+        setDetected([])
+        errs.push(`USB scan failed: ${String(rigsR.reason)}`)
+      }
+      if (flexR.status === 'fulfilled') setDetectedFlex(flexR.value)
+      else {
+        setDetectedFlex([])
+        errs.push(`Flex network scan failed: ${String(flexR.reason)}`)
+      }
+      setDetectError(errs.length ? errs.join(' · ') : null)
+      setDetecting(false)
+    })
   }
   const applyDetected = (r: DetectedRig) => {
     if (r.suggestedModel != null) {
@@ -229,9 +238,12 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
     }
     setSerialPort(r.portName)
     setRigConn('serial')
-    if (r.suggestedAudio) {
-      setAudioIn(r.suggestedAudio)
-      setAudioOut(r.suggestedAudio)
+    // RX from the capture list, TX from the OUTPUT list — the rig's CODEC enumerates under
+    // different input/output names on Windows, so reusing the input name for audioOut sent TX
+    // audio to the PC speakers. Fall back to the input name only if no output paired.
+    if (r.suggestedAudio) setAudioIn(r.suggestedAudio)
+    if (r.suggestedAudioOut || r.suggestedAudio) {
+      setAudioOut(r.suggestedAudioOut ?? r.suggestedAudio ?? '')
     }
   }
   const applyDetectedFlex = (f: { model: string; nickname: string; ip: string }) => {
@@ -346,7 +358,13 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
             <button type="button" className="wizard-btn" disabled={detecting} onClick={runDetect}>
               {detecting ? 'Detecting…' : '🔍 Detect my radio'}
             </button>
-            {detected != null && detected.length === 0 && detectedFlex.length === 0 && (
+            {detectError && (
+              <span className="wizard-field-hint" role="alert" style={{ color: 'var(--danger, #e5484d)' }}>
+                Detection hit an error: {detectError}. You can still pick your rig by hand below, or
+                skip and set it up later.
+              </span>
+            )}
+            {!detectError && detected != null && detected.length === 0 && detectedFlex.length === 0 && (
               <span className="wizard-field-hint">
                 Nothing found — USB: plug in + power on; Flex: must be on this network.
                 Or skip and set it up later.
