@@ -548,10 +548,12 @@ export function SettingsPanel({
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
   }
 
-  // Per-alert band-scope selects (new DXCC / new grid / rare grid). `alertNew` stays the
-  // stored master gate for backward compat: when it's off the UI renders every scope as
-  // Off, so changing one materializes that view (others → 'off') before re-enabling the
-  // master — enabling ONE type can't silently resurrect the rest.
+  // Per-alert band-scope selects (new DXCC / new grid / rare grid). The three selects ARE the
+  // truth: the stored `alertNew` master is DERIVED from them (on = any scope not Off), never an
+  // independent hidden toggle — which previously stuck `true` even after every scope was set to
+  // Off (only ever set true, never back to false), silently keeping the alert engine "armed" with
+  // nothing selected. When re-materializing from an old master-off state, show only the scope just
+  // changed so enabling one type can't resurrect the rest.
   const ALERT_SCOPE_KEYS = ['alertDxccBands', 'alertGridBands', 'alertRareGridBands'] as const
   const changeAlertScope = (key: (typeof ALERT_SCOPE_KEYS)[number], value: string) => {
     markDirty()
@@ -560,8 +562,8 @@ export function SettingsPanel({
       const next = { ...prev, [key]: value }
       if (!prev.alertNew) {
         for (const k of ALERT_SCOPE_KEYS) if (k !== key) next[k] = 'off'
-        next.alertNew = true
       }
+      next.alertNew = ALERT_SCOPE_KEYS.some((k) => (next[k] ?? 'off') !== 'off')
       return next
     })
   }
