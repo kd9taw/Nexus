@@ -236,15 +236,20 @@ pub struct DetectedRig {
     pub chip: UsbSerialChip,
     /// Driver guidance when the chip needs one on this OS (None = native/bundled).
     pub driver: Option<DriverHint>,
-    /// Best-guess paired sound device (the rig's USB-Audio CODEC), by name.
+    /// Best-guess paired CAPTURE device (the rig's USB-Audio CODEC input), by name.
     pub suggested_audio: Option<String>,
+    /// Best-guess paired PLAYBACK device, matched against the OUTPUT list — on Windows the rig's
+    /// CODEC input and output enumerate under DIFFERENT names, so reusing the input name for TX
+    /// sent modem audio to the PC speakers instead of the rig ("TX out the speakers" bug).
+    pub suggested_audio_out: Option<String>,
 }
 
 /// Join enumerated USB ports + audio device names into per-rig suggestions. Pure, so
 /// the matching/pairing is testable; the command layer supplies the live enumeration.
 pub fn detect_rigs(
     ports: &[crate::ports::UsbPort],
-    audio: &[String],
+    audio_in: &[String],
+    audio_out: &[String],
     os: HostOs,
 ) -> Vec<DetectedRig> {
     ports
@@ -266,7 +271,8 @@ pub fn detect_rigs(
                 suggested_model_name,
                 chip,
                 driver: driver_hint(chip, os),
-                suggested_audio: pair_audio(&p.product, audio),
+                suggested_audio: pair_audio(&p.product, audio_in),
+                suggested_audio_out: pair_audio(&p.product, audio_out),
             }
         })
         .collect()
@@ -376,11 +382,16 @@ mod tests {
     fn detect_native_usb_rig_full_resolution() {
         // An IC-705 (native USB, Silicon Labs bridge) + its USB-Audio CODEC.
         let ports = vec![port("COM5", 0x10C4, "IC-705", "Icom Inc.")];
-        let audio = vec![
+        // Windows enumerates the rig's CODEC under DIFFERENT input vs output names.
+        let audio_in = vec![
             "Microphone (USB Audio CODEC)".to_string(),
             "Realtek HD".to_string(),
         ];
-        let got = detect_rigs(&ports, &audio, HostOs::Windows);
+        let audio_out = vec![
+            "Speakers (USB Audio CODEC)".to_string(),
+            "Realtek HD".to_string(),
+        ];
+        let got = detect_rigs(&ports, &audio_in, &audio_out, HostOs::Windows);
         assert_eq!(got.len(), 1);
         let r = &got[0];
         assert_eq!(r.suggested_model, Some(3085));
@@ -392,6 +403,12 @@ mod tests {
             r.suggested_audio.as_deref(),
             Some("Microphone (USB Audio CODEC)")
         );
+        // The fix: TX device is matched against the OUTPUT list (the speaker-side CODEC), not the
+        // mic — otherwise applying the input name to audioOut sent TX audio to the PC speakers.
+        assert_eq!(
+            r.suggested_audio_out.as_deref(),
+            Some("Speakers (USB Audio CODEC)")
+        );
     }
 
     #[test]
@@ -399,11 +416,17 @@ mod tests {
         // A CH340-cabled rig that reports only the chip → no model, but a driver hint
         // and (on Linux) bundled. No audio match → None.
         let ports = vec![port("/dev/ttyUSB0", 0x1A86, "USB Serial", "wch.cn")];
-        let got = detect_rigs(&ports, &["Built-in Audio".into()], HostOs::Linux);
+        let got = detect_rigs(
+            &ports,
+            &["Built-in Audio".into()],
+            &["Built-in Audio".into()],
+            HostOs::Linux,
+        );
         assert_eq!(got[0].suggested_model, None);
         assert_eq!(got[0].chip, UsbSerialChip::Ch340);
         assert!(got[0].driver.as_ref().is_some_and(|d| d.bundled)); // Linux ships CH340
         assert_eq!(got[0].suggested_audio, None);
+        assert_eq!(got[0].suggested_audio_out, None);
     }
 
     #[test]

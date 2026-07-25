@@ -894,7 +894,13 @@ export function SettingsPanel({
               ? { rigModel: r.suggestedModel, rigModelName: r.suggestedModelName ?? '' }
               : {}),
             serialPort: r.portName,
-            ...(r.suggestedAudio ? { audioIn: r.suggestedAudio, audioOut: r.suggestedAudio } : {}),
+            // Pair RX from the capture list, TX from the OUTPUT list — the rig's CODEC enumerates
+            // under different names per direction on Windows, so reusing the input name for audioOut
+            // sent TX audio to the PC speakers. Fall back to the input name only if no output paired.
+            ...(r.suggestedAudio ? { audioIn: r.suggestedAudio } : {}),
+            ...(r.suggestedAudioOut || r.suggestedAudio
+              ? { audioOut: r.suggestedAudioOut ?? r.suggestedAudio ?? '' }
+              : {}),
             ...(baud ? { baud } : {}),
           }
         : prev,
@@ -917,11 +923,15 @@ export function SettingsPanel({
             rigAddr: '127.0.0.1:5002',
             rigModel: 2036,
             rigModelName: 'FlexRadio FLEX-6xxx (SmartSDR CAT)',
+            // Keep the discovered radio IP — the native panadapter / DAX path connects to the rig
+            // directly over VITA-49 at this address (CAT still rides the localhost SmartSDR proxy
+            // above). Discovery already knows it; dropping it left the native features unreachable.
+            flexRadioIp: f.ip || (prev.flexRadioIp ?? ''),
           }
         : prev,
     )
     pushToast(
-      `Applied ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} via SmartSDR CAT (slice A, port 5002) — review + Save, then Test CAT. Second slice? Use port 60001.`,
+      `Applied ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — SmartSDR CAT (slice A, port 5002); native panadapter/DAX ready to enable below. Review + Save, then Test CAT. Second slice? Use port 60001.`,
       'success',
     )
   }

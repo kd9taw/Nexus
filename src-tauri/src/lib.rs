@@ -3971,8 +3971,11 @@ struct DetectedRigDto {
     driver_note: Option<String>,
     driver_url: Option<String>,
     driver_bundled: bool,
-    /// Best-guess paired sound device (the rig's USB-Audio CODEC).
+    /// Best-guess paired capture device (the rig's USB-Audio CODEC input).
     suggested_audio: Option<String>,
+    /// Best-guess paired playback device, matched against the OUTPUT list (Windows names the
+    /// rig's input and output CODEC differently; reusing the input name sent TX to the speakers).
+    suggested_audio_out: Option<String>,
 }
 
 /// Zero-config station setup: enumerate connected USB radios and resolve each to a
@@ -3985,9 +3988,9 @@ async fn detect_rigs() -> Vec<DetectedRigDto> {
     {
         use tempo_audio::usbrig::UsbSerialChip;
         let ports = tempo_audio::ports::available_usb_ports();
-        let (audio_in, _out) = tempo_audio::device::available_devices();
+        let (audio_in, audio_out) = tempo_audio::device::available_devices();
         let os = tempo_audio::usbrig::current_os();
-        tempo_audio::usbrig::detect_rigs(&ports, &audio_in, os)
+        tempo_audio::usbrig::detect_rigs(&ports, &audio_in, &audio_out, os)
             .into_iter()
             .map(|r| {
                 let chip = match (&r.driver, r.chip) {
@@ -4012,6 +4015,7 @@ async fn detect_rigs() -> Vec<DetectedRigDto> {
                         .map(|d| d.url.to_string()),
                     driver_bundled: r.driver.as_ref().is_some_and(|d| d.bundled),
                     suggested_audio: r.suggested_audio,
+                    suggested_audio_out: r.suggested_audio_out,
                 }
             })
             .collect()

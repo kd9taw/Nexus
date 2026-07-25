@@ -536,8 +536,11 @@ export interface DetectedRig {
   driverNote: string | null
   driverUrl: string | null
   driverBundled: boolean
-  /** Best-guess paired sound device (the rig's USB-Audio CODEC). */
+  /** Best-guess paired CAPTURE device (the rig's USB-Audio CODEC input). */
   suggestedAudio: string | null
+  /** Best-guess paired PLAYBACK device, matched against the output list (may differ from the
+   * capture name on Windows). Falls back to suggestedAudio when the output couldn't be paired. */
+  suggestedAudioOut: string | null
 }
 
 /**
