@@ -16483,6 +16483,49 @@ html[data-panel='needed'] {
   border-radius: var(--radius-sm);
   white-space: nowrap;
 }
+
+/* Setup Health strip (Settings ▸ Radio) — visible station verification. */
+.setup-health {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) 14px;
+  padding: var(--space-2) 14px;
+  margin-bottom: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface-2, transparent);
+}
+.setup-health-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.setup-health .health-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 12px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.setup-health .health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.setup-health .health-item.ok .health-dot {
+  background: var(--ok, #35c46b);
+}
+.setup-health .health-item.bad .health-dot {
+  background: var(--danger, #e5484d);
+}
+.setup-health .health-item.unknown .health-dot {
+  background: var(--text-faint);
+}
 .aprs-messages {
   display: flex;
   flex-direction: column;

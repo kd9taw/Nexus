@@ -225,6 +225,57 @@ const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
 ]
 
+/** Setup Health — "is the station actually working?" made visible, so setup stops running on
+ * faith (0.17.0). Reads live snapshot state: Rig (CAT responding), RX audio (level/error), and
+ * whether TX is armed. A live Test-CAT result, when present, overrides the passive CAT state.
+ * Reusable — the wizard finale and a cockpit indicator can render the same strip later. */
+function SetupHealth({
+  radio,
+  catResult,
+}: {
+  radio?: {
+    catOk?: boolean | null
+    catDetail?: string
+    rxLevel: number
+    audioError?: string | null
+    txEnabled: boolean
+  }
+  catResult: CatTestResult | null
+}) {
+  const rigOk = catResult ? catResult.ok : radio?.catOk
+  const rigDetail = catResult ? catResult.detail : radio?.catDetail
+  const rxDb = radio ? Math.round(rxLevelDb(radio.rxLevel)) : null
+  const rxLive = rxDb != null && rxDb > -60 && !radio?.audioError
+  const cls = (ok?: boolean | null) => (ok === true ? 'ok' : ok === false ? 'bad' : 'unknown')
+  return (
+    <div className="setup-health" role="status" aria-label="Setup health">
+      <span className="setup-health-title">Setup health</span>
+      <span
+        className={`health-item ${cls(rigOk)}`}
+        title={rigDetail || 'CAT not tested yet — use Test CAT below'}
+      >
+        <span className="health-dot" /> Rig{' '}
+        {rigOk === true ? 'responding' : rigOk === false ? 'not answering' : 'untested'}
+      </span>
+      <span
+        className={`health-item ${radio?.audioError ? 'bad' : rxLive ? 'ok' : 'unknown'}`}
+        title={
+          radio?.audioError || (rxLive ? 'Receiving audio' : 'No RX audio — check the audio device below')
+        }
+      >
+        <span className="health-dot" /> RX audio{' '}
+        {radio?.audioError ? 'error' : rxDb != null ? `${rxDb} dB` : '—'}
+      </span>
+      <span
+        className={`health-item ${radio?.txEnabled ? 'ok' : 'unknown'}`}
+        title={radio?.txEnabled ? 'Transmit is enabled' : 'Transmit is off'}
+      >
+        <span className="health-dot" /> TX {radio?.txEnabled ? 'on' : 'off'}
+      </span>
+    </div>
+  )
+}
+
 // Public human DX-cluster nodes (SSB/phone + human spots) — the RBN CW + digital skimmer
 // feeds connect automatically, so these are for the phone/human spots RBN doesn't carry.
 // Researched, community-trusted, callsign-only login. (NOT RBN ports — those are wired
@@ -1738,6 +1789,7 @@ export function SettingsPanel({
           {/* ---- Rig control ---- */}
           {tab === 'radio' && (
           <>
+          <SetupHealth radio={radio} catResult={catResult} />
           {/* Dual-radio roster (P2). Always shown — the "+ Add radio" button is the discovery
               affordance a single-radio operator sees; the per-radio list + band coverage only
               matter once there's a 2nd radio. */}
