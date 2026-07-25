@@ -16484,6 +16484,27 @@ html[data-panel='needed'] {
   white-space: nowrap;
 }
 
+/* Operate cockpit: live FT8/FT4 decode-depth chips (Fast/Norm/Deep) in the header actions. */
+.cockpit-decode-depth {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+.cockpit-depth-chip {
+  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, transparent);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.cockpit-depth-chip.active {
+  color: var(--text);
+  border-color: var(--accent, #4f8cff);
+  background: color-mix(in srgb, var(--accent, #4f8cff) 15%, transparent);
+}
+
 /* Per-radio editing (Settings ▸ Radio): the card you're editing + the "editing another radio" note. */
 .radio-card.editing {
   border-color: var(--accent, #4f8cff);

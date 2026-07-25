@@ -439,6 +439,10 @@ pub struct RadioStatus {
     /// and auto-halted transmit. Cleared by re-enabling TX.
     #[serde(default)]
     pub tx_watchdog: bool,
+    /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — mirrored into the snapshot so the Operate
+    /// cockpit can show + change it live (a mid-session CPU/battery lever), not only Settings.
+    #[serde(default = "default_decode_depth_dto")]
+    pub decode_depth: u8,
     /// Whether a QSO recording (audio bridge) is streaming live RX to disk. Drives the
     /// Phone cockpit's REC badge; persists across UI nav (it's loop-owned, not per-view).
     #[serde(default)]
@@ -529,6 +533,9 @@ fn default_txlevel() -> f32 {
 /// serde default helper: `tx_enabled` defaults to true on partial deserialize.
 fn default_true() -> bool {
     true
+}
+fn default_decode_depth_dto() -> u8 {
+    3
 }
 
 /// serde default helper: audio offsets default to the 1500 Hz passband center.

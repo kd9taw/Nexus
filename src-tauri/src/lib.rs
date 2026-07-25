@@ -5384,6 +5384,18 @@ fn set_cw_wpm(state: State<'_, SharedEngine>, wpm: u32, commit: bool) -> Result<
     Ok(eng.snapshot())
 }
 
+/// Set FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) live from the Operate cockpit. Persists
+/// immediately (it's a discrete chip click, not a slider, so no save-storm concern).
+#[tauri::command]
+fn set_decode_depth(state: State<'_, SharedEngine>, depth: u8) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_decode_depth(depth);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: set_decode_depth save failed: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Abort CW in progress (Esc) — stops the rig keyer and clears the queue.
 #[tauri::command]
 fn stop_cw(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
@@ -10511,6 +10523,7 @@ pub fn run() {
             send_cw,
             set_cw_peer_info,
             set_cw_wpm,
+            set_decode_depth,
             stop_cw,
             set_cw_keyer,
             set_ptt,

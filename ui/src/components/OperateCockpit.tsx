@@ -20,6 +20,7 @@ import {
 } from '../txMessages'
 import { openPanelWindow, getSettings, notifyErase, setSettings } from '../api'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
+import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
@@ -609,17 +610,45 @@ export function OperateCockpit({
         }
         onCommitDial={commitDial}
         actions={
-          <PanelsMenu
-            items={LAYOUT_PANELS[layoutMode].map((id) => ({
-              id,
-              label: PANEL_LABELS[id],
-              state: stateOf(id),
-            }))}
-            onToggle={(id, show) => setPanelState(id as OperatePanelId, show ? 'docked' : 'removed')}
-            onUndo={panels.undo}
-            canUndo={panels.canUndo}
-            onReset={panels.reset}
-          />
+          <>
+            <div
+              className="cockpit-decode-depth"
+              role="group"
+              aria-label="Decode depth"
+              title="FT8/FT4 decode depth — Deep catches weaker signals but uses more CPU/battery (a field/POTA lever)"
+            >
+              {([
+                [1, 'Fast'],
+                [2, 'Norm'],
+                [3, 'Deep'],
+              ] as [number, string][]).map(([d, label]) => (
+                <button
+                  key={d}
+                  type="button"
+                  className={`cockpit-depth-chip${snap.radio.decodeDepth === d ? ' active' : ''}`}
+                  aria-pressed={snap.radio.decodeDepth === d}
+                  onClick={() =>
+                    void setDecodeDepth(d)
+                      .then((s) => onSnap?.(s))
+                      .catch(() => {})
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <PanelsMenu
+              items={LAYOUT_PANELS[layoutMode].map((id) => ({
+                id,
+                label: PANEL_LABELS[id],
+                state: stateOf(id),
+              }))}
+              onToggle={(id, show) => setPanelState(id as OperatePanelId, show ? 'docked' : 'removed')}
+              onUndo={panels.undo}
+              canUndo={panels.canUndo}
+              onReset={panels.reset}
+            />
+          </>
         }
         frequencyExtras={
           <TuningStrip

@@ -695,6 +695,8 @@ export interface RadioStatus {
   tuning: boolean
   /** True if the TX watchdog has auto-halted transmit (needs a re-enable). */
   txWatchdog: boolean
+  /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
+  decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
    * nav — drives the Phone cockpit's REC badge. */
   qsoRecording: boolean

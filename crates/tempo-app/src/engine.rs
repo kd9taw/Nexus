@@ -2342,6 +2342,13 @@ impl Engine {
         self.settings.cw_wpm = wpm.clamp(5, 50);
     }
 
+    /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep). Live-settable from the Operate cockpit so
+    /// the operator can trade CPU/battery for weak-signal decodes mid-session (a POTA field lever),
+    /// not only from Settings. The decoder reads `settings.decode_depth` on the next slot.
+    pub fn set_decode_depth(&mut self, depth: u8) {
+        self.settings.decode_depth = depth.clamp(1, 3);
+    }
+
     /// Operator CW decode sensitivity in [0, 1] (0.5 = the original gates; higher catches
     /// weaker/off-pitch marks like the skimmer, lower rejects more noise).
     pub fn set_cw_sensitivity(&mut self, s: f32) {
@@ -5859,6 +5866,7 @@ impl Engine {
         s.radio.tx_allowed = self.tx_allowed();
         s.radio.tuning = self.tuning;
         s.radio.tx_watchdog = self.tx_watchdog;
+        s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;

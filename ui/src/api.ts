@@ -897,6 +897,11 @@ export async function setCwWpm(wpm: number, commit = false): Promise<AppSnapshot
   return invoke<AppSnapshot>('set_cw_wpm', { wpm, commit })
 }
 
+/** Set FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) live from the Operate cockpit; persists. */
+export async function setDecodeDepth(depth: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_decode_depth', { depth })
+}
+
 /** Abort CW in progress (Esc) — stops the rig keyer + clears the queue. */
 export async function stopCw(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('stop_cw')

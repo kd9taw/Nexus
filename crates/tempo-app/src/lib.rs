@@ -271,6 +271,7 @@ impl AppState {
                 tx_allowed: true,
                 tuning: false,
                 tx_watchdog: false,
+                decode_depth: 3,
                 qso_recording: false,
                 cat_ok: None,
                 cat_detail: String::new(),
