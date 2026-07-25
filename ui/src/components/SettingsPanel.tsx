@@ -1018,31 +1018,37 @@ export function SettingsPanel({
 
   // One-click apply a detected rig: fill model (if identified) + port + paired audio.
   const applyDetectedRig = (r: DetectedRig) => {
+    if (!form) return
     markDirty()
     const baud = r.suggestedModel != null ? recommendedBaud(r.suggestedModel) : null
-    setForm((prev) =>
-      prev
-        ? {
-            ...prev,
-            ...(r.suggestedModel != null
-              ? { rigModel: r.suggestedModel, rigModelName: r.suggestedModelName ?? '' }
-              : {}),
-            serialPort: r.portName,
-            // Pair RX from the capture list, TX from the OUTPUT list — the rig's CODEC enumerates
-            // under different names per direction on Windows, so reusing the input name for audioOut
-            // sent TX audio to the PC speakers. Fall back to the input name only if no output paired.
-            ...(r.suggestedAudio ? { audioIn: r.suggestedAudio } : {}),
-            ...(r.suggestedAudioOut || r.suggestedAudio
-              ? { audioOut: r.suggestedAudioOut ?? r.suggestedAudio ?? '' }
-              : {}),
-            ...(baud ? { baud } : {}),
-          }
-        : prev,
-    )
-    pushToast(
-      `Applied ${r.suggestedModelName ?? (r.product || 'radio')} on ${r.portName} — review + Save settings`,
-      'success',
-    )
+    const applied = {
+      ...form,
+      ...(r.suggestedModel != null
+        ? { rigModel: r.suggestedModel, rigModelName: r.suggestedModelName ?? '' }
+        : {}),
+      serialPort: r.portName,
+      // Pair RX from the capture list, TX from the OUTPUT list — the rig's CODEC enumerates under
+      // different names per direction on Windows, so reusing the input name for audioOut sent TX
+      // audio to the PC speakers. Fall back to the input name only if no output paired.
+      ...(r.suggestedAudio ? { audioIn: r.suggestedAudio } : {}),
+      ...(r.suggestedAudioOut || r.suggestedAudio
+        ? { audioOut: r.suggestedAudioOut ?? r.suggestedAudio ?? '' }
+        : {}),
+      ...(baud ? { baud } : {}),
+    }
+    setForm(applied)
+    if (r.suggestedModel == null) {
+      // Unidentified rig (bridge chip only, no model) — instead of making the operator pick a model
+      // and Test CAT by hand, chain straight into the port Auto-test, which sweeps COMMON_CAT_MODELS
+      // + bauds to find the one that actually answers. Pass the freshly-applied form (state is async).
+      pushToast(`Applied ${r.product || 'radio'} on ${r.portName} — identifying via Auto-test…`, 'info')
+      void handleAutoTestPorts(applied)
+    } else {
+      pushToast(
+        `Applied ${r.suggestedModelName ?? (r.product || 'radio')} on ${r.portName} — review + Save settings`,
+        'success',
+      )
+    }
   }
 
   // One-click apply a discovered Flex: network conn via SmartSDR CAT's default
@@ -1105,8 +1111,9 @@ export function SettingsPanel({
   // Auto-test ports: probe each USB port (read-only) for the one that actually drives
   // the rig, then auto-fill + save the winning port/baud/model so CAT just works — no
   // guessing which COM port among a rig's several is the control port.
-  const handleAutoTestPorts = async () => {
-    if (!form) return
+  const handleAutoTestPorts = async (base?: typeof form) => {
+    const f = base ?? form
+    if (!f) return
     setCatTesting(true)
     setCatResult(null)
     setError(null)
@@ -1117,7 +1124,7 @@ export function SettingsPanel({
         // seeded common-rig probe can be answered by a same-family sibling (FT-991A on the FTDX10
         // probe), so keep the operator's Rig Model rather than persisting a wrong one.
         const next = {
-          ...form,
+          ...f,
           serialPort: r.portName,
           baud: r.baud,
           pttMethod: 'cat',
@@ -2378,7 +2385,7 @@ export function SettingsPanel({
                   <button
                     type="button"
                     className="settings-refresh"
-                    onClick={handleAutoTestPorts}
+                    onClick={() => handleAutoTestPorts()}
                     disabled={catTesting}
                     title="Probe each USB port (read-only — never transmits) and auto-select the one that drives your rig"
                   >
