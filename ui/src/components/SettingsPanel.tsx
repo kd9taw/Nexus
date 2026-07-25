@@ -199,39 +199,30 @@ const FREQ_MODES = ['FT8', 'FT4']
 /** Settings is split into tabbed sections: only the active one renders, so a
  * keystroke re-renders ~one section's worth of inputs instead of the whole panel
  * (fixes typing lag) — and it tames the single-giant-scroll wall. */
+// Consolidated 8-tab IA (0.17.0): identity → radio (CAT+audio) → the operating modes → frequencies
+// → what-am-I-told (spots+alerts) → where-QSOs-go (logging+connectors) → contesting → app prefs.
+// Old 14-tab ids fold into these: rig+audio→'radio', phone/digital/cw/rtty→'modes',
+// alerts→'spots', confirmations+connections→'logging', fieldday→'contesting',
+// workspace+features→'appearance'. The render blocks are grouped by tab, not moved.
 type SettingsTab =
   | 'station'
-  | 'rig'
-  | 'audio'
-  | 'phone'
-  | 'digital'
-  | 'cw'
-  | 'rtty'
+  | 'radio'
+  | 'modes'
   | 'frequencies'
-  | 'alerts'
-  | 'confirmations'
-  | 'connections'
-  | 'fieldday'
-  | 'features'
-  | 'workspace'
+  | 'spots'
+  | 'logging'
+  | 'contesting'
+  | 'appearance'
 
-// Mode-first order, mirroring the app's Phone · Digital · CW rail: radio/station setup, then the
-// three operating modes, then logging/alerts/integrations, then app prefs.
 const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'station', label: 'Station' },
-  { id: 'rig', label: 'Rig / CAT' },
-  { id: 'audio', label: 'Audio' },
-  { id: 'phone', label: 'Phone' },
-  { id: 'digital', label: 'Digital (FT8/FT4)' },
-  { id: 'cw', label: 'CW' },
-  { id: 'rtty', label: 'RTTY' },
+  { id: 'radio', label: 'Radio' },
+  { id: 'modes', label: 'Modes' },
   { id: 'frequencies', label: 'Frequencies' },
-  { id: 'alerts', label: 'Alerts' },
-  { id: 'confirmations', label: 'Logbook & QSL' },
-  { id: 'connections', label: 'Integrations & Feeds' },
-  { id: 'fieldday', label: 'Field Day' },
-  { id: 'features', label: 'Features' },
-  { id: 'workspace', label: 'Workspace' },
+  { id: 'spots', label: 'Spots & Alerts' },
+  { id: 'logging', label: 'Logging & Connectors' },
+  { id: 'contesting', label: 'Contesting' },
+  { id: 'appearance', label: 'Appearance' },
 ]
 
 // Public human DX-cluster nodes (SSB/phone + human spots) — the RBN CW + digital skimmer
@@ -1310,7 +1301,10 @@ export function SettingsPanel({
     e.preventDefault()
     if (!form) return
     if (!form.mycall.trim()) {
-      setError('Callsign is required.')
+      // Don't dead-end on another tab: route the operator to where the fix is instead of a
+      // silently-greyed Save button with a context-free "required" error.
+      setTab('station')
+      setError('Enter your callsign on the Station tab before saving.')
       return
     }
     setStatus('saving')
@@ -1440,9 +1434,9 @@ export function SettingsPanel({
 
       <form className="settings-form" onSubmit={handleSubmit}>
         <div className="settings-tabs" role="tablist" aria-label="Settings sections">
-          {/* The FD-detail tab is hidden unless the Field Day master switch (fdActive,
-              toggled in Features) is on — off-season Field Day is entirely invisible. */}
-          {SETTINGS_TABS.filter((t) => t.id !== 'fieldday' || form.fdActive).map((t) => (
+          {/* Contesting is always visible now (0.17.0 decision) — capability, not config, gates
+              tabs; the Field Day master switch lives inside the Contesting tab. */}
+          {SETTINGS_TABS.map((t) => (
             <button
               key={t.id}
               type="button"
@@ -1457,7 +1451,7 @@ export function SettingsPanel({
         </div>
         <div className="settings-scroll">
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
-          {tab === 'workspace' && (
+          {tab === 'appearance' && (
           <fieldset className="settings-section">
             <legend>Workspace</legend>
             <div className="settings-grid">
@@ -1578,7 +1572,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Features (modular toggles + goal profiles) ---- */}
-          {tab === 'features' && (
+          {tab === 'appearance' && (
           <fieldset className="settings-section">
             <legend>Features</legend>
             <div className="settings-field">
@@ -1658,7 +1652,7 @@ export function SettingsPanel({
                               // Turning on with no Class/Section yet → jump to the FD setup
                               // tab (now visible) so they're filled; the backend won't enter
                               // Field Day until both are set.
-                              if (next && (!form.fdClass.trim() || !form.fdSection.trim())) setTab('fieldday')
+                              if (next && (!form.fdClass.trim() || !form.fdSection.trim())) setTab('contesting')
                             }}
                             aria-label={`${form.fdActive ? 'Disable' : 'Enable'} Field Day mode`}
                           >
@@ -1742,7 +1736,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Rig control ---- */}
-          {tab === 'rig' && (
+          {tab === 'radio' && (
           <>
           {/* Dual-radio roster (P2). Always shown — the "+ Add radio" button is the discovery
               affordance a single-radio operator sees; the per-radio list + band coverage only
@@ -2702,7 +2696,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Audio ---- */}
-          {tab === 'audio' && (
+          {tab === 'radio' && (
           <>
           {(form.radios?.length ?? 1) > 1 && (
             <div className="radio-config-banner">
@@ -2904,7 +2898,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Digital (FT8/FT4) — was "Operating"; ~90% FT8 sequencing/decoder knobs ---- */}
-          {tab === 'digital' && (
+          {tab === 'modes' && (
           <fieldset className="settings-section">
             <legend>Digital (FT8/FT4)</legend>
             <div className="settings-featgroup">
@@ -3449,7 +3443,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Digital quick-reply macros (moved out of the old Alerts/Macros orphan) ---- */}
-          {tab === 'digital' && (
+          {tab === 'modes' && (
           <fieldset className="settings-section">
             <legend>Quick-reply macros</legend>
             <div className="settings-grid">
@@ -3494,7 +3488,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Phone (SSB / FM) ---- */}
-          {tab === 'phone' && (
+          {tab === 'modes' && (
           <fieldset className="settings-section">
             <legend>Phone (SSB / FM)</legend>
             <div className="settings-featgroup">
@@ -3581,7 +3575,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- CW — the standalone CW home (keyer + F-key macros) ---- */}
-          {tab === 'cw' && (
+          {tab === 'modes' && (
           <fieldset className="settings-section">
             <legend>CW</legend>
             <div className="settings-featgroup">
@@ -3798,7 +3792,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- RTTY — keying backend + signal parameters (TX + RX demod both) ---- */}
-          {tab === 'rtty' && (
+          {tab === 'modes' && (
           <fieldset className="settings-section">
             <legend>RTTY</legend>
             <div className="settings-featgroup">
@@ -4044,7 +4038,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Alerts ---- */}
-          {tab === 'alerts' && (
+          {tab === 'spots' && (
           <>
           <fieldset className="settings-section">
             <legend>Accessibility &amp; eyes-free</legend>
@@ -4213,7 +4207,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Connections (connector status + log) — moved from Logbook & QSL ---- */}
-          {tab === 'connections' && (
+          {tab === 'logging' && (
           <fieldset className="settings-section">
             <legend>Connections</legend>
             <div className="conn-status-grid">
@@ -4279,7 +4273,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Network integrations ---- */}
-          {tab === 'connections' && (
+          {tab === 'logging' && (
           <fieldset className="settings-section">
             <legend>Integrations &amp; Feeds</legend>
             <div className="settings-featgroup">
@@ -4611,7 +4605,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- N3FJP + N1MM loggers (moved from Field Day — they serve everyday club logging) ---- */}
-          {tab === 'connections' && (
+          {tab === 'logging' && (
           <>
           <fieldset className="settings-section">
             <legend>DXKeeper (DXLab Suite)</legend>
@@ -4834,7 +4828,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Confirmations (LoTW / eQSL / QRZ / ClubLog accounts) ---- */}
-          {tab === 'confirmations' && (
+          {tab === 'logging' && (
           <>
           <fieldset className="settings-section">
             <legend>LoTW users list</legend>
@@ -5644,10 +5638,30 @@ export function SettingsPanel({
           </>
           )}
           {/* ---- Field Day ---- */}
-          {tab === 'fieldday' && (
+          {tab === 'contesting' && (
           <fieldset className="settings-section">
             <legend>Field Day Setup</legend>
-            {(!form.fdClass.trim() || !form.fdSection.trim()) && (
+            {/* The Field Day MASTER lives here now (Contesting is always visible) — turning it on
+                reveals the FD workspace + Class/Section exchange across all modes. */}
+            <label className="settings-field">
+              <span className="settings-label">Field Day mode</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!form.fdActive}
+                className={`toggle${form.fdActive ? ' on' : ''}`}
+                onClick={() => updateBool('fdActive', !form.fdActive)}
+                aria-label={`${form.fdActive ? 'Disable' : 'Enable'} Field Day mode`}
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="settings-hint">
+                Turn on for Field Day weekend — reveals the Field Day workspace and the
+                Class/Section exchange across all modes. Off the rest of the year. Fill in Class +
+                Section below to start operating. Save to apply.
+              </span>
+            </label>
+            {form.fdActive && (!form.fdClass.trim() || !form.fdSection.trim()) && (
               <p className="settings-note">
                 <strong>Set your Class + Section to start operating.</strong> Field Day mode is on,
                 but the station won&apos;t enter Field Day until both are filled in below.
@@ -5767,7 +5781,9 @@ export function SettingsPanel({
           <button
             type="submit"
             className="settings-save"
-            disabled={status === 'saving' || !form.mycall.trim()}
+            // Not disabled on an empty callsign — clicking routes to the Station tab with a clear
+            // message (handleSubmit), rather than a greyed button that gives no reason or fix.
+            disabled={status === 'saving'}
           >
             {status === 'saving' ? 'Saving…' : 'Save'}
           </button>
