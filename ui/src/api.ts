@@ -1051,6 +1051,39 @@ export async function setRadioBands(id: number, bands: string[]): Promise<AppSna
   return invoke<AppSnapshot>('set_radio_bands', { id, bands })
 }
 
+/** The editable CAT/audio/PTT/rotator/native subset of a radio profile — the per-radio Settings
+ * page edits ONE radio with this, without making it active. Field names match the flat rig form. */
+export interface RadioProfilePatch {
+  pttMethod: string
+  rigModel: number
+  rigModelName: string
+  serialPort: string
+  baud: number
+  rigConn: string
+  rigAddr: string
+  rigctldPort: number
+  icomNativeCat: boolean
+  audioIn: string
+  audioOut: string
+  txLevel: number
+  rxGain: number
+  rotatorModel: number
+  rotatorPort: string
+  rotatorBaud: number
+  rotatorHost: string
+  rotctldPort: number
+  nativeScope: string
+}
+
+/** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio
+ * (no live rig swap / dropped carrier). Returns the updated snapshot. */
+export async function updateRadioProfile(
+  id: number,
+  patch: RadioProfilePatch,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('update_radio_profile', { id, patch })
+}
+
 /** Key / unkey a tune carrier. Returns the fresh snapshot. */
 export async function setTune(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_tune', { on })

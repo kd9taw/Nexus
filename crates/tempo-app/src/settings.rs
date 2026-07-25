@@ -1059,6 +1059,61 @@ pub struct RadioProfile {
     pub native_scope: String,
 }
 
+/// The editable CAT/audio/PTT/rotator/native subset of a [`RadioProfile`], sent from the Settings
+/// per-radio page to edit ONE radio in place (via [`Engine::update_radio_profile`]) without making
+/// it active. Excludes identity (`id`/`name`/`enabled`), band coverage (its own command), and the
+/// `last_*` tune memory (owned by the radio loop). Mirrors the field set of `sync_active_from_flat`.
+///
+/// [`Engine::update_radio_profile`]: crate::engine::Engine::update_radio_profile
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadioProfilePatch {
+    pub ptt_method: String,
+    pub rig_model: u32,
+    pub rig_model_name: String,
+    pub serial_port: String,
+    pub baud: u32,
+    pub rig_conn: String,
+    pub rig_addr: String,
+    pub rigctld_port: u16,
+    pub icom_native_cat: bool,
+    pub audio_in: String,
+    pub audio_out: String,
+    pub tx_level: f32,
+    pub rx_gain: f32,
+    pub rotator_model: u32,
+    pub rotator_port: String,
+    pub rotator_baud: u32,
+    pub rotator_host: String,
+    pub rotctld_port: u16,
+    pub native_scope: String,
+}
+
+impl RadioProfilePatch {
+    /// Copy the patch fields onto a profile, leaving its identity / bands / tune-memory alone.
+    pub fn apply_to(self, p: &mut RadioProfile) {
+        p.ptt_method = self.ptt_method;
+        p.rig_model = self.rig_model;
+        p.rig_model_name = self.rig_model_name;
+        p.serial_port = self.serial_port;
+        p.baud = self.baud;
+        p.rig_conn = self.rig_conn;
+        p.rig_addr = self.rig_addr;
+        p.rigctld_port = self.rigctld_port;
+        p.icom_native_cat = self.icom_native_cat;
+        p.audio_in = self.audio_in;
+        p.audio_out = self.audio_out;
+        p.tx_level = self.tx_level;
+        p.rx_gain = self.rx_gain;
+        p.rotator_model = self.rotator_model;
+        p.rotator_port = self.rotator_port;
+        p.rotator_baud = self.rotator_baud;
+        p.rotator_host = self.rotator_host;
+        p.rotctld_port = self.rotctld_port;
+        p.native_scope = self.native_scope;
+    }
+}
+
 /// serde default helper: booleans that default ON for absent fields in older settings.
 fn default_true() -> bool {
     true

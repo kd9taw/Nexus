@@ -35,6 +35,8 @@ import {
   renameRadio,
   setActiveRadio,
   setRadioBands,
+  updateRadioProfile,
+  type RadioProfilePatch,
   testCat,
   probeCatPorts,
   qrzTestConnection,
@@ -224,6 +226,34 @@ const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'contesting', label: 'Contesting' },
   { id: 'appearance', label: 'Appearance' },
 ]
+
+/** Pick just the per-radio CAT/audio/PTT/rotator/native fields — the flat rig form and a radio
+ * profile share these exact field names, so this serves BOTH directions: build the save patch
+ * from the form, and load a radio's profile into the form (`{...form, ...radioPatch(profile)}`). */
+function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
+  // `??` only fills genuinely-absent (null/undefined) fields — 0 / '' legit values are preserved.
+  return {
+    pttMethod: s.pttMethod ?? 'vox',
+    rigModel: s.rigModel ?? 0,
+    rigModelName: s.rigModelName ?? '',
+    serialPort: s.serialPort ?? '',
+    baud: s.baud ?? 38400,
+    rigConn: s.rigConn ?? 'serial',
+    rigAddr: s.rigAddr ?? '',
+    rigctldPort: s.rigctldPort ?? 4532,
+    icomNativeCat: s.icomNativeCat ?? false,
+    audioIn: s.audioIn ?? '',
+    audioOut: s.audioOut ?? '',
+    txLevel: s.txLevel ?? 1,
+    rxGain: s.rxGain ?? 1,
+    rotatorModel: s.rotatorModel ?? 0,
+    rotatorPort: s.rotatorPort ?? '',
+    rotatorBaud: s.rotatorBaud ?? 9600,
+    rotatorHost: s.rotatorHost ?? '',
+    rotctldPort: s.rotctldPort ?? 4533,
+    nativeScope: s.nativeScope ?? 'auto',
+  }
+}
 
 /** Setup Health — "is the station actually working?" made visible, so setup stops running on
  * faith (0.17.0). Reads live snapshot state: Rig (CAT responding), RX audio (level/error), and
@@ -449,6 +479,9 @@ export function SettingsPanel({
   const [rbToken, setRbTokenField] = useState('')
   const [cloudlogKey, setCloudlogKeyField] = useState('')
   const [tab, setTab] = useState<SettingsTab>('station')
+  // Which radio the Radio-tab form is currently EDITING — decoupled from which radio is operating
+  // (activeRadioId). Editing a non-active radio writes just that profile (no live rig swap).
+  const [editingRadioId, setEditingRadioId] = useState<number | undefined>(activeRadioId)
   // In-progress MHz text for the override row being edited — committed only when
   // it parses as a positive number, so a half-typed "14." never corrupts the form.
   const [mhzDraft, setMhzDraft] = useState<{ idx: number; text: string } | null>(null)
@@ -470,6 +503,7 @@ export function SettingsPanel({
       .then((s) => {
         setForm(s)
         dirtyRef.current = false
+        setEditingRadioId(activeRadioId) // form now mirrors the (new) active radio
       })
       .catch(() => {})
   }, [activeRadioId])
@@ -874,12 +908,25 @@ export function SettingsPanel({
       (s) => s && reloadRadios(),
     )
   }
-  // Switching the active radio is a LIVE rig swap (carrier dropped first) that re-points the flat
-  // rig form at that radio — so here we FULLY reload the form (unlike the roster edits above).
+  // EDIT a radio's config without touching what you're operating on: load that radio's profile
+  // into the rig form LOCALLY (no backend call, no live rig swap, no dropped carrier). Save then
+  // writes just this radio (via update_radio_profile) when it isn't the active one.
   const handleConfigureRadio = (id: number) => {
-    // Switching re-points the flat form at the new radio (full reload), discarding any unsaved edits
-    // to the current one — warn first if there are any.
-    if (dirtyRef.current && !window.confirm('Discard unsaved changes and switch to this radio?')) {
+    if (id === editingRadioId) return
+    if (dirtyRef.current && !window.confirm('Discard unsaved changes to the radio you were editing?')) {
+      return
+    }
+    const r = form?.radios?.find((p) => p.id === id)
+    if (!r) return
+    setForm((prev) => (prev ? { ...prev, ...radioPatch(r) } : prev))
+    setEditingRadioId(id)
+    dirtyRef.current = false
+  }
+
+  // MAKE ACTIVE — the operating radio swap (carrier dropped first). Separate from Edit now, so
+  // configuring a second rig no longer forces you to start operating on it.
+  const handleMakeActive = (id: number) => {
+    if (dirtyRef.current && !window.confirm('Discard unsaved changes and switch the operating radio?')) {
       return
     }
     void withErrorToast(() => setActiveRadio(id), 'Could not switch radios').then((s) => {
@@ -887,6 +934,7 @@ export function SettingsPanel({
       void getSettings().then((full) => {
         setForm(full)
         dirtyRef.current = false
+        setEditingRadioId(id)
       })
       onSaved?.()
     })
@@ -1361,7 +1409,23 @@ export function SettingsPanel({
     setStatus('saving')
     setError(null)
     try {
-      await setSettings({ ...form, mycall: form.mycall.trim().toUpperCase() })
+      if (editingRadioId != null && editingRadioId !== form.activeRadio) {
+        // Editing a NON-active radio: write ONLY that radio's CAT/audio/PTT/rotator/native config.
+        // The active radio, its flat mirror, and station-wide settings are untouched (the backend
+        // re-syncs the flat mirror from the still-active radio). No live rig swap. rotctldPort +
+        // nativeScope aren't on the flat form, so preserve them from the radio being edited.
+        const edited = form.radios?.find((r) => r.id === editingRadioId)
+        await updateRadioProfile(
+          editingRadioId,
+          radioPatch({
+            ...form,
+            rotctldPort: edited?.rotctldPort ?? form.rigctldPort + 1,
+            nativeScope: edited?.nativeScope ?? 'auto',
+          }),
+        )
+      } else {
+        await setSettings({ ...form, mycall: form.mycall.trim().toUpperCase() })
+      }
       dirtyRef.current = false
       setStatus('saved')
       onSaved?.()
@@ -1795,12 +1859,25 @@ export function SettingsPanel({
               matter once there's a 2nd radio. */}
           <fieldset className="settings-section">
             <legend>Radios</legend>
+            {editingRadioId != null && editingRadioId !== form.activeRadio && (
+              <p className="settings-note radio-editing-note">
+                <strong>
+                  Editing {form.radios?.find((r) => r.id === editingRadioId)?.name ?? 'another radio'}
+                </strong>{' '}
+                — not your operating radio. <strong>Save</strong> writes only this radio&apos;s CAT /
+                audio config; your active radio and station-wide settings are untouched.
+              </p>
+            )}
             <div className="radios-manager">
               {(form.radios ?? []).map((r) => {
                 const isActive = r.id === form.activeRadio
+                const isEditing = r.id === editingRadioId
                 const multi = (form.radios?.length ?? 1) > 1
                 return (
-                  <div key={r.id} className={`radio-card${isActive ? ' active' : ''}`}>
+                  <div
+                    key={r.id}
+                    className={`radio-card${isActive ? ' active' : ''}${isEditing ? ' editing' : ''}`}
+                  >
                     <div className="radio-card-head">
                       <input
                         className="settings-input radio-name-input"
@@ -1814,21 +1891,37 @@ export function SettingsPanel({
                         autoComplete="off"
                         spellCheck={false}
                       />
-                      {isActive ? (
-                        <span
-                          className="radio-active-badge"
-                          title="The Rig / CAT + Audio settings below configure this radio."
-                        >
+                      {isActive && (
+                        <span className="radio-active-badge" title="Your operating radio.">
                           Active
                         </span>
-                      ) : (
+                      )}
+                      {isEditing && !isActive && (
+                        <span
+                          className="radio-editing-badge"
+                          title="The Rig / CAT + Audio form below is editing this radio."
+                        >
+                          Editing
+                        </span>
+                      )}
+                      {!isEditing && (
                         <button
                           type="button"
                           className="settings-refresh"
                           onClick={() => handleConfigureRadio(r.id)}
-                          title="Make this the active radio so the Rig / CAT form below configures it (drops the carrier and swaps rigs)."
+                          title="Edit this radio's CAT / audio below — WITHOUT changing your operating radio (no swap, no dropped carrier)."
                         >
-                          Configure
+                          Edit
+                        </button>
+                      )}
+                      {!isActive && (
+                        <button
+                          type="button"
+                          className="settings-refresh"
+                          onClick={() => handleMakeActive(r.id)}
+                          title="Make this your operating radio (swaps rigs; drops any carrier first)."
+                        >
+                          Make active
                         </button>
                       )}
                       {multi && !isActive && (
@@ -1886,10 +1979,10 @@ export function SettingsPanel({
               </button>
               <span className="settings-hint">
                 {(form.radios?.length ?? 1) > 1
-                  ? `The Rig / CAT + Audio settings below configure “${
-                      form.radios?.find((r) => r.id === form.activeRadio)?.name ?? 'the active radio'
-                    }”. Each radio has its OWN CAT + audio — use “Configure” (or the top-bar pills) to set up the other radio. “+ Add radio” switches to the new radio automatically.`
-                  : 'Run two rigs at once — e.g. an HF radio plus a VHF/UHF radio on a different antenna? Add a second radio, then switch between them from the top bar. Newcomers can ignore this.'}
+                  ? `The Rig / CAT + Audio settings below edit “${
+                      form.radios?.find((r) => r.id === editingRadioId)?.name ?? 'the selected radio'
+                    }”. Each radio has its OWN CAT + audio — click “Edit” on any radio to configure it WITHOUT changing the one you're operating on; “Make active” swaps your operating radio.`
+                  : 'Run two rigs at once — e.g. an HF radio plus a VHF/UHF radio on a different antenna? Add a second radio; you can then Edit either one without interrupting the one you are operating on. Newcomers can ignore this.'}
               </span>
             </div>
             {(form.radios?.length ?? 1) > 1 && (
@@ -2754,11 +2847,10 @@ export function SettingsPanel({
             <div className="radio-config-banner">
               🎚 Audio devices below are for{' '}
               <strong>
-                {form.radios?.find((r) => r.id === form.activeRadio)?.name ?? 'the active radio'}
+                {form.radios?.find((r) => r.id === editingRadioId)?.name ?? 'the selected radio'}
               </strong>
-              . Each radio has its OWN input/output — switch radios (the top-bar pills, or “Configure”
-              in Rig ▸ Radios) to set the other radio's audio. The RX audio + waterfall follow whichever
-              radio is active.
+              . Each radio has its OWN input/output — click “Edit” on another radio (in Radios above)
+              to set its audio. The live RX audio + waterfall follow whichever radio is active.
             </div>
           )}
           <fieldset className="settings-section">

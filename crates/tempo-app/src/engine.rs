@@ -1664,6 +1664,21 @@ impl Engine {
         }
     }
 
+    /// Edit ONE radio's CAT/audio/PTT/rotator/native config IN PLACE — WITHOUT changing which radio
+    /// is active. This is what lets the operator configure Radio 2 while operating on Radio 1: no
+    /// live rig swap, no dropped carrier. If `id` happens to BE the active radio, the flat mirror is
+    /// re-synced from it so the running loop picks the edits up; if it isn't, the active radio (and
+    /// its flat mirror) are left completely untouched. `active_radio` is never changed here.
+    pub fn update_radio_profile(&mut self, id: u32, patch: crate::settings::RadioProfilePatch) {
+        if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) {
+            patch.apply_to(p);
+        }
+        // Keep each radio's daemon ports distinct (a bumped port must not collide) and mirror the
+        // ACTIVE profile back into the flat fields — a no-op for the flat mirror when id != active.
+        self.settings.ensure_distinct_radio_ports();
+        self.settings.sync_flat_from_active();
+    }
+
     pub fn set_frequency(&mut self, dial_mhz: f64, band: &str, mode: &str) {
         // A normal QSY leaves the APRS FM-simplex context (aprs_tune re-sets it right after its own
         // set_frequency call), so FM never lingers onto the next band the operator tunes.
@@ -12659,6 +12674,56 @@ mod tests {
             "FM",
             "FM does not follow the operator off APRS onto HF"
         );
+    }
+
+    #[test]
+    fn update_radio_profile_edits_a_nonactive_radio_without_touching_the_active_one() {
+        use crate::settings::{RadioProfile, RadioProfilePatch};
+        // Build a patch from a profile, changing only the serial port — the field we assert on.
+        let patch_with_port = |p: &RadioProfile, port: &str| RadioProfilePatch {
+            ptt_method: p.ptt_method.clone(),
+            rig_model: p.rig_model,
+            rig_model_name: p.rig_model_name.clone(),
+            serial_port: port.to_string(),
+            baud: p.baud,
+            rig_conn: p.rig_conn.clone(),
+            rig_addr: p.rig_addr.clone(),
+            rigctld_port: p.rigctld_port,
+            icom_native_cat: p.icom_native_cat,
+            audio_in: p.audio_in.clone(),
+            audio_out: p.audio_out.clone(),
+            tx_level: p.tx_level,
+            rx_gain: p.rx_gain,
+            rotator_model: p.rotator_model,
+            rotator_port: p.rotator_port.clone(),
+            rotator_baud: p.rotator_baud,
+            rotator_host: p.rotator_host.clone(),
+            rotctld_port: p.rotctld_port,
+            native_scope: p.native_scope.clone(),
+        };
+
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.serial_port = "COM_R0".into();
+        e.settings.sync_active_from_flat(); // radio 0 profile now carries COM_R0
+        let r0 = e.settings.active_radio;
+        let r1 = e.add_radio(); // radio 1 — now the ACTIVE radio
+        e.settings.serial_port = "COM_R1".into();
+        e.settings.sync_active_from_flat(); // radio 1 profile + flat mirror carry COM_R1
+        assert_eq!(e.settings.active_radio, r1);
+
+        // Edit the NON-active radio (r0) — operating on r1 the whole time.
+        let r0_profile = e.settings.radios.iter().find(|p| p.id == r0).unwrap().clone();
+        e.update_radio_profile(r0, patch_with_port(&r0_profile, "COM_R0_EDITED"));
+
+        // r0's profile changed…
+        let r0_now = e.settings.radios.iter().find(|p| p.id == r0).unwrap();
+        assert_eq!(r0_now.serial_port, "COM_R0_EDITED");
+        // …the active radio is STILL r1, its profile untouched, and the flat mirror still points at it.
+        assert_eq!(e.settings.active_radio, r1, "active radio unchanged");
+        let r1_now = e.settings.radios.iter().find(|p| p.id == r1).unwrap();
+        assert_eq!(r1_now.serial_port, "COM_R1", "active radio's profile untouched");
+        assert_eq!(e.settings.serial_port, "COM_R1", "flat mirror still mirrors the active radio");
     }
 
     #[test]

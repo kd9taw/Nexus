@@ -5030,6 +5030,23 @@ fn set_radio_bands(
     Ok(eng.snapshot())
 }
 
+/// Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio
+/// — the per-radio Settings page uses this to configure a radio you're NOT currently operating on
+/// (no live rig swap, no dropped carrier). Persists + returns the snapshot.
+#[tauri::command]
+fn update_radio_profile(
+    state: State<'_, SharedEngine>,
+    id: u32,
+    patch: tempo_app::settings::RadioProfilePatch,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.update_radio_profile(id, patch);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: update_radio_profile save failed: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Hold (`true`) or release (`false`) a steady tune carrier for ATU/amp tuning.
 /// While tuning, normal slot TX is suppressed and the radio loop plays a steady
 /// f0 sine. Returns the refreshed snapshot.
@@ -10534,6 +10551,7 @@ pub fn run() {
             remove_radio,
             rename_radio,
             set_radio_bands,
+            update_radio_profile,
             set_tune,
             halt_tx,
             test_cat,

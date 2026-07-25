@@ -16484,6 +16484,25 @@ html[data-panel='needed'] {
   white-space: nowrap;
 }
 
+/* Per-radio editing (Settings ▸ Radio): the card you're editing + the "editing another radio" note. */
+.radio-card.editing {
+  border-color: var(--accent, #4f8cff);
+  box-shadow: 0 0 0 1px var(--accent, #4f8cff) inset;
+}
+.radio-editing-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent, #4f8cff);
+  border: 1px solid var(--accent, #4f8cff);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-1);
+}
+.radio-editing-note {
+  border-left: 3px solid var(--accent, #4f8cff);
+}
+
 /* Setup Health strip (Settings ▸ Radio) — visible station verification. */
 .setup-health {
   display: flex;
