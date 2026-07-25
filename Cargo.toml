@@ -31,3 +31,17 @@ homepage = "https://github.com/kd9taw/nexus"
 # DWARF from release artifacts — see the note there (panic-backtrace memory).
 [profile.release]
 strip = "debuginfo"
+
+# Optimize the DSP crates under `cargo test`. They are sample-loop code, and unoptimized
+# they dominate CI wall clock: the 15 SSTV TX↔RX loopback cases each ran over a minute,
+# pushing `cargo test --workspace` past an hour and starving the clippy + per-crate gates
+# queued behind it in ci.yml's single job. Optimizing the crate under test (not the test
+# harness) keeps every assertion and every case — no coverage is traded for the time.
+[profile.test.package.tempo-sstv]
+opt-level = 3
+[profile.test.package.tempo-fast]
+opt-level = 3
+[profile.test.package.ft8]
+opt-level = 3
+[profile.test.package.ft4]
+opt-level = 3

@@ -5,6 +5,39 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.12] — 2026-07-25 — Dual-radio setup, honest rig mode, FT exchange fields
+
+- **Setting up a second radio no longer overwrites the first one's COM port.** Pressing *Test CAT*
+  or *Auto-test* while editing a radio you are not operating on used to save that radio's port,
+  model and audio devices onto your **active** radio's profile, silently and permanently, leaving
+  both radios pointing at one set of ports. Every write from the rig form now goes to the radio the
+  form is actually describing. On the air: your two rigs stay two rigs.
+- **Auto-test now probes for the radio you are configuring.** It seeded every port with the *active*
+  radio's Hamlib model, and an Icom only ever answers at its own CI-V address — so with two radios
+  set up, the second one's port could never answer and Auto-test kept handing back the first radio's
+  port. It also no longer claims a CAT test passed when the test it ran was on the other radio.
+- **The top bar tells the truth about your rig's mode.** Its USB/FM buttons stopped reaching the
+  radio back in June, when the transmit path moved to per-section modes. Clicking FM could not
+  command FM; all it did was force a retune that re-asserted the section's own mode, which is what
+  dragged a rig sitting in FM into USB/USB-D. The dead buttons are gone, and when your radio is
+  actually in a different mode than Nexus thinks, the top bar now says so (`rig: FM`) instead of
+  confidently printing the wrong one.
+- **FT8/FT4: the DX call and grid fill in however the QSO started.** They were only ever populated
+  by a single click on a decode row, so working a caller any other way — the Work/Call buttons, the
+  roster, Shift+Enter, JTAlert/GridTracker, or a station simply answering your CQ while the
+  sequencer handled it — left the exchange panel blank, with Tx1–Tx4 showing "—" and the Tx buttons
+  dead, even though the QSO ran and logged correctly. They now track the live QSO, and the grid
+  resolves exactly the way the logged GRIDSQUARE does. This also removes a real hazard: pressing a
+  Tx row while a stale call was showing could retarget the contact to the wrong station.
+- **RST_SENT no longer goes missing when you work a station that answered your CQ.** The report the
+  sequencer had already armed was being discarded at the moment you clicked, and the only other
+  place that captured it does not run during your own transmit slot — so the contact logged with a
+  blank sent report. This is the "the log has it right in almost every case" case.
+- **CI runs in minutes again.** The 15 SSTV transmit/receive loopback cases were built unoptimized
+  and each took over a minute, pushing the test job past an hour and starving the gates queued
+  behind it. The DSP crates are now optimized under `cargo test`: the same suite runs in 13 seconds
+  with every case and every assertion intact.
+
 ## [0.17.11] — 2026-07-25 — Decode-first CW cockpit + cross-mode layout fixes
 
 - **The CW decode transcript is now the dominant pane.** It grows to fill the space under the

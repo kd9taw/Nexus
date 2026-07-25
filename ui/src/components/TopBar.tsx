@@ -56,6 +56,33 @@ function dtLabel(dtSec: number): string {
   return `DT ${v > 0 ? '+' : ''}${v.toFixed(1)}s`
 }
 
+/** Collapse a CAT mode string to its sideband FAMILY, so the top bar only flags a real
+ * disagreement. The data variants ride the same sideband (PKTUSB is USB with the rear jack
+ * live — an Icom shows it as USB-D), and FMN/WFM are still FM, so none of those are a
+ * mismatch worth shouting about outside an operating cockpit. */
+function modeFamily(mode: string): string {
+  const m = mode.trim().toUpperCase()
+  if (/^W?FM/.test(m)) return 'FM'
+  if (/^(PKT|DATA[- ]?)?USB/.test(m) || m === 'USB-D') return 'USB'
+  if (/^(PKT|DATA[- ]?)?LSB/.test(m) || m === 'LSB-D') return 'LSB'
+  if (m === 'CWR') return 'CW'
+  if (m === 'RTTYR') return 'RTTY'
+  return m
+}
+
+/** The rig's real mode when it disagrees with what Nexus believes, else null.
+ * `rigMode` is Hamlib's `m`, which some backends answer from cache — good enough for a
+ * display hint, never good enough to verify a set (see reference-section-follow). */
+function modeMismatch(
+  rigMode: string | null | undefined,
+  believed: string,
+  rigConfirmed: boolean | undefined,
+): string | null {
+  const rig = (rigMode ?? '').trim()
+  if (!rigConfirmed || rig === '') return null
+  return modeFamily(rig) === modeFamily(believed) ? null : rig.toUpperCase()
+}
+
 /** Color class for the NTP clock offset: ok ≤0.3 s, warn ≤1 s, else bad. */
 function clockClass(ms: number): string {
   const a = Math.abs(ms)
@@ -116,6 +143,11 @@ export function TopBar({
   useEffect(() => {
     appVersion().then(setVersion).catch(() => {})
   }, [])
+  // The readout above prints `radio.sideband` — what Nexus BELIEVES the rig is on. The rig can
+  // legitimately be somewhere else (it powered up in FM, or the operator turned the mode knob):
+  // launch is a read-only act, so Nexus never commands the rig into agreement. Surface the
+  // disagreement instead of printing the belief as if it were fact. Display only.
+  const rigModeMismatch = modeMismatch(radio.rigMode, radio.sideband, radio.rigConfirmed)
   return (
     <header className={`topbar${hideFrequencyControl ? ' topbar--no-readout' : ''}`}>
       <div className="topbar-group brand">
@@ -145,8 +177,17 @@ export function TopBar({
             band={radio.band}
             mode={radio.sideband}
             variant="compact"
+            showModeToggle={false}
             onSet={onSetFrequency}
           />
+          {rigModeMismatch && (
+            <span
+              className="topbar-rig-mode"
+              title={`Your rig is on ${rigModeMismatch}, but Nexus has ${radio.sideband}. Turn the rig's mode knob (or pick the band in an operating cockpit) to match.`}
+            >
+              rig: {rigModeMismatch}
+            </span>
+          )}
         </div>
       )}
 

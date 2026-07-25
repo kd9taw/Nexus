@@ -1540,6 +1540,9 @@ export interface ImportStats {
 export interface QsoStatus {
   state: string
   dxcall: string | null
+  /** The DX's grid: what the exchange carried, else what we decoded from them earlier this
+   * session. Resolved exactly as the logged GRIDSQUARE is, so screen and log agree. */
+  dxgrid?: string | null
   rxReport: number | null
   running: boolean
   /** On-air text of the message queued for the next TX slot ("Now sending"). */

@@ -1110,8 +1110,8 @@ export async function testCat(): Promise<CatTestResult> {
 
 /** Auto-test which serial port drives the rig: probes each USB port read-only and
  * returns the working (port, baud, model) to auto-select, or found=false. */
-export async function probeCatPorts(): Promise<CatProbeResult> {
-  return invoke<CatProbeResult>('probe_cat_ports')
+export async function probeCatPorts(radioId?: number): Promise<CatProbeResult> {
+  return invoke<CatProbeResult>('probe_cat_ports', { radioId })
 }
 
 /** Point the antenna rotator at an absolute azimuth (degrees) via rotctld. */

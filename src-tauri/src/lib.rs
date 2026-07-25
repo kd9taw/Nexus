@@ -4049,15 +4049,30 @@ struct CatProbeResult {
 /// fallback Hamlib model is the operator's configured rig (for ports whose USB descriptor
 /// doesn't name a model). Run it when CAT isn't already connected (the setup wizard, or a
 /// not-working CAT) — a live daemon holding the real port blocks that one port's probe.
+///
+/// `radio_id` names the radio being CONFIGURED, which is not always the active one: the
+/// per-radio Edit flow configures a radio without making it active. Seeding the probe from
+/// the flat mirror (= the ACTIVE radio) instead meant that with two radios configured,
+/// radio 2's port was probed with radio 1's Hamlib model — and an Icom answers only at its
+/// OWN CI-V address, so it could never answer. Operator report, 2026-07-25: "when one is
+/// configured it finds the right comm ports, when two are configured it only finds one set."
 #[tauri::command]
-async fn probe_cat_ports(state: State<'_, SharedEngine>) -> Result<CatProbeResult, String> {
+async fn probe_cat_ports(
+    state: State<'_, SharedEngine>,
+    radio_id: Option<u32>,
+) -> Result<CatProbeResult, String> {
     #[cfg(feature = "radio")]
     {
         // Read the configured model, then release the lock for the seconds-long probe so
         // the UI's snapshot polling never blocks on it.
         let model = {
             let eng = state.lock().map_err(|e| e.to_string())?;
-            eng.settings().rig_model
+            let s = eng.settings();
+            // The radio being configured owns the fallback model. Fall back to the flat
+            // mirror only when no radio was named (the setup wizard's single-radio path).
+            radio_id
+                .and_then(|id| s.radios.iter().find(|p| p.id == id).map(|p| p.rig_model))
+                .unwrap_or(s.rig_model)
         };
         // 4599: a private TCP port for the throwaway rigctld, distinct from the live one.
         let hit = tauri::async_runtime::spawn_blocking(move || {
@@ -4098,8 +4113,11 @@ async fn probe_cat_ports(state: State<'_, SharedEngine>) -> Result<CatProbeResul
                 model: 0,
                 model_name: String::new(),
                 freq_mhz: 0.0,
-                detail: "No rig answered on any USB port. Check the cable and that the rig is on \
-                         (and not already connected elsewhere), then retry."
+                detail: "No rig answered on any USB port. Check the cable and that the rig is \
+                         on. Note that a radio Nexus is already driving holds its own port \
+                         open, so Auto-test cannot re-probe THAT port — its CAT is already \
+                         working. Set the Rig Model for the radio you are configuring and \
+                         retry."
                     .to_string(),
                 model_seeded: false,
             },

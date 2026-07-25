@@ -6956,7 +6956,8 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-size: 11px;
   color: var(--text);
 }
-.ph-mode-mismatch {
+.ph-mode-mismatch,
+.topbar-rig-mode {
   font-weight: 700;
   font-size: var(--fs-label);
   letter-spacing: 0.04em;
@@ -6965,6 +6966,10 @@ input.cw-pitch::-webkit-inner-spin-button {
   border: 1px solid color-mix(in srgb, var(--state-weak, #e0a030) 45%, transparent);
   border-radius: var(--radius-sm);
   padding: 3px var(--space-2);
+}
+.topbar-rig-mode {
+  margin-left: var(--space-2);
+  white-space: nowrap;
 }
 .ph-split {
   display: inline-flex;

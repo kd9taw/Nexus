@@ -1084,6 +1084,43 @@ export function SettingsPanel({
     )
   }
 
+  // Persist the rig form to the radio it actually describes.
+  //
+  // The backend contract is that a settings payload's `activeRadio` names the radio whose
+  // config the flat fields describe (engine.rs apply_settings → sync_active_from_flat). The
+  // per-radio Edit flow breaks that contract by design, so every write of the rig form has to
+  // route through the per-radio verb instead. Only Save was taught this; Test CAT and Auto-test
+  // were not, and a whole-settings save from either one stamped the EDITED radio's COM port,
+  // model and audio devices onto the ACTIVE radio's profile — persisted, silent, and
+  // unrecoverable. Operator report, 2026-07-25: both radios ended up on one set of comm ports.
+  //
+  // Takes the form explicitly: setForm is async, so a caller that just built a new form must
+  // hand it over rather than let this read a stale closure.
+  const persistRadioForm = async (next: NonNullable<typeof form>) => {
+    if (editingRadioId != null && editingRadioId !== next.activeRadio) {
+      const edited = next.radios?.find((r) => r.id === editingRadioId)
+      await updateRadioProfile(
+        editingRadioId,
+        radioPatch({
+          ...next,
+          rotctldPort: edited?.rotctldPort ?? next.rigctldPort + 1,
+          nativeScope: edited?.nativeScope ?? 'auto',
+        }),
+      )
+    } else {
+      await setSettings({ ...next, mycall: next.mycall.trim().toUpperCase() })
+    }
+  }
+
+  // A station-wide save (LoTW/eQSL credentials, config profiles) that must NOT carry the rig
+  // form's radio fields — while editing a non-active radio those describe the wrong radio, and
+  // the backend would fold them into the active profile. Restore the active radio's own config
+  // into the payload so the fold is a no-op; everything station-wide still persists.
+  const withActiveRadioConfig = (next: NonNullable<typeof form>) => {
+    const active = next.radios?.find((r) => r.id === next.activeRadio)
+    return active ? { ...next, ...radioPatch(active) } : next
+  }
+
   // Test CAT (WSJT-X-style): save the form first so the radio loop reconfigures
   // (launching rigctld for CAT) from these exact values, then probe the rig and
   // show a green/red result with the read frequency or a specific error.
@@ -1097,10 +1134,22 @@ export function SettingsPanel({
     setCatResult(null)
     setError(null)
     try {
-      await setSettings({ ...form, mycall: form.mycall.trim().toUpperCase() })
+      await persistRadioForm(form)
       onSaved?.()
-      const result = await testCat()
-      setCatResult(result)
+      if (editingRadioId != null && editingRadioId !== form.activeRadio) {
+        // test_cat reports the ACTIVE radio's CAT state — it has no radio argument. Running it
+        // here would save this radio's config and then hand back a green tick earned by the
+        // OTHER radio. A false green is worse than no test: it's what hid the CAT-flip bug
+        // through a whole review. Say what was actually done instead.
+        const name = form.radios?.find((r) => r.id === editingRadioId)?.name ?? `radio ${editingRadioId}`
+        setCatResult({
+          ok: true,
+          detail: `Saved to ${name}. CAT can only be tested on the radio you're operating — make ${name} active to test it.`,
+        })
+      } else {
+        const result = await testCat()
+        setCatResult(result)
+      }
     } catch {
       setCatResult({ ok: false, detail: 'Could not run the CAT test.' })
     } finally {
@@ -1118,7 +1167,9 @@ export function SettingsPanel({
     setCatResult(null)
     setError(null)
     try {
-      const r = await probeCatPorts()
+      // Probe on behalf of the radio being CONFIGURED, not the one being operated — its Hamlib
+      // model is what seeds a bridge-chip port, and an Icom answers only at its own CI-V address.
+      const r = await probeCatPorts(editingRadioId ?? f.activeRadio)
       if (r.found) {
         // Apply port + baud (confirmed working). Only trust the MODEL when it wasn't a guess — a
         // seeded common-rig probe can be answered by a same-family sibling (FT-991A on the FTDX10
@@ -1133,7 +1184,7 @@ export function SettingsPanel({
             : { rigModel: r.model, rigModelName: r.modelName }),
         }
         setForm(next)
-        await setSettings(next)
+        await persistRadioForm(next)
         onSaved?.()
         setCatResult({ ok: true, detail: `✓ ${r.detail}` })
       } else {
@@ -1158,6 +1209,9 @@ export function SettingsPanel({
     const p = profiles.find((x) => x.name === selectedProfile)
     if (!p) return
     setForm(p.settings)
+    // A profile is a whole-station config, so the form no longer describes whichever radio was
+    // being edited — drop back to the active radio or the load would route into a radio patch.
+    setEditingRadioId(p.settings.activeRadio)
     await setSettings(p.settings)
     onSaved?.()
     pushToast(`Loaded profile "${p.name}"`, 'success')
@@ -1197,8 +1251,12 @@ export function SettingsPanel({
     // Persist the form first so the download runs against the username the user
     // sees — the backend reads SAVED settings, not the in-form draft (and a
     // username change resets the sync cursor). Mirrors how Test CAT saves first.
+    // This is a station-wide save, so it must not carry the rig form's radio fields.
     const r = await withErrorToast(async () => {
-      await setSettings({ ...form, mycall: form.mycall.trim().toUpperCase() })
+      await setSettings({
+        ...withActiveRadioConfig(form),
+        mycall: form.mycall.trim().toUpperCase(),
+      })
       return downloadLotwReport()
     }, 'LoTW sync failed')
     setLotwSyncing(false)
@@ -1243,8 +1301,12 @@ export function SettingsPanel({
     setEqslSyncing(true)
     // Save the form first so the download uses the username the user sees (the
     // backend reads SAVED settings; a username change resets the cursor).
+    // Station-wide save: must not carry the rig form's radio fields (see onSyncLotw).
     const r = await withErrorToast(async () => {
-      await setSettings({ ...form, mycall: form.mycall.trim().toUpperCase() })
+      await setSettings({
+        ...withActiveRadioConfig(form),
+        mycall: form.mycall.trim().toUpperCase(),
+      })
       return downloadEqslReport()
     }, 'eQSL sync failed')
     setEqslSyncing(false)
@@ -1458,23 +1520,10 @@ export function SettingsPanel({
     setStatus('saving')
     setError(null)
     try {
-      if (editingRadioId != null && editingRadioId !== form.activeRadio) {
-        // Editing a NON-active radio: write ONLY that radio's CAT/audio/PTT/rotator/native config.
-        // The active radio, its flat mirror, and station-wide settings are untouched (the backend
-        // re-syncs the flat mirror from the still-active radio). No live rig swap. rotctldPort +
-        // nativeScope aren't on the flat form, so preserve them from the radio being edited.
-        const edited = form.radios?.find((r) => r.id === editingRadioId)
-        await updateRadioProfile(
-          editingRadioId,
-          radioPatch({
-            ...form,
-            rotctldPort: edited?.rotctldPort ?? form.rigctldPort + 1,
-            nativeScope: edited?.nativeScope ?? 'auto',
-          }),
-        )
-      } else {
-        await setSettings({ ...form, mycall: form.mycall.trim().toUpperCase() })
-      }
+      // Editing a NON-active radio writes ONLY that radio's CAT/audio/PTT/rotator/native config;
+      // the active radio, its flat mirror and station-wide settings are untouched (the backend
+      // re-syncs the flat mirror from the still-active radio). No live rig swap.
+      await persistRadioForm(form)
       dirtyRef.current = false
       setStatus('saved')
       onSaved?.()

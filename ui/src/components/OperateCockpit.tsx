@@ -453,14 +453,36 @@ export function OperateCockpit({
 
   // A retarget/abandon makes a remembered Tx-slot pick meaningless — without
   // this the next-dot stayed lit on a stale row of the NEW station's panel.
+  //
+  // This is also the ONE place the DX fields get reconciled with the engine. They used to be
+  // seeded only by a decode-row single-click, which meant every other way a QSO starts left
+  // them empty or holding the PREVIOUS station: the Work/Call buttons, a roster double-click,
+  // Shift+Enter, the JTAlert/GridTracker UDP Reply path, an engine-side retarget — and above
+  // all the CQ auto-answer, where a caller replies and the sequencer starts the QSO with no
+  // click anywhere. An empty dxCall makes genStdMessages return blanks, so Tx1–Tx4 render "—",
+  // the DX Grid box is empty and the Tx buttons are dead, all while the QSO runs correctly and
+  // logs correctly. Seeding from the snapshot covers every one of those paths at once, and it
+  // closes a worse hazard: pressing a Tx row with a STALE dxCall retargets the live QSO to the
+  // wrong station. Operator report, 2026-07-25.
   const lastDx = useRef<string | null>(null)
   useEffect(() => {
     const dx = snap.qso?.dxcall ?? null
+    // The engine resolves the grid the same way the logged GRIDSQUARE does (the exchange's
+    // grid, else the roster's), so screen and log agree by construction.
+    const grid = (snap.qso?.dxgrid ?? '').toUpperCase()
     if (dx !== lastDx.current) {
       lastDx.current = dx
       setLocalNext(null)
+      if (dx) {
+        setDxCall(dx.toUpperCase())
+        setDxGrid(grid)
+      }
+    } else if (dx && grid) {
+      // The grid can land LATER than the call — a caller who answered with a bare report has
+      // no grid until we decode one from them. Fill an empty box; never overwrite a typed one.
+      setDxGrid((prev) => (prev.trim() ? prev : grid))
     }
-  }, [snap.qso?.dxcall])
+  }, [snap.qso?.dxcall, snap.qso?.dxgrid])
 
   // The six panel rows (Tx5 + Tx6 = the live editable texts). The "next" dot
   // follows qso.txNow when it matches a row, else the operator's local pick.

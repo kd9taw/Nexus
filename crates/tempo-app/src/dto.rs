@@ -581,6 +581,11 @@ pub struct QsoStatus {
     /// Sequencer state, e.g. "callingCq", "awaitReport", "done".
     pub state: String,
     pub dxcall: Option<String>,
+    /// The DX's grid: what the exchange carried, else what we decoded from this station
+    /// earlier in the session. Same resolution the logged GRIDSQUARE uses, so the cockpit's
+    /// DX Grid box and the log can never disagree.
+    #[serde(default)]
+    pub dxgrid: Option<String>,
     /// Signal report received about my own signal, if any.
     pub rx_report: Option<i32>,
     /// True if this station is calling CQ (running) vs answering (S&P).

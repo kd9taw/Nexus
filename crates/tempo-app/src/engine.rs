@@ -3607,6 +3607,15 @@ impl Engine {
                 .map(|g| g.trim().to_uppercase())
                 .filter(|g| !g.is_empty());
         }
+        // The station we just built may ALREADY have a report armed — that's the CQ case: a
+        // caller answered our CQ, `Station::observe` advanced CallingCq→AwaitRoger and queued
+        // the report, and only then did the operator click to work them. Capture it here,
+        // because our only other capture point (`observe_modes`) runs off a decode fold, and
+        // no decode folds during our own TX slot. Miss it and the next fold has already
+        // advanced the QSO to RR73, so the report is gone and the contact logs with a blank
+        // RST_SENT. Operator report, 2026-07-25: "the log seems to have it right in almost
+        // every case" — this is the "almost".
+        let opening_report = report_in(station.outgoing());
         self.mode = Mode::Qso {
             station: Box::new(station),
             running: true,
@@ -3676,7 +3685,7 @@ impl Engine {
         self.tx_queue.clear();
         self.broadcast_queue.clear();
         self.qso_logged = false;
-        self.qso_report_sent = None;
+        self.qso_report_sent = opening_report;
         self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
         self.harq_reset_locked(); // fresh exchange: drop stale receive-side IR-HARQ state
     }
@@ -6036,6 +6045,10 @@ impl Engine {
                 s.qso = Some(QsoStatus {
                     state: format!("{:?}", station.state),
                     dxcall: station.dxcall.clone(),
+                    dxgrid: station
+                        .dxcall
+                        .as_deref()
+                        .and_then(|c| self.dx_grid_resolved(c, station.dxgrid.clone())),
                     rx_report: station.rx_report,
                     running: *running,
                     tx_now: station.pending_text(),
@@ -7282,6 +7295,31 @@ impl Engine {
         }
     }
 
+    /// The DX's grid for a contact: what the exchange itself carried, else what we decoded
+    /// from that station earlier this session.
+    ///
+    /// Grid backfill (operator report, 2026-07-23): a caller who answers our CQ with a bare
+    /// report — `KD9TAW K0SSD +17`, the common FT8 form — carries NO grid in the QSO, so the
+    /// contact logged with a blank GRIDSQUARE. But we almost always decoded that station's
+    /// grid this session from their own CQ (`CQ HB9XBY JN47`) or a grid message, and the
+    /// roster remembers it (the same source the rarity badge backfills from). Fill it in when
+    /// the QSO itself gave us nothing — exactly as WSJT-X pre-fills its Log dialog from decode
+    /// history. An empty/whitespace grid counts as nothing.
+    ///
+    /// Shared by the log record and the snapshot's `QsoStatus.dxgrid` so the cockpit's DX Grid
+    /// box and the logged GRIDSQUARE resolve identically — they diverged before, and the
+    /// operator saw a blank grid on screen for a contact that logged correctly.
+    fn dx_grid_resolved(&self, dxcall: &str, dxgrid: Option<String>) -> Option<String> {
+        dxgrid.filter(|g| !g.trim().is_empty()).or_else(|| {
+            self.app
+                .inbox
+                .roster
+                .get(dxcall)
+                .and_then(|h| h.grid.clone())
+                .filter(|g| !g.trim().is_empty())
+        })
+    }
+
     /// Build a [`QsoRecord`] for a completed auto-sequenced QSO from the current
     /// settings (band / dial / tier) and the station's exchanged reports.
     fn qso_record(
@@ -7315,21 +7353,7 @@ impl Engine {
         } else {
             self.settings.dial_mhz + off_mhz
         };
-        // Grid backfill (operator report, 2026-07-23): a caller who answers our CQ with a bare
-        // report — `KD9TAW K0SSD +17`, the common FT8 form — carries NO grid in the QSO, so the
-        // contact logged with a blank GRIDSQUARE. But we almost always decoded that station's
-        // grid this session from their own CQ (`CQ HB9XBY JN47`) or a grid message, and the
-        // roster remembers it (the same source the rarity badge backfills from, above). Fill it
-        // in when the QSO itself gave us nothing — exactly as WSJT-X pre-fills its Log dialog
-        // from decode history. An empty/whitespace grid counts as nothing.
-        let grid = dxgrid.filter(|g| !g.trim().is_empty()).or_else(|| {
-            self.app
-                .inbox
-                .roster
-                .get(&dxcall)
-                .and_then(|h| h.grid.clone())
-                .filter(|g| !g.trim().is_empty())
-        });
+        let grid = self.dx_grid_resolved(&dxcall, dxgrid);
         QsoRecord {
             call: dxcall,
             grid,
@@ -10748,6 +10772,76 @@ mod tests {
             e.rf_power_to_command().map(|(_, f)| f),
             Some(false),
             "uncapped mode never forces"
+        );
+    }
+
+    #[test]
+    fn working_a_cq_answerer_keeps_the_report_it_already_armed() {
+        // Operator report, 2026-07-25: "grid, RST etc intermittently fail, but the log seems to
+        // have it right in almost every case… calling CQ, then clicking Work or Call. That first
+        // cycle seems more likely to fail."
+        //
+        // The CQ path is the one that loses it. A caller answers our CQ with their grid, so
+        // `Station::observe` advances CallingCq→AwaitRoger and ARMS the report on its own. The
+        // operator then clicks Work on that same station: `call_station_ctx` rebuilds the station
+        // (landing back on AwaitRoger with the same report armed) and used to wipe
+        // `qso_report_sent`. The only other place that captures it is `observe_modes`, which runs
+        // off a decode fold — and no decode folds during our own TX slot. By the next fold the
+        // QSO has advanced to RR73, `report_in` sees no report, and the contact logs with a blank
+        // RST_SENT. S&P never hits this: there the advance CREATES the outgoing report, so the
+        // same pass captures it.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::TempoFast);
+        let _ = e.start_cq(None);
+
+        // W9XYZ answers our CQ with their grid; we decode them at -7, so -7 is the report we owe.
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ EM48", -7)], 1);
+        assert_eq!(
+            e.qso_report_sent,
+            Some(-7),
+            "the auto-answer armed the report and observe_modes captured it"
+        );
+
+        // The operator clicks Work on that same caller (the report is already armed).
+        e.call_station("W9XYZ");
+        assert_eq!(
+            e.qso_report_sent,
+            Some(-7),
+            "the click must not discard the report the rebuilt station still has armed"
+        );
+
+        // They roger our report (→ we send RR73), then sign 73 and the QSO reaches Done.
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ R-10", -7)], 3);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ 73", -7)], 5);
+        let log = e.get_log();
+        assert_eq!(log.len(), 1, "the QSO auto-logged");
+        assert_eq!(
+            log[0].rst_sent.as_deref(),
+            Some("-7"),
+            "RST_SENT survives working a station that answered our CQ"
+        );
+    }
+
+    #[test]
+    fn qso_snapshot_carries_the_same_grid_the_log_will() {
+        // The cockpit's DX Grid box reads this field. It must resolve exactly as the logged
+        // GRIDSQUARE does — the exchange's grid, else the roster's — or the operator sees a
+        // blank grid on screen for a contact that logs correctly (operator report, 2026-07-25).
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::TempoFast);
+        // We hear W9XYZ's CQ first, so the roster learns EM48.
+        e.ingest_decodes_for_test(&[dec_snr("CQ W9XYZ EM48", -7)], 1);
+        let _ = e.start_cq(None);
+        // They come back with a BARE REPORT — the common FT8 form, carrying no grid at all.
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ +17", -7)], 3);
+
+        let snap = e.snapshot();
+        let qso = snap.qso.expect("a QSO is in progress");
+        assert_eq!(qso.dxcall.as_deref(), Some("W9XYZ"));
+        assert_eq!(
+            qso.dxgrid.as_deref(),
+            Some("EM48"),
+            "the snapshot backfills the grid from the roster, exactly as the log does"
         );
     }
 
