@@ -80,11 +80,49 @@ fn native_civ_addr(t: &Transport) -> Option<u8> {
     crate::rigmodels::icom_scope_model(t.rig_model).map(|m| m.default_civ_addr())
 }
 
+/// Does this transport key RTS/DTR on the SAME serial port rigctld uses for CAT?
+///
+/// This is the single-cable interface (Digirig Mobile and friends): one USB port carries both
+/// the CI-V/CAT bytes and the RTS keying line. Nexus used to detect only the OPPOSITE case (a
+/// dedicated keying port, e.g. an SO2R controller) and fell back to "serial keying, no CAT" for
+/// everything else — so the commonest single-cable interface in the hobby silently ran with NO
+/// CAT AT ALL, while `probe_serial` reported success. The band never followed and nothing said why.
+///
+/// When true, rigctld owns the port and does BOTH (Hamlib shares the fd — see
+/// [`crate::rigctld_proc::rigctld_args`]), so keying MUST go through the daemon
+/// (`PttMode::Cat`). Our own `PttMode::Serial` could not open a port rigctld already holds.
+///
+/// ⚠️ THE SINGLE SOURCE OF TRUTH for this decision. [`ptt_mode_for`] and [`open_rig`] must both
+/// consult it: they are two separate matches over `ptt_method`, and the last time they disagreed
+/// the adopted rig kept `PttMode::Vox` and TX was silently dead after a radio switch. Excludes
+/// network rigs — a TCP transport has no RTS line to key.
+fn keys_on_the_cat_port(t: &Transport) -> bool {
+    matches!(t.ptt_method.as_str(), "rts" | "dtr")
+        && t.rig_model != 0
+        && !t.is_network()
+        && !t.serial_port.trim().is_empty()
+        && t.ptt_port().eq_ignore_ascii_case(t.serial_port.trim())
+}
+
 /// Start the CAT daemon for `t` on its rigctld port: the native CI-V daemon when opted
 /// in (falling back to rigctld if the port/serial open fails), else Hamlib's rigctld.
-fn spawn_cat_daemon(t: &Transport, target: &str, network: bool) -> std::io::Result<CatDaemon> {
+///
+/// `ptt_line` is `Some` only for the shared-port keying case ([`keys_on_the_cat_port`]); it makes
+/// the spawned rigctld key the transmitter on the same port it opened for CAT.
+fn spawn_cat_daemon(
+    t: &Transport,
+    target: &str,
+    network: bool,
+    ptt_line: Option<SerialLine>,
+) -> std::io::Result<CatDaemon> {
+    // ⚠️ The native CI-V daemon speaks Icom CI-V on the serial port itself and has NO keying
+    // path — it cannot assert RTS. Taking it here would open the port, leave PTT unkeyed, and
+    // present as a rig that tunes but never transmits. When keying rides the CAT port, Hamlib's
+    // rigctld is the ONLY backend that can do both, so skip native entirely (the operator keeps
+    // CAT and keying; they lose only the native panadapter, which is the correct trade and is
+    // surfaced by the scope falling back rather than failing silently).
     #[cfg(feature = "serial")]
-    if let Some(addr) = native_civ_addr(t) {
+    if let Some(addr) = native_civ_addr(t).filter(|_| ptt_line.is_none()) {
         match crate::civ::broker::CivDaemon::start(&t.serial_port, t.baud, addr, t.rigctld_port) {
             Ok(d) => return Ok(CatDaemon::Native(d)),
             Err(e) => {
@@ -95,7 +133,15 @@ fn spawn_cat_daemon(t: &Transport, target: &str, network: bool) -> std::io::Resu
     }
     #[cfg(not(feature = "serial"))]
     let _ = native_civ_addr(t); // native CI-V needs the serial feature; classic path below
-    spawn_rigctld(t.rig_model, target, t.baud, t.rigctld_port, network).map(CatDaemon::Spawned)
+    spawn_rigctld(
+        t.rig_model,
+        target,
+        t.baud,
+        t.rigctld_port,
+        network,
+        ptt_line,
+    )
+    .map(CatDaemon::Spawned)
 }
 
 /// A clear, model-aware "CAT is down" message for when the rig stops answering — the field-report
@@ -642,7 +688,10 @@ fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
     } else {
         (t.serial_port.as_str(), false)
     };
-    match spawn_cat_daemon(t, target, network) {
+    // `None`: a monitor is READ-ONLY and must never be able to key. Even for a shared-port
+    // keying transport, the background rig's daemon comes up WITHOUT --ptt-type, so a stray
+    // keying command cannot reach a radio the operator is not focused on.
+    match spawn_cat_daemon(t, target, network, None) {
         Ok(mut proc) => {
             std::thread::sleep(Duration::from_millis(700));
             if !proc.is_alive() {
@@ -4831,6 +4880,14 @@ type RigOpen = (Rig, Option<CatDaemon>, CatProbe);
 /// the FTDX10 after switching to it, but freq/mode still work" bug — Vox keying is a no-op while
 /// set_freq/set_mode ignore the PTT mode).
 fn ptt_mode_for(t: &Transport) -> PttMode {
+    // Shared-port keying: rigctld holds the port and asserts the line on our behalf, so the
+    // keying command goes to the DAEMON. Must be checked before the rts/dtr arms below, and
+    // must stay in step with `open_rig` — both consult `keys_on_the_cat_port` for exactly that
+    // reason. Handing back PttMode::Serial here would try to open a port rigctld owns: on
+    // Windows that fails outright, and the operator sees a rig that tunes but never keys.
+    if keys_on_the_cat_port(t) {
+        return PttMode::Cat;
+    }
     match t.ptt_method.as_str() {
         "cat" if t.rig_model != 0 => PttMode::Cat,
         "rts" => PttMode::Serial {
@@ -4852,7 +4909,7 @@ fn ptt_mode_for(t: &Transport) -> PttMode {
 fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
     match t.ptt_method.as_str() {
         // CAT PTT: control + keying both over rigctld.
-        "cat" if t.rig_model != 0 => open_cat(t, PttMode::Cat, allow_coexist),
+        "cat" if t.rig_model != 0 => open_cat(t, PttMode::Cat, allow_coexist, None),
         "cat" => (
             Rig::vox(),
             None,
@@ -4874,7 +4931,7 @@ fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
         // no `M`/`F` command at all because CAT was fused to the PTT method. (Matched
         // explicitly, not via the catch-all, so a typo'd/legacy ptt_method string
         // degrades safely to pure VOX below rather than silently grabbing the port.)
-        "vox" if t.rig_model != 0 => open_cat(t, PttMode::Vox, allow_coexist),
+        "vox" if t.rig_model != 0 => open_cat(t, PttMode::Vox, allow_coexist, None),
         _ => (
             Rig::vox(),
             None,
@@ -4892,6 +4949,32 @@ fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
 /// keying with no CAT — the prior behavior.
 fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigOpen {
     let ptt_port = t.ptt_port().to_string();
+    // Single-cable interface (Digirig Mobile): keying and CAT are the SAME port, so let rigctld
+    // own it and do both. Hamlib shares the fd, so this is one open, not a fight for the port.
+    if keys_on_the_cat_port(t) {
+        // allow_coexist is deliberately FORCED OFF here. Coexisting means attaching to a rigctld
+        // that is ALREADY listening — one we did not launch and whose --ptt-type we cannot know.
+        // If it came up without keying flags (the default), every `T 1` we send is accepted and
+        // does nothing: a rig that tunes, reports healthy, and never transmits. We must own a
+        // daemon we know was told to key. If the port is genuinely held by someone else our
+        // spawn fails and reports it, which is the honest outcome.
+        let (rig, daemon, probe) = open_cat(t, PttMode::Cat, false, Some(line));
+        // ⚠️ TX FLOOR. Before this change a shared-port operator keyed the line DIRECTLY and had
+        // no CAT, so a wrong rig model cost them nothing they had. Now keying rides the daemon,
+        // and if that daemon never came up they would lose TX as well — a strictly worse radio
+        // for a CAT-only misconfiguration. When no daemon is running, nothing holds the port, so
+        // we can still key it ourselves: fall back to exactly the old behaviour. A CAT problem
+        // must never take the operator's transmitter away.
+        if daemon.is_none() && probe.ok == Some(false) {
+            let mut fallback = probe_serial(&ptt_port, line);
+            fallback.2.detail = format!(
+                "{} Keying {} directly instead — CAT is off until that is fixed.",
+                probe.detail, ptt_port
+            );
+            return fallback;
+        }
+        return (rig, daemon, probe);
+    }
     let separate = t.rig_model != 0 && !ptt_port.eq_ignore_ascii_case(t.serial_port.trim());
     if separate {
         open_cat(
@@ -4901,6 +4984,7 @@ fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigO
                 line,
             },
             allow_coexist,
+            None,
         )
     } else {
         probe_serial(&ptt_port, line)
@@ -4921,7 +5005,22 @@ fn allow_coexist_on_swap(owns_daemon: bool, old_port: u16, new_port: u16) -> boo
 /// launch); the probe's read seeds the app. `ptt_mode` layers on top so keying (CAT vs
 /// VOX) stays independent of control. Used for BOTH a CAT-PTT rig and a VOX-keyed rig
 /// that still has CAT freq/mode control.
-fn open_cat(t: &Transport, ptt_mode: PttMode, allow_coexist: bool) -> RigOpen {
+///
+/// `ptt_line` is `Some` ONLY for the shared-port keying case ([`keys_on_the_cat_port`]), where the
+/// daemon we spawn must also be told to assert RTS/DTR on the port it opens. Callers passing
+/// `Some` must also pass `allow_coexist == false`: an already-running daemon we did not launch
+/// cannot be assumed to have keying enabled, and attaching to one that doesn't yields a rig that
+/// tunes but never transmits.
+fn open_cat(
+    t: &Transport,
+    ptt_mode: PttMode,
+    allow_coexist: bool,
+    ptt_line: Option<SerialLine>,
+) -> RigOpen {
+    debug_assert!(
+        ptt_line.is_none() || !allow_coexist,
+        "shared-port keying must own its daemon — coexisting risks silent no-key"
+    );
     let addr = format!("127.0.0.1:{}", t.rigctld_port);
     if t.broker_self_port == Some(t.rigctld_port) {
         // Misconfig: our own CAT broker and the launched rigctld want the same port.
@@ -4965,7 +5064,7 @@ fn open_cat(t: &Transport, ptt_mode: PttMode, allow_coexist: bool) -> RigOpen {
     } else {
         (t.serial_port.as_str(), false)
     };
-    match spawn_cat_daemon(t, rig_target, network) {
+    match spawn_cat_daemon(t, rig_target, network, ptt_line) {
         Ok(proc) => {
             // Give the daemon a moment to bind its TCP port before connecting.
             std::thread::sleep(Duration::from_millis(700));
@@ -6139,6 +6238,79 @@ mod tests {
 
         t.ptt_method = "vox".into();
         assert_eq!(ptt_mode_for(&t), PttMode::Vox);
+    }
+
+    /// Digirig Mobile and every other single-cable interface: ONE port carries CAT and the RTS
+    /// keying line. Nexus only ever detected the OPPOSITE case (a dedicated keying port, e.g. an
+    /// SO2R controller) and fell through to "serial keying, no CAT" — so the commonest interface
+    /// in the hobby ran with NO CAT AT ALL while reporting success. rigctld now owns the port and
+    /// does both, which means keying goes through the DAEMON, not our own serial line.
+    #[test]
+    fn shared_cat_and_keying_port_keys_through_the_daemon() {
+        let mut t = cat_transport(4532, None);
+        t.rig_model = 3073;
+        t.serial_port = "COM5".into();
+        t.ptt_serial_port = String::new(); // blank ⇒ ptt_port() falls back to the CAT port
+        t.ptt_method = "rts".into();
+
+        assert!(keys_on_the_cat_port(&t));
+        assert_eq!(
+            ptt_mode_for(&t),
+            PttMode::Cat,
+            "rigctld holds the port, so PttMode::Serial could not open it — on Windows that \
+             fails outright and the rig tunes but never keys"
+        );
+
+        // Spelling the same port explicitly is the same case.
+        t.ptt_serial_port = "com5".into(); // case-insensitive on purpose
+        assert!(keys_on_the_cat_port(&t));
+        assert_eq!(ptt_mode_for(&t), PttMode::Cat);
+    }
+
+    /// The boundaries. Each of these must KEEP the old behaviour, because in each the daemon
+    /// either isn't there to key or has no line to key with.
+    #[test]
+    fn shared_port_keying_does_not_capture_the_other_ptt_shapes() {
+        let mut t = cat_transport(4532, None);
+        t.rig_model = 3073;
+        t.serial_port = "COM5".into();
+        t.ptt_method = "rts".into();
+
+        // SO2R: a DEDICATED keying port. We key it ourselves and run CAT separately — unchanged.
+        t.ptt_serial_port = "COM9".into();
+        assert!(!keys_on_the_cat_port(&t));
+        assert_eq!(
+            ptt_mode_for(&t),
+            PttMode::Serial {
+                port: "COM9".into(),
+                line: SerialLine::Rts,
+            }
+        );
+
+        // No rig model: there is no CAT daemon at all, so keying stays ours.
+        t.ptt_serial_port = String::new();
+        t.rig_model = 0;
+        assert!(!keys_on_the_cat_port(&t));
+        assert!(matches!(ptt_mode_for(&t), PttMode::Serial { .. }));
+
+        // Network rig: a TCP transport has no RTS line to assert.
+        t.rig_model = 23005;
+        t.rig_conn = "network".into();
+        t.rig_addr = "192.168.1.50:4992".into();
+        assert!(!keys_on_the_cat_port(&t));
+
+        // No serial device named at all.
+        t.rig_conn = "serial".into();
+        t.rig_addr = String::new();
+        t.serial_port = String::new();
+        assert!(!keys_on_the_cat_port(&t));
+
+        // CAT and VOX keying are untouched by any of this.
+        t.serial_port = "COM5".into();
+        t.ptt_method = "cat".into();
+        assert!(!keys_on_the_cat_port(&t));
+        t.ptt_method = "vox".into();
+        assert!(!keys_on_the_cat_port(&t));
     }
 
     #[test]

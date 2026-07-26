@@ -2201,9 +2201,11 @@ export function SettingsPanel({
                   />
                   <span className="settings-hint">
                     COM port your RTS/DTR keying line is on — e.g. an SO2R controller (u2R/MK2R)
-                    that routes PTT on its own port, separate from CAT. Leave blank to key on the
-                    CAT serial port. <strong>Per radio</strong>: each rig on an SO2R box has its
-                    own keying port, and this one follows the radio you switch to.
+                    that routes PTT on its own port, separate from CAT. Leave blank if keying
+                    shares the CAT port, which is how a single-cable interface like a Digirig
+                    Mobile is wired; CAT keeps working either way. <strong>Per radio</strong>:
+                    each rig on an SO2R box has its own keying port, and this one follows the
+                    radio you switch to.
                   </span>
                 </label>
               )}

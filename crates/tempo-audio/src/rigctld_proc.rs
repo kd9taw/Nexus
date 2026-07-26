@@ -19,12 +19,29 @@ use std::process::{Child, Command, Stdio};
 /// - `-s <baud>` serial speed — omitted for a network rig (`network`) or an empty addr, since
 ///   a TCP rig has no baud rate.
 /// - `-t <tcp_port>` TCP port for the daemon to listen on.
+/// - `-P <RTS|DTR>` / `-p <addr>` ONLY when `ptt_line` is set: the daemon ALSO keys the
+///   transmitter on the very same serial port it uses for CAT. This is the single-cable
+///   interface case (Digirig Mobile), where keying and control share one port and we
+///   therefore cannot open the line ourselves — rigctld holds it.
+///
+///   Safe because Hamlib explicitly SHARES the file descriptor rather than opening the port
+///   twice (`rig.c`, `rig_open`): for `RIG_PTT_SERIAL_RTS`/`_DTR` it copies the rig pathname
+///   when the PTT pathname is empty, then `if (!strcmp(pttp->pathname, rp->pathname))
+///   { pttp->fd = rp->fd; }`. We pass `-p` explicitly anyway rather than relying on that
+///   defaulting, so the intent is visible in the daemon's own log line.
+///
+///   ⚠️ The type token MUST be one Hamlib recognises — `RIG`, `DTR`, `RTS`, `PARALLEL`,
+///   `NONE` (rigctld(1) of the bundled 4.7.x). Anything else does NOT error: rigctld prints
+///   "Unrecognised PTT type, using NONE" and comes up with keying silently disabled, which
+///   looks exactly like a dead rig. `ptt_type_token` is therefore derived from the enum, not
+///   spelled at the call site, and is pinned by tests.
 pub fn rigctld_args(
     model: u32,
     addr: &str,
     baud: u32,
     tcp_port: u16,
     network: bool,
+    ptt_line: Option<crate::rig::SerialLine>,
 ) -> Vec<String> {
     let mut args = vec!["-m".to_string(), model.to_string()];
     if !addr.is_empty() {
@@ -35,9 +52,29 @@ pub fn rigctld_args(
             args.push(baud.to_string());
         }
     }
+    // Keying on the CAT port. Meaningless without a port to key (`addr` empty) or over a
+    // network transport — a TCP rig has no RTS line — so it is gated on both.
+    if let Some(line) = ptt_line {
+        if !addr.is_empty() && !network {
+            args.push("-P".to_string());
+            args.push(ptt_type_token(line).to_string());
+            args.push("-p".to_string());
+            args.push(addr.to_string());
+        }
+    }
     args.push("-t".to_string());
     args.push(tcp_port.to_string());
     args
+}
+
+/// The exact `--ptt-type` token Hamlib parses for a serial keying line. Kept as a function so
+/// the spelling exists in ONE place: a typo here does not fail loudly, it silently disables
+/// keying (see [`rigctld_args`]).
+pub fn ptt_type_token(line: crate::rig::SerialLine) -> &'static str {
+    match line {
+        crate::rig::SerialLine::Rts => "RTS",
+        crate::rig::SerialLine::Dtr => "DTR",
+    }
 }
 
 /// A spawned `rigctld` that is killed when this handle is dropped — and, on
@@ -218,8 +255,9 @@ pub fn spawn_rigctld(
     baud: u32,
     tcp_port: u16,
     network: bool,
+    ptt_line: Option<crate::rig::SerialLine>,
 ) -> std::io::Result<RigctldProc> {
-    let args = rigctld_args(model, addr, baud, tcp_port, network);
+    let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line);
     let mut cmd = Command::new(resolve_rigctld());
     cmd.args(&args);
     // Capture the daemon's own stderr so Hamlib's connection errors (port open failed, read
@@ -286,7 +324,7 @@ mod tests {
 
     #[test]
     fn args_with_serial_port() {
-        let args = rigctld_args(3073, "COM5", 38400, 4532, false);
+        let args = rigctld_args(3073, "COM5", 38400, 4532, false, None);
         assert_eq!(
             args,
             vec!["-m", "3073", "-r", "COM5", "-s", "38400", "-t", "4532"]
@@ -296,7 +334,7 @@ mod tests {
     #[test]
     fn args_for_network_rig_omit_baud() {
         // A FlexRadio over SmartSDR (or any TCP rig): host:port on -r, no baud.
-        let args = rigctld_args(23005, "192.168.1.50:4992", 38400, 4532, true);
+        let args = rigctld_args(23005, "192.168.1.50:4992", 38400, 4532, true, None);
         assert_eq!(
             args,
             vec!["-m", "23005", "-r", "192.168.1.50:4992", "-t", "4532"]
@@ -305,7 +343,7 @@ mod tests {
 
     #[test]
     fn args_for_unix_serial_device() {
-        let args = rigctld_args(1042, "/dev/ttyUSB0", 19200, 4533, false);
+        let args = rigctld_args(1042, "/dev/ttyUSB0", 19200, 4533, false, None);
         assert_eq!(
             args,
             vec![
@@ -324,7 +362,73 @@ mod tests {
     #[test]
     fn args_without_serial_port_omit_port_and_baud() {
         // Dummy / NET rigs need no serial device.
-        let args = rigctld_args(1, "", 38400, 4532, false);
+        let args = rigctld_args(1, "", 38400, 4532, false, None);
         assert_eq!(args, vec!["-m", "1", "-t", "4532"]);
+    }
+
+    /// The single-cable interface (Digirig Mobile): ONE port carries CAT and the RTS keying
+    /// line, so rigctld is told to do both. Hamlib shares the fd for the second use rather than
+    /// opening the port twice, which is what makes this legal at all.
+    #[test]
+    fn shared_port_keying_emits_ptt_type_and_file() {
+        let args = rigctld_args(
+            3073,
+            "COM5",
+            38400,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Rts),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "-m", "3073", "-r", "COM5", "-s", "38400", "-P", "RTS", "-p", "COM5", "-t", "4532"
+            ],
+            "-P/-p must name the SAME device as -r; a mismatch opens a second port"
+        );
+
+        let dtr = rigctld_args(
+            1042,
+            "/dev/ttyUSB0",
+            19200,
+            4533,
+            false,
+            Some(crate::rig::SerialLine::Dtr),
+        );
+        assert!(dtr.windows(2).any(|w| w == ["-P", "DTR"]));
+        assert!(dtr.windows(2).any(|w| w == ["-p", "/dev/ttyUSB0"]));
+    }
+
+    /// ⚠️ THE SILENT-KILLER PIN. rigctld does NOT reject an unknown --ptt-type: it prints
+    /// "Unrecognised PTT type, using NONE" and starts with keying disabled, so the rig tunes
+    /// perfectly and never transmits. These two tokens are the ONLY serial ones Hamlib parses
+    /// (rigctld(1), bundled 4.7.x: RIG, DTR, RTS, PARALLEL, NONE). If anyone "tidies" the
+    /// spelling — lowercase, "SERIAL_RTS", the numeric enum — this test is the thing that
+    /// stops it reaching a radio.
+    #[test]
+    fn ptt_type_tokens_are_exactly_what_hamlib_parses() {
+        assert_eq!(ptt_type_token(crate::rig::SerialLine::Rts), "RTS");
+        assert_eq!(ptt_type_token(crate::rig::SerialLine::Dtr), "DTR");
+    }
+
+    /// A TCP rig has no RTS line, and a rig with no serial device has nothing to key. Emitting
+    /// -P/-p in either case would hand Hamlib a PTT path that cannot exist.
+    #[test]
+    fn shared_port_keying_is_dropped_when_there_is_no_serial_line_to_key() {
+        let net = rigctld_args(
+            23005,
+            "192.168.1.50:4992",
+            38400,
+            4532,
+            true,
+            Some(crate::rig::SerialLine::Rts),
+        );
+        assert!(
+            !net.iter().any(|a| a == "-P" || a == "-p"),
+            "a network rig has no serial keying line: {net:?}"
+        );
+
+        let no_dev = rigctld_args(1, "", 38400, 4532, false, Some(crate::rig::SerialLine::Rts));
+        assert_eq!(no_dev, vec!["-m", "1", "-t", "4532"]);
     }
 }

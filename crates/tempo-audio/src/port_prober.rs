@@ -151,7 +151,7 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16) -> Option<ProbeHit> {
             .unwrap_or(PROBE_BAUDS);
         for &baud in bauds {
             // Throwaway daemon for this (port, baud, model) — killed on drop.
-            let Ok(proc) = spawn_rigctld(c.model, &c.port_name, baud, tcp_port, false) else {
+            let Ok(proc) = spawn_rigctld(c.model, &c.port_name, baud, tcp_port, false, None) else {
                 continue;
             };
             // Let rigctld open the port + settle, then ask for the dial frequency.
