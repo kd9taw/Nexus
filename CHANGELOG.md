@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.19.3] — unreleased
+## [0.19.4] — unreleased
 
 ### Worked stations stop showing as needed
 Working a station in a US state you had already worked left it lit in the Needed roster with its
@@ -56,6 +56,20 @@ straight line on a flat map is straight.
 
 The POTA/SOTA map opened as a flat world map while Chase DX, Ragchew and 6m/VHF all opened as
 globes. It is a globe now, like the rest.
+
+### Digital modes can run plain SSB, per radio
+Nexus puts the radio in its DATA submode (DATA-U / USB-D) for FT8, FT4, RTTY and SSTV, because on
+most rigs that is the only mode where the USB sound device actually reaches the transmitter. That
+is still the default and nothing changes unless you go looking for this.
+
+If your transmit audio goes in through the **microphone** instead — an interface wired to the mic
+jack, as several RIGblaster models are — there is now a per-radio setting, **Settings ▸ Radio ▸
+Data modes use plain SSB**. Nexus then commands plain USB or LSB for those modes and stays there,
+through band changes and when you call a station.
+
+It is per radio because it depends on how that particular rig is cabled. On a normally-wired radio
+turning it on means the transmitter gets no audio at all — a red TX light and nothing on the air —
+so leave it off unless you know your interface needs it. True FSK RTTY is unaffected.
 
 ### Fixes
 - Logging a contact in Voice and CW shows your previous contacts with that station again — the
