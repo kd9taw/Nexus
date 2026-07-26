@@ -1146,6 +1146,13 @@ impl RadioProfilePatch {
     /// Copy the patch fields onto a profile, leaving its identity / bands / tune-memory alone.
     pub fn apply_to(self, p: &mut RadioProfile) {
         p.ptt_method = self.ptt_method;
+        // Was MISSING (shipped 0.18.0): the patch declared and the UI sent `ptt_serial_port`,
+        // but apply_to never assigned it — so editing the dedicated RTS/DTR keying port of a
+        // radio you are NOT currently operating silently saved nothing. Same per-radio-Edit
+        // routing class as the 0.17.12 dual-radio clobber. `ptt_serial_port_is_assigned_by_the
+        // _patch` pins it; `radio_profile_patch_assigns_every_profile_field` stops the next
+        // added field from being dropped the same way.
+        p.ptt_serial_port = self.ptt_serial_port;
         p.rig_model = self.rig_model;
         p.rig_model_name = self.rig_model_name;
         p.serial_port = self.serial_port;
@@ -2080,6 +2087,65 @@ impl Settings {
 mod tests {
     #![allow(clippy::field_reassign_with_default)]
     use super::*;
+
+    /// REGRESSION (shipped 0.18.0, found 2026-07-26): `apply_to` assigned 19 sibling fields and
+    /// silently skipped `ptt_serial_port`, so editing the dedicated RTS/DTR keying port of a
+    /// radio you were NOT operating saved nothing — the setting round-tripped through the UI and
+    /// vanished. Same per-radio-Edit routing class as the 0.17.12 dual-radio clobber.
+    ///
+    /// This is deliberately a TOTALITY test driven by serde rather than a hand-written field
+    /// list: a hand-written list is exactly what failed, because adding a field to the patch
+    /// does not force anyone to remember `apply_to`. Every field the patch carries must land on
+    /// the profile, so the NEXT field added cannot be dropped the same way. Both structs are
+    /// `rename_all = "camelCase"`, so the keys line up by construction.
+    #[test]
+    fn radio_profile_patch_assigns_every_field_it_carries() {
+        // Values chosen to differ from RadioProfile::default() in every field, so "was it
+        // assigned?" cannot be confused with "did it already happen to equal the default?".
+        let patch = RadioProfilePatch {
+            ptt_method: "rts".into(),
+            rig_model: 3085,
+            rig_model_name: "Icom IC-7300".into(),
+            serial_port: "COM7".into(),
+            ptt_serial_port: "COM9".into(),
+            baud: 115_200,
+            rig_conn: "network".into(),
+            rig_addr: "192.0.2.10:4992".into(),
+            rigctld_port: 4533,
+            icom_native_cat: true,
+            audio_in: "USB Audio CODEC #2".into(),
+            audio_out: "USB Audio CODEC #2 out".into(),
+            tx_level: 0.42,
+            rx_gain: 1.75,
+            rotator_model: 202,
+            rotator_port: "COM11".into(),
+            rotator_baud: 19_200,
+            rotator_host: "192.0.2.20".into(),
+            rotctld_port: 4534,
+            native_scope: "civ".into(),
+        };
+
+        let sent = serde_json::to_value(&patch).expect("patch serializes");
+        let mut profile = RadioProfile::default();
+        patch.apply_to(&mut profile);
+        let landed = serde_json::to_value(&profile).expect("profile serializes");
+
+        let sent = sent.as_object().expect("patch is an object");
+        let landed = landed.as_object().expect("profile is an object");
+
+        let dropped: Vec<&str> = sent
+            .iter()
+            .filter(|(k, v)| landed.get(*k) != Some(*v))
+            .map(|(k, _)| k.as_str())
+            .collect();
+
+        assert!(
+            dropped.is_empty(),
+            "apply_to dropped {} patch field(s): {dropped:?} — every field the patch carries \
+             must be copied onto the profile, or a per-radio edit silently saves nothing",
+            dropped.len()
+        );
+    }
 
     #[test]
     fn rtty_rig_mode_follows_the_keying_backend() {

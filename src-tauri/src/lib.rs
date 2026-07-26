@@ -10216,6 +10216,12 @@ pub fn run() {
         eng.set_dxcc_resolver(|call| {
             propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
         });
+        // Wire the US-state resolver to the SAME `us_state_hint` the heard side uses
+        // (get_need_alerts / the spot rows). That shared function is the whole point of the
+        // fix: the worked side used to have no resolver at all and could only read a logged
+        // ADIF STATE, which the auto-log path never wrote — so a worked state stayed "needed"
+        // forever. Set BEFORE the log loads so the one-time backfill runs over it.
+        eng.set_state_resolver(us_state_hint);
         // Grid-rarity gems: geography table + the measured-activity census
         // (demote-only refinement). Restore the persisted census BEFORE any
         // stamping so the first snapshot already shows refined tiers.

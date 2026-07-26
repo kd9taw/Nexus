@@ -86,6 +86,18 @@ pub struct StationCore {
     /// (new-DXCC highlighting simply stays off). See [`Self::set_dxcc_resolver`].
     #[allow(clippy::type_complexity)]
     pub(crate) dxcc_resolve: Option<Box<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+    /// (Callsign, heard grid) → US state resolver, injected by the command layer (which owns
+    /// the FCC callsign index) — same pattern as [`Self::set_dxcc_resolver`], and injected for
+    /// the same reason: tempo-app has no `propagation` dependency, so it cannot reach the index
+    /// directly. `None` in headless tests (state simply stays unresolved, never guessed).
+    ///
+    /// ⚠️ It MUST take the same inputs as the heard side's `us_state_hint(call, grid)`. Passing
+    /// only the call would re-open the exact split this exists to close: a call the FCC file
+    /// does not list still resolves on the heard side via its grid, so a call-only resolver
+    /// would leave `worked_states` unable to match it and NewState would stick forever.
+    #[allow(clippy::type_complexity)]
+    pub(crate) state_resolve:
+        Option<Box<dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync>>,
     /// Grid → rarity tier (0–3) resolver, injected by the command layer (which
     /// owns the geography table in the propagation crate) — same pattern as
     /// [`Self::set_dxcc_resolver`]. `None` in headless tests (gems stay off).
@@ -161,6 +173,7 @@ impl StationCore {
             pending_qso_path: None,
             pending_msgs_path: None,
             dxcc_resolve: None,
+            state_resolve: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
             worked_entities: HashSet::new(),
@@ -194,6 +207,7 @@ impl StationCore {
         self.logbook = Logbook::load(&path);
         self.log_path = Some(path);
         self.backfill_country();
+        self.backfill_state();
         self.refresh_worked_index();
     }
 
@@ -224,6 +238,59 @@ impl StationCore {
         self.dxcc_resolve = Some(Box::new(resolve));
         self.backfill_country();
         self.refresh_worked_index();
+    }
+
+    /// Inject the (callsign, heard grid) → US state resolver (the command layer passes a
+    /// closure over the FCC callsign index — the SAME `us_state_hint` the heard side uses).
+    /// Backfills every record that lacks a STATE so the needed board, WAS and the awards
+    /// matrix all see the states already worked.
+    ///
+    /// No `refresh_worked_index()` here, unlike [`Self::set_dxcc_resolver`]: worked STATES are
+    /// not part of this struct's index (that holds entities/grids/parks). They are folded into
+    /// `propagation::LogNeeds` from the records themselves, so backfilling the records is
+    /// exactly what the needs side reads.
+    pub fn set_state_resolver(
+        &mut self,
+        resolve: impl Fn(&str, Option<&str>) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.state_resolve = Some(Box::new(resolve));
+        self.backfill_state();
+    }
+
+    /// Resolve a US state for any logged record that lacks one. No-op without a resolver;
+    /// persists the log if anything changed.
+    ///
+    /// WHY THIS EXISTS: one question — "what state is this call in?" — used to be answered by
+    /// two different resolvers on the two sides of the same comparison. The heard side resolved
+    /// it from the FCC index; the worked side could only read a logged ADIF STATE, and every
+    /// record Nexus generated hardcoded `state: None`. So a state could be worked and still
+    /// report as needed forever. Filling the record is what makes both sides read the same
+    /// source. See [`Self::backfill_country`] — same shape, same reasons, same ordering.
+    fn backfill_state(&mut self) {
+        let Some(resolve) = self.state_resolve.take() else {
+            return;
+        };
+        // Same ordering as backfill_country and for the same reason: pull in records a second
+        // instance appended BEFORE the full-log rewrite below, or this silently drops them
+        // (the M18 data-loss class). Doing it first also backfills the recovered records.
+        self.recover_external_appends();
+        let mut changed = false;
+        for r in self.logbook.records_mut() {
+            if r.state.is_none() {
+                if let Some(st) = resolve(&r.call, r.grid.as_deref()) {
+                    r.state = Some(st);
+                    changed = true;
+                }
+            }
+        }
+        self.state_resolve = Some(resolve);
+        if changed {
+            if let Some(path) = &self.log_path {
+                if let Err(e) = self.logbook.save(path) {
+                    eprintln!("tempo: backfill_state save failed: {e}");
+                }
+            }
+        }
     }
 
     /// Inject the grid → rarity-tier (0–3) resolver (the command layer passes a

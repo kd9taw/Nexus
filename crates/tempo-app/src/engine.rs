@@ -3302,6 +3302,16 @@ impl Engine {
                 rec.country = resolve(&rec.call);
             }
         }
+        // Same treatment for the US state, and for the same reason: it is inferred from the
+        // callsign, never exchanged on the air, and the needs/WAS side can ONLY learn it from
+        // the logged record. Without this the auto-log path wrote `state: None` forever, so a
+        // worked state could never enter `worked_states` and NewState (tier 60 — the lead pill
+        // and the row colour) re-fired on every poll. An operator-supplied state always wins.
+        if rec.state.is_none() {
+            if let Some(resolve) = &self.station.state_resolve {
+                rec.state = resolve(&rec.call, rec.grid.as_deref());
+            }
+        }
         // Tag with the current POTA/SOTA activation (your side) if one is set and the
         // record doesn't already carry one — so the contact exports with the right
         // MY_SIG/MY_SOTA_REF and counts toward your activation.
@@ -7653,6 +7663,14 @@ impl Engine {
         self.station.set_dxcc_resolver(resolve)
     }
 
+    /// See [`StationCore::set_state_resolver`].
+    pub fn set_state_resolver(
+        &mut self,
+        resolve: impl Fn(&str, Option<&str>) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.station.set_state_resolver(resolve)
+    }
+
     /// See [`StationCore::set_grid_rarity_resolver`].
     pub fn set_grid_rarity_resolver(
         &mut self,
@@ -10891,6 +10909,84 @@ mod tests {
             qso.dxgrid.as_deref(),
             Some("EM48"),
             "the snapshot backfills the grid from the roster, exactly as the log does"
+        );
+    }
+
+    /// REGRESSION (operator, on-air 2026-07-26): "things I have already worked are not being
+    /// removed from the Needed section, and the pills that designate why I needed them do not
+    /// get removed." Root cause was NOT a stale cache or a refresh gap — `log_qso` already
+    /// refreshes the worked index, and the decode rows are rebuilt every snapshot. It was that
+    /// ONE question ("what state is this call in?") had TWO resolvers on the two sides of the
+    /// same comparison: the HEARD side used the FCC callsign index, while the WORKED side could
+    /// only learn it from a logged ADIF STATE — and `qso_record` hardcoded `state: None`. So
+    /// `LogNeeds.worked_states` never gained the state just worked and `NeedTag::NewState`
+    /// (tier 60 — above NewGrid/NewBand, so it becomes tags[0]: the lead pill AND the row
+    /// colour) re-fired forever. Fixed the same way `country` already was: an injected resolver
+    /// filled at the one funnel every log path passes through.
+    ///
+    /// Uses the FT1 sequence because it is the known-good completion path in these tests; the
+    /// record builder (`qso_record`) is shared with FT8/FT4, which is where the operator hit it.
+    #[test]
+    fn auto_logged_qso_carries_the_worked_station_state() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_state_resolver(|call, _grid| (call == "W9XYZ").then(|| "VT".to_string()));
+        e.set_tier(Tier::TempoFast);
+
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+
+        let log = e.get_log();
+        assert_eq!(log.len(), 1, "completed QSO auto-logs exactly one record");
+        assert_eq!(
+            log[0].state.as_deref(),
+            Some("VT"),
+            "an auto-logged QSO must carry the worked station's state — without it \
+             worked_states can never learn it and NewState re-fires forever"
+        );
+    }
+
+    /// The funnel itself, mode-independent: every path (auto-log, cockpit Log button, manual
+    /// form) goes through `log_qso`, so the fill belongs there and not in one mode's builder.
+    #[test]
+    fn log_qso_fills_a_missing_state_from_the_resolver() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_state_resolver(|call, _grid| (call == "W1ABC").then(|| "MA".to_string()));
+
+        let mut rec = e.qso_record("W1ABC".into(), None, None);
+        rec.state = None;
+        e.log_qso(rec);
+
+        assert_eq!(
+            e.get_log()[0].state.as_deref(),
+            Some("MA"),
+            "log_qso must fill a missing state, like it already fills a missing country"
+        );
+    }
+
+    /// The negative twin — pins that this is resolver-driven and never fabricated. With no
+    /// resolver wired (headless, or FCC index absent) the state stays None rather than being
+    /// guessed, and an explicitly-logged state is never overwritten.
+    #[test]
+    fn log_qso_never_invents_or_overwrites_a_state() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let rec = e.qso_record("W1ABC".into(), None, None);
+        e.log_qso(rec);
+        assert_eq!(
+            e.get_log()[0].state,
+            None,
+            "no resolver wired ⇒ no state, never a guess"
+        );
+
+        let mut e2 = Engine::new("K2DEF", "FN31", 0);
+        e2.set_state_resolver(|_, _| Some("XX".to_string()));
+        let mut rec2 = e2.qso_record("W1ABC".into(), None, None);
+        rec2.state = Some("MA".into());
+        e2.log_qso(rec2);
+        assert_eq!(
+            e2.get_log()[0].state.as_deref(),
+            Some("MA"),
+            "an operator-supplied state must win over the resolver"
         );
     }
 

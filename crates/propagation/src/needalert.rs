@@ -957,6 +957,67 @@ pub fn skimmer_grid(call: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    /// REGRESSION (operator, on-air 2026-07-26): "things I have already worked are not being
+    /// removed from the Needed section, and the pills that designate why I needed them do not
+    /// get removed." This is the needs-side half of that fix, pinned end-to-end through
+    /// `LogNeeds::add` → `score_slots` — the same route `get_need_alerts` takes.
+    ///
+    /// The cause was a split resolver: the HEARD side answered "what state is this call in?"
+    /// from the FCC callsign index, while the WORKED side could only read a logged ADIF STATE,
+    /// and the auto-log builder hardcoded `state: None`. So `worked_states` never gained the
+    /// state just worked and `NewState` — tier 60, above NewGrid(55)/NewBand(50), so it lands
+    /// as tags[0]: the lead pill AND the roster row colour — re-fired on every 30 s poll.
+    ///
+    /// ⚠️ Deliberately uses `score_slots`, NOT the `score()` shim. The shim treats every worked
+    /// slot as also confirmed, which is exactly why the existing tests here were structurally
+    /// incapable of catching this.
+    #[test]
+    fn a_worked_and_stated_qso_stops_reporting_newstate() {
+        let mut n = LogNeeds::new();
+        // Precisely what `Engine::log_qso` now writes once the state resolver is wired.
+        n.add("W1AW", "20m", "FT8", Some("FN31"), Some("CT"), false);
+
+        let s = n.slots();
+        let alert = score_slots("W1AW", "20m", "FT8", Some("FN31"), Some("CT"), &n, &s);
+
+        // A Confirm row may legitimately remain (worked but unconfirmed) — that is deliberate
+        // and must NOT be "fixed". What must be gone is the chase-grade needs.
+        if let Some(a) = alert {
+            assert!(
+                !a.tags.contains(&NeedTag::NewState),
+                "a state worked ON THIS BAND must stop reporting NewState, got {:?}",
+                a.tags
+            );
+            assert!(
+                !a.tags.contains(&NeedTag::NewGrid),
+                "the grid was logged too, so NewGrid must clear as well, got {:?}",
+                a.tags
+            );
+        }
+    }
+
+    /// The negative twin — this IS the bug's shape, kept as a live specimen so the trap is
+    /// documented rather than silently re-introduced. The identical QSO logged WITHOUT a state
+    /// leaves that state unworked forever, so NewState keeps firing even though the operator
+    /// worked the station. If this test ever starts failing, someone has taught the needs side
+    /// to guess a state instead of reading the logged one, which is the split all over again.
+    #[test]
+    fn a_qso_logged_without_a_state_leaves_newstate_firing_forever() {
+        let mut n = LogNeeds::new();
+        n.add("W1AW", "20m", "FT8", Some("FN31"), None, false);
+
+        let s = n.slots();
+        let a = score_slots("W1AW", "20m", "FT8", Some("FN31"), Some("CT"), &n, &s)
+            .expect("a station with an unworked state is still worth alerting");
+
+        assert!(
+            a.tags.contains(&NeedTag::NewState),
+            "with no STATE on the record the state cannot be known worked — this is the \
+             defect the log-side fix removes, not something to paper over here: {:?}",
+            a.tags
+        );
+    }
+
     /// Build AwardSlots from worked sets with confirmed == worked — the pre-confirmation
     /// behaviour (a worked slot is fully satisfied, no Confirm row). Confirm-specific tests
     /// build AwardSlots explicitly with distinct worked/confirmed sets.
