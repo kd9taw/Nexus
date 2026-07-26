@@ -8550,20 +8550,51 @@ input.cw-pitch::-webkit-inner-spin-button {
 .settings-group {
   margin-top: 14px;
 }
+/* A collapsible group's header must NOT look like a static section caption. It reused
+   .settings-featgroup-title verbatim — 10px, uppercase, --text-faint — so a clickable
+   disclosure was indistinguishable from a label, and operators walked straight past
+   "Advanced" without realising settings were folded inside it (which is exactly how the
+   per-radio data-mode option got lost). Accent colour + a bordered row + a filled chevron
+   well make it read as a control. */
 .settings-group-toggle {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
   width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm, 4px);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: var(--accent);
   font-family: inherit;
+  font-size: 11px;
   text-align: left;
   cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
 }
 .settings-group-toggle:hover {
-  color: var(--text-dim);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-soft));
+  color: var(--accent);
+}
+/* Say what is inside without opening it — a bare chevron does not tell you there is
+   anything worth expanding. */
+.settings-group-toggle::after {
+  content: 'show';
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  opacity: 0.75;
+}
+.settings-group-toggle[aria-expanded='true']::after {
+  content: 'hide';
+}
+.settings-group-toggle[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-soft));
+  margin-bottom: var(--space-2);
 }
 .settings-group-toggle:focus-visible {
   outline: 2px solid var(--accent);
