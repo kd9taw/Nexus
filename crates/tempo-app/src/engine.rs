@@ -7390,14 +7390,39 @@ impl Engine {
     /// box and the logged GRIDSQUARE resolve identically — they diverged before, and the
     /// operator saw a blank grid on screen for a contact that logged correctly.
     fn dx_grid_resolved(&self, dxcall: &str, dxgrid: Option<String>) -> Option<String> {
-        dxgrid.filter(|g| !g.trim().is_empty()).or_else(|| {
-            self.app
-                .inbox
-                .roster
-                .get(dxcall)
-                .and_then(|h| h.grid.clone())
-                .filter(|g| !g.trim().is_empty())
-        })
+        dxgrid
+            .filter(|g| !g.trim().is_empty())
+            .or_else(|| {
+                self.app
+                    .inbox
+                    .roster
+                    .get(dxcall)
+                    .and_then(|h| h.grid.clone())
+                    .filter(|g| !g.trim().is_empty())
+            })
+            .or_else(|| {
+                // Third and last: a grid we LOGGED for this station before. The session roster
+                // only remembers stations heard since launch, so a station worked on a previous
+                // day whose CQ we haven't decoded this session still logged with a blank grid —
+                // and a blank grid means `worked_grids` never learns it, so NewGrid keeps firing
+                // for a grid already worked. Same shape as the NewState defect, and fixed the
+                // same way: read something we already own instead of leaving the field empty.
+                //
+                // Newest record first: a rover's most recent grid is the better answer.
+                //
+                // ⚠️ This is a LOOKUP, never a guess. Unlike state there is no callsign→grid
+                // index, so a station whose grid we have genuinely never seen still logs blank
+                // and still reports NewGrid — which is CORRECT: we cannot credit a grid we do
+                // not know. Do not "fix" that by inventing one from the callsign prefix.
+                self.station
+                    .logbook
+                    .records()
+                    .iter()
+                    .rev()
+                    .find(|r| tempo_core::message::same_call(&r.call, dxcall))
+                    .and_then(|r| r.grid.clone())
+                    .filter(|g| !g.trim().is_empty())
+            })
     }
 
     /// Build a [`QsoRecord`] for a completed auto-sequenced QSO from the current
@@ -10944,6 +10969,41 @@ mod tests {
             "an auto-logged QSO must carry the worked station's state — without it \
              worked_states can never learn it and NewState re-fires forever"
         );
+    }
+
+    /// Sibling of the NewState defect, same class: a QSO that logs with a BLANK grid can never
+    /// teach `worked_grids` anything, so NewGrid keeps firing for a grid already worked. The
+    /// session roster covers a station heard this session; this covers one worked on a previous
+    /// day whose CQ we haven't decoded since.
+    #[test]
+    fn a_gridless_qso_falls_back_to_the_grid_we_logged_before() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+
+        // A previous contact where they DID send a grid.
+        let mut first = e.qso_record("W9XYZ".into(), Some("EN37".into()), None);
+        first.grid = Some("EN37".into());
+        e.log_qso(first);
+
+        // Today they answer our CQ with a bare report — the common FT8 form, no grid in the
+        // QSO at all, and nothing in this session's roster either.
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        assert_eq!(
+            rec.grid.as_deref(),
+            Some("EN37"),
+            "a gridless QSO must reuse the grid we already logged for that call, or the grid \
+             can never be credited and NewGrid fires forever"
+        );
+    }
+
+    /// The honest limit, pinned deliberately. There is no callsign→grid index the way FCC gives
+    /// callsign→state, so a station whose grid we have NEVER seen still logs blank — and still
+    /// reports NewGrid, which is correct: we cannot credit a grid we do not know. If this test
+    /// ever fails, someone has started inventing grids from callsign prefixes.
+    #[test]
+    fn an_unknown_grid_is_left_blank_rather_than_invented() {
+        let e = Engine::new("K2DEF", "FN31", 0);
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        assert_eq!(rec.grid, None);
     }
 
     /// The funnel itself, mode-independent: every path (auto-log, cockpit Log button, manual

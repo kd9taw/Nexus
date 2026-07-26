@@ -19,7 +19,7 @@
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tempo_app::engine::{DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine};
 use tempo_core::tempo_fast;
@@ -1140,7 +1140,25 @@ enum ErrOwner {
     /// The rig rejected a TX key command (PTT NAK/timeout) — otherwise we'd play modem
     /// audio into a receiving rig with no warning ("silent dead air").
     Ptt,
+    /// Native Flex DAX RX audio was selected but no audio is arriving — otherwise the
+    /// operator is simply deaf, with silence indistinguishable from a dead band.
+    Dax,
 }
+
+/// How long native DAX RX may deliver NOTHING before we call it broken, fall back to the
+/// sound card and say so.
+///
+/// Why a fallback and not just an error: when `dax_src` is `Some`, the loop takes DAX audio
+/// INSTEAD of the sound card. If the Flex never streams — wrong IP, firewall, the slice never
+/// bound, DAX disabled on the radio — `take_audio()` returns empty forever and the operator
+/// hears NOTHING, with no error anywhere. Deafness is a worse failure than losing the native
+/// path, so DAX starvation degrades to the sound card exactly like a CAT failure degrades to
+/// direct keying (`open_serial_ptt`'s TX floor).
+///
+/// 6 s is comfortably longer than a stream create + slice bind round-trip (which the control
+/// thread does in well under a second) but short enough that the operator is not left guessing
+/// through a whole QSO.
+const DAX_STARVE_AFTER: Duration = Duration::from_secs(6);
 
 /// The persistent decode worker: one background thread that runs the heavy per-slot
 /// decode ([`tempo_app::engine::run_decode_job`]) OFF the radio-loop thread and OFF
@@ -1387,6 +1405,12 @@ struct RadioLoop {
     /// Whether the DAX TX-audio tee is currently installed in the backend — installed when `dax_src`
     /// starts, cleared when it stops, so TX audio routes over DAX exactly while native audio is on.
     dax_tee_set: bool,
+    /// When the current `dax_src` started, for the starvation check. `None` once starvation has
+    /// been reported (the check is one-shot per source — it must not re-fire every tick).
+    dax_started: Option<Instant>,
+    /// Has the current `dax_src` EVER delivered a sample? Once true the source is proven and the
+    /// starvation check is done for good; a later quiet band is just a quiet band.
+    dax_saw_audio: bool,
     /// We wrote the current audio-error line with a voice-mic open failure, so we clear
     /// Slot index whose WSJT-X-style EARLY decode pass already ran (once per
     /// RX slot; the boundary decode then ingests only the stragglers).
@@ -1558,6 +1582,8 @@ impl RadioLoop {
             spectrum_src_key: None,
             dax_src: None,
             dax_src_key: None,
+            dax_started: None,
+            dax_saw_audio: false,
             dax_tee_set: false,
             err_owner: ErrOwner::None,
             early_done_slot: None,
@@ -1666,9 +1692,43 @@ impl RadioLoop {
         if dax_key != self.dax_src_key {
             self.dax_src = None;
             self.dax_src_key = dax_key;
+            // Reset the starvation bookkeeping with the source it belongs to.
+            self.dax_started = None;
+            self.dax_saw_audio = false;
             if dax_enabled && !ip.is_empty() {
-                self.dax_src = crate::flexdax::FlexDax::start(engine.clone(), ip).ok();
+                match crate::flexdax::FlexDax::start(engine.clone(), ip) {
+                    Ok(d) => {
+                        self.dax_src = Some(d);
+                        self.dax_started = Some(Instant::now());
+                    }
+                    // Was `.ok()`, which threw the reason away: native audio silently did
+                    // nothing and the operator had a toggle that appeared to be on. The sound
+                    // card still works (dax_src stays None), so this is a warning, not a fault.
+                    Err(e) => {
+                        if let Ok(mut eng) = engine.lock() {
+                            eng.set_audio_error(Some(format!(
+                                "Native Flex audio couldn't start ({e}). Using the sound card \
+                                 instead — check the Flex API address in Settings."
+                            )));
+                        }
+                        self.err_owner = ErrOwner::Dax;
+                    }
+                }
             }
+        }
+    }
+
+    /// Native DAX RX was selected but nothing is arriving — drop back to the sound card and SAY
+    /// so. Returns true when it fired (the caller clears `dax_src`).
+    ///
+    /// Pure decision, split out so it is testable without a Flex on the bench: the whole feature
+    /// is unverifiable locally, so at minimum its FAILURE handling must not be.
+    fn dax_starved(started: Option<Instant>, saw_audio: bool, now: Instant) -> bool {
+        match started {
+            // Proven sources and already-reported ones are done: a quiet band must never trip this.
+            Some(_) if saw_audio => false,
+            Some(t) => now.duration_since(t) >= DAX_STARVE_AFTER,
+            None => false,
         }
     }
 
@@ -1816,9 +1876,39 @@ impl RadioLoop {
         // its 12 kHz stream as the RX audio instead of the soundcard.
         let soundcard = backend.capture();
         let captured = match self.dax_src.as_ref() {
-            Some(dax) => dax.take_audio(),
+            Some(dax) => {
+                let dax_audio = dax.take_audio();
+                if !dax_audio.is_empty() {
+                    self.dax_saw_audio = true;
+                }
+                dax_audio
+            }
             None => soundcard,
         };
+        // ⚠️ RX FLOOR. Taking DAX audio means IGNORING the sound card, so a DAX source that never
+        // streams (wrong IP, firewall, DAX off on the radio, slice never bound) leaves the
+        // operator completely deaf — and silence is indistinguishable from a dead band, so there
+        // is nothing to notice. Give up on it, fall back, and say why. Same principle as the TX
+        // floor in `open_serial_ptt`: a feature that fails must never cost the operator the radio.
+        if Self::dax_starved(self.dax_started, self.dax_saw_audio, Instant::now()) {
+            self.dax_src = None;
+            self.dax_started = None;
+            if self.dax_tee_set {
+                backend.set_tx_tee(None);
+                self.dax_tee_set = false;
+            }
+            if matches!(self.err_owner, ErrOwner::None | ErrOwner::Dax) {
+                if let Ok(mut eng) = engine.lock() {
+                    eng.set_audio_error(Some(
+                        "Native Flex audio is selected but no audio is arriving — switched back \
+                         to the sound card. Check the Flex API address, that DAX is enabled on \
+                         the radio, and that a firewall isn't blocking its UDP audio."
+                            .to_string(),
+                    ));
+                }
+                self.err_owner = ErrOwner::Dax;
+            }
+        }
         if !captured.is_empty() {
             self.rx.push(&captured);
         }
@@ -7081,6 +7171,50 @@ mod tests {
             t.rig_differs(&t2) || t2.rig_differs(&t),
             "PTT port change triggers a rig rebuild"
         );
+    }
+
+    /// Native Flex DAX RX cannot be verified on this bench — there is no Flex here. That is
+    /// exactly why its FAILURE path must be testable: when the tester reports "no audio", the
+    /// build has to have already told them which of the four causes it was.
+    ///
+    /// The trap being pinned: selecting DAX makes the loop take DAX audio INSTEAD of the sound
+    /// card, so a source that never streams leaves the operator deaf with silence that looks
+    /// exactly like a dead band.
+    #[test]
+    fn dax_that_never_streams_gives_up_and_falls_back() {
+        let t0 = Instant::now();
+
+        // Just started, nothing yet — well inside the grace window, so no complaint.
+        assert!(!RadioLoop::dax_starved(Some(t0), false, t0));
+        assert!(!RadioLoop::dax_starved(
+            Some(t0),
+            false,
+            t0 + Duration::from_secs(2)
+        ));
+
+        // Past the window with nothing ever received → give up.
+        assert!(RadioLoop::dax_starved(
+            Some(t0),
+            false,
+            t0 + DAX_STARVE_AFTER
+        ));
+        assert!(RadioLoop::dax_starved(
+            Some(t0),
+            false,
+            t0 + Duration::from_secs(60)
+        ));
+
+        // A source that HAS delivered audio is proven. A quiet band, a between-slots gap, or a
+        // long listening pause must never trip this — that would yank a working native feed.
+        assert!(!RadioLoop::dax_starved(
+            Some(t0),
+            true,
+            t0 + Duration::from_secs(600)
+        ));
+
+        // No DAX source selected at all: nothing to starve.
+        assert!(!RadioLoop::dax_starved(None, false, t0 + DAX_STARVE_AFTER));
+        assert!(!RadioLoop::dax_starved(None, true, t0 + DAX_STARVE_AFTER));
     }
 
     #[test]
