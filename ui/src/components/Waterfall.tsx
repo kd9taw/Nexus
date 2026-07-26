@@ -11,6 +11,7 @@ import {
   WATERFALL_ZOOMS,
   zoomRange,
   MIN_SPAN,
+  tuneTarget,
 } from '../waterfall'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { WaterfallHistory, ageLabel } from '../waterfallHistory'
@@ -56,7 +57,6 @@ interface Props {
   /** Transmit audio offset (Hz) — the red marker (where we transmit). */
   txOffsetHz: number
   theme: string
-  /** Click to tune: `shift` = set TX offset, otherwise set RX offset. */
   /** Tune from a waterfall click: set the TX offset, the RX offset, or both. */
   onTune?: (freqHz: number, target: 'tx' | 'rx' | 'both') => void
   /** False while the Operate cockpit is navigated away (kept mounted but hidden):
@@ -70,7 +70,7 @@ interface Props {
    * markers — e.g. RTTY mark/space. When set, the RX/TX marker block is skipped; the
    * FT8 path is byte-identical when this is undefined. */
   cursors?: { hz: number; color: string; label: string }[]
-  /** Header hint text override (default: the WSJT-X click/Shift/Ctrl legend). */
+  /** Header hint text override (default: the left/right/Shift/Ctrl legend). */
   hint?: string
 }
 
@@ -625,15 +625,22 @@ export function Waterfall({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // STOCK WSJT-X wide-graph gestures: click = RX (green), Shift+click = TX
-  // (red), Ctrl+click = both. (The old left=TX/right=RX mapping was ours alone
-  // — a WSJT-X operator's muscle memory moved the WRONG marker.)
+  // Wide-graph gestures. LEFT = RX (green) is stock WSJT-X and JTDX alike, so it is the one
+  // gesture that must never move — an operator's muscle memory for it is universal. On top of
+  // that:
+  //   Shift+left = TX (red)   — stock WSJT-X
+  //   RIGHT      = TX (red)   — JTDX (operator preference, 2026-07-26)
+  //   Ctrl+left  = both
+  // Right-click is ADDITIVE: stock WSJT-X has no right-button action, so adopting JTDX's here
+  // takes nothing away from a WSJT-X operator and both conventions work side by side.
+  // ⚠️ Nexus once mapped left=TX/right=RX, which moved the WRONG marker for anyone arriving
+  // from WSJT-X. Do not "restore" that — left is RX in every mainstream client.
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!onTune) return
-    if (e.button !== 0) return // stock has no right-button action
+    const target = tuneTarget(e.button, e.ctrlKey, e.shiftKey)
+    if (!target) return // middle / back / forward must never retune the radio
     const rect = canvasRef.current!.getBoundingClientRect()
     const hz = Math.round(xToFreq(e.clientX - rect.left, rect.width, view.lo, view.hi))
-    const target: 'tx' | 'rx' | 'both' = e.ctrlKey ? 'both' : e.shiftKey ? 'tx' : 'rx'
     e.preventDefault()
     onTune(hz, target)
   }
@@ -642,7 +649,7 @@ export function Waterfall({
     <div className="waterfall-wrap">
       <div className="panel-header">
         <h2>Waterfall</h2>
-        <span className="wf-hint">{hint ?? 'click = RX · Shift = TX · Ctrl = both'}</span>
+        <span className="wf-hint">{hint ?? 'left = RX · right / Shift = TX · Ctrl = both'}</span>
         <PalettePicker />
         <select
           className="wf-palette wf-zoom"

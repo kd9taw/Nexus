@@ -265,3 +265,37 @@ export function resolveColormap(palette: string, theme: string): ColormapName {
   const explicit = WATERFALL_PALETTES.some((p) => p.value === palette && p.value !== 'auto')
   return explicit ? (palette as ColormapName) : themeColormap(theme)
 }
+
+/**
+ * Which marker a waterfall click moves — the wide-graph gesture map.
+ *
+ * LEFT = RX is the one gesture that must never move: it is identical in stock WSJT-X and in
+ * JTDX, so it is universal muscle memory. Everything else layers on top:
+ *
+ * | gesture      | target | origin                          |
+ * |--------------|--------|---------------------------------|
+ * | left         | rx     | WSJT-X + JTDX                   |
+ * | Shift + left | tx     | WSJT-X                          |
+ * | right        | tx     | JTDX (operator ask 2026-07-26)  |
+ * | Ctrl + left  | both   | WSJT-X                          |
+ *
+ * Right-click is ADDITIVE: stock WSJT-X binds no right-button action, so supporting JTDX's
+ * here costs a WSJT-X operator nothing and both conventions work at once.
+ *
+ * ⚠️ Nexus once shipped left=TX / right=RX — its own invention, which moved the WRONG marker
+ * for anyone arriving from either mainstream client. Do not "restore" it.
+ *
+ * Buttons other than left(0) and right(2) return null so middle-click and the mouse's
+ * back/forward buttons cannot retune the radio by accident.
+ */
+export function tuneTarget(
+  button: number,
+  ctrlKey: boolean,
+  shiftKey: boolean,
+): 'tx' | 'rx' | 'both' | null {
+  if (button === 2) return 'tx' // JTDX right-click, before any modifier
+  if (button !== 0) return null
+  if (ctrlKey) return 'both'
+  if (shiftKey) return 'tx'
+  return 'rx'
+}
