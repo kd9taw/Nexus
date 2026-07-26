@@ -4009,6 +4009,16 @@ struct DetectedRigDto {
     /// Best-guess paired playback device, matched against the OUTPUT list (Windows names the
     /// rig's input and output CODEC differently; reusing the input name sent TX to the speakers).
     suggested_audio_out: Option<String>,
+    /// Set when this port is a recognised sound-card INTERFACE CABLE (Digirig, RIGblaster)
+    /// rather than a radio. Never implies a rig model — the operator still picks the radio.
+    interface_name: Option<String>,
+    /// PTT method to pre-fill for that interface ("rts"). Null when not an interface.
+    interface_ptt_method: Option<String>,
+    /// Whether keying shares the CAT serial port: `true` = leave PTT Serial Port blank,
+    /// `false` = it has its own, `null` = varies by model, so ASK rather than pre-fill.
+    interface_shares_cat_port: Option<bool>,
+    /// One plain sentence about this interface for the operator.
+    interface_note: Option<String>,
 }
 
 /// Zero-config station setup: enumerate connected USB radios and resolve each to a
@@ -4049,6 +4059,10 @@ async fn detect_rigs() -> Vec<DetectedRigDto> {
                     driver_bundled: r.driver.as_ref().is_some_and(|d| d.bundled),
                     suggested_audio: r.suggested_audio,
                     suggested_audio_out: r.suggested_audio_out,
+                    interface_name: r.interface.map(|i| i.name.to_string()),
+                    interface_ptt_method: r.interface.map(|i| i.ptt_method.to_string()),
+                    interface_shares_cat_port: r.interface.and_then(|i| i.shares_cat_port),
+                    interface_note: r.interface.map(|i| i.note.to_string()),
                 }
             })
             .collect()

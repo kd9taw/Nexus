@@ -14346,6 +14346,13 @@ html[data-panel='needed'] {
   font-size: var(--fs-micro);
   color: var(--band-marginal, #d8a657);
 }
+/* A recognised interface cable. Informational, NOT a warning: nothing went wrong, the operator
+   just still has to pick the radio. Deliberately not the amber of .rig-detect-nomodel. */
+.rig-detect-interface {
+  font-size: var(--fs-micro);
+  color: var(--text-dim, #9aa7b8);
+  line-height: 1.35;
+}
 .aw-bandrow {
   display: grid;
   grid-template-columns: 44px 1fr 64px;

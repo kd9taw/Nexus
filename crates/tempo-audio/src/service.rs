@@ -4987,7 +4987,18 @@ fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigO
             None,
         )
     } else {
-        probe_serial(&ptt_port, line)
+        // Pure serial keying, no CAT. After the shared-port branch above this is reached only
+        // when NO rig model is set, so the honest report names the missing half: keying works,
+        // but nothing will follow the band. This used to report a bare success and the operator
+        // was left to work out why the radio ignored every band change.
+        let mut open = probe_serial(&ptt_port, line);
+        if t.rig_model == 0 && open.2.ok == Some(true) {
+            open.2.detail = format!(
+                "{} — no CAT (no rig model set), so the radio will not follow the band.",
+                open.2.detail
+            );
+        }
+        open
     }
 }
 
@@ -5151,6 +5162,10 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
             Some(false),
             "CAT selected but no rig model is set — pick your rig in Settings.".to_string(),
         ),
+        // Shared CAT+keying port: rigctld owns the port and there IS a live control channel, so
+        // Test CAT must probe it. Reporting "Serial PTT on COM5" here would contradict what the
+        // app is actually doing and hide a genuinely broken CAT link behind a green pill.
+        _ if keys_on_the_cat_port(t) => probe_cat_or_explain(rig, t.rigctld_port),
         "rts" | "dtr" => {
             let shown = if t.ptt_port().is_empty() {
                 "(no port set)"
@@ -5158,7 +5173,17 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
                 t.ptt_port()
             };
             match rig.ptt(false) {
-                Ok(()) => (Some(true), format!("Serial PTT on {shown}")),
+                Ok(()) => {
+                    // Say what is NOT happening. Keying works and the pill goes green, but with
+                    // no rig model there is no CAT at all — the band will not follow, and the
+                    // operator otherwise has to infer that from a control that looks healthy.
+                    let detail = if t.rig_model == 0 {
+                        format!("Serial PTT on {shown} — no CAT (no rig model set), so the radio will not follow the band.")
+                    } else {
+                        format!("Serial PTT on {shown}")
+                    };
+                    (Some(true), detail)
+                }
                 Err(e) => (
                     Some(false),
                     format!("Could not open serial port {shown}: {e}"),

@@ -22,6 +22,7 @@ version is always `rigctl -l`.
 | **Icom** | [icom.md](icom.md) | IC-9700 incl. 23 cm; IC-7300-class single-USB |
 | **FlexRadio** | [flexradio.md](flexradio.md) | LAN discovery verified on a FLEX-6400M; CAT chain in final verification |
 | **Xiegu** | [xiegu.md](xiegu.md) | Supported but **not yet field-verified** |
+| **Sound-card interfaces** | [interfaces.md](interfaces.md) | Digirig / RIGblaster; **not yet field-verified** |
 | **Rotators** | [rotators.md](rotators.md) | Dummy-verified; real az/el hardware pending |
 
 Kenwood, Elecraft, Ten-Tec, QRP Labs, and Alinco are also in the curated model

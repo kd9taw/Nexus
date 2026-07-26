@@ -74,6 +74,30 @@ pub const COMMON_CAT_MODELS: &[(u32, &str, &[u32])] = &[
     (3081, "Icom IC-9700", &[115200, 19200]),
     (2037, "Kenwood TS-590SG", &[115200]),
     (2029, "Elecraft K3", &[38400]),
+    // --- Interface-cable rigs (Digirig / RigBlaster companions), added 2026-07-26. ---
+    // These are the rigs that reach this sweep MOST often and previously never matched: they
+    // connect through a generic USB-serial bridge (CP2102/CH340/FTDI), so the USB product string
+    // names the CHIP, not the radio — `match_rig_model` returns None and the seeded sweep is the
+    // only thing that can identify them. A native-USB rig (IC-705 over its own USB, FT-710) names
+    // itself and never gets here; the IC-705 seed below is for the CI-V-cable wiring of it.
+    //
+    // ⚠️ COST, stated rather than hidden: this roughly DOUBLES the baud-probes in the worst case
+    // (12 → 23). The worst case is "nothing answers" — a wrong port, or no rig — because the first
+    // answer wins. A real rig on the right port is unaffected in practice. If detect ever feels
+    // slow, trim from the BOTTOM of this block, not the top.
+    //
+    // Bauds are each family's factory default first. All of these land on the LONG (2.5 s) CAT
+    // deadline automatically — Xiegu by model, the rest by the `baud <= 19200` rule in
+    // `rigmodels::is_slow_serial_link` — so a slow vintage backend is not misread as "no answer".
+    (1036, "Yaesu FT-891", &[38400]),
+    (1022, "Yaesu FT-857 / FT-857D", &[4800]),
+    (1041, "Yaesu FT-818 / FT-818ND", &[4800]),
+    (1020, "Yaesu FT-817 / FT-817ND", &[4800]),
+    (3070, "Icom IC-7100", &[19200, 115200]),
+    (3085, "Icom IC-705", &[115200, 19200]),
+    (3088, "Xiegu G90", &[19200]),
+    (3087, "Xiegu X6100", &[19200]),
+    (2028, "Kenwood TS-480 (SAT/HX)", &[9600, 57600]),
 ];
 
 /// Build probe candidates from enumerated USB ports. A native-USB rig (IC-705, FT-710…)
@@ -186,6 +210,42 @@ pub fn probe_cat_ports(_fallback_model: u32, _tcp_port: u16) -> Option<ProbeHit>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every seeded model number must be a REAL Hamlib model. A typo'd or removed number does
+    /// not fail loudly — the probe just never gets an answer, and the rig reports as undetected
+    /// with no clue why. The display name must match the table too, or Detect shows the operator
+    /// one rig while configuring another.
+    #[test]
+    fn every_seeded_cat_model_exists_in_hamlib() {
+        let table = crate::rigmodels::rig_models();
+        for (model, name, bauds) in COMMON_CAT_MODELS {
+            let found = table.iter().find(|(m, _)| m == model);
+            let (_, real) = found
+                .unwrap_or_else(|| panic!("seeded model {model} ({name}) is not a Hamlib model"));
+            assert_eq!(
+                real, name,
+                "seeded model {model} is really {real:?}, not {name:?} — Detect would name the \
+                 wrong radio"
+            );
+            assert!(
+                !bauds.is_empty(),
+                "{name} has no seed baud, so it can never be probed"
+            );
+            assert!(bauds.iter().all(|b| *b > 0), "{name} has a zero baud seed");
+        }
+    }
+
+    /// The sweep's worst case is "nothing answers", and it is paid on every failed detect. This
+    /// pins the cost so a future addition is a deliberate choice rather than a silent slowdown.
+    #[test]
+    fn the_seeded_sweep_stays_bounded() {
+        let probes: usize = COMMON_CAT_MODELS.iter().map(|(_, _, b)| b.len()).sum();
+        assert!(
+            probes <= 30,
+            "seeded probes grew to {probes}; each one lengthens a FAILED detect. Trim the \
+             interface-cable block before adding more."
+        );
+    }
 
     fn usb(port: &str, product: &str, mfr: &str) -> UsbPort {
         UsbPort {

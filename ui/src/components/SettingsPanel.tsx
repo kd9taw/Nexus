@@ -1036,9 +1036,24 @@ export function SettingsPanel({
         ? { audioOut: r.suggestedAudioOut ?? r.suggestedAudio ?? '' }
         : {}),
       ...(baud ? { baud } : {}),
+      // A recognised interface cable keys a serial line, so pre-fill that much. The PTT PORT is
+      // only filled when we actually know the answer: `interfaceSharesCatPort === true` means
+      // one cable, so blank is correct. `null` means it varies by model — leave whatever the
+      // operator already had rather than guessing, because a wrong keying port keys the wrong
+      // radio, which is a TX-path error, not a cosmetic one.
+      ...(r.interfacePttMethod ? { pttMethod: r.interfacePttMethod } : {}),
+      ...(r.interfaceSharesCatPort === true ? { pttSerialPort: '' } : {}),
     }
     setForm(applied)
-    if (r.suggestedModel == null) {
+    if (r.interfaceName) {
+      // Do NOT chain into Auto-test the way an unidentified rig does. We know exactly what this
+      // device is — a cable — and the sweep would be looking for a radio that this port may not
+      // even have a CAT link to yet. Tell the operator the one thing still missing.
+      pushToast(
+        `Applied ${r.interfaceName} on ${r.portName} — now pick your Rig Model, then Save`,
+        'success',
+      )
+    } else if (r.suggestedModel == null) {
       // Unidentified rig (bridge chip only, no model) — instead of making the operator pick a model
       // and Test CAT by hand, chain straight into the port Auto-test, which sweeps COMMON_CAT_MODELS
       // + bauds to find the one that actually answers. Pass the freshly-applied form (state is async).
@@ -2244,13 +2259,25 @@ export function SettingsPanel({
                       <li className="rig-detect" key={`${r.portName}-${i}`}>
                         <div className="rig-detect-main">
                           <span className="rig-detect-name">
-                            {r.suggestedModelName ?? (r.product || 'Unknown radio')}
+                            {r.interfaceName ??
+                              r.suggestedModelName ??
+                              (r.product || 'Unknown radio')}
                           </span>
                           <span className="rig-detect-meta">
                             {r.portName} · {r.chip}
                             {r.suggestedAudio ? ` · ${r.suggestedAudio}` : ''}
                           </span>
-                          {!r.suggestedModel && (
+                          {/* A recognised interface is a CABLE, not a radio. Say so plainly and
+                              tell the operator what is still theirs to choose — the rig — rather
+                              than showing the generic "couldn't identify the model" warning,
+                              which reads as a failure when nothing actually went wrong. */}
+                          {r.interfaceName && (
+                            <span className="rig-detect-interface">
+                              This is an interface cable, not a radio — pick your rig in{' '}
+                              <em>Rig Model</em> below. {r.interfaceNote}
+                            </span>
+                          )}
+                          {!r.suggestedModel && !r.interfaceName && (
                             <span className="rig-detect-nomodel">
                               ⚠ Found the port but not the exact model — normal when the rig sits
                               behind a generic USB bridge chip that reports only its own name (common

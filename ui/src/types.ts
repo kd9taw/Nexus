@@ -541,6 +541,17 @@ export interface DetectedRig {
   /** Best-guess paired PLAYBACK device, matched against the output list (may differ from the
    * capture name on Windows). Falls back to suggestedAudio when the output couldn't be paired. */
   suggestedAudioOut: string | null
+  /** Set when this port is a recognised sound-card INTERFACE CABLE (Digirig, RIGblaster)
+   * rather than a radio. It never implies a rig model — an interface can be wired to any
+   * radio, so the operator still picks one. */
+  interfaceName: string | null
+  /** PTT method to pre-fill for that interface ("rts"). Null when not an interface. */
+  interfacePttMethod: string | null
+  /** Does keying share the CAT serial port? true = leave PTT Serial Port blank; false = it has
+   * its own; null = varies by model, so ask rather than pre-fill (guessing keys the wrong rig). */
+  interfaceSharesCatPort: boolean | null
+  /** One plain sentence about this interface for the operator. */
+  interfaceNote: string | null
 }
 
 /**

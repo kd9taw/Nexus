@@ -220,6 +220,81 @@ pub fn match_rig_model(product: &str, manufacturer: &str) -> Option<(u32, &'stat
     best.map(|(_, m, n)| (m, n))
 }
 
+/// A recognised sound-card INTERFACE (Digirig, RigBlaster…) — a cable between the PC and a
+/// radio, NOT a radio. Deliberately carries no rig model: an interface can be wired to any
+/// radio, and claiming one would be a guess that silently mis-configures CAT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnownInterface {
+    /// Display name for the Detect list, e.g. "Digirig Mobile".
+    pub name: &'static str,
+    /// The `ptt_method` to pre-fill — "rts" for every interface here (they all key a serial
+    /// control line). Never "cat": the interface cannot key the rig's CAT channel for it.
+    pub ptt_method: &'static str,
+    /// Does keying share the CAT serial port? `Some(true)` = leave "PTT Serial Port" BLANK
+    /// (the single-cable wiring; see `service::keys_on_the_cat_port`). `Some(false)` = it has
+    /// its own keying port. `None` = varies by model, so ASK rather than pre-fill — an
+    /// interface guessed wrong here keys the wrong thing, which is a TX-path error.
+    pub shares_cat_port: Option<bool>,
+    /// One plain sentence for the operator, shown beside the detected port.
+    pub note: &'static str,
+}
+
+/// Recognise a known interface cable from its USB identity.
+///
+/// ⚠️ **MATCHES ON THE PRODUCT/MANUFACTURER STRING ONLY — never on VID/PID.** A stock Digirig
+/// is a Silicon Labs CP2102, `10C4:EA60`, which is the SAME VID/PID as an FTDX10, an FT-710 and
+/// several Xiegu radios. Keying off the numbers would confidently label a working FTDX10 as an
+/// interface cable and pre-fill the wrong PTT method — worse than not recognising it at all.
+/// So: an interface that does not NAME itself is correctly returned as `None`, and the operator
+/// configures it by hand exactly as before. `vid`/`pid` are accepted only to confirm a name
+/// match, never to make one.
+pub fn match_interface(
+    vid: u16,
+    _pid: u16,
+    product: &str,
+    manufacturer: &str,
+) -> Option<KnownInterface> {
+    let hay = format!("{manufacturer} {product}").to_ascii_uppercase();
+    // Digirig Mobile: ONE USB port carrying CAT and RTS keying, plus its own codec. This is
+    // the wiring `service::keys_on_the_cat_port` exists for.
+    if hay.contains("DIGIRIG") {
+        let lite = hay.contains("LITE");
+        return Some(KnownInterface {
+            name: if lite {
+                "Digirig Lite"
+            } else {
+                "Digirig Mobile"
+            },
+            ptt_method: "rts",
+            // Lite keys via CM108 HID, which Nexus does not implement — say so rather than
+            // pre-filling a method that would never key.
+            shares_cat_port: if lite { None } else { Some(true) },
+            note: if lite {
+                "Digirig Lite keys over CM108 HID, which Nexus does not support yet — use VOX, \
+                 or a rig that keys over CAT."
+            } else {
+                "One cable for CAT and keying: leave PTT Serial Port blank and Nexus keys RTS \
+                 on the CAT port."
+            },
+        });
+    }
+    // West Mountain RIGblaster. The family spans PTT-only boxes (Plug & Play) and CAT+PTT ones
+    // (Advantage), so the port question genuinely varies — `None` means ask, don't guess.
+    if hay.contains("RIGBLASTER") || hay.contains("WEST MOUNTAIN") {
+        return Some(KnownInterface {
+            name: "West Mountain RIGblaster",
+            ptt_method: "rts",
+            shares_cat_port: None,
+            note: "Keys RTS on a serial port. Which port depends on your model — if CAT and \
+                   keying are one cable, leave PTT Serial Port blank.",
+        });
+    }
+    // A bare bridge chip cannot be identified further, and MUST NOT be guessed at: see the
+    // shared-VID/PID warning above. `vid` is referenced so the intent is explicit.
+    let _ = vid;
+    None
+}
+
 /// A fully-resolved detection result for one connected USB radio — everything the
 /// setup wizard needs to one-click configure it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,6 +317,11 @@ pub struct DetectedRig {
     /// CODEC input and output enumerate under DIFFERENT names, so reusing the input name for TX
     /// sent modem audio to the PC speakers instead of the rig ("TX out the speakers" bug).
     pub suggested_audio_out: Option<String>,
+    /// Set when this port is a recognised INTERFACE CABLE rather than a radio (see
+    /// [`match_interface`]). Mutually exclusive with `suggested_model` in practice: an interface
+    /// names itself and no rig token matches, while a native-USB radio names its model. When
+    /// present the operator still picks the RIG — the cable does not imply one.
+    pub interface: Option<KnownInterface>,
 }
 
 /// Join enumerated USB ports + audio device names into per-rig suggestions. Pure, so
@@ -273,6 +353,7 @@ pub fn detect_rigs(
                 driver: driver_hint(chip, os),
                 suggested_audio: pair_audio(&p.product, audio_in),
                 suggested_audio_out: pair_audio(&p.product, audio_out),
+                interface: match_interface(p.vid, p.pid, &p.product, &p.manufacturer),
             }
         })
         .collect()
@@ -288,13 +369,32 @@ fn pair_audio(product: &str, audio: &[String]) -> Option<String> {
             return Some(a.clone());
         }
     }
-    audio
-        .iter()
-        .find(|a| {
-            let n = a.to_ascii_uppercase();
-            n.contains("USB AUDIO") || n.contains("USB CODEC")
-        })
-        .cloned()
+    audio.iter().find(|a| is_generic_rig_codec(a)).cloned()
+}
+
+/// Does this sound-device name look like a rig-audio USB codec rather than the PC's own
+/// speakers/mic? Used only as the FALLBACK, after a product-name match fails.
+///
+/// "USB AUDIO CODEC" is the near-universal name for a radio's built-in codec and for most
+/// RigBlaster models. It is NOT what an outboard interface cable presents: a Digirig Mobile
+/// enumerates on Windows as **"USB PnP Sound Device"** and on Linux/macOS often as a bare
+/// "USB Audio Device", so neither existing pattern matched and Detect paired nothing — the
+/// operator had to find the device by hand with no hint which of several it was.
+///
+/// Deliberately conservative. Every pattern here still contains "USB", so a built-in laptop
+/// mic/speaker (Realtek, "Microphone Array", HDMI) can never win the fallback; and because this
+/// only runs after the product-name pass, a rig that DOES name itself is unaffected.
+fn is_generic_rig_codec(name: &str) -> bool {
+    let n = name.to_ascii_uppercase();
+    n.contains("USB AUDIO CODEC")
+        || n.contains("USB CODEC")
+        // Digirig Mobile / Digirig Lite / CM108-class dongles.
+        || n.contains("USB PNP SOUND DEVICE")
+        // Generic enumeration used by several interface cables and by ALSA for the same devices.
+        || n.contains("USB AUDIO DEVICE")
+        // Kept last and broadest: the historical pattern, which also covers names like
+        // "USB Audio CODEC #2" that the duplicate-name disambiguator produces.
+        || n.contains("USB AUDIO")
 }
 
 #[cfg(test)]
@@ -375,6 +475,94 @@ mod tests {
             pid: 0xEA60,
             product: product.into(),
             manufacturer: maker.into(),
+        }
+    }
+
+    /// ⚠️ THE TRAP THIS TABLE EXISTS TO AVOID. A stock Digirig is a Silicon Labs CP2102,
+    /// `10C4:EA60` — the SAME VID/PID as an FTDX10, an FT-710 and several Xiegu radios. If
+    /// `match_interface` ever keys off the numbers, a working FTDX10 gets labelled an interface
+    /// cable and pre-filled with the wrong PTT method. Not recognising a device is a mild
+    /// inconvenience; mislabelling a radio is a TX-path misconfiguration.
+    #[test]
+    fn a_bare_bridge_chip_is_never_claimed_as_an_interface() {
+        // Same VID/PID as a Digirig, but the product string names a chip, not a cable.
+        assert_eq!(
+            match_interface(
+                0x10C4,
+                0xEA60,
+                "CP2102 USB to UART Bridge Controller",
+                "Silicon Labs"
+            ),
+            None
+        );
+        // Same VID/PID again, but this time it IS a radio.
+        assert_eq!(
+            match_interface(0x10C4, 0xEA60, "FTDX10", "Yaesu"),
+            None,
+            "a radio on the shared CP2102 id must never be called an interface"
+        );
+        assert_eq!(
+            match_interface(0x0403, 0x6001, "FT232R USB UART", "FTDI"),
+            None
+        );
+    }
+
+    #[test]
+    fn known_interfaces_are_matched_by_name_and_carry_no_rig_model() {
+        let d = match_interface(0x10C4, 0xEA60, "Digirig Mobile", "Digirig")
+            .expect("a device that names itself Digirig is recognisable");
+        assert_eq!(d.name, "Digirig Mobile");
+        assert_eq!(d.ptt_method, "rts");
+        assert_eq!(
+            d.shares_cat_port,
+            Some(true),
+            "the defining Digirig Mobile wiring: one cable for CAT and keying"
+        );
+
+        // Lite keys via CM108 HID, which Nexus does not implement. It must NOT claim a serial
+        // wiring that would never key — `None` means "ask", and the note says why.
+        let lite = match_interface(0x10C4, 0xEA60, "Digirig Lite", "Digirig").unwrap();
+        assert_eq!(lite.shares_cat_port, None);
+        assert!(lite.note.contains("CM108"));
+
+        let rb = match_interface(
+            0x0403,
+            0x6001,
+            "RIGblaster Advantage",
+            "West Mountain Radio",
+        )
+        .expect("RIGblaster is recognisable by name");
+        assert_eq!(rb.ptt_method, "rts");
+        assert_eq!(
+            rb.shares_cat_port, None,
+            "the RIGblaster family spans PTT-only and CAT+PTT boxes — ask, do not guess"
+        );
+    }
+
+    /// Digirig's codec matched NEITHER prior pattern, so Detect paired no audio at all and the
+    /// operator had to guess which device was the radio.
+    #[test]
+    fn interface_codecs_pair_as_rig_audio() {
+        for name in [
+            "USB PnP Sound Device", // Digirig on Windows
+            "USB Audio Device",     // several cables, and ALSA for the same hardware
+            "USB Audio CODEC",      // built-in rig codecs, most RigBlasters
+            "USB Audio CODEC #2",   // the duplicate-name disambiguator
+        ] {
+            assert!(
+                is_generic_rig_codec(name),
+                "{name} should be recognised as rig audio"
+            );
+        }
+        // Must NOT capture the PC's own hardware — this only runs as a fallback, but a false
+        // positive here sends modem audio to the laptop speakers (the "TX out the speakers" bug).
+        for name in [
+            "Realtek High Definition Audio",
+            "Microphone Array (Intel Smart Sound)",
+            "Speakers (Realtek)",
+            "HDMI Output",
+        ] {
+            assert!(!is_generic_rig_codec(name), "{name} is not rig audio");
         }
     }
 
