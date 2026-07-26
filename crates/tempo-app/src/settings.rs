@@ -2447,6 +2447,46 @@ mod tests {
         assert_eq!(s.rig_mode(), "CW");
     }
 
+    /// THE UPGRADE PATH, which is the case that actually matters: an existing operator's
+    /// settings.json has no `dataModesPlainSsb` key at all, and a new install writes none.
+    /// Both must land on the DATA submode exactly as before — this option must be invisible
+    /// to everyone who does not deliberately turn it on. Proven by deserializing a settings
+    /// blob WITHOUT the key rather than by trusting the `#[serde(default)]`.
+    #[test]
+    fn an_older_settings_file_and_a_new_install_both_keep_the_data_submode() {
+        // A settings blob from before this option existed.
+        let before: Settings = serde_json::from_str(
+            r#"{"mycall":"KD9TAW","mygrid":"EN51","operatingMode":"digital","dialMhz":14.074}"#,
+        )
+        .expect("an older settings file must still load");
+        assert!(
+            !before.data_modes_plain_ssb,
+            "a missing key must mean DATA, never plain SSB — silently flipping an existing \
+             station to plain SSB would take them off the air with a red TX light"
+        );
+        assert_eq!(before.rig_mode(), "PKTUSB");
+
+        // And a radio profile from before the option existed.
+        let p: RadioProfile =
+            serde_json::from_str(r#"{"id":0,"name":"FTDX10"}"#).expect("older profile loads");
+        assert!(!p.data_modes_plain_ssb);
+
+        // A brand-new install.
+        let fresh = Settings::default();
+        assert!(!fresh.data_modes_plain_ssb);
+        assert!(!RadioProfile::default().data_modes_plain_ssb);
+
+        // And it round-trips once set, so an operator who DOES turn it on keeps it across a
+        // restart (the dead-key lesson: a field that serialises but never deserialises is worse
+        // than no field at all).
+        let mut on = Settings::default();
+        on.data_modes_plain_ssb = true;
+        let json = serde_json::to_string(&on).unwrap();
+        assert!(json.contains("\"dataModesPlainSsb\":true"), "{json}");
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(back.data_modes_plain_ssb);
+    }
+
     /// The setting lives on the RADIO, so switching rigs must switch the behaviour with it —
     /// a mic-jack interface on one rig and a data-port interface on the other is the whole
     /// reason it is per-radio rather than global.
