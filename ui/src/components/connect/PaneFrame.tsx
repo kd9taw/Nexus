@@ -1,30 +1,33 @@
 // One grid slot: a header (pane title + a content-picker to reassign the slot) over a
-// body that renders the pane's Expert JSX, or — when Expert has no data, or in Basic
-// mode — the pane's one-sentence Basic projection. The picker auto-lists every registry
-// entry, so B2/B3 panes appear with no change here.
+// body that renders the pane's full panel, falling back to its one-sentence projection when
+// there is no data yet. The picker auto-lists every registry entry, so B2/B3 panes appear with
+// no change here.
+//
+// The Basic/Expert detail toggle was removed 2026-07-26 (operator) — every pane renders in full.
+// `def.basic()` is NOT the removed mode: it is the loading / no-data / offline hint for every
+// pane, reached whenever `def.expert()` returns null. Deleting it would blank a pane that is
+// simply waiting on a feed.
 import type { CSSProperties } from 'react'
 import { PANES, paneById } from './panes'
 import type { PaneContext } from './paneContext'
-import type { ConnectMode, PaneId, SlotId } from '../../features/connectConfig'
+import type { PaneId, SlotId } from '../../features/connectConfig'
 
 export function PaneFrame({
   slotId,
   paneId,
-  mode,
   ctx,
   onAssign,
   style,
 }: {
   slotId: SlotId
   paneId: PaneId
-  mode: ConnectMode
   ctx: PaneContext
   onAssign: (slotId: SlotId, paneId: PaneId) => void
   style?: CSSProperties // { gridArea: slotId } for the 4 rail frames; omitted inside the strip
 }) {
   const def = paneById(paneId)
   if (!def) return null
-  const body = mode === 'expert' ? def.expert(ctx) : null // Expert no-data → null → falls back to basic()
+  const body = def.expert(ctx) // null when there is no data yet → falls back to basic() below
   return (
     <section className="pane-frame" data-slot={slotId} data-pane={paneId} style={style}>
       <header className="pane-head">

@@ -34,7 +34,7 @@ export function satPassesLine(sats: SatView | null): string {
   return `Next: ${next.name} ${timeLabel(next.aosUnix, now)}, max ${Math.round(next.maxElDeg)}° ${octant(next.aosAzDeg)}→${octant(next.losAzDeg)}.`
 }
 
-export function SatPassesPane({ expert }: { expert: boolean }) {
+export function SatPassesPane() {
   const [sats, setSats] = useState<SatView | null>(null)
   const [chased, setChased] = useState<Set<string>>(() => satChasingSet())
   useEffect(() => {
@@ -71,7 +71,7 @@ export function SatPassesPane({ expert }: { expert: boolean }) {
         </p>
       )}
       <ul className="sat-list">
-        {rows.slice(0, expert ? 14 : 5).map((p) => {
+        {rows.slice(0, 14).map((p) => {
           const isChased = chased.has(p.name.toUpperCase())
           return (
             <li key={`${p.name}-${p.aosUnix}`} className={`sat-row${isChased ? ' chased' : ''}`}>
@@ -98,11 +98,9 @@ export function SatPassesPane({ expert }: { expert: boolean }) {
               <span className="sat-arc" title="Rise → set compass directions">
                 {octant(p.aosAzDeg)}→{octant(p.losAzDeg)}
               </span>
-              {expert && (
-                <span className="sat-dur">
-                  {Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60))} min
-                </span>
-              )}
+              <span className="sat-dur">
+                {Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60))} min
+              </span>
             </li>
           )
         })}

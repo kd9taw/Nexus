@@ -2421,8 +2421,7 @@ button.nb-chip:hover {
   text-transform: uppercase;
   color: var(--text-dim);
 }
-.mi-collapse,
-.if-expand {
+.mi-collapse {
   background: none;
   border: none;
   color: var(--text-faint);
@@ -2563,12 +2562,6 @@ button.nb-chip:hover {
   color: var(--text-dim);
   font-family: var(--font-mono);
   margin-top: 2px;
-}
-.if-expand {
-  flex: none;
-}
-.if-expand.open {
-  transform: rotate(180deg);
 }
 .map-path-call {
   font-weight: 600;

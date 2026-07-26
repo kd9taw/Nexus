@@ -33,30 +33,32 @@ describe('connectConfig', () => {
     }
   })
 
-  it('default is Basic mode with a complete default slot record', () => {
+  it('defaults to a complete slot record', () => {
     const c = defaultConnectConfig()
-    expect(c.mode).toBe('basic')
     expect(Object.keys(c.slots).sort()).toEqual([...SLOT_IDS].sort())
   })
 
   it('normalize keeps valid overrides, drops unknown pane ids, fills every slot', () => {
-    const c = normalizeConfig({ mode: 'expert', slots: { left1: 'spacewx', left2: 'bogus' } })
-    expect(c.mode).toBe('expert')
+    const c = normalizeConfig({ slots: { left1: 'spacewx', left2: 'bogus' } })
     expect(c.slots.left1).toBe('spacewx') // valid override kept
     expect(c.slots.left2).toBe(DEFAULT_SLOTS.left2) // unknown id → default
     expect(Object.keys(c.slots).sort()).toEqual([...SLOT_IDS].sort()) // complete record
   })
 
   it('normalize repairs junk to a usable config', () => {
-    expect(normalizeConfig(null).mode).toBe('basic')
+    expect(normalizeConfig(null).slots).toEqual(DEFAULT_SLOTS)
     expect(normalizeConfig('garbage').slots).toEqual(DEFAULT_SLOTS)
     expect(normalizeConfig(42).slots).toEqual(DEFAULT_SLOTS)
   })
 
-  it('migrates the legacy nexus.connect.mode=expert when the new config has no mode', () => {
+  // The Basic/Expert detail toggle was removed 2026-07-26 (operator): every pane renders in
+  // full. A stored `mode` from an older install must be IGNORED, not choke normalize — there is
+  // no setting left for it to migrate into.
+  it('ignores a stored mode from before the toggle was removed', () => {
     localStorage.setItem('nexus.connect.mode', 'expert')
-    expect(normalizeConfig({}).mode).toBe('expert') // inherits legacy
-    expect(normalizeConfig({ mode: 'basic' }).mode).toBe('basic') // explicit wins
+    const c = normalizeConfig({ mode: 'basic', slots: { left1: 'spacewx' } })
+    expect('mode' in c).toBe(false)
+    expect(c.slots.left1).toBe('spacewx') // the rest of the stored config still applies
   })
 
   it('isPaneId accepts valid ids and rejects junk', () => {

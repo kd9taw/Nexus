@@ -24,7 +24,6 @@ export interface PaneContext {
   myGrid: string
   theme: Theme
   intent: MapIntent
-  expert: boolean
   // shared live state
   prop: PropagationSnapshot | null
   prov: { label: string; cls: string } | null

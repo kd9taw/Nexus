@@ -39,6 +39,23 @@ import type {
 
 const EARTH_KM = 6371 // for altKm → globe-radius altitude units
 
+/**
+ * Opening-sector stacking radii, in globe-radius units.
+ *
+ * ⚠️ THESE MUST ALL DIFFER, and the outline MUST clear every fill. The fills and their outlines
+ * were both at a flat 0.006 — identical radius — so each outline was coplanar with its own cap,
+ * and every overlapping pair of wedges was coplanar with the other. Two surfaces at the same
+ * depth have no correct draw order, so the GPU resolves it per-pixel and per-frame: the
+ * flickering the operator reported once the geometry stopped tearing.
+ *
+ * `SECTOR_ALT_STEP` × 6371 km ≈ 2.5 km — invisible as height at any usable zoom, but far coarser
+ * than the depth buffer at this range, which is what breaks the tie.
+ */
+const SECTOR_FILL_ALT = 0.006
+const SECTOR_ALT_STEP = 0.0004
+/** Above the highest fill any plausible number of simultaneous openings can reach. */
+const SECTOR_OUTLINE_ALT = 0.014
+
 /** Interpolate a satellite's subpoint from its per-minute ground track at unix `tSec`. */
 function satPosAt(track: [number, number, number][], tSec: number): { lat: number; lon: number } | null {
   if (track.length === 0) return null
@@ -178,8 +195,6 @@ interface Props {
   selectedCall: string | null
   /** Click a spot → select it (same handler as the 2-D map). */
   onSelectCall: (call: string | null) => void
-  /** Expert mode (the insight rail shows full data). */
-  expert?: boolean
   /** Path/band outlook for the insight rail's MUF ceiling. */
   outlook?: PathPrediction | null
   /** Focus a band from the insight rail. */
@@ -258,7 +273,6 @@ export default function Globe3D({
   prop,
   selectedCall,
   onSelectCall,
-  expert,
   outlook,
   onBandClick,
   activeBand,
@@ -332,8 +346,14 @@ export default function Globe3D({
   // the globe's outline-only sectors read as stray arcs (operator report). Same wedge
   // geometry as the syncLines outlines, rendered via globe.gl's native polygons layer.
   const sectorPolys = useMemo(() => {
-    if (!qth) return [] as { geometry: { type: 'Polygon'; coordinates: number[][][] }; fill: string }[]
-    const polys: { geometry: { type: 'Polygon'; coordinates: number[][][] }; fill: string }[] = []
+    type Poly = {
+      geometry: { type: 'Polygon'; coordinates: number[][][] }
+      fill: string
+      alt: number
+    }
+    if (!qth) return [] as Poly[]
+    const polys: Poly[] = []
+    let i = 0
     for (const o of prop?.openings ?? []) {
       if (!(o.maxKm > 0)) continue
       const ring = sectorRing(qth, o.bearingDeg, o.maxKm) as unknown as number[][]
@@ -341,7 +361,16 @@ export default function Globe3D({
       polys.push({
         geometry: { type: 'Polygon', coordinates: [ring] },
         fill: `rgba(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}, 0.16)`,
+        // ⚠️ EVERY SECTOR GETS ITS OWN RADIUS (operator report: heavy flickering across the
+        // non-green wedges, after the tearing fix). These were ALL at a flat 0.006, so any two
+        // openings whose wedges overlapped had exactly coplanar caps — the GPU has no
+        // consistent way to order two surfaces at the same depth, so it picks per-pixel,
+        // per-frame, and the overlap boils. Fanning them out by index gives the depth buffer an
+        // unambiguous order. The step is ~2.5 km on a 6371 km globe: far too small to see as
+        // height, far larger than the depth buffer's resolution at this range.
+        alt: SECTOR_FILL_ALT + i * SECTOR_ALT_STEP,
       })
+      i++
     }
     return polys
   }, [qth, prop])
@@ -851,7 +880,9 @@ export default function Globe3D({
         openingModeColor(mode),
         0.9,
         show.openings && lines.length > 0,
-        0.006,
+        // Above EVERY fill (see SECTOR_OUTLINE_ALT): the outline used to sit at exactly the
+        // fills' 0.006, so each wedge's border was coplanar with its own cap.
+        SECTOR_OUTLINE_ALT,
       )
     }
     // Sector LABELS — the 2-D map tags each wedge "6m Sporadic-E"; without them the
@@ -951,8 +982,9 @@ export default function Globe3D({
       >
         {spin ? '⏸ Spin' : '▶ Spin'}
       </button>
-      {/* Layers panel (Expert), matching the 2-D map. Grows as Phase B adds layers. */}
-      {expert && (
+      {/* Layers panel, matching the 2-D map. Grows as Phase B adds layers. (Was gated on the
+          Expert detail level, removed 2026-07-26 — the layer list is now always available.) */}
+      {(
         <div className="globe3d-layers">
           <span className="globe3d-layers-h">Layers</span>
           {(
@@ -993,7 +1025,6 @@ export default function Globe3D({
       {prop && (
         <MapInsightRail
           prop={prop}
-          expert={expert}
           outlook={outlook}
           onBandClick={onBandClick}
           activeBand={activeBand}
@@ -1052,7 +1083,7 @@ export default function Globe3D({
           polygonCapColor={(d: object) => (d as { fill: string }).fill}
           polygonSideColor={() => 'rgba(0,0,0,0)'}
           polygonStrokeColor={() => 'rgba(0,0,0,0)'}
-          polygonAltitude={0.006}
+          polygonAltitude={(d: object) => (d as { alt: number }).alt}
           polygonsTransitionDuration={0}
           pathsData={show.states ? statePaths : []}
           pathPointLat={(p: unknown) => (p as [number, number])[0]}

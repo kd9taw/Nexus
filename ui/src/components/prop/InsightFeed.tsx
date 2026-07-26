@@ -2,7 +2,6 @@
 // technical detail rides inline in Expert mode, or behind a per-row expander in Simple
 // mode. Each row is colour-keyed by level and icon-keyed by kind; rows with a band link
 // to the map highlight.
-import { useState } from 'react'
 import {
   TrendingUp,
   Sun,
@@ -10,7 +9,6 @@ import {
   Zap,
   Sunrise,
   Radio,
-  ChevronDown,
   Gauge,
   Rocket,
   ArrowLeftRight,
@@ -35,11 +33,9 @@ const KIND_ICON: Record<InsightKind, LucideIcon> = {
 
 export function InsightFeed({
   insights,
-  expert,
   onBandClick,
 }: {
   insights: Insight[]
-  expert?: boolean
   onBandClick?: (band: string) => void
 }) {
   const rows = sortInsights(insights)
@@ -47,7 +43,7 @@ export function InsightFeed({
   return (
     <div className="insight-feed" role="list" aria-label="Predictive insights">
       {rows.map((ins, i) => (
-        <InsightRow key={`${ins.kind}-${i}`} ins={ins} expert={!!expert} onBandClick={onBandClick} />
+        <InsightRow key={`${ins.kind}-${i}`} ins={ins} onBandClick={onBandClick} />
       ))}
     </div>
   )
@@ -55,16 +51,12 @@ export function InsightFeed({
 
 function InsightRow({
   ins,
-  expert,
   onBandClick,
 }: {
   ins: Insight
-  expert: boolean
   onBandClick?: (band: string) => void
 }) {
-  const [open, setOpen] = useState(false)
   const Icon = KIND_ICON[ins.kind]
-  const showTech = expert || open
   const clickable = !!ins.band && !!onBandClick
   return (
     <div
@@ -79,21 +71,10 @@ function InsightRow({
       </span>
       <div className="if-body">
         <span className="if-plain">{ins.plain}</span>
-        {showTech && <span className="if-tech">{ins.technical}</span>}
+        {/* Always shown: Connect's Basic detail level was removed 2026-07-26, and with it the
+            per-row expand control that used to reveal this. */}
+        <span className="if-tech">{ins.technical}</span>
       </div>
-      {!expert && (
-        <button
-          type="button"
-          className={`if-expand${open ? ' open' : ''}`}
-          aria-label={open ? 'Hide detail' : 'Show detail'}
-          onClick={(e) => {
-            e.stopPropagation()
-            setOpen((v) => !v)
-          }}
-        >
-          <ChevronDown size={13} />
-        </button>
-      )}
     </div>
   )
 }

@@ -17,13 +17,11 @@ const COLLAPSE_KEY = 'nexus.connect.insights.collapsed'
 
 export function MapInsightRail({
   prop,
-  expert,
   outlook,
   onBandClick,
   activeBand,
 }: {
   prop: PropagationSnapshot
-  expert?: boolean
   /** The current path/general outlook (selected station's path, else the no-selection
    * band outlook), for the MUF ceiling + modelled heatmap. */
   outlook?: PathPrediction | null
@@ -92,11 +90,11 @@ export function MapInsightRail({
       {insights.length > 0 && (
         <div className="mi-card">
           <h4 className="mi-card-h">Outlook</h4>
-          <InsightFeed insights={insights} expert={expert} onBandClick={onBandClick} />
+          <InsightFeed insights={insights} onBandClick={onBandClick} />
         </div>
       )}
 
-      {expert && heatBands.length > 0 && (
+      {heatBands.length > 0 && (
         <div className="mi-card">
           <h4 className="mi-card-h">Modelled band × hour</h4>
           <LikelihoodHeatmap outlook={heatBands} />

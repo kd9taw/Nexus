@@ -79,11 +79,9 @@ const GROUPS: { bucket: ContestBucket; label: string }[] = [
 
 export function ContestCalendarPane({
   load,
-  expert,
 }: {
   /** Injected fetcher (registry passes the wired `getContests`). Null = no data yet. */
   load: () => Promise<ContestEvent[] | null>
-  expert: boolean
 }) {
   const [contests, setContests] = useState<ContestEvent[] | null>(null)
   useEffect(() => {
@@ -106,7 +104,7 @@ export function ContestCalendarPane({
   const up = upcomingContests(contests, now)
   if (up.length === 0) return null
 
-  const shown = up.slice(0, expert ? 20 : 8)
+  const shown = up.slice(0, 20)
   const byBucket = new Map<ContestBucket, ContestEvent[]>()
   for (const ev of shown) {
     const b = contestBucket(ev, now)

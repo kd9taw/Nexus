@@ -111,8 +111,7 @@ export function ConnectView({
       return nv
     })
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
-  const { mode, slots, setMode, assignPane } = useConnectConfig()
-  const expert = mode === 'expert' // still feeds MapView.expert
+  const { slots, assignPane } = useConnectConfig()
   // Band focus (advisor/opening row click) — the map highlights that band's heat
   // + spots; click the same band again (or the clear chip) to release.
   const [focusBand, setFocusBand] = useState<string | null>(null)
@@ -273,7 +272,6 @@ export function ConnectView({
     myGrid,
     theme,
     intent,
-    expert,
     prop,
     prov,
     needByCall,
@@ -304,14 +302,13 @@ export function ConnectView({
       key={s}
       slotId={s}
       paneId={slots[s]}
-      mode={mode}
       ctx={ctx}
       onAssign={assignPane}
       style={{ gridArea: s }}
     />
   )
   const stripFrame = (s: SlotId) => (
-    <PaneFrame key={s} slotId={s} paneId={slots[s]} mode={mode} ctx={ctx} onAssign={assignPane} />
+    <PaneFrame key={s} slotId={s} paneId={slots[s]} ctx={ctx} onAssign={assignPane} />
   )
 
   return (
@@ -329,22 +326,6 @@ export function ConnectView({
                 {it.label}
               </button>
             ))}
-          </div>
-          <div className="map-proj connect-mode" role="group" aria-label="Detail level">
-            <button
-              className={mode === 'basic' ? 'active' : ''}
-              onClick={() => setMode('basic')}
-              title="Basic — one plain-language line per pane"
-            >
-              Basic
-            </button>
-            <button
-              className={mode === 'expert' ? 'active' : ''}
-              onClick={() => setMode('expert')}
-              title="Expert — full data in every pane"
-            >
-              Expert
-            </button>
           </div>
           <button
             type="button"
@@ -382,7 +363,6 @@ export function ConnectView({
                   prop={prop}
                   selectedCall={selectedCall}
                   onSelectCall={onSelectCall}
-                  expert={expert}
                   outlook={selectedCall ? pathPred : bandOutlook}
                   onBandClick={toggleFocusBand}
                   activeBand={focusBand}
@@ -400,7 +380,6 @@ export function ConnectView({
               selectedCall={selectedCall}
               onSelectCall={onSelectCall}
               needByCall={needByCall}
-              expert={expert}
               intent={intent}
               onWorkSpot={onWorkSpot}
               onSelectSat={onSelectSat}

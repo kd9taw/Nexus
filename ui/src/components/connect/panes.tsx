@@ -387,7 +387,7 @@ export const PANES: PaneDef[] = [
     expert: (c) =>
       c.prop && c.prop.source !== 'offline' ? (
         <>
-          <SpaceWxGauges wx={c.prop.spaceWx} gloss={!c.expert} />
+          <SpaceWxGauges wx={c.prop.spaceWx} gloss={false} />
           <ScalesAnnunciator scales={c.scales} alerts={c.alerts} />
         </>
       ) : null,
@@ -430,7 +430,7 @@ export const PANES: PaneDef[] = [
     category: 'b2',
     basic: beaconsLine,
     // Clock-derived — never gates on offline; only the heard badges need spots.
-    expert: (c) => <BeaconMonitor spots={c.prop?.spots ?? null} expert={c.expert} />,
+    expert: (c) => <BeaconMonitor spots={c.prop?.spots ?? null} />,
   },
   {
     id: 'insights',
@@ -440,7 +440,7 @@ export const PANES: PaneDef[] = [
     expert: (c) => {
       const ins = c.prop && c.prop.source !== 'offline' ? c.prop.insights : undefined
       return ins?.length ? (
-        <InsightFeed insights={ins} expert={c.expert} onBandClick={c.toggleFocusBand} />
+        <InsightFeed insights={ins} onBandClick={c.toggleFocusBand} />
       ) : null
     },
   },
@@ -510,7 +510,7 @@ export const PANES: PaneDef[] = [
     // hint because the data lives inside the component, not PaneContext.
     basic: () =>
       'Upcoming amateur-satellite passes over your QTH appear here once orbital elements load.',
-    expert: (c) => <SatPassesPane expert={c.expert} />,
+    expert: () => <SatPassesPane />,
   },
   {
     id: 'rotor',
@@ -542,7 +542,7 @@ export const PANES: PaneDef[] = [
     // Self-fetching (get_contests) — Basic stays a static hint since the data
     // lives in the component, not PaneContext (same pattern as Satellite Passes).
     basic: () => 'Upcoming HF/VHF contests (WA7BNM) appear here once online.',
-    expert: (c) => <ContestCalendarPane load={getContests} expert={c.expert} />,
+    expert: () => <ContestCalendarPane load={getContests} />,
   },
 ]
 

@@ -25,7 +25,7 @@ export function ChaseFeedPane({ ctx }: { ctx: PaneContext }) {
   )
   if (items.length === 0) return null // PaneFrame falls back to the basic() line
 
-  const rows = ctx.expert ? items : items.slice(0, 3)
+  const rows = items
   return (
     <section className="chase-pane cfeed panel">
       <ul className="chase-list">
@@ -58,7 +58,7 @@ export function ChaseFeedPane({ ctx }: { ctx: PaneContext }) {
                       last days
                     </span>
                   )}
-                  <span className="chase-entity">{ctx.expert ? i.entity : ''}</span>
+                  <span className="chase-entity">{i.entity}</span>
                 </div>
                 <div className={`chase-open o-${i.openNow ? 'open' : 'closed'}`}>{i.why}</div>
               </div>

@@ -55,11 +55,11 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
                       ↗
                     </button>
                   )}
-                  <span className="chase-entity">{ctx.expert ? t.entity : ''}</span>
+                  <span className="chase-entity">{t.entity}</span>
                   {t.ageSecs != null && <span className="chase-age">{ageLabel(t.ageSecs)}</span>}
                 </div>
                 <div className={`chase-open o-${op.cls}`}>{op.text}</div>
-                {ctx.expert && t.evidence && <div className="chase-evi">{t.evidence}</div>}
+                {t.evidence && <div className="chase-evi">{t.evidence}</div>}
               </div>
               {ctx.onWorkSpot && (
                 <button

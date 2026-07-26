@@ -70,9 +70,6 @@ interface Props {
   /** Top award-need tier per heard callsign (uppercased) — colors the map dots
    * the same way the roster/decodes do, so the map shows WHAT you need WHERE. */
   needByCall: Map<string, NeedTag>
-  /** Expert mode reveals the per-layer panel (toggles + opacity). Simple (false)
-   * keeps a clean map with just the essential toolbar. Default true (standalone). */
-  expert?: boolean
   /** Connect intent preset — applied (soft) on change. Omitted = no preset. */
   intent?: MapIntent
   /** Double-click-to-work a live spot / DXpedition marker: the app's atomic
@@ -332,7 +329,6 @@ export function MapView({
   selectedCall,
   onSelectCall,
   needByCall,
-  expert = true,
   intent,
   onWorkSpot,
   onSelectSat,
@@ -2175,7 +2171,6 @@ export function MapView({
           {prop && (
             <MapInsightRail
               prop={prop}
-              expert={expert}
               outlook={outlook}
               onBandClick={onFocusBand}
               activeBand={focusBand}
@@ -2183,7 +2178,9 @@ export function MapView({
           )}
         </div>
 
-        {expert && !embedded && (
+        {/* The layer panel used to be gated on Connect's Expert detail level too; that toggle
+            was removed 2026-07-26, so only the embedded/standalone distinction remains. */}
+        {!embedded && (
         <aside className="map-layers">
           <h3>Layers</h3>
           {(Object.keys(layers) as LayerKey[]).map((k) => (

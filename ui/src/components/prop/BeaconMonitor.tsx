@@ -9,7 +9,7 @@ function ago(secs: number): string {
   return secs < 60 ? `${Math.round(secs)}s` : `${Math.round(secs / 60)}m`
 }
 
-export function BeaconMonitor({ spots, expert }: { spots: MapSpot[] | null; expert: boolean }) {
+export function BeaconMonitor({ spots }: { spots: MapSpot[] | null }) {
   const [, setTick] = useState(0)
   useEffect(() => {
     const id = window.setInterval(() => setTick((t) => t + 1), 1000)
@@ -26,7 +26,7 @@ export function BeaconMonitor({ spots, expert }: { spots: MapSpot[] | null; expe
             <span className="bcn-call" title={`${s.qth} · ${s.freqMhz} MHz`}>
               {s.call}
             </span>
-            {expert && <span className="bcn-qth">{s.qth}</span>}
+            <span className="bcn-qth">{s.qth}</span>
             <span className="bcn-bar" aria-hidden="true">
               <span className="bcn-fill" style={{ width: `${(s.secsIntoSlot + 1) * 10}%` }} />
             </span>
