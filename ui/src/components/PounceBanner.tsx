@@ -28,16 +28,9 @@ interface Props {
   onDismiss: () => void
   /** Work it: QSY to the spot and set up the QSO. */
   onWork: (a: PounceAlert) => void
-  /** Why working it is refused right now (in a QSO, transmitting), or null when it's allowed.
-   *
-   * This banner appears UNBIDDEN over whatever the operator is doing, with a prominent button.
-   * `work_spot` has no in-QSO guard of its own, so without this a stray click QSYs away from a
-   * live contact — turning an operator-initiated action into an accident. Alerts notify; they
-   * must not become a way to lose the contact you were already in. */
-  blockReason?: string | null
 }
 
-export function PounceBanner({ alert, onDismiss, onWork, blockReason }: Props) {
+export function PounceBanner({ alert, onDismiss, onWork }: Props) {
   if (!alert) return null
   const cat = TAG_TO_CAT[alert.tags[0] ?? '']
   const vis = cat ? NEED_VISUALS[cat] : null
@@ -58,10 +51,9 @@ export function PounceBanner({ alert, onDismiss, onWork, blockReason }: Props) {
         type="button"
         className="pounce-work"
         onClick={() => onWork(alert)}
-        disabled={!!blockReason}
-        title={blockReason ?? `QSY to ${alert.call} and start the QSO`}
+        title={`QSY to ${alert.call} and start the QSO`}
       >
-        {blockReason ?? 'Work it'}
+        Work it
       </button>
       <button
         type="button"

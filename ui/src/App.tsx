@@ -2349,18 +2349,20 @@ export default function App() {
 
       <UpdateBanner update={selfUpdate} />
 
-      <PounceBanner
-        alert={pounceAlert}
-        onDismiss={dismissPounce}
-        onWork={handlePounceWork}
-        blockReason={
-          snap.radio.transmitting
-            ? 'Transmitting'
-            : snap.qso?.dxcall
-              ? `In a QSO with ${snap.qso.dxcall}`
-              : null
-        }
-      />
+      {/* ⚠️ NO blockReason — deliberate, operator ruling 2026-07-26.
+          This used to disable Work and show "In a QSO with <call>" or "Transmitting" in place of
+          the button. Both were wrong for what Pounce IS: a race against a pileup that has not
+          formed yet. Whether to abandon the current contact and chase a new one is the
+          operator's call to make in that moment, not something the app should refuse — and the
+          reason text replaced the very control they were reaching for, so the alert became a
+          notification you could not act on.
+          Safe to allow: `work_spot_split` sets the mode then the dial, and the radio loop already
+          defers a retune while a slot is actively transmitting (rigs reject VFO/mode changes
+          mid-TX), so a click during our own over is applied at the next safe moment rather than
+          keying across it. This removes a UI refusal, not a TX-path guard.
+          Still notify-never-act ([[feedback-alerts-notify-never-act]]): Nexus does not move the
+          radio on its own here — this is a button the operator presses. */}
+      <PounceBanner alert={pounceAlert} onDismiss={dismissPounce} onWork={handlePounceWork} />
 
       {needsOnboarding && (
         <OnboardingBanner
