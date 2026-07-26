@@ -5,6 +5,48 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] — unreleased
+
+### Worked stations stop showing as needed
+Working a station in a US state you had already worked left it lit in the Needed roster with its
+"why you need this" pills, so a worked station kept looking new. One question — what state is this
+call in — was being answered by two different sources on the two sides of the same comparison: the
+heard side resolved it from the FCC callsign index, while the worked side could only read a state
+written into the log, and auto-logged contacts never wrote one. So a worked state could never be
+learned. Contacts now carry the state, resolved from the same source both sides use, and existing
+contacts are filled in once on first launch.
+
+Your Worked All States **worked** counts will jump the first time you run this. That is the
+correction, not a bug — they were understated for every auto-logged contact. Confirmed counts are
+unchanged. The state is written into your log and into uploads to QRZ, ClubLog, eQSL and LoTW,
+exactly as the country already was.
+
+A contact logged with no grid now reuses a grid you logged for that station before, so a grid you
+have already worked stops reporting as new. A station whose grid has never been seen still logs
+blank, because a grid that is not known cannot be credited.
+
+### Single-cable interfaces keep CAT
+A Digirig Mobile carries CAT and the keying line on one port. Nexus only recognised the opposite
+arrangement — a separate keying port, as on an SO2R controller — and everything else fell back to
+keying with no CAT at all, while reporting success. The band never followed and nothing said why.
+That configuration now keeps full CAT and keying together on the one cable.
+
+Detect recognises Digirig and RIGblaster interfaces, pairs their sound device, and fills in the
+keying method. It will not guess which radio is on the other end of a cable, so you still pick your
+Rig Model. Auto-test now also tries the radios these interfaces are usually paired with — FT-891,
+FT-857, FT-817/818, IC-7100, IC-705, Xiegu G90 and X6100, TS-480.
+
+Keying with no rig model set now says outright that there is no CAT and the radio will not follow
+the band, instead of reporting a bare success.
+
+### Fixes
+- The keying port of a radio you were not currently operating could be edited and silently not
+  saved. It saves.
+- Native Flex audio that fails to start, or starts and never delivers any audio, now says so and
+  falls back to the sound card. Previously it left you hearing nothing, with silence that looked
+  exactly like a dead band.
+- Raspberry Pi packages build again; 0.18.0 shipped without them.
+
 ## [0.18.0] — 2026-07-25
 
 The last public release was 0.17.12. This gathers everything since.
