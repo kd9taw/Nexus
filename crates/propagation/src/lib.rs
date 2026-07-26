@@ -39,6 +39,7 @@ pub mod opening;
 pub mod p533;
 pub mod pca;
 pub mod pota;
+pub mod pounce;
 pub mod predict;
 pub mod pskr_mqtt;
 pub mod repeaters;

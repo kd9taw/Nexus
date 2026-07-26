@@ -5,6 +5,217 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-07-25
+
+The last public release was 0.17.12. This gathers everything since.
+
+### The waterfall no longer stalls
+Operators reported the waterfall freezing for about a second, over and over, on voice, CW and FT8
+alike. The waterfall line was being built by the same part of Nexus that talks to your radio, and
+a radio that is slow to answer can hold that up for as long as two and a half seconds. Nothing new
+could be drawn for the whole of that time, so the last line was redrawn again and again, which is
+the vertical streaking people saw. The waterfall is now built from the incoming receive audio
+directly and cannot be held up by the radio at all. The Flex and Icom panadapter displays were
+being held up the same way and are fixed with it.
+
+### Nexus can update itself
+When a new version is out it downloads quietly in the background, then offers to install. Nothing
+installs behind your back and nothing happens on a schedule: the button waits for you, and stands
+down while you are transmitting, tuning, in a contact or running CQ, telling you which. Restarting
+mid-contact would lose the contact, so it will not. Every update is signed and verified before it
+is applied. Windows and the Linux AppImage update in place; the .deb packages, including both
+Raspberry Pi builds, are managed by your package system and continue to notify you instead.
+
+### Pounce: know about a new one the moment it appears
+Working a rare station is a race, and once the pileup builds you have lost it. Nexus can now score
+every skimmer and cluster spot as it arrives and, when something you actually need turns up, play
+a distinct tone whether or not Nexus is the window you are looking at, raise a desktop
+notification, and show a banner with the call, the country and the frequency. One click works it.
+It is off until you switch it on, because how often it would fire depends entirely on how much you
+still have to chase. Settings, under Spots and Alerts, explains when to turn it on. Nexus never
+touches the radio on its own for this: it tells you, and you decide. The Work button stands down
+while you are transmitting or already in a contact.
+
+### PTT follows the radio you switch to
+If you key with RTS or DTR on a dedicated port, an SO2R controller such as a u2R or MK2R where each
+radio has its own keying line, that port was a single setting shared across every radio. Switching
+rigs moved the CAT port but left the keying line pointing at the previous radio, so transmit could
+key the rig you had just switched away from. The keying port is now part of each radio's own
+configuration and travels with it.
+
+### The operating cockpits hold their shape
+In Phone and CW the areas you operate from, the decode, DSP controls and band activity, now have a
+guaranteed minimum height that nothing below can take; if the window is short the cockpit scrolls
+instead. Typing a callsign used to bring up the station card under the log form and collapse the
+whole operating area. That card is now a single line while you are operating, showing the call,
+whether they are a dupe or a new one, how many times you have worked them and their name, with the
+full card still in the Logbook. Clicking a spot in a cockpit's own band activity no longer throws
+you into a different cockpit; the rig moves and you stay where you are. The Needed board and the
+map still take you to the matching cockpit, which is what you want there.
+
+### Logging by hand
+The manual log form now takes the UTC date and time, so logging a contact after the fact no longer
+stamps it with the moment you typed it. It also takes the US state, which Worked All States counts
+and which a hand-logged contact has no other way to learn, and transmit power. Editing a contact
+that has already gone to LoTW, QRZ, eQSL or Club Log now re-sends it; previously the correction
+stayed on your machine and the online logbooks kept the old version with nothing to tell you they
+disagreed.
+
+### Under the hood
+Incoming skimmer spots cost half as much to process on a busy band, and building the spots list no
+longer holds up the rest of the app while it runs.
+
+## [0.17.22] — 2026-07-25 — The operating panes hold their ground
+
+- **The panes you operate from can no longer be squeezed away by what sits below them.** In Phone
+  and CW the decode, DSP and band-activity area now has a guaranteed minimum height; if the window
+  is too short for everything, the cockpit scrolls instead of crushing them. Previously typing a
+  callsign brought up the station card under the log form and the whole operating area collapsed
+  to nothing.
+- **The station recall card is one line in the operating cockpits.** While you are working someone
+  it shows what you glance at — their call, whether they are a dupe on this band or a new one, how
+  many times you have worked them, and their name. The full card, with location, notes and your
+  complete history with them, is still there in the Logbook.
+
+## [0.17.21] — 2026-07-25 — Clicking a spot keeps you where you are
+
+- **Clicking a spot in a cockpit's own band activity no longer throws you into a different
+  cockpit.** Working a spot sends you to the cockpit that matches the spot's mode, which is right
+  from the Needed board but wrong from inside Phone or CW: Band Activity shows the whole band, so
+  clicking a CW spot from Phone navigated away and the entire Phone view vanished. It looked like
+  the layout collapsing. Now the rig moves to the spot and you stay where you were. The Needed
+  board and the map still take you to the matching cockpit, which is what you want there.
+- **Band activity is visibly its own window**, with a title, sitting apart from the DSP and level
+  controls instead of blending into them. They were already separate sections but the dividing
+  line was too faint to see against a dark background.
+- **The push-to-talk and voice keyer sections take less height**, so band activity gets the room.
+  PTT stays a comfortable hold-target — a transmit control you have to aim at is a worse problem
+  than a shorter spot list.
+
+## [0.17.20] — 2026-07-25 — Phone's panes are fixed in place
+
+- **Removed the removable/pop-out panels from the Phone cockpit.** The sections under the scope —
+  DSP, the RX level controls, Band Activity — are now permanent, each in its own box, and Band
+  Activity can no longer be taken out of the main window. Operators reported the whole area
+  collapsing and the band activity disappearing when clicking a spot; two narrower fixes each
+  corrected a real fault without stopping it, so the machinery that can remove a pane is gone
+  from this view. The CW cockpit reached the same conclusion about its drag-to-resize seams
+  earlier: in a cockpit you operate from, panes that can move or vanish cost more than they give.
+
+## [0.17.19] — 2026-07-25 — Phone panes stay put, and Pounce starts quiet
+
+- **The DSP controls no longer vanish when you click a spot.** Changing frequency makes Nexus
+  re-check what your rig supports, and while that check is in flight the answer is briefly
+  "unknown". The Phone view was treating that as "your rig doesn't have these" and removing the
+  NB/NR/notch controls and the noise-reduction sliders, which made the area collapse and the band
+  activity jump. Once your radio has reported a control, it stays on screen.
+- **The panes under the scope are visibly separate now.** DSP, the RX level controls and Band
+  Activity were always separate sections but had no boundary between them, so they read as one
+  block — which is why one of them disappearing looked like the whole area had gone. Each has its
+  own frame.
+- **Pounce is off until you turn it on.** It alerts on stations you still need, and how often that
+  fires depends entirely on how much you have left to chase: for a well-established log a new
+  entity is a rare event worth interrupting for, but earlier on almost every DX spot is a new one
+  and the alert would never stop. Rather than guess, it now ships off, and Settings explains when
+  to switch it on.
+
+## [0.17.18] — 2026-07-25 — Phone layout, fixed the way CW was
+
+- **Phone's Band Activity keeps its spot lines.** The same fault CW had: panes could be squeezed
+  below their own content and then clipped it, so the vertical spot lines vanished. Every pane
+  under the scope now holds its content height and the region scrolls instead, with Band Activity
+  the one pane that grows. This is the treatment CW got in 0.17.11, applied to Phone.
+- **Removed leftover pane-resize plumbing from Phone.** The drag-to-resize seams were taken out of
+  CW because they were fragile and added little, but Phone kept the sizing variable behind them.
+  With no slider left to correct it, a stale size could still skew the Band Activity pane. Phone
+  never showed those seams, so this was machinery that could only misbehave.
+- **The extra band/frequency/time fields under "Log a contact from another radio" no longer push
+  the log form off the bottom.** They are capped and scroll on their own now, so opening them
+  cannot shove the thing you were about to use out of reach on a short window.
+
+## [0.17.17] — 2026-07-25 — Updates that install themselves, and PTT that follows the radio
+
+- **PTT now follows the radio you switch to.** If you key with RTS or DTR on a dedicated port —
+  an SO2R controller like a u2R or MK2R, where each radio has its own keying line — that port was
+  a single setting shared across every radio. Switching rigs moved the CAT port but left the
+  keying line pointing at the previous radio, so transmit could key the rig you had just switched
+  away from. The keying port is now part of each radio's own configuration and travels with it.
+  The only workaround before was re-loading the radio's profile in Settings by hand.
+- **Nexus can update itself.** When a new version is out it downloads quietly in the background,
+  then offers to install it. Nothing is ever installed behind your back and nothing happens on
+  its own schedule: the button waits for you, and it stands down — telling you why — while you
+  are transmitting, tuning, in a contact, or running CQ. Restarting mid-contact would lose the
+  contact, so it simply will not. Every update is cryptographically signed and verified before it
+  is applied; an installer that has been altered is refused. Windows and the Linux AppImage
+  update in place; the .deb packages, including both Raspberry Pi builds, are managed by your
+  package system and continue to notify you instead.
+
+## [0.17.16] — 2026-07-25 — Pounce, and hand-logging that keeps the right time
+
+- **Pounce: you get told the instant a new one appears, not when the board next refreshes.**
+  Working a rare station is a race — once the pileup builds you have lost it. Nexus now scores
+  every skimmer and cluster spot the moment it arrives and, when something you actually need
+  shows up, plays a distinct tone (whether or not Nexus is the window you are looking at), raises
+  a desktop notification, and puts a banner up with the call, the entity and the frequency. One
+  click works it. Deliberately rare so it stays worth trusting: the default is all-time-new DXCC
+  entities only, with new zone and new state available as wider settings, and each station alerts
+  once per band and mode. Set it under Settings, Spots and Alerts; it can be turned off entirely.
+  Nexus never touches the radio on its own for this — it tells you, and you decide. The Work
+  button stands down while you are transmitting or already in a contact, and says so.
+- **Hand-logged contacts keep the time they actually happened.** The manual log form now takes the
+  UTC date and time, so logging a 2 m contact after the fact no longer stamps it with the moment
+  you typed it. It also takes the US state (which Worked All States counts, and which a
+  hand-logged contact has no other way to learn) and transmit power.
+- **Editing an already-uploaded contact re-sends it.** Previously the correction stayed on your
+  machine and the online logbooks kept the old version, with nothing to tell you they disagreed.
+
+## [0.17.15] — 2026-07-25 — The waterfall is drawn where the audio arrives
+
+- **The waterfall is no longer built by the part of Nexus that talks to your radio.** This is the
+  real fix for the periodic stall; 0.17.13 and 0.17.14 each addressed a piece of it and neither
+  was the cause. The waterfall line was being computed by the same thread that sends and receives
+  every CAT command, and a radio that is slow to answer can hold that thread for up to two and a
+  half seconds. Nothing new could be drawn for the whole of that time, so the last line was
+  redrawn over and over, which is the vertical streaking operators reported. The line is now built
+  on its own from a direct copy of the incoming receive audio, and it cannot be held up by the
+  radio at all. What it means on the air: the waterfall keeps scrolling no matter what the radio
+  is doing, on voice, CW and FT alike.
+- **The Flex and Icom panadapter displays were being held up the same way**, even though they
+  already had their own connections. They now publish independently too.
+- **A dead audio device stops the waterfall cleanly** instead of leaving the last line frozen on
+  screen looking like live signal.
+
+## [0.17.14] — 2026-07-25 — The waterfall stall, properly this time
+
+- **The waterfall stops stalling every 30 seconds.** 0.17.13 attacked the wrong half of this. The
+  display was not waiting on anything; the radio loop was, so no new waterfall line was being
+  produced and the last one got drawn over and over, which is the vertical streaking operators
+  reported. The cause: Nexus asks the radio whether it supports each DSP function (noise blanker,
+  noise reduction, notch, compression, VOX), one per cycle. A radio that does not cleanly answer
+  one of those makes Nexus wait up to two and a half seconds for a reply that never comes, and
+  that wait happens on the same thread that draws the waterfall. Worse, a function that had been
+  given up on was retried every 30 seconds for the whole session, so the stall came back forever.
+  Retries now back off, from 30 seconds out to about half an hour, and reset the instant the radio
+  answers. What it means on the air: a rig that is quiet about one of its DSP functions no longer
+  costs you a frozen waterfall every half minute.
+
+## [0.17.13] — 2026-07-25 — The waterfall stops freezing
+
+- **The waterfall no longer hangs for a second at a time.** Operators reported it stopping dead
+  for about a second every 10 to 20 seconds, in voice, CW and FT alike, right from launch. The
+  waterfall row was being read through the same lock that guards the whole application state, and
+  that lock is held while the radio is commanded over CAT at each 15-second slot boundary. A CAT
+  round-trip takes up to a second on a slow serial link, and the waterfall sat waiting for the
+  whole of it, drawing nothing. The row is now published separately, so the display never waits on
+  radio or logbook work again. What it means on the air: the waterfall scrolls smoothly and keeps
+  scrolling, whatever else the app is doing.
+- **The spot buffer costs less to fill.** Every incoming skimmer spot was scanned against the whole
+  buffer twice; it now takes one pass. On a busy band with the RBN firehose running, that halves
+  the work done on the app's busiest data path.
+- **The spots list no longer blocks the rest of the app while it is built.** It held the shared
+  application lock across the entire build, so the waterfall and every other status read queued
+  behind it. It now takes what it needs and lets go first.
+
 ## [0.17.12] — 2026-07-25 — Dual-radio setup, honest rig mode, FT exchange fields
 
 - **Setting up a second radio no longer overwrites the first one's COM port.** Pressing *Test CAT*

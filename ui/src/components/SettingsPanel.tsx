@@ -240,6 +240,7 @@ function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     rigModel: s.rigModel ?? 0,
     rigModelName: s.rigModelName ?? '',
     serialPort: s.serialPort ?? '',
+    pttSerialPort: s.pttSerialPort ?? '',
     baud: s.baud ?? 38400,
     rigConn: s.rigConn ?? 'serial',
     rigAddr: s.rigAddr ?? '',
@@ -2201,7 +2202,8 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     COM port your RTS/DTR keying line is on — e.g. an SO2R controller (u2R/MK2R)
                     that routes PTT on its own port, separate from CAT. Leave blank to key on the
-                    CAT serial port.
+                    CAT serial port. <strong>Per radio</strong>: each rig on an SO2R box has its
+                    own keying port, and this one follows the radio you switch to.
                   </span>
                 </label>
               )}
@@ -4282,6 +4284,33 @@ export function SettingsPanel({
           {/* ---- Alerts ---- */}
           {tab === 'spots' && (
           <>
+          <fieldset className="settings-section">
+            <legend>Pounce — new-one alert</legend>
+            <p className="settings-note">
+              Interrupts you the INSTANT a needed station appears on the cluster or RBN, rather
+              than waiting for the spot board to refresh. A loud tone plays whether or not Nexus
+              is the window you are looking at, and a banner offers one-click Work.
+              {' '}
+              Off until you switch it on. How rare "rare" is depends on your own totals: if you
+              are chasing your first hundred entities then almost every DX spot is a new one and
+              this would never stop talking. Start with <em>New DXCC entity only</em> once your
+              log is far enough along that a new one is genuinely an event. Each station alerts
+              once per band and mode.
+            </p>
+            <label className="settings-field">
+              <span className="settings-label">Alert me for</span>
+              <select
+                value={form.pounceThreshold ?? 'off'}
+                onChange={(e) => update('pounceThreshold', e.target.value as never)}
+              >
+                <option value="off">Off (default)</option>
+                <option value="atno">New DXCC entity only</option>
+                <option value="atnoOrZone">New entity or CQ zone</option>
+                <option value="atnoZoneOrState">New entity, zone, or US state</option>
+              </select>
+            </label>
+          </fieldset>
+
           <fieldset className="settings-section">
             <legend>Accessibility &amp; eyes-free</legend>
             <p className="settings-note">

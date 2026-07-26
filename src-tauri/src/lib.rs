@@ -31,6 +31,7 @@
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
 mod chains;
+mod pouncer;
 
 use chains::{panel_key, panel_label, Instance};
 use std::path::PathBuf;
@@ -87,6 +88,24 @@ type SharedWxHistory = Arc<Mutex<propagation::SpaceWxHistory>>;
 /// The cluster thread runs for the process lifetime (a desktop daemon thread);
 /// this stop flag exists only so `cluster::run`'s signature is satisfied.
 static CLUSTER_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Handoff to the Pounce detector, set once at startup. The cluster feed callbacks `offer()` each
+/// inbound spot here; that call NEVER blocks (a full queue drops), because the caller is the
+/// thread reading the cluster socket. All the expensive work — the worked-sets snapshot, the
+/// scoring — happens on the detector's own thread. See `pouncer.rs`.
+static POUNCE_TX: std::sync::OnceLock<pouncer::PounceTx> = std::sync::OnceLock::new();
+
+/// Offer a freshly-parsed cluster spot to the Pounce detector. No-op before startup wires it.
+fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
+    let Some(tx) = POUNCE_TX.get() else { return };
+    let freq_mhz = sp.freq_mhz();
+    tx.offer(pouncer::SpotHint {
+        call: sp.dx_call.clone(),
+        freq_mhz,
+        mode: propagation::classify_spot_mode(freq_mhz).label().to_string(),
+        spotted_unix: sp.received_unix as i64,
+    });
+}
 
 /// Outbound command queue for the HUMAN DX-cluster nodes — the `post_spot`
 /// command pushes a formatted `DX …` line here and the nodes' pump loops flush
@@ -317,6 +336,7 @@ fn start_cluster_feed(
                     // the machine-generated RBN wire, never on the human-node path.
                     let mut s = sp.clone();
                     s.rbn = true;
+                    pounce_offer(&s);
                     b.push(s);
                 }
             },
@@ -381,6 +401,7 @@ fn start_human_cluster_feed(spots: &SharedSpots, host: &str, mycall: &str, healt
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 if let Ok(mut b) = buf.lock() {
+                    pounce_offer(sp);
                     b.push(sp.clone());
                 }
             },
@@ -3538,7 +3559,19 @@ async fn get_space_wx_scales(
 
 /// One waterfall row (Goertzel power spectrum of the last received frame).
 #[tauri::command]
-fn get_spectrum_row(state: State<'_, SharedEngine>) -> Result<Spectrum, String> {
+fn get_spectrum_row(
+    feed: State<'_, tempo_app::engine::SpectrumFeed>,
+    state: State<'_, SharedEngine>,
+) -> Result<Spectrum, String> {
+    // Fast path: the radio loop and the native scope workers publish every row here, so the
+    // waterfall reads WITHOUT the engine mutex. That mutex is held across blocking CAT I/O at
+    // the 15 s slot boundary, which froze the waterfall for ~1 s every 15 s in every mode
+    // (operator report 2026-07-25) — see tempo_app::engine::SpectrumFeed.
+    if let Some(row) = feed.row() {
+        return Ok(row);
+    }
+    // Nothing published yet: a Companion/UDP source has no local capture, so its row is
+    // computed on demand from the last decoded buffer. Rare, low-rate, and correct to block on.
     let eng = state.lock().map_err(|e| e.to_string())?;
     Ok(eng.spectrum_row())
 }
@@ -6481,14 +6514,38 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
         ),
         Err(_) => return Vec::new(),
     };
-    // Hold the engine lock across row-building: read the license class once, and resolve each
-    // spot's US state from the roster's cached grid (a station heard before → its grid → state).
+    // Take the engine lock ONLY long enough to snapshot what the rows need: the license class,
+    // and the roster's cached grid for each spotted call (a station heard before → its grid →
+    // its state). Everything expensive below — DXCC resolve, the FCC state lookup, the privilege
+    // check and ~8 allocations per row, plus the final sort — then runs with the lock RELEASED.
+    //
+    // It used to hold the lock across that entire unbounded pass, so every `get_spectrum_row`
+    // and every 300 ms `get_snapshot` queued behind a full firehose row-build. Measured at the
+    // buffer's 30,000-row cap that hold was ~14-23 ms, which is NOT the operator's ~1 s
+    // waterfall stall (that was chased and ruled out on 2026-07-25) — but it is a needless
+    // contention point on the app's busiest shared lock, and it grows with band activity.
+    //
     // A poisoned lock degrades to Open (no gate) + no state — never a wrongly-hidden spot.
-    let eng = state.lock().ok();
-    let class = eng
-        .as_ref()
-        .map(|e| e.settings().license_class)
-        .unwrap_or(LicenseClass::Open);
+    let (class, roster_grids) = {
+        let eng = state.lock().ok();
+        let class = eng
+            .as_ref()
+            .map(|e| e.settings().license_class)
+            .unwrap_or(LicenseClass::Open);
+        let grids: std::collections::HashMap<String, String> = eng
+            .as_ref()
+            .map(|e| {
+                recent
+                    .iter()
+                    .filter_map(|cs| {
+                        e.roster_grid(&cs.dx_call)
+                            .map(|g| (cs.dx_call.clone(), g.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        (class, grids)
+    };
     let mut rows: Vec<SpotRow> = recent
         .into_iter()
         .map(|cs| {
@@ -6502,8 +6559,8 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
             // US state hint (drives New-State): FCC callsign→state baseline (precise, no grid
             // needed → covers this whole cluster/CW/SSB firehose), refined by the roster's cached
             // decode grid for rovers. See us_state_hint.
-            let roster_grid = eng.as_ref().and_then(|e| e.roster_grid(&cs.dx_call));
-            let state = us_state_hint(&cs.dx_call, roster_grid.as_deref());
+            let roster_grid = roster_grids.get(&cs.dx_call).map(String::as_str);
+            let state = us_state_hint(&cs.dx_call, roster_grid);
             let age_secs = if cs.received_unix > 0 {
                 (now - cs.received_unix as i64).max(0)
             } else {
@@ -9740,6 +9797,63 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
 // dismissible prompt (and remembers a dismissed version); nothing is ever downloaded or run —
 // signed auto-update is a later phase.
 
+/// Why an update install may not happen right now, or `None` when it is safe.
+///
+/// THE SAFETY GATE FOR SELF-UPDATE. Installing restarts the app, and this app keys a
+/// transmitter: a restart at the wrong instant can strand PTT, abandon a QSO mid-sequence, or
+/// drop a run. Operator decision (2026-07-25): Nexus NEVER installs on its own schedule and
+/// never on launch — it downloads quietly and waits for an explicit press, and that press is
+/// refused, with the reason, while the radio is busy. Same shape as every other transmit gate.
+///
+/// Returns a human sentence, because the UI shows it on the button — a disabled control with no
+/// explanation reads as broken.
+/// The pure decision, split from the Tauri wiring so it can be tested exhaustively — this is a
+/// safety gate, and a safety gate that cannot be tested is a wish.
+///
+/// Order matters: report the most immediate hazard first, because the operator acts on the first
+/// thing they read.
+fn install_block_reason(
+    transmitting: bool,
+    tuning: bool,
+    dxcall: Option<&str>,
+    running: bool,
+    tx_enabled: bool,
+) -> Option<String> {
+    if transmitting {
+        return Some("Transmitting — finish the over first".into());
+    }
+    if tuning {
+        return Some("Tuning — drop the carrier first".into());
+    }
+    if let Some(dx) = dxcall {
+        return Some(format!("In a QSO with {dx} — finish or abandon it first"));
+    }
+    if running {
+        return Some("Running CQ — stop the run first".into());
+    }
+    if tx_enabled {
+        return Some("Transmit is armed — turn Enable TX off first".into());
+    }
+    None
+}
+
+#[tauri::command]
+fn update_install_block(state: State<'_, SharedEngine>) -> Result<Option<String>, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    let snap = eng.snapshot();
+    let (dxcall, running) = match snap.qso.as_ref() {
+        Some(q) => (q.dxcall.clone(), q.running),
+        None => (None, false),
+    };
+    Ok(install_block_reason(
+        snap.radio.transmitting,
+        eng.tuning(),
+        dxcall.as_deref(),
+        running,
+        eng.tx_enabled(),
+    ))
+}
+
 /// Our own update endpoint (schema 1): a `version.json` with a direct `"latest"` field. Primary,
 /// GitHub-first, and under our control — so update accuracy no longer depends on SourceForge's
 /// per-release "Default Download" flip.
@@ -9953,9 +10067,20 @@ pub fn run() {
         }
     }
 
+    // The waterfall's publish seam, shared by the rx-dsp producer, the native scope workers and
+    // the UI reader. Created here (not on the Engine) because no part of it is engine state —
+    // that separation is the point: the row must not be reachable only through the engine mutex,
+    // which the radio loop holds across blocking CAT. See tempo-audio/src/rxtap.rs.
+    let spectrum_feed = tempo_app::engine::SpectrumFeed::default();
+
     // Build the radio config from settings before the engine takes ownership.
     #[cfg(feature = "radio")]
     let radio_cfg = tempo_audio::service::RadioConfig {
+        // The SAME feed the UI reads (registered as managed state below) and the tee the
+        // rx-dsp thread drains. The waterfall row is produced on that thread, not on the radio
+        // loop, so blocking CAT can no longer starve it — see tempo-audio/src/rxtap.rs.
+        spectrum_feed: spectrum_feed.clone(),
+        rx_tap: std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
         ptt_method: settings.ptt_method.clone(),
         rig_model: settings.rig_model,
         serial_port: settings.serial_port.clone(),
@@ -10441,9 +10566,19 @@ pub fn run() {
     // knowably wrong. Re-keying on radio-switch is the cap-lift's problem, and the cap-lift is
     // where the registry acquires its first reader. The type and its tests stay — they are the
     // proven artifact that branch starts from.
+    // Pounce: the detector thread + the app's push channel to the UI. The cluster feeds hand
+    // spots to `POUNCE_TX` (non-blocking); this thread does the scoring and emits an event only
+    // when something genuinely rare appears. Everything else in the app is polled — this is
+    // deliberately not, because the whole value of the feature is that the alert arrives the
+    // MOMENT the spot does, and a poll is late by construction.
+    let (pounce_tx, pounce_rx) = pouncer::channel();
+    let _ = POUNCE_TX.set(pounce_tx);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(engine)
+        .manage(spectrum_feed)
         .manage(prop_cache)
         .manage(aurora_cache)
         .manage(kc2g_cache)
@@ -10460,6 +10595,7 @@ pub fn run() {
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .invoke_handler(tauri::generate_handler![
+            update_install_block,
             get_snapshot,
             send_message,
             resend_chat,
@@ -10711,6 +10847,24 @@ pub fn run() {
             if let Some(main) = app.get_webview_window("main") {
                 let _ = main.set_min_size(Some(tauri::LogicalSize::new(900.0, 600.0)));
             }
+            // Pounce detector. Emits `pounce` to every window when a rare one appears — the
+            // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
+            // panel windows get it too without tracking listener lifetimes.
+            {
+                use tauri::Emitter;
+                let eng = app.state::<SharedEngine>().inner().clone();
+                let emit_handle = app.handle().clone();
+                let rx = pounce_rx;
+                std::thread::Builder::new()
+                    .name("nexus-pounce".into())
+                    .spawn(move || {
+                        pouncer::run(eng, rx, move |p| {
+                            let _ = emit_handle.emit("pounce", &p);
+                        });
+                    })
+                    .expect("spawn pounce detector");
+            }
+
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(2));
@@ -10843,9 +10997,49 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        b64_decode, b64_encode, is_complete_lotw_body, iss_pass_from_tles, parse_sstv_mode,
-        profile_dir_name, sanitize_profile,
+        b64_decode, b64_encode, install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
+        parse_sstv_mode, profile_dir_name, sanitize_profile,
     };
+
+    /// THE SELF-UPDATE SAFETY GATE. Installing restarts the app, and this app keys a
+    /// transmitter — a restart at the wrong instant can strand PTT, abandon a QSO mid-sequence
+    /// or drop a run. Operator decision: Nexus never installs on its own schedule; the explicit
+    /// press is refused, WITH THE REASON, while the radio is busy.
+    #[test]
+    fn an_update_never_installs_while_the_radio_is_busy() {
+        // Idle and disarmed is the ONLY state that permits it.
+        assert_eq!(install_block_reason(false, false, None, false, false), None);
+
+        // Every busy state refuses, and every refusal explains itself — a disabled button with
+        // no reason reads as broken.
+        for (t, tune, dx, run, armed) in [
+            (true, false, None, false, false),
+            (false, true, None, false, false),
+            (false, false, Some("3Y0X"), false, false),
+            (false, false, None, true, false),
+            (false, false, None, false, true),
+        ] {
+            let r = install_block_reason(t, tune, dx, run, armed);
+            let msg = r.expect("a busy radio must refuse the install");
+            assert!(!msg.trim().is_empty(), "the refusal must say why");
+        }
+    }
+
+    #[test]
+    fn the_refusal_names_the_station_youre_working() {
+        // "In a QSO" is not enough to act on; naming the station tells the operator what they
+        // would have lost.
+        let r = install_block_reason(false, false, Some("3Y0X"), false, false)
+            .expect("in a QSO refuses");
+        assert!(r.contains("3Y0X"), "got {r:?}");
+    }
+
+    #[test]
+    fn transmitting_outranks_every_other_reason() {
+        // The operator acts on the first thing they read, so the most immediate hazard wins.
+        let r = install_block_reason(true, true, Some("K1ABC"), true, true).expect("refuses");
+        assert!(r.starts_with("Transmitting"), "got {r:?}");
+    }
 
     #[test]
     fn profile_names_are_sanitized_to_safe_dirs() {

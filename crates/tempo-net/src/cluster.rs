@@ -341,12 +341,33 @@ impl SpotBuffer {
         // Carry the replaced spot's spotter (and ITS corroborators) forward —
         // "who else reported this DX" is the multi-endpoint evidence the VHF
         // gate needs; plain replacement silently reduced every DX to one voice.
-        if let Some((_, old)) = self.spots.iter().find(|(_, s)| same(s)) {
+        // ONE pass, not two. This runs on the inbound RBN firehose (CW + digital skimmers +
+        // every human node into this one buffer), so a separate `find` followed by a `retain`
+        // meant TWO full scans of the deque with a String compare per element for EVERY
+        // arriving spot — at the buffer's occupancy that is the hottest loop in the app.
+        // Carry the superseded row's spotter (and ITS corroborators) forward: "who else
+        // reported this DX" is the multi-endpoint evidence the VHF gate needs, and plain
+        // replacement silently reduced every DX to one voice. Only the FIRST match is carried,
+        // exactly as the `find` did.
+        let mut carried: Option<Vec<String>> = None;
+        self.spots.retain(|(_, s)| {
+            if !same(s) {
+                return true;
+            }
+            if carried.is_none() {
+                carried = Some(
+                    s.corroborators
+                        .iter()
+                        .cloned()
+                        .chain(std::iter::once(s.spotter.clone()))
+                        .collect(),
+                );
+            }
+            false
+        });
+        if let Some(old) = carried {
             let mut set: Vec<String> = old
-                .corroborators
-                .iter()
-                .cloned()
-                .chain(std::iter::once(old.spotter.clone()))
+                .into_iter()
                 .filter(|c| {
                     !c.eq_ignore_ascii_case(&spot.spotter)
                         && !spot.corroborators.iter().any(|x| x.eq_ignore_ascii_case(c))
@@ -355,7 +376,6 @@ impl SpotBuffer {
             spot.corroborators.append(&mut set);
             spot.corroborators.truncate(8);
         }
-        self.spots.retain(|(_, s)| !same(s));
         self.spots.push_back((at, spot));
         // Age-based retention is PRIMARY: drop spots older than `max_age` so a sparse
         // source (human SSB) survives the read window even while the RBN firehose floods.

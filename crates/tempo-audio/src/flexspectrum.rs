@@ -191,6 +191,7 @@ impl FlexSpectrum {
     /// `engine`. Returns once the UDP socket is bound; the threads run until the value is dropped.
     pub fn start(
         engine: Arc<Mutex<Engine>>,
+        feed: tempo_app::engine::SpectrumFeed,
         ip: String,
         dial_hz: u64,
     ) -> std::io::Result<FlexSpectrum> {
@@ -330,9 +331,11 @@ impl FlexSpectrum {
                                     hi_hz: hi,
                                     source: "flex".into(),
                                 };
-                                if let Ok(mut e) = engine.lock() {
-                                    e.set_spectrum_rf(spec);
-                                }
+                                // Straight to the feed. This used to take the ENGINE mutex —
+                                // which the radio loop holds across its blocking boundary CAT —
+                                // so the Flex panadapter was starved by the same hold that
+                                // starved the audio row, despite already having its own thread.
+                                feed.publish_rf(spec);
                             }
                         }
                         Some(METER_PACKET_CLASS) => {

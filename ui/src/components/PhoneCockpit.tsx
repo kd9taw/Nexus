@@ -7,9 +7,6 @@ import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { Splitter } from './Splitter'
-import { PanelsMenu } from './PanelsMenu'
-import { panelHost } from '../features/panelHost'
-import { PHONE_PANEL_IDS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
@@ -71,18 +68,6 @@ interface Props {
   onRecallMemory?: (m: Memory) => void
   /** Open the Memories section (manage/groups/import). */
   onOpenMemories?: () => void
-  /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
-   *  Optional: without it every pane shows and there's no ⊞ menu. */
-  panels?: PanelLayoutApi<PhonePanelId>
-}
-
-/** Display labels for the Phone removable panels (the ⊞ Panels menu). */
-const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
-  rigscope: 'Rig Scope',
-  txmeters: 'TX Meters',
-  dsp: 'DSP Functions',
-  dspLevels: 'RX DSP Levels',
-  bandActivity: 'Band Activity',
 }
 
 /**
@@ -143,7 +128,7 @@ const FLEX_SPANS = [
   { label: '2M', hz: 2_000_000 },
 ] as const
 
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, panels }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   // Mirror the RIG's real level (CAT read-back / last commanded) so the slider
   // never lies at a guessed 100% — but never fight an in-flight drag.
@@ -258,15 +243,17 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const cockpitRef = useRef<HTMLElement>(null)
   // Panels (Phase 3): the scope + all TX chrome (header, PTT row, voice keyer, log) are pinned;
   // the panes under the scope are removable, with Band Activity filling the bounded lower region.
-  const host = panels
-    ? panelHost(panels, { menu: PHONE_PANEL_IDS, side: [], main: 'bandActivity', labels: PHONE_PANEL_LABELS })
-    : null
-  const shown = (id: PhonePanelId) => (host ? host.shown(id) : true)
+  // NO REMOVABLE/POP-OUT PANELS IN PHONE (operator, 2026-07-25: "remove any of the movable
+  // windows … it's still getting clobbered the same way"). Every pane below renders
+  // unconditionally and keeps its own box. Two rounds of narrower fixes — pinning flex sizes,
+  // then making the DSP capability reads sticky — each addressed a real defect and neither
+  // stopped the region collapsing, so the machinery itself goes. CW reached the same conclusion
+  // about its resize seams in 0.17.11: in a fixed operating cockpit this buys little and breaks
+  // in ways that are hard to see.
   const bandActivityRef = useRef<HTMLDivElement>(null)
-  const shareStyle = (id: PhonePanelId): React.CSSProperties | undefined => {
-    const s = panels?.layout.share[id]
-    return s != null ? ({ '--pane-share': s } as React.CSSProperties) : undefined
-  }
+  // Which DSP funcs this rig has EVER reported this session — see the sticky note at the DSP pane.
+  const seenDspFuncs = useRef<string[]>([])
+  const seenDspLevels = useRef(false)
   useWheelTune(scopeRef, {
     dialMhz: snap.radio.dialMhz,
     sideband: snap.radio.sideband || 'USB',
@@ -473,17 +460,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         }
         bandControl={<BandPicker snap={snap} mode="phone" onSnap={onSnap} />}
         onCommitDial={commitDial}
-        actions={
-          host && panels ? (
-            <PanelsMenu
-              items={host.menuItems}
-              onToggle={(id, show) => panels.setPanelState(id as PhonePanelId, show ? 'docked' : 'removed')}
-              onUndo={panels.undo}
-              canUndo={panels.canUndo}
-              onReset={panels.reset}
-            />
-          ) : undefined
-        }
         wheelTune
         wheelStepHz={tuneStep}
         wheelSensitivity={wheelSensitivity}
@@ -724,7 +700,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       {/* Rig scope controls (native Icom CI-V only) — drive the RADIO's real panadapter: span
           changes the hardware sweep width, ref sets weak-signal visibility. Distinct from the
           view-zoom chips on the scope itself, which only zoom what's already streamed. */}
-      {shown('rigscope') && civScope && (
+      {civScope && (
         <div className="ph-rigscope" role="group" aria-label="Rig scope control">
           <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
             Rig&nbsp;scope
@@ -759,7 +735,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       )}
 
       {/* FlexRadio SmartSDR panadapter controls — command the Flex pan's real bandwidth + ref. */}
-      {shown('rigscope') && flexScope && (
+      {flexScope && (
         <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
           <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
             Flex&nbsp;pan
@@ -794,11 +770,22 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       )}
 
       {/* Transmit meters (SWR/ALC/Po/COMP) — appear only while keyed, where the S-meter sat. */}
-      {shown('txmeters') && <TxMeters radio={snap.radio} />}
+      <TxMeters radio={snap.radio} />
 
-      {shown('dsp') && (() => {
+      {(() => {
           // Only funcs the rig actually reports (non-null) render — capability-gated, no dead buttons.
-          const supported = DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
+          //
+          // STICKY ONCE SEEN. `null` means BOTH "this rig lacks the func" and "we don't know right
+          // now", and the radio loop clears every reading to null on a CAT re-confirmation — which
+          // a QSY triggers. Gating purely on the live value therefore made the whole DSP group
+          // vanish the moment you clicked a spot, the region reflow, and Band Activity jump
+          // (operator report 2026-07-25). Once a rig has reported a func we keep showing it; a rig
+          // that never reports one still shows nothing, so no dead buttons appear.
+          const live = DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
+          if (live.length > 0) seenDspFuncs.current = live.map((f) => f.key)
+          const supported = live.length > 0
+            ? live
+            : DSP_FUNCS.filter((f) => seenDspFuncs.current.includes(f.key))
           if (supported.length === 0) return null
           return (
             <div className="ph-dsp" role="group" aria-label="Rig DSP functions">
@@ -827,7 +814,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         })()}
 
       {/* RX DSP levels — NR level slider + AGC speed, each shown only when the rig reports it. */}
-      {shown('dspLevels') && (snap.radio.nrLevel != null || snap.radio.agc != null) && (
+      {/* Same sticky rule as the DSP group above: a CAT re-confirmation nulls these, and
+          unmounting on that made the pane flicker away on every QSY. */}
+      {(() => {
+          if (snap.radio.nrLevel != null || snap.radio.agc != null) seenDspLevels.current = true
+          return seenDspLevels.current
+        })() && (
         <div className="ph-dsp-levels" role="group" aria-label="RX DSP levels">
           {snap.radio.nrLevel != null && (
             <label className="ph-dsplev" title="Noise-reduction depth — raise until the noise floor drops, back off if audio gets watery">
@@ -868,8 +860,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         </div>
       )}
 
-      {shown('bandActivity') && onWorkSpot && (
-        <div className="ph-band-pane" ref={bandActivityRef} style={shareStyle('bandActivity')}>
+      {onWorkSpot && (
+        <div className="ph-band-pane" ref={bandActivityRef}>
           <BandStrip
             band={snap.radio.band}
             dialMhz={snap.radio.dialMhz}
@@ -932,6 +924,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       <VoiceKeyer txEnabled={snap.radio.txEnabled} keyed={keyed} fdExchange={fdExchange} />
 
       <LogEntry
+        compactRecall
         snap={snap}
         mode={commandedMode === 'FM' ? 'FM' : 'SSB'}
         defaultRst="59"

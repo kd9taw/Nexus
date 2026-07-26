@@ -41,6 +41,10 @@ tauri-build = { version = "2", features = [] }
 # to the webview via convertFileSrc under the sstv-gallery scope).
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
+# Signed self-update (0.17.17). Apache-2.0 OR MIT (Tauri first-party, same licence as tauri
+# itself, already vendored) — compatible with our GPL-3.0-only. OSS-integration checklist run
+# 2026-07-25; NOTICE updated.
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Update-check fetch of SourceForge best_release.json. Matches the propagation crate's exact

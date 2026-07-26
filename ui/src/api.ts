@@ -49,6 +49,14 @@ declare global {
     __TAURI__?: {
       core?: { invoke?: InvokeFn }
       invoke?: InvokeFn
+      /** Tauri's event bridge (exposed by `withGlobalTauri`). Used by usePounce for the app's
+       * one PUSH channel — everything else here polls. */
+      event?: {
+        listen?: <T>(
+          event: string,
+          handler: (e: { payload: T }) => void,
+        ) => Promise<() => void>
+      }
     }
     /**
      * The low-level IPC bridge. Tauri v2 injects this into EVERY app webview,
@@ -689,6 +697,13 @@ export async function appVersion(): Promise<string> {
   return invoke<string>('app_version')
 }
 
+/** Why installing a downloaded update is refused right now, or null when it is allowed.
+ * Asked at the moment of the press, never cached — the radio can go busy between a poll and a
+ * click, and installing restarts the app. */
+export async function updateInstallBlock(): Promise<string | null> {
+  return invoke<string | null>('update_install_block')
+}
+
 /** One selectable radio in the launch picker. */
 export interface RadioLaunchOption {
   id: number
@@ -1063,6 +1078,10 @@ export interface RadioProfilePatch {
   rigModel: number
   rigModelName: string
   serialPort: string
+  /** Dedicated RTS/DTR PTT port for THIS radio; empty = key on the CAT port. An SO2R box
+   * (U2R/MK2R) gives each radio its own keying port, so this must travel per-radio — it was
+   * flat-only until 2026-07-25 and PTT did not follow a radio switch. */
+  pttSerialPort: string
   baud: number
   rigConn: string
   rigAddr: string

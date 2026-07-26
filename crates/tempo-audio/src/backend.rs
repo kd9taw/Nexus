@@ -19,6 +19,13 @@ pub trait AudioBackend {
     fn rx_level(&self) -> f32 {
         0.0
     }
+    /// The wait-free tee of the capture stream feeding the waterfall producer, with the device
+    /// rate its samples are at. `None` for backends with no real capture stream (mocks, DAX-only
+    /// paths) — the producer then simply has nothing to drain. See `rxtap.rs` for why the row is
+    /// produced off the radio loop at all.
+    fn spectrum_tap(&self) -> Option<(std::sync::Arc<crate::monitor::SpscRing>, u32)> {
+        None
+    }
     /// Set the TX audio level (0.0–1.0) applied to played samples. No-op default
     /// for non-hardware backends (the real sound card overrides it).
     fn set_tx_level(&mut self, _level: f32) {}

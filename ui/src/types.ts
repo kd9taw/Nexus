@@ -1922,6 +1922,8 @@ export interface Settings {
   // --- Wanted watch list / alert filters (W1.5) ---
   /** Watch list: exact calls or trailing-* wildcard prefixes that raise a loud alert. */
   wantedCalls: string[]
+  /** Pounce — how rare a spot must be before Nexus interrupts you the moment it appears. */
+  pounceThreshold?: 'off' | 'atno' | 'atnoOrZone' | 'atnoZoneOrState'
   // --- confirmations (LoTW) ---
   /** LoTW account username (often, but not always, the callsign). The password is
    *  NOT here — it lives in the OS keychain (set via setLotwPassword). */
@@ -2022,6 +2024,8 @@ export interface RadioProfile {
   rigModel: number
   rigModelName: string
   serialPort: string
+  /** Dedicated RTS/DTR PTT port for THIS radio; empty = key on the CAT port. */
+  pttSerialPort?: string
   baud: number
   rigConn: string
   rigAddr: string

@@ -46,10 +46,38 @@ interface DraftQso {
   qth: string
   comment: string
   notes: string
+  /** UTC date+time the contact happened, as `YYYY-MM-DDTHH:MM` (the datetime-local format).
+   * THE field that makes hand-logging work: you log a 2 m contact after the fact, so stamping
+   * "now" writes the wrong time into the log and into every upload downstream. */
+  whenUtc: string
+  /** US state (WAS). The auto-log path fills this from the callsign/grid; a hand-logged
+   * contact has no decode to derive it from, so it has to be typeable or WAS silently misses. */
+  state: string
+  /** TX power in watts (ADIF TX_PWR) — part of a complete hand-log, and some awards want it. */
+  txPower: string
 }
 
 /** The word the operator must type to arm the full-log purge (irreversible). */
 const PURGE_WORD = 'DELETE'
+
+/** Parse a `datetime-local` value as UTC seconds. The browser's own Date parsing treats a
+ * bare `YYYY-MM-DDTHH:MM` as LOCAL time; a log is UTC, so an operator in EN52 typing the UTC
+ * time off their clock would otherwise have it silently shifted by their offset. Returns null
+ * for an empty/unparseable value so the caller can fall back. */
+function parseUtcLocal(v: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v.trim())
+  if (!m) return null
+  const [, y, mo, d, h, mi] = m
+  const ms = Date.UTC(+y, +mo - 1, +d, +h, +mi)
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000)
+}
+
+/** Format Unix seconds as the `datetime-local` UTC value the form edits. */
+function toUtcLocal(whenUnix: number): string {
+  const d = new Date(whenUnix * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
+}
 
 function fmtUtc(whenUnix: number): string {
   const d = new Date(whenUnix * 1000)
@@ -128,6 +156,9 @@ export function Logbook({
     qth: '',
     comment: '',
     notes: '',
+    whenUtc: '',
+    state: '',
+    txPower: '',
   }))
   const [err, setErr] = useState<string | null>(null)
   const [qrzBusy, setQrzBusy] = useState(false)
@@ -297,6 +328,9 @@ export function Logbook({
       qth: q.qth ?? '',
       comment: q.comment ?? '',
       notes: q.notes ?? '',
+      whenUtc: toUtcLocal(q.whenUnix),
+      state: q.state ?? '',
+      txPower: q.txPower != null ? String(q.txPower) : '',
     })
     setShowForm(true)
   }
@@ -490,12 +524,21 @@ export function Logbook({
       qth: draft.qth.trim() || null,
       comment: draft.comment.trim() || null,
       notes: draft.notes.trim() || null,
-      // Editing preserves the original time + confirmation/upload state (the engine
-      // re-applies the latter regardless); a new entry is stamped now.
-      whenUnix: existing ? existing.whenUnix : Math.floor(Date.now() / 1000),
+      state: draft.state.trim().toUpperCase() || null,
+      txPower: draft.txPower.trim() ? Number(draft.txPower) : null,
+      // The operator's typed UTC wins; otherwise keep the original (edit) or stamp now (new).
+      // Hand-logging is inherently after the fact, so "now" is the wrong default whenever the
+      // operator has told us when it actually happened.
+      whenUnix: parseUtcLocal(draft.whenUtc)
+        ?? (existing ? existing.whenUnix : Math.floor(Date.now() / 1000)),
       confirmed: existing ? existing.confirmed : false,
       awardConfirmed: existing ? existing.awardConfirmed : false,
-      upload: existing?.upload,
+      // Editing a QSO that was already sent to LoTW/QRZ/eQSL/ClubLog: the SERVICES still hold
+      // the old values, so keeping the "uploaded" stamps would leave Nexus silently disagreeing
+      // with them forever. Clearing the stamps re-queues it, so the corrected QSO actually
+      // reaches the services. (An edit that changes nothing they hold still re-sends — harmless,
+      // and far better than a permanent silent divergence.)
+      upload: editIndex !== null ? undefined : existing?.upload,
     }
     if (editIndex !== null) {
       const idx = editIndex
@@ -503,7 +546,7 @@ export function Logbook({
       if (snap) {
         pushToast(`Updated ${record.call}`, 'success')
         cancelForm()
-        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '' }))
+        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '' }))
         load()
       }
       return
@@ -512,7 +555,7 @@ export function Logbook({
     if (snap) {
       load()
       setShowForm(false)
-      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '' }))
+      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '' }))
       // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
       // (every log path, the engine auto-log included); outcomes toast via the
       // snapshot uploadTick.
@@ -747,6 +790,40 @@ export function Logbook({
             <label className="logbook-field">
               <span>RST Rcvd</span>
               <input className="settings-input" value={draft.rstRcvd} onChange={(e) => setField('rstRcvd', e.target.value)} placeholder="59 / 599 / -11" autoComplete="off" />
+            </label>
+            <label className="logbook-field">
+              <span>Date + time (UTC)</span>
+              <input
+                className="settings-input"
+                type="datetime-local"
+                value={draft.whenUtc}
+                onChange={(e) => setField('whenUtc', e.target.value)}
+                title="When the contact actually happened, in UTC. Leave blank to stamp now."
+              />
+            </label>
+            <label className="logbook-field">
+              <span>State</span>
+              <input
+                className="settings-input"
+                value={draft.state}
+                onChange={(e) => setField('state', e.target.value)}
+                placeholder="WI"
+                maxLength={2}
+                autoComplete="off"
+                title="US state — drives Worked All States. A hand-logged contact has no decode to derive it from."
+              />
+            </label>
+            <label className="logbook-field">
+              <span>TX power (W)</span>
+              <input
+                className="settings-input"
+                type="number"
+                min="0"
+                value={draft.txPower}
+                onChange={(e) => setField('txPower', e.target.value)}
+                placeholder="100"
+                autoComplete="off"
+              />
             </label>
             <label className="logbook-field">
               <span>Name</span>

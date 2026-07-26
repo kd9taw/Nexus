@@ -54,6 +54,8 @@ pub mod rtty_fsk;
 #[cfg(feature = "device")]
 pub mod rttyrx;
 pub mod runtime;
+pub mod rxdsp;
+pub mod rxtap;
 pub mod serial_keyer;
 pub mod slot;
 /// SSTV image/gallery persistence helpers (BMP writer, preview downscale,

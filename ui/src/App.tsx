@@ -56,7 +56,7 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { visibleNeeds, workTarget, modeClassOf } from './features/needs'
-import { OPERATE_PANELS, PHONE_PANELS, CW_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
+import { OPERATE_PANELS, CW_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
@@ -133,6 +133,10 @@ import { RoamPanel } from './components/RoamPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Toasts } from './components/Toasts'
 import { OnboardingBanner } from './components/OnboardingBanner'
+import { PounceBanner } from './components/PounceBanner'
+import { UpdateBanner } from './components/UpdateBanner'
+import { useSelfUpdate } from './useSelfUpdate'
+import { usePounce, type PounceAlert } from './usePounce'
 import { RevealNudge } from './components/RevealNudge'
 import { SetupWizard, type WizardDraft } from './components/SetupWizard'
 import { RadioPicker } from './components/RadioPicker'
@@ -354,7 +358,7 @@ export default function App() {
   // Host SSTV's panel record above its keep-alive view so removals + share edits survive the
   // view's remounts (panelState.ts: owned by a host that outlives the view).
   const sstvPanels = usePanelLayout(SSTV_PANELS)
-  const phonePanels = usePanelLayout(PHONE_PANELS)
+  // Phone has NO removable panels (operator 2026-07-25) — every pane is fixed and framed.
   const cwPanels = usePanelLayout(CW_PANELS)
   const rttyPanels = usePanelLayout(RTTY_PANELS)
 
@@ -887,6 +891,28 @@ export default function App() {
       (s) => s && setSnap(s),
     )
   }, [])
+
+  // Pounce — the app's one PUSH channel. The earcon has already played inside the hook by the
+  // time `pounceAlert` is set; this is the visual half plus the one-click work.
+  const { alert: pounceAlert, dismiss: dismissPounce } = usePounce()
+  // Signed self-update: downloads quietly, installs only on an explicit press that the engine
+  // refuses while the radio is busy (see useSelfUpdate / update_install_block).
+  const selfUpdate = useSelfUpdate()
+  const handlePounceWork = useCallback(
+    (a: PounceAlert) => {
+      // Route through the SAME path the needed board uses, so QSY, rig mode and pileup-split
+      // handling behave identically to working any other spot. A separate path here would drift.
+      const kind =
+        a.mode === 'CW' ? 'cw' : a.mode === 'Phone' ? 'phone' : ('digital' as const)
+      if (a.freqMhz) {
+        workSpot(kind as 'digital' | 'phone' | 'cw', a.freqMhz, a.band, a.call)
+          .then((snap) => setSnap(snap))
+          .catch(() => pushToast(`Could not QSY to ${a.call}`, 'error'))
+      }
+      dismissPounce()
+    },
+    [dismissPounce],
+  )
 
   const handleCall = useCallback(
     (call: string, grid?: string, message?: string, snr?: number, freq?: number, tier?: Tier | null) => {
@@ -1501,6 +1527,30 @@ export default function App() {
 
   // Work a raw spot from the Spots panel — synthesize a minimal NeedAlert so we reuse
   // handleWorkNeeded's workSpot → cockpit-open path (QSY to the spot's exact freq + mode).
+  // Work a spot from a COCKPIT'S OWN band strip: QSY to it and stay put.
+  //
+  // `handleWorkSpot` (below) routes to the cockpit matching the SPOT's mode — correct for the
+  // Needed board, which lists every mode, but wrong from inside a cockpit. Phone's Band Activity
+  // shows the whole band, so a CW spot at the band bottom navigated the operator out of Phone and
+  // the entire view unmounted. Operator report 2026-07-25: "the whole window with those two
+  // things gets removed from the primary window and they disappear" — that was the Phone cockpit
+  // being replaced, not a layout fault. Three layout fixes chased it before this was found.
+  const handleWorkSpotHere = useCallback(
+    (s: SpotRow) => {
+      const kind =
+        s.mode === 'CW' ? 'cw' : s.mode === 'Phone' ? 'phone' : ('digital' as const)
+      void withErrorToast(
+        () => workSpot(kind as 'digital' | 'phone' | 'cw', s.freqMhz, s.band, s.call),
+        `Could not work ${s.call} — check CAT`,
+      ).then((snap) => {
+        if (!snap) return
+        setSnap(snap)
+        pushToast(`▶ ${s.call} — ${s.band} ${s.freqMhz.toFixed(3)} MHz`, 'success', 3000)
+      })
+    },
+    [],
+  )
+
   const handleWorkSpot = useCallback(
     (s: SpotRow) => {
       handleWorkNeeded({
@@ -2016,7 +2066,7 @@ export default function App() {
           spots={allSpots}
           needByCall={needByCall}
           typeByCall={typeByCall}
-          onWorkSpot={handleWorkSpot}
+          onWorkSpot={handleWorkSpotHere}
           onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
           onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
           panels={cwPanels}
@@ -2037,10 +2087,9 @@ export default function App() {
           spots={allSpots}
           needByCall={needByCall}
           typeByCall={typeByCall}
-          onWorkSpot={handleWorkSpot}
+          onWorkSpot={handleWorkSpotHere}
           onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
           onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
-          panels={phonePanels}
         />
       )
       break
@@ -2296,6 +2345,21 @@ export default function App() {
         onTierChange={handleTier}
         theme={theme}
         onThemeChange={setTheme}
+      />
+
+      <UpdateBanner update={selfUpdate} />
+
+      <PounceBanner
+        alert={pounceAlert}
+        onDismiss={dismissPounce}
+        onWork={handlePounceWork}
+        blockReason={
+          snap.radio.transmitting
+            ? 'Transmitting'
+            : snap.qso?.dxcall
+              ? `In a QSO with ${snap.qso.dxcall}`
+              : null
+        }
       />
 
       {needsOnboarding && (

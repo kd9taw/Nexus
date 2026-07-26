@@ -23,6 +23,87 @@ use tempo_core::qso::{State as QsoState, Station as QsoStation};
 use tempo_core::qsy::{Directive, Roamer};
 use tempo_core::{channel, spectrum, tempo_fast, tx};
 
+/// The live waterfall row, published on its OWN lock so the UI can read it without
+/// contending for the engine mutex.
+///
+/// The waterfall is display-only: the radio loop (and the Flex/CI-V scope workers) write it,
+/// an 8-20 Hz UI poll reads it. Nothing about it needs app state. While it lived behind the
+/// engine mutex, every long hold of that mutex froze the waterfall — see
+/// [`Engine::spectrum_feed`] for the operator report that led here and the exact holder.
+///
+/// The lock is taken only to move a `Spectrum` in or clone one out, so a reader can never wait
+/// on anything but another such move.
+#[derive(Default)]
+struct FeedRows {
+    audio: Option<(Spectrum, Instant)>,
+    rf: Option<(Spectrum, Instant)>,
+}
+
+#[derive(Clone, Default)]
+pub struct SpectrumFeed {
+    rows: Arc<Mutex<FeedRows>>,
+}
+
+impl SpectrumFeed {
+    /// Publish the audio-FFT row (the rx-dsp thread).
+    pub fn publish_audio(&self, row: Spectrum) {
+        if let Ok(mut g) = self.rows.lock() {
+            g.audio = Some((row, Instant::now()));
+        }
+    }
+    /// Publish a NATIVE RF panadapter row (Flex VITA-49 / Icom CI-V scope).
+    pub fn publish_rf(&self, row: Spectrum) {
+        if let Ok(mut g) = self.rows.lock() {
+            g.rf = Some((row, Instant::now()));
+        }
+    }
+    /// Drop the native row so the audio FFT takes over immediately (DATA mode / scope off).
+    pub fn clear_rf(&self) {
+        if let Ok(mut g) = self.rows.lock() {
+            g.rf = None;
+        }
+    }
+    /// The row to display. This precedence is moved VERBATIM from the old
+    /// `Engine::spectrum_row`: a native RF row wins while its rows are fresh (< 1 s), else the
+    /// audio row while fresh (< 2 s). `None` only before anything has ever been published —
+    /// the Companion/UDP path, which has no local capture and computes on demand.
+    pub fn row(&self) -> Option<Spectrum> {
+        let g = self.rows.lock().ok()?;
+        if let Some((spec, at)) = &g.rf {
+            if at.elapsed() < std::time::Duration::from_secs(1) && !spec.row.is_empty() {
+                return Some(spec.clone());
+            }
+        }
+        if let Some((spec, at)) = &g.audio {
+            if at.elapsed() < std::time::Duration::from_secs(2) {
+                return Some(spec.clone());
+            }
+            // STALE, but the capture path HAS published before: go quiet. Returning None here
+            // would send the reader to the engine's Companion fallback, which computes a row
+            // from the last decoded buffer — a non-empty row redrawn at 8-20 Hz, i.e. the
+            // frozen-ghost streak this whole change exists to remove. An empty row stops the
+            // waterfall cleanly, which is the honest failure.
+            return Some(Spectrum {
+                row: Vec::new(),
+                lo_hz: spec.lo_hz,
+                hi_hz: spec.hi_hz,
+                source: spec.source.clone(),
+            });
+        }
+        None
+    }
+
+    /// Test-only: backdate the audio stamp to simulate a capture stream that went silent.
+    #[cfg(test)]
+    pub fn backdate_audio_for_test(&self, by: std::time::Duration) {
+        if let Ok(mut g) = self.rows.lock() {
+            if let Some((_, at)) = g.audio.as_mut() {
+                *at = Instant::now() - by;
+            }
+        }
+    }
+}
+
 use crate::dto::{
     AppSnapshot, DecodeRow, FieldDayQso, FieldDayStatus, OpMode, QsoStatus, QsyStatus,
     RadioSummary, SourceKind, Spectrum, Tier,
@@ -698,18 +779,12 @@ pub struct Engine {
     qso_record_path: Option<String>,
     /// Rolling window of the most recent captured audio, fed continuously by the
     /// radio loop (independent of the decoder) so the waterfall reflects LIVE
-    /// sound-card input — not just the once-per-slot decoded frame.
-    spectrum_audio: Vec<f32>,
     /// Cached waterfall row — recomputed once per audio feed in the radio loop, so `get_spectrum_row`
     /// (the ~20-30 Hz UI poll) just returns it instead of re-running the Goertzel under the engine
     /// lock on every call (the source of the "choppy" Phone scope under lock/IPC contention).
-    /// Stamped like `spectrum_rf` so a dead capture stream (unplugged device, lost DAX) goes
-    /// quiet instead of scrolling the last captured row forever as a frozen ghost.
-    spectrum_cache: Option<(crate::dto::Spectrum, Instant)>,
     /// The latest NATIVE RF panadapter row (Flex VITA / Icom CI-V) + when it arrived. Preferred
     /// over `spectrum_cache` while fresh (< 1 s); a stalled native source falls back to audio.
     /// Fed by `set_spectrum_rf`; `None` until a native scope worker is running.
-    spectrum_rf: Option<(crate::dto::Spectrum, Instant)>,
     /// A longer rolling RX-audio ring (several seconds) — the batch per-channel decode
     /// behind the wideband CW skimmer (the 4096-sample waterfall window is too short).
     cw_audio: Vec<f32>,
@@ -845,7 +920,6 @@ pub struct Engine {
 
 /// Samples of recent audio kept for the live waterfall spectrum (~0.34 s at
 /// 12 kHz) — enough for a responsive, reasonably-resolved Goertzel bank.
-const SPECTRUM_WINDOW: usize = 4096;
 /// CW-decode RX ring: ~6 s at 12 kHz — long enough for a full callsign exchange at the
 /// speeds an operator reads, short enough that the per-poll decode stays cheap.
 const CW_WINDOW: usize = 72_000;
@@ -1273,9 +1347,6 @@ impl Engine {
             record_buf: Vec::new(),
             qso_recording: false,
             qso_record_path: None,
-            spectrum_audio: Vec::new(),
-            spectrum_cache: None,
-            spectrum_rf: None,
             cw_audio: Vec::new(),
             ai_cw_audio: Vec::new(),
             ai_cw_text: String::new(),
@@ -4440,19 +4511,18 @@ impl Engine {
     /// the decoder. The radio loop calls this every iteration so the waterfall
     /// updates at the loop cadence from real sound-card input, rather than only
     /// once per (4 s / 15 s) RX slot. Keeps a rolling [`SPECTRUM_WINDOW`] window.
-    pub fn set_spectrum_audio(&mut self, samples: &[f32]) {
+    pub fn feed_rx_audio(&mut self, samples: &[f32]) {
         if samples.is_empty() {
             return;
         }
-        self.spectrum_audio.extend_from_slice(samples);
-        if self.spectrum_audio.len() > SPECTRUM_WINDOW {
-            let drop = self.spectrum_audio.len() - SPECTRUM_WINDOW;
-            self.spectrum_audio.drain(0..drop);
-        }
-        // Recompute the cached waterfall row here (radio-loop thread) so the UI poll returns it
-        // without re-running the Goertzel under the engine lock.
-        self.spectrum_cache = Some((Self::compute_spectrum(&self.spectrum_audio), Instant::now()));
-        // Also feed the longer CW-decode ring (the 4096-sample waterfall window is far too
+        // NOTE: the WATERFALL row is no longer computed here. It used to be, which meant the
+        // radio loop — the only thread that issues blocking CAT (up to 2500 ms on slow serial)
+        // — was also the only producer of spectrum rows, so any CAT stall froze the waterfall.
+        // The row is now produced on the rx-dsp thread from a wait-free tee of the capture
+        // stream (tempo-audio: rxtap.rs / rxdsp.rs). These mode taps DELIBERATELY stay on the
+        // loop: moving them would need an engine handle on that thread, and a contended lock
+        // would start DROPPING CW/RTTY audio during exactly the stall this fixed.
+        // Feed the longer CW-decode ring (the 4096-sample waterfall window is far too
         // short for Morse — CW_WINDOW holds several seconds so a callsign fits).
         self.cw_audio.extend_from_slice(samples);
         if self.cw_audio.len() > CW_WINDOW {
@@ -7522,40 +7592,19 @@ impl Engine {
         }
     }
 
-    /// Feed a NATIVE RF spectrum row (Flex SmartSDR VITA-49 or the Icom CI-V scope). It takes
-    /// precedence over the audio-FFT scope while fresh; a stalled native source auto-falls-back
-    /// to audio, so the waterfall never goes dead if the panadapter stream drops.
-    pub fn set_spectrum_rf(&mut self, spectrum: crate::dto::Spectrum) {
-        self.spectrum_rf = Some((spectrum, Instant::now()));
-    }
-
-    /// Drop the native RF panadapter row so `spectrum_row()` falls back to the audio FFT. Called
-    /// when the native scope is off (e.g. FT8/FT4 DATA mode, where the waterfall shows audio).
-    pub fn clear_spectrum_rf(&mut self) {
-        self.spectrum_rf = None;
-    }
-
+    /// The waterfall row for a source with NO local capture (the Companion/UDP path), computed
+    /// on demand from the last decoded RX buffer.
+    ///
+    /// This is a FALLBACK ONLY now. Every real capture path publishes to [`SpectrumFeed`] from
+    /// the rx-dsp thread (tempo-audio: `rxtap.rs` / `rxdsp.rs`), and `get_spectrum_row` reads
+    /// the feed first; the source precedence that used to live here moved to
+    /// [`SpectrumFeed::row`], where all three writers converge.
+    ///
+    /// It moved because the row used to be produced on the radio loop — the one thread that
+    /// issues blocking CAT (700 ms, 2500 ms on slow serial). Any CAT stall meant no row was
+    /// produced, so the UI redrew the cached row and the waterfall streaked vertically
+    /// (operator report, 2026-07-25).
     pub fn spectrum_row(&self) -> Spectrum {
-        // A native RF panadapter (Flex/Icom) wins while its rows are fresh (< 1 s) — this is the
-        // single seam both native workers feed via `set_spectrum_rf`.
-        if let Some((spec, at)) = &self.spectrum_rf {
-            if at.elapsed() < std::time::Duration::from_secs(1) && !spec.row.is_empty() {
-                return spec.clone();
-            }
-        }
-        // Live capture → return the row already computed in the radio loop (cheap clone, no
-        // recompute under the lock) while fresh (< 2 s — the loop feeds every tick, so silence
-        // means the capture died; go quiet rather than scroll the last row as a frozen ghost).
-        // Fallback: a Companion/UDP source with no local capture (cache never fed) → compute
-        // from the last decoded RX buffer on demand (rare, low-rate path).
-        if let Some((c, at)) = &self.spectrum_cache {
-            if !c.row.is_empty() {
-                if at.elapsed() < std::time::Duration::from_secs(2) {
-                    return c.clone();
-                }
-                return Self::compute_spectrum(&[]);
-            }
-        }
         Self::compute_spectrum(self.last_rx.as_deref().unwrap_or(&[]))
     }
 
@@ -8482,14 +8531,14 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
 
         // Disarmed = zero added work: the tap stays empty however much audio flows.
-        e.set_spectrum_audio(&[0.0; 256]);
+        e.feed_rx_audio(&[0.0; 256]);
         assert!(e.take_rtty_audio().is_empty(), "disarmed tap never fills");
         assert!(!e.rtty_state().armed);
 
         // Armed: RX audio accumulates; take() drains it for the decode thread.
         e.set_rtty_armed(true);
-        e.set_spectrum_audio(&[0.0; 256]);
-        e.set_spectrum_audio(&[0.0; 100]);
+        e.feed_rx_audio(&[0.0; 256]);
+        e.feed_rx_audio(&[0.0; 100]);
         assert_eq!(e.take_rtty_audio().len(), 356);
         assert!(e.take_rtty_audio().is_empty(), "take drains");
 
@@ -8523,7 +8572,7 @@ mod tests {
 
         // Disarm: the tap stops immediately, but the transcript stays readable.
         e.set_rtty_armed(false);
-        e.set_spectrum_audio(&[0.0; 64]);
+        e.feed_rx_audio(&[0.0; 64]);
         assert!(e.take_rtty_audio().is_empty());
         let s = e.rtty_state();
         assert!(!s.armed);
@@ -8543,13 +8592,13 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
 
         // Disarmed = no tap fill, no progress.
-        e.set_spectrum_audio(&[0.0; 128]);
+        e.feed_rx_audio(&[0.0; 128]);
         assert!(e.take_sstv_audio().is_empty());
         assert!(e.sstv_progress().is_none());
 
         // Armed: audio accumulates; the decode thread publishes progress.
         e.set_sstv_armed(true);
-        e.set_spectrum_audio(&[0.0; 128]);
+        e.feed_rx_audio(&[0.0; 128]);
         assert_eq!(e.take_sstv_audio().len(), 128);
         e.set_sstv_progress(Some(SstvProgress {
             mode: "Scottie 1".into(),
@@ -8581,7 +8630,7 @@ mod tests {
 
         // Disarm drops the tap + in-flight progress but keeps the gallery.
         e.set_sstv_armed(false);
-        e.set_spectrum_audio(&[0.0; 64]);
+        e.feed_rx_audio(&[0.0; 64]);
         assert!(e.take_sstv_audio().is_empty());
         assert!(e.sstv_progress().is_none());
         assert_eq!(e.sstv_gallery().len(), SSTV_GALLERY_CAP);
@@ -12596,6 +12645,71 @@ mod tests {
         );
     }
 
+    /// The source precedence that decides which row the waterfall shows.
+    ///
+    /// It used to live in `Engine::spectrum_row`, where all three writers had to reach the
+    /// engine mutex to publish — and the radio loop holds that mutex across blocking CAT at the
+    /// slot boundary, so a stall starved the audio row AND the Flex/CI-V panadapter together
+    /// (operator report, 2026-07-25: the waterfall "hangs and stops moving"). The rule is
+    /// unchanged; it moved to where the writers converge without a lock anyone else contends.
+    #[test]
+    fn a_fresh_native_row_wins_over_audio_and_falls_back_when_cleared() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(Spectrum {
+            row: vec![0.1, 0.2, 0.3],
+            lo_hz: 0.0,
+            hi_hz: 4000.0,
+            source: "audio".into(),
+        });
+        assert_eq!(feed.row().expect("audio published").source, "audio");
+
+        feed.publish_rf(Spectrum {
+            row: vec![1.0, 2.0, 3.0],
+            lo_hz: 144_000_000.0,
+            hi_hz: 144_200_000.0,
+            source: "civ".into(),
+        });
+        let row = feed.row().expect("rf published");
+        assert_eq!(row.source, "civ", "a fresh native RF row wins");
+        assert_eq!(row.row, vec![1.0, 2.0, 3.0]);
+
+        // DATA mode drops the native row: the audio FFT must take over IMMEDIATELY, with no
+        // window where the last panadapter row still wins.
+        feed.clear_rf();
+        assert_eq!(
+            feed.row().expect("audio still there").source,
+            "audio",
+            "clearing RF falls straight back to the audio FFT"
+        );
+    }
+
+    /// An EMPTY native row must never win — a panadapter that streams nothing would otherwise
+    /// blank the waterfall instead of letting the audio FFT through.
+    #[test]
+    fn an_empty_native_row_never_wins() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(Spectrum {
+            row: vec![0.1, 0.2],
+            lo_hz: 0.0,
+            hi_hz: 4000.0,
+            source: "audio".into(),
+        });
+        feed.publish_rf(Spectrum {
+            row: Vec::new(),
+            lo_hz: 0.0,
+            hi_hz: 0.0,
+            source: "flex".into(),
+        });
+        assert_eq!(feed.row().expect("published").source, "audio");
+    }
+
+    /// Nothing published at all → `None`, which routes the reader to the Companion/UDP fallback
+    /// that computes a row on demand. That is the ONLY case allowed to reach the engine.
+    #[test]
+    fn an_unfed_feed_returns_none_so_the_companion_path_can_compute() {
+        assert!(SpectrumFeed::default().row().is_none());
+    }
+
     #[test]
     fn cq_run_strongest_works_the_loudest_caller() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
@@ -12632,54 +12746,94 @@ mod tests {
         assert!(qso.dxcall.is_none(), "did not lock the below-floor caller");
     }
 
+    /// A dead capture stream (device unplugged, DAX lost) must GO QUIET, not keep scrolling the
+    /// last row as steady phantom carriers. Moved here with the rest of the precedence rule.
     #[test]
-    fn native_rf_spectrum_takes_precedence_over_audio_then_falls_back() {
-        // The shared per-radio scope seam: a fresh native RF row (Flex/Icom) wins over the
-        // audio-FFT scope; an empty/absent native row falls back so the waterfall never dies.
-        let mut e = Engine::new("W9XYZ", "EN52", 0);
-        e.set_spectrum_audio(&vec![0.1f32; 256]);
-        assert_eq!(e.spectrum_row().source, "audio", "audio-FFT by default");
-
-        e.set_spectrum_rf(crate::dto::Spectrum {
-            row: vec![0.5, 0.6, 0.7],
-            lo_hz: 144_000_000.0,
-            hi_hz: 144_200_000.0,
-            source: "flex".into(),
-        });
-        let rf = e.spectrum_row();
-        assert_eq!(rf.source, "flex", "fresh native RF row wins");
-        assert_eq!(rf.row, vec![0.5, 0.6, 0.7]);
-
-        // An empty native row must NOT blank the scope — fall back to audio.
-        e.set_spectrum_rf(crate::dto::Spectrum {
-            row: vec![],
+    fn a_stale_audio_row_goes_quiet_instead_of_scrolling_a_frozen_ghost() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(Spectrum {
+            row: vec![0.1, 0.2, 0.3],
             lo_hz: 0.0,
-            hi_hz: 0.0,
-            source: "civ".into(),
+            hi_hz: 4000.0,
+            source: "audio".into(),
         });
+        assert!(
+            !feed.row().expect("fresh").row.is_empty(),
+            "fresh row draws"
+        );
+
+        feed.backdate_audio_for_test(std::time::Duration::from_secs(3));
+        let row = feed.row().expect("still returns a row, deliberately");
+        assert!(
+            row.row.is_empty(),
+            "a stale row must come back EMPTY so the waterfall stops"
+        );
+        // The critical half: it must NOT return None, which would route the reader to the
+        // engine's on-demand fallback and redraw a non-empty ghost row at 8-20 Hz.
+    }
+
+    #[test]
+    fn the_dedicated_ptt_port_follows_a_radio_switch() {
+        // Operator report 2026-07-25 (U2R / SO2R interface): "each radio needs its own serial RTS
+        // port for PTT. When switching between radios via the top left button, the PTT port does
+        // not follow the selected radio. CAT works fine."
+        //
+        // Root cause: `ptt_serial_port` lived ONLY on the flat Settings, never on RadioProfile —
+        // so `serial_port` (CAT) followed the switch and the keyline port did not. The radio loop
+        // builds PttMode::Serial{port} from the flat mirror, so after a switch it keyed the
+        // PREVIOUS radio's port. This pins that both ports now travel together.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+
+        // Radio 0: CAT on COM3, keyline on its own COM8 (the whole point of an SO2R box).
+        e.settings.ptt_method = "rts".to_string();
+        e.settings.serial_port = "COM3".to_string();
+        e.settings.ptt_serial_port = "COM8".to_string();
+        e.settings.sync_active_from_flat();
+
+        // Radio 1: CAT on COM7, keyline on COM9.
+        let r1 = e.add_radio();
+        e.settings.ptt_method = "rts".to_string();
+        e.settings.serial_port = "COM7".to_string();
+        e.settings.ptt_serial_port = "COM9".to_string();
+        e.settings.sync_active_from_flat();
+
+        // Switch back to radio 0 — the flat mirror is what the radio loop keys from.
+        e.set_active_radio(0);
         assert_eq!(
-            e.spectrum_row().source,
-            "audio",
-            "empty native row → audio fallback"
+            e.settings.serial_port, "COM3",
+            "CAT followed (it always did)"
+        );
+        assert_eq!(
+            e.settings.ptt_serial_port, "COM8",
+            "the KEYLINE must follow too — keying the other radio's port is the bug"
+        );
+
+        // ...and forward again.
+        e.set_active_radio(r1);
+        assert_eq!(e.settings.serial_port, "COM7");
+        assert_eq!(
+            e.settings.ptt_serial_port, "COM9",
+            "the keyline follows in both directions"
         );
     }
 
     #[test]
-    fn stale_audio_spectrum_goes_quiet_instead_of_scrolling_a_frozen_ghost() {
-        // A dead capture stream (device unplugged, DAX stream lost) must not keep the scope
-        // scrolling the last captured row as steady phantom carriers — after the freshness
-        // window it goes quiet, mirroring the native RF row's 1 s expiry above.
-        let mut e = Engine::new("W9XYZ", "EN52", 0);
-        e.set_spectrum_audio(&vec![0.1f32; 256]);
-        assert!(!e.spectrum_row().row.is_empty(), "fresh audio row draws");
-        // Backdate the stamp to simulate the radio loop going silent for > 2 s.
-        if let Some((_, at)) = e.spectrum_cache.as_mut() {
-            *at = Instant::now() - std::time::Duration::from_secs(3);
-        }
-        assert!(
-            e.spectrum_row().row.is_empty(),
-            "stale audio row goes quiet (no frozen ghost)"
+    fn a_shared_keyline_port_is_still_allowed() {
+        // The common single-cable case: no dedicated PTT port, so keying rides the CAT port.
+        // Making the field per-radio must not force operators to fill it in.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.serial_port = "COM3".to_string();
+        e.settings.ptt_serial_port = String::new();
+        e.settings.sync_active_from_flat();
+        let r1 = e.add_radio();
+        e.set_active_radio(0);
+        assert_eq!(
+            e.settings.ptt_serial_port, "",
+            "empty stays empty — falls back to the CAT port"
         );
+        let _ = r1;
     }
 
     #[test]
@@ -12860,6 +13014,7 @@ mod tests {
             rig_model: p.rig_model,
             rig_model_name: p.rig_model_name.clone(),
             serial_port: port.to_string(),
+            ptt_serial_port: p.ptt_serial_port.clone(),
             baud: p.baud,
             rig_conn: p.rig_conn.clone(),
             rig_addr: p.rig_addr.clone(),

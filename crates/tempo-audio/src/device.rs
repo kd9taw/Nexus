@@ -184,6 +184,11 @@ pub struct CpalBackend {
     rx_gain: Arc<AtomicU32>,
     /// Tx audio level (0.0–1.0) applied to outgoing samples in [`Self::play`].
     tx_level: f32,
+    /// Wait-free tee of the capture stream feeding the waterfall producer (see rxtap.rs). The
+    /// caller publishes this to the RxTap after a successful open.
+    spectrum_tap: Arc<SpscRing>,
+    /// Device capture rate, so the consumer can build its own resampler.
+    in_rate: u32,
     /// Dark headphone monitor: an in-place, off-by-default pass-through of the RX
     /// audio to a chosen output device. Reconfigured via [`AudioBackend::set_monitor`]
     /// WITHOUT touching the capture/TX streams (the decode path never restarts).
@@ -356,6 +361,10 @@ impl CpalBackend {
         // of capture-rate mono so the 20 ms loop bursts never overflow it in normal
         // use. The capture callback only pushes here while `mon_enabled` is set. ----
         let mon_ring = Arc::new(SpscRing::new((in_rate as usize / 2).max(4096)));
+        // The waterfall's own tee of the capture stream. Sized ~1 s of device audio: the
+        // producer never blocks, so a consumer that stalls just loses the excess. Lives in the
+        // STREAM (not in RxTap) so each open owns exactly one producer — see rxtap.rs.
+        let tap_ring = Arc::new(SpscRing::new((in_rate as usize).max(12_000)));
         let mon_enabled = Arc::new(AtomicBool::new(false));
         let mon_level = Arc::new(AtomicU32::new(0.5f32.to_bits()));
 
@@ -363,6 +372,7 @@ impl CpalBackend {
         let in_ring_cb = in_ring.clone();
         let rx_meter_cb = rx_level.clone();
         let mon_ring_in = mon_ring.clone();
+        let tap_ring_in = tap_ring.clone();
         let mon_enabled_in = mon_enabled.clone();
         let rx_gain_cb = rx_gain.clone();
         let in_stream = match in_cfg.sample_format() {
@@ -390,6 +400,12 @@ impl CpalBackend {
                         sum_sq += m * m;
                         n += 1;
                         ring.push_back(m);
+                        // Tee to the waterfall producer (see rxtap.rs). Wait-free: atomics
+                        // only, never blocks, never allocates, drops on overflow — the same
+                        // discipline the monitor ring uses, so the decode path (this callback)
+                        // is never stalled by it. UNGATED, unlike the monitor: the waterfall is
+                        // always live, and an undrained ring simply fills and drops.
+                        tap_ring_in.push(m);
                         if monitoring {
                             mon_ring_in.push(m);
                         }
@@ -414,6 +430,12 @@ impl CpalBackend {
                         sum_sq += m * m;
                         n += 1;
                         ring.push_back(m);
+                        // Tee to the waterfall producer (see rxtap.rs). Wait-free: atomics
+                        // only, never blocks, never allocates, drops on overflow — the same
+                        // discipline the monitor ring uses, so the decode path (this callback)
+                        // is never stalled by it. UNGATED, unlike the monitor: the waterfall is
+                        // always live, and an undrained ring simply fills and drops.
+                        tap_ring_in.push(m);
                         if monitoring {
                             mon_ring_in.push(m);
                         }
@@ -445,6 +467,12 @@ impl CpalBackend {
                         sum_sq += m * m;
                         n += 1;
                         ring.push_back(m);
+                        // Tee to the waterfall producer (see rxtap.rs). Wait-free: atomics
+                        // only, never blocks, never allocates, drops on overflow — the same
+                        // discipline the monitor ring uses, so the decode path (this callback)
+                        // is never stalled by it. UNGATED, unlike the monitor: the waterfall is
+                        // always live, and an undrained ring simply fills and drops.
+                        tap_ring_in.push(m);
                         if monitoring {
                             mon_ring_in.push(m);
                         }
@@ -473,6 +501,12 @@ impl CpalBackend {
                         sum_sq += m * m;
                         n += 1;
                         ring.push_back(m);
+                        // Tee to the waterfall producer (see rxtap.rs). Wait-free: atomics
+                        // only, never blocks, never allocates, drops on overflow — the same
+                        // discipline the monitor ring uses, so the decode path (this callback)
+                        // is never stalled by it. UNGATED, unlike the monitor: the waterfall is
+                        // always live, and an undrained ring simply fills and drops.
+                        tap_ring_in.push(m);
                         if monitoring {
                             mon_ring_in.push(m);
                         }
@@ -569,6 +603,8 @@ impl CpalBackend {
             rx_gain,
             tx_level: 1.0,
             monitor: Monitor::new(mon_ring, mon_enabled, mon_level, in_rate),
+            spectrum_tap: tap_ring,
+            in_rate,
             voice_mic: None,
             tx_tee: None,
         })
@@ -589,6 +625,10 @@ fn update_rx_meter(meter: &Arc<Mutex<f32>>, sum_sq: f32, n: usize) {
 }
 
 impl AudioBackend for CpalBackend {
+    fn spectrum_tap(&self) -> Option<(Arc<SpscRing>, u32)> {
+        Some((self.spectrum_tap.clone(), self.in_rate))
+    }
+
     fn capture(&mut self) -> Vec<f32> {
         let dev: Vec<f32> = {
             let mut ring = self.in_ring.lock().unwrap_or_else(|e| e.into_inner());

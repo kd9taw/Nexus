@@ -181,6 +181,12 @@ const FREQ_MISS_LIMIT: u32 = 3;
 /// order. `ANF` (auto-notch) is the notch we expose — it works as a bare on/off toggle, unlike
 /// `MN` (manual notch) which needs a separate NOTCHF frequency level.
 const RIG_FUNCS: [&str; 5] = ["NB", "NR", "ANF", "COMP", "VOX"];
+/// First re-probe delay for a DSP func that latched unsupported, in heavy polls (40 × 750 ms
+/// ≈ 30 s — the old fixed cadence, now only the FIRST retry).
+const FUNC_RETRY_BACKOFF_BASE: u32 = 40;
+/// Backoff ceiling, in heavy polls (2560 × 750 ms ≈ 32 min). A func the rig genuinely lacks
+/// settles here instead of costing a CAT timeout every 30 s for the whole session.
+const FUNC_RETRY_BACKOFF_MAX: u32 = 2560;
 
 /// Indices into the `RadioLoop` `level_supported` / `level_misses` arrays — the optional extended
 /// per-poll level reads (RF power, mic gain, NR level, AGC). They mirror the rig's real knob
@@ -244,6 +250,11 @@ const MODE_SET_PASSBAND0_AFTER: u32 = 10;
 /// PTT is keyed, and for CAT the `rig_model` / `serial_port` / `baud` /
 /// `rigctld_port` describe the `rigctld` daemon Tempo launches itself.
 pub struct RadioConfig {
+    /// Where every waterfall source publishes, shared with the UI reader and the rx-dsp thread.
+    /// Defaulted so existing constructions (tests, tools) need no change.
+    pub spectrum_feed: tempo_app::engine::SpectrumFeed,
+    /// The wait-free capture tee the rx-dsp thread drains (rxtap.rs).
+    pub rx_tap: Arc<crate::rxtap::RxTap>,
     /// PTT method: `"cat"` (launch + use rigctld), `"rts"`, `"dtr"`, or `"vox"`.
     pub ptt_method: String,
     /// Hamlib rig model number for `rigctld -m` (0 = none / VOX).
@@ -288,6 +299,8 @@ pub struct RadioConfig {
 impl Default for RadioConfig {
     fn default() -> Self {
         Self {
+            spectrum_feed: tempo_app::engine::SpectrumFeed::default(),
+            rx_tap: Arc::new(crate::rxtap::RxTap::new()),
             ptt_method: "vox".to_string(),
             rig_model: 0,
             serial_port: String::new(),
@@ -377,6 +390,12 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
     };
     backend.set_tx_level(cfg.tx_level);
     backend.set_rx_gain(cfg.rx_gain);
+    // Hand the capture tee to the waterfall producer and start it. From here the row is made on
+    // ITS thread, so this loop's blocking CAT can no longer starve the waterfall (rxtap.rs).
+    if let Some((ring, rate)) = backend.spectrum_tap() {
+        cfg.rx_tap.publish_card(ring, rate);
+    }
+    crate::rxdsp::spawn(cfg.rx_tap.clone(), cfg.spectrum_feed.clone());
 
     // Resolve the PTT method into a Rig and probe it. `open_rig` launches rigctld
     // for CAT (its kill-on-drop handle lives as long as the rig) and reports the
@@ -1387,6 +1406,31 @@ struct RadioLoop {
     /// Last-known func states, mirrored to the engine each sub-cadence poll; a read miss on a
     /// supported func keeps the last value so the toggle never flickers.
     func_state: [Option<bool>; 5],
+    /// Earliest `rig_poll_ticks` at which a func latched `Some(false)` may be re-probed, and the
+    /// backoff (in heavy polls) applied when it fails again.
+    ///
+    /// WHY THIS EXISTS (operator report, 2026-07-25 — the waterfall "hangs and stops moving"
+    /// for ~1 s every 10-20 s, in Phone/CW/FT, from the first minute). A func GET on a rig that
+    /// does not cleanly reject an unsupported func blocks to the CAT deadline (700 ms, 2500 ms
+    /// on slow serial) — and it runs on the RADIO LOOP, the sole producer of waterfall rows via
+    /// `feed_rx_audio`. Block that thread and no new row is produced, so the UI re-draws
+    /// the cached row: the waterfall does not blank, it STREAKS vertically, which is exactly
+    /// what the operator's screenshot shows.
+    ///
+    /// The old recovery re-armed EVERY latched-off func unconditionally every 40 heavy polls
+    /// (~30 s), forever. So a func the rig never answers cost a full CAT timeout every 30 s for
+    /// the life of the session: three stalls at 15 s spacing → latch off → quiet → re-arm →
+    /// repeat. That is the operator's "then it might be fine again, then we get a small lag".
+    /// Transient-hiccup recovery is still worth having, so the retry is kept but BACKED OFF
+    /// (40 → 80 → 160 … heavy polls, capped), and reset on a successful read.
+    func_retry_at: [u32; 5],
+    func_retry_backoff: [u32; 5],
+    /// Where every spectrum source publishes. Held here so the CI-V native row can be published
+    /// WITHOUT the engine mutex — that mutex is held across this loop's own blocking CAT at the
+    /// slot boundary, which is what starved the panadapter along with the audio row.
+    spectrum_feed: tempo_app::engine::SpectrumFeed,
+    /// The wait-free tee the rx-dsp thread drains. Republished on every audio (re)open.
+    rx_tap: Arc<crate::rxtap::RxTap>,
     /// Per-extended-level capability ([RFPOWER, MICGAIN, NR, AGC], see the `LVL_*` indices), the
     /// same miss-tolerant caching as `func_supported`: `Some(false)` after 3 get-misses → stop
     /// issuing that read, so a rig slow/silent on it doesn't churn the CAT socket every poll
@@ -1487,6 +1531,10 @@ impl RadioLoop {
             func_supported: [None; 5],
             func_misses: [0; 5],
             func_state: [None; 5],
+            func_retry_at: [0; 5],
+            func_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; 5],
+            spectrum_feed: cfg.spectrum_feed.clone(),
+            rx_tap: cfg.rx_tap.clone(),
             level_supported: [None; 4],
             level_misses: [0; 4],
 
@@ -1556,9 +1604,13 @@ impl RadioLoop {
             self.spectrum_src = None;
             self.spectrum_src_key = key;
             if flex_enabled && !ip.is_empty() {
-                self.spectrum_src =
-                    crate::flexspectrum::FlexSpectrum::start(engine.clone(), ip.clone(), dial_hz)
-                        .ok();
+                self.spectrum_src = crate::flexspectrum::FlexSpectrum::start(
+                    engine.clone(),
+                    self.spectrum_feed.clone(),
+                    ip.clone(),
+                    dial_hz,
+                )
+                .ok();
             }
         }
         // DAX RX audio worker: same tear-down/restart (Drop removes the DAX stream).
@@ -1878,6 +1930,11 @@ impl RadioLoop {
                     Ok(b) => {
                         *backend = b;
                         audio_rebuilt = true;
+                        // New stream, new ring: republish so the producer rebuilds its resampler
+                        // and clears its window rather than smearing two sample rates together.
+                        if let Some((ring, rate)) = backend.spectrum_tap() {
+                            self.rx_tap.publish_card(ring, rate);
+                        }
                         if let Ok(mut eng) = engine.lock() {
                             eng.set_audio_error(None);
                         }
@@ -2040,21 +2097,22 @@ impl RadioLoop {
                         d.set_scope_center_mode(f);
                     }
                 }
+                // Publish straight to the spectrum feed. This used to go through the engine
+                // mutex, so the Icom panadapter was starved by the very hold that starved the
+                // audio row (the boundary CAT block downstream of this loop's engine.lock()).
                 if !data_mode {
                     if let Some(sweep) = d.take_scope_row() {
-                        if let Ok(mut e) = engine.lock() {
-                            e.set_spectrum_rf(tempo_app::dto::Spectrum {
-                                row: sweep.row,
-                                lo_hz: sweep.lo_hz,
-                                hi_hz: sweep.hi_hz,
-                                source: "civ".into(),
-                            });
-                        }
+                        self.spectrum_feed.publish_rf(tempo_app::dto::Spectrum {
+                            row: sweep.row,
+                            lo_hz: sweep.lo_hz,
+                            hi_hz: sweep.hi_hz,
+                            source: "civ".into(),
+                        });
                     }
-                } else if let Ok(mut e) = engine.lock() {
-                    // DATA mode (FT8/FT4): drop any stale native row so spectrum_row() falls back to
-                    // the audio FFT immediately (no ~1 s window where the last civ row still wins).
-                    e.clear_spectrum_rf();
+                } else {
+                    // DATA mode (FT8/FT4): drop any stale native row so the audio FFT takes over
+                    // immediately (no ~1 s window where the last civ row still wins).
+                    self.spectrum_feed.clear_rf();
                 }
             }
 
@@ -2257,12 +2315,17 @@ impl RadioLoop {
                     self.smeter_supported = None;
                     self.smeter_misses = 0;
                 }
-                if self.rig_poll_ticks.is_multiple_of(40) {
-                    for i in 0..RIG_FUNCS.len() {
-                        if self.func_supported[i] == Some(false) {
-                            self.func_supported[i] = None; // give a given-up func one retry
-                            self.func_misses[i] = 0;
-                        }
+                // Re-probe a given-up func only once its BACKOFF has elapsed. A rig that never
+                // answers a func used to be retried every 40 heavy polls (~30 s) forever, and
+                // every retry costs a full CAT timeout on this thread — which starves the
+                // waterfall (see `func_retry_at`). Backing off keeps transient-hiccup recovery
+                // while making a permanently-absent func cost progressively nothing.
+                for i in 0..RIG_FUNCS.len() {
+                    if self.func_supported[i] == Some(false)
+                        && self.rig_poll_ticks >= self.func_retry_at[i]
+                    {
+                        self.func_supported[i] = None; // give a given-up func one retry
+                        self.func_misses[i] = 0;
                     }
                 }
                 match rig.read_freq() {
@@ -2465,12 +2528,24 @@ impl RadioLoop {
                                         self.func_supported[i] = Some(true);
                                         self.func_misses[i] = 0;
                                         self.func_state[i] = Some(on);
+                                        // A real answer clears the backoff: a func that works
+                                        // now must recover full responsiveness if it ever drops.
+                                        self.func_retry_backoff[i] = FUNC_RETRY_BACKOFF_BASE;
                                     }
                                     None => {
                                         self.func_misses[i] = self.func_misses[i].saturating_add(1);
                                         if self.func_misses[i] >= 3 {
                                             self.func_supported[i] = Some(false);
                                             self.func_state[i] = None; // hide the toggle
+                                                                       // Schedule the next retry, then double the wait for
+                                                                       // the one after (capped) — a func that keeps failing
+                                                                       // must stop costing a CAT timeout on a fixed cycle.
+                                            self.func_retry_at[i] = self
+                                                .rig_poll_ticks
+                                                .saturating_add(self.func_retry_backoff[i]);
+                                            self.func_retry_backoff[i] = self.func_retry_backoff[i]
+                                                .saturating_mul(2)
+                                                .min(FUNC_RETRY_BACKOFF_MAX);
                                         }
                                     }
                                 }
@@ -3369,7 +3444,12 @@ impl RadioLoop {
         eng.set_slot_timing(self.clock.ms_to_next_slot(now) as u64);
         // RX input meter + live waterfall audio (decoupled from the slot decoder).
         eng.set_rx_level(backend.rx_level());
-        eng.set_spectrum_audio(&captured);
+        // The WATERFALL row is NOT produced here any more — see rxtap.rs / rxdsp.rs. This loop
+        // issues every blocking CAT call (up to 2500 ms on slow serial), and while it was also
+        // the sole producer of spectrum rows, any CAT stall froze the waterfall. These mode
+        // taps (CW/RTTY/APRS/SSTV/QSO) deliberately stay: the loop already holds this lock, so
+        // they cost nothing here, and moving them would risk dropping audio under contention.
+        eng.feed_rx_audio(&captured);
 
         // --- Tune carrier: hold PTT + a steady f0 sine while the operator holds
         // "tune", with a safety auto-release. Normal slot TX is suppressed. ---
@@ -5015,6 +5095,91 @@ fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
 mod tests {
     use super::*;
     use crate::backend::MockBackend;
+
+    /// A DSP func the rig never answers must stop costing a CAT timeout on a fixed cycle.
+    ///
+    /// Operator report 2026-07-25: the waterfall "hangs and stops moving" for ~1 s every
+    /// 10-20 s, in Phone/CW/FT, from the first minute — the screenshot shows vertical
+    /// STREAKING (the cached row redrawn), i.e. the producer starved, not the reader blocked.
+    /// A func GET blocks to the CAT deadline (700 ms, 2500 ms slow-serial) on the RADIO LOOP,
+    /// which is the sole caller of `feed_rx_audio`. The old code re-armed every
+    /// latched-off func every 40 heavy polls (~30 s) FOREVER, so an unanswerable func stalled
+    /// the waterfall on a permanent 30 s cycle. This pins the backoff that ends that cycle.
+    #[test]
+    fn an_unanswerable_dsp_func_backs_off_instead_of_stalling_forever() {
+        // Model the state machine exactly as the poll site drives it.
+        let mut supported: Option<bool> = None;
+        let mut misses: u8 = 0;
+        let mut retry_at: u32 = 0;
+        let mut backoff: u32 = FUNC_RETRY_BACKOFF_BASE;
+        let mut probes: Vec<u32> = Vec::new();
+        // When the func latched off — the boundary between probe BURSTS. Within a burst the
+        // three probes are always 20 ticks apart; it is the gap BETWEEN bursts that must widen.
+        let mut latch_offs: Vec<u32> = Vec::new();
+
+        // 4000 heavy polls ≈ 50 minutes of operating. The rig NEVER answers this func.
+        for tick in 0..4000u32 {
+            if supported == Some(false) && tick >= retry_at {
+                supported = None; // re-arm
+                misses = 0;
+            }
+            // One func is probed per 20 heavy polls (round-robin over 5, on `%4==2`).
+            if tick % 20 == 2 && supported != Some(false) {
+                probes.push(tick); // this probe BLOCKS to the CAT deadline
+                misses = misses.saturating_add(1);
+                if misses >= 3 {
+                    supported = Some(false);
+                    latch_offs.push(tick);
+                    retry_at = tick.saturating_add(backoff);
+                    backoff = backoff.saturating_mul(2).min(FUNC_RETRY_BACKOFF_MAX);
+                }
+            }
+        }
+
+        // OLD behaviour (fixed 40-tick re-arm) probed indefinitely — roughly one stall per
+        // 30 s for the whole session. Backing off must cut that hard.
+        assert!(
+            probes.len() < 40,
+            "an unanswerable func must stop being re-probed on a fixed cycle; got {} probes \
+             in 4000 heavy polls (~50 min): {:?}",
+            probes.len(),
+            probes
+        );
+        // And the interval between BURSTS must grow — that is what makes a permanently-absent
+        // func eventually stop costing anything.
+        assert!(
+            latch_offs.len() >= 3,
+            "expected several give-up cycles to compare, got {latch_offs:?}"
+        );
+        let first_gap = latch_offs[1] - latch_offs[0];
+        let last_gap = latch_offs[latch_offs.len() - 1] - latch_offs[latch_offs.len() - 2];
+        assert!(
+            last_gap > first_gap * 2,
+            "retry interval must widen sharply (first gap {first_gap}, last {last_gap}, \
+             latch-offs {latch_offs:?})"
+        );
+    }
+
+    /// The backoff must NOT persist once the rig starts answering: a func that recovers has to
+    /// regain full responsiveness, or a transient CAT hiccup would permanently degrade it.
+    #[test]
+    fn a_recovered_dsp_func_resets_its_backoff() {
+        let mut backoff: u32 = FUNC_RETRY_BACKOFF_BASE;
+        // Three latch-offs in a row grow the backoff.
+        for _ in 0..3 {
+            backoff = backoff.saturating_mul(2).min(FUNC_RETRY_BACKOFF_MAX);
+        }
+        assert!(
+            backoff > FUNC_RETRY_BACKOFF_BASE,
+            "backoff grew while failing"
+        );
+        // A successful read resets it (the `Some(on)` arm at the poll site).
+        backoff = FUNC_RETRY_BACKOFF_BASE;
+        assert_eq!(
+            backoff, FUNC_RETRY_BACKOFF_BASE,
+            "a func that answers again is probed at the base cadence, not the degraded one"
+        );
+    }
 
     /// The decode worker roundtrips a real job off the calling thread: build a job
     /// under the "engine lock", dispatch it, receive the result, fold it. This is

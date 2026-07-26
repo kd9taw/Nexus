@@ -18,6 +18,13 @@ interface Props {
   newEntity?: boolean
   newBandSlot?: boolean
   newModeSlot?: boolean
+  /** ONE LINE instead of the full card (operator choice, 2026-07-25 — Phone).
+   *
+   * The card appears the moment you type 3 characters of a call, and in a cockpit it was taking
+   * the height the operating panes needed. Compact keeps the part you glance at mid-contact —
+   * who they are, and whether they are new or a dupe — and drops the avatar, the location block,
+   * the note and the previous-contacts list. Those all remain in the Logbook. */
+  compact?: boolean
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -47,7 +54,7 @@ function initials(call: string): string {
  * mode · report · comment) gives durable relationship context, not just the last-QSO summary. Looks
  * complete with NO photo (initials avatar) — a QRZ photo is a later add-on, not a dependency.
  */
-export function RecallPanel({ call, band, name, qth, grid, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot }: Props) {
+export function RecallPanel({ call, band, name, qth, grid, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, compact }: Props) {
   const c = call.trim()
   if (c.length < 3) return null
   const cu = c.toUpperCase()
@@ -63,6 +70,34 @@ export function RecallPanel({ call, band, name, qth, grid, country, image, myGri
   const needed = newEntity ? 'New DXCC!' : newBandSlot ? 'New band-slot' : newModeSlot ? 'New mode-slot' : null
   const prior = [...hist.qsos].sort((a, b) => b.whenUnix - a.whenUnix)
   const lastNote = prior.find((q) => (q.notes ?? '').trim())?.notes?.trim()
+
+  if (compact) {
+    // Order matters: the CALL is what you are reading back on air, so it leads. The dupe/new
+    // flags come next because they change what you do. Name is last — nice to have, not a
+    // decision. Everything is one row; nothing wraps to a second line.
+    return (
+      <div className="recall-line" title={`${cu}${nm ? ` · ${nm}` : ''}`}>
+        <span className="recall-line-call mono">{cu}</span>
+        {hist.dupeThisBand && band && (
+          <span className="recall-badge dupe" title={`Already worked on ${band} — logging now would be a dupe`}>
+            DUPE {band}
+          </span>
+        )}
+        {newEntity && (
+          <span className="recall-badge need" title="Worth working — a new one for your log">
+            NEW ONE
+          </span>
+        )}
+        {!hist.dupeThisBand && hist.count > 0 && (
+          <span className="recall-line-hist" title={`${hist.count} prior contact(s)`}>
+            worked {hist.count}×
+          </span>
+        )}
+        {hist.count === 0 && <span className="recall-line-hist">first contact</span>}
+        {nm && <span className="recall-line-name">{nm}</span>}
+      </div>
+    )
+  }
 
   return (
     <div className="recall-card">

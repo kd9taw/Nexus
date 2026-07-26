@@ -233,6 +233,9 @@ the crates below. Pull in the full transitive license set with `cargo about` /
 `cargo deny` against `Cargo.lock`; the principal third-party components are:
 
 - **Tauri** (v2 desktop shell) — MIT OR Apache-2.0.
+- **tauri-plugin-updater** (signed self-update: verifies a minisign signature over each
+  installer before applying it) — MIT OR Apache-2.0.
+- **tauri-plugin-opener** (open a URL / file in the system handler) — MIT OR Apache-2.0.
 - **cpal** (sound-card audio transport) — MIT OR Apache-2.0.
 - **serialport** (serial CAT / RTS-DTR keying) — MPL-2.0.
 - **sgp4** (SGP4/SDP4 orbital propagation for satellite geometry) — MIT.

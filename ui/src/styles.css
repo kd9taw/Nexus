@@ -5786,6 +5786,9 @@ select optgroup {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
+  /* With `.cw-lower` floored, a short window overflows the COCKPIT — scroll here rather than
+     letting the flex column crush its children (mirrors `.phone-cockpit`). */
+  overflow-y: auto;
   /* Bounded (Phase 3): scope pinned, keyer/macros/send/log pinned; the lower region holds the
      removable + seam-resizable content panes and scrolls inside them — the view never scrolls. */
   overflow: hidden;
@@ -5793,9 +5796,11 @@ select optgroup {
 }
 /* Bounded lower region: the removable panes under the scope. The four content panes carry the
    `panel` class → share-driven flex + seam-resizable; the thin control strips sit at content height. */
+/* Floored like `.ph-lower`: the decode + band activity get a guaranteed minimum that the log
+   form and recall line below cannot take. CW has the same pressure Phone did. */
 .cw-lower {
-  flex: 1 1 0;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 18em;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -6627,12 +6632,19 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-weight: 400;
   color: var(--text-faint);
 }
+/* The expanded band/freq/mode/time overrides. LogEntry is PINNED below the cockpit's scrolling
+   region, so anything that grows here pushes the layout instead of scrolling — on a short Phone
+   viewport that shoved the log form off the bottom (operator report 2026-07-25: "the large
+   contact window coming up under the log a contact from another radio"). Cap it and let it
+   scroll internally: the same "pinned chrome never grows unbounded" rule the panes follow. */
 .le-override-fields {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--space-2);
   margin-top: var(--space-2);
+  max-height: 8.5em;
+  overflow-y: auto;
 }
 .le-ov-field {
   display: flex;
@@ -6853,9 +6865,15 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 /* Bounded lower region: the removable panes under the scope. Band Activity fills; the thin
    control strips (rig scope / DSP) sit at content height above it. */
+/* THE FLOOR. The panes you operate from — DSP, the RX levels, Band Activity — get a guaranteed
+   minimum height that nothing below can take. Anything that does not fit (the log form, the
+   recall line) scrolls at the cockpit level instead of crushing this region.
+   Operator, 2026-07-25: the region collapsed the moment the recall card appeared under "Log this
+   QSO". Capping that one card would have fixed this instance; a floor fixes the RULE, so the
+   next thing added below cannot do it again. Same discipline as `.cw-lower`. */
 .ph-lower {
-  flex: 1 1 0;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 18em;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -6863,22 +6881,91 @@ input.cw-pitch::-webkit-inner-spin-button {
      control panes + the Band Activity spot lines off the bottom with no way to reach them. */
   overflow-y: auto;
 }
-/* Pin every control pane to content height so it can't be crushed below its content (which the
-   pane's own overflow:auto would then clip); the deficit flows to `.ph-lower`'s scroll instead.
-   The band-pane grower is excluded so it still fills / floors. Mirrors `.cw-lower > .panel`. */
-.ph-lower > *:not(.ph-band-pane) {
-  flex-shrink: 0;
+/* Every child sits at CONTENT height and never shrinks below it, so nothing gets crushed or
+   clipped; a real vertical deficit flows to `.ph-lower { overflow-y:auto }` and scrolls instead.
+   Byte-for-byte the treatment `.cw-lower > *` got — Phone had only `flex-shrink:0`, which leaves
+   flex-basis at `auto` and still let panes lose height to a grower. Operator report 2026-07-25:
+   the Band Activity spot lines were being lost the same way CW's were. */
+.ph-lower > * {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+/* the removable content panes scroll internally if their own content overflows */
+.ph-lower > .panel {
+  overflow: auto;
+}
+/* Band Activity is the SOLE grower and the primary area: it fills the lower region and floors
+   large so it stays dominant.
+   `--pane-share` is deliberately GONE. The seam-resize sliders were removed from CW in 0.17.11
+   ("sliders have little value here") but Phone kept the variable, so a stale share left over from
+   a dragged seam still skewed this pane's grow factor with no slider left to correct it. Phone
+   never had visible seams — the machinery was dead weight that could only misbehave. */
+/* Each pane under the scope is its OWN window, visibly.
+   First attempt used `--border-soft` on an undefined `--bg-raised`; that border is #1b2433 on a
+   dark panel — invisible in practice, so DSP / NB / NR and Band Activity still read as one merged
+   section (operator, 2026-07-25: "seems to be attached to the band activity in a whole section").
+   Use the app's real `.panel` surface instead of inventing a weaker one: same background and
+   radius the rest of Nexus uses for a window, with a border that is actually visible against it. */
+.ph-lower > .ph-dsp,
+.ph-lower > .ph-dsp-levels,
+.ph-band-pane {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+}
+.ph-lower > .ph-dsp {
+  /* the frame supplies the spacing now */
+  margin: 0;
+}
+/* Band Activity is the primary pane down here — give it a title so it reads as its own window
+   rather than an unlabelled area that happens to sit below the DSP controls. */
+.ph-band-pane::before {
+  content: 'Band activity';
+  display: block;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding-bottom: var(--space-1);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border-soft);
 }
 .ph-band-pane {
-  flex: var(--pane-share, 1) 1 0;
-  /* Floor the sole grower so it can never collapse to 0 (flex-basis:0 gets no free space when
-     the control panes fill the region) — mirrors `.cw-lower > .cw-decode.panel { min-height:6em }`. */
+  flex: 1 1 0;
   min-height: 6em;
   overflow: auto;
 }
-/* The PTT row never shrinks/clips — push-to-talk stays reachable no matter the window. */
+/* The PTT row never shrinks/clips — push-to-talk stays reachable no matter the window.
+   It IS trimmed though: PTT and the voice keyer were taking vertical space that Band Activity
+   needed (operator, 2026-07-25: "if we need more space, make the voice keyer and push to talk
+   sections smaller"). Trimmed, not shrunk to nothing — PTT stays a comfortable hold-target,
+   because a fiddly transmit control is a worse problem than a short spot list. */
+.phone-cockpit {
+  /* With `.ph-lower` floored, a short window overflows the COCKPIT — scroll here rather than
+     letting the flex column crush its children. */
+  overflow-y: auto;
+}
 .phone-cockpit .ph-ptt-row {
   flex: 0 0 auto;
+  gap: var(--space-3);
+}
+.phone-cockpit .ph-ptt {
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  font-size: 15px;
+}
+.phone-cockpit .ph-ptt-hint {
+  /* the hint is for the first few sessions; it does not need a line of its own forever */
+  font-size: var(--fs-micro);
+}
+/* Voice keyer: tighten the header and the gaps between its rows. No control is removed or made
+   harder to hit — this is padding, not function. */
+.phone-cockpit .vk-head {
+  margin-bottom: var(--space-1);
+}
+.phone-cockpit .vk-note {
+  margin: 0 0 var(--space-1);
 }
 .ph-bar {
   display: flex;
@@ -16838,4 +16925,131 @@ html[data-panel='needed'] {
 }
 .aprs-kind-object {
   color: var(--need-mode, #22d3ee);
+}
+
+/* --- Pounce: a rare one just appeared -------------------------------------------------
+   Deliberately the loudest banner in the app. It fires seldom (ATNO-only by default), and
+   when it does the operator has seconds. Pinned to the top of the viewport so it lands over
+   whatever cockpit is open, and it never auto-dismisses. */
+.pounce-banner {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: min(92vw, 60rem);
+  padding: var(--space-2) var(--space-3);
+  border: 2px solid var(--need-entity, #ff5c7a);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: color-mix(in srgb, var(--need-entity, #ff5c7a) 22%, var(--bg-panel, #12161d));
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.55);
+  animation: pounce-in 180ms ease-out;
+}
+@keyframes pounce-in {
+  from { transform: translate(-50%, -100%); opacity: 0; }
+  to   { transform: translate(-50%, 0);     opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pounce-banner { animation: none; }
+}
+.pounce-tag {
+  font-weight: 800;
+  font-size: var(--fs-label);
+  letter-spacing: 0.06em;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--need-entity, #ff5c7a);
+  color: #10131a;
+  white-space: nowrap;
+}
+.pounce-what { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.pounce-what strong { font-size: 1.15rem; letter-spacing: 0.02em; }
+.pounce-entity { opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pounce-where { opacity: 0.9; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pounce-work {
+  font-weight: 700;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--need-entity, #ff5c7a);
+  background: var(--need-entity, #ff5c7a);
+  color: #10131a;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pounce-work:hover { filter: brightness(1.12); }
+.pounce-close {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: var(--space-1);
+}
+.pounce-close:hover { opacity: 1; }
+
+/* --- Self-update prompt -----------------------------------------------------------------
+   Deliberately QUIET, and deliberately unlike .pounce-banner. A new build is not urgent, so it
+   sits at the bottom, does not steal focus, and can be dismissed. Pounce is loud and top-of-
+   screen because a rare DX spot genuinely is a race; these two must not read as the same thing. */
+.update-banner {
+  position: fixed;
+  bottom: var(--space-3);
+  right: var(--space-3);
+  z-index: 8000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: min(90vw, 40rem);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border, #2a3340);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel, #12161d);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  font-size: var(--fs-body);
+}
+.update-what { font-weight: 600; }
+.update-detail { opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-install {
+  font-weight: 600;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent, #4da3ff);
+  background: var(--accent, #4da3ff);
+  color: #0d1117;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.update-install:hover:not(:disabled) { filter: brightness(1.1); }
+.update-install:disabled { opacity: 0.55; cursor: not-allowed; background: transparent; color: inherit; }
+.update-close {
+  background: none; border: none; color: inherit; opacity: 0.6;
+  cursor: pointer; font-size: 0.95rem; line-height: 1; padding: var(--space-1);
+}
+.update-close:hover { opacity: 1; }
+
+/* The one-line recall (operating cockpits). The full card lives in the Logbook; here it must
+   cost a single row no matter what the callbook returns, so it can never push the operating
+   panes off screen. */
+.recall-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) 0;
+  font-size: var(--fs-label);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.recall-line-call { font-weight: 800; letter-spacing: 0.03em; }
+.recall-line-hist { color: var(--text-dim); }
+.recall-line-name {
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

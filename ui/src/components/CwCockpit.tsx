@@ -1158,6 +1158,7 @@ export function CwCockpit({
       </div>
 
       <LogEntry
+        compactRecall
         snap={snap}
         mode="CW"
         defaultRst="599"

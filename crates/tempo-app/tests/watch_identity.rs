@@ -3,15 +3,20 @@
 //! This is the acceptance gate for the multi-radio refactor. It runs ONE fully
 //! deterministic scripted session against [`Engine::with_settings`] — explicit identity,
 //! explicit dial/band/sideband, audio generated arithmetically in this file, no wall
-//! clock, no environment, no filesystem state — and pins two serializations against
-//! checked-in fixtures:
+//! clock, no environment, no filesystem state — and pins one serialization against a
+//! checked-in fixture:
 //!
 //! * `eng.snapshot()` — the whole UI contract, minus the handful of genuinely
 //!   time-derived fields blanked by [`normalize`].
-//! * `eng.spectrum_row()` — pins BOTH the `spectrum_rf > spectrum_cache > last_rx`
-//!   preference order and the Goertzel output for a known input.
 //!
-//! If a refactor changes one byte of either, this fails. That is the point: a diff here
+//! (The waterfall row used to be pinned here too. It is no longer produced by the engine at
+//! all: the row moved to a dedicated thread fed by a wait-free tee of the capture stream, so
+//! that blocking CAT on the radio loop can no longer starve it — see tempo-audio `rxtap.rs` /
+//! `rxdsp.rs`, and the 2026-07-25 operator report. Its two halves are pinned where they now
+//! live: the source-precedence rule by `SpectrumFeed`'s tests in engine.rs, and the DSP output
+//! values by `rxdsp::tests::the_row_for_a_known_input_is_byte_stable`.)
+//!
+//! If a refactor changes one byte of it, this fails. That is the point: a diff here
 //! is a behavior change to be justified, never absorbed by loosening the comparison. If
 //! a new field genuinely varies per run, find out why before touching [`normalize`] — a
 //! fixture you have to weaken is not an acceptance test.
@@ -87,7 +92,7 @@ fn scripted_session() -> Engine {
     eng.set_tier(Tier::Ft8);
     eng.set_frequency(14.074, "20m", "USB");
     eng.set_rx_offset(F0_HZ);
-    eng.set_spectrum_audio(&sawtooth(SPECTRUM_SAMPLES));
+    eng.feed_rx_audio(&sawtooth(SPECTRUM_SAMPLES));
     eng.ingest(
         &native_frame_for(modes::ModeKind::Ft8, "CQ K2DEF FN31", F0_HZ),
         100,
@@ -137,18 +142,14 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// The two golden documents, as the exact bytes the fixtures must hold.
-fn golden_docs() -> (String, String) {
+/// The golden document, as the exact bytes the fixture must hold.
+fn golden_docs() -> String {
     let eng = scripted_session();
 
     let mut snapshot = serde_json::to_value(eng.snapshot()).expect("snapshot serializes");
     normalize(&mut snapshot);
-    let spectrum = serde_json::to_value(eng.spectrum_row()).expect("spectrum serializes");
 
-    (
-        format!("{}\n", serde_json::to_string_pretty(&snapshot).unwrap()),
-        format!("{}\n", serde_json::to_string_pretty(&spectrum).unwrap()),
-    )
+    format!("{}\n", serde_json::to_string_pretty(&snapshot).unwrap())
 }
 
 fn assert_matches_fixture(name: &str, got: &str) {
@@ -166,26 +167,24 @@ fn assert_matches_fixture(name: &str, got: &str) {
     );
 }
 
-/// Both fixtures are checked by ONE test on purpose: the FT8/FT4 decoders carry
+/// The fixture is checked by ONE test on purpose: the FT8/FT4 decoders carry
 /// process-global FFI state (the a7 cross-cycle table, the FT1 HARQ buffers), so two
 /// scripted sessions running concurrently in this binary could cross-contaminate and
 /// flake. One test = one session = one baseline.
 #[test]
 fn watch_identity_is_byte_identical_to_golden() {
-    let (snapshot, spectrum) = golden_docs();
+    let snapshot = golden_docs();
     assert_matches_fixture("watch_identity_snapshot.json", &snapshot);
-    assert_matches_fixture("watch_identity_spectrum.json", &spectrum);
 }
 
-/// Rewrite both fixtures from the current tree. Ignored by default — run it deliberately,
+/// Rewrite the fixture from the current tree. Ignored by default — run it deliberately,
 /// and only when the tree is known good, because it DEFINES the baseline. (Run it alone,
 /// not via `--include-ignored`, for the global-decoder-state reason above.)
 #[test]
 #[ignore = "regenerates the golden fixtures; run explicitly on a known-good tree"]
 fn regenerate_golden_fixtures() {
-    let (snapshot, spectrum) = golden_docs();
+    let snapshot = golden_docs();
     let dir = fixture_path("");
     std::fs::create_dir_all(&dir).expect("fixtures dir");
     std::fs::write(fixture_path("watch_identity_snapshot.json"), snapshot).expect("write snapshot");
-    std::fs::write(fixture_path("watch_identity_spectrum.json"), spectrum).expect("write spectrum");
 }

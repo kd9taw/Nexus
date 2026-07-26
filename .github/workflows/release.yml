@@ -81,6 +81,10 @@ jobs:
       - name: Build .deb + AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
+          # The AppImage is self-updatable and gets a .sig; the .deb is apt-managed and cannot
+          # self-update, so it is published unsigned by design.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-linux.sh
 
       - name: Verify artifacts
@@ -98,6 +102,8 @@ jobs:
           [ -s "$m" ] || { echo "DeepCW model missing from the .deb"; exit 1; }
           echo "$MODEL_SHA  $m" | sha256sum -c -
           mkdir -p out && cp "$deb" "$app" out/
+          # The AppImage's updater signature, when the signing secrets were present.
+          [ -f "$app.sig" ] && cp "$app.sig" out/ || echo "note: unsigned build (no signing secrets)"
           ( cd out && sha256sum ./* )
 
       - uses: actions/upload-artifact@v4
@@ -149,6 +155,13 @@ jobs:
           node-version: 24
 
       - name: Cross-build the NSIS installer
+        # Signed for self-update: the bundler emits a `.sig` beside the installer when these are
+        # present. If the secrets are absent (a fork, or before they are configured) the build
+        # still succeeds unsigned — the updater simply has nothing to verify, which is the right
+        # failure: no release, rather than an unsigned one clients would refuse anyway.
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-windows-cross.sh
 
       - name: Verify installer
@@ -161,6 +174,8 @@ jobs:
           sz=$(stat -c%s "$exe")
           [ "$sz" -gt 50000000 ] || { echo "installer only $sz bytes — bundling likely failed"; exit 1; }
           mkdir -p out && cp "$exe" out/
+          # The updater signature, when the signing secrets were present.
+          [ -f "$exe.sig" ] && cp "$exe.sig" out/ || echo "note: unsigned build (no signing secrets)"
           ( cd out && sha256sum ./* )
 
       - uses: actions/upload-artifact@v4
@@ -299,6 +314,38 @@ jobs:
       - name: Checksums
         run: ( cd dist && sha256sum Nexus_* | tee SHA256SUMS.txt )
 
+      # The self-update manifest. Generated FROM the .sig files the bundler just produced, so it
+      # can never disagree with what actually shipped — a hand-maintained manifest is a signature
+      # mismatch waiting to happen, and the client's only symptom would be a silent refusal.
+      #
+      # Windows NSIS + Linux AppImage only: .deb (amd64 and both Pi bases) is apt-managed and
+      # cannot self-update, so those platforms keep the notify-and-download path forever. Emitting
+      # a manifest entry for them would promise an update route that does not exist.
+      - name: Build the updater manifest (latest.json)
+        run: |
+          set -euo pipefail
+          ver='${{ steps.ver.outputs.ver }}'
+          tag='${{ steps.ver.outputs.tag }}'
+          base="https://github.com/kd9taw/Nexus/releases/download/$tag"
+          win=$(find dist -name '*_x64-setup.exe' -print -quit)
+          app=$(find dist -name '*_amd64.AppImage' -print -quit)
+          platforms=''
+          add() { # $1=platform key  $2=artifact path
+            [ -n "$2" ] && [ -f "$2.sig" ] || { echo "note: no signature for ${1:-?} — omitting"; return; }
+            platforms="$platforms$(printf '"%s":{"signature":"%s","url":"%s/%s"},' \
+              "$1" "$(cat "$2.sig")" "$base" "$(basename "$2")")"
+          }
+          add "windows-x86_64" "$win"
+          add "linux-x86_64"   "$app"
+          if [ -z "$platforms" ]; then
+            echo "No signed artifacts — skipping latest.json. Clients keep the notify-only path."
+            exit 0
+          fi
+          printf '{"version":"%s","notes":"See the release notes.","pub_date":"%s","platforms":{%s}}\n' \
+            "$ver" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${platforms%,}" > dist/latest.json
+          python3 -c "import json;json.load(open('dist/latest.json'));print('latest.json valid')"
+          cat dist/latest.json
+
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -307,7 +354,8 @@ jobs:
           gh release create "${{ steps.ver.outputs.tag }}" \
             --title "Nexus ${{ steps.ver.outputs.ver }}" \
             --notes-file dist/NOTES.md \
-            dist/Nexus_* dist/SHA256SUMS.txt
+            dist/Nexus_* dist/SHA256SUMS.txt \
+            $( [ -f dist/latest.json ] && echo dist/latest.json )
 
   # Second wave (operator's release order: Windows + Linux first, then Pi): attach the
   # Raspberry Pi .debs to the already-published release as their builds finish. Waits on

@@ -62,6 +62,30 @@ pub enum CwKeyerBackend {
     Serial,
 }
 
+/// How rare a spot must be before Pounce interrupts the operator.
+///
+/// This MIRRORS `propagation::pounce::PounceThreshold`. Duplicated deliberately: settings live in
+/// tempo-app, the scoring logic lives in propagation, and neither crate depends on the other —
+/// adding a whole crate dependency to share one enum is the heavier choice. The conversion lives
+/// in src-tauri (which sees both) and is pinned by a totality test there, so the two cannot drift
+/// silently. Add a variant here, add it there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PounceThreshold {
+    /// DEFAULT — no Pounce alerts until the operator opts in. The right threshold depends on how
+    /// much they still have to chase, which we cannot know at install: rare for a big total, a
+    /// siren for a small one. See `propagation::pounce::PounceThreshold`.
+    #[default]
+    Off,
+    /// An all-time-new DXCC entity only.
+    Atno,
+    /// ATNO or a new CQ zone (5BWAZ chasers).
+    AtnoOrZone,
+    /// ATNO, zone, or a new US state — the widest tier; fires often enough to become a feed
+    /// rather than an interrupt.
+    AtnoZoneOrState,
+}
+
 /// Everything the operator configures: identity, band/frequency, Field Day
 /// exchange, rig/PTT control, and network (WSJT-X UDP API + PSK Reporter).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -660,6 +684,12 @@ pub struct Settings {
     #[serde(default)]
     pub wanted_calls: Vec<String>,
 
+    /// Pounce — how rare a spot must be before Nexus interrupts you the moment it appears.
+    /// Defaults to all-time-new DXCC only: at a serious total an ATNO is genuinely rare, so the
+    /// alert stays trustworthy. An alert that cries wolf gets ignored and is then worthless.
+    #[serde(default)]
+    pub pounce_threshold: PounceThreshold,
+
     // --- confirmations (LoTW) ---
     /// LoTW account **username** (usually but not always the callsign). The
     /// password is NOT stored here — it lives in the OS keychain (set via the
@@ -1037,6 +1067,15 @@ pub struct RadioProfile {
     pub rig_model: u32,
     pub rig_model_name: String,
     pub serial_port: String,
+    /// DEDICATED serial port for RTS/DTR PTT keying, when the keyline is NOT on the CAT port.
+    /// Empty = key on `serial_port` (the common single-cable case).
+    ///
+    /// PER-RADIO because it has to be: an SO2R interface (U2R, MK2R) gives EACH radio its own
+    /// keying port. This lived ONLY on the flat `Settings` until 2026-07-25, so switching radios
+    /// moved CAT (which is per-radio) but left PTT pointing at whatever the previous radio used —
+    /// operator report: "the PTT port does not follow the selected radio. CAT works fine."
+    #[serde(default)]
+    pub ptt_serial_port: String,
     pub baud: u32,
     pub rig_conn: String,
     pub rig_addr: String,
@@ -1083,6 +1122,9 @@ pub struct RadioProfilePatch {
     pub rig_model: u32,
     pub rig_model_name: String,
     pub serial_port: String,
+    /// Dedicated RTS/DTR PTT port for THIS radio (see `RadioProfile::ptt_serial_port`).
+    #[serde(default)]
+    pub ptt_serial_port: String,
     pub baud: u32,
     pub rig_conn: String,
     pub rig_addr: String,
@@ -1140,6 +1182,7 @@ impl Default for RadioProfile {
             rig_model: 0,
             rig_model_name: "None / VOX".to_string(),
             serial_port: String::new(),
+            ptt_serial_port: String::new(),
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
@@ -1458,6 +1501,7 @@ impl Default for Settings {
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
             wanted_calls: Vec::new(),
+            pounce_threshold: PounceThreshold::default(),
             alert_cq: false,
             // New-DXCC / new-grid alerts: ON by default — these are the "new ones"
             // worth chasing (not per-decode spam, which we never alert on).
@@ -1513,6 +1557,7 @@ impl Settings {
             rig_model: self.rig_model,
             rig_model_name: self.rig_model_name.clone(),
             serial_port: self.serial_port.clone(),
+            ptt_serial_port: self.ptt_serial_port.clone(),
             baud: self.baud,
             rig_conn: self.rig_conn.clone(),
             rig_addr: self.rig_addr.clone(),
@@ -1682,6 +1727,7 @@ impl Settings {
         self.rig_model = p.rig_model;
         self.rig_model_name = p.rig_model_name;
         self.serial_port = p.serial_port;
+        self.ptt_serial_port = p.ptt_serial_port;
         self.baud = p.baud;
         self.rig_conn = p.rig_conn;
         self.rig_addr = p.rig_addr;
@@ -1709,6 +1755,7 @@ impl Settings {
             rig_model,
             rig_model_name,
             serial_port,
+            ptt_serial_port,
             baud,
             rig_conn,
             rig_addr,
@@ -1727,6 +1774,7 @@ impl Settings {
             self.rig_model,
             self.rig_model_name.clone(),
             self.serial_port.clone(),
+            self.ptt_serial_port.clone(),
             self.baud,
             self.rig_conn.clone(),
             self.rig_addr.clone(),
@@ -1746,6 +1794,7 @@ impl Settings {
             p.rig_model = rig_model;
             p.rig_model_name = rig_model_name;
             p.serial_port = serial_port;
+            p.ptt_serial_port = ptt_serial_port;
             p.baud = baud;
             p.rig_conn = rig_conn;
             p.rig_addr = rig_addr;
