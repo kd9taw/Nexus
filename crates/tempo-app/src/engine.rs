@@ -2280,7 +2280,15 @@ impl Engine {
                     .map_or(self.settings.dial_mhz < 10.0, |m| {
                         m.eq_ignore_ascii_case("lsb")
                     });
-                return if lsb { "PKTLSB" } else { "PKTUSB" }.to_string();
+                // Same per-radio opt-out as Digital and RTTY-AFSK: a mic-jack interface needs
+                // PLAIN SSB here, because on that wiring a DATA submode routes TX audio to a
+                // port the interface isn't on. Off by default — see
+                // `RadioProfile::data_modes_plain_ssb`.
+                return self.settings.plain_ssb_if_configured(if lsb {
+                    "PKTLSB"
+                } else {
+                    "PKTUSB"
+                });
             }
             if let Some(m) = &self.sideband_override {
                 return m.clone();
@@ -13176,6 +13184,7 @@ mod tests {
             rig_addr: p.rig_addr.clone(),
             rigctld_port: p.rigctld_port,
             icom_native_cat: p.icom_native_cat,
+            data_modes_plain_ssb: p.data_modes_plain_ssb,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,

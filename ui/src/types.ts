@@ -1730,6 +1730,13 @@ export interface Settings {
   /** Native Icom CI-V: Nexus owns the CI-V serial port itself (real scope waveform +
    * instant dial tracking) instead of launching rigctld. Per-radio; default off. */
   icomNativeCat: boolean
+  /** Command plain SSB (USB/LSB by band) instead of the DATA submode on the soundcard modes —
+   * Digital, RTTY-AFSK and SSTV. Per radio. Off by default.
+   *
+   * ⚠️ Wiring-dependent and wrong for most rigs: on a normal setup plain SSB takes TX audio from
+   * the MIC, so the radio transmits with no RF. Correct only when the audio reaches the mic path
+   * (an interface wired into the mic jack). RTTY-FSK is unaffected. */
+  dataModesPlainSsb: boolean
   /** Antenna rotator: rotctld daemon `host:port` (empty = no rotator). */
   /** Integrated rotator: Hamlib rotator model # (0 = none) + serial port +
    * baud — Nexus launches the bundled rotctld itself, like the rig. */
@@ -2044,6 +2051,13 @@ export interface RadioProfile {
   /** Native Icom CI-V: Nexus owns the CI-V serial port itself (real scope waveform +
    * instant dial tracking) instead of launching rigctld. Per-radio; default off. */
   icomNativeCat: boolean
+  /** Command plain SSB (USB/LSB by band) instead of the DATA submode on the soundcard modes —
+   * Digital, RTTY-AFSK and SSTV. Per radio. Off by default.
+   *
+   * ⚠️ Wiring-dependent and wrong for most rigs: on a normal setup plain SSB takes TX audio from
+   * the MIC, so the radio transmits with no RF. Correct only when the audio reaches the mic path
+   * (an interface wired into the mic jack). RTTY-FSK is unaffected. */
+  dataModesPlainSsb: boolean
   audioIn: string
   audioOut: string
   txLevel: number

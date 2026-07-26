@@ -1087,6 +1087,7 @@ export interface RadioProfilePatch {
   rigAddr: string
   rigctldPort: number
   icomNativeCat: boolean
+  dataModesPlainSsb: boolean
   audioIn: string
   audioOut: string
   txLevel: number

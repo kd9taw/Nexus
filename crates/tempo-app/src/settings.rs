@@ -225,6 +225,10 @@ pub struct Settings {
     /// [`RadioProfile::icom_native_cat`]). Default off.
     #[serde(default)]
     pub icom_native_cat: bool,
+    /// Plain SSB instead of the DATA submode on the soundcard modes, for the active radio
+    /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
+    #[serde(default)]
+    pub data_modes_plain_ssb: bool,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
     /// force their mode), so this opt-out is no longer consulted by
     /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
@@ -1086,6 +1090,25 @@ pub struct RadioProfile {
     /// rig's real spectrum-scope waveform + instant transceive dial tracking. Only honored
     /// for a scope-capable Icom on a serial connection; off (default) = classic rigctld.
     pub icom_native_cat: bool,
+    /// Command PLAIN SSB (USB/LSB by band) instead of the DATA submode on the soundcard
+    /// modes — Digital (FT8/FT4/FT1), RTTY-AFSK and SSTV. Off by default: the DATA submode
+    /// is correct for the overwhelming majority of stations and is what
+    /// [`Settings::rig_mode`] forces.
+    ///
+    /// ⚠️ THIS IS WIRING-DEPENDENT, AND WRONG FOR MOST RIGS. On a normal setup the rig's
+    /// USB codec feeds only the DATA path, so plain USB/LSB takes TX audio from the MIC and
+    /// the radio transmits with **zero RF** — the "red light, no signal" failure. It is
+    /// correct only when the transmit audio actually reaches the mic path: an interface
+    /// wired into the MIC jack (several RIGblaster models), or a rig whose data port is live
+    /// in SSB.
+    ///
+    /// PER RADIO, not global, because it is a property of the CABLE — a station can run a
+    /// mic-jack interface on one rig and a data-port interface on the other.
+    ///
+    /// RTTY in FSK mode is unaffected: it commands the rig's own RTTY mode, which is neither
+    /// a DATA submode nor SSB.
+    #[serde(default)]
+    pub data_modes_plain_ssb: bool,
     // --- audio (a rig's own RX codec) ---
     pub audio_in: String,
     pub audio_out: String,
@@ -1130,6 +1153,9 @@ pub struct RadioProfilePatch {
     pub rig_addr: String,
     pub rigctld_port: u16,
     pub icom_native_cat: bool,
+    /// See `RadioProfile::data_modes_plain_ssb` — plain SSB instead of the DATA submode.
+    #[serde(default)]
+    pub data_modes_plain_ssb: bool,
     pub audio_in: String,
     pub audio_out: String,
     pub tx_level: f32,
@@ -1161,6 +1187,7 @@ impl RadioProfilePatch {
         p.rig_addr = self.rig_addr;
         p.rigctld_port = self.rigctld_port;
         p.icom_native_cat = self.icom_native_cat;
+        p.data_modes_plain_ssb = self.data_modes_plain_ssb;
         p.audio_in = self.audio_in;
         p.audio_out = self.audio_out;
         p.tx_level = self.tx_level;
@@ -1195,6 +1222,7 @@ impl Default for RadioProfile {
             rig_addr: String::new(),
             rigctld_port: 4532,
             icom_native_cat: false,
+            data_modes_plain_ssb: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -1397,6 +1425,7 @@ impl Default for Settings {
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
             icom_native_cat: false,
+            data_modes_plain_ssb: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class
@@ -1570,6 +1599,7 @@ impl Settings {
             rig_addr: self.rig_addr.clone(),
             rigctld_port: self.rigctld_port,
             icom_native_cat: self.icom_native_cat,
+            data_modes_plain_ssb: self.data_modes_plain_ssb,
             audio_in: self.audio_in.clone(),
             audio_out: self.audio_out.clone(),
             tx_level: self.tx_level,
@@ -1740,6 +1770,7 @@ impl Settings {
         self.rig_addr = p.rig_addr;
         self.rigctld_port = p.rigctld_port;
         self.icom_native_cat = p.icom_native_cat;
+        self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
         self.tx_level = p.tx_level;
@@ -1768,6 +1799,7 @@ impl Settings {
             rig_addr,
             rigctld_port,
             icom_native_cat,
+            data_modes_plain_ssb,
             audio_in,
             audio_out,
             tx_level,
@@ -1787,6 +1819,7 @@ impl Settings {
             self.rig_addr.clone(),
             self.rigctld_port,
             self.icom_native_cat,
+            self.data_modes_plain_ssb,
             self.audio_in.clone(),
             self.audio_out.clone(),
             self.tx_level,
@@ -1807,6 +1840,7 @@ impl Settings {
             p.rig_addr = rig_addr;
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
+            p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
             p.tx_level = tx_level;
@@ -2062,12 +2096,17 @@ impl Settings {
             // signal"). LSB-side keeps the RTTY convention (mark = lower audio = higher RF);
             // `rtty_reverse` flips the TONES, not the sideband. A rig with no DATA submode is
             // handled by the loop's bounded set_mode retry (tries, is rejected, gives up).
-            OperatingMode::Rtty => if self.rtty_backend.eq_ignore_ascii_case("fsk") {
-                "RTTY"
-            } else {
-                "PKTLSB"
+            // FSK is deliberately NOT run through `plain_ssb_if_configured`: it commands the
+            // rig's own RTTY mode, which is what unlocks the narrow RTTY filters and keys the
+            // shift. "Plain SSB" has no meaning there — only the AFSK (soundcard) path, which
+            // is a DATA submode for the same reason FT8 is, can be switched.
+            OperatingMode::Rtty => {
+                if self.rtty_backend.eq_ignore_ascii_case("fsk") {
+                    "RTTY".to_string()
+                } else {
+                    self.plain_ssb_if_configured("PKTLSB")
+                }
             }
-            .to_string(),
             // Digital: force the DATA submode (PKTUSB/PKTLSB → Yaesu DATA-U / Icom USB-D
             // / Kenwood DATA), USB-side by default — UNCONDITIONALLY, like Phone forces
             // SSB and CW forces CW. (No opt-out: FT8/FT4 are a data mode, and a rig
@@ -2075,10 +2114,31 @@ impl Settings {
             // retry — it tries once, the rig rejects it, and it gives up, rather than
             // leaving the rig stuck in the previous section's SSB/CW mode.) Any non-LSB
             // sideband (incl. empty/garbled) maps to the USB-side PKTUSB that FT8 uses.
-            OperatingMode::Digital => match self.sideband.trim().to_ascii_uppercase().as_str() {
-                "LSB" => "PKTLSB".to_string(),
-                _ => "PKTUSB".to_string(),
-            },
+            OperatingMode::Digital => self.plain_ssb_if_configured(
+                match self.sideband.trim().to_ascii_uppercase().as_str() {
+                    "LSB" => "PKTLSB",
+                    _ => "PKTUSB",
+                },
+            ),
+        }
+    }
+
+    /// Map a DATA submode to its plain-SSB equivalent when this radio is configured for
+    /// [`RadioProfile::data_modes_plain_ssb`]. Identity otherwise, and identity for anything
+    /// that is not a DATA submode — notably RTTY-FSK, which commands the rig's own `RTTY`
+    /// mode and has no SSB equivalent to fall back to.
+    ///
+    /// ⚠️ Read the warning on `RadioProfile::data_modes_plain_ssb` before touching this: for a
+    /// normally-wired rig, plain SSB on a soundcard mode transmits NO RF. This exists for
+    /// mic-jack interfaces, and it is off by default for everyone else.
+    pub(crate) fn plain_ssb_if_configured(&self, m: &str) -> String {
+        if !self.data_modes_plain_ssb {
+            return m.to_string();
+        }
+        match m {
+            "PKTUSB" => "USB".to_string(),
+            "PKTLSB" => "LSB".to_string(),
+            other => other.to_string(),
         }
     }
 }
@@ -2113,6 +2173,7 @@ mod tests {
             rig_addr: "192.0.2.10:4992".into(),
             rigctld_port: 4533,
             icom_native_cat: true,
+            data_modes_plain_ssb: true,
             audio_in: "USB Audio CODEC #2".into(),
             audio_out: "USB Audio CODEC #2 out".into(),
             tx_level: 0.42,
@@ -2341,6 +2402,75 @@ mod tests {
         assert!(json.contains("\"rptrOffsetOverrideHz\":1000000"), "{json}");
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.rptr_offset_override_hz, 1_000_000);
+    }
+
+    /// Operator ask 2026-07-26: run the soundcard modes in PLAIN SSB instead of the DATA
+    /// submode, per radio, staying there.
+    ///
+    /// ⚠️ This is wiring-dependent and WRONG for most rigs — on a normal setup plain SSB takes
+    /// TX audio from the MIC and the radio transmits no RF. It exists for an interface wired
+    /// into the mic jack (several RIGblaster models). Hence: OFF by default, and per RADIO,
+    /// because it is a property of the cable and a station can be wired differently per rig.
+    #[test]
+    fn plain_ssb_opt_out_covers_every_soundcard_mode_and_defaults_off() {
+        let mut s = Settings::default();
+        s.dial_mhz = 14.074;
+
+        // DEFAULT: unchanged. The DATA submode is still forced everywhere.
+        assert!(!s.data_modes_plain_ssb, "must stay off by default");
+        s.operating_mode = OperatingMode::Digital;
+        assert_eq!(s.rig_mode(), "PKTUSB");
+        s.operating_mode = OperatingMode::Rtty;
+        s.rtty_backend = "afsk".into();
+        assert_eq!(s.rig_mode(), "PKTLSB");
+
+        // OPTED IN: the DATA submode becomes its plain-SSB equivalent.
+        s.data_modes_plain_ssb = true;
+        s.operating_mode = OperatingMode::Digital;
+        assert_eq!(s.rig_mode(), "USB", "Digital: PKTUSB → USB");
+        s.sideband = "LSB".into();
+        assert_eq!(s.rig_mode(), "LSB", "Digital LSB-side: PKTLSB → LSB");
+        s.operating_mode = OperatingMode::Rtty;
+        assert_eq!(s.rig_mode(), "LSB", "RTTY-AFSK: PKTLSB → LSB");
+
+        // ⚠️ RTTY in FSK is NOT touched: it commands the rig's own RTTY mode, which is what
+        // keys the shift and unlocks the narrow RTTY filters. "Plain SSB" is meaningless there,
+        // and swapping it would silently break true FSK for anyone who enables this.
+        s.rtty_backend = "fsk".into();
+        assert_eq!(s.rig_mode(), "RTTY", "FSK keeps the rig's RTTY mode");
+
+        // Phone and CW are their own policies and must be untouched by a DATA-mode opt-out.
+        s.operating_mode = OperatingMode::Phone;
+        s.sideband = String::new();
+        assert_eq!(s.rig_mode(), "USB");
+        s.operating_mode = OperatingMode::Cw;
+        assert_eq!(s.rig_mode(), "CW");
+    }
+
+    /// The setting lives on the RADIO, so switching rigs must switch the behaviour with it —
+    /// a mic-jack interface on one rig and a data-port interface on the other is the whole
+    /// reason it is per-radio rather than global.
+    #[test]
+    fn plain_ssb_opt_out_follows_the_active_radio() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let r2 = s.add_radio_profile();
+        let r1 = s.active_radio;
+
+        // Radio 1: mic-jack interface → plain SSB. Radio 2: normal data port → DATA.
+        // (`active_radio` is set directly + synced, the idiom the other radio tests use.)
+        s.data_modes_plain_ssb = true;
+        s.sync_active_from_flat();
+        s.active_radio = r2;
+        s.data_modes_plain_ssb = false;
+        s.sync_active_from_flat();
+
+        s.active_radio = r1;
+        s.sync_flat_from_active();
+        assert!(s.data_modes_plain_ssb, "radio 1 keeps its plain-SSB wiring");
+        s.active_radio = r2;
+        s.sync_flat_from_active();
+        assert!(!s.data_modes_plain_ssb, "radio 2 keeps the DATA submode");
     }
 
     #[test]

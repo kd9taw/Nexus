@@ -246,6 +246,7 @@ function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     rigAddr: s.rigAddr ?? '',
     rigctldPort: s.rigctldPort ?? 4532,
     icomNativeCat: s.icomNativeCat ?? false,
+    dataModesPlainSsb: s.dataModesPlainSsb ?? false,
     audioIn: s.audioIn ?? '',
     audioOut: s.audioOut ?? '',
     txLevel: s.txLevel ?? 1,
@@ -2688,6 +2689,34 @@ export function SettingsPanel({
                   autoComplete="off"
                 />
                 <span className="settings-hint">Port Nexus launches rigctld on.</span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">Data modes use plain SSB</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.dataModesPlainSsb ?? false}
+                  className={`toggle${form.dataModesPlainSsb ? ' on' : ''}`}
+                  onClick={() => updateBool('dataModesPlainSsb', !form.dataModesPlainSsb)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">
+                  <strong>Leave this off unless you know you need it.</strong> Nexus normally puts
+                  the radio in its DATA submode (DATA-U / USB-D / PKTUSB) for FT8, FT4, RTTY-AFSK
+                  and SSTV, because on most rigs that is the only mode where the USB codec reaches
+                  the transmitter. Turn this on and Nexus commands plain{' '}
+                  <strong>USB/LSB</strong> for those modes instead, and stays there — through band
+                  changes and when you call a station.
+                  {' '}
+                  Only correct if your transmit audio goes in the <strong>microphone</strong> path,
+                  as with an interface wired to the mic jack (some RIGblaster models). On a rig
+                  where the codec feeds only the data port, plain SSB takes audio from the mic and
+                  the radio transmits <strong>no RF at all</strong> — a red TX light and nothing on
+                  the air. <strong>Per radio</strong>, since it depends on how that rig is cabled.
+                  True FSK RTTY is unaffected — it keeps the rig's own RTTY mode.
+                </span>
               </label>
 
               {form.rigConn !== 'network' &&
