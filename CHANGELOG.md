@@ -5,6 +5,53 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.5] — unreleased
+
+### TempoFast decoding on a real link
+The first two-station Tempo QSO turned up a fault that had been there all along. TempoFast's
+decoder cannot look for a signal that arrives EARLY — its timing search starts at zero and goes
+forward. FT8 and FT4 both search backwards as well, which is why they were unaffected on the same
+radios.
+
+TempoFast was also the one mode that started transmitting at the very beginning of its slot,
+sitting exactly on that limit with no room to spare. Any ordinary timing error — the other
+station's PC a quarter-second off UTC was enough — pushed frames off the edge, where they are not
+merely weak but invisible. About half of all frames were lost in each direction, so short messages
+arrived and longer ones never finished assembling.
+
+TempoFast now starts transmitting 0.4 s into its slot, the same way FT8 and FT4 do, which leaves
+room for normal clock error on both sides. **Both stations need this version** for a Tempo
+conversation to benefit.
+
+If your Tempo contacts have been unreliable, check the clock reading in the top bar at BOTH ends —
+a few tenths of a second is invisible to FT8 and was fatal to Tempo.
+
+### Chat messages that never fully arrive
+A Tempo message is split into 10-character pieces and reassembled. If a piece never arrived, the
+message used to wait for it forever: nothing appeared in the conversation, and nothing said why —
+you could see the pieces in Band Activity while the chat window stayed empty.
+
+Now the conversation shows what did arrive, marked **"2 of 3 received"**. Half a message tells you
+which half to ask about.
+
+Two stations sending at the same time could also have their pieces mixed into one garbled message,
+because messages were matched by number without checking who sent them. They are now matched per
+station.
+
+### Pounce: Work is always available
+The Work button used to disable itself and explain why — "In a QSO with…" — which replaced the very
+button you were reaching for. Whether to leave your current contact to chase a new one is your
+call, so the button is always there. It moves the radio and the mode over.
+
+### Waterfall: right-click sets transmit
+JTDX's mapping: left click sets receive, right click sets transmit. Shift+click still sets transmit
+too, so both conventions work.
+
+### Settings
+The collapsible "Advanced" sections were styled like plain labels and easy to walk straight past.
+They now look like controls, with a show/hide affordance — the per-radio data-mode setting lives
+inside one of them.
+
 ## [0.19.4] — 2026-07-26
 
 ### Worked stations stop showing as needed
