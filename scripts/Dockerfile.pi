@@ -44,7 +44,16 @@ COPY . .
 # ever need a different tree, pass `--build-arg WX=/opt/wsjtx-source` and COPY it there.)
 # Pi OS is Debian → ship the .deb only (arm64 AppImage tooling is flaky under emulation).
 # sed only the container's copy, so the host's running build is untouched.
+#
+# ALSO turn OFF createUpdaterArtifacts for this build. With a `pubkey` configured, Tauri HARD
+# ERRORS when the private key is absent — "A public key has been found, but no private key" —
+# and the signing secrets are deliberately not passed into this container. The .deb is
+# apt-managed and can never self-update, so there is nothing here to sign; without this sed the
+# .deb builds successfully and then the run fails at the signing step (broke the 0.18.0 Pi debs
+# and both CI Pi jobs). Do not "fix" this by handing the container the signing key: a key that
+# does not need to exist in a container should not be in one.
 RUN sed -i 's/--bundles deb,appimage/--bundles deb/' scripts/build-linux.sh \
+    && sed -i 's/"createUpdaterArtifacts": true/"createUpdaterArtifacts": false/' src-tauri/tauri.conf.json \
     && ./scripts/build-linux.sh
 RUN mkdir /out && cp src-tauri/target/release/bundle/deb/*.deb /out/
 
