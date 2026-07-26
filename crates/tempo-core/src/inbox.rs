@@ -50,6 +50,12 @@ pub struct ChatMessage {
     pub slot: u64,
     /// True if `to` matched our callsign.
     pub directed_to_me: bool,
+    /// `Some((have, tot))` when this is a message that NEVER fully arrived — the chunks that
+    /// did land, surfaced so the thread shows "2 of 3 received" instead of the message simply
+    /// never appearing. A chat client does not silently swallow a message
+    /// ([[feedback-tempo-chat-trillian]]); the operator hit exactly that on the first
+    /// two-station QSO, seeing fragments in band activity and an empty chat window.
+    pub incomplete: Option<(usize, usize)>,
 }
 
 /// Processes decodes into a roster + chat messages.
@@ -161,6 +167,7 @@ impl Inbox {
                     text: body,
                     slot,
                     directed_to_me: false,
+                    incomplete: None,
                 }
             }
             _ => self.directed_message(text, slot),
@@ -200,7 +207,39 @@ impl Inbox {
             text,
             slot,
             directed_to_me,
+            incomplete: None,
         }
+    }
+
+    /// Retire chunk sets that never completed, pushing each into the conversation as a visibly
+    /// INCOMPLETE message rather than letting it vanish.
+    ///
+    /// A chat client never silently swallows a message ([[feedback-tempo-chat-trillian]]). On the
+    /// first two-station QSO the operator watched fragments arrive in band activity while the chat
+    /// window stayed empty and nothing explained it — the set was one chunk short and buffered
+    /// forever. Now it surfaces with what did arrive and a "2 of 3" marker.
+    ///
+    /// `max_age` is the caller's, not a constant here: a chunk can legitimately land many cycles
+    /// late after a lost burst, so the sender's whole retry budget is the floor.
+    pub fn sweep_incomplete(&mut self, now_slot: u64, max_age: u64) {
+        for inc in self.reasm.age_out(now_slot, max_age) {
+            let from = (!inc.from.is_empty()).then(|| inc.from.clone());
+            let directed_to_me = self.current_to.as_deref() == Some(self.mycall.as_str());
+            self.messages.push(ChatMessage {
+                from,
+                to: self.current_to.clone(),
+                text: inc.text,
+                slot: now_slot,
+                directed_to_me,
+                incomplete: Some((inc.have, inc.tot)),
+            });
+        }
+    }
+
+    /// Chunk sets still arriving — for a live "incomplete (2 of 3)" indicator while the sender
+    /// is still retrying, before `sweep_incomplete` gives up on them.
+    pub fn pending_incomplete(&self) -> Vec<crate::text::Incomplete> {
+        self.reasm.pending()
     }
 
     /// Messages directed specifically to me.

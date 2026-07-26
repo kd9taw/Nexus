@@ -95,6 +95,17 @@ export function MessageBubble({ message, delivery, onResend }: Props) {
         )}
         <span className="bubble-text">{message.text}</span>
         <span className="bubble-meta">
+          {/* An inbound message that never fully arrived. Showing the fragments that DID land,
+              plainly marked, beats the old behaviour: the message never appeared at all while
+              its fragments sat visible in band activity, with nothing explaining the gap. */}
+          {message.incomplete && (
+            <span
+              className="bubble-incomplete"
+              title={`Only ${message.incomplete[0]} of ${message.incomplete[1]} parts of this message were received — the rest never arrived`}
+            >
+              ⚠ {message.incomplete[0]} of {message.incomplete[1]} received
+            </span>
+          )}
           {sub && <span className="bubble-tech">{sub}</span>}
           {message.outbound && delivery && (
             <DeliveryTicks stage={delivery} to={message.to} attempts={message.attempts} />

@@ -338,6 +338,7 @@ impl AppState {
             freq_hz: None,
             dt_sec: None,
             tier: Some(self.link.tier),
+            incomplete: None,
             delivered: false, // flips true when the recipient's id-bearing ACK arrives
             attempts: 0,      // bumped per release ("sending k/N")
             confirmed: false,
@@ -367,6 +368,7 @@ impl AppState {
             freq_hz: None,
             dt_sec: None,
             tier: Some(tier),
+            incomplete: None,
             delivered: false, // broadcasts have no per-recipient ACK
             attempts: 0,
             confirmed: false,
@@ -606,6 +608,14 @@ impl AppState {
         }
 
         self.inbox.observe(decodes, slot);
+        // Retire chunk sets that never completed, so a message one chunk short surfaces as
+        // "2 of 3 received" instead of vanishing (the operator watched exactly that happen on
+        // the first two-station QSO). Generous by design: a sender's full retry budget is ~3
+        // cycles and a burst can be several frames, so a late chunk arriving many slots after
+        // its siblings is NORMAL. Ageing out early would discard a set about to complete —
+        // hence a whole-minutes floor rather than a tight one.
+        const INCOMPLETE_MAX_AGE_SLOTS: u64 = 60;
+        self.inbox.sweep_incomplete(slot, INCOMPLETE_MAX_AGE_SLOTS);
         // ACK obligations the inbox just incurred: each directed-to-me message we received
         // (incl. a heard resend) → owe an id-bearing ACK to its sender. Bounded so a long
         // monitor session can't grow the list. (An incoming ACK is consumed by the inbox as
@@ -737,6 +747,7 @@ impl AppState {
                 freq_hz: None,
                 dt_sec: None,
                 tier: Some(self.link.tier),
+                incomplete: m.incomplete,
                 delivered: false,
                 attempts: 0,
                 confirmed: false,
@@ -1428,6 +1439,7 @@ mod tests {
             freq_hz: None,
             dt_sec: None,
             tier: Some(tier),
+            incomplete: None,
             delivered: false,
             attempts: 0,
             confirmed: false,

@@ -605,6 +605,10 @@ export interface ChatMessage {
   tier: Tier | null
   /** Outbound directed message the recipient acknowledged (an RR73 ACK came back) —
    * a REAL delivery confirmation, not the "a later reply implies they heard us" guess. */
+  /** `[have, tot]` for an INBOUND message that never fully arrived — the chunks that did land.
+   * The thread shows what came through and "2 of 3 received", instead of the message simply
+   * never appearing. A chat client does not silently swallow a message. */
+  incomplete?: [number, number] | null
   delivered?: boolean
   /** Outbound directed message still HELD in the store-and-forward queue — never yet
    * released on the air, because the recipient hasn't been heard. Cleared on its first

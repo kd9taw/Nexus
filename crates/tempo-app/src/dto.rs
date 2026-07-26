@@ -233,6 +233,11 @@ pub struct ChatMessage {
     pub freq_hz: Option<f32>,
     pub dt_sec: Option<f32>,
     pub tier: Option<Tier>,
+    /// `Some((have, tot))` for an INBOUND message that never fully arrived — the chunks that
+    /// did land. The thread shows "2 of 3 received" rather than the message never appearing at
+    /// all. A chat client does not silently swallow a message.
+    #[serde(default)]
+    pub incomplete: Option<(usize, usize)>,
     /// For an OUTBOUND directed message: the recipient acknowledged receipt (an id-bearing
     /// RR73 ACK came back). Drives a REAL "Delivered ✓" instead of the old heuristic.
     #[serde(default)]

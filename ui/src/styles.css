@@ -4640,6 +4640,14 @@ select optgroup {
   font-size: 10px;
   opacity: 0.7;
 }
+/* An inbound message that never fully arrived. Warn-coloured so it reads as "this is not the
+   whole message" at a glance, without shouting like an error — nothing went wrong on this end. */
+.bubble-incomplete {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--warn, #e8a33d);
+  white-space: nowrap;
+}
 .bubble.theirs .bubble-tech {
   color: var(--text-dim);
   opacity: 1;
