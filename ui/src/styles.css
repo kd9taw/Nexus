@@ -17036,6 +17036,14 @@ html[data-panel='needed'] {
 /* The one-line recall (operating cockpits). The full card lives in the Logbook; here it must
    cost a single row no matter what the callbook returns, so it can never push the operating
    panes off screen. */
+/* Compact recall = the one-line header PLUS a bounded history. The whole point of compact is
+   that it cannot shove the cockpit around, so the container never grows: the history scrolls
+   inside a fixed ceiling instead of pushing the log form down the screen. */
+.recall-compact {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 .recall-line {
   display: flex;
   align-items: baseline;
@@ -17045,6 +17053,27 @@ html[data-panel='needed'] {
   font-size: var(--fs-label);
   white-space: nowrap;
   overflow: hidden;
+}
+/* ~4 rows visible, the rest scrolls. Deep enough to answer "when did I last work them, and on
+   what?" at a glance; shallow enough that a station worked 40 times cannot take the pane. */
+.recall-line-log {
+  max-height: 5.5em;
+  overflow-y: auto;
+  min-width: 0;
+  border-top: 1px solid var(--border-soft, #1b2433);
+  margin-top: 2px;
+  padding-top: 2px;
+}
+.recall-line-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.recall-line-row .recall-log-bm {
+  color: var(--text-faint);
 }
 .recall-line-call { font-weight: 800; letter-spacing: 0.03em; }
 .recall-line-hist { color: var(--text-dim); }

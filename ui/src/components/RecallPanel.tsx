@@ -18,12 +18,18 @@ interface Props {
   newEntity?: boolean
   newBandSlot?: boolean
   newModeSlot?: boolean
-  /** ONE LINE instead of the full card (operator choice, 2026-07-25 — Phone).
+  /** A one-line header + a bounded history, instead of the full card (operator choice,
+   * 2026-07-25 — Phone and CW cockpits).
    *
    * The card appears the moment you type 3 characters of a call, and in a cockpit it was taking
-   * the height the operating panes needed. Compact keeps the part you glance at mid-contact —
-   * who they are, and whether they are new or a dupe — and drops the avatar, the location block,
-   * the note and the previous-contacts list. Those all remain in the Logbook. */
+   * the height the operating panes needed. Compact drops what made it tall — avatar/photo,
+   * location block, distance/bearing, the note — and keeps what you glance at mid-contact: who
+   * they are, whether they are new or a dupe, and WHEN you last worked them on what band.
+   *
+   * ⚠️ The previous-contacts list is NOT one of the things compact drops. It was, briefly, and
+   * the operator reported it straight away (2026-07-26): a bare "worked 3×" answers "have I?"
+   * but not the question actually being asked on air. It is bounded (a fixed-height scroller)
+   * rather than removed. */
   compact?: boolean
 }
 
@@ -74,27 +80,48 @@ export function RecallPanel({ call, band, name, qth, grid, country, image, myGri
   if (compact) {
     // Order matters: the CALL is what you are reading back on air, so it leads. The dupe/new
     // flags come next because they change what you do. Name is last — nice to have, not a
-    // decision. Everything is one row; nothing wraps to a second line.
+    // decision. The header is one row; nothing wraps to a second line.
+    //
+    // ⚠️ The PREVIOUS-CONTACTS list below is NOT optional detail (operator report 2026-07-26:
+    // "no longer showing previous contacts for a CS entered and resolved"). Compact originally
+    // collapsed the whole history to a "worked 3×" count, which answers "have I?" but not the
+    // question actually being asked on air — WHEN, on WHAT BAND, and what did we exchange.
+    // It is back, but BOUNDED: a fixed-height scroller with no avatar, photo, QTH, geo or note
+    // block. Those are what made the full card shove the cockpit around, which is why compact
+    // exists; the history never was.
     return (
-      <div className="recall-line" title={`${cu}${nm ? ` · ${nm}` : ''}`}>
-        <span className="recall-line-call mono">{cu}</span>
-        {hist.dupeThisBand && band && (
-          <span className="recall-badge dupe" title={`Already worked on ${band} — logging now would be a dupe`}>
-            DUPE {band}
-          </span>
+      <div className="recall-compact">
+        <div className="recall-line" title={`${cu}${nm ? ` · ${nm}` : ''}`}>
+          <span className="recall-line-call mono">{cu}</span>
+          {hist.dupeThisBand && band && (
+            <span className="recall-badge dupe" title={`Already worked on ${band} — logging now would be a dupe`}>
+              DUPE {band}
+            </span>
+          )}
+          {newEntity && (
+            <span className="recall-badge need" title="Worth working — a new one for your log">
+              NEW ONE
+            </span>
+          )}
+          {!hist.dupeThisBand && hist.count > 0 && (
+            <span className="recall-line-hist" title={`${hist.count} prior contact(s)`}>
+              worked {hist.count}×
+            </span>
+          )}
+          {hist.count === 0 && <span className="recall-line-hist">first contact</span>}
+          {nm && <span className="recall-line-name">{nm}</span>}
+        </div>
+        {prior.length > 0 && (
+          <div className="recall-line-log" role="list" aria-label={`Previous contacts with ${cu}`}>
+            {prior.map((q, i) => (
+              <div className="recall-line-row" role="listitem" key={`${q.whenUnix}-${i}`}>
+                <span className="recall-log-date mono">{fmtDate(q.whenUnix)}</span>
+                <span className="recall-log-bm">{[q.band, q.mode].filter(Boolean).join(' ')}</span>
+                <span className="recall-log-rst mono">{rstPair(q)}</span>
+              </div>
+            ))}
+          </div>
         )}
-        {newEntity && (
-          <span className="recall-badge need" title="Worth working — a new one for your log">
-            NEW ONE
-          </span>
-        )}
-        {!hist.dupeThisBand && hist.count > 0 && (
-          <span className="recall-line-hist" title={`${hist.count} prior contact(s)`}>
-            worked {hist.count}×
-          </span>
-        )}
-        {hist.count === 0 && <span className="recall-line-hist">first contact</span>}
-        {nm && <span className="recall-line-name">{nm}</span>}
       </div>
     )
   }
