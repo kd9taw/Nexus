@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.19.0] — unreleased
+## [0.19.1] — unreleased
 
 ### Worked stations stop showing as needed
 Working a station in a US state you had already worked left it lit in the Needed roster with its
@@ -38,6 +38,16 @@ FT-857, FT-817/818, IC-7100, IC-705, Xiegu G90 and X6100, TS-480.
 
 Keying with no rig model set now says outright that there is no CAT and the radio will not follow
 the band, instead of reporting a bare success.
+
+### Map fixes
+Opening sectors on the 3-D globe tore into green spikes that stabbed through the Earth. Nothing in
+that layer draws curved lines, so the wedge's two long straight edges cut through the sphere and
+came back out the other side — on a 3000 km opening they passed about 78 km under the surface. The
+wedge is now drawn in short steps that follow the curve. The 2-D map was never affected, because a
+straight line on a flat map is straight.
+
+The POTA/SOTA map opened as a flat world map while Chase DX, Ragchew and 6m/VHF all opened as
+globes. It is a globe now, like the rest.
 
 ### Fixes
 - The keying port of a radio you were not currently operating could be edited and silently not
