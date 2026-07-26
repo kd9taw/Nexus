@@ -106,13 +106,16 @@ pub fn parse_chunk(frame: &str) -> Option<(char, usize, usize, String)> {
     Some((id, seq, tot, cs[HEADER..].iter().collect()))
 }
 
-/// One message being reassembled: how many chunks it needs, the chunks so far, and the slot its
-/// most recent chunk arrived in (for ageing out a set that never completes).
+/// One message being reassembled: how many chunks it needs, the chunks so far, the slot its most
+/// recent chunk arrived in (for ageing out a set that never completes), and who we believe sent it.
 #[derive(Debug)]
 struct Partial {
     tot: usize,
     parts: BTreeMap<usize, String>,
     last_slot: u64,
+    /// Bound from the talker context at the FIRST chunk of this id and never revised — see the
+    /// warning on [`Reassembler`].
+    from: String,
 }
 
 /// A chunk set that arrived but never completed — surfaced so the operator sees
@@ -129,15 +132,25 @@ pub struct Incomplete {
 
 /// Accumulates chunk frames and yields complete messages.
 ///
-/// ⚠️ KEYED BY (SENDER, id), NOT id ALONE. Chunk ids only cycle `A..Z`, so a bare-`id` map
-/// MERGES two stations' chunks when both happen to be sending message `B` — one garbled message
-/// out of two real ones — and also merges a stale partial `B` with a NEW `B` 26 messages later.
-/// Invisible with a single peer on a quiet band; a real corruption path on a busy opening with
-/// several Tempo stations. Pass `""` when the sender is unknown; that is its own bucket rather
-/// than a wildcard that would collide with everyone.
+/// ⚠️ KEYED BY `id` ALONE, DELIBERATELY. Sender attribution is recorded at the FIRST chunk of a
+/// message and never revised — it is for display, NOT for routing.
+///
+/// This was briefly keyed on `(sender, id)` to stop two stations on the same id from merging.
+/// That is WRONG here and was reverted before it ever shipped: a chunk carries no callsign, so
+/// the sender can only come from the talker context, and that context is updated by ANY standard
+/// frame from ANY station. Chunks arrive one per own-parity slot (~8 s apart at TempoFast), so on
+/// a live band another station's frame lands between them and moves the context — chunk 1 buckets
+/// under one call, chunk 2 under another, and the message NEVER completes. That breaks the common
+/// case on any active band to fix a rare one.
+///
+/// KNOWN LIMIT, accepted: two stations mid-message on the SAME id merge into one garbled message,
+/// and a stale partial can merge with a new message reusing that id 26 messages later. Ids cycle
+/// `A..Z`, so this needs several simultaneous Tempo stations to bite. The real fix is a sender
+/// hash IN THE FRAME — see the Tempo header-packing item, which is already reworking the 3-byte
+/// header and is where the bits for it would come from.
 #[derive(Debug, Default)]
 pub struct Reassembler {
-    buffers: HashMap<(String, char), Partial>,
+    buffers: HashMap<char, Partial>,
 }
 
 impl Reassembler {
@@ -147,13 +160,17 @@ impl Reassembler {
 
     /// Feed a frame heard from `from` in `slot`. Returns `Some(message)` when a chunk set is
     /// complete, `None` if the frame is not a chunk or the message is still partial.
+    ///
+    /// `from` is recorded on the FIRST chunk of an id and ignored afterwards: the talker context
+    /// drifts between a message's chunks on a live band, so routing on it would split the message
+    /// (see the warning on [`Reassembler`]).
     pub fn accept(&mut self, from: &str, frame: &str, slot: u64) -> Option<String> {
         let (id, seq, tot, payload) = parse_chunk(frame)?;
-        let key = (from.to_string(), id);
-        let entry = self.buffers.entry(key.clone()).or_insert(Partial {
+        let entry = self.buffers.entry(id).or_insert_with(|| Partial {
             tot,
             parts: BTreeMap::new(),
             last_slot: slot,
+            from: from.to_string(),
         });
         entry.tot = tot;
         entry.last_slot = slot;
@@ -162,7 +179,7 @@ impl Reassembler {
         // set can arrive 2-then-1 and still assemble.
         entry.parts.insert(seq, payload);
         if entry.parts.len() == tot {
-            let done = self.buffers.remove(&key).unwrap();
+            let done = self.buffers.remove(&id).unwrap();
             Some(done.parts.into_values().collect::<Vec<_>>().join(" "))
         } else {
             None
@@ -180,19 +197,19 @@ impl Reassembler {
     /// legitimately arrive many cycles later when an earlier burst was lost. Ageing out early
     /// would discard a set that was about to complete.
     pub fn age_out(&mut self, now_slot: u64, max_age: u64) -> Vec<Incomplete> {
-        let stale: Vec<(String, char)> = self
+        let stale: Vec<char> = self
             .buffers
             .iter()
             .filter(|(_, p)| now_slot.saturating_sub(p.last_slot) > max_age)
-            .map(|(k, _)| k.clone())
+            .map(|(k, _)| *k)
             .collect();
         stale
             .into_iter()
-            .filter_map(|k| {
-                let p = self.buffers.remove(&k)?;
+            .filter_map(|id| {
+                let p = self.buffers.remove(&id)?;
                 Some(Incomplete {
-                    from: k.0,
-                    id: k.1,
+                    from: p.from,
+                    id,
                     have: p.parts.len(),
                     tot: p.tot,
                     text: p.parts.into_values().collect::<Vec<_>>().join(" "),
@@ -207,12 +224,12 @@ impl Reassembler {
         let mut v: Vec<(u64, Incomplete)> = self
             .buffers
             .iter()
-            .map(|(k, p)| {
+            .map(|(id, p)| {
                 (
                     p.last_slot,
                     Incomplete {
-                        from: k.0.clone(),
-                        id: k.1,
+                        from: p.from.clone(),
+                        id: *id,
                         have: p.parts.len(),
                         tot: p.tot,
                         text: p.parts.values().cloned().collect::<Vec<_>>().join(" "),
@@ -276,34 +293,48 @@ mod tests {
         assert_eq!(out.as_deref(), Some("ONE TWO THREE FOUR FIVE SIX SEVEN"));
     }
 
-    // ⚠️ THE CORRUPTION THIS KEY EXISTS TO PREVENT. Chunk ids only cycle 'A'..'Z', so on a busy
-    // band two stations are eventually mid-message on the SAME id. Keyed on id alone their
-    // chunks merged into one garbled message — and a stale partial also merged with a NEW
-    // message reusing that id 26 messages later.
+    // ⚠️ THE REGRESSION THIS TEST EXISTS TO PREVENT — caught before shipping, 2026-07-26.
+    //
+    // Reassembly was briefly keyed on (sender, id) to stop two stations on the same id merging.
+    // A chunk carries NO callsign, so the sender can only come from the talker context — and
+    // that context moves on ANY standard frame from ANY station. Chunks arrive ~8 s apart at
+    // TempoFast, so on a live band another station transmits in between, the context changes,
+    // and the message splits across two buckets and NEVER completes.
+    //
+    // This test walks that exact sequence: the attributed sender CHANGES mid-message. The
+    // message must still assemble. Routing on a drifting context breaks the common case on any
+    // active band in order to fix a rare one.
     #[test]
-    fn two_stations_on_the_same_id_never_merge() {
-        let a = chunk("ALPHA BRAVO CHARLIE DELTA", 'B');
-        let b = chunk("ZULU YANKEE XRAY WHISKEY", 'B');
-        assert!(a.len() > 1 && b.len() > 1, "need multi-chunk messages");
+    fn a_message_still_assembles_when_the_talker_context_drifts() {
+        let frames = chunk("YOU ARE THE MAN SETH", 'B');
+        assert_eq!(frames.len(), 3, "need a multi-chunk message");
         let mut r = Reassembler::new();
 
-        // Interleave the two stations, as a shared band actually delivers them.
-        let mut from_a = None;
-        let mut from_b = None;
-        for i in 0..a.len().max(b.len()) {
-            if let Some(f) = a.get(i) {
-                if let Some(full) = r.accept("N9UM", f, i as u64) {
-                    from_a = Some(full);
-                }
-            }
-            if let Some(f) = b.get(i) {
-                if let Some(full) = r.accept("W1ABC", f, i as u64) {
-                    from_b = Some(full);
-                }
-            }
-        }
-        assert_eq!(from_a.as_deref(), Some("ALPHA BRAVO CHARLIE DELTA"));
-        assert_eq!(from_b.as_deref(), Some("ZULU YANKEE XRAY WHISKEY"));
+        // Chunk 1 while N9UM is the identified talker.
+        assert_eq!(r.accept("N9UM", &frames[0], 10), None);
+        // A third station transmits in between and becomes the "current" talker.
+        assert_eq!(r.accept("W1ABC", &frames[1], 12), None);
+        // And another. The message is still N9UM's and must still complete.
+        let done = r.accept("K2DEF", &frames[2], 14);
+        assert_eq!(done.as_deref(), Some("YOU ARE THE MAN SETH"));
+        assert!(r.pending().is_empty());
+    }
+
+    // Attribution is bound at the FIRST chunk and never revised, so an incomplete set still
+    // names the station that actually started it rather than whoever last transmitted.
+    #[test]
+    fn attribution_binds_to_the_first_chunk_not_the_latest_frame() {
+        let frames = chunk("YOU ARE THE MAN SETH", 'B');
+        let mut r = Reassembler::new();
+        r.accept("N9UM", &frames[0], 10);
+        r.accept("W1ABC", &frames[1], 12); // context drifted; message is still N9UM's
+        let aged = r.age_out(100, 30);
+        assert_eq!(aged.len(), 1);
+        assert_eq!(
+            aged[0].from, "N9UM",
+            "credited to whoever started the message"
+        );
+        assert_eq!((aged[0].have, aged[0].tot), (2, 3));
     }
 
     // A message that never completes must not sit in the buffer forever with nothing said. The
