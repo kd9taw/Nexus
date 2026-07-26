@@ -338,6 +338,14 @@ impl Mode for Ft4Mode {
     }
 }
 
+/// Slot lead-in for FT1, in seconds — how far into its 4 s T/R period the tones start.
+///
+/// Exists because FT1's decoder clamps its timing search at `istart >= 0` (see
+/// `Ft1Mode::gen_wave`), so a signal at t=0 has no early-side margin at all. 0.4 s buys that
+/// margin while still fitting inside `gen_wave`'s fixed 48000-sample buffer, whose 0.464 s of
+/// trailing zeros is the entire budget available to shift into.
+const FT1_LEAD_IN_SECS: f32 = 0.4;
+
 /// **FT1** (KD9TAW) — 4 s T/R, 4-CPM turbo, with IR-HARQ. Tempo's native mode.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Ft1Mode;
@@ -358,7 +366,46 @@ impl Mode for Ft1Mode {
         tempo_fast::encode(msg)
     }
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
-        tempo_fast::gen_wave(itone, fsample, f0)
+        // ⚠️ SLOT LEAD-IN — an on-air fix, not cosmetics. Read this before removing it.
+        //
+        // FT1's decoder cannot search for an EARLY signal at all. `tempofast_decode.f90`'s
+        // coarse sweep is `do istart=0,200,4` and its fine pass is
+        // `do istart=max(0,ibest_all-5),…` — both hard-clamped at zero. The two modes that work
+        // both search negative: FT8's `sync8.f90` declares `sync2d(NH1,-JZ:JZ)` and sweeps
+        // `do j=-JZ,+JZ` about a nominal +0.5 s start, and FT4's `ft4_decode.f90` starts at
+        // `ibmin=-344`.
+        //
+        // Until now FT1 alone returned the raw waveform, putting its first symbol at sample 0 —
+        // sitting exactly ON that clamp, with ZERO margin on the early side. Any ordinary
+        // timing error in the early direction (a peer's PC a few hundred ms off UTC, audio-clock
+        // rate error, keying jitter) fell straight off a cliff: measured 0/5 decodes at just
+        // −50 ms early, against 5/5 at 0 and 5/5 out to +500 ms.
+        //
+        // On air (KD9TAW ↔ N9UM, 6 m, 2026-07-26) that lost roughly half of all frames in each
+        // direction — enough that single-frame messages got through and multi-frame ones never
+        // reassembled. FT8 was unaffected on the same radios, because its symmetric search
+        // absorbs the same error.
+        //
+        // 0.4 s, NOT the 0.5 s FT8/FT4 use: `tempo_fast::gen_wave` returns a FIXED
+        // NMAX = 48000-sample (4.000 s) buffer holding 3.536 s of tones plus 0.464 s of tail
+        // zeros. 0.4 s (4800 samples) shifts into that tail with 771 samples to spare; 0.5 s
+        // would overrun it. Shifting WITHIN the buffer — rather than prepending, as FT8/FT4 do —
+        // keeps the length at exactly 4.000 s, which matters because the PTT hold is sized from
+        // `w.len()` (`tempo-audio/src/slot.rs`) and FT1's over already fills its whole T/R period.
+        let tones = tempo_fast::gen_wave(itone, fsample, f0);
+        let lead = (FT1_LEAD_IN_SECS * fsample).round().max(0.0) as usize;
+        if lead == 0 || lead >= tones.len() {
+            return tones;
+        }
+        let keep = tones.len() - lead;
+        debug_assert!(
+            tones[keep..].iter().all(|&s| s == 0.0),
+            "the lead-in shift must only ever push trailing SILENCE off the end — if this trips, \
+             gen_wave's tail-zero budget shrank and the signal is being clipped"
+        );
+        let mut wave = vec![0f32; tones.len()];
+        wave[lead..].copy_from_slice(&tones[..keep]);
+        wave
     }
     fn decode_frame(
         &self,

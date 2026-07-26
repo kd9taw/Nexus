@@ -118,6 +118,63 @@ mod tests {
     }
 
     #[test]
+    fn ft1_gen_wave_has_a_lead_in_and_never_clips_the_signal() {
+        // REGRESSION (on air, KD9TAW <-> N9UM, 6 m, 2026-07-26): TempoFast was seen on the
+        // panadapter and decoded only intermittently, while FT8 worked perfectly on the same
+        // radios. Roughly half of all frames were lost in each direction, so single-frame
+        // messages arrived and multi-frame ones never reassembled.
+        //
+        // Cause: FT1's decoder CANNOT search for an early signal. `tempofast_decode.f90` sweeps
+        // `do istart=0,200,4` and refines with `max(0,ibest_all-5)` — clamped at zero. FT8
+        // (`sync8.f90`, `do j=-JZ,+JZ` about a +0.5 s nominal) and FT4 (`ibmin=-344`) both search
+        // negative. FT1 alone transmitted at t=0, i.e. sitting ON the clamp with no early margin,
+        // so ordinary clock error (N9UM measured -0.25 s off UTC) pushed frames off a cliff.
+        let m = make_mode(ModeKind::TempoFast);
+        let tones = m.encode("CQ KD9TAW EN52");
+        let wave = m.gen_wave(&tones, FS, 1500.0);
+        let bare = tempo_fast::gen_wave(&tones, FS, 1500.0);
+        let lead = (0.4 * FS).round() as usize;
+
+        // The buffer LENGTH must not change. FT1's over already fills its whole 4 s T/R period,
+        // and the PTT hold is sized from the wave length — a longer buffer would push the tail
+        // past the slot boundary into the peer's receive window.
+        assert_eq!(
+            wave.len(),
+            bare.len(),
+            "FT1 buffer stays exactly one T/R period"
+        );
+        assert_eq!(wave.len(), tempo_fast::NMAX);
+
+        assert!(wave[..lead].iter().all(|&s| s == 0.0), "lead-in is silence");
+        assert!(
+            wave[lead..].iter().any(|&s| s != 0.0),
+            "tones follow the lead-in"
+        );
+
+        // The shift must be a pure delay of the SAME waveform — nothing resampled, nothing
+        // clipped off the end. Everything the shift pushed past the end must have been silence.
+        let keep = bare.len() - lead;
+        assert!(
+            bare[keep..].iter().all(|&s| s == 0.0),
+            "the shift may only push trailing silence off the end, never signal"
+        );
+        assert_eq!(
+            &wave[lead..],
+            &bare[..keep],
+            "a pure delay, sample for sample"
+        );
+
+        // And the delay is real: the first sample of signal moved right by the lead-in.
+        let first_bare = bare.iter().position(|&s| s != 0.0).unwrap();
+        let first_wave = wave.iter().position(|&s| s != 0.0).unwrap();
+        assert_eq!(
+            first_wave,
+            first_bare + lead,
+            "signal starts {lead} samples later"
+        );
+    }
+
+    #[test]
     fn ft8_gen_wave_is_slot_positioned_with_lead_in() {
         // Mode::gen_wave for FT8 must include the 0.5 s lead-in (slot-positioned), so the
         // radio loop plays it at the slot boundary without going on the air 0.5 s early.
