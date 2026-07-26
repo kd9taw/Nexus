@@ -185,7 +185,10 @@ impl Detector {
     /// `DE <CALL> QSY …` broadcast reassembles into a valid directive.
     pub fn observe(&mut self, frame: &str, now_slot: u64) -> Option<(String, Directive)> {
         // Mirror the inbox: a chunk reassembles; a non-chunk frame is taken whole.
-        let full = if let Some(f) = self.reasm.accept(frame) {
+        // A QSY directive is a BROADCAST: the `DE <CALL>` lives inside the reassembled text, so
+        // the sender is not known until after reassembly. One bucket ("") is correct here — this
+        // reassembler only ever sees QSY traffic, not the general chat stream.
+        let full = if let Some(f) = self.reasm.accept("", frame, now_slot) {
             f
         } else if text::parse_chunk(frame).is_none() {
             frame.to_string()

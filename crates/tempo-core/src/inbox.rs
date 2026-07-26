@@ -107,7 +107,10 @@ impl Inbox {
                 && m.addressee().is_none_or(looks_like_call);
             if !is_standard {
                 if let Some((id, ..)) = text::parse_chunk(&d.message) {
-                    if let Some(full) = self.reasm.accept(&d.message) {
+                    // Attribute the chunk to whoever the preceding identify frame named. Keying
+                    // on the id alone merges two stations both sending message 'B'.
+                    let from = self.current_from.clone().unwrap_or_default();
+                    if let Some(full) = self.reasm.accept(&from, &d.message, slot) {
                         // A directed-to-me message completed → owe an id-ACK to its sender,
                         // recorded EVERY time we hear it complete (so the sender's resend
                         // re-triggers the ACK if the first was lost), independent of the
