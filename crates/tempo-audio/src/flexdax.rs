@@ -187,6 +187,21 @@ impl FlexDax {
                 let _ = flex.send(&dax_rx_create_command(DAX_CHANNEL));
                 // DAX TX: create the outbound stream (its create reply carries the stream id) and
                 // route the rig's transmit audio to it. Torn down on stop (TX back to the mic).
+                //
+                // ⚠️ OPERATOR RULING 2026-07-26 — THIS IS DELIBERATE, DO NOT "FIX" IT.
+                // `transmit_set_dax_command(true)` below is UNCONDITIONAL: turning on native Flex
+                // audio routes BOTH directions over DAX, RX and TX, from the one
+                // `flex_native_audio` toggle. It reads like an oversight (a TX-path command with
+                // no TX-specific gate) and has been queried once already, hence this note.
+                //
+                // The alternative considered and REJECTED was splitting TX behind its own opt-in.
+                // Rejected because one toggle is what an operator actually wants — native audio
+                // means native audio — and a half-native path (DAX in, sound card out) is a
+                // configuration that mostly exists to be got wrong.
+                //
+                // The backlog's older "dax_tx stays gated" line means gated behind THIS toggle,
+                // not behind a second one. Teardown restores the mic on stop, so the rig is never
+                // left expecting DAX audio that stopped arriving.
                 let mut tx_created: Option<u32> = None;
                 if let Ok((_, reply)) =
                     flex.command(&dax_tx_create_command(), Duration::from_millis(600))
