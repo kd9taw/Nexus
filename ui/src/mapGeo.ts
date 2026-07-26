@@ -396,3 +396,56 @@ export function mufCells(stepLat = 10, stepLon = 15): MufCell[] {
   }
   return cells
 }
+
+/**
+ * The ±22.5° opening wedge as a CLOSED ring of [lon, lat], subdivided so every edge is short
+ * enough to hug the sphere.
+ *
+ * ⚠️ WHY THE SUBDIVISION IS THE WHOLE POINT (operator report: green spikes tearing through the
+ * 3-D globe, while the 2-D map was clean). Nothing here draws great circles: `syncLines` maps
+ * each vertex to a 3-D point and draws a STRAIGHT chord between them, and globe.gl's polygon
+ * layer triangulates flat between vertices too. A chord between two points `d` km apart sags
+ * `R(1 - cos(d/2R))` BELOW the surface at its midpoint — for a 3000 km radial that is ~78 km,
+ * against a layer altitude of only ~0.006 R (~38 km). So the geometry dived through the globe
+ * and poked back out: the spikes.
+ *
+ * The far arc was never the problem (16 steps across 45° puts its vertices ~2.8° apart). The
+ * two RADIAL edges were each a SINGLE segment spanning the full `maxKm`. So walk out along one
+ * radial, across the arc, and back down the other — every edge short.
+ *
+ * 2-D is unaffected because it projects to a plane, where a straight edge is straight.
+ *
+ * Shared by the fill and the outline deliberately: they drew the same wedge from two copies of
+ * the geometry, so a fix to one silently left the other torn.
+ */
+export function sectorRing(
+  qth: { lat: number; lon: number },
+  bearingDeg: number,
+  maxKm: number,
+): [number, number][] {
+  // ~200 km per step keeps the worst-case sag well under a kilometre; clamped so a short
+  // opening still reads as a wedge and a very long one can't explode the vertex count.
+  const radialSteps = Math.max(4, Math.min(48, Math.ceil(maxKm / 200)))
+  const ARC_STEPS = 16
+  const left = bearingDeg - 22.5
+  const right = bearingDeg + 22.5
+  const ring: [number, number][] = []
+  // Out along the left radial (skip 0 km — that IS the QTH, added last when we close).
+  for (let i = 1; i <= radialSteps; i++) {
+    const d = destinationPoint(qth, left, (maxKm * i) / radialSteps)
+    ring.push([d.lon, d.lat])
+  }
+  // Across the far arc, left → right.
+  for (let i = 1; i < ARC_STEPS; i++) {
+    const d = destinationPoint(qth, left + (45 * i) / ARC_STEPS, maxKm)
+    ring.push([d.lon, d.lat])
+  }
+  // Back down the right radial to the QTH.
+  for (let i = radialSteps; i >= 1; i--) {
+    const d = destinationPoint(qth, right, (maxKm * i) / radialSteps)
+    ring.push([d.lon, d.lat])
+  }
+  ring.push([qth.lon, qth.lat])
+  ring.push(ring[0]) // close
+  return ring
+}

@@ -103,10 +103,11 @@ describe('isolation: a second window cannot overwrite the first', () => {
 
   it('inherits the main window once, then diverges for good', () => {
     // Why inherit at all: nexus.connect.projection exists PRECISELY so a torn-off map
-    // opens on the globe you were already using. A cold per-surface read would reset it
-    // to the intent preset (pota's is the flat world map) — the exact bug that key was
-    // added to fix. Inheriting is free in the other direction: the first write in the
-    // pop-out makes it that window's own.
+    // opens on the projection you were already using, instead of a cold per-surface read
+    // resetting it to whatever the intent preset says. Inheriting is free in the other
+    // direction: the first write in the pop-out makes it that window's own.
+    // (This used to cite pota's preset as the flat world map — pota is a globe as of
+    // 2026-07-26, but the inheritance guarantee is what this test is about either way.)
     surfaceSet('nexus.connect.projection', 'globe')
     expect(asSurface('w2', () => surfaceGet('nexus.connect.projection'))).toBe('globe')
     asSurface('w2', () => surfaceSet('nexus.connect.projection', 'world'))

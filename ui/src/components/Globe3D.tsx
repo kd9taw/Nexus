@@ -13,7 +13,15 @@ import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
 import { gridToLatLon } from '../grid'
 import { bandColor, openingModeColor } from '../bandColors'
-import { subsolarPoint, usStateBorders, flareField, flareRScale, destinationPoint, rangeRing } from '../mapGeo'
+import {
+  subsolarPoint,
+  usStateBorders,
+  flareField,
+  flareRScale,
+  destinationPoint,
+  rangeRing,
+  sectorRing,
+} from '../mapGeo'
 import { getAurora, getPca, getSatellites, getLog } from '../api'
 import cqzonesUrl from '../data/cqzones.geojson?url'
 import { spotTooltip } from '../propViz'
@@ -328,12 +336,7 @@ export default function Globe3D({
     const polys: { geometry: { type: 'Polygon'; coordinates: number[][][] }; fill: string }[] = []
     for (const o of prop?.openings ?? []) {
       if (!(o.maxKm > 0)) continue
-      const ring: number[][] = [[qth.lon, qth.lat]]
-      for (let i = 0; i <= 16; i++) {
-        const d = destinationPoint(qth, o.bearingDeg - 22.5 + (45 * i) / 16, o.maxKm)
-        ring.push([d.lon, d.lat])
-      }
-      ring.push([qth.lon, qth.lat])
+      const ring = sectorRing(qth, o.bearingDeg, o.maxKm) as unknown as number[][]
       const c = new THREE.Color(openingModeColor(o.mode))
       polys.push({
         geometry: { type: 'Polygon', coordinates: [ring] },
@@ -827,12 +830,12 @@ export default function Globe3D({
     if (show.openings && qth) {
       for (const o of prop?.openings ?? []) {
         if (!(o.maxKm > 0)) continue
-        const outline: [number, number][] = [[qth.lat, qth.lon]]
-        for (let i = 0; i <= 16; i++) {
-          const d = destinationPoint(qth, o.bearingDeg - 22.5 + (45 * i) / 16, o.maxKm)
-          outline.push([d.lat, d.lon])
-        }
-        outline.push([qth.lat, qth.lon])
+        // Same subdivided ring as the fill (see `sectorRing`) — as [lat, lon] for syncLines.
+        // These two used to build the wedge from two copies of the geometry, so the outline
+        // tore through the globe exactly like the fill did.
+        const outline: [number, number][] = sectorRing(qth, o.bearingDeg, o.maxKm).map(
+          ([lon, lat]) => [lat, lon] as [number, number],
+        )
         const arr = openingsByMode.get(o.mode) ?? []
         arr.push(outline)
         openingsByMode.set(o.mode, arr)

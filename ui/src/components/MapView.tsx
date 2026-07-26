@@ -143,8 +143,13 @@ const INTENT_PRESETS: Record<
 > = {
   // Chase DX: spinnable globe, need-colored, openings + DXpeditions + rings on.
   dx: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: true, heat: true } },
-  // POTA/SOTA: world view, need-colored activators; de-emphasize rings.
-  pota: { kind: 'world', colorBy: 'need', layers: { dxped: false, rings: false, heat: false } },
+  // POTA/SOTA: globe, need-colored activators; de-emphasize rings.
+  // Was the flat 'world' projection on the theory that activators are mostly domestic so a
+  // world view shows more at once. Operator ruling 2026-07-26: POTA must behave like every
+  // other intent — Chase DX, Ragchew and 6m/VHF are all globes, and having one intent silently
+  // flip the map to flat reads as a rendering bug, not a preset. Only the projection changed;
+  // the rings/heat de-emphasis is still right for this intent.
+  pota: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: false, heat: false } },
   // Ragchew: globe, who-can-I-hear (signal), calm — dxped off.
   casual: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: false } },
   // 6m/VHF: heat ON — visualizing the Es/F2 opening footprint IS this intent.
@@ -153,9 +158,9 @@ const INTENT_PRESETS: Record<
 
 /** The operator's chosen projection is persisted (like the Connect intent) so a torn-off
  * window — and the next launch — restore the SAME globe/beam/world they were using, instead
- * of snapping back to the intent preset. Without this the globe never carries over to a
- * detached window (the mount-time intent effect resets it, and pota's preset is the flat
- * world map). */
+ * of snapping back to the intent preset (the mount-time intent effect would otherwise reset
+ * it). Still load-bearing now that every intent presets to a globe: the operator's own
+ * Beam/World pick has to survive a detach and a relaunch. */
 // PER-SURFACE: the projection suits the WINDOW's aspect (a tall pop-out and a wide main
 // map want different ones). A brand-new surface still inherits the main window's pick —
 // that carry-over is the reason this key exists, and `surfaceGet` preserves it.
