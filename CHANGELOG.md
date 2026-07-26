@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.19.1] — unreleased
+## [0.19.3] — unreleased
 
 ### Worked stations stop showing as needed
 Working a station in a US state you had already worked left it lit in the Needed roster with its
@@ -39,6 +39,14 @@ FT-857, FT-817/818, IC-7100, IC-705, Xiegu G90 and X6100, TS-480.
 Keying with no rig model set now says outright that there is no CAT and the radio will not follow
 the band, instead of reporting a bare success.
 
+### Connect shows everything by default
+Connect had a Basic / Expert detail level, and new installs started on Basic — one plain sentence
+per pane. That toggle is gone and every pane now shows its full data. In practice you also get the
+map layer panels without switching anything, the modelled band-by-hour chart, more satellite passes
+(14 instead of 5) and more contests (20 instead of 8), and the chase feed no longer stops at three
+rows. Panes still fall back to a one-line summary while they are waiting on data or a feed is
+offline — that part was never the detail setting.
+
 ### Map fixes
 Opening sectors on the 3-D globe tore into green spikes that stabbed through the Earth. Nothing in
 that layer draws curved lines, so the wedge's two long straight edges cut through the sphere and
@@ -50,6 +58,8 @@ The POTA/SOTA map opened as a flat world map while Chase DX, Ragchew and 6m/VHF 
 globes. It is a globe now, like the rest.
 
 ### Fixes
+- Logging a contact in Voice and CW shows your previous contacts with that station again — the
+  date, band and reports — not just a count of them.
 - The keying port of a radio you were not currently operating could be edited and silently not
   saved. It saves.
 - Native Flex audio that fails to start, or starts and never delivers any audio, now says so and
