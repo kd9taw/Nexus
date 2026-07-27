@@ -13,4 +13,5 @@ ft8 = { path = "../ft8" }
 ft4 = { path = "../ft4" }
 fst4 = { path = "../fst4" }
 q65 = { path = "../q65" }
+msk144 = { path = "../msk144" }
 tempo-net = { path = "../tempo-net" }

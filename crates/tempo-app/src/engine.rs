@@ -1404,6 +1404,7 @@ impl Engine {
             self.settings.q65_period_s,
             self.settings.q65_submode,
             self.settings.fst4_period_s,
+            self.settings.msk144_period_s,
         )
     }
 
@@ -4516,6 +4517,7 @@ impl Engine {
             // to pin. FST4 and FST4W share fst4_period_s: same decoder, same clock.
             Tier::Fst4 | Tier::Fst4w => f64::from(self.settings.fst4_period_s),
             Tier::Q65 => f64::from(self.settings.q65_period_s),
+            Tier::Msk144 => f64::from(self.settings.msk144_period_s),
             Tier::TempoDeep => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
             // FT4 = 0.5 s lead-in + 5.04 s tones (105 sym × 576 sa @ 12 kHz). The
             // generated buffer also carries ~1.0 s of TRAILING silence — that is
@@ -7503,6 +7505,8 @@ impl Engine {
             // decoded, but a log entry must carry the registered name or award
             // credit breaks. Same unreachable-while-receive-only note as FST4.
             Tier::Q65 => "Q65",
+            // "MSK144" is the ADIF-registered mode name.
+            Tier::Msk144 => "MSK144",
             Tier::TempoFast => "TempoFast",
         }
         .to_string();

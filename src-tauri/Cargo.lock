@@ -2639,9 +2639,17 @@ dependencies = [
  "fst4",
  "ft4",
  "ft8",
+ "msk144",
  "q65",
  "tempo-fast",
  "tempo-net",
+]
+
+[[package]]
+name = "msk144"
+version = "0.1.0"
+dependencies = [
+ "tempo-fast-sys",
 ]
 
 [[package]]

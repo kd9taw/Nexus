@@ -188,6 +188,59 @@ pub type Ft4DecodeT = Ft8DecodeT;
 /// FST4 decode record — byte-identical C-ABI layout to [`Ft8DecodeT`].
 pub type Fst4DecodeT = Ft8DecodeT;
 
+/// The T/R periods MSK144 supports. 15 s is the 6 m meteor-scatter workhorse.
+/// Anything else is REJECTED with -1 rather than clamped.
+pub const MSK144_PERIODS: [u16; 4] = [5, 10, 15, 30];
+/// Ceiling on an MSK144 frame: 30 s @ 12 kHz.
+pub const MSK144_NMAX_MAX: usize = 360_000;
+
+/// Samples in one MSK144 frame at `period_s` seconds, 12 kHz.
+pub const fn msk144_nmax(period_s: u16) -> usize {
+    period_s as usize * 12_000
+}
+
+/// Whether `period_s` is one of the four periods MSK144 supports.
+pub const fn msk144_period_supported(period_s: u16) -> bool {
+    matches!(period_s, 5 | 10 | 15 | 30)
+}
+
+/// One decode from [`msk144_decode_frame`]. Layout matches `msk144_decode_t` in
+/// `libtempo.h` — the same 64 bytes as [`Ft8DecodeT`], NOT an alias: the last two
+/// fields are `dtype`/`reserved` (int/int) where FT8 has `nap`/`qual`
+/// (`int`/`float`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Msk144DecodeT {
+    /// Always 0.0 — mskrtd reports no sync metric.
+    pub sync: c_float,
+    pub snr: c_int,
+    /// Time offset within the T/R period, seconds.
+    pub dt: c_float,
+    pub freq: c_float,
+    pub message: [u8; 38],
+    /// 0 = frame-averaged, 1 = `&` single-ping (mskspd), 2 = `^` long average.
+    pub dtype: c_int,
+    /// Unused, always 0.
+    pub reserved: c_int,
+}
+
+impl Default for Msk144DecodeT {
+    // Hand-written rather than derived: `[u8; 38]` has no `Default` impl (the std
+    // blanket stops at 32), which is why every other decode record here does the
+    // same.
+    fn default() -> Self {
+        Self {
+            sync: 0.0,
+            snr: 0,
+            dt: 0.0,
+            freq: 0.0,
+            message: [0; 38],
+            dtype: 0,
+            reserved: 0,
+        }
+    }
+}
+
 /// One decode from [`q65_decode_frame`]. Layout matches `q65_decode_t` in
 /// `libtempo.h` — the same 64 bytes as [`Ft8DecodeT`], but NOT an alias: Q65's last
 /// two fields are `idec`/`nused` (both `int`), where FT8 has `nap`/`qual`
@@ -476,6 +529,27 @@ extern "C" {
         nqso_progress: c_int,
         nfqso: c_int, // QSO/RX freq (Hz); deep AP center; 0/oob ⇒ band mid
         out: *mut Q65DecodeT,
+        max_out: c_int,
+    ) -> c_int;
+
+    /// Decode every MSK144 signal in one T/R period.
+    ///
+    /// DECODE ONLY — receive-only; see `Capabilities.tx` and `modes::tx_mode`.
+    ///
+    /// ⭐ `nutc` MUST differ between periods. mskrtd's duplicate suppressor resets
+    /// only when it changes, so a constant silently drops any message heard again
+    /// in a later period.
+    pub fn msk144_decode_frame(
+        iwave: *const i16, // [ntrperiod * 12000] — see `msk144_nmax`
+        ntrperiod: c_int,  // 5 | 10 | 15 | 30; anything else ⇒ -1
+        nutc: c_int,       // per-period label; MUST differ between periods
+        nfa: c_int,
+        nfb: c_int,
+        ndepth: c_int,
+        mycall: *const c_char,
+        hiscall: *const c_char,
+        nfqso: c_int,
+        out: *mut Msk144DecodeT,
         max_out: c_int,
     ) -> c_int;
 

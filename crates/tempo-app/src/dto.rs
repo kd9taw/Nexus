@@ -207,6 +207,11 @@ pub enum Tier {
     /// which actually knows.
     #[serde(rename = "Q65")]
     Q65,
+    /// WSJT-X MSK144 — the METEOR-SCATTER mode. **RECEIVE-ONLY** —
+    /// `modes::tx_mode` refuses it, so selecting this tier decodes but never keys
+    /// the radio. The T/R period comes from `Settings::msk144_period_s`.
+    #[serde(rename = "MSK144")]
+    Msk144,
 }
 
 impl Tier {
@@ -235,6 +240,7 @@ impl Tier {
         q65_period_s: u16,
         q65_submode: u8,
         fst4_period_s: u16,
+        msk144_period_s: u16,
     ) -> Option<ModeKind> {
         match self {
             Tier::TempoFast => Some(ModeKind::TempoFast),
@@ -243,7 +249,18 @@ impl Tier {
             Tier::Fst4 => Some(Self::fst4_kind(fst4_period_s, false)),
             Tier::Fst4w => Some(Self::fst4_kind(fst4_period_s, true)),
             Tier::Q65 => Some(Self::q65_kind(q65_period_s, q65_submode)),
+            Tier::Msk144 => Some(Self::msk144_kind(msk144_period_s)),
             Tier::TempoDeep => None,
+        }
+    }
+
+    /// A validated `ModeKind::Msk144`, falling back to 15 s (the 6 m workhorse)
+    /// on an unsupported period. Same degrade-don't-refuse rule as the others.
+    pub fn msk144_kind(period_s: u16) -> ModeKind {
+        if ModeKind::MSK144_PERIODS.contains(&period_s) {
+            ModeKind::Msk144 { period_s }
+        } else {
+            ModeKind::MSK144_15
         }
     }
 
@@ -286,6 +303,7 @@ impl Tier {
             // Every Q65 combination maps back to the one Q65 tier: the tier is the
             // operator's mode selection, and period/submode are settings under it.
             ModeKind::Q65 { .. } => Tier::Q65,
+            ModeKind::Msk144 { .. } => Tier::Msk144,
         }
     }
 }

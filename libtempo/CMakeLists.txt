@@ -206,6 +206,62 @@ set(LIBTEMPO_SOURCES
     #     `include`d by the files above: fst4/fst4_params.f90,
     #     fst4/ldpc_240_{101,74}_{parity,generator}.f90
 
+    # --- MSK144 native decode (mskrtd + msk144/msk40 family) : Nexus, RX-ONLY ---
+    #     The METEOR-SCATTER mode. 72 ms frames repeated through the period, so a
+    #     single ionised trail lasting a tenth of a second can carry a message.
+    #
+    #     ⭐ Shaped differently from every other mode here: mskrtd is a SLIDING-
+    #     WINDOW decoder analysing one 7168-sample block per call, driven at
+    #     half-block steps across the period, and it returns a FORMATTED TEXT LINE
+    #     rather than calling a callback. msk144_cabi owns the slide and reads the
+    #     line back with an internal READ on upstream's own format.
+    #
+    #     Decode only: no encode path is wired, and the Rust ModeKind reports
+    #     Capabilities{tx:false} so modes::tx_mode() refuses the transmit path.
+    ${CMAKE_CURRENT_SOURCE_DIR}/msk144_cabi.f90
+    ${LIB}/mskrtd.f90                     # the real-time block decoder
+    ${LIB}/msk144spd.f90                  # single-ping ("&") fast decode
+    ${LIB}/msk144sync.f90                 # frame sync / averaging patterns
+    ${LIB}/msk144_freq_search.f90         # frequency search
+    ${LIB}/msk144decodeframe.f90          # one frame -> softbits -> LDPC
+    ${LIB}/msk144signalquality.f90        # SNR + phase-equalizer training
+    ${LIB}/bpdecode128_90.f90             # LDPC(128,90) BP decoder
+    ${LIB}/encode_128_90.f90              # re-encode for the OSD/quality path
+    ${LIB}/genmsk_128_90.f90              # REQUIRED FOR DECODE despite the name:
+                                          #   msk144signalquality regenerates the
+                                          #   candidate to measure against.
+    #     MSK40 = the SHORTHAND message variant. Gated off at run time
+    #     (bshmsg/bswl are pinned false in msk144_cabi), but mskrtd calls it
+    #     unconditionally in SOURCE, so the symbols must exist to link.
+    ${LIB}/msk40spd.f90
+    ${LIB}/msk40sync.f90
+    ${LIB}/msk40_freq_search.f90
+    ${LIB}/msk40decodeframe.f90
+    ${LIB}/bpdecode40.f90                 # LDPC(40,...) BP decoder
+    ${LIB}/encode_msk40.f90
+    ${LIB}/genmsk40.f90
+    ${LIB}/update_msk40_hasharray.f90     # the hashed-callsign table MSK40 uses
+    ${LIB}/hash.f90                       # callsign hashing for MSK40 shorthand
+    ${LIB}/hashing.f90                    #   (hash.f90 wraps hashing.f90)
+    ${LIB}/wsprd/nhash.c                  #   ... and hash.f90:7 calls nhash() from
+                                          #   here, via the bind(C,name="nhash")
+                                          #   interface in hashing.f90:3.
+                                          #
+                                          #   lib/wsprd/, NOT lib/wsprcode/: the
+                                          #   wsprcode copy exports only the
+                                          #   Fortran-convention `nhash_` with
+                                          #   pointer args, so it links but does
+                                          #   not satisfy the bind(C) name.
+                                          #   Upstream builds the wsprd one for
+                                          #   the same reason (its CMakeLists:770).
+                                          #   And NOT lib/superfox/qpc/nhash2.c —
+                                          #   that directory holds the non-free
+                                          #   SuperFox tables NOTICE forbids.
+    #     Shared support first needed by MSK144:
+    ${LIB}/analytic.f90                   # real -> analytic signal
+    ${LIB}/tweak1.f90                     # complex frequency shift
+    ${LIB}/ft8/chkcrc13a.f90              # CRC-13 check on the 128,90 codeword
+
     # --- Q65 native decode (lib/qra/q65 + q65_decode.f90) : Nexus, RX-ONLY ---
     #     Q65 is the first vendored mode with a substantial C layer: the Q-ary RA
     #     LDPC codec is Nico Palermo's (IV3NWV) qracodes, C rather than Fortran,
@@ -296,6 +352,8 @@ set(LIBTEMPO_SOURCES
 
     # --- C / C++ infra ---
     ${LIB}/crc14.cpp                      # Boost CRC-14 (crc14 / crc14_check)
+    ${LIB}/crc13.cpp                      # Boost CRC-13, for MSK144's (128,90)
+                                          #   codeword: chkcrc13a.f90:18 calls it
 )
 
 # ---------------------------------------------------------------------------

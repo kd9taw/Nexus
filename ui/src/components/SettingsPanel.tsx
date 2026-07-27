@@ -3744,6 +3744,38 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- MSK144: meteor scatter. Period is the whole setting. ---- */}
+          {tab === 'modes' && (
+          <fieldset className="settings-section">
+            <legend>MSK144 &mdash; meteor scatter (receive-only)</legend>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">T/R period</span>
+                <select
+                  className="settings-input"
+                  value={String(form.msk144PeriodS ?? 15)}
+                  onChange={(e) => updateNum('msk144PeriodS', Number(e.target.value))}
+                >
+                  <option value="5">5 s &mdash; fast turnaround, big showers</option>
+                  <option value="10">10 s</option>
+                  <option value="15">15 s &mdash; the 6 m standard</option>
+                  <option value="30">30 s &mdash; sparse pings, more to stack</option>
+                </select>
+                <span className="settings-hint">
+                  MSK144 sends a 72&nbsp;ms message over and over, so a single meteor trail lasting
+                  a tenth of a second can carry the whole thing. Shorter periods turn the exchange
+                  around faster during a shower; longer ones give the decoder more frames to stack
+                  when pings are sparse. Both stations must use the same period.
+                </span>
+              </label>
+            </div>
+            <span className="settings-hint">
+              Nexus decodes MSK144 and does not transmit it. Shorthand (MSK40) messages are off,
+              matching WSJT-X&rsquo;s default.
+            </span>
+          </fieldset>
+          )}
+
           {/* ---- FST4 / FST4W: one period setting, shared. Same decoder, same
                slot clock; the tier picks QSO vs beacon. ---- */}
           {tab === 'modes' && (

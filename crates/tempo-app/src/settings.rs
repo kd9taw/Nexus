@@ -129,6 +129,12 @@ pub struct Settings {
     /// beacon receiver is the likelier reason to pick this mode at all).
     #[serde(default = "default_fst4_period_s")]
     pub fst4_period_s: u16,
+    /// MSK144 T/R period in seconds: 5, 10, 15 or 30. Defaults to 15 — the period
+    /// 6 m meteor scatter actually runs on. Shorter periods turn the exchange
+    /// around faster on a busy shower; longer ones give the decoder more frames to
+    /// stack when pings are sparse.
+    #[serde(default = "default_msk144_period_s")]
+    pub msk144_period_s: u16,
     /// Q65 submode, 0..=4 for A..E — the tone spacing. Wider submodes tolerate
     /// more Doppler spread at the cost of sensitivity, which is why EME operators
     /// move up the letters as the path degrades. Defaults to A.
@@ -1406,6 +1412,11 @@ fn default_fst4_period_s() -> u16 {
     120
 }
 
+/// MSK144 at 15 s — the 6 m meteor-scatter period. See [`Settings::msk144_period_s`].
+fn default_msk144_period_s() -> u16 {
+    15
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -1428,6 +1439,7 @@ impl Default for Settings {
             ctcss_tone_hz: 0.0,
             q65_period_s: default_q65_period_s(),
             fst4_period_s: default_fst4_period_s(),
+            msk144_period_s: default_msk144_period_s(),
             q65_submode: 0,
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this

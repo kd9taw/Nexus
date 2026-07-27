@@ -390,6 +390,75 @@ int fst4_decode_frame(const int16_t *iwave /*[ntrperiod*12000]*/,
                       fst4_decode_t *out, int max_out);
 
 /*===========================================================================
+ * MSK144: WSJT-X METEOR-SCATTER mode. DECODE ONLY.
+ *===========================================================================*/
+
+/* MSK144 sends 72 ms frames (864 samples @ 12 kHz) continuously through the T/R
+ * period, so a single ionised meteor trail lasting a tenth of a second can carry
+ * a whole message. Its decoder is shaped unlike the others here.
+ *
+ * ⭐ SLIDING WINDOW, NOT ONE-SHOT. `mskrtd` analyses one 7168-sample block per
+ * call and is driven at half-block (3584-sample, ~0.3 s) steps across the period
+ * — about 50 calls per 15 s. This ABI owns that slide internally, so the caller
+ * still hands over one period and gets every decode back.
+ *
+ * ⭐ nutc IS THE PERIOD LABEL AND MUST DIFFER BETWEEN PERIODS. mskrtd dupe-checks
+ * against the previous message and resets on `nutc00 != nutc0 || tsec < tsec0`.
+ * Both disjuncts are live: tsec0 advances every call (a LABELLED assignment at
+ * mskrtd.f90:238 that every exit path reaches), so the check also self-clears at
+ * a period boundary when tsec restarts. nutc is still required — it is the UTC
+ * field of the output line and the other half of the reset. Pass the period's
+ * UTC, or any per-period-distinct value.
+ *
+ * T/R periods: 5, 10, 15 or 30 s. 15 s is the 6 m workhorse. The frame is
+ * ntrperiod*12000 samples; an unsupported period returns -1 rather than being
+ * clamped. */
+#define MSK144_NMAX_MAX 360000  /* ceiling: 30 s @ 12 kHz                       */
+#define MSK144_NPERIODS 4       /* {5, 10, 15, 30}                              */
+
+/* NO msk144 encode / gen_wave, deliberately. Receive-only: the Rust ModeKind
+ * reports Capabilities{tx:false} and modes::tx_mode() refuses the transmit path. */
+
+/* One decode from MSK144 acquisition. Byte-compatible with the ft8/ft4/fst4/q65
+ * records (64 bytes, 4-byte aligned). */
+typedef struct {
+    float sync;          /* ALWAYS 0.0 — mskrtd reports no sync metric   */
+    int   snr;           /* SNR estimate, dB (rounded)                   */
+    float dt;            /* time offset within the period, seconds       */
+    float freq;          /* audio frequency, Hz                          */
+    char  message[38];   /* NUL-terminated decoded message text          */
+    int   dtype;         /* 0 = frame-averaged, 1 = '&' single-ping      */
+                         /* (mskspd), 2 = '^' long average               */
+    int   reserved;      /* unused, always 0                             */
+} msk144_decode_t;
+
+/*
+ * Decode EVERY MSK144 signal in one complete T/R period.
+ *   iwave      : ntrperiod*12000 int16 audio samples @ 12 kHz
+ *   ntrperiod  : 5, 10, 15 or 30 (s). Anything else returns -1.
+ *   nutc       : per-period label; MUST DIFFER between periods (see above)
+ *   nfa, nfb   : search band edges (Hz). MSK144 searches a centre +/- tolerance
+ *                rather than a range, so both are derived from what is asked for.
+ *   ndepth     : 1..3 (3 = deepest; <=0 defaults to 3)
+ *   mycall/hiscall : NUL/space-terminated callsigns (may be "")
+ *   nfqso      : QSO/RX audio freq (Hz). 0 / out of [nfa,nfb] = band mid
+ *   out        : caller array of msk144_decode_t (capacity max_out)
+ *   max_out    : capacity of out
+ *
+ * Returns the number of decodes found (>= 0), or -1 on error. NOT thread-safe.
+ *
+ * Shorthand (MSK40) messages and SWL mode are OFF, matching WSJT-X's defaults;
+ * phase-equalizer training is off and its .pcoeff dump was removed from the
+ * vendored source.
+ */
+int msk144_decode_frame(const int16_t *iwave /*[ntrperiod*12000]*/,
+                        int ntrperiod, int nutc,
+                        int nfa, int nfb, int ndepth,
+                        const char *mycall, const char *hiscall,
+                        int nfqso,
+                        msk144_decode_t *out, int max_out);
+
+/*===========================================================================
  * Q65: WSJT-X weak-signal mode for EME/VHF+ and ionoscatter. DECODE ONLY.
  *===========================================================================*/
 

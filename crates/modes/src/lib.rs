@@ -70,6 +70,9 @@ mod tests {
             ModeKind::Q65 { .. } => {
                 unreachable!("Q65 is receive-only; native_frame requires encode()")
             }
+            ModeKind::Msk144 { .. } => {
+                unreachable!("MSK144 is receive-only; native_frame requires encode()")
+            }
             ModeKind::TempoFast => 4_800,
         };
         to_i16_frame(&wave, mode.frame_samples(), off, 1000.0)
@@ -118,7 +121,7 @@ mod tests {
         assert_eq!(names.len(), 25, "Q65 labels collided: {names:?}");
         assert!(!names.contains("Q65"), "a combination fell through to the family name");
 
-        assert_eq!(ModeKind::ALL.len(), 5) // FT8, FT4, FST4, Q65, TempoFast;
+        assert_eq!(ModeKind::ALL.len(), 6) // FT8, FT4, FST4, Q65, MSK144, TempoFast;
     }
 
     /// Each native mode decodes its own clean signal through a `Box<dyn

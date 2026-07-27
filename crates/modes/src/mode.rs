@@ -44,16 +44,24 @@ pub enum ModeKind {
     /// VHF/UHF works Q65-60A/B/C; 6 m meteor/ionoscatter uses 30; 15 is
     /// troposcatter.
     Q65 { period_s: u16, submode: u8 },
+    /// WSJT-X MSK144 — the METEOR-SCATTER mode. **RECEIVE-ONLY** — see
+    /// [`Capabilities::tx`].
+    ///
+    /// Carries its T/R period for the same reason FST4 and Q65 do: the frame is
+    /// `period_s * 12000` samples. `period_s` ∈ {5, 10, 15, 30}; 15 is the 6 m
+    /// workhorse.
+    Msk144 { period_s: u16 },
     TempoFast,
 }
 
 impl ModeKind {
     /// All modes shipped today, in display order.
-    pub const ALL: [ModeKind; 5] = [
+    pub const ALL: [ModeKind; 6] = [
         ModeKind::Ft8,
         ModeKind::Ft4,
         ModeKind::FST4_15,
         ModeKind::Q65_30A,
+        ModeKind::MSK144_15,
         ModeKind::TempoFast,
     ];
 
@@ -63,6 +71,13 @@ impl ModeKind {
         period_s: 15,
         wspr: false,
     };
+
+    /// MSK144 at 15 s — the period 6 m meteor scatter actually runs on, and
+    /// `ALL`'s representative MSK144 entry.
+    pub const MSK144_15: ModeKind = ModeKind::Msk144 { period_s: 15 };
+
+    /// The T/R periods MSK144 supports, in seconds.
+    pub const MSK144_PERIODS: [u16; 4] = [5, 10, 15, 30];
 
     /// The T/R periods FST4/FST4W support, in seconds.
     pub const FST4_PERIODS: [u16; 7] = [15, 30, 60, 120, 300, 900, 1800];
@@ -95,6 +110,24 @@ impl ModeKind {
         Self::FST4_PERIODS
             .into_iter()
             .flat_map(|period_s| [false, true].map(move |wspr| ModeKind::Fst4 { period_s, wspr }))
+    }
+
+    /// Every valid MSK144 period.
+    pub fn msk144_all() -> impl Iterator<Item = ModeKind> {
+        Self::MSK144_PERIODS
+            .into_iter()
+            .map(|period_s| ModeKind::Msk144 { period_s })
+    }
+
+    /// Display name for an MSK144 period, e.g. `"MSK144-15"`.
+    fn msk144_name(period_s: u16) -> &'static str {
+        match period_s {
+            5 => "MSK144-5",
+            10 => "MSK144-10",
+            15 => "MSK144-15",
+            30 => "MSK144-30",
+            _ => "MSK144",
+        }
     }
 
     /// Display name for an FST4/FST4W period, e.g. `"FST4-60"` / `"FST4W-300"`.
@@ -170,6 +203,7 @@ impl ModeKind {
             // small, and an unsupported combination falls back to the bare family
             // name rather than pretending to a precision it does not have.
             ModeKind::Q65 { period_s, submode } => Self::q65_name(period_s, submode),
+            ModeKind::Msk144 { period_s } => Self::msk144_name(period_s),
             ModeKind::TempoFast => "TempoFast",
         }
     }
@@ -183,6 +217,7 @@ impl ModeKind {
             ModeKind::Fst4 { period_s, .. } => f32::from(period_s),
             // The whole reason the period lives in the kind: slot timing follows it.
             ModeKind::Q65 { period_s, .. } => f32::from(period_s),
+            ModeKind::Msk144 { period_s } => f32::from(period_s),
             ModeKind::TempoFast => 4.0,
         }
     }
@@ -196,6 +231,7 @@ impl ModeKind {
             ModeKind::Fst4 { period_s, .. } => fst4::nmax(period_s),
             // ... and so does the buffer contract: period*12000 samples.
             ModeKind::Q65 { period_s, .. } => q65::nmax(period_s),
+            ModeKind::Msk144 { period_s } => msk144::nmax(period_s),
             ModeKind::TempoFast => tempo_fast::NMAX,
         }
     }
@@ -355,6 +391,7 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
         ModeKind::Ft4 => Box::new(Ft4Mode),
         ModeKind::Fst4 { period_s, wspr } => Box::new(Fst4Mode { period_s, wspr }),
         ModeKind::Q65 { period_s, submode } => Box::new(Q65Mode { period_s, submode }),
+        ModeKind::Msk144 { period_s } => Box::new(Msk144Mode { period_s }),
         ModeKind::TempoFast => Box::new(Ft1Mode),
     }
 }
@@ -684,7 +721,10 @@ mod tx_capability_tests {
     /// submode, so a slice would need all 25 combinations listed and would silently
     /// miss any that were forgotten. `matches!` covers the whole family.
     fn rx_only(kind: ModeKind) -> bool {
-        matches!(kind, ModeKind::Fst4 { .. } | ModeKind::Q65 { .. })
+        matches!(
+            kind,
+            ModeKind::Fst4 { .. } | ModeKind::Q65 { .. } | ModeKind::Msk144 { .. }
+        )
     }
 
     #[test]
@@ -698,6 +738,7 @@ mod tx_capability_tests {
             .into_iter()
             .chain(ModeKind::q65_all())
             .chain(ModeKind::fst4_all())
+            .chain(ModeKind::msk144_all())
         {
             let rx_only = rx_only(kind);
             let caps_tx = make_mode(kind).capabilities().tx;
@@ -761,6 +802,7 @@ mod tx_capability_tests {
             .into_iter()
             .chain(ModeKind::q65_all())
             .chain(ModeKind::fst4_all())
+            .chain(ModeKind::msk144_all())
         {
             let _ = make_mode(kind); // never refuses
         }
@@ -938,6 +980,83 @@ impl Mode for Q65Mode {
             // which is worth doing only if grid-AP measurably helps.
             "",
             nqso_progress,
+            nfqso,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
+}
+
+/// WSJT-X **MSK144** — the meteor-scatter mode. Receive-only.
+///
+/// 72 ms frames repeated through the period, so one ionised trail lasting a tenth
+/// of a second can carry a whole message. Third receive-only mode in this tree:
+/// `encode`/`gen_wave` are left defaulted (empty) and `Capabilities.tx` is false,
+/// so [`tx_mode`] refuses to hand it to the transmit path.
+#[derive(Debug, Clone, Copy)]
+pub struct Msk144Mode {
+    /// T/R period in seconds: 5, 10, 15 or 30.
+    pub period_s: u16,
+}
+
+impl Default for Msk144Mode {
+    /// 15 s — the period 6 m meteor scatter runs on.
+    fn default() -> Self {
+        Self { period_s: 15 }
+    }
+}
+
+impl Mode for Msk144Mode {
+    fn kind(&self) -> ModeKind {
+        ModeKind::Msk144 {
+            period_s: self.period_s,
+        }
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            // Flipping this to true without adding the encode entry points to the
+            // C ABI gets you a mode that keys the radio and transmits silence.
+            tx: false,
+            fox_hound: false,
+            ir_harq: false,
+            free_text: true,
+            contest: false,
+        }
+    }
+
+    // encode() and gen_wave() are DELIBERATELY not implemented — the trait defaults
+    // return empty, which is the safe failure if anything bypasses tx_mode.
+
+    #[allow(clippy::too_many_arguments)]
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        _nqso_progress: i32,
+        nfqso: i32,
+        frame_time_ms: i64,
+    ) -> Vec<Decode> {
+        // ⭐ frame_time_ms IS the nutc the C ABI needs. mskrtd uses it as the
+        // period label: it is the UTC field of the decoder's output line and one
+        // half of the duplicate-suppressor reset (`nutc00 != nutc0 || tsec <
+        // tsec0`). Seconds are distinct per period at every supported period
+        // (5 s minimum) and monotonic, which is all mskrtd compares.
+        let nutc = (frame_time_ms / 1000) as i32;
+        msk144::decode_frame(
+            iwave,
+            self.period_s,
+            nutc,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
             nfqso,
         )
         .into_iter()
