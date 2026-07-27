@@ -243,9 +243,20 @@ fn wx_override() -> Option<String> {
     env::var("WX").ok().filter(|s| !s.is_empty())
 }
 
-/// Emit `cargo:rerun-if-changed` for `p`. If `p` is a directory, recurse through it
-/// and emit each `.f90`/`.f`/`.cpp`/`.h`/`.txt`/`.cmake` file individually (so content
-/// edits — not just add/remove — trigger a rebuild).
+/// Emit `cargo:rerun-if-changed` for `p`. If `p` is a directory, emit the directory
+/// ITSELF and then recurse, emitting each `.f90`/`.f`/`.cpp`/`.h`/`.txt`/`.cmake`
+/// file individually.
+///
+/// BOTH are required and they catch different things:
+///   * per-FILE entries catch content EDITS to a source that already existed;
+///   * the DIRECTORY entry catches files being ADDED or REMOVED.
+///
+/// Watching files alone is not enough, and the failure is silent in the same way the
+/// original bug was. Cargo compares against the paths emitted by the PREVIOUS run, so
+/// a file that did not exist then is not watched: vendoring the 18 FST4 sources
+/// triggered no rebuild at all, and the modem-state manifest gate — which exists
+/// precisely to catch new unclassified state — did not run until `build.rs` itself was
+/// touched by hand. Adding a mode is exactly when that matters most.
 ///
 /// PANICS if `p` does not exist. Every call site names a path that must be present, so
 /// a missing one is a typo in this file, not a valid configuration. This used to return
@@ -261,6 +272,8 @@ fn emit_rerun_glob(p: &std::path::Path) {
         println!("cargo:rerun-if-changed={}", canon.display());
         return;
     }
+    // The directory entry: this is what makes an ADDED or REMOVED source re-run us.
+    println!("cargo:rerun-if-changed={}", canon.display());
     let Ok(rd) = std::fs::read_dir(&canon) else {
         panic!("build.rs cannot read watch dir: {}", canon.display())
     };
