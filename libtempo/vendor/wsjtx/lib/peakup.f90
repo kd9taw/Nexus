@@ -1,7 +1,9 @@
 subroutine peakup(ym,y0,yp,dx)
 
-  b=(yp-ym)/2.0
-  c=(yp+ym-2.0*y0)/2.0
+  real*4 b,c,dx,yp,ym,y0
+
+  b=(yp-ym)
+  c=(yp+ym-2.0*y0)
   dx=-b/(2.0*c)
 
   return

@@ -1,10 +1,8 @@
-  parameter (MAXTEST=75,NTEST=48)
+  parameter (MAXTEST=75,NTEST=49)
   character*37 testmsg(MAXTEST)
   data testmsg(1:NTEST)/                   &
       "TNX BOB 73 GL",                             &     ! 0.0
       "K1ABC RR73; W9XYZ <KH1/KH7Z> -08",          &     ! 0.1
-      "PA9XYZ 590003 IO91NP",                      &     ! 0.2
-      "G4ABC/P R 570007 JO22DB",                   &     ! 0.2
       "K1ABC W9XYZ 6A WI",                         &     ! 0.3
       "W9XYZ K1ABC R 17B EMA",                     &     ! 0.3
       "123456789ABCDEF012",                        &     ! 0.5
@@ -31,6 +29,9 @@
       "<YW18FIFA> KA1ABC R-17",                    &     ! 1.
       "<YW18FIFA> KA1ABC 73",                      &     ! 1.
       "CQ G4ABC/P IO91",                           &     ! 2.
+      "CQ TEST G4ABC/P IO91",                      &     ! 2.
+      "<PA9XYZ> <G4ABC/P> 570123 IO91NP",          &     ! 2.
+      "<G4ABC/P> <PA9XYZ> R 580071 JO22DB",        &     ! 2.
       "G4ABC/P PA9XYZ JO22",                       &     ! 2.
       "PA9XYZ G4ABC/P RR73",                       &     ! 2.
       "K1ABC W9XYZ 579 WI",                        &     ! 3.
