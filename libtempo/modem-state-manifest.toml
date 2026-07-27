@@ -5280,3 +5280,825 @@ sizes_corrected = "osd174_91 /boxes/ 0->2160004 total; encode174_91(+_nocrc) gen
 #      libtempo/CMakeLists.txt and CI before the next vendor refresh, or this file starts
 #      rotting the day someone pulls upstream.
 # =============================================================================================
+
+# =============================================================================================
+# GROUP G - FST4 (RX-only vendor pass, 2026-07-27)
+# =============================================================================================
+#
+#   The 18 FST4 decode sources vendored from WSJT-X 3.0.2 in eee69382. Audited the same way as
+#   GROUPS A-F: batched by file, every verdict keyed by (file, name), sizes measured with
+#   nm -S / readelf -sW against objects built from the vendored sources rather than inferred
+#   from declarations.
+#
+#   74 symbols. The manifest gate demanded 68; the audit found 6 more that its scanner
+#   does not currently flag, and those are filed too — an unscanned symbol today is a scanned
+#   one after the next refresh, and a row costs nothing.
+#
+#   class 1 (PER-CHAIN)  33   class 2 (INIT-ONCE)  11
+#   class 3 (SCRATCH)     7   class 4 (CONSTANT)   23
+#
+#   Every class 2/3/4 verdict — the ones asserting two radio chains may SHARE a symbol — was
+#   put to a separate challenger agent tasked with refuting it. Two were overturned to a
+#   stricter class and say so in their reason. Class 1 verdicts were not challenged: class 1
+#   is the safe default, so an over-cautious class 1 costs a memcpy while a wrong 2/3/4 costs
+#   a fabricated QSO.
+#
+#   FST4 is vendored RX-ONLY. gen_fst4wave is nonetheless on the DECODE path (fst4_decode
+#   regenerates and subtracts), so its symbols are audited as decode state, not TX state.
+# =============================================================================================
+
+# ---------------------------------------------------------------------------
+# fst4_decode.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "wcalls"
+file = "fst4_decode.f90"
+line = 45
+class = 1
+size_bytes = 2000
+reason = """
+THE most dangerous shared read in this file. The Keff=50 FST4W path has NO CRC AT ALL - :557 states it outright ('No CRC in this mode, so only accept the decode if call/grid have been seen before') and :558-:565 implement that as: clear unpk77_success, then set it back to .true. if the unpacked message contains any entry of wcalls. wcalls IS the entire validity check. Shared between chains, a callsign chain A heard on 40 m authorises chain B to accept an uncorroborated, error-check-free 20 m 'decode' that would otherwise have been rejected - a fabricated QSO manufactured by exactly the mechanism this manifest exists to prevent, with no CRC anywhere in the path to catch it. The list is also mutated per call from chain-specific decode output (:527-:534), so it plainly carries chain-specific data across calls: not class 2 (many writes, content is decode-derived), not class 3 (never wholly overwritten), not class 4. COUNTER-CONSIDERATION, recorded honestly rather than suppressed: the backing store trim(data_dir)//'/fst4w_calls.txt' is a station-global database that both chains read at :99 and both rewrite at :647-:651 with status='unknown' (truncating), so per-chain in-memory copies introduce a LOST-UPDATE RACE on that file - last writer wins and drops the other chain's additions. That is a real defect in either configuration and wants a single owner for the :97-:108/:646-:652 file I/O; it is not a reason to share the in-memory list, because sharing trades a file-consistency bug for a false-decode bug. Also note wcalls.18 is a subroutine SAVE local (:85) - file-local, so like apbits it needs a module hoist before it can be swapped at all. 2000 B, the second-largest class-1 item in this group.
+"""
+
+[[symbol]]
+name = "hiscall0"
+file = "fst4_decode.f90"
+line = 48
+class = 1
+size_bytes = 12
+reason = """
+The other half of the AP cache key, and by far the more chain-specific of the two: in two-radio operation mycall is usually common but hiscall is the per-chain QSO partner, so this is the symbol that actually differs between chains on every call. Note it is used as SCRATCH inside the rebuild block - :156 stores hiscall, :158 may overwrite it with mycall to build a dummy 'MYCALL MYCALL RR73' message (with nohiscall set so :170 re-arms the apbits(30)=99 sentinel), and :174 restores it - so the value that PERSISTS across calls is exactly the live `hiscall` dummy. That transient mycall substitution is why a partial split is worse than it looks: a context swapped mid-block would carry the scratch value as the key. Class 1, indivisible with apbits and mycall0. Same HOIST requirement: `hiscall0.2` is a subroutine SAVE local (:84), unaddressable from another compilation unit until moved to module fst4_decode_apstate. 12 B.
+"""
+
+[[symbol]]
+name = "mycall0"
+file = "fst4_decode.f90"
+line = 48
+class = 1
+size_bytes = 12
+reason = """
+Half of the AP cache key. Written from the `mycall` dummy argument, so its content is by definition per-chain (the operator's callsign is usually common across two chains, but nothing in this file makes that true - and :144-:147 first NUL-trims the dummy in place, so the stored value is the trimmed live argument). Must be restored as ONE unit with apbits and hiscall0: a key from chain A paired with an apbits from chain B is precisely the mis-attribution this manifest exists to prevent, and it is silent - the :148 compare reports 'cache valid' and the AP passes run against the wrong station. Note the interaction with `first`: the :139 blanking is idempotent and, because mycall0 is .bss (NUL-filled, not blank-filled), skipping it is harmless - a zero-filled per-chain copy simply forces a rebuild at :148, which is the safe direction. That is why `first` being class 1 does not endanger this symbol, unlike the mcq family. Class 1. Same HOIST requirement as apbits: `mycall0.3` is a subroutine SAVE local (:84) and is unaddressable from outside the file until moved to module fst4_decode_apstate. 12 B.
+"""
+
+[[symbol]]
+name = "hmod"
+file = "fst4_decode.f90"
+line = 59
+class = 4
+size_bytes = 4
+reason = """
+The FST4 modulation index (submode), fixed at 1 by the DATA statement at :83 and never assigned anywhere in the FST4 subtree. Class 4 by the same rule as ft8/twkfreq1.f90:7 - read-only DATA. TWO honest caveats, which is why this is 'probable' rather than 'decisive'. (1) The compiler did NOT certify it: -O2 left hmod in writable .data while it moved rvec, xdb and isyncword1/2 into .rodata, because hmod is passed BY REFERENCE to five procedures with no intent(in) on any of the dummies, so gfortran cannot prove read-only. The claim here rests on source inspection of all five callees, which I did exhaustively above, not on the section flag. (2) HAZARD FOR A VENDOR REFRESH, and it is a sharp one: hmod is the submode selector. If upstream ever makes it a per-call argument (WSJT-X has experimental FST4 submodes keyed on it), it becomes class 1 the same day - AND, worse, the sync cache guard at :679 tests only `nss.ne.nss0 .or. ntr.ne.ntr0`, so it does NOT include hmod even though csync1/csync2 are built from hmod at :686-:687. Two chains at the same T/R period with different hmod would silently reuse each other's sync template. That guard hole is a pre-existing upstream defect, latent only because hmod is a constant today; it should be fixed by adding hmod to the :679 guard, not masked by scoping. 4 B in .data, immutable in practice.
+"""
+
+[[symbol]]
+name = "rvec"
+file = "fst4_decode.f90"
+line = 62
+class = 4
+size_bytes = 77
+reason = """
+The fixed 77-bit FST4 scrambling vector. Never written at runtime: DATA-initialised at :80-:82 and read at five sites, and -O2 placed it in .rodata, which the linker will enforce - a stray write would fault rather than corrupt. Note how load-bearing it is despite being a constant: it is the pseudo-random mask applied both when BUILDING the AP hypothesis (:168, feeding apbits) and when UNSCRAMBLING a decoded codeword (:488, feeding unpack77), so the two must use the same vector - which sharing a class-4 constant guarantees. Class 4, shareable, no per-chain cost. 77 B of .rodata, allocated but immutable.
+"""
+
+[[symbol]]
+name = "apbits"
+file = "fst4_decode.f90"
+line = 63
+class = 1
+size_bytes = 960
+reason = """
+The a-priori LDPC information vector for THIS chain's (mycall,hiscall), built at :161-:169 by pack77/unpack77 of 'MYCALL HISCALL RR73' and scrambled with rvec at :168. Read on every AP pass of every call at :454/:460/:466, and at iaptype 4/5/6 (:463-:470) apmask(1:77)=1 forces ALL 77 information bits into decode240_101/OSD - the resulting codeword is essentially the encoding of the AP hypothesis and carries a self-consistent CRC24, so chain A's callsign pair emerges as a syntactically perfect, CRC-valid chain B decode that is logged and auto-uploaded. The :150/:151/:170 sentinel value 99 is the ONLY thing that disarms AP (:443/:444); a shared table populated by a chain with a valid standard callsign pair therefore ARMS the deep AP passes on a chain that should have had them disabled. Being precise as the tempofast_decode.f90:40 row was: the :148 key compare re-derives on mismatch, so an all-shared configuration is currently self-consistent; the killer is the PARTIAL split. apbits per-chain + mycall0/hiscall0 shared gives chain B a cache HIT and an all-zero apbits with apmask=1 over 58-77 positions (zero-magnitude forced LLRs - a plausible-wrong-decode generator). apbits shared + mycall0/hiscall0 per-chain gives chain B a suppressed rebuild and a straight read of chain A's table. Class 1 by content, by guard coupling, and by the asymmetric tie-break. IMPLEMENTATION NOTE: like ft4_decode.f90:23 and tempofast_decode.f90:40, this is a SAVEd local of subroutine decode (:84 `save first,apbits,...`), so nm emits it as the file-local `apbits.1` that no other compilation unit can name - it CANNOT be swapped until it is HOISTED to module scope (module fst4_decode_apstate, mirroring ft4_decode_apstate / ft1_decode_apstate), with a MODIFIED FOR NEXUS header a vendor refresh must re-apply. 960 B.
+"""
+
+[[symbol]]
+name = "nappasses"
+file = "fst4_decode.f90"
+line = 64
+class = 2
+size_bytes = 24
+reason = """
+Written only at :115-:120 from six integer literals, all six elements, argument-independent - so every re-fire, from any chain, in any order, writes BYTE-IDENTICAL content. That idempotence is a property of the code, not an assumption about the caller, which is exactly what separates this from the mcq family sitting three lines away in the same guarded block. It is therefore safe under EVERY split of the surrounding cluster: with `first` per-chain and this table shared, chain B's init simply rewrites the same six values. The read at :419 is indexed by the per-call nQSOProgress - the INDEX is per-call, the TABLE is not. Zero-init is harmless because `first` is .true. in every fresh per-chain copy, so the guard always fires before the first read. Class 2, upholding the same verdict the ft8/ft8b.f90:27, ft4_decode.f90:95 and tempofast_decode.f90:140 twins carry. 24 B saved from the per-chain context; the value of the row is that it is provable, not the bytes.
+"""
+
+[[symbol]]
+name = "naptypes"
+file = "fst4_decode.f90"
+line = 65
+class = 2
+size_bytes = 96
+reason = """
+The AP-type dispatch table (the iaptype 1-6 map documented in the comment block at :122-:130). All 24 elements written at :132-:137 from hard-coded array constructors; no dummy argument, no band parameter, no persistent state on any right-hand side, so a re-fire from any chain reproduces the identical bytes. Safe under any split of the init cluster - including the per-chain `first` that this group requires. The read at :441 is doubly per-call (nQSOProgress and itry) but the table itself is fixed. Class 2, matching ft8/ft8b.f90:28, ft4_decode.f90:96 and tempofast_decode.f90:141. One thing worth flagging for a future refresh rather than for the classification: naptypes selects WHICH apbits/mcq entries get forced, so if a refresh ever makes these rows depend on a mode or contest argument, this row inverts to class 1 immediately. 96 B.
+"""
+
+[[symbol]]
+name = "m73"
+file = "fst4_decode.f90"
+line = 66
+class = 1
+size_bytes = 76
+reason = """
+The '73' message-tail AP vector, same non-idempotent in-place transform and same full-77-bit forced-apmask read path as mrrr. Note what a corrupted m73 buys an attacker of the log: iaptype 5 is 'MyCall DxCall 73', the message that CLOSES a QSO - a fabricated one is the single most likely thing to be logged and auto-uploaded to LoTW/QRZ/ClubLog without the operator looking twice. Class 1 with the rest of the init cluster; .DATA-resident, seed a per-chain copy from the load image. 76 B.
+"""
+
+[[symbol]]
+name = "mcq"
+file = "fst4_decode.f90"
+line = 66
+class = 1
+size_bytes = 116
+reason = """
+Raw DATA {0,...,0,1,0,0} at :76 transformed in place to +-1 at :110 and then read at :448 to force 29 callsign bits into decode240_101 before OSD - wrong signs or magnitudes here manufacture CRC-valid but WRONG callsigns, the exact logged-false-decode mode. The post-transform CONTENT is chain-independent (a fixed function of the DATA literal and the read-only rvec at :80-:82), which is why the ft4_decode.f90:97 twin was filed class 2. It is filed class 1 HERE for a structural reason, not a content reason: the guard is `first`, and `first` in this file is class 1 because it also guards wcalls/nwcalls (see that row). Once `first` is per-chain, a SHARED mcq is re-transformed on chain B's first call - mod(-1+0,2) = -1 in Fortran, so entries become -3 - and every iaptype==1 CQ pass on both chains gets garbage a-priori LLRs at apmag scale forever. The reverse split (shared first, per-chain mcq) leaves chain B's copy in raw {0,1} form, i.e. an all-non-negative forced CQ mask. Both mixed configurations produce plausible wrong decodes that get logged. Per the ft8b.f90:39 caution, this row does NOT rest on any property of today's caller: the classification follows from the guard being class-1 persistent state inside this file. CRITICAL for the implementer: mcq lives in .DATA, so a per-chain copy must be SEEDED FROM THE LOAD-TIME IMAGE, never zero-filled - a zero-filled copy transforms to all -1 and forces a wrong CQ mask. Fourth distinct symbol named mcq in the tree (ft8/ft8b.f90:39, ft4_decode.f90:97, tempofast_decode.f90:142, here). 116 B.
+"""
+
+[[symbol]]
+name = "mrr73"
+file = "fst4_decode.f90"
+line = 66
+class = 1
+size_bytes = 76
+reason = """
+The 'RR73' tail. Reached most often of the three tails, because naptypes rows 3 and 4 (:135-:136) select iaptype 6 for the Tx3/Tx4 QSO states - i.e. the mid-QSO states where the operator is actively logging. Identical non-idempotent transform at :113 under the class-1 `first` latch and identical forced-77-bit read at :469. Class 1 as part of the indivisible init cluster; .DATA-resident, per-chain copy must be seeded from the load image. 76 B.
+"""
+
+[[symbol]]
+name = "mrrr"
+file = "fst4_decode.f90"
+line = 66
+class = 1
+size_bytes = 76
+reason = """
+Same mechanism as mcq at :66/:110, applied to the 19-bit 'RRR' message tail. Read at :467 inside the iaptype 4/5/6 branch where apmask(1:77)=1 forces the ENTIRE 77-bit information vector - the most dangerous AP mode in the file, because the decoder's output is then essentially the encoding of the AP hypothesis and its CRC24 is self-consistent by construction. A re-fired transform (per-chain `first` + shared table) drives elements to -3 and poisons that path on both chains permanently. Belongs to the indivisible init cluster {first, mcq, mrrr, m73, mrr73, wcalls, nwcalls}. .DATA-resident: per-chain copy must be seeded from the load image, not zero-filled. 76 B.
+"""
+
+[[symbol]]
+name = "first"
+file = "fst4_decode.f90"
+line = 69
+class = 1
+size_bytes = 4
+reason = """
+Class 1 because what this latch guards is NOT uniformly idempotent AND includes class-1 storage. Two independent hazards in one block. (a) :110-:113 perform the NON-IDEMPOTENT in-place transform `mcq=2*mod(mcq+rvec(1:29),2)-1` and its mrrr/m73/mrr73 siblings; re-firing on already-transformed +-1 data gives mod(-1+0,2) = -1 in Fortran, hence 2*(-1)-1 = -3, and the AP tables are permanently garbage at apmag scale on BOTH chains for the life of the process. (b) :97-:108 load wcalls/nwcalls from trim(data_dir)//'/fst4w_calls.txt' - and that list is the ONLY validity check on the CRC-LESS Keff=50 FST4W decode path (:557 comment, :560-:564 loop). The two dangerous partial splits are exactly complementary: shared `first` + per-chain wcalls means chain B never executes :99-:107, nwcalls stays 0 from .bss, every Keff=50 decode is silently rejected, and the moment chain B sets new_callsign at :527 the rewrite at :646-:652 truncates the operator's fst4w_calls.txt down to chain B's one-entry list (data loss, not just a missed decode). Per-chain `first` + shared mcq family gives hazard (a). Therefore `first` goes per-chain TOGETHER with mcq/mrrr/m73/mrr73/wcalls/nwcalls or none of them. Unlike ft8b.f90:47 - where the guard tests a runtime argument echo so per-chain copies would MASK an upstream defect rather than fix it - this guard is monotone, so per-chain copies here are a COMPLETE fix, not a paper-over: each chain transforms its own load-image copy exactly once. That is why this row swaps where ft8b's stayed shared. One of 23 symbols named `first` in the tree; keyed strictly to fst4_decode.f90:69 (declaration at :69, DATA at :83, SAVE at :84). 4 B.
+"""
+
+[[symbol]]
+name = "nwcalls"
+file = "fst4_decode.f90"
+line = 85
+class = 1
+size_bytes = 4
+reason = """
+The length of the class-1 wcalls list, and therefore the loop bound of the CRC-less acceptance test at :560-:564 and of the file rewrite at :648-:650. It must move with wcalls for the obvious reason - a count from chain A over an array from chain B reads uninitialised slots (blank strings; note `index(msg,trim(''))` returns 1 for a blank entry, i.e. an EMPTY slot would validate ANY message, so a count that overruns the populated region does not fail safe, it fails open). That is the concrete failure mode of splitting the pair, and it is a silent one. Class 1. Implicitly typed with no declaration, so a hoist to module scope must supply the type explicitly. 4 B.
+"""
+
+[[symbol]]
+name = "isyncword1"
+file = "fst4_decode.f90"
+line = 667
+class = 4
+size_bytes = 32
+reason = """
+The 8-symbol Costas-like sync word A for FST4, used to synthesise csync1. Never written; -O2 puts it in .rodata, which is the strongest available evidence for a class-4 claim. It is worth stating explicitly why this is class 4 while the csync1 it feeds is class 1: the WORD is a protocol constant identical on every band and every chain, whereas the WAVEFORM built from it at :689 is scaled by nss and hmod and is therefore per-band. Class 4, shareable. 32 B .rodata.
+"""
+
+[[symbol]]
+name = "isyncword2"
+file = "fst4_decode.f90"
+line = 667
+class = 4
+size_bytes = 32
+reason = """
+Sync word B, the second of the two alternating FST4 sync patterns (the frame uses them in the order 1,2,1,2,1 at the five Costas positions i1..i5, :716-:720). Never written; -O2 placement in .rodata confirms it. Same class-4 / class-1 distinction as isyncword1: the protocol constant is shareable, the csync2 waveform derived from it at :690 is not. 32 B .rodata.
+"""
+
+[[symbol]]
+name = "f0save"
+file = "fst4_decode.f90"
+line = 668
+class = 1
+size_bytes = 4
+reason = """
+The cache key for csynct1/csynct2. Class 1 without qualification: it echoes a per-call, per-chain trial frequency, and splitting it from the arrays it keys is the canonical guard/data split failure. Concretely, a shared csynct1/csynct2 with a per-chain f0save produces false cache HITS (see the csynct1 row - f0=0.0 recurs on every chain), and a per-chain csynct with a shared f0save produces false cache hits in the other direction, leaving chain B correlating against uninitialised .bss zeros so every sync score is 0 and nothing decodes. THE .DATA SEEDING POINT MATTERS HERE MORE THAN ANYWHERE ELSE IN THIS GROUP: the DATA value is -99.9, chosen so no real f0 can match it on the first call. A zero-filled per-chain copy holds 0.0, which is EXACTLY the first f0 the coarse sweep offers (fc1=0.0 at :884, if=0 at :894), so the very first sync_fst4 call would take the :702 branch as a hit and skip the ctwk build entirely - correlating against whatever the other chain left in the COMMON. Seed from the load-time image, never zero-fill. 4 B.
+"""
+
+[[symbol]]
+name = "csync1"
+file = "fst4_decode.f90"
+line = 669
+class = 1
+size_bytes = 25600
+reason = """
+The cached 8-symbol sync-waveform template for sync word 1, at THIS chain's symbol rate. Its content is a function of nss (= nsps/ndown, i.e. of ntrperiod: 40/80/160/336 across the 15 s..1800 s submodes) and of hmod (:686) - per-band data by construction, so not class 2. It is not class 3 either: only 8*nss of 3200 elements are written and only when the guard fires, so it is emphatically NOT fully overwritten before read each call. Not class 4. Class 1 by elimination and by content. Two specific failure modes worth naming. (a) The guard is INCOMPLETE: hmod is used at :686 but is absent from the :679 test, so two chains differing only in modulation index silently share one template (latent today because hmod is the constant 1 - see that row - but the manifest classifies on the symbol, not on today's caller). (b) The STALE TAIL: after a 1800 s decode (nss=40? no - nss ranges 40..336 across submodes) leaves 8*nss elements valid, a subsequent larger-nss configuration that somehow skipped the guard would correlate against uninitialised .bss zeros for the tail, silently halving sync energy rather than failing. The saving grace that makes an all-shared configuration self-consistent is :699 `f0save=-1.e30`, which forces the dependent csynct1/csynct2 rebuild whenever this array is rebuilt - which is exactly why the eight symbols in moves_with are indivisible. 25600 B; the four-array COMMON is 102400 B and is the dominant per-chain cost in this group.
+"""
+
+[[symbol]]
+name = "csync2"
+file = "fst4_decode.f90"
+line = 669
+class = 1
+size_bytes = 25600
+reason = """
+Sync-word-2 template, phase-accumulated from isyncword2 at :687 with the same nss and hmod scaling as csync1. Everything said on the csync1 row applies verbatim: per-band content, partial write (8*nss of 3200), read on later calls, guard that omits hmod. It is listed as its own row rather than folded into csync1 because the manifest keys by symbol and because the two are read at DIFFERENT Costas positions - csynct1 (from csync1) at i1/i3/i5 and csynct2 (from csync2) at i2/i4 (:734-:741) - so a partial corruption of one produces an asymmetric sync score, which shows up as a plausible but slightly-off dt/frequency rather than as an obvious failure. That is the quiet-wrongness signature this manifest is built to prevent. Class 1. 25600 B.
+"""
+
+[[symbol]]
+name = "csynct1"
+file = "fst4_decode.f90"
+line = 669
+class = 1
+size_bytes = 25600
+reason = """
+The frequency-twiddled sync template actually used for correlation - the innermost hot data in FST4 sync search. This is the sharpest class-1 case in the group because the cache KEY IS A BARE FREQUENCY that provably repeats across chains: fst4_sync_search sets fc1=0.0 at :884 and sweeps fc=fc1+0.1*baud*if for if=-12..12 at :894-:895, so f0=0.0 is offered by EVERY chain on EVERY candidate's coarse pass. A shared csynct1 with a per-chain f0save therefore hits a false cache match on the very first coarse step and correlates chain B's downsampled data against chain A's template - built at chain A's nss, chain A's hmod, chain A's twiddle. The result is not a crash and not an obvious failure: it is a wrong sbest/isbest/fcbest, which selects a wrong dt and frequency, which feeds get_fst4_bitmetrics and can hand OSD a shifted frame that AP passes then force into a CRC-valid message. Even in the ALL-shared configuration correctness rests entirely on :699 f0save=-1.e30 invalidating this array whenever csync1 is rebuilt - a one-line coupling between two different guards, which is the strongest possible argument that all eight symbols in moves_with are one indivisible unit. Not class 3: written only under the guard, nz of 3200 elements, read on calls that did not write it. Class 1. 25600 B.
+"""
+
+[[symbol]]
+name = "csynct2"
+file = "fst4_decode.f90"
+line = 669
+class = 1
+size_bytes = 25600
+reason = """
+Twiddled sync-word-2 template. Identical mechanism, key and failure mode to csynct1 - the repeating f0=0.0 cache key from :884/:894, the per-band nss/hmod content, the read-on-a-call-that-did-not-write-it pattern at :736/:738/:759/:761, and the cross-guard coupling through :699. Filed separately because it occupies distinct storage in the COMMON and is read at the even Costas positions; a per-chain context must carry all four arrays or none, since correlating an odd-position template from one chain against an even-position template from another yields a sync score that is neither chain's and is silently plausible. Class 1. 25600 B.
+"""
+
+[[symbol]]
+name = "nss0"
+file = "fst4_decode.f90"
+line = 672
+class = 1
+size_bytes = 4
+reason = """
+Guard echo of the symbol rate the cached sync templates were built for. Class 1 as the key half of a keyed cache whose data (csync1/csync2/dt/fac) is per-band: a key from chain A over templates from chain B is a silent wrong-rate correlation. DATA -1 at :672 means a per-chain copy must be seeded from the load image (a zero-filled copy holds 0, which no real nss can equal since nss is 40..336, so it would still fire - but do not build on that accident; seed it). Two details worth recording. First, the :712 write is redundant with :697 and means nss0 is touched by BOTH guarded blocks, so the two guards are not independent - a design that only works because they are restored together. Second, the guard is INCOMPLETE with respect to hmod, which csync1/csync2 depend on at :686-:687 (see the hmod row); adding hmod to :679 is the upstream fix. 4 B.
+"""
+
+[[symbol]]
+name = "ntr0"
+file = "fst4_decode.f90"
+line = 672
+class = 1
+size_bytes = 4
+reason = """
+The other half of the sync-cache key: an echo of the ntrperiod dummy (ntr), i.e. of the FST4 T/R period, which is exactly the parameter most likely to DIFFER between two chains - one radio on FST4-30 chasing a DXpedition while the other sits on FST4W-1800. That makes this the symbol whose per-chain value most reliably diverges, and therefore the one whose sharing most reliably makes the cache lie. It is a redundant key in the strict sense (nss is itself a function of ntrperiod through ndown at :181-:216, so nss and ntr always change together), but that redundancy is what makes the pair safe when kept together and is no argument for splitting them. DATA -1 at :672: seed a per-chain copy from the load image. Class 1. 4 B.
+"""
+
+[[symbol]]
+name = "dt"
+file = "fst4_decode.f90"
+line = 673
+class = 1
+size_bytes = 4
+reason = """
+The downsampled sample interval, 1/fs2 = ndown/12000, cached for the ctwk frequency-twiddle at :703. Class 1 on BOTH available grounds, which is unusual and worth stating. By CONTENT: ndown is 18/42/108/205/512/1664/3360 across the seven T/R periods (:184-:215), so dt is per-band data, not a constant - it is not the 8*atan(1)-style init-once value that the twopi row three names away turns out to be. By UNIT-OF-RESTORE: it is written only under the nss0/ntr0 guard, so a per-chain context restored with a matching nss0 and a stale dt (or a shared dt behind per-chain guards) skips the recompute and twiddles at the WRONG rate - dphi off by the ratio of the two ndown values, which shifts the whole sync search off frequency. Being fair to the upstream design: dt is a pure function of ntr, and ntr IS in the guard, so an ALL-shared configuration is internally consistent; the failure requires a split, which is exactly why this row exists. NAME COLLISION WARNING - there are THREE `dt` in this one file and six in the tree: the callback dummy at :18, a STACK local in subroutine decode at :221 (`dt=1.0/fs`, 1/12000, absent from nm entirely), and this SAVEd one in sync_fst4. Key strictly by fst4_decode.f90:673. 4 B.
+"""
+
+[[symbol]]
+name = "fac"
+file = "fst4_decode.f90"
+line = 673
+class = 1
+size_bytes = 0
+reason = """
+Dead write-only state: `fac` caches 1/(8*nss) for a power-computing statement function p() declared at :675 that nothing ever calls, so -O2 removes the symbol outright. Filed class 1 at ZERO cost, and deliberately not class 2/3 like the dead twopi rows at ft4_decode.f90:120 and ft4/sync4d.f90:19, because those dead saves held 8*atan(1) - a chain-INDEPENDENT value - whereas this one holds 1.0/(8.0*nss), which is per-band exactly like dt at :681, and it sits under the same class-1 nss0/ntr0 guard. Its harmlessness today rests entirely on p() happening to be unreferenced in the current body - a property of today's code, not of the symbol, which is precisely the reasoning the ft8b.f90:39 mcq row forbids. Since the class-1 verdict costs 0 bytes (nothing to allocate, nothing to memcpy), there is no trade to make. The row's real job is to be a tripwire: if a vendor refresh restores the use of p(), fac becomes live per-band cache state inside the sync inner loop and this row already says so. DISAMBIGUATION: a second, unrelated `fac` exists at :950 in dopspread (`fac=1.0/32768`) - a stack local, absent from nm at any optimisation level. Key strictly by fst4_decode.f90:673.
+"""
+
+[[symbol]]
+name = "twopi"
+file = "fst4_decode.f90"
+line = 673
+class = 2
+size_bytes = 4
+reason = """
+Class 2 by exactly the ft8/gen_ft8wave.f90:13 argument, which this case matches point for point. There is a single write site (:680) whose value is the mathematical constant 2*pi; every re-fire, from any chain, at any band, produces the IDENTICAL bit pattern, so a cross-chain read at :703/:707 is indistinguishable from a self-computed one. Read-before-write is impossible in any split: reaching :703 requires having already passed :679, and on the first call of a fresh copy nss0 = -1 (DATA at :672) which no real nss (40..336) can equal, so the :679 block always fires first. That holds whether nss0 is per-chain (each chain's first call initialises the shared twopi) or shared (the process's first call does). This is the one symbol in the sync-cache block whose content is provably chain-INDEPENDENT, and the contrast with `dt` two names away - same SAVE statement, same guard, same read site :703 - is the point of the row: dt is 1/fs2 and is per-band, twopi is 8*atan(1) and is not. 11 symbols named twopi in the tree; keyed strictly to fst4_decode.f90:673. 4 B, shareable.
+"""
+
+[[symbol]]
+name = "xdb"
+file = "fst4_decode.f90"
+line = 812
+class = 4
+size_bytes = 28
+reason = """
+The model 4-tone CCF peak shape subtracted by the CLEAN algorithm at :865-:870 when a candidate is removed from the search spectrum. A pure symmetric taper of literals with no dependence on nsps, hmod, band or chain - the per-candidate scaling comes from pval (:867), which is a stack local. Never written; -O2 puts it in .rodata. Class 4, shareable. Worth noting for completeness that everything else in get_candidates_fst4 - s, s2, sbase, candidates - is either an allocatable or a stack local (nm emits no symbol for them), so xdb is the ONLY static in that subroutine. 28 B .rodata.
+"""
+
+[[symbol]]
+name = "ncall"
+file = "fst4_decode.f90"
+line = 938
+class = 1
+size_bytes = 4
+reason = """
+A monotone per-chain invocation counter used as the vertical offset that stacks successive Doppler-spread spectra in the plot written to unit 52 (:1018). Class 1 by strict elimination against the taxonomy: it is not written-once (it accumulates, :941), it is not fully overwritten before read on a call (it is read-modify-written), and it is not constant - so classes 2, 3 and 4 are all excluded and class 1 is the only remaining verdict. Stating the severity honestly rather than inflating it: the consequence of sharing is a mangled diagnostic plot, because ncall never reaches the decode path - it flows only into `y` and thence to `write(52,1010)`. It cannot fabricate a QSO. But the manifest's rule is that a class-2/3/4 verdict is a positive claim requiring proof, and no such proof exists here; the honest verdict is 1, and it costs 4 bytes. Note also that dopspread reaches gen_fst4wave at :948, which is why this subroutine is on the DECODE path at all and not dismissible as TX-only. Distinct from any other `ncall` in the tree; keyed to fst4_decode.f90:938.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/gen_fst4wave.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "ctab"
+file = "fst4/gen_fst4wave.f90"
+line = 7
+class = 2
+size_bytes = 524288
+reason = """
+CLASS 2, and I stress-tested it because it is the largest object in the group (512 KB, half a megabyte of would-be per-chain cost) and because it sits behind a guard I am filing class 1, so it WILL be rewritten by every chain. The proof of chain-independence is complete: the write at :21-24 is a unit-circle phasor table whose value depends on nothing but the PARAMETER NTAB=65536 (:5) and the local `twopi` set two lines earlier at :20 to the literal 8.0*atan(1.0). No dummy argument reaches it -- not nsps, not fsample, not f0, not hmod, not itone, not icmplx. There is no band-, rate- or chain-derived input anywhere in its dependency cone, so no argument combination can make chain A's ctab differ from chain B's by a single bit; a re-fire from any chain rewrites byte-identical content, and cos/sin are deterministic within one process image. Checked the two traps that have caught rows elsewhere in this manifest. (1) PARTIAL WRITE: the loop covers the entire declared extent and the read index is masked to that extent, so unlike ft8/gen_ft8wave.f90:9 `pulse` there is no stale-tail question at all. (2) ALIASING: ctab shares a declaration statement with the DUMMY argument cwave at :7 (`complex cwave(nwave),ctab(0:NTAB-1)`), which is the kind of line that hides an overlay -- it does not here. There is no EQUIVALENCE in this file and nm resolves ctab to its own 512 KB .bss object (`ctab.5`), distinct from the caller-supplied cwave, so writes through cwave at :58/:67/:84/:87 cannot reach it. (3) READ-BEFORE-WRITE: the only way to read ctab undefined is to reach :65/:67 with `first` already .false. and ctab never written in this partition -- impossible, because `first` is class 1 and every chain therefore enters with first=.true. and executes :21-24 before its first :65. That is the dependency this row rests on, and it is why `first` is class 1 rather than the 4-byte saving. UPHOLDS the manifest's own gen_ft8wave.f90:8 ctab verdict, same idiom, same size, same argument-independence. Shareable: saves 512 KB per chain, which is the single largest item in this group by two orders of magnitude.
+"""
+
+[[symbol]]
+name = "first"
+file = "fst4/gen_fst4wave.f90"
+line = 14
+class = 1
+size_bytes = 4
+reason = """
+CLASS 1 because it is the only assignment that is correct under EVERY partition of the symbols it guards; the alternatives are conditionally correct, and a conditional correctness that spans two blocks is exactly what this manifest exists to stop. The concrete failure: `first` gates the ALLOCATION of `pulse` (real, allocatable, save at gen_fst4wave.f90:9; allocate at :31). If `first` is shared and `pulse` is per-chain, chain A's call latches first=.false. at :39, chain B enters with first already .false., and if chain B's nsps happens to equal the shared nsps0 the whole block at :29-41 is SKIPPED -- chain B then reads `pulse(1:3*nsps)` at :51 from an allocatable that was never allocated in its own partition. That is an unallocated-descriptor dereference, not a wrong number. The mirror failure is worse because it is silent: if `first` is shared and `twopi` (:17/:20) is per-chain, block 1 never re-fires for chain B, chain B reads twopi straight out of uninitialized .bss (0.0) at :46/:56/:62, dphi_peak goes to 0, the ctab phase index pins at 0, and gen_fst4wave returns a DC carrier that dopspread then reports as a perfectly plausible Doppler-spread figure. Filing `first` class 1 makes BOTH impossible: chain B always re-enters with first=.true., block 1 re-fires (writing twopi/ctab/lshape with provably byte-identical content -- see those rows), and block 2 re-fires (reallocating and refilling pulse for chain B's own nsps). Every re-fire in this routine is an idempotent assignment; there is no `x=2*x-1`-style non-idempotent in-place transform anywhere in the file, so the re-fire costs cycles and nothing else. Counter-argument considered and rejected: because nsps0 is class 1 and initialises to DATA -99 (:15), chain B's `nsps.ne.nsps0` is true on its first call regardless of `first`, so `first` COULD be class 2 under today's exact partition -- but that makes its safety a cross-symbol invariant that any future reclassification of ctab/twopi/pulse silently breaks. 4 bytes against a DC-carrier Doppler report and an unallocated-array read is not a trade. Note for whoever holds the rest of this file: `pulse` (gen_fst4wave.f90:9, nm `pulse.2` 64 B .bss descriptor + heap payload of 4*3*nsps B, i.e. 8640 B at FST4-60 up to 1612800 B at FST4-1800) is a real static symbol that was NOT in this batch's symbol list. It is the payload this entire guard set protects and it needs a class-1 row of its own; swapping the 64 B descriptor is what transfers heap ownership per chain.
+"""
+
+[[symbol]]
+name = "nsps0"
+file = "fst4/gen_fst4wave.f90"
+line = 15
+class = 1
+size_bytes = 4
+reason = """
+CLASS 1. nsps0 is a cache key over a genuinely PER-CHAIN quantity, which is what separates it from the shareable-memo precedent at gen_ft8wave.f90:12 (`fchk0`). nsps is not a constant in FST4: fst4_decode.f90:182-213 selects it from ntrperiod -- 720 / 1680 / 3888 / 8200 / 21504 / 66560 / 134400 for the 15 / 30 / 60 / 120 / 300 / 900 / 1800 s submodes -- and two chains on two bands running two different FST4 TR periods is a normal, supported operating configuration, not an exotic one. So unlike fchk0, whose key is one constant process-wide in this build, nsps0 legitimately holds different values for different chains. Split it from the cache it keys and you get one of two failures. (1) nsps0 per-chain, pulse shared: chain A calls nsps=3888 (fills the shared pulse with the 11664-point shape, nsps0_A=3888); chain B calls nsps=8200 (reallocates the SHARED pulse to 24600 points and refills it, nsps0_B=8200); chain A calls nsps=3888 again -- its own nsps0_A still reads 3888, the guard at :29 does NOT fire, and :51 reads pulse(1:11664) out of an array now holding chain B's 8200-symbol GFSK shape. The reconstructed waveform is wrong, the subtraction/correlation against iwave is wrong, and nothing anywhere reports an error. (2) nsps0 shared, pulse per-chain: chain B hits `nsps.eq.nsps0`, skips the allocate at :31, and reads its own never-allocated `pulse` at :51. Keeping nsps0, first, dt, tsym and pulse in one partition makes the block self-healing per call -- every miss rewrites ALL of :31-40 before anything at :46+ reads it -- which is the property that would otherwise have earned it class 2. Note the residual defect the key does NOT cover, which is why dt and tsym are also class 1 and not merely along for the ride: `fsample` is a dummy argument that feeds dt (:32) and tsym (:33) but is NOT part of the guard expression at :29.
+"""
+
+[[symbol]]
+name = "lshape"
+file = "fst4/gen_fst4wave.f90"
+line = 16
+class = 2
+size_bytes = 4
+reason = """
+CLASS 2, and this is the one symbol in the group that is provably safe under EVERY partition, which is why it is the cleanest class-2 claim here. Three properties, each verified rather than assumed. (1) CONTENT IS PROCESS-WIDE, NOT CHAIN-SPECIFIC: the value comes from the environment variable FST4_NOSHAPING via get_environment_variable at :25. I grepped the entire libtempo tree -- .f90, .c, .cpp, .h and .rs -- for `setenv` and `putenv` and found ZERO hits, and FST4_NOSHAPING itself appears at exactly one line in the whole repo (this :25). Nothing in the process can make the variable read differently for chain A than for chain B, so a re-fire from any chain writes the same answer. (2) THE WRITE IS IDEMPOTENT AND MONOTONIC: `lshape=.false.` is a plain assignment under a condition, not a toggle and not an in-place transform, and there is no code path anywhere that sets it back to .true. -- the DATA at :16 is the only source of .true.. So re-firing the guard N times from N chains is indistinguishable from firing it once. (3) NO READ-BEFORE-WRITE IN EITHER DIRECTION: unlike twopi (uninitialized .bss if the block is skipped), lshape's DATA default .true. IS its correct pre-write value for the no-env-var case, so even a partition that skips :26 entirely reads a defined and correct value. That immunity is what makes this row independent of the `first` verdict. Shareable. SURGERY NOTE on the headless-coupling point raised for this batch: gen_fst4wave.f90:4 carries `use prog_args`, but nothing in the routine references a single prog_args entity -- not shm_key, exe_dir, data_dir, temp_dir, share_dir or lquiet (prog_args.f90:2-5). The routine reaches the environment through the get_environment_variable INTRINSIC at :25, not through the module. So line 4 is vestigial and deleting it decouples gen_fst4wave from prog_args entirely, removing this file from the prog_args surgery question rather than adding rows to it. Deleting it is also the cheapest way to keep the FST4 waveform path free of WSJT-X program-argument state; recommend it as surgery, not as manifest rows.
+"""
+
+[[symbol]]
+name = "dt"
+file = "fst4/gen_fst4wave.f90"
+line = 17
+class = 1
+size_bytes = 4
+reason = """
+CLASS 1, on the same structural finding the manifest already recorded for gen_ft4wave.f90:10 -- a saved scalar derived from a dummy argument that is absent from its own cache key, read outside the guard. Contrast gen_ft8wave.f90:13 `dt`, which the manifest filed class 2 for the specific reason that fsample IS a component of its key (`fchk=nsym+nsps+bt+fsample`, gen_ft8wave.f90:16), so a rate change forces a miss and a recompute BEFORE dt is read. gen_fst4wave has no such protection: the key at :29 is nsps alone, so a caller that supplies a different fsample at the same nsps reads the previous caller's dt and the regenerated waveform is mis-scaled in frequency by exactly the rate ratio. The defensible counter-argument, stated plainly: there is exactly ONE gen_fst4wave call site in the whole libtempo tree (fst4_decode.f90:948, inside dopspread), it hardcodes `fsample=12000.0` two lines earlier at :947, and grep across .f90/.c/.h/.rs finds no C-ABI or Rust entry point that reaches gen_fst4wave -- FST4 is being vendored RX-only and there is no fst4_gen_wave export. So the latched value is 8.3333e-5 process-wide TODAY and dt is, today, chain-independent in content. That is why the confidence below is `probable` and not `decisive`. But this is textbook mcq: a fact about the current caller, not about the symbol, and the manifest's own header records that the gen_ft4wave sibling had exactly this shape until a second caller (the C ABI) appeared and turned it into a live first-caller-wins defect. The tie-break is asymmetric and dt is 4 bytes; it also has to travel with first/nsps0/tsym/pulse regardless, since splitting it out of that atom is what produces the stale-cache read in the first place. Filing it class 1 costs nothing beyond the memcpy it was already going to be part of. FLAG for the port, distinct from the chain question and NOT fixed by per-chain copies: if the app ever exposes a variable sample rate to FST4 regeneration, add fsample to the guard at :29 (or restore a gen_ft8wave-style key) before doing anything else -- but per the gen_ft4wave precedent that is a transmitted/regenerated-waveform change and needs its own approval.
+"""
+
+[[symbol]]
+name = "tsym"
+file = "fst4/gen_fst4wave.f90"
+line = 17
+class = 1
+size_bytes = 4
+reason = """
+CLASS 1, decisively, and it is the strongest case in this group. tsym is written from a chain-specific input and read outside its guard. nsps varies per chain by design (fst4_decode.f90:182-213 maps ntrperiod to nsps; FST4-60 gives tsym=3888/12000=0.324 s, FST4-120 gives 8200/12000=0.6833 s), so a shared tsym holds one chain's symbol duration while the other chain reads it at :56. The ONLY thing that saves a shared tsym today is that nsps is in the guard key, so a chain switching nsps forces a recompute before the :56 read -- i.e. tsym's correctness is not a property of tsym, it is borrowed entirely from nsps0's coherence. That is the definition of a symbol that must move with its guard. Split nsps0 per-chain while leaving tsym shared and the borrowed coherence evaporates in exactly the interleaving spelled out in the nsps0 row: chain A's guard reads its own stale nsps0, does not fire, and :56 uses chain B's tsym. The error is not a crash and not a rejected decode -- it shifts the reconstructed carrier by 1.5*hmod*(1/tsym_A - 1/tsym_B) Hz, which for FST4-60 against FST4-120 with hmod=1 is about 2.3 Hz, well inside the analysis window, so dopspread's g(t)=iwave*conjg(cwave) product at fst4_decode.f90:952 stays plausible and the reported Doppler spread w50 is simply wrong. There is also a second hole independent of the partitioning: fsample is a dummy argument and is NOT part of the guard at :29, so tsym latches the FIRST caller's sample rate for a given nsps and never re-checks it -- the identical structural defect the manifest already records at gen_ft4wave.f90:10. Today the sole caller hardcodes it (fst4_decode.f90:947 `fsample=12000.0`, the only gen_fst4wave call site in the tree, at :948), but per the mcq caution that is a property of TODAY'S CALLER and not of this symbol, and it is precisely the property a headless/variable-rate front end would change. PATH NOTE, stated so nobody over-weights it either way: gen_fst4wave is reached on the decode path ONLY through dopspread (fst4_decode.f90:927), which fst4_decode calls at :588 under `if(plotspec_exists)` -- guarded by an `inquire(file='plotspec')` at :584. So in a default build this whole file is cold, and there is no subtractfst4-style regenerate-and-subtract in fst4_decode. That lowers the exposure; it does not change the classification, because the file-existence probe is an operator-visible diagnostic toggle that can be on in production, and because a cold symbol filed class 2 becomes a live bug the moment the path warms up.
+"""
+
+[[symbol]]
+name = "twopi"
+file = "fst4/gen_fst4wave.f90"
+line = 17
+class = 2
+size_bytes = 4
+reason = """
+CLASS 2. Written exactly once, at :20, to 8.0*atan(1.0): a compile-time-determined mathematical constant with no dependence on any dummy argument, on the band, on nsps, on fsample, or on anything a chain can vary. Every re-fire of the :19 block produces the identical bit pattern, so a cross-chain read is indistinguishable from a self-computed one and the many out-of-guard reads at :46-:88 are harmless. Assignment, not an in-place transform -- there is no non-idempotent `x=2*x-1` hazard here or anywhere in this file. UPHOLDS the manifest's gen_ft8wave.f90:13 `twopi` verdict on identical grounds. The one thing worth writing down, because it is the asymmetry that decided the `first` row: twopi is safe to SHARE but would be fatal to make PER-CHAIN while leaving `first` shared. In that partition chain B enters with first already .false., block 1 never runs for it, and twopi is read from uninitialized .bss as 0.0 -- dphi_peak goes to zero at :46, the ctab index at :62 pins to 0, the phase wrap at :70 never fires, and gen_fst4wave hands dopspread a DC carrier that produces a perfectly well-formed, entirely fictitious Doppler-spread report. Filing `first` class 1 forecloses that partition; this row and that one are two halves of one decision.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/fst4_baseline.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "nseg"
+file = "fst4/fst4_baseline.f90"
+line = 12
+class = 4
+size_bytes = 0
+reason = """
+CLASS 4. Never written after load-time DATA initialization, therefore read-only DATA, which is the header's own definition of class 4. The whole of fst4_baseline is otherwise stateless: it is a pure function of its arguments (s, np, ia, ib, npct) into sbase, and its working arrays x(1000)/y(1000)/a(5) at :11 and the automatic sw(np) at :8 are stack/heap locals, not static -- confirmed by the empty static symbol table above, so there is nothing else in this file for the manifest to hold. Its single caller is fst4_decode.f90:848 (`call fst4_baseline(s2,nnw,ina+hmod*3,inb-hmod*3,npctile,sbase)`) inside get_candidates_fst4; the per-call spectrum arrives entirely through the argument list, so no chain-specific data can survive between calls here. Precedent note for consistency: the manifest filed the analogous never-written DATA arrays ft8/genft8.f90:12 `graymap` and ft8/genft8.f90:11 `icos7` as class 2 while remarking they are 'equivalent to 4'. I am filing 4 rather than 2 because this symbol is not merely unwritten but has literally no storage to share or to swap -- there is no object in .bss or .data to get wrong. If the gate prefers the genft8 convention, 2 and 4 are interchangeable here and the distinction is immaterial to the memcpy set either way: 0 bytes.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/get_fst4_bitmetrics.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "ci"
+file = "fst4/get_fst4_bitmetrics.f90"
+line = 8
+class = 1
+size_bytes = 88
+reason = """
+NOT IN THE ASSIGNED SYMBOL LIST — flagging it because the manifest rule is that EVERY statically-allocated symbol in the file must appear, and this file's static set (nm) is exactly {first, isyncword1, isyncword2, ci, s2, one}; ci and s2 are the two the assignment did not name. `complex, allocatable, save :: ci(:,:)` at :8, commented 'ideal waveforms, 20 samples per symbol, 4 tones'. CLASS 1 on the manifest's own criterion: its allocation status is persistent state that is READ at :26 before anything is written on that call, which is the textbook class-1 signature and disqualifies it from class 3 ('fully overwritten before read each call') on the precise point that is also the hazard. Its content is a per-chain quantity: ci depends on nss (dphi=twopi/nss at :37, dp=(itone-1.5)*dphi at :39), and nss is a per-chain submode parameter — fst4_decode.f90:217 nss=nsps/ndown over the ntrperiod branch at :181-215, giving 36 (T/R 60 s), 40 (15/30/120/900/1800 s) or 42 (300 s). Two chains on different FST4 T/R periods want DIFFERENT ci. TODAY the routine gets away with sharing it only by accident: nss0 is never assigned (see that row), so :26 deallocates and :29-45 rebuilds on literally every call, and the stale-cache window never opens. Two things still argue class 1 now, not later. (i) NON-SERIALIZED USE IS A HEAP BUG, NOT A DATA BUG: a shared allocatable descriptor touched by two chains concurrently is a double-free / use-after-free at :26/:29, and the payload freed under chain A at :26 while chain A is mid-:53 gives a use-after-free read whose garbage correlations still flow to the decoder. (ii) THE SPLIT HAZARD: if a refresh restores `nss0=nss` (the same idiom at fst4_decode.f90:696 already has that store) then a shared ci with per-chain guards, or a per-chain ci with shared guards, produces either an unallocated dereference at :53 or a correlation of a 42-element csymb against a 40-element ci — an out-of-bounds heap read per tone per symbol, feeding wrong-but-well-formed bit metrics into decode240_101/osd240_101. Keeping ci, nss0 and first in one class makes every one of those mixes unconstructible. Cost: 88 bytes of descriptor plus a ~1.3 kB heap block per chain, and the swap must move the descriptor as a unit (a naive memcpy of the descriptor aliases the SAME heap payload into both chains — the per-chain context must own its own allocation, so the correct implementation is to give each chain its own descriptor and let each chain's first call allocate). IMPLEMENTATION NOTE: like the 18 symbols already hoisted for this manifest, `ci` is a subroutine-local SAVE and therefore a FILE-LOCAL symbol (nm: ci.11) that no other compilation unit can name — it must be hoisted to module scope before it can be swapped at all.
+"""
+
+[[symbol]]
+name = "isyncword1"
+file = "fst4/get_fst4_bitmetrics.f90"
+line = 10
+class = 4
+size_bytes = 32
+reason = """
+integer isyncword1(0:7), declared at :10 and DATA-initialized at :20 with the literal sequence 0,1,3,2,1,0,2,3. It is NOT in the SAVE list at :24, but a DATA-initialized local acquires implicit SAVE and therefore static storage — confirmed by nm (isyncword1.8, 32 bytes, .rodata). CLASS 4 as a positive claim: the value is a compile-time literal, it is never the target of an assignment, it never appears on the left of an =, it is never passed to a subprogram (so no dummy-argument write face exists and no EQUIVALENCE alias exists — the file contains no EQUIVALENCE statement at all), and it is read only in the three integer comparisons at :69/:73/:77. Its content is the FST4 protocol's first sync word; it is the same sequence for every band, every T/R period and every chain by definition of the mode, so it is not merely never-written, it is chain-INDEPENDENT by construction. Shareable with no serialization requirement — read-only data is safe even under true concurrency, which distinguishes this row from the class-3 rows in the same file. NAME COLLISION WARNING, AND IT IS A REAL ONE IN THIS CALL CHAIN: fst4_decode.f90:667 declares `integer hmod,isyncword1(0:7),isyncword2(0:7)` inside the contained subroutine sync_fst4 with the identical DATA at :669 — a second, distinct 32-byte object with the same name and the same value, in the same decode path. Keying by name would merge two rows that must stay separate; both are class 4, but a future divergence would be invisible.
+"""
+
+[[symbol]]
+name = "isyncword2"
+file = "fst4/get_fst4_bitmetrics.f90"
+line = 10
+class = 4
+size_bytes = 32
+reason = """
+integer isyncword2(0:7), declared at :10, DATA at :21 with the literal 2,3,1,0,3,2,0,1 — the bitwise complement-pattern partner of isyncword1, used for FST4's second and fourth sync blocks. Implicit SAVE via DATA (it is absent from the explicit SAVE list at :24), storage confirmed by nm in .rodata at 32 bytes. CLASS 4 by the same positive proof as isyncword1: never assigned, never on the left of an =, never passed as an actual argument (the routine's only calls are timer at :86/:164 and normalizebmet at :180-183, neither of which receives it), no EQUIVALENCE anywhere in the file, and the value is a protocol constant identical for every band, T/R period and chain. Read-only, so shareable without even the serialization proviso that the class-3 rows carry. NAME COLLISION: a distinct 32-byte object of the same name and value exists at fst4_decode.f90:667 (contained subroutine sync_fst4, DATA at :670), read there at :687 to build csync2 — same value today, separate storage, separate row required.
+"""
+
+[[symbol]]
+name = "graymap"
+file = "fst4/get_fst4_bitmetrics.f90"
+line = 11
+class = 4
+size_bytes = 0
+reason = """
+integer graymap(0:3), declared at :11, DATA-initialized at :22 to 0,1,3,2 — the 4-FSK Gray mapping. Implicit SAVE via DATA (it is not in the explicit SAVE list at :24), but at -O3 gfortran folds the four literals into the :99 subscript computation and emits no object at all, which is why size_bytes is 0 and not the declared 16. CLASS 4 on a proof that does not depend on the optimizer: the array is never the target of an assignment, never appears left of an =, and is never passed as an actual argument to any call (this routine calls only timer at :86/:164 and normalizebmet at :180-183), so no write face — dummy-argument or EQUIVALENCE — exists anywhere. Its value is a fixed property of the FST4 modulation, identical for every band, T/R period, submode and chain; it cannot depend on per-call input because nothing in the file can reach it. Zero bytes to share and read-only, so it is safe even under true concurrency. NAME COLLISION: ft4/get_ft4_bitmetrics.f90:9 declares an identically named, identically valued 16-byte graymap that IS emitted (.rodata) and is already class 4 in this manifest — two symbols, one name, different emitted sizes (16 vs 0). Never key by name.
+"""
+
+[[symbol]]
+name = "one"
+file = "fst4/get_fst4_bitmetrics.f90"
+line = 14
+class = 3
+size_bytes = 4194304
+reason = """
+CLASS CORRECTED BY THE CHALLENGE PASS: filed class 2 on the first pass, corrected to class 3. PARTIALLY REFUTED - the SHAREABLE verdict survives, the CLASS LABEL does not. Class 2, not class 1: the 4,194,304 bytes stay out of the per-chain context, so the claim's economic argument is safe. But class 2 is the wrong label and the claim's own text proves it. I confirmed the load-bearing fact myself: `grep -n nss0 fst4/get_fst4_bitmetrics.f90` returns only :23 (`data first/.true./,nss0/-1/`), :24 (SAVE list), :26 and :28 (the two tests). nss0 is NEVER ASSIGNED, so `first .or. nss.ne.nss0` at :28 is permanently true and `one` is memset at :30 and rebuilt by the 1,048,576-iteration loop at :31-:35 on EVERY call. That is not INIT-ONCE. The manifest's class-2 header promises 'written once ... so a re-fire from any chain reproduces identical bytes'; the class-3 header is the one that says 'two chains inside the same routine concurrently is a live data race on every one of them'. The second sentence is the true one here, and the claim concedes it verbatim ('SERIALIZATION IS STILL REQUIRED ... chain B's `one=.false.` landing between chain A's :35 and chain A's :104 gives chain A an all-false mask, maxval-over-empty-mask = -HUGE'). A label that carries a class-3 obligation must sit in the class-3 table, or an implementer who reads the class column and not the 1,400-word reason will conclude no serialization is needed and ship the race. THE CLAIM'S OWN PRECEDENT IS WHAT BREAKS IT: it cites ft4/get_ft4_bitmetrics.f90:11 as 'same idiom, 512x smaller'. It is NOT the same idiom - I checked: ft4's guard is `if(first)` alone (ft4/get_ft4_bitmetrics.f90:24 saves only `first,one`, there is no nss0 at all), so ft4's `one` genuinely is written once and class 2 is correct THERE. Keying by name across the two files is exactly what the manifest header forbids, and it is the one place this claim's reasoning slips. Everything else in the claim I confirmed: content is a pure function of the loop indices i,j at :33 with no dummy (cd, nss, bitmetrics, s4, nsync_qual, badsync) reaching it; :30 blankets all elements so there is no partial-write tail; the rebuild is wipe-then-set, hence idempotent; column coverage across the reads at :104/:122/:140/:156 spans all 16 columns and row coverage reaches 0:65535, so the whole array is live. Size independently re-measured - I built the object with the Release flags myself: `nm -S` -> `0000000000040000 0000000000400000 b one.9` = 4,194,304 B .bss, 94% of the unit's 4,456,536 B .bss. SECOND FINDING, not a class issue but it should go in the row: because nss0 is never written, every single call pays a 4 MB memset plus a 1M-iteration loop plus a deallocate/allocate of `ci` at :26/:29. That is a live upstream performance defect, and its root cause (`nss0=nss` is missing from the end of the :28 block, where `first=.false.` sits at :46) is the same missing statement. logical one(0:65535,0:15) declared at :14, SAVEd at :24 (nm: one.9, 4,194,304 bytes .bss — measured with the exact Release flags from build.ninja:924, not inferred). CLASS 2 is a positive claim and here is the proof. (a) CONTENT IS INPUT-INDEPENDENT: the only expression that ever sets a true bit is `if(iand(i,2**j).ne.0) one(i,j)=.true.` at :33, where i and j are the loop indices of :31-32 and nothing else appears on the right-hand side. It is a pure bit-decomposition table of the integers 0..65535 — no dummy argument (cd, nss, bitmetrics, s4, nsync_qual, badsync), no COMMON, no other SAVE variable, no band/frequency/callsign input reaches it. Two chains on different bands compute byte-identical tables. (b) NO PARTIAL-WRITE LEAK: :30 `one=.false.` blankets all 1,048,576 elements before the loop sets the true bits, so there is no path on which a read at :104/:122/:140/:156 sees a half-built table. (c) THE IN-PLACE TRANSFORM IS IDEMPOTENT: rebuilding is `blanket-zero then set`, not an accumulate — contrast the ft8b `x=2*x-1` family — so re-firing the guard cannot corrupt it. This is what makes `one` safe to leave shared even though all three of its guard/companion symbols (first, nss0, ci) are filed class 1: the worst a per-chain guard can do is make chain 2 recompute an identical table, which costs 4 MB of memset and 1,048,576 loop iterations but cannot change a single bit of output. The reverse mix — the one that is fatal for ft4's `one` (shared first + per-chain one leaves chain 2 with an all-.false. mask and both maxval calls degenerate to -huge) — is unreachable here because the :28 guard is permanently true (nss0 is never written; see that row), so every chain builds its own copy of the shared table on every call regardless of how `first` is classified. SERIALIZATION IS STILL REQUIRED: `one` is written on every call, so two chains executing get_fst4_bitmetrics CONCURRENTLY race on the memset at :30 — chain B's `one=.false.` landing between chain A's :35 and chain A's :104 gives chain A an all-false mask, maxval-over-empty-mask = -HUGE, and the resulting bit metrics are garbage that still flows into decode240_101/osd240_101 and can emerge CRC-valid. Class 2 here means shareable under the same serialize-the-decoders discipline every class-3 row in this manifest already assumes. KEEPING THIS CLASS 2 IS THE WHOLE ECONOMIC STORY OF THE FST4 BATCH: filing it class 1 would add 4,194,304 bytes to a 3,530,670-byte per-chain context, i.e. it would more than double the memcpy set for a table of the first 65536 integers' binary expansions. NAME COLLISION: distinct storage from ft4/get_ft4_bitmetrics.f90:11 `one` (8192 bytes, also class 2) — same idiom, 512x the size, never key by name.
+"""
+
+[[symbol]]
+name = "first"
+file = "fst4/get_fst4_bitmetrics.f90"
+line = 15
+class = 1
+size_bytes = 4
+reason = """
+logical, DATA .true. at :23, SAVEd at :24, written .false. exactly once at :46 (nm: first.10, 4 bytes .data). Its CONTENT is trivially chain-independent — it is a boolean that encodes 'has this process ever run this routine', with no band, frequency or callsign dependence — and on content alone it is the class 2 that the two ft4 sibling rows (ft4/get_ft4_bitmetrics.f90:12 and ft4/getcandidates4.f90:14) were given. I am filing it CLASS 1 anyway, on the coupling rule, and I expect this row to be attacked so here is the defence in full. `first` is not a standalone flag: it is one of two disjuncts guarding an ALLOCATABLE, SAVE array (`ci`, :8) that is filed class 1, and the safety of that array depends on the guard and the array being in the same class. Concretely, in the world where the missing `nss0=nss` store is restored (see the nss0 row — the store exists in the parallel copy of this idiom at fst4_decode.f90:696, so restoring it is a plausible vendor refresh), the mix 'shared first + per-chain ci' is fatal in the most ordinary configuration there is, two chains on the same T/R period: chain A runs, allocates its ci, sets shared first=.false. and shared nss0=nss; chain B then reads first=.false. at :28 and nss==nss0, skips the allocate at :29, and dereferences its own UNALLOCATED ci at :53. And the mirror mix 'per-chain first + shared nss0' aborts the process outright — chain B's own first is still .true. so :28 fires, but :26 did NOT deallocate (nss==shared nss0), so :29 allocates an already-allocated array and gfortran raises 'Attempting to allocate already allocated variable ci'. Both failure modes are one restored assignment away, neither is detectable by a (file,line,name) manifest gate, and the price of immunity is FOUR BYTES. Note what `first` does NOT threaten: nothing inside the block it gates is non-idempotent. :30 blanket-zeroes `one` before rebuilding it, :36-45 recomputes ci from nss alone, twopi/dphi/dp/phi are plain locals — there is no `x=2*x-1` accumulate of the ft8b kind, so an extra firing of this guard wastes time and cannot corrupt a value. That is exactly why `one` can stay class 2 while its guard goes class 1: a per-chain guard can only cause an idempotent rebuild of a shared, input-independent table. TODAY, additionally, `first` is functionally DEAD as a gate: nss0 is never written, so the right disjunct of :28 is permanently .true. and the block runs on every call whatever `first` holds. NAME COLLISION: distinct storage from the nine other `first` symbols already in this manifest (ft4_decode.f90:68, ft4/ft4_downsample.f90:11, ft4/gen_ft4wave.f90:9, ft4/get_ft4_bitmetrics.f90:12, ft4/getcandidates4.f90:14, ft4/subtractft4.f90:17, ft4/sync4d.f90:12, ...). Key by file:line, never by name.
+"""
+
+[[symbol]]
+name = "s2"
+file = "fst4/get_fst4_bitmetrics.f90"
+line = 18
+class = 3
+size_bytes = 262144
+reason = """
+NOT IN THE ASSIGNED SYMBOL LIST — reported because it is a statically-allocated symbol in the audited file and the manifest rule admits no exceptions; an unclassified symbol is by default a shared one. real s2(0:65535) declared at :18 with NO save and NO data attribute, yet nm places it in .bss at 262,144 bytes: a gfortran stack spill, invisible to any grep for SAVE/DATA/COMMON. CLASS 3 is provable rather than assumed: each of the four correlation stages opens with an unconditional full-array `s2=0` (:97, :112, :130, :147) and only then writes the subrange it is about to read, and the read at each stage is confined to exactly the subrange just written (:104 reads 0:3 after :100 wrote 0:3; :122 reads 0:15 after :117 wrote 0:15; :140 reads 0:255 after :135 wrote 0:255; :156 reads 0:65535 after :151 wrote 0:65535). There is no path on which a read observes a value from a previous call, and the early returns at :83 (badsync, nsync<16) and :177 (nsync_qual<46) both occur BEFORE the :94 loop and so cannot leave a half-written s2 that a later call would read. Content is therefore not carried across the call boundary at all. THE CLASS-3 CAVEAT IS LOAD-BEARING HERE AND MUST NOT BE READ AS 'SAFE': shareable IF AND ONLY IF the two chains' calls serialize. Two chains inside get_fst4_bitmetrics concurrently interleave on the same 262 kB buffer — chain B's `s2=0` at :147 landing between chain A's :151 and chain A's :156 yields maxval over an all-zero array, bm = 0-0 = 0 for every bit of that 8-symbol group, and a bitmetrics row of zeros is not a detectable error: it is a maximally-ambiguous LLR that the LDPC(240,101) decoder and its CRC-24 will happily resolve into a syntactically perfect wrong message. If the two-radio design ever runs the FST4 decoders in parallel threads rather than serialized, s2 moves to class 1 (262,144 bytes) along with every other class-3 row in this manifest. NAME NOTE: `s4` at :19 is a DUMMY ARGUMENT (declared real s4(0:3,NN), passed in from fst4_decode.f90:406-407), not static storage, and correctly gets no row.
+"""
+
+[[symbol]]
+name = "nss0"
+file = "fst4/get_fst4_bitmetrics.f90"
+line = 23
+class = 1
+size_bytes = 4
+reason = """
+Implicitly-typed INTEGER, DATA -1 at :23, SAVEd at :24, and NEVER ASSIGNED — verified by reading the complete 190-line file, not by grep alone. On its face that is class 4 (read-only DATA), and I want the record to state plainly that the never-written finding is decisive. I am nevertheless filing it CLASS 1, and the reasoning is the manifest's own coupling rule plus the asymmetric tie-break. (1) THE MISSING WRITE IS AN UPSTREAM OMISSION, NOT A DESIGN PROPERTY. The identical idiom appears 470 lines away in the same feature: fst4_decode.f90:672 `data f0save/-99.9/,nss0/-1/`, :673 `save twopi,dt,fac,f0save,nss0,ntr0`, :679 `if(nss.ne.nss0 .or. ntr.ne.ntr0) then`, and there the write IS present at :696 `nss0=nss` (with :697 `ntr0=ntr`). Two copies of one cache idiom in one mode; one has the store, this one does not. Classifying this symbol class 4 is classifying on a typo. (2) THE MANIFEST GATE CANNOT CATCH THE FIX. The gate diffs (file, line, name) keys. A vendor refresh that adds `nss0=nss` at, say, line 46 leaves the DATA statement at :23 exactly where it is, so this row still matches and the build still passes — while the symbol has silently become a per-chain cache key. That is the one mutation class this manifest is structurally blind to, and class 1 is the only way to be safe through it. (3) WHAT BREAKS WHEN THE WRITE IS RESTORED AND nss0 IS SHARED. With the store present and both chains on the SAME T/R period (the common case), chain A runs, sets shared nss0=nss and builds its own per-chain ci; chain B then evaluates :26 `nss.ne.nss0` FALSE (no deallocate) and :28 `first .or. nss.ne.nss0` FALSE (first already .false.) — so chain B SKIPS the allocate at :29 and falls straight to :53 `sum(csymb*conjg(ci(:,itone)))` with ci UNALLOCATED. Segfault at best; with an already-freed descriptor still pointing at reusable heap, a read of stale complex data that produces well-formed wrong correlations, wrong s4, a sync check at :81/:175 that can still pass, and bit metrics that go on to decode240_101 and can surface as a CRC-24-valid fabricated decode. With the two chains on DIFFERENT T/R periods (nss 40 vs 42) and shared nss0 but per-chain ci, chain A's second call sees its own nss==the shared nss0 written by nobody-knows-which chain and correlates a 42-element csymb against a 40-element ci — a 2-element out-of-bounds heap read per tone, every symbol, every candidate. (4) THE COST OF BEING WRONG IN MY DIRECTION IS ZERO BYTES: the Release build does not even emit the symbol. TODAY'S BEHAVIOUR, FOR THE RECORD, AND IT IS A REAL PERFORMANCE BUG WORTH REPORTING SEPARATELY: because nss0 is stuck at -1 and nss is always positive, `nss.ne.nss0` is permanently .true., so :26 deallocates ci and :28-47 re-runs on EVERY call — a 4 MB memset plus a 1,048,576-iteration loop plus a free/malloc pair, and get_fst4_bitmetrics is called from inside the candidate x jitter double loop at fst4_decode.f90:406 (icand=1..ncand at :385, ijitter=0..jittermax=2 at :395), so that work is repeated on the order of hundreds of times per decode period. NAME COLLISION WARNING: fst4_decode.f90:672 declares a DIFFERENT nss0 (in the contained subroutine sync_fst4) that IS written; two symbols named nss0 in the same call chain with opposite behaviour. Never key by name.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/osd240_101.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "gen"
+file = "fst4/osd240_101.f90"
+line = 18
+class = 1
+size_bytes = 88
+reason = """
+NEW - FST4 vendor add, no first-pass row to uphold or overturn. Class 1 by the manifest's asymmetric tie-break, and the class-2 claim fails for exactly the reason the `mcq` row warns about. Both the SHAPE and the CONTENT of this matrix are a function of the dummy argument `k`: the allocation at :47 is `gen(k,N)`, and the fill body is k-dependent (`do i=1,k` :49, `if(i.le.77)` :52, `message101(78:k)=0` :56 - the count of CRC24 bits cascaded into the LDPC code, which is the whole point of the k parameter per the header :9-13). To file this class 2 I would have to prove k is identical for every chain, and the only available proof is that decode240_101.f90:138 is the sole call site and fst4_decode.f90:478 hard-codes Keff=91 immediately before it. That is a property of TODAY'S CALLER, not of the symbol - precisely the mcq trap - and it is not even a safe property here, because there is no ksave to repair a mismatch: the second chain would silently consume a generator matrix built for the first chain's k. Concretely, if chain A entered first with k=91 and chain B with k=101, :78 reads gen(1:101,...) out of a heap block dimensioned (91,240) - a 2,400-byte out-of-bounds heap read producing a garbage generator matrix, from which mrbencode101 (:121/:195/:205/:248/:264) produces a well-formed 240-bit codeword whose 24-bit CRC check at :284 is a 1-in-16.7M gate. That is the fabricated-QSO failure mode this manifest exists for. Per-chain also FIXES the shape latch rather than papering over it: each chain allocates for its own k. Seed a per-chain copy as a NULL/unallocated descriptor (zero-filled 88 B is the correct unallocated state for gfortran) paired with first=.true., never by copying the process image after the first fill - and never split from `first`: shared first + per-chain descriptor means chain B skips :37-63 and dereferences a null base_addr at :78 (segfault); per-chain first + shared descriptor leaks the k mismatch above. Move the pair or neither.
+"""
+
+[[symbol]]
+name = "first"
+file = "fst4/osd240_101.f90"
+line = 30
+class = 1
+size_bytes = 4
+reason = """
+NEW - FST4 vendor add. Class 1 not on its own content (a boolean latch carries nothing chain-specific) but because its correctness is a JOINT property with `gen`, and gen is class 1. This is the same joint-latch reasoning the manifest applies to ft8b.f90:47 `first`. The dangerous configurations are the partial splits, and here they are worse than in the ft8 case because the guarded object is an ALLOCATABLE: (a) shared `first` + per-chain `gen` descriptor - chain B finds first==.false. at :37, skips :37-63 entirely, and reaches :78 `gen(1:k,indx(...))` with a descriptor whose base_addr is still zero from the per-chain seed, i.e. a null-pointer read of the generator matrix; (b) per-chain `first` + shared `gen` - chain B re-enters :47 `allocate(gen(k,N))` on an ALREADY-ALLOCATED saved allocatable, which in gfortran with -fcheck off silently overwrites the descriptor and LEAKS chain A's 21,840-byte block, and thereafter chain A reads chain B's matrix. Neither failure crashes reliably; both end in mrbencode101 emitting a syntactically perfect codeword. A per-chain copy MUST be seeded .true. (i.e. from the load image at .data, or an explicit 1), not zero-filled - a zero-filled context makes first==.false. and lands straight in failure (a). Unlike the encode240_* latches in this same group, this one is NOT harmless-if-duplicated, because what it guards is an allocate, not an idempotent table fill.
+"""
+
+[[symbol]]
+name = "fp"
+file = "fst4/osd240_101.f90"
+line = 333
+class = 3
+size_bytes = 2100004
+reason = """
+NEW - FST4 vendor add. Class 3: the 2.1 MB wipe is unconditional on the first boxit101 call of every invocation and precedes every read, in both boxit101 and fetchit101; where npre2==0 (:228, ndeep<3) the array is untouched, so the predicate holds vacuously. Index range is safe: ipat is built at :349-352 as a sum of ishft(1,ntau-i) over i=1..ntau, so 0 <= ipat <= 2^ntau - 1, and the largest ntau any ndeep selects is 17 (:160, ndeep=4) giving 131,071, well inside 525,000 - and the live path uses ntau=14 (:153, ndeep=3, which is what fst4_decode.f90:479 norder=3 delivers). This is BY FAR the largest object in the group and the one that makes the /boxes/ aliasing finding matter in practice: this fp array is the same linker object as ft8/osd174_91.f90's fp (see the `indexes` row - the existing manifest's claim that only ft8 declares /boxes/ is now false, four declarations exist across two files, identical layout, silently merged). A shared 2.1 MB hash-head table between two DIFFERENT modes is not a per-chain issue - the wipe defends it - but it means the class-3 serialization precondition must now hold between FT8 and FST4 decodes as well as between chains. If Nexus ever runs an FT8 and an FST4 decode concurrently, chain-agnostic, this table is torn and fetchit101 walks a chain of head pointers written by the other decoder, returning i1/i2 index pairs that select the wrong error patterns - a well-formed wrong codeword gated only by get_crc24 at :284. Fix by renaming the FST4 block, not by memcpy: 2.1 MB per chain is a real cost and it would not even address the cross-mode case.
+"""
+
+[[symbol]]
+name = "indexes"
+file = "fst4/osd240_101.f90"
+line = 333
+class = 3
+size_bytes = 40000
+reason = """
+NEW - FST4 vendor add, and it carries THE headline finding of this batch. Class 3 on the read/write ordering, which is decisive: the whole-array wipe at :342 fires on the first boxit101 call of every invocation (reset armed at :229, and the loop :231-237 is never zero-trip for k>=2), before boxit101's own reads at :355/:359 and before every fetchit101 read. On calls with ndeep<3 the `if(npre2.eq.1)` gate at :228 means the array is neither read nor written, so the predicate holds vacuously. Same partial-write check as the ft8 row passes: fetchit101 only ever indexes it through fp(ipat) and np(...), both of which were wiped to -1 and thereafter hold only npindex values actually written, so the untouched tail rows are unreachable. BUT THE PRECONDITION HAS CHANGED, AND THE EXISTING MANIFEST SAYS SO IN WRITING. The ft8/osd174_91.f90 `fp` row asserts: 'grep for `common.*boxes` over the entire lib returns ONLY those two lines, so no other translation unit aliases the block'. That assertion is now FALSE. `grep -rn 'common/boxes/'` over vendor/wsjtx/lib returns four lines: ft8/osd174_91.f90:340, :377 and fst4/osd240_101.f90:335, :372. COMMON block names are global linker symbols; both files declare the identical layout (5000x2 / 0:525000 / 5000), so the sizes match, the linker emits ONE 2,160,004-byte `boxes_`, and there is not even a size-mismatch warning. FT8's OSD and FST4's OSD now write the same 2 MiB of memory. The /boxes/ path is live on FST4: fst4_decode.f90:479 sets norder=3, which reaches osd240_101 :147-153 as ndeep=3 -> npre2=1, ntau=14. This does NOT change the verdict to class 1 - the wipe is unconditional and covers whatever the other mode left - but it makes the class-3 precondition 'IF calls serialize' bind across MODES, not just across chains: an FT8 decode and an FST4 decode overlapping in one process corrupt each other's box tables even on a SINGLE radio chain. The correct fix is surgery, not memcpy: rename FST4's block (e.g. /boxes240/) at :335 and :372, which costs two lines and restores the ft8 row's invariant. Second, independent defect found while bounding the writes: npindex at :235 is `ntotal`, which the loops :231-232 drive to k*(k-1)/2. At today's Keff=91 that is 4095, inside the 5000 bound - but the routine's own header (:13) declares k up to 101, where it reaches 5050 and :346-347 writes indexes(5001..5050, 1:2), i.e. OUT OF BOUNDS past element 10,000, straight into the adjacent COMMON member fp(0..49). Latent, caller-dependent, and it would corrupt the block for BOTH modes.
+"""
+
+[[symbol]]
+name = "np"
+file = "fst4/osd240_101.f90"
+line = 333
+class = 3
+size_bytes = 20000
+reason = """
+NEW - FST4 vendor add. Class 3, same structure and same proof as its two block-mates: whole-array wipe at :340 by the first boxit101 call of every invocation, before boxit101's reads at :359-360 and fetchit101's at :391/:395; untouched and unread when npre2==0 (:228). Distinct from the `np` at fastosd240_74.f90:161, which shares only the name and is not state at all - this is why every row in this manifest is keyed by file:line, never by name. Inherits the same two caveats as fp and indexes: (1) COMMON /boxes/ is now declared in BOTH ft8/osd174_91.f90 (:340, :377) and fst4/osd240_101.f90 (:335, :372) with identical layout, so the linker merges them into one block and this np array is physically shared with the FT8 OSD decoder - the serialization precondition now spans modes, and the right remedy is renaming FST4's block, not swapping 20 KB per chain; (2) the indexes-overflow defect noted in the `indexes` row would, at k=101, write past indexes into fp - it does not reach np, but it corrupts the same block. Also worth stating plainly for an implementer: if you split any one of indexes/fp/np per chain you must split all three, because fetchit101 dereferences np and indexes through fp's head pointer - a chain walk half in one chain's memory and half in another's is the exact 'well-formed wrong decode' this manifest was written to prevent.
+"""
+
+[[symbol]]
+name = "lastpat"
+file = "fst4/osd240_101.f90"
+line = 369
+class = 3
+size_bytes = 4
+reason = """
+NEW - FST4 vendor add; mirrors the class-3 verdict this manifest already recorded for ft8/osd174_91.f90 lastpat, and I re-verified the entry paths rather than inheriting them. fetchit101 has exactly ONE caller (:256) and it is inside `if(npre2.eq.1)` (:228); reset is armed at :241 on the line before the loop and reset is a stack local, so it cannot arrive already-false and the :376 wipe cannot be skipped. That makes the :388 read-before-write harmless across invocations. Two preconditions the implementer must not lose: (a) calls must serialize - two chains inside osd240_101 at once tear this cursor and the whole /boxes/ block with it; (b) if anyone decides to make its partner `inext` per-chain (and the row for inext argues class 1), lastpat MUST move with it. lastpat and inext are one logical cursor: the :392 branch tests `lastpat.eq.ipat .and. inext.gt.0` and then consumes inext at :393-395. Splitting them so that one chain's lastpat is compared against another chain's inext produces exactly the mis-walked index chain that yields a valid-looking wrong codeword. Moving the pair, or neither, are the only two safe configurations; moving only the cursor is strictly worse than leaving both shared.
+"""
+
+[[symbol]]
+name = "inext"
+file = "fst4/osd240_101.f90"
+line = 373
+class = 1
+size_bytes = 4
+reason = """
+NEW - FST4 vendor add, and an exact structural repeat of the defect this manifest already upgraded 3->1 at ft8/osd174_91.f90 inext. WSJT-X copied the routine and copied the bug. Filed class 1 on the literal definition: it is read at :392 before it is written on that call, so it carries a value across the call boundary, and the value it carries is a linked-list cursor into /boxes/ tables that the OTHER invocation built. The leak is currently benign and I can prove it the same way: reset forces lastpat=-1 at :376, ipat is built at :380-385 as a sum of ishft(1,ntau-i) and is therefore provably >= 0, so `lastpat.eq.ipat` at :392 is always .false. on the first call, making the whole `.and.` false regardless of the stale cursor and rendering the :393-395 body that would consume it unreachable. But that proof has two soft joints. First, Fortran does not mandate short-circuit `.and.`, so gfortran is free to load the stale value; the safety rests on a non-local invariant established in a DIFFERENT subroutine, not on the symbol being overwritten - which is not what class 3 means. Second, and new relative to the ft8 case: /boxes/ is now aliased between ft8/osd174_91.f90 and fst4/osd240_101.f90 (see the fp/indexes rows), so a stale inext that DID get consumed would index tables another MODE populated. Textbook when-in-doubt: 4 bytes of memcpy against a mis-walked index chain feeding a wrong-but-well-formed 240-bit codeword to a 24-bit CRC. Save/restore it as a PAIR with lastpat (:369) - splitting the pair is worse than leaving both shared, because the :392 comparison would then straddle two chains' state. Better still, and cheaper than either: add `inext=-1` to the reset block at :376, which makes both symbols honestly class 3.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/fastosd240_74.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "gen"
+file = "fst4/fastosd240_74.f90"
+line = 18
+class = 1
+size_bytes = 88
+reason = """
+NEW - FST4 vendor add. Class 1, and unlike its osd240_101 sibling I do not have to reason about hypothetical callers, because the k thrash is REAL ON TODAY'S PATH: fst4_decode.f90:494 calls decode240_74 with Keff=66 and, if that fails, fst4_decode.f90:545 calls it again with Keff=50, both within one decode of one chain (decode240_74.f90:144 is the only call site). So `k.ne.ksave` fires, the heap block is deallocated and reallocated, and the entire 240xk matrix is rebuilt from scratch, several times per second, already. That is what makes the SPLIT configurations lethal rather than theoretical. With per-chain ksave and a SHARED gen descriptor, chain B entering with k=66 finds its own ksave already 66, skips :37-65, and executes :85 `gen(1:66, ...)` against a heap block chain A dimensioned (50,240) - a 3,840-byte out-of-bounds heap read. The garbage rows become the generator matrix, mrbencode74 (:157/:210) emits a syntactically perfect 240-bit codeword, and the only thing between that and a logged QSO is get_crc24 at :231, a 1-in-16.7M gate that fires twice per call (the ibasis loop retries). With a per-chain descriptor and SHARED first/ksave, chain B skips the allocate and dereferences a null base_addr. The content itself is chain-INDEPENDENT for a fixed k - it is a pure function of k and the DATA-const generator table `g` in ldpc_240_74_generator.f90 reached via encode240_74 - so a fully SHARED triple {first, ksave, gen} is functionally correct under serialization, at the price of a full rebuild whenever the two chains' k differ. But `ksave` holds a per-call dummy argument across calls, which is class 1 by definition (the manifest's ncontest0 precedent), so the cluster travels as one. Seed a per-chain copy as a zeroed/unallocated descriptor with first=.true. and ksave at its DATA value 64 (:30) - never by copying the running image, and never split from the other two.
+"""
+
+[[symbol]]
+name = "ksave"
+file = "fst4/fastosd240_74.f90"
+line = 26
+class = 1
+size_bytes = 4
+reason = """
+NEW - FST4 vendor add. This is class 1 by the definition itself, and it is the same shape the manifest already used to overturn ft8b.f90:29 `ncontest0`: it is written as a verbatim copy of a per-call ARGUMENT (:64 `ksave=k`) and read on the NEXT call (:37). It literally carries the previous call's input across the call boundary - that is what class 1 means, independent of what value the input happens to hold, and independent of who the caller is today. And here the input genuinely varies: fst4_decode.f90 drives Keff to 66 (:494) and then 50 (:545) within a single decode, via decode240_74.f90:144, so ksave flips on the live path right now. Two chains sharing it is not obviously wrong - it just means the k-change rebuild also fires when the OTHER chain last used a different k, costing a 240xk matrix rebuild (the cache degenerates, correctness survives). What is lethal is a partial split, and the asymmetric tie-break is what settles it: per-chain ksave with shared gen makes chain B believe the shared matrix already matches its k when it was built for the other chain's k, and :85 then reads gen(1:66,...) out of a (50,240) heap block. See the `gen` row for the full failure chain. Cost of filing it class 1: 4 bytes. Cost of getting it wrong: an out-of-bounds generator matrix producing a CRC-valid wrong decode. Move {first, ksave, gen} as a unit; a per-chain copy must be seeded to the DATA value 64, not zero (k=0 would be a legal-looking but never-matching sentinel, which is merely wasteful, whereas a zero-seeded copy paired with a stale shared gen is not).
+"""
+
+[[symbol]]
+name = "first"
+file = "fst4/fastosd240_74.f90"
+line = 30
+class = 1
+size_bytes = 4
+reason = """
+NEW - FST4 vendor add. Class 1 not for its own content - a boolean latch carries nothing band-specific - but because it is inseparable from `gen` and `ksave`, and both of those are class 1. Note the asymmetry with the encode240_74.f90:13 latch of the same name in this very group, which I filed class 2: THAT one guards an idempotent fill of a fixed-size static array from a DATA constant, so duplicating or losing it is harmless. THIS one guards an `if(allocated(gen)) deallocate(gen)` / `allocate(gen(k,N))` pair (:47-48). Getting it wrong therefore reaches memory management, not just recomputation: per-chain `first` with a shared `gen` descriptor means chain B re-enters :47-48 and, in gfortran, silently deallocates the block chain A is still pointing at through the same descriptor - after which chain A's :85 read is a use-after-free that returns whatever the allocator handed out next, and mrbencode74 encodes it into a well-formed codeword. Shared `first` with a per-chain descriptor means chain B skips :37-65 and reads through a null base_addr at :85. A per-chain copy MUST be seeded .true. from the load image; a zero-filled per-chain context puts first=.false. and lands directly in the null-descriptor case. Two names collide here and the file:line key is what separates them - fastosd240_74.f90:30 `first` is class 1, encode240_74.f90:13 `first` is class 2, and they are different 4-byte objects in different translation units.
+"""
+
+[[symbol]]
+name = "np"
+file = "fst4/fastosd240_74.f90"
+line = 161
+class = 3
+size_bytes = 0
+reason = """
+NEW - FST4 vendor add. Recorded explicitly so a later reviewer can tell 'checked and stack-resident' from 'missed', the same way the manifest records ft8/osd174_91.f90:29 `reset` and :343 `patterns`. This `np` shares nothing but its name with the 20,000-byte COMMON /boxes/ np(5000) at osd240_101.f90:333 - different file, different translation unit, different storage class - and it is precisely the kind of collision that made the first pass unattributable (the header records 87 such name collisions). It is a plain assignment of the literal 32, dominated by every read within the call, with no save/DATA/COMMON attachment, so gfortran keeps it in a register or a stack slot; nm and readelf both confirm there is no object for it. Zero bytes of per-chain context. One adjacent observation that is NOT a state issue but is worth carrying forward: the allocatable `sp` at :162 is allocated under `if(ibasis.eq.1)` inside a loop and is a non-saved local, so it is auto-deallocated at return - no leak, and no static storage either (again confirmed by the empty remainder of .bss).
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/encode240_101.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "gen"
+file = "fst4/encode240_101.f90"
+line = 8
+class = 2
+size_bytes = 14039
+reason = """
+NEW - FST4 vendor add. Class 2, and this is a POSITIVE claim I can discharge without appealing to any caller. The fill at :18-28 reads exactly one input: `g(i)(j:j)` (:20), the character*26 g(139) DATA table supplied by the include at :11 (ldpc_240_101_generator.f90:1-3, `character*26 g(139)` / `data g/ 'e28df133efbc554bcd30eb1828', ... /`). NO dummy argument participates in the fill - `message` and `codeword` are untouched inside the guarded block - and there is no k, no band, no per-call quantity anywhere in :16-30. The content is therefore a fixed function of a compile-time DATA literal: byte-identical for every chain, every band, every call, forever. Contrast this deliberately with fst4/osd240_101.f90:18 `gen`, which I filed class 1: that one is `allocate(gen(k,N))` off a DUMMY ARGUMENT and its content varies with k. Same name, same group, opposite verdicts - which is why these rows are keyed by file:line. The transform is also fully IDEMPOTENT: :17 zeroes the whole array before :25 sets bits, so a spurious re-fire (per-chain `first` accidentally re-arming) merely rewrites the same 14,039 bytes; there is no `x=2*x-1` hazard and no allocate to double-fire. It follows that mis-splitting `first` from `gen` here is harmless in both directions, which is exactly the property osd240_101's pair lacks. Genuinely shareable with no invariant to defend. Note this is a SEPARATE 14,039-byte object from encode240_74's identically-named copy (12,284 B) - two independent bare subroutines, not a module, so the group carries both matrices. Traffic note: osd240_101.f90:58 calls this routine k times (91 today) during its one-shot gen fill, so this table is hot but written once.
+"""
+
+[[symbol]]
+name = "first"
+file = "fst4/encode240_101.f90"
+line = 13
+class = 2
+size_bytes = 4
+reason = """
+NEW - FST4 vendor add. Class 2, on the same footing as the manifest's existing encode174_91 `first` row. Single write at :29 inside the block it guards; nothing re-arms it; and what it guards is an idempotent fill (:17 `gen=0` wipes before :25 sets bits) of a fixed-size static array whose only input is the DATA-const `g` from the include at :11 - no dummy argument, no per-call, per-band or per-chain quantity. So the failure mode that forces the osd240_101 and fastosd240_74 latches to class 1 does not exist here: wrongly making this one per-chain would merely re-fill `gen` with byte-identical content (a few microseconds, once per chain), and wrongly sharing it is correct by construction. There is no allocatable behind it, so there is no null-descriptor case and no double-allocate case. Filed 2 rather than 1 because the class-2 proof is complete and self-contained - it rests on the symbol and its guarded block, not on any caller. Distinguish carefully from the three other `first` symbols in this group (osd240_101.f90:30 class 1, fastosd240_74.f90:30 class 1, encode240_74.f90:13 class 2): four different 4-byte objects in four translation units, two verdicts.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/encode240_74.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "gen"
+file = "fst4/encode240_74.f90"
+line = 8
+class = 2
+size_bytes = 12284
+reason = """
+NEW - FST4 vendor add. Class 2, discharged the same way as its 101-bit twin and with no appeal to caller behaviour. The fill's sole input is `g(i)(j:j)` (:20), the character*19 g(166) DATA table from the include at :11 (ldpc_240_74_generator.f90:1-3, `character*19 g(166)` / `data g/ 'de8b3201e3c59f55a14', ... /`). No dummy argument is read inside :16-30 - `message` and `codeword` are untouched there - and there is no k dependence at all, which is the decisive difference from fastosd240_74.f90:18 `gen`, the routine that CALLS this one (:59) and whose gen is class 1 because it is `allocate(gen(k,N))` off a dummy. The two matrices are unrelated storage despite the shared name; this manifest's file:line keying is what keeps them apart. The fill is idempotent (:17 wipes, :25 sets), so a spurious re-fire rewrites identical bytes - no non-idempotent transform, no allocate, nothing to corrupt. Content is byte-identical for any chain, band or call. A separate 12,284-byte object from encode240_101's 14,039-byte gen; the group holds both. Traffic: fastosd240_74.f90:59 calls this k times (66 or 50) on every generator rebuild, and those rebuilds happen several times per decode because Keff alternates 66/50 - so this table is read constantly but written exactly once per process.
+"""
+
+[[symbol]]
+name = "first"
+file = "fst4/encode240_74.f90"
+line = 13
+class = 2
+size_bytes = 4
+reason = """
+NEW - FST4 vendor add. Class 2. Written once at :29 inside the block it guards, never re-armed, and the block it guards is an idempotent fill (:17 `gen=0` precedes the :25 bit-sets) of a fixed-size static array from the DATA-const `g` in the include at :11 - no dummy argument, nothing per-call or per-band. The proof is entirely local to this file: it does not depend on who calls encode240_74 or with what, so it survives the mcq test. Consequences of getting it wrong are benign in both directions (duplicating it just re-fills identical bytes; sharing it is correct), because unlike the fastosd240_74.f90:30 latch there is no allocatable behind it - no deallocate, no null descriptor, no use-after-free. Recorded as its own row because `first` appears four times in this group at four different file:line keys with two different verdicts, and a name-keyed scan would collapse them.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/get_crc24.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "p"
+file = "fst4/get_crc24.f90"
+line = 9
+class = 4
+size_bytes = 25
+reason = """
+NEW - FST4 vendor add. Class 4, and this is the strongest verdict in the group: the claim is not 'I could not find a write' but 'the toolchain placed it in .rodata', which is a mechanical proof that no write exists in this translation unit and that any write at runtime would fault rather than corrupt. It is the fixed generator polynomial for CRC-24 0x100065b, a mathematical constant of the FST4 code, with no dependence on call, band, chain, k, or anything else. Note it is size 25 and NOT zero: it does occupy storage, unlike a PARAMETER, because a DATA-initialized local array is a real object - but it occupies read-only storage, so it contributes 0 bytes to the per-chain context. Shareable unconditionally, including across modes and across concurrent threads; it needs no serialization precondition, which distinguishes class 4 from the class-3 /boxes/ rows in this same group. Worth recording that get_crc24 as a whole is otherwise stateless: with .data = 0 and .bss = 0, this routine - which every FST4 OSD and decode path calls to gate a candidate codeword (osd240_101.f90:53/:284, fastosd240_74.f90:54/:231, decode240_101.f90:77, decode240_74.f90:81) - holds no mutable process-global state at all. That is a genuinely useful fact for the two-radio design: the CRC gate itself cannot be the vector for a cross-chain fabricated decode.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/ldpc_240_101_parity.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "Mn"
+file = "fst4/ldpc_240_101_parity.f90"
+line = 1
+class = 4
+size_bytes = 2880
+reason = """
+DATA-initialized LDPC(240,101) bit-to-check parity table, textually substituted into decode240_101.f90 at :25 (`include "ldpc_240_101_parity.f90"`), declared at decode240_101.f90:16 as `integer Mn(3,N)`. DATA on a local confers implicit SAVE, which is why it is statically allocated despite no SAVE keyword - nm proves it: `r mn.0`, 0x b40 = 2880 B, in .RODATA, so the linker makes a write FAULT. Zero writers tree-wide per the same grep the ft8 rows used. Content is a fixed function of the DATA literal - the LDPC(240,101) code definition - with no dependence on band, chain, or any per-call input, so it is chain-independent by construction. KEYING NOTE: `include` is textual, so this storage is instantiated exactly once, in decode240_101.f90 (grep for `ldpc_240_101_parity` finds a single includer). The pre-existing ft8 rows double-key the identical construct at both the include file (ft8/ldpc_174_91_c_parity.f90:1) and the includer (ft8/bpdecode174_91.f90:13, ft8/decode174_91.f90:16); that costs nothing here because class 4 contributes 0 context bytes, but if the decode240_* group also files a row for decode240_101.f90:16 the two must be reconciled to one key set, not allocated twice. SECOND KEYING DEFECT worth fixing while here: the existing ft8 rows key Nm and nrw to ldpc_174_91_c_parity.f90:1, but their DATA statements are at :177 and :262 - a line-keyed gate scanner will not find them there. These fst4 rows are keyed to the actual DATA statement line. Name-collides with fst4/ldpc_240_74_parity.f90:1 and ft8/ldpc_174_91_c_parity.f90:1 (three separate 2880/2880/2088 B copies) - key by line, never by name. 0 context bytes.
+"""
+
+[[symbol]]
+name = "Nm"
+file = "fst4/ldpc_240_101_parity.f90"
+line = 243
+class = 4
+size_bytes = 3336
+reason = """
+DATA-initialized LDPC(240,101) check-to-bit parity table (the transpose face of Mn), included into decode240_101.f90 at :25 and declared there at :15. Implicit SAVE via DATA; nm confirms `d nm.1` at 0x d08 = 3336, exact match to 6*139*4. IMPORTANT NUANCE, and the one place a lazy reader could get this wrong: gfortran placed Nm in .DATA (writable) rather than .rodata, unlike its line-mates Mn and nrw. That is NOT evidence of a write - it is the same codegen artifact already recorded for ft8/bpdecode174_91.f90:12: the vector-subscript `cw(Nm(1:nrw(i),i))` at :71 and the `mask=` array section at :127 materialise temporaries whose construction takes Nm's address, which defeats gfortran's TREE_READONLY inference. The consequence to be honest about is that a stray write to Nm would NOT fault the way a write to Mn would; but the source contains no such write, and no aliasing path exists because Nm is never an actual argument. Content is a fixed function of the DATA literal - the LDPC(240,101) code definition - independent of band, chain and every per-call input. Zero tree-wide writers. Name-collides with fst4/ldpc_240_74_parity.f90:243 and ft8/ldpc_174_91_c_parity.f90 (three separate copies, 3336/3320/2324 B) - key by line. 0 context bytes.
+"""
+
+[[symbol]]
+name = "nrw"
+file = "fst4/ldpc_240_101_parity.f90"
+line = 384
+class = 4
+size_bytes = 556
+reason = """
+DATA-initialized row-weight vector for the LDPC(240,101) parity check matrix (values 5 and 6 - the code has mixed-weight rows, which is why the ragged `1:nrw(j)` indexing exists at all). Included into decode240_101.f90:25, declared at :14 as `integer nrw(M),ncw`. Implicit SAVE via DATA. nm: `r nrw.2`, 0x 22c = 556, in .RODATA - linker-enforced read-only, a write would fault. Content is a fixed function of the DATA literal, chain-independent. LINE-MATE WARNING carried over from the ft8 audit and re-verified here: `ncw` is declared on the SAME source line (decode240_101.f90:14) but has NO DATA initializer, so it gets no implicit SAVE; it is assigned by the executable statement `ncw=3` at ldpc_240_101_parity.f90:393 - the include file's last line, which is executable, not a data statement - i.e. unconditionally re-assigned at the top of every call before its first read at decode240_101.f90:56. nm on decode240_101.o shows no ncw symbol at all (stack/register resident, 0 static bytes). Do not let the shared declaration line cause nrw and ncw to be filed as one symbol. 0 context bytes.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/ldpc_240_101_generator.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "g"
+file = "fst4/ldpc_240_101_generator.f90"
+line = 1
+class = 4
+size_bytes = 3614
+reason = """
+DATA-initialized LDPC(240,101) GENERATOR matrix, stored as 139 hex strings of 26 characters (139 parity rows x 101 message columns, 26 nybbles = 104 bits, of which the last nybble contributes only 1 bit - see the `if(j.eq.26) ibmax=1` at encode240_101.f90:22). Textually included into encode240_101.f90 at :11. DATA on a local confers implicit SAVE, hence the static `g.0`. ON THE DECODE PATH - do not dismiss this as TX-only: encode240_101 is called from osd240_101.f90:58 (`call encode240_101(message101,cw)`), the ordered-statistics decoder re-encoding candidate information sets, and osd240_101 is reached from decode240_101 which fst4_decode.f90:481 calls. osd240_101.o is in the prebuilt RX object set, confirming it is compiled into the RX build. Content is a fixed function of the DATA literal - the code definition - with zero dependence on band, chain, or any per-call input. Placed in .DATA rather than .rodata because g's address is handed to the libgfortran internal-unit transfer routine, which is not const-qualified; that is a codegen artifact, not a write, and it is the same class of artifact as the Nm rows above. ADJACENT FINDING, not my row but flagged so it is not lost: encode240_101.f90:8 `integer*1 gen(M,K)` is the table BUILT from g under the `first` guard - nm shows `b gen.1` at 14039 B (= 139*101) in .bss, plus `d first.2` at 4 B. gen is a first-guarded derived table whose content is a pure function of g and therefore chain-independent (a class-2 candidate), but the guard variable `first` and the data `gen` MUST NOT be split across chains: a chain that inherits first=.false. with a zero-filled gen would silently OSD-re-encode with an all-zero generator, producing wrong parity and hence wrong CRC-24 acceptance decisions. That row belongs to the encode240_* group; if it is not filed there it is an unclassified symbol. Name-collides with fst4/ldpc_240_74_generator.f90:1 and ft8/ldpc_174_91_c_generator.f90:1 (three separate copies, 3614/3154/2002 B) - key by line, never by name. 0 context bytes.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/ldpc_240_74_parity.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "Mn"
+file = "fst4/ldpc_240_74_parity.f90"
+line = 1
+class = 4
+size_bytes = 2880
+reason = """
+DATA-initialized LDPC(240,74) bit-to-check parity table, textually included into decode240_74.f90 at :25 and declared there at :16. This is the FST4 low-rate (K=74, 50-bit payload + 24-bit CRC) code used for the long-T/R WSPR-like decodes; decode240_74 is reached from fst4_decode.f90:496 and :547 and is unambiguously on the RX path. Same storage size as its 101 sibling because Mn is dimensioned by N=240, which both codes share - but it is a SEPARATE static copy (include is textual substitution, not module USE), and nm on decode240_74.o shows its own `r mn.0`. In .RODATA, so a write faults. Zero writers tree-wide. Content is a fixed function of the DATA literal - the (240,74) code definition - with no per-band, per-chain or per-call dependence. Note the file-level asymmetry vs the 101 table: this code has row weights 4 and 5 (see the nrw row), so the includer declares `integer Nm(5,M)` where the 101 includer declares `Nm(6,M)`. Name-collides with fst4/ldpc_240_101_parity.f90:1 and ft8/ldpc_174_91_c_parity.f90:1 - key by line. 0 context bytes.
+"""
+
+[[symbol]]
+name = "Nm"
+file = "fst4/ldpc_240_74_parity.f90"
+line = 243
+class = 4
+size_bytes = 3320
+reason = """
+DATA-initialized LDPC(240,74) check-to-bit parity table, included into decode240_74.f90:25, declared at :15. Implicit SAVE via DATA; nm: `d nm.1` 0x cf8 = 3320, exact match to 5*166*4. Landed in .DATA rather than .rodata for the identical codegen reason as its 101 sibling and as ft8/bpdecode174_91.f90:12 - the vector subscript at :75 and the `mask=` section at :131 take its address - so the storage is writable at runtime even though the source never writes it. Recorded explicitly so a reviewer does not read `d` (writable) as evidence of a write; the evidence of no-write is the exhaustive source grep, not the section flag. Content is a fixed function of the DATA literal, chain-independent. Separate static copy from decode240_101's (textual include). Name-collides with fst4/ldpc_240_101_parity.f90:243 and the ft8 parity table - key by line. 0 context bytes.
+"""
+
+[[symbol]]
+name = "nrw"
+file = "fst4/ldpc_240_74_parity.f90"
+line = 411
+class = 4
+size_bytes = 664
+reason = """
+DATA-initialized row-weight vector for the LDPC(240,74) parity check matrix (values 4 and 5, vs 5 and 6 for the 101 code - which is exactly why the includer dimensions Nm(5,M) here and Nm(6,M) there). Included into decode240_74.f90:25, declared at :14 as `integer nrw(M),ncw`. Implicit SAVE via DATA. nm: `r nrw.2`, 0x 298 = 664, in .RODATA - a write would fault. Fixed function of the DATA literal, chain-independent. Same LINE-MATE WARNING as the 101 copy: `ncw` shares the declaration line but has no DATA, so no implicit SAVE; it is set by the executable `ncw=3` at ldpc_240_74_parity.f90:422 at the top of every call, before its first read at decode240_74.f90:60, and nm on decode240_74.o emits no ncw symbol - 0 static bytes, stack-resident, shareable. nrw and ncw are two different symbols sharing one line; do not merge them. 0 context bytes.
+"""
+
+# ---------------------------------------------------------------------------
+# fst4/ldpc_240_74_generator.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "g"
+file = "fst4/ldpc_240_74_generator.f90"
+line = 1
+class = 4
+size_bytes = 3154
+reason = """
+DATA-initialized LDPC(240,74) GENERATOR matrix as 166 hex strings of 19 characters (166 parity rows x 74 message columns; 19 nybbles = 76 bits, last nybble contributing 2 - see `if(j.eq.19) ibmax=2` at encode240_74.f90:22). Included into encode240_74.f90:11. Implicit SAVE via DATA. ON THE DECODE PATH: encode240_74 is called from fastosd240_74.f90:59 (`call encode240_74(message74,cw)`), and fastosd240_74.o IS in the prebuilt RX object set (decode240_74.o's readelf shows `UND fastosd240_74_`), with decode240_74 called from fst4_decode.f90:496 and :547. Content is a fixed function of the DATA literal - the (240,74) code definition - independent of band, chain and per-call input. In .DATA for the same internal-unit-address codegen reason as the 101 copy, not because of any write. Separate static copy from the 101 generator (textual include, one includer each). SAME ADJACENT FINDING: encode240_74.f90:8 `integer*1 gen(M,K)` measures `b gen.1` = 12284 B (= 166*74) in .bss with `d first.2` = 4 B; chain-independent content but the (first, gen) PAIR must move together or a chain inheriting first=.false. against a zeroed gen re-encodes with an all-zero generator and corrupts the fast-OSD accept/reject decision - a CRC-valid wrong decode, exactly the failure this manifest exists to prevent. Those rows belong to the encode240_* group. Name-collides with fst4/ldpc_240_101_generator.f90:1 and ft8/ldpc_174_91_c_generator.f90:1 - key by line. 0 context bytes.
+"""
+
+# ---------------------------------------------------------------------------
+# prog_args.f90
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "shm_key"
+file = "prog_args.f90"
+line = 2
+class = 4
+size_bytes = 80
+reason = """
+DEAD AND ALSO LATENTLY BROKEN - class 4 on zero writers and zero readers, but the more useful output of auditing it is the trap it is sitting on. Upstream, shm_key is the key the jt9 program uses to attach the shared-memory segment it exchanges with the WSJT-X GUI; libtempo has no shm and no jt9 main, so the symbol is pure dead weight. THE LATENT TRAP: because it is the ONE prog_args character variable with no `= '.'` initializer, it lives in .BSS and is therefore ZERO-FILLED - 80 NUL bytes, NOT 80 blanks. Fortran character semantics assume blank padding; `trim(shm_key)` on NUL fill returns 80 characters of NUL rather than the empty string a reader would expect, and `shm_key .eq. ''` is false. So if a vendor refresh or a Nexus shim ever adds a READER without first adding a writer, it gets a silently malformed 80-NUL string rather than an obviously empty one - a debug-hostile failure. MY READ: HEADLESS-SURGERY TARGET, and the strongest delete candidate of the six. It is not decoder state, it names an IPC mechanism this build does not have, and leaving it in place is an invitation for a future refresh to reconnect the headless library to WSJT-X GUI shared memory - precisely the coupling the headless port exists to sever. Recommend removing shm_key from prog_args.f90 rather than carrying this row forward; until then, the row records it as audited-inert. RE-AUDIT TRIGGER: any writer or reader appearing on shm_key means the shm coupling is back, and that is a design regression to escalate, not merely a symbol to re-class. 0 context bytes.
+"""
+
+[[symbol]]
+name = "data_dir"
+file = "prog_args.f90"
+line = 3
+class = 2
+size_bytes = 500
+reason = """
+CLASS CORRECTED BY THE CHALLENGE PASS: filed class 4 on the first pass, corrected to class 2. SHAREABLE — CONFIRMED. CLASS-4 LABEL — REFUTED. I could not find a writer and I widened the search rather than trusting the claim: `grep -rn 'data_dir|share_dir|exe_dir|temp_dir|shm_key|lquiet|prog_args'` across .f90/.F90/.c/.cpp/.h/.rs/.txt/.cmake over the entire libtempo tree returns the six prog_args declaration lines, two `use prog_args` lines, and five reads in fst4_decode.f90 (:97,:99,:624,:630,:647). No setter, no FFI binding, no C extern. So the conclusion — shareable, 0 context bytes, not in the memcpy set — is correct and I uphold it. The CLASS is not. This manifest's class 4 is 'never written (PARAMETER or read-only DATA)', and every other class-4 row in this batch is a PARAMETER or a DATA-initialised local. data_dir is neither: it is a public module variable with a default initializer, living in WRITABLE .data as a GLOBAL, externally nameable symbol (nm: `D __prog_args_MOD_data_dir`, 500 B), whose entire designed purpose upstream is to be assigned once at startup by the WSJT-X program-argument parser. That is the textbook description of class 2 — written once, process-wide config, chain-independent — and class 2 is equally shareable, so the correction costs nothing. It matters for two reasons. First, this IS closer to the mcq trap than the claim allows: mcq's bad first-pass verdict rested on 'the caller passes 0 so the branch never fires' and this one rests on 'the build does not include the file that writes it' — both are properties of the surrounding assembly rather than of the symbol, and the claim's own re-audit trigger is an admission the property is contingent. Second, a row labelled CONSTANT invites a later pass to skip it or to move it to a read-only page; a row labelled INIT-ONCE survives a vendor refresh that restores jt9.f90 without needing reclassification at all. On the rest of the row I agree entirely, and the surgery read is the right one: the actual two-chain hazard is not the string but the I/O it addresses — fst4_decode.f90:99 and :647 both open hard-coded UNIT 42 on data_dir//'/fst4w_calls.txt' and :630 opens UNIT 21 on fst4_decodes.dat in append mode, so two chains collide on fixed unit numbers, and worse, :647 has chain A rewrite fst4w_calls.txt from its own wcalls table for chain B to read at :99 under its own `first` guard. That is a cross-chain callsign-table contamination path through the FILESYSTEM that no amount of in-memory context swapping can fix. Excise the I/O; do not per-chain the string. Also confirmed the vestigial `use prog_args` at gen_fst4wave.f90:4 references no prog_args name and shadows no local. MANIFEST ROW, BUT THE REAL ANSWER IS HEADLESS SURGERY - stating that read explicitly as asked. Classification first: class 4, and this is NOT the mcq trap. The mcq trap was a symbol that HAS a write site whose firing depends on a caller-supplied value; here the write site does not exist in the vendored tree at all - exhaustively verified by a tree-wide grep plus a whole-libtempo grep across Fortran, C, C++, Rust and build files. A symbol with zero writers is constant in the same sense a DATA table is, and that is a property of the compilation unit set, not of one caller's argument. Storage is writable .data (500 B, GLOBAL, externally nameable as __prog_args_MOD_data_dir), so nothing enforces the constancy at the hardware level - the enforcement is the absence of a writer, which is why the re-audit trigger below matters. RE-AUDIT TRIGGER (make this a gate condition): the instant any Nexus shim adds a data_dir setter, or a vendor refresh pulls in jt9.f90 / the prog_args parser, this symbol acquires a runtime writer and MUST be re-classified - class 2 if the value is process-wide config, class 1 if per-chain data dirs are ever introduced. WHY SURGERY IS THE RIGHT FIX, not a memcpy row: swapping this string per chain would be a no-op today because both copies would contain '.'. The actual two-chain hazard living behind data_dir is the file I/O it addresses, and that hazard is real - fst4_decode.f90:99 and :647 open Fortran UNIT 42 on the fixed path data_dir//'/fst4w_calls.txt', and :630 opens UNIT 21 on data_dir//'/fst4_decodes.dat' in append mode. Two chains decoding two bands in one process therefore (a) collide on hard-coded unit numbers 21 and 42, which in gfortran is a runtime error or silently interleaved I/O, and (b) worse, at :647 chain A REWRITES fst4w_calls.txt from its own `wcalls` table, which chain B then reads at :99 under its `first` guard - a cross-chain callsign-table contamination path that runs through the FILESYSTEM and would survive any amount of in-memory context swapping. The correct action is to excise this I/O from the library decode path (it is WSJT-X companion-file/debug behaviour - `decdata` is a developer probe file, and fst4w_calls.txt is a GUI-side artifact), not to per-chain the string. The wcalls/nwcalls/unit-21/unit-42 rows belong to the fst4_decode group; recording the coupling here so it is not lost between groups. 0 context bytes as filed.
+"""
+
+[[symbol]]
+name = "exe_dir"
+file = "prog_args.f90"
+line = 3
+class = 4
+size_bytes = 500
+reason = """
+DEAD MODULE VARIABLE - class 4 by the strictest possible evidence: zero writers AND zero readers tree-wide, verified by exhaustive grep across the whole libtempo tree, not just the Fortran. Upstream WSJT-X sets this from the program-args parser so that lib code can locate resources next to the executable; libtempo vendors lib/ only and no such parser exists in the compilation unit set, so the symbol never changes from its '.' initializer and nothing ever consults it. MY READ: this is a HEADLESS-SURGERY TARGET, not a state-management concern. There is nothing to memcpy (both chains would copy the identical constant) and nothing to protect (no reader can be corrupted). The right disposition is to delete exe_dir from prog_args, or - if a vendor refresh is meant to stay byte-diffable against upstream - leave it and record it here as audited-inert, which is what this row does. The manifest's own stated purpose covers this case: 'Recorded so that a later reviewer can tell an audited constant from an unexamined symbol.' RE-AUDIT TRIGGER: if a refresh introduces either a writer (a prog_args parser) or a reader, re-classify - a written-then-read path directory would be process-wide config (class 2) unless per-chain resource roots are ever introduced. 0 context bytes.
+"""
+
+[[symbol]]
+name = "temp_dir"
+file = "prog_args.f90"
+line = 3
+class = 4
+size_bytes = 500
+reason = """
+DEAD MODULE VARIABLE - class 4 on zero writers AND zero readers, exhaustively verified. Upstream WSJT-X uses temp_dir for scratch files written by the decoder chain (the sort of thing that WOULD be a genuine two-chain collision if it were live, since two chains writing the same scratch path is the filesystem twin of a shared .bss buffer). It is not live here: no vendored code writes or reads it. MY READ: HEADLESS-SURGERY TARGET, not a manifest memcpy candidate. Delete it, or keep it and treat this row as the audited-inert record. THE RE-AUDIT TRIGGER IS SHARPER FOR THIS ONE THAN FOR exe_dir, and is the reason I am not just waving it through: temp_dir is by definition a path for per-run scratch output. If a vendor refresh ever restores code that writes scratch files under trim(temp_dir), two chains sharing one temp_dir immediately collide on those files regardless of any in-memory context swap - the same structural defect already present in fst4_decode.f90's use of data_dir for units 21/42. Should that happen, the fix is per-chain paths (or removing the scratch I/O), and this symbol becomes class 1. As vendored today: 0 context bytes, nothing to copy.
+"""
+
+[[symbol]]
+name = "share_dir"
+file = "prog_args.f90"
+line = 4
+class = 4
+size_bytes = 500
+reason = """
+NOT IN THE ASSIGNED SYMBOL LIST - FILING IT ANYWAY, and flagging the omission as the finding. The task named data_dir, exe_dir, lquiet, shm_key and temp_dir, but prog_args declares SIX module variables: share_dir is the sixth, carried on the continuation line prog_args.f90:4 with the vendor comment `!ft8md added share_dir`. Because it hides on a continuation line rather than starting its own statement, a line-oriented symbol scanner keyed on `CHARACTER(len=` at :3 will miss it - and the manifest's stated rule is that an unclassified symbol FAILS THE BUILD and is 'by default, a shared one'. It is a real, externally nameable 500-byte GLOBAL in .data (nm proves it), so it needs a row. Classification: class 4 on zero writers AND zero readers tree-wide, identical evidence to exe_dir. MY READ: HEADLESS-SURGERY TARGET. Note it is a NON-UPSTREAM addition (the `!ft8md added` comment says so), which means a vendor refresh against stock WSJT-X will not carry it and its absence will not be flagged by an upstream diff - one more reason to have it written down. RE-AUDIT TRIGGER: same as exe_dir - any refresh that adds a writer or reader forces re-classification. 0 context bytes.
+"""
+
+[[symbol]]
+name = "lquiet"
+file = "prog_args.f90"
+line = 5
+class = 4
+size_bytes = 4
+reason = """
+DEAD MODULE VARIABLE - class 4 on zero writers AND zero readers, exhaustively verified. Upstream this is the jt9 `-q` quiet flag that suppresses console chatter from the decoders; libtempo vendors no program-args parser and no vendored decoder consults it, so it is inert 4 bytes of .bss. Worth one explicit note since it is a LOGICAL rather than a string: unlike shm_key, its `= .false.` initializer is correctly satisfied by the .bss zero-fill, so it is not sitting on the NUL-vs-blank trap - it genuinely reads .false. if anything ever reads it. MY READ: HEADLESS-SURGERY TARGET, lowest-stakes of the six. Delete it with exe_dir/temp_dir/share_dir/shm_key, or keep it and treat this row as the audited-inert record. RE-AUDIT TRIGGER: if a refresh restores readers, note that a quiet FLAG is process-wide policy, not per-chain data, so it would become class 2 rather than class 1 - unless the two chains are ever given different verbosity, which would be a deliberate design choice to re-audit at that time. 0 context bytes.
+"""
