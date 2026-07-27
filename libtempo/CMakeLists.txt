@@ -138,7 +138,12 @@ set(LIBTEMPO_SOURCES
     ${LIB}/ft8/genft8.f90                 # genft8 + entry get_ft8_tones_from_77bits
     ${LIB}/ft8/gen_ft8wave.f90            # tones -> waveform (also used by subtractft8)
     ${LIB}/ft8/ft8apset.f90               # a-priori symbol setup (calls stdcall)
-    ${CMAKE_CURRENT_SOURCE_DIR}/ft8_stdcall.f90  # vendored stdcall (avoids Q65 stack)
+    #     stdcall now comes from the REAL upstream source, qra/q65/q65_set_list.f90
+    #     (listed in the Q65 block below), which defines both q65_set_list and
+    #     stdcall. libtempo/ft8_stdcall.f90 was a standalone copy of that one
+    #     routine, added when FT8 needed stdcall but pulling in q65_set_list.f90
+    #     "would drag in the whole Q65 modem". Q65 is now in the build, so the copy
+    #     became a duplicate definition and the link failed on it. Copy deleted.
     ${LIB}/ft8/sync8.f90                  # Costas candidate search (calls get_spectrum_baseline)
     ${LIB}/ft8/sync8d.f90                 # fine sync / symbol metrics (called by ft8b)
     ${LIB}/ft8/get_spectrum_baseline.f90  # calls baseline, nuttal_window, four2a
@@ -200,6 +205,67 @@ set(LIBTEMPO_SOURCES
     #     NOT listed and NOT compilable standalone — no program unit, they are
     #     `include`d by the files above: fst4/fst4_params.f90,
     #     fst4/ldpc_240_{101,74}_{parity,generator}.f90
+
+    # --- Q65 native decode (lib/qra/q65 + q65_decode.f90) : Nexus, RX-ONLY ---
+    #     Q65 is the first vendored mode with a substantial C layer: the Q-ary RA
+    #     LDPC codec is Nico Palermo's (IV3NWV) qracodes, C rather than Fortran,
+    #     reached through the q65_subs.c shim. See NOTICE — it is a SEPARATE
+    #     copyright from the WSJT Development Group's.
+    #
+    #     Decode only: no q65_encode / gen_q65wave path is wired, and the Rust
+    #     ModeKind reports Capabilities{tx:false} so modes::tx_mode() refuses to
+    #     hand it to the transmit path. Adding TX means adding the encode side
+    #     here AND flipping that flag AND passing the FT-mode TX hard gate.
+    #
+    #     ⭐ Q65-30A ONLY (ntrperiod=30, nsubmode=0). q65_decode sizes its frame
+    #     from ntrperiod (npts=ntrperiod*12000 at q65_decode.f90:109), and
+    #     q65_cabi pins Q65_NTRPERIOD=30 so the 360000-sample contract is fixed.
+    #     Upstream offers 5 submodes x 5 periods; exposing more needs a
+    #     per-period entry point plus Rust-side work to express a selectable
+    #     period, and the manifest flags anything cached on period or submode.
+    ${CMAKE_CURRENT_SOURCE_DIR}/q65_cabi.f90
+    ${LIB}/q65_decode.f90                 # module q65_decode (OO decoder)
+    ${LIB}/qra/q65/q65.f90                # module q65: shared state + q65_dec0,
+                                          #   q65_symspec, q65_hist, q65_bzap,
+                                          #   q65_write_red, q65_clravg, q65_snr
+    ${LIB}/qra/q65/q65_ap.f90             # a-priori decoding hypotheses
+    ${LIB}/qra/q65/q65_loops.f90          # sync/decode search loops
+    ${LIB}/qra/q65/q65_set_list.f90       # full-AP candidate codeword list
+    ${LIB}/qra/q65/q65_set_list2.f90      # secondary candidate list
+    ${LIB}/qra/q65/genq65.f90             # REQUIRED FOR DECODE despite the name:
+                                          #   q65_decode calls it to regenerate a
+                                          #   candidate's tone sequence, the same
+                                          #   shape as genfst4 above.
+    #     The qracodes C layer. fadengauss.c / fadenlorentz.c are deliberately
+    #     ABSENT: they are `#include`d into q65.c's translation unit at
+    #     q65.c:273-274, so compiling them separately would be dead objects.
+    #     They are still vendored, still scanned by the manifest gate, and the
+    #     codec does not build without them present on disk.
+    ${LIB}/qra/q65/q65.c                  # the Q65 codec proper
+    ${LIB}/qra/q65/q65_subs.c             # Fortran <-> C shim (holds `codec`)
+    ${LIB}/qra/q65/qracodes.c             # generic Q-ary RA codec
+    ${LIB}/qra/q65/npfwht.c               # fast Walsh-Hadamard transform
+    ${LIB}/qra/q65/pdmath.c               # probability-distribution math
+    ${LIB}/qra/q65/qra15_65_64_irr_e23.c  # the ONLY code Q65 instantiates —
+                                          #   q65_subs.c:38 passes
+                                          #   &qra15_65_64_irr_e23 to q65_init
+    #     NOT listed, deliberately:
+    #       qra/qracodes/qra12_63_64_irr_b.c, qra13_64_64_irr_e.c — QRA64 codes,
+    #         not Q65's. Their headers are commented out in qracodes.h:63-65 and
+    #         nothing in the Q65 path names them. Still vendored and still
+    #         classified in the manifest, just not linked.
+    #       qra/q65/normrnd.c — a Gaussian noise generator referenced only by its
+    #         own header; upstream uses it in sim/test harnesses.
+    #     NOTE the vendored tree keeps qracodes.c under qra/q65/, not
+    #     qra/qracodes/ — upstream ships copies in both and the drop took q65's.
+
+    #     Q65 decode-path support (lib), not previously needed by FT8/FT4/FST4:
+    ${LIB}/ana64.f90                      # iwave -> analytic c00 at 6000 Sa/s
+    ${LIB}/spec64.f90                     # 64-bin symbol spectra
+    ${LIB}/sec0.f90                       # elapsed-time helper
+    ${LIB}/twkfreq.f90                    # complex frequency/phase tweak
+    ${LIB}/smo121.f90                     # 1-2-1 smoothing
+    ${LIB}/types.f90                      # module types: q3list + kind params
 
     # --- 77-bit message packing (lib/77bit) ---
     # NOTE: call_to_c28, encode77, free_text, hash22calc, nonstd_to_c58, test28

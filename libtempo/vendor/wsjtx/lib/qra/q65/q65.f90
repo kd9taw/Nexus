@@ -666,29 +666,30 @@ subroutine q65_write_red(iz,xdt,ccf2_avg,ccf2)
 
 ! Write data for the red and orange sync curves to LU 17.
 
+! MODIFIED FOR NEXUS (KD9TAW, 2026-07-27): the body is excised; this is now a
+! no-op. Same class as fst4_decode's `plotspec`/dopspread block and this file's
+! own tsil.3q write — a GUI plotting aid with no consumer in a headless build.
+!
+! What it did: rewind LU 17, then write ~810 lines of sync-curve data (one per
+! frequency bin between nfa and nfb) and flush, on EVERY decode. Those are the
+! red/orange curves WSJT-X paints on its Wide Graph. Nexus draws its own
+! waterfall from its own data and never reads LU 17.
+!
+! Why it had to go rather than just being ignored: the writes are BARE — there is
+! no `open(17,...)` anywhere, so Fortran implicitly connects unit 17 to a file
+! named `fort.17` in the process's CURRENT WORKING DIRECTORY. That means every
+! Q65 decode created and rewrote an 812-line file wherever Nexus happened to be
+! started from, and did the I/O synchronously on the decode path. It was found
+! exactly that way: running the new Q65 test suite left a stray
+! crates/q65/fort.17 in the tree. Grepping for `open(` missed it precisely
+! because there is no open.
+!
+! The subroutine and its call at :205 are KEPT so the vendor diff stays small and
+! the caller is untouched. Restoring the curves means feeding them through the C
+! ABI to the waterfall, not reinstating a file write.
+
   real ccf2_avg(iz)
   real ccf2(iz)
-
-  call q65_sync_curve(ccf2_avg,1,iz,rms1)
-  call q65_sync_curve(ccf2,1,iz,rms2)
-
-  i1=max(1,nint(nfa/df))
-  i2=min(iz,int(nfb/df))
-  y0=minval(ccf2(i1:i2))
-  y0_avg=minval(ccf2_avg(i1:i2))
-  g=0.4
-  g_avg=0.
-  if(navg(iseq).ge.2) g_avg=g
-  rewind 17
-  write(17,1000) xdt,g_avg*minval(ccf2_avg),g_avg*maxval(ccf2_avg)
-  do i=i1,i2
-     freq=i*df
-     y1=g_avg*(ccf2_avg(i)-y0_avg)
-     y2=g*(ccf2(i)-y0)
-     write(17,1000) freq,y1,y2
-1000 format(f10.3,2f15.6)
-  enddo
-  flush(17)
 
   return
 end subroutine q65_write_red

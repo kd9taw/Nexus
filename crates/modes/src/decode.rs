@@ -74,6 +74,33 @@ impl From<fst4::Decode> for Decode {
     }
 }
 
+impl From<q65::Decode> for Decode {
+    fn from(d: q65::Decode) -> Self {
+        Self {
+            message: d.message,
+            sync: d.sync,
+            snr: d.snr,
+            dt: d.dt,
+            freq: d.freq,
+            // Q65 reports `idec` (which decode strategy succeeded: 0=q0..3=q3),
+            // not FT8's `iaptype`. Both answer "was a-priori information used and
+            // how", so idec lands in `nap` — but they are NOT the same scale, and
+            // anything comparing nap across modes has to know that. idec==3 in
+            // particular means the message was matched against a candidate list
+            // built from mycall/hiscall/hisgrid rather than independently
+            // recovered.
+            nap: d.idec,
+            // Q65 has no [0,1] quality metric. Upstream's closest analogue is the
+            // sync-curve value already carried in `sync`, so this stays 0.0 rather
+            // than inventing a number that would rank against FT8's real one.
+            qual: 0.0,
+            // No redundancy-version concept (that is FT1's IR-HARQ).
+            rv: None,
+            mode: None,
+        }
+    }
+}
+
 impl From<ft8::Decode> for Decode {
     fn from(d: ft8::Decode) -> Self {
         Self {

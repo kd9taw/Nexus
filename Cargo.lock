@@ -1172,6 +1172,7 @@ dependencies = [
  "fst4",
  "ft4",
  "ft8",
+ "q65",
  "tempo-fast",
  "tempo-net",
 ]
@@ -1544,6 +1545,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "q65"
+version = "0.1.0"
+dependencies = [
+ "tempo-fast-sys",
 ]
 
 [[package]]

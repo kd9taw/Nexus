@@ -171,7 +171,11 @@ pub fn band_plan_for(tier: crate::dto::Tier) -> Vec<BandChannel> {
         // a dead band edge, which is the least-wrong stand-in for a receive-only
         // mode the operator will tune manually. Replace with a real FST4 plan
         // before FST4 is offered as a first-class operating tier.
-        Tier::Fst4 => ft8_band_plan(),
+        // Q65 shares FT8's band plan for the same reason FST4 does: Nexus decodes
+        // it in the same audio passband on the same dial frequencies. Q65's real
+        // home is VHF+/EME, where the calling frequencies are per-band conventions
+        // rather than a plan this table models.
+        Tier::Fst4 | Tier::Q65 => ft8_band_plan(),
         Tier::TempoFast | Tier::TempoDeep => band_plan(),
     }
 }

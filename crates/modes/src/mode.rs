@@ -18,13 +18,21 @@ pub enum ModeKind {
     Ft4,
     /// WSJT-X FST4, 15 s T/R. **RECEIVE-ONLY** — see [`Capabilities::tx`].
     Fst4,
+    /// WSJT-X Q65-30A (30 s T/R, submode A). **RECEIVE-ONLY** — see
+    /// [`Capabilities::tx`].
+    Q65,
     TempoFast,
 }
 
 impl ModeKind {
     /// All modes shipped today, in display order.
-    pub const ALL: [ModeKind; 4] =
-        [ModeKind::Ft8, ModeKind::Ft4, ModeKind::Fst4, ModeKind::TempoFast];
+    pub const ALL: [ModeKind; 5] = [
+        ModeKind::Ft8,
+        ModeKind::Ft4,
+        ModeKind::Fst4,
+        ModeKind::Q65,
+        ModeKind::TempoFast,
+    ];
 
     /// Short display name, e.g. `"FT8"`.
     pub fn as_str(self) -> &'static str {
@@ -32,6 +40,9 @@ impl ModeKind {
             ModeKind::Ft8 => "FT8",
             ModeKind::Ft4 => "FT4",
             ModeKind::Fst4 => "FST4",
+            // The submode letter is part of the mode's on-air identity to an
+            // operator: "Q65" alone does not say which tone spacing or period.
+            ModeKind::Q65 => "Q65-30A",
             ModeKind::TempoFast => "TempoFast",
         }
     }
@@ -43,6 +54,8 @@ impl ModeKind {
             ModeKind::Ft4 => 7.5,
             // FST4 supports 15/30/60/120/300/900/1800 s upstream; the C ABI pins 15.
             ModeKind::Fst4 => 15.0,
+            // Q65 supports 15/30/60/120/300 s upstream; the C ABI pins 30.
+            ModeKind::Q65 => 30.0,
             ModeKind::TempoFast => 4.0,
         }
     }
@@ -54,6 +67,7 @@ impl ModeKind {
             ModeKind::Ft8 => ft8::NMAX,
             ModeKind::Ft4 => ft4::NMAX,
             ModeKind::Fst4 => fst4::NMAX,
+            ModeKind::Q65 => q65::NMAX,
             ModeKind::TempoFast => tempo_fast::NMAX,
         }
     }
@@ -212,6 +226,7 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
         ModeKind::Ft8 => Box::new(Ft8Mode),
         ModeKind::Ft4 => Box::new(Ft4Mode),
         ModeKind::Fst4 => Box::new(Fst4Mode),
+        ModeKind::Q65 => Box::new(Q65Mode),
         ModeKind::TempoFast => Box::new(Ft1Mode),
     }
 }
@@ -535,7 +550,7 @@ mod tx_capability_tests {
     /// Modes that ship RECEIVE-ONLY. Adding to this list is the deliberate act
     /// that makes a mode silent; a mode that is silent WITHOUT being listed here
     /// fails `tx_capability_is_declared_not_inherited` below.
-    const RX_ONLY: &[ModeKind] = &[ModeKind::Fst4];
+    const RX_ONLY: &[ModeKind] = &[ModeKind::Fst4, ModeKind::Q65];
 
     #[test]
     fn tx_capability_is_declared_not_inherited() {
@@ -655,6 +670,80 @@ impl Mode for Fst4Mode {
             ndepth,
             mycall,
             hiscall,
+            nqso_progress,
+            nfqso,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
+}
+
+/// WSJT-X **Q65-30A**, receive-only.
+///
+/// The weak-signal mode for EME, VHF+ scatter and other Doppler-smeared paths:
+/// 65-tone FSK carrying 78 bits through a Q-ary Repeat-Accumulate LDPC code over
+/// GF(64). The second mode in this tree that cannot transmit — `encode`/`gen_wave`
+/// are left defaulted (empty) and `Capabilities.tx` is false, so [`tx_mode`]
+/// refuses to hand it to the transmit path.
+///
+/// Upstream Q65 offers 5 T/R periods × 5 submodes (A–E). The C ABI pins **30 s,
+/// submode A**, because `q65_decode` sizes its frame from the period; a selectable
+/// period needs both a per-period entry point and a `ModeKind` that can carry one.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Q65Mode;
+
+impl Mode for Q65Mode {
+    fn kind(&self) -> ModeKind {
+        ModeKind::Q65
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            // Flipping this to true without also adding the encode entry points to
+            // the C ABI gets you a mode that keys the radio and transmits silence.
+            tx: false,
+            fox_hound: false,
+            ir_harq: false,
+            free_text: true,
+            // The Q65 contest path is deliberately not wired: it depends on caller
+            // history that used to arrive through a file the headless build removed,
+            // because that file let one chain's callers reach another.
+            contest: false,
+        }
+    }
+
+    // encode() and gen_wave() are DELIBERATELY not implemented — the trait defaults
+    // return empty, which is the safe failure if anything bypasses tx_mode.
+
+    #[allow(clippy::too_many_arguments)]
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        _frame_time_ms: i64, // Q65 has no cross-frame state here: the ABI pins
+                             // lclearave, so message averaging never spans calls.
+    ) -> Vec<Decode> {
+        q65::decode_frame(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            // hisgrid: the trait's decode_frame carries no grid, and Q65 is the only
+            // mode whose AP layer wants one (q65_set_list builds its candidate list
+            // from mycall+hiscall+hisgrid). Passing "" costs some q3 list-decode
+            // reach and costs nothing else — every other decode path is unaffected.
+            // Wiring it through means widening the trait signature for all modes,
+            // which is worth doing only if grid-AP measurably helps.
+            "",
             nqso_progress,
             nfqso,
         )

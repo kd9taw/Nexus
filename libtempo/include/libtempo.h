@@ -376,6 +376,68 @@ int fst4_decode_frame(const int16_t *iwave /*[FST4_NMAX]*/,
                       fst4_decode_t *out, int max_out);
 
 /*===========================================================================
+ * Q65: WSJT-X weak-signal mode for EME/VHF+ and ionoscatter. DECODE ONLY.
+ *===========================================================================*/
+
+/* ⭐ Q65-30A ONLY — one T/R period AND one submode. Upstream offers 5 periods
+ * (15/30/60/120/300 s) x 5 submodes (A-E, tone spacing). q65_decode sizes its
+ * frame from ntrperiod (npts = ntrperiod*12000), so the buffer contract depends
+ * on it. This ABI pins ntrperiod=30 / nsubmode=0. Other combinations need a
+ * per-period entry point plus Rust-side work to express a selectable period —
+ * and note that modem-state-manifest.toml flags anything cached on period or
+ * submode as chain-specific the moment two chains differ. */
+#define Q65_NTRPERIOD 30       /* T/R period, seconds — fixed by this ABI      */
+#define Q65_NSUBMODE  0        /* 0 = submode A                                */
+#define Q65_NMAX      360000   /* samples in iwave (30 s @ 12 kHz)             */
+
+/* NO q65_encode / gen_q65wave, deliberately. Q65 ships receive-only: the Rust
+ * ModeKind reports Capabilities{tx:false} and modes::tx_mode() refuses to hand
+ * it to the transmit path. Adding TX means adding those entry points, flipping
+ * that flag, AND passing the FT-mode TX approval gate. */
+
+/* One decode result from Q65 acquisition. Byte-compatible with ft8/ft4/
+ * fst4_decode_t (64 bytes, 4-byte aligned), but the last two fields carry what
+ * Q65 actually reports rather than FT8's nap/qual. */
+typedef struct {
+    float sync;          /* snr1: sync-curve correlation metric          */
+    int   snr;           /* SNR estimate, dB in 2500 Hz (rounded)        */
+    float dt;            /* time offset, seconds                         */
+    float freq;          /* audio frequency, Hz                          */
+    char  message[38];   /* NUL-terminated decoded message text          */
+    int   idec;          /* decode type: 0=q0, 1=q1, 2=q2, 3=q3 list     */
+    int   nused;         /* T/R periods averaged (always 1 — see below)  */
+} q65_decode_t;
+
+/*
+ * Decode EVERY Q65 signal in a complete 30 s frame.
+ *   iwave         : Q65_NMAX (360000) int16 audio samples @ 12 kHz
+ *   nfa, nfb      : frequency search band edges (Hz)
+ *   ndepth        : 1..3 (3 = deepest; <=0 defaults to 3)
+ *   mycall/hiscall: NUL/space-terminated callsigns for AP (may be "")
+ *   hisgrid       : NUL/space-terminated 6-char grid for AP (may be "")
+ *   nqso_progress : QSO progress index (AP pass schedule)
+ *   nfqso         : QSO/RX audio freq (Hz) being worked; the deep AP passes
+ *                   center on it. 0 / out of [nfa,nfb] = band mid
+ *   out           : caller array of q65_decode_t (capacity max_out)
+ *   max_out       : capacity of out
+ *
+ * Returns the number of decodes found (>= 0), or -1 on error. Up to
+ * min(found, max_out) entries are written. NOT thread-safe / not reentrant.
+ *
+ * EVERY CALL IS INDEPENDENT. Q65 supports multi-period message averaging, but
+ * this ABI pins lclearave=.true. so the averaging arrays are cleared at the top
+ * of every decode and frame N is never influenced by frames 1..N-1. `nused` is
+ * therefore always 1. Real averaging needs a stateful session API plus the
+ * per-chain state swap the manifest specifies, not a flag flip.
+ */
+int q65_decode_frame(const int16_t *iwave /*[Q65_NMAX]*/,
+                     int nfa, int nfb, int ndepth,
+                     const char *mycall, const char *hiscall,
+                     const char *hisgrid,
+                     int nqso_progress, int nfqso,
+                     q65_decode_t *out, int max_out);
+
+/*===========================================================================
  * DX1-S: non-coherent M-FSK + soft-LDPC robust tier (fading-resilient).
  *===========================================================================*/
 

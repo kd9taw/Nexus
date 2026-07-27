@@ -186,6 +186,14 @@ pub enum Tier {
     /// selecting this tier decodes but never keys the radio.
     #[serde(rename = "FST4")]
     Fst4,
+    /// WSJT-X Q65-30A (30 s T/R, submode A). **RECEIVE-ONLY** — `modes::tx_mode`
+    /// refuses it, so selecting this tier decodes but never keys the radio.
+    ///
+    /// The serde name carries the submode because "Q65" alone does not identify a
+    /// signal on the air: period and tone spacing both matter, and an operator
+    /// reading the tier needs to know which one is being decoded.
+    #[serde(rename = "Q65-30A")]
+    Q65,
 }
 
 impl Tier {
@@ -207,6 +215,7 @@ impl Tier {
             Tier::Ft8 => Some(ModeKind::Ft8),
             Tier::Ft4 => Some(ModeKind::Ft4),
             Tier::Fst4 => Some(ModeKind::Fst4),
+            Tier::Q65 => Some(ModeKind::Q65),
             Tier::TempoDeep => None,
         }
     }
@@ -221,6 +230,7 @@ impl Tier {
             ModeKind::Ft8 => Tier::Ft8,
             ModeKind::Ft4 => Tier::Ft4,
             ModeKind::Fst4 => Tier::Fst4,
+            ModeKind::Q65 => Tier::Q65,
         }
     }
 }

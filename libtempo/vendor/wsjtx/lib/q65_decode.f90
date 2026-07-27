@@ -74,7 +74,35 @@ contains
     character*6 cutc
     character c6*6,c4*4,cmode*4
     character*80 fmt
-    integer*2 iwave(NMAX)                 !Raw data
+! MODIFIED FOR NEXUS (KD9TAW, 2026-07-27): explicit-shape iwave(NMAX)
+! -> assumed-size iwave(*). Same change, same reason, as fst4_decode.f90:77.
+!
+! Upstream declares the dummy at the WORST-CASE period (NMAX = 300*12000 =
+! 3,600,000 samples) because its only caller hands it jt9com's id2, which is
+! always sized for the longest mode. libtempo drives Q65 at a single period
+! (30 s = 360,000 samples, see q65_cabi.f90), and gfortran REJECTS that outright:
+! "Actual argument contains too few elements for dummy argument 'iwave'
+! (360000/3600000)". The check is conservative against a declaration that
+! overstates what the routine reads.
+!
+! What it actually reads is bounded and derived, and in this routine iwave is
+! never indexed at all — it is only handed onward, twice:
+!   * `call ana64(iwave,npts,c00)` at :225 and :372, where npts=ntrperiod*12000
+!     (:109) is passed explicitly and ana64 reads exactly that many.
+!   * `call q65_dec0(iavg,iwave,ntrperiod,...)` at :208/:261/:278/:292/:359,
+!     and q65_dec0 declares `integer*2 iwave(0:12000*ntrperiod-1)`
+!     (qra/q65/q65.f90:33) — an adjustable-size dummy that sizes itself from the
+!     same ntrperiod the caller passed.
+! Both consumers therefore bound themselves by ntrperiod, so the read never
+! exceeds the frame supplied for the period asked for.
+!
+! COST OF THIS CHANGE, stated plainly: assumed-size removes the compile-time
+! length check, so the contract becomes the caller's to keep — supply at least
+! ntrperiod*12000 elements for the chosen period. q65_cabi.f90 keeps it by
+! construction: it pins Q65_NTRPERIOD=30 as a parameter and sizes Q65_NMAX=360000
+! from it, so the two cannot drift. A future multi-period entry point must size
+! its buffer from ntrperiod, not assume 360000.
+    integer*2 iwave(*)                    !Raw data
     real, allocatable :: dd(:)            !Raw data
     real xdtdecodes(100)
     real f0decodes(100)
@@ -334,8 +362,10 @@ contains
                int(abs(f0dec-nfqso)).le.ntol ) call q65_clravg    !AutoClrAvg
           call sec0(1,tdecode)
 ! MODIFIED FOR NEXUS: q65_decodes.txt diagnostic dump removed (hard-coded unit 22
-! under data_dir; nothing on the decode path reads it).
-          endif
+! under data_dir; nothing on the decode path reads it). The `if(ios.eq.0) then`
+! that guarded it (upstream :341) went with it, so its matching `endif`
+! (upstream :357) is removed here too — leaving it behind orphaned an `endif`
+! and the file did not compile.
        endif
     endif
     navg0=1000*navg(0) + navg(1)
@@ -431,8 +461,11 @@ contains
              call sec0(1,tdecode)
              ios=1
 ! MODIFIED FOR NEXUS: q65_decodes.txt diagnostic dump removed (hard-coded unit 22
-! under data_dir; nothing on the decode path reads it).
-             endif
+! under data_dir; nothing on the decode path reads it). As at the first dump
+! site, the `if(ios.eq.0) then` guard (upstream :454) went with it and its
+! matching `endif` (upstream :471) is removed here too. `ios=1` above is now a
+! dead store — upstream primed it before open()'s iostat= could set it — and is
+! left in place to keep the vendor diff to what was actually excised.
           endif
        endif
 800    continue

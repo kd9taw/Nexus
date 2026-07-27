@@ -4498,6 +4498,7 @@ impl Engine {
             // fit check pass and rely solely on tx_mode to stop it; two guards
             // pointing the same way is cheaper than one.
             Tier::Fst4 => 15.0,
+            Tier::Q65 => 30.0,
             Tier::TempoDeep => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
             // FT4 = 0.5 s lead-in + 5.04 s tones (105 sym × 576 sa @ 12 kHz). The
             // generated buffer also carries ~1.0 s of TRAILING silence — that is
@@ -7475,6 +7476,12 @@ impl Engine {
             // FST4 is receive-only (no TX means no completed QSO to log), but the
             // right answer the moment that changes.
             Tier::Fst4 => "FST4",
+            // "Q65" WITHOUT the submode: that is the ADIF-registered mode name,
+            // and ADIF has no field for the period/submode. The tier displays as
+            // "Q65-30A" because an operator needs to know which variant is being
+            // decoded, but a log entry must carry the registered name or award
+            // credit breaks. Same unreachable-while-receive-only note as FST4.
+            Tier::Q65 => "Q65",
             Tier::TempoFast => "TempoFast",
         }
         .to_string();

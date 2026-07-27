@@ -63,6 +63,13 @@ mod tests {
             ModeKind::Fst4 => {
                 unreachable!("FST4 is receive-only; native_frame requires encode()")
             }
+            // Q65 is likewise RECEIVE-ONLY, and the same assert fires first. Listed
+            // explicitly rather than folded into a `_` arm so that adding a
+            // TRANSMITTING mode later fails to compile here instead of silently
+            // inheriting some other mode's slot offset.
+            ModeKind::Q65 => {
+                unreachable!("Q65 is receive-only; native_frame requires encode()")
+            }
             ModeKind::TempoFast => 4_800,
         };
         to_i16_frame(&wave, mode.frame_samples(), off, 1000.0)
@@ -87,7 +94,13 @@ mod tests {
         assert_eq!(m1.frame_samples(), tempo_fast::NMAX);
         assert!(m1.capabilities().ir_harq);
 
-        assert_eq!(ModeKind::ALL.len(), 4) // FT8, FT4, FST4, TempoFast;
+        let mq = make_mode(ModeKind::Q65);
+        assert_eq!(mq.name(), "Q65-30A");
+        assert_eq!(mq.slot_secs(), 30.0);
+        assert_eq!(mq.frame_samples(), q65::NMAX);
+        assert!(!mq.capabilities().tx);
+
+        assert_eq!(ModeKind::ALL.len(), 5) // FT8, FT4, FST4, Q65, TempoFast;
     }
 
     /// Each native mode decodes its own clean signal through a `Box<dyn

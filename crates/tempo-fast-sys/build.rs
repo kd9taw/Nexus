@@ -197,19 +197,25 @@ fn mingw_gcc_lib_dir() -> Option<String> {
 fn emit_rerun(libtempo_src: &std::path::Path) {
     println!("cargo:rerun-if-changed=build.rs");
 
-    // Tempo-side libtempo sources (the C-ABI shims, DX1, headers, build config).
-    // Every *_cabi.f90 MUST be listed: a content edit to one that is NOT watched
-    // silently links a STALE libtempo.a (Cargo never re-runs CMake).
-    for rel in [
-        "CMakeLists.txt",
-        "tempofast_cabi.f90",
-        "ft8_cabi.f90",
-        "ft8_stdcall.f90",
-        "ft4_cabi.f90",
-        "mingw-w64.cmake",
-        "include",
-        "tempodeep",
-    ] {
+    // Tempo-side libtempo sources: the C-ABI shims, DX1, headers, build config.
+    //
+    // The top-level *.f90 are swept rather than enumerated. An enumerated list drifts
+    // and the failure is silent — a content edit to an UNWATCHED shim links a STALE
+    // libtempo.a, because Cargo never re-runs CMake. That already happened twice:
+    // fst4_cabi.f90 was never added when FST4 landed, and ft8_stdcall.f90 stayed on
+    // the list after the file was deleted (which the canonicalize() panic then caught).
+    // Sweeping the directory makes every present and future *_cabi.f90 watched by
+    // construction, the same argument the vendored lib tree below is watched under.
+    for entry in std::fs::read_dir(libtempo_src)
+        .unwrap_or_else(|e| panic!("build.rs cannot read {}: {e}", libtempo_src.display()))
+        .flatten()
+    {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) == Some("f90") {
+            emit_rerun_glob(&p);
+        }
+    }
+    for rel in ["CMakeLists.txt", "mingw-w64.cmake", "include", "tempodeep"] {
         emit_rerun_glob(&libtempo_src.join(rel));
     }
 

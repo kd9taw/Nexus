@@ -52,6 +52,17 @@ pub const FST4_NTRPERIOD: usize = 15;
 /// Samples in an FST4 decode frame at 12 kHz (15 s). Same length as FT8's frame.
 pub const FST4_NMAX: usize = 180_000;
 
+/// Q65 T/R period in seconds. FIXED by the C ABI: `q65_decode` sizes its frame from
+/// ntrperiod (npts = ntrperiod*12000), and `q65_cabi.f90` pins 30 so the buffer
+/// contract cannot be got wrong.
+pub const Q65_NTRPERIOD: usize = 30;
+/// Q65 submode. FIXED at 0 (submode A) by the C ABI. Upstream offers A–E, which
+/// differ in tone spacing; exposing them needs a `ModeKind` that can carry one, and
+/// the state manifest treats anything cached on submode as chain-specific.
+pub const Q65_NSUBMODE: usize = 0;
+/// Samples in a Q65 decode frame at 12 kHz (30 s).
+pub const Q65_NMAX: usize = 360_000;
+
 /// One decode from [`ft1_decode_frame`]. Layout matches `ft1_decode_t` in
 /// `libtempo.h` (68 bytes, 4-byte aligned; `#[repr(C)]` reproduces the 2-byte pad
 /// after `message`).
@@ -149,6 +160,42 @@ pub type Ft4DecodeT = Ft8DecodeT;
 
 /// FST4 decode record — byte-identical C-ABI layout to [`Ft8DecodeT`].
 pub type Fst4DecodeT = Ft8DecodeT;
+
+/// One decode from [`q65_decode_frame`]. Layout matches `q65_decode_t` in
+/// `libtempo.h` — the same 64 bytes as [`Ft8DecodeT`], but NOT an alias: Q65's last
+/// two fields are `idec`/`nused` (both `int`), where FT8 has `nap`/`qual`
+/// (`int`/`float`). Aliasing would silently reinterpret `nused` as a float.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Q65DecodeT {
+    /// snr1: sync-curve correlation metric.
+    pub sync: c_float,
+    /// SNR estimate, dB in 2500 Hz.
+    pub snr: c_int,
+    /// Time offset in seconds.
+    pub dt: c_float,
+    pub freq: c_float,
+    pub message: [u8; 38],
+    /// Decode type: 0=q0, 1=q1, 2=q2, 3=q3 (full-AP list decode).
+    pub idec: c_int,
+    /// T/R periods averaged. Always 1 — the ABI pins `lclearave` so each frame
+    /// decodes independently.
+    pub nused: c_int,
+}
+
+impl Default for Q65DecodeT {
+    fn default() -> Self {
+        Self {
+            sync: 0.0,
+            snr: 0,
+            dt: 0.0,
+            freq: 0.0,
+            message: [0; 38],
+            idec: 0,
+            nused: 0,
+        }
+    }
+}
 
 extern "C" {
     /// Encode a message into 99 quaternary channel symbols {0,1,2,3} (RV0).
@@ -380,6 +427,27 @@ extern "C" {
         max_out: c_int,
     ) -> c_int;
 
+    /// Decode every Q65 signal in a 360000-sample (30 s) frame.
+    ///
+    /// DECODE ONLY — there is deliberately no `q65_encode` / `gen_q65wave`. Q65
+    /// ships receive-only; see `Capabilities.tx` and `modes::tx_mode`.
+    ///
+    /// Takes `hisgrid` as well as the two callsigns: Q65's AP layer builds its
+    /// candidate list from the grid too (`q65_set_list`), which FT8/FT4/FST4 do not.
+    pub fn q65_decode_frame(
+        iwave: *const i16, // [Q65_NMAX]
+        nfa: c_int,
+        nfb: c_int,
+        ndepth: c_int,
+        mycall: *const c_char,
+        hiscall: *const c_char,
+        hisgrid: *const c_char,
+        nqso_progress: c_int,
+        nfqso: c_int, // QSO/RX freq (Hz); deep AP center; 0/oob ⇒ band mid
+        out: *mut Q65DecodeT,
+        max_out: c_int,
+    ) -> c_int;
+
     // ---- Per-chain decoder context (see `DecoderCtx`) ------------------------
 
     /// Bytes one per-chain decoder context needs. Sized by the library from its
@@ -551,5 +619,34 @@ mod tests {
         assert_eq!(offset_of!(Ft8DecodeT, qual), 60);
         // Ft4DecodeT is an alias — identical layout.
         assert_eq!(size_of::<Ft4DecodeT>(), size_of::<Ft8DecodeT>());
+    }
+
+    #[test]
+    fn q65_decode_t_layout() {
+        // Q65DecodeT is NOT an alias of Ft8DecodeT: the last two fields are
+        // idec/nused (int/int) where FT8 has nap/qual (int/float). The offsets must
+        // still line up byte-for-byte with q65_decode_t in libtempo.h, so this
+        // pins them independently rather than leaning on the FT8 test.
+        assert_eq!(size_of::<Q65DecodeT>(), 64, "Q65DecodeT size");
+        assert_eq!(align_of::<Q65DecodeT>(), 4, "Q65DecodeT align");
+        assert_eq!(offset_of!(Q65DecodeT, sync), 0);
+        assert_eq!(offset_of!(Q65DecodeT, snr), 4);
+        assert_eq!(offset_of!(Q65DecodeT, dt), 8);
+        assert_eq!(offset_of!(Q65DecodeT, freq), 12);
+        assert_eq!(offset_of!(Q65DecodeT, message), 16);
+        assert_eq!(offset_of!(Q65DecodeT, idec), 56);
+        assert_eq!(offset_of!(Q65DecodeT, nused), 60);
+        // Same footprint as the FT8 record, which is what lets the two share a
+        // results-buffer shape on the Fortran side.
+        assert_eq!(size_of::<Q65DecodeT>(), size_of::<Ft8DecodeT>());
+    }
+
+    #[test]
+    fn q65_frame_is_the_pinned_30s_length() {
+        // Q65_NMAX must equal ntrperiod * 12000, or the buffer contract the ABI
+        // depends on (q65_cabi.f90 pins both) is broken.
+        assert_eq!(Q65_NTRPERIOD, 30);
+        assert_eq!(Q65_NSUBMODE, 0);
+        assert_eq!(Q65_NMAX, Q65_NTRPERIOD * 12_000);
     }
 }

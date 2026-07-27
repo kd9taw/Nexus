@@ -4520,6 +4520,12 @@ fn tier_mode(tier: Tier) -> &'static str {
         Tier::TempoDeep => "TempoDeep",
         Tier::Ft8 => "FT8",
         Tier::Ft4 => "FT4",
+        // These feed the WSJT-X UDP Decode message and the PSK Reporter spot
+        // queue, so they must be the names cooperating loggers and the reporter
+        // expect — "Q65" without the submode, as in ADIF, not the "Q65-30A" the
+        // tier displays.
+        Tier::Fst4 => "FST4",
+        Tier::Q65 => "Q65",
     }
 }
 
