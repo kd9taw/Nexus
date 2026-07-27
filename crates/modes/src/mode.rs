@@ -16,18 +16,22 @@ use crate::decode::Decode;
 pub enum ModeKind {
     Ft8,
     Ft4,
+    /// WSJT-X FST4, 15 s T/R. **RECEIVE-ONLY** — see [`Capabilities::tx`].
+    Fst4,
     TempoFast,
 }
 
 impl ModeKind {
     /// All modes shipped today, in display order.
-    pub const ALL: [ModeKind; 3] = [ModeKind::Ft8, ModeKind::Ft4, ModeKind::TempoFast];
+    pub const ALL: [ModeKind; 4] =
+        [ModeKind::Ft8, ModeKind::Ft4, ModeKind::Fst4, ModeKind::TempoFast];
 
     /// Short display name, e.g. `"FT8"`.
     pub fn as_str(self) -> &'static str {
         match self {
             ModeKind::Ft8 => "FT8",
             ModeKind::Ft4 => "FT4",
+            ModeKind::Fst4 => "FST4",
             ModeKind::TempoFast => "TempoFast",
         }
     }
@@ -37,6 +41,8 @@ impl ModeKind {
         match self {
             ModeKind::Ft8 => 15.0,
             ModeKind::Ft4 => 7.5,
+            // FST4 supports 15/30/60/120/300/900/1800 s upstream; the C ABI pins 15.
+            ModeKind::Fst4 => 15.0,
             ModeKind::TempoFast => 4.0,
         }
     }
@@ -47,6 +53,7 @@ impl ModeKind {
         match self {
             ModeKind::Ft8 => ft8::NMAX,
             ModeKind::Ft4 => ft4::NMAX,
+            ModeKind::Fst4 => fst4::NMAX,
             ModeKind::TempoFast => tempo_fast::NMAX,
         }
     }
@@ -204,6 +211,7 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
     match kind {
         ModeKind::Ft8 => Box::new(Ft8Mode),
         ModeKind::Ft4 => Box::new(Ft4Mode),
+        ModeKind::Fst4 => Box::new(Fst4Mode),
         ModeKind::TempoFast => Box::new(Ft1Mode),
     }
 }
@@ -524,22 +532,50 @@ mod tx_capability_tests {
         }
     }
 
+    /// Modes that ship RECEIVE-ONLY. Adding to this list is the deliberate act
+    /// that makes a mode silent; a mode that is silent WITHOUT being listed here
+    /// fails `tx_capability_is_declared_not_inherited` below.
+    const RX_ONLY: &[ModeKind] = &[ModeKind::Fst4];
+
     #[test]
-    fn every_shipped_mode_declares_tx() {
-        // If a future mode ships RX-only, this is the line that has to change
-        // deliberately — it should not be possible to add a silent mode by accident.
+    fn tx_capability_is_declared_not_inherited() {
+        // The original form of this test asserted every shipped mode declares tx.
+        // FST4 is the first that does not, and the test failing on it was the
+        // intended behaviour — a silent mode must not be addable by accident. The
+        // invariant is now two-sided: RX_ONLY is exactly the set that cannot
+        // transmit, and every other mode can.
         for kind in ModeKind::ALL {
-            assert!(
-                make_mode(kind).capabilities().tx,
-                "{} must declare tx: true or the TX path silently drops it",
+            let rx_only = RX_ONLY.contains(&kind);
+            let caps_tx = make_mode(kind).capabilities().tx;
+            assert_eq!(
+                caps_tx,
+                !rx_only,
+                "{} declares tx={caps_tx} but RX_ONLY says rx_only={rx_only} — \
+                 update RX_ONLY deliberately, or fix the mode's Capabilities",
                 kind.as_str()
             );
-            assert!(
+            assert_eq!(
                 tx_mode(kind).is_some(),
-                "tx_mode({}) must hand back a mode",
+                !rx_only,
+                "tx_mode({}) disagrees with its own Capabilities.tx",
                 kind.as_str()
             );
         }
+    }
+
+    #[test]
+    fn fst4_is_receive_only_end_to_end() {
+        // The whole reason Capabilities.tx exists. Every route to a waveform must
+        // refuse FST4: tx_mode hands back nothing, and the defaulted trait methods
+        // produce nothing if a caller bypasses it.
+        assert!(!make_mode(ModeKind::Fst4).capabilities().tx);
+        assert!(tx_mode(ModeKind::Fst4).is_none(), "tx_mode must refuse FST4");
+        let m = make_mode(ModeKind::Fst4);
+        assert!(m.encode("CQ KD9TAW EN52").is_empty(), "FST4 must not encode");
+        assert!(
+            m.gen_wave(&[1, 2, 3], 12000.0, 1500.0).is_empty(),
+            "FST4 must not produce a waveform"
+        );
     }
 
     #[test]
@@ -562,5 +598,68 @@ mod tx_capability_tests {
             let _ = make_mode(kind); // never refuses
         }
         assert!(RxOnlyMode.capabilities().tx == false);
+    }
+}
+
+/// WSJT-X **FST4** — 15 s T/R, 4-GFSK, LDPC(240,101)+CRC-24. **RECEIVE-ONLY.**
+///
+/// The first mode in this tree that cannot transmit. `encode`/`gen_wave` are left
+/// defaulted (empty) and `Capabilities.tx` is false, so [`tx_mode`] refuses to hand
+/// it to the transmit path. That is enforced, not conventional: `engine.rs`'s wave
+/// builder goes through `tx_mode` and abandons the over when it returns `None`.
+///
+/// Upstream FST4 offers 15/30/60/120/300/900/1800 s periods. The C ABI pins 15 s
+/// because `fst4_decode` sizes its frame from the period, so a selectable period
+/// needs both a per-period entry point and a `ModeKind` that can carry one.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Fst4Mode;
+
+impl Mode for Fst4Mode {
+    fn kind(&self) -> ModeKind {
+        ModeKind::Fst4
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            // The whole point of the flag. Flipping this to true without also adding
+            // fst4_encode/fst4_gen_wave to the C ABI gets you a mode that keys the
+            // radio and transmits an empty waveform.
+            tx: false,
+            fox_hound: false,
+            ir_harq: false,
+            free_text: true,
+            contest: false,
+        }
+    }
+
+    // encode() and gen_wave() are DELIBERATELY not implemented — the trait defaults
+    // return empty, which is the safe failure if anything bypasses tx_mode.
+
+    #[allow(clippy::too_many_arguments)]
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        _frame_time_ms: i64, // FST4 has no cross-frame state (no a7, no IR-HARQ)
+    ) -> Vec<Decode> {
+        fst4::decode_frame(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
     }
 }

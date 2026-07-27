@@ -57,6 +57,23 @@ impl From<tempo_fast::Decode> for Decode {
     }
 }
 
+impl From<fst4::Decode> for Decode {
+    fn from(d: fst4::Decode) -> Self {
+        Self {
+            message: d.message,
+            sync: d.sync,
+            snr: d.snr,
+            dt: d.dt,
+            freq: d.freq,
+            nap: d.nap,
+            qual: d.qual,
+            // FST4 has no redundancy-version concept (that is FT1's IR-HARQ).
+            rv: None,
+            mode: None,
+        }
+    }
+}
+
 impl From<ft8::Decode> for Decode {
     fn from(d: ft8::Decode) -> Self {
         Self {

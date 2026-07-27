@@ -56,6 +56,13 @@ mod tests {
         let off = match mode.kind() {
             ModeKind::Ft8 => 0,
             ModeKind::Ft4 => 0,
+            // FST4 is RECEIVE-ONLY. Mode::encode returns empty for it, so the
+            // assert above fires before this match is ever reached. This harness
+            // is TX-dependent by construction and cannot serve a mode that does
+            // not transmit — which is the point, not a gap to fill in later.
+            ModeKind::Fst4 => {
+                unreachable!("FST4 is receive-only; native_frame requires encode()")
+            }
             ModeKind::TempoFast => 4_800,
         };
         to_i16_frame(&wave, mode.frame_samples(), off, 1000.0)
@@ -80,7 +87,7 @@ mod tests {
         assert_eq!(m1.frame_samples(), tempo_fast::NMAX);
         assert!(m1.capabilities().ir_harq);
 
-        assert_eq!(ModeKind::ALL.len(), 3);
+        assert_eq!(ModeKind::ALL.len(), 4) // FT8, FT4, FST4, TempoFast;
     }
 
     /// Each native mode decodes its own clean signal through a `Box<dyn

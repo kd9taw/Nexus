@@ -44,6 +44,14 @@ pub const FT4_NN: usize = 103;
 /// Raw audio samples per FT4 frame (21*3456, ~6.05 s window of the 7.5 s slot).
 pub const FT4_NMAX: usize = 72_576;
 
+/// FST4 T/R period in seconds. FIXED by the C ABI: `fst4_decode` sizes its frame
+/// from ntrperiod (15/30/60/120/300/900/1800 s), and `fst4_cabi.f90` pins 15 so
+/// the buffer contract cannot be got wrong. Other periods need a per-period entry
+/// point plus a `ModeKind` that can carry a selectable period.
+pub const FST4_NTRPERIOD: usize = 15;
+/// Samples in an FST4 decode frame at 12 kHz (15 s). Same length as FT8's frame.
+pub const FST4_NMAX: usize = 180_000;
+
 /// One decode from [`ft1_decode_frame`]. Layout matches `ft1_decode_t` in
 /// `libtempo.h` (68 bytes, 4-byte aligned; `#[repr(C)]` reproduces the 2-byte pad
 /// after `message`).
@@ -138,6 +146,9 @@ impl Default for Ft8DecodeT {
 
 /// FT4 decode record — byte-identical C-ABI layout to [`Ft8DecodeT`].
 pub type Ft4DecodeT = Ft8DecodeT;
+
+/// FST4 decode record — byte-identical C-ABI layout to [`Ft8DecodeT`].
+pub type Fst4DecodeT = Ft8DecodeT;
 
 extern "C" {
     /// Encode a message into 99 quaternary channel symbols {0,1,2,3} (RV0).
@@ -349,6 +360,23 @@ extern "C" {
         nqso_progress: c_int,
         nfqso: c_int, // QSO/RX freq (Hz); deep AP center; 0/oob ⇒ band mid
         out: *mut Ft4DecodeT,
+        max_out: c_int,
+    ) -> c_int;
+
+    /// Decode every FST4 signal in a 180000-sample (15 s) frame.
+    ///
+    /// DECODE ONLY — there is deliberately no `fst4_encode` / `fst4_gen_wave`.
+    /// FST4 ships receive-only; see `Capabilities.tx` and `modes::tx_mode`.
+    pub fn fst4_decode_frame(
+        iwave: *const i16, // [FST4_NMAX]
+        nfa: c_int,
+        nfb: c_int,
+        ndepth: c_int,
+        mycall: *const c_char,
+        hiscall: *const c_char,
+        nqso_progress: c_int,
+        nfqso: c_int, // QSO/RX freq (Hz); deep AP center; 0/oob ⇒ band mid
+        out: *mut Fst4DecodeT,
         max_out: c_int,
     ) -> c_int;
 

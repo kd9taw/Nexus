@@ -164,6 +164,14 @@ pub fn band_plan_for(tier: crate::dto::Tier) -> Vec<BandChannel> {
     match tier {
         Tier::Ft8 => ft8_band_plan(),
         Tier::Ft4 => ft4_band_plan(),
+        // FST4: PLACEHOLDER, and knowingly so. FST4's own conventional frequencies
+        // are not tabulated in this tree, and they are not the FT8 ones — FST4 is
+        // used heavily on LF/MF (2200 m, 630 m) where FT8 has no presence at all.
+        // Reusing the FT8 plan puts the operator somewhere populated rather than on
+        // a dead band edge, which is the least-wrong stand-in for a receive-only
+        // mode the operator will tune manually. Replace with a real FST4 plan
+        // before FST4 is offered as a first-class operating tier.
+        Tier::Fst4 => ft8_band_plan(),
         Tier::TempoFast | Tier::TempoDeep => band_plan(),
     }
 }

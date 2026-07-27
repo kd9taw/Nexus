@@ -5,6 +5,7 @@ members = [
     "crates/tempo-fast",
     "crates/ft8",
     "crates/ft4",
+    "crates/fst4",
     "crates/modes",
     "crates/propagation",
     "crates/tempo-core",

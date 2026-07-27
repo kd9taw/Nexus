@@ -182,6 +182,10 @@ pub enum Tier {
     Ft8,
     #[serde(rename = "FT4")]
     Ft4,
+    /// WSJT-X FST4, 15 s T/R. **RECEIVE-ONLY** — `modes::tx_mode` refuses it, so
+    /// selecting this tier decodes but never keys the radio.
+    #[serde(rename = "FST4")]
+    Fst4,
 }
 
 impl Tier {
@@ -202,6 +206,7 @@ impl Tier {
             Tier::TempoFast => Some(ModeKind::TempoFast),
             Tier::Ft8 => Some(ModeKind::Ft8),
             Tier::Ft4 => Some(ModeKind::Ft4),
+            Tier::Fst4 => Some(ModeKind::Fst4),
             Tier::TempoDeep => None,
         }
     }
@@ -215,6 +220,7 @@ impl Tier {
             ModeKind::TempoFast => Tier::TempoFast,
             ModeKind::Ft8 => Tier::Ft8,
             ModeKind::Ft4 => Tier::Ft4,
+            ModeKind::Fst4 => Tier::Fst4,
         }
     }
 }
