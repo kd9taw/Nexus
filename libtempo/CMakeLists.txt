@@ -165,6 +165,42 @@ set(LIBTEMPO_SOURCES
     ${LIB}/ft4/get_ft4_bitmetrics.f90     # bit metrics (calls normalizebmet from ft8b)
     ${LIB}/ft4/subtractft4.f90            # signal subtraction (calls gen_ft4wave)
 
+    # --- FST4 native decode (lib/fst4 + fst4_decode.f90) : Nexus, RX-ONLY ---
+    #     Same clean OO+callback shape as FT4 (no nzhsym/a7/shmem), wrapped behind
+    #     a C ABI in fst4_cabi.f90. Decode only: there is no fst4_encode /
+    #     fst4_gen_wave, and the Rust ModeKind reports Capabilities{tx:false} so
+    #     modes::tx_mode() refuses to hand it to the transmit path.
+    #
+    #     NOTE gen_fst4wave IS on the RECEIVE path despite the name: fst4_decode
+    #     calls it to regenerate and subtract a decoded signal.
+    #
+    #     The 15 s T/R period only. fst4_decode sizes its frame from ntrperiod
+    #     (15/30/60/120/300/900/1800 s -> 180000..21600000 samples), and
+    #     fst4_cabi pins FST4_NTRPERIOD=15 so the 180000-sample contract is fixed.
+    ${CMAKE_CURRENT_SOURCE_DIR}/fst4_cabi.f90
+    ${LIB}/fst4_decode.f90                # module fst4_decode (OO decoder)
+    ${LIB}/fst4/genfst4.f90               # REQUIRED FOR DECODE despite the name:
+                                          #   fst4_decode calls its ENTRY point
+                                          #   get_fst4_tones_from_bits (genfst4.f90:76)
+                                          #   to regenerate a decoded signal for
+                                          #   subtraction. A use/call dependency scan
+                                          #   misses it — Fortran ENTRY defines extra
+                                          #   callable names inside a subroutine.
+    ${LIB}/fst4/fst4_baseline.f90         # spectral baseline
+    ${LIB}/fst4/gen_fst4wave.f90          # tones -> waveform (decode-path subtract)
+    ${LIB}/fst4/get_fst4_bitmetrics.f90   # bit metrics
+    ${LIB}/fst4/get_crc24.f90             # CRC-24 over the 240-bit codeword
+    ${LIB}/fst4/decode240_101.f90         # LDPC(240,101) BP decoder  (includes parity)
+    ${LIB}/fst4/decode240_74.f90          # LDPC(240,74) BP decoder   (includes parity)
+    ${LIB}/fst4/osd240_101.f90            # ordered-statistics decode (calls encode240_101)
+    ${LIB}/fst4/fastosd240_74.f90         # fast OSD                  (calls encode240_74)
+    ${LIB}/fst4/encode240_101.f90         # re-encode for OSD         (includes generator)
+    ${LIB}/fst4/encode240_74.f90          # re-encode for fast OSD    (includes generator)
+    ${LIB}/blanker.f90                    # noise blanker (fst4_decode's outer loop)
+    #     NOT listed and NOT compilable standalone — no program unit, they are
+    #     `include`d by the files above: fst4/fst4_params.f90,
+    #     fst4/ldpc_240_{101,74}_{parity,generator}.f90
+
     # --- 77-bit message packing (lib/77bit) ---
     # NOTE: call_to_c28, encode77, free_text, hash22calc, nonstd_to_c58, test28
     # are standalone TEST PROGRAMS (each has its own `program main`), NOT library

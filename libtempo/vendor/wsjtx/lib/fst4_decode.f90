@@ -74,7 +74,34 @@ contains
       logical decdata_exists
       logical lprinthash22
 
-      integer*2 iwave(30*60*12000)
+! MODIFIED FOR NEXUS (KD9TAW, 2026-07-27): explicit-shape iwave(30*60*12000)
+! -> assumed-size iwave(*).
+!
+! Upstream declares the dummy at the WORST-CASE period (1800 s = 21,600,000
+! samples) because its only caller hands it jt9com's id2, which is always sized
+! for the longest mode. libtempo drives FST4 at a single period (15 s = 180,000
+! samples, see fst4_cabi.f90), and gfortran rejects that as
+! "Actual argument contains too few elements for dummy argument 'iwave'
+! (180000/21600000)" — a conservative check against a declaration that overstates
+! what the routine reads.
+!
+! What it actually reads is bounded and derived: the ONLY consumer of iwave in
+! this routine is `call blanker(iwave,nfft1,...)` at :297, and blanker declares
+! `integer*2 iwave(nz)` with nz=nfft1. nfft1 comes from the ntrperiod table at
+! :176-210 — for 15 s, int(180000/18)*18 = 180000 exactly. So the read never
+! exceeds the frame the caller supplies for the period it asked for.
+!
+! COST OF THIS CHANGE, stated plainly: assumed-size removes the compile-time
+! length check. The contract is now the caller's to keep — supply at least nfft1
+! elements for the chosen ntrperiod. fst4_cabi.f90 keeps it by construction: it
+! pins FST4_NTRPERIOD=15 as a parameter and sizes its buffer FST4_NMAX=180000 to
+! match, so the two cannot drift. A future multi-period entry point must size its
+! buffer from the period table, not assume 180000.
+!
+! The alternative — a 43 MB static buffer in fst4_cabi holding 360 KB of audio —
+! preserves the check but pays for the worst case on every build to serve one
+! period.
+      integer*2 iwave(*)
 
       data   mcq/0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0/
       data  mrrr/0,1,1,1,1,1,1,0,1,0,0,1,0,0,1,0,0,0,1/

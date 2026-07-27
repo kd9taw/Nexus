@@ -6039,3 +6039,72 @@ reason = """
 DATA-initialized LDPC(240,74) GENERATOR matrix as 166 hex strings of 19 characters (166 parity rows x 74 message columns; 19 nybbles = 76 bits, last nybble contributing 2 - see `if(j.eq.19) ibmax=2` at encode240_74.f90:22). Included into encode240_74.f90:11. Implicit SAVE via DATA. ON THE DECODE PATH: encode240_74 is called from fastosd240_74.f90:59 (`call encode240_74(message74,cw)`), and fastosd240_74.o IS in the prebuilt RX object set (decode240_74.o's readelf shows `UND fastosd240_74_`), with decode240_74 called from fst4_decode.f90:496 and :547. Content is a fixed function of the DATA literal - the (240,74) code definition - independent of band, chain and per-call input. In .DATA for the same internal-unit-address codegen reason as the 101 copy, not because of any write. Separate static copy from the 101 generator (textual include, one includer each). SAME ADJACENT FINDING: encode240_74.f90:8 `integer*1 gen(M,K)` measures `b gen.1` = 12284 B (= 166*74) in .bss with `d first.2` = 4 B; chain-independent content but the (first, gen) PAIR must move together or a chain inheriting first=.false. against a zeroed gen re-encodes with an all-zero generator and corrupts the fast-OSD accept/reject decision - a CRC-valid wrong decode, exactly the failure this manifest exists to prevent. Those rows belong to the encode240_* group. Name-collides with fst4/ldpc_240_101_generator.f90:1 and ft8/ldpc_174_91_c_generator.f90:1 - key by line. 0 context bytes.
 """
 
+
+# ---------------------------------------------------------------------------
+# fst4/genfst4.f90  (added with the CMake wiring — see below)
+# ---------------------------------------------------------------------------
+#
+#   genfst4 is vendored for DECODE despite being the message encoder: fst4_decode
+#   calls its ENTRY point get_fst4_tones_from_bits (genfst4.f90:76) to regenerate a
+#   decoded signal for subtraction. A use/call dependency scan does not find it,
+#   because Fortran ENTRY defines additional callable names inside a subroutine.
+
+[[symbol]]
+name = "isyncword1"
+file = "fst4/genfst4.f90"
+line = 24
+class = 4
+size_bytes = 32
+reason = """
+CONSTANT. DATA-initialised at :27 (`data isyncword1/0,1,3,2,1,0,2,3/`) and thereafter
+READ ONLY, at :99, :103 and :107, always as a whole-array copy INTO the output tone
+buffer (`i4tone(1:8)=isyncword1`, `i4tone(77:84)=`, `i4tone(153:160)=`). Every
+reference in the file is one of those four lines — declaration, DATA, three reads —
+so there is no write site, no guard, and nothing to be stale. Content is the FST4
+sync pattern from the protocol definition: fixed, not a function of band, period,
+callsign or any per-call input. Shareable across any number of chains. Size 32 B by
+declaration (8 x integer*4); it does not appear in `nm -S genfst4.o` because gfortran
+constant-folds the array into the three assignment sites at -O2, so there is no
+runtime object at all — which is a stronger guarantee than class 4 normally carries.
+NAME COLLISION: fst4_decode.f90 declares its own isyncword1. Different file,
+independent row, independent verdict — key on (file, name), never name alone.
+"""
+
+[[symbol]]
+name = "isyncword2"
+file = "fst4/genfst4.f90"
+line = 24
+class = 4
+size_bytes = 32
+reason = """
+CONSTANT, same evidence as isyncword1 above. DATA at :28
+(`data isyncword2/2,3,1,0,3,2,0,1/`), read only at :101 and :105 as whole-array copies
+into i4tone. No write site anywhere in the file. The second FST4 sync pattern from the
+protocol definition; chain-independent by construction. 32 B by declaration
+(8 x integer*4), constant-folded at -O2 so absent from nm. NAME COLLISION with
+fst4_decode.f90's isyncword2 — independent row.
+"""
+
+[[symbol]]
+name = "rvec"
+file = "fst4/genfst4.f90"
+line = 23
+class = 4
+size_bytes = 77
+reason = """
+CONSTANT, and this one is settled by the linker rather than by reading. DATA-initialised
+at :29 and read at exactly ONE site, :63
+(`msgbits(1:77)=mod(msgbits(1:77)+rvec,2)`) — the pseudo-random vector FST4 XORs into
+the 77 message bits. `nm -S genfst4.o` reports `0000000000000020 000000000000004d r
+rvec.2`: lowercase `r` is .rodata, 0x4d = 77 bytes = 77 x integer*1 exactly. A symbol
+the compiler placed in READ-ONLY memory cannot be written by any code path, so the
+class-4 claim needs no reasoning about guards — a write would fault.
+NAME COLLISION: fst4_decode.f90 declares its OWN rvec — same name, same 77-byte
+shape, same protocol role. That one is ALSO class 4, so here the two verdicts happen to
+agree, and the rows are independent only because the manifest keys on (file, name) as a
+rule rather than because these two differ. Do not read the agreement as a reason to
+relax the rule: the manifest header records 87 names colliding across files, several of
+which genuinely disagree (tempofast_downsample.f90:47 `x` is class 1 while
+tempofast_sync.f90:44 `x`, the same source idiom, is class 3). Two rows that agree cost
+nothing; one merged row that hid a disagreement would cost a fabricated QSO.
+"""

@@ -322,6 +322,60 @@ int ft4_decode_frame(const int16_t *iwave /*[FT4_NMAX]*/,
                      ft4_decode_t *out, int max_out);
 
 /*===========================================================================
+ * FST4: WSJT-X slow weak-signal mode. DECODE ONLY.
+ *===========================================================================*/
+
+/* ⭐ FST4's frame length is PERIOD-DEPENDENT, unlike FT8/FT4. fst4_decode sizes
+ * its frame from ntrperiod:
+ *     period (s)    15     30     60     120      300      900     1800
+ *     samples   180000 360000 720000 1440000  3600000 10800000 21600000
+ * This ABI exposes the 15 s period ONLY, so the buffer contract is fixed at
+ * FST4_NMAX. Other periods need either a per-period entry point or a
+ * caller-supplied length, plus Rust-side work to express a selectable period. */
+#define FST4_NTRPERIOD 15       /* T/R period, seconds — fixed by this ABI     */
+#define FST4_NMAX      180000   /* samples in iwave (15 s @ 12 kHz)            */
+
+/* NO fst4_encode / fst4_gen_wave, deliberately. FST4 ships receive-only: the
+ * Rust ModeKind reports Capabilities{tx:false} and modes::tx_mode() refuses to
+ * hand it to the transmit path. Adding TX means adding those two entry points,
+ * flipping that flag, AND passing the FT-mode TX approval gate. */
+
+/* One decode result from FST4 acquisition (same 64-byte layout as
+ * ft8_decode_t / ft4_decode_t). */
+typedef struct {
+    float sync;          /* sync metric                                  */
+    int   snr;           /* SNR estimate, dB (rounded)                   */
+    float dt;            /* time offset, seconds                         */
+    float freq;          /* audio frequency, Hz                          */
+    char  message[38];   /* NUL-terminated decoded message text          */
+    int   nap;           /* AP type used (iaptype; 0 = none)             */
+    float qual;          /* decode quality metric [0,1]                  */
+} fst4_decode_t;
+
+/*
+ * Decode EVERY FST4 signal in a complete 15 s frame.
+ *   iwave         : FST4_NMAX (180000) int16 audio samples @ 12 kHz
+ *   nfa, nfb      : frequency search band edges (Hz)
+ *   ndepth        : 1..3 (3 = full bp+osd; <=0 defaults to 3)
+ *   mycall/hiscall: NUL/space-terminated callsigns for AP (may be "")
+ *   nqso_progress : QSO progress index (AP pass schedule)
+ *   nfqso         : QSO/RX audio freq (Hz) being worked; the deep AP passes
+ *                   center on it. 0 / out of [nfa,nfb] = band mid
+ *   out           : caller array of fst4_decode_t (capacity max_out)
+ *   max_out       : capacity of out
+ *
+ * Returns the number of decodes found (>= 0), or -1 on error. Up to
+ * min(found, max_out) entries are written. NOT thread-safe / not reentrant.
+ * Runs FST4 QSO mode (iwspr=0); FST4W beacon mode is not wired up — it needs the
+ * hashed-callsign table that the headless build's excised file read populated.
+ */
+int fst4_decode_frame(const int16_t *iwave /*[FST4_NMAX]*/,
+                      int nfa, int nfb, int ndepth,
+                      const char *mycall, const char *hiscall,
+                      int nqso_progress, int nfqso,
+                      fst4_decode_t *out, int max_out);
+
+/*===========================================================================
  * DX1-S: non-coherent M-FSK + soft-LDPC robust tier (fading-resilient).
  *===========================================================================*/
 
