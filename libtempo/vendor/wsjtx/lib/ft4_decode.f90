@@ -62,7 +62,12 @@ contains
 ! `only:` keeps that module's ft4_params re-export from colliding with the include below.
       use ft4_decode_apstate, only: apbits, apmy_ru, aphis_fd, mycall0, hiscall0
       include 'ft4/ft4_params.f90'
-      parameter (MAXCAND=100)
+! FROM WSJT-X 3.0.2 (KD9TAW, 2026-07-27): MAXCAND 100 -> 200. More candidates
+! admitted per pass: yield up, CPU up. Hand-ported rather than taking upstream's
+! file, which would delete module ft4_decode_apstate and reintroduce the
+! apmy_ru/aphis_fd read-before-write that upstream still has (its save list at
+! ft4_decode.f90:85 omits both).
+      parameter (MAXCAND=200)
       class(ft4_decoder), intent(inout) :: this
       procedure(ft4_decode_callback) :: callback
       parameter (NSS=NSPS/NDOWN,NDMAX=NMAX/NDOWN)
@@ -226,7 +231,10 @@ contains
 ! ndepth=1: 1 pass, no subtraction
 
       max_iterations=40
-      syncmin=1.2
+! FROM WSJT-X 3.0.2 (KD9TAW, 2026-07-27): syncmin 1.2 -> 1.18. Lowering the sync
+! floor admits more candidates, which raises the absolute number of CRC-14 rolls
+! and so the false-decode exposure. Gated on ft4_false_alarm staying at 0.
+      syncmin=1.18
       dosubtract=.true.
       doosd=.true.
       nsp=3
@@ -383,7 +391,11 @@ contains
 !          7 : HOUND
 !
 ! Conditions that cause us to bail out of AP decoding
-                     napwid=80
+! FROM WSJT-X 3.0.2 (KD9TAW, 2026-07-27): napwid 80 -> 50 Hz. NARROWS the window
+! around nfqso within which deep AP passes are attempted, so strictly fewer AP
+! attempts — the safe direction, since AP is where a marginal candidate gets
+! handed a hypothesis to match.
+                     napwid=50
                      if(ncontest.le.5 .and. iaptype.ge.3 .and. (abs(f1-nfqso).gt.napwid) ) cycle
                      if(iaptype.ge.2 .and. apbits(1).gt.1) cycle  ! No, or nonstandard, mycall
                      if(iaptype.ge.3 .and. apbits(30).gt.1) cycle ! No, or nonstandard, dxcall
