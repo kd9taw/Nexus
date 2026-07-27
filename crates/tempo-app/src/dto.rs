@@ -182,10 +182,20 @@ pub enum Tier {
     Ft8,
     #[serde(rename = "FT4")]
     Ft4,
-    /// WSJT-X FST4, 15 s T/R. **RECEIVE-ONLY** — `modes::tx_mode` refuses it, so
-    /// selecting this tier decodes but never keys the radio.
+    /// WSJT-X FST4 (QSO mode). **RECEIVE-ONLY** — `modes::tx_mode` refuses it, so
+    /// selecting this tier decodes but never keys the radio. The T/R period comes
+    /// from `Settings::fst4_period_s`.
     #[serde(rename = "FST4")]
     Fst4,
+    /// WSJT-X FST4W — the WSPR-like BEACON mode (50-bit messages, no AP
+    /// decoding). **RECEIVE-ONLY**, same as FST4.
+    ///
+    /// A separate tier rather than a flag on `Fst4` because it is a separate
+    /// operator decision: FST4 is for working a station, FST4W is for listening
+    /// to beacons and building propagation evidence. They share one decoder, one
+    /// frame contract, and `Settings::fst4_period_s`.
+    #[serde(rename = "FST4W")]
+    Fst4w,
     /// WSJT-X Q65. **RECEIVE-ONLY** — `modes::tx_mode` refuses it, so selecting
     /// this tier decodes but never keys the radio.
     ///
@@ -220,14 +230,33 @@ impl Tier {
     /// An out-of-range pair falls back to Q65-30A rather than refusing — settings
     /// arriving from an older file or a hand-edited JSON should degrade to a
     /// working mode, not disable decoding.
-    pub fn mode_kind(self, q65_period_s: u16, q65_submode: u8) -> Option<ModeKind> {
+    pub fn mode_kind(
+        self,
+        q65_period_s: u16,
+        q65_submode: u8,
+        fst4_period_s: u16,
+    ) -> Option<ModeKind> {
         match self {
             Tier::TempoFast => Some(ModeKind::TempoFast),
             Tier::Ft8 => Some(ModeKind::Ft8),
             Tier::Ft4 => Some(ModeKind::Ft4),
-            Tier::Fst4 => Some(ModeKind::Fst4),
+            Tier::Fst4 => Some(Self::fst4_kind(fst4_period_s, false)),
+            Tier::Fst4w => Some(Self::fst4_kind(fst4_period_s, true)),
             Tier::Q65 => Some(Self::q65_kind(q65_period_s, q65_submode)),
             Tier::TempoDeep => None,
+        }
+    }
+
+    /// A validated `ModeKind::Fst4`, falling back to 15 s on an unsupported period.
+    /// Same degrade-don't-refuse rule as [`Self::q65_kind`].
+    pub fn fst4_kind(period_s: u16, wspr: bool) -> ModeKind {
+        if ModeKind::FST4_PERIODS.contains(&period_s) {
+            ModeKind::Fst4 { period_s, wspr }
+        } else {
+            ModeKind::Fst4 {
+                period_s: 15,
+                wspr,
+            }
         }
     }
 
@@ -250,7 +279,10 @@ impl Tier {
             ModeKind::TempoFast => Tier::TempoFast,
             ModeKind::Ft8 => Tier::Ft8,
             ModeKind::Ft4 => Tier::Ft4,
-            ModeKind::Fst4 => Tier::Fst4,
+            // FST4 and FST4W are distinct tiers; the wspr flag is what tells them
+            // apart, and a decode row must be labelled with the one that produced it.
+            ModeKind::Fst4 { wspr: false, .. } => Tier::Fst4,
+            ModeKind::Fst4 { wspr: true, .. } => Tier::Fst4w,
             // Every Q65 combination maps back to the one Q65 tier: the tier is the
             // operator's mode selection, and period/submode are settings under it.
             ModeKind::Q65 { .. } => Tier::Q65,

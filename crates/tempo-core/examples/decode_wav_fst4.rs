@@ -54,7 +54,7 @@ fn resample_linear(x: &[f32], from: u32, to: u32) -> Vec<f32> {
     out
 }
 
-fn decode_file(path: &str) -> Result<usize, String> {
+fn decode_file(path: &str, kind: ModeKind, period_s: usize) -> Result<usize, String> {
     let (samples, sr) = read_wav_i16(path).map_err(|e| e.to_string())?;
     let f: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
     let f12 = if sr == MODEM_RATE {
@@ -66,10 +66,10 @@ fn decode_file(path: &str) -> Result<usize, String> {
 
     // FST4's slot IS its decode frame at the pinned 15 s period (unlike FT4, where
     // the 7.5 s slot is longer than the 6.048 s frame).
-    let frame_len = ModeKind::Fst4.frame_samples();
+    let frame_len = kind.frame_samples();
     let n_slots = (iwave_all.len() / frame_len).max(1);
 
-    let mut src = NativeSource::from_kind(ModeKind::Fst4);
+    let mut src = NativeSource::from_kind(kind);
     let mut total = 0usize;
 
     for slot in 0..n_slots {
@@ -88,7 +88,7 @@ fn decode_file(path: &str) -> Result<usize, String> {
             hiscall: "",
             nqso_progress: 0,
             nfqso: 0,
-            frame_time_ms: (slot as i64) * 15_000,
+            frame_time_ms: (slot as i64) * (period_s as i64) * 1000,
         };
         let mut decs = src.decode(&req);
         decs.sort_by(|a, b| {
@@ -99,7 +99,7 @@ fn decode_file(path: &str) -> Result<usize, String> {
         for d in &decs {
             println!(
                 "{} {:.1} {} {:+.2} {}",
-                slot * 15,
+                slot * period_s,
                 d.freq,
                 d.snr,
                 d.dt,
@@ -112,19 +112,48 @@ fn decode_file(path: &str) -> Result<usize, String> {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.is_empty() {
-        eprintln!("usage: decode_wav_fst4 FILE.wav [FILE2.wav ...]");
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut period_s: u16 = 15;
+    let mut wspr = false;
+    let mut files: Vec<String> = Vec::new();
+
+    let mut it = argv.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--period" => match it.next().and_then(|v| v.parse::<u16>().ok()) {
+                Some(v) => period_s = v,
+                None => {
+                    eprintln!("--period needs one of {:?}", ModeKind::FST4_PERIODS);
+                    std::process::exit(2);
+                }
+            },
+            // FST4W: the WSPR-like beacon mode. 50-bit messages, no AP.
+            "--wspr" => wspr = true,
+            other => files.push(other.to_string()),
+        }
+    }
+
+    if files.is_empty() {
+        eprintln!(
+            "usage: decode_wav_fst4 [--period 15|30|60|120|300|900|1800] [--wspr] FILE.wav [...]"
+        );
         std::process::exit(2);
     }
+    if !ModeKind::FST4_PERIODS.contains(&period_s) {
+        eprintln!("unsupported FST4 period {period_s}");
+        std::process::exit(2);
+    }
+
+    let kind = ModeKind::Fst4 { period_s, wspr };
     eprintln!(
-        "# mode: FST4 (blind, ndepth 3, 200-2900 Hz, {} s period, {} samples/frame)",
-        15,
-        ModeKind::Fst4.frame_samples()
+        "# mode: {} (blind, ndepth 3, 200-2900 Hz, {} s period, {} samples/frame)",
+        kind.as_str(),
+        period_s,
+        kind.frame_samples()
     );
-    for path in &args {
+    for path in &files {
         eprintln!("# file: {path}");
-        match decode_file(path) {
+        match decode_file(path, kind, period_s as usize) {
             Ok(n) => eprintln!("# {path}: {n} decode(s)"),
             Err(e) => eprintln!("# {path}: ERROR {e}"),
         }

@@ -1400,7 +1400,11 @@ impl Engine {
     /// clock. Every caller must go through here rather than `Tier::mode_kind`
     /// directly, or a Q65 buffer gets sized for the wrong period.
     fn tier_mode_kind(&self, tier: Tier) -> Option<modes::ModeKind> {
-        tier.mode_kind(self.settings.q65_period_s, self.settings.q65_submode)
+        tier.mode_kind(
+            self.settings.q65_period_s,
+            self.settings.q65_submode,
+            self.settings.fst4_period_s,
+        )
     }
 
     /// Apply new settings. A change of callsign/grid rebinds identity IN PLACE
@@ -4499,15 +4503,19 @@ impl Engine {
             // loop actually plays). Must include the lead-in so the "snappy first over"
             // room check doesn't admit an over that overruns the next slot by 0.5 s.
             Tier::Ft8 => 13.14,
-            // FST4 NEVER TRANSMITS: Capabilities{tx:false} means modes::tx_mode()
-            // returns None and the wave builder abandons the over before keying. A
-            // full slot is returned rather than 0.0 so that if this value is ever
-            // consulted by a fit check, the answer is "does not fit" and the over is
-            // skipped — the conservative direction. Returning 0.0 would make every
-            // fit check pass and rely solely on tx_mode to stop it; two guards
-            // pointing the same way is cheaper than one.
-            Tier::Fst4 => 15.0,
-            Tier::Q65 => 30.0,
+            // FST4 / FST4W / Q65 NEVER TRANSMIT: Capabilities{tx:false} means
+            // modes::tx_mode() returns None and the wave builder abandons the over
+            // before keying. A FULL SLOT is returned rather than 0.0 so that if
+            // this value is ever consulted by a fit check, the answer is "does not
+            // fit" and the over is skipped — the conservative direction. Returning
+            // 0.0 would make every fit check pass and rely solely on tx_mode to
+            // stop it; two guards pointing the same way is cheaper than one.
+            //
+            // The slot is now the operator's configured period, so the guard stays
+            // conservative at every period rather than only at the one the ABI used
+            // to pin. FST4 and FST4W share fst4_period_s: same decoder, same clock.
+            Tier::Fst4 | Tier::Fst4w => f64::from(self.settings.fst4_period_s),
+            Tier::Q65 => f64::from(self.settings.q65_period_s),
             Tier::TempoDeep => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
             // FT4 = 0.5 s lead-in + 5.04 s tones (105 sym × 576 sa @ 12 kHz). The
             // generated buffer also carries ~1.0 s of TRAILING silence — that is
@@ -7487,6 +7495,8 @@ impl Engine {
             // FST4 is receive-only (no TX means no completed QSO to log), but the
             // right answer the moment that changes.
             Tier::Fst4 => "FST4",
+            // FST4W is its own ADIF-registered mode name, not an FST4 submode.
+            Tier::Fst4w => "FST4W",
             // "Q65" WITHOUT the submode: that is the ADIF-registered mode name,
             // and ADIF has no field for the period/submode. The tier displays as
             // "Q65-30A" because an operator needs to know which variant is being

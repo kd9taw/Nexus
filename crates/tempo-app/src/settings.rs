@@ -122,6 +122,13 @@ pub struct Settings {
     /// existed still load.
     #[serde(default = "default_q65_period_s")]
     pub q65_period_s: u16,
+    /// FST4 / FST4W T/R period in seconds: 15, 30, 60, 120, 300, 900 or 1800.
+    /// Shared by both tiers — they are the same decoder on the same slot clock.
+    /// Defaults to 120, the shortest interval FST4W beacons actually use (FST4
+    /// QSO work is more often 15–60, but 120 is a working value for both and a
+    /// beacon receiver is the likelier reason to pick this mode at all).
+    #[serde(default = "default_fst4_period_s")]
+    pub fst4_period_s: u16,
     /// Q65 submode, 0..=4 for A..E — the tone spacing. Wider submodes tolerate
     /// more Doppler spread at the cost of sensitivity, which is why EME operators
     /// move up the letters as the path degrades. Defaults to A.
@@ -1394,6 +1401,11 @@ fn default_q65_period_s() -> u16 {
     60
 }
 
+/// FST4/FST4W at 120 s. See [`Settings::fst4_period_s`].
+fn default_fst4_period_s() -> u16 {
+    120
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -1415,6 +1427,7 @@ impl Default for Settings {
             rptr_shift: "simplex".to_string(),
             ctcss_tone_hz: 0.0,
             q65_period_s: default_q65_period_s(),
+            fst4_period_s: default_fst4_period_s(),
             q65_submode: 0,
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this

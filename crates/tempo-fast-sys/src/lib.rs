@@ -44,13 +44,26 @@ pub const FT4_NN: usize = 103;
 /// Raw audio samples per FT4 frame (21*3456, ~6.05 s window of the 7.5 s slot).
 pub const FT4_NMAX: usize = 72_576;
 
-/// FST4 T/R period in seconds. FIXED by the C ABI: `fst4_decode` sizes its frame
-/// from ntrperiod (15/30/60/120/300/900/1800 s), and `fst4_cabi.f90` pins 15 so
-/// the buffer contract cannot be got wrong. Other periods need a per-period entry
-/// point plus a `ModeKind` that can carry a selectable period.
-pub const FST4_NTRPERIOD: usize = 15;
-/// Samples in an FST4 decode frame at 12 kHz (15 s). Same length as FT8's frame.
-pub const FST4_NMAX: usize = 180_000;
+/// The T/R periods FST4/FST4W support. Anything else is REJECTED with -1 rather
+/// than clamped — a wrong period makes the modem read a different span of the
+/// caller's buffer than the caller sized.
+pub const FST4_PERIODS: [u16; 7] = [15, 30, 60, 120, 300, 900, 1800];
+/// Ceiling on an FST4 frame: 1800 s @ 12 kHz. NOT the buffer contract — the actual
+/// length is [`fst4_nmax`] of the period in use.
+pub const FST4_NMAX_MAX: usize = 21_600_000;
+
+/// Samples in one FST4/FST4W frame at `period_s` seconds, 12 kHz.
+///
+/// This is THE buffer contract for [`fst4_decode_frame`]. The routine reads
+/// `nfft1`, which upstream's period table keeps ≤ this at every period.
+pub const fn fst4_nmax(period_s: u16) -> usize {
+    period_s as usize * 12_000
+}
+
+/// Whether `period_s` is one of the seven periods the modem supports.
+pub const fn fst4_period_supported(period_s: u16) -> bool {
+    matches!(period_s, 15 | 30 | 60 | 120 | 300 | 900 | 1800)
+}
 
 /// The T/R periods (seconds) Q65 supports. The C ABI accepts any of these and
 /// REJECTS anything else with -1 rather than clamping — a wrong period makes the
@@ -429,7 +442,9 @@ extern "C" {
     /// DECODE ONLY — there is deliberately no `fst4_encode` / `fst4_gen_wave`.
     /// FST4 ships receive-only; see `Capabilities.tx` and `modes::tx_mode`.
     pub fn fst4_decode_frame(
-        iwave: *const i16, // [FST4_NMAX]
+        iwave: *const i16, // [ntrperiod * 12000] — see `fst4_nmax`
+        ntrperiod: c_int,  // 15|30|60|120|300|900|1800; anything else ⇒ -1
+        iwspr: c_int,      // 0 = FST4 (QSO), 1 = FST4W (beacon); else ⇒ -1
         nfa: c_int,
         nfb: c_int,
         ndepth: c_int,

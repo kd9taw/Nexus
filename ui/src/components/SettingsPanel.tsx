@@ -3744,6 +3744,44 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- FST4 / FST4W: one period setting, shared. Same decoder, same
+               slot clock; the tier picks QSO vs beacon. ---- */}
+          {tab === 'modes' && (
+          <fieldset className="settings-section">
+            <legend>FST4 / FST4W (receive-only)</legend>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">T/R period</span>
+                <select
+                  className="settings-input"
+                  value={String(form.fst4PeriodS ?? 120)}
+                  onChange={(e) => updateNum('fst4PeriodS', Number(e.target.value))}
+                >
+                  <option value="15">15 s</option>
+                  <option value="30">30 s</option>
+                  <option value="60">60 s</option>
+                  <option value="120">120 s — shortest FST4W beacon interval</option>
+                  <option value="300">300 s</option>
+                  <option value="900">900 s</option>
+                  <option value="1800">1800 s — deepest</option>
+                </select>
+                <span className="settings-hint">
+                  Shared by both tiers. Longer periods hear weaker signals at fewer exchanges per
+                  hour. FST4W beacons run at 120/300/900/1800 s; FST4 QSO work is usually
+                  15&ndash;60 s. Both stations (or the beacon you are listening for) must be on the
+                  same period.
+                </span>
+              </label>
+            </div>
+            <span className="settings-hint">
+              <strong>FST4</strong> is the QSO mode; <strong>FST4W</strong> is the WSPR-like beacon
+              mode &mdash; pick which one on the tier selector. Nexus decodes both and transmits
+              neither. Note that FST4W hashed callsigns show as <code>&lt;...&gt;</code>: the
+              lookup table upstream fills from a file this build does not carry.
+            </span>
+          </fieldset>
+          )}
+
           {/* ---- Q65: period + submode. Both change the on-air signal AND the
                decode frame length, so they belong with the mode, not the radio. ---- */}
           {tab === 'modes' && (

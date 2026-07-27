@@ -13,12 +13,20 @@
 //! adding those entry points in `fst4_cabi.f90`, flipping that flag, AND passing
 //! the FT-mode TX approval gate — three deliberate steps.
 //!
-//! # ⭐ Single T/R period
-//! Upstream FST4 supports 15/30/60/120/300/900/1800 s, and `fst4_decode` sizes its
-//! frame from the period. The C ABI pins **15 s / 180000 samples** so the buffer
-//! contract is fixed. Supporting more periods needs a per-period entry point plus a
-//! `ModeKind` that can carry one, which is why [`NMAX`] is a constant here rather
-//! than a function of anything.
+//! # ⭐ All 7 periods, and both modes
+//! Period and mode are arguments. **The frame length follows the period** —
+//! [`nmax`] of it, 180000 samples (15 s) to 21600000 (1800 s).
+//!
+//! `wspr = false` is FST4, the QSO mode (77-bit messages, AP decoding).
+//! `wspr = true` is **FST4W**, the WSPR-like beacon mode (50-bit messages, no AP).
+//! FST4W is why the period had to become an argument: its standard beacon
+//! intervals are 120/300/900/1800 s, so a 15 s-only wrapper could not do it.
+//!
+//! ⚠️ **FST4W hashed callsigns do not resolve.** The k50 lookup table is populated
+//! upstream from `fst4w_calls.txt`, a GUI-side file the headless build removed.
+//! With an empty table the decoder reports the `<...>` hash form — the same result
+//! an empty file produced upstream. Beacon reception, SNR and grid all work; only
+//! resolving a previously-heard hashed call is missing.
 //!
 //! # Thread safety
 //! Not thread-safe; serializes behind [`tempo_fast_sys::MODEM_LOCK`] — the single
@@ -26,7 +34,10 @@
 
 use tempo_fast_sys::MODEM_LOCK;
 
-pub use tempo_fast_sys::{FST4_NMAX as NMAX, FST4_NTRPERIOD as NTRPERIOD};
+pub use tempo_fast_sys::{
+    fst4_nmax as nmax, fst4_period_supported as period_supported, FST4_NMAX_MAX as NMAX_MAX,
+    FST4_PERIODS as PERIODS,
+};
 
 /// WSJT-X audio sample rate (Hz).
 pub const SAMPLE_RATE: f32 = 12_000.0;
@@ -54,21 +65,25 @@ pub struct Decode {
 // fst4_decode.f90. Raise both together or the weakest decodes are dropped silently.
 const MAX_DECODES: usize = 100;
 
-/// Decode every FST4 signal in a 180000-sample ([`NMAX`]) int16 frame at 12 kHz.
+/// Decode every FST4 (or FST4W) signal in one T/R period.
+///
+/// `iwave` must hold [`nmax`]`(period_s)` int16 samples at 12 kHz. `period_s` must
+/// be one of [`PERIODS`]. `wspr` selects FST4W beacon mode over FST4 QSO mode.
 ///
 /// `nfa..=nfb` is the audio search range (Hz); `ndepth` is decode aggressiveness
 /// (≤ 0 ⇒ 3); `mycall`/`hiscall` enable a-priori decoding (pass `""` if unknown).
 /// `nfqso` is the QSO/RX audio frequency (Hz) being worked; the deep AP passes fire
 /// near it. Pass 0 (or out of `nfa..=nfb`) for band-center.
 ///
-/// Runs FST4 QSO mode (iwspr=0). FST4W beacon mode is not wired up: it needs the
-/// hashed-callsign table that the headless build's excised file read populated.
-///
 /// # Panics
-/// Panics if `iwave.len() < NMAX`.
+/// Panics if `iwave.len() < nmax(period_s)` or `period_s` is unsupported. These are
+/// caller contract violations: buffer length and period must be chosen together,
+/// and a silent short-read would decode a window the caller never intended.
 #[allow(clippy::too_many_arguments)]
 pub fn decode_frame(
     iwave: &[i16],
+    period_s: u16,
+    wspr: bool,
     nfa: i32,
     nfb: i32,
     ndepth: i32,
@@ -78,8 +93,13 @@ pub fn decode_frame(
     nfqso: i32,
 ) -> Vec<Decode> {
     assert!(
-        iwave.len() >= NMAX,
-        "decode_frame needs at least {NMAX} samples, got {}",
+        period_supported(period_s),
+        "FST4 period {period_s}s is not supported (must be one of {PERIODS:?})"
+    );
+    let need = nmax(period_s);
+    assert!(
+        iwave.len() >= need,
+        "decode_frame needs at least {need} samples for a {period_s}s period, got {}",
         iwave.len()
     );
     let myc = std::ffi::CString::new(mycall).unwrap_or_default();
@@ -91,6 +111,8 @@ pub fn decode_frame(
         unsafe {
             tempo_fast_sys::fst4_decode_frame(
                 iwave.as_ptr(),
+                i32::from(period_s),
+                i32::from(wspr),
                 nfa,
                 nfb,
                 ndepth,
@@ -131,11 +153,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_is_the_pinned_15s_length() {
-        // The ABI pins one period; if this changes, fst4_cabi.f90's FST4_NMAX and
-        // FST4_NTRPERIOD must change with it or the buffer contract breaks.
-        assert_eq!(NTRPERIOD, 15);
-        assert_eq!(NMAX, 15 * 12_000);
+    fn frame_length_follows_the_period() {
+        for p in PERIODS {
+            assert_eq!(nmax(p), p as usize * 12_000);
+            assert!(period_supported(p));
+        }
+        assert_eq!(nmax(1800), NMAX_MAX);
+        // FST4W's standard beacon intervals must all be reachable — the reason
+        // this became parametric.
+        for p in [120u16, 300, 900, 1800] {
+            assert!(period_supported(p), "FST4W needs {p}s");
+        }
+        for p in [0u16, 1, 10, 20, 45, 600, 3600] {
+            assert!(!period_supported(p), "period {p} must not be supported");
+        }
     }
 
     #[test]
@@ -144,13 +175,20 @@ mod tests {
         // decoder runs to completion on pure noise and invents nothing. With no
         // FST4 TX in-tree there is no way to synthesise a signal, so this is a
         // liveness + silence check, NOT a sensitivity test.
-        let mut iwave = vec![0i16; NMAX];
-        let mut seed: u32 = 0x5EED;
-        for s in iwave.iter_mut() {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            *s = ((seed >> 16) as i16) / 8;
+        // Both modes, at the shortest period so the suite stays quick.
+        for wspr in [false, true] {
+            let mut iwave = vec![0i16; nmax(15)];
+            let mut seed: u32 = 0x5EED ^ u32::from(wspr);
+            for s in iwave.iter_mut() {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *s = ((seed >> 16) as i16) / 8;
+            }
+            let d = decode_frame(&iwave, 15, wspr, 200, 2900, 3, "KD9TAW", "W1AW", 0, 1500);
+            assert!(
+                d.is_empty(),
+                "wspr={wspr} decoded {} signal(s) from noise",
+                d.len()
+            );
         }
-        let d = decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 0, 1500);
-        assert!(d.is_empty(), "decoded {} signal(s) from noise", d.len());
     }
 }

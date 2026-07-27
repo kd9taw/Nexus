@@ -60,8 +60,8 @@ mod tests {
             // assert above fires before this match is ever reached. This harness
             // is TX-dependent by construction and cannot serve a mode that does
             // not transmit — which is the point, not a gap to fill in later.
-            ModeKind::Fst4 => {
-                unreachable!("FST4 is receive-only; native_frame requires encode()")
+            ModeKind::Fst4 { .. } => {
+                unreachable!("FST4/FST4W are receive-only; native_frame requires encode()")
             }
             // Q65 is likewise RECEIVE-ONLY, and the same assert fires first. Listed
             // explicitly rather than folded into a `_` arm so that adding a

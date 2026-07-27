@@ -4525,6 +4525,7 @@ fn tier_mode(tier: Tier) -> &'static str {
         // expect — "Q65" without the submode, as in ADIF, not the "Q65-30A" the
         // tier displays.
         Tier::Fst4 => "FST4",
+        Tier::Fst4w => "FST4W",
         Tier::Q65 => "Q65",
     }
 }

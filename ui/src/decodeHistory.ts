@@ -28,7 +28,11 @@ const SLOT_MS = 15_000
 export const TIER_PERIOD_SECS: Record<Tier, number> = {
   FT8: 15,
   FT4: 7.5,
+  // FST4/FST4W periods are an operator setting (15..1800); these are the
+  // defaults. A decode row's true period comes from the ModeKind the engine
+  // tagged it with.
   FST4: 15,
+  FST4W: 120,
   // Q65's period is an operator setting (15/30/60/120/300), so this table cannot
   // state it. 60 is the default and the EME working period; a decode row's true
   // period comes from the ModeKind the engine tagged it with.

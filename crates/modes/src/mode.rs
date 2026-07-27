@@ -16,8 +16,20 @@ use crate::decode::Decode;
 pub enum ModeKind {
     Ft8,
     Ft4,
-    /// WSJT-X FST4, 15 s T/R. **RECEIVE-ONLY** — see [`Capabilities::tx`].
-    Fst4,
+    /// WSJT-X FST4 / FST4W. **RECEIVE-ONLY** — see [`Capabilities::tx`].
+    ///
+    /// Carries its T/R period for the same reason `Q65` does: the frame is
+    /// `period_s * 12000` samples, so the period has to reach
+    /// [`Self::frame_samples`] and [`Self::slot_secs`].
+    ///
+    /// `wspr` selects **FST4W**, the WSPR-like beacon mode (50-bit messages, no
+    /// AP decoding), over FST4's QSO mode. They are separate modes on the air and
+    /// separate operator selections, but one decoder and one frame contract —
+    /// hence a flag rather than a second variant duplicating the sizing.
+    ///
+    /// `period_s` ∈ {15, 30, 60, 120, 300, 900, 1800}. FST4W's standard beacon
+    /// intervals are 120/300/900/1800.
+    Fst4 { period_s: u16, wspr: bool },
     /// WSJT-X Q65. **RECEIVE-ONLY** — see [`Capabilities::tx`].
     ///
     /// Carries its T/R period and submode because both are part of the mode's
@@ -40,10 +52,20 @@ impl ModeKind {
     pub const ALL: [ModeKind; 5] = [
         ModeKind::Ft8,
         ModeKind::Ft4,
-        ModeKind::Fst4,
+        ModeKind::FST4_15,
         ModeKind::Q65_30A,
         ModeKind::TempoFast,
     ];
+
+    /// FST4 at 15 s, QSO mode — the combination the C ABI used to be pinned to,
+    /// kept as `ALL`'s one representative FST4 entry.
+    pub const FST4_15: ModeKind = ModeKind::Fst4 {
+        period_s: 15,
+        wspr: false,
+    };
+
+    /// The T/R periods FST4/FST4W support, in seconds.
+    pub const FST4_PERIODS: [u16; 7] = [15, 30, 60, 120, 300, 900, 1800];
 
     /// Q65-30A: the combination the C ABI used to be pinned to, kept as the
     /// default so `ALL` has one representative Q65 entry rather than 25.
@@ -66,6 +88,46 @@ impl ModeKind {
         Self::Q65_PERIODS.into_iter().flat_map(|period_s| {
             (0..Self::Q65_SUBMODES).map(move |submode| ModeKind::Q65 { period_s, submode })
         })
+    }
+
+    /// Every valid FST4/FST4W period and mode combination.
+    pub fn fst4_all() -> impl Iterator<Item = ModeKind> {
+        Self::FST4_PERIODS
+            .into_iter()
+            .flat_map(|period_s| [false, true].map(move |wspr| ModeKind::Fst4 { period_s, wspr }))
+    }
+
+    /// Display name for an FST4/FST4W period, e.g. `"FST4-60"` / `"FST4W-300"`.
+    ///
+    /// A table for the same reason as [`Self::q65_name`]: keeps [`Self::as_str`]
+    /// returning `&'static str`.
+    fn fst4_name(period_s: u16, wspr: bool) -> &'static str {
+        const QSO: [&str; 7] = [
+            "FST4-15",
+            "FST4-30",
+            "FST4-60",
+            "FST4-120",
+            "FST4-300",
+            "FST4-900",
+            "FST4-1800",
+        ];
+        const BEACON: [&str; 7] = [
+            "FST4W-15",
+            "FST4W-30",
+            "FST4W-60",
+            "FST4W-120",
+            "FST4W-300",
+            "FST4W-900",
+            "FST4W-1800",
+        ];
+        let Some(i) = Self::FST4_PERIODS.iter().position(|&p| p == period_s) else {
+            return if wspr { "FST4W" } else { "FST4" };
+        };
+        if wspr {
+            BEACON[i]
+        } else {
+            QSO[i]
+        }
     }
 
     /// Display name for a Q65 period/submode pair, e.g. `"Q65-60B"`.
@@ -97,7 +159,11 @@ impl ModeKind {
         match self {
             ModeKind::Ft8 => "FT8",
             ModeKind::Ft4 => "FT4",
-            ModeKind::Fst4 => "FST4",
+            // FST4/FST4W name themselves by period the way WSJT-X does: "FST4-60",
+            // "FST4W-300". The bare family name would not say which slot clock the
+            // operator is on, and FST4W at 120 s vs 900 s are different operating
+            // decisions.
+            ModeKind::Fst4 { period_s, wspr } => Self::fst4_name(period_s, wspr),
             // Period AND submode letter: "Q65" alone does not identify a signal on
             // the air, and an operator reading the label needs both. A table
             // rather than a format! so this can stay &'static str — 25 entries is
@@ -114,7 +180,7 @@ impl ModeKind {
             ModeKind::Ft8 => 15.0,
             ModeKind::Ft4 => 7.5,
             // FST4 supports 15/30/60/120/300/900/1800 s upstream; the C ABI pins 15.
-            ModeKind::Fst4 => 15.0,
+            ModeKind::Fst4 { period_s, .. } => f32::from(period_s),
             // The whole reason the period lives in the kind: slot timing follows it.
             ModeKind::Q65 { period_s, .. } => f32::from(period_s),
             ModeKind::TempoFast => 4.0,
@@ -127,7 +193,7 @@ impl ModeKind {
         match self {
             ModeKind::Ft8 => ft8::NMAX,
             ModeKind::Ft4 => ft4::NMAX,
-            ModeKind::Fst4 => fst4::NMAX,
+            ModeKind::Fst4 { period_s, .. } => fst4::nmax(period_s),
             // ... and so does the buffer contract: period*12000 samples.
             ModeKind::Q65 { period_s, .. } => q65::nmax(period_s),
             ModeKind::TempoFast => tempo_fast::NMAX,
@@ -287,7 +353,7 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
     match kind {
         ModeKind::Ft8 => Box::new(Ft8Mode),
         ModeKind::Ft4 => Box::new(Ft4Mode),
-        ModeKind::Fst4 => Box::new(Fst4Mode),
+        ModeKind::Fst4 { period_s, wspr } => Box::new(Fst4Mode { period_s, wspr }),
         ModeKind::Q65 { period_s, submode } => Box::new(Q65Mode { period_s, submode }),
         ModeKind::TempoFast => Box::new(Ft1Mode),
     }
@@ -618,7 +684,7 @@ mod tx_capability_tests {
     /// submode, so a slice would need all 25 combinations listed and would silently
     /// miss any that were forgotten. `matches!` covers the whole family.
     fn rx_only(kind: ModeKind) -> bool {
-        matches!(kind, ModeKind::Fst4 | ModeKind::Q65 { .. })
+        matches!(kind, ModeKind::Fst4 { .. } | ModeKind::Q65 { .. })
     }
 
     #[test]
@@ -628,7 +694,11 @@ mod tx_capability_tests {
         // intended behaviour — a silent mode must not be addable by accident. The
         // invariant is now two-sided: RX_ONLY is exactly the set that cannot
         // transmit, and every other mode can.
-        for kind in ModeKind::ALL.into_iter().chain(ModeKind::q65_all()) {
+        for kind in ModeKind::ALL
+            .into_iter()
+            .chain(ModeKind::q65_all())
+            .chain(ModeKind::fst4_all())
+        {
             let rx_only = rx_only(kind);
             let caps_tx = make_mode(kind).capabilities().tx;
             assert_eq!(
@@ -652,14 +722,23 @@ mod tx_capability_tests {
         // The whole reason Capabilities.tx exists. Every route to a waveform must
         // refuse FST4: tx_mode hands back nothing, and the defaulted trait methods
         // produce nothing if a caller bypasses it.
-        assert!(!make_mode(ModeKind::Fst4).capabilities().tx);
-        assert!(tx_mode(ModeKind::Fst4).is_none(), "tx_mode must refuse FST4");
-        let m = make_mode(ModeKind::Fst4);
-        assert!(m.encode("CQ KD9TAW EN52").is_empty(), "FST4 must not encode");
-        assert!(
-            m.gen_wave(&[1, 2, 3], 12000.0, 1500.0).is_empty(),
-            "FST4 must not produce a waveform"
-        );
+        // Every period AND both modes — FST4W is just as silent as FST4, and a
+        // per-variant capability slip would otherwise hide behind the one
+        // combination the test happened to name.
+        for kind in ModeKind::fst4_all() {
+            let label = kind.as_str();
+            assert!(!make_mode(kind).capabilities().tx, "{label} declares tx");
+            assert!(tx_mode(kind).is_none(), "tx_mode must refuse {label}");
+            let m = make_mode(kind);
+            assert!(
+                m.encode("CQ KD9TAW EN52").is_empty(),
+                "{label} must not encode"
+            );
+            assert!(
+                m.gen_wave(&[1, 2, 3], 12000.0, 1500.0).is_empty(),
+                "{label} must not produce a waveform"
+            );
+        }
     }
 
     #[test]
@@ -678,7 +757,11 @@ mod tx_capability_tests {
         // make_mode stays unrestricted (RX/general construction); tx_mode is what
         // enforces the capability. Both must remain true for the split to mean
         // anything.
-        for kind in ModeKind::ALL.into_iter().chain(ModeKind::q65_all()) {
+        for kind in ModeKind::ALL
+            .into_iter()
+            .chain(ModeKind::q65_all())
+            .chain(ModeKind::fst4_all())
+        {
             let _ = make_mode(kind); // never refuses
         }
         assert!(RxOnlyMode.capabilities().tx == false);
@@ -695,12 +778,30 @@ mod tx_capability_tests {
 /// Upstream FST4 offers 15/30/60/120/300/900/1800 s periods. The C ABI pins 15 s
 /// because `fst4_decode` sizes its frame from the period, so a selectable period
 /// needs both a per-period entry point and a `ModeKind` that can carry one.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Fst4Mode;
+#[derive(Debug, Clone, Copy)]
+pub struct Fst4Mode {
+    /// T/R period in seconds: 15, 30, 60, 120, 300, 900 or 1800.
+    pub period_s: u16,
+    /// FST4W beacon mode (50-bit, no AP) instead of FST4's QSO mode.
+    pub wspr: bool,
+}
+
+impl Default for Fst4Mode {
+    /// FST4 at 15 s — the combination the C ABI was originally pinned to.
+    fn default() -> Self {
+        Self {
+            period_s: 15,
+            wspr: false,
+        }
+    }
+}
 
 impl Mode for Fst4Mode {
     fn kind(&self) -> ModeKind {
-        ModeKind::Fst4
+        ModeKind::Fst4 {
+            period_s: self.period_s,
+            wspr: self.wspr,
+        }
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -734,6 +835,8 @@ impl Mode for Fst4Mode {
     ) -> Vec<Decode> {
         fst4::decode_frame(
             iwave,
+            self.period_s,
+            self.wspr,
             nfa,
             nfb,
             ndepth,

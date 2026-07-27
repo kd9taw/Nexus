@@ -325,15 +325,28 @@ int ft4_decode_frame(const int16_t *iwave /*[FT4_NMAX]*/,
  * FST4: WSJT-X slow weak-signal mode. DECODE ONLY.
  *===========================================================================*/
 
-/* ⭐ FST4's frame length is PERIOD-DEPENDENT, unlike FT8/FT4. fst4_decode sizes
- * its frame from ntrperiod:
- *     period (s)    15     30     60     120      300      900     1800
- *     samples   180000 360000 720000 1440000  3600000 10800000 21600000
- * This ABI exposes the 15 s period ONLY, so the buffer contract is fixed at
- * FST4_NMAX. Other periods need either a per-period entry point or a
- * caller-supplied length, plus Rust-side work to express a selectable period. */
-#define FST4_NTRPERIOD 15       /* T/R period, seconds — fixed by this ABI     */
-#define FST4_NMAX      180000   /* samples in iwave (15 s @ 12 kHz)            */
+/* ⭐ ALL 7 T/R periods, and BOTH modes (FST4 + FST4W). ntrperiod and iwspr are
+ * ARGUMENTS. fst4_decode sizes everything from ntrperiod:
+ *     period (s)     15      30      60     120      300       900      1800
+ *     samples    180000  360000  720000 1440000  3600000  10800000  21600000
+ * The caller supplies ntrperiod*12000 samples; the routine reads nfft1, which the
+ * table keeps <= that at every period. FST4_NMAX_MAX is the ceiling, NOT the
+ * contract.
+ *
+ * iwspr=0 is FST4 (QSO mode, 77-bit messages); iwspr=1 is FST4W, the WSPR-like
+ * BEACON mode (50-bit messages, no AP decoding). FST4W is why the period had to
+ * become an argument: its standard beacon intervals are 120/300/900/1800 s, so a
+ * wrapper pinned to 15 s could not do FST4W in any useful form.
+ *
+ * ⚠️ FST4W HASHED CALLSIGNS DO NOT RESOLVE. The k50 lookup table is populated
+ * upstream from fst4w_calls.txt, a GUI-side file the headless build removed. With
+ * an empty table the lookup reports the `<...>` hash form — the same result an
+ * empty file produced upstream. Beacon reception, SNR and grid all work; only
+ * resolving a previously-heard hashed call is missing.
+ *
+ * An unsupported period or iwspr returns -1 rather than being clamped. */
+#define FST4_NMAX_MAX 21600000  /* ceiling: 1800 s @ 12 kHz                     */
+#define FST4_NPERIODS 7         /* {15, 30, 60, 120, 300, 900, 1800}            */
 
 /* NO fst4_encode / fst4_gen_wave, deliberately. FST4 ships receive-only: the
  * Rust ModeKind reports Capabilities{tx:false} and modes::tx_mode() refuses to
@@ -353,8 +366,10 @@ typedef struct {
 } fst4_decode_t;
 
 /*
- * Decode EVERY FST4 signal in a complete 15 s frame.
- *   iwave         : FST4_NMAX (180000) int16 audio samples @ 12 kHz
+ * Decode EVERY FST4/FST4W signal in one complete T/R period.
+ *   iwave         : ntrperiod*12000 int16 audio samples @ 12 kHz
+ *   ntrperiod     : 15|30|60|120|300|900|1800 (s). Anything else returns -1.
+ *   iwspr         : 0 = FST4 (QSO), 1 = FST4W (beacon). Anything else returns -1.
  *   nfa, nfb      : frequency search band edges (Hz)
  *   ndepth        : 1..3 (3 = full bp+osd; <=0 defaults to 3)
  *   mycall/hiscall: NUL/space-terminated callsigns for AP (may be "")
@@ -366,10 +381,9 @@ typedef struct {
  *
  * Returns the number of decodes found (>= 0), or -1 on error. Up to
  * min(found, max_out) entries are written. NOT thread-safe / not reentrant.
- * Runs FST4 QSO mode (iwspr=0); FST4W beacon mode is not wired up — it needs the
- * hashed-callsign table that the headless build's excised file read populated.
  */
-int fst4_decode_frame(const int16_t *iwave /*[FST4_NMAX]*/,
+int fst4_decode_frame(const int16_t *iwave /*[ntrperiod*12000]*/,
+                      int ntrperiod, int iwspr,
                       int nfa, int nfb, int ndepth,
                       const char *mycall, const char *hiscall,
                       int nqso_progress, int nfqso,
