@@ -490,6 +490,17 @@ impl std::fmt::Debug for DecoderCtx {
     }
 }
 
+/// The manifest gate's scanners, compiled into the TEST target only.
+///
+/// `manifest_gate.rs` is a build-script module (`#[path] mod manifest_gate;` in build.rs), and
+/// cargo does not run `#[cfg(test)]` tests that live inside a build script — so every test in
+/// that file silently never executed, which is worse than having none. Pulling it in here puts
+/// those tests on the normal `cargo test -p tempo-fast-sys --lib` path. It is `cfg(test)` so
+/// nothing is added to the shipped library.
+#[cfg(test)]
+#[path = "../manifest_gate.rs"]
+mod manifest_gate;
+
 #[cfg(test)]
 mod tests {
     use super::*;

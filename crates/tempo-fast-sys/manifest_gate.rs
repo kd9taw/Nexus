@@ -1,5 +1,5 @@
-//! Build gate: every module-scope Fortran symbol in the vendored modem must be classified in
-//! `libtempo/modem-state-manifest.toml`.
+//! Build gate: every module-scope Fortran symbol and every static-storage C symbol in the
+//! vendored modem must be classified in `libtempo/modem-state-manifest.toml`.
 //!
 //! # Why this exists
 //!
@@ -13,8 +13,11 @@
 //!
 //! # What it does and does not catch
 //!
-//! It scans for the *greppable* declaration forms — `save`, `data`, `common`, and module-scope
-//! declarations between `module` and `contains`. It deliberately does **not** try to re-derive
+//! In Fortran it scans for the *greppable* declaration forms — `save`, `data`, `common`, and
+//! module-scope declarations between `module` and `contains`. In C it scans every `static`
+//! (at any brace depth, since a function-local static is just as shared) plus file-scope
+//! globals; see [`scan_c`] for why `const` is not treated the way Fortran's `parameter` is.
+//! It deliberately does **not** try to re-derive
 //! the full audit: ~160 of the manifest's 585 symbols are ordinary locals that gfortran spilled
 //! into `.bss` for exceeding `-fmax-stack-var-size`, which is a property of the *compiler
 //! invocation*, not the source, and no source scan can see them.
@@ -203,6 +206,148 @@ fn names_in_decl(line: &str) -> Vec<String> {
     names
 }
 
+/// Symbol names with static storage duration in one C source.
+///
+/// Q65 is the first vendored mode to bring substantial C, and until it did, this gate scanned
+/// Fortran only — so `q65_subs.c`'s 344-byte mutable `codec` struct and its paired first-call
+/// guards sat in `.bss` completely outside the audit while the build reported "all classified".
+/// That is the exact false pass the manifest exists to prevent.
+///
+/// Two forms have static storage duration and both are process-global:
+///
+///   * `static` at **any** brace depth. A function-local `static int first=1;` is every bit as
+///     shared between chains as a file-scope one; it just has a mangled name (`first.0`) in the
+///     object file. Depth is therefore not a filter for these.
+///   * a file-scope (depth 0) definition **without** `static`, which is an external-linkage
+///     global — `const qracode qra_13_64_64_irr_e` is one.
+///
+/// # `const` is NOT excluded, and that is deliberate
+///
+/// The Fortran scanner drops `parameter`, which is safe there: a Fortran `parameter` is a
+/// compile-time constant with no storage at all. C's `const` is a different thing — it is
+/// storage that may not be written *through that lvalue*, which does not imply the linker put
+/// it anywhere read-only. Measured on this very tree: `pd_uniform_tab` (pdmath.c:68) and
+/// `qra_13_64_64_irr_e` (qra13_64_64_irr_e.c:495) are both `const`-qualified and both land in
+/// writable `.data`, because they hold relocated pointers. Excluding `const` would have skipped
+/// both. The `.rodata` ones cost one class-4 manifest row each, which is the cheap side of the
+/// trade this gate has always made.
+pub fn scan_c(src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth: i32 = 0;
+    // Parens must be tracked separately from braces. A multi-line function signature keeps
+    // brace depth at 0, so without this every continuation line reads as a file-scope
+    // declaration and each PARAMETER becomes a symbol: q65.c:529 alone contributed seven
+    // phantoms (pAPMask, pAPSymbols, ...) before this was added.
+    let mut paren: i32 = 0;
+    let mut in_block_comment = false;
+
+    for raw in src.lines() {
+        let line = strip_c_comments(raw, &mut in_block_comment);
+        let t = line.trim();
+
+        // Preprocessor lines can carry braces inside macro bodies that never balance.
+        if paren == 0 && !t.starts_with('#') && !t.is_empty() {
+            let is_static = t.starts_with("static ") || t.starts_with("static\t");
+            // A declaration is only a *definition* of storage at depth 0 when unqualified;
+            // `static` counts anywhere. `extern` is a reference to storage defined elsewhere,
+            // and `typedef` declares a type, so neither allocates.
+            if (is_static || depth == 0)
+                && !t.starts_with("extern")
+                && !t.starts_with("typedef")
+                && !is_c_function_decl(t)
+            {
+                for n in c_declarator_names(t) {
+                    out.push(n);
+                }
+            }
+        }
+
+        depth += line.matches('{').count() as i32;
+        depth -= line.matches('}').count() as i32;
+        if depth < 0 {
+            depth = 0;
+        }
+        paren += line.matches('(').count() as i32;
+        paren -= line.matches(')').count() as i32;
+        if paren < 0 {
+            paren = 0;
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Blank out `//` and `/* */` comment text, carrying block state across lines.
+fn strip_c_comments(line: &str, in_block: &mut bool) -> String {
+    let b = line.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while i < b.len() {
+        if *in_block {
+            if i + 1 < b.len() && b[i] == b'*' && b[i + 1] == b'/' {
+                *in_block = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if i + 1 < b.len() && b[i] == b'/' && b[i + 1] == b'*' {
+            *in_block = true;
+            i += 2;
+            continue;
+        }
+        if i + 1 < b.len() && b[i] == b'/' && b[i + 1] == b'/' {
+            break;
+        }
+        out.push(b[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// True when the declarator is a function rather than storage.
+///
+/// The discriminator is a `(` in the declarator, i.e. before any `=` or `;`. That keeps
+/// `static void np_fwht2(float*, float*);` out while keeping `static pnp_fwht np_fwht_tab[7]`
+/// in — an array of function pointers behind a typedef has no parens of its own and IS
+/// writable storage (npfwht.c:38 is exactly that, and it is not even `const`).
+fn is_c_function_decl(t: &str) -> bool {
+    let head = t.split(['=', ';']).next().unwrap_or(t);
+    head.contains('(')
+}
+
+/// Declared names from one C declaration line, handling `static int a, b;`.
+fn c_declarator_names(t: &str) -> Vec<String> {
+    let head = t.split(['=', ';', '{']).next().unwrap_or(t);
+    let mut out = Vec::new();
+    for part in head.split(',') {
+        // Everything before `[` is the declarator; the last identifier in it is the name.
+        let decl = part.split('[').next().unwrap_or(part);
+        let last = decl
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .rfind(|s| !s.is_empty());
+        if let Some(name) = last {
+            if name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if C_NOISE.contains(&name) {
+                continue;
+            }
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// Type and storage keywords that can end up last when a line declares no name — e.g. a bare
+/// `static const int` continuation, or a struct tag with the declarator on the next line.
+const C_NOISE: &[&str] = &[
+    "static", "const", "volatile", "unsigned", "signed", "int", "char", "short", "long", "float",
+    "double", "void", "struct", "union", "enum", "inline", "restrict", "register", "auto",
+];
+
 fn push_name(names: &mut Vec<String>, cur: &mut String) {
     if cur.is_empty() {
         return;
@@ -270,7 +415,8 @@ pub fn unclassified(lib_root: &Path, manifest_text: &str) -> Vec<Key> {
                 stack.push(p);
                 continue;
             }
-            if p.extension().and_then(|s| s.to_str()) != Some("f90") {
+            let ext = p.extension().and_then(|s| s.to_str());
+            if !matches!(ext, Some("f90") | Some("c")) {
                 continue;
             }
             let Ok(src) = std::fs::read_to_string(&p) else {
@@ -281,7 +427,12 @@ pub fn unclassified(lib_root: &Path, manifest_text: &str) -> Vec<Key> {
                 .unwrap_or(&p)
                 .to_string_lossy()
                 .replace('\\', "/");
-            for name in scan_fortran(&src) {
+            let names = if ext == Some("c") {
+                scan_c(&src)
+            } else {
+                scan_fortran(&src)
+            };
+            for name in names {
                 let k = Key {
                     file: rel.clone(),
                     name,
@@ -295,6 +446,107 @@ pub fn unclassified(lib_root: &Path, manifest_text: &str) -> Vec<Key> {
     missing.sort();
     missing.dedup();
     missing
+}
+
+#[cfg(test)]
+mod c_tests {
+    use super::*;
+
+    /// The bug that made the first version of this scanner useless. Parens do not change
+    /// BRACE depth, so every continuation line of a multi-line function signature sits at
+    /// depth 0 and reads as a file-scope declaration — turning each parameter into a phantom
+    /// symbol. On the real tree this produced seven phantoms from `q65.c:529` alone and
+    /// buried the two symbols that actually matter.
+    #[test]
+    fn multiline_signature_params_are_not_symbols() {
+        let src = r#"
+int q65_decode(const qracode *pcode,
+	       const float *pIntrinsics, const int *pAPMask,
+	       const int *pAPSymbols, const int maxiters)
+{
+	return 0;
+}
+"#;
+        assert_eq!(scan_c(src), Vec::<String>::new());
+    }
+
+    /// A function-local `static` has static storage duration and is shared between chains
+    /// exactly like a file-scope one — it just gets a mangled name (`first.0`) in the object.
+    /// Brace depth must NOT filter these out.
+    #[test]
+    fn function_local_static_is_a_symbol() {
+        let src = r#"
+void q65_enc_(int *a)
+{
+  static int first=1;
+  int scratch;
+  if (first) { first=0; }
+}
+"#;
+        let got = scan_c(src);
+        assert!(got.contains(&"first".to_string()), "got {got:?}");
+        assert!(!got.contains(&"scratch".to_string()), "stack local leaked: {got:?}");
+    }
+
+    /// `const` is not excluded the way Fortran's `parameter` is, because a C `const` object
+    /// still has storage and the linker may put it somewhere writable. Both of these are
+    /// `const`-qualified in the real tree and both land in `.data` because they hold
+    /// relocated pointers.
+    #[test]
+    fn const_qualified_storage_is_still_a_symbol() {
+        let src = r#"
+static const ppd_uniform pd_uniform_tab[7] = {
+	pd_uniform1, pd_uniform2
+};
+const qracode qra_13_64_64_irr_e = {
+	13, 64
+};
+"#;
+        let got = scan_c(src);
+        assert!(got.contains(&"pd_uniform_tab".to_string()), "got {got:?}");
+        assert!(got.contains(&"qra_13_64_64_irr_e".to_string()), "got {got:?}");
+    }
+
+    /// Function declarations are not storage; an array of function pointers behind a typedef
+    /// is. The discriminator is a paren in the declarator, and `np_fwht_tab` (npfwht.c:38)
+    /// has none — it is writable storage and is not even `const`.
+    #[test]
+    fn functions_out_function_pointer_tables_in() {
+        let src = r#"
+static void np_fwht2(float *dst, float *src);
+static pnp_fwht np_fwht_tab[7] = {
+	np_fwht1, np_fwht2
+};
+"#;
+        assert_eq!(scan_c(src), vec!["np_fwht_tab".to_string()]);
+    }
+
+    /// `extern` refers to storage defined elsewhere and `typedef` defines a type; neither
+    /// allocates, and counting them would demand a manifest row in every file that sees the
+    /// header.
+    #[test]
+    fn extern_and_typedef_allocate_nothing() {
+        let src = r#"
+extern int q65_llh;
+typedef void (*pnp_fwht)(float*, float*);
+"#;
+        assert_eq!(scan_c(src), Vec::<String>::new());
+    }
+
+    /// Comments must not contribute names. `q65_subs.c` carries the Fortran interface it
+    /// implements inside a block comment, complete with declaration-shaped lines.
+    #[test]
+    fn comments_contribute_nothing() {
+        let src = r#"
+/*
+   real s3prob(LL,NN)    !Symbol-value probabilities
+   static int decoy;
+*/
+// static int decoy2;
+static int real_one;
+"#;
+        assert_eq!(scan_c(src), vec!["real_one".to_string()]);
+    }
 }
 
 #[cfg(test)]

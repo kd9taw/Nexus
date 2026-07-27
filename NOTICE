@@ -51,10 +51,19 @@ https://sourceforge.net/projects/wsjt/
 License: **GNU GPL, version 3 or later** (GPL-3.0-or-later), © 2016.
 
 The Q-ary Repeat-Accumulate LDPC codec behind **Q65**, vendored at
-`libtempo/vendor/wsjtx/lib/qra/` (9 C sources + headers, per-file GPL-3-or-later
-headers retained verbatim). Nexus is GPL-3.0-only; the "or later" grant is
-compatible one-way inbound, so these files keep their own more permissive terms
-while the combined work stays v3-only.
+`libtempo/vendor/wsjtx/lib/qra/` (11 C sources + headers, copied byte-identical
+from upstream with their per-file GPL-3-or-later headers retained verbatim).
+Nexus is GPL-3.0-only; the "or later" grant is compatible one-way inbound, so
+these files keep their own more permissive terms while the combined work stays
+v3-only.
+
+Two of the eleven — `qra/q65/fadengauss.c` and `qra/q65/fadenlorentz.c`, the
+Gaussian and Lorentzian energy-fading coefficient tables — carry no license
+header of their own upstream, only a one-line descriptive comment. They are
+covered by the same package grant as the rest of qracodes and are vendored
+unmodified rather than having a header added, which is this tree's convention for
+vendored sources. They are not optional extras: `q65.c` `#include`s both directly
+(q65.c:273-274), so the codec does not compile without them.
 
 qracodes reaches Nexus through WSJT-X, which vendors the same sources, but it is a
 SEPARATE COPYRIGHT from the WSJT Development Group's and is credited separately for
