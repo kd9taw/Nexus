@@ -64,6 +64,18 @@ int main(void) {
         "2E1ABC KD9TAW -12",
         "KH6ABC 4X4AA R-08",
         "KD9TAW 8P9AA RR73",
+        /* ROVERS. '/R' is the rover flag: one spare bit per callsign inside the
+         * ordinary type-1 message. WSJT-X 3.0.2 discards any decode containing
+         * '/R' when ncontest.eq.0, and ft8_cabi.f90 hard-codes ncontest = 0, so
+         * adopting that filter would silently drop every rover — after LDPC and
+         * CRC-14 had already passed it. Nexus deliberately does not take it
+         * (operator decision 2026-07-27; see the divergence note in ft8b.f90).
+         * These cases exist so that decision cannot be undone by accident: if a
+         * future vendor refresh reintroduces the filter, this test fails instead
+         * of rovers quietly going dark on 6 m and 2 m during a VHF contest. */
+        "W1AW/R KD9TAW EN52",
+        "KD9TAW W1AW/R R FN42",
+        "WA9XYZ/R KA1ABC/R R FN42",
     };
     const int NMSG = (int)(sizeof(msgs) / sizeof(msgs[0]));
 

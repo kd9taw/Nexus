@@ -440,6 +440,34 @@ subroutine ft8b(dd0,newdat,nQSOProgress,nfqso,nftx,ndepth,nzhsym,lapon,     &
      if(i3.eq.0 .and. n3.eq.2) cycle
      call unpack77(c77,1,msg37,unpk77_success)
      if(.not.unpk77_success) cycle
+! DELIBERATE DIVERGENCE FROM WSJT-X 3.0.2 (KD9TAW, 2026-07-27) — DO NOT "RESTORE"
+! ON A VENDOR REFRESH. Upstream discards any decode whose text contains '/R' (and
+! any 'TU; ' form) for message types 1-3 when ncontest.eq.0:
+!
+!     if(.not.unpk77_success .or. index(msg37,'/R').gt.0 .or.     &
+!          msg37(1:4).eq.'TU; ') then
+!        if(i3.ge.1 .and. i3.le.3 .and. ncontest.eq.0) cycle
+!     endif
+!
+! '/R' is the ROVER flag: one spare bit per callsign inside the ordinary type-1
+! message (see packjt77.f90:506, `if(i.ge.4 .and. ipa.eq.1 .and. i3.eq.1)`).
+! Upstream's reasoning is that outside a contest a stray '/R' is more likely a
+! decode corrupt in exactly those two bits than a genuine rover.
+!
+! Nexus does not take it. ft8_cabi.f90:437 hard-codes ncontest = 0, so the filter
+! would be permanently armed and would silently discard EVERY rover — after the
+! message had already passed LDPC and CRC-14. Rovers activate rare grids during
+! the ARRL VHF contests on 6 m and 2 m, which is exactly the traffic this station
+! is built to catch. Operator decision, 2026-07-27: "We need to be able to work
+! rovers."
+!
+! The protection forgone is small: CRC-14 already leaves ~1 in 16384, and this
+! would only catch the slice of that landing on a rover bit. The false-alarm
+! gates measure 0/200 (FT8) and 0/300 (FT4) against noise with AP fully armed.
+!
+! If ncontest ever becomes runtime state rather than a constant, revisit: taking
+! upstream's version WITH its ncontest gate would then behave correctly, filtering
+! outside contests and passing rovers during them.
      nbadcrc=0  ! If we get this far: valid codeword, valid (i3,n3), nonquirky message.
      call get_ft8_tones_from_77bits(message77,itone)
      if(lsubtract) then
