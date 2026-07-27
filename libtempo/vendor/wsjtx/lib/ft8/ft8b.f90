@@ -174,7 +174,19 @@ subroutine ft8b(dd0,newdat,nQSOProgress,nfqso,nftx,ndepth,nzhsym,lapon,     &
   enddo
 ! hard sync sum - max is 21
   nsync=is1+is2+is3
-  if(nsync .le. 6) then ! bail out
+! FROM WSJT-X 3.0.2 (KD9TAW, 2026-07-27): hard-sync floor becomes depth-dependent
+! instead of a flat 6. Upstream's third line, `if(imetric.eq.2) syncmin=7`, is
+! omitted deliberately — imetric belongs to 3.0.2's wider ft8b rework (5th soft
+! metric, doubled AP passes) which this tree does not take, so there is no
+! imetric here to test.
+!
+! This is LIVE on every FT8 slot, not a shallow-depth curiosity: ft8_cabi.f90:501
+! sets ndeep=2 whenever ndepth_l==3, so pass 1 at the default Deep setting enters
+! ft8b with ndepth=2 and picks up syncmin=8. Pass 1 is also the pass that runs
+! with subtraction against un-thinned audio.
+  syncmin=6
+  if(ndepth.le.2) syncmin=8
+  if(nsync.le.syncmin) then ! bail out
     nbadcrc=1
     return
   endif
