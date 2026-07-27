@@ -198,13 +198,18 @@ set(LIBTEMPO_SOURCES
 
 # ---------------------------------------------------------------------------
 # Include directories for Fortran `include` statements:
-#   ft1/ft1_params.f90          -> -I lib/ft1
+#   tempofast_params.f90        -> -I lib/tempofast
 #   ldpc_174_91_c_generator.f90 -> -I lib/ft8
 #   ldpc_174_91_c_parity.f90    -> -I lib/ft8
 #   fftw3.f03                   -> -I <fftw include dir> (usually /usr/include)
+#
+# NOTE: gfortran resolves `include` relative to the including file first, so these
+# -I entries are a backstop rather than the primary mechanism. That is why the stale
+# `${LIB}/ft1` entry here (the pre-2026-07-21 name for tempofast/) produced only a
+# -Wmissing-include-dirs warning instead of a build failure, and sat unnoticed.
 # ---------------------------------------------------------------------------
 set(LIBFT1_INCLUDE_DIRS
-    ${LIB}/ft1
+    ${LIB}/tempofast
     ${LIB}/ft8
     ${LIB}
     ${FFTW3F_INCLUDE_DIRS}   # fftw3.f03 (native: from pkg-config /usr/include;

@@ -208,7 +208,7 @@ fn emit_rerun(libtempo_src: &std::path::Path) {
         "ft4_cabi.f90",
         "mingw-w64.cmake",
         "include",
-        "dx1",
+        "tempodeep",
     ] {
         emit_rerun_glob(&libtempo_src.join(rel));
     }
@@ -217,19 +217,19 @@ fn emit_rerun(libtempo_src: &std::path::Path) {
     // libtempo/vendor/wsjtx, or an external WSJT-X checkout when WX is overridden.
     // CMake's own dependency tracking is correct, but Cargo will not re-run CMake
     // (and so links a stale libtempo.a) unless one of these files is registered here.
-    // Watch every modem .f90 in the FT1 + FT8 lib dirs per-file: a bare directory
-    // rerun-if-changed catches only add/remove, NOT content edits.
     //
-    // This MUST resolve the same WX the CMake configure above used, or edits go
-    // unnoticed and the stale archive links silently — `emit_rerun_glob` skips
-    // missing paths, so a wrong path fails quietly rather than erroring.
+    // Watch the WHOLE lib tree, not an enumerated subset. Listing individual dirs
+    // means every mode added later is unwatched until someone remembers to extend
+    // this list, and the failure is silent: the stale archive links and the decode
+    // under test is the OLD one, so a parity measurement quietly reports the wrong
+    // answer. Recursing is both simpler and correct by construction.
+    //
+    // This MUST resolve the same WX the CMake configure above used.
     let wx_lib = match wx_override() {
         Some(wx) => PathBuf::from(wx).join("lib"),
         None => libtempo_src.join("vendor/wsjtx/lib"),
     };
-    emit_rerun_glob(&wx_lib.join("tempofast")); // TempoFast modem (turbo, ldpc348, bcjr, sync, harq, ...)
-    emit_rerun_glob(&wx_lib.join("ft8")); // shared deps (osd174_91, ldpc_174_91 parity, ...)
-    emit_rerun_glob(&wx_lib.join("tempofast_decode.f90")); // live decode + HARQ driver
+    emit_rerun_glob(&wx_lib);
 }
 
 /// The `WX` override (WSJT-X-derived modem source tree) if the environment sets one.
@@ -243,28 +243,41 @@ fn wx_override() -> Option<String> {
     env::var("WX").ok().filter(|s| !s.is_empty())
 }
 
-/// Emit `cargo:rerun-if-changed` for `p`. If `p` is a directory, recurse one level
-/// and emit each contained `.f90`/`.f`/`.cpp`/`.h`/`.txt`/`.cmake` file individually
-/// (so content edits — not just add/remove — trigger a rebuild). Missing paths are
-/// skipped (emitting a non-existent path would force an unconditional rebuild).
+/// Emit `cargo:rerun-if-changed` for `p`. If `p` is a directory, recurse through it
+/// and emit each `.f90`/`.f`/`.cpp`/`.h`/`.txt`/`.cmake` file individually (so content
+/// edits — not just add/remove — trigger a rebuild).
+///
+/// PANICS if `p` does not exist. Every call site names a path that must be present, so
+/// a missing one is a typo in this file, not a valid configuration. This used to return
+/// quietly, which is how `"dx1"` (the pre-rename name for `tempodeep/`) sat in the watch
+/// list unnoticed: the directory had not existed for some time and all nine TempoDeep
+/// sources were silently unwatched. Failing loudly is the whole point — an unwatched
+/// source links a stale `libtempo.a` with no warning.
 fn emit_rerun_glob(p: &std::path::Path) {
-    let Ok(canon) = p.canonicalize() else { return };
-    if canon.is_dir() {
-        if let Ok(rd) = std::fs::read_dir(&canon) {
-            for entry in rd.flatten() {
-                let c = entry.path();
-                let watch = c
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| matches!(e, "f90" | "f" | "F90" | "cpp" | "c" | "h" | "txt" | "cmake"))
-                    .unwrap_or(false);
-                if watch {
-                    println!("cargo:rerun-if-changed={}", c.display());
-                }
-            }
-        }
-    } else {
+    let canon = p
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("build.rs watch path does not resolve: {} ({e})", p.display()));
+    if !canon.is_dir() {
         println!("cargo:rerun-if-changed={}", canon.display());
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(&canon) else {
+        panic!("build.rs cannot read watch dir: {}", canon.display())
+    };
+    for entry in rd.flatten() {
+        let c = entry.path();
+        if c.is_dir() {
+            emit_rerun_glob(&c);
+            continue;
+        }
+        let watch = c
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| matches!(e, "f90" | "f" | "F90" | "cpp" | "c" | "h" | "txt" | "cmake"))
+            .unwrap_or(false);
+        if watch {
+            println!("cargo:rerun-if-changed={}", c.display());
+        }
     }
 }
 
