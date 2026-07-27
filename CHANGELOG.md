@@ -5,6 +5,45 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.7] — 2026-07-27
+
+### Decoder: vendored WSJT-X modem sources moved from 2.7.0 to 3.0.2
+Nexus builds its FT8/FT4 decoder from WSJT-X's own DSP sources. Those were pinned at WSJT-X 2.7.0;
+upstream has since released 3.0.2. This build takes the parts of that update worth having, one
+change at a time, each measured against the previous build on identical recorded audio.
+
+Most of it changes nothing you can see, and that is the honest summary: eight of the nine changes
+produce byte-for-byte identical decodes. The value is that the decoder no longer drifts from the
+reference implementation, which keeps future updates cheap and low-risk.
+
+What does change:
+
+- **Callsigns that cannot exist are rejected.** The 28-bit callsign field can represent strings no
+  real callsign could ever be. Those now get thrown out instead of reaching the log. Verified
+  against rare-prefix calls (9A1AA, 2E1ABC, 3D2AB, 4X4AA, 8P9AA, KH6ABC) plus short calls, so no
+  legitimate callsign is affected.
+- **One fewer wrong decode.** The FT8 timing search was clipping at its own boundary and
+  occasionally producing a decode from the artifact. Widening it removed a measured false decode,
+  at the cost of one very weak signal on the sensitivity floor. A wrong decode reaches the log and
+  gets uploaded to LoTW, QRZ and ClubLog; a missed one just means the station calls again.
+- **FT4 considers twice as many signals per pass.** Should mean the same or more decodes on a busy
+  band.
+
+### Rovers keep decoding
+WSJT-X 3.0.2 discards any decode containing `/R` outside contest mode. `/R` is the rover flag —
+stations that drive between grid squares during the VHF contests, which is exactly the traffic
+worth catching on 6 m and 2 m. Nexus does not take that filter, and there is now a test that fails
+if anyone reintroduces it.
+
+### Under the hood
+Fixed a build fault where 52 of the decoder's source files were not tracked for rebuilds: editing
+one linked a stale library with no warning, so a change could appear to have no effect when it had
+simply not been compiled in.
+
+Added false-alarm tests for FT8 and FT4 — the decoder is now checked against pure noise and must
+produce nothing at all. Previously the tests only checked that real signals still decoded, never
+that silence stayed silent.
+
 ## [0.19.6] — 2026-07-26
 
 ### TempoFast decoding on a real link
