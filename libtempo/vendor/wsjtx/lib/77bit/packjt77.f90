@@ -776,7 +776,7 @@ end subroutine pack28
 subroutine unpack28(n28_0,c13,success)
 
   parameter (NTOKENS=2063592,MAX22=4194304)
-  logical success
+  logical success,callok
   character*13 c13
   character*37 c1
   character*36 c2
@@ -838,6 +838,16 @@ subroutine unpack28(n28_0,c13,success)
   c13=c1(i1+1:i1+1)//c2(i2+1:i2+1)//c3(i3+1:i3+1)//c4(i4+1:i4+1)//     &
        c4(i5+1:i5+1)//c4(i6+1:i6+1)
   c13=adjustl(c13)
+
+! FROM WSJT-X 3.0.2 (KD9TAW, 2026-07-27): reject 28-bit field values that
+! decode to something structurally impossible as a callsign. The 28-bit
+! standard-callsign field can represent strings no ITU prefix could ever
+! produce, and without this the only structural check is the embedded-space
+! test below, so those reach the caller as if they were real callsigns.
+  if(.not.callok(trim(c13))) then
+     c13='QU1RK'
+     success=.false.
+  endif
 
 900 i0=index(c13,' ')
   if(i0.ne.0 .and. i0.lt.len(trim(c13))) then
@@ -1665,3 +1675,71 @@ subroutine to_grid(n,grid6,ok)
 end subroutine to_grid
 
 end module packjt77
+
+! FROM WSJT-X 3.0.2 (KD9TAW, 2026-07-27), verbatim apart from this comment.
+!
+! Deliberately OUTSIDE the module, matching upstream: unpack28 declares it as
+! `logical callok`, i.e. an external function. Defining it as a module procedure
+! instead makes that declaration shadow the module version and the link fails on
+! an unmangled `callok_`.
+!
+! True when w could be a real callsign. Used by unpack28 to reject 28-bit field
+! values that decode to structurally impossible strings.
+!
+! Safe against unpack28's output by construction: that routine builds c13 from
+! alphabets c1(space/digit/letter), c2(digit/letter), c3(DIGITS ONLY) and three
+! copies of c4(space/LETTERS ONLY). Positions 4-6 therefore never hold a digit,
+! so after adjustl the last digit sits at position 2 (when position 1 was blank)
+! or 3 (when it was not) — exactly the i0 values this function accepts. Rare
+! prefixes were walked through by hand and pass: 9A1AA (i0=3, pfx "9A" has a
+! letter), 1A0KM (i0=3, pfx "1A"), K1A (i0=2, pfx "K"). What it rejects —
+! sub-3-character strings, a leading Q, an all-digit prefix, a suffix with a
+! non-letter — are not valid amateur callsigns.
+logical function callok(w)
+
+  character*(*) w
+  character*1 c1
+  character*2 pfx
+  character*3 sfx
+  logical isdig,islet
+
+  islet(c1)=(ichar(c1).ge.65 .and. ichar(c1).le.90) .or. &
+            (ichar(c1).ge.97 .and. ichar(c1).le.122)
+  isdig(c1)=(ichar(c1).ge.48 .and. ichar(c1).le.57)
+
+  callok=.false.
+  n=len(trim(w))
+  if(n.lt.3) return                 !Must be at lkeast three characters
+  if(w(1:1).eq.'Q') return          !Callsigns can't start with Q
+
+  i0=0
+  do i=n,1,-1
+     if(isdig(w(i:i))) exit
+  enddo
+  i0=i                              !Call area position in word
+
+  if(i0.ne.2 .and. i0.ne.3) return
+
+  pfx=w(1:i0-1)                     !Prefix, without call area
+  sfx=w(i0+1:)                      !Suffix
+
+  nlp=0
+  ndp=0
+  np=len(trim(pfx))
+  do i=1,np
+     if(isdig(pfx(i:i))) ndp=ndp+1
+     if(islet(pfx(i:i))) nlp=nlp+1
+  enddo
+  if(nlp.eq.0) return              !Prefix must have at least one letter
+
+  nls=0
+  ns=len(trim(sfx))
+  do i=1,ns
+     if(islet(sfx(i:i))) nls=nls+1
+  enddo
+  if(nls.lt.ns) return             !Suffix must be all letters
+
+  callok=.true.
+
+  return
+end function callok

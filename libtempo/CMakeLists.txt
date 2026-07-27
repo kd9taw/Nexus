@@ -341,3 +341,12 @@ target_link_libraries(ft8_false_alarm PRIVATE tempo_static m gfortran)
 # ---------------------------------------------------------------------------
 add_executable(ft4_false_alarm ${CMAKE_CURRENT_SOURCE_DIR}/../tests/ft4_false_alarm.c)
 target_link_libraries(ft4_false_alarm PRIVATE tempo_static m gfortran)
+# ---------------------------------------------------------------------------
+# Verification executable H: standard-callsign round-trip. unpack28's callok()
+# structural check REJECTS malformed 28-bit field values; this proves it never
+# rejects a callsign someone actually holds, which a single-message yield ladder
+# would not notice.
+# ---------------------------------------------------------------------------
+add_executable(ft8_callsign_roundtrip ${CMAKE_CURRENT_SOURCE_DIR}/../tests/ft8_callsign_roundtrip.c)
+target_link_libraries(ft8_callsign_roundtrip PRIVATE tempo_static m gfortran)
+
