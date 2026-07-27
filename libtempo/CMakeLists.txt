@@ -325,3 +325,19 @@ target_link_libraries(ft8_acquire PRIVATE tempo_static m gfortran)
 # ---------------------------------------------------------------------------
 add_executable(ft4_acquire ${CMAKE_CURRENT_SOURCE_DIR}/../tests/ft4_acquire.c)
 target_link_libraries(ft4_acquire PRIVATE tempo_static m gfortran)
+
+# ---------------------------------------------------------------------------
+# Verification executable F: native FT8 FALSE-ALARM gate — decode noise, expect
+# silence. The acquire tests above only measure yield (did we still find the
+# signal); nothing asserted that the decoder does not invent signals that are not
+# there. In Nexus a false decode reaches log_qso and the connector upload funnel,
+# so it is the more expensive direction of the two.
+# ---------------------------------------------------------------------------
+add_executable(ft8_false_alarm ${CMAKE_CURRENT_SOURCE_DIR}/../tests/ft8_false_alarm.c)
+target_link_libraries(ft8_false_alarm PRIVATE tempo_static m gfortran)
+
+# ---------------------------------------------------------------------------
+# Verification executable G: the FT4 false-alarm gate (mirror of F).
+# ---------------------------------------------------------------------------
+add_executable(ft4_false_alarm ${CMAKE_CURRENT_SOURCE_DIR}/../tests/ft4_false_alarm.c)
+target_link_libraries(ft4_false_alarm PRIVATE tempo_static m gfortran)
