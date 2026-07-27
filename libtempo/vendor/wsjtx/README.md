@@ -18,6 +18,17 @@ This is a **subset** of WSJT-X's `lib/` — only the ~70 Fortran/C/C++ DSP sourc
 that `libtempo` actually compiles (see the source list in `libtempo/CMakeLists.txt`).
 None of WSJT-X's Qt/GUI code is included.
 
+## Third-party code with its OWN copyright (not the WSJT group's)
+
+`lib/qra/` — **qracodes**, © 2016 Nico Palermo (IV3NWV) / Microtelecom Srl, **GPL-3.0-or-later**.
+The Q-ary RA LDPC codec behind Q65: 9 C sources plus headers, per-file license headers RETAINED
+VERBATIM. Unlike the rest of `lib/` (which carries no per-file headers and is therefore treated as
+GPL-3.0-only), these files carry an explicit "or later" grant. Do not strip those headers.
+
+⚠️ The same author's `lib/superfox/qpc/qpc_n127k50q128.c` is **NOT free software** ("licensed only
+for use with WSJT-X") and is deliberately NOT vendored here. Per-file terms differ within one
+author's work — determine license per FILE, never per author.
+
 ## What is original vs. reused
 
 - **New protocol code by KD9TAW (2026)**, derived from the WSJT-X framework: the

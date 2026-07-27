@@ -217,6 +217,12 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   full lineage and marked modifications). Nexus interoperates with their ecosystem over the standard
   WSJT-X UDP protocol; its auto-sequencer is original Rust modeled on WSJT-X's on-air behavior.
   **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.
+- **[qracodes](https://github.com/IV3NWV/qracodes)** — **Nico Palermo IV3NWV** / Microtelecom Srl
+  (© 2016, GPL-3.0-or-later). The Q-ary Repeat-Accumulate LDPC codec that **Q65** decodes with,
+  vendored at `libtempo/vendor/wsjtx/lib/qra/` with its per-file license headers intact. A separate
+  copyright from the WSJT Development Group's, credited separately for that reason. Nexus does not
+  vendor or link the same author's SuperFox polar-code tables, which are not free software — see
+  **[NOTICE](NOTICE)**.
 - **TempoFast / TempoDeep** — the native weak-signal waveforms by **KD9TAW**.
 - **[AetherSDR](https://github.com/aethersdr/AetherSDR)** (GPLv3) — the waterfall's 3D
   stacked-spectrum view (`ui/src/dss.ts`) and retained-history model

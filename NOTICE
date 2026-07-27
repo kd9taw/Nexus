@@ -47,6 +47,30 @@ Uwe Risse (DG2YCB), Brian Moran (N9ADG), and others. See the upstream project
 for the authoritative copyright and contributor list:
 https://sourceforge.net/projects/wsjt/
 
+### qracodes — Nico Palermo (IV3NWV), Microtelecom Srl
+License: **GNU GPL, version 3 or later** (GPL-3.0-or-later), © 2016.
+
+The Q-ary Repeat-Accumulate LDPC codec behind **Q65**, vendored at
+`libtempo/vendor/wsjtx/lib/qra/` (9 C sources + headers, per-file GPL-3-or-later
+headers retained verbatim). Nexus is GPL-3.0-only; the "or later" grant is
+compatible one-way inbound, so these files keep their own more permissive terms
+while the combined work stays v3-only.
+
+qracodes reaches Nexus through WSJT-X, which vendors the same sources, but it is a
+SEPARATE COPYRIGHT from the WSJT Development Group's and is credited separately for
+that reason. Nico Palermo is also listed among the WSJT-X contributors above; that
+is a different role from holding copyright in this codec.
+
+⚠️ Per-file terms differ WITHIN this author's work, which is why the integration
+checklist requires a per-FILE determination rather than a per-author one:
+`lib/superfox/qpc/qpc_n127k50q128.c` — the SuperFox (127,50) polar-code parameter
+tables, by the same author — states it is **NOT free software** and is "licensed
+only for use with WSJT-X". Nexus does **not** vendor that file, does not link it,
+and must not port, transliterate or table-extract it. Verified absent from Q65's
+dependency closure before Q65 was vendored.
+
+Project: <https://github.com/IV3NWV/qracodes>
+
 Nexus treats WSJT-X as the reference standard for FT8/FT4 on-air behavior. It
 is an independent application and is **not affiliated with or endorsed by** the
 WSJT project.
