@@ -341,8 +341,17 @@ subroutine unpack77(c77,nrx,msg,unpk77_success)
      call unpack28(n28b,call_2,unpk28_success)
      if(.not.unpk28_success .or. n28b.le.2) unpk77_success=.false.
      call hash10(n10,call_3)
+! FROM WSJT-X 3.0.2 (KD9TAW, 2026-07-27): the len(trim(dxcall13)).ge.3 conjunct.
+! Without it an EMPTY dxcall13 can still satisfy the hash test and substitute
+! '<>' for a received 10-bit hash. Strictly restrictive — an added .and. can only
+! suppress a substitution, never create one — and no valid callsign is under
+! three characters, so it cannot block a legitimate one. Directly relevant to the
+! two-chain hazard described in this file's MODIFIED FOR NEXUS header, where a
+! chain calling CQ with an empty hiscall can otherwise substitute against state
+! the other chain left behind.
      if(nrx.eq.1     .and. &
         dxcall13_set .and. &
+        len(trim(dxcall13)).ge.3 .and. &
         hashdx10.eq.n10) call_3='<'//trim(dxcall13)//'>'
      if(nrx.eq.0     .and. &
         mycall13_set .and. &
