@@ -18,7 +18,7 @@ pub mod mode;
 pub mod source;
 
 pub use decode::Decode;
-pub use mode::{make_mode, Capabilities, Ft1Mode, Ft4Mode, Ft8Mode, Mode, ModeKind};
+pub use mode::{make_mode, tx_mode, Capabilities, Ft1Mode, Ft4Mode, Ft8Mode, Mode, ModeKind};
 pub use source::{DecodeRequest, NativeSource, SignalSource, WsjtxUdpSource};
 
 /// Clear FT8's a7 cross-cycle decode table (prior-slot call pairs). The engine

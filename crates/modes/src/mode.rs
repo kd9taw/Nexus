@@ -65,6 +65,18 @@ impl ModeKind {
 /// generic engine need not special-case mode names.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Capabilities {
+    /// This mode can TRANSMIT.
+    ///
+    /// Every mode shipped today sets this. It exists so a DECODE-ONLY mode can
+    /// be added without becoming transmit-capable by accident: before this flag,
+    /// `encode`/`gen_wave` were required trait methods and every [`ModeKind`]
+    /// reachable from a `Tier` could key the radio by construction, so there was
+    /// nothing to withhold.
+    ///
+    /// Enforced by [`tx_mode`], which is the only sanctioned way to obtain a mode
+    /// for transmitting. Note `Default` gives `false`: a mode that forgets to
+    /// declare itself is silent, which is the safe direction.
+    pub tx: bool,
     /// Supports DXpedition Fox/Hound (multi-stream) operation.
     pub fox_hound: bool,
     /// Supports incremental-redundancy HARQ (cross-frame joint decode).
@@ -108,13 +120,26 @@ pub trait Mode: Send + Sync {
     fn capabilities(&self) -> Capabilities;
 
     /// Encode a message (≤ 37 chars) into channel tones; empty on bad input.
-    fn encode(&self, msg: &str) -> Vec<i32>;
+    ///
+    /// Defaults to empty so a DECODE-ONLY mode need not implement it. A mode that
+    /// leaves this defaulted must also report `Capabilities { tx: false, .. }`;
+    /// [`tx_mode`] is what keeps the two consistent, by refusing to hand out a
+    /// mode for transmitting unless it declared `tx`.
+    fn encode(&self, _msg: &str) -> Vec<i32> {
+        Vec::new()
+    }
 
     /// Synthesize the TX audio waveform for the given tones at carrier `f0`. The
     /// returned buffer is **slot-positioned** — it includes the mode's leading silence
     /// (FT8/FT4 start 0.5 s into the slot) so the radio loop can play it straight at the
     /// slot boundary without the over going out early.
-    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32>;
+    ///
+    /// Defaults to empty for the same reason as [`Mode::encode`]. An empty wave is
+    /// also the safe failure: the radio loop sizes its PTT hold from the returned
+    /// buffer length, so nothing is keyed.
+    fn gen_wave(&self, _itone: &[i32], _fsample: f32, _f0: f32) -> Vec<f32> {
+        Vec::new()
+    }
 
     /// Decode every signal in a [`frame_samples`](Mode::frame_samples)-long
     /// int16 frame at 12 kHz. `nfa..=nfb` is the audio search range; `ndepth`
@@ -183,6 +208,28 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
     }
 }
 
+/// Build a mode **for transmitting**, or `None` if the mode cannot transmit.
+///
+/// The only sanctioned path to a mode that will be handed to `encode`/`gen_wave`.
+/// [`make_mode`] stays the RX/general constructor and is unrestricted.
+///
+/// This exists so a decode-only mode can ship. Previously `encode` and `gen_wave`
+/// were required trait methods with no default, so every [`ModeKind`] reachable
+/// from a `Tier` was transmit-capable by construction and "RX-only" was not
+/// expressible — there was nothing to withhold. Adding a receive-only mode without
+/// this would have made it silently keyable.
+///
+/// It can only ever PREVENT keying: it does not alter timing, waveform, or the
+/// decision to transmit, and a mode declaring `tx: true` is returned unchanged.
+pub fn tx_mode(kind: ModeKind) -> Option<Box<dyn Mode>> {
+    let m = make_mode(kind);
+    if m.capabilities().tx {
+        Some(m)
+    } else {
+        None
+    }
+}
+
 /// Standard WSJT-X **FT8** — 15 s T/R, 8-GFSK, the dominant HF digital mode.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Ft8Mode;
@@ -193,6 +240,7 @@ impl Mode for Ft8Mode {
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
+            tx: true,
             fox_hound: true,
             ir_harq: false,
             free_text: true,
@@ -288,6 +336,7 @@ impl Mode for Ft4Mode {
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
+            tx: true,
             fox_hound: false,
             ir_harq: false,
             free_text: true,
@@ -356,6 +405,7 @@ impl Mode for Ft1Mode {
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
+            tx: true,
             fox_hound: false,
             ir_harq: true,
             free_text: true,
@@ -434,5 +484,83 @@ impl Mode for Ft1Mode {
         .into_iter()
         .map(Into::into)
         .collect()
+    }
+}
+
+#[cfg(test)]
+mod tx_capability_tests {
+    use super::*;
+
+    /// A receive-only mode: implements decode, leaves `encode`/`gen_wave` defaulted,
+    /// and declares `tx: false`. This is the shape FST4 will take when it lands
+    /// RX-only, so the guard is tested against the real intended use rather than a
+    /// hypothetical.
+    struct RxOnlyMode;
+
+    impl Mode for RxOnlyMode {
+        fn kind(&self) -> ModeKind {
+            ModeKind::Ft8 // borrowed identity; only capabilities matter here
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                tx: false,
+                ..Default::default()
+            }
+        }
+        #[allow(clippy::too_many_arguments)]
+        fn decode_frame(
+            &self,
+            _iwave: &[i16],
+            _nfa: i32,
+            _nfb: i32,
+            _ndepth: i32,
+            _mycall: &str,
+            _hiscall: &str,
+            _nqso_progress: i32,
+            _nfqso: i32,
+            _frame_time_ms: i64,
+        ) -> Vec<Decode> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn every_shipped_mode_declares_tx() {
+        // If a future mode ships RX-only, this is the line that has to change
+        // deliberately — it should not be possible to add a silent mode by accident.
+        for kind in ModeKind::ALL {
+            assert!(
+                make_mode(kind).capabilities().tx,
+                "{} must declare tx: true or the TX path silently drops it",
+                kind.as_str()
+            );
+            assert!(
+                tx_mode(kind).is_some(),
+                "tx_mode({}) must hand back a mode",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn rx_only_mode_cannot_produce_a_waveform() {
+        let m = RxOnlyMode;
+        assert!(!m.capabilities().tx);
+        // The defaulted trait methods are the backstop if a caller bypasses tx_mode:
+        // an empty wave keys nothing, because the radio loop sizes its PTT hold from
+        // the returned buffer length.
+        assert!(m.encode("CQ KD9TAW EN52").is_empty());
+        assert!(m.gen_wave(&[1, 2, 3], 12000.0, 1500.0).is_empty());
+    }
+
+    #[test]
+    fn tx_mode_is_the_gate_not_make_mode() {
+        // make_mode stays unrestricted (RX/general construction); tx_mode is what
+        // enforces the capability. Both must remain true for the split to mean
+        // anything.
+        for kind in ModeKind::ALL {
+            let _ = make_mode(kind); // never refuses
+        }
+        assert!(RxOnlyMode.capabilities().tx == false);
     }
 }

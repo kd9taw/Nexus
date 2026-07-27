@@ -6639,13 +6639,29 @@ impl Engine {
                     // before PTT — the on-air RF frequency is unchanged.
                     native => {
                         let kind = native.mode_kind().unwrap_or(modes::ModeKind::TempoFast);
-                        let mode = modes::make_mode(kind);
+                        // tx_mode, not make_mode: a receive-only mode yields None and this
+                        // over is abandoned. Every mode shipped today declares tx, so None
+                        // means a decode-only mode reached the TX path, which is a bug —
+                        // refusing to key is the correct response to it.
+                        let Some(mode) = modes::tx_mode(kind) else {
+                            self.app.set_transmitting(false);
+                            return Vec::new();
+                        };
                         let tones = mode.encode(&t);
                         let (f0, shift) = self.split_reduce(self.tx_offset_hz);
                         self.tx_dial_shift_hz = shift;
                         mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0)
                     }
                 };
+                // Bail out on an EMPTY OUTER vec, never `vec![empty_wave]`. Callers gate
+                // on `waves.is_empty()` and then index `waves.first()` / `waves.len()-1`
+                // and call `rig.ptt(true)`; a zero-length wave passes that guard and
+                // walks into the keying path with nothing to send. Returning no waves at
+                // all is the only shape every downstream branch already handles.
+                if wave.is_empty() {
+                    self.app.set_transmitting(false);
+                    return Vec::new();
+                }
                 vec![wave]
             }
             None => {
