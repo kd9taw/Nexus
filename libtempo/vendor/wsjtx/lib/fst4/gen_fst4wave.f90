@@ -1,7 +1,11 @@
 subroutine gen_fst4wave(itone,nsym,nsps,nwave,fsample,hmod,f0,    &
    icmplx,cwave,wave)
 
-   use prog_args
+! MODIFIED FOR NEXUS (KD9TAW, 2026-07-27): `use prog_args` removed. It was
+! vestigial even upstream — this routine references none of that module's six
+! symbols (data_dir/exe_dir/temp_dir/share_dir/shm_key/lquiet), verified by name.
+! Dropping it here severs libtempo's LAST link to WSJT-X's program-argument
+! module, so prog_args.f90 itself is no longer vendored.
    parameter(NTAB=65536)
    real wave(nwave)
    complex cwave(nwave),ctab(0:NTAB-1)

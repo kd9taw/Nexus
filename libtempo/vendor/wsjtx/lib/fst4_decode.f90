@@ -32,7 +32,10 @@ contains
       ndepth,ntrperiod,nexp_decode,ntol,emedelay,lagain,lapcqonly,mycall, &
       hiscall,iwspr,lprinthash22)
 
-      use prog_args
+! MODIFIED FOR NEXUS (KD9TAW, 2026-07-27): `use prog_args` removed. prog_args is
+! WSJT-X's program-argument module (data_dir/exe_dir/temp_dir/shm_key), written by
+! jt9.f90's argument parser, which libtempo deliberately does not vendor. Its only
+! use here was building paths for the file I/O excised below.
       use timer_module, only: timer
       use packjt77
       use, intrinsic :: iso_c_binding
@@ -93,19 +96,13 @@ contains
       if(lagain) continue ! use lagain to keep compiler happy 
 
       if(first) then
-! read the fst4_calls.txt file
-         inquire(file=trim(data_dir)//'/fst4w_calls.txt',exist=wcalls_exists)
-         if( wcalls_exists ) then
-            open(42,file=trim(data_dir)//'/fst4w_calls.txt',status='unknown')
-            do i=1,MAXWCALLS
-               wcalls(i)=''
-               read(42,fmt='(a)',end=2867) wcalls(i)
-               wcalls(i)=adjustl(wcalls(i))
-               if(len(trim(wcalls(i))).eq.0) exit
-            enddo
-2867        nwcalls=i-1
-            close(42)
-         endif
+! MODIFIED FOR NEXUS: the fst4w_calls.txt read is removed. It populated the
+! hashed-callsign table for FST4W (iwspr=1) from a GUI-side file under data_dir.
+! Nexus vendors FST4 RX-only in QSO mode (iwspr=0); with nwcalls=0 the k50 hashed
+! lookup simply finds nothing and reports the <...> hash form, which is the same
+! result an empty file produced upstream. Restoring FST4W means feeding this table
+! through the C ABI, NOT reopening a file.
+         nwcalls=0
 
          mcq=2*mod(mcq+rvec(1:29),2)-1
          mrrr=2*mod(mrrr+rvec(59:77),2)-1
@@ -581,14 +578,18 @@ contains
                      else
                         call get_fst4_tones_from_bits(message74,itone,1)
                      endif
-                     inquire(file='plotspec',exist=plotspec_exists)
+! MODIFIED FOR NEXUS: the `plotspec` file probe and the dopspread call it gated
+! are removed. dopspread is a developer plotting aid (it wrote a spectrum to
+! Fortran unit 52) and upstream ran it only when a file named `plotspec` happened
+! to exist in the working directory.
+!
+! w50 IS NOW INITIALISED, which upstream does not do. dopspread was w50's ONLY
+! writer, so with plotspec absent — the normal case — upstream passes an
+! UNINITIALISED w50 to the callback at the end of this block, and thence into the
+! decode record. fmid was already given the -999.0 sentinel two lines up; w50
+! evidently should have been too. Same sentinel, same meaning: not measured.
                      fmid=-999.0
-                     call timer('dopsprd ',0)
-                     if(plotspec_exists) then
-                        call dopspread(itone,iwave,nsps,nmax,ndown,hmod,  &
-                           isbest,fc_synced,fmid,w50)
-                     endif
-                     call timer('dopsprd ',1)
+                     w50=-999.0
                      xsig=0
                      do i=1,NN
                         xsig=xsig+s4(itone(i),i)
@@ -621,19 +622,9 @@ contains
                      nsnr=nint(xsnr)
                      qual=0.0
                      fsig=fc_synced - 1.5*baud
-                     inquire(file=trim(data_dir)//'/decdata',exist=decdata_exists)
-                     if(decdata_exists) then
-                        hdec=0
-                        where(llrs(:,1).ge.0.0) hdec=1
-                        nhp=count(hdec.ne.cw) ! # hard errors wrt N=1 soft symbols
-                        hd=sum(ieor(hdec,cw)*abs(llrs(:,1))) ! weighted distance wrt N=1 symbols
-                        open(21,file=trim(data_dir)//'/fst4_decodes.dat',status='unknown',position='append')
-                        write(21,3021) nutc,icand,itry,nsyncoh,iaptype,  &
-                           ijitter,npct,ntype,Keff,nsync_qual,nharderrors,dmin,nhp,hd,  &
-                           sync,xsnr,xdt,fsig,w50,trim(msg)
-3021                    format(i6.6,i4,6i3,3i4,f6.1,i4,f6.1,f9.2,f6.1,f6.2,f7.1,f7.3,1x,a)
-                        close(21)
-                     endif
+! MODIFIED FOR NEXUS: the `decdata` probe and the fst4_decodes.dat append are
+! removed. A developer diagnostic dump on hard-coded Fortran unit 21, gated on a
+! marker file under data_dir. Nothing on the decode path reads it.
                      call this%callback(nutc,smax1,nsnr,xdt,fsig,msg,    &
                         iaptype,qual,ntrperiod,fmid,w50)
                      goto 800
@@ -643,13 +634,13 @@ contains
 800      enddo !candidate list
       enddo ! noise blanker loop
 
-      if(new_callsign .and. do_k50_decode) then ! re-write the fst4w_calls.txt file
-         open(42,file=trim(data_dir)//'/fst4w_calls.txt',status='unknown')
-         do i=1,nwcalls
-            write(42,'(a20)') trim(wcalls(i))
-         enddo
-         close(42)
-      endif
+! MODIFIED FOR NEXUS: the fst4w_calls.txt REWRITE is removed, and this one is a
+! correctness fix rather than housekeeping. It rewrote the shared callsign file
+! from THIS decoder's `wcalls` table on hard-coded unit 42. With two radio chains
+! in one process, chain A's table lands on disk and chain B reads it back under
+! its own `first` guard: a cross-chain callsign-table contamination path running
+! through the FILESYSTEM, which no per-chain in-memory context swap can close.
+! See GROUP G / prog_args data_dir in modem-state-manifest.toml.
 
       return
    end subroutine decode
@@ -1011,13 +1002,10 @@ contains
       w50=xdiff*df                 !Compute Doppler spread
       fmid=xi2*df                  !Frequency midpoint of signal powere
 
-      do i=-ia,ia                          !Save the spectrum for plotting
-         y=ncall-1
-         j=i+nint(xi2)
-         if(abs(j*df).lt.10.0) y=0.99*ss(i+nint(xi2)) + ncall-1
-         write(52,1010) i*df,y
-1010     format(f12.6,f12.6)
-      enddo
+! MODIFIED FOR NEXUS: the spectrum dump to Fortran unit 52 is removed. Unit 52 is
+! never OPENed in this file, so gfortran would implicitly create a fort.52 in the
+! process working directory. dopspread is now unreachable (its only caller was the
+! plotspec-gated block above) but is left compiled so the vendor diff stays small.
 
       return
    end subroutine dopspread
