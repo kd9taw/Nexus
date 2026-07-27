@@ -67,7 +67,7 @@ mod tests {
             // explicitly rather than folded into a `_` arm so that adding a
             // TRANSMITTING mode later fails to compile here instead of silently
             // inheriting some other mode's slot offset.
-            ModeKind::Q65 => {
+            ModeKind::Q65 { .. } => {
                 unreachable!("Q65 is receive-only; native_frame requires encode()")
             }
             ModeKind::TempoFast => 4_800,
@@ -94,11 +94,29 @@ mod tests {
         assert_eq!(m1.frame_samples(), tempo_fast::NMAX);
         assert!(m1.capabilities().ir_harq);
 
-        let mq = make_mode(ModeKind::Q65);
+        let mq = make_mode(ModeKind::Q65_30A);
         assert_eq!(mq.name(), "Q65-30A");
         assert_eq!(mq.slot_secs(), 30.0);
-        assert_eq!(mq.frame_samples(), q65::NMAX);
+        assert_eq!(mq.frame_samples(), q65::nmax(30));
         assert!(!mq.capabilities().tx);
+
+        // Q65-60B: the EME working combination, and proof the period and submode
+        // actually reach the buffer contract and the label rather than being
+        // decoration on a still-pinned decoder.
+        let eme = make_mode(ModeKind::Q65 {
+            period_s: 60,
+            submode: 1,
+        });
+        assert_eq!(eme.name(), "Q65-60B");
+        assert_eq!(eme.slot_secs(), 60.0);
+        assert_eq!(eme.frame_samples(), 60 * 12_000);
+        assert!(!eme.capabilities().tx);
+
+        // Every combination must produce a distinct, well-formed label.
+        let names: std::collections::HashSet<&str> =
+            ModeKind::q65_all().map(|k| k.as_str()).collect();
+        assert_eq!(names.len(), 25, "Q65 labels collided: {names:?}");
+        assert!(!names.contains("Q65"), "a combination fell through to the family name");
 
         assert_eq!(ModeKind::ALL.len(), 5) // FT8, FT4, FST4, Q65, TempoFast;
     }

@@ -52,16 +52,30 @@ pub const FST4_NTRPERIOD: usize = 15;
 /// Samples in an FST4 decode frame at 12 kHz (15 s). Same length as FT8's frame.
 pub const FST4_NMAX: usize = 180_000;
 
-/// Q65 T/R period in seconds. FIXED by the C ABI: `q65_decode` sizes its frame from
-/// ntrperiod (npts = ntrperiod*12000), and `q65_cabi.f90` pins 30 so the buffer
-/// contract cannot be got wrong.
-pub const Q65_NTRPERIOD: usize = 30;
-/// Q65 submode. FIXED at 0 (submode A) by the C ABI. Upstream offers A–E, which
-/// differ in tone spacing; exposing them needs a `ModeKind` that can carry one, and
-/// the state manifest treats anything cached on submode as chain-specific.
-pub const Q65_NSUBMODE: usize = 0;
-/// Samples in a Q65 decode frame at 12 kHz (30 s).
-pub const Q65_NMAX: usize = 360_000;
+/// The T/R periods (seconds) Q65 supports. The C ABI accepts any of these and
+/// REJECTS anything else with -1 rather than clamping — a wrong period makes the
+/// modem read a different span of the caller's buffer than the caller sized, and a
+/// decode off the wrong window is a plausible wrong answer rather than a crash.
+pub const Q65_PERIODS: [u16; 5] = [15, 30, 60, 120, 300];
+/// Number of Q65 submodes (A–E, passed as 0..=4). They differ in tone spacing.
+pub const Q65_NSUBMODES: u8 = 5;
+/// Ceiling on a Q65 frame: 300 s @ 12 kHz. NOT the buffer contract — the actual
+/// length is [`q65_nmax`] of the period in use, and sizing everything at the max
+/// would waste 20x on a 15 s decode.
+pub const Q65_NMAX_MAX: usize = 3_600_000;
+
+/// Samples in one Q65 frame at `period_s` seconds, 12 kHz.
+///
+/// This is THE buffer contract for [`q65_decode_frame`]: supply exactly this many
+/// samples for the period being decoded.
+pub const fn q65_nmax(period_s: u16) -> usize {
+    period_s as usize * 12_000
+}
+
+/// Whether `period_s` is one of the five periods the modem supports.
+pub const fn q65_period_supported(period_s: u16) -> bool {
+    matches!(period_s, 15 | 30 | 60 | 120 | 300)
+}
 
 /// One decode from [`ft1_decode_frame`]. Layout matches `ft1_decode_t` in
 /// `libtempo.h` (68 bytes, 4-byte aligned; `#[repr(C)]` reproduces the 2-byte pad
@@ -435,7 +449,9 @@ extern "C" {
     /// Takes `hisgrid` as well as the two callsigns: Q65's AP layer builds its
     /// candidate list from the grid too (`q65_set_list`), which FT8/FT4/FST4 do not.
     pub fn q65_decode_frame(
-        iwave: *const i16, // [Q65_NMAX]
+        iwave: *const i16, // [ntrperiod * 12000] — see `q65_nmax`
+        ntrperiod: c_int,  // 15 | 30 | 60 | 120 | 300; anything else ⇒ -1
+        nsubmode: c_int,   // 0..=4 for A..E; anything else ⇒ -1
         nfa: c_int,
         nfb: c_int,
         ndepth: c_int,
@@ -642,11 +658,23 @@ mod tests {
     }
 
     #[test]
-    fn q65_frame_is_the_pinned_30s_length() {
-        // Q65_NMAX must equal ntrperiod * 12000, or the buffer contract the ABI
-        // depends on (q65_cabi.f90 pins both) is broken.
-        assert_eq!(Q65_NTRPERIOD, 30);
-        assert_eq!(Q65_NSUBMODE, 0);
-        assert_eq!(Q65_NMAX, Q65_NTRPERIOD * 12_000);
+    fn q65_frame_length_follows_the_period() {
+        // The buffer contract: exactly period*12000 samples, for every supported
+        // period. Getting this wrong reads the wrong span of the caller's audio.
+        assert_eq!(q65_nmax(15), 180_000);
+        assert_eq!(q65_nmax(30), 360_000);
+        assert_eq!(q65_nmax(60), 720_000);
+        assert_eq!(q65_nmax(120), 1_440_000);
+        assert_eq!(q65_nmax(300), 3_600_000);
+        // The ceiling must actually be the ceiling.
+        for p in Q65_PERIODS {
+            assert!(q65_nmax(p) <= Q65_NMAX_MAX, "period {p} exceeds the ceiling");
+            assert!(q65_period_supported(p), "period {p} in the table but rejected");
+        }
+        assert_eq!(q65_nmax(300), Q65_NMAX_MAX);
+        // And the unsupported ones must be rejected, not silently accepted.
+        for p in [0u16, 1, 10, 20, 45, 90, 600] {
+            assert!(!q65_period_supported(p), "period {p} must not be supported");
+        }
     }
 }

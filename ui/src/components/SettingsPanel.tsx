@@ -3744,6 +3744,58 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- Q65: period + submode. Both change the on-air signal AND the
+               decode frame length, so they belong with the mode, not the radio. ---- */}
+          {tab === 'modes' && (
+          <fieldset className="settings-section">
+            <legend>Q65 (receive-only)</legend>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">T/R period</span>
+                <select
+                  className="settings-input"
+                  value={String(form.q65PeriodS ?? 60)}
+                  onChange={(e) => updateNum('q65PeriodS', Number(e.target.value))}
+                >
+                  <option value="15">15 s — troposcatter</option>
+                  <option value="30">30 s — 6 m meteor / ionoscatter</option>
+                  <option value="60">60 s — EME (most common)</option>
+                  <option value="120">120 s — deep EME</option>
+                  <option value="300">300 s — deepest, microwave EME</option>
+                </select>
+                <span className="settings-hint">
+                  Longer periods integrate longer and hear weaker signals, at one exchange per
+                  period. Both stations must use the <strong>same</strong> period. Changing this
+                  changes the decode frame length, so it takes effect on the next slot.
+                </span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">Submode (tone spacing)</span>
+                <select
+                  className="settings-input"
+                  value={String(form.q65Submode ?? 0)}
+                  onChange={(e) => updateNum('q65Submode', Number(e.target.value))}
+                >
+                  <option value="0">A — narrowest, most sensitive</option>
+                  <option value="1">B — 2x spacing</option>
+                  <option value="2">C — 4x spacing</option>
+                  <option value="3">D — 8x spacing</option>
+                  <option value="4">E — 16x spacing, most Doppler-tolerant</option>
+                </select>
+                <span className="settings-hint">
+                  Wider spacing survives more Doppler spread and frequency drift but costs
+                  sensitivity. Move up the letters as the path degrades — EME on the higher bands
+                  usually needs B or C.
+                </span>
+              </label>
+            </div>
+            <span className="settings-hint">
+              Q65 decodes only — Nexus will not transmit it, so these settings affect what you
+              hear, never what you send.
+            </span>
+          </fieldset>
+          )}
+
           {/* ---- Digital quick-reply macros (moved out of the old Alerts/Macros orphan) ---- */}
           {tab === 'modes' && (
           <fieldset className="settings-section">

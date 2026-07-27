@@ -18,9 +18,20 @@ pub enum ModeKind {
     Ft4,
     /// WSJT-X FST4, 15 s T/R. **RECEIVE-ONLY** — see [`Capabilities::tx`].
     Fst4,
-    /// WSJT-X Q65-30A (30 s T/R, submode A). **RECEIVE-ONLY** — see
-    /// [`Capabilities::tx`].
-    Q65,
+    /// WSJT-X Q65. **RECEIVE-ONLY** — see [`Capabilities::tx`].
+    ///
+    /// Carries its T/R period and submode because both are part of the mode's
+    /// identity AND its buffer contract: the frame is `period_s * 12000` samples
+    /// and the submode sets the tone spacing. Putting them here rather than in a
+    /// side channel is what keeps [`Self::frame_samples`] and [`Self::slot_secs`]
+    /// pure functions of the kind, so every consumer that sizes a capture buffer
+    /// or drives slot timing from a `ModeKind` stays correct with no signature
+    /// change.
+    ///
+    /// `period_s` ∈ {15, 30, 60, 120, 300}; `submode` ∈ 0..=4 for A..E. EME on
+    /// VHF/UHF works Q65-60A/B/C; 6 m meteor/ionoscatter uses 30; 15 is
+    /// troposcatter.
+    Q65 { period_s: u16, submode: u8 },
     TempoFast,
 }
 
@@ -30,9 +41,56 @@ impl ModeKind {
         ModeKind::Ft8,
         ModeKind::Ft4,
         ModeKind::Fst4,
-        ModeKind::Q65,
+        ModeKind::Q65_30A,
         ModeKind::TempoFast,
     ];
+
+    /// Q65-30A: the combination the C ABI used to be pinned to, kept as the
+    /// default so `ALL` has one representative Q65 entry rather than 25.
+    pub const Q65_30A: ModeKind = ModeKind::Q65 {
+        period_s: 30,
+        submode: 0,
+    };
+
+    /// The T/R periods Q65 supports, in seconds.
+    pub const Q65_PERIODS: [u16; 5] = [15, 30, 60, 120, 300];
+    /// Q65 submodes A..E, passed as 0..=4.
+    pub const Q65_SUBMODES: u8 = 5;
+
+    /// Every valid Q65 period/submode combination.
+    ///
+    /// Separate from [`Self::ALL`] on purpose: `ALL` is the display-order list of
+    /// mode families and would be swamped by 25 Q65 rows, but the capability
+    /// invariants still have to hold for every one of them.
+    pub fn q65_all() -> impl Iterator<Item = ModeKind> {
+        Self::Q65_PERIODS.into_iter().flat_map(|period_s| {
+            (0..Self::Q65_SUBMODES).map(move |submode| ModeKind::Q65 { period_s, submode })
+        })
+    }
+
+    /// Display name for a Q65 period/submode pair, e.g. `"Q65-60B"`.
+    ///
+    /// A lookup table rather than `format!` so [`Self::as_str`] can keep returning
+    /// `&'static str` — changing that signature would ripple through every caller
+    /// for the sake of five characters. An out-of-range pair yields the bare
+    /// family name: better a vaguer label than one asserting a period that is not
+    /// what the decoder was handed.
+    fn q65_name(period_s: u16, submode: u8) -> &'static str {
+        const NAMES: [[&str; 5]; 5] = [
+            ["Q65-15A", "Q65-15B", "Q65-15C", "Q65-15D", "Q65-15E"],
+            ["Q65-30A", "Q65-30B", "Q65-30C", "Q65-30D", "Q65-30E"],
+            ["Q65-60A", "Q65-60B", "Q65-60C", "Q65-60D", "Q65-60E"],
+            ["Q65-120A", "Q65-120B", "Q65-120C", "Q65-120D", "Q65-120E"],
+            ["Q65-300A", "Q65-300B", "Q65-300C", "Q65-300D", "Q65-300E"],
+        ];
+        let Some(pi) = Self::Q65_PERIODS.iter().position(|&p| p == period_s) else {
+            return "Q65";
+        };
+        match NAMES[pi].get(submode as usize) {
+            Some(n) => n,
+            None => "Q65",
+        }
+    }
 
     /// Short display name, e.g. `"FT8"`.
     pub fn as_str(self) -> &'static str {
@@ -40,9 +98,12 @@ impl ModeKind {
             ModeKind::Ft8 => "FT8",
             ModeKind::Ft4 => "FT4",
             ModeKind::Fst4 => "FST4",
-            // The submode letter is part of the mode's on-air identity to an
-            // operator: "Q65" alone does not say which tone spacing or period.
-            ModeKind::Q65 => "Q65-30A",
+            // Period AND submode letter: "Q65" alone does not identify a signal on
+            // the air, and an operator reading the label needs both. A table
+            // rather than a format! so this can stay &'static str — 25 entries is
+            // small, and an unsupported combination falls back to the bare family
+            // name rather than pretending to a precision it does not have.
+            ModeKind::Q65 { period_s, submode } => Self::q65_name(period_s, submode),
             ModeKind::TempoFast => "TempoFast",
         }
     }
@@ -54,8 +115,8 @@ impl ModeKind {
             ModeKind::Ft4 => 7.5,
             // FST4 supports 15/30/60/120/300/900/1800 s upstream; the C ABI pins 15.
             ModeKind::Fst4 => 15.0,
-            // Q65 supports 15/30/60/120/300 s upstream; the C ABI pins 30.
-            ModeKind::Q65 => 30.0,
+            // The whole reason the period lives in the kind: slot timing follows it.
+            ModeKind::Q65 { period_s, .. } => f32::from(period_s),
             ModeKind::TempoFast => 4.0,
         }
     }
@@ -67,7 +128,8 @@ impl ModeKind {
             ModeKind::Ft8 => ft8::NMAX,
             ModeKind::Ft4 => ft4::NMAX,
             ModeKind::Fst4 => fst4::NMAX,
-            ModeKind::Q65 => q65::NMAX,
+            // ... and so does the buffer contract: period*12000 samples.
+            ModeKind::Q65 { period_s, .. } => q65::nmax(period_s),
             ModeKind::TempoFast => tempo_fast::NMAX,
         }
     }
@@ -226,7 +288,7 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
         ModeKind::Ft8 => Box::new(Ft8Mode),
         ModeKind::Ft4 => Box::new(Ft4Mode),
         ModeKind::Fst4 => Box::new(Fst4Mode),
-        ModeKind::Q65 => Box::new(Q65Mode),
+        ModeKind::Q65 { period_s, submode } => Box::new(Q65Mode { period_s, submode }),
         ModeKind::TempoFast => Box::new(Ft1Mode),
     }
 }
@@ -550,7 +612,14 @@ mod tx_capability_tests {
     /// Modes that ship RECEIVE-ONLY. Adding to this list is the deliberate act
     /// that makes a mode silent; a mode that is silent WITHOUT being listed here
     /// fails `tx_capability_is_declared_not_inherited` below.
-    const RX_ONLY: &[ModeKind] = &[ModeKind::Fst4, ModeKind::Q65];
+    /// The modes that cannot transmit.
+    ///
+    /// A predicate rather than a const slice: `ModeKind::Q65` carries a period and
+    /// submode, so a slice would need all 25 combinations listed and would silently
+    /// miss any that were forgotten. `matches!` covers the whole family.
+    fn rx_only(kind: ModeKind) -> bool {
+        matches!(kind, ModeKind::Fst4 | ModeKind::Q65 { .. })
+    }
 
     #[test]
     fn tx_capability_is_declared_not_inherited() {
@@ -559,14 +628,14 @@ mod tx_capability_tests {
         // intended behaviour — a silent mode must not be addable by accident. The
         // invariant is now two-sided: RX_ONLY is exactly the set that cannot
         // transmit, and every other mode can.
-        for kind in ModeKind::ALL {
-            let rx_only = RX_ONLY.contains(&kind);
+        for kind in ModeKind::ALL.into_iter().chain(ModeKind::q65_all()) {
+            let rx_only = rx_only(kind);
             let caps_tx = make_mode(kind).capabilities().tx;
             assert_eq!(
                 caps_tx,
                 !rx_only,
-                "{} declares tx={caps_tx} but RX_ONLY says rx_only={rx_only} — \
-                 update RX_ONLY deliberately, or fix the mode's Capabilities",
+                "{} declares tx={caps_tx} but rx_only() says rx_only={rx_only} — \
+                 update rx_only() deliberately, or fix the mode's Capabilities",
                 kind.as_str()
             );
             assert_eq!(
@@ -609,7 +678,7 @@ mod tx_capability_tests {
         // make_mode stays unrestricted (RX/general construction); tx_mode is what
         // enforces the capability. Both must remain true for the split to mean
         // anything.
-        for kind in ModeKind::ALL {
+        for kind in ModeKind::ALL.into_iter().chain(ModeKind::q65_all()) {
             let _ = make_mode(kind); // never refuses
         }
         assert!(RxOnlyMode.capabilities().tx == false);
@@ -687,15 +756,34 @@ impl Mode for Fst4Mode {
 /// are left defaulted (empty) and `Capabilities.tx` is false, so [`tx_mode`]
 /// refuses to hand it to the transmit path.
 ///
-/// Upstream Q65 offers 5 T/R periods × 5 submodes (A–E). The C ABI pins **30 s,
-/// submode A**, because `q65_decode` sizes its frame from the period; a selectable
-/// period needs both a per-period entry point and a `ModeKind` that can carry one.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Q65Mode;
+/// Carries its T/R period and submode: all 5 × 5 combinations are reachable, and
+/// both are part of the buffer contract (`frame_samples` = `period_s * 12000`).
+/// EME on VHF/UHF works Q65-60A/B/C, which is why this is parametric rather than
+/// pinned to the 30 s the ABI originally exposed.
+#[derive(Debug, Clone, Copy)]
+pub struct Q65Mode {
+    /// T/R period in seconds: 15, 30, 60, 120 or 300.
+    pub period_s: u16,
+    /// Submode 0..=4 for A..E (tone spacing).
+    pub submode: u8,
+}
+
+impl Default for Q65Mode {
+    /// Q65-30A — the combination the C ABI was originally pinned to.
+    fn default() -> Self {
+        Self {
+            period_s: 30,
+            submode: 0,
+        }
+    }
+}
 
 impl Mode for Q65Mode {
     fn kind(&self) -> ModeKind {
-        ModeKind::Q65
+        ModeKind::Q65 {
+            period_s: self.period_s,
+            submode: self.submode,
+        }
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -732,6 +820,8 @@ impl Mode for Q65Mode {
     ) -> Vec<Decode> {
         q65::decode_frame(
             iwave,
+            self.period_s,
+            self.submode,
             nfa,
             nfb,
             ndepth,

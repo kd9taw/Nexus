@@ -379,16 +379,24 @@ int fst4_decode_frame(const int16_t *iwave /*[FST4_NMAX]*/,
  * Q65: WSJT-X weak-signal mode for EME/VHF+ and ionoscatter. DECODE ONLY.
  *===========================================================================*/
 
-/* ⭐ Q65-30A ONLY — one T/R period AND one submode. Upstream offers 5 periods
- * (15/30/60/120/300 s) x 5 submodes (A-E, tone spacing). q65_decode sizes its
- * frame from ntrperiod (npts = ntrperiod*12000), so the buffer contract depends
- * on it. This ABI pins ntrperiod=30 / nsubmode=0. Other combinations need a
- * per-period entry point plus Rust-side work to express a selectable period —
- * and note that modem-state-manifest.toml flags anything cached on period or
- * submode as chain-specific the moment two chains differ. */
-#define Q65_NTRPERIOD 30       /* T/R period, seconds — fixed by this ABI      */
-#define Q65_NSUBMODE  0        /* 0 = submode A                                */
-#define Q65_NMAX      360000   /* samples in iwave (30 s @ 12 kHz)             */
+/* ⭐ ALL 5 T/R periods x ALL 5 submodes. ntrperiod and nsubmode are ARGUMENTS.
+ *
+ * THE FRAME LENGTH IS A FUNCTION OF THE PERIOD:
+ *     period (s)     15      30      60      120       300
+ *     samples    180000  360000  720000  1440000   3600000
+ * The caller supplies ntrperiod*12000 samples for the period it asks for.
+ * Q65_NMAX_MAX is the ceiling (300 s), NOT the contract — sizing every buffer at
+ * the max wastes 20x on a 15 s decode.
+ *
+ * Q65-30A is not the mode's main use: EME on VHF/UHF runs Q65-60A/B/C, 6 m
+ * meteor/ionoscatter is where 30 belongs, and 15 is troposcatter.
+ *
+ * An unsupported period or submode returns -1 rather than being clamped: the
+ * modem would otherwise read a different span of iwave than the caller sized,
+ * and a decode off the wrong window is a plausible wrong answer, not a crash. */
+#define Q65_NMAX_MAX  3600000  /* ceiling: 300 s @ 12 kHz                      */
+#define Q65_NPERIODS  5        /* {15, 30, 60, 120, 300}                       */
+#define Q65_NSUBMODES 5        /* A..E, passed as 0..4                         */
 
 /* NO q65_encode / gen_q65wave, deliberately. Q65 ships receive-only: the Rust
  * ModeKind reports Capabilities{tx:false} and modes::tx_mode() refuses to hand
@@ -409,8 +417,10 @@ typedef struct {
 } q65_decode_t;
 
 /*
- * Decode EVERY Q65 signal in a complete 30 s frame.
- *   iwave         : Q65_NMAX (360000) int16 audio samples @ 12 kHz
+ * Decode EVERY Q65 signal in one complete T/R period.
+ *   iwave         : ntrperiod*12000 int16 audio samples @ 12 kHz
+ *   ntrperiod     : 15, 30, 60, 120 or 300 (s). Anything else returns -1.
+ *   nsubmode      : 0..4 for submodes A..E. Anything else returns -1.
  *   nfa, nfb      : frequency search band edges (Hz)
  *   ndepth        : 1..3 (3 = deepest; <=0 defaults to 3)
  *   mycall/hiscall: NUL/space-terminated callsigns for AP (may be "")
@@ -430,7 +440,8 @@ typedef struct {
  * therefore always 1. Real averaging needs a stateful session API plus the
  * per-chain state swap the manifest specifies, not a flag flip.
  */
-int q65_decode_frame(const int16_t *iwave /*[Q65_NMAX]*/,
+int q65_decode_frame(const int16_t *iwave /*[ntrperiod*12000]*/,
+                     int ntrperiod, int nsubmode,
                      int nfa, int nfb, int ndepth,
                      const char *mycall, const char *hiscall,
                      const char *hisgrid,

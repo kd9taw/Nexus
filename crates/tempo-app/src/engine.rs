@@ -1393,6 +1393,16 @@ impl Engine {
         &self.settings
     }
 
+    /// The [`ModeKind`] a tier resolves to under the CURRENT settings.
+    ///
+    /// Q65 is the first tier whose mode is not determined by the tier alone — the
+    /// operator's period and submode selection sets the frame length and the slot
+    /// clock. Every caller must go through here rather than `Tier::mode_kind`
+    /// directly, or a Q65 buffer gets sized for the wrong period.
+    fn tier_mode_kind(&self, tier: Tier) -> Option<modes::ModeKind> {
+        tier.mode_kind(self.settings.q65_period_s, self.settings.q65_submode)
+    }
+
     /// Apply new settings. A change of callsign/grid rebinds identity IN PLACE
     /// (preserving roster + conversations + the `*` band feed — see
     /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place. The
@@ -4099,7 +4109,7 @@ impl Engine {
         // In Companion mode the source is the upstream WSJT-X stream — never
         // clobber it; the tier still updates for TX / display.
         if self.source_kind == SourceKind::Native {
-            if let Some(kind) = tier.mode_kind() {
+            if let Some(kind) = self.tier_mode_kind(tier) {
                 // Swap the boxed decoder UNDER the lock (waits for any decode in
                 // flight) so the stable serialization mutex is preserved and no
                 // job can be reading the old mode as it's replaced.
@@ -4142,8 +4152,7 @@ impl Engine {
         match kind {
             SourceKind::Native => {
                 let mode_kind = self
-                    .tier()
-                    .mode_kind()
+                    .tier_mode_kind(self.tier())
                     .unwrap_or(modes::ModeKind::TempoFast);
                 *self.source.lock().unwrap() = Box::new(NativeSource::from_kind(mode_kind));
             }
@@ -5929,8 +5938,8 @@ impl Engine {
     pub fn active_slot_secs(&self) -> f64 {
         match self.app.tier() {
             Tier::TempoDeep => tempo_core::timing::DX1_PERIOD_S,
-            t => t
-                .mode_kind()
+            t => self
+                .tier_mode_kind(t)
                 .map(|k| k.slot_secs() as f64)
                 .unwrap_or(tempo_core::timing::PERIOD_S),
         }
@@ -5943,8 +5952,8 @@ impl Engine {
     pub fn active_frame_samples(&self) -> usize {
         match self.app.tier() {
             Tier::TempoDeep => tempo_fast::deep::capture_len(),
-            t => t
-                .mode_kind()
+            t => self
+                .tier_mode_kind(t)
                 .map(|k| k.frame_samples())
                 .unwrap_or(tempo_fast::NMAX),
         }
@@ -5959,8 +5968,8 @@ impl Engine {
     pub fn active_capture_samples(&self) -> usize {
         match self.app.tier() {
             Tier::TempoDeep => tempo_fast::deep::capture_len(),
-            t => t
-                .mode_kind()
+            t => self
+                .tier_mode_kind(t)
                 .map(|k| k.capture_samples())
                 .unwrap_or(tempo_fast::NMAX),
         }
@@ -6647,7 +6656,9 @@ impl Engine {
                     // leaves the matching dial shift for the slot core to apply
                     // before PTT — the on-air RF frequency is unchanged.
                     native => {
-                        let kind = native.mode_kind().unwrap_or(modes::ModeKind::TempoFast);
+                        let kind = self
+                        .tier_mode_kind(native)
+                        .unwrap_or(modes::ModeKind::TempoFast);
                         // tx_mode, not make_mode: a receive-only mode yields None and this
                         // over is abandoned. Every mode shipped today declares tx, so None
                         // means a decode-only mode reached the TX path, which is a bug —

@@ -19,14 +19,27 @@
 !                                 -> q65_dec1/q65_dec2 -> q65_subs.c -> q65.c
 !                                 (Q-ary RA LDPC over GF(64))
 !
-! ⭐ Q65-30A ONLY — ONE PERIOD, ONE SUBMODE.
-!   Upstream offers 5 T/R periods x 5 submodes (A-E). q65_decode sizes its frame
-!   from ntrperiod (npts = ntrperiod*12000, q65_decode.f90:109), so the buffer
-!   contract depends on it. This wrapper pins ntrperiod=30 / nsubmode=0, giving
-!   Q65_NMAX = 360000 samples. Exposing more needs a per-period entry point plus
-!   Rust-side work to express a selectable period — and note that the state
-!   manifest flags anything cached on period or submode as chain-specific the
-!   moment two chains differ, even though only one combination is built today.
+! ⭐ ALL 5 T/R PERIODS x ALL 5 SUBMODES.
+!   ntrperiod and nsubmode are ARGUMENTS, not parameters. The vendored Fortran was
+!   always fully parametric — npts/nfft1/nfft2 derive from ntrperiod at
+!   q65_decode.f90:137-139, the bandwidth table branches on it at :177-183, and
+!   q65_dec0's iwave is an adjustable-size dummy `integer*2
+!   iwave(0:12000*ntrperiod-1)` (q65.f90:62). Submode is likewise a runtime
+!   variable (mode_q65: LL=64*(2+mode_q65) at q65.f90:84). The single-period pin
+!   was in THIS file, not the modem.
+!
+!   That matters because Q65-30A is not the mode's main use. EME on VHF/UHF runs
+!   Q65-60A/B/C; 6 m meteor/ionoscatter is where 30 belongs; 15 is troposcatter.
+!   Pinning 30A shipped the mode's narrowest slice.
+!
+!   THE FRAME LENGTH IS THEREFORE A FUNCTION OF THE PERIOD: npts = ntrperiod*12000,
+!   from 180000 (15 s) to 3600000 (300 s). The caller MUST supply npts samples for
+!   the period it asks for; Q65_NMAX_MAX below is the ceiling, not the contract.
+!
+!   ⚠️ The state manifest flags anything cached on period or submode as
+!   chain-specific the moment two chains differ. That was a latent note while only
+!   one combination was built; now that all 25 are reachable it is live, and any
+!   future per-chain swap must treat the Q65 caches accordingly.
 !
 ! ⭐ EVERY CALL IS INDEPENDENT — lclearave is pinned .true.
 !   q65 supports multi-period message averaging, accumulating symbol-spectrum
@@ -45,10 +58,15 @@ module q65_cabi
   use q65_decode, only: q65_decoder
   implicit none
 
-  integer, parameter :: Q65_NTRPERIOD = 30                 ! seconds; see banner
-  integer, parameter :: Q65_NSUBMODE  = 0                  ! 0 = submode A
-  integer, parameter :: Q65_NMAX      = 30 * 12000         ! 360000 samples @ 12 kHz
-  integer, parameter :: Q65_MAXDEC    = 100                ! matches decodes(100) in q65_decode
+  ! Ceiling only — the ACTUAL frame length is ntrperiod*12000, chosen per call.
+  integer, parameter :: Q65_NMAX_MAX = 300 * 12000         ! 3,600,000 samples (300 s)
+  integer, parameter :: Q65_MAXDEC   = 100                 ! matches decodes(100) in q65_decode
+
+  ! The periods upstream supports. Anything else is rejected rather than clamped:
+  ! a wrong period reads the wrong span of the caller's buffer, and silently
+  ! decoding the wrong window is worse than refusing.
+  integer, parameter :: Q65_NPERIODS = 5
+  integer, parameter :: Q65_PERIODS(Q65_NPERIODS) = [15, 30, 60, 120, 300]
 
   ! Interop result struct. Layout MUST match q65_decode_t in libtempo.h, and is
   ! byte-compatible with ft8/ft4/fst4_decode_t (64 bytes, 4-byte aligned, 2-byte
@@ -116,9 +134,13 @@ contains
   end subroutine q65_collect_cb
 
   !-------------------------------------------------------------------------
-  ! q65_decode_frame : decode EVERY Q65 signal in a 360000-sample frame.
+  ! q65_decode_frame : decode EVERY Q65 signal in one T/R period.
   !
-  !   iwave         : Q65_NMAX (360000) int16 audio samples @ 12 kHz (30 s)
+  !   iwave         : ntrperiod*12000 int16 audio samples @ 12 kHz. The caller
+  !                   sizes this from the period it asks for — 180000 at 15 s,
+  !                   3600000 at 300 s. Supplying fewer reads past the end.
+  !   ntrperiod     : 15, 30, 60, 120 or 300 (seconds). Anything else => -1.
+  !   nsubmode      : 0..4 for A..E (tone spacing). Anything else => -1.
   !   nfa, nfb      : frequency search band edges (Hz)
   !   ndepth        : 1..3 (3 = deepest; <=0 defaults to 3)
   !   mycall,hiscall: NUL/space-terminated callsigns for AP (may be empty)
@@ -136,10 +158,11 @@ contains
   ! per-chain subset is classified in modem-state-manifest.toml GROUP H: 238
   ! symbols, ~12.3 MB of class-1 state.
   !-------------------------------------------------------------------------
-  function q65_decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, hisgrid, &
-       nqso_progress, nfqso_in, out, max_out) result(ndec) &
-       bind(C, name="q65_decode_frame")
-    integer(c_int16_t),     intent(in)  :: iwave(Q65_NMAX)
+  function q65_decode_frame(iwave, ntrperiod, nsubmode, nfa, nfb, ndepth, &
+       mycall, hiscall, hisgrid, nqso_progress, nfqso_in, out, max_out) &
+       result(ndec) bind(C, name="q65_decode_frame")
+    integer(c_int16_t),     intent(in)  :: iwave(*)
+    integer(c_int), value,  intent(in)  :: ntrperiod, nsubmode
     integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress
     integer(c_int), value,  intent(in)  :: nfqso_in, max_out
     character(kind=c_char), intent(in)  :: mycall(*)
@@ -149,10 +172,15 @@ contains
     integer(c_int)                      :: ndec
 
     type(q65_decoder)  :: decoder
-    integer(kind=2)    :: iwave_l(Q65_NMAX)
+    ! ALLOCATABLE, not automatic. At 300 s the frame is 3,600,000 samples = 7.2 MB,
+    ! which blows the default 8 MB stack once locals and the decoder's own frames
+    ! are on it. (Stock q65sim segfaults for exactly this reason under the default
+    ! rlimit.) Allocating npts exactly also avoids paying the 300 s cost on a 15 s
+    ! decode, which is 20x smaller.
+    integer(kind=2), allocatable :: iwave_l(:)
     character(len=12)  :: mycall_f, hiscall_f
     character(len=6)   :: hisgrid_f
-    integer            :: nfqso, ndepth_l, i, j, n, ncopy
+    integer            :: nfqso, ndepth_l, i, j, n, ncopy, npts
     integer            :: nutc, nqd, ntol, max_drift, ncontest, navg0
     integer            :: nqf(20)
     real               :: emedelay
@@ -161,8 +189,22 @@ contains
     ndec = 0
     if (max_out <= 0) return
 
+    ! REJECT rather than clamp. An unsupported period would make the modem read a
+    ! different span of iwave than the caller sized, and a decode off the wrong
+    ! window is a plausible-looking wrong answer, not an obvious failure.
+    if (.not. any(Q65_PERIODS == ntrperiod)) then
+       ndec = -1
+       return
+    end if
+    if (nsubmode < 0 .or. nsubmode > 4) then
+       ndec = -1
+       return
+    end if
+    npts = ntrperiod * 12000
+
     gq_count = 0
-    iwave_l(1:Q65_NMAX) = int(iwave(1:Q65_NMAX), kind=2)
+    allocate(iwave_l(npts))
+    iwave_l(1:npts) = int(iwave(1:npts), kind=2)
     call c_to_fstr_q65(mycall,  mycall_f, 12)
     call c_to_fstr_q65(hiscall, hiscall_f, 12)
     call c_to_fstr_q65(hisgrid, hisgrid_f, 6)
@@ -219,10 +261,11 @@ contains
     nqf           = 0
 
     decoder%callback => q65_collect_cb
-    call decoder%decode(q65_collect_cb, iwave_l, nqd, nutc, Q65_NTRPERIOD,   &
-         Q65_NSUBMODE, nfqso, ntol, ndepth_l, nfa, nfb, lclearave,           &
+    call decoder%decode(q65_collect_cb, iwave_l, nqd, nutc, ntrperiod,       &
+         nsubmode, nfqso, ntol, ndepth_l, nfa, nfb, lclearave,               &
          single_decode, lagain, max_drift, lnewdat, emedelay, mycall_f,      &
          hiscall_f, hisgrid_f, nqso_progress, ncontest, lapcqonly, navg0, nqf)
+    deallocate(iwave_l)
 
     ! ncopy == max_out means the cap was hit and decodes were dropped: raise
     ! Q65_MAXDEC and the Rust-side MAX_DECODES together.

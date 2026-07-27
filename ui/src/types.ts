@@ -4,7 +4,7 @@
 
 export type Presence = 'active' | 'idle' | 'stale'
 
-export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FST4' | 'Q65-30A'
+export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FST4' | 'Q65'
 
 // ---- Propagation & opening intelligence (matches the `propagation` crate) ----
 export type ActivityTier = 'Active' | 'Moderate' | 'Quiet' | 'Closed'
@@ -1689,6 +1689,12 @@ export interface Settings {
   rptrShift: string
   /** FM CTCSS (PL) tone in Hz; 0 = off. */
   ctcssToneHz: number
+  /** Q65 T/R period in seconds: 15 | 30 | 60 | 120 | 300. Only used at the Q65
+   * tier. The period sets both the slot clock and the decode frame length. */
+  q65PeriodS: number
+  /** Q65 submode 0..4 for A..E (tone spacing). Wider tolerates more Doppler
+   * spread at the cost of sensitivity. */
+  q65Submode: number
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

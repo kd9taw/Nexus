@@ -14,12 +14,17 @@
 //! adding those entry points in `q65_cabi.f90`, flipping that flag, AND passing the
 //! FT-mode TX approval gate — three deliberate steps.
 //!
-//! # ⭐ Q65-30A only
-//! Upstream supports 5 T/R periods × 5 submodes (A–E, tone spacing). `q65_decode`
-//! sizes its frame from the period, so the C ABI pins **30 s / 360000 samples** and
-//! **submode A**. Supporting more needs a per-period entry point plus a `ModeKind`
-//! that can carry one, which is why [`NMAX`] is a constant here rather than a
-//! function of anything.
+//! # ⭐ All 5 periods × all 5 submodes
+//! Period and submode are arguments, not constants. The vendored Fortran was
+//! always fully parametric — the single-period pin lived in the C ABI, not the
+//! modem. That matters because Q65-30A is not the mode's main use: EME on VHF/UHF
+//! runs **Q65-60A/B/C**, 6 m meteor/ionoscatter is where 30 belongs, and 15 is
+//! troposcatter.
+//!
+//! **The frame length follows the period** — [`nmax`] of the period, from 180000
+//! samples (15 s) to 3600000 (300 s). Supply exactly that many; an unsupported
+//! period is rejected rather than clamped, because reading the wrong span of the
+//! caller's audio yields a plausible wrong answer rather than an obvious failure.
 //!
 //! # ⭐ Every call is independent
 //! Q65 supports multi-period message averaging, accumulating symbol-spectrum power
@@ -36,7 +41,10 @@
 
 use tempo_fast_sys::MODEM_LOCK;
 
-pub use tempo_fast_sys::{Q65_NMAX as NMAX, Q65_NSUBMODE as NSUBMODE, Q65_NTRPERIOD as NTRPERIOD};
+pub use tempo_fast_sys::{
+    q65_nmax as nmax, q65_period_supported as period_supported, Q65_NMAX_MAX as NMAX_MAX,
+    Q65_NSUBMODES as NSUBMODES, Q65_PERIODS as PERIODS,
+};
 
 /// WSJT-X audio sample rate (Hz).
 pub const SAMPLE_RATE: f32 = 12_000.0;
@@ -71,7 +79,12 @@ pub struct Decode {
 // q65_decode.f90. Raise both together or the weakest decodes are dropped silently.
 const MAX_DECODES: usize = 100;
 
-/// Decode every Q65 signal in a 360000-sample ([`NMAX`]) int16 frame at 12 kHz.
+/// Decode every Q65 signal in one T/R period.
+///
+/// `iwave` must hold [`nmax`]`(period_s)` int16 samples at 12 kHz — 180000 at 15 s,
+/// 3600000 at 300 s. `period_s` must be one of [`PERIODS`] and `submode` 0..=4
+/// (A..E); anything else returns an empty result rather than decoding the wrong
+/// window.
 ///
 /// `nfa..=nfb` is the audio search range (Hz); `ndepth` is decode aggressiveness
 /// (≤ 0 ⇒ 3); `mycall`/`hiscall`/`hisgrid` enable a-priori decoding (pass `""` if
@@ -86,10 +99,15 @@ const MAX_DECODES: usize = 100;
 /// build removed, precisely because it let one chain's callers reach another.
 ///
 /// # Panics
-/// Panics if `iwave.len() < NMAX`.
+/// Panics if `iwave.len() < nmax(period_s)`, or if `period_s`/`submode` are not
+/// supported. These are contract violations by the caller, not runtime conditions:
+/// the buffer length and the period must be chosen together, and a silent
+/// short-read would decode a window the caller never intended.
 #[allow(clippy::too_many_arguments)]
 pub fn decode_frame(
     iwave: &[i16],
+    period_s: u16,
+    submode: u8,
     nfa: i32,
     nfb: i32,
     ndepth: i32,
@@ -100,8 +118,18 @@ pub fn decode_frame(
     nfqso: i32,
 ) -> Vec<Decode> {
     assert!(
-        iwave.len() >= NMAX,
-        "decode_frame needs at least {NMAX} samples, got {}",
+        period_supported(period_s),
+        "Q65 period {period_s}s is not supported (must be one of {PERIODS:?})"
+    );
+    assert!(
+        submode < NSUBMODES,
+        "Q65 submode {submode} out of range (0..={} for A..E)",
+        NSUBMODES - 1
+    );
+    let need = nmax(period_s);
+    assert!(
+        iwave.len() >= need,
+        "decode_frame needs at least {need} samples for a {period_s}s period, got {}",
         iwave.len()
     );
     let myc = std::ffi::CString::new(mycall).unwrap_or_default();
@@ -114,6 +142,8 @@ pub fn decode_frame(
         unsafe {
             tempo_fast_sys::q65_decode_frame(
                 iwave.as_ptr(),
+                i32::from(period_s),
+                i32::from(submode),
                 nfa,
                 nfb,
                 ndepth,
@@ -155,30 +185,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_is_the_pinned_30s_length() {
-        // The ABI pins one period and one submode; if either changes, q65_cabi.f90's
-        // Q65_NMAX / Q65_NTRPERIOD / Q65_NSUBMODE must change with it or the buffer
-        // contract breaks.
-        assert_eq!(NTRPERIOD, 30);
-        assert_eq!(NSUBMODE, 0);
-        assert_eq!(NMAX, 30 * 12_000);
+    fn frame_length_follows_the_period() {
+        // The buffer contract. Getting this wrong reads the wrong span of audio,
+        // which decodes a window the caller never meant to hand over.
+        for p in PERIODS {
+            assert_eq!(nmax(p), p as usize * 12_000);
+            assert!(period_supported(p));
+        }
+        assert_eq!(nmax(300), NMAX_MAX);
+        // EME's actual working period must be reachable — the whole point of
+        // making this parametric.
+        assert!(period_supported(60), "Q65-60 is the EME workhorse");
     }
 
     #[test]
-    fn noise_decodes_to_nothing() {
-        // Same property the FST4 wrapper asserts: the decoder runs to completion on
-        // pure noise and invents nothing. With no Q65 TX in-tree there is no way to
-        // synthesise a signal here, so this is a liveness + silence check, NOT a
-        // sensitivity test — sensitivity is measured in the parity lab against
-        // stock q65sim.
-        let mut iwave = vec![0i16; NMAX];
-        let mut seed: u32 = 0x5EED;
+    fn unsupported_period_is_refused() {
+        for p in [0u16, 1, 10, 20, 45, 90, 600] {
+            assert!(!period_supported(p), "period {p} must not be supported");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "not supported")]
+    fn decoding_at_an_unsupported_period_panics() {
+        // Refusing loudly beats decoding the wrong window: the modem would read
+        // ntrperiod*12000 samples regardless of what the caller sized.
+        let iwave = vec![0i16; nmax(30)];
+        let _ = decode_frame(&iwave, 45, 0, 200, 2900, 3, "", "", "", 0, 1500);
+    }
+
+    #[test]
+    #[should_panic(expected = "samples for a 60s period")]
+    fn a_buffer_sized_for_the_wrong_period_panics() {
+        // A 30 s buffer handed to a 60 s decode is exactly the short-read the
+        // assert exists to catch.
+        let iwave = vec![0i16; nmax(30)];
+        let _ = decode_frame(&iwave, 60, 0, 200, 2900, 3, "", "", "", 0, 1500);
+    }
+
+    #[test]
+    fn noise_decodes_to_nothing_at_every_period() {
+        // Liveness + silence on noise, across the whole period range rather than
+        // just the one that used to be pinned. NOT a sensitivity test — with no
+        // Q65 TX in-tree there is no way to synthesise a signal here; sensitivity
+        // is measured in the parity lab against stock q65sim.
+        //
+        // 300 s is skipped: it is a 3.6 M-sample decode and would dominate the
+        // suite's runtime for no extra coverage of the code path.
+        for p in [15u16, 30, 60] {
+            let mut iwave = vec![0i16; nmax(p)];
+            let mut seed: u32 = 0x5EED ^ u32::from(p);
+            for s in iwave.iter_mut() {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *s = ((seed >> 16) as i16) / 8;
+            }
+            let d = decode_frame(&iwave, p, 0, 200, 2900, 3, "KD9TAW", "W1AW", "EN52", 0, 1500);
+            assert!(d.is_empty(), "Q65-{p} decoded {} signal(s) from noise", d.len());
+        }
+    }
+
+    #[test]
+    fn every_submode_runs() {
+        // A–E differ in tone spacing (mode_q65 drives LL=64*(2+mode_q65)), so each
+        // takes a different path through the demodulator. All five must at least
+        // run to completion and stay silent on noise.
+        let mut iwave = vec![0i16; nmax(15)];
+        let mut seed: u32 = 0xBEEF;
         for s in iwave.iter_mut() {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             *s = ((seed >> 16) as i16) / 8;
         }
-        let d = decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", "EN52", 0, 1500);
-        assert!(d.is_empty(), "decoded {} signal(s) from noise", d.len());
+        for sm in 0..NSUBMODES {
+            let d = decode_frame(&iwave, 15, sm, 200, 2900, 3, "", "", "", 0, 1500);
+            assert!(d.is_empty(), "submode {sm} decoded {} from noise", d.len());
+        }
     }
 
     #[test]
@@ -187,14 +267,14 @@ mod tests {
         // one frame into the next. Decoding the SAME noise twice must therefore give
         // the same answer; if averaging were live, the second call would see
         // accumulated power from the first and could differ.
-        let mut iwave = vec![0i16; NMAX];
+        let mut iwave = vec![0i16; nmax(30)];
         let mut seed: u32 = 0xC0FFEE;
         for s in iwave.iter_mut() {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             *s = ((seed >> 16) as i16) / 8;
         }
-        let a = decode_frame(&iwave, 200, 2900, 3, "", "", "", 0, 1500);
-        let b = decode_frame(&iwave, 200, 2900, 3, "", "", "", 0, 1500);
+        let a = decode_frame(&iwave, 30, 0, 200, 2900, 3, "", "", "", 0, 1500);
+        let b = decode_frame(&iwave, 30, 0, 200, 2900, 3, "", "", "", 0, 1500);
         assert_eq!(a.len(), b.len(), "same frame decoded differently on replay");
     }
 }

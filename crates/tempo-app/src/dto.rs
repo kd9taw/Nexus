@@ -186,13 +186,16 @@ pub enum Tier {
     /// selecting this tier decodes but never keys the radio.
     #[serde(rename = "FST4")]
     Fst4,
-    /// WSJT-X Q65-30A (30 s T/R, submode A). **RECEIVE-ONLY** — `modes::tx_mode`
-    /// refuses it, so selecting this tier decodes but never keys the radio.
+    /// WSJT-X Q65. **RECEIVE-ONLY** — `modes::tx_mode` refuses it, so selecting
+    /// this tier decodes but never keys the radio.
     ///
-    /// The serde name carries the submode because "Q65" alone does not identify a
-    /// signal on the air: period and tone spacing both matter, and an operator
-    /// reading the tier needs to know which one is being decoded.
-    #[serde(rename = "Q65-30A")]
+    /// Plain "Q65", NOT a period/submode-qualified name. The tier is the
+    /// operator's mode selection; which of the 25 period/submode combinations it
+    /// resolves to comes from `Settings::q65_period_s` / `q65_submode`. Baking a
+    /// combination into the tier name would make the label lie the moment the
+    /// operator changed the period — the qualified name lives on `ModeKind`,
+    /// which actually knows.
+    #[serde(rename = "Q65")]
     Q65,
 }
 
@@ -209,14 +212,32 @@ impl Tier {
 
     /// The native decode/encode mode this tier maps to, or `None` for `Dx1`
     /// (FT1's robust non-coherent tier, handled outside the `modes::Mode` set).
-    pub fn mode_kind(self) -> Option<ModeKind> {
+    ///
+    /// `q65_period_s` / `q65_submode` come from settings and are used ONLY by the
+    /// Q65 tier. Q65 is the first tier whose mode is not fully determined by the
+    /// tier alone: the period sets the frame length and the slot clock, so it has
+    /// to reach `ModeKind` or every buffer sized from that kind would be wrong.
+    /// An out-of-range pair falls back to Q65-30A rather than refusing — settings
+    /// arriving from an older file or a hand-edited JSON should degrade to a
+    /// working mode, not disable decoding.
+    pub fn mode_kind(self, q65_period_s: u16, q65_submode: u8) -> Option<ModeKind> {
         match self {
             Tier::TempoFast => Some(ModeKind::TempoFast),
             Tier::Ft8 => Some(ModeKind::Ft8),
             Tier::Ft4 => Some(ModeKind::Ft4),
             Tier::Fst4 => Some(ModeKind::Fst4),
-            Tier::Q65 => Some(ModeKind::Q65),
+            Tier::Q65 => Some(Self::q65_kind(q65_period_s, q65_submode)),
             Tier::TempoDeep => None,
+        }
+    }
+
+    /// A validated `ModeKind::Q65`, falling back to Q65-30A on anything unsupported.
+    pub fn q65_kind(period_s: u16, submode: u8) -> ModeKind {
+        let ok = ModeKind::Q65_PERIODS.contains(&period_s) && submode < ModeKind::Q65_SUBMODES;
+        if ok {
+            ModeKind::Q65 { period_s, submode }
+        } else {
+            ModeKind::Q65_30A
         }
     }
 
@@ -230,7 +251,9 @@ impl Tier {
             ModeKind::Ft8 => Tier::Ft8,
             ModeKind::Ft4 => Tier::Ft4,
             ModeKind::Fst4 => Tier::Fst4,
-            ModeKind::Q65 => Tier::Q65,
+            // Every Q65 combination maps back to the one Q65 tier: the tier is the
+            // operator's mode selection, and period/submode are settings under it.
+            ModeKind::Q65 { .. } => Tier::Q65,
         }
     }
 }

@@ -115,6 +115,18 @@ pub struct Settings {
     pub rptr_shift: String,
     /// FM CTCSS (PL) tone in Hz for repeater access, e.g. 100.0; 0.0 = off.
     pub ctcss_tone_hz: f32,
+    /// Q65 T/R period in seconds: 15, 30, 60, 120 or 300. Only meaningful at the
+    /// Q65 tier. Defaults to 60 — EME on VHF/UHF, Q65's flagship use, works
+    /// Q65-60A/B/C. (30 is the 6 m meteor/ionoscatter setting and 15 is
+    /// troposcatter.) `#[serde(default)]` so settings files written before Q65
+    /// existed still load.
+    #[serde(default = "default_q65_period_s")]
+    pub q65_period_s: u16,
+    /// Q65 submode, 0..=4 for A..E — the tone spacing. Wider submodes tolerate
+    /// more Doppler spread at the cost of sensitivity, which is why EME operators
+    /// move up the letters as the path degrades. Defaults to A.
+    #[serde(default)]
+    pub q65_submode: u8,
     /// FM repeater offset override in Hz (0 = use the band convention from
     /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
     /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
@@ -1377,6 +1389,11 @@ pub fn cw_key_port_conflict(
         })
 }
 
+/// Q65-60: the EME working period. See [`Settings::q65_period_s`].
+fn default_q65_period_s() -> u16 {
+    60
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -1397,6 +1414,8 @@ impl Default for Settings {
             phone_mode: "ssb".to_string(),
             rptr_shift: "simplex".to_string(),
             ctcss_tone_hz: 0.0,
+            q65_period_s: default_q65_period_s(),
+            q65_submode: 0,
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
