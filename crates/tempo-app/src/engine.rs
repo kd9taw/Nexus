@@ -1504,6 +1504,56 @@ impl Engine {
             .is_some_and(|k| modes::make_mode(k).capabilities().beacon_only)
     }
 
+    /// How many unanswered CQs before a run stops on its own, or `None` for stock
+    /// WSJT-X behaviour (call until the operator or the watchdog stops it).
+    ///
+    /// ⭐ MSK144 RUNS UNCAPPED. WSJT-X has no per-call CQ budget in any mode — the
+    /// wall-clock TX watchdog is the only bound — and on meteor scatter that
+    /// matters: a CQ is expected to run for many minutes before a trail arrives.
+    /// Our default of 10 calls would stop a run after ~5 minutes and read as the
+    /// mode being broken. The watchdog still bounds it, as upstream intends.
+    ///
+    /// ⚠️ On MSK144 this OVERRIDES the operator's `cq_max_calls` rather than
+    /// deferring to it. `Option<u32>` cannot distinguish "the operator chose 10"
+    /// from "10 is the default", so honouring the value would silently reimpose the
+    /// FT8 budget on every station that never touched the setting — the common
+    /// case, and the one that reads as the mode being broken. Stopping a run is
+    /// still one click, and the TX watchdog still bounds it.
+    fn cq_call_budget(&self) -> Option<u32> {
+        match self.app.tier() {
+            Tier::Msk144 => None,
+            _ => self.settings.cq_max_calls,
+        }
+    }
+
+    /// How many unanswered overs to give an in-QSO step before abandoning it and
+    /// returning to CQ. Mode-aware, because "the partner has gone" means completely
+    /// different things on different modes.
+    ///
+    /// ⭐ MSK144 IS THE EXCEPTION, and the default was badly wrong for it. On
+    /// meteor scatter, SILENCE IS THE NORMAL STATE: you transmit continuously and
+    /// wait for a trail that may be a minute or more away. Our default of 3 overs
+    /// is ~45 s at a 15 s period, which abandons live contacts.
+    ///
+    /// WSJT-X's own patience for MSK144 is the Wait-and-Reply timer,
+    /// `stopWRTimer.start(int(12000.0*m_TRperiod))` (mainwindow.cpp:3031) — twelve
+    /// T/R periods of transmitting, which is SIX own-transmit periods since the
+    /// station keys every other one. That is the number matched here.
+    ///
+    /// The operator's explicit `cq_stall_overs` always wins; this only supplies the
+    /// default, and `Some(0)` still disables abandonment entirely (stock WSJT-X
+    /// behaviour: wait for the operator).
+    fn qso_patience_overs(&self) -> u32 {
+        if let Some(explicit) = self.settings.cq_stall_overs {
+            return explicit;
+        }
+        match self.app.tier() {
+            // 12 T/R periods of WSJT-X patience = 6 of our own overs.
+            Tier::Msk144 => 6,
+            _ => 3,
+        }
+    }
+
     /// `Err(reason)` when the ACTIVE tier has no QSO sequence to run — a beacon.
     /// Checked by the entry points that start or advance an EXCHANGE, alongside
     /// [`Self::require_tx_capable`], which asks the different question of whether
@@ -3659,7 +3709,7 @@ impl Engine {
             "qso-run" => Mode::Qso {
                 station: Box::new({
                     let mut s = QsoStation::calling_cq(&mycall, &mygrid);
-                    s.cq_call_cap = self.settings.cq_max_calls; // None = stock
+                    s.cq_call_cap = self.cq_call_budget();
                     if let Some(d) = &self.cq_dir {
                         // Directed run: "CQ DX <me> <grid>" instead of plain.
                         s.override_next(Msg::Cq {
@@ -7831,7 +7881,7 @@ impl Engine {
         // resume CQ so the pileup keeps moving. Default 3 overs; `Some(0)` disables (wait
         // for the operator, stock WSJT-X). Confirming/Done are handled by `resume_cq` above
         // (they auto-log); this fires only for the mid-QSO waits, and never for a bare CQ.
-        let stall_cap = self.settings.cq_stall_overs.unwrap_or(3);
+        let stall_cap = self.qso_patience_overs();
         let abandon_stalled = self.cq_running
             && !self.qso_logged
             && stall_cap > 0
@@ -7884,7 +7934,7 @@ impl Engine {
             let mygrid = self.settings.mygrid.clone();
             let mut s = QsoStation::calling_cq(&mycall, &mygrid);
             s.confirm_with_rrr = self.settings.prefer_rrr;
-            s.cq_call_cap = self.settings.cq_max_calls; // None = stock
+            s.cq_call_cap = self.cq_call_budget();
             if let Some(d) = &self.cq_dir {
                 // The directed run stays directed across the pileup (stock: the
                 // edited Tx6 text persists).
@@ -14324,6 +14374,69 @@ mod tests {
     // the air, and three were reproduced with executable probes. They are grouped
     // because they share a cause: the beacon transmit path was bolted onto poll_tx
     // without walking the guard list it was skipping.
+
+    #[test]
+    fn msk144_gets_wsjtx_meteor_scatter_patience_not_ft8_patience() {
+        // ⭐ SILENCE IS THE NORMAL STATE ON METEOR SCATTER. You transmit continuously
+        // and wait for a trail that may be a minute or more away, so FT8's "nobody
+        // answered, move on" reflexes abandon live contacts.
+        //
+        // WSJT-X's own patience is the Wait-and-Reply timer,
+        // stopWRTimer.start(int(12000.0*m_TRperiod)) (mainwindow.cpp:3031) — twelve
+        // T/R periods of transmitting, which is SIX own overs since a station keys
+        // every other period.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Msk144);
+        assert_eq!(e.qso_patience_overs(), 6, "MSK144 waits 12 T/R periods");
+
+        // And WSJT-X has no per-call CQ budget in ANY mode — the wall-clock watchdog
+        // is the only bound. Our 10-call default would stop a run after ~5 minutes,
+        // which on this mode reads as the mode being broken.
+        assert_eq!(
+            e.cq_call_budget(),
+            None,
+            "MSK144 CQ runs uncapped, like WSJT-X"
+        );
+
+        // The FT modes are untouched: 3 overs, and the 10-call default stands.
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            assert_eq!(e.qso_patience_overs(), 3, "{tier:?} keeps its patience");
+            assert_eq!(
+                e.cq_call_budget(),
+                e.settings().cq_max_calls,
+                "{tier:?} keeps its CQ budget"
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_stall_setting_still_wins_on_every_tier() {
+        // The mode-aware value is only a DEFAULT. An operator who sets the number
+        // gets the number, and Some(0) still disables abandonment entirely (stock
+        // WSJT-X: wait for the operator).
+        for tier in [Tier::Msk144, Tier::Ft8, Tier::Q65] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            let mut s = e.settings().clone();
+            s.cq_stall_overs = Some(9);
+            e.apply_settings(s.clone());
+            assert_eq!(
+                e.qso_patience_overs(),
+                9,
+                "{tier:?} must honour the operator"
+            );
+
+            s.cq_stall_overs = Some(0);
+            e.apply_settings(s);
+            assert_eq!(
+                e.qso_patience_overs(),
+                0,
+                "{tier:?}: 0 disables abandonment"
+            );
+        }
+    }
 
     #[test]
     fn a_beacon_never_keys_while_the_phone_or_cw_section_owns_the_rig() {
