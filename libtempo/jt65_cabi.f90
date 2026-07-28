@@ -50,6 +50,10 @@ module jt65_cabi
   integer, parameter :: JT65_MAXDEC  = 50           ! matches dec(50) in jt65_decode
   integer, parameter :: JT65_NSUBMODES = 3          ! A, B, C as 0, 1, 2
 
+  ! JT65 channel symbols per transmission: 63 sync + 63 data, interleaved by
+  ! gen65's `nprc` vector. Upstream's NUM_JT65_SYMBOLS.
+  integer, parameter :: JT65_NN = 126
+
   ! Interop result struct. Layout MUST match jt65_decode_t in libtempo.h, and is
   ! byte-compatible with the other modes' records (64 bytes, 4-byte aligned).
   type, bind(C) :: jt65_decode_t
@@ -278,5 +282,77 @@ contains
        fstr(i:i) = cstr(i)
     end do
   end subroutine c_to_fstr_jt65
+
+  !-------------------------------------------------------------------------
+  ! jt65_encode_msg : message text -> the 126 JT65 channel symbols.
+  !
+  !   msg       : message text (C string). ⭐ AT MOST 22 CHARACTERS — JT65
+  !               predates 77-bit and uses the LEGACY packjt layer, not
+  !               packjt77's 37. Anything longer is the caller's bug.
+  !   msg_len   : length of msg
+  !   itone_out : caller buffer, JT65_NN entries
+  !   returns   : JT65_NN on success, -1 if the message will not pack
+  !
+  ! Wraps the vendored gen65, which is already BIND(c) upstream. Unlike every
+  ! other mode here, gen65 was NOT already compiled: Q65/FST4/WSPR/MSK144 all had
+  ! their encoders linked in because their DECODERS call them to regenerate a
+  ! candidate, and JT65's decoder does not. gen65 + chkmsg were vendored for this.
+  !
+  ! Everything gen65 needs was already present, though: packjt (packmsg/unpackmsg),
+  ! interleave63, graycode65, and rs_encode from Karn's wrapkarn.c — the same
+  ! Reed-Solomon codec the JT65 DECODER already uses, so encode and decode share
+  ! one RS implementation.
+  !
+  ! ⭐ TONE VALUES ARE 0 OR 2..65, NOT 0..64. gen65 emits tone 0 for the 63 SYNC
+  ! symbols (positions fixed by its `nprc` pseudo-random vector) and `sent(k)+2`
+  ! for the 63 data symbols. The +2 offset is real and part of the wire format.
+  !-------------------------------------------------------------------------
+  function jt65_encode_msg(msg, msg_len, itone_out) result(nsym_out) &
+       bind(C, name="jt65_encode_msg")
+    character(kind=c_char), intent(in)  :: msg(*)
+    integer(c_int), value,  intent(in)  :: msg_len
+    integer(c_int),         intent(out) :: itone_out(JT65_NN)
+    integer(c_int) :: nsym_out
+
+    ! ⭐ gen65 is BIND(c) UPSTREAM (gen65.f90:1), so its symbol is the unmangled
+    ! `gen65`, not gfortran's `gen65_`. Without this explicit interface the call
+    ! below emits `gen65_` and fails at LINK time with an undefined symbol —
+    ! which is the good failure, but only because nothing else in the tree
+    ! happens to define that name.
+    interface
+       subroutine gen65(msg00, ichk, msgsent0, itone, itype) bind(C)
+         import :: c_char, c_int
+         character(kind=c_char) :: msg00(23), msgsent0(23)
+         integer(c_int) :: ichk, itone(126), itype
+       end subroutine gen65
+    end interface
+
+    character(kind=c_char) :: msg23(23), msgsent23(23)
+    integer(c_int) :: itone(JT65_NN)
+    integer(c_int) :: ichk, itype
+    integer :: i, n
+
+    nsym_out = -1
+    msg23 = ' '
+    n = min(msg_len, 22)
+    do i = 1, n
+       if (msg(i) == c_null_char) exit
+       msg23(i) = msg(i)
+    end do
+    msg23(23) = char(0)
+
+    ichk = 0
+    itype = 0
+    itone = -1
+    call gen65(msg23, ichk, msgsent23, itone, itype)
+
+    ! itype < 0 is gen65's "this message will not pack" signal; a surviving -1 in
+    ! itone means nothing was generated.
+    if (itype < 0) return
+    if (any(itone(1:JT65_NN) < 0)) return
+
+    itone_out(1:JT65_NN) = itone(1:JT65_NN)
+    nsym_out = JT65_NN
+  end function jt65_encode_msg
 
 end module jt65_cabi

@@ -241,6 +241,10 @@ pub const JT65_NPTS: usize = 624_000;
 /// JT65 submodes A/B/C, passed as 0/1/2 (tone spacing 1x/2x/4x).
 pub const JT65_NSUBMODES: u8 = 3;
 
+/// JT65 channel symbols per transmission: 63 sync + 63 data. Upstream's
+/// `NUM_JT65_SYMBOLS`.
+pub const JT65_NN: usize = 126;
+
 /// Samples the WSPR decoder reads: 114 s of the 120 s window, at 12 kHz.
 pub const WSPR_NMAX: usize = 1_368_000;
 /// WSPR's reception interval in seconds. Fixed — WSPR has one period.
@@ -745,6 +749,21 @@ extern "C" {
     ///
     /// `iwave` must hold [`JT65_NMAX`] samples even though only [`JT65_NPTS`] is
     /// read: the underlying dummy is explicit-shape.
+    /// Encode a message into the 126 JT65 channel symbols.
+    ///
+    /// Returns 126, or -1 if the message will not pack.
+    ///
+    /// ⭐ `msg` is at most **22 characters** — JT65 predates 77-bit and uses the
+    /// legacy `packjt` layer, not `packjt77`'s 37.
+    ///
+    /// ⭐ Tone values are 0 (sync) or 2..=65 (data). The +2 offset on data symbols
+    /// is part of the wire format, not an off-by-two.
+    pub fn jt65_encode_msg(
+        msg: *const c_char,
+        msg_len: c_int,
+        itone_out: *mut c_int, // [JT65_NN]
+    ) -> c_int;
+
     pub fn jt65_decode_frame(
         iwave: *const i16, // [JT65_NMAX] — the full 60 s
         nsubmode: c_int,   // 0 | 1 | 2 for A/B/C; anything else ⇒ -1

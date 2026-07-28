@@ -7121,6 +7121,37 @@ impl Engine {
                     if now.saturating_sub(start) >= limit_secs {
                         self.tx_watchdog = true;
                         self.tx_enabled = false;
+                        // ⭐ RETURN, don't fall through. This used to disarm TX and then
+                        // build and return the wave anyway, so the loop keyed the radio
+                        // and cut it ~20 ms later on the next tick — a brief spurious
+                        // emission every time the watchdog fired.
+                        self.app.set_transmitting(false);
+                        return Vec::new();
+                    }
+                    // ⭐ AN OVER LONGER THAN THE WHOLE LIMIT CAN NEVER BE TRANSMITTED.
+                    //
+                    // The watchdog is evaluated when an over is BUILT, never during one,
+                    // so it cannot interrupt a transmission already in flight. That is
+                    // fine at 12.6 s (FT8) and wrong at 1800 s: FST4-1800 would key for
+                    // THIRTY MINUTES with no duration bound whatsoever, then be refused
+                    // at the next boundary — the operator's "TX watchdog: 6 min" setting
+                    // silently not applying to the mode that most needs it.
+                    //
+                    // Refusing is the honest outcome: say so, and let the operator raise
+                    // the limit deliberately. Same shape as the SSTV path, which already
+                    // declines a send that could not finish in time.
+                    //
+                    // Scoped so FT modes are untouched: this fires only when the over
+                    // exceeds the ENTIRE limit, which at 12.6 s against a 6-minute
+                    // default cannot happen. It is not a "will it finish in the time
+                    // remaining" test — that WOULD change FT8, by refusing an over
+                    // starting a few seconds before the limit that today goes out.
+                    let over_secs = self.tx_over_secs() as u64;
+                    if over_secs > limit_secs {
+                        self.tx_watchdog = true;
+                        self.tx_enabled = false;
+                        self.app.set_transmitting(false);
+                        return Vec::new();
                     }
                 }
                 // Record this transmission so the decode feed shows our own calls
@@ -14374,6 +14405,84 @@ mod tests {
     // the air, and three were reproduced with executable probes. They are grouped
     // because they share a cause: the beacon transmit path was bolted onto poll_tx
     // without walking the guard list it was skipping.
+
+    #[test]
+    fn the_watchdog_refuses_an_over_it_could_never_bound() {
+        // The watchdog is evaluated when an over is BUILT, never during one, so it
+        // cannot interrupt a transmission in flight. At FT8's 12.6 s that is fine.
+        // At FST4-1800 it meant a THIRTY MINUTE key-down with no duration bound at
+        // all, while Settings claimed a 6-minute watchdog was in force.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Fst4);
+        let mut s = e.settings().clone();
+        s.fst4_period_s = 1800; // a 30-minute over
+        s.tx_watchdog_min = 6; // against a 6-minute limit
+        e.apply_settings(s.clone());
+        e.set_tx_enabled(true);
+        e.set_mode("qso-run").unwrap();
+
+        assert!(
+            e.poll_tx(0).is_empty(),
+            "an over longer than the whole watchdog limit must be refused, not keyed"
+        );
+        assert!(
+            e.tx_watchdog,
+            "and the refusal must be visible to the operator"
+        );
+
+        // Raising the limit past the over length makes it transmittable again —
+        // the operator's decision, taken deliberately.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Fst4);
+        s.tx_watchdog_min = 45;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.set_mode("qso-run").unwrap();
+        assert!(!e.tx_watchdog, "45 min > a 30 min over: no refusal");
+    }
+
+    #[test]
+    fn a_watchdog_trip_emits_no_waveform() {
+        // The trip used to disarm TX and then build and return the wave anyway, so
+        // the radio loop keyed and cut it ~20 ms later — a brief spurious emission
+        // every time the watchdog fired.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let mut s = e.settings().clone();
+        s.tx_watchdog_min = 1;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.set_mode("qso-run").unwrap();
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+
+        assert!(
+            e.poll_tx(0).is_empty(),
+            "a tripped watchdog must emit nothing"
+        );
+        assert!(e.tx_watchdog);
+        assert!(!e.tx_enabled());
+    }
+
+    #[test]
+    fn an_ft8_over_is_never_refused_by_the_length_rule() {
+        // The length rule is scoped to overs exceeding the ENTIRE limit, which at
+        // 12.6 s against any sane watchdog cannot happen. Deliberately NOT a "will
+        // it finish in the time remaining" test — that would change FT8 by refusing
+        // an over starting seconds before the limit that today goes out.
+        for min in [1u32, 6, 30] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(Tier::Ft8);
+            let mut s = e.settings().clone();
+            s.tx_watchdog_min = min;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            e.set_mode("qso-run").unwrap();
+            assert!(
+                !e.tx_watchdog,
+                "FT8 must never be refused by the length rule (watchdog {min} min)"
+            );
+        }
+    }
 
     #[test]
     fn msk144_gets_wsjtx_meteor_scatter_patience_not_ft8_patience() {

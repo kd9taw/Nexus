@@ -22,3 +22,4 @@ microfft = "0.6"
 q65 = { path = "../q65" }
 fst4 = { path = "../fst4" }
 msk144 = { path = "../msk144" }
+jt65 = { path = "../jt65" }

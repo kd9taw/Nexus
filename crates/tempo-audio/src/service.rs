@@ -636,6 +636,21 @@ struct MonitorConn {
     /// Consecutive failed freq reads — the pill only goes red after ≥3 (mirrors the
     /// active loop's FREQ_MISS_LIMIT; a single slow poll must not flash the pill).
     freq_misses: u32,
+    /// Consecutive FAILED OPENS for this radio — see `retry_after_ms`.
+    open_failures: u32,
+    /// Monotonic ms before which this conn must NOT be recycled, even though it has
+    /// no control channel.
+    ///
+    /// ⭐ WITHOUT THIS THE POOL IS A PROCESS-SPAWN LOOP. `open_monitor` parks a
+    /// radio whose rigctld cannot stay up as a control-less `Rig::vox()`; the keep
+    /// test below then sees `!has_control()` and recycles it; the reconcile runs
+    /// every 150 ms and each reopen costs a 700 ms daemon-liveness wait. A second
+    /// radio that is ENABLED but unreachable — powered off, unplugged, COM port
+    /// absent, port clash — therefore spawns and kills a rigctld.exe roughly every
+    /// 850 ms, forever. On Windows that is expensive process creation plus a 12 MB
+    /// libhamlib DLL re-scanned by Defender on every launch, which is why it shows
+    /// up as antimalware CPU rather than as ours.
+    retry_after_ms: f64,
 }
 
 impl Transport {
@@ -751,7 +766,7 @@ fn monitor_loop(
             std::thread::sleep(Duration::from_millis(20));
             continue;
         }
-        reconcile_pool(&pool, &want, active, &engine);
+        reconcile_pool(&pool, &want, active, &engine, crate::slot::now_ms());
         poll_monitors(&pool, active, &engine, &pending);
         std::thread::sleep(Duration::from_millis(150));
     }
@@ -765,6 +780,7 @@ fn reconcile_pool(
     want: &[(u32, Transport)],
     active: u32,
     engine: &Arc<Mutex<Engine>>,
+    now_ms: f64,
 ) {
     let (to_open, to_close): (Vec<(u32, Transport)>, Vec<u32>) = {
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
@@ -775,9 +791,18 @@ fn reconcile_pool(
             // has no control channel; a dead DAEMON behind a cached TCP answer is a zombie.
             // Either way: recycle so it self-heals (and a switch-to never adopts a dead conn).
             let keep = p.iter_mut().find(|c| c.id == *id).is_some_and(|c| {
-                !c.transport.rig_differs(t)
-                    && c.rig.has_control()
-                    && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
+                if c.transport.rig_differs(t) {
+                    return false; // CAT settings changed — always reopen, no backoff
+                }
+                // ⭐ BACKOFF: a conn that failed to open is KEPT (not recycled) until
+                // its retry window opens. Without this the 150 ms reconcile respawns
+                // an unreachable radio's rigctld forever — see `retry_after_ms`.
+                // A CAT change above bypasses it, because that is the operator
+                // fixing the very thing that was broken and they should not wait.
+                if !c.rig.has_control() && now_ms < c.retry_after_ms {
+                    return true;
+                }
+                c.rig.has_control() && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
             });
             if !keep {
                 to_open.push((*id, t.clone())); // new / CAT changed / DEAD → (re)open
@@ -824,6 +849,27 @@ fn reconcile_pool(
         if let Ok(mut e) = engine.lock() {
             e.observe_radio_cat(id, ok);
         }
+        // Exponential backoff on a failed open: 1 s, 2 s, 4 s … capped at 60 s, so
+        // an unreachable radio settles to one probe a minute instead of one every
+        // 850 ms. A SUCCESSFUL open clears it, so a radio that comes back on line
+        // is adopted at the next reconcile.
+        let prior_failures = {
+            let p = pool.lock().unwrap_or_else(|e| e.into_inner());
+            p.iter().find(|c| c.id == id).map_or(0, |c| c.open_failures)
+        };
+        let (open_failures, retry_after_ms) = if rig.has_control() {
+            (0, 0.0)
+        } else {
+            let n = prior_failures.saturating_add(1);
+            let wait = (1000.0_f64 * 2.0_f64.powi(n.min(6) as i32 - 1)).min(60_000.0);
+            if n == 1 || n % 8 == 0 {
+                crate::civ::diag::note(&format!(
+                    "monitor radio {id}: CAT open failed ({n}x) — retrying in {:.0}s",
+                    wait / 1000.0
+                ));
+            }
+            (n, now_ms + wait)
+        };
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
         // A handoff may have inserted this id meanwhile (old active → pool); don't double-open.
         if !p.iter().any(|c| c.id == id) {
@@ -836,6 +882,8 @@ fn reconcile_pool(
                 ticks: 0,
                 smeter_supported: None,
                 freq_misses: 0,
+                open_failures,
+                retry_after_ms,
             });
         }
     }
@@ -1074,6 +1122,8 @@ fn handoff_if_switched(
             ticks: 0,
             smeter_supported: None,
             freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
         });
         *last_active = active;
     } else {
@@ -1611,6 +1661,8 @@ impl RadioLoop {
             tx_meter_idx: 0,
             last_freq_poll: now_unix_ms(),
             freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
             cat_ok: None,
             handoff_deferred: false,
             smeter_supported: None,
@@ -5998,6 +6050,8 @@ mod tests {
             ticks: 0,
             smeter_supported: None,
             freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
         }]));
         let mut last_active = 0u32;
         let pending = std::sync::atomic::AtomicBool::new(false);
@@ -6092,6 +6146,8 @@ mod tests {
             ticks: 0,
             smeter_supported: None,
             freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
         }]));
         (engine, pool, state, r1, r1_port)
     }
@@ -6318,14 +6374,14 @@ mod tests {
         // alone (the handoff's fallback drops it if stale — nothing leaks).
         let (engine, pool, _state, r1, _r1_port) = switch_scene();
         // Post-switch view: r1 is now active → want excludes it.
-        reconcile_pool(&pool, &[], r1, &engine);
+        reconcile_pool(&pool, &[], r1, &engine, 0.0);
         assert_eq!(
             pool.lock().unwrap().len(),
             1,
             "the new active's conn survives for the handoff to adopt"
         );
         // …but once some OTHER radio is active and r1 is genuinely unwanted, it IS closed.
-        reconcile_pool(&pool, &[], 0, &engine);
+        reconcile_pool(&pool, &[], 0, &engine, 0.0);
         assert!(
             pool.lock().unwrap().is_empty(),
             "an unwanted non-active conn is still reaped as before"
@@ -6547,6 +6603,8 @@ mod tests {
             ticks: 0,
             smeter_supported: None,
             freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
         }]));
         let mut last_active = 0u32;
         let pending = std::sync::atomic::AtomicBool::new(false);
@@ -6606,6 +6664,8 @@ mod tests {
             ticks: 0,
             smeter_supported: None,
             freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
         }]));
         let mut last_active = 0u32;
         let pending = std::sync::atomic::AtomicBool::new(false);
@@ -6673,6 +6733,8 @@ mod tests {
             ticks: 0,
             smeter_supported: None,
             freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
         }]));
         let mut last_active = 0u32;
         let pending = std::sync::atomic::AtomicBool::new(false);

@@ -437,6 +437,17 @@ set(LIBTEMPO_SOURCES
     ${LIB}/grid2deg.f90                   # grid <-> lat/long (unpack77 grid)
     ${LIB}/deg2grid.f90                   # grid <-> lat/long (unpack77 grid)
     ${LIB}/packjt.f90                     # module packjt (used by packjt77)
+    ${LIB}/gen65.f90                      # JT65 ENCODE: message -> itone(1:126).
+                                          #   The FIRST mode whose encoder was NOT
+                                          #   already linked — Q65/FST4/WSPR/MSK144
+                                          #   all had theirs compiled because their
+                                          #   DECODERS call them. JT65's decoder does
+                                          #   not, so gen65 + chkmsg are new here.
+                                          #   Everything they need was already
+                                          #   present: packjt (packmsg/unpackmsg),
+                                          #   interleave63, graycode65, and rs_encode
+                                          #   from Karn's wrapkarn.c.
+    ${LIB}/chkmsg.f90                     # gen65's message sanity check
     ${LIB}/crc.f90                        # module crc (binds C crc14/get_crc14)
     ${LIB}/db.f90                         # power -> dB (ft8_a7d SNR estimate)
     ${LIB}/indexx.f90

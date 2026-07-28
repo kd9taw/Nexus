@@ -11575,3 +11575,64 @@ line = 67
 class = 4
 size_bytes = 4
 reason = """A DEBUG PRINT FLAG, and a symbol whose name invites exactly the wrong assumption — the brief's instruction to read the source rather than guess from the name pays off here twice. It is NOT a data buffer and it is NOT printer state: `int printdata=0;` at :67 is the leftover verbosity switch from the wsprsim companion program, and it does one thing — gate a hex dump of the 11-byte packed message. WRITE SITES: NONE. A tree-wide grep for `printdata` across all of libtempo returns exactly three hits: this definition at wsprd.c:67, the `extern int printdata;` declaration at wsprsim_utils.h:12, and the single READ at wsprsim_utils.c:277 `if( printdata ) { printf("Data is :"); ... }`. There is no assignment anywhere — not in the deleted getopt loop (the MODIFIED FOR NEXUS inventory at wsprd.c:843-:880 enumerates every upstream option and printdata is not among them; upstream set it only from the wsprsim main(), which is not vendored), not in the Fortran, not in the Rust, not in the C ABI shims. It sits at its .bss zero for the life of the process and cannot change. Class 4 by the never-written rule, argued POSITIVELY rather than from the section, because .bss is writable and being GLOBAL the name is reachable from any TU — the same discipline the GROUP J q65_decode nsnr0/cq0 rows used. WORTH STATING BECAUSE IT IS EASY TO DISMISS AS DEAD: the read is LIVE ON THE SHIPPED DECODE PATH, not gated off. wsprd.c:1387 `if( get_wspr_channel_symbols(call_loc_pow, hashtab, loctab, channel_symbols) )` calls into wsprsim_utils.c:165, which reaches :277 on every successful decode as part of the re-encode sanity check that produces the channel symbols for subtract_signal2. So this branch is evaluated once per decoded spot per chain; it is simply always false. That is the GROUP I gen40 point made again — a symbol can be live and shared and still be class 4. CONTENT IS CHAIN-INDEPENDENT BY CONSTRUCTION: a compile-time-edited diagnostic switch has no band, no callsign, no candidate and no per-call input; both chains read the same zero. Shareable at zero cost. TRIPWIRE FOR A REFRESH, and it is not hypothetical: if anyone ever wires this to a runtime verbosity setting it becomes a shared toggle that one chain flips for both, and worse, it enables an unsynchronised printf() to stdout from inside a decode — the exact class of stray output the MODIFIED FOR NEXUS blocks removed everywhere else in this file (the five persistent files at :907-:917, the emit loop at :1458-:1478). If it becomes writable it becomes class 1 the same day, and it should instead be a parameter. 4 B in .bss, shareable today."""
+
+# --- group M (JT65 ENCODE: gen65.f90, vendored 2026-07-28 for JT65 transmit) ---
+# gen65.f90 carries a BARE `save` at :23, so every local below has the SAVE
+# attribute — the same construct that made genq65.f90 a nine-symbol .bss set.
+# nprc is the one constant; everything else carries per-QSO callsign content.
+
+[[symbol]]
+name = "nprc"
+file = "gen65.f90"
+line = 15
+class = 4
+size_bytes = 504
+reason = "DATA at :16-22 (declared :15), read at :64 (`if(nprc(j).eq.ntest)`) to place sync vs data symbols, assigned nowhere in the tree. The compiler agrees and this is decisive rather than inferred: `nm -S` puts it at `r nprc.1` in .RODATA, 0x1f8 = 504 B, so a write would fault. It is JT65's 126-bit pseudo-random sync vector — a protocol constant, the JT65 analogue of FT8's icos7 Costas array."
+
+[[symbol]]
+name = "dgen"
+file = "gen65.f90"
+line = 14
+class = 1
+size_bytes = 52
+reason = "THE PACKED 72-BIT MESSAGE, and the reason this whole group is class 1 rather than scratch. Written at :52 `call packmsg(message,dgen,itype)`; read at :53 `call unpackmsg(dgen,msgsent)` and — the load-bearing one — at :58 `call rs_encode(dgen,sent)`, which is what actually goes on the air. THERE IS A DEMONSTRABLE READ-BEFORE-WRITE PATH ON A SINGLE CHAIN. packmsg documents `itype = -1  Does not decode correctly` (packjt.f90:401-413), and gen65 DOES NOT TEST itype before :58 — it flows straight from :52 through :58 regardless. So a message packmsg refuses leaves dgen holding the PREVIOUS call's 72 bits, which are then Reed-Solomon encoded, interleaved, Gray-coded and emitted as a complete, RS-valid 126-symbol frame carrying a message the operator did not type. That is not a degraded decode; on the ENCODE side it is transmitting the wrong message. Nexus does not reach that path — jt65_cabi.f90's jt65_encode_msg refuses on `itype < 0` and again on any surviving -1 in itone — but the guard is OURS, sitting outside this file, and the manifest classifies the symbol, not our wrapper. Per-QSO callsign content plus a proven stale-read route is class 1 twice over. 0x34 = 52 B .bss (`nm -S`: `b dgen.8`)."
+
+[[symbol]]
+name = "sent"
+file = "gen65.f90"
+line = 14
+class = 1
+size_bytes = 252
+reason = "The 63 Reed-Solomon symbols — the encoded form of dgen, and the direct source of the transmitted tones. Written at :58 `call rs_encode(dgen,sent)`, mutated in place at :59 `call interleave63(sent,1)` and :60 `call graycode65(sent,63,1)`, read at :66 `itone(j)=sent(k)+2`. Its content is entirely determined by dgen, so it inherits dgen's class by construction: a stale dgen yields a stale-but-perfectly-legal `sent`, and the resulting frame is RS-consistent for the wrong message. Classifying it below dgen would leave the derived value shareable while the source is not, which is the guard-and-data split the manifest header forbids. 0xfc = 252 B .bss (`nm -S`: `b sent.5`)."
+
+[[symbol]]
+name = "message"
+file = "gen65.f90"
+line = 9
+class = 1
+size_bytes = 22
+reason = "The 22-character JT65 message under construction — per-QSO callsign content by definition. Built from the msg00 dummy at :30-41, leading-blank-stripped at :43-46, passed to chkmsg at :48 and packmsg at :52. Written before read WITHIN a call, but it carries one chain's callsign pair and report, and it is the input to the dgen chain classified 1 above; a chain-B interleave between :41 and :52 hands chain A chain B's message to pack and transmit. The manifest's tie-break applies directly — 22 bytes of memcpy against putting another station's exchange on the air is not a trade. 0x16 = 22 B .bss (`nm -S`: `b message.13`)."
+
+[[symbol]]
+name = "msgsent"
+file = "gen65.f90"
+line = 10
+class = 1
+size_bytes = 22
+reason = "The message AS IT WILL BE RECEIVED — what gen65 reports back to the caller through msgsent0, i.e. what the UI shows the operator as the text going out. Written at :53 `call unpackmsg(dgen,msgsent)`, amended at :54 `msgsent(20:22)=cok` and :55 `call fmtmsg(msgsent,iz)`. Same per-QSO content as message, and it inherits dgen's staleness directly: when the :52 pack fails, unpackmsg at :53 decodes the PREVIOUS dgen and the operator is shown the previous message as confirmation of what was sent. Displaying the wrong text alongside transmitting it is worse than either alone. 0x16 = 22 B .bss (`nm -S`: `b msgsent.7`)."
+
+[[symbol]]
+name = "msg0"
+file = "gen65.f90"
+line = 8
+class = 1
+size_bytes = 22
+reason = "The caller's raw 22-character message, assembled from the msg00 character*1 dummy. Written before read on every call, but per-QSO callsign content and the head of the same chain as message/dgen/sent — classified with them rather than split off at class 3, so the whole gen65 message path moves as one unit under a per-chain swap. 0x16 = 22 B .bss (`nm -S`: `b msg0.15`)."
+
+[[symbol]]
+name = "cok"
+file = "gen65.f90"
+line = 12
+class = 1
+size_bytes = 3
+reason = "The '   ' / 'OOO' flag from chkmsg (:48), stamped into the transmitted text at :54 `msgsent(20:22)=cok`. Three bytes, and it changes what goes on the air: 'OOO' is the JT65 EME shorthand marker. GUARD AND DATA MUST SHARE A CLASS — cok is written by the same chkmsg call that sets nspecial and flip, which select the shorthand branch at :70 and the ntest sync polarity at :50, and the message text it stamps is class 1. Splitting the flag from the text it modifies is exactly the guard/data split the manifest header prohibits. 3 B .bss (`nm -S`: `b cok.12`)."

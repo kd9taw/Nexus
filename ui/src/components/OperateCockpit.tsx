@@ -260,9 +260,16 @@ export function OperateCockpit({
   }, [snap.radio.nextSlotMs])
   const [, tick] = useState(0)
   useEffect(() => {
+    // Gated on `active` for the same reason the waterfall loop is: the cockpit
+    // stays MOUNTED across navigation (so Band Activity keeps accumulating), so an
+    // ungated 4 Hz ticker re-rendered the hidden cockpit — and its two decode
+    // panes, up to 300 unvirtualized rows each — on EVERY other section of the app.
+    // The JS cost is the same everywhere; the PAINT cost of that DOM churn is what
+    // diverges on a machine without GPU compositing, which is where it was noticed.
+    if (!active) return
     const id = window.setInterval(() => tick((t) => (t + 1) % 1000), 250)
     return () => window.clearInterval(id)
-  }, [])
+  }, [active])
   const nextSlotSec = Math.max(
     0,
     Math.ceil((slotBase.current.ms - (Date.now() - slotBase.current.at)) / 1000),

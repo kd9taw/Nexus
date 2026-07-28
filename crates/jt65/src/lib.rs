@@ -8,7 +8,17 @@
 //! This wraps `jt65_decode_frame` in `jt65_cabi.f90`, which drives the vendored
 //! WSJT-X `jt65_decoder`.
 //!
-//! # DECODE ONLY — no encode, no gen_wave
+//! # Transmit and receive
+//! [`encode`] and [`gen_wave`] are the transmit half.
+//!
+//! ⚠️ **JT65 is the one mode whose encoder was NOT already compiled.** Q65, FST4,
+//! WSPR and MSK144 all had theirs linked in because their DECODERS call them to
+//! regenerate a candidate; JT65's decoder does not, so `gen65.f90` and `chkmsg.f90`
+//! were vendored for this. Everything they need was already present: `packjt`,
+//! `interleave63`, `graycode65`, and `rs_encode` from Karn's `wrapkarn.c` — the same
+//! Reed-Solomon codec the decoder uses, so encode and decode share one RS layer.
+//!
+//! # DECODE-ONLY NOTE (historical)
 //! `ModeKind::Jt65` reports `Capabilities { tx: false }`, so `modes::tx_mode()`
 //! refuses to hand it to the transmit path. Adding TX means adding those entry
 //! points in the C ABI, flipping that flag, AND passing the FT-mode TX approval
@@ -53,6 +63,102 @@ pub const SAMPLE_RATE: f32 = 12_000.0;
 
 /// JT65's T/R period, in seconds. Fixed — unlike Q65 and FST4, JT65 has only one.
 pub const PERIOD_S: u16 = 60;
+
+pub use tempo_fast_sys::JT65_NN as NN;
+
+/// ⭐ JT65's NATIVE sample rate is 11025 Hz, not the 12 kHz every other mode here
+/// uses. Symbol length is 4096 samples AT THAT RATE, and the tone spacing derives
+/// from it — get this wrong and the over is the right shape at the wrong speed.
+pub const NATIVE_RATE: f32 = 11_025.0;
+
+/// Samples per symbol at NATIVE_RATE.
+pub const NSPS_NATIVE: f32 = 4096.0;
+
+/// Where the modulation starts within the minute. 1.0 s, like the other 60 s modes.
+pub const LEAD_IN_SECS: f32 = 1.0;
+
+/// Tone spacing in Hz for `submode` (0/1/2 = A/B/C): `2^submode * 11025/4096`.
+///
+/// From `MainWindow::transmit()` (`mainwindow.cpp:12620-12622`) — the ON-AIR path,
+/// which for JT65 spells the three cases out literally.
+pub fn tone_spacing_hz(submode: u8) -> Option<f32> {
+    (submode < NSUBMODES).then(|| f32::from(1u16 << submode) * NATIVE_RATE / NSPS_NATIVE)
+}
+
+/// Occupied bandwidth in Hz — the highest tone is 65 spacings above the lowest.
+pub fn bandwidth_hz(submode: u8) -> Option<f32> {
+    tone_spacing_hz(submode).map(|s| 65.0 * s)
+}
+
+/// How long the radio stays keyed for one over, in seconds.
+///
+/// `tx_duration()` in WSJT-X's `helper_functions.cpp:10`:
+/// `1.0 + 126*4096/11025` ≈ 47.8 s, inside the 60 s slot.
+pub fn tx_duration_secs() -> f32 {
+    1.0 + (NN as f32 * NSPS_NATIVE) / NATIVE_RATE
+}
+
+/// Encode a message into the 126 JT65 channel symbols, or `None` if it will not
+/// pack.
+///
+/// ⭐ At most **22 characters** — JT65 predates 77-bit and uses the legacy `packjt`
+/// layer. Tones come back as 0 (sync) or 2..=65 (data); the +2 on data symbols is
+/// part of the wire format.
+pub fn encode(msg: &str) -> Option<Vec<i32>> {
+    let c = std::ffi::CString::new(msg).ok()?;
+    let mut itone = vec![0i32; NN];
+    let n = {
+        let _guard = MODEM_LOCK.lock().unwrap();
+        unsafe {
+            tempo_fast_sys::jt65_encode_msg(
+                c.as_ptr(),
+                msg.len() as std::os::raw::c_int,
+                itone.as_mut_ptr(),
+            )
+        }
+    };
+    (n as usize == NN).then_some(itone)
+}
+
+/// Synthesise the JT65 audio for `itone` at carrier `f0`, WITHOUT the lead-in.
+///
+/// Continuous-phase MFSK: tone *k* sits at `f0 + k * tone_spacing_hz(submode)`,
+/// phase carried across symbol boundaries and never reset.
+///
+/// ⭐ THE SYMBOL LENGTH IS FRACTIONAL AT 12 kHz. JT65 is natively 11025 Hz with
+/// 4096 samples per symbol, which resampled is `4096 * 12000/11025` = 4458.503…
+/// samples — not an integer. Rounding each symbol independently would accumulate
+/// ~63 samples of drift over 126 symbols and stretch the over past its slot, so
+/// boundaries are taken as `round(i * nsps)` from the START, which keeps the total
+/// exact and the error bounded to half a sample. Upstream does the same thing by
+/// passing the fractional `4096.0*12000.0/11025.0` straight to the modulator
+/// (`mainwindow.cpp:12626`).
+pub fn gen_wave(itone: &[i32], submode: u8, fsample: f32, f0: f32) -> Option<Vec<f32>> {
+    if itone.len() != NN || itone.iter().any(|&t| !(0..=65).contains(&t)) {
+        return None;
+    }
+    let spacing = f64::from(tone_spacing_hz(submode)?);
+    let nsps = f64::from(NSPS_NATIVE) * f64::from(fsample) / f64::from(NATIVE_RATE);
+    let total = (NN as f64 * nsps).round() as usize;
+
+    let dt = 1.0 / f64::from(fsample);
+    let tau = std::f64::consts::TAU;
+    let mut wave = vec![0f32; total];
+    let mut phi = 0f64;
+    for (i, &t) in itone.iter().enumerate() {
+        let start = (i as f64 * nsps).round() as usize;
+        let end = (((i + 1) as f64) * nsps).round() as usize;
+        let dphi = tau * (f64::from(f0) + f64::from(t) * spacing) * dt;
+        for w in wave.iter_mut().take(end.min(total)).skip(start) {
+            *w = phi.sin() as f32;
+            phi += dphi;
+            if phi > tau {
+                phi -= tau;
+            }
+        }
+    }
+    Some(wave)
+}
 
 /// How a decode was obtained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
