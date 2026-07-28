@@ -72,7 +72,13 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             libssl-dev \
-            libsoup-3.0-dev
+            libsoup-3.0-dev \
+            libhamlib-utils
+
+      # libhamlib-utils above ships `rigctld`: the tempo-audio integration
+      # suite (tests/rigctld_dummy.rs) drives the REAL CAT client against a
+      # real Hamlib dummy rig (-m 1). Without rigctld those tests self-skip,
+      # so dropping the package silently removes the coverage — keep it.
 
       - name: Set up Rust 1.93.1 toolchain (pinned — see header)
         uses: dtolnay/rust-toolchain@master
@@ -294,6 +300,11 @@ jobs:
       - name: Cross-compile src-tauri (x86_64-pc-windows-gnu)
         env:
           FFTW_MINGW_PREFIX: ${{ github.workspace }}/target/fftw-mingw
+          # This job proves COMPILE/LINK, not shipping: the gitignored DeepCW
+          # model isn't staged here, and build.rs hard-fails a release-profile
+          # radio build without it (the silent-lobotomy gate). Allow it HERE
+          # only — release.yml stages + digest-verifies the real model.
+          NEXUS_ALLOW_MISSING_AICW: "1"
         run: >
           cargo build --release
           --manifest-path src-tauri/Cargo.toml
