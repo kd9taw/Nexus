@@ -3778,7 +3778,7 @@ export function SettingsPanel({
           {/* ---- MSK144: meteor scatter. Period is the whole setting. ---- */}
           {tab === 'modes' && (
           <fieldset className="settings-section">
-            <legend>MSK144 &mdash; meteor scatter (receive-only)</legend>
+            <legend>MSK144 &mdash; meteor scatter</legend>
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">T/R period</span>
@@ -3801,8 +3801,11 @@ export function SettingsPanel({
               </label>
             </div>
             <span className="settings-hint">
-              Nexus decodes MSK144 and does not transmit it. Shorthand (MSK40) messages are off,
-              matching WSJT-X&rsquo;s default.
+              MSK144 transmits for nearly the whole period, sending the same 72 ms frame
+              hundreds of times &mdash; that is how meteor scatter works, and a contact can
+              take many minutes of apparent silence. The audio frequency is fixed at a
+              1500 Hz centre; the signal is 1 kHz wide, so there is nowhere to tune it.
+              Shorthand (MSK40) messages are off, matching WSJT-X&rsquo;s default.
             </span>
           </fieldset>
           )}
@@ -3932,7 +3935,7 @@ export function SettingsPanel({
                decode frame length, so they belong with the mode, not the radio. ---- */}
           {tab === 'modes' && (
           <fieldset className="settings-section">
-            <legend>Q65 (receive-only)</legend>
+            <legend>Q65 &mdash; EME / VHF+ scatter</legend>
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">T/R period</span>
@@ -3974,8 +3977,9 @@ export function SettingsPanel({
               </label>
             </div>
             <span className="settings-hint">
-              Q65 decodes only — Nexus will not transmit it, so these settings affect what you
-              hear, never what you send.
+              Q65 transmits and receives. The period and submode set both what you hear and
+              what you send, and BOTH STATIONS MUST MATCH &mdash; a correspondent on a
+              different period or submode will not decode you.
             </span>
           </fieldset>
           )}

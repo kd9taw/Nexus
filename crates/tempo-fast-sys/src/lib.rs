@@ -209,6 +209,17 @@ pub type Fst4DecodeT = Ft8DecodeT;
 /// The T/R periods MSK144 supports. 15 s is the 6 m meteor-scatter workhorse.
 /// Anything else is REJECTED with -1 rather than clamped.
 pub const MSK144_PERIODS: [u16; 4] = [5, 10, 15, 30];
+
+/// MSK144 channel symbols per frame: 144 bits, which at 2000 baud is a 72 ms
+/// message. Upstream's `NUM_MSK144_SYMBOLS`. The MSK40 shorthand is 40.
+pub const MSK144_NN: usize = 144;
+
+/// Samples per symbol at 12 kHz — 2000 baud. `msk144sim.f90:54`.
+pub const MSK144_NSPS: usize = 6;
+
+/// MSK144 baud rate. The tone separation is `baud/2` = 1000 Hz, which is what
+/// makes the modulation minimum-shift keying rather than arbitrary FSK.
+pub const MSK144_BAUD: f32 = 2000.0;
 /// Ceiling on an MSK144 frame: 30 s @ 12 kHz.
 pub const MSK144_NMAX_MAX: usize = 360_000;
 
@@ -703,6 +714,17 @@ extern "C" {
     /// ⭐ `nutc` MUST differ between periods. mskrtd's duplicate suppressor resets
     /// only when it changes, so a constant silently drops any message heard again
     /// in a later period.
+    /// Encode a message into MSK144 channel symbols (BITS — 0 or 1).
+    ///
+    /// Returns 144 for a full frame, **40 for an MSK40 shorthand**, or -1 on
+    /// failure. A caller that assumes 144 would transmit 104 symbols of whatever
+    /// was in the buffer.
+    pub fn msk144_encode_msg(
+        msg: *const c_char,
+        msg_len: c_int,
+        itone_out: *mut c_int, // [MSK144_NN]
+    ) -> c_int;
+
     pub fn msk144_decode_frame(
         iwave: *const i16, // [ntrperiod * 12000] — see `msk144_nmax`
         ntrperiod: c_int,  // 5 | 10 | 15 | 30; anything else ⇒ -1

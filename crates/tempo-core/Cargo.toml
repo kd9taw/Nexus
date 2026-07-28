@@ -21,3 +21,4 @@ microfft = "0.6"
 # depend on any modem crate. q65 depends only on tempo-fast-sys, so no cycle.
 q65 = { path = "../q65" }
 fst4 = { path = "../fst4" }
+msk144 = { path = "../msk144" }

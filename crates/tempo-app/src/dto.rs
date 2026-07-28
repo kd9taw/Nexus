@@ -211,9 +211,10 @@ pub enum Tier {
     /// which actually knows.
     #[serde(rename = "Q65")]
     Q65,
-    /// WSJT-X MSK144 — the METEOR-SCATTER mode. **RECEIVE-ONLY** —
-    /// `modes::tx_mode` refuses it, so selecting this tier decodes but never keys
-    /// the radio. The T/R period comes from `Settings::msk144_period_s`.
+    /// WSJT-X MSK144 — the METEOR-SCATTER mode. **Transmits and receives**, verified
+    /// against stock `jt9 -k` at every period. Keys for nearly the whole period,
+    /// repeating one 72 ms frame — that repetition IS the mode. The T/R period comes
+    /// from `Settings::msk144_period_s`.
     #[serde(rename = "MSK144")]
     Msk144,
     /// WSJT JT65 — the classic weak-signal / EME mode. **RECEIVE-ONLY**. The
@@ -312,10 +313,7 @@ impl Tier {
         if ModeKind::FST4_PERIODS.contains(&period_s) {
             ModeKind::Fst4 { period_s, wspr }
         } else {
-            ModeKind::Fst4 {
-                period_s: 15,
-                wspr,
-            }
+            ModeKind::Fst4 { period_s: 15, wspr }
         }
     }
 

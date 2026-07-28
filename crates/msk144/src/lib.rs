@@ -44,12 +44,119 @@
 use tempo_fast_sys::MODEM_LOCK;
 
 pub use tempo_fast_sys::{
-    msk144_nmax as nmax, msk144_period_supported as period_supported,
-    MSK144_NMAX_MAX as NMAX_MAX, MSK144_PERIODS as PERIODS,
+    msk144_nmax as nmax, msk144_period_supported as period_supported, MSK144_BAUD as BAUD,
+    MSK144_NMAX_MAX as NMAX_MAX, MSK144_NN as NN, MSK144_NSPS as NSPS, MSK144_PERIODS as PERIODS,
 };
 
 /// WSJT-X audio sample rate (Hz).
 pub const SAMPLE_RATE: f32 = 12_000.0;
+
+/// The nominal audio CENTRE frequency for an MSK144 transmission, in Hz.
+///
+/// ⭐ FIXED, unlike every other mode here — MSK144 does not follow the operator's
+/// TX offset. The signal is 1000 Hz wide (two tones at centre ±500), so it occupies
+/// most of a normal SSB passband and there is nowhere to move it to. Upstream
+/// hardcodes the same thing: `mainwindow.cpp:12763` sets `f0=1000.0` with a 1000 Hz
+/// tone spacing, putting the tones at 1000 and 2000 Hz — a 1500 Hz centre.
+pub const TX_CENTRE_HZ: f32 = 1500.0;
+
+/// Tone separation in Hz: `BAUD/2` = 1000. Not a free parameter — an index of 0.5
+/// is what makes this minimum-shift keying rather than arbitrary FSK.
+pub const TONE_SPACING_HZ: f32 = BAUD / 2.0;
+
+/// One frame's duration in seconds: 144 symbols at 2000 baud = 72 ms.
+pub fn frame_secs() -> f32 {
+    (NN * NSPS) as f32 / SAMPLE_RATE
+}
+
+/// How long the radio stays keyed for one period, in seconds.
+///
+/// From `tx_duration()` in WSJT-X's `helper_functions.cpp:32`: `trPeriod - 0.25`.
+/// ⭐ MSK144 KEYS FOR ESSENTIALLY THE WHOLE PERIOD, unlike every other mode here,
+/// which sends one short over and listens. Meteor scatter works by transmitting
+/// continuously and hoping one 72 ms frame finds a reflection.
+pub fn tx_duration_secs(period_s: u16) -> f32 {
+    f32::from(period_s) - 0.25
+}
+
+/// Encode a message into MSK144 channel symbols (bits, 0 or 1).
+///
+/// Returns the symbols actually generated: **144 for a full frame, or 40 for an
+/// MSK40 shorthand** (`<Call_1 Call2> Rpt`). `None` if the message will not pack.
+///
+/// ⚠️ Check the LENGTH. Assuming 144 on a shorthand frame would transmit 104
+/// symbols of padding as if they were message.
+pub fn encode(msg: &str) -> Option<Vec<i32>> {
+    let c = std::ffi::CString::new(msg).ok()?;
+    let mut itone = vec![0i32; NN];
+    let n = {
+        let _guard = MODEM_LOCK.lock().unwrap();
+        unsafe {
+            tempo_fast_sys::msk144_encode_msg(
+                c.as_ptr(),
+                msg.len() as std::os::raw::c_int,
+                itone.as_mut_ptr(),
+            )
+        }
+    };
+    if n != 40 && n as usize != NN {
+        return None;
+    }
+    itone.truncate(n as usize);
+    Some(itone)
+}
+
+/// Synthesise one period of MSK144 audio: the frame REPEATED to fill the over.
+///
+/// `f0` is the CENTRE frequency; the two tones land at `f0 ± BAUD/4` (±500 Hz).
+/// Returns `None` unless `itone` is 40 or 144 bits and the period is supported.
+///
+/// ⭐ THE REPETITION IS THE MODE. A 72 ms frame is sent over and over for
+/// `period − 0.25 s` — ~204 copies in a 15 s period. The far end may hear exactly
+/// one of them, off a meteor trail lasting a tenth of a second. Sending the frame
+/// once, as every other mode here does, would make the mode look like it worked
+/// and essentially never complete a contact.
+///
+/// Whole frames only: a truncated trailing copy carries no decodable message, so
+/// the over ends on a frame boundary and the remainder is silence.
+pub fn gen_wave(itone: &[i32], period_s: u16, fsample: f32, f0: f32) -> Option<Vec<f32>> {
+    if (itone.len() != 40 && itone.len() != NN) || itone.iter().any(|&t| !(0..=1).contains(&t)) {
+        return None;
+    }
+    if !period_supported(period_s) {
+        return None;
+    }
+    let nsps_out = (NSPS as f32 * fsample / SAMPLE_RATE).round().max(1.0) as usize;
+    let frame_len = itone.len() * nsps_out;
+    let budget = (tx_duration_secs(period_s) * fsample) as usize;
+    let nreps = budget / frame_len;
+    if nreps == 0 {
+        return None;
+    }
+
+    // Continuous phase across symbols AND across frame repeats — the phase is never
+    // reset, exactly as msk144sim.f90 builds it. A reset at each frame boundary
+    // would splatter ~204 times per over.
+    let dt = 1.0 / f64::from(fsample);
+    let tau = std::f64::consts::TAU;
+    let lo = tau * f64::from(f0 - BAUD / 4.0) * dt;
+    let hi = tau * f64::from(f0 + BAUD / 4.0) * dt;
+
+    let mut wave = vec![0f32; nreps * frame_len];
+    let mut phi = 0f64;
+    let mut k = 0usize;
+    for _ in 0..nreps {
+        for &bit in itone {
+            let dphi = if bit == 0 { lo } else { hi };
+            for _ in 0..nsps_out {
+                wave[k] = phi.cos() as f32;
+                phi = (phi + dphi) % tau;
+                k += 1;
+            }
+        }
+    }
+    Some(wave)
+}
 
 /// How a decode was recovered — worth surfacing, because the two mean different
 /// things to an operator watching a band open.
@@ -177,6 +284,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn encode_produces_a_valid_2fsk_frame() {
+        let t = encode("K1ABC W9XYZ EN37").expect("packs");
+        assert_eq!(t.len(), NN, "a full MSK144 frame is 144 symbols");
+        assert!(
+            t.iter().all(|&x| (0..=1).contains(&x)),
+            "MSK144 is 2-FSK — every symbol is a BIT"
+        );
+    }
+
+    #[test]
+    fn the_frame_is_repeated_to_fill_the_over() {
+        // ⭐ THE REPETITION IS THE MODE. A 72 ms frame goes out over and over for
+        // period-0.25 s; the far end may hear exactly one copy off a meteor trail
+        // lasting a tenth of a second. Sending it once — as every other mode here
+        // does — would look correct in a file and essentially never complete a
+        // contact on the air.
+        let t = encode("K1ABC W9XYZ EN37").unwrap();
+        for &p in PERIODS.iter() {
+            let w = gen_wave(&t, p, SAMPLE_RATE, TX_CENTRE_HZ).expect("supported");
+            let frames = w.len() / (NN * NSPS);
+            assert!(frames > 50, "MSK144-{p} sent only {frames} frames");
+            assert_eq!(w.len() % (NN * NSPS), 0, "MSK144-{p} ended mid-frame");
+            assert!(
+                w.len() as f32 / SAMPLE_RATE <= tx_duration_secs(p),
+                "MSK144-{p} over exceeds its keying budget"
+            );
+        }
+        let w15 = gen_wave(&t, 15, SAMPLE_RATE, TX_CENTRE_HZ).unwrap();
+        assert_eq!(
+            w15.len() / (NN * NSPS),
+            204,
+            "~204 frames in a 15 s interval"
+        );
+    }
+
+    #[test]
+    fn the_two_tones_sit_one_baud_half_apart() {
+        // Minimum-shift keying is CPFSK at modulation index 0.5. The spacing is not
+        // a free parameter: at 2000 baud the tones are 1000 Hz apart, centred on
+        // TX_CENTRE_HZ, giving 1000 and 2000 Hz — exactly what upstream emits.
+        assert_eq!(TONE_SPACING_HZ, BAUD / 2.0);
+        assert_eq!(TONE_SPACING_HZ, 1000.0);
+        assert_eq!(TX_CENTRE_HZ - BAUD / 4.0, 1000.0);
+        assert_eq!(TX_CENTRE_HZ + BAUD / 4.0, 2000.0);
+        assert!(
+            (frame_secs() - 0.072).abs() < 1e-6,
+            "144 bits at 2000 baud = 72 ms"
+        );
+    }
+
+    #[test]
+    fn an_unsupported_period_or_symbol_is_refused() {
+        let t = encode("K1ABC W9XYZ EN37").unwrap();
+        assert!(gen_wave(&t, 20, SAMPLE_RATE, TX_CENTRE_HZ).is_none());
+        let mut bad = t.clone();
+        bad[3] = 2;
+        assert!(gen_wave(&bad, 15, SAMPLE_RATE, TX_CENTRE_HZ).is_none());
+        assert!(gen_wave(&t[..100], 15, SAMPLE_RATE, TX_CENTRE_HZ).is_none());
+    }
+
+    #[test]
+    fn encode_then_decode_recovers_the_message() {
+        const MSG: &str = "K1ABC W9XYZ EN37";
+        for &p in PERIODS.iter() {
+            let t = encode(MSG).unwrap();
+            let w = gen_wave(&t, p, SAMPLE_RATE, TX_CENTRE_HZ).unwrap();
+            let mut iwave = vec![0i16; nmax(p)];
+            for (i, &v) in w.iter().enumerate() {
+                if i < iwave.len() {
+                    iwave[i] = (v * 8000.0) as i16;
+                }
+            }
+            let d = decode_frame(&iwave, p, 0, 300, 2700, 3, "", "", 1500);
+            assert!(
+                d.iter().any(|r| r.message.trim() == MSG),
+                "MSK144-{p} did not decode its own transmission: {:?}",
+                d.iter().map(|r| r.message.trim()).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn frame_length_follows_the_period() {
         for p in PERIODS {
             assert_eq!(nmax(p), p as usize * 12_000);
@@ -217,7 +406,17 @@ mod tests {
                 *s = ((seed >> 16) as i16) / 8;
             }
             // Distinct nutc per call, as the contract requires.
-            let d = decode_frame(&iwave, p, i as i32 + 1, 200, 2900, 3, "KD9TAW", "W1AW", 1500);
+            let d = decode_frame(
+                &iwave,
+                p,
+                i as i32 + 1,
+                200,
+                2900,
+                3,
+                "KD9TAW",
+                "W1AW",
+                1500,
+            );
             assert!(d.is_empty(), "MSK144-{p} decoded {} from noise", d.len());
         }
     }

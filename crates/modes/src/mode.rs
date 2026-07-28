@@ -796,7 +796,7 @@ mod tx_capability_tests {
     /// `tx: true` AND `beacon_only: true` — transmit-capable, but never handed to
     /// the QSO sequencer. MSK144 and JT65 remain.
     fn rx_only(kind: ModeKind) -> bool {
-        matches!(kind, ModeKind::Msk144 { .. } | ModeKind::Jt65 { .. })
+        matches!(kind, ModeKind::Jt65 { .. })
     }
 
     #[test]
@@ -1223,16 +1223,37 @@ impl Mode for Msk144Mode {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            // Flipping this to true without adding the encode entry points to the
-            // C ABI gets you a mode that keys the radio and transmits silence.
-            tx: false,
+            tx: true,
             fox_hound: false,
             ir_harq: false,
             free_text: true,
             contest: false,
-            // A QSO mode: it has an exchange to sequence.
+            // A QSO mode: it has an exchange to sequence. ⚠️ But a METEOR-SCATTER
+            // one — the far end may hear a single 72 ms frame out of ~200 and a
+            // contact can take many minutes of apparent silence. The sequencer's
+            // FT8-tuned patience (cq_max_calls, the stalled-QSO detector) is the
+            // part that still wants operator judgement on the air.
             beacon_only: false,
         }
+    }
+
+    fn encode(&self, msg: &str) -> Vec<i32> {
+        // May return 40 (MSK40 shorthand) rather than 144 — gen_wave accepts both.
+        msk144::encode(msg).unwrap_or_default()
+    }
+
+    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
+        // ⭐ f0 IS IGNORED. MSK144 does not follow the operator's TX offset: the
+        // signal is 1000 Hz wide (two tones at centre ±500) and fills a normal SSB
+        // passband, so there is nowhere to move it. Upstream hardcodes the same
+        // centre (mainwindow.cpp:12763, f0=1000 with 1000 Hz spacing → tones at
+        // 1000/2000 Hz). Honouring a 2800 Hz offset here would put the upper tone
+        // outside the transmit filter.
+        let _ = f0;
+        // The frame is repeated to fill the over — gen_wave owns that, because the
+        // repetition IS the mode. No lead-in: MSK144 keys from the slot boundary
+        // (msk144sim starts at sample 1), unlike Q65/FST4/WSPR.
+        msk144::gen_wave(itone, self.period_s, fsample, msk144::TX_CENTRE_HZ).unwrap_or_default()
     }
 
     // encode() and gen_wave() are DELIBERATELY not implemented — the trait defaults

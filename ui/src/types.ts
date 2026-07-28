@@ -10,7 +10,7 @@ export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FST4' | 'FST4W' 
  * in the `modes` crate — the engine is the enforcement (it refuses to arm TX or
  * start a CQ run on these); this list exists so the UI does not OFFER controls the
  * engine will refuse. Keep the two in step when a mode gains a transmitter. */
-export const RX_ONLY_TIERS: readonly Tier[] = ['MSK144', 'JT65']
+export const RX_ONLY_TIERS: readonly Tier[] = ['JT65']
 
 /** BEACON tiers: they transmit, but on a SCHEDULE and with no QSO sequence — the
  * payload is callsign, grid and power. Mirrors `Capabilities { beacon_only: true }`.

@@ -45,9 +45,8 @@ const TIER_PILLS: {
   {
     tier: 'MSK144',
     name: 'MSK144',
-    small: 'RX',
-    rxOnly: true,
-    title: 'MSK144 — meteor scatter. DECODE ONLY. Period in Settings ▸ Modes',
+    title:
+      'MSK144 — meteor scatter. Transmits for nearly the whole period (that is how the mode works). Period in Settings ▸ Modes',
   },
   {
     tier: 'JT65',

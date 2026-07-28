@@ -2207,6 +2207,7 @@ dependencies = [
  "fst4",
  "microfft",
  "modes",
+ "msk144",
  "q65",
  "tempo-fast",
  "wspr",

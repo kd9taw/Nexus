@@ -4329,16 +4329,35 @@ impl Engine {
         // Tier switch changes the slot period (FT8 15 s / FT4 7.5 s) — slot indices
         // from the old tier are meaningless for answer parity. Flush the context.
         self.clear_decode_context();
+        // Captured BEFORE the swap: the halt below asks what we are LEAVING.
+        let from = self.app.tier();
         self.app.set_tier(tier);
-        // Switching INTO a receive-only tier stands transmit down. Without this, a
-        // CQ run started on FT8 survives the switch verbatim — mode stays
-        // `Qso { running: true }`, `tx_enabled` stays latched, and the sequencer
-        // keeps queuing overs the wave builder then discards. That is the same
-        // phantom the entry-point guards close, reached by a different door: the
-        // guards refuse a run you START here, and this ends one you BRING here.
-        // `halt_tx` also releases any latched PTT/CW, which matters because the
-        // switch can happen mid-over.
-        if self.tier_is_rx_only(tier) {
+        // ⭐ ANY TIER SWITCH WHILE AN OVER IS IN FLIGHT STANDS TRANSMIT DOWN.
+        //
+        // This was gated on `tier_is_rx_only`, which stopped covering the case that
+        // matters once Q65/FST4/WSPR/FST4W gained transmitters — all four declare
+        // `tx: true`, so none of them is rx-only and the halt never ran. The audio
+        // service only cuts an in-flight over when `tx_enabled` goes false, so PTT
+        // stayed held to `tx_until_ms`, sized from the whole generated waveform.
+        //
+        // On FT8 that window was ~13 s of a 15 s slot and reads as "the over
+        // finishes". On WSPR it is ~93% of every interval and on FST4W-1800 it is
+        // essentially always: the operator clicks off the tier, the UI and the pill
+        // follow instantly, and the radio keeps sending the OLD mode for up to
+        // 25 minutes. The retune to the new tier queues behind it too.
+        //
+        // ⚠️ SCOPED TO THE TIERS WHERE IT IS NEW. Halting on ANY armed tier switch
+        // also disarms an FT8→FT4 change, which is shipped gold-standard behaviour
+        // and not mine to alter — `tier_switch_keeps_message_layer` caught exactly
+        // that. FT8/FT4/FT1/DX1 keep their existing behaviour (their overs are
+        // 13 s or less, and trailing one out reads as "the over finishes"); the
+        // four new tiers, whose overs run from 26 s to 30 MINUTES, stand down.
+        let leaving_a_long_over = self.tx_enabled
+            && !matches!(
+                from,
+                Tier::Ft8 | Tier::Ft4 | Tier::TempoFast | Tier::TempoDeep
+            );
+        if self.tier_is_rx_only(tier) || leaving_a_long_over {
             self.halt_tx();
             self.cq_running = false;
             if matches!(self.mode, Mode::Qso { .. } | Mode::FieldDay { .. }) {
@@ -4772,7 +4791,7 @@ impl Engine {
             // loop actually plays). Must include the lead-in so the "snappy first over"
             // room check doesn't admit an over that overruns the next slot by 0.5 s.
             Tier::Ft8 => 13.14,
-            // FST4 / FST4W / Q65 NEVER TRANSMIT: Capabilities{tx:false} means
+            // FST4 / FST4W / Q65 transmit; this returns the FULL T/R period, which is conservative means
             // modes::tx_mode() returns None and the wave builder abandons the over
             // before keying. A FULL SLOT is returned rather than 0.0 so that if
             // this value is ever consulted by a fit check, the answer is "does not
@@ -6697,6 +6716,18 @@ impl Engine {
     /// `poll_tx`'s `tx_enabled` / `tx_allowed` / operating-mode guards, so a beacon
     /// keys unattended only once the operator has explicitly armed transmit.
     fn poll_beacon_tx(&mut self, slot: u64) -> Vec<Vec<f32>> {
+        // ⭐ 0% MEANS SILENT, WHICHEVER SCHEDULER IS SELECTED. This check used to
+        // live only inside `BeaconScheduler::next_is_tx`, which the Round-Robin arm
+        // below never calls — so a station with an RR slot left over from a
+        // coordinated session kept keying every Nth interval after the operator set
+        // Transmit % to 0 and believed they had stopped. Settings says "0 = listen
+        // only" in as many words; it has to be true on both paths.
+        if self.settings.beacon_tx_percent == 0 {
+            self.beacon_decided_slot = Some(slot);
+            self.beacon_tx_this_slot = false;
+            self.app.set_transmitting(false);
+            return Vec::new();
+        }
         if self.beacon_decided_slot != Some(slot) {
             self.beacon_decided_slot = Some(slot);
             self.beacon_sched
@@ -6746,6 +6777,27 @@ impl Engine {
             self.app.set_transmitting(false);
             return Vec::new();
         }
+        // ⭐ THE WALL-CLOCK WATCHDOG APPLIES HERE TOO. It is implemented inline in
+        // the QSO arm of `poll_tx`, ~240 lines below the branch that sent us here,
+        // so a beacon had NO duration bound at all: Settings offers "TX watchdog:
+        // 6 min" and it silently did not cover the two modes most likely to be left
+        // running unattended. An armed beacon keyed on schedule indefinitely and the
+        // UI never showed a trip.
+        //
+        // Checked BEFORE keying, not after: an FST4W-1800 over is 30 minutes, so a
+        // watchdog evaluated only at over boundaries would let a single transmission
+        // run five times past its own limit.
+        let limit_secs = u64::from(self.settings.tx_watchdog_min) * 60;
+        if limit_secs > 0 {
+            let now = now_unix_secs();
+            let start = *self.tx_watchdog_start.get_or_insert(now);
+            if now.saturating_sub(start) >= limit_secs {
+                self.tx_watchdog = true;
+                self.tx_enabled = false;
+                self.app.set_transmitting(false);
+                return Vec::new();
+            }
+        }
         self.app.set_transmitting(true);
         vec![wave]
     }
@@ -6760,13 +6812,6 @@ impl Engine {
         if !self.tx_enabled || self.tuning || !self.tx_allowed() {
             self.app.set_transmitting(false);
             return Vec::new();
-        }
-        // BEACON TIER (WSPR / FST4W): a completely separate transmit path. It
-        // never reaches the QSO sequencer below, because there is no exchange —
-        // the payload is callsign, grid and power, and the only decision is
-        // WHETHER to key this interval.
-        if self.tier_is_beacon(self.app.tier()) {
-            return self.poll_beacon_tx(slot);
         }
         // RECEIVE-ONLY TIER: stop HERE, with the other "we are not transmitting"
         // guards — not at the wave builder below.
@@ -6795,6 +6840,27 @@ impl Engine {
         if self.settings.operating_mode != crate::settings::OperatingMode::Digital {
             self.app.set_transmitting(false);
             return Vec::new();
+        }
+        // BEACON TIER (WSPR / FST4W): a separate transmit path — there is no
+        // exchange, so it never reaches the QSO sequencer below. The only decision
+        // is WHETHER to key this interval.
+        //
+        // ⭐ THIS MUST STAY BELOW THE OPERATING-MODE GATE. It was above it, and that
+        // was a live RF bug, not a style point: `set_operating_mode` ARMS TX when
+        // the operator enters Phone/CW/RTTY (the comment there justifies it with
+        // "poll_tx is gated off for non-Digital", which the early return had
+        // quietly made false). A configured beacon therefore keyed itself on
+        // schedule while the operator was on SSB — 111 s of WSPR tones into the
+        // 20 m phone segment, on the shared PTT, with no action that reads as
+        // "transmit". `tx_allowed` compounded it by validating the SSB passband
+        // against PHONE privileges, so the data emission was checked against the
+        // wrong rule set too.
+        //
+        // Everything above this line is a reason not to transmit AT ALL, so the
+        // beacon must clear all of it. Only the QSO-specific machinery below —
+        // identity packing, parity, the sequencer — is genuinely inapplicable.
+        if self.tier_is_beacon(self.app.tier()) {
+            return self.poll_beacon_tx(slot);
         }
         // Delivery ACKs we now owe (heard a directed message addressed to us) ride out on
         // the chat broadcast path — closing the store-and-forward loop. Only reached when
@@ -14138,11 +14204,10 @@ mod tests {
 
     /// Every RX-only tier, in its DEFAULT settings resolution.
     ///
-    /// Shrinking as encoders land: Q65, FST4, then WSPR and FST4W once the beacon
-    /// scheduler existed. The beacons are NOT here — they transmit. They are in
-    /// `BEACON_TIERS` below, which pins the different property that they refuse the
-    /// QSO sequencer.
-    const RX_ONLY_TIERS: [Tier; 2] = [Tier::Msk144, Tier::Jt65];
+    /// Down to JT65 alone: Q65, FST4, the two beacons and MSK144 all transmit now.
+    /// The beacons are NOT here — they key the radio; they are in `BEACON_TIERS`
+    /// below, which pins the different property that they refuse the QSO sequencer.
+    const RX_ONLY_TIERS: [Tier; 1] = [Tier::Jt65];
 
     /// The BEACON tiers: transmit-capable, but with no QSO sequence. They must
     /// refuse every sequencer entry point while still being able to key.
@@ -14234,6 +14299,7 @@ mod tests {
             Tier::TempoDeep,
             Tier::Q65,
             Tier::Fst4,
+            Tier::Msk144,
         ] {
             let mut e = Engine::new("KD9TAW", "EN52", 0);
             e.set_tier(tier);
@@ -14249,6 +14315,141 @@ mod tests {
                 .unwrap_or_else(|err| panic!("{tier:?}: CQ run refused: {err}"));
             assert!(e.tx_enabled(), "{tier:?}: the CQ run did not arm TX");
             assert!(matches!(e.mode, Mode::Qso { running: true, .. }));
+        }
+    }
+
+    // ---- The four pre-flight transmit-safety fixes ----
+    //
+    // Every one of these was found by a pre-flight review BEFORE the modes went on
+    // the air, and three were reproduced with executable probes. They are grouped
+    // because they share a cause: the beacon transmit path was bolted onto poll_tx
+    // without walking the guard list it was skipping.
+
+    #[test]
+    fn a_beacon_never_keys_while_the_phone_or_cw_section_owns_the_rig() {
+        // ⭐ THE RF BUG. The beacon branch returned ABOVE poll_tx's operating-mode
+        // gate, and `set_operating_mode` ARMS TX when the operator enters Phone —
+        // justified by a comment saying poll_tx is gated off for non-Digital, which
+        // the early return had quietly made false. Net effect, from a probe: one
+        // click on the Phone section, no transmit action at all, and the radio put
+        // 111 s of WSPR tones into the 20 m phone segment on the beacon schedule.
+        // `tx_allowed` compounded it by checking the SSB passband against PHONE
+        // privileges, so the data emission was validated against the wrong rules.
+        for tier in BEACON_TIERS {
+            for op in ["phone", "cw", "rtty"] {
+                let mut e = Engine::new("KD9TAW", "EN52", 0);
+                e.set_tier(tier);
+                let mut s = e.settings().clone();
+                s.beacon_tx_percent = 100;
+                s.beacon_power_dbm = 37;
+                e.apply_settings(s);
+
+                // The single operator action, exactly as the probe ran it.
+                e.set_operating_mode(op, true);
+
+                assert!(
+                    e.poll_tx(0).is_empty(),
+                    "{tier:?} beaconed while the {op} section owned the rig"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_beacon_is_bounded_by_the_tx_watchdog_like_everything_else() {
+        // The wall-clock watchdog is implemented inline in poll_tx's QSO arm, ~240
+        // lines BELOW the beacon branch, so beacons had no duration bound at all:
+        // Settings offers "TX watchdog: 6 min" and it silently did not cover the two
+        // modes most likely to be left running unattended.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Wspr);
+        let mut s = e.settings().clone();
+        s.beacon_tx_percent = 100;
+        s.beacon_power_dbm = 37;
+        s.tx_watchdog_min = 1;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+
+        assert!(!e.poll_tx(0).is_empty(), "precondition: the beacon keys");
+
+        // Backdate the watchdog past its limit, as the probe did.
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(
+            e.poll_tx(1).is_empty(),
+            "the beacon kept keying past the watchdog limit"
+        );
+        assert!(e.tx_watchdog, "the trip must be visible to the operator");
+        assert!(!e.tx_enabled(), "a trip disarms TX");
+    }
+
+    #[test]
+    fn zero_percent_silences_the_beacon_on_both_schedulers() {
+        // The 0%-never short-circuit lived only inside BeaconScheduler::next_is_tx,
+        // which the Round-Robin arm never calls. A station with an RR slot left over
+        // from a coordinated session kept keying every Nth interval after the
+        // operator set Transmit % to 0 — which Settings describes, in as many words,
+        // as "0 = listen only".
+        for (rr_slot, rr_slots) in [(0u8, 0u8), (1, 2), (2, 3)] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(Tier::Wspr);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 0;
+            s.beacon_power_dbm = 37;
+            s.beacon_rr_slot = rr_slot;
+            s.beacon_rr_slots = rr_slots;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+
+            for slot in 0..8u64 {
+                assert!(
+                    e.poll_tx(slot).is_empty(),
+                    "0% still keyed at slot {slot} with rr_slot={rr_slot}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn leaving_a_long_over_tier_stands_transmit_down() {
+        // set_tier halted only for RECEIVE-ONLY tiers, which stopped covering the
+        // case that matters once these four gained transmitters — all declare
+        // tx: true, so none is rx-only and the halt never ran. The audio service
+        // cuts an in-flight over only when tx_enabled goes false, so PTT stayed held
+        // for the rest of the waveform: ~93% of every WSPR interval, and up to 30
+        // minutes on FST4W-1800.
+        for from in [Tier::Wspr, Tier::Fst4w, Tier::Fst4, Tier::Q65] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(from);
+            e.set_tx_enabled(true);
+            assert!(e.tx_enabled(), "precondition: armed on {from:?}");
+
+            e.set_tier(Tier::Ft8);
+            assert!(
+                !e.tx_enabled(),
+                "leaving {from:?} left transmit armed — the old mode keeps going out"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ft_tier_switch_keeps_its_shipped_behaviour() {
+        // The fix above is deliberately SCOPED. Halting on any armed tier switch
+        // would also disarm FT8→FT4, which is shipped gold-standard behaviour and
+        // not ours to change — their overs are 13 s or less and trailing one out
+        // reads as "the over finishes". This pins that they are untouched.
+        for (from, to) in [
+            (Tier::Ft8, Tier::Ft4),
+            (Tier::Ft4, Tier::Ft8),
+            (Tier::TempoFast, Tier::TempoDeep),
+        ] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(from);
+            e.set_tx_enabled(true);
+            e.set_tier(to);
+            assert!(
+                e.tx_enabled(),
+                "{from:?} -> {to:?} disarmed TX; FT behaviour must not change"
+            );
         }
     }
 

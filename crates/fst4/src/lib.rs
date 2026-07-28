@@ -12,11 +12,10 @@
 //! because the decoder calls both — `get_fst4_tones_from_bits` for candidate tones
 //! and `gen_fst4wave` to subtract a decoded signal from the spectrum.
 //!
-//! ⚠️ **FST4W (the beacon variant) is still receive-only.** Its `iwspr=1` path
-//! exists in the C ABI, but a beacon needs a transmit-percentage scheduler and a
-//! callsign/grid/power message rather than a QSO exchange — a separate machine, and
-//! a separate phase of work. `ModeKind::Fst4 { wspr: true }` still declares
-//! `tx: false`.
+//! **FST4W (the beacon variant) also transmits**, on a schedule rather than through
+//! the QSO sequencer — see `tempo_core::beacon`. `Capabilities` distinguishes them
+//! with `beacon_only`, not with `tx`: both key the radio, but only FST4 has an
+//! exchange to sequence.
 //!
 //! # ⭐ All 7 periods, and both modes
 //! Period and mode are arguments. **The frame length follows the period** —

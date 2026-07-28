@@ -64,6 +64,11 @@ module msk144_cabi
   integer, parameter :: MSK144_NPERIODS = 4
   integer, parameter :: MSK144_PERIODS(MSK144_NPERIODS) = [5, 10, 15, 30]
 
+  ! MSK144 channel symbols per frame: s8 + 48 bits + s8 + 80 bits = 144, which at
+  ! 2000 baud is a 72 ms message (genmsk_128_90.f90:2). Upstream's
+  ! NUM_MSK144_SYMBOLS. The MSK40 shorthand form is 40 of these.
+  integer, parameter :: MSK144_NN = 144
+
   ! mskrtd.f90:220 format 1021 — the contract this wrapper reads back.
   character(len=*), parameter :: FMT_1021 = '(i6,i4,f5.1,i5,a4,a37)'
 
@@ -241,5 +246,69 @@ contains
        fstr(i:i) = cstr(i)
     end do
   end subroutine c_to_fstr12_msk
+
+  !-------------------------------------------------------------------------
+  ! msk144_encode_msg : message text -> MSK144 channel symbols (bits, 0 or 1).
+  !
+  !   msg        : message text (C string, <= 37 chars)
+  !   msg_len    : length of msg
+  !   itone_out  : caller buffer, MSK144_NN entries
+  !   returns    : 144 for a full message, 40 for an MSK40 SHORTHAND, -1 on failure
+  !
+  ! Straight into the vendored genmsk_128_90 - the same routine the DECODER already
+  ! calls to regenerate a candidate for comparison, so encode and decode share one
+  ! generator and cannot drift apart.
+  !
+  ! ⭐ MSK144 IS 2-FSK, not 4- or 65-. itone is a BIT, 0 or 1. The "MSK" is in how
+  ! those bits are carried: minimum shift keying is continuous-phase FSK with
+  ! modulation index 0.5, so the two tones sit baud/2 = 1000 Hz apart. That spacing
+  ! is not a free parameter - it is what makes the modulation MSK.
+  !
+  ! ⭐ SHORTHAND RETURNS 40, NOT 144. genmsk_128_90 emits a 40-symbol MSK40 frame
+  ! for the short "<Call_1 Call2> Rpt" forms, signalled by itone(41) < 0 - exactly
+  ! how upstream detects it (msk144sim.f90:55, mainwindow.cpp:12772). A caller that
+  ! assumes 144 would transmit 104 symbols of uninitialised memory.
+  !-------------------------------------------------------------------------
+  function msk144_encode_msg(msg, msg_len, itone_out) result(nsym_out) &
+       bind(C, name="msk144_encode_msg")
+    character(kind=c_char), intent(in)  :: msg(*)
+    integer(c_int), value,  intent(in)  :: msg_len
+    integer(c_int),         intent(out) :: itone_out(MSK144_NN)
+    integer(c_int) :: nsym_out
+
+    character(len=37) :: msg37
+    character(len=37) :: msgsent37
+    integer :: itone(MSK144_NN)
+    integer :: i, n, ichk, itype
+
+    nsym_out = -1
+    msg37 = ' '
+    n = min(msg_len, 37)
+    do i = 1, n
+       if (msg(i) == c_null_char) exit
+       msg37(i:i) = msg(i)
+    end do
+
+    ichk = 0
+    itype = 0
+    itone = -1
+    call genmsk_128_90(msg37, ichk, msgsent37, itone, itype)
+
+    ! itype <= 0 means the packer refused the message outright.
+    if (itype <= 0) return
+
+    ! Upstream's own shorthand test. A full frame fills all 144; a short one leaves
+    ! everything from 41 on at the -1 we seeded.
+    if (itone(41) < 0) then
+       if (any(itone(1:40) < 0)) return
+       itone_out(1:40) = itone(1:40)
+       itone_out(41:MSK144_NN) = 0
+       nsym_out = 40
+    else
+       if (any(itone(1:MSK144_NN) < 0)) return
+       itone_out(1:MSK144_NN) = itone(1:MSK144_NN)
+       nsym_out = MSK144_NN
+    end if
+  end function msk144_encode_msg
 
 end module msk144_cabi
