@@ -156,29 +156,156 @@ pub fn sstv_band_plan() -> Vec<BandChannel> {
     ]
 }
 
-/// The band/calling plan for the active tier: FT8/FT4 use the standard WSJT-X
-/// watering holes (so you call where everyone else does); FT1/DX1 use Nexus's
-/// native off-cluster plan (those are new narrow modes that must avoid mutual QRM).
+/// The band/calling plan for the active tier.
+///
+/// ⭐ EVERY WSJT-X MODE HAS ITS OWN FREQUENCIES, and they are NOT the FT8 ones.
+/// An earlier version of this function mapped all six new tiers to
+/// `ft8_band_plan()` with a comment calling it a knowing placeholder. It was
+/// worse than the comment admitted:
+///   * MSK144 has NO HF PRESENCE AT ALL — it is 6 m/4 m/2 m/70 cm meteor
+///     scatter. Handing it 14.074 points the rig at a band the mode is not used
+///     on.
+///   * Q65 is likewise VHF+ (6 m through 1.2 cm); its HF entries do not exist.
+///   * FST4/FST4W are LF/MF — 2200 m, 630 m, 160 m — the opposite end of the
+///     spectrum from FT8.
+///   * WSPR's HF frequencies differ from FT8's everywhere (20 m is 14.0956, not
+///     14.074), so an operator on "20 m WSPR" would have been listening to FT8.
+///   * JT65 is 14.076 on 20 m, not 14.074.
+///
+/// The per-mode plans below are GENERATED from WSJT-X's own frequency table —
+/// see `paritylab/parse_wsjtx_freqs.py`, which reads the FrequenciesForRegionModes
+/// blob out of a real WSJT-X.ini — rather than typed from memory. Roughly ninety
+/// amateur frequencies is exactly the volume where one transposed digit hides in
+/// a table and looks authoritative.
 pub fn band_plan_for(tier: crate::dto::Tier) -> Vec<BandChannel> {
     use crate::dto::Tier;
     match tier {
         Tier::Ft8 => ft8_band_plan(),
         Tier::Ft4 => ft4_band_plan(),
-        // FST4: PLACEHOLDER, and knowingly so. FST4's own conventional frequencies
-        // are not tabulated in this tree, and they are not the FT8 ones — FST4 is
-        // used heavily on LF/MF (2200 m, 630 m) where FT8 has no presence at all.
-        // Reusing the FT8 plan puts the operator somewhere populated rather than on
-        // a dead band edge, which is the least-wrong stand-in for a receive-only
-        // mode the operator will tune manually. Replace with a real FST4 plan
-        // before FST4 is offered as a first-class operating tier.
-        // Q65 shares FT8's band plan for the same reason FST4 does: Nexus decodes
-        // it in the same audio passband on the same dial frequencies. Q65's real
-        // home is VHF+/EME, where the calling frequencies are per-band conventions
-        // rather than a plan this table models.
-        Tier::Fst4 | Tier::Fst4w | Tier::Q65 | Tier::Msk144 | Tier::Jt65 | Tier::Wspr => ft8_band_plan(),
+        Tier::Q65 => q65_band_plan(),
+        Tier::Msk144 => msk144_band_plan(),
+        Tier::Fst4 => fst4_band_plan(),
+        Tier::Fst4w => fst4w_band_plan(),
+        Tier::Jt65 => jt65_band_plan(),
+        Tier::Wspr => wspr_band_plan(),
+        // TempoFast/TempoDeep use Nexus's native off-cluster plan — new narrow
+        // modes that must avoid mutual QRM with the WSJT-X watering holes.
         Tier::TempoFast | Tier::TempoDeep => band_plan(),
     }
 }
+
+/// Q65 calling/beacon frequencies, taken verbatim from WSJT-X's own
+/// frequency table (see the module note). 14 entries.
+pub fn q65_band_plan() -> Vec<BandChannel> {
+    let n = "WSJT-X Q65 calling frequency (from WSJT-X's default table)";
+    vec![
+        ch("6m", "VHF", 50.211000, "USB", "6 m · Q65", n),
+        ch("6m-2", "VHF", 50.275000, "USB", "6 m · Q65", n),
+        ch("2m", "VHF", 144.116000, "USB", "2 m · Q65", n),
+        ch("1.25m", "VHF", 222.065000, "USB", "1.25 m · Q65", n),
+        ch("70cm", "VHF", 432.065000, "USB", "70cm · Q65", n),
+        ch("33cm", "VHF", 902.065000, "USB", "33cm · Q65", n),
+        ch("23cm", "VHF", 1296.065000, "USB", "23cm · Q65", n),
+        ch("13cm", "VHF", 2301.065000, "USB", "13cm · Q65", n),
+        ch("13cm-2", "VHF", 2304.065000, "USB", "13cm · Q65", n),
+        ch("13cm-3", "VHF", 2320.065000, "USB", "13cm · Q65", n),
+        ch("9cm", "VHF", 3400.065000, "USB", "9cm · Q65", n),
+        ch("5cm", "VHF", 5760.200000, "USB", "5cm · Q65", n),
+        ch("3cm", "VHF", 10368.200000, "USB", "3cm · Q65", n),
+        ch("1.2cm", "VHF", 24048.200000, "USB", "1.2cm · Q65", n),
+    ]
+}
+
+/// MSK144 calling/beacon frequencies, taken verbatim from WSJT-X's own
+/// frequency table (see the module note). 6 entries.
+pub fn msk144_band_plan() -> Vec<BandChannel> {
+    let n = "WSJT-X MSK144 calling frequency (from WSJT-X's default table)";
+    vec![
+        ch("6m", "VHF", 50.260000, "USB", "6 m · MSK144", n),
+        ch("6m-2", "VHF", 50.380000, "USB", "6 m · MSK144", n),
+        ch("4m", "VHF", 70.230000, "USB", "4 m · MSK144", n),
+        ch("2m", "VHF", 144.150000, "USB", "2 m · MSK144", n),
+        ch("2m-2", "VHF", 144.360000, "USB", "2 m · MSK144", n),
+        ch("70cm", "VHF", 432.360000, "USB", "70cm · MSK144", n),
+    ]
+}
+
+/// FST4 calling/beacon frequencies, taken verbatim from WSJT-X's own
+/// frequency table (see the module note). 3 entries.
+pub fn fst4_band_plan() -> Vec<BandChannel> {
+    let n = "WSJT-X FST4 calling frequency (from WSJT-X's default table)";
+    vec![
+        ch("2200m", "HF", 0.136000, "USB", "2200 m · FST4", n),
+        ch("630m", "HF", 0.474200, "USB", "630 m · FST4", n),
+        ch("160m", "HF", 1.839000, "USB", "160 m · FST4", n),
+    ]
+}
+
+/// FST4W calling/beacon frequencies, taken verbatim from WSJT-X's own
+/// frequency table (see the module note). 3 entries.
+pub fn fst4w_band_plan() -> Vec<BandChannel> {
+    let n = "WSJT-X FST4W beacon frequency (from WSJT-X's default table)";
+    vec![
+        ch("2200m", "HF", 0.136000, "USB", "2200 m · FST4W", n),
+        ch("630m", "HF", 0.474200, "USB", "630 m · FST4W", n),
+        ch("160m", "HF", 1.836800, "USB", "160 m · FST4W", n),
+    ]
+}
+
+/// JT65 calling/beacon frequencies, taken verbatim from WSJT-X's own
+/// frequency table (see the module note). 22 entries.
+pub fn jt65_band_plan() -> Vec<BandChannel> {
+    let n = "WSJT-X JT65 calling frequency (from WSJT-X's default table)";
+    vec![
+        ch("160m", "HF", 1.838000, "USB", "160 m · JT65", n),
+        ch("80m", "HF", 3.570000, "USB", "80 m · JT65", n),
+        ch("40m", "HF", 7.076000, "USB", "40 m · JT65", n),
+        ch("30m", "HF", 10.138000, "USB", "30 m · JT65", n),
+        ch("20m", "HF", 14.076000, "USB", "20 m · JT65", n),
+        ch("17m", "HF", 18.102000, "USB", "17 m · JT65", n),
+        ch("15m", "HF", 21.076000, "USB", "15 m · JT65", n),
+        ch("12m", "HF", 24.917000, "USB", "12 m · JT65", n),
+        ch("10m", "HF", 28.076000, "USB", "10 m · JT65", n),
+        ch("6m", "VHF", 50.276000, "USB", "6 m · JT65", n),
+        ch("6m-2", "VHF", 50.310000, "USB", "6 m · JT65", n),
+        ch("4m", "VHF", 70.102000, "USB", "4 m · JT65", n),
+        ch("2m", "VHF", 144.120000, "USB", "2 m · JT65", n),
+        ch("1.25m", "VHF", 222.065000, "USB", "1.25 m · JT65", n),
+        ch("70cm", "VHF", 432.065000, "USB", "70cm · JT65", n),
+        ch("33cm", "VHF", 902.065000, "USB", "33cm · JT65", n),
+        ch("23cm", "VHF", 1296.065000, "USB", "23cm · JT65", n),
+        ch("13cm", "VHF", 2301.065000, "USB", "13cm · JT65", n),
+        ch("13cm-2", "VHF", 2304.065000, "USB", "13cm · JT65", n),
+        ch("13cm-3", "VHF", 2320.065000, "USB", "13cm · JT65", n),
+        ch("9cm", "VHF", 3400.065000, "USB", "9cm · JT65", n),
+        ch("5cm", "VHF", 5760.065000, "USB", "5cm · JT65", n),
+    ]
+}
+
+/// WSPR calling/beacon frequencies, taken verbatim from WSJT-X's own
+/// frequency table (see the module note). 16 entries.
+pub fn wspr_band_plan() -> Vec<BandChannel> {
+    let n = "WSPR beacon frequency (from WSJT-X's default table)";
+    vec![
+        ch("2200m", "HF", 0.136000, "USB", "2200 m · WSPR", n),
+        ch("630m", "HF", 0.474200, "USB", "630 m · WSPR", n),
+        ch("160m", "HF", 1.836600, "USB", "160 m · WSPR", n),
+        ch("80m", "HF", 3.568600, "USB", "80 m · WSPR", n),
+        ch("40m", "HF", 7.038600, "USB", "40 m · WSPR", n),
+        ch("30m", "HF", 10.138700, "USB", "30 m · WSPR", n),
+        ch("20m", "HF", 14.095600, "USB", "20 m · WSPR", n),
+        ch("17m", "HF", 18.104600, "USB", "17 m · WSPR", n),
+        ch("15m", "HF", 21.094600, "USB", "15 m · WSPR", n),
+        ch("12m", "HF", 24.924600, "USB", "12 m · WSPR", n),
+        ch("10m", "HF", 28.124600, "USB", "10 m · WSPR", n),
+        ch("6m", "VHF", 50.293000, "USB", "6 m · WSPR", n),
+        ch("4m", "VHF", 70.091000, "USB", "4 m · WSPR", n),
+        ch("2m", "VHF", 144.489000, "USB", "2 m · WSPR", n),
+        ch("70cm", "VHF", 432.300000, "USB", "70cm · WSPR", n),
+        ch("23cm", "VHF", 1296.500000, "USB", "23cm · WSPR", n),
+    ]
+}
+
 
 /// Where CW ACTIVITY concentrates on each band (the general-CW / QRP / SKCC watering holes),
 /// so the CW cockpit parks the operator IN the action instead of on the dead band edge (the
@@ -372,5 +499,89 @@ mod tests {
         assert!((s80eu.dial_mhz - 3.730).abs() < 1e-9, "80m EU SSTV = 3.730");
         assert_eq!(s80.mode, "LSB");
         assert_eq!(s80eu.mode, "LSB");
+    }
+}
+
+#[cfg(test)]
+mod wsjtx_parity_tests {
+    use super::*;
+    use crate::dto::Tier;
+
+    /// Anchors taken from WSJT-X's own table. These are not round numbers a typo
+    /// would land on by accident, and two of them (WSPR 20 m / 30 m) also appear
+    /// as literals in WSJT-X's own source (mainwindow.cpp's wsprFreq), so they
+    /// are independently checkable.
+    #[test]
+    fn per_mode_frequencies_match_wsjtx() {
+        let f = |t: Tier, band: &str| -> Option<f64> {
+            band_plan_for(t)
+                .into_iter()
+                .find(|c| c.band == band)
+                .map(|c| c.dial_mhz)
+        };
+        // The two production modes, unchanged.
+        assert_eq!(f(Tier::Ft8, "20m"), Some(14.074));
+        assert_eq!(f(Tier::Ft4, "20m"), Some(14.080));
+        // WSPR is NOT on the FT8 frequency — this is the pair that would have
+        // silently pointed a WSPR session at an FT8 watering hole.
+        assert_eq!(f(Tier::Wspr, "20m"), Some(14.0956));
+        assert_eq!(f(Tier::Wspr, "30m"), Some(10.1387));
+        // JT65 sits 2 kHz above FT8 on 20 m.
+        assert_eq!(f(Tier::Jt65, "20m"), Some(14.076));
+        // Q65 and MSK144 are VHF+ modes.
+        assert_eq!(f(Tier::Q65, "2m"), Some(144.116));
+        assert_eq!(f(Tier::Msk144, "6m"), Some(50.260));
+        assert_eq!(f(Tier::Msk144, "2m"), Some(144.150));
+        // FST4/FST4W live at the bottom of the spectrum.
+        assert_eq!(f(Tier::Fst4, "630m"), Some(0.4742));
+        assert_eq!(f(Tier::Fst4w, "2200m"), Some(0.136));
+    }
+
+    /// The regression this whole change exists to prevent: every new tier used to
+    /// return ft8_band_plan(). If a future tier is added to Tier and forgotten in
+    /// band_plan_for, the match is non-exhaustive and will not compile — but a
+    /// lazy `_ => ft8_band_plan()` arm would compile and silently recreate the
+    /// bug, so assert the distinctness directly.
+    #[test]
+    fn no_mode_silently_reuses_the_ft8_plan() {
+        let ft8 = ft8_band_plan();
+        for t in [Tier::Q65, Tier::Msk144, Tier::Fst4, Tier::Fst4w, Tier::Jt65, Tier::Wspr] {
+            let p = band_plan_for(t);
+            assert!(!p.is_empty(), "{t:?} has an empty band plan");
+            let same = p.len() == ft8.len()
+                && p.iter().zip(ft8.iter()).all(|(a, b)| a.dial_mhz == b.dial_mhz);
+            assert!(!same, "{t:?} is still returning the FT8 band plan");
+        }
+    }
+
+    /// MSK144 and Q65 are VHF+ modes. A stray HF entry would put the rig on a
+    /// band where the mode simply is not used.
+    #[test]
+    fn vhf_only_modes_carry_no_hf_channels() {
+        for t in [Tier::Msk144, Tier::Q65] {
+            for c in band_plan_for(t) {
+                assert!(
+                    c.dial_mhz > 30.0,
+                    "{t:?} has an HF channel at {} MHz ({})",
+                    c.dial_mhz,
+                    c.band
+                );
+            }
+        }
+    }
+
+    /// FST4/FST4W are the converse: LF/MF, nothing above 160 m.
+    #[test]
+    fn fst4_family_is_lf_mf_only() {
+        for t in [Tier::Fst4, Tier::Fst4w] {
+            for c in band_plan_for(t) {
+                assert!(
+                    c.dial_mhz < 2.0,
+                    "{t:?} has a channel at {} MHz ({}) above the MF range",
+                    c.dial_mhz,
+                    c.band
+                );
+            }
+        }
     }
 }

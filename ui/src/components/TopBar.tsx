@@ -8,6 +8,65 @@ import { LevelMeter, rxLevelDb } from './LevelMeter'
 import { RadioSwitcher } from './RadioSwitcher'
 import { appVersion } from '../api'
 
+/** The tier pills in the top bar. FT8/FT4 transmit; the six WSJT-X modes below
+ *  them are DECODE-ONLY (modes::tx_mode refuses them in the engine) and carry a
+ *  dashed edge so that is visible before the operator tries to call CQ rather
+ *  than after. Order is deliberate: the two Tempo tiers, then the two production
+ *  FT modes, then the receive-only set roughly by how often they get used. */
+const TIER_PILLS: {
+  tier: Tier
+  small?: string
+  name: string
+  title: string
+  rxOnly?: boolean
+}[] = [
+  { tier: 'TempoFast', small: 'Tempo', name: 'Fast', title: 'Fast conversational tier' },
+  {
+    tier: 'TempoDeep',
+    small: 'Tempo',
+    name: 'Deep',
+    title: 'Robust non-coherent tier — fading-resilient (15 s)',
+  },
+  { tier: 'FT4', name: 'FT4', title: 'Standard WSJT-X FT4 (7.5 s)' },
+  { tier: 'FT8', name: 'FT8', title: 'Standard WSJT-X FT8 (15 s)' },
+  {
+    tier: 'WSPR',
+    name: 'WSPR',
+    rxOnly: true,
+    title: 'WSPR propagation beacons — DECODE ONLY, 2 min intervals',
+  },
+  {
+    tier: 'Q65',
+    name: 'Q65',
+    rxOnly: true,
+    title: 'Q65 — EME / VHF+ scatter. DECODE ONLY. Period + submode in Settings ▸ Modes',
+  },
+  {
+    tier: 'MSK144',
+    name: 'MSK144',
+    rxOnly: true,
+    title: 'MSK144 — meteor scatter. DECODE ONLY. Period in Settings ▸ Modes',
+  },
+  {
+    tier: 'JT65',
+    name: 'JT65',
+    rxOnly: true,
+    title: 'JT65 — classic EME, 60 s. DECODE ONLY. Submode in Settings ▸ Modes',
+  },
+  {
+    tier: 'FST4',
+    name: 'FST4',
+    rxOnly: true,
+    title: 'FST4 — slow weak-signal QSO mode (LF/MF). DECODE ONLY',
+  },
+  {
+    tier: 'FST4W',
+    name: 'FST4W',
+    rxOnly: true,
+    title: 'FST4W — LF/MF beacons. DECODE ONLY. Hashed calls show as <...>',
+  },
+]
+
 interface Props {
   /** Hide the TX-control cluster (the FT cockpit shows its own consolidated
    * copy beside CQ/S&P — operator request; other sections keep it here). */
@@ -306,42 +365,21 @@ export function TopBar({
       {!hideDigitalChrome && (
       <>
       <div className="topbar-group tier-toggle" role="group" aria-label="Link tier">
-        <button
-          type="button"
-          className={`tier-btn${tier === 'TempoFast' ? ' active' : ''}`}
-          aria-pressed={tier === 'TempoFast'}
-          onClick={() => onTierChange('TempoFast')}
-          title="Fast conversational tier"
-        >
-          <small>Tempo</small>Fast
-        </button>
-        <button
-          type="button"
-          className={`tier-btn${tier === 'TempoDeep' ? ' active' : ''}`}
-          aria-pressed={tier === 'TempoDeep'}
-          onClick={() => onTierChange('TempoDeep')}
-          title="Robust non-coherent tier — fading-resilient (15 s)"
-        >
-          <small>Tempo</small>Deep
-        </button>
-        <button
-          type="button"
-          className={`tier-btn${tier === 'FT4' ? ' active' : ''}`}
-          aria-pressed={tier === 'FT4'}
-          onClick={() => onTierChange('FT4')}
-          title="Standard WSJT-X FT4 (7.5 s)"
-        >
-          <small>FT4</small>
-        </button>
-        <button
-          type="button"
-          className={`tier-btn${tier === 'FT8' ? ' active' : ''}`}
-          aria-pressed={tier === 'FT8'}
-          onClick={() => onTierChange('FT8')}
-          title="Standard WSJT-X FT8 (15 s)"
-        >
-          <small>FT8</small>
-        </button>
+        {TIER_PILLS.map((p) => (
+          <button
+            key={p.tier}
+            type="button"
+            className={`tier-btn${tier === p.tier ? ' active' : ''}${
+              p.rxOnly ? ' rx-only' : ''
+            }`}
+            aria-pressed={tier === p.tier}
+            onClick={() => onTierChange(p.tier)}
+            title={p.title}
+          >
+            {p.small ? <small>{p.small}</small> : null}
+            {p.name}
+          </button>
+        ))}
       </div>
 
       <div className="topbar-group tier-toggle tx-period" role="group" aria-label="Transmit cycle">
