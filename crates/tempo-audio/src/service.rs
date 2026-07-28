@@ -766,7 +766,7 @@ fn monitor_loop(
             std::thread::sleep(Duration::from_millis(20));
             continue;
         }
-        reconcile_pool(&pool, &want, active, &engine, crate::slot::now_ms());
+        reconcile_pool(&pool, &want, active, &engine, now_unix_ms());
         poll_monitors(&pool, active, &engine, &pending);
         std::thread::sleep(Duration::from_millis(150));
     }
@@ -1661,8 +1661,6 @@ impl RadioLoop {
             tx_meter_idx: 0,
             last_freq_poll: now_unix_ms(),
             freq_misses: 0,
-            open_failures: 0,
-            retry_after_ms: 0.0,
             cat_ok: None,
             handoff_deferred: false,
             smeter_supported: None,
@@ -5452,6 +5450,8 @@ fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::backend::MockBackend;
 
     #[test]
     fn an_unanswerable_dsp_func_backs_off_instead_of_stalling_forever() {
