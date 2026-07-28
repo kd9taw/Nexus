@@ -796,11 +796,9 @@ mod tx_capability_tests {
     /// `tx: true` AND `beacon_only: true` — transmit-capable, but never handed to
     /// the QSO sequencer. MSK144 and JT65 remain.
     fn rx_only(kind: ModeKind) -> bool {
-        // EMPTY: every shipped mode transmits. Kept as a predicate rather than
-        // deleted — the two-sided capability test still needs something to assert
-        // against, and the next receive-only mode belongs here.
-        let _ = kind;
-        false
+        // JT65 only, and TEMPORARILY — its encoder is verified; transmit is disabled
+        // pending the Windows Call CQ crash. See Jt65Mode::capabilities.
+        matches!(kind, ModeKind::Jt65 { .. })
     }
 
     #[test]
@@ -1326,10 +1324,26 @@ impl Mode for Jt65Mode {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            // Verified: our transmission decodes as K1ABC W9XYZ EN37 at 1500.0 Hz,
-            // dt +0.00 — see `encode_then_decode_recovers_the_message` in the jt65
-            // crate, which carries the two fixture traps that made this look broken.
-            tx: true,
+            // ⚠️ DISABLED PENDING A CRASH FIX — this is a MITIGATION, not a verdict on
+            // the encoder. The waveform is correct and verified: our transmission
+            // decodes as K1ABC W9XYZ EN37 at 1500.0 Hz, dt +0.00
+            // (`encode_then_decode_recovers_the_message` in the jt65 crate).
+            //
+            // But on Windows, Call CQ on JT65 hard-crashes Nexus with 0xC0000005 the
+            // instant the transmit cycle comes round — an ACCESS VIOLATION, before PTT
+            // is asserted (the operator confirms CAT never fires), so the fault is
+            // inside Engine::poll_tx and not in the audio or rig path.
+            //
+            // NOT reproducible on Linux. Ruled out so far: the encoder (passes on the
+            // operator's own Windows box via win_smoke), the engine path, gen_wave, the
+            // decode/encode interleave, gen65's shorthand branch, stack exhaustion in
+            // BOTH encode and decode (measured — encode survives a 64 KiB stack, decode
+            // 512 KiB, against the ~2 MiB a spawned thread gets), the a-priori and
+            // deep-search decode paths at every depth, and duplicate-symbol collisions.
+            //
+            // The other five modes are unaffected and stay enabled. Re-enable ONLY with
+            // a reproduction and a fix — 0.19.16 still has it on, for reproducing.
+            tx: false,
             fox_hound: false,
             ir_harq: false,
             // JT65's legacy packjt layer carries a 13-character free-text form.

@@ -14292,7 +14292,7 @@ mod tests {
     /// vacuous today and are kept deliberately: they are the contract the next
     /// receive-only mode inherits, and the phantom-CQ bug they were written for is
     /// exactly what returns if a mode is added without them.
-    const RX_ONLY_TIERS: [Tier; 0] = [];
+    const RX_ONLY_TIERS: [Tier; 1] = [Tier::Jt65];
 
     /// The BEACON tiers: transmit-capable, but with no QSO sequence. They must
     /// refuse every sequencer entry point while still being able to key.
@@ -14385,7 +14385,6 @@ mod tests {
             Tier::Q65,
             Tier::Fst4,
             Tier::Msk144,
-            Tier::Jt65,
         ] {
             let mut e = Engine::new("KD9TAW", "EN52", 0);
             e.set_tier(tier);
@@ -14490,42 +14489,39 @@ mod tests {
     }
 
     #[test]
-    fn jt65_call_cq_drives_the_whole_tx_path() {
-        // Operator report 2026-07-28: "on jt65, call cq hard crashes the program"
-        // (Windows, 0.19.16). This drives the ENTIRE engine-side path a Call CQ takes
-        // — arm, start the run, key both parities, then every call the UI polls
-        // afterwards — and is clean on Linux, which is what says the fault is in the
-        // Windows build or a layer below the engine (audio backend, PTT, Tauri),
-        // NOT in the mode wiring. Kept so a future engine-side regression here fails
-        // in CI instead of on the air.
+    fn jt65_transmit_is_disabled_pending_the_windows_crash() {
+        // Operator report (Windows, 0.19.16): Call CQ on JT65 hard-crashes Nexus with
+        // 0xC0000005 the instant the transmit cycle comes round, BEFORE PTT (CAT never
+        // fires). Not reproducible on Linux — this exact path used to run clean here,
+        // producing a correct 573,737-sample over, which is why the mitigation is a
+        // capability flag rather than a code fix.
+        //
+        // This asserts the MITIGATION holds end to end: no CQ run, no armed TX, no
+        // waveform. When the crash is fixed, flip Jt65Mode's `tx` back and restore the
+        // positive version of this test from git history — it drove start_cq plus six
+        // slots of poll_tx and every call the UI polls afterwards.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Jt65);
+
         e.set_tx_enabled(true);
-        e.start_cq(None).expect("JT65 CQ run should start");
+        assert!(
+            !e.tx_enabled(),
+            "JT65 must not arm TX while transmit is disabled"
+        );
 
-        let mut keyed = 0;
-        for slot in 0..6u64 {
-            let w = e.poll_tx(slot);
-            if let Some(first) = w.first() {
-                keyed += 1;
-                // 126 symbols at 4458.5 samples + a 1.0 s lead-in, inside the minute.
-                assert!(
-                    first.len() > 500_000 && first.len() < 60 * 12_000,
-                    "JT65 over is {} samples — outside the slot",
-                    first.len()
-                );
-            }
+        let err = e.start_cq(None).expect_err("JT65 CQ must be refused");
+        assert!(
+            err.contains("receive-only"),
+            "the refusal must tell the operator why, got: {err}"
+        );
+
+        for slot in 0..4u64 {
+            assert!(e.poll_tx(slot).is_empty(), "JT65 keyed at slot {slot}");
         }
-        assert!(keyed > 0, "JT65 CQ never produced a waveform in 6 slots");
 
-        // Everything the UI polls afterwards. A panic in any of these crashes the app
-        // at exactly the moment Call CQ is pressed.
+        // Receive is untouched: the decoder is fine and the mode still listens.
         let snap = e.snapshot();
         assert_eq!(snap.link.tier, Tier::Jt65);
-        let _ = e.spectrum_row();
-        let _ = e.band_plan();
-        let _ = e.active_frame_samples();
-        let _ = e.active_capture_samples();
     }
 
     #[test]

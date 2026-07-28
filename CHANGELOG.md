@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### JT65 transmit is disabled in this build
+
+JT65 receives normally. Transmit is turned off pending a crash: on Windows, pressing
+Call CQ on JT65 kills the app the moment the transmit cycle comes round, before the
+radio is keyed.
+
+The encoder itself is correct and verified — a Nexus JT65 transmission decodes back at
+the right frequency and timing — and the fault is not reproducible on Linux at all, so
+this is a mitigation rather than a diagnosis. The other five modes are unaffected.
+
+
 ### Six more modes now transmit
 
 Nexus decoded eight WSJT-X modes. It now transmits six of them: **Q65, FST4, FST4W,
