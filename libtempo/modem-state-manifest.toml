@@ -11229,3 +11229,133 @@ line = 11
 class = 1
 size_bytes = 4
 reason = """Third of the three fchisq65 cache guards (`a3.17 d 4 B`, DATA 99.0). See the a1 row for the mechanism and the csx gap."""
+
+# ---------------------------------------------------------------------------
+# GROUP K — the BARE `save` set: locals the gate could not see until now.
+#
+# A `save` with no name list makes EVERY LOCAL in the scoping unit static. The
+# gate matched `save <names>` and `save::<names>`; a bare `save` matched neither,
+# so eight vendored files (ana64, ccf2, decode65a, decode65b, extract, fchisq65,
+# genmsk_128_90, jt65_decode) had their locals invisible while the gate reported
+# them clean. This closes the gap the GROUP J addendum recorded as open.
+#
+# Fixing it needed three corrections, not one, and two were bugs in the fix:
+#   1. Recognise a bare `save` and buffer the unit's declarations, since they
+#      precede it.
+#   2. Parse CONTINUED subprogram headers. Reading only the first line captured a
+#      PREFIX of the dummy list, so decode65a's mycall/hiscall/hisgrid/ljt65apon
+#      were reported as locals — 26 false positives. Third continuation-or-label
+#      miss in this gate, after `999 tsec0=tsec` and `1 call demod64a(...)`.
+#   3. Open a derived-TYPE block on `type candidate` as well as `type :: name`.
+#      The types.f90 row already called the old behaviour "two independent bugs
+#      cancelling"; bare-save stopped them cancelling, and jt65_decode.f90:66-69
+#      reported freq/dt/sync/flip as locals when they are COMPONENTS of
+#      `type candidate`. The storage is `ca(300)`, classified separately.
+#
+# 43 raw hits -> 17 after the header fix -> 13 after the type fix. Those 13 are
+# below. Two regression tests pin the bare-save and continued-header behaviour.
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "csx"
+file = "fchisq65.f90"
+line = 10
+class = 1
+size_bytes = 720008
+reason = """THE SYMBOL THIS WHOLE GROUP EXISTS FOR, and the one the GROUP J addendum named as the concrete cost of the gap. `complex csx(0:NMAX/8)` at fchisq65.f90:10 — NMAX=60*12000 so 90001 complex, measured 720008 B (`nm -S` on fchisq65.o: `csx.16 b 0xafc48`). Static only because of the bare `save` at :12. IT IS THE MIXED AND INTEGRATED SIGNAL: :28-:41 walks this chain's cx() audio, applies the phase ramp built from the caller's polynomial coefficients a(1..3), and accumulates into csx. CLASS 1 BECAUSE ITS GUARDS ARE. a1/a2/a3 (class 1, this manifest) memoise the coefficients csx was built for, and :22 `if(a(1).ne.a1 .or. ...)` skips the whole rebuild on a match. Guard and data must carry the same class or the pair fails in both directions: per-chain guards over a shared csx hands chain B chain A's integrated audio on a coefficient match; a shared guard over per-chain csx skips the rebuild chain B needs and reads its zero-filled array. Until now the manifest classified the guards and not the thing they guard — precisely the split this file warns about everywhere else."""
+
+[[symbol]]
+name = "ss"
+file = "fchisq65.f90"
+line = 9
+class = 3
+size_bytes = 12000
+reason = """The symbol-spectrum scratch buffer, `real ss(3000)` at :9, static via the bare `save` at :12. Zeroed at :49 (`ss(i)=0.`) and filled at :52 from csx within the same loop, then passed to ccf2 at :58. Written before read on every call that reaches it, and only the first `nout` elements are ever consumed — `nout=ndiv*npts/nsps` at :19, and ccf2 receives nout explicitly — so the tail beyond nout is never read regardless of what a previous chain left there. Class 3: shareable if calls serialize, which MODEM_LOCK enforces."""
+
+[[symbol]]
+name = "w"
+file = "fchisq65.f90"
+line = 8
+class = 3
+size_bytes = 8
+reason = """Running phase accumulator, `complex w` at :8, static via the bare `save`. Set to (1.0,0.0) at :29 and advanced by `w=w*wstep` at :39, both inside the a1/a2/a3-guarded rebuild block, and read only within that block. On a call where the guard does not fire it is neither written nor read. Class 3."""
+
+[[symbol]]
+name = "wstep"
+file = "fchisq65.f90"
+line = 8
+class = 3
+size_bytes = 8
+reason = """Per-step phase rotor, `complex wstep` at :8. Written at :37 from dphi every 100th sample inside the guarded rebuild and read at :39 in the same loop. Never read outside it. Class 3, same reasoning as `w`."""
+
+[[symbol]]
+name = "z"
+file = "fchisq65.f90"
+line = 8
+class = 3
+size_bytes = 8
+reason = """Scratch complex used at :52 when forming the power spectrum from csx differences. Written and read within the same statement sequence on every call that reaches :49-:53. Class 3."""
+
+[[symbol]]
+name = "ccf"
+file = "ccf2.f90"
+line = 6
+class = 3
+size_bytes = 2068
+reason = """The lag-domain cross-correlation, `real ccf(-LAGMAX:LAGMAX)` at ccf2.f90:6, static via the bare `save` at :18. Written across the full lag range at :37 (`ccf(lag)=nflip*(s1-s0)`) and read at :38 in the same loop iteration, so every element consumed on a call was written by that call. Reached from fchisq65.f90:58. Class 3."""
+
+[[symbol]]
+name = "s3"
+file = "decode65b.f90"
+line = 7
+class = 3
+size_bytes = 16128
+reason = """The 64x63 symbol-probability matrix, `real s3(64,63)` at decode65b.f90:7, static via the bare `save`. Filled completely at :18 (`s3(i,j)=s2(i+2,k)`) from the caller's s2 before being handed to extract at :22. Written before read, whole-array, every call. Class 3."""
+
+[[symbol]]
+name = "ltext"
+file = "decode65b.f90"
+line = 8
+class = 3
+size_bytes = 4
+reason = """The "decoded message is free text" flag. `logical ltext` at :8, static via the bare `save`. It is an OUTPUT of extract (passed at :22-:24) and read at :29 (`if(nflip.lt.0 .and. ltext)`), so the callee writes it before this routine reads it on every call. Class 3."""
+
+[[symbol]]
+name = "pi"
+file = "genmsk_128_90.f90"
+line = 32
+class = 2
+size_bytes = 8
+reason = """`real*8 pi` at genmsk_128_90.f90:32, static via the bare `save`, computed at :42 as 4.0*atan(1.0) inside the `if(first)` block at :39. Chain-independent by construction — a mathematical constant from a literal. MUST MOVE WITH `first` (already class 2 in GROUP I): a per-chain pi under a shared `first` is never initialised and the waveform is built with pi=0."""
+
+[[symbol]]
+name = "twopi"
+file = "genmsk_128_90.f90"
+line = 32
+class = 2
+size_bytes = 8
+reason = """`real*8 twopi` at :32, computed at :43 as 8.*atan(1.0) under the same `first` guard as pi. Same class, same must-move-with-its-guard constraint."""
+
+[[symbol]]
+name = "xi"
+file = "genmsk_128_90.f90"
+line = 32
+class = 3
+size_bytes = 6912
+reason = """In-phase half of the generated MSK waveform, `real*8 xi(864)` at :32 (864 doubles = 6912 B), static via the bare `save`. Rebuilt from bitseq on every call in the :99-:104 block, which covers the whole array — the leading partial symbol, the twelve-sample runs, and the trailing partial — before any read. genmsk_128_90 is on the RECEIVE path despite the name: msk144signalquality regenerates a candidate to measure the received frame against. Class 3."""
+
+[[symbol]]
+name = "xq"
+file = "genmsk_128_90.f90"
+line = 32
+class = 3
+size_bytes = 6912
+reason = """Quadrature half of the same waveform, `real*8 xq(864)` at :32. Written whole at :99-:104 each call before use — see the `xi` row. Class 3."""
+
+[[symbol]]
+name = "csync"
+file = "jt65_decode.f90"
+line = 354
+class = 3
+size_bytes = 1
+reason = """A one-character sync marker, `character*1 csync` at jt65_decode.f90:354, static via the bare `save`. Set to ' ' at :441 and overwritten on the paths that report a sync condition, always before the formatting that consumes it. NOT to be confused with the `sync` at :68, which is a COMPONENT of `type candidate` and not storage at all — the gate reported that one as a local until the type-block guard was fixed in this group. Class 3."""

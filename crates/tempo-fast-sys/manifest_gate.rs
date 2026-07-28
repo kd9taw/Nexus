@@ -88,6 +88,22 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
     // (cd_rv0, freq, rv_count, …) are not symbols — the SLOT ARRAY declared of that type is,
     // and it is classified separately.
     let mut in_type_block = false;
+    // ⭐ BARE `save` SUPPORT. A `save` with no name list makes EVERY LOCAL in the
+    // scoping unit static — the whole routine's storage, not one variable. Eight
+    // vendored files use it, and the gate could not see any of it: `save ` and
+    // `save::` matched, a bare `save` matched neither. In fchisq65.f90 that hid
+    // `csx` (720008 B of per-chain integrated signal) while its guards a1/a2/a3
+    // WERE reported, because they appear in a `data` statement — so the manifest
+    // described a guard without the thing it guards.
+    //
+    // Declarations normally PRECEDE the `save`, so names are buffered per scoping
+    // unit and emitted at its end if a bare save was seen. Dummy ARGUMENTS are
+    // excluded: a bare save covers locals, and a dummy is not one. Without that
+    // exclusion this would invent a symbol for every parameter in those files.
+    let mut bare_save_unit = false;
+    let mut header_buf = String::new();
+    let mut unit_decls: Vec<String> = Vec::new();
+    let mut unit_args: std::collections::HashSet<String> = std::collections::HashSet::new();
     for raw in src.lines() {
         let line = raw.split('!').next().unwrap_or("").trim(); // strip comments
         let low = line.to_ascii_lowercase();
@@ -100,9 +116,20 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
             past_contains = true;
             continue;
         }
+        // ⭐ A derived-TYPE definition, in BOTH spellings. Requiring `::` here meant
+        // `type candidate` (no `::`) never opened the block, so its components
+        // leaked out as if they were storage. The types.f90 manifest row already
+        // predicted this — it called the old behaviour "two independent bugs
+        // cancelling" — and enabling bare-`save` stopped them cancelling:
+        // jt65_decode.f90:66-69 reported freq/dt/sync/flip as locals when they are
+        // components of `type candidate` at :65. The real storage is `ca(300)` at
+        // :71, which is classified separately.
+        //
+        // `type(candidate) ca(300)` is a DECLARATION, not a definition, and is
+        // excluded by the `type(` test — the distinction is the parenthesis
+        // immediately after the keyword, not the presence of one anywhere.
         if (low.starts_with("type ") || low.starts_with("type::") || low.starts_with("type,"))
-            && line.contains("::")
-            && !low.contains("(")
+            && !low.starts_with("type(")
         {
             in_type_block = true;
             continue;
@@ -130,6 +157,52 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
             past_contains = false;
             continue;
         }
+        // Scoping-unit boundaries, for the bare-`save` buffer above.
+        //
+        // ⭐ CONTINUATIONS. A subprogram header routinely spans several lines with
+        // `&`, and reading only the first one captured a PREFIX of the dummy list —
+        // decode65a.f90's header is three lines, so mycall/hiscall/hisgrid/ljt65apon
+        // fell outside the parsed args and were reported as if they were locals.
+        // This is the third time a line-anchored read has missed a Fortran
+        // continuation or statement label in this gate; accumulate first, parse
+        // after.
+        if header_buf.is_empty() {
+            if is_subprogram_header(&low) {
+                header_buf.push_str(line);
+            }
+        } else {
+            header_buf.push_str(line);
+        }
+        if !header_buf.is_empty() && !header_buf.trim_end().ends_with('&') {
+            let joined = header_buf.replace('&', " ");
+            let jlow = joined.to_ascii_lowercase();
+            header_buf.clear();
+            if let Some(args) = subprogram_args(&jlow, &joined) {
+                bare_save_unit = false;
+                unit_decls.clear();
+                unit_args = args;
+            }
+        } else if !header_buf.is_empty() {
+            // Mid-header: nothing else on this line can be a declaration.
+            continue;
+        }
+        if low.starts_with("end subroutine")
+            || low.starts_with("end function")
+            || low == "end"
+        {
+            if bare_save_unit {
+                out.append(&mut unit_decls);
+            }
+            bare_save_unit = false;
+            unit_decls.clear();
+            unit_args.clear();
+        }
+        // A bare `save` — no `::`, no name list.
+        if low == "save" {
+            bare_save_unit = true;
+            continue;
+        }
+
         // `save ::`, `data x/…/`, `common /blk/ a,b` carry state wherever they appear —
         // including inside subroutines, which is the classic SAVEd-local idiom.
         let explicit = !low.starts_with("use ")
@@ -173,6 +246,20 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
             && !past_contains
             && (line.contains("::") || (starts_with_type && !is_typed_function))
             && !is_decl_noise;
+        // Inside a subprogram, buffer every declaration in case a bare `save`
+        // turns up later in the unit. `intent(` marks a dummy argument outright;
+        // the arg-list set catches the rest.
+        if !in_module || past_contains {
+            let is_decl = line.contains("::") || is_type_keyword_line(&low);
+            if is_decl && !is_decl_noise && !low.contains("function") && !low.contains("intent(")
+            {
+                for n in names_in_decl(line) {
+                    if !unit_args.contains(&n.to_ascii_lowercase()) {
+                        unit_decls.push(n);
+                    }
+                }
+            }
+        }
         if !(explicit || module_decl) {
             continue;
         }
@@ -183,6 +270,49 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
     out
 }
 
+
+
+
+/// True when a line OPENS a subprogram (subroutine or function). Split out from
+/// [`subprogram_args`] so a multi-line header can be detected before it has been
+/// fully accumulated.
+fn is_subprogram_header(low: &str) -> bool {
+    (low.starts_with("subroutine ")
+        || low.starts_with("recursive subroutine ")
+        || low.contains(" function ")
+        || low.starts_with("function "))
+        && !low.starts_with("end ")
+        && !low.starts_with("module procedure")
+}
+
+/// If `line` opens a SUBROUTINE or FUNCTION, return its dummy-argument names
+/// (lowercased). Used to keep dummies out of the bare-`save` buffer: a bare save
+/// makes LOCALS static, and a dummy argument is not a local.
+///
+/// Returns `None` for anything that is not a subprogram header, including
+/// `end subroutine` and `module procedure`.
+fn subprogram_args(low: &str, line: &str) -> Option<std::collections::HashSet<String>> {
+    if !is_subprogram_header(low) {
+        return None;
+    }
+    let mut set = std::collections::HashSet::new();
+    // Everything between the first `(` and the last `)` is the dummy list. A header
+    // with no parentheses has no dummies, which is still a valid unit start.
+    if let (Some(a), Some(b)) = (line.find('('), line.rfind(')')) {
+        if a < b {
+            for part in line[a + 1..b].split(',') {
+                let n: String = part
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if !n.is_empty() {
+                    set.insert(n.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+    Some(set)
+}
 
 /// True when a module-scope line opens with a Fortran type keyword, i.e. it declares
 /// storage in the older style that omits `::`.
@@ -618,6 +748,66 @@ class = 1
             file: "ft8/ft8_a7.f90".into(),
             name: "msg0".into()
         }));
+    }
+
+    /// A BARE `save` makes every LOCAL in the scoping unit static. The gate
+    /// matched `save <names>` and `save::<names>` but not this form, so eight
+    /// vendored files had their locals invisible — including fchisq65's `csx`,
+    /// 720008 B of per-chain state, while its guards WERE classified.
+    #[test]
+    fn a_bare_save_makes_every_local_reportable() {
+        let src = "\
+subroutine fchisq65(cx,npts,fsample,nflip,a,ccfmax,dtmax)
+  complex cx(npts)
+  real a(5)
+  complex w,wstep,z
+  complex csx(0:90000)
+  save
+  return
+end subroutine fchisq65
+";
+        let got = scan_fortran(src);
+        for want in ["csx", "w", "wstep", "z"] {
+            assert!(got.contains(&want.to_string()), "missed local {want}: {got:?}");
+        }
+        // Dummy arguments are NOT locals — a bare save does not make them static,
+        // and flagging them would invent a symbol for every parameter.
+        for arg in ["cx", "npts", "fsample", "nflip", "a", "ccfmax", "dtmax"] {
+            assert!(!got.contains(&arg.to_string()), "dummy {arg} reported: {got:?}");
+        }
+    }
+
+    /// A subprogram header routinely spans several lines with `&`. Reading only the
+    /// first captured a PREFIX of the dummy list, so decode65a's mycall/hiscall/
+    /// hisgrid/ljt65apon were reported as locals. This is the third continuation-
+    /// or-label miss in this gate; the others were `999 tsec0=tsec` and
+    /// `1 call demod64a(...)`.
+    #[test]
+    fn a_continued_subprogram_header_yields_all_its_dummies() {
+        let src = "\
+subroutine decode65a(dd,npts,newdat,nqd,f0,nflip,mode65,ntrials,     &
+     naggressive,ndepth,ntol,mycall,hiscall,hisgrid,nQSOProgress,    &
+     ljt65apon,bVHF,sync2,a,dt,nft,nspecial,qual,nhist,nsmo,decoded)
+  real dd(npts)
+  character*12 mycall,hiscall
+  character*6 hisgrid
+  logical ljt65apon,bVHF
+  character*22 decoded
+  real scratch(100)
+  save
+  return
+end subroutine decode65a
+";
+        let got = scan_fortran(src);
+        // Every one of these is a dummy declared AFTER the first header line.
+        for arg in ["mycall", "hiscall", "hisgrid", "ljt65apon", "bVHF", "decoded", "dd"] {
+            assert!(
+                !got.contains(&arg.to_string()),
+                "continued-header dummy {arg} reported as a local: {got:?}"
+            );
+        }
+        // …while a genuine local under the same bare save still is.
+        assert!(got.contains(&"scratch".to_string()), "real local missed: {got:?}");
     }
 
     /// The tree-wide false negative this gate shipped with. Fortran's older
