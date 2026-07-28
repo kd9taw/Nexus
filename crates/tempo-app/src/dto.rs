@@ -217,8 +217,8 @@ pub enum Tier {
     /// from `Settings::msk144_period_s`.
     #[serde(rename = "MSK144")]
     Msk144,
-    /// WSJT JT65 — the classic weak-signal / EME mode. **RECEIVE-ONLY**. The
-    /// submode comes from `Settings::jt65_submode`.
+    /// WSJT JT65 — the classic weak-signal / EME mode. **Transmits and receives.**
+    /// The submode comes from `Settings::jt65_submode`.
     #[serde(rename = "JT65")]
     Jt65,
     /// WSPR — the propagation-BEACON mode. **RECEIVE-ONLY**. Unlike every other

@@ -3747,7 +3747,7 @@ export function SettingsPanel({
           {/* ---- JT65: submode only. One fixed 60 s period, unlike the others. ---- */}
           {tab === 'modes' && (
           <fieldset className="settings-section">
-            <legend>JT65 (receive-only)</legend>
+            <legend>JT65 &mdash; classic EME</legend>
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">Submode (tone spacing)</span>

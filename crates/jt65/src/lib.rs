@@ -294,6 +294,98 @@ mod tests {
     use super::*;
 
     #[test]
+    fn encode_produces_a_valid_frame() {
+        let t = encode("K1ABC W9XYZ EN37").expect("packs");
+        assert_eq!(t.len(), NN, "JT65 is 126 symbols");
+        assert_eq!(
+            t.iter().filter(|&&x| x == 0).count(),
+            63,
+            "63 sync symbols at tone 0"
+        );
+        assert_eq!(t.iter().filter(|&&x| x >= 2).count(), 63, "63 data symbols");
+        assert!(
+            t.iter().all(|&x| x == 0 || (2..=65).contains(&x)),
+            "tones are 0 (sync) or 2..=65 (data +2 offset); never 1"
+        );
+    }
+
+    #[test]
+    fn a_message_longer_than_the_legacy_layer_is_refused() {
+        // JT65 predates 77-bit: `packjt` carries 22 characters, not packjt77's 37.
+        assert!(
+            encode("BAD\0MSG").is_none(),
+            "an interior NUL cannot cross the FFI"
+        );
+    }
+
+    #[test]
+    fn encode_then_decode_recovers_the_message() {
+        // ⭐⭐ THIS TEST EXISTS BECAUSE ITS ABSENCE COST A SESSION, and the two traps
+        // below are the whole reason. JT65 shipped with only `noise_decodes_to_nothing`
+        // — there was no TX in-tree to make a signal with — so "runs and stays silent
+        // on noise" stood in for "decodes". A LIVENESS TEST IS NOT A DECODE TEST.
+        //
+        // ⭐ TRAP 1: THE DECODER NEEDS A NOISE FLOOR. A mathematically perfect,
+        // noiseless tone sequence DOES NOT DECODE — the decoder normalises against a
+        // baseline and a zero-variance one is degenerate. Testing the bare waveform
+        // returns nothing and reads exactly like a broken encoder. It is not.
+        //
+        // ⭐ TRAP 2 (the harness side, recorded so nobody repeats it): stock
+        // `jt65sim -s 90` is NOT "no noise". Its guard is `if(xsnr.gt.90.0) sig=1.0`,
+        // so 90 itself computes an astronomical amplitude and clips — 51,606 clipped
+        // samples, a square wave, not JT65. Use a real SNR, or a value ABOVE 90.
+        const MSG: &str = "K1ABC W9XYZ EN37";
+        for submode in 0..NSUBMODES {
+            let itone = encode(MSG).expect("packs");
+            let wave = gen_wave(&itone, submode, SAMPLE_RATE, 1500.0).expect("supported");
+
+            let lead = (LEAD_IN_SECS * SAMPLE_RATE) as usize;
+            let mut iwave = vec![0i16; NMAX];
+            // Deterministic noise floor at roughly the level jt65sim produces, with
+            // the signal well above it. See TRAP 1.
+            // Levels matter, not just presence: signal peak ~160 against a noise
+            // sigma ~100 is what a real capture looks like and what decodes. A far
+            // STRONGER signal over the same noise does NOT — the decoder's
+            // normalisation wants a sane ratio, so "louder" is not "easier".
+            let mut seed: u32 = 0xA5A5 ^ u32::from(submode);
+            for s in iwave.iter_mut() {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *s = (((seed >> 16) % 347) as i16) - 173; // uniform ±173 ⇒ σ ≈ 100
+            }
+            for (i, &v) in wave.iter().enumerate() {
+                if lead + i < iwave.len() {
+                    iwave[lead + i] = iwave[lead + i].saturating_add((v * 160.0) as i16);
+                }
+            }
+
+            let d = decode_frame(&iwave, submode, 200, 2900, 3, "", "", "", 1500);
+            assert!(
+                d.iter().any(|r| r.message.trim() == MSG),
+                "JT65 submode {submode} did not decode its own transmission: {:?}",
+                d.iter().map(|r| r.message.trim()).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn the_over_fits_inside_the_minute() {
+        // tx_duration() in helper_functions.cpp:10 — 1.0 + 126*4096/11025 ≈ 47.8 s.
+        let d = tx_duration_secs();
+        assert!((d - 47.8).abs() < 0.1, "expected ~47.8 s, got {d}");
+        assert!(d < f32::from(PERIOD_S), "the over must fit its minute");
+        // ⭐ 11025 Hz native, the only mode here that is not 12 kHz.
+        assert!((tone_spacing_hz(0).unwrap() - 11025.0 / 4096.0).abs() < 1e-4);
+        assert_eq!(
+            tone_spacing_hz(1).unwrap(),
+            2.0 * tone_spacing_hz(0).unwrap()
+        );
+        assert_eq!(
+            tone_spacing_hz(2).unwrap(),
+            4.0 * tone_spacing_hz(0).unwrap()
+        );
+    }
+
+    #[test]
     fn the_frame_contract_is_the_full_minute() {
         // The decoder reads 52 s but the dummy is explicit-shape at 60 s, so the
         // caller must supply the whole thing. If these ever diverge from

@@ -51,9 +51,7 @@ const TIER_PILLS: {
   {
     tier: 'JT65',
     name: 'JT65',
-    small: 'RX',
-    rxOnly: true,
-    title: 'JT65 — classic EME, 60 s. DECODE ONLY. Submode in Settings ▸ Modes',
+    title: 'JT65 — classic EME, 60 s. Transmit and receive. Submode in Settings ▸ Modes',
   },
   {
     tier: 'FST4',

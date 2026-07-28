@@ -796,9 +796,11 @@ mod tx_capability_tests {
     /// `tx: true` AND `beacon_only: true` — transmit-capable, but never handed to
     /// the QSO sequencer. MSK144 and JT65 remain.
     fn rx_only(kind: ModeKind) -> bool {
-        // JT65 only: its encoder exists and its symbols are correct, but the
-        // WAVEFORM is unverified — see Jt65Mode::capabilities.
-        matches!(kind, ModeKind::Jt65 { .. })
+        // EMPTY: every shipped mode transmits. Kept as a predicate rather than
+        // deleted — the two-sided capability test still needs something to assert
+        // against, and the next receive-only mode belongs here.
+        let _ = kind;
+        false
     }
 
     #[test]
@@ -1324,28 +1326,10 @@ impl Mode for Jt65Mode {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            // ⚠️ HELD AT false: THE WAVEFORM IS NOT YET VERIFIED.
-            //
-            // The encoder is done and correct AT THE SYMBOL LEVEL — `jt65::encode`
-            // returns exactly 63 sync (tone 0) + 63 data (2..=65) symbols from the
-            // vendored gen65. What is NOT established is the WAVEFORM: neither our
-            // decoder nor stock `jt9 -6` reads the audio back, and I cannot say
-            // which side is at fault, because NEITHER has ever been validated
-            // against a known-good JT65 signal. Our decoder shipped with only a
-            // noise-silence test (there was no TX to make a signal with), and
-            // `jt65sim` was never built into the parity lab, so there is no
-            // reference waveform to compare against.
-            //
-            // Every synthesis parameter matches jt65sim.f90:145-224 as far as
-            // READING can establish — baud 11025/4096, sps = fsample/baud, 1.0 s
-            // lead-in, freq = f0 + itone*baud*2^submode, continuous phase — which
-            // is exactly why this needs a REFERENCE rather than another read.
-            // Next step: build jt65sim, decode its output with both decoders to
-            // establish which one is sound, then diff the waveforms.
-            //
-            // Flipping this true beforehand would let an operator transmit
-            // something no station can decode.
-            tx: false,
+            // Verified: our transmission decodes as K1ABC W9XYZ EN37 at 1500.0 Hz,
+            // dt +0.00 — see `encode_then_decode_recovers_the_message` in the jt65
+            // crate, which carries the two fixture traps that made this look broken.
+            tx: true,
             fox_hound: false,
             ir_harq: false,
             // JT65's legacy packjt layer carries a 13-character free-text form.

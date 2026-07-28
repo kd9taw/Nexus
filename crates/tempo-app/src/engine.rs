@@ -14288,7 +14288,11 @@ mod tests {
     /// Down to JT65 alone: Q65, FST4, the two beacons and MSK144 all transmit now.
     /// The beacons are NOT here — they key the radio; they are in `BEACON_TIERS`
     /// below, which pins the different property that they refuse the QSO sequencer.
-    const RX_ONLY_TIERS: [Tier; 1] = [Tier::Jt65];
+    /// ⭐ EMPTY — every shipped mode now transmits. The guards below are therefore
+    /// vacuous today and are kept deliberately: they are the contract the next
+    /// receive-only mode inherits, and the phantom-CQ bug they were written for is
+    /// exactly what returns if a mode is added without them.
+    const RX_ONLY_TIERS: [Tier; 0] = [];
 
     /// The BEACON tiers: transmit-capable, but with no QSO sequence. They must
     /// refuse every sequencer entry point while still being able to key.
@@ -14381,6 +14385,7 @@ mod tests {
             Tier::Q65,
             Tier::Fst4,
             Tier::Msk144,
+            Tier::Jt65,
         ] {
             let mut e = Engine::new("KD9TAW", "EN52", 0);
             e.set_tier(tier);
