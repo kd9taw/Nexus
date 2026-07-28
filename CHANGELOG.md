@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Six more modes now transmit
+
+Nexus decoded eight WSJT-X modes. It now transmits six of them: **Q65, FST4, FST4W,
+MSK144, JT65 and WSPR**, alongside FT8, FT4 and the Tempo tiers.
+
+Every waveform was checked by generating a transmission in Nexus and having **stock
+WSJT-X decode it**, rather than by testing Nexus against its own decoder — both halves
+come from the same vendored source, so a shared misreading would pass unnoticed. That is
+not hypothetical: FST4 at the 15-second period was going out half a second late and every
+in-house test passed, because the transmit duration and the modulation start time are two
+different numbers in the upstream source. Stock WSJT-X reported the offset. Q65's waveform
+was additionally compared sample by sample against WSJT-X's own generator and matched at
+0.9985 correlation.
+
+JT65 is the exception: upstream's JT65 decoder depends on KVASD, a non-free component
+Nexus does not ship, so there is no stock decoder to check against. It is verified by
+round-trip against WSJT-X's own signal generator instead.
+
+Each mode keeps its own operating rhythm rather than inheriting FT8's. MSK144 waits twelve
+transmit periods before giving up on a contact, against three for FT8, and its CQ runs are
+uncapped — on meteor scatter silence is normal rather than a sign the other station has
+gone, and FT8's settings abandoned live contacts. WSPR and FST4W never touch the QSO
+sequencer at all; they transmit on a percentage schedule, and below 40% avoid two
+transmissions in a row while still hitting the requested rate.
+
+### Every mode now lands on the right frequency
+
+Mode frequencies are read from WSJT-X's own frequency table rather than typed from memory.
+Previously every new mode inherited FT8's list, which is wrong for most of them: MSK144 and
+Q65 have no HF presence at all, FST4 and FST4W are LF and MF, and WSPR on 20 m is 14.0956
+rather than 14.074, so "20 m WSPR" was listening to FT8. Selecting a mode with nothing on
+your current band now moves the radio to that mode's own calling frequency.
+
+### Transmit safety
+
+A review of the transmit paths before any of this reached a radio found four real defects.
+The most serious: entering the Phone, CW or RTTY section arms transmit for you, and the
+beacon path was being reached before the check that stops digital modes keying while those
+sections own the radio — so a configured WSPR beacon would key on schedule while the
+operator worked SSB, putting 111 seconds of data tones into the 20 m phone band.
+
+Also fixed: the transmit watchdog did not cover beacons and could not bound a long
+transmission; "Transmit 0%" did not stop a beacon with a Round Robin slot configured; and
+switching modes mid-transmission did not release the radio.
+
+Selecting a receive-only mode and pressing Call CQ used to report that calls were going out
+while nothing was transmitted. Modes that cannot transmit now say so.
+
+### Fixed
+
+- **A second radio that was switched off could spawn a CAT process every second, forever.**
+  There was no retry backoff. On Windows this is expensive process creation plus a 12 MB
+  driver library re-scanned by antivirus each time, so it appeared as system CPU rather
+  than as Nexus. Retries now back off to once a minute and recover when the radio returns.
+- **A decoder crash could silently stop all receive.** The app kept running and the
+  waterfall kept painting, so it looked alive while it had gone deaf until restart.
+- **A slow decode could delay or prevent a transmission.** Modes other than FT8 and FT4
+  waited for the previous period's decode before keying, so the over went out late or, on
+  longer modes, not at all. All modes now key at the slot boundary, as WSJT-X does.
+- **Mode settings now take effect immediately.** Changing a Q65 period or JT65 submode did
+  nothing until you switched modes and back, while the rest of the app reported the new
+  value.
+- **The Phone cockpit gained its ⊞ Panels menu**, which CW, RTTY and SSTV already had.
+
+
 ### Program tells you when the repeater list is missing a band
 
 The Program section's default source, hearham.com, is an open directory with real holes in rural
