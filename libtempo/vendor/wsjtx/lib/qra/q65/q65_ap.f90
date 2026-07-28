@@ -48,6 +48,35 @@ subroutine q65_ap(nQSOprogress,ipass,ncontest,lapcqonly,iaptype,   &
   endif
 
   apsymbols=0
+! MODIFIED FOR NEXUS (KD9TAW, 2026-07-28): `apmask=0` added beside the apsymbols
+! wipe it was always missing from.
+!
+! THE BUG. apsymbols is zeroed unconditionally on entry; the first apmask write
+! is at :73, INSIDE `if(iaptype.eq.1)`. All four bail-outs below (:67 ncontest>=6,
+! :68 nonstandard/absent mycall, :69 hound, :70 nonstandard/absent dxcall) `goto
+! 900` and return WITHOUT EVER TOUCHING apmask — while the caller reads it
+! unconditionally: q65.f90:372 `write(c78,1050) apmask1`, and q65_decode.f90:263
+! and :419. There is no status output for the caller to check.
+!
+! REACHABLE ON ORDINARY OPERATION. ft8apset sets apsym0(30)=99 whenever hiscall is
+! empty (ft8apset.f90:48-50), and libtempo's ABI documents hiscall as optional.
+! Band-scanning with nQSOprogress 3 or 4 gives iaptype=3, so :70 fires and the
+! decoder is handed whatever mask the LAST call built — for iaptype=3 that is
+! apmask(1:58)=1, asserting all 58 callsign-pair bits are already KNOWN. An
+! AP-constrained Q65 decode does not re-derive masked bits; it accepts them.
+!
+! ZERO IS THE CORRECT VALUE, not a behaviour change: a bail means "no a-priori
+! information for this pass", and apmask=0 says exactly that. The caller already
+! does the same thing for the no-AP pass (q65.f90:366 `apmask=0`), so this makes
+! the bail path agree with the path that was always correct.
+!
+! VERIFIED DECODE-NEUTRAL on the parity ladder, not merely reasoned about — see
+! the commit. An earlier attempt at this looked catastrophic (0/36) and was
+! reverted; that turned out to be the ladder invoking the CLI without --period
+! after the default changed from 30A to 60A, i.e. the harness, not this line.
+!
+! ⚠️ DIVERGENCE FROM UPSTREAM. A vendor refresh will drop this; re-apply it.
+  apmask=0
   iaptype=naptypes(nQSOProgress,ipass)
   if(lapcqonly) iaptype=1
   
