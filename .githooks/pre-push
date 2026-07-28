@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Nexus pre-push gate — enforces the publish rules in CLAUDE.md mechanically.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# (core.hooksPath is repo config shared by all worktrees; the path is resolved
+# per-worktree, so a worktree without this file simply runs no hook.)
+#
+# Three checks, fail-closed:
+#   1. Wrong-remote guard: kd9taw/tempo is an UNRELATED repo — never push there.
+#   2. Identity: every commit being pushed must carry the project identity.
+#   3. Content scrub: the pushed diff and commit messages must not match any
+#      pattern in the private patterns file. The patterns are NOT in this repo
+#      (this hook is public; committing the patterns would leak the very
+#      strings they protect). Keep them in $HOME/.nexus-leak-patterns, mode
+#      0600, one extended-regex per line; override path via NEXUS_LEAK_PATTERNS.
+#
+# Known limitation: for content, each pushed range is scanned as an endpoint
+# diff (added-then-removed content mid-range is not caught — history rewrites
+# need a manual pass). Commit METADATA is checked per-commit across the range.
+#
+# Emergency bypass (maintainer only, deliberately loud): git push --no-verify
+
+set -u
+remote="$1"
+url="${2:-}"
+
+ZERO="0000000000000000000000000000000000000000"
+IDENT="kd9taw@protonmail.com"
+PAT="${NEXUS_LEAK_PATTERNS:-$HOME/.nexus-leak-patterns}"
+
+fail() { echo "pre-push: $*" >&2; exit 1; }
+
+case "$url" in
+  *kd9taw/tempo*) fail "refusing: '$url' is the unrelated kd9taw/tempo repo" ;;
+esac
+
+[ -r "$PAT" ] || fail "patterns file '$PAT' missing/unreadable — create it (0600, one regex per line) or set NEXUS_LEAK_PATTERNS. Refusing to push unscrubbed."
+
+while read -r _lref lsha _rref rsha; do
+  [ "$lsha" = "$ZERO" ] && continue   # ref deletion — nothing new leaves
+
+  if [ "$rsha" = "$ZERO" ]; then
+    # New remote ref: range = commits not already on any ref of this remote;
+    # content = full tree at the tip (first publication of this line of work).
+    range=$(git rev-list "$lsha" --not --remotes="$remote" 2>/dev/null)
+    diff_base=$(git hash-object -t tree /dev/null)
+  else
+    range=$(git rev-list "$rsha..$lsha" 2>/dev/null)
+    diff_base="$rsha"
+  fi
+  [ -z "$range" ] && continue
+
+  # 2. Identity — author AND committer email on every outgoing commit.
+  bad=$(echo "$range" | while read -r c; do
+    git show -s --format='%ae%n%ce' "$c"
+  done | sort -u | grep -vFx "$IDENT" || true)
+  [ -n "$bad" ] && fail "non-project identity in outgoing commits: $bad (repo config must be KD9TAW <$IDENT>)"
+
+  # 3a. Content scrub of what this push makes public.
+  hits=$(git diff "$diff_base" "$lsha" 2>/dev/null | grep -aiE -f "$PAT" | head -5 || true)
+  [ -n "$hits" ] && { echo "pre-push: SCRUB HIT in pushed content:" >&2; echo "$hits" >&2; exit 1; }
+
+  # 3b. Commit messages in the range.
+  msghits=$(echo "$range" | while read -r c; do git show -s --format='%B' "$c"; done \
+            | grep -aiE -f "$PAT" | head -5 || true)
+  [ -n "$msghits" ] && { echo "pre-push: SCRUB HIT in commit messages:" >&2; echo "$msghits" >&2; exit 1; }
+done
+
+exit 0
