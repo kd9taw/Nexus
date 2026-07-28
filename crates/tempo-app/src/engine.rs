@@ -14490,6 +14490,45 @@ mod tests {
     }
 
     #[test]
+    fn jt65_call_cq_drives_the_whole_tx_path() {
+        // Operator report 2026-07-28: "on jt65, call cq hard crashes the program"
+        // (Windows, 0.19.16). This drives the ENTIRE engine-side path a Call CQ takes
+        // — arm, start the run, key both parities, then every call the UI polls
+        // afterwards — and is clean on Linux, which is what says the fault is in the
+        // Windows build or a layer below the engine (audio backend, PTT, Tauri),
+        // NOT in the mode wiring. Kept so a future engine-side regression here fails
+        // in CI instead of on the air.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Jt65);
+        e.set_tx_enabled(true);
+        e.start_cq(None).expect("JT65 CQ run should start");
+
+        let mut keyed = 0;
+        for slot in 0..6u64 {
+            let w = e.poll_tx(slot);
+            if let Some(first) = w.first() {
+                keyed += 1;
+                // 126 symbols at 4458.5 samples + a 1.0 s lead-in, inside the minute.
+                assert!(
+                    first.len() > 500_000 && first.len() < 60 * 12_000,
+                    "JT65 over is {} samples — outside the slot",
+                    first.len()
+                );
+            }
+        }
+        assert!(keyed > 0, "JT65 CQ never produced a waveform in 6 slots");
+
+        // Everything the UI polls afterwards. A panic in any of these crashes the app
+        // at exactly the moment Call CQ is pressed.
+        let snap = e.snapshot();
+        assert_eq!(snap.link.tier, Tier::Jt65);
+        let _ = e.spectrum_row();
+        let _ = e.band_plan();
+        let _ = e.active_frame_samples();
+        let _ = e.active_capture_samples();
+    }
+
+    #[test]
     fn msk144_gets_wsjtx_meteor_scatter_patience_not_ft8_patience() {
         // ⭐ SILENCE IS THE NORMAL STATE ON METEOR SCATTER. You transmit continuously
         // and wait for a trail that may be a minute or more away, so FT8's "nobody

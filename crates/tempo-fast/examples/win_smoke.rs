@@ -101,6 +101,39 @@ fn dx1_roundtrip() -> Result<String, String> {
     }
 }
 
+
+/// JT65 ENCODE + waveform, straight through the C ABI.
+///
+/// Added 2026-07-28 after an operator report that Call CQ on JT65 hard-crashes the
+/// Windows build. The whole engine-side path is clean on Linux, so this isolates the
+/// question this exe exists to answer: does the FORTRAN side work on this target?
+/// gen65 + chkmsg are the only newly vendored sources in that release, and Windows
+/// gives a thread far less stack than Linux does.
+///
+/// PASS here means the fault is above libtempo — the app, the audio backend or PTT.
+/// A crash here means it is the modem side, and this exe is where to debug it.
+fn jt65_encode_probe() -> Result<usize, String> {
+    let msg = std::ffi::CString::new("CQ KD9TAW EN52").map_err(|e| e.to_string())?;
+    let mut itone = vec![0i32; 126];
+    let n = unsafe {
+        tempo_fast_sys::jt65_encode_msg(
+            msg.as_ptr(),
+            14,
+            itone.as_mut_ptr(),
+        )
+    };
+    if n != 126 {
+        return Err(format!("jt65_encode_msg returned {n}, expected 126"));
+    }
+    if itone.iter().filter(|&&t| t == 0).count() != 63 {
+        return Err("expected 63 sync symbols at tone 0".to_string());
+    }
+    if !itone.iter().all(|&t| t == 0 || (2..=65).contains(&t)) {
+        return Err("a tone was outside 0 / 2..=65".to_string());
+    }
+    Ok(n as usize)
+}
+
 fn main() {
     let mut ok = true;
 
@@ -116,6 +149,15 @@ fn main() {
     print!("DX1 (non-coherent 8-FSK) round-trip: ");
     match dx1_roundtrip() {
         Ok(m) => println!("PASS — recovered {m:?}"),
+        Err(e) => {
+            ok = false;
+            println!("FAIL — {e}");
+        }
+    }
+
+    print!("JT65 encode (gen65 + chkmsg, newly vendored): ");
+    match jt65_encode_probe() {
+        Ok(n) => println!("PASS — {n} channel symbols"),
         Err(e) => {
             ok = false;
             println!("FAIL — {e}");
