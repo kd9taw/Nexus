@@ -206,6 +206,37 @@ set(LIBTEMPO_SOURCES
     #     `include`d by the files above: fst4/fst4_params.f90,
     #     fst4/ldpc_240_{101,74}_{parity,generator}.f90
 
+    # --- WSPR native decode (lib/wsprd) : Nexus, RX-ONLY ---
+    #     The propagation-beacon mode. 50-bit messages, K=32 r=1/2 convolutional
+    #     coding, 110.6 s transmissions in a 2-minute window.
+    #
+    #     ⭐ WSPR HAS NO LIBRARY-SHAPED DECODER UPSTREAM. WSJT-X runs the `wsprd`
+    #     EXECUTABLE as a subprocess (its widgets/mainwindow.cpp:2551), so there
+    #     was nothing to call. Integrating it meant converting the PROGRAM: main()
+    #     became wspr_decode_core() (wsprd.c), the getopt loop became parameters
+    #     and pinned values, five persistent files were removed, and the emit loop
+    #     writes the caller's array. Every MODIFIED FOR NEXUS block in wsprd.c
+    #     documents one of those. The decode itself is untouched.
+    #
+    #     ⚠️ LICENSING: fano.c and jelinek.c carry a copyright line and NO license
+    #     grant of their own. They are here on the WSJT-X PROJECT-WIDE GPL-3 — an
+    #     inference from the surrounding work, not a per-file determination, and a
+    #     deliberate operator decision. See NOTICE, which says so plainly and
+    #     names the cleaner path (Karn's libfec ships a stated-LGPL fano.c).
+    ${LIB}/wsprd/wsprd.c                  # the decode core (converted from main)
+    ${LIB}/wsprd/wsprd_utils.c            # message unpacking, hashing helpers
+    ${LIB}/wsprd/wsprsim_utils.c          # shared pack/unpack with the simulator
+    ${LIB}/wsprd/fano.c                   # Fano sequential decoder (Karn)
+    ${LIB}/wsprd/jelinek.c                # stack-bucket decoder (K9AN)
+    ${LIB}/wsprd/tab.c                    # bit-count table
+    ${LIB}/wsprd/osdwspr.f90              # ordered-statistics decoder. OSD is
+                                          #   PINNED OFF (ndepth=0, upstream's
+                                          #   default) but wsprd.c calls it
+                                          #   unconditionally in source, so the
+                                          #   symbol must exist to link.
+    #     NOT listed: wsprd/metric_tables.c is `#include`d into wsprd.c:835, and
+    #     wsprd/nhash.c is already compiled above for MSK144's hashing.
+
     # --- JT65 native decode (jt65_decode.f90 + lib/ftrsd) : Nexus, RX-ONLY ---
     #     The classic EME / weak-signal mode: 65-tone MFSK, a (63,12) Reed-Solomon
     #     code, and the LEGACY 72-bit packjt message layer (character*22 decodes),

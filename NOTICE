@@ -73,10 +73,35 @@ ftrsd REPLACES KVASD, the non-free Reed-Solomon decoder JT65 historically shelle
 out to. Nexus does not ship, link, or invoke KVASD, and the vendored tree contains
 no copy of it.
 
-⚠️ NOT VENDORED, and not to be vendored without a fresh licensing determination:
-`lib/wsprd/fano.c` and `lib/wsprd/jelinek.c` — also Karn-derived, but carrying a
-bare copyright line with NO license grant of any kind. That is a materially
-different case from the files above and is why WSPR is not integrated.
+### Convolutional decoders — Phil Karn (KA9Q) and Steve Franke (K9AN)
+License: **GNU GPL, version 3**, by the WSJT-X project-wide grant. ⚠️ See below.
+
+The K=32 r=1/2 convolutional decoders behind **WSPR**, vendored at
+`libtempo/vendor/wsjtx/lib/wsprd/` — `fano.c` (Fano sequential decoder,
+"Copyright 1994, Phil Karn, KA9Q / Minor modifications by Joe Taylor, K1JT") and
+`jelinek.c` (stack-bucket sequential decoder, written by Steve Franke K9AN for
+WSJT-X in 2015, reusing Karn's ENCODE macro).
+
+⚠️ THESE TWO CARRY NO LICENSE GRANT OF THEIR OWN. Unlike the Reed-Solomon codec
+above — whose files each state "May be used under the terms of the GNU General
+Public License (GPL)" — `fano.c` and `jelinek.c` have only a copyright line and a
+description. There is no per-file grant to read.
+
+They are vendored on the basis of the WSJT-X PROJECT-WIDE license: they sit
+inside a work whose `COPYING` is verbatim GPL-3, they are listed in that
+project's own build (its `CMakeLists.txt` wsprd_CSRCS), and upstream has
+distributed them as part of a GPL-3 work for two decades. That is an inference
+from the surrounding project, NOT a per-file determination, and it is recorded
+here as such — a deliberate operator decision (KD9TAW, 2026-07-27) rather than a
+conclusion this file can support from the sources alone.
+
+It is a weaker footing than every other component documented here, and it is the
+only one resting on implied rather than stated terms. If Karn's intent were ever
+shown to be narrower, the remedy is to drop WSPR, not to re-argue the inference:
+`fano.c` is the decoder WSPR fundamentally depends on. A cleaner path exists and
+was not taken here — Karn's own `libfec` distributes a `fano.c` under stated LGPL
+terms, and if it is the same code, vendoring THAT copy would replace this
+inference with an explicit grant.
 
 Project: <https://www.ka9q.net/>
 
