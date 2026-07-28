@@ -390,6 +390,76 @@ int fst4_decode_frame(const int16_t *iwave /*[ntrperiod*12000]*/,
                       fst4_decode_t *out, int max_out);
 
 /*===========================================================================
+ * WSPR: the propagation-beacon mode. DECODE ONLY.
+ *===========================================================================*/
+
+/* 50-bit messages ("CALL GRID DBM"), K=32 r=1/2 convolutional coding, a 110.6 s
+ * transmission inside a 2-minute window at ~1.4 baud. Beacons, not QSOs — the
+ * point is to hear who is propagating where.
+ *
+ * ⭐ THIS DECODER WAS A PROGRAM. WSJT-X has no library-shaped WSPR decoder; it
+ * runs the `wsprd` EXECUTABLE as a subprocess. Nexus converted main() into
+ * wspr_decode_core() — see the MODIFIED FOR NEXUS blocks in wsprd.c for every
+ * piece of the program shell that was removed.
+ *
+ * ⭐ SERIALIZE. fftwf_plan_dft_* is the FFTW PLANNER, which is not thread-safe,
+ * and this decoder plans three transforms per call against freshly-allocated
+ * buffers. Two concurrent decodes corrupt FFTW's internal plan list. The Rust
+ * wrapper holds MODEM_LOCK for exactly this reason; a caller reaching this
+ * symbol by another route must serialize it itself.
+ *
+ * ⭐ THE HASHED-CALLSIGN TABLE IS OFF (upstream's own -H). Type-2 and type-3
+ * messages therefore report the <...> hash form rather than resolving a
+ * previously-heard callsign — the same limitation FST4W has here, and for the
+ * same reason: the table persisted to a file on disk, which is a path for one
+ * radio chain's callsigns to reach another's decoder.
+ *
+ * The frame is 114 s of the 120 s window: WSPR_NMAX = 114*12000 = 1368000. A
+ * short buffer is zero-padded rather than refused. */
+#define WSPR_NMAX     1368000  /* samples the decoder reads (114 s @ 12 kHz)   */
+#define WSPR_PERIOD_S 120      /* the reception interval is 2 minutes          */
+
+/* NO wspr encode / gen_wave. Receive-only: the Rust ModeKind reports
+ * Capabilities{tx:false} and modes::tx_mode() refuses the transmit path. */
+
+/* One decode from WSPR acquisition.
+ *
+ * Deliberately NOT the 64-byte record the FT8-family modes share: WSPR reports
+ * an ABSOLUTE frequency in MHz as a double (not an audio offset in Hz), carries
+ * a drift term no other mode here has, and its message is 22 characters from its
+ * own 50-bit layer. Forcing it into the shared shape would have meant
+ * misrepresenting at least two of those fields. */
+typedef struct {
+    double freq;        /* absolute RF frequency, MHz (dial + audio offset)   */
+    float  sync;        /* sync quality                                      */
+    float  snr;         /* SNR estimate, dB in 2500 Hz                       */
+    float  dt;          /* time offset, seconds                              */
+    float  drift;       /* frequency drift, Hz/minute — WSPR-specific        */
+    char   message[23]; /* NUL-terminated "CALL GRID DBM"; 22 chars + NUL     */
+    int    decodetype;  /* 0 = type 1, 1 = type 2, 2 = type 3                */
+} wspr_decode_t;
+
+/*
+ * Decode every WSPR signal in one 2-minute reception interval.
+ *   iwave       : WSPR_NMAX int16 samples @ 12 kHz (short = zero-padded)
+ *   nsamples    : how many of them are real
+ *   dialfreq    : rig dial frequency in MHz — reported freq is dial + offset
+ *   quickmode   : 1 = do not dig deep for weak signals (upstream -q)
+ *   npasses     : subtraction passes; upstream default 2, 1 = -B
+ *   subtraction : 0 disables signal subtraction between passes (-s)
+ *   more_candidates : upstream -d, a deeper candidate list
+ *   stackdecoder    : upstream -J, the Jelinek stack decoder instead of Fano
+ *   out, max_out    : caller's array
+ *
+ * Returns the number of decodes written (>= 0), or -1 on error. NOT thread-safe;
+ * see the serialization note above.
+ */
+int wspr_decode_core(const short *iwave, long nsamples, double dialfreq,
+                     int quickmode, int npasses, int subtraction,
+                     int more_candidates, int stackdecoder,
+                     wspr_decode_t *out, int max_out);
+
+/*===========================================================================
  * JT65: the classic WSJT weak-signal / EME mode. DECODE ONLY.
  *===========================================================================*/
 

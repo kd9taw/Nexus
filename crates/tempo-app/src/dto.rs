@@ -216,6 +216,10 @@ pub enum Tier {
     /// submode comes from `Settings::jt65_submode`.
     #[serde(rename = "JT65")]
     Jt65,
+    /// WSPR — the propagation-BEACON mode. **RECEIVE-ONLY**. Unlike every other
+    /// tier, its decodes are propagation reports rather than QSO traffic.
+    #[serde(rename = "WSPR")]
+    Wspr,
 }
 
 impl Tier {
@@ -256,6 +260,7 @@ impl Tier {
             Tier::Q65 => Some(Self::q65_kind(q65_period_s, q65_submode)),
             Tier::Msk144 => Some(Self::msk144_kind(msk144_period_s)),
             Tier::Jt65 => Some(Self::jt65_kind(jt65_submode)),
+            Tier::Wspr => Some(ModeKind::Wspr),
             Tier::TempoDeep => None,
         }
     }
@@ -320,6 +325,7 @@ impl Tier {
             ModeKind::Q65 { .. } => Tier::Q65,
             ModeKind::Msk144 { .. } => Tier::Msk144,
             ModeKind::Jt65 { .. } => Tier::Jt65,
+            ModeKind::Wspr => Tier::Wspr,
         }
     }
 }

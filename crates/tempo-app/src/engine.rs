@@ -4520,6 +4520,7 @@ impl Engine {
             Tier::Q65 => f64::from(self.settings.q65_period_s),
             Tier::Msk144 => f64::from(self.settings.msk144_period_s),
             Tier::Jt65 => 60.0,
+            Tier::Wspr => 120.0,
             Tier::TempoDeep => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
             // FT4 = 0.5 s lead-in + 5.04 s tones (105 sym × 576 sa @ 12 kHz). The
             // generated buffer also carries ~1.0 s of TRAILING silence — that is
@@ -7510,6 +7511,8 @@ impl Engine {
             // "MSK144" is the ADIF-registered mode name.
             Tier::Msk144 => "MSK144",
             Tier::Jt65 => "JT65",
+            // ADIF-registered. Unreachable while receive-only, like the others.
+            Tier::Wspr => "WSPR",
             Tier::TempoFast => "TempoFast",
         }
         .to_string();

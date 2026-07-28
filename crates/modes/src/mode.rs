@@ -57,18 +57,26 @@ pub enum ModeKind {
     /// fixed 60 s T/R period, so the frame length is constant. `submode` is 0/1/2
     /// for A/B/C (tone spacing 1x/2x/4x).
     Jt65 { submode: u8 },
+    /// WSPR — the propagation-BEACON mode. **RECEIVE-ONLY**.
+    ///
+    /// Carries nothing: one fixed 2-minute interval, one message form. It is
+    /// also the only mode here whose decodes are not QSO traffic — they are
+    /// propagation reports, and they report an ABSOLUTE frequency in MHz rather
+    /// than an audio offset.
+    Wspr,
     TempoFast,
 }
 
 impl ModeKind {
     /// All modes shipped today, in display order.
-    pub const ALL: [ModeKind; 7] = [
+    pub const ALL: [ModeKind; 8] = [
         ModeKind::Ft8,
         ModeKind::Ft4,
         ModeKind::FST4_15,
         ModeKind::Q65_30A,
         ModeKind::MSK144_15,
         ModeKind::JT65A,
+        ModeKind::Wspr,
         ModeKind::TempoFast,
     ];
 
@@ -222,6 +230,7 @@ impl ModeKind {
             // name rather than pretending to a precision it does not have.
             ModeKind::Q65 { period_s, submode } => Self::q65_name(period_s, submode),
             ModeKind::Msk144 { period_s } => Self::msk144_name(period_s),
+            ModeKind::Wspr => "WSPR",
             ModeKind::Jt65 { submode } => match submode {
                 0 => "JT65A",
                 1 => "JT65B",
@@ -244,6 +253,8 @@ impl ModeKind {
             ModeKind::Msk144 { period_s } => f32::from(period_s),
             // JT65 has ONE period, unlike the other parametric modes here.
             ModeKind::Jt65 { .. } => 60.0,
+            // WSPR's interval is 2 minutes; the decoder reads 114 s of it.
+            ModeKind::Wspr => f32::from(wspr::PERIOD_S),
             ModeKind::TempoFast => 4.0,
         }
     }
@@ -261,6 +272,8 @@ impl ModeKind {
             // The full 60 s: the Fortran dummy is explicit-shape even though only
             // the first 52 s are read.
             ModeKind::Jt65 { .. } => jt65::NMAX,
+            // 114 s, NOT the full 120 s interval — see the wspr crate docs.
+            ModeKind::Wspr => wspr::NMAX,
             ModeKind::TempoFast => tempo_fast::NMAX,
         }
     }
@@ -422,6 +435,7 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
         ModeKind::Q65 { period_s, submode } => Box::new(Q65Mode { period_s, submode }),
         ModeKind::Msk144 { period_s } => Box::new(Msk144Mode { period_s }),
         ModeKind::Jt65 { submode } => Box::new(Jt65Mode { submode }),
+        ModeKind::Wspr => Box::new(WsprMode),
         ModeKind::TempoFast => Box::new(Ft1Mode),
     }
 }
@@ -757,6 +771,7 @@ mod tx_capability_tests {
                 | ModeKind::Q65 { .. }
                 | ModeKind::Msk144 { .. }
                 | ModeKind::Jt65 { .. }
+                | ModeKind::Wspr
         )
     }
 
@@ -773,6 +788,7 @@ mod tx_capability_tests {
             .chain(ModeKind::fst4_all())
             .chain(ModeKind::msk144_all())
             .chain(ModeKind::jt65_all())
+            .chain(std::iter::once(ModeKind::Wspr))
         {
             let rx_only = rx_only(kind);
             let caps_tx = make_mode(kind).capabilities().tx;
@@ -838,6 +854,7 @@ mod tx_capability_tests {
             .chain(ModeKind::fst4_all())
             .chain(ModeKind::msk144_all())
             .chain(ModeKind::jt65_all())
+            .chain(std::iter::once(ModeKind::Wspr))
         {
             let _ = make_mode(kind); // never refuses
         }
@@ -1169,5 +1186,68 @@ impl Mode for Jt65Mode {
         .into_iter()
         .map(Into::into)
         .collect()
+    }
+}
+
+/// **WSPR** — the propagation-beacon mode. Receive-only.
+///
+/// The odd one out in this trait. Every other mode decodes QSO traffic and
+/// reports an audio offset in Hz; WSPR decodes BEACONS and reports an absolute
+/// frequency in MHz, because a spot is only meaningful with the band attached.
+/// The shared [`Decode`] cannot carry that, so `freq` here is the audio offset
+/// derived back from the absolute value — see the conversion in `decode.rs`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WsprMode;
+
+impl Mode for WsprMode {
+    fn kind(&self) -> ModeKind {
+        ModeKind::Wspr
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            // WSPR transmit is an OPERATING decision as much as a code one: a
+            // beacon keys unattended on a schedule, which is precisely what the
+            // TX-safety invariants exist to govern. Receive-only here.
+            tx: false,
+            fox_hound: false,
+            ir_harq: false,
+            // WSPR's 50-bit layer carries "CALL GRID DBM" and nothing else.
+            free_text: false,
+            contest: false,
+        }
+    }
+
+    // encode() and gen_wave() are DELIBERATELY not implemented.
+
+    #[allow(clippy::too_many_arguments)]
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        _nfa: i32,
+        _nfb: i32,
+        ndepth: i32,
+        _mycall: &str,
+        _hiscall: &str,
+        _nqso_progress: i32,
+        _nfqso: i32,
+        _frame_time_ms: i64,
+    ) -> Vec<Decode> {
+        // ⭐ nfa/nfb/mycall/hiscall/nfqso are IGNORED, and that is not an
+        // oversight. WSPR searches its own fixed 200 Hz sub-band around the dial
+        // frequency — there is no operator-selectable passband — and it has no
+        // a-priori decoding, so callsigns buy nothing. Accepting them and
+        // silently doing nothing would be worse than saying so here.
+        //
+        // dial_mhz is 0.0 because the shared Decode has nowhere to put an
+        // absolute frequency; the app-layer path passes the real dial. A caller
+        // using this trait method gets audio offsets in MHz, which the
+        // conversion in decode.rs turns back into Hz.
+        let quick = ndepth > 0 && ndepth < 2;
+        // 3 passes: upstream's default. The third is the weak-signal pass.
+        wspr::decode_frame(iwave, 0.0, quick, 3, true, false, false)
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 }

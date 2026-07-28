@@ -175,7 +175,7 @@ pub fn band_plan_for(tier: crate::dto::Tier) -> Vec<BandChannel> {
         // it in the same audio passband on the same dial frequencies. Q65's real
         // home is VHF+/EME, where the calling frequencies are per-band conventions
         // rather than a plan this table models.
-        Tier::Fst4 | Tier::Fst4w | Tier::Q65 | Tier::Msk144 | Tier::Jt65 => ft8_band_plan(),
+        Tier::Fst4 | Tier::Fst4w | Tier::Q65 | Tier::Msk144 | Tier::Jt65 | Tier::Wspr => ft8_band_plan(),
         Tier::TempoFast | Tier::TempoDeep => band_plan(),
     }
 }

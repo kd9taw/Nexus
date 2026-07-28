@@ -151,6 +151,34 @@ impl From<jt65::Decode> for Decode {
     }
 }
 
+impl From<wspr::Decode> for Decode {
+    fn from(d: wspr::Decode) -> Self {
+        Self {
+            message: d.message,
+            sync: d.sync,
+            // WSPR reports SNR as a float; the shared record is an int, and a
+            // WSPR spot is quoted in whole dB anyway.
+            snr: d.snr.round() as i32,
+            dt: d.dt,
+            // ⚠️ LOSSY, AND THE ONE PLACE THIS CONVERSION LIES A LITTLE. WSPR
+            // reports an ABSOLUTE frequency in MHz; the shared Decode carries an
+            // audio offset in Hz because every other mode does. Recovering the
+            // offset needs the dial frequency, which is not in this struct — so
+            // the fractional MHz is converted to Hz and the band is dropped.
+            // Anything that needs the true spot frequency must use
+            // wspr::Decode directly rather than this normalized form.
+            freq: ((d.freq_mhz - d.freq_mhz.floor()) * 1.0e6) as f32,
+            // WSPR has no a-priori decoding at all.
+            nap: 0,
+            // No [0,1] quality metric; `sync` above is the closest thing and is
+            // already carried honestly.
+            qual: 0.0,
+            rv: None,
+            mode: None,
+        }
+    }
+}
+
 impl From<ft8::Decode> for Decode {
     fn from(d: ft8::Decode) -> Self {
         Self {

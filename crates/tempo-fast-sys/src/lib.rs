@@ -212,6 +212,47 @@ pub const JT65_NPTS: usize = 624_000;
 /// JT65 submodes A/B/C, passed as 0/1/2 (tone spacing 1x/2x/4x).
 pub const JT65_NSUBMODES: u8 = 3;
 
+/// Samples the WSPR decoder reads: 114 s of the 120 s window, at 12 kHz.
+pub const WSPR_NMAX: usize = 1_368_000;
+/// WSPR's reception interval in seconds. Fixed — WSPR has one period.
+pub const WSPR_PERIOD_S: u16 = 120;
+
+/// One decode from [`wspr_decode_core`]. Layout matches `wspr_decode_t` in
+/// `libtempo.h`.
+///
+/// NOT the 64-byte shape the FT8-family records share, deliberately: `freq` is an
+/// ABSOLUTE frequency in MHz as an `f64` (not an audio offset in Hz), `drift` has
+/// no analogue in the other modes, and the message is 22 characters from WSPR's
+/// own 50-bit layer.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WsprDecodeT {
+    /// Absolute RF frequency in MHz (dial + audio offset).
+    pub freq: f64,
+    pub sync: c_float,
+    pub snr: c_float,
+    pub dt: c_float,
+    /// Frequency drift, Hz/minute.
+    pub drift: c_float,
+    pub message: [u8; 23],
+    /// 0 = type 1, 1 = type 2, 2 = type 3.
+    pub decodetype: c_int,
+}
+
+impl Default for WsprDecodeT {
+    fn default() -> Self {
+        Self {
+            freq: 0.0,
+            sync: 0.0,
+            snr: 0.0,
+            dt: 0.0,
+            drift: 0.0,
+            message: [0; 23],
+            decodetype: 0,
+        }
+    }
+}
+
 /// One decode from [`jt65_decode_frame`]. Layout matches `jt65_decode_t` in
 /// `libtempo.h`. NOT an alias of [`Ft8DecodeT`]: the last two fields are
 /// `ft`/`qual` (int/int) where FT8 has `nap`/`qual` (int/float).
@@ -611,6 +652,25 @@ extern "C" {
         hisgrid: *const c_char,
         nfqso: c_int,
         out: *mut Jt65DecodeT,
+        max_out: c_int,
+    ) -> c_int;
+
+    /// Decode every WSPR signal in one 2-minute reception interval.
+    ///
+    /// DECODE ONLY — receive-only; see `Capabilities.tx` and `modes::tx_mode`.
+    ///
+    /// ⭐ Serialize. This plans three FFTW transforms per call, and the FFTW
+    /// PLANNER is not thread-safe; the safe wrapper holds `MODEM_LOCK`.
+    pub fn wspr_decode_core(
+        iwave: *const i16, // [WSPR_NMAX]; short is zero-padded
+        nsamples: std::os::raw::c_long,
+        dialfreq: f64,     // rig dial, MHz — reported freq is dial + offset
+        quickmode: c_int,
+        npasses: c_int,
+        subtraction: c_int,
+        more_candidates: c_int,
+        stackdecoder: c_int,
+        out: *mut WsprDecodeT,
         max_out: c_int,
     ) -> c_int;
 

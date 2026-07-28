@@ -4,7 +4,7 @@
 
 export type Presence = 'active' | 'idle' | 'stale'
 
-export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65'
+export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65' | 'WSPR'
 
 // ---- Propagation & opening intelligence (matches the `propagation` crate) ----
 export type ActivityTier = 'Active' | 'Moderate' | 'Quiet' | 'Closed'

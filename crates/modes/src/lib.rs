@@ -76,6 +76,9 @@ mod tests {
             ModeKind::Jt65 { .. } => {
                 unreachable!("JT65 is receive-only; native_frame requires encode()")
             }
+            ModeKind::Wspr => {
+                unreachable!("WSPR is receive-only; native_frame requires encode()")
+            }
             ModeKind::TempoFast => 4_800,
         };
         to_i16_frame(&wave, mode.frame_samples(), off, 1000.0)
@@ -124,7 +127,7 @@ mod tests {
         assert_eq!(names.len(), 25, "Q65 labels collided: {names:?}");
         assert!(!names.contains("Q65"), "a combination fell through to the family name");
 
-        assert_eq!(ModeKind::ALL.len(), 7) // FT8, FT4, FST4, Q65, MSK144, JT65, TempoFast;
+        assert_eq!(ModeKind::ALL.len(), 8) // FT8, FT4, FST4, Q65, MSK144, JT65, WSPR, TempoFast;
     }
 
     /// Each native mode decodes its own clean signal through a `Box<dyn

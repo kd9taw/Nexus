@@ -2651,6 +2651,7 @@ dependencies = [
  "q65",
  "tempo-fast",
  "tempo-net",
+ "wspr",
 ]
 
 [[package]]
@@ -5027,6 +5028,7 @@ dependencies = [
  "microfft",
  "modes",
  "tempo-fast",
+ "wspr",
 ]
 
 [[package]]
@@ -6681,6 +6683,13 @@ dependencies = [
  "windows-core 0.61.2",
  "windows-version",
  "x11-dl",
+]
+
+[[package]]
+name = "wspr"
+version = "0.1.0"
+dependencies = [
+ "tempo-fast-sys",
 ]
 
 [[package]]

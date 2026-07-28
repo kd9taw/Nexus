@@ -845,7 +845,11 @@ int wspr_decode_core(const short *iwave, long nsamples, double dialfreq_in,
    became of it:
 
      -a <path>  data_dir        GONE. Nothing writes files any more; see below.
-     -B         npasses=1       -> npasses_in (caller)
+     -B         npasses=1       -> npasses_in (caller). ⚠️ Upstream's DEFAULT is
+                                3, not 2. The third pass (ipass==2) is the
+                                weak-signal one — nblocksize=4 and minsync2
+                                lowered to 0.10 — and omitting it cost 1-2 dB at
+                                the decode floor, caught by the parity ladder.
      -c         writec2         PINNED 0. Wrote a .c2 file; pure diagnostic.
      -C <n>     maxcycles       PINNED 10000, upstream's own default.
      -d         more_candidates -> more_candidates_in (caller)
@@ -863,7 +867,11 @@ int wspr_decode_core(const short *iwave, long nsamples, double dialfreq_in,
      -J         stackdecoder    -> stackdecoder_in (caller)
      -m         wspr_type=15    PINNED 2 (the 2-minute mode). WSPR-15 needs an
                                 8x longer buffer and is not exposed.
-     -o <n>     ndepth          PINNED 0 (OSD disabled), upstream's default.
+     -o <n>     ndepth          PINNED -1 (OSD disabled). ⚠️ NOT 0 — the test at
+                                :1357 is `ndepth >= 0`, so 0 ENABLES OSD. An
+                                earlier version of this block pinned 0 and
+                                described it as upstream's default; it is not,
+                                and it silently turned OSD on.
      -q         quickmode       -> quickmode_in (caller)
      -s         subtraction=0   -> subtraction_in (caller)
      -w         fmin/fmax       NOT APPLIED. Upstream's -w widens the search to
@@ -880,7 +888,7 @@ int wspr_decode_core(const short *iwave, long nsamples, double dialfreq_in,
     usehashtable = 0;
     stackdecoder = stackdecoder_in;
     wspr_type = 2;
-    ndepth = 0;
+    ndepth = -1;
     quickmode = quickmode_in;
     subtraction = subtraction_in;
     /* -w (fmin=-150, fmax=+150) deliberately NOT applied — default window. */
@@ -927,11 +935,22 @@ int wspr_decode_core(const short *iwave, long nsamples, double dialfreq_in,
     }
     dialfreq = dialfreq_cmdline - (dialfreq_error*1.0e-06);
     
-    // Parse date and time from given filename
-    strncpy(date,ptr_to_infile_suffix-11,6);
-    strncpy(uttime,ptr_to_infile_suffix-4,4);
-    date[6]='\0';
-    uttime[4]='\0';
+    /* MODIFIED FOR NEXUS (KD9TAW, 2026-07-28): the date/time parse is removed.
+   
+   ⚠️ THIS WAS A NULL DEREFERENCE, not a tidy-up. Upstream derived the UTC stamp
+   from the INPUT FILENAME — wsprd expects WSJT-X's "YYMMDD_HHMM.wav" convention
+   and read backwards from the suffix pointer. With the audio arriving as a
+   buffer there is no filename, so ptr_to_infile_suffix stayed NULL and
+   `strncpy(date, NULL-11, 6)` segfaulted on the first decode. Found by the
+   wspr crate's own noise test, which is exactly what that test is for.
+   
+   Nothing is lost: date and time are the two fields wsprd_nexus.h deliberately
+   drops from the result record, because the CALLER knows when it captured the
+   audio far more reliably than a filename does. decodes[].date/.time are still
+   populated below (with empty strings) since the sort and dupe logic touch the
+   struct, but they are not copied out. */
+    date[0]='\0';
+    uttime[0]='\0';
     
     // Do windowed ffts over 2 symbols, stepped by half symbols
     int nffts=4*floor(npoints/512)-1;

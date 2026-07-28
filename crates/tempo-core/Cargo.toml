@@ -10,6 +10,7 @@ description = "Nexus transceiver core — slot timing, virtual-air channel, TX/R
 [dependencies]
 tempo-fast = { path = "../tempo-fast" }
 modes = { path = "../modes" }
+wspr = { path = "../wspr" }
 # Fixed-size real FFT for the waterfall power spectrum (MIT). Zero-alloc, ~2 transitive deps —
 # an exact fit for the compile-time 4096-sample window.
 microfft = "0.6"
