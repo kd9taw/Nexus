@@ -4019,7 +4019,30 @@ impl RadioLoop {
                     // slot, busy worker) the deferred decode→TX ordering below is
                     // UNCHANGED — this deliberately narrows the new behavior to the
                     // path that produced the ~1-2 s late TX.
-                    if self.early_done_slot == Some(slot.wrapping_sub(1)) {
+                    //
+                    // ⭐ AND FOR EVERY TIER THAT HAS NO EARLY PASS AT ALL.
+                    // `early_done_slot` is set only by the early-pass block, whose
+                    // trigger table is FT8 11.8 s / FT4 5.5 s / everything else None
+                    // — so Q65, FST4, MSK144, WSPR and FST4W could NEVER satisfy the
+                    // condition above and always fell through to the deferred path,
+                    // keyed late by however long the previous period's decode took.
+                    //
+                    // On the air (operator report, 2026-07-28): MSK144 started ~8 s
+                    // into a 15 s slot, so a 14.7 s over ran well past the boundary;
+                    // FST4-60 never transmitted at all, because by the time its far
+                    // slower decode landed there was no room left for a 52.8 s over.
+                    // Q65-60A worked only because its decode happens to be quick
+                    // enough — the same bug, under the threshold.
+                    //
+                    // WSJT-X keys at t=0 and decodes in PARALLEL; stragglers cannot
+                    // change an over already in flight there either. This restores
+                    // that ordering for the modes that had no way to reach it.
+                    // FT8/FT4 keep their existing early-pass condition untouched.
+                    let has_early_pass = matches!(
+                        eng.tier(),
+                        tempo_app::dto::Tier::Ft8 | tempo_app::dto::Tier::Ft4
+                    );
+                    if !has_early_pass || self.early_done_slot == Some(slot.wrapping_sub(1)) {
                         let _ =
                             self.key_boundary_tx(&mut eng, rig, backend, now, slot, false, None);
                     }
@@ -5377,18 +5400,7 @@ fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::backend::MockBackend;
 
-    /// A DSP func the rig never answers must stop costing a CAT timeout on a fixed cycle.
-    ///
-    /// Operator report 2026-07-25: the waterfall "hangs and stops moving" for ~1 s every
-    /// 10-20 s, in Phone/CW/FT, from the first minute — the screenshot shows vertical
-    /// STREAKING (the cached row redrawn), i.e. the producer starved, not the reader blocked.
-    /// A func GET blocks to the CAT deadline (700 ms, 2500 ms slow-serial) on the RADIO LOOP,
-    /// which is the sole caller of `feed_rx_audio`. The old code re-armed every
-    /// latched-off func every 40 heavy polls (~30 s) FOREVER, so an unanswerable func stalled
-    /// the waterfall on a permanent 30 s cycle. This pins the backoff that ends that cycle.
     #[test]
     fn an_unanswerable_dsp_func_backs_off_instead_of_stalling_forever() {
         // Model the state machine exactly as the poll site drives it.
