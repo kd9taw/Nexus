@@ -294,6 +294,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decode_and_encode_interleave_without_corrupting_each_other() {
+        // Operator report: JT65 Call CQ hard-crashes on Windows with 0xC0000005 (an
+        // ACCESS VIOLATION, not a Rust panic) inside Nexus.exe. A static probe that
+        // calls the encoder ALONE passes on the same machine, so the encoder is fine in
+        // isolation — what the app does differently is DECODE CONTINUOUSLY and then
+        // encode, and gen65 shares the packjt module with the decoder while carrying a
+        // bare `save` that makes every one of its locals static.
+        //
+        // This drives that interleaving.
+        let mut noise = vec![0i16; NMAX];
+        let mut seed: u32 = 0x1234;
+        for s in noise.iter_mut() {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *s = ((seed >> 20) as i16) % 100;
+        }
+        for round in 0..6 {
+            let _ = decode_frame(&noise, 0, 200, 2900, 3, "", "", "", 1500);
+            let t = encode("CQ KD9TAW EN52").expect("encode after decode");
+            assert_eq!(
+                t.len(),
+                NN,
+                "round {round}: wrong symbol count after a decode"
+            );
+            assert_eq!(
+                t.iter().filter(|&&x| x == 0).count(),
+                63,
+                "round {round}: sync symbols corrupted after a decode"
+            );
+            // And the shorthand forms, which chkmsg routes down gen65's OTHER branch —
+            // never exercised by the CQ probe.
+            for sh in ["RO", "RRR", "73"] {
+                let t = encode(sh).expect("shorthand encodes");
+                assert_eq!(t.len(), NN, "round {round}: {sh} wrong length");
+            }
+        }
+    }
+
+    #[test]
     fn encode_produces_a_valid_frame() {
         let t = encode("K1ABC W9XYZ EN37").expect("packs");
         assert_eq!(t.len(), NN, "JT65 is 126 symbols");
