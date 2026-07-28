@@ -22,6 +22,18 @@ interface Props {
   onSetTune?: (on: boolean) => void
   onHaltTx?: () => void
   onSetHoldTxFreq?: (on: boolean) => void
+  /** The active tier decodes but cannot transmit (Q65 / MSK144 / FST4 / FST4W /
+   * JT65 / WSPR). The engine already refuses to arm TX or start a CQ run on
+   * these; this disables the controls so the strip does not OFFER a run it
+   * cannot make happen — the failure that made "Call CQ" on MSK144 look like it
+   * was transmitting. Stop TX stays live: disarming is always allowed. */
+  rxOnly?: boolean
+  /** The active tier is a BEACON (WSPR / FST4W): it transmits on a schedule and
+   * has no QSO sequence. Distinct from `rxOnly` — TX controls stay live, because
+   * the mode does key the radio, but Call CQ / S&P / free text / Log have nothing
+   * to act on. The engine refuses these entry points with a message either way;
+   * this stops the strip offering them. */
+  beacon?: boolean
 }
 
 function reportLabel(rx: number | null | undefined): string | null {
@@ -35,7 +47,7 @@ function reportLabel(rx: number | null | undefined): string | null {
  * Resend), the Call-CQ / Monitor role toggle, and an in-QSO free-text field —
  * so you work a station and watch it sequence WITHOUT leaving the waterfall.
  */
-export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext, onLog, radio, onSetTxEnabled, onSetTune, onHaltTx, onSetHoldTxFreq }: Props) {
+export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext, onLog, radio, onSetTxEnabled, onSetTune, onHaltTx, onSetHoldTxFreq, rxOnly, beacon }: Props) {
   const running = qso?.running ?? false
   const dxcall = qso?.dxcall ?? null
   const state = qso?.state ?? 'Idle'
@@ -43,6 +55,14 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
   const stalled = qso?.stalled ?? false
   const txCount = qso?.txCount ?? 0
   const rpt = reportLabel(qso?.rxReport)
+  const noTx = rxOnly ?? false
+  const noTxWhy = 'This mode is receive-only in Nexus — it decodes but does not transmit'
+  const isBeacon = beacon ?? false
+  const beaconWhy =
+    'This is a beacon mode — it transmits your callsign, grid and power on a schedule. There is no QSO sequence. Set the transmit % and power in Settings ▸ Modes.'
+  // No QSO to run on a beacon, and nothing to send on a receive-only tier.
+  const noQso = noTx || isBeacon
+  const noQsoWhy = isBeacon ? beaconWhy : noTxWhy
 
   const [free, setFree] = useState('')
   const sendFree = () => {
@@ -79,7 +99,12 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
             className={`cq-role cq-call${running ? ' active' : ''}`}
             aria-pressed={running}
             onClick={() => (onCallCq ? onCallCq() : onSetMode('qso-run'))}
-            title="Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically"
+            disabled={noQso}
+            title={
+              noQso
+                ? noQsoWhy
+                : 'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically'
+            }
           >
             Call CQ
           </button>
@@ -88,7 +113,8 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
             className={`cq-role${!running ? ' active' : ''}`}
             aria-pressed={!running}
             onClick={() => onSetMode('qso-monitor')}
-            title="Monitor — search &amp; pounce"
+            disabled={noQso}
+            title={noQso ? noQsoWhy : 'Monitor — search & pounce'}
           >
             S&amp;P
           </button>
@@ -100,8 +126,11 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
               className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
               aria-pressed={radio.txEnabled}
               onClick={() => onSetTxEnabled?.(!radio.txEnabled)}
+              disabled={noTx}
               title={
-                radio.txEnabled
+                noTx
+                  ? noTxWhy
+                  : radio.txEnabled
                   ? 'Transmit ENABLED — your queued message will go out. Click to disable transmit (receive keeps decoding either way).'
                   : 'Transmit DISABLED — receive keeps decoding. Click to enable transmit (WSJT-X "Enable Tx").'
               }
@@ -113,7 +142,8 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
               className={`op-btn tune${radio.tuning ? ' keyed' : ''}`}
               aria-pressed={radio.tuning}
               onClick={() => onSetTune?.(!radio.tuning)}
-              title="Key a tune carrier"
+              disabled={noTx}
+              title={noTx ? noTxWhy : 'Key a tune carrier'}
             >
               Tune
             </button>
@@ -140,7 +170,13 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
 
       <div className={`cq-now${stalled ? ' stalled' : ''}`} role="status">
         <span className="cq-now-label">{stalled ? 'Stalled' : 'TX'}</span>
-        <span className="cq-now-msg mono">{txNow ?? '— listening'}</span>
+        <span className="cq-now-msg mono">
+          {noTx
+            ? '— receive-only, not transmitting'
+            : isBeacon
+              ? '— beacon: transmits on schedule'
+              : (txNow ?? '— listening')}
+        </span>
         {txCount > 1 && (
           <span className="cq-attempts" title={`Sent ${txCount} times — calling repeatedly`}>
             ×{txCount}
@@ -172,7 +208,11 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
           aria-label="In-QSO free text"
           onChange={(e) => setFree(e.target.value.toUpperCase())}
         />
-        <button type="submit" disabled={!free.trim()} title="Send on the next over">
+        <button
+          type="submit"
+          disabled={!free.trim() || noQso}
+          title={noQso ? noQsoWhy : 'Send on the next over'}
+        >
           Send
         </button>
         <button

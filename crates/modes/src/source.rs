@@ -163,15 +163,60 @@ impl SignalSource for NativeSource {
 }
 
 /// Map an upstream WSJT-X/JTDX/MSHV `Decode` mode field to a [`ModeKind`].
-/// WSJT-X reports the mode as a single-character code in the Decode message
-/// (`"~"` = FT8, `"+"` = FT4); some apps send the full name. Unknown modes
-/// (FST4/JT65/Q65/…) map to `None`.
+///
+/// WSJT-X reports the mode as a single-character code in the Decode message; some
+/// apps send the full name instead, so both are accepted. The characters are the
+/// ones the decoders actually print, read off WSJT-X 3.0.2's own `lib/decoder.f90`
+/// output formats rather than from memory:
+///
+/// | code | mode | source |
+/// |------|------|--------|
+/// | `~` | FT8 | `ft8_decoded`, format 1001 |
+/// | `+` | FT4 | `ft4_decoded`, format 1001 |
+/// | `` ` `` | FST4 | `fst4_decoded`, format 1001 |
+/// | `:` | Q65 | `q65_decoded`, format 1001 |
+/// | `#` | JT65 | `jt65_decoded`, the `csync` field (`#`/`##`/`# `) |
+/// | `&` `^` | MSK144 | `mainwindow.cpp:8931` accepts both |
+///
+/// ⭐ THE RETURNED PERIOD/SUBMODE ARE PLACEHOLDERS, and that is sound only because
+/// of what reads this. The single character does not carry a T/R period — a `:` is
+/// Q65 at any of 5 periods and 5 submodes. The one consumer is the decode row's
+/// tier label via `Tier::from_mode_kind`, which collapses every `Q65 { .. }` to
+/// `Tier::Q65` and discards the parameters. Nothing here sizes a buffer or a slot
+/// clock: these decodes arrive already decoded from the upstream app. If a caller
+/// ever needs the real period off a companion decode, it has to come from the
+/// upstream Status message, not from this character.
 fn wsjtx_mode_to_kind(m: &str) -> Option<ModeKind> {
     match m.trim() {
         "~" => Some(ModeKind::Ft8),
         "+" => Some(ModeKind::Ft4),
+        "`" => Some(ModeKind::Fst4 {
+            period_s: 60,
+            wspr: false,
+        }),
+        ":" => Some(ModeKind::Q65 {
+            period_s: 60,
+            submode: 0,
+        }),
+        "#" | "##" => Some(ModeKind::Jt65 { submode: 0 }),
+        "&" | "^" => Some(ModeKind::Msk144 { period_s: 15 }),
         other if other.eq_ignore_ascii_case("FT8") => Some(ModeKind::Ft8),
         other if other.eq_ignore_ascii_case("FT4") => Some(ModeKind::Ft4),
+        other if other.eq_ignore_ascii_case("Q65") => Some(ModeKind::Q65 {
+            period_s: 60,
+            submode: 0,
+        }),
+        other if other.eq_ignore_ascii_case("JT65") => Some(ModeKind::Jt65 { submode: 0 }),
+        other if other.eq_ignore_ascii_case("MSK144") => Some(ModeKind::Msk144 { period_s: 15 }),
+        other if other.eq_ignore_ascii_case("FST4") => Some(ModeKind::Fst4 {
+            period_s: 60,
+            wspr: false,
+        }),
+        other if other.eq_ignore_ascii_case("FST4W") => Some(ModeKind::Fst4 {
+            period_s: 120,
+            wspr: true,
+        }),
+        other if other.eq_ignore_ascii_case("WSPR") => Some(ModeKind::Wspr),
         _ => None,
     }
 }

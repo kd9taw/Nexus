@@ -12,6 +12,7 @@
 //! frame-in/frame-out boundary later (see task #10).
 
 pub mod aprs;
+pub mod beacon;
 pub mod channel;
 pub mod clublog;
 pub mod cw;

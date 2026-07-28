@@ -3807,11 +3807,94 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- Beacons (WSPR / FST4W). A SEPARATE surface from the QSO modes:
+               there is no exchange, only a schedule. Off by default — beaconing
+               keys the radio unattended, so it is always an explicit choice. ---- */}
+          {tab === 'modes' && (
+          <fieldset className="settings-section">
+            <legend>Beacons — WSPR &amp; FST4W</legend>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">Transmit %</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={String(form.beaconTxPercent ?? 0)}
+                  onChange={(e) => updateNum('beaconTxPercent', Number(e.target.value))}
+                />
+                <span className="settings-hint">
+                  Fraction of intervals to transmit on. 0 = listen only. A beacon that
+                  transmits every interval hears nothing, so a minority is the convention
+                  &mdash; 20&ndash;30% is typical. Below 40% Nexus also avoids
+                  back-to-back transmissions while still hitting the rate you asked for.
+                </span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">Transmit power (dBm)</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min={0}
+                  max={60}
+                  value={String(form.beaconPowerDbm ?? 0)}
+                  onChange={(e) => updateNum('beaconPowerDbm', Number(e.target.value))}
+                />
+                <span className="settings-hint">
+                  <strong>Required, and it has to be real.</strong> WSPR reports are
+                  published to a public propagation database that other operators draw
+                  conclusions from, so a wrong figure corrupts their data as well as
+                  yours. The beacon stays silent until this is set. 23 = 200 mW,
+                  30 = 1 W, 37 = 5 W, 43 = 20 W.
+                </span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">FST4W Round Robin slot</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={String(form.beaconRrSlot ?? 0)}
+                  onChange={(e) => updateNum('beaconRrSlot', Number(e.target.value))}
+                />
+                <span className="settings-hint">
+                  0 = use the transmit-% schedule. Otherwise your slot in a coordinated
+                  rotation: stations agreeing on the same slot count and each taking a
+                  different slot never transmit at the same time, because the assignment
+                  is fixed by UTC.
+                </span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">Round Robin slots</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={String(form.beaconRrSlots ?? 0)}
+                  onChange={(e) => updateNum('beaconRrSlots', Number(e.target.value))}
+                />
+                <span className="settings-hint">
+                  How many stations are in the rotation. Ignored when the slot is 0.
+                </span>
+              </label>
+            </div>
+            <span className="settings-hint">
+              Beacons transmit your callsign, grid and power &mdash; there is no QSO
+              sequence, so Call CQ and S&amp;P are inactive on these tiers. Transmit
+              still has to be armed as usual; the schedule never keys a radio whose
+              transmit you have not enabled.
+            </span>
+          </fieldset>
+          )}
+
           {/* ---- FST4 / FST4W: one period setting, shared. Same decoder, same
                slot clock; the tier picks QSO vs beacon. ---- */}
           {tab === 'modes' && (
           <fieldset className="settings-section">
-            <legend>FST4 / FST4W (receive-only)</legend>
+            <legend>FST4 (QSO) / FST4W (beacon)</legend>
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">T/R period</span>

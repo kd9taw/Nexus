@@ -9,6 +9,7 @@ import type {
   SourceKind,
   Tier,
 } from '../types'
+import { isRxOnly, isBeacon } from '../types'
 import { bandLabelForMhz } from '../band'
 import {
   clampOffsetHz,
@@ -933,6 +934,8 @@ export function OperateCockpit({
         <OperateQsoStrip
           qso={snap.qso}
           radio={snap.radio}
+          rxOnly={isRxOnly(tier)}
+          beacon={isBeacon(tier)}
           onSetTxEnabled={onSetTxEnabled}
           onSetTune={onSetTune}
           onHaltTx={onHaltTx}

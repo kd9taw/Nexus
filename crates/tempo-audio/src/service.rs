@@ -1284,6 +1284,12 @@ impl StationSinks {
 
 struct RadioLoop {
     cur_tier: Tier,
+    /// The slot period the clock + capture ring were BUILT for. Tracked alongside
+    /// the tier because tier alone no longer determines it: Q65, FST4/FST4W and
+    /// MSK144 take their T/R period from Settings, so a save can change the period
+    /// with the tier unchanged. Keying the rebuild on the tier only left the clock
+    /// running the OLD period — 30 s slots against a 60 s Q65 decode.
+    cur_slot_secs: f64,
     clock: SlotClock,
     rx: RxRing,
     last_slot: Option<u64>,
@@ -1534,12 +1540,19 @@ struct RadioLoop {
     /// is still running, so the early result is always folded (setting `early_seen`)
     /// before the boundary decode filters against it. Cleared when a result drains.
     decode_in_flight: bool,
+    /// Periods whose decode was dropped because the worker was still busy. Counted
+    /// and logged rather than silently swallowed: a rising number is the signal that
+    /// the decoder cannot keep up with the T/R period on this hardware.
+    dropped_decodes: u64,
 }
 
 impl RadioLoop {
     fn new(applied: Transport, rigctld_proc: Option<CatDaemon>, cfg: &RadioConfig) -> Self {
         Self {
             cur_tier: Tier::TempoFast,
+            // Rebuilt on the first tick that disagrees; the clock below is
+            // constructed from the same source of truth.
+            cur_slot_secs: 0.0,
             clock: SlotClock::ft1(),
             rx: RxRing::new(),
             last_slot: None,
@@ -1616,6 +1629,7 @@ impl RadioLoop {
             clock_offset_ms: 0,
             decode: DecodeWorker::spawn(),
             decode_in_flight: false,
+            dropped_decodes: 0,
         }
     }
 
@@ -3527,7 +3541,9 @@ impl RadioLoop {
             }
         }
 
-        let slot = self.clock.slot_index(now);
+        // `mut`: a tier/period change below replaces the clock, and everything after
+        // it must use the NEW numbering — see the rebuild.
+        let mut slot = self.clock.slot_index(now);
         let mut eng = engine.lock().map_err(|e| e.to_string())?;
         // Split-Operation teardown catch-all: the moment NO over is pending,
         // restore a Fake-It-shifted VFO and drop an audio Rig-split. ONE drain
@@ -3864,11 +3880,15 @@ impl RadioLoop {
             }
         }
 
-        // Rebuild the slot clock + capture ring if the operator switched tier.
+        // Rebuild the slot clock + capture ring if the operator switched tier — or
+        // changed the ACTIVE TIER'S PERIOD in Settings, which is the same event for
+        // the clock's purposes and used not to be noticed at all.
         let tier_now = eng.tier();
-        if tier_now != self.cur_tier {
+        let slot_secs_now = eng.active_slot_secs();
+        if tier_now != self.cur_tier || slot_secs_now != self.cur_slot_secs {
             self.cur_tier = tier_now;
-            self.clock = SlotClock::with_period_secs(eng.active_slot_secs());
+            self.cur_slot_secs = slot_secs_now;
+            self.clock = SlotClock::with_period_secs(slot_secs_now);
             self.rx = RxRing::with_capacity(eng.active_capture_samples());
             self.last_slot = None;
             self.prev_slot_was_tx = false;
@@ -3876,6 +3896,12 @@ impl RadioLoop {
             // the old tier must not coincidentally match a new tier's slot.
             self.early_done_slot = None;
             self.boundary_keyed = None;
+            // Including the index THIS tick already computed, above, from the clock we
+            // just replaced. `last_slot = None` makes the boundary block below fire on
+            // this very tick, so leaving it stale ran that boundary — and the TX
+            // decision hanging off it — under the old period's numbering, at a moment
+            // that is mid-period in the new one. Renumber before anyone reads it.
+            slot = self.clock.slot_index(now);
         }
 
         // --- Decode-worker results: fold any completed decode, then act on it. The
@@ -4002,8 +4028,42 @@ impl RadioLoop {
                     self.decode_in_flight = true;
                     // TX decision (when not already keyed above) deferred until this
                     // result is drained (next ticks).
+                } else {
+                    // ⭐ WORKER STILL BUSY: DROP THIS PERIOD'S DECODE — WSJT-X's own
+                    // behaviour, `if(m_decoderBusy) return;` at mainwindow.cpp:5377
+                    // ("Don't start decoder if it's already busy").
+                    //
+                    // This used to leave `last_slot` unset and retry on later ticks,
+                    // which sounds harmless and is not: `rx.frame()` would then be
+                    // captured at the RETRY tick, and RxRing keeps the newest `cap`
+                    // samples. The frame was therefore a rolling window straddling the
+                    // old slot's tail and the new slot's head — every dt in it shifted
+                    // by the retry delay, the whole thing attributed to the wrong slot
+                    // index, and the new slot decoded a second time when it truly
+                    // ended. A dropped period is a period of missed decodes; a
+                    // misaligned one is wrong data presented as fact.
+                    //
+                    // Reachable on FT8 today, not only on the long modes: the early
+                    // pass dispatches at 11.8 s of a 15 s slot, so an early decode
+                    // running over ~3.2 s lands here. The Pi builds are the concern.
+                    //
+                    // The TX decision still runs — WSJT-X keys at t=0 regardless of
+                    // whether a decode completed, and a busy decoder must not cost the
+                    // operator an over. The ring is deliberately NOT cleared: it holds
+                    // the newest `cap` samples, so by the next boundary it contains
+                    // exactly that slot.
+                    self.last_slot = Some(slot);
+                    self.dropped_decodes = self.dropped_decodes.saturating_add(1);
+                    eprintln!(
+                        "[decode] worker still busy at the slot {slot} boundary — period \
+                         dropped (total {}). The decoder is not keeping up with the T/R \
+                         period on this hardware.",
+                        self.dropped_decodes
+                    );
+                    self.finish_boundary(
+                        &mut eng, rig, backend, sinks, station, now, slot, false, None,
+                    )?;
                 }
-                // else: worker busy -> leave last_slot unset so we retry next tick.
             } else {
                 self.last_slot = Some(slot);
                 // Own carrier: the ring holds our own transmission -> drop it so a

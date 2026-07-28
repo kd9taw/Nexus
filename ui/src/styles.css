@@ -11545,12 +11545,17 @@ select.settings-input {
   opacity: 0.8;
 }
 
-/* Receive-only TOP-BAR pills. Same intent as the cockpit rule below. */
-.tier-btn.rx-only {
-  border-style: dashed;
+/* Receive-only TOP-BAR pills. Same intent as the cockpit rule below, but the
+   marker has to be the pill's OWN grammar: .tier-btn sets `border: none`, so any
+   border-style here revives the initial `medium` width and rings the pill in a
+   3 px dash. These say RX in the same <small> slot the Tempo pills use for
+   "Tempo", so the row stays visually uniform. */
+.tier-btn.rx-only small {
+  letter-spacing: 0.08em;
+  opacity: 0.55;
 }
-.tier-btn.rx-only.active {
-  border-style: dashed;
+.tier-btn.rx-only.active small {
+  opacity: 0.75;
 }
 .tier-toggle {
   flex-wrap: wrap;

@@ -182,13 +182,16 @@ pub enum Tier {
     Ft8,
     #[serde(rename = "FT4")]
     Ft4,
-    /// WSJT-X FST4 (QSO mode). **RECEIVE-ONLY** — `modes::tx_mode` refuses it, so
-    /// selecting this tier decodes but never keys the radio. The T/R period comes
-    /// from `Settings::fst4_period_s`.
+    /// WSJT-X FST4 (QSO mode) — **transmits and receives**, verified on-air
+    /// compatible by having stock WSJT-X `jt9 -7` decode our transmission at every
+    /// period. The T/R period comes from `Settings::fst4_period_s`.
     #[serde(rename = "FST4")]
     Fst4,
     /// WSJT-X FST4W — the WSPR-like BEACON mode (50-bit messages, no AP
-    /// decoding). **RECEIVE-ONLY**, same as FST4.
+    /// decoding). **RECEIVE-ONLY**, unlike FST4, which transmits. The C ABI can
+    /// encode it (`iwspr=1`); what is missing is the operating layer — a beacon
+    /// needs a transmit-percentage scheduler and a callsign/grid/power message,
+    /// not the QSO sequencer.
     ///
     /// A separate tier rather than a flag on `Fst4` because it is a separate
     /// operator decision: FST4 is for working a station, FST4W is for listening
@@ -196,8 +199,9 @@ pub enum Tier {
     /// frame contract, and `Settings::fst4_period_s`.
     #[serde(rename = "FST4W")]
     Fst4w,
-    /// WSJT-X Q65. **RECEIVE-ONLY** — `modes::tx_mode` refuses it, so selecting
-    /// this tier decodes but never keys the radio.
+    /// WSJT-X Q65 — EME and VHF+ scatter. **Transmits and receives**: the encoder
+    /// (`q65_encode_msg` / `q65_gen_wave`) is verified on-air-compatible by having
+    /// stock WSJT-X `jt9` decode our transmission at every period and submode.
     ///
     /// Plain "Q65", NOT a period/submode-qualified name. The tier is the
     /// operator's mode selection; which of the 25 period/submode combinations it
@@ -223,6 +227,24 @@ pub enum Tier {
 }
 
 impl Tier {
+    /// The operator-facing name — what the top-bar pill reads. Distinct from the
+    /// ADIF mode name in `Engine::qso_record`, which must stay the registered one
+    /// for award credit even where the two happen to agree.
+    pub fn label(self) -> &'static str {
+        match self {
+            Tier::TempoFast => "Tempo Fast",
+            Tier::TempoDeep => "Tempo Deep",
+            Tier::Ft8 => "FT8",
+            Tier::Ft4 => "FT4",
+            Tier::Fst4 => "FST4",
+            Tier::Fst4w => "FST4W",
+            Tier::Q65 => "Q65",
+            Tier::Msk144 => "MSK144",
+            Tier::Jt65 => "JT65",
+            Tier::Wspr => "WSPR",
+        }
+    }
+
     /// True for the Tempo CHAT-capable tiers (TempoFast/TempoDeep). The chat cadence —
     /// store-and-forward resends, delivery ACKs, conversation folding, and every behavior the
     /// 2026-07 cadence rework adds — runs ONLY on these tiers. Mode::Chat at an FT tier is a

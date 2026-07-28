@@ -206,7 +206,7 @@ set(LIBTEMPO_SOURCES
     #     `include`d by the files above: fst4/fst4_params.f90,
     #     fst4/ldpc_240_{101,74}_{parity,generator}.f90
 
-    # --- WSPR native decode (lib/wsprd) : Nexus, RX-ONLY ---
+    # --- WSPR native decode + encode (lib/wsprd + wspr_cabi.c) ---
     #     The propagation-beacon mode. 50-bit messages, K=32 r=1/2 convolutional
     #     coding, 110.6 s transmissions in a 2-minute window.
     #
@@ -223,6 +223,13 @@ set(LIBTEMPO_SOURCES
     #     inference from the surrounding work, not a per-file determination, and a
     #     deliberate operator decision. See NOTICE, which says so plainly and
     #     names the cleaner path (Karn's libfec ships a stated-LGPL fano.c).
+    ${CMAKE_CURRENT_SOURCE_DIR}/wspr_cabi.c  # Nexus ENCODE shim -> get_wspr_channel_symbols
+                                          #   (already compiled below: the DECODER
+                                          #   calls it at wsprd.c:1433 to subtract a
+                                          #   decoded signal, so encode/decode share
+                                          #   one generator). No waveform here -
+                                          #   upstream has no library-shaped WSPR
+                                          #   wave generator; that lives in Rust.
     ${LIB}/wsprd/wsprd.c                  # the decode core (converted from main)
     ${LIB}/wsprd/wsprd_utils.c            # message unpacking, hashing helpers
     ${LIB}/wsprd/wsprsim_utils.c          # shared pack/unpack with the simulator
@@ -359,17 +366,18 @@ set(LIBTEMPO_SOURCES
     #     reached through the q65_subs.c shim. See NOTICE — it is a SEPARATE
     #     copyright from the WSJT Development Group's.
     #
-    #     Decode only: no q65_encode / gen_q65wave path is wired, and the Rust
-    #     ModeKind reports Capabilities{tx:false} so modes::tx_mode() refuses to
-    #     hand it to the transmit path. Adding TX means adding the encode side
-    #     here AND flipping that flag AND passing the FT-mode TX hard gate.
+    #     TRANSMIT AND RECEIVE. q65_cabi exposes q65_encode_msg / q65_gen_wave
+    #     alongside q65_decode_frame. The encode chain needed NO new sources: the
+    #     DECODER already calls genq65 (below) to regenerate a candidate's tone
+    #     sequence, so the symbol generator and the qracodes C layer were linked
+    #     in all along. Encode and decode therefore share one generator.
     #
-    #     ⭐ Q65-30A ONLY (ntrperiod=30, nsubmode=0). q65_decode sizes its frame
-    #     from ntrperiod (npts=ntrperiod*12000 at q65_decode.f90:109), and
-    #     q65_cabi pins Q65_NTRPERIOD=30 so the 360000-sample contract is fixed.
-    #     Upstream offers 5 submodes x 5 periods; exposing more needs a
-    #     per-period entry point plus Rust-side work to express a selectable
-    #     period, and the manifest flags anything cached on period or submode.
+    #     ⚠️ q65_encode_msg, NOT q65_encode — the latter is upstream's own
+    #     qracodes codeword API (q65.h:65) and collides at link time.
+    #
+    #     ⭐ ALL 5 PERIODS x ALL 5 SUBMODES, on both paths. Period sets the symbol
+    #     length (Q65_NSPS) and submode scales the TONE SPACING by 2**submode; the
+    #     manifest flags anything cached on either as chain-specific.
     ${CMAKE_CURRENT_SOURCE_DIR}/q65_cabi.f90
     ${LIB}/q65_decode.f90                 # module q65_decode (OO decoder)
     ${LIB}/qra/q65/q65.f90                # module q65: shared state + q65_dec0,

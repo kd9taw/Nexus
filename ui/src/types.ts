@@ -6,6 +6,26 @@ export type Presence = 'active' | 'idle' | 'stale'
 
 export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65' | 'WSPR'
 
+/** Tiers Nexus DECODES but will not transmit. Mirrors `Capabilities { tx: false }`
+ * in the `modes` crate — the engine is the enforcement (it refuses to arm TX or
+ * start a CQ run on these); this list exists so the UI does not OFFER controls the
+ * engine will refuse. Keep the two in step when a mode gains a transmitter. */
+export const RX_ONLY_TIERS: readonly Tier[] = ['MSK144', 'JT65']
+
+/** BEACON tiers: they transmit, but on a SCHEDULE and with no QSO sequence — the
+ * payload is callsign, grid and power. Mirrors `Capabilities { beacon_only: true }`.
+ * Distinct from RX_ONLY: these can key the radio, so TX controls stay live, but the
+ * QSO controls (Call CQ, S&P, free text, Log) have nothing to act on. */
+export const BEACON_TIERS: readonly Tier[] = ['WSPR', 'FST4W']
+
+export function isBeacon(tier: Tier | null | undefined): boolean {
+  return !!tier && BEACON_TIERS.includes(tier)
+}
+
+export function isRxOnly(tier: Tier | null | undefined): boolean {
+  return !!tier && RX_ONLY_TIERS.includes(tier)
+}
+
 // ---- Propagation & opening intelligence (matches the `propagation` crate) ----
 export type ActivityTier = 'Active' | 'Moderate' | 'Quiet' | 'Closed'
 export type Confidence = 'Strong' | 'Likely' | 'Marginal'
@@ -1700,6 +1720,18 @@ export interface Settings {
   fst4PeriodS: number
   /** MSK144 T/R period in seconds: 5|10|15|30. 15 is the 6 m workhorse. */
   msk144PeriodS: number
+  /** Percentage of BEACON intervals to transmit on (WSPR / FST4W), 0..100.
+   * Defaults to 0 — beaconing is off until the operator asks for it, because it
+   * keys the radio unattended. */
+  beaconTxPercent: number
+  /** Beacon transmit power in dBm. ⚠️ Published to a public propagation database,
+   * so it has to be the real figure; the beacon refuses to transmit until set.
+   * 23 = 200 mW, 30 = 1 W, 37 = 5 W, 43 = 20 W. */
+  beaconPowerDbm: number
+  /** FST4W Round Robin slot, 1-based; 0 = use the transmit-percentage scheduler. */
+  beaconRrSlot: number
+  /** How many Round Robin slots are in the rotation. Ignored when slot is 0. */
+  beaconRrSlots: number
   /** JT65 submode 0/1/2 for A/B/C (tone spacing 1x/2x/4x). */
   jt65Submode: number
   /** FM repeater offset override in Hz (0 = band convention). Set by the

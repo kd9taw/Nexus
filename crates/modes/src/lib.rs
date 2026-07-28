@@ -107,7 +107,10 @@ mod tests {
         assert_eq!(mq.name(), "Q65-30A");
         assert_eq!(mq.slot_secs(), 30.0);
         assert_eq!(mq.frame_samples(), q65::nmax(30));
-        assert!(!mq.capabilities().tx);
+        assert!(
+            mq.capabilities().tx,
+            "Q65 transmits since the encoder was wired"
+        );
 
         // Q65-60B: the EME working combination, and proof the period and submode
         // actually reach the buffer contract and the label rather than being
@@ -119,7 +122,7 @@ mod tests {
         assert_eq!(eme.name(), "Q65-60B");
         assert_eq!(eme.slot_secs(), 60.0);
         assert_eq!(eme.frame_samples(), 60 * 12_000);
-        assert!(!eme.capabilities().tx);
+        assert!(eme.capabilities().tx);
 
         // Every combination must produce a distinct, well-formed label.
         let names: std::collections::HashSet<&str> =

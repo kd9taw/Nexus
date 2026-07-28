@@ -29,8 +29,11 @@ pub enum ModeKind {
     ///
     /// `period_s` ∈ {15, 30, 60, 120, 300, 900, 1800}. FST4W's standard beacon
     /// intervals are 120/300/900/1800.
-    Fst4 { period_s: u16, wspr: bool },
-    /// WSJT-X Q65. **RECEIVE-ONLY** — see [`Capabilities::tx`].
+    Fst4 {
+        period_s: u16,
+        wspr: bool,
+    },
+    /// WSJT-X Q65 — transmits and receives; see [`Capabilities::tx`].
     ///
     /// Carries its T/R period and submode because both are part of the mode's
     /// identity AND its buffer contract: the frame is `period_s * 12000` samples
@@ -43,20 +46,27 @@ pub enum ModeKind {
     /// `period_s` ∈ {15, 30, 60, 120, 300}; `submode` ∈ 0..=4 for A..E. EME on
     /// VHF/UHF works Q65-60A/B/C; 6 m meteor/ionoscatter uses 30; 15 is
     /// troposcatter.
-    Q65 { period_s: u16, submode: u8 },
+    Q65 {
+        period_s: u16,
+        submode: u8,
+    },
     /// WSJT-X MSK144 — the METEOR-SCATTER mode. **RECEIVE-ONLY** — see
     /// [`Capabilities::tx`].
     ///
     /// Carries its T/R period for the same reason FST4 and Q65 do: the frame is
     /// `period_s * 12000` samples. `period_s` ∈ {5, 10, 15, 30}; 15 is the 6 m
     /// workhorse.
-    Msk144 { period_s: u16 },
+    Msk144 {
+        period_s: u16,
+    },
     /// WSJT JT65 — the classic weak-signal / EME mode. **RECEIVE-ONLY**.
     ///
     /// Carries only its submode: unlike FST4, Q65 and MSK144, JT65 has a single
     /// fixed 60 s T/R period, so the frame length is constant. `submode` is 0/1/2
     /// for A/B/C (tone spacing 1x/2x/4x).
-    Jt65 { submode: u8 },
+    Jt65 {
+        submode: u8,
+    },
     /// WSPR — the propagation-BEACON mode. **RECEIVE-ONLY**.
     ///
     /// Carries nothing: one fixed 2-minute interval, one message form. It is
@@ -310,6 +320,16 @@ pub struct Capabilities {
     pub ir_harq: bool,
     /// Supports free-text messages.
     pub free_text: bool,
+    /// This mode is a **BEACON**: it transmits on a schedule and has no QSO
+    /// sequence at all.
+    ///
+    /// Distinct from `tx`, and both flags are needed. WSPR and FST4W can transmit
+    /// (`tx: true`) but there is nothing to sequence — the payload is callsign,
+    /// grid and power, with no exchange and no addressing. Without this flag the
+    /// auto-sequencer would happily arm a CQ run on a beacon tier and try to work
+    /// the stations it hears, which is meaningless. The operating layer routes
+    /// these through a transmit-percentage scheduler instead.
+    pub beacon_only: bool,
     /// Has contest sub-modes / exchanges.
     pub contest: bool,
 }
@@ -477,6 +497,8 @@ impl Mode for Ft8Mode {
             ir_harq: false,
             free_text: true,
             contest: true,
+            // A QSO mode: it has an exchange to sequence.
+            beacon_only: false,
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
@@ -573,6 +595,8 @@ impl Mode for Ft4Mode {
             ir_harq: false,
             free_text: true,
             contest: true,
+            // A QSO mode: it has an exchange to sequence.
+            beacon_only: false,
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
@@ -642,6 +666,8 @@ impl Mode for Ft1Mode {
             ir_harq: true,
             free_text: true,
             contest: true,
+            // A QSO mode: it has an exchange to sequence.
+            beacon_only: false,
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
@@ -761,18 +787,16 @@ mod tx_capability_tests {
     /// fails `tx_capability_is_declared_not_inherited` below.
     /// The modes that cannot transmit.
     ///
-    /// A predicate rather than a const slice: `ModeKind::Q65` carries a period and
-    /// submode, so a slice would need all 25 combinations listed and would silently
-    /// miss any that were forgotten. `matches!` covers the whole family.
+    /// A predicate rather than a const slice: the data-carrying kinds would need
+    /// every combination listed and would silently miss any that were forgotten.
+    /// `matches!` covers a whole family at once.
+    ///
+    /// Shrinking as encoders land: Q65, then FST4, then the two BEACONS (WSPR and
+    /// FST4W) once the transmit-percentage scheduler existed. Beacons are
+    /// `tx: true` AND `beacon_only: true` — transmit-capable, but never handed to
+    /// the QSO sequencer. MSK144 and JT65 remain.
     fn rx_only(kind: ModeKind) -> bool {
-        matches!(
-            kind,
-            ModeKind::Fst4 { .. }
-                | ModeKind::Q65 { .. }
-                | ModeKind::Msk144 { .. }
-                | ModeKind::Jt65 { .. }
-                | ModeKind::Wspr
-        )
+        matches!(kind, ModeKind::Msk144 { .. } | ModeKind::Jt65 { .. })
     }
 
     #[test]
@@ -809,25 +833,108 @@ mod tx_capability_tests {
     }
 
     #[test]
-    fn fst4_is_receive_only_end_to_end() {
-        // The whole reason Capabilities.tx exists. Every route to a waveform must
-        // refuse FST4: tx_mode hands back nothing, and the defaulted trait methods
-        // produce nothing if a caller bypasses it.
-        // Every period AND both modes — FST4W is just as silent as FST4, and a
-        // per-variant capability slip would otherwise hide behind the one
-        // combination the test happened to name.
+    fn fst4_and_fst4w_both_transmit_but_only_one_is_a_qso_mode() {
+        // FST4 and FST4W share a ModeKind and DIVERGE on `beacon_only`, which is the
+        // distinction most likely to be lost by a change to either. Both halves
+        // pinned. `tx` alone is NOT enough to describe them: both key the radio, but
+        // only FST4 has an exchange for the sequencer to run.
         for kind in ModeKind::fst4_all() {
             let label = kind.as_str();
-            assert!(!make_mode(kind).capabilities().tx, "{label} declares tx");
-            assert!(tx_mode(kind).is_none(), "tx_mode must refuse {label}");
+            let wspr = matches!(kind, ModeKind::Fst4 { wspr: true, .. });
+            let m = make_mode(kind);
+            let caps = m.capabilities();
+
+            assert!(caps.tx, "{label} should transmit");
+            assert!(tx_mode(kind).is_some(), "tx_mode must allow {label}");
+            assert_eq!(
+                caps.beacon_only, wspr,
+                "{label}: beacon_only must follow the wspr flag"
+            );
+            assert_eq!(
+                caps.free_text, !wspr,
+                "{label}: the 50-bit beacon payload has no free-text form"
+            );
+
+            let msg = if wspr {
+                "KD9TAW EN52 30"
+            } else {
+                "CQ KD9TAW EN52"
+            };
+            let tones = m.encode(msg);
+            assert_eq!(tones.len(), fst4::NN, "{label} encodes 160 symbols");
+            assert!(
+                tones.iter().all(|&t| (0..=3).contains(&t)),
+                "{label} is 4-FSK: every tone must be 0..3"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_fst4_codes_produce_different_symbols_for_the_same_period() {
+        // `iwspr` selects the LDPC code — (240,101)/77-bit vs (240,74)/50-bit — and
+        // BOTH emit 160 symbols, so a mix-up transmits a well-formed frame the far
+        // end cannot read. Nothing about the length would catch it.
+        let qso = make_mode(ModeKind::Fst4 {
+            period_s: 60,
+            wspr: false,
+        })
+        .encode("CQ KD9TAW EN52");
+        let beacon = make_mode(ModeKind::Fst4 {
+            period_s: 60,
+            wspr: true,
+        })
+        .encode("KD9TAW EN52 30");
+        assert_eq!(qso.len(), beacon.len());
+        assert_ne!(qso, beacon, "the two codes must not coincide");
+    }
+
+    #[test]
+    fn every_beacon_mode_declares_itself_one_and_no_qso_mode_does() {
+        // The flag exists so the auto-sequencer can never arm a CQ run on a mode
+        // with no exchange. Assert the whole set both ways rather than spot-checks.
+        for kind in ModeKind::ALL
+            .into_iter()
+            .chain(ModeKind::q65_all())
+            .chain(ModeKind::fst4_all())
+            .chain(ModeKind::msk144_all())
+            .chain(ModeKind::jt65_all())
+        {
+            let caps = make_mode(kind).capabilities();
+            let expect_beacon = matches!(kind, ModeKind::Wspr | ModeKind::Fst4 { wspr: true, .. });
+            assert_eq!(
+                caps.beacon_only,
+                expect_beacon,
+                "{} declares beacon_only={}",
+                kind.as_str(),
+                caps.beacon_only
+            );
+            if caps.beacon_only {
+                assert!(
+                    caps.tx,
+                    "{}: a beacon must be able to transmit",
+                    kind.as_str()
+                );
+                assert!(
+                    !caps.free_text,
+                    "{}: a beacon payload carries call/grid/power only",
+                    kind.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_malformed_tone_vector_never_reaches_the_air() {
+        // The defaulted-trait backstop applies to transmit-capable modes too: a
+        // caller handing gen_wave the wrong symbol count must get silence, not a
+        // partial over. 3 tones is not an FST4 frame.
+        for kind in ModeKind::fst4_all().filter(|k| !matches!(k, ModeKind::Fst4 { wspr: true, .. }))
+        {
             let m = make_mode(kind);
             assert!(
-                m.encode("CQ KD9TAW EN52").is_empty(),
-                "{label} must not encode"
-            );
-            assert!(
                 m.gen_wave(&[1, 2, 3], 12000.0, 1500.0).is_empty(),
-                "{label} must not produce a waveform"
+                "{} produced a waveform from 3 tones",
+                kind.as_str()
             );
         }
     }
@@ -900,19 +1007,45 @@ impl Mode for Fst4Mode {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            // The whole point of the flag. Flipping this to true without also adding
-            // fst4_encode/fst4_gen_wave to the C ABI gets you a mode that keys the
-            // radio and transmits an empty waveform.
-            tx: false,
+            tx: true,
             fox_hound: false,
             ir_harq: false,
-            free_text: true,
+            // FST4W's 50-bit beacon payload has no free-text form.
+            free_text: !self.wspr,
             contest: false,
+            // ⭐ SPLIT ON `wspr` — the reason FST4 and FST4W share a ModeKind but
+            // not a behaviour. FST4 is a QSO mode with a full exchange; FST4W is a
+            // beacon carrying callsign/grid/power on a schedule. Both transmit; only
+            // one has anything for the sequencer to do.
+            beacon_only: self.wspr,
         }
     }
 
-    // encode() and gen_wave() are DELIBERATELY not implemented — the trait defaults
-    // return empty, which is the safe failure if anything bypasses tx_mode.
+    fn encode(&self, msg: &str) -> Vec<i32> {
+        // `iwspr` selects the LDPC CODE, not just the message shape — (240,101)
+        // with a 77-bit payload vs (240,74) with the 50-bit beacon payload. Both
+        // yield 160 symbols, so passing the wrong one transmits a well-formed frame
+        // the far end cannot read.
+        fst4::encode(msg, self.wspr).unwrap_or_default()
+    }
+
+    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
+        // hmod = 1: upstream's x2/x4 Tone Spacing is a config option for unusual
+        // paths, not a default. Exposing it means a settings field and a matching
+        // RX-side choice, so it stays at standard spacing until asked for.
+        let Some(tones) = fst4::gen_wave(itone, self.period_s, 1, fsample, f0) else {
+            return Vec::new();
+        };
+        // Slot-positioned per the trait contract. 1.0 s at every period EXCEPT
+        // FST4-15, which starts at 0.5 s — `fst4::lead_in_secs` carries the two
+        // upstream citations. A flat 1.0 s here still decodes, just 0.5 s late.
+        let lead = (fst4::lead_in_secs(self.period_s) * fsample)
+            .round()
+            .max(0.0) as usize;
+        let mut wave = vec![0f32; lead + tones.len()];
+        wave[lead..].copy_from_slice(&tones);
+        wave
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn decode_frame(
@@ -985,9 +1118,7 @@ impl Mode for Q65Mode {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            // Flipping this to true without also adding the encode entry points to
-            // the C ABI gets you a mode that keys the radio and transmits silence.
-            tx: false,
+            tx: true,
             fox_hound: false,
             ir_harq: false,
             free_text: true,
@@ -995,11 +1126,35 @@ impl Mode for Q65Mode {
             // history that used to arrive through a file the headless build removed,
             // because that file let one chain's callers reach another.
             contest: false,
+            // A QSO mode: it has an exchange to sequence.
+            beacon_only: false,
         }
     }
 
-    // encode() and gen_wave() are DELIBERATELY not implemented — the trait defaults
-    // return empty, which is the safe failure if anything bypasses tx_mode.
+    fn encode(&self, msg: &str) -> Vec<i32> {
+        // Empty on a message that will not pack — the trait's documented safe
+        // failure, and `gen_wave` below turns it into an empty waveform, so the
+        // radio loop keys nothing rather than transmitting garbage.
+        q65::encode(msg).unwrap_or_default()
+    }
+
+    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
+        // Slot-positioned, per the trait contract: PREPEND the lead-in silence so
+        // the radio loop can play this straight at the slot boundary.
+        //
+        // ⭐ The lead-in is 0.5 s at 15/30 s and 1.0 s at 60 s+ — not the flat 0.5 s
+        // FT8 uses. `q65::lead_in_secs` carries the citations. Getting it wrong puts
+        // every receiver's DT off by half a second at the periods EME actually runs.
+        let Some(tones) = q65::gen_wave(itone, self.period_s, self.submode, fsample, f0) else {
+            return Vec::new();
+        };
+        let lead = (q65::lead_in_secs(self.period_s) * fsample)
+            .round()
+            .max(0.0) as usize;
+        let mut wave = vec![0f32; lead + tones.len()];
+        wave[lead..].copy_from_slice(&tones);
+        wave
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn decode_frame(
@@ -1075,6 +1230,8 @@ impl Mode for Msk144Mode {
             ir_harq: false,
             free_text: true,
             contest: false,
+            // A QSO mode: it has an exchange to sequence.
+            beacon_only: false,
         }
     }
 
@@ -1151,6 +1308,8 @@ impl Mode for Jt65Mode {
             // of it — a different beast from packjt77's 13-char free text at 37.
             free_text: true,
             contest: false,
+            // A QSO mode: it has an exchange to sequence.
+            beacon_only: false,
         }
     }
 
@@ -1206,19 +1365,43 @@ impl Mode for WsprMode {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            // WSPR transmit is an OPERATING decision as much as a code one: a
-            // beacon keys unattended on a schedule, which is precisely what the
-            // TX-safety invariants exist to govern. Receive-only here.
-            tx: false,
+            tx: true,
             fox_hound: false,
             ir_harq: false,
             // WSPR's 50-bit layer carries "CALL GRID DBM" and nothing else.
             free_text: false,
             contest: false,
+            // A beacon keys unattended on a schedule. `beacon_only` keeps the QSO
+            // sequencer away from it — see Capabilities::beacon_only.
+            beacon_only: true,
         }
     }
 
-    // encode() and gen_wave() are DELIBERATELY not implemented.
+    fn encode(&self, msg: &str) -> Vec<i32> {
+        // `msg` must already be "CALL GRID DBM" — `wspr::message()` builds it. The
+        // 50-bit payload has no other form, so anything else simply fails to encode
+        // and yields the empty (silent) result.
+        wspr::encode(msg)
+            .map(|s| s.into_iter().map(i32::from).collect())
+            .unwrap_or_default()
+    }
+
+    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
+        // Back to the u8 the synthesiser validates: any value outside 0..=3 is not
+        // a WSPR symbol and must produce silence rather than a wrong tone.
+        if itone.iter().any(|&t| !(0..=3).contains(&t)) {
+            return Vec::new();
+        }
+        let sym: Vec<u8> = itone.iter().map(|&t| t as u8).collect();
+        let Some(tones) = wspr::gen_wave(&sym, fsample, f0) else {
+            return Vec::new();
+        };
+        // Slot-positioned: WSPR's modulation starts 1.0 s into the 2-minute window.
+        let lead = (wspr::LEAD_IN_SECS * fsample).round().max(0.0) as usize;
+        let mut wave = vec![0f32; lead + tones.len()];
+        wave[lead..].copy_from_slice(&tones);
+        wave
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn decode_frame(

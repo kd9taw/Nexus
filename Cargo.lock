@@ -2204,8 +2204,10 @@ dependencies = [
 name = "tempo-core"
 version = "0.2.0"
 dependencies = [
+ "fst4",
  "microfft",
  "modes",
+ "q65",
  "tempo-fast",
  "wspr",
 ]

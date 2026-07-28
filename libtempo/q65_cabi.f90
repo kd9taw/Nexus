@@ -5,14 +5,13 @@
 ! ladder, no a7 cross-cycle table and no shared memory, so it is driven directly
 ! via a collector callback.
 !
-! RX-ONLY, DELIBERATELY. There is no q65_encode / gen_q65wave here. Q65 is being
-! added as a decode-only mode: `Capabilities { tx: false }` on the Rust side means
-! modes::tx_mode() refuses to hand it to the transmit path. Adding TX means adding
-! those entry points here AND flipping that flag AND passing the FT-mode TX hard
-! gate — three deliberate steps, not an oversight.
+! TRANSMIT AND RECEIVE. q65_encode / q65_gen_wave are below, beside the decoder.
+! Q65 shipped decode-only first; the encoder was cheap to add because genq65 and
+! the qracodes C layer were ALREADY compiled into libtempo — q65_decode calls
+! genq65 to regenerate a candidate's tone sequence on the RECEIVE path, the same
+! shape as genfst4, so the encode chain was linked in all along.
 !
-! (genq65 IS compiled into libtempo regardless: q65_decode calls it to regenerate a
-! candidate's tone sequence on the RECEIVE path, the same shape as genfst4.)
+! Encode and decode therefore share one symbol generator and cannot drift apart.
 !
 ! Underlying Fortran/C:
 !   q65_decode (q65_decode.f90) - OO decoder: ana64 -> q65_dec0 -> q65_loops
@@ -67,6 +66,16 @@ module q65_cabi
   ! decoding the wrong window is worse than refusing.
   integer, parameter :: Q65_NPERIODS = 5
   integer, parameter :: Q65_PERIODS(Q65_NPERIODS) = [15, 30, 60, 120, 300]
+
+  ! Q65 channel symbols per transmission: 63 data + 22 sync (the isync table in
+  ! genq65). Upstream's NUM_Q65_SYMBOLS.
+  integer, parameter :: Q65_NN = 85
+
+  ! Symbol length in samples at 12 kHz, indexed like Q65_PERIODS. Verbatim from
+  ! WSJT-X's own table (lib/q65params.f90 `data nsps/.../`, and repeated at
+  ! mainwindow.cpp:12714) - NOT derived, because 120 s is 16000 rather than the
+  ! 16384 a power-of-two guess would give, and 300 s is 41472.
+  integer, parameter :: Q65_NSPS(Q65_NPERIODS) = [1800, 3600, 7200, 16000, 41472]
 
   ! Interop result struct. Layout MUST match q65_decode_t in libtempo.h, and is
   ! byte-compatible with ft8/ft4/fst4_decode_t (64 bytes, 4-byte aligned, 2-byte
@@ -289,6 +298,158 @@ contains
 
     ndec = gq_count
   end function q65_decode_frame
+
+
+  !-------------------------------------------------------------------------
+  ! q65_encode_msg : message text -> the 85 Q65 channel symbols.
+  !
+  ! NOT `q65_encode` — that name is TAKEN by upstream's own qracodes API
+  ! (`int q65_encode(const q65_codec_ds*, int*, const int*)`, q65.h:65), which
+  ! encodes a codeword rather than a message and is already linked into libtempo.
+  ! Using it here linked cleanly right up to a duplicate-symbol error.
+  !
+  !   msg       : message text (C string, <= 37 chars)
+  !   msg_len   : length of msg
+  !   itone_out : caller buffer, Q65_NN entries
+  !   nsym_out  : out = Q65_NN on success, -1 if the message will not pack
+  !
+  ! Straight into the vendored genq65 — the SAME routine the decoder already
+  ! calls to regenerate a candidate's tone sequence, so encode and decode cannot
+  ! drift apart. It emits itone(1:85): 22 sync symbols at tone 0 (the isync
+  ! table) interleaved with 63 data symbols offset by +1, because Q65 transmits
+  ! data symbol 0 on tone 1.
+  !
+  ! ⭐ SUBMODE AND PERIOD DO NOT APPEAR HERE, deliberately. Q65's submode scales
+  ! only the TONE SPACING and the period only the symbol DURATION; neither
+  ! changes the symbol values. Both enter in q65_gen_wave below. Upstream splits
+  ! it the same way (genq65 takes neither).
+  !-------------------------------------------------------------------------
+  function q65_encode_msg(msg, msg_len, itone_out) result(nsym_out) &
+       bind(C, name="q65_encode_msg")
+    character(kind=c_char), intent(in)  :: msg(*)
+    integer(c_int), value,  intent(in)  :: msg_len
+    integer(c_int),         intent(out) :: itone_out(Q65_NN)
+    integer(c_int) :: nsym_out
+
+    character(len=37) :: msg37, msgsent37
+    integer :: itone(Q65_NN)
+    integer :: i, n, ichk, i3, n3
+
+    msg37 = ' '
+    n = min(msg_len, 37)
+    do i = 1, n
+       if (msg(i) == c_null_char) exit
+       msg37(i:i) = msg(i)
+    end do
+
+    ichk = 0
+    i3 = -1
+    n3 = -1
+    itone = 0
+    call genq65(msg37, ichk, msgsent37, itone, i3, n3)
+    ! genq65 leaves i3/n3 at -1 when pack77 could not place the message. Refuse
+    ! rather than transmit whatever happened to be in itone.
+    if (i3 < 0 .and. n3 < 0) then
+       nsym_out = -1
+       return
+    end if
+    itone_out(1:Q65_NN) = itone(1:Q65_NN)
+    nsym_out = Q65_NN
+  end function q65_encode_msg
+
+  !-------------------------------------------------------------------------
+  ! q65_gen_wave : channel symbols -> real audio, at 12 kHz.
+  !
+  !   itone     : the 85 symbols from q65_encode_msg
+  !   nsym      : symbol count (Q65_NN)
+  !   ntrperiod : T/R period, seconds - sets the symbol duration
+  !   nsubmode  : 0..4 for A..E - sets the tone spacing
+  !   fsample   : output sample rate (Hz)
+  !   f0        : audio carrier (Hz)
+  !   wave_out  : caller buffer (capacity nwave_out)
+  !   nwave_out : in = capacity; out = samples produced, or -1 on refusal
+  !
+  ! ⭐ THE TWO SCALING RULES, from WSJT-X 3.0.2 and cross-checked against two
+  ! independent places in it:
+  !
+  !     nsps    = Q65_NSPS(period)          symbol length in samples at 12 kHz
+  !     baud    = 12000 / nsps              keying rate
+  !     spacing = baud * 2**nsubmode        A=1x, B=2x, C=4x, D=8x, E=16x
+  !
+  ! The submode factor is REAL and easy to miss: mainwindow.cpp:8038 builds a
+  ! 48 kHz PREVIEW buffer with `toneSpacing=fsample/nsps4`, which is submode A
+  ! regardless of the selected submode. That is NOT the on-air path. The
+  ! transmitted signal comes from MainWindow::transmit at mainwindow.cpp:12721:
+  !
+  !     int mode65=pow(2.0,double(m_nSubMode));
+  !     toneSpacing=mode65*12000.0/nsps;
+  !
+  ! which agrees with q65sim.f90:176 (`freq = f0 + itone(isym)*baud*mode65`) and
+  ! with lib/q65params.f90 (`spacing=baud*2**(j-1)`). Getting this wrong emits a
+  ! signal at submode-A spacing that no correspondent can decode.
+  !
+  ! Modulation is plain continuous-phase MFSK — phase accumulates ACROSS symbol
+  ! boundaries and is never reset, exactly as upstream's genwave.f90 and q65sim
+  ! do it. Resetting per symbol would splatter the spectrum.
+  !-------------------------------------------------------------------------
+  function q65_gen_wave(itone, nsym, ntrperiod, nsubmode, fsample, f0, &
+       wave_out, nwave_cap) result(nwave_out) bind(C, name="q65_gen_wave")
+    integer(c_int),        intent(in)    :: itone(*)
+    integer(c_int), value, intent(in)    :: nsym, ntrperiod, nsubmode
+    real(c_float),  value, intent(in)    :: fsample, f0
+    real(c_float),         intent(inout) :: wave_out(*)
+    integer(c_int), value, intent(in)    :: nwave_cap
+    integer(c_int) :: nwave_out
+
+    integer  :: nsps, nwave, i, j, k, ip
+    real*8   :: dt, phi, dphi, twopi, freq, baud, tonespacing
+
+    nwave_out = -1
+    if (nsym /= Q65_NN) return
+    if (nsubmode < 0 .or. nsubmode > 4) return
+    ip = q65_period_index(ntrperiod)
+    if (ip < 1) return
+
+    nsps  = Q65_NSPS(ip)
+    nwave = nsym * nsps
+    if (nwave_cap < nwave) return
+
+    ! Tone spacing scales with the submode; the keying rate does not.
+    baud        = 12000.d0 / dble(nsps)
+    tonespacing = baud * (2.d0 ** nsubmode)
+
+    dt    = 1.d0 / dble(fsample)
+    twopi = 8.d0 * atan(1.d0)
+    phi   = 0.d0
+    k     = 0
+    do j = 1, nsym
+       freq = dble(f0) + dble(itone(j)) * tonespacing
+       dphi = twopi * freq * dt
+       do i = 1, nsps
+          k = k + 1
+          wave_out(k) = real(sin(phi))
+          phi = phi + dphi
+          if (phi > twopi) phi = phi - twopi
+       end do
+    end do
+    nwave_out = nwave
+  end function q65_gen_wave
+
+  !-------------------------------------------------------------------------
+  ! q65_period_index : 1..Q65_NPERIODS for a supported T/R period, else -1.
+  ! Reject, never clamp — the same rule the decode side follows.
+  !-------------------------------------------------------------------------
+  integer function q65_period_index(ntrperiod)
+    integer, intent(in) :: ntrperiod
+    integer :: i
+    q65_period_index = -1
+    do i = 1, Q65_NPERIODS
+       if (Q65_PERIODS(i) == ntrperiod) then
+          q65_period_index = i
+          return
+       end if
+    end do
+  end function q65_period_index
 
   !-------------------------------------------------------------------------
   ! c_to_fstr_q65 : marshal a NUL/space-terminated C string into a Fortran

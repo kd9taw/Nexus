@@ -48,6 +48,15 @@ pub const FT4_NMAX: usize = 72_576;
 /// than clamped — a wrong period makes the modem read a different span of the
 /// caller's buffer than the caller sized.
 pub const FST4_PERIODS: [u16; 7] = [15, 30, 60, 120, 300, 900, 1800];
+
+/// FST4 channel symbols per transmission: 120 data + 40 sync. Upstream's `NN`
+/// (`lib/fst4/fst4_params.f90`). FST4 is 4-FSK, so tones are 0..3.
+pub const FST4_NN: usize = 160;
+
+/// Symbol length in samples at 12 kHz, indexed like [`FST4_PERIODS`]. Verbatim from
+/// upstream, where the same table appears in `fst4_decode.f90:206` and both TX
+/// blocks of `mainwindow.cpp` — 120 s is 8200, 900 s is 66560, not derived.
+pub const FST4_NSPS: [usize; 7] = [720, 1680, 3888, 8200, 21504, 66560, 134400];
 /// Ceiling on an FST4 frame: 1800 s @ 12 kHz. NOT the buffer contract — the actual
 /// length is [`fst4_nmax`] of the period in use.
 pub const FST4_NMAX_MAX: usize = 21_600_000;
@@ -72,6 +81,15 @@ pub const fn fst4_period_supported(period_s: u16) -> bool {
 pub const Q65_PERIODS: [u16; 5] = [15, 30, 60, 120, 300];
 /// Number of Q65 submodes (A–E, passed as 0..=4). They differ in tone spacing.
 pub const Q65_NSUBMODES: u8 = 5;
+
+/// Q65 channel symbols per transmission: 63 data + 22 sync. Upstream's
+/// `NUM_Q65_SYMBOLS`.
+pub const Q65_NN: usize = 85;
+
+/// Symbol length in samples at 12 kHz, indexed like [`Q65_PERIODS`]. Verbatim from
+/// WSJT-X's `lib/q65params.f90` — NOT derived: 120 s is 16000, not the 16384 a
+/// power-of-two guess gives, and 300 s is 41472.
+pub const Q65_NSPS: [usize; 5] = [1800, 3600, 7200, 16000, 41472];
 /// Ceiling on a Q65 frame: 300 s @ 12 kHz. NOT the buffer contract — the actual
 /// length is [`q65_nmax`] of the period in use, and sizing everything at the max
 /// would waste 20x on a 15 s decode.
@@ -576,6 +594,40 @@ extern "C" {
     ///
     /// DECODE ONLY — there is deliberately no `fst4_encode` / `fst4_gen_wave`.
     /// FST4 ships receive-only; see `Capabilities.tx` and `modes::tx_mode`.
+    /// Encode a message into the 160 FST4 channel symbols (values 0..3).
+    ///
+    /// `iwspr`: 0 = FST4 (77-bit QSO message, LDPC(240,101)), 1 = FST4W (50-bit
+    /// beacon, LDPC(240,74)). Returns `FST4_NN`, or -1 if the message will not pack.
+    ///
+    /// ⭐ `iwspr` selects the CODE, not just the message shape — both produce 160
+    /// symbols, so a wrong value transmits a well-formed frame the other side's
+    /// decoder cannot read.
+    pub fn fst4_encode_msg(
+        msg: *const c_char,
+        msg_len: c_int,
+        iwspr: c_int,
+        itone_out: *mut c_int, // [FST4_NN]
+    ) -> c_int;
+
+    /// FST4 channel symbols → real audio at `fsample`, nominal carrier `f0`.
+    ///
+    /// `hmod` is upstream's tone-spacing multiplier (1 | 2 | 4). Returns samples
+    /// produced (`160 * nsps`), or -1 on refusal.
+    ///
+    /// Unlike Q65's plain MFSK this is GFSK-shaped (BT=2.0) with raised-cosine
+    /// ramps, via upstream's own `gen_fst4wave`. `f0` is where the signal is
+    /// REPORTED — the ABI applies the 1.5-tone offset that upstream's callers do.
+    pub fn fst4_gen_wave(
+        itone: *const c_int,
+        nsym: c_int,
+        ntrperiod: c_int, // 15 | 30 | 60 | 120 | 300 | 900 | 1800
+        hmod: c_int,      // 1 | 2 | 4
+        fsample: c_float,
+        f0: c_float,
+        wave_out: *mut c_float,
+        nwave_cap: c_int,
+    ) -> c_int;
+
     pub fn fst4_decode_frame(
         iwave: *const i16, // [ntrperiod * 12000] — see `fst4_nmax`
         ntrperiod: c_int,  // 15|30|60|120|300|900|1800; anything else ⇒ -1
@@ -593,9 +645,6 @@ extern "C" {
 
     /// Decode every Q65 signal in a 360000-sample (30 s) frame.
     ///
-    /// DECODE ONLY — there is deliberately no `q65_encode` / `gen_q65wave`. Q65
-    /// ships receive-only; see `Capabilities.tx` and `modes::tx_mode`.
-    ///
     /// Takes `hisgrid` as well as the two callsigns: Q65's AP layer builds its
     /// candidate list from the grid too (`q65_set_list`), which FT8/FT4/FST4 do not.
     pub fn q65_decode_frame(
@@ -612,6 +661,39 @@ extern "C" {
         nfqso: c_int, // QSO/RX freq (Hz); deep AP center; 0/oob ⇒ band mid
         out: *mut Q65DecodeT,
         max_out: c_int,
+    ) -> c_int;
+
+    /// Encode a message into the 85 Q65 channel symbols.
+    ///
+    /// Returns `Q65_NN` (85), or -1 when the message will not pack.
+    ///
+    /// ⭐ NOT `q65_encode` — that symbol belongs to upstream's qracodes codeword
+    /// API (`q65.h:65`) and is already linked in. Period and submode are absent on
+    /// purpose: neither changes the symbol VALUES, only their duration and spacing,
+    /// which is [`q65_gen_wave`]'s job. Upstream splits it identically.
+    pub fn q65_encode_msg(
+        msg: *const c_char,
+        msg_len: c_int,
+        itone_out: *mut c_int, // [Q65_NN]
+    ) -> c_int;
+
+    /// Q65 channel symbols → real audio at `fsample`, carrier `f0`.
+    ///
+    /// Returns samples produced (`85 * nsps` for the period), or -1 if the period
+    /// or submode is unsupported or the buffer is too small.
+    ///
+    /// ⭐ `nsubmode` genuinely matters: tone spacing is `(12000/nsps) << nsubmode`.
+    /// See the Fortran for why the obvious reading of WSJT-X's source gets this
+    /// wrong (its 48 kHz preview path is submode-A regardless of the selection).
+    pub fn q65_gen_wave(
+        itone: *const c_int,
+        nsym: c_int,
+        ntrperiod: c_int, // 15 | 30 | 60 | 120 | 300
+        nsubmode: c_int,  // 0..=4 for A..E
+        fsample: c_float,
+        f0: c_float,
+        wave_out: *mut c_float,
+        nwave_cap: c_int,
     ) -> c_int;
 
     /// Decode every MSK144 signal in one T/R period.
@@ -661,6 +743,20 @@ extern "C" {
     ///
     /// ⭐ Serialize. This plans three FFTW transforms per call, and the FFTW
     /// PLANNER is not thread-safe; the safe wrapper holds `MODEM_LOCK`.
+    /// Encode `"CALL GRID DBM"` into the 162 WSPR channel symbols (values 0..3).
+    ///
+    /// Returns 162, or -1 if the message will not encode. Thin shim over upstream's
+    /// `get_wspr_channel_symbols` — see `libtempo/wspr_cabi.c`.
+    ///
+    /// ⭐ There is no matching `wspr_gen_wave`: upstream has no library-shaped WSPR
+    /// waveform generator (wsprsim builds I/Q for its own noise model). The
+    /// waveform is plain continuous-phase 4-FSK and is synthesised in the `wspr`
+    /// crate, where it is testable.
+    pub fn wspr_encode_msg(
+        msg: *const c_char,
+        symbols_out: *mut u8, // [162]
+    ) -> c_int;
+
     pub fn wspr_decode_core(
         iwave: *const i16, // [WSPR_NMAX]; short is zero-padded
         nsamples: std::os::raw::c_long,

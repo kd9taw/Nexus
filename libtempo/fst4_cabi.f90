@@ -53,6 +53,18 @@ module fst4_cabi
   integer, parameter :: FST4_NPERIODS = 7
   integer, parameter :: FST4_PERIODS(FST4_NPERIODS) = [15, 30, 60, 120, 300, 900, 1800]
 
+  ! FST4 channel symbols per transmission: 120 data + 40 sync (five 8x4 sync
+  ! vectors). Upstream's NN in lib/fst4/fst4_params.f90; NUM_FST4_SYMBOLS in the Qt
+  ! layer. FST4 is 4-FSK, so itone values are 0..3 - unlike Q65's 0..64.
+  integer, parameter :: FST4_NN = 160
+
+  ! Symbol length in samples at 12 kHz, indexed like FST4_PERIODS. Verbatim from
+  ! upstream, where the SAME table appears in three places that must agree:
+  ! fst4_decode.f90:206-236, and both TX blocks in mainwindow.cpp (:8016 and
+  ! :12689). Not derived - 120 s is 8200 and 900 s is 66560.
+  integer, parameter :: FST4_NSPS(FST4_NPERIODS) = &
+       [720, 1680, 3888, 8200, 21504, 66560, 134400]
+
   ! Interop result struct. Layout MUST match fst4_decode_t in libtempo.h.
   ! Identical to ft4_decode_t (64 bytes) so the Rust side can share a shape.
   type, bind(C) :: fst4_decode_t
@@ -253,6 +265,143 @@ contains
 
     ndec = gs4_count
   end function fst4_decode_frame
+
+
+  !-------------------------------------------------------------------------
+  ! fst4_encode_msg : message text -> the 160 FST4 channel symbols.
+  !
+  !   msg       : message text (C string, <= 37 chars)
+  !   msg_len   : length of msg
+  !   iwspr     : 0 = FST4 (77-bit QSO message), 1 = FST4W (50-bit beacon)
+  !   itone_out : caller buffer, FST4_NN entries, values 0..3
+  !   returns   : FST4_NN on success, -1 if the message will not pack
+  !
+  ! Straight into the vendored genfst4 - the same file whose get_fst4_tones_from_bits
+  ! ENTRY point the decoder already calls, so encode and decode share one generator.
+  !
+  ! ⭐ iwspr PICKS THE CODE, not just the message format: 0 selects LDPC(240,101)
+  ! with a 77-bit payload, 1 selects LDPC(240,74) with the 50-bit WSPR-style
+  ! payload. Both produce 160 symbols, so a wrong iwspr yields a perfectly
+  ! well-formed transmission that the other side's decoder cannot read.
+  !-------------------------------------------------------------------------
+  function fst4_encode_msg(msg, msg_len, iwspr, itone_out) result(nsym_out) &
+       bind(C, name="fst4_encode_msg")
+    character(kind=c_char), intent(in)  :: msg(*)
+    integer(c_int), value,  intent(in)  :: msg_len, iwspr
+    integer(c_int),         intent(out) :: itone_out(FST4_NN)
+    integer(c_int) :: nsym_out
+
+    character(len=37) :: msg37, msgsent37
+    character(len=101) :: msgbits
+    integer :: itone(FST4_NN)
+    integer :: i, n, ichk, iwspr_l
+
+    nsym_out = -1
+    if (iwspr /= 0 .and. iwspr /= 1) return
+
+    msg37 = ' '
+    n = min(msg_len, 37)
+    do i = 1, n
+       if (msg(i) == c_null_char) exit
+       msg37(i:i) = msg(i)
+    end do
+
+    ichk = 0
+    iwspr_l = iwspr
+    itone = -1
+    call genfst4(msg37, ichk, msgsent37, msgbits, itone, iwspr_l)
+    ! genfst4 leaves itone untouched when pack77 refuses the message. Every real
+    ! symbol is 0..3, so a surviving -1 means nothing was generated.
+    if (any(itone(1:FST4_NN) < 0)) return
+
+    itone_out(1:FST4_NN) = itone(1:FST4_NN)
+    nsym_out = FST4_NN
+  end function fst4_encode_msg
+
+  !-------------------------------------------------------------------------
+  ! fst4_gen_wave : channel symbols -> real audio.
+  !
+  !   itone     : the 160 symbols from fst4_encode_msg
+  !   nsym      : symbol count (FST4_NN)
+  !   ntrperiod : T/R period, seconds - sets the symbol duration
+  !   hmod      : tone-spacing multiplier, 1 | 2 | 4 (upstream's x2/x4 Tone Spacing)
+  !   fsample   : output sample rate (Hz)
+  !   f0        : NOMINAL audio carrier (Hz) - see the offset note below
+  !   wave_out  : caller buffer (capacity nwave_cap)
+  !   returns   : samples produced (nsym*nsps), or -1 on refusal
+  !
+  ! Delegates to the vendored gen_fst4wave, which is NOT a plain MFSK generator
+  ! like Q65's: it applies a GFSK frequency-deviation pulse (BT=2.0) spanning three
+  ! symbols, plus raised-cosine ramps over the first and last quarter-symbol. That
+  ! shaping is why FST4 is clean enough for the LF/MF bands it lives on, and it is
+  ! why this calls upstream rather than synthesising here.
+  !
+  ! ⭐ THE 1.5-TONE OFFSET, and why it looks redundant but is not.
+  ! gen_fst4wave internally shifts DOWN by 1.5 tone spacings:
+  !     dphi = dphi + twopi*(f0 - 1.5*hmod/tsym)*dt
+  ! and both of upstream's callers shift UP by the same amount before calling:
+  !     if(!m_tune) f0 += 1.5*dfreq;            (mainwindow.cpp:12703)
+  ! The two cancel, which is the point: without them the 4-tone constellation would
+  ! be CENTRED on f0, and with them the LOWEST tone sits at f0 - the convention the
+  ! decoder reports frequency in. We add it here so this ABI's `f0` means the same
+  ! thing it does for every other mode: where the signal is reported.
+  !
+  ! Note upstream skips the offset for TUNE (a single carrier, no constellation to
+  ! centre). We have no tune path through here - Tune is a separate carrier.
+  !-------------------------------------------------------------------------
+  function fst4_gen_wave(itone, nsym, ntrperiod, hmod, fsample, f0, &
+       wave_out, nwave_cap) result(nwave_out) bind(C, name="fst4_gen_wave")
+    integer(c_int),        intent(in)    :: itone(*)
+    integer(c_int), value, intent(in)    :: nsym, ntrperiod, hmod
+    real(c_float),  value, intent(in)    :: fsample, f0
+    real(c_float),         intent(inout) :: wave_out(*)
+    integer(c_int), value, intent(in)    :: nwave_cap
+    integer(c_int) :: nwave_out
+
+    integer :: nsps, nwave, ip, icmplx, itone_l(FST4_NN), hmod_l
+    real    :: fs_l, f0_l, dfreq
+    complex :: cwave(1)                      ! icmplx=0: never written
+
+    nwave_out = -1
+    if (nsym /= FST4_NN) return
+    if (hmod /= 1 .and. hmod /= 2 .and. hmod /= 4) return
+    ip = fst4_period_index(ntrperiod)
+    if (ip < 1) return
+
+    nsps  = FST4_NSPS(ip)
+    nwave = nsym * nsps
+    if (nwave_cap < nwave) return
+
+    ! Tone spacing at the OUTPUT rate; the caller-side half of the cancelling pair.
+    dfreq = real(hmod) * fsample / real(nsps)
+    itone_l(1:FST4_NN) = itone(1:FST4_NN)
+    hmod_l = hmod
+    fs_l   = fsample
+    f0_l   = f0 + 1.5 * dfreq
+    icmplx = 0
+
+    ! gen_fst4wave writes (nsym+2)*nsps of dphi internally but emits exactly
+    ! nsym*nsps samples (its output loop runs j=nsps..(nsym+1)*nsps-1).
+    call gen_fst4wave(itone_l, nsym, nsps, nwave, fs_l, hmod_l, f0_l, &
+                      icmplx, cwave, wave_out(1:nwave))
+    nwave_out = nwave
+  end function fst4_gen_wave
+
+  !-------------------------------------------------------------------------
+  ! fst4_period_index : 1..FST4_NPERIODS for a supported T/R period, else -1.
+  ! Reject, never clamp - the same rule the decode side follows.
+  !-------------------------------------------------------------------------
+  integer function fst4_period_index(ntrperiod)
+    integer, intent(in) :: ntrperiod
+    integer :: i
+    fst4_period_index = -1
+    do i = 1, FST4_NPERIODS
+       if (FST4_PERIODS(i) == ntrperiod) then
+          fst4_period_index = i
+          return
+       end if
+    end do
+  end function fst4_period_index
 
   !-------------------------------------------------------------------------
   ! c_to_fstr12_fst4 : marshal a NUL/space-terminated C string into character(12).

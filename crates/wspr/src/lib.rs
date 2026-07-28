@@ -20,7 +20,23 @@
 //! internal plan list regardless of where the handles live. [`decode_frame`]
 //! holds [`tempo_fast_sys::MODEM_LOCK`] for exactly this reason.
 //!
-//! # DECODE ONLY — no encode, no gen_wave
+//! # Transmit and receive
+//! [`encode`] and [`gen_wave`] are the transmit half. The encoder is upstream's
+//! `get_wspr_channel_symbols`, already compiled because the DECODER calls it to
+//! subtract a decoded signal — so encode and decode share one generator.
+//!
+//! The WAVEFORM is synthesised here rather than in C, because upstream has none to
+//! borrow: `wsprsim`'s `add_signal_vector` builds an I/Q pair for the simulator's
+//! own noise model, not slot-positioned audio. WSPR's modulation is plain
+//! continuous-phase 4-FSK, which is short enough to write and test directly.
+//!
+//! # ⭐ WSPR IS A BEACON, NOT A QSO MODE
+//! The 50-bit payload is exactly callsign + grid + power, with no exchange, no
+//! addressing and no free text. Putting it on the air is a SCHEDULING decision —
+//! a percentage of 2-minute intervals, unattended — which is why the operating
+//! layer routes these tiers through a beacon scheduler instead of the auto-sequencer.
+//!
+//! # DECODE-ONLY NOTE (historical)
 //! `ModeKind::Wspr` reports `Capabilities { tx: false }`, so `modes::tx_mode()`
 //! refuses to hand it to the transmit path. WSPR transmit is also an operating
 //! decision, not just a code one: a beacon keys unattended on a schedule.
@@ -39,6 +55,97 @@ pub use tempo_fast_sys::{WSPR_NMAX as NMAX, WSPR_PERIOD_S as PERIOD_S};
 
 /// WSJT-X audio sample rate (Hz).
 pub const SAMPLE_RATE: f32 = 12_000.0;
+
+/// WSPR channel symbols per transmission.
+pub const NSYM: usize = 162;
+
+/// Samples per symbol at 12 kHz. Upstream's WSPR symbol length.
+pub const NSPS: usize = 8192;
+
+/// Tone spacing in Hz — and also the baud rate, since WSPR's symbol length and tone
+/// spacing are reciprocal: `12000/8192` ≈ 1.4648 Hz.
+pub const TONE_SPACING_HZ: f32 = SAMPLE_RATE / NSPS as f32;
+
+/// Where the modulation starts within the 2-minute window, in seconds.
+///
+/// ⭐ 1.0 s, confirmed in three independent places in WSJT-X 3.0.2:
+/// `wsprsim.c:130` (`float f0=0.0, t0=1.0;`), the decoder's dt reference in
+/// `wsprd.c` (`dt_print = shift1*dt - 1.0`), and the parity lab's own
+/// `gen_wspr_wav.py`, which was validated against stock `wsprd`.
+///
+/// ⚠️ NOT the same as [`tx_duration_secs`], which is the PTT hold. WSJT-X's
+/// `helper_functions.cpp` uses `2.0 + …` for WSPR; that 2.0 is keying allowance,
+/// not the signal position. Conflating the two is exactly the bug that put FST4-15
+/// half a second late.
+pub const LEAD_IN_SECS: f32 = 1.0;
+
+/// How long the radio stays keyed for one beacon, in seconds.
+///
+/// From `tx_duration()` in WSJT-X's `helper_functions.cpp:19`:
+/// `2.0 + 162*8192/12000` ≈ 112.6 s, inside the 120 s window.
+pub fn tx_duration_secs() -> f32 {
+    2.0 + (NSYM * NSPS) as f32 / SAMPLE_RATE
+}
+
+/// Build the WSPR message text: `"CALL GRID DBM"`.
+///
+/// `power_dbm` is the transmitter's ERP in dBm. ⚠️ WSPR reports feed a PUBLIC
+/// propagation database that other operators draw conclusions from, so a wrong
+/// power figure corrupts other people's data, not just yours. The operating layer
+/// requires it explicitly rather than defaulting it.
+///
+/// Only the first 4 characters of the grid are sent — the 50-bit payload has room
+/// for no more.
+pub fn message(callsign: &str, grid: &str, power_dbm: i32) -> String {
+    let g: String = grid.chars().take(4).collect::<String>().to_uppercase();
+    format!("{} {} {}", callsign.trim().to_uppercase(), g, power_dbm)
+}
+
+/// Encode `"CALL GRID DBM"` into the 162 channel symbols (0..3), or `None` if it
+/// will not encode.
+pub fn encode(msg: &str) -> Option<Vec<u8>> {
+    let c = std::ffi::CString::new(msg).ok()?;
+    let mut sym = vec![0u8; NSYM];
+    let n = {
+        let _guard = MODEM_LOCK.lock().unwrap();
+        unsafe { tempo_fast_sys::wspr_encode_msg(c.as_ptr(), sym.as_mut_ptr()) }
+    };
+    (n as usize == NSYM).then_some(sym)
+}
+
+/// Synthesise the WSPR audio for `symbols` at carrier `f0`, WITHOUT the lead-in.
+///
+/// Plain continuous-phase 4-FSK: tone *k* sits at `f0 + k * TONE_SPACING_HZ`, each
+/// held for [`NSPS`] samples, with phase carried ACROSS symbol boundaries and never
+/// reset. Resetting per symbol would splatter a mode whose whole point is occupying
+/// ~6 Hz.
+///
+/// Returns `None` unless `symbols` is exactly [`NSYM`] values in 0..=3.
+pub fn gen_wave(symbols: &[u8], fsample: f32, f0: f32) -> Option<Vec<f32>> {
+    if symbols.len() != NSYM || symbols.iter().any(|&s| s > 3) {
+        return None;
+    }
+    // Spacing is tied to the SYMBOL RATE, not the output rate: at any fsample a
+    // symbol lasts NSPS/12000 s and the tones stay 12000/8192 Hz apart.
+    let nsps_out = (NSPS as f32 * fsample / SAMPLE_RATE).round() as usize;
+    let dt = 1.0 / f64::from(fsample);
+    let mut wave = vec![0f32; NSYM * nsps_out];
+    let mut phi = 0f64;
+    let mut k = 0usize;
+    for &s in symbols {
+        let freq = f64::from(f0) + f64::from(s) * f64::from(TONE_SPACING_HZ);
+        let dphi = std::f64::consts::TAU * freq * dt;
+        for _ in 0..nsps_out {
+            wave[k] = phi.sin() as f32;
+            phi += dphi;
+            if phi > std::f64::consts::TAU {
+                phi -= std::f64::consts::TAU;
+            }
+            k += 1;
+        }
+    }
+    Some(wave)
+}
 
 /// Which WSPR message form a decode came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,6 +275,115 @@ fn cstr_field(b: &[u8; 23]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encode_then_decode_recovers_the_beacon() {
+        // Our waveform through our own decoder. Proves the WAVEFORM layer — symbol
+        // rate, tone spacing, continuous phase, slot position — since the symbols
+        // come from upstream's generator either way.
+        const CALL: &str = "KD9TAW";
+        const GRID: &str = "EN52";
+        let msg = message(CALL, GRID, 30);
+        let sym = encode(&msg).expect("encodes");
+        let wave = gen_wave(&sym, SAMPLE_RATE, 1500.0).expect("valid");
+
+        let lead = (LEAD_IN_SECS * SAMPLE_RATE) as usize;
+        let mut iwave = vec![0i16; NMAX];
+        for (i, &v) in wave.iter().enumerate() {
+            if lead + i < iwave.len() {
+                iwave[lead + i] = (v * 8000.0) as i16;
+            }
+        }
+
+        let d = decode_frame(&iwave, 10.1387, false, 3, false, false, false);
+        assert!(
+            d.iter().any(|r| r.message.trim() == msg),
+            "the beacon did not decode as {msg:?}: {:?}",
+            d.iter().map(|r| r.message.trim()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn encode_produces_a_valid_4fsk_frame() {
+        let sym = encode("KD9TAW EN52 30").expect("standard message encodes");
+        assert_eq!(sym.len(), NSYM, "WSPR is 162 symbols");
+        assert!(
+            sym.iter().all(|&s| s <= 3),
+            "WSPR is 4-FSK: symbols are 2*databit + sync, so 0..3"
+        );
+        // The sync vector is embedded in every symbol's low bit, so parity across
+        // the frame is fixed by pr3 regardless of payload. Two different messages
+        // must still differ somewhere.
+        let other = encode("W1AW FN31 37").expect("encodes");
+        assert_ne!(
+            sym, other,
+            "different messages must produce different symbols"
+        );
+    }
+
+    #[test]
+    fn the_message_builder_matches_the_wire_format() {
+        assert_eq!(message("kd9taw", "en52tk", 30), "KD9TAW EN52 30");
+        assert_eq!(message(" W1AW ", "FN31", 37), "W1AW FN31 37");
+        // 4-character grid only — the 50-bit payload has room for no more.
+        assert_eq!(message("K1ABC", "EN50AB", 23), "K1ABC EN50 23");
+    }
+
+    #[test]
+    fn a_malformed_message_is_refused_rather_than_encoded() {
+        assert!(
+            encode("BAD\0MSG").is_none(),
+            "an interior NUL cannot cross the FFI"
+        );
+        assert!(encode("").is_none(), "an empty message is not a beacon");
+    }
+
+    #[test]
+    fn gen_wave_is_continuous_phase_and_correctly_sized() {
+        let sym = encode("KD9TAW EN52 30").unwrap();
+        let w = gen_wave(&sym, SAMPLE_RATE, 1500.0).expect("valid frame");
+        assert_eq!(w.len(), NSYM * NSPS, "162 symbols x 8192 samples");
+
+        // Continuity across every symbol boundary is the property that keeps WSPR
+        // inside ~6 Hz. A phase reset would show up as a step; sample-to-sample
+        // deltas must stay bounded by the highest tone's per-sample phase advance.
+        let max_step = ((1500.0 + 3.0 * f64::from(TONE_SPACING_HZ)) * std::f64::consts::TAU
+            / f64::from(SAMPLE_RATE))
+        .sin()
+            * 1.05;
+        for i in 1..w.len() {
+            let d = f64::from(w[i] - w[i - 1]).abs();
+            assert!(
+                d <= max_step.abs().max(0.9),
+                "phase discontinuity at sample {i}: step {d}"
+            );
+        }
+    }
+
+    #[test]
+    fn gen_wave_refuses_a_malformed_symbol_vector() {
+        let sym = encode("KD9TAW EN52 30").unwrap();
+        assert!(
+            gen_wave(&sym[..161], SAMPLE_RATE, 1500.0).is_none(),
+            "161 is not a frame"
+        );
+        let mut bad = sym.clone();
+        bad[7] = 4; // 4-FSK has no symbol 4
+        assert!(
+            gen_wave(&bad, SAMPLE_RATE, 1500.0).is_none(),
+            "symbol 4 does not exist"
+        );
+    }
+
+    #[test]
+    fn the_beacon_fits_inside_its_window() {
+        // 2.0 + 162*8192/12000 = 112.6 s of keying inside a 120 s window, with the
+        // modulation starting at 1.0 s. An overrun would key into the next window.
+        let d = tx_duration_secs();
+        assert!((d - 112.592).abs() < 0.01, "expected ~112.6 s, got {d}");
+        assert!(d < f32::from(PERIOD_S), "the beacon must fit its window");
+        assert!(LEAD_IN_SECS + (NSYM * NSPS) as f32 / SAMPLE_RATE < f32::from(PERIOD_S));
+    }
 
     #[test]
     fn the_frame_is_114_seconds_of_the_two_minute_window() {

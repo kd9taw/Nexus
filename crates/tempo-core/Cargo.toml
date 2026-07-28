@@ -14,3 +14,10 @@ wspr = { path = "../wspr" }
 # Fixed-size real FFT for the waterfall power spectrum (MIT). Zero-alloc, ~2 transitive deps —
 # an exact fit for the compile-time 4096-sample window.
 microfft = "0.6"
+
+[dev-dependencies]
+# Q65 TX helpers (tone spacing / bandwidth / over length) for the encode_wav_q65
+# parity CLI. DEV-ONLY: examples are never shipped, and tempo-core itself does not
+# depend on any modem crate. q65 depends only on tempo-fast-sys, so no cycle.
+q65 = { path = "../q65" }
+fst4 = { path = "../fst4" }

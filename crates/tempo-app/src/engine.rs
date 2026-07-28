@@ -227,6 +227,11 @@ pub struct DecodeResult {
     pass: DecodePass,
     slot: u64,
     epoch: u64,
+    /// The decode PANICKED and was contained — see [`run_decode_job`]. Carries no
+    /// decodes and an empty frame, and exists only so the result still comes back:
+    /// the radio loop clears its in-flight latch when a result lands, so a job that
+    /// never returns one stops decoding forever.
+    failed: bool,
 }
 
 impl DecodeResult {
@@ -307,6 +312,46 @@ pub enum DecodeApplied {
 /// identical decodes. Locks ONLY the decoder ([`SharedSource`]) — never the engine
 /// mutex — for the whole decode, serializing all process-global decode FFI state.
 pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
+    // Identify the job before it is consumed — a panic destroys the job, but the
+    // loop still needs to know which pass/slot/epoch failed.
+    let (pass, slot, epoch) = (job.pass, job.slot, job.epoch);
+    // ⭐ CONTAIN THE PANIC. Decoding runs on ONE persistent worker thread, and the
+    // radio loop clears `decode_in_flight` only when a result arrives. Without this,
+    // a panic anywhere in the decode chain — and the modem wrappers assert freely
+    // (`jt65::decode_frame` panics on a short buffer or an out-of-range submode, and
+    // the others match) — killed that thread, dropped the result channel, and left
+    // the latch stuck true FOREVER. Every later dispatch went to a dead channel via
+    // `let _ = tx.send(job)`, which discards the error. The app then decoded nothing
+    // for the rest of the session, silently: the waterfall is fed separately, so it
+    // kept painting and the app looked alive while it had gone completely deaf.
+    //
+    // `panic = "abort"` is NOT set for release, so the default unwind applies and the
+    // process survives the dead thread — which is exactly what made it silent rather
+    // than a visible crash.
+    //
+    // AssertUnwindSafe: on the panic path we return no decodes and touch no recovered
+    // state, so a half-updated decoder cannot leak into the result. The decoder's own
+    // global FFI state is re-seeded per job by the caller's context handling.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_decode_job_inner(job))) {
+        Ok(r) => r,
+        Err(_) => {
+            eprintln!(
+                "[decode] PANIC in {pass:?} decode for slot {slot} — decode contained, \
+                 receive continues. This is a bug; please report it."
+            );
+            DecodeResult {
+                decodes: Vec::new(),
+                frame: Vec::new(),
+                pass,
+                slot,
+                epoch,
+                failed: true,
+            }
+        }
+    }
+}
+
+fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
     let DecodeJob {
         source,
         frame,
@@ -395,6 +440,7 @@ pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
         pass,
         slot,
         epoch,
+        failed: false,
     }
 }
 
@@ -493,7 +539,18 @@ pub struct Engine {
     /// `mine` rows in the decode feed so the operator sees each of their calls
     /// (WSJT-X "your message in Band Activity"). Capped; cleared on halt/mode change.
     own_tx: VecDeque<OwnTx>,
-    last_rx: Option<Vec<f32>>,
+    /// The last decoded RX frame, retained for the F6 redecode and the waterfall row.
+    ///
+    /// ⭐ Stored as i16, the decoder's OWN input format — the same choice WSJT-X makes
+    /// (`short int d2[NTMAX*RX_SAMPLE_RATE]`, commons.h). This is a permanent
+    /// allocation sized by the T/R period, and f32 doubled it for nothing: the decode
+    /// path immediately converts to i16 anyway. At FST4's 1800 s period that is 21.6 M
+    /// samples — 86 MB as f32, 43 MB here.
+    ///
+    /// The round-trip is EXACT, not approximate. `capture_to_i16` is
+    /// `round(x * 32767)`; dividing by the same constant and re-applying it returns
+    /// the identical i16, so a redecode sees byte-for-byte what the live decode saw.
+    last_rx: Option<Vec<i16>>,
     /// Decodes from the most recent [`Engine::ingest`] (for the network layer to
     /// emit over the WSJT-X UDP API / PSK Reporter).
     last_decodes: Vec<modes::Decode>,
@@ -585,6 +642,16 @@ pub struct Engine {
     /// Whether the operator is RUNNING (called CQ) vs answering a specific station.
     /// When running, a completed QSO returns to calling CQ (WSJT-X's run workflow).
     cq_running: bool,
+    /// Transmit-percentage scheduler for the BEACON tiers (WSPR / FST4W). Carries
+    /// the anti-consecutive carry state across intervals, so it must persist rather
+    /// than be rebuilt per slot — rebuilding would reset the spread and skew the
+    /// achieved duty cycle.
+    beacon_sched: tempo_core::beacon::BeaconScheduler,
+    /// The last beacon slot a transmit decision was taken for, so one decision is
+    /// made per interval no matter how often `poll_tx` is called within it.
+    beacon_decided_slot: Option<u64>,
+    /// The decision itself, held for the length of the interval.
+    beacon_tx_this_slot: bool,
     /// Chat-native CQ run (Tempo): while on, an idle own-parity TX slot re-sends the
     /// structured CQ — the WSJT-X-style "keep calling until someone answers" loop the
     /// one-shot Call CQ button couldn't do. Runtime-only (resets each launch, like
@@ -1281,6 +1348,11 @@ impl Engine {
             qso_logged: false,
             qso_start_unix: None,
             cq_running: false,
+            // Seeded from the callsign so two stations do not share a draw
+            // sequence; the percentage is applied from settings on each decision.
+            beacon_sched: tempo_core::beacon::BeaconScheduler::new(0, 0x5EED),
+            beacon_decided_slot: None,
+            beacon_tx_this_slot: false,
             chat_cq: false,
             chat_cq_paused: false,
             chat_cq_last_directed: 0,
@@ -1409,11 +1481,78 @@ impl Engine {
         )
     }
 
+    /// True when `tier` decodes but cannot transmit under the current settings.
+    ///
+    /// ⭐ `None` from [`Self::tier_mode_kind`] is NOT a refusal. TempoDeep (DX1)
+    /// has no `ModeKind` — it transmits through FT1's own path — so treating an
+    /// absent kind as receive-only would silence DX1. Only a mode that explicitly
+    /// declares `tx: false` is receive-only.
+    fn tier_is_rx_only(&self, tier: Tier) -> bool {
+        self.tier_mode_kind(tier)
+            .is_some_and(|k| modes::tx_mode(k).is_none())
+    }
+
+    /// True when `tier` is a BEACON — it transmits on a schedule and has no QSO
+    /// sequence (WSPR, FST4W).
+    ///
+    /// Separate from [`Self::tier_is_rx_only`] and both are needed: a beacon CAN
+    /// transmit, so the rx-only guards correctly let it through, but there is no
+    /// exchange for the auto-sequencer to run. Without this the sequencer would arm
+    /// a CQ run on WSPR and try to work the beacons it hears, which is meaningless.
+    fn tier_is_beacon(&self, tier: Tier) -> bool {
+        self.tier_mode_kind(tier)
+            .is_some_and(|k| modes::make_mode(k).capabilities().beacon_only)
+    }
+
+    /// `Err(reason)` when the ACTIVE tier has no QSO sequence to run — a beacon.
+    /// Checked by the entry points that start or advance an EXCHANGE, alongside
+    /// [`Self::require_tx_capable`], which asks the different question of whether
+    /// the tier can key at all.
+    fn require_qso_capable(&self) -> Result<(), String> {
+        let tier = self.app.tier();
+        if self.tier_is_beacon(tier) {
+            return Err(format!(
+                "{} is a beacon — it transmits your callsign, grid and power on a \
+                 schedule, and has no QSO sequence. Set the transmit percentage in \
+                 Settings ▸ Modes, or switch to FT8, FT4, Q65 or FST4 to work stations.",
+                tier.label()
+            ));
+        }
+        Ok(())
+    }
+
+    /// `Err(reason)` when the ACTIVE tier cannot transmit — the precondition every
+    /// operator-initiated TX entry point checks.
+    ///
+    /// ⭐ WHY THIS EXISTS AT THE ENTRY POINTS AND NOT ONLY AT THE KEY.
+    /// `modes::tx_mode()` already refuses in the wave builder, so a receive-only
+    /// tier never keyed the radio — the safety property held. But the refusal
+    /// happened ~800 lines downstream of the click, silently: Call CQ on MSK144
+    /// armed the sequencer, enabled TX, queued a CQ and reported it as sent, and
+    /// only the waveform quietly failed to exist. The operator watched a CQ run
+    /// that transmitted nothing and had no way to tell from the UI. A guard that
+    /// fires too late to inform is not enough; refuse where the operator asked.
+    fn require_tx_capable(&self) -> Result<(), String> {
+        let tier = self.app.tier();
+        if self.tier_is_rx_only(tier) {
+            return Err(format!(
+                "{} is receive-only — Nexus decodes it but does not transmit it. \
+                 Switch to FT8, FT4 or a Tempo tier to call.",
+                tier.label()
+            ));
+        }
+        Ok(())
+    }
+
     /// Apply new settings. A change of callsign/grid rebinds identity IN PLACE
     /// (preserving roster + conversations + the `*` band feed — see
     /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place. The
     /// operating mode returns to Chat.
     pub fn apply_settings(&mut self, s: Settings) {
+        // What the active tier resolves to BEFORE the save — the per-mode period /
+        // submode fields live in `Settings`, so this can change under us. See the
+        // decoder rebuild at the end of this function.
+        let kind_before = self.tier_mode_kind(self.tier());
         // Rebind identity IN PLACE (not a fresh AppState) so editing the callsign or
         // grid in Settings — or a GPS/UDP grid update routed through a save — does
         // NOT wipe conversation history, the `*` band feed, or the roster.
@@ -1564,6 +1703,33 @@ impl Engine {
         // Reconcile the (separate) coordinated-QSY feature with the saved flags.
         self.qsy
             .configure(self.settings.qsy_set.clone(), self.settings.qsy_cadence);
+        // ⭐ REBUILD THE DECODER when the save changed what the ACTIVE tier resolves
+        // to. Q65, FST4/FST4W, MSK144 and JT65 take their period/submode from
+        // Settings, so the same tier maps to different `ModeKind`s across a save —
+        // and the boxed decoder was only ever rebuilt by `set_tier`/`set_source`.
+        // Changing Q65 30 s → 60 s while sitting on Q65 therefore changed nothing
+        // in the decode path (the Settings hint promises it takes effect on the
+        // next slot), while `active_slot_secs`, `tx_over_secs` and the WSJT-X UDP
+        // status all switched to the new period immediately — so the app disagreed
+        // with itself about the running period until the operator toggled tiers.
+        // A submode-only change had no visible symptom at all: decodes just stopped
+        // appearing, on modes where that setting is the entire point.
+        //
+        // Compared BY KIND so an unrelated save is a no-op: rebuilding drops the
+        // decoder's accumulated state, which for Q65/JT65 message averaging is real
+        // progress to lose. Companion mode owns its own source — leave it alone.
+        if self.source_kind == SourceKind::Native && self.tier_mode_kind(self.tier()) != kind_before
+        {
+            if let Some(kind) = self.tier_mode_kind(self.tier()) {
+                // Swap UNDER the lock (waits out any decode in flight) and clear the
+                // context, exactly as `set_tier` does — same reasons. The epoch bump
+                // inside is the load-bearing part: a decode already dispatched at the
+                // OLD period would otherwise land after the swap and be folded in
+                // with slot indices that no longer mean anything.
+                *self.source.lock().unwrap() = Box::new(NativeSource::from_kind(kind));
+                self.clear_decode_context();
+            }
+        }
         if self.settings.qsy_enabled && !self.qsy.enabled {
             let home = self.qsy_token_for_current();
             let partner = self.app.active_peer().map(|s| s.to_string());
@@ -3463,6 +3629,18 @@ impl Engine {
     pub fn set_mode(&mut self, spec: &str) -> Result<(), String> {
         let mycall = self.settings.mycall.clone();
         let mygrid = self.settings.mygrid.clone();
+        // A RUN mode auto-calls CQ and arms TX below — starting one on a tier that
+        // cannot transmit produces a CQ run that reports overs it never sends. The
+        // passive specs (monitor / S&P / chat) are decode views that only transmit
+        // on a further operator action, and each of THOSE actions carries its own
+        // check, so they stay reachable for listening.
+        if matches!(spec, "qso-run" | "fieldday-run") {
+            self.require_tx_capable()?;
+            // A beacon transmits, so require_tx_capable passes — but there is no
+            // exchange to run, so a CQ run on WSPR is nonsense. Refuse explicitly
+            // rather than arm a sequencer with nothing to sequence.
+            self.require_qso_capable()?;
+        }
         // The Field Day exchange goes ON THE AIR — refuse to start the mode on a
         // blank class/section rather than transmit somebody else's defaults.
         if spec.starts_with("fieldday")
@@ -3539,7 +3717,13 @@ impl Engine {
         // chunked free text does NOT fit FT8/FT4's 13-char packer (it would
         // silently transmit nothing). Snap to FT1 when entering Chat on a
         // structured tier, so Chat can never silently fail.
-        if matches!(self.mode, Mode::Chat) && matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4) {
+        //
+        // Gated on `is_chat()` rather than an Ft8|Ft4 list: the list was written when
+        // those were the only non-chat tiers, and the six receive-only ones slipped
+        // straight through it. Chat on those was worse than on FT8 — composing armed
+        // TX, the bubble said "sending", and it could never transmit at all. Same
+        // outcome for FT8/FT4 as before (neither is `is_chat`).
+        if matches!(self.mode, Mode::Chat) && !self.app.tier().is_chat() {
             self.set_tier(Tier::TempoFast);
         }
         // Running modes (Call CQ / Field-Day run) auto-call CQ, so entering one
@@ -3589,10 +3773,18 @@ impl Engine {
                 }
             }
             _ => {
-                // DX = FT8/FT4 structured. Restore the remembered DX tier (FT4
-                // survives a trip through msg); default FT8. Only pull out of
-                // Chat — leave a running QSO alone.
-                if !matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4) {
+                // DX = the structured/digital paradigm. Restore the remembered DX
+                // tier (FT4 survives a trip through msg); default FT8. Only pull out
+                // of Chat — leave a running QSO alone.
+                //
+                // The test is "are we on a CHAT tier", the exact mirror of the msg
+                // branch above — not an Ft8|Ft4 list. That list predated the six
+                // receive-only tiers, which are digital-area tiers too, so entering
+                // Digital on Q65 used to file Q65 away as the remembered CHAT tier
+                // and yank the operator to FT8. The next trip through msg then
+                // restored Q65 as the chat tier — a chat client running on a mode
+                // that cannot transmit.
+                if self.app.tier().is_chat() {
                     self.last_msg_tier = Some(self.app.tier());
                     self.set_tier(self.last_dx_tier.unwrap_or(Tier::Ft8));
                 }
@@ -3654,6 +3846,19 @@ impl Engine {
         // band activity) must not start a QSO with ourselves — stock WSJT-X
         // ignores it; without this we'd key up calling our own callsign.
         if tempo_core::message::same_call(dxcall, &mycall) {
+            return;
+        }
+        // Same reasoning on a receive-only tier: this arms TX, picks answer parity
+        // and moves RX to the DX — a whole QSO the radio can never take part in.
+        // JT65 decodes real QSO traffic into the band feed, so double-clicking a
+        // heard station is the natural thing to try there; refusing here leaves it a
+        // listening view instead of a QSO that never gets answered.
+        //
+        // Beacons are refused for the opposite reason: they CAN transmit, but a
+        // WSPR spot is a propagation report, not a station calling. Answering one
+        // is not a thing the mode does.
+        let t = self.app.tier();
+        if self.tier_is_rx_only(t) || self.tier_is_beacon(t) {
             return;
         }
 
@@ -3966,6 +4171,13 @@ impl Engine {
     }
 
     pub fn send_message(&mut self, peer: &str, text: &str) {
+        // Same reasoning as `broadcast`: the entry point must refuse, not the wave
+        // builder. Chat should not be reachable on these tiers at all now that
+        // `set_mode("chat")` snaps off any non-chat tier, but this path is also
+        // driven by companion datagrams, so it carries its own check.
+        if self.tier_is_rx_only(self.app.tier()) {
+            return;
+        }
         self.reset_tx_watchdog();
         // Smart cycle (FT8-style): when auto and not in a CQ run, answer a heard station
         // on the OPPOSITE T/R parity to the one we decoded them in, so we key while they
@@ -4056,6 +4268,14 @@ impl Engine {
         if text.trim().is_empty() {
             return; // nothing to say — never put a bare "DE <MYCALL>" carrier on the air
         }
+        // Receive-only tier: nothing to broadcast on. This is reachable WITHOUT any
+        // Nexus UI action — a companion app's FreeText-with-send datagram (JTAlert,
+        // GridTracker) lands straight here — so the guard has to be in the engine,
+        // not only in the buttons. Without it the text is queued, echoed into the
+        // band feed as if sent, and silently dropped at the wave builder.
+        if self.tier_is_rx_only(self.app.tier()) {
+            return;
+        }
         self.reset_tx_watchdog();
         let mycall = self.settings.mycall.clone();
         let full = tempo_core::inbox::broadcast_text(&mycall, text);
@@ -4110,6 +4330,27 @@ impl Engine {
         // from the old tier are meaningless for answer parity. Flush the context.
         self.clear_decode_context();
         self.app.set_tier(tier);
+        // Switching INTO a receive-only tier stands transmit down. Without this, a
+        // CQ run started on FT8 survives the switch verbatim — mode stays
+        // `Qso { running: true }`, `tx_enabled` stays latched, and the sequencer
+        // keeps queuing overs the wave builder then discards. That is the same
+        // phantom the entry-point guards close, reached by a different door: the
+        // guards refuse a run you START here, and this ends one you BRING here.
+        // `halt_tx` also releases any latched PTT/CW, which matters because the
+        // switch can happen mid-over.
+        if self.tier_is_rx_only(tier) {
+            self.halt_tx();
+            self.cq_running = false;
+            if matches!(self.mode, Mode::Qso { .. } | Mode::FieldDay { .. }) {
+                self.mode = Mode::Qso {
+                    station: Box::new(QsoStation::monitoring(
+                        &self.settings.mycall,
+                        &self.settings.mygrid,
+                    )),
+                    running: false,
+                };
+            }
+        }
         // Point the native signal source at the selected mode (FT1/FT8/FT4). DX1
         // decodes via its own robust path in `ingest`, so the source is left as-is.
         // In Companion mode the source is the upstream WSJT-X stream — never
@@ -4130,11 +4371,26 @@ impl Engine {
         // skip it there. (`band_plan()` is tier-aware off the just-set tier.)
         if self.source_kind == SourceKind::Native {
             let band = self.settings.band.clone();
-            if let Some(ch) = self
-                .band_plan()
-                .into_iter()
+            let plan = self.band_plan();
+            // ⭐ FALL BACK TO THE MODE'S PRIMARY CHANNEL when the current band has
+            // none. The tier-aware plans are not all all-band: MSK144 and Q65 are
+            // VHF+ only, FST4/FST4W are 2200/630/160 m only. `find()` therefore
+            // MISSES for the common case — an operator sitting on 20 m FT8 clicks
+            // MSK144 — and the whole QSY used to be a silent no-op: tier, decoder
+            // and slot clock all moved to MSK144 while the radio stayed on 14.074.
+            // The mode then decodes an FT8 watering hole forever and reads as
+            // broken, which is how this was found. WSJT-X moves you to the new
+            // mode's own frequency in exactly this situation; the first plan entry
+            // is that mode's calling channel (MSK144 → 6 m 50.260, FST4 → 2200 m).
+            //
+            // This is a BAND CHANGE, not an in-band nudge — `clear_decode_context`
+            // at the top of this function has already flushed the stale context.
+            let target = plan
+                .iter()
                 .find(|c| c.band.eq_ignore_ascii_case(&band))
-            {
+                .or_else(|| plan.first())
+                .cloned();
+            if let Some(ch) = target {
                 if (ch.dial_mhz - self.settings.dial_mhz).abs() > 0.0005 {
                     self.set_frequency(ch.dial_mhz, &ch.band, &ch.mode);
                 }
@@ -4303,6 +4559,8 @@ impl Engine {
     /// only WSJT-X-packable tokens stay structured (an unsupported one would fall back
     /// to free text), so callers should validate or pass `None`.
     pub fn call_cq(&mut self, dir: Option<&str>) -> Result<(), String> {
+        self.require_tx_capable()?;
+        self.require_qso_capable()?;
         let mycall = self.settings.mycall.trim().to_string();
         let grid = self.settings.mygrid.trim();
         if mycall.is_empty() {
@@ -4404,6 +4662,15 @@ impl Engine {
     }
 
     pub fn set_tx_enabled(&mut self, on: bool) {
+        // BACKSTOP for the receive-only tiers. Every arm path funnels here, so this
+        // is where "armed but unable to transmit" is made unrepresentable — the UI
+        // reads `tx_enabled`, so letting it latch true is exactly what made the app
+        // claim it was transmitting. Note the `immediate_retune` below: arming also
+        // sends the rig a mode/dial assert, so an ungated arm reaches CAT even on a
+        // tier that can never key. DISARMING is always honoured.
+        if on && self.tier_is_rx_only(self.app.tier()) {
+            return;
+        }
         // Read-only launch: arming TX is the moment the operator commits to
         // transmitting — arm a retune NOW so the mode assert runs a tick BEFORE the
         // key on the normal FT8 path (on a slow-serial rig an assert at the key
@@ -5877,6 +6144,13 @@ impl Engine {
         if tempo_core::message::same_call(dxcall, &self.settings.mycall) {
             return; // never a self-QSO
         }
+        // Answering a decode is a TX commitment: it arms TX and asks for the
+        // current period. On a receive-only tier there is no over to send, so do
+        // not stage one — a queued reply the operator can see but the radio can
+        // never send is the phantom this whole guard exists to prevent.
+        if self.tier_is_rx_only(self.app.tier()) {
+            return;
+        }
         let on_dx = matches!(&self.mode, Mode::Qso { station, .. }
             if station.dxcall.as_deref().map(|c| tempo_core::message::same_call(c, dxcall)).unwrap_or(false));
         if !on_dx {
@@ -6382,6 +6656,100 @@ impl Engine {
 
     /// Audio waveform(s) to transmit at `slot` (empty unless it's our TX slot and
     /// the active mode has something to send). One frame per slot.
+    /// The beacon message for the active identity, or `Err` with the reason.
+    ///
+    /// ⚠️ REFUSES ON AN UNSET POWER. WSPR reports feed a public propagation
+    /// database, so a beacon claiming 0 dBm (1 mW) while actually running 5 W
+    /// corrupts other operators' conclusions about the path, not just this
+    /// station's own. Upstream defaults the field; we require it. A deliberate
+    /// divergence, and it fails closed — no power, no transmission.
+    fn beacon_message(&self) -> Result<String, String> {
+        let call = self.settings.mycall.trim();
+        let grid = self.settings.mygrid.trim();
+        if call.is_empty() {
+            return Err("Set your callsign before beaconing".to_string());
+        }
+        if grid.len() < 4 {
+            return Err("Set your 4-character grid before beaconing".to_string());
+        }
+        if self.settings.beacon_power_dbm <= 0 {
+            return Err(
+                "Set your beacon transmit power (dBm) in Settings. WSPR reports \
+                        are published, so the figure has to be real — 30 dBm = 1 W, \
+                        37 = 5 W."
+                    .to_string(),
+            );
+        }
+        Ok(tempo_core::beacon::message(
+            call,
+            grid,
+            self.settings.beacon_power_dbm,
+        ))
+    }
+
+    /// Transmit decision + waveform for one BEACON interval.
+    ///
+    /// ⭐ ONE DECISION PER INTERVAL. `poll_tx` may be called many times inside a
+    /// slot; re-drawing each time would break the anti-consecutive rule and make
+    /// the achieved duty cycle meaningless.
+    ///
+    /// The TX-safety invariants still apply in full — this is only reached after
+    /// `poll_tx`'s `tx_enabled` / `tx_allowed` / operating-mode guards, so a beacon
+    /// keys unattended only once the operator has explicitly armed transmit.
+    fn poll_beacon_tx(&mut self, slot: u64) -> Vec<Vec<f32>> {
+        if self.beacon_decided_slot != Some(slot) {
+            self.beacon_decided_slot = Some(slot);
+            self.beacon_sched
+                .set_tx_percent(self.settings.beacon_tx_percent);
+            self.beacon_tx_this_slot = if self.settings.beacon_rr_slot > 0 {
+                // FST4W Round Robin: a deterministic assignment so coordinated
+                // stations never collide. A pure function of UTC, which `slot`
+                // counts periods of.
+                let period = self.active_slot_secs().max(1.0) as u32;
+                let secs_of_day = (slot.wrapping_mul(u64::from(period)) % 86_400) as u32;
+                tempo_core::beacon::fst4w_round_robin_is_tx(
+                    secs_of_day,
+                    period as u16,
+                    self.settings.beacon_rr_slot.saturating_sub(1),
+                    self.settings.beacon_rr_slots,
+                )
+            } else {
+                self.beacon_sched.next_is_tx()
+            };
+        }
+        if !self.beacon_tx_this_slot {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        }
+
+        // Misconfigured (no power, no grid) ⇒ stay silent. The UI surfaces the
+        // reason; publishing a wrong report is worse than not beaconing.
+        let Ok(msg) = self.beacon_message() else {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        };
+        let Some(kind) = self.tier_mode_kind(self.app.tier()) else {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        };
+        let Some(mode) = modes::tx_mode(kind) else {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        };
+        let itone = mode.encode(&msg);
+        if itone.is_empty() {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        }
+        let wave = mode.gen_wave(&itone, tempo_fast::SAMPLE_RATE, self.tx_offset_hz());
+        if wave.is_empty() {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        }
+        self.app.set_transmitting(true);
+        vec![wave]
+    }
+
     pub fn poll_tx(&mut self, slot: u64) -> Vec<Vec<f32>> {
         // Coordinated QSY: execute a scheduled move the moment it comes due,
         // regardless of TX/RX/mute state (no-op while the feature is disabled).
@@ -6390,6 +6758,33 @@ impl Engine {
         // license privileges at this dial/mode: no slot TX. The radio loop handles the
         // steady tune carrier separately (also privilege-gated at set_tune).
         if !self.tx_enabled || self.tuning || !self.tx_allowed() {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        }
+        // BEACON TIER (WSPR / FST4W): a completely separate transmit path. It
+        // never reaches the QSO sequencer below, because there is no exchange —
+        // the payload is callsign, grid and power, and the only decision is
+        // WHETHER to key this interval.
+        if self.tier_is_beacon(self.app.tier()) {
+            return self.poll_beacon_tx(slot);
+        }
+        // RECEIVE-ONLY TIER: stop HERE, with the other "we are not transmitting"
+        // guards — not at the wave builder below.
+        //
+        // ⭐ THIS ORDERING IS THE BUG, not a redundancy. `modes::tx_mode()` already
+        // refused at the bottom of this function, so nothing ever keyed; but every
+        // side effect of an over happens BETWEEN here and there, and none of it is
+        // rolled back when the waveform turns out not to exist. On a receive-only
+        // tier the old flow advanced the QSO sequencer and burned the CQ budget,
+        // pushed an own-TX row into the band feed, wrote a `Tx` line to ALL.TXT
+        // (which tailing loggers and GridTracker read as fact), armed the pending
+        // CW ID, and started the TX watchdog that later reported halting a
+        // transmission that never happened. Refusing at the top makes all of it
+        // unrepresentable instead of merely harmless.
+        //
+        // Unreachable in normal operation now that arming is gated — this is the
+        // backstop for any future path that latches `tx_enabled` directly.
+        if self.tier_is_rx_only(self.app.tier()) {
             self.app.set_transmitting(false);
             return Vec::new();
         }
@@ -6670,8 +7065,8 @@ impl Engine {
                     // before PTT — the on-air RF frequency is unchanged.
                     native => {
                         let kind = self
-                        .tier_mode_kind(native)
-                        .unwrap_or(modes::ModeKind::TempoFast);
+                            .tier_mode_kind(native)
+                            .unwrap_or(modes::ModeKind::TempoFast);
                         // tx_mode, not make_mode: a receive-only mode yields None and this
                         // over is abandoned. Every mode shipped today declares tx, so None
                         // means a decode-only mode reached the TX path, which is a bug —
@@ -6840,6 +7235,15 @@ impl Engine {
             // switch since dispatch) — its slot indices / AP context are meaningless.
             return DecodeApplied::Stale;
         }
+        if result.failed {
+            // A contained panic. Drop it exactly like a stale result: it carries no
+            // decodes and an EMPTY frame, and letting that frame through would set
+            // `last_rx` to nothing — which the F6 redecode would then hand to a
+            // decoder whose buffer-length assert panics, killing the worker again.
+            // The period is simply lost, which is what WSJT-X does with any decode
+            // it cannot complete.
+            return DecodeApplied::Stale;
+        }
         let DecodeResult {
             decodes,
             frame,
@@ -6939,7 +7343,14 @@ impl Engine {
             // steal the boundary's datagrams (same guard as the early pass).
             return 0;
         }
-        let Some(frame) = self.last_rx.clone() else {
+        // Back to f32 for the job. Transient and on an operator button press, not the
+        // hot loop — and `build_decode_job`'s own `capture_to_i16` reverses this
+        // exactly, so the decoder sees the identical samples it saw live.
+        let Some(frame) = self.last_rx.as_ref().map(|q| {
+            q.iter()
+                .map(|&v| f32::from(v) / 32767.0)
+                .collect::<Vec<f32>>()
+        }) else {
             return 0;
         };
         let Some(slot) = self.last_decode_slot else {
@@ -7066,7 +7477,7 @@ impl Engine {
             }
             self.qsy.on_rx_slot(slot);
         }
-        self.last_rx = Some(frame.to_vec());
+        self.last_rx = Some(tempo_core::channel::capture_to_i16(frame));
         for d in &decodes {
             self.decode_history.push_back((slot, d.clone()));
         }
@@ -7714,7 +8125,18 @@ impl Engine {
     /// produced, so the UI redrew the cached row and the waterfall streaked vertically
     /// (operator report, 2026-07-25).
     pub fn spectrum_row(&self) -> Spectrum {
-        Self::compute_spectrum(self.last_rx.as_deref().unwrap_or(&[]))
+        // `power_spectrum` reads only the LAST FFT_N samples, so convert just that
+        // tail rather than the whole retained frame — which at a 1800 s period would
+        // be 21.6 M samples rebuilt on every UI tick.
+        const TAIL: usize = 4096; // FFT_N in tempo_core::spectrum
+        let tail: Vec<f32> = match self.last_rx.as_deref() {
+            Some(q) => q[q.len().saturating_sub(TAIL)..]
+                .iter()
+                .map(|&v| f32::from(v) / 32767.0)
+                .collect(),
+            None => Vec::new(),
+        };
+        Self::compute_spectrum(&tail)
     }
 
     // ---------------------------------------------------------------------------
@@ -12567,7 +12989,7 @@ mod tests {
         let frame = vec![0.0f32; 1024];
         e.ingest(&frame, 3); // boundary: authoritative full-audio pass
         e.ingest_early(&frame, 4); // early partial pass
-        e.last_rx = Some(frame.clone());
+        e.last_rx = Some(tempo_core::channel::capture_to_i16(&frame));
         e.last_decode_slot = Some(4);
         e.redecode(); // F6 review of retained (old) audio
         assert_eq!(
@@ -13705,5 +14127,419 @@ mod tests {
             "expected a TX-off refusal, got: {err}"
         );
         assert!(e.poll_aprs_tx().is_none(), "nothing queued");
+    }
+
+    // ---- Receive-only tiers must never LOOK like they are transmitting ----
+    //
+    // `modes::tx_mode()` has always refused to build a waveform for these, so the
+    // radio never keyed. The defect these cover is the other half: the app armed
+    // TX, ran the sequencer, and reported overs it was silently discarding — the
+    // operator saw a CQ run on MSK144 that produced no RF and no CAT.
+
+    /// Every RX-only tier, in its DEFAULT settings resolution.
+    ///
+    /// Shrinking as encoders land: Q65, FST4, then WSPR and FST4W once the beacon
+    /// scheduler existed. The beacons are NOT here — they transmit. They are in
+    /// `BEACON_TIERS` below, which pins the different property that they refuse the
+    /// QSO sequencer.
+    const RX_ONLY_TIERS: [Tier; 2] = [Tier::Msk144, Tier::Jt65];
+
+    /// The BEACON tiers: transmit-capable, but with no QSO sequence. They must
+    /// refuse every sequencer entry point while still being able to key.
+    const BEACON_TIERS: [Tier; 2] = [Tier::Wspr, Tier::Fst4w];
+
+    #[test]
+    fn rx_only_tiers_refuse_to_start_a_cq_run() {
+        for tier in RX_ONLY_TIERS {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            let err = e
+                .start_cq(None)
+                .expect_err("{tier:?} is receive-only — a CQ run must be refused");
+            assert!(
+                err.contains("receive-only"),
+                "{tier:?}: expected a receive-only refusal, got: {err}"
+            );
+            // The refusal has to be TOTAL: no armed TX, no running sequencer. A
+            // refusal that still left the run armed would be the same phantom.
+            assert!(!e.tx_enabled(), "{tier:?}: TX armed despite the refusal");
+            assert!(
+                !matches!(e.mode, Mode::Qso { running: true, .. }),
+                "{tier:?}: sequencer running despite the refusal"
+            );
+        }
+    }
+
+    #[test]
+    fn rx_only_tiers_refuse_to_arm_transmit() {
+        // set_tx_enabled is the funnel EVERY arm path reaches (Enable-Tx button,
+        // Call CQ, double-click, UDP Reply), and arming also fires a CAT retune —
+        // so an ungated arm reaches the radio on a tier that can never key.
+        for tier in RX_ONLY_TIERS {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            e.set_tx_enabled(true);
+            assert!(!e.tx_enabled(), "{tier:?}: TX armed on a receive-only tier");
+        }
+    }
+
+    #[test]
+    fn rx_only_tiers_refuse_to_answer_a_decode() {
+        for tier in RX_ONLY_TIERS {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            e.override_next_tx("W1AW", Some("FN31"), "W1AW KD9TAW EN52");
+            assert!(!e.tx_enabled(), "{tier:?}: answering a decode armed TX");
+            assert!(
+                !e.take_immediate_tx(),
+                "{tier:?}: requested the snappy key for an over that cannot be sent"
+            );
+        }
+    }
+
+    #[test]
+    fn switching_into_an_rx_only_tier_stands_transmit_down() {
+        // The likely real-world path: a CQ run is up on FT8 and the operator clicks
+        // MSK144. Nothing about the run is tier-checked, so it used to survive the
+        // switch intact — sequencer running, TX latched — and quietly stop keying.
+        for tier in RX_ONLY_TIERS {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(Tier::Ft8);
+            e.start_cq(None).unwrap();
+            assert!(e.tx_enabled(), "precondition: the FT8 run armed TX");
+            assert!(matches!(e.mode, Mode::Qso { running: true, .. }));
+
+            e.set_tier(tier);
+            assert!(
+                !e.tx_enabled(),
+                "{tier:?}: TX stayed armed across the switch"
+            );
+            assert!(
+                !matches!(e.mode, Mode::Qso { running: true, .. }),
+                "{tier:?}: the CQ run survived the switch"
+            );
+        }
+    }
+
+    #[test]
+    fn transmit_capable_tiers_are_untouched_by_the_rx_only_guard() {
+        // The guard may only ever SUBTRACT from the receive-only tiers. FT8/FT4 are
+        // the gold-standard TX paths and TempoDeep (DX1) has NO ModeKind at all —
+        // reading its absent kind as "cannot transmit" would silence DX1, which is
+        // exactly the mistake this pins.
+        for tier in [
+            Tier::Ft8,
+            Tier::Ft4,
+            Tier::TempoFast,
+            Tier::TempoDeep,
+            Tier::Q65,
+            Tier::Fst4,
+        ] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            e.set_tx_enabled(true);
+            assert!(
+                e.tx_enabled(),
+                "{tier:?}: the guard blocked a TX-capable tier"
+            );
+
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            e.start_cq(None)
+                .unwrap_or_else(|err| panic!("{tier:?}: CQ run refused: {err}"));
+            assert!(e.tx_enabled(), "{tier:?}: the CQ run did not arm TX");
+            assert!(matches!(e.mode, Mode::Qso { running: true, .. }));
+        }
+    }
+
+    #[test]
+    fn beacon_tiers_transmit_but_refuse_every_qso_entry_point() {
+        // WSPR and FST4W CAN key the radio, so the receive-only guards correctly let
+        // them through — but there is no exchange to sequence. Without a separate
+        // check the auto-sequencer would arm a CQ run on WSPR and try to work the
+        // beacons it hears, which is meaningless.
+        for tier in BEACON_TIERS {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+
+            // Transmit-capable: arming works, unlike a receive-only tier.
+            e.set_tx_enabled(true);
+            assert!(e.tx_enabled(), "{tier:?}: a beacon must be able to arm TX");
+
+            // But no QSO.
+            let err = e.start_cq(None).expect_err("{tier:?} has no CQ to run");
+            assert!(
+                err.contains("beacon"),
+                "{tier:?}: expected a beacon refusal, got: {err}"
+            );
+            assert!(
+                !matches!(e.mode, Mode::Qso { running: true, .. }),
+                "{tier:?}: a sequencer was armed on a beacon"
+            );
+
+            // And answering a spot is not a thing the mode does.
+            e.override_next_tx("W1AW", Some("FN31"), "W1AW KD9TAW EN52");
+            assert!(
+                !matches!(e.mode, Mode::Qso { .. }),
+                "{tier:?}: answering a beacon spot started a QSO"
+            );
+        }
+    }
+
+    #[test]
+    fn a_beacon_stays_silent_until_it_is_configured() {
+        // FAIL CLOSED. WSPR reports are PUBLISHED, so a beacon with an unset power
+        // would tell the world it runs 1 mW while actually running 5 W — corrupting
+        // other operators' path conclusions, not just this station's. Default
+        // settings must produce silence, not a wrong report.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Wspr);
+        e.set_tx_enabled(true);
+
+        assert_eq!(
+            e.settings().beacon_tx_percent,
+            0,
+            "beaconing is off by default"
+        );
+        assert_eq!(e.settings().beacon_power_dbm, 0, "power has no default");
+        assert!(
+            e.beacon_message().is_err(),
+            "an unset power must refuse to build a message"
+        );
+
+        // Even with the schedule turned fully on, an unset power stays silent.
+        let mut s = e.settings().clone();
+        s.beacon_tx_percent = 100;
+        e.apply_settings(s.clone());
+        e.set_tx_enabled(true);
+        assert!(
+            e.poll_tx(0).is_empty(),
+            "a beacon with no configured power must not transmit"
+        );
+
+        // Configured: it builds the wire message and transmits.
+        s.beacon_power_dbm = 30;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        assert_eq!(e.beacon_message().unwrap(), "KD9TAW EN52 30");
+    }
+
+    #[test]
+    fn a_beacon_decides_once_per_interval_not_once_per_poll() {
+        // The radio loop calls poll_tx many times inside a slot. Re-drawing on each
+        // call would break the anti-consecutive rule AND make the achieved duty
+        // cycle meaningless — the operator would get roughly `percent` of POLLS
+        // rather than of intervals.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Wspr);
+        let mut s = e.settings().clone();
+        s.beacon_tx_percent = 100;
+        s.beacon_power_dbm = 30;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+
+        let first = e.poll_tx(4).len();
+        for _ in 0..5 {
+            assert_eq!(
+                e.poll_tx(4).len(),
+                first,
+                "the same interval must yield the same decision"
+            );
+        }
+    }
+
+    #[test]
+    fn a_period_change_in_settings_rebuilds_the_decoder() {
+        // The per-mode period/submode live in Settings, so the SAME tier resolves to
+        // a different ModeKind across a save. The decoder was only ever rebuilt by
+        // set_tier, so changing Q65 30 s → 60 s while sitting on Q65 changed nothing
+        // in the decode chain — while active_slot_secs, tx_over_secs and the WSJT-X
+        // UDP tr_period all reported the new period immediately. The app disagreed
+        // with itself until the operator happened to toggle tiers.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let mut s = e.settings().clone();
+        s.q65_period_s = 30;
+        e.apply_settings(s.clone());
+        e.set_tier(Tier::Q65);
+        assert_eq!(e.active_slot_secs(), 30.0);
+        let epoch_before = e.decode_epoch;
+
+        s.q65_period_s = 60;
+        e.apply_settings(s);
+        assert_eq!(
+            e.active_slot_secs(),
+            60.0,
+            "the reported period follows Settings"
+        );
+        assert_ne!(
+            e.decode_epoch, epoch_before,
+            "the decode context must be flushed — a decode dispatched at the OLD \
+             period would otherwise fold in with meaningless slot indices"
+        );
+    }
+
+    #[test]
+    fn a_submode_change_rebuilds_the_decoder_even_though_no_size_changes() {
+        // The nastiest arm: JT65 A→B (and Q65 30A→30C) change no buffer size at all,
+        // so a stale decoder has NO symptom — the submode the operator asked for just
+        // silently does not decode. Guard it via the epoch, which only bumps when the
+        // resolved kind actually changed.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Jt65);
+        let epoch_before = e.decode_epoch;
+        let slot_before = e.active_slot_secs();
+
+        let mut s = e.settings().clone();
+        s.jt65_submode = 1; // JT65B — same 60 s period, different tone spacing
+        e.apply_settings(s);
+
+        assert_eq!(e.active_slot_secs(), slot_before, "JT65 has one period");
+        assert_ne!(
+            e.decode_epoch, epoch_before,
+            "a submode-only change still has to reach the decoder"
+        );
+    }
+
+    #[test]
+    fn an_unrelated_save_does_not_disturb_the_decoder() {
+        // The rebuild is compared BY KIND on purpose: it drops the decoder's
+        // accumulated state, which for Q65/JT65 message averaging is real progress.
+        // A save that does not change the resolved mode must be inert.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Q65);
+        let epoch_before = e.decode_epoch;
+        let mut s = e.settings().clone();
+        s.prefer_rrr = !s.prefer_rrr;
+        e.apply_settings(s);
+        assert_eq!(
+            e.decode_epoch, epoch_before,
+            "an unrelated setting must not flush the decode context"
+        );
+    }
+
+    #[test]
+    fn selecting_a_tier_with_no_channel_on_this_band_moves_to_its_own_frequency() {
+        // The bug that made MSK144 look broken: the tier-aware plans are not all
+        // all-band (MSK144/Q65 are VHF+, FST4/FST4W are LF/MF), so the band-match
+        // lookup MISSED for the ordinary case — 20 m FT8, click MSK144 — and the QSY
+        // was a silent no-op. Tier, decoder and slot clock moved; the radio did not.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+
+        e.set_tier(Tier::Msk144);
+        assert!(
+            (e.settings().dial_mhz - 50.260).abs() < 1e-6,
+            "MSK144 from 20 m must land on its own 6 m calling channel, got {}",
+            e.settings().dial_mhz
+        );
+        assert_eq!(e.settings().band, "6m");
+
+        // FST4 is 2200/630/160 m only — same fallback, different primary.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tier(Tier::Fst4);
+        assert!(
+            (e.settings().dial_mhz - 0.1360).abs() < 1e-6,
+            "FST4 from 20 m must land on 2200 m, got {}",
+            e.settings().dial_mhz
+        );
+    }
+
+    #[test]
+    fn a_tier_that_does_cover_this_band_stays_on_it() {
+        // The fallback may only fire when the band is genuinely absent — FT8 → FT4 on
+        // 20 m must still be the in-band nudge 14.074 → 14.080, not a jump to the
+        // plan's first entry.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tier(Tier::Ft4);
+        assert_eq!(e.settings().band, "20m", "still 20 m");
+        assert!(
+            (e.settings().dial_mhz - 14.080).abs() < 1e-6,
+            "expected the 20 m FT4 channel, got {}",
+            e.settings().dial_mhz
+        );
+    }
+
+    // ---- Decode-worker robustness + retained-audio sizing ----
+
+    /// A source that always panics — stands in for any assert in the modem wrappers
+    /// (`jt65::decode_frame` panics on a short buffer or an out-of-range submode, and
+    /// the others match).
+    struct PanickingSource;
+    impl modes::SignalSource for PanickingSource {
+        fn label(&self) -> String {
+            "panicking (test)".into()
+        }
+        fn mode_kind(&self) -> Option<modes::ModeKind> {
+            Some(modes::ModeKind::Ft8)
+        }
+        fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+            panic!("decoder exploded");
+        }
+    }
+
+    #[test]
+    fn a_panicking_decode_is_contained_and_still_returns_a_result() {
+        // THE POINT IS THE RETURN, not the absence of a crash. Decoding runs on ONE
+        // worker thread and the radio loop clears its in-flight latch only when a
+        // result lands. A panic used to kill that thread and strand the latch true
+        // forever — every later dispatch went to a dead channel via `let _ = send`,
+        // which discards the error — so the app decoded nothing for the rest of the
+        // session while the waterfall (fed separately) kept painting.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        *e.source.lock().unwrap() = Box::new(PanickingSource);
+        let frame = vec![0.0f32; e.active_frame_samples()];
+
+        // Silence the panic hook so the expected panic does not spam test output.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let job = e.build_decode_job(frame, 7, DecodePass::Boundary);
+        let result = run_decode_job(job);
+        std::panic::set_hook(prev);
+
+        assert!(
+            result.failed,
+            "the panic must be reported, not swallowed silently"
+        );
+        assert!(result.decodes.is_empty());
+        assert_eq!(
+            result.slot, 7,
+            "the failed result still identifies its slot"
+        );
+        assert_eq!(result.pass, DecodePass::Boundary);
+
+        // And applying it must not poison engine state: dropped like a stale result,
+        // so `last_rx` is never set to the empty frame a redecode would then hand to
+        // a decoder whose buffer-length assert panics — killing the worker again.
+        let applied = e.apply_decode_result(result);
+        assert!(matches!(applied, DecodeApplied::Stale));
+        assert!(
+            e.last_rx.is_none(),
+            "a failed decode must not clobber the retained audio"
+        );
+    }
+
+    #[test]
+    fn retained_audio_round_trips_through_i16_exactly() {
+        // `last_rx` is stored in the decoder's own i16 format (WSJT-X does the same:
+        // `short int d2[NTMAX*RX_SAMPLE_RATE]`), halving a permanent allocation that
+        // is 86 MB as f32 at FST4's 1800 s period. The redecode must see byte-for-byte
+        // what the live decode saw — `capture_to_i16` is round(x*32767), so dividing
+        // and re-applying the same constant is exact, NOT approximate.
+        let samples: Vec<f32> = vec![0.0, 1.0, -1.0, 0.5, -0.5, 0.000_03, 2.0, -2.0];
+        let stored = tempo_core::channel::capture_to_i16(&samples);
+        let restored: Vec<f32> = stored.iter().map(|&v| f32::from(v) / 32767.0).collect();
+        let again = tempo_core::channel::capture_to_i16(&restored);
+        assert_eq!(
+            stored, again,
+            "the i16 the decoder sees must survive the round-trip unchanged"
+        );
+        // Clipping is preserved rather than wrapping (±2.0 saturates, not overflows).
+        assert_eq!(stored[6], i16::MAX);
+        assert_eq!(stored[7], i16::MIN);
     }
 }

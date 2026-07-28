@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { BandChannel, LinkState, RadioStatus, RadioSummary, Tier } from '../types'
+import { isRxOnly } from '../types'
 import type { Theme } from '../useTheme'
 import { ThemeSwitcher } from './ThemeSwitcher'
 import { FrequencyControl } from './FrequencyControl'
@@ -32,38 +33,40 @@ const TIER_PILLS: {
   {
     tier: 'WSPR',
     name: 'WSPR',
-    rxOnly: true,
-    title: 'WSPR propagation beacons — DECODE ONLY, 2 min intervals',
+    small: 'BCN',
+    title:
+      'WSPR propagation beacons — 2 min intervals. Transmits on a schedule; set the transmit % and power in Settings ▸ Modes',
   },
   {
     tier: 'Q65',
     name: 'Q65',
-    rxOnly: true,
-    title: 'Q65 — EME / VHF+ scatter. DECODE ONLY. Period + submode in Settings ▸ Modes',
+    title: 'Q65 — EME / VHF+ scatter. Transmit and receive. Period + submode in Settings ▸ Modes',
   },
   {
     tier: 'MSK144',
     name: 'MSK144',
+    small: 'RX',
     rxOnly: true,
     title: 'MSK144 — meteor scatter. DECODE ONLY. Period in Settings ▸ Modes',
   },
   {
     tier: 'JT65',
     name: 'JT65',
+    small: 'RX',
     rxOnly: true,
     title: 'JT65 — classic EME, 60 s. DECODE ONLY. Submode in Settings ▸ Modes',
   },
   {
     tier: 'FST4',
     name: 'FST4',
-    rxOnly: true,
-    title: 'FST4 — slow weak-signal QSO mode (LF/MF). DECODE ONLY',
+    title: 'FST4 — slow weak-signal QSO mode (LF/MF). Transmit and receive',
   },
   {
     tier: 'FST4W',
     name: 'FST4W',
-    rxOnly: true,
-    title: 'FST4W — LF/MF beacons. DECODE ONLY. Hashed calls show as <...>',
+    small: 'BCN',
+    title:
+      'FST4W — LF/MF beacons. Transmits on a schedule; set the transmit % and power in Settings ▸ Modes. Hashed calls show as <...>',
   },
 ]
 
@@ -207,6 +210,11 @@ export function TopBar({
   // launch is a read-only act, so Nexus never commands the rig into agreement. Surface the
   // disagreement instead of printing the belief as if it were fact. Display only.
   const rigModeMismatch = modeMismatch(radio.rigMode, radio.sideband, radio.rigConfirmed)
+  // The engine refuses to arm TX on a receive-only tier; don't offer the control.
+  // Stop TX stays live — disarming is always allowed, and it is the operator's way
+  // out if they switched tiers mid-over.
+  const noTx = isRxOnly(tier)
+  const NO_TX_WHY = 'This mode is receive-only in Nexus — it decodes but does not transmit'
   return (
     <header className={`topbar${hideFrequencyControl ? ' topbar--no-readout' : ''}`}>
       <div className="topbar-group brand">
@@ -278,8 +286,11 @@ export function TopBar({
             className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
             aria-pressed={radio.txEnabled}
             onClick={() => onSetTxEnabled(!radio.txEnabled)}
+            disabled={noTx}
             title={
-              radio.txEnabled
+              noTx
+                ? NO_TX_WHY
+                : radio.txEnabled
                 ? 'Transmit ENABLED — your queued message will go out. Click to disable transmit (receive keeps decoding either way).'
                 : 'Transmit DISABLED — receive keeps decoding. Click to enable transmit (WSJT-X "Enable Tx").'
             }
@@ -291,7 +302,8 @@ export function TopBar({
             className={`op-btn tune${radio.tuning ? ' keyed' : ''}`}
             aria-pressed={radio.tuning}
             onClick={() => onSetTune(!radio.tuning)}
-            title="Key a tune carrier"
+            disabled={noTx}
+            title={noTx ? NO_TX_WHY : 'Key a tune carrier'}
           >
             Tune
           </button>

@@ -122,6 +122,41 @@ pub struct Settings {
     /// existed still load.
     #[serde(default = "default_q65_period_s")]
     pub q65_period_s: u16,
+    /// Percentage of beacon intervals to TRANSMIT on (WSPR / FST4W), 0..=100.
+    ///
+    /// Defaults to **0 — beaconing off**. A beacon keys the radio unattended, so
+    /// the operator has to ask for it; an upgrade must never silently start
+    /// transmitting on a mode the station was only listening to.
+    ///
+    /// The convention is a minority of intervals: a beacon that transmits every
+    /// interval hears nothing, and WSPR's value is the two-way picture. Below 40 %
+    /// the scheduler also avoids back-to-back transmissions while preserving the
+    /// requested rate — see `tempo_core::beacon::BeaconScheduler`.
+    #[serde(default)]
+    pub beacon_tx_percent: u8,
+    /// Transmit power in **dBm** reported in WSPR/FST4W beacons.
+    ///
+    /// ⚠️ NOT cosmetic, and deliberately has no useful default (0 dBm = 1 mW).
+    /// WSPR reports feed a PUBLIC propagation database that other operators draw
+    /// conclusions from, so a wrong figure corrupts their data as well as yours.
+    /// The beacon refuses to transmit until this is set — see the guard in
+    /// `Engine::beacon_message`.
+    ///
+    /// Common values: 23 dBm = 200 mW, 30 dBm = 1 W, 37 dBm = 5 W, 43 dBm = 20 W.
+    #[serde(default)]
+    pub beacon_power_dbm: i32,
+    /// FST4W **Round Robin** slot for this station, 1-based; 0 = random scheduling.
+    ///
+    /// Several stations agreeing on `beacon_rr_slots` and each taking a different
+    /// slot will never transmit in the same interval, because the assignment is a
+    /// pure function of UTC. Use it when coordinating with others on one frequency;
+    /// leave it 0 to use the transmit-percentage scheduler.
+    #[serde(default)]
+    pub beacon_rr_slot: u8,
+    /// How many FST4W Round Robin slots are in the rotation. Ignored when
+    /// `beacon_rr_slot` is 0.
+    #[serde(default)]
+    pub beacon_rr_slots: u8,
     /// FST4 / FST4W T/R period in seconds: 15, 30, 60, 120, 300, 900 or 1800.
     /// Shared by both tiers — they are the same decoder on the same slot clock.
     /// Defaults to 120, the shortest interval FST4W beacons actually use (FST4
@@ -1443,6 +1478,12 @@ impl Default for Settings {
             rptr_shift: "simplex".to_string(),
             ctcss_tone_hz: 0.0,
             q65_period_s: default_q65_period_s(),
+            // Beaconing OFF by default: it keys the radio unattended, so it is
+            // always an explicit operator decision.
+            beacon_tx_percent: 0,
+            beacon_power_dbm: 0,
+            beacon_rr_slot: 0,
+            beacon_rr_slots: 0,
             fst4_period_s: default_fst4_period_s(),
             msk144_period_s: default_msk144_period_s(),
             jt65_submode: 0,
