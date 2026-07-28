@@ -2209,6 +2209,13 @@ export interface RepeaterSearchResult {
   fetchedUtc: number
   /** True when a fetch failed/rate-limited and stale cache was served. */
   stale: boolean
+  /**
+   * A major band ("2 m", "70 cm", "2 m or 70 cm") the source lists nothing on
+   * here while listing other machines — hearham has real rural holes, and a
+   * channel list missing a whole band looks complete when it isn't. Only ever
+   * set on the hearham path.
+   */
+  coverageGap: string | null
   rows: RepeaterSearchRow[]
 }
 

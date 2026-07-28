@@ -9385,6 +9385,11 @@ struct RepeaterSearchResult {
     fetched_utc: i64,
     /// True when a fetch failed/was rate-limited and stale cache was served instead.
     stale: bool,
+    /// A major band this source lists nothing on here, when it lists something —
+    /// hearham has real holes in rural country (no 2 m at all around Bozeman MT),
+    /// and a channel list missing a whole band reads as complete when it isn't.
+    /// Only set on the hearham path, where adding a RepeaterBook token is the fix.
+    coverage_gap: Option<&'static str>,
     rows: Vec<RepeaterSearchRow>,
 }
 
@@ -9475,6 +9480,7 @@ async fn repeater_search(
                     source: "repeaterbook".into(),
                     fetched_utc: if oldest == i64::MAX { now } else { oldest },
                     stale,
+                    coverage_gap: None,
                     rows: search_rows(rpt::filter_sort(&records, origin, radius)),
                 });
             }
@@ -9506,11 +9512,14 @@ async fn repeater_search(
             }
         };
         let records = rpt::parse_hearham_json(&body);
+        // Judged on what's inside the radius, not the whole global feed.
+        let in_radius = rpt::filter_sort(&records, origin, radius);
         Ok(RepeaterSearchResult {
             source: "hearham".into(),
             fetched_utc: at,
             stale,
-            rows: search_rows(rpt::filter_sort(&records, origin, radius)),
+            coverage_gap: rpt::missing_major_band(&in_radius),
+            rows: search_rows(in_radius),
         })
     })
     .await

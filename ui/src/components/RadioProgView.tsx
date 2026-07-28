@@ -608,6 +608,14 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               </button>
             </div>
           )}
+          {result?.coverageGap && (
+            <div className="rp-note" role="status">
+              hearham lists no <strong>{result.coverageGap}</strong> repeaters here, which is
+              unusual for an area that has any — its rural coverage is patchy, so this list is
+              probably missing machines. Adding a RepeaterBook API token in{' '}
+              <strong>Settings ▸ Integrations</strong> fills the gap.
+            </div>
+          )}
 
           <div className="rp-filters" role="group" aria-label="Result filters">
             <button

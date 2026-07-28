@@ -78,8 +78,10 @@ WSJT-X muscle memory just works, inside a UI built this decade.
   grid, or a city for a trip), fetch the repeaters around it, ADD the ones you want, and export a
   **CHIRP-ready CSV** (CHIRP flashes ~1,000 radio models) or a plain CSV — offsets, tones, channel
   numbers, and radio-length names handled for you. With a CAT rig connected, one click **tunes the
-  rig to a repeater now**, exact odd-split offsets included. Data courtesy of RepeaterBook.com
-  (with your own API token) or the open hearham.com directory.
+  rig to a repeater now**, exact odd-split offsets included. Repeater data comes from the open
+  hearham.com directory by default; add your own RepeaterBook API token in Settings to pull from
+  RepeaterBook.com under your own account instead. (Shared RepeaterBook access for every Nexus
+  user, with no token to set up, is pending RepeaterBook's approval.)
 
 ## Who it's for
 

@@ -6020,10 +6020,12 @@ export function SettingsPanel({
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Optional. The <strong>Program</strong> section gets RepeaterBook data through Nexus's shared
-                    access automatically — a personal token (from your RepeaterBook account's{' '}
-                    <strong>API Apps</strong> page) makes your queries independent of it. Stored in the OS
-                    keychain. If RepeaterBook is unreachable, Program falls back to the open hearham.com list.
+                    Optional. Without a token the <strong>Program</strong> section uses the open hearham.com
+                    directory. Add a personal token (from your RepeaterBook account's{' '}
+                    <strong>API Apps</strong> page) to pull from RepeaterBook.com under your own account
+                    instead. Stored in the OS keychain. Shared RepeaterBook access for every Nexus user is
+                    pending RepeaterBook's approval; if RepeaterBook is unreachable, Program falls back to
+                    hearham.com.
                   </span>
                 </label>
               </div>
