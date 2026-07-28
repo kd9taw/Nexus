@@ -1,8 +1,11 @@
 import { useEffect, useState, useRef } from 'react'
+import { PHONE_PANEL_IDS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
+import { panelHost } from '../features/panelHost'
 import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { TxMeters } from './TxMeters'
 import { BandStrip } from './BandStrip'
+import { PanelsMenu } from './PanelsMenu'
 import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
@@ -38,6 +41,10 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 
 interface Props {
+  /** Which panels this cockpit shows or hides (⊞ Panels). Owned by the HOST (App), never
+   * here — the cockpit remounts on nav and would drop the record. Absent ⇒ every panel shows
+   * and the menu hides, so nothing here can hide a transmit control. */
+  panels?: PanelLayoutApi<PhonePanelId>
   snap: AppSnapshot
   theme: string
   /** Click-to-work handoff from the Needed board: the callsign to prefill the log with.
@@ -76,6 +83,17 @@ interface Props {
  * audio bridge + voice keyer land in P3-b/c). Entering forces USB/LSB by band (the
  * rig-mode keystone, wired in App).
  */
+/** ⊞ Panels menu labels. The vocabulary itself lives in panelState — note what is NOT
+ *  in it: the CockpitHeader, the PTT row, the voice keyer and the log strip are pinned by
+ *  construction, so no menu entry can ever hide a transmit control or the log. */
+const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
+  rigscope: 'Rig Scope Controls',
+  txmeters: 'TX Meters',
+  dsp: 'DSP Functions',
+  dspLevels: 'RX DSP Levels',
+  bandActivity: 'Band Activity',
+}
+
 /** Expert DSP-function toggles. `key` matches the RadioStatus field + the set_rig_func name; the
  * cockpit only renders those the rig reports as supported (field non-null), so no dead buttons. */
 const DSP_FUNCS = [
@@ -128,7 +146,7 @@ const FLEX_SPANS = [
   { label: '2M', hz: 2_000_000 },
 ] as const
 
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, panels }: Props) {
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   // Mirror the RIG's real level (CAT read-back / last commanded) so the slider
   // never lies at a guessed 100% — but never fight an in-flight drag.
@@ -204,6 +222,17 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
   // True only when the rig's own Icom scope is streaming (span/ref are Icom CI-V commands; the
   // Flex panadapter has a different control path, so gate on 'civ' specifically, not any RF feed).
+  // ⊞ Panels. `main`/`side` are unused here (Phone has no two-column pane grid), so the
+  // host is only supplying `shown` + the menu items.
+  const host = panels
+    ? panelHost(panels, {
+        menu: PHONE_PANEL_IDS,
+        side: [],
+        main: 'bandActivity',
+        labels: PHONE_PANEL_LABELS,
+      })
+    : null
+  const shown = (id: PhonePanelId) => (host ? host.shown(id) : true)
   const civScope = scopeFeed?.source === 'civ'
   // FlexRadio SmartSDR panadapter — its own span/ref command path (display pan set …).
   const flexScope = scopeFeed?.source === 'flex'
@@ -460,6 +489,19 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         }
         bandControl={<BandPicker snap={snap} mode="phone" onSnap={onSnap} />}
         onCommitDial={commitDial}
+        actions={
+          host && panels ? (
+            <PanelsMenu
+              items={host.menuItems}
+              onToggle={(id, show) =>
+                panels.setPanelState(id as PhonePanelId, show ? 'docked' : 'removed')
+              }
+              onUndo={panels.undo}
+              canUndo={panels.canUndo}
+              onReset={panels.reset}
+            />
+          ) : undefined
+        }
         wheelTune
         wheelStepHz={tuneStep}
         wheelSensitivity={wheelSensitivity}
@@ -700,7 +742,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       {/* Rig scope controls (native Icom CI-V only) — drive the RADIO's real panadapter: span
           changes the hardware sweep width, ref sets weak-signal visibility. Distinct from the
           view-zoom chips on the scope itself, which only zoom what's already streamed. */}
-      {civScope && (
+      {shown('rigscope') && civScope && (
         <div className="ph-rigscope" role="group" aria-label="Rig scope control">
           <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
             Rig&nbsp;scope
@@ -735,7 +777,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       )}
 
       {/* FlexRadio SmartSDR panadapter controls — command the Flex pan's real bandwidth + ref. */}
-      {flexScope && (
+      {shown('rigscope') && flexScope && (
         <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
           <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
             Flex&nbsp;pan
@@ -770,9 +812,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       )}
 
       {/* Transmit meters (SWR/ALC/Po/COMP) — appear only while keyed, where the S-meter sat. */}
-      <TxMeters radio={snap.radio} />
+      {shown('txmeters') && <TxMeters radio={snap.radio} />}
 
-      {(() => {
+      {shown('dsp') && (() => {
           // Only funcs the rig actually reports (non-null) render — capability-gated, no dead buttons.
           //
           // STICKY ONCE SEEN. `null` means BOTH "this rig lacks the func" and "we don't know right
@@ -816,7 +858,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       {/* RX DSP levels — NR level slider + AGC speed, each shown only when the rig reports it. */}
       {/* Same sticky rule as the DSP group above: a CAT re-confirmation nulls these, and
           unmounting on that made the pane flicker away on every QSY. */}
-      {(() => {
+      {shown('dspLevels') && (() => {
           if (snap.radio.nrLevel != null || snap.radio.agc != null) seenDspLevels.current = true
           return seenDspLevels.current
         })() && (
@@ -860,7 +902,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         </div>
       )}
 
-      {onWorkSpot && (
+      {onWorkSpot && shown('bandActivity') && (
         <div className="ph-band-pane" ref={bandActivityRef}>
           <BandStrip
             band={snap.radio.band}

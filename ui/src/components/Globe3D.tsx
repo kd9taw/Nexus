@@ -6,6 +6,7 @@
 // subsolar day/night terminator, band-colored spots, selected/heard-me great-circle arcs,
 // a QTH ping, a starfield, and bloom. Phase A of the 3-D plan (look + foundation).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { workedGridSet } from '../coverage'
 import * as THREE from 'three'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import Globe, { type GlobeMethods } from 'react-globe.gl'
@@ -805,11 +806,7 @@ export default function Globe3D({
     getLog()
       .then((log) => {
         if (!live) return
-        const grids = new Set<string>()
-        for (const q of log) {
-          const gr = (q.grid ?? '').trim().toUpperCase()
-          if (gr.length >= 4) grids.add(gr.slice(0, 4))
-        }
+        const grids = workedGridSet(log)
         const pts: { lat: number; lon: number }[] = []
         grids.forEach((gr) => {
           const ll = gridToLatLon(gr)

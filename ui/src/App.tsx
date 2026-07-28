@@ -56,7 +56,7 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { visibleNeeds, workTarget, modeClassOf } from './features/needs'
-import { OPERATE_PANELS, CW_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
+import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
@@ -374,6 +374,7 @@ export default function App() {
   // view's remounts (panelState.ts: owned by a host that outlives the view).
   const sstvPanels = usePanelLayout(SSTV_PANELS)
   // Phone has NO removable panels (operator 2026-07-25) — every pane is fixed and framed.
+  const phonePanels = usePanelLayout(PHONE_PANELS)
   const cwPanels = usePanelLayout(CW_PANELS)
   const rttyPanels = usePanelLayout(RTTY_PANELS)
 
@@ -2100,6 +2101,7 @@ export default function App() {
       workspace = (
         <PhoneCockpit
           snap={snap}
+          panels={phonePanels}
           theme={theme}
           pendingWork={pendingWork?.view === 'phone' ? pendingWork : null}
           onConsumeWork={() => setPendingWork(null)}

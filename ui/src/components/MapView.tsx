@@ -4,6 +4,7 @@
 // route through the shared tokens (status/need) and the colormap LUT, so color
 // means one thing app-wide.
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { workedGridSet } from '../coverage'
 import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects } from 'd3-geo'
 import { RotateCcw } from 'lucide-react'
@@ -721,12 +722,7 @@ export function MapView({
     getLog()
       .then((log) => {
         if (!live) return
-        const set = new Set<string>()
-        for (const q of log) {
-          const g = q.grid?.trim().toUpperCase()
-          if (g && g.length >= 4) set.add(g.slice(0, 4))
-        }
-        setWorkedGrids(set)
+        setWorkedGrids(workedGridSet(log))
       })
       .catch(() => {})
     return () => {
