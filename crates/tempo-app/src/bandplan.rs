@@ -306,7 +306,6 @@ pub fn wspr_band_plan() -> Vec<BandChannel> {
     ]
 }
 
-
 /// Where CW ACTIVITY concentrates on each band (the general-CW / QRP / SKCC watering holes),
 /// so the CW cockpit parks the operator IN the action instead of on the dead band edge (the
 /// 20 m CW segment starts at 14.000, but nobody works there — activity is ~14.030+). The
@@ -545,11 +544,20 @@ mod wsjtx_parity_tests {
     #[test]
     fn no_mode_silently_reuses_the_ft8_plan() {
         let ft8 = ft8_band_plan();
-        for t in [Tier::Q65, Tier::Msk144, Tier::Fst4, Tier::Fst4w, Tier::Jt65, Tier::Wspr] {
+        for t in [
+            Tier::Q65,
+            Tier::Msk144,
+            Tier::Fst4,
+            Tier::Fst4w,
+            Tier::Jt65,
+            Tier::Wspr,
+        ] {
             let p = band_plan_for(t);
             assert!(!p.is_empty(), "{t:?} has an empty band plan");
             let same = p.len() == ft8.len()
-                && p.iter().zip(ft8.iter()).all(|(a, b)| a.dial_mhz == b.dial_mhz);
+                && p.iter()
+                    .zip(ft8.iter())
+                    .all(|(a, b)| a.dial_mhz == b.dial_mhz);
             assert!(!same, "{t:?} is still returning the FT8 band plan");
         }
     }

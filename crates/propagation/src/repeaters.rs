@@ -330,8 +330,12 @@ pub fn missing_major_band(records: &[RepeaterRecord]) -> Option<&'static str> {
     if records.is_empty() {
         return None;
     }
-    let two_m = records.iter().any(|r| (144.0..=148.0).contains(&r.output_mhz));
-    let seventy_cm = records.iter().any(|r| (420.0..=450.0).contains(&r.output_mhz));
+    let two_m = records
+        .iter()
+        .any(|r| (144.0..=148.0).contains(&r.output_mhz));
+    let seventy_cm = records
+        .iter()
+        .any(|r| (420.0..=450.0).contains(&r.output_mhz));
     match (two_m, seventy_cm) {
         (true, true) => None,
         (false, true) => Some("2 m"),
@@ -517,10 +521,12 @@ mod tests {
         };
 
         // Bozeman MT as hearham actually has it: nine machines, all 70 cm.
-        let bozeman: Vec<_> = [434.40, 444.10, 446.46, 446.66, 447.00, 447.95, 448.35, 449.30, 449.90]
-            .iter()
-            .map(|f| at(*f))
-            .collect();
+        let bozeman: Vec<_> = [
+            434.40, 444.10, 446.46, 446.66, 447.00, 447.95, 448.35, 449.30, 449.90,
+        ]
+        .iter()
+        .map(|f| at(*f))
+        .collect();
         assert_eq!(missing_major_band(&bozeman), Some("2 m"));
 
         // Amarillo TX: genuinely sparse, but band-balanced — not a gap.
@@ -534,14 +540,29 @@ mod tests {
         // The directory knows about the band, so that is an outage and not a
         // hole — counting listings rather than live ones keeps this quiet.
         let fairbanks = vec![
-            RepeaterRecord { output_mhz: 147.25, operational: false, ..base.clone() },
-            RepeaterRecord { output_mhz: 147.55, operational: false, ..base.clone() },
-            RepeaterRecord { output_mhz: 443.30, operational: true, ..base.clone() },
+            RepeaterRecord {
+                output_mhz: 147.25,
+                operational: false,
+                ..base.clone()
+            },
+            RepeaterRecord {
+                output_mhz: 147.55,
+                operational: false,
+                ..base.clone()
+            },
+            RepeaterRecord {
+                output_mhz: 443.30,
+                operational: true,
+                ..base.clone()
+            },
         ];
         assert_eq!(missing_major_band(&fairbanks), None);
 
         assert_eq!(missing_major_band(&[at(146.94)]), Some("70 cm"));
-        assert_eq!(missing_major_band(&[at(53.10), at(224.5)]), Some("2 m or 70 cm"));
+        assert_eq!(
+            missing_major_band(&[at(53.10), at(224.5)]),
+            Some("2 m or 70 cm")
+        );
         // Nothing found at all is the caller's empty state, not a coverage gap.
         assert_eq!(missing_major_band(&[]), None);
     }

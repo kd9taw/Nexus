@@ -801,7 +801,7 @@ extern "C" {
     pub fn wspr_decode_core(
         iwave: *const i16, // [WSPR_NMAX]; short is zero-padded
         nsamples: std::os::raw::c_long,
-        dialfreq: f64,     // rig dial, MHz — reported freq is dial + offset
+        dialfreq: f64, // rig dial, MHz — reported freq is dial + offset
         quickmode: c_int,
         npasses: c_int,
         subtraction: c_int,
@@ -1015,8 +1015,14 @@ mod tests {
         assert_eq!(q65_nmax(300), 3_600_000);
         // The ceiling must actually be the ceiling.
         for p in Q65_PERIODS {
-            assert!(q65_nmax(p) <= Q65_NMAX_MAX, "period {p} exceeds the ceiling");
-            assert!(q65_period_supported(p), "period {p} in the table but rejected");
+            assert!(
+                q65_nmax(p) <= Q65_NMAX_MAX,
+                "period {p} exceeds the ceiling"
+            );
+            assert!(
+                q65_period_supported(p),
+                "period {p} in the table but rejected"
+            );
         }
         assert_eq!(q65_nmax(300), Q65_NMAX_MAX);
         // And the unsupported ones must be rejected, not silently accepted.

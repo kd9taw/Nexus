@@ -73,7 +73,11 @@ pub fn fetch_state_proxy(state_id: &str) -> Result<String, String> {
         .build()
         .map_err(|_| "RepeaterBook: HTTP client initialization failed".to_string())?;
     let url = format!("{PROXY_URL}?state_id={}", state_id.trim());
-    let resp = c.get(url).header("x-nexus-client", key).send().map_err(redact)?;
+    let resp = c
+        .get(url)
+        .header("x-nexus-client", key)
+        .send()
+        .map_err(redact)?;
     let status = resp.status();
     if status.as_u16() == 429 {
         return Err(ERR_RATE_LIMITED.to_string());

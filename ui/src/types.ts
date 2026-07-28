@@ -12,7 +12,9 @@ export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FST4' | 'FST4W' 
  * engine will refuse. Keep the two in step when a mode gains a transmitter. */
 // JT65 only, and TEMPORARILY: its encoder is verified, but transmit is disabled
 // pending a Windows crash on Call CQ. See Jt65Mode::capabilities in the modes crate.
-export const RX_ONLY_TIERS: readonly Tier[] = ['JT65']
+// Every shipped tier can transmit. JT65 was listed here in 0.19.17 only, as a
+// mitigation for a Windows crash fixed in 0.19.18 (see xcor.f90).
+export const RX_ONLY_TIERS: readonly Tier[] = []
 
 /** BEACON tiers: they transmit, but on a SCHEDULE and with no QSO sequence — the
  * payload is callsign, grid and power. Mirrors `Capabilities { beacon_only: true }`.

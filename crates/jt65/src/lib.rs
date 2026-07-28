@@ -467,6 +467,47 @@ mod tests {
     }
 
     #[test]
+    fn a_partially_filled_ring_decodes_to_nothing_and_does_not_fault() {
+        // REGRESSION — the 0.19.16 "Call CQ on JT65 hard-crashes Nexus" bug, which
+        // was an ACCESS VIOLATION (0xC0000005) on Windows, not a panic.
+        //
+        // `RxRing::frame()` FRONT-ZERO-PADS while the ring is still filling, so the
+        // decode that runs at the first 60 s boundary after selecting JT65 — or
+        // after the ring is cleared at TX start, which is why it looked like a
+        // TRANSMIT bug — sees a window that is mostly digital silence. Past 28%
+        // silence (flat65's percentile), the reference spectrum went to zero,
+        // symspec65's `ss/ref` became 0/0 = NaN, and NaN defeats BOTH comparisons in
+        // xcor's peak search, so `lagpk` escaped unassigned and sync65 indexed
+        // `real ccfblue(-32:82)` with a leftover stack word. See xcor.f90.
+        //
+        // ⚠️ This test passes on Linux even against the UNFIXED decoder, and that is
+        // itself the point worth recording: sync65's frame lands on the same stack
+        // address every call, so any earlier successful decode leaves a stale but
+        // IN-RANGE lag in that slot. The fault needs a machine where the leftover
+        // word is large — which is why it reached an operator and never CI. What
+        // this test does lock down is the contract that makes the crash impossible
+        // to reach: a partial window yields no decodes, quietly.
+        //
+        // Sample counts are the measured envelope: the cliff sits between 560000
+        // (25.6% silence) and 540000 (28.8%), i.e. exactly on flat65's npct=28.
+        for captured in [0, 180_000, 300_000, 432_000, 540_000, 560_000, NMAX] {
+            let mut iwave = vec![0i16; NMAX];
+            let mut seed: u32 = 0xA57E;
+            // Real audio occupies the TAIL; the head is the zero padding.
+            for s in iwave[NMAX - captured..].iter_mut() {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *s = ((seed >> 16) as i16) / 8;
+            }
+            let d = decode_frame(&iwave, 0, 200, 2900, 3, "KD9TAW", "W1AW", "EN52", 1500);
+            assert!(
+                d.is_empty(),
+                "{captured} captured samples decoded {} signal(s) out of padding",
+                d.len()
+            );
+        }
+    }
+
+    #[test]
     fn decode_type_distinguishes_reed_solomon_from_deep_search() {
         // The distinction matters the same way Q65's idec==3 does: a deep-search
         // decode was matched against candidates built from the callsigns in play,

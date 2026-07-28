@@ -14285,14 +14285,13 @@ mod tests {
 
     /// Every RX-only tier, in its DEFAULT settings resolution.
     ///
-    /// Down to JT65 alone: Q65, FST4, the two beacons and MSK144 all transmit now.
     /// The beacons are NOT here — they key the radio; they are in `BEACON_TIERS`
     /// below, which pins the different property that they refuse the QSO sequencer.
     /// ⭐ EMPTY — every shipped mode now transmits. The guards below are therefore
     /// vacuous today and are kept deliberately: they are the contract the next
     /// receive-only mode inherits, and the phantom-CQ bug they were written for is
     /// exactly what returns if a mode is added without them.
-    const RX_ONLY_TIERS: [Tier; 1] = [Tier::Jt65];
+    const RX_ONLY_TIERS: [Tier; 0] = [];
 
     /// The BEACON tiers: transmit-capable, but with no QSO sequence. They must
     /// refuse every sequencer entry point while still being able to key.
@@ -14489,39 +14488,46 @@ mod tests {
     }
 
     #[test]
-    fn jt65_transmit_is_disabled_pending_the_windows_crash() {
-        // Operator report (Windows, 0.19.16): Call CQ on JT65 hard-crashes Nexus with
-        // 0xC0000005 the instant the transmit cycle comes round, BEFORE PTT (CAT never
-        // fires). Not reproducible on Linux — this exact path used to run clean here,
-        // producing a correct 573,737-sample over, which is why the mitigation is a
-        // capability flag rather than a code fix.
+    fn jt65_call_cq_drives_the_whole_tx_path() {
+        // Operator report 2026-07-28 (Windows, 0.19.16): "on jt65, call cq hard
+        // crashes the program" — 0xC0000005 the instant the transmit cycle came
+        // round, before PTT. TX was disabled in 0.19.17 as a mitigation and is
+        // restored in 0.19.18: the cause was never on this path at all. It was the
+        // DECODE dispatched at the same slot boundary, reading a front-zero-padded
+        // window (xcor.f90's uninitialized `lagpk`), which is why it presented as a
+        // transmit bug and why this test was clean on Linux throughout.
         //
-        // This asserts the MITIGATION holds end to end: no CQ run, no armed TX, no
-        // waveform. When the crash is fixed, flip Jt65Mode's `tx` back and restore the
-        // positive version of this test from git history — it drove start_cq plus six
-        // slots of poll_tx and every call the UI polls afterwards.
+        // Drives the ENTIRE engine-side Call CQ path — arm, start the run, key both
+        // parities, then every call the UI polls afterwards — so an engine-side
+        // regression fails in CI instead of on the air.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Jt65);
-
         e.set_tx_enabled(true);
-        assert!(
-            !e.tx_enabled(),
-            "JT65 must not arm TX while transmit is disabled"
-        );
+        e.start_cq(None).expect("JT65 CQ run should start");
 
-        let err = e.start_cq(None).expect_err("JT65 CQ must be refused");
-        assert!(
-            err.contains("receive-only"),
-            "the refusal must tell the operator why, got: {err}"
-        );
-
-        for slot in 0..4u64 {
-            assert!(e.poll_tx(slot).is_empty(), "JT65 keyed at slot {slot}");
+        let mut keyed = 0;
+        for slot in 0..6u64 {
+            let w = e.poll_tx(slot);
+            if let Some(first) = w.first() {
+                keyed += 1;
+                // 126 symbols at 4458.5 samples + a 1.0 s lead-in, inside the minute.
+                assert!(
+                    first.len() > 500_000 && first.len() < 60 * 12_000,
+                    "JT65 over is {} samples — outside the slot",
+                    first.len()
+                );
+            }
         }
+        assert!(keyed > 0, "JT65 CQ never produced a waveform in 6 slots");
 
-        // Receive is untouched: the decoder is fine and the mode still listens.
+        // Everything the UI polls afterwards. A panic in any of these crashes the app
+        // at exactly the moment Call CQ is pressed.
         let snap = e.snapshot();
         assert_eq!(snap.link.tier, Tier::Jt65);
+        let _ = e.spectrum_row();
+        let _ = e.band_plan();
+        let _ = e.active_frame_samples();
+        let _ = e.active_capture_samples();
     }
 
     #[test]

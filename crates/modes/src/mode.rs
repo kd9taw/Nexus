@@ -792,13 +792,15 @@ mod tx_capability_tests {
     /// `matches!` covers a whole family at once.
     ///
     /// Shrinking as encoders land: Q65, then FST4, then the two BEACONS (WSPR and
-    /// FST4W) once the transmit-percentage scheduler existed. Beacons are
-    /// `tx: true` AND `beacon_only: true` — transmit-capable, but never handed to
-    /// the QSO sequencer. MSK144 and JT65 remain.
-    fn rx_only(kind: ModeKind) -> bool {
-        // JT65 only, and TEMPORARILY — its encoder is verified; transmit is disabled
-        // pending the Windows Call CQ crash. See Jt65Mode::capabilities.
-        matches!(kind, ModeKind::Jt65 { .. })
+    /// FST4W) once the transmit-percentage scheduler existed, then MSK144, then
+    /// JT65. Beacons are `tx: true` AND `beacon_only: true` — transmit-capable, but
+    /// never handed to the QSO sequencer.
+    fn rx_only(_kind: ModeKind) -> bool {
+        // EMPTY — every shipped mode transmits. JT65 was listed here in 0.19.17
+        // alone, as a mitigation for a Windows crash fixed in 0.19.18 (xcor.f90).
+        // Kept as a predicate, not deleted: it is the deliberate act that makes the
+        // next receive-only mode silent, and the two-sided test below enforces it.
+        false
     }
 
     #[test]
@@ -1324,26 +1326,18 @@ impl Mode for Jt65Mode {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            // ⚠️ DISABLED PENDING A CRASH FIX — this is a MITIGATION, not a verdict on
-            // the encoder. The waveform is correct and verified: our transmission
-            // decodes as K1ABC W9XYZ EN37 at 1500.0 Hz, dt +0.00
-            // (`encode_then_decode_recovers_the_message` in the jt65 crate).
+            // TX is ON. It was disabled in 0.19.17 as a mitigation while Call CQ on
+            // JT65 hard-crashed Windows with 0xC0000005; the cause is fixed in
+            // 0.19.18 and the mitigation is lifted.
             //
-            // But on Windows, Call CQ on JT65 hard-crashes Nexus with 0xC0000005 the
-            // instant the transmit cycle comes round — an ACCESS VIOLATION, before PTT
-            // is asserted (the operator confirms CAT never fires), so the fault is
-            // inside Engine::poll_tx and not in the audio or rig path.
-            //
-            // NOT reproducible on Linux. Ruled out so far: the encoder (passes on the
-            // operator's own Windows box via win_smoke), the engine path, gen_wave, the
-            // decode/encode interleave, gen65's shorthand branch, stack exhaustion in
-            // BOTH encode and decode (measured — encode survives a 64 KiB stack, decode
-            // 512 KiB, against the ~2 MiB a spawned thread gets), the a-priori and
-            // deep-search decode paths at every depth, and duplicate-symbol collisions.
-            //
-            // The other five modes are unaffected and stay enabled. Re-enable ONLY with
-            // a reproduction and a fix — 0.19.16 still has it on, for reproducing.
-            tx: false,
+            // The fault was never in the encoder or the TX path — it was the DECODE
+            // that runs at the same slot boundary. `xcor.f90` left its `lagpk` peak-lag
+            // dummy UNASSIGNED whenever the cross-correlation was everywhere zero or
+            // NaN, and `sync65.f90:44` used it as an unguarded index into
+            // `real ccfblue(-32:82)`. See the note in xcor.f90 for the full chain and
+            // why JT65 alone was affected (sync65/xcor are JT65-only compilation
+            // units — Q65-60 shares the slot and the sequencer but not this code).
+            tx: true,
             fox_hound: false,
             ir_harq: false,
             // JT65's legacy packjt layer carries a 13-character free-text form.

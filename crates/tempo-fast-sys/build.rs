@@ -271,9 +271,12 @@ fn wx_override() -> Option<String> {
 /// sources were silently unwatched. Failing loudly is the whole point — an unwatched
 /// source links a stale `libtempo.a` with no warning.
 fn emit_rerun_glob(p: &std::path::Path) {
-    let canon = p
-        .canonicalize()
-        .unwrap_or_else(|e| panic!("build.rs watch path does not resolve: {} ({e})", p.display()));
+    let canon = p.canonicalize().unwrap_or_else(|e| {
+        panic!(
+            "build.rs watch path does not resolve: {} ({e})",
+            p.display()
+        )
+    });
     if !canon.is_dir() {
         println!("cargo:rerun-if-changed={}", canon.display());
         return;

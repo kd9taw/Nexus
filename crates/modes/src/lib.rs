@@ -128,7 +128,10 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             ModeKind::q65_all().map(|k| k.as_str()).collect();
         assert_eq!(names.len(), 25, "Q65 labels collided: {names:?}");
-        assert!(!names.contains("Q65"), "a combination fell through to the family name");
+        assert!(
+            !names.contains("Q65"),
+            "a combination fell through to the family name"
+        );
 
         assert_eq!(ModeKind::ALL.len(), 8) // FT8, FT4, FST4, Q65, MSK144, JT65, WSPR, TempoFast;
     }

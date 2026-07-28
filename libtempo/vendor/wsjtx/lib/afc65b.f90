@@ -12,6 +12,19 @@ subroutine afc65b(cx,npts,fsample,nflip,mode65,a,ccfbest,dtbest)
   i1=-i2
   j2=8*mode65
   j1=-j2
+! MODIFIED FOR NEXUS (KD9TAW, 2026-07-28): dtmax is initialized here, for the same
+! reason as `lagpk` in xcor.f90 — fchisq65 assigns its `dtmax` dummy ONLY inside
+! `if(ccf.gt.ccfmax)`, so a cross-correlation that never beats zero leaves this
+! local unassigned. It leaves as dtbest (:91), becomes `dt` in decode65a, and
+! reaches subtract65, which computes `nstart=dt*12000+1` and then indexes
+! `dd(nstart-1+ind)` with a LOWER bound check only (subtract65.f90:64-65) while
+! `ind` runs to 561708 — so a garbage dt reads past dd(720000).
+!
+! Unreachable on live audio (ccf2 is positive for essentially any real signal) and
+! not the 0.19.16 crash, which fired earlier at sync65.f90:44. Fixed together with
+! it because it is the same defect on the same degenerate-frame path, and the
+! xcor.f90 fix makes execution able to travel further than it used to.
+  dtmax=0.
   ccfmax=0.
   istep=2*mode65
   do iter=1,2

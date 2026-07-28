@@ -7,15 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### JT65 transmit is disabled in this build
+### Fixed: JT65 could crash Nexus outright, and it is transmitting again
 
-JT65 receives normally. Transmit is turned off pending a crash: on Windows, pressing
-Call CQ on JT65 kills the app the moment the transmit cycle comes round, before the
-radio is keyed.
+On Windows, pressing Call CQ on JT65 killed the app the moment the transmit cycle came
+round — before the radio was keyed. Transmit was switched off in 0.19.17 as a stopgap.
+The cause is now found and fixed, and **JT65 transmits again**.
 
-The encoder itself is correct and verified — a Nexus JT65 transmission decodes back at
-the right frequency and timing — and the fault is not reproducible on Linux at all, so
-this is a mitigation rather than a diagnosis. The other five modes are unaffected.
+Nothing was ever wrong with the transmit path. The crash came from the *decode* that runs
+at the same instant, which is why it looked like a transmit bug and why it appeared right
+when you pressed Call CQ.
+
+Nexus decodes a full minute of audio for JT65. When it has not yet collected a full
+minute — the first minute after you select the mode, or after the buffer is reset as
+transmit begins — it pads the front of that minute with silence. Past about 28 % silence,
+a brightness reference inside the decoder went to zero, everything downstream became
+"not a number", and a peak-search step then read from an essentially random memory
+address. On Windows that is an instant, uncatchable process kill. On Linux the same code
+happened to land somewhere harmless, which is why it never showed up in testing here or
+in CI, and why only one mode was affected: this sync code is JT65's alone, which is what
+kept Q65 at the same 60-second period working perfectly throughout.
+
+Three fixes: the reference can no longer be zero, the peak-search variable can no longer
+escape unset, and a second variable on the same path with the same flaw was closed too.
+A partly-filled minute now simply reports nothing, quietly. Both defects are inherited
+from upstream WSJT-X, which never meets them because it only ever decodes a full window
+of live audio.
+
+### Added: native crash reports on Windows
+
+When Nexus dies from a fault in the DSP layer rather than a normal error, Windows tells
+you nothing and the window just disappears. Nexus now writes `nexus-crash.txt` — beside
+the program, or in your `%TEMP%` folder — naming the component at fault and the call path
+into it. Sending that file with a bug report turns a crash like the one above from a
+multi-day hunt into a single look. It records only addresses and module names: no
+callsign, no log, no personal information.
 
 
 ### Six more modes now transmit

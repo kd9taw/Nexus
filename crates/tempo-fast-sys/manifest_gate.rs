@@ -186,10 +186,7 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
             // Mid-header: nothing else on this line can be a declaration.
             continue;
         }
-        if low.starts_with("end subroutine")
-            || low.starts_with("end function")
-            || low == "end"
-        {
+        if low.starts_with("end subroutine") || low.starts_with("end function") || low == "end" {
             if bare_save_unit {
                 out.append(&mut unit_decls);
             }
@@ -251,8 +248,7 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
         // the arg-list set catches the rest.
         if !in_module || past_contains {
             let is_decl = line.contains("::") || is_type_keyword_line(&low);
-            if is_decl && !is_decl_noise && !low.contains("function") && !low.contains("intent(")
-            {
+            if is_decl && !is_decl_noise && !low.contains("function") && !low.contains("intent(") {
                 for n in names_in_decl(line) {
                     if !unit_args.contains(&n.to_ascii_lowercase()) {
                         unit_decls.push(n);
@@ -269,9 +265,6 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
     out.dedup();
     out
 }
-
-
-
 
 /// True when a line OPENS a subprogram (subroutine or function). Split out from
 /// [`subprogram_args`] so a multi-line header can be detected before it has been
@@ -659,7 +652,10 @@ void q65_enc_(int *a)
 "#;
         let got = scan_c(src);
         assert!(got.contains(&"first".to_string()), "got {got:?}");
-        assert!(!got.contains(&"scratch".to_string()), "stack local leaked: {got:?}");
+        assert!(
+            !got.contains(&"scratch".to_string()),
+            "stack local leaked: {got:?}"
+        );
     }
 
     /// `const` is not excluded the way Fortran's `parameter` is, because a C `const` object
@@ -678,7 +674,10 @@ const qracode qra_13_64_64_irr_e = {
 "#;
         let got = scan_c(src);
         assert!(got.contains(&"pd_uniform_tab".to_string()), "got {got:?}");
-        assert!(got.contains(&"qra_13_64_64_irr_e".to_string()), "got {got:?}");
+        assert!(
+            got.contains(&"qra_13_64_64_irr_e".to_string()),
+            "got {got:?}"
+        );
     }
 
     /// Function declarations are not storage; an array of function pointers behind a typedef
@@ -768,12 +767,18 @@ end subroutine fchisq65
 ";
         let got = scan_fortran(src);
         for want in ["csx", "w", "wstep", "z"] {
-            assert!(got.contains(&want.to_string()), "missed local {want}: {got:?}");
+            assert!(
+                got.contains(&want.to_string()),
+                "missed local {want}: {got:?}"
+            );
         }
         // Dummy arguments are NOT locals — a bare save does not make them static,
         // and flagging them would invent a symbol for every parameter.
         for arg in ["cx", "npts", "fsample", "nflip", "a", "ccfmax", "dtmax"] {
-            assert!(!got.contains(&arg.to_string()), "dummy {arg} reported: {got:?}");
+            assert!(
+                !got.contains(&arg.to_string()),
+                "dummy {arg} reported: {got:?}"
+            );
         }
     }
 
@@ -800,14 +805,25 @@ end subroutine decode65a
 ";
         let got = scan_fortran(src);
         // Every one of these is a dummy declared AFTER the first header line.
-        for arg in ["mycall", "hiscall", "hisgrid", "ljt65apon", "bVHF", "decoded", "dd"] {
+        for arg in [
+            "mycall",
+            "hiscall",
+            "hisgrid",
+            "ljt65apon",
+            "bVHF",
+            "decoded",
+            "dd",
+        ] {
             assert!(
                 !got.contains(&arg.to_string()),
                 "continued-header dummy {arg} reported as a local: {got:?}"
             );
         }
         // …while a genuine local under the same bare save still is.
-        assert!(got.contains(&"scratch".to_string()), "real local missed: {got:?}");
+        assert!(
+            got.contains(&"scratch".to_string()),
+            "real local missed: {got:?}"
+        );
     }
 
     /// The tree-wide false negative this gate shipped with. Fortran's older
@@ -849,8 +865,14 @@ contains
 end module m
 ";
         let got = scan_fortran(src);
-        assert!(got.contains(&"nreal".to_string()), "real storage missed: {got:?}");
-        assert!(!got.contains(&"counts".to_string()), "function typed as storage: {got:?}");
+        assert!(
+            got.contains(&"nreal".to_string()),
+            "real storage missed: {got:?}"
+        );
+        assert!(
+            !got.contains(&"counts".to_string()),
+            "function typed as storage: {got:?}"
+        );
     }
 
     /// The type-keyword match must not fire on an identifier that merely starts

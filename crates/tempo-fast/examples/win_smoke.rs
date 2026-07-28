@@ -101,7 +101,6 @@ fn dx1_roundtrip() -> Result<String, String> {
     }
 }
 
-
 /// JT65 ENCODE + waveform, straight through the C ABI.
 ///
 /// Added 2026-07-28 after an operator report that Call CQ on JT65 hard-crashes the
@@ -115,13 +114,7 @@ fn dx1_roundtrip() -> Result<String, String> {
 fn jt65_encode_probe() -> Result<usize, String> {
     let msg = std::ffi::CString::new("CQ KD9TAW EN52").map_err(|e| e.to_string())?;
     let mut itone = vec![0i32; 126];
-    let n = unsafe {
-        tempo_fast_sys::jt65_encode_msg(
-            msg.as_ptr(),
-            14,
-            itone.as_mut_ptr(),
-        )
-    };
+    let n = unsafe { tempo_fast_sys::jt65_encode_msg(msg.as_ptr(), 14, itone.as_mut_ptr()) };
     if n != 126 {
         return Err(format!("jt65_encode_msg returned {n}, expected 126"));
     }

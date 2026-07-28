@@ -41,6 +41,27 @@ subroutine xcor(ipk,nsteps,nsym,lag1,lag2,ccf,ccf0,lagpk,flip,fdot,nrobust)
     enddo
   endif
 
+! MODIFIED FOR NEXUS (KD9TAW, 2026-07-28): lagpk is initialized here.
+! It was assigned ONLY inside `if(ccf(lag).gt.ccfmax)` (ccfmax seeded to 0.) or
+! `if(-ccfmin.gt.ccfmax)`, so a cross-correlation that is everywhere zero or NaN
+! left it UNASSIGNED — and it is a dummy argument with no intent, aliased to
+! sync65's uninitialized local lagpk0, which sync65.f90 then uses as an UNGUARDED
+! index into `real ccfblue(-32:82)`. An arbitrary leftover stack word scaled by 4
+! is a read gigabytes from the frame: on Windows, 0xC0000005, killing the process
+! (an access violation is not a Rust panic, so no catch_unwind contains it).
+!
+! Both degenerate cases are reachable from this application, which is why this is
+! not theoretical: Nexus's RxRing FRONT-ZERO-PADS a partially-filled window, and a
+! window that is >28% digital silence drives flat65's percentile reference to zero,
+! so symspec65's `ss/ref` is 0/0 = NaN and every comparison below is false. A muted
+! or disconnected sound card does the same thing with no padding involved. Upstream
+! WSJT-X never hits it because it only ever decodes a full window of live audio.
+! Note `lagmin` right above already carries `data lagmin/0/` for the same reason.
+!
+! lag1 is the natural choice: it is what a flat CCF means (no peak found anywhere),
+! it is in range by construction, and sync65's OTHER use of lagpk is already
+! bounds-guarded at :74 — this makes the unguarded use at :44 safe too.
+  lagpk=lag1
   ccfmax=0.
   ccfmin=0.
   do lag=lag1,lag2
