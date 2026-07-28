@@ -128,9 +128,73 @@ interface Props {
 /** Mode chips, in the order the cockpit presents them (popular modes first). */
 // The DX-area cockpit operates the structured WSJT-X modes only. TempoFast/TempoDeep live in
 // the MSG (Chat) area — no mixed tier picker.
-const MODES: { tier: Tier; label: string; slot: string; title: string }[] = [
+const MODES: {
+  tier: Tier
+  label: string
+  slot: string
+  title: string
+  /** Decode-only: Nexus will not transmit it. Marked in the UI because an
+   *  operator who selects a mode and then cannot call CQ deserves to know why
+   *  BEFORE they try, not after. Enforced in the engine by modes::tx_mode(),
+   *  not by this flag — this is the explanation, not the guard. */
+  rxOnly?: boolean
+}[] = [
   { tier: 'FT8', label: 'FT8', slot: '15s', title: 'Standard WSJT-X FT8 — 15 s T/R' },
   { tier: 'FT4', label: 'FT4', slot: '7.5s', title: 'Standard WSJT-X FT4 — 7.5 s T/R' },
+  {
+    tier: 'Q65',
+    label: 'Q65',
+    slot: 'RX',
+    rxOnly: true,
+    title:
+      'WSJT-X Q65 — EME and VHF+ scatter. DECODE ONLY. Period and submode in ' +
+      'Settings ▸ Modes (default 60 s / A; EME works 60A/B/C).',
+  },
+  {
+    tier: 'MSK144',
+    label: 'MSK144',
+    slot: 'RX',
+    rxOnly: true,
+    title:
+      'WSJT-X MSK144 — meteor scatter. DECODE ONLY. Period in Settings ▸ Modes ' +
+      '(default 15 s, the 6 m standard).',
+  },
+  {
+    tier: 'FST4',
+    label: 'FST4',
+    slot: 'RX',
+    rxOnly: true,
+    title:
+      'WSJT-X FST4 — slow weak-signal QSO mode. DECODE ONLY. Period in ' +
+      'Settings ▸ Modes (default 120 s).',
+  },
+  {
+    tier: 'FST4W',
+    label: 'FST4W',
+    slot: 'RX',
+    rxOnly: true,
+    title:
+      'WSJT-X FST4W — beacon mode. DECODE ONLY. Shares the FST4 period. ' +
+      'Hashed callsigns show as <...> in this build.',
+  },
+  {
+    tier: 'JT65',
+    label: 'JT65',
+    slot: 'RX',
+    rxOnly: true,
+    title:
+      'WSJT-X JT65 — the classic EME mode, 60 s T/R. DECODE ONLY. Submode ' +
+      '(A/B/C) in Settings ▸ Modes.',
+  },
+  {
+    tier: 'WSPR',
+    label: 'WSPR',
+    slot: 'RX',
+    rxOnly: true,
+    title:
+      'WSPR — propagation beacons, 2-minute intervals. DECODE ONLY. Reports ' +
+      'absolute frequency in MHz rather than an audio offset.',
+  },
 ]
 
 /** DXpedition special-op chip definitions. */
@@ -623,7 +687,9 @@ export function OperateCockpit({
               <button
                 key={m.tier}
                 type="button"
-                className={`cockpit-mode${tier === m.tier ? ' active' : ''}`}
+                className={`cockpit-mode${tier === m.tier ? ' active' : ''}${
+                  m.rxOnly ? ' rx-only' : ''
+                }`}
                 aria-pressed={tier === m.tier}
                 onClick={() => onTierChange(m.tier)}
                 title={m.title}

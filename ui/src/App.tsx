@@ -185,6 +185,21 @@ const DEFAULT_MACROS: Settings['macros'] = {
   band: ['QRZ?', 'PSE K', '73', 'GL'],
 }
 
+/** The tiers the Operate (Digital) cockpit owns — FT8/FT4 plus the six
+ *  receive-only WSJT-X modes. Kept beside the picker in OperateCockpit's MODES
+ *  so a tier added there and forgotten here cannot be silently coerced back to
+ *  FT8, which is exactly what happened when Q65 and friends were first wired. */
+const OPERATE_TIERS: Tier[] = [
+  'FT8',
+  'FT4',
+  'Q65',
+  'MSK144',
+  'FST4',
+  'FST4W',
+  'JT65',
+  'WSPR',
+]
+
 export default function App() {
   const [theme, setTheme] = useTheme()
   const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale()
@@ -1660,7 +1675,15 @@ export default function App() {
         setView(m)
         return
       }
-      const wantTier: Tier = tierRef.current === 'FT4' ? 'FT4' : 'FT8'
+      // PRESERVE the operator's tier if it is already one this screen owns.
+      // This used to read `tierRef.current === 'FT4' ? 'FT4' : 'FT8'`, which
+      // silently forced anything else back to FT8 — so selecting Q65 (or any of
+      // the receive-only modes) and then re-entering Digital dropped the choice
+      // on the floor, with no error and no visible cause. Only the Tempo chat
+      // tiers, which this screen does not own, still fall back to FT8.
+      const wantTier: Tier = OPERATE_TIERS.includes(tierRef.current)
+        ? tierRef.current
+        : 'FT8'
       setArea('dx')
       try {
         localStorage.setItem('nexus.workspace', 'dx')
@@ -2211,8 +2234,11 @@ export default function App() {
                   ? settings?.phoneMode === 'fm'
                     ? 'FM'
                     : snap.radio.sideband || 'USB'
-                  : tier === 'FT4'
-                    ? 'FT4'
+                  : // The tier's own name, not a guess. This was
+                    // `tier === 'FT4' ? 'FT4' : 'FT8'`, which labelled a memory
+                    // saved on Q65/WSPR/JT65 as FT8.
+                    OPERATE_TIERS.includes(tier)
+                    ? tier
                     : 'FT8'
             }
             onRecall={recallMemory}

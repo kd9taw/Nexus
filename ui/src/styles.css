@@ -11545,6 +11545,31 @@ select.settings-input {
   opacity: 0.8;
 }
 
+/* Receive-only tiers (Q65, MSK144, FST4, FST4W, JT65, WSPR). Nexus decodes these
+   and will not transmit them, so the tile reads visually as "listening" — a
+   dashed edge and an RX slot label — rather than looking like a mode you can
+   call CQ on. The guard itself is modes::tx_mode() in the engine; this is only
+   the signal to the operator. */
+.cockpit-mode.rx-only {
+  border-style: dashed;
+}
+.cockpit-mode.rx-only .cm-slot {
+  letter-spacing: 0.08em;
+  opacity: 0.65;
+}
+.cockpit-mode.rx-only.active {
+  /* Keep the dashed edge when selected so the receive-only nature stays legible
+     at the moment it matters most — while the mode is actually in use. */
+  border-style: dashed;
+  border-color: var(--accent-ink);
+}
+
+/* The mode row now carries 8 tiles; let it wrap on narrow cockpits instead of
+   overflowing the header. */
+.cockpit-modes {
+  flex-wrap: wrap;
+}
+
 /* DXpedition special-op selector — compact 3-chip strip in the cockpit bar. */
 .cockpit-specialop {
   display: flex;
