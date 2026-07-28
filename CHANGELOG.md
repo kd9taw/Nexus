@@ -5,6 +5,31 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Program tells you when the repeater list is missing a band
+
+The Program section's default source, hearham.com, is an open directory with real holes in rural
+country. Around Bozeman MT it lists nine repeaters and not one of them on 2 m, which is not a true
+description of Montana. That is worse than a short list: a channel list with no 2 m on it looks
+finished, and you find out it wasn't when you key up and nobody answers.
+
+Program now checks the results for a major band with nothing on it at all, and says so, pointing at
+the RepeaterBook token in Settings as the fix. It looks for a missing **band**, not a low count —
+genuinely empty country stays balanced across 2 m and 70 cm (Amarillo TX has three of each), so
+counting repeaters would cry wolf in the plains while staying quiet where the data is actually
+wrong. It also counts what the directory *lists* rather than what is on the air, so a town whose
+2 m machines are simply off-air, as Fairbanks AK's are, does not trigger it. Checked against the
+full 22,574-record hearham feed at eight locations, it fires at one.
+
+### Fixed — the app and the README disagreed about where repeater data comes from
+
+Settings told you the Program section "gets RepeaterBook data through Nexus's shared access
+automatically". It does not. Shared access is still pending RepeaterBook's approval, so every
+install has been using hearham.com, and the README described a third arrangement again. Both now
+say the same true thing: hearham by default, your own RepeaterBook token if you add one, shared
+access when and if RepeaterBook approves it.
+
 ## [0.19.6] — 2026-07-26
 
 ### TempoFast decoding on a real link

@@ -15317,6 +15317,13 @@ html[data-panel='needed'] {
   align-items: center;
   gap: var(--space-2);
 }
+.rp-note {
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+  border-left: 2px solid var(--state-ok);
+  padding: var(--space-1) var(--space-2);
+}
 .rp-count {
   font-size: 0.75rem;
   color: var(--text-dim);

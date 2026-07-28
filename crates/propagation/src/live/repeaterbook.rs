@@ -2,14 +2,27 @@
 //! per US state. Parsing lives in the pure [`crate::repeaters`]; caching, TTL
 //! and per-state throttling live in the shell.
 //!
-//! Compliance (RepeaterBook API terms, 2026): access is approval-gated — each
-//! Nexus user generates their own `rbuapp_…` token from their RepeaterBook
-//! account ("API Apps" dashboard) and pastes it into Settings. The token rides
-//! the `X-RB-App-Token` header (never a URL, never logged); the User-Agent
-//! uniquely identifies the app with a contact address; rate limits are
-//! unpublished, so a 429 maps to a DISTINCT error the shell treats as
-//! "serve the stale cache and back off". Data is fetched per-user, on demand,
-//! for programming that user's own radios — never redistributed or bundled.
+//! Compliance (RepeaterBook API terms, 2026): access is approval-gated, and
+//! there are two mutually exclusive paths, chosen per user.
+//!
+//! 1. PERSONAL. The user generates their own `rbuapp_…` token from their
+//!    RepeaterBook account ("API Apps" dashboard) and pastes it into Settings.
+//!    [`fetch_state`] then calls RepeaterBook directly under that user's own
+//!    account. The token rides the `X-RB-App-Token` header (never a URL, never
+//!    logged).
+//! 2. SHARED. A user with no personal token holds no credential at all;
+//!    [`fetch_state_proxy`] calls our Worker, which is the only thing that ever
+//!    holds a shared token. Pending RepeaterBook's approval, so it currently
+//!    503s and the shell falls through to hearham.
+//!
+//! No RepeaterBook credential is embedded in this client, the installer, or
+//! the repo, in any form including build-time injection — baking one is
+//! forbidden by RB's terms (unlike ClubLog, whose app keys are meant to be
+//! embedded; that pattern does NOT transfer). The User-Agent uniquely
+//! identifies the app with a contact address; rate limits are unpublished, so a
+//! 429 maps to a DISTINCT error the shell treats as "serve the stale cache and
+//! back off". Data is fetched per-user, on demand, for programming that user's
+//! own radios — never redistributed or bundled.
 
 use std::time::Duration;
 
@@ -31,9 +44,27 @@ pub const ERR_RATE_LIMITED: &str = "RepeaterBook: rate limited";
 /// hearham, so the feature works before/without RepeaterBook approval.
 const PROXY_URL: &str = "https://rb.hamradiotools.io/rb/export";
 
-/// Fetch one state's export through the Nexus proxy (no token on this side).
-/// Same body/parse contract as [`fetch_state`].
+/// Proxy client key, baked at build time from `NEXUS_RB_CLIENT_KEY`.
+///
+/// ⚠️ DETERRENCE, NOT AUTHENTICATION, and it must never be described as
+/// authentication. Nexus is a distributed desktop application: anything shipped
+/// in the binary can be extracted from it, so this cannot establish that a
+/// caller IS Nexus. It filters casual scrapers off the proxy and identifies our
+/// traffic, nothing more. Real per-caller authentication needs a per-user
+/// credential, which is exactly what the personal `rbuapp_` path already is.
+///
+/// Absent in a build (the env var wasn't set) ⇒ the proxy path returns a LOUD
+/// error and the shell falls through to hearham, rather than silently shipping
+/// a build whose shared path 403s against a configured Worker.
+const CLIENT_KEY: Option<&str> = option_env!("NEXUS_RB_CLIENT_KEY");
+
+/// Fetch one state's export through the Nexus proxy (no RepeaterBook token on
+/// this side). Same body/parse contract as [`fetch_state`].
 pub fn fetch_state_proxy(state_id: &str) -> Result<String, String> {
+    let key = CLIENT_KEY
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .ok_or_else(|| "RepeaterBook: this build has no proxy client key".to_string())?;
     let c = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent(UA)
@@ -42,13 +73,19 @@ pub fn fetch_state_proxy(state_id: &str) -> Result<String, String> {
         .build()
         .map_err(|_| "RepeaterBook: HTTP client initialization failed".to_string())?;
     let url = format!("{PROXY_URL}?state_id={}", state_id.trim());
-    let resp = c.get(url).send().map_err(redact)?;
+    let resp = c.get(url).header("x-nexus-client", key).send().map_err(redact)?;
     let status = resp.status();
     if status.as_u16() == 429 {
         return Err(ERR_RATE_LIMITED.to_string());
     }
     if status.as_u16() == 503 {
         return Err("RepeaterBook: proxy not activated".to_string());
+    }
+    if status.as_u16() == 403 {
+        // The Worker has a client key configured and ours didn't match — a
+        // build/deploy mismatch, not a user-facing condition. Distinct so it
+        // isn't mistaken for a RepeaterBook outage.
+        return Err("RepeaterBook: proxy rejected this build's client key".to_string());
     }
     if !status.is_success() {
         return Err(format!(
