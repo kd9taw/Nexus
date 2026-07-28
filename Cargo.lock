@@ -940,6 +940,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt65"
+version = "0.1.0"
+dependencies = [
+ "tempo-fast-sys",
+]
+
+[[package]]
 name = "kstring"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1172,6 +1179,7 @@ dependencies = [
  "fst4",
  "ft4",
  "ft8",
+ "jt65",
  "msk144",
  "q65",
  "tempo-fast",

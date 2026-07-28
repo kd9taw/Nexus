@@ -390,6 +390,77 @@ int fst4_decode_frame(const int16_t *iwave /*[ntrperiod*12000]*/,
                       fst4_decode_t *out, int max_out);
 
 /*===========================================================================
+ * JT65: the classic WSJT weak-signal / EME mode. DECODE ONLY.
+ *===========================================================================*/
+
+/* 65-tone MFSK, one tone per 372 ms, carrying a 72-bit message through a
+ * (63,12) Reed-Solomon code. It predates the 77-bit era, which shows in two
+ * places a caller must know about:
+ *
+ *   * MESSAGES ARE 22 CHARACTERS, not 37 — the legacy packjt layer, not
+ *     packjt77. The shared 38-byte message field is simply never filled past 22.
+ *   * SUBMODES ARE A/B/C, passed as 0/1/2. The decoder squares them
+ *     (mode65 = 2**nsubmode), giving 1x/2x/4x tone spacing; wider survives more
+ *     Doppler spread, which is why EME operators move up the letters as the path
+ *     degrades.
+ *
+ * ⭐ THE FRAME IS 60 s BUT ONLY 52 s ARE DECODED. dd0 is an explicit-shape dummy
+ * at 60*12000 = 720000, so the caller must supply all of it — but upstream reads
+ * only npts = 52*12000 = 624000, and this ABI does the same. The tail is buffer
+ * the decoder never touches. This is the one case here where "supply more than is
+ * read" is the correct contract rather than waste.
+ *
+ * ⭐ EVERY CALL IS INDEPENDENT. JT65 supports multi-period message averaging
+ * (avg65); the ABI pins clearave so frame N is never influenced by frames
+ * 1..N-1, for the same reason Q65 does.
+ *
+ * ⭐ NOT KVASD. JT65's historical Reed-Solomon decoder was the non-free KVASD
+ * binary, invoked as a subprocess. This build uses ftrsd — the Franke-Taylor
+ * soft-decision decoder written to replace it — and neither ships nor invokes
+ * KVASD. The ftrsd RS codec is Phil Karn's under a separate GPL grant; see
+ * NOTICE. */
+#define JT65_NMAX      720000  /* buffer contract: 60 s @ 12 kHz               */
+#define JT65_NPTS      624000  /* what the decoder actually reads (52 s)       */
+#define JT65_NSUBMODES 3       /* A, B, C as 0, 1, 2                           */
+
+/* NO jt65 encode / gen_wave, deliberately. Receive-only: the Rust ModeKind
+ * reports Capabilities{tx:false} and modes::tx_mode() refuses the transmit path. */
+
+/* One decode from JT65 acquisition. Byte-compatible with the other modes'
+ * records (64 bytes, 4-byte aligned). */
+typedef struct {
+    float sync;          /* sync metric                                  */
+    int   snr;           /* SNR estimate, dB (rounded)                   */
+    float dt;            /* time offset, seconds                         */
+    float freq;          /* audio frequency, Hz                          */
+    char  message[38];   /* NUL-terminated; only 22 are ever used        */
+    int   ft;            /* decode type: 1 = Reed-Solomon, 2 = deep search */
+    int   qual;          /* deep-search confidence; 0 for an RS decode   */
+} jt65_decode_t;
+
+/*
+ * Decode EVERY JT65 signal in one 60 s T/R period.
+ *   iwave      : JT65_NMAX (720000) int16 audio samples @ 12 kHz — the full 60 s
+ *   nsubmode   : 0, 1 or 2 for JT65A/B/C. Anything else returns -1.
+ *   nfa, nfb   : frequency search band edges (Hz)
+ *   ndepth     : 1..3; also scales the Reed-Solomon trial budget
+ *   mycall/hiscall : NUL/space-terminated callsigns for AP (may be "")
+ *   hisgrid    : NUL/space-terminated 6-char grid for AP (may be "")
+ *   nfqso      : QSO/RX audio freq (Hz). 0 / out of [nfa,nfb] = band mid
+ *   out        : caller array of jt65_decode_t (capacity max_out)
+ *   max_out    : capacity of out
+ *
+ * Returns the number of decodes found (>= 0), or -1 on error. NOT thread-safe.
+ */
+int jt65_decode_frame(const int16_t *iwave /*[JT65_NMAX]*/,
+                      int nsubmode,
+                      int nfa, int nfb, int ndepth,
+                      const char *mycall, const char *hiscall,
+                      const char *hisgrid,
+                      int nfqso,
+                      jt65_decode_t *out, int max_out);
+
+/*===========================================================================
  * MSK144: WSJT-X METEOR-SCATTER mode. DECODE ONLY.
  *===========================================================================*/
 

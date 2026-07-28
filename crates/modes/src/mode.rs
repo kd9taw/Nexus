@@ -51,17 +51,24 @@ pub enum ModeKind {
     /// `period_s * 12000` samples. `period_s` ∈ {5, 10, 15, 30}; 15 is the 6 m
     /// workhorse.
     Msk144 { period_s: u16 },
+    /// WSJT JT65 — the classic weak-signal / EME mode. **RECEIVE-ONLY**.
+    ///
+    /// Carries only its submode: unlike FST4, Q65 and MSK144, JT65 has a single
+    /// fixed 60 s T/R period, so the frame length is constant. `submode` is 0/1/2
+    /// for A/B/C (tone spacing 1x/2x/4x).
+    Jt65 { submode: u8 },
     TempoFast,
 }
 
 impl ModeKind {
     /// All modes shipped today, in display order.
-    pub const ALL: [ModeKind; 6] = [
+    pub const ALL: [ModeKind; 7] = [
         ModeKind::Ft8,
         ModeKind::Ft4,
         ModeKind::FST4_15,
         ModeKind::Q65_30A,
         ModeKind::MSK144_15,
+        ModeKind::JT65A,
         ModeKind::TempoFast,
     ];
 
@@ -75,6 +82,12 @@ impl ModeKind {
     /// MSK144 at 15 s — the period 6 m meteor scatter actually runs on, and
     /// `ALL`'s representative MSK144 entry.
     pub const MSK144_15: ModeKind = ModeKind::Msk144 { period_s: 15 };
+
+    /// JT65A — the default submode, and `ALL`'s representative JT65 entry.
+    pub const JT65A: ModeKind = ModeKind::Jt65 { submode: 0 };
+
+    /// JT65 submodes A/B/C, passed as 0/1/2.
+    pub const JT65_SUBMODES: u8 = 3;
 
     /// The T/R periods MSK144 supports, in seconds.
     pub const MSK144_PERIODS: [u16; 4] = [5, 10, 15, 30];
@@ -117,6 +130,11 @@ impl ModeKind {
         Self::MSK144_PERIODS
             .into_iter()
             .map(|period_s| ModeKind::Msk144 { period_s })
+    }
+
+    /// Every JT65 submode.
+    pub fn jt65_all() -> impl Iterator<Item = ModeKind> {
+        (0..Self::JT65_SUBMODES).map(|submode| ModeKind::Jt65 { submode })
     }
 
     /// Display name for an MSK144 period, e.g. `"MSK144-15"`.
@@ -204,6 +222,12 @@ impl ModeKind {
             // name rather than pretending to a precision it does not have.
             ModeKind::Q65 { period_s, submode } => Self::q65_name(period_s, submode),
             ModeKind::Msk144 { period_s } => Self::msk144_name(period_s),
+            ModeKind::Jt65 { submode } => match submode {
+                0 => "JT65A",
+                1 => "JT65B",
+                2 => "JT65C",
+                _ => "JT65",
+            },
             ModeKind::TempoFast => "TempoFast",
         }
     }
@@ -218,6 +242,8 @@ impl ModeKind {
             // The whole reason the period lives in the kind: slot timing follows it.
             ModeKind::Q65 { period_s, .. } => f32::from(period_s),
             ModeKind::Msk144 { period_s } => f32::from(period_s),
+            // JT65 has ONE period, unlike the other parametric modes here.
+            ModeKind::Jt65 { .. } => 60.0,
             ModeKind::TempoFast => 4.0,
         }
     }
@@ -232,6 +258,9 @@ impl ModeKind {
             // ... and so does the buffer contract: period*12000 samples.
             ModeKind::Q65 { period_s, .. } => q65::nmax(period_s),
             ModeKind::Msk144 { period_s } => msk144::nmax(period_s),
+            // The full 60 s: the Fortran dummy is explicit-shape even though only
+            // the first 52 s are read.
+            ModeKind::Jt65 { .. } => jt65::NMAX,
             ModeKind::TempoFast => tempo_fast::NMAX,
         }
     }
@@ -392,6 +421,7 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
         ModeKind::Fst4 { period_s, wspr } => Box::new(Fst4Mode { period_s, wspr }),
         ModeKind::Q65 { period_s, submode } => Box::new(Q65Mode { period_s, submode }),
         ModeKind::Msk144 { period_s } => Box::new(Msk144Mode { period_s }),
+        ModeKind::Jt65 { submode } => Box::new(Jt65Mode { submode }),
         ModeKind::TempoFast => Box::new(Ft1Mode),
     }
 }
@@ -723,7 +753,10 @@ mod tx_capability_tests {
     fn rx_only(kind: ModeKind) -> bool {
         matches!(
             kind,
-            ModeKind::Fst4 { .. } | ModeKind::Q65 { .. } | ModeKind::Msk144 { .. }
+            ModeKind::Fst4 { .. }
+                | ModeKind::Q65 { .. }
+                | ModeKind::Msk144 { .. }
+                | ModeKind::Jt65 { .. }
         )
     }
 
@@ -739,6 +772,7 @@ mod tx_capability_tests {
             .chain(ModeKind::q65_all())
             .chain(ModeKind::fst4_all())
             .chain(ModeKind::msk144_all())
+            .chain(ModeKind::jt65_all())
         {
             let rx_only = rx_only(kind);
             let caps_tx = make_mode(kind).capabilities().tx;
@@ -803,6 +837,7 @@ mod tx_capability_tests {
             .chain(ModeKind::q65_all())
             .chain(ModeKind::fst4_all())
             .chain(ModeKind::msk144_all())
+            .chain(ModeKind::jt65_all())
         {
             let _ = make_mode(kind); // never refuses
         }
@@ -1057,6 +1092,78 @@ impl Mode for Msk144Mode {
             ndepth,
             mycall,
             hiscall,
+            nfqso,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
+}
+
+/// WSJT **JT65** — the classic weak-signal / EME mode. Receive-only.
+///
+/// 65-tone MFSK through a (63,12) Reed-Solomon code, carrying the LEGACY 72-bit
+/// message layer (22-character decodes, not 37). One fixed 60 s T/R period, so
+/// unlike FST4/Q65/MSK144 this carries only a submode.
+#[derive(Debug, Clone, Copy)]
+pub struct Jt65Mode {
+    /// Submode 0/1/2 for A/B/C — tone spacing 1x/2x/4x.
+    pub submode: u8,
+}
+
+impl Default for Jt65Mode {
+    /// JT65A.
+    fn default() -> Self {
+        Self { submode: 0 }
+    }
+}
+
+impl Mode for Jt65Mode {
+    fn kind(&self) -> ModeKind {
+        ModeKind::Jt65 {
+            submode: self.submode,
+        }
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            tx: false,
+            fox_hound: false,
+            ir_harq: false,
+            // JT65's legacy 72-bit layer carries free text, but only 13 characters
+            // of it — a different beast from packjt77's 13-char free text at 37.
+            free_text: true,
+            contest: false,
+        }
+    }
+
+    // encode() and gen_wave() are DELIBERATELY not implemented.
+
+    #[allow(clippy::too_many_arguments)]
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        _nqso_progress: i32,
+        nfqso: i32,
+        _frame_time_ms: i64, // JT65 has no cross-frame state here: clearave is pinned.
+    ) -> Vec<Decode> {
+        jt65::decode_frame(
+            iwave,
+            self.submode,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            // hisgrid: same trait limitation as Q65 — decode_frame carries no grid.
+            // JT65's deep search would use it to build candidate messages; passing
+            // "" narrows that path and costs nothing else.
+            "",
             nfqso,
         )
         .into_iter()

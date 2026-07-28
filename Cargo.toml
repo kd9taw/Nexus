@@ -8,6 +8,7 @@ members = [
     "crates/fst4",
     "crates/q65",
     "crates/msk144",
+    "crates/jt65",
     "crates/modes",
     "crates/propagation",
     "crates/tempo-core",

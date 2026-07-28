@@ -124,6 +124,33 @@ impl From<msk144::Decode> for Decode {
     }
 }
 
+impl From<jt65::Decode> for Decode {
+    fn from(d: jt65::Decode) -> Self {
+        Self {
+            message: d.message,
+            sync: d.sync,
+            snr: d.snr,
+            dt: d.dt,
+            freq: d.freq,
+            // JT65 reports `ft` — Reed-Solomon vs deep search — which answers the
+            // same question FT8's iaptype does: was outside information used. A
+            // deep-search decode was matched against candidates built from the
+            // callsigns in play, so it is the JT65 analogue of Q65's idec==3.
+            nap: match d.dtype {
+                jt65::DecodeType::ReedSolomon => 0,
+                jt65::DecodeType::DeepSearch => 2,
+                jt65::DecodeType::Other(n) => n,
+            },
+            // JT65's qual is a deep-search confidence COUNT, not a [0,1] fraction,
+            // so it is deliberately not crammed into `qual` where it would rank
+            // against FT8's normalised metric.
+            qual: 0.0,
+            rv: None,
+            mode: None,
+        }
+    }
+}
+
 impl From<ft8::Decode> for Decode {
     fn from(d: ft8::Decode) -> Self {
         Self {

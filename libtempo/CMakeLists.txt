@@ -206,6 +206,66 @@ set(LIBTEMPO_SOURCES
     #     `include`d by the files above: fst4/fst4_params.f90,
     #     fst4/ldpc_240_{101,74}_{parity,generator}.f90
 
+    # --- JT65 native decode (jt65_decode.f90 + lib/ftrsd) : Nexus, RX-ONLY ---
+    #     The classic EME / weak-signal mode: 65-tone MFSK, a (63,12) Reed-Solomon
+    #     code, and the LEGACY 72-bit packjt message layer (character*22 decodes),
+    #     not the 77-bit packjt77 everything else here uses.
+    #
+    #     Clean OO+callback decoder like FT4/FST4/Q65 — no shmem, no streaming
+    #     ladder. Decode only; Capabilities{tx:false}.
+    #
+    #     ⭐ NOT KVASD. JT65's historical Reed-Solomon decoder was the non-free
+    #     KVASD binary. WSJT-X 3.0.2 uses ftrsd instead — the Franke-Taylor
+    #     soft-decision decoder written to replace it — and the only KVASD
+    #     reference left in the upstream tree is a CLI help string in jt9.f90.
+    ${CMAKE_CURRENT_SOURCE_DIR}/jt65_cabi.f90
+    ${LIB}/jt65_decode.f90                # module jt65_decode (OO decoder)
+    ${LIB}/jt65_mod.f90                   # module jt65_mod (shared state)
+    ${LIB}/symspec65.f90                  # symbol spectra
+    ${LIB}/sync65.f90                     # sync search
+    ${LIB}/decode65a.f90                  # per-candidate decode
+    ${LIB}/decode65b.f90
+    ${LIB}/extract.f90                    # soft symbols -> RS decode (calls ftrsdap)
+    ${LIB}/hint65.f90                     # deep-search hypotheses (CALL3.TXT excised)
+    ${LIB}/chkhist.f90                    # histogram sanity check
+    ${LIB}/afc65b.f90                     # AFC
+    ${LIB}/filbig.f90                     # wideband filter
+    ${LIB}/fil6521.f90                    # 6.25:1 decimation
+    ${LIB}/flat65.f90                     # spectrum flattening
+    ${LIB}/setup65.f90                    # tone/sync setup
+    ${LIB}/graycode.f90                   # Gray coding
+    ${LIB}/graycode65.f90
+    ${LIB}/interleave63.f90               # (63,12) interleaver
+    ${LIB}/subtract65.f90                 # signal subtraction (multi-pass)
+    ${LIB}/twkfreq65.f90                  # frequency tweak
+    ${LIB}/xcor.f90                       # cross-correlation
+    ${LIB}/sh65.f90                       # shorthand messages
+    ${LIB}/sh65snr.f90
+    ${LIB}/lorentzian.f90                 # Lorentzian fit
+    ${LIB}/move.f90                       # array move helper
+    #     The Reed-Solomon layer. Phil Karn's (KA9Q) RS codec under an explicit
+    #     unversioned GPL grant + the Franke-Taylor soft-decision wrapper. See
+    #     NOTICE — Karn is a SEPARATE copyright holder from the WSJT Development
+    #     Group and is credited as such.
+    ${LIB}/ftrsd/ftrsdap.c                # Franke-Taylor soft-decision RS decoder
+    ${LIB}/ftrsd/decode_rs.c              # Karn Berlekamp-Massey decoder
+    ${LIB}/ftrsd/encode_rs.c              # Karn RS encoder (used by the soft path)
+    ${LIB}/ftrsd/init_rs.c                # Karn RS codec init
+    ${LIB}/wrapkarn.c                     # rs_encode_: the Fortran-callable RS
+                                          #   encoder hint65.f90:91 calls
+    ${LIB}/igray.c                        # igray_: Gray code, used by
+                                          #   graycode.f90:5 and graycode65.f90:5
+    #     Five sources my dependency scan MISSED and the audit surfaced:
+    #     demod64a (called from a LABELLED statement, extract.f90:120 `1 call ...`,
+    #     which a line-anchored regex does not match), fchisq0, fchisq65, slope,
+    #     and the two C files above. The archive linked without them because a
+    #     static archive tolerates undefined symbols; only the final link fails.
+    ${LIB}/demod64a.f90                   # 64-FSK demodulator (extract.f90:120)
+    ${LIB}/fchisq0.f90                    # chi-squared fit
+    ${LIB}/fchisq65.f90                   # chi-squared fit, JT65 variant
+    ${LIB}/slope.f90                      # linear detrend
+    ${LIB}/ccf2.f90                       # cross-correlation (fchisq65.f90:58)
+
     # --- MSK144 native decode (mskrtd + msk144/msk40 family) : Nexus, RX-ONLY ---
     #     The METEOR-SCATTER mode. 72 ms frames repeated through the period, so a
     #     single ionised trail lasting a tenth of a second can carry a message.
@@ -392,6 +452,21 @@ endif()
 # ---------------------------------------------------------------------------
 # Static + shared libtempo.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Karn's RS codec selects its symbol width with a preprocessor switch:
+#   #ifdef FIXED -> fixed.h ; #elif BIGSYM -> int.h ; #else -> char.h
+# Only int.h is shipped (char.h and fixed.h do not exist in the tree), so BIGSYM
+# is REQUIRED, not optional — without it the build fails on a missing char.h.
+# Upstream sets it globally (its CMakeLists:1288 `-DBIGSYM=1`); scoped to these
+# four files here so the define cannot leak into unrelated C.
+# ---------------------------------------------------------------------------
+set_source_files_properties(
+    ${LIB}/ftrsd/ftrsdap.c
+    ${LIB}/ftrsd/decode_rs.c
+    ${LIB}/ftrsd/encode_rs.c
+    ${LIB}/ftrsd/init_rs.c
+    PROPERTIES COMPILE_DEFINITIONS "BIGSYM=1")
+
 add_library(tempo_static STATIC ${LIBTEMPO_SOURCES})
 add_library(tempo_shared SHARED ${LIBTEMPO_SOURCES})
 set_target_properties(tempo_static PROPERTIES OUTPUT_NAME tempo)

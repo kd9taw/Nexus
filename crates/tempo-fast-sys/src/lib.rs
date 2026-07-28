@@ -204,6 +204,47 @@ pub const fn msk144_period_supported(period_s: u16) -> bool {
     matches!(period_s, 5 | 10 | 15 | 30)
 }
 
+/// JT65 buffer contract: 60 s @ 12 kHz. The full frame must be supplied even
+/// though only [`JT65_NPTS`] is read — `dd0` is an explicit-shape dummy.
+pub const JT65_NMAX: usize = 720_000;
+/// What the JT65 decoder actually reads: the first 52 s of the period.
+pub const JT65_NPTS: usize = 624_000;
+/// JT65 submodes A/B/C, passed as 0/1/2 (tone spacing 1x/2x/4x).
+pub const JT65_NSUBMODES: u8 = 3;
+
+/// One decode from [`jt65_decode_frame`]. Layout matches `jt65_decode_t` in
+/// `libtempo.h`. NOT an alias of [`Ft8DecodeT`]: the last two fields are
+/// `ft`/`qual` (int/int) where FT8 has `nap`/`qual` (int/float).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Jt65DecodeT {
+    pub sync: c_float,
+    pub snr: c_int,
+    pub dt: c_float,
+    pub freq: c_float,
+    /// NUL-terminated. JT65 uses the legacy 72-bit layer, so only 22 bytes are
+    /// ever filled.
+    pub message: [u8; 38],
+    /// Decode type: 1 = Reed-Solomon, 2 = deep search.
+    pub ft: c_int,
+    /// Deep-search confidence; 0 for a Reed-Solomon decode.
+    pub qual: c_int,
+}
+
+impl Default for Jt65DecodeT {
+    fn default() -> Self {
+        Self {
+            sync: 0.0,
+            snr: 0,
+            dt: 0.0,
+            freq: 0.0,
+            message: [0; 38],
+            ft: 0,
+            qual: 0,
+        }
+    }
+}
+
 /// One decode from [`msk144_decode_frame`]. Layout matches `msk144_decode_t` in
 /// `libtempo.h` — the same 64 bytes as [`Ft8DecodeT`], NOT an alias: the last two
 /// fields are `dtype`/`reserved` (int/int) where FT8 has `nap`/`qual`
@@ -550,6 +591,26 @@ extern "C" {
         hiscall: *const c_char,
         nfqso: c_int,
         out: *mut Msk144DecodeT,
+        max_out: c_int,
+    ) -> c_int;
+
+    /// Decode every JT65 signal in one 60 s T/R period.
+    ///
+    /// DECODE ONLY — receive-only; see `Capabilities.tx` and `modes::tx_mode`.
+    ///
+    /// `iwave` must hold [`JT65_NMAX`] samples even though only [`JT65_NPTS`] is
+    /// read: the underlying dummy is explicit-shape.
+    pub fn jt65_decode_frame(
+        iwave: *const i16, // [JT65_NMAX] — the full 60 s
+        nsubmode: c_int,   // 0 | 1 | 2 for A/B/C; anything else ⇒ -1
+        nfa: c_int,
+        nfb: c_int,
+        ndepth: c_int,
+        mycall: *const c_char,
+        hiscall: *const c_char,
+        hisgrid: *const c_char,
+        nfqso: c_int,
+        out: *mut Jt65DecodeT,
         max_out: c_int,
     ) -> c_int;
 

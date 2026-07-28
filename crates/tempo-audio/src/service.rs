@@ -4528,6 +4528,7 @@ fn tier_mode(tier: Tier) -> &'static str {
         Tier::Fst4w => "FST4W",
         Tier::Q65 => "Q65",
         Tier::Msk144 => "MSK144",
+        Tier::Jt65 => "JT65",
     }
 }
 

@@ -1,0 +1,11 @@
+[package]
+publish = false
+name = "jt65"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Safe Rust wrapper over libtempo's native JT65 decoder (WSJT-X JT65A/B/C, DECODE ONLY)"
+
+[dependencies]
+tempo-fast-sys = { path = "../tempo-fast-sys" }

@@ -3744,6 +3744,37 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- JT65: submode only. One fixed 60 s period, unlike the others. ---- */}
+          {tab === 'modes' && (
+          <fieldset className="settings-section">
+            <legend>JT65 (receive-only)</legend>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">Submode (tone spacing)</span>
+                <select
+                  className="settings-input"
+                  value={String(form.jt65Submode ?? 0)}
+                  onChange={(e) => updateNum('jt65Submode', Number(e.target.value))}
+                >
+                  <option value="0">A &mdash; HF standard, narrowest</option>
+                  <option value="1">B &mdash; 2x spacing</option>
+                  <option value="2">C &mdash; 4x spacing, most Doppler-tolerant</option>
+                </select>
+                <span className="settings-hint">
+                  JT65 always uses a 60&nbsp;s T/R period, so spacing is the only choice. A is
+                  what you want on HF; EME operators move up to B or C as Doppler spread on the
+                  higher bands smears the tones. Both stations must use the same submode.
+                </span>
+              </label>
+            </div>
+            <span className="settings-hint">
+              The classic weak-signal and moonbounce mode. Nexus decodes JT65 and does not
+              transmit it. Messages are the older 22-character format, not the 37-character one
+              FT8 and friends use.
+            </span>
+          </fieldset>
+          )}
+
           {/* ---- MSK144: meteor scatter. Period is the whole setting. ---- */}
           {tab === 'modes' && (
           <fieldset className="settings-section">

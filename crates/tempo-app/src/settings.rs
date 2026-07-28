@@ -135,6 +135,11 @@ pub struct Settings {
     /// stack when pings are sparse.
     #[serde(default = "default_msk144_period_s")]
     pub msk144_period_s: u16,
+    /// JT65 submode: 0/1/2 for A/B/C. A is the HF standard; B and C widen the tone
+    /// spacing 2x and 4x, which EME operators move up to as Doppler spread grows.
+    /// JT65 has one fixed 60 s period, so there is no period setting to go with it.
+    #[serde(default)]
+    pub jt65_submode: u8,
     /// Q65 submode, 0..=4 for A..E — the tone spacing. Wider submodes tolerate
     /// more Doppler spread at the cost of sensitivity, which is why EME operators
     /// move up the letters as the path degrades. Defaults to A.
@@ -1440,6 +1445,7 @@ impl Default for Settings {
             q65_period_s: default_q65_period_s(),
             fst4_period_s: default_fst4_period_s(),
             msk144_period_s: default_msk144_period_s(),
+            jt65_submode: 0,
             q65_submode: 0,
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this

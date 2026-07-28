@@ -212,6 +212,10 @@ pub enum Tier {
     /// the radio. The T/R period comes from `Settings::msk144_period_s`.
     #[serde(rename = "MSK144")]
     Msk144,
+    /// WSJT JT65 — the classic weak-signal / EME mode. **RECEIVE-ONLY**. The
+    /// submode comes from `Settings::jt65_submode`.
+    #[serde(rename = "JT65")]
+    Jt65,
 }
 
 impl Tier {
@@ -241,6 +245,7 @@ impl Tier {
         q65_submode: u8,
         fst4_period_s: u16,
         msk144_period_s: u16,
+        jt65_submode: u8,
     ) -> Option<ModeKind> {
         match self {
             Tier::TempoFast => Some(ModeKind::TempoFast),
@@ -250,7 +255,17 @@ impl Tier {
             Tier::Fst4w => Some(Self::fst4_kind(fst4_period_s, true)),
             Tier::Q65 => Some(Self::q65_kind(q65_period_s, q65_submode)),
             Tier::Msk144 => Some(Self::msk144_kind(msk144_period_s)),
+            Tier::Jt65 => Some(Self::jt65_kind(jt65_submode)),
             Tier::TempoDeep => None,
+        }
+    }
+
+    /// A validated `ModeKind::Jt65`, falling back to A on an unsupported submode.
+    pub fn jt65_kind(submode: u8) -> ModeKind {
+        if submode < ModeKind::JT65_SUBMODES {
+            ModeKind::Jt65 { submode }
+        } else {
+            ModeKind::JT65A
         }
     }
 
@@ -304,6 +319,7 @@ impl Tier {
             // operator's mode selection, and period/submode are settings under it.
             ModeKind::Q65 { .. } => Tier::Q65,
             ModeKind::Msk144 { .. } => Tier::Msk144,
+            ModeKind::Jt65 { .. } => Tier::Jt65,
         }
     }
 }

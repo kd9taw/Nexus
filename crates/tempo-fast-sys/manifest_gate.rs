@@ -156,7 +156,23 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
             || low.starts_with("private")
             || low.starts_with("protected");
         // A module-scope declaration before `contains` is implicitly SAVEd.
-        let module_decl = in_module && !past_contains && line.contains("::") && !is_decl_noise;
+        //
+        // ⭐ BOTH DECLARATION STYLES. Requiring `::` here was a tree-wide FALSE
+        // NEGATIVE: Fortran's older form declares storage without it, so
+        // `jt65_mod.f90`'s eleven module variables — including `s1(-255:256,126)`,
+        // 258 KB of shared decoder state — were invisible to this gate while it
+        // reported the file clean. Same class of blind spot as the C one that
+        // `scan_c` closed.
+        //
+        // So a module-scope line is a declaration if it has `::` OR it opens with
+        // a type keyword. `integer function foo(...)` is excluded, because that
+        // declares a PROCEDURE's result type, not storage.
+        let starts_with_type = is_type_keyword_line(&low);
+        let is_typed_function = low.contains("function");
+        let module_decl = in_module
+            && !past_contains
+            && (line.contains("::") || (starts_with_type && !is_typed_function))
+            && !is_decl_noise;
         if !(explicit || module_decl) {
             continue;
         }
@@ -165,6 +181,34 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+
+/// True when a module-scope line opens with a Fortran type keyword, i.e. it declares
+/// storage in the older style that omits `::`.
+///
+/// `double precision` is spelled as two words, and `type` is deliberately ABSENT: a
+/// bare `type foo` opens a derived-type DEFINITION (layout, not storage), and the
+/// `type(foo) :: bar` form that does declare storage already carries `::`.
+fn is_type_keyword_line(low: &str) -> bool {
+    const TYPES: &[&str] = &[
+        "integer",
+        "real",
+        "complex",
+        "character",
+        "logical",
+        "double precision",
+        "doubleprecision",
+    ];
+    TYPES.iter().any(|t| {
+        low.strip_prefix(t)
+            // Must be followed by whitespace, `*` (character*22), `(` (real(dp))
+            // or `,` (integer, save) — never another identifier character, or
+            // `integervar` would match `integer`.
+            .is_some_and(|rest| {
+                rest.starts_with(|c: char| c.is_whitespace() || c == '*' || c == '(' || c == ',')
+            })
+    })
 }
 
 /// Identifier names from one declaration line, ignoring types, attributes, dimensions and
@@ -574,6 +618,66 @@ class = 1
             file: "ft8/ft8_a7.f90".into(),
             name: "msg0".into()
         }));
+    }
+
+    /// The tree-wide false negative this gate shipped with. Fortran's older
+    /// declaration form omits `::`, and requiring it made every such symbol
+    /// invisible — 54 of them in Q65 files that had already been audited and
+    /// shipped, including `codewords`, the full-AP candidate list that a q3 decode
+    /// returns, and the apmask/apsymbols arrays built from the operator's
+    /// callsigns. Exactly the state the manifest exists to catch.
+    #[test]
+    fn old_style_declarations_without_colons_are_found() {
+        let src = "\
+module jt65_mod
+  integer param(0:9)
+  integer mdat(126),mref(126,2)
+  real s1(-255:256,126)
+  real width
+  character*22 msg
+end module jt65_mod
+";
+        let got = scan_fortran(src);
+        for want in ["param", "mdat", "mref", "s1", "width", "msg"] {
+            assert!(got.contains(&want.to_string()), "missed {want}: {got:?}");
+        }
+    }
+
+    /// `integer function foo(...)` declares a PROCEDURE's result type, not storage.
+    /// Without this exclusion the relaxed rule above would invent a symbol for
+    /// every typed function in the tree.
+    #[test]
+    fn a_typed_function_declaration_is_not_storage() {
+        let src = "\
+module m
+  integer nreal
+contains
+  integer function counts(x)
+    integer x
+    counts = x
+  end function counts
+end module m
+";
+        let got = scan_fortran(src);
+        assert!(got.contains(&"nreal".to_string()), "real storage missed: {got:?}");
+        assert!(!got.contains(&"counts".to_string()), "function typed as storage: {got:?}");
+    }
+
+    /// The type-keyword match must not fire on an identifier that merely starts
+    /// with one — `integervar` is not `integer`.
+    #[test]
+    fn a_name_prefixed_by_a_type_keyword_is_not_a_declaration() {
+        let src = "\
+module m
+  integer good
+  realistic = 1
+  integervar = 2
+end module m
+";
+        let got = scan_fortran(src);
+        assert!(got.contains(&"good".to_string()), "{got:?}");
+        assert!(!got.contains(&"realistic".to_string()), "{got:?}");
+        assert!(!got.contains(&"integervar".to_string()), "{got:?}");
     }
 
     #[test]

@@ -47,6 +47,39 @@ Uwe Risse (DG2YCB), Brian Moran (N9ADG), and others. See the upstream project
 for the authoritative copyright and contributor list:
 https://sourceforge.net/projects/wsjt/
 
+### Reed-Solomon codec — Phil Karn (KA9Q)
+License: **GNU General Public License**, version unspecified, © 2002.
+
+The (63,12) Reed-Solomon codec behind **JT65**, vendored at
+`libtempo/vendor/wsjtx/lib/ftrsd/` (`decode_rs.c`, `encode_rs.c`, `init_rs.c`
+and the headers `rs2.h`, `int.h`), copied byte-identical from upstream. Each
+carries the notice "Copyright 2002, Phil Karn, KA9Q / May be used under the terms
+of the GNU General Public License (GPL)".
+
+⚠️ THE GRANT NAMES NO VERSION, and that is deliberate to record rather than
+paper over. GPL-3 §14 covers exactly this wording: "If the Program does not
+specify a version number of the GNU General Public License, you may choose any
+version ever published by the Free Software Foundation." Nexus chooses version 3,
+which is what makes these files compatible with a GPL-3.0-only combined work. The
+choice is the recipient's to make under the license itself; it is not an
+assumption about the author's intent.
+
+Phil Karn is a SEPARATE COPYRIGHT HOLDER from the WSJT Development Group and is
+credited separately for that reason, the same way qracodes is below. The
+soft-decision wrapper around this codec, `ftrsd/ftrsdap.c`, is by Steve Franke
+(K9AN) and Joe Taylor (K1JT) and is covered by the WSJT-X project grant above.
+
+ftrsd REPLACES KVASD, the non-free Reed-Solomon decoder JT65 historically shelled
+out to. Nexus does not ship, link, or invoke KVASD, and the vendored tree contains
+no copy of it.
+
+⚠️ NOT VENDORED, and not to be vendored without a fresh licensing determination:
+`lib/wsprd/fano.c` and `lib/wsprd/jelinek.c` — also Karn-derived, but carrying a
+bare copyright line with NO license grant of any kind. That is a materially
+different case from the files above and is why WSPR is not integrated.
+
+Project: <https://www.ka9q.net/>
+
 ### qracodes — Nico Palermo (IV3NWV), Microtelecom Srl
 License: **GNU GPL, version 3 or later** (GPL-3.0-or-later), © 2016.
 

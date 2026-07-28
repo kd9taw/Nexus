@@ -4,7 +4,7 @@
 
 export type Presence = 'active' | 'idle' | 'stale'
 
-export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144'
+export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65'
 
 // ---- Propagation & opening intelligence (matches the `propagation` crate) ----
 export type ActivityTier = 'Active' | 'Moderate' | 'Quiet' | 'Closed'
@@ -1700,6 +1700,8 @@ export interface Settings {
   fst4PeriodS: number
   /** MSK144 T/R period in seconds: 5|10|15|30. 15 is the 6 m workhorse. */
   msk144PeriodS: number
+  /** JT65 submode 0/1/2 for A/B/C (tone spacing 1x/2x/4x). */
+  jt65Submode: number
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

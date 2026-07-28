@@ -34,6 +34,7 @@ export const TIER_PERIOD_SECS: Record<Tier, number> = {
   FST4: 15,
   FST4W: 120,
   MSK144: 15,
+  JT65: 60,
   // Q65's period is an operator setting (15/30/60/120/300), so this table cannot
   // state it. 60 is the default and the EME working period; a decode row's true
   // period comes from the ModeKind the engine tagged it with.
