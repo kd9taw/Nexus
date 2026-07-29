@@ -172,6 +172,62 @@ time — and honestly claims no contest points.
 If you run several consumers on one machine, name the port. 12060 is often already taken (HRD
 listens there), and the port you type is the port that is used.
 
+### Route each mode to the radio that does it best
+
+Nexus already handed a band to the radio configured for it: pick 2 m and it switched to your VHF
+rig. But a band is not fine enough. If you have a 2 m/70 cm rig for weak-signal digital and a
+different rig for FM and APRS, both of them cover 2 m — and Nexus had no way to tell them apart,
+so a 2 m FT8 spot and an APRS tune went to whichever radio it happened to pick first.
+
+You can now route on the band **and the mode**. In **Settings ▸ Radio** there is a routing table
+under your radios: pick a set of bands, pick a mode class, pick the radio. Rules are checked top to
+bottom and the first match wins, so a specific rule above a broad one takes precedence — and the
+arrows beside each rule let you reorder them. Anything no rule matches falls back to the band
+coverage you already set on each radio, and then to a default radio you can nominate for
+everything else.
+
+A three-radio shack maps onto two rules. Digital to the 9700, APRS and repeaters to the 991A, HF to
+the FTdx10:
+
+| Bands | Mode | Radio |
+| --- | --- | --- |
+| 2 m, 70 cm | FM & APRS | FT-991A |
+| 2 m, 70 cm | Weak-signal digital | IC-9700 |
+| *(everything else)* | | FTdx10 |
+
+The mode classes are deliberately coarse — weak-signal digital, FM & APRS, SSB phone, CW, RTTY —
+so a whole station fits in a handful of rules rather than one per submode. Every action that used
+to consult the band table now consults band + mode: the band picker, a typed frequency, clicking a
+spot on the Needed board or a DXpedition card, and APRS Tune. Peg-lock still pins your radio and
+stops all of it, exactly as before.
+
+There is a **"Where would this go?"** control under the table. Pick a band and a mode and it tells
+you which radio that combination resolves to, without touching a rig — it asks the same code the
+radio does, so it cannot tell you one thing and then do another.
+
+If you never add a rule, nothing changes: routing stays band-only, as it was.
+
+### A third radio now works properly
+
+Two radios worked. A third did not, for a reason that only ever shows up at three: each radio's
+window keeps its own settings file, seeded once from the shared one the first time that window
+opens. With two radios you always add the second one before those per-window files exist, so both
+windows learn about both radios. The third radio is the first one you add *after* they exist — so
+it landed in exactly one window's settings and nowhere else. The launch picker (which reads the
+shared file) never offered it, the other window never monitored it, and there was no way to repair
+it from inside the app.
+
+Adding or removing a radio now updates the shared config too, and every window picks up radios
+added elsewhere when it starts. The routing table is shared the same way, since which rig does 2 m
+FM is a decision about your station, not about one window.
+
+Three smaller things that also only bite at three radios: a band claimed by two rigs now always
+goes to the same one (it used to depend on the order they happened to sit in the list); adding a
+radio after removing one no longer produces two radios with the same name, which made the port and
+audio conflict warnings ambiguous; and a window launched pointing at a radio that no longer exists
+now says so instead of quietly driving the first radio's serial port — which is the port another
+window is already using.
+
 ### APRS decode readout stops mixing up "now" with "a while ago"
 
 The new input-level reading immediately caught a sentence that contradicted itself: *"2 packets

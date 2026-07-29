@@ -2132,6 +2132,27 @@ export interface Settings {
   /** Opt-in: run two radios at once (one per window). When on with ≥2 radios, launch shows a
    *  "which radio?" picker. Off by default so single-radio stations are never bothered. */
   simultaneousRadios?: boolean
+  /** Band+mode → radio routing rules, FIRST-MATCH-WINS in list order. Lets one band go to two
+   *  rigs by mode (2 m FT8 → IC-9700, 2 m FM/APRS → FT-991A), which `bands` coverage can't. */
+  routingRules?: RoutingRule[]
+  /** Fallback radio when no rule and no band coverage claims a (band, mode). Absent = stay put. */
+  defaultRadio?: number | null
+}
+
+/** The mode granularity radio routing decides on — a refinement of the app's CW/Phone/Digital
+ * classes (FM and SSB are both Phone; digital and RTTY are both Digital). The refinement is what
+ * makes "2 m FT8 to one rig, 2 m FM to another" expressible. Mirrors the Rust `RouteMode`. */
+export type RouteMode = 'digital' | 'fm' | 'ssb' | 'cw' | 'rtty'
+
+/** One band+mode → radio routing rule. Both selectors are "empty = any": `bands: []` matches every
+ * band, `mode: null` every mode class. Mirrors the Rust `RoutingRule`. */
+export interface RoutingRule {
+  /** Bands this rule covers, e.g. `['2m','70cm']`. Empty = any band. */
+  bands: string[]
+  /** Mode class this rule covers. `null` = any mode class. */
+  mode: RouteMode | null
+  /** The `RadioProfile.id` to route to. */
+  radio: number
 }
 
 /** One radio's complete connection profile (dual-radio). Mirrors the Rust `RadioProfile`; the flat

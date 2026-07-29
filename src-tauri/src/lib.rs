@@ -1035,6 +1035,16 @@ fn radio_profile_key(radio_id: u32) -> String {
     format!("r{radio_id}")
 }
 
+/// The radio id THIS instance was launched to drive — `--profile r<id>`, as the launch picker
+/// spawns it. `None` for the default profile and for a hand-named profile (`--profile hf`), which is
+/// a deliberately independent station config: the fleet-level roster/routing mirroring below applies
+/// only to the picker's radio windows.
+fn bound_radio_id() -> Option<u32> {
+    active_profile()
+        .and_then(|p| p.strip_prefix('r'))
+        .and_then(|s| s.parse::<u32>().ok())
+}
+
 /// Is another running instance already holding `profile`'s config dir? Checked via a std
 /// advisory file lock: an instance holds an exclusive lock on `<config_dir>/.lock` for its whole
 /// life ([`hold_profile_lock`]), so a `try_lock` that WOULD BLOCK means that radio's window is
@@ -1146,6 +1156,70 @@ fn persist_simultaneous_to_base(enabled: bool) {
     if s.simultaneous_radios != enabled {
         s.simultaneous_radios = enabled;
         let _ = s.save(&base);
+    }
+}
+
+/// Mirror the ROSTER IDENTITY (which radios exist) into the BASE profile's settings.json.
+///
+/// **This is what makes a THIRD radio reachable.** The per-radio config is seeded from base exactly
+/// ONCE (first launch of `r<id>`), and `add_radio` then persists only to the window that ran it. With
+/// two radios that never bit: you necessarily add radio 1 in the base config BEFORE `tempo-r0`/
+/// `tempo-r1` exist, so both windows are seeded with a complete roster that never changes again.
+/// Adding a THIRD radio is the first roster mutation that happens AFTER those dirs exist — so it
+/// landed in one settings.json only. The base config (which the launch PICKER reads, and which the
+/// picker's own overlay blocks the operator from editing) never learned about it, making the new
+/// radio permanently unselectable with no repair path.
+///
+/// Deliberately mirrors only radios base does not already have, and only their identity + config as
+/// created — a radio's per-window CAT/audio edits are NOT pushed back, because each window owns its
+/// own radio's live config and base's copy may legitimately differ. `radio_pegged`/`active_radio` are
+/// per-window and never touched. Best-effort; a failure just leaves base as it was.
+fn persist_roster_to_base(radios: &[tempo_app::settings::RadioProfile]) {
+    if bound_radio_id().is_none() {
+        return; // the base config itself, or an independent named profile — nothing to mirror
+    }
+    let base = config_dir_for(None).join("settings.json");
+    let mut s = Settings::load(&base);
+    let added: Vec<_> = radios
+        .iter()
+        .filter(|r| !s.radios.iter().any(|b| b.id == r.id))
+        .cloned()
+        .collect();
+    let removed = s
+        .radios
+        .iter()
+        .any(|b| !radios.iter().any(|r| r.id == b.id));
+    if added.is_empty() && !removed {
+        return;
+    }
+    s.radios.retain(|b| radios.iter().any(|r| r.id == b.id));
+    s.radios.extend(added);
+    s.ensure_radio_profiles();
+    s.ensure_distinct_radio_ports();
+    s.ensure_routing_targets();
+    if let Err(e) = s.save(&base) {
+        eprintln!("tempo: couldn't mirror the radio roster to the base config: {e}");
+    }
+}
+
+/// Mirror the ROUTING TABLE (rules + default radio) into the BASE profile's settings.json. Routing
+/// is a station-wide decision — which rig does 2 m FM is not a per-window opinion — and the same
+/// one-time-seed asymmetry as [`persist_roster_to_base`] would otherwise leave each window routing
+/// by a different table. Best-effort.
+fn persist_routing_to_base(live: &Settings) {
+    if bound_radio_id().is_none() {
+        return;
+    }
+    let base = config_dir_for(None).join("settings.json");
+    let mut s = Settings::load(&base);
+    if s.routing_rules == live.routing_rules && s.default_radio == live.default_radio {
+        return;
+    }
+    s.routing_rules = live.routing_rules.clone();
+    s.default_radio = live.default_radio;
+    s.ensure_routing_targets();
+    if let Err(e) = s.save(&base) {
+        eprintln!("tempo: couldn't mirror the routing table to the base config: {e}");
     }
 }
 
@@ -5321,6 +5395,9 @@ fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: add_radio save failed: {e}");
     }
+    // Mirror the new radio into the base config, or a THIRD radio added from a per-radio window is
+    // invisible to the launch picker forever — see `persist_roster_to_base`.
+    persist_roster_to_base(&eng.settings().radios);
     Ok(eng.snapshot())
 }
 
@@ -5332,6 +5409,9 @@ fn remove_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, 
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: remove_radio save failed: {e}");
     }
+    // …and out of the base config too, else the picker keeps offering a radio that no longer exists.
+    persist_roster_to_base(&eng.settings().radios);
+    persist_routing_to_base(eng.settings());
     Ok(eng.snapshot())
 }
 
@@ -5364,6 +5444,67 @@ fn set_radio_bands(
         eprintln!("tempo: set_radio_bands save failed: {e}");
     }
     Ok(eng.snapshot())
+}
+
+/// Replace the band+mode routing rules (list order IS the first-match-wins precedence). Mirrored to
+/// the base config so every radio window — and the launch picker's config — agrees on the routing
+/// table. Returns the snapshot.
+#[tauri::command]
+fn set_routing_rules(
+    state: State<'_, SharedEngine>,
+    rules: Vec<tempo_app::settings::RoutingRule>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_routing_rules(rules);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: set_routing_rules save failed: {e}");
+    }
+    persist_routing_to_base(eng.settings());
+    Ok(eng.snapshot())
+}
+
+/// Set (or clear, with `null`) the fallback radio for band+mode combinations no rule and no band
+/// coverage claims. Mirrored to the base config like the rules. Returns the snapshot.
+#[tauri::command]
+fn set_default_radio(
+    state: State<'_, SharedEngine>,
+    id: Option<u32>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_default_radio(id);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: set_default_radio save failed: {e}");
+    }
+    persist_routing_to_base(eng.settings());
+    Ok(eng.snapshot())
+}
+
+/// Where a `(band, mode class)` WOULD route right now, as the radio's id + name — the Settings rule
+/// editor's "test" affordance. Read-only: it never moves a rig.
+#[tauri::command]
+fn route_preview(
+    state: State<'_, SharedEngine>,
+    band: String,
+    mode: tempo_app::settings::RouteMode,
+) -> Result<RoutePreview, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    let id = eng.route_preview(&band, mode);
+    let name = eng
+        .settings()
+        .radios
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| format!("Radio {}", id + 1));
+    Ok(RoutePreview { radio: id, name })
+}
+
+/// The answer to "where would 2 m FM go?" — the resolved radio, named so the operator recognizes it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RoutePreview {
+    radio: u32,
+    name: String,
 }
 
 /// Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio
@@ -10389,18 +10530,62 @@ pub fn run() {
 
     let mut settings = Settings::load(&settings_path());
 
+    let bound_radio = bound_radio_id();
+
+    // Union in any radio the BASE config has that this window's config doesn't, and adopt base's
+    // routing table. The seed above is one-time, so a radio added AFTER this profile's dir existed
+    // (i.e. every radio from the third on) would otherwise be permanently unknown to this window:
+    // its monitor pool would never open that rig and routing could never reach it. ADDITIVE ONLY —
+    // a radio this window already knows keeps ITS OWN CAT/audio config, because each window owns its
+    // radio's live config and base's copy of it can lag. See `persist_roster_to_base`.
+    //
+    // Scoped to `r<id>` (radio-window) profiles: those are the multi-radio fleet, and base is their
+    // shared source of truth. A hand-named `--profile hf` is a deliberately independent station
+    // config and must keep its own roster and its own routing table.
+    if bound_radio.is_some() {
+        let base = Settings::load(&config_dir_for(None).join("settings.json"));
+        let missing: Vec<_> = base
+            .radios
+            .iter()
+            .filter(|b| !settings.radios.iter().any(|r| r.id == b.id))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            eprintln!(
+                "tempo: adopting {} radio(s) added in another window",
+                missing.len()
+            );
+            settings.radios.extend(missing);
+            settings.ensure_distinct_radio_ports();
+        }
+        // Routing is station-wide, so base is authoritative for it (a per-window table would make
+        // "which rig does 2 m FM" depend on which window you asked).
+        settings.routing_rules = base.routing_rules;
+        settings.default_radio = base.default_radio;
+        settings.ensure_routing_targets();
+    }
+
     // A radio profile keyed "r<id>" PINS its active radio, so this window always drives the radio
     // the operator picked in the launcher, regardless of the persisted/seeded active_radio. CRUCIAL:
     // re-mirror the flat rig/audio fields to THAT radio's profile — the seed copied the default's
     // flat fields, so without this the window keeps the OTHER radio's serial port/model and tries to
     // open the port the first window already holds (the "opposite radio won't load" hang). Also
     // self-heals a profile that was seeded before this fix, since it runs every launch.
-    if let Some(id) = active_profile()
-        .and_then(|p| p.strip_prefix('r'))
-        .and_then(|s| s.parse::<u32>().ok())
-    {
-        settings.active_radio = id;
-        settings.sync_flat_from_active();
+    //
+    // VALIDATED against the roster first: `sync_flat_from_active` silently returns when the id names
+    // no profile, which would leave the flat mirror pointing at the DEFAULT radio — same COM port,
+    // same rigctld port, same audio device as the window already driving it. That is the wrong-rig /
+    // double-open class, reachable from a stale shortcut or a relaunch after the radio was removed.
+    if let Some(id) = bound_radio {
+        if settings.radios.iter().any(|p| p.id == id) {
+            settings.active_radio = id;
+            settings.sync_flat_from_active();
+        } else {
+            eprintln!(
+                "tempo: --profile r{id} names a radio that is not in the roster — refusing to bind \
+                 it (that would drive the default radio's port). Relaunch without --profile."
+            );
+        }
     }
 
     // One-time migration: an older build kept the Cloudlog/Wavelog API key in
@@ -11138,6 +11323,9 @@ pub fn run() {
             remove_radio,
             rename_radio,
             set_radio_bands,
+            set_routing_rules,
+            set_default_radio,
+            route_preview,
             update_radio_profile,
             set_tune,
             halt_tx,

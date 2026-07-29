@@ -6251,6 +6251,155 @@ mod tests {
         );
     }
 
+    /// A pool with THREE radios configured: radio 0 active, radios 1 and 2 as live monitors. Returns
+    /// `(engine, pool, [port0, port1, port2])`. Every radio test in this file until now built exactly
+    /// "profile 0 + one add_radio", so nothing exercised a pool holding more than ONE monitor — which
+    /// is where every "the other radio" assumption would show up.
+    #[allow(clippy::type_complexity)]
+    fn three_radio_pool() -> (Arc<Mutex<Engine>>, MonitorPool, [u16; 3]) {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let (r1, r2, ports, transports) = {
+            let mut e = engine.lock().unwrap();
+            let r1 = e.add_radio();
+            let r2 = e.add_radio();
+            e.set_active_radio(0);
+            let prof = |id: u32| {
+                e.settings()
+                    .radios
+                    .iter()
+                    .find(|p| p.id == id)
+                    .unwrap()
+                    .clone()
+            };
+            let (p0, p1, p2) = (prof(0), prof(r1), prof(r2));
+            (
+                r1,
+                r2,
+                [p0.rigctld_port, p1.rigctld_port, p2.rigctld_port],
+                [Transport::from_profile(&p1), Transport::from_profile(&p2)],
+            )
+        };
+        let conn = |id: u32, port: u16, transport: Transport| MonitorConn {
+            id,
+            transport,
+            rig: Rig::with_control(Some(format!("127.0.0.1:{port}")), PttMode::Vox),
+            rigctld_proc: None,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        };
+        let pool: MonitorPool = Arc::new(Mutex::new(vec![
+            conn(r1, ports[1], transports[0].clone()),
+            conn(r2, ports[2], transports[1].clone()),
+        ]));
+        (engine, pool, ports)
+    }
+
+    #[test]
+    fn three_radios_get_distinct_daemon_ports_and_two_live_monitors() {
+        // Two live rigctld daemons already needed distinct ports; a third must too, and the pool must
+        // actually hold TWO monitors rather than collapsing to one.
+        let (engine, pool, ports) = three_radio_pool();
+        let mut sorted = ports.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            3,
+            "three radios, three distinct ports: {ports:?}"
+        );
+        assert_eq!(engine.lock().unwrap().settings().radios.len(), 3);
+        assert_eq!(
+            pool.lock().unwrap().len(),
+            2,
+            "both non-active radios monitored"
+        );
+    }
+
+    #[test]
+    fn a_handoff_across_three_radios_adopts_the_right_one_and_leaves_the_third_alone() {
+        // With TWO radios a handoff is unambiguous: there is exactly one conn in the pool, so
+        // "swap with the pool" cannot pick wrong. With three it can. Switching 0 → 2 must adopt
+        // radio 2's conn, demote radio 0 into the pool as Vox (a monitor must never key), and leave
+        // radio 1's monitor completely untouched — still monitored, still unable to transmit.
+        let (engine, pool, ports) = three_radio_pool();
+        let (r1, r2) = (1u32, 2u32);
+        let mut state = loop_state();
+        state.applied = cat_transport(ports[0], None);
+        // Radio 0 is a live CAT rig (the operating radio), so the demotion to Vox is observable.
+        let mut rig = Rig::with_control(Some(format!("127.0.0.1:{}", ports[0])), PttMode::Cat);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        engine.lock().unwrap().set_active_radio(r2);
+
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+
+        assert_eq!(last_active, r2, "switched to radio 2, not radio 1");
+        assert_eq!(
+            state.applied.rigctld_port, ports[2],
+            "the ADOPTED transport is radio 2's — picking radio 1's would drive the wrong rig"
+        );
+        let mut p = pool.lock().unwrap();
+        p.sort_by_key(|c| c.id);
+        assert_eq!(
+            p.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![0, r1],
+            "radio 0 demoted in, radio 2 taken out, radio 1 still pooled"
+        );
+        assert_eq!(
+            p[0].rig.ptt_mode(),
+            &PttMode::Vox,
+            "the demoted radio 0 can never key while it is a read-only monitor"
+        );
+        assert_eq!(
+            p[1].rig.ptt_mode(),
+            &PttMode::Vox,
+            "the untouched third radio is still a read-only monitor"
+        );
+        assert_eq!(
+            p[1].transport.rigctld_port, ports[1],
+            "radio 1's conn was not rebuilt or repointed by the handoff"
+        );
+    }
+
+    #[test]
+    fn two_monitors_take_turns_so_neither_starves() {
+        // `poll_monitors` services ONE conn per call. With a single monitor that is trivially fair;
+        // with two, an unfair pick (e.g. always the first, or always the same one on a tie) would
+        // leave one radio's pill frozen forever. It must always take the MOST OVERDUE.
+        let (engine, pool, _ports) = three_radio_pool();
+        {
+            let mut p = pool.lock().unwrap();
+            p[0].last_poll = 0.0; // radio 1 — most overdue
+            p[1].last_poll = 100.0; // radio 2
+        }
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        poll_monitors(&pool, 0, &engine, &pending);
+        {
+            let p = pool.lock().unwrap();
+            assert_eq!(p[0].ticks, 1, "the most-overdue monitor was polled");
+            assert_eq!(
+                p[1].ticks, 0,
+                "…and only that one (one read burst per call)"
+            );
+        }
+        // Now radio 2 is the most overdue, so the NEXT call must serve it — not radio 1 again.
+        poll_monitors(&pool, 0, &engine, &pending);
+        let p = pool.lock().unwrap();
+        assert_eq!(p[0].ticks, 1);
+        assert_eq!(p[1].ticks, 1, "the second monitor got its turn");
+    }
+
     #[test]
     fn handoff_swaps_active_radio_with_the_pool_no_teardown() {
         // Durable dual-radio: switching the active radio HANDS the (already-connected) new active Rig

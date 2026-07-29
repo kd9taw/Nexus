@@ -32,6 +32,8 @@ import type {
   NeedAlert,
   QrzLookup,
   QrzPushResult,
+  RouteMode,
+  RoutingRule,
   Settings,
   SourceKind,
   Spectrum,
@@ -1076,6 +1078,26 @@ export async function renameRadio(id: number, name: string): Promise<AppSnapshot
 /** Set a radio's band-coverage set (empty = covers everything) for auto-routing. Returns snapshot. */
 export async function setRadioBands(id: number, bands: string[]): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_radio_bands', { id, bands })
+}
+
+/** Replace the band+mode routing rules (list order IS the first-match-wins precedence). A live verb,
+ * not part of the settings form — like the roster, so a stale-form Save can't revert it. */
+export async function setRoutingRules(rules: RoutingRule[]): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_routing_rules', { rules })
+}
+
+/** Set (or clear, with `null`) the fallback radio for band+modes no rule and no coverage claims. */
+export async function setDefaultRadio(id: number | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_default_radio', { id })
+}
+
+/** Where a (band, mode class) WOULD route right now — the rule editor's "test" affordance.
+ * Read-only: it never moves a rig. */
+export async function routePreview(
+  band: string,
+  mode: RouteMode,
+): Promise<{ radio: number; name: string }> {
+  return invoke<{ radio: number; name: string }>('route_preview', { band, mode })
 }
 
 /** The editable CAT/audio/PTT/rotator/native subset of a radio profile — the per-radio Settings

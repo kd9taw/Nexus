@@ -734,6 +734,12 @@ pub struct Engine {
     /// `mode_giveup` so a click is never ignored — even if a prior attempt gave up on
     /// that mode. One-shot, drained by the loop.
     immediate_retune: bool,
+    /// One-shot override for the mode class the NEXT `set_frequency` routes on, for callers whose
+    /// mode intent isn't in `Settings`/engine state yet at QSY time. Only [`Engine::aprs_tune`]
+    /// needs it: `set_frequency` clears `aprs_fm` (a QSY leaves the APRS context), so without the
+    /// override an APRS tune would route on the mode class of the section the operator is LEAVING.
+    /// Taken by the routing step; the normal path derives the class from [`Engine::route_mode`].
+    route_intent: Option<crate::settings::RouteMode>,
     /// Rolling received-decode history (slot, row) across the last several T/R
     /// cycles — NOT just the last slot. This is what makes a roster/late click on
     /// a caller resolve to the RIGHT QSO step: `last_decodes` is replaced on every
@@ -1918,6 +1924,7 @@ impl Engine {
             last_decode_slot: None,
             immediate_tx: false,
             immediate_retune: false,
+            route_intent: None,
             decode_history: std::collections::VecDeque::new(),
             early_seen: None,
             pending_tx_disable: false,
@@ -2187,6 +2194,13 @@ impl Engine {
         let live_source_radios = std::mem::take(&mut self.settings.radios);
         let live_active = self.settings.active_radio;
         let live_pegged = self.settings.radio_pegged;
+        // The routing rules + default radio are part of that same live roster state (they key on
+        // `RadioProfile::id`), owned by `set_routing_rules`/`set_default_radio`. They MUST be
+        // captured here too: while the operator is editing a NON-ACTIVE radio the panel saves via
+        // `update_radio_profile` and never sends the form at all, so a later plain Save carries a
+        // form loaded before the rules were written — and would silently revert them.
+        let live_rules = std::mem::take(&mut self.settings.routing_rules);
+        let live_default_radio = self.settings.default_radio;
         let (live_dial, live_band, live_sideband) = (
             self.settings.dial_mhz,
             self.settings.band.clone(),
@@ -2207,6 +2221,8 @@ impl Engine {
         self.settings.source = live_source;
         self.settings.radios = live_source_radios;
         self.settings.radio_pegged = live_pegged;
+        self.settings.routing_rules = live_rules;
+        self.settings.default_radio = live_default_radio;
         self.settings.ensure_radio_profiles();
         // Fold the form's flat rig/audio edits into the profile the FORM was editing — the flat fields
         // describe the radio SHOWN in the form, which may differ from the live active radio if a
@@ -2237,6 +2253,9 @@ impl Engine {
         // else an in-session config (e.g. a flat-form port edit, or loading a pre-P2 profile) can
         // leave two radios sharing 4532; their monitors then cross-connect and command the wrong rig.
         self.settings.ensure_distinct_radio_ports();
+        // A save can remove a radio (a legacy payload's roster is discarded, but `ensure_radio_profiles`
+        // can still remap ids) — re-check that nothing routes at a radio that isn't there.
+        self.settings.ensure_routing_targets();
         // `ensure_distinct_radio_ports` may have just BUMPED the active radio's profile rigctld/rotctld
         // port to de-conflict it. Re-pin the flat CAT/audio mirror to the active profile NOW, so the
         // active-radio loop (which reads the flat mirror via `Transport::from_settings`) and the
@@ -2556,6 +2575,21 @@ impl Engine {
         }
     }
 
+    /// Replace the band+mode routing rules (first-match-wins order is the list order). Rules aimed
+    /// at a radio that doesn't exist are dropped — a rule that can never fire is worse than no rule.
+    /// Live verb, NOT part of the settings form: like the roster it must survive a stale-form Save.
+    pub fn set_routing_rules(&mut self, rules: Vec<crate::settings::RoutingRule>) {
+        self.settings.routing_rules = rules;
+        self.settings.ensure_routing_targets();
+    }
+
+    /// Set (or clear) the fallback radio for band+mode combinations no rule and no band coverage
+    /// claims. `None` = stay on the active radio. Live verb, same reason as `set_routing_rules`.
+    pub fn set_default_radio(&mut self, id: Option<u32>) {
+        self.settings.default_radio = id;
+        self.settings.ensure_routing_targets();
+    }
+
     /// Edit ONE radio's CAT/audio/PTT/rotator/native config IN PLACE — WITHOUT changing which radio
     /// is active. This is what lets the operator configure Radio 2 while operating on Radio 1: no
     /// live rig swap, no dropped carrier. If `id` happens to BE the active radio, the flat mirror is
@@ -2572,22 +2606,31 @@ impl Engine {
     }
 
     pub fn set_frequency(&mut self, dial_mhz: f64, band: &str, mode: &str) {
-        // A normal QSY leaves the APRS FM-simplex context (aprs_tune re-sets it right after its own
-        // set_frequency call), so FM never lingers onto the next band the operator tunes.
-        self.aprs_fm = false;
         // A fresh QSY request is a fresh attempt: drop any earlier refusal so a stale "the radio
         // refused 144.390" can't sit on screen next to a frequency that worked.
         self.rig_refused_dial_mhz = None;
-        // Dual-Radio P4 auto band-routing: a commanded band pick (dropdown / manual entry) that a
-        // DIFFERENT radio covers better hands off to that radio FIRST, then the tune below lands it on
-        // the requested dial — so selecting 2 m activates the IC-9700 (which has 2 m configured) and
-        // selecting an HF band swings back to the FTDX10. Peg-lock pins the active radio (no auto-
-        // switch). No-op for a single radio, or when the active radio already covers the band.
+        // Auto radio routing on (BAND, MODE CLASS): a commanded band pick (dropdown / manual entry /
+        // Needed click / APRS tune) hands off to the radio the operator mapped for that band+mode
+        // FIRST, then the tune below lands it on the requested dial. Mode class — not band alone —
+        // is what lets ONE band go to two rigs: 2 m FT8 to the IC-9700, 2 m FM/APRS to the FT-991A.
+        // Falls back to band-only coverage, then the default radio (see `Settings::route_radio`).
+        // Peg-lock pins the active radio (no auto-switch). No-op for a single radio, or when the
+        // routing decision already names the active one.
+        //
+        // The class is read BEFORE `aprs_fm` is cleared below, and `route_intent` lets a caller
+        // whose intent isn't in state yet name it explicitly (aprs_tune).
+        let route_mode = self
+            .route_intent
+            .take()
+            .unwrap_or_else(|| self.route_mode(band, dial_mhz));
         if !self.settings.radio_pegged {
-            if let Some(id) = self.settings.radio_for_band(band) {
+            if let Some(id) = self.settings.route_radio(band, route_mode) {
                 self.set_active_radio(id);
             }
         }
+        // A normal QSY leaves the APRS FM-simplex context (aprs_tune re-sets it right after its own
+        // set_frequency call), so FM never lingers onto the next band the operator tunes.
+        self.aprs_fm = false;
         // Band change invalidates the decode context: answering a HISTORY row from
         // the old band would target a station that isn't here and derive parity
         // from the old band's slots. The heard-stations roster goes with it —
@@ -3099,6 +3142,56 @@ impl Engine {
             }
         }
         self.settings.rig_mode()
+    }
+
+    /// The mode CLASS radio routing decides on, for a QSY to `band` / `dial_mhz` (the TARGET, not
+    /// where the rig is now — a routing decision is made before the tune lands).
+    ///
+    /// Reads the SAME state [`Engine::rig_mode_effective`] commands the rig from — `aprs_fm`,
+    /// `operating_mode`, `phone_mode`, the dial — so the radio a band+mode routes to can never
+    /// disagree with the mode that radio is then put in. In particular both FM gates are mirrored:
+    /// APRS-FM only counts on 2 m, and Phone-FM only at/above 29 MHz (below it FM isn't used, and
+    /// `phone_mode` is one station-wide field that nothing resets on a band change).
+    pub fn route_mode(&self, band: &str, dial_mhz: f64) -> crate::settings::RouteMode {
+        use crate::settings::{OperatingMode, RouteMode};
+        if self.aprs_fm && band.eq_ignore_ascii_case("2m") {
+            return RouteMode::Fm;
+        }
+        match self.settings.operating_mode {
+            OperatingMode::Cw => RouteMode::Cw,
+            OperatingMode::Rtty => RouteMode::Rtty,
+            OperatingMode::Digital => RouteMode::Digital,
+            // SSTV rides the Phone section, so it routes as SSB — see `RouteMode`'s note on why it
+            // is not its own class.
+            OperatingMode::Phone => {
+                // The cockpit's explicit mode pick wins with NO band gate, matching
+                // `rig_mode_effective` (which returns the override verbatim) — but only for a
+                // SAME-BAND move, because `set_frequency` DROPS the override on a band change, so
+                // on a cross-band QSY the override describes where we're leaving, not arriving.
+                let override_fm = self
+                    .sideband_override
+                    .as_deref()
+                    .filter(|_| self.settings.band.eq_ignore_ascii_case(band))
+                    .is_some_and(|m| m.eq_ignore_ascii_case("fm"));
+                // Otherwise the station-wide `phone_mode`, under `rig_mode`'s 29 MHz FM gate.
+                let policy_fm =
+                    self.settings.phone_mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0;
+                if override_fm || policy_fm {
+                    RouteMode::Fm
+                } else {
+                    RouteMode::Ssb
+                }
+            }
+        }
+    }
+
+    /// Where a given (band, mode class) WOULD route right now — the Settings "test" affordance, so
+    /// the operator can check a rule table without QSYing a rig. Returns the resolved radio id,
+    /// which is the ACTIVE radio when nothing claims that band+mode. Read-only: touches no state.
+    pub fn route_preview(&self, band: &str, mode: crate::settings::RouteMode) -> u32 {
+        self.settings
+            .route_radio(band, mode)
+            .unwrap_or(self.settings.active_radio)
     }
 
     /// The active Phone mode override for the cockpit picker (`None` = AUTO / band-derived).
@@ -6021,10 +6114,11 @@ impl Engine {
     }
 
     /// Tune the rig for APRS: QSY to `dial_mhz` on 2 m in **FM simplex**, auto-routing to the radio
-    /// that covers 2 m (the same dual-radio band-routing every QSY uses — so a 2-radio HF+VHF setup
-    /// hands off to the VHF rig). Distinct from the raw `set_frequency` the mode dropdowns use
-    /// because APRS is not a Phone/Digital operating section: without this the rig kept the previous
-    /// section's mode (DATA/USB) and a 2 m packet signal never demodulated. Cleared by the next QSY.
+    /// mapped for **2 m FM** (the same routing every QSY uses — so a station with a VHF digital rig
+    /// AND an FM rig lands on the FM one, not on whichever covers 2 m first). Distinct from the raw
+    /// `set_frequency` the mode dropdowns use because APRS is not a Phone/Digital operating section:
+    /// without this the rig kept the previous section's mode (DATA/USB) and a 2 m packet signal never
+    /// demodulated. Cleared by the next QSY.
     /// ⚠️ CAPABILITY-GATED. Refuses when the radio provably cannot receive `dial_mhz` — the FTdx10
     /// report: opening the APRS cockpit auto-tuned 144.390 at an HF-only radio, the rig refused it,
     /// and the app was left showing a frequency the radio had never been on. Commanding a radio
@@ -6032,17 +6126,28 @@ impl Engine {
     /// failure. Unknown coverage (no CAT, caps unreadable) still tunes — the loop's refusal
     /// handling is the backstop.
     pub fn aprs_tune(&mut self, dial_mhz: f64) -> Result<(), String> {
-        // Judge the radio that would actually be USED: on a 2-radio HF+VHF station `set_frequency`
-        // hands off to whichever radio covers 2 m, so the ACTIVE radio's coverage is the wrong
-        // question there — blocking on it would break the exact IC-9700 setup aprs_tune exists for.
-        let hands_off_to_a_2m_radio =
-            !self.settings.radio_pegged && self.settings.radio_for_band("2m").is_some();
-        if !hands_off_to_a_2m_radio && self.rig_covers_mhz(dial_mhz) == Some(false) {
+        // Judge the radio that would actually be USED. Under band+mode routing that is the
+        // (2 m, FM) decision — `route_radio` returning Some means a DIFFERENT radio takes this
+        // QSY, so the ACTIVE radio's coverage is the wrong question there; blocking on it would
+        // break the exact HF+VHF setups the routing exists for. (Pure query: the one-shot
+        // `route_intent` is set only after the gate passes, so a refusal cannot leave a stale
+        // intent to misroute the next QSY.)
+        let hands_off_to_a_vhf_radio = !self.settings.radio_pegged
+            && self
+                .settings
+                .route_radio("2m", crate::settings::RouteMode::Fm)
+                .is_some();
+        if !hands_off_to_a_vhf_radio && self.rig_covers_mhz(dial_mhz) == Some(false) {
             return Err(format!(
                 "This radio doesn't cover {dial_mhz:.3} MHz, so it can't receive RF APRS. \
                  RF APRS needs a VHF radio; the internet feed works without one."
             ));
         }
+        // Name the mode class EXPLICITLY for the routing step. `aprs_fm` is still false here (we're
+        // arriving from some other section, and set_frequency clears it anyway), so without this the
+        // QSY would route on the class of the section being LEFT — sending an APRS tune to the FT8
+        // radio when the operator happened to come from Operate.
+        self.route_intent = Some(crate::settings::RouteMode::Fm);
         // set_frequency does the radio hand-off + dial + band and clears aprs_fm; re-arm FM after so
         // the loop commands FM (via rig_mode_effective) with simplex plumbing (via fm_repeater_config).
         self.set_frequency(dial_mhz, "2m", "FM");
@@ -14908,6 +15013,258 @@ mod tests {
             "landed on the APRS dial"
         );
         assert_eq!(e.rig_mode_effective(), "FM");
+    }
+
+    /// The operator's actual three-radio shack, wired the way the app wires it (real profiles, real
+    /// rig models, the routing rules from Settings). Returns `(ic9700, ft991a)`; radio 0 is the
+    /// FTdx10 and is left ACTIVE, which is where an HF operator starts the day.
+    fn three_radio_engine() -> (Engine, u32, u32) {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.rig_model = 1042; // FTdx10 on radio 0 — catch-all coverage (HF everything)
+        e.settings.sync_active_from_flat();
+        let ic9700 = e.add_radio();
+        e.settings.rig_model = 3081;
+        e.settings.sync_active_from_flat();
+        let ft991a = e.add_radio();
+        e.settings.rig_model = 1035;
+        e.settings.sync_active_from_flat();
+        e.rename_radio(0, "FTdx10");
+        e.rename_radio(ic9700, "IC-9700");
+        e.rename_radio(ft991a, "FT-991A");
+        // Both VHF rigs cover 2 m / 70 cm — which is exactly why band-only routing can't decide.
+        e.set_radio_bands(ic9700, vec!["2m".into(), "70cm".into()]);
+        e.set_radio_bands(ft991a, vec!["2m".into(), "70cm".into()]);
+        e.set_routing_rules(vec![
+            crate::settings::RoutingRule {
+                bands: vec!["2m".into(), "70cm".into()],
+                mode: Some(crate::settings::RouteMode::Fm),
+                radio: ft991a,
+            },
+            crate::settings::RoutingRule {
+                bands: vec!["2m".into(), "70cm".into()],
+                mode: Some(crate::settings::RouteMode::Digital),
+                radio: ic9700,
+            },
+        ]);
+        e.set_default_radio(Some(0));
+        e.set_active_radio(0);
+        e.settings.band = "20m".into();
+        e.settings.dial_mhz = 14.074;
+        (e, ic9700, ft991a)
+    }
+
+    #[test]
+    fn working_a_2m_ft8_spot_routes_to_the_digital_radio() {
+        // THE driving case. Clicking a 2 m FT8 spot must reach the IC-9700, not the FT-991A —
+        // band-only routing cannot tell them apart (both list 2 m), so this is what mode-class
+        // routing exists for.
+        let (mut e, ic9700, _ft991a) = three_radio_engine();
+        e.work_spot("operate", 144.174, "2m"); // the Needed-board click: mode + QSY, one lock
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "2 m FT8 routed to the IC-9700"
+        );
+        assert!((e.settings.dial_mhz - 144.174).abs() < 1e-9);
+        assert_eq!(
+            e.settings.operating_mode,
+            crate::settings::OperatingMode::Digital
+        );
+    }
+
+    #[test]
+    fn aprs_tune_routes_to_the_fm_radio_not_merely_the_2m_radio() {
+        // aprs_tune's OLD contract was "switch to the radio that covers 2 m". With two rigs on 2 m
+        // that is ambiguous — and the ambiguity resolves the WRONG way here, because coverage-tier
+        // ties go to the lowest id (the IC-9700). APRS must route on the FM mode class.
+        let (mut e, ic9700, ft991a) = three_radio_engine();
+        e.aprs_tune(144.390);
+        assert_eq!(
+            e.settings.active_radio, ft991a,
+            "APRS routed to the FT-991A (the FM radio), not the IC-9700"
+        );
+        assert_ne!(e.settings.active_radio, ic9700);
+        assert!((e.settings.dial_mhz - 144.390).abs() < 1e-9);
+        assert_eq!(e.rig_mode_effective(), "FM", "still forces FM simplex");
+    }
+
+    #[test]
+    fn aprs_tune_routes_on_fm_even_when_arriving_from_the_digital_section() {
+        // The ordering trap: `set_frequency` CLEARS `aprs_fm` (a QSY leaves the APRS context), so a
+        // routing decision derived from live state would see the section being LEFT. Arriving from
+        // Operate (Digital) must still route APRS to the FM radio — that is what `route_intent` is.
+        let (mut e, _ic9700, ft991a) = three_radio_engine();
+        e.set_operating_mode("operate", false); // sitting in the FT8 cockpit
+        e.aprs_tune(144.390);
+        assert_eq!(e.settings.active_radio, ft991a);
+    }
+
+    #[test]
+    fn a_2m_fm_repeater_qsy_routes_to_the_fm_radio() {
+        // The other half of the operator's spec: a 2 m FM/repeater context (Phone + phone_mode=fm,
+        // which is what the Memories FM channels set) goes to the FT-991A.
+        let (mut e, _ic9700, ft991a) = three_radio_engine();
+        e.settings.phone_mode = "fm".into();
+        e.set_operating_mode("phone", false);
+        e.set_frequency(146.520, "2m", "FM");
+        assert_eq!(e.settings.active_radio, ft991a, "2 m FM → the FT-991A");
+
+        // …and 2 m SSB (phone, NOT fm) matches neither mode rule, so it falls to band coverage,
+        // where the tie breaks to the IC-9700. Recorded as the honest consequence of the operator's
+        // rule set: they mapped 2 m digital and 2 m FM, not 2 m SSB.
+        e.settings.phone_mode = "usb".into();
+        e.set_active_radio(0);
+        e.set_frequency(144.200, "2m", "USB");
+        assert_eq!(e.settings.active_radio, 1);
+    }
+
+    #[test]
+    fn hf_actions_route_to_the_hf_radio_in_every_mode() {
+        // "any HF action → FTdx10", from whichever VHF rig is active, in every mode class.
+        let (mut e, ic9700, ft991a) = three_radio_engine();
+        for (section, band, dial) in [
+            ("operate", "20m", 14.074),
+            ("phone", "20m", 14.250),
+            ("cw", "40m", 7.030),
+            ("rtty", "20m", 14.083),
+        ] {
+            for start in [ic9700, ft991a] {
+                e.set_active_radio(start);
+                e.set_operating_mode(section, false);
+                e.set_frequency(dial, band, "USB");
+                assert_eq!(
+                    e.settings.active_radio, 0,
+                    "{section} on {band} from radio {start} → the FTdx10"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn peg_lock_suppresses_mode_routing_too() {
+        // Peg-lock is the operator's "don't move my radio" latch; adding a mode dimension must not
+        // give routing a new way around it.
+        let (mut e, _ic9700, _ft991a) = three_radio_engine();
+        e.set_radio_pegged(true);
+        e.work_spot("operate", 144.174, "2m");
+        assert_eq!(e.settings.active_radio, 0, "pegged → no auto-switch");
+        e.aprs_tune(144.390);
+        assert_eq!(
+            e.settings.active_radio, 0,
+            "pegged → APRS doesn't switch either"
+        );
+    }
+
+    #[test]
+    fn route_mode_mirrors_the_rig_mode_policys_fm_gates() {
+        // The routing class must never disagree with the mode the rig is then put in. Both FM gates
+        // in `rig_mode`/`rig_mode_effective` are mirrored: APRS-FM only on 2 m, Phone-FM only ≥29 MHz.
+        use crate::settings::{OperatingMode, RouteMode};
+        let (mut e, _ic9700, _ft991a) = three_radio_engine();
+
+        e.settings.operating_mode = OperatingMode::Phone;
+        e.settings.phone_mode = "fm".into();
+        assert_eq!(e.route_mode("2m", 146.520), RouteMode::Fm);
+        assert_eq!(
+            e.route_mode("20m", 14.250),
+            RouteMode::Ssb,
+            "phone_mode is station-wide and nothing resets it on a band change — FM must not \
+             follow the operator down to HF, in routing OR in the commanded mode"
+        );
+        e.settings.phone_mode = "usb".into();
+        assert_eq!(e.route_mode("2m", 144.200), RouteMode::Ssb);
+
+        // The cockpit's explicit FM pick wins with no band gate — `rig_mode_effective` returns the
+        // override verbatim, so routing must agree. But ONLY for a same-band move: `set_frequency`
+        // drops the override on a band change, so on a cross-band QSY it describes the band being
+        // LEFT and must not drag FM onto the new one.
+        e.settings.band = "2m".into();
+        e.sideband_override = Some("FM".into());
+        assert_eq!(e.route_mode("2m", 146.520), RouteMode::Fm);
+        assert_eq!(
+            e.route_mode("20m", 14.250),
+            RouteMode::Ssb,
+            "a cross-band QSY drops the override, so it must not route on it"
+        );
+        e.sideband_override = None;
+
+        e.settings.operating_mode = OperatingMode::Digital;
+        assert_eq!(e.route_mode("2m", 144.174), RouteMode::Digital);
+        e.settings.operating_mode = OperatingMode::Cw;
+        assert_eq!(e.route_mode("40m", 7.030), RouteMode::Cw);
+        e.settings.operating_mode = OperatingMode::Rtty;
+        assert_eq!(e.route_mode("20m", 14.083), RouteMode::Rtty);
+
+        // In the APRS context, a QSY that stays on 2 m routes FM; one that leaves 2 m routes on the
+        // underlying section, because `aprs_fm` is meaningless off 2 m (same gate as rig_mode_effective).
+        e.settings.operating_mode = OperatingMode::Digital;
+        e.aprs_tune(144.390);
+        assert_eq!(e.route_mode("2m", 144.800), RouteMode::Fm);
+        assert_eq!(e.route_mode("20m", 14.074), RouteMode::Digital);
+    }
+
+    #[test]
+    fn route_preview_answers_where_a_band_and_mode_would_go() {
+        // The Settings "test" affordance: read-only, and it names a radio even when the answer is
+        // "stay where you are" (so the operator sees a rig, never a blank).
+        use crate::settings::RouteMode;
+        let (e, ic9700, ft991a) = three_radio_engine();
+        assert_eq!(e.route_preview("2m", RouteMode::Digital), ic9700);
+        assert_eq!(e.route_preview("2m", RouteMode::Fm), ft991a);
+        assert_eq!(e.route_preview("70cm", RouteMode::Fm), ft991a);
+        assert_eq!(e.route_preview("20m", RouteMode::Ssb), 0);
+        assert_eq!(e.route_preview("40m", RouteMode::Cw), 0);
+        assert_eq!(
+            e.settings.active_radio, 0,
+            "preview is read-only — it must not move the radio"
+        );
+    }
+
+    #[test]
+    fn a_stale_form_save_cannot_revert_the_routing_rules() {
+        // Same class as the roster: the rules are LIVE state owned by `set_routing_rules`, and while
+        // the operator edits a non-active radio the panel never sends the form at all — so a later
+        // plain Save carries a form loaded before the rules existed.
+        let (mut e, _ic9700, ft991a) = three_radio_engine();
+        let rules = e.settings.routing_rules.clone();
+        let mut stale = Settings::default();
+        stale.ensure_radio_profiles(); // a one-radio form with no rules
+        e.apply_settings(stale);
+        assert_eq!(
+            e.settings.routing_rules, rules,
+            "the stale form did not drop the routing rules"
+        );
+        assert_eq!(e.settings.default_radio, Some(0));
+        assert_eq!(e.settings.radios.len(), 3, "…nor the third radio");
+        // …and routing still works after the save.
+        e.aprs_tune(144.390);
+        assert_eq!(e.settings.active_radio, ft991a);
+    }
+
+    #[test]
+    fn dxped_work_mode_routing_still_reaches_the_right_radio() {
+        // The dxpedWorkMode invariant: a DXpedition card's mode string picks the cockpit, and that
+        // cockpit's section name is what `work_spot` routes on. Regression guard that adding the
+        // mode dimension didn't break the HF-DX path (which is the whole point of a dxped chase).
+        let (mut e, ic9700, _ft991a) = three_radio_engine();
+        for (work_mode, band, dial, want) in [
+            ("operate", "20m", 14.074, 0u32),   // FT8 on 20 m → the FTdx10
+            ("phone", "15m", 21.250, 0),        // SSB on 15 m → the FTdx10
+            ("cw", "40m", 7.030, 0),            // CW on 40 m → the FTdx10
+            ("operate", "2m", 144.174, ic9700), // a VHF dxped → the IC-9700
+        ] {
+            e.set_active_radio(if want == 0 { ic9700 } else { 0 });
+            e.work_spot(work_mode, dial, band);
+            assert_eq!(
+                e.settings.active_radio, want,
+                "{work_mode} on {band} routed wrong"
+            );
+            assert_eq!(
+                e.work_view.as_deref(),
+                Some(work_mode),
+                "cockpit hint intact"
+            );
+        }
     }
 
     #[test]
