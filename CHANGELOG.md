@@ -41,6 +41,23 @@ speaker tells you nothing about which device the app is capturing, and packets t
 checksum usually mean the radio is off frequency or the receive audio is driven hard enough to
 clip.
 
+### APRS starts listening when you open it — receive only
+
+Opening APRS now starts the decoder for you, so the screen is not dead until you find the Monitor
+button. This is strictly receive: a decoder started this way will **never** send an automatic ack,
+whatever your TX setting.
+
+Automatic acks stay behind two deliberate acts, and opening a screen is not one of them: you arm
+Monitor yourself, **and** TX is on. That is unchanged except that it is now enforced rather than
+assumed — an unattended transmission should never follow from navigating somewhere. The Monitor
+button says which state you are in, reading "Monitoring (auto)" when APRS started it for you, and
+its tooltip spells out whether acks can go out.
+
+Clicking Monitor always means start or stop, as before. It never quietly upgrades an
+automatically-started decoder into one that can transmit — to allow acks, stop it and start it
+yourself. And if you stop the decoder, it stays stopped: coming back to the APRS screen will not
+restart it behind you.
+
 ### APRS Monitor button now reports the decoder, not its own guess
 
 The Monitor button tracked its own idea of whether the decoder was running, which could disagree

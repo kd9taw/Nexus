@@ -12,7 +12,7 @@ const NOW = 1_700_000_000
 
 function health(over: Partial<AprsHealth> = {}): AprsHealth {
   return {
-    armed: true,
+    arm: 'explicit',
     audioPeak: 0.4,
     lastAudioUnix: NOW,
     framesSeen: 0,
@@ -77,7 +77,7 @@ describe('APRS decode health tells the three empty-screen cases apart', () => {
   })
 
   it('disarmed says so rather than blaming the radio', () => {
-    expect(aprsDecodeStatus(health({ armed: false }), NOW).state).toBe('off')
+    expect(aprsDecodeStatus(health({ arm: 'off' }), NOW).state).toBe('off')
     expect(aprsDecodeStatus(null, NOW).state).toBe('off')
   })
 })

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   aprsArm,
+  aprsAutoArm,
   aprsSendBeacon,
   aprsSendMessage,
   getAprsHeard,
@@ -76,7 +77,7 @@ export function aprsDecodeStatus(
   health: AprsHealth | null,
   nowSec: number,
 ): { state: AprsDecodeState; label: string; detail: string } {
-  if (!health || !health.armed) {
+  if (!health || health.arm === 'off') {
     return {
       state: 'off',
       label: 'Monitor off',
@@ -180,6 +181,7 @@ export function AprsCockpit({
   const [me, setMe] = useState<LatLon | null>(null)
   const prefilled = useRef(false)
   const autoTuned = useRef(false)
+  const autoArmed = useRef(false)
 
   // Default to the APRS radio on ENTERING the view: hand off to the 2 m-capable rig, land on the
   // selected APRS frequency in FM. This is the operator's "hitting APRS should default to the 9700"
@@ -194,6 +196,27 @@ export function AprsCockpit({
       onTune(freq)
     }
   }, [active, onTune, freq])
+
+  // Arm the decoder on ENTERING the view, so APRS does not open on a dead screen the operator has
+  // to notice and fix. Rising edge of `active`, not mount — the cockpit is kept alive across
+  // navigation (App.tsx renders it hidden), so it mounts once per session.
+  //
+  // ⚠️ RECEIVE-ONLY, and the engine is what guarantees that: `aprs_auto_arm` never confers the
+  // auto-ack, only upgrades from off, and refuses once the operator has explicitly stopped the
+  // decoder this session. The policy lives there rather than in a ref here so it cannot be lost
+  // to a remount — which is exactly how the armed-state desync happened.
+  useEffect(() => {
+    if (!active) {
+      autoArmed.current = false
+      return
+    }
+    if (autoArmed.current) return
+    autoArmed.current = true
+    void aprsAutoArm()
+      .then(() => getAprsHealth())
+      .then(setHealth)
+      .catch(() => {})
+  }, [active])
 
   // Prefill the beacon lat/lon from the operator's grid (and remember it for distance/bearing), once.
   useEffect(() => {
@@ -233,14 +256,21 @@ export function AprsCockpit({
   }, [active])
 
   const decode = useMemo(() => aprsDecodeStatus(health, now), [health, now])
-  // The engine's flag, as of the last poll. Null health (before the first poll) reads as
+  // The engine's arm state, as of the last poll. Null health (before the first poll) reads as
   // disarmed, which matches how the engine starts.
-  const armed = health?.armed ?? false
+  const arm = health?.arm ?? 'off'
+  const armed = arm !== 'off'
 
   const toggleArm = () => {
-    // Re-read health straight after the round trip rather than assuming it worked: an arm that
-    // the engine refuses must not leave the button claiming to be monitoring. One IPC hop, so
-    // the button still responds immediately — it just responds with the truth.
+    // A plain start/stop toggle. Clicking it while armed ALWAYS stops — including when the
+    // decoder was auto-armed on view entry. It deliberately does NOT "upgrade" an auto-arm to an
+    // explicit one: the button reads "● Monitoring", so a click is the operator reaching for
+    // stop, and turning that same click into "grant unattended-transmit capability" would be the
+    // most dangerous surprise available here. Explicit arm is reached from OFF, which is what the
+    // auto-arm tooltip tells the operator.
+    //
+    // Re-read health after the round trip rather than assuming it worked: an arm the engine
+    // refuses must not leave the button claiming to be monitoring.
     void aprsArm(!armed)
       .then((h) => {
         setHeard(h)
@@ -373,14 +403,27 @@ export function AprsCockpit({
             {radio.txEnabled ? 'TX On' : 'TX Off'}
           </button>
         )}
+        {/* Three states, because "decoding" and "may transmit an ack by itself" are different
+            things and the operator has to be able to tell them apart. Auto-armed must never look
+            ack-capable — see aprs_auto_ack's gate. */}
         <button
           type="button"
           className={`np-chip${armed ? ' active' : ''}`}
           aria-pressed={armed}
           onClick={toggleArm}
-          title="Arm the APRS decoder on the RX audio"
+          title={
+            arm === 'explicit'
+              ? 'You armed the decoder, so automatic acks are allowed — an incoming message ' +
+                'addressed to you is acked when TX is on. Click to stop.'
+              : arm === 'auto'
+                ? 'Armed automatically when you opened APRS: RECEIVE ONLY. It will never send ' +
+                  'an automatic ack. To allow those, stop it and arm it yourself, then turn TX ' +
+                  'on. Click to stop.'
+                : 'Arm the APRS decoder on the RX audio. Arming it yourself also allows ' +
+                  'automatic acks once TX is on.'
+          }
         >
-          {armed ? '● Monitoring' : 'Monitor'}
+          {arm === 'auto' ? '● Monitoring (auto)' : arm === 'explicit' ? '● Monitoring' : 'Monitor'}
         </button>
         {/* Decode health. An empty APRS screen used to be one answer to three different
             questions — deaf app, unreadable channel, quiet band — so it never told the
