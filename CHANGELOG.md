@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: APRS map icons flashed on and off
+
+With the internet feed running, stations blinked in and out constantly. Two separate faults, both
+fixed.
+
+The map was built on the **last 300 packets** rather than on stations. Three hundred packets is two
+to five minutes of a busy feed, so a station beaconing on a perfectly ordinary ten-minute cycle was
+pushed out before its next beacon — it disappeared, came back, disappeared again. The map now keeps
+**stations**, with their own history: last position, when each was last heard by your radio and by
+the internet, symbol, course and speed. A station stays for an hour after its last packet and starts
+to fade after twenty minutes of silence, so a quiet station recedes instead of vanishing. You can
+change the hour in **Settings ▸ Modes ▸ APRS**.
+
+Separately, the whole map was being torn down and repainted **every two seconds** whether anything
+had changed or not. That alone made icons flicker even for stations that never went away. The map now
+repaints only when something has actually moved, arrived, or aged.
+
+### APRS stations are coloured by what they are
+
+Symbols now carry a colour for their family: homes and portable stations, vehicles, aircraft, boats,
+weather stations, digipeaters and gateways, and hand-placed objects. Colour says what a station *is*
+— nothing here means urgency — and it is independent of the ring that tells you whether your own
+antenna heard it, so the two never compete. The palette varies brightness as well as hue so the
+families stay apart for colourblind operators, and it has a separate version for the light theme.
+
 ### APRS decode readout stops mixing up "now" with "a while ago"
 
 The new input-level reading immediately caught a sentence that contradicted itself: *"2 packets

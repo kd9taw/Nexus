@@ -2907,10 +2907,35 @@ button.nb-chip:hover {
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
   --shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+
+  /* APRS symbol categories. Colour says WHAT a station is, never how urgent it is — the map is
+     not an incident board, so nothing here is alarm-red. Hue AND lightness both vary, so the
+     families stay separable for a colourblind operator and in greyscale. Tuned for the dark
+     theme's dark map; the light theme overrides them all. */
+  --aprs-cat-fixed: #93b4d8; /* light steel — homes, antennas, portable ops */
+  --aprs-cat-mobile: #f0b352; /* amber, the brightest: things that move and matter most */
+  --aprs-cat-air: #6fd8e8; /* pale cyan — sky */
+  --aprs-cat-marine: #6d8fe0; /* deeper blue, darker than air so the two never merge */
+  --aprs-cat-wx: #c39ae8; /* violet */
+  --aprs-cat-infra: #74d69a; /* green — the long-standing APRS colour for a digipeater */
+  --aprs-cat-object: #e8a0c0; /* rose — objects and event markers someone placed by hand */
+  --aprs-cat-other: #94a3b8; /* desaturated neutral: we do not know what this is */
 }
 
 /* ---- LIGHT (sunlight) ---- */
 [data-theme='light'] {
+  /* Same eight families, darkened and slightly desaturated: the light theme's map is a pale
+     surface, so the dark-theme inks would wash out on it. Ordering of lightness between the
+     families is preserved, so a station's category reads the same way in either theme. */
+  --aprs-cat-fixed: #3f6491;
+  --aprs-cat-mobile: #9a6410;
+  --aprs-cat-air: #10707f;
+  --aprs-cat-marine: #2f4da8;
+  --aprs-cat-wx: #7040a0;
+  --aprs-cat-infra: #1c7a48;
+  --aprs-cat-object: #a4457a;
+  --aprs-cat-other: #5b6675;
+
   --bg: #e5eaf0;
   --bg-elev: #fbfcfe;
   --bg-elev-2: #f4f6f9;

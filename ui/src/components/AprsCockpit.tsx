@@ -11,13 +11,15 @@ import {
   getAprsHeard,
   getAprsHealth,
   getAprsIsStatus,
+  getAprsStations,
   getSettings,
   type AprsHealth,
   type AprsHeard,
   type AprsIsStatus,
   type AprsSource,
+  type AprsStationsView,
 } from '../api'
-import { GLYPH_PATHS, resolveSymbol } from '../aprsSymbols'
+import { ageFade, CATEGORY_VAR, GLYPH_PATHS, resolveSymbol, symbolCategory } from '../aprsSymbols'
 import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
@@ -138,13 +140,69 @@ export type AprsDecodeState =
 export function AprsSymbolIcon({ table, code }: { table: string; code: string }) {
   const sym = resolveSymbol(table, code)
   return (
-    <span className={`aprs-sym${sym.known ? '' : ' aprs-sym-unknown'}`} title={sym.label}>
+    <span
+      className={`aprs-sym${sym.known ? '' : ' aprs-sym-unknown'}`}
+      title={sym.label}
+      // Same category colour the map paints, from the same variable — one palette, two renderers.
+      style={{ color: `var(${CATEGORY_VAR[symbolCategory(sym.glyph)]})` }}
+    >
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
         <path d={GLYPH_PATHS[sym.glyph]} fill="currentColor" />
       </svg>
       {sym.overlay && <span className="aprs-sym-overlay">{sym.overlay}</span>}
     </span>
   )
+}
+
+/** A roster with nothing in it, and the backend's own default thresholds. */
+const EMPTY_ROSTER: AprsStationsView = { stations: [], ttlMin: 60, fadeAfterMin: 20 }
+
+/**
+ * ⭐ THE RENDER-SIDE HALF OF THE FLASHING BUG. Keep the previous array when a poll brought back the
+ * same data, so React sees the same reference and nothing downstream re-runs.
+ *
+ * The poll fires every two seconds and used to `setHeard(h)` unconditionally. Tauri hands back a
+ * FRESH array every time, so the identity changed on every tick even when not a single packet had
+ * arrived. That invalidated the memo feeding MapView's `aprs` prop, which re-ran the draw effect,
+ * which reassigns `canvas.width` — and assigning canvas width RESETS THE BITMAP. So the entire map,
+ * relief and coastlines included, was torn down and repainted every two seconds whether or not
+ * anything had changed. That is a visible flash on its own, independent of the store churn, and it
+ * is why stations appeared to blink even while continuously present.
+ *
+ * Compares what actually drives the render rather than deep-equalling everything.
+ */
+function samePackets(a: AprsHeard[], b: AprsHeard[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].source !== b[i].source || a[i].atUnix !== b[i].atUnix || a[i].text !== b[i].text) {
+      return false
+    }
+  }
+  return true
+}
+
+/** As `samePackets`, for the station roster: identity, when it was last heard, and where it is. */
+function sameRoster(a: AprsStationsView, b: AprsStationsView): boolean {
+  if (a === b) return true
+  if (a.ttlMin !== b.ttlMin || a.fadeAfterMin !== b.fadeAfterMin) return false
+  if (a.stations.length !== b.stations.length) return false
+  for (let i = 0; i < a.stations.length; i++) {
+    const x = a.stations[i]
+    const y = b.stations[i]
+    if (
+      x.call !== y.call ||
+      x.lastHeardUnix !== y.lastHeardUnix ||
+      x.lat !== y.lat ||
+      x.lon !== y.lon ||
+      x.sourceKind !== y.sourceKind ||
+      x.symbolCode !== y.symbolCode ||
+      x.symbolTable !== y.symbolTable
+    ) {
+      return false
+    }
+  }
+  return true
 }
 
 /** Short tag shown in the station list's Via column. */
@@ -374,6 +432,9 @@ export function AprsCockpit({
   const [selected, setSelected] = useState<string | null>(null)
   const [freq, setFreq] = useState(144.39)
   const [heard, setHeard] = useState<AprsHeard[]>([])
+  // The STATION roster — what the list and map draw. The packet log above still feeds the packet
+  // pane and the message list, which are about events rather than stations.
+  const [roster, setRoster] = useState<AprsStationsView>(EMPTY_ROSTER)
   const [health, setHealth] = useState<AprsHealth | null>(null)
   const [isStatus, setIsStatus] = useState<AprsIsStatus | null>(null)
   // Show stations the internet reported. On by default when the feed is running (there is no
@@ -457,7 +518,10 @@ export function AprsCockpit({
     const tick = () => {
       setNow(Math.floor(Date.now() / 1000))
       void getAprsHeard()
-        .then((h) => alive && setHeard(h))
+        .then((h) => alive && setHeard((prev) => (samePackets(prev, h) ? prev : h)))
+        .catch(() => {})
+      void getAprsStations()
+        .then((v) => alive && setRoster((prev) => (sameRoster(prev, v) ? prev : v)))
         .catch(() => {})
       void getAprsHealth()
         .then((h) => alive && setHealth(h))
@@ -555,67 +619,51 @@ export function AprsCockpit({
       .catch((e) => setStatus(String(e)))
   }
 
-  // Per-STATION source, accumulated across every packet from that callsign — not just its latest.
-  // A station our antenna heard ten minutes ago and the internet has reported since is still a
-  // station we can hear, and the newest packet alone would quietly relabel it `inet`. Once RF, the
-  // station stays at least `both`.
-  const sourceByCall = useMemo(() => {
-    const m = new Map<string, AprsSource>()
-    for (const h of heard) {
-      const prior = m.get(h.source)
-      m.set(h.source, !prior || prior === h.sourceKind ? h.sourceKind : 'both')
-    }
-    return m
-  }, [heard])
-
-  // The "show internet stations" toggle. Applied ONCE here, so the list, the counts and the map
-  // can never disagree about which stations exist.
-  const visible = useMemo(
-    () => (showInet ? heard : heard.filter((h) => sourceByCall.get(h.source) !== 'inet')),
-    [heard, showInet, sourceByCall],
+  // The station roster, filtered by the "show internet stations" toggle. Applied ONCE here so the
+  // list, the counts and the map can never disagree about which stations exist.
+  //
+  // No per-station source accumulation any more: the backend store derives each station's source
+  // from when each channel last carried it, which is one source of truth instead of two that could
+  // drift.
+  const visibleStations = useMemo(
+    () => (showInet ? roster.stations : roster.stations.filter((st) => st.sourceKind !== 'inet')),
+    [roster, showInet],
   )
 
-  // How many VISIBLE stations actually carry a position — status and message packets carry none,
-  // so "nothing on the map" is a normal state worth naming.
+  // How many VISIBLE stations actually carry a position — a station heard only via a message or
+  // status packet has none, so "nothing on the map" is a normal state worth naming.
   const positioned = useMemo(
-    () => visible.filter((h) => h.lat != null && h.lon != null).length,
-    [visible],
+    () => visibleStations.filter((st) => st.lat != null && st.lon != null).length,
+    [visibleStations],
   )
 
-  // Messages get their OWN chronological list (newest first) — never collapsed by source, so a
-  // conversation of several lines from one station all show. Positions are the roster below.
+  // Messages keep their OWN chronological list from the PACKET log (newest first) — they are
+  // events, not stations, and a conversation of several lines from one station must all show.
   const messages = useMemo(
-    () => visible.filter((h) => h.kind === 'message').slice().reverse(),
-    [visible],
+    () => heard.filter((h) => h.kind === 'message').slice().reverse(),
+    [heard],
   )
 
-  // Collapse the POSITION stream to ONE row per station (latest wins — `heard` is oldest→newest),
-  // newest first, with distance + bearing from the operator's grid. Messages are excluded (above).
-  const rows = useMemo(() => {
-    const byCall = new Map<string, AprsHeard>()
-    for (const h of visible) {
-      if (h.kind === 'message') continue
-      byCall.set(h.source, h)
-    }
-    return [...byCall.values()]
-      .sort((a, b) => b.atUnix - a.atUnix)
-      .map((h) => {
-        const hasPos = h.lat != null && h.lon != null
-        const there = hasPos ? { lat: h.lat as number, lon: h.lon as number } : null
+  // The station rows: the backend already collapsed packets into stations and ordered them
+  // newest-heard first, so this only decorates them with distance + bearing from the operator.
+  const rows = useMemo(
+    () =>
+      visibleStations.map((st) => {
+        const there = st.lat != null && st.lon != null ? { lat: st.lat, lon: st.lon } : null
         return {
-          h,
-          src: sourceByCall.get(h.source) ?? h.sourceKind,
+          st,
           dist: me && there ? haversineKm(me, there) : null,
           brg: me && there ? bearingDeg(me, there) : null,
         }
-      })
-  }, [visible, me, sourceByCall])
+      }),
+    [visibleStations, me],
+  )
 
   // How many stations the internet contributed that our own receiver has NOT heard — the number
   // the toggle hides, and worth naming so its effect is never a surprise.
   const inetOnly = useMemo(
-    () => [...sourceByCall.values()].filter((s) => s === 'inet').length,
-    [sourceByCall],
+    () => roster.stations.filter((st) => st.sourceKind === 'inet').length,
+    [roster],
   )
 
   return (
@@ -864,39 +912,47 @@ export function AprsCockpit({
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ h, src, dist, brg }) => (
+            {rows.map(({ st, dist, brg }) => (
               // Selecting here selects on the map and vice versa — one selection,
               // two views of it. Clicking the same row again clears it.
               <tr
-                key={h.source}
-                className={selected === h.source ? 'sel' : undefined}
-                onClick={() => setSelected(selected === h.source ? null : h.source)}
+                key={st.call}
+                className={selected === st.call ? 'sel' : undefined}
+                // A station going quiet fades in the list exactly as it does on the map, from the
+                // same thresholds the backend sent, so the two readings cannot disagree.
+                style={{
+                  opacity: ageFade(st.lastHeardUnix, now, roster.fadeAfterMin, roster.ttlMin),
+                }}
+                onClick={() => setSelected(selected === st.call ? null : st.call)}
                 title={
-                  h.lat != null && h.lon != null
-                    ? `Highlight ${h.source} on the map`
-                    : `${h.source} reported no position — nothing to highlight`
+                  st.lat != null && st.lon != null
+                    ? `Highlight ${st.call} on the map`
+                    : `${st.call} reported no position — nothing to highlight`
                 }
               >
-                <td className="aprs-age">{ageLabel(h.atUnix, now)}</td>
+                <td className="aprs-age">{ageLabel(st.lastHeardUnix, now)}</td>
                 <td className="aprs-sym-cell">
-                  <AprsSymbolIcon table={h.symbolTable} code={h.symbolCode} />
+                  <AprsSymbolIcon table={st.symbolTable} code={st.symbolCode} />
                 </td>
-                <td className="aprs-from">{h.source}</td>
-                <td className={`aprs-src aprs-src-${src}`} title={SOURCE_TITLE[src]}>
-                  {SOURCE_LABEL[src]}
+                <td className="aprs-from">{st.call}</td>
+                <td
+                  className={`aprs-src aprs-src-${st.sourceKind}`}
+                  title={SOURCE_TITLE[st.sourceKind]}
+                >
+                  {SOURCE_LABEL[st.sourceKind]}
                 </td>
-                <td className={`aprs-kind aprs-kind-${h.kind}`}>{h.kind}</td>
+                <td className={`aprs-kind aprs-kind-${st.kind}`}>{st.kind}</td>
                 <td className="aprs-pos">
-                  {h.lat != null && h.lon != null
-                    ? `${h.lat.toFixed(4)}, ${h.lon.toFixed(4)}${
-                        h.speedKnots ? ` · ${h.speedKnots}kt ${h.courseDeg}°` : ''
+                  {st.lat != null && st.lon != null
+                    ? `${st.lat.toFixed(4)}, ${st.lon.toFixed(4)}${
+                        st.speedKnots ? ` · ${st.speedKnots}kt ${st.courseDeg}°` : ''
                       }`
                     : '—'}
                 </td>
                 <td className="aprs-dist">
                   {dist != null ? `${Math.round(dist)} km ${brg != null ? compass(brg) : ''}` : ''}
                 </td>
-                <td className="aprs-info">{h.text}</td>
+                <td className="aprs-info">{st.text}</td>
               </tr>
             ))}
           </tbody>
@@ -906,7 +962,9 @@ export function AprsCockpit({
         <div className="aprs-map">
           <MapView
             embedded={{ aprs: true }}
-            aprs={visible}
+            aprs={visibleStations}
+            aprsFadeAfterMin={roster.fadeAfterMin}
+            aprsTtlMin={roster.ttlMin}
             selectedAprs={selected}
             onSelectAprs={setSelected}
             myGrid={myGrid}

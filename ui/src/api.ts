@@ -1222,6 +1222,53 @@ export interface AprsHeard {
 /** Where an APRS packet reached us from. See `AprsHeard.sourceKind`. */
 export type AprsSource = 'rf' | 'inet' | 'both'
 
+/** One STATION, accumulated from every packet it has sent (from `get_aprs_stations`).
+ *
+ * Distinct from `AprsHeard`, which is one PACKET. The map and the station list read stations; the
+ * packet pane and the message list read packets. Conflating them is what made the map flash — the
+ * packet log is capped by count with no age expiry, so a busy internet feed evicted stations that
+ * were still active, and they blinked off until their next beacon. */
+export interface AprsStation {
+  /** Callsign-SSID — the station identity and the store key. */
+  call: string
+  /** Last known position. Sticky: a later packet without one does not erase it. */
+  lat: number | null
+  lon: number | null
+  symbolTable: string
+  symbolCode: string
+  kind: string
+  text: string
+  speedKnots: number | null
+  courseDeg: number | null
+  path: string[]
+  raw: string
+  /** Most recent packet from this station, either source. Drives the age column and the fade. */
+  lastHeardUnix: number
+  /** When this receiver last decoded it off the air, if ever. */
+  lastRfUnix: number | null
+  /** When it last arrived via APRS-IS, if ever. */
+  lastInetUnix: number | null
+  /** Derived from the two above, so it cannot drift from the evidence. */
+  sourceKind: AprsSource
+  packets: number
+  firstHeardUnix: number
+}
+
+/** The station roster plus the aging thresholds that produced it, so the UI's fade can never
+ * disagree with the backend's retention. */
+export interface AprsStationsView {
+  stations: AprsStation[]
+  /** Minutes of silence after which a station is dropped. */
+  ttlMin: number
+  /** Minutes of silence after which it starts to fade (derived from ttlMin). */
+  fadeAfterMin: number
+}
+
+/** Poll the APRS station roster — what the map and station list draw. */
+export async function getAprsStations(): Promise<AprsStationsView> {
+  return invoke<AprsStationsView>('get_aprs_stations')
+}
+
 /** Arm/disarm the APRS RX decoder (session-only; RX decode). Returns the current heard list. */
 export async function aprsArm(on: boolean): Promise<AprsHeard[]> {
   return invoke<AprsHeard[]>('aprs_arm', { on })

@@ -119,6 +119,7 @@
   "aprsIsObjects": true,
   "aprsIsMessages": true,
   "aprsIsUplink": false,
+  "aprsStationTtlMin": 60,
   "audioIn": "",
   "audioOut": "",
   "voiceMicDevice": "",

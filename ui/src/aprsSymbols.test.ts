@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ageFade,
+  CATEGORY_VAR,
   GLYPH_PATHS,
+  MIN_FADE,
+  symbolCategory,
   resolveSymbol,
   showSymbolAt,
   sourceRing,
@@ -190,5 +194,92 @@ describe('map calm at low zoom', () => {
   it('the APRS map opens above the threshold, so the local view always has symbols', async () => {
     const { APRS_HOME_ZOOM } = await import('./mapGeo')
     expect(showSymbolAt(APRS_HOME_ZOOM)).toBe(true)
+  })
+})
+
+describe('category colours', () => {
+  it('every glyph has a category, and only the fallbacks are neutral', () => {
+    for (const g of Object.keys(GLYPH_PATHS) as GlyphId[]) {
+      expect(CATEGORY_VAR[symbolCategory(g)], `glyph '${g}'`).toBeTruthy()
+    }
+    expect(symbolCategory('unknown')).toBe('other')
+    expect(symbolCategory('question')).toBe('other')
+  })
+
+  it('groups symbols the way an operator would', () => {
+    expect(symbolCategory('house')).toBe('fixed')
+    expect(symbolCategory('car')).toBe('mobile')
+    expect(symbolCategory('aircraft')).toBe('air')
+    expect(symbolCategory('boat')).toBe('marine')
+    expect(symbolCategory('weather')).toBe('wx')
+    expect(symbolCategory('digipeater')).toBe('infra')
+    expect(symbolCategory('igate')).toBe('infra')
+  })
+
+  it('colour is category identity, NOT severity', () => {
+    // An ambulance is a VEHICLE. Painting it as its own alarming thing would turn the map into an
+    // incident board and make colour mean two different things at once.
+    expect(symbolCategory('ambulance')).toBe('mobile')
+    expect(symbolCategory('police')).toBe('mobile')
+    expect(symbolCategory('fire')).toBe('mobile')
+    // ...but a fire STATION is infrastructure at a fixed place, and a fire truck is not.
+    expect(symbolCategory('antenna')).toBe('fixed')
+  })
+
+  it('every category maps to a distinct CSS variable', () => {
+    const vars = Object.values(CATEGORY_VAR)
+    expect(new Set(vars).size).toBe(vars.length)
+    for (const v of vars) expect(v.startsWith('--aprs-cat-')).toBe(true)
+  })
+})
+
+describe('age fade', () => {
+  const NOW = 1_700_000_000
+  const heard = (minAgo: number) => NOW - minAgo * 60
+
+  it('a freshly heard station is not dimmed at all', () => {
+    expect(ageFade(heard(0), NOW, 20, 60)).toBe(1)
+    expect(ageFade(heard(19), NOW, 20, 60)).toBe(1)
+  })
+
+  it('a station beaconing on any normal cycle never fades', () => {
+    // Mobiles run 1-2 min and fixed stations commonly 10 — the fade must start past all of them,
+    // or an active station dims for no reason, which is the flashing complaint in slow motion.
+    for (const cycle of [1, 2, 5, 10]) {
+      expect(ageFade(heard(cycle), NOW, 20, 60), `${cycle} min cycle`).toBe(1)
+    }
+  })
+
+  it('eases across the stale band rather than snapping', () => {
+    const mid = ageFade(heard(40), NOW, 20, 60)
+    expect(mid).toBeLessThan(1)
+    expect(mid).toBeGreaterThan(MIN_FADE)
+    // Monotonic: older is always dimmer, never brighter.
+    expect(ageFade(heard(50), NOW, 20, 60)).toBeLessThan(mid)
+  })
+
+  it('bottoms out rather than vanishing, so a station is never invisible-but-present', () => {
+    expect(ageFade(heard(60), NOW, 20, 60)).toBe(MIN_FADE)
+    expect(ageFade(heard(600), NOW, 20, 60)).toBe(MIN_FADE)
+  })
+
+  it('composes multiplicatively with the internet dimming', () => {
+    // Both facts reduce how much a station should be asserting, so they stack.
+    const fade = ageFade(heard(40), NOW, 20, 60)
+    const combined = sourceRing('inet').alpha * fade
+    expect(combined).toBeLessThan(fade)
+    expect(combined).toBeLessThan(sourceRing('inet').alpha)
+    expect(combined).toBeGreaterThan(0)
+  })
+
+  it('scales with a shortened window instead of ignoring it', () => {
+    // ttl 15 / fade 5: a station silent 10 minutes is half-stale here but perfectly fresh at the
+    // default. The thresholds have to travel with the data.
+    expect(ageFade(heard(10), NOW, 5, 15)).toBeLessThan(1)
+    expect(ageFade(heard(10), NOW, 20, 60)).toBe(1)
+  })
+
+  it('survives a degenerate window without dividing by zero', () => {
+    expect(Number.isFinite(ageFade(heard(30), NOW, 60, 60))).toBe(true)
   })
 })

@@ -2,7 +2,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { AprsCockpit } from './AprsCockpit'
-import { getAprsHeard, getAprsIsStatus, type AprsHeard, type AprsIsStatus } from '../api'
+import {
+  getAprsHeard,
+  getAprsIsStatus,
+  getAprsStations,
+  type AprsIsStatus,
+  type AprsStation,
+} from '../api'
 
 // APRS now has TWO inlets — this station's receiver and the APRS-IS internet feed — and the whole
 // design rests on the operator always being able to tell which is which. "My antenna hears this"
@@ -12,8 +18,8 @@ import { getAprsHeard, getAprsIsStatus, type AprsHeard, type AprsIsStatus } from
 
 vi.mock('./MapView', () => ({
   // Report what the map was actually handed, so the list and the map can be checked for agreement.
-  MapView: ({ aprs }: { aprs?: AprsHeard[] }) => (
-    <div data-testid="map" data-calls={(aprs ?? []).map((a) => a.source).join(',')} />
+  MapView: ({ aprs }: { aprs?: AprsStation[] }) => (
+    <div data-testid="map" data-calls={(aprs ?? []).map((a) => a.call).join(',')} />
   ),
 }))
 
@@ -29,6 +35,7 @@ vi.mock('../api', () => ({
     lastDecodeUnix: Math.floor(Date.now() / 1000),
   })),
   getAprsIsStatus: vi.fn(async () => inetOff()),
+  getAprsStations: vi.fn(async () => ({ stations: [], ttlMin: 60, fadeAfterMin: 20 })),
   aprsAutoArm: vi.fn(async () => true),
   aprsSendBeacon: vi.fn(async () => {}),
   aprsSendMessage: vi.fn(async () => {}),
@@ -51,11 +58,13 @@ function inetOff(): AprsIsStatus {
 
 let clock = 1_700_000_000
 
-function pkt(source: string, sourceKind: AprsHeard['sourceKind'], over: Partial<AprsHeard> = {}): AprsHeard {
+function stn(
+  call: string,
+  sourceKind: AprsStation['sourceKind'],
+  over: Partial<AprsStation> = {},
+): AprsStation {
   return {
-    source,
-    dest: 'APRS',
-    path: ['WIDE1-1'],
+    call,
     lat: 41.9,
     lon: -87.6,
     symbolTable: '/',
@@ -64,17 +73,21 @@ function pkt(source: string, sourceKind: AprsHeard['sourceKind'], over: Partial<
     text: 'hello',
     speedKnots: null,
     courseDeg: null,
-    addressee: null,
-    msgId: null,
-    atUnix: clock,
+    path: ['WIDE1-1'],
+    raw: `${call}>APRS,WIDE1-1:!4154.00N/08736.00W>hello`,
+    lastHeardUnix: clock,
+    lastRfUnix: sourceKind === 'inet' ? null : clock,
+    lastInetUnix: sourceKind === 'rf' ? null : clock,
     sourceKind,
-    raw: `${source}>APRS,WIDE1-1:!4154.00N/08736.00W>hello`,
+    packets: 1,
+    firstHeardUnix: clock,
     ...over,
   }
 }
 
-async function mount(heard: AprsHeard[], inet?: Partial<AprsIsStatus>) {
-  vi.mocked(getAprsHeard).mockResolvedValue(heard)
+async function mount(stations: AprsStation[], inet?: Partial<AprsIsStatus>) {
+  vi.mocked(getAprsHeard).mockResolvedValue([])
+  vi.mocked(getAprsStations).mockResolvedValue({ stations, ttlMin: 60, fadeAfterMin: 20 })
   vi.mocked(getAprsIsStatus).mockResolvedValue({ ...inetOff(), ...inet })
   const view = render(<AprsCockpit active theme="dark" myGrid="EM28" onTune={() => {}} />)
   await act(async () => {
@@ -95,7 +108,7 @@ afterEach(cleanup)
 
 describe('APRS source tagging', () => {
   it('tags each station with how it reached us', async () => {
-    await mount([pkt('W9RF-1', 'rf'), pkt('W9NET-2', 'inet')])
+    await mount([stn('W9RF-1', 'rf'), stn('W9NET-2', 'inet')])
     const rf = screen.getByText('W9RF-1').closest('tr')!
     const net = screen.getByText('W9NET-2').closest('tr')!
     expect(rf.querySelector('.aprs-src-rf')).toBeTruthy()
@@ -103,32 +116,21 @@ describe('APRS source tagging', () => {
   })
 
   it('a station heard BOTH ways is never demoted by whichever packet arrived last', async () => {
-    // THE BUG THIS PREVENTS: collapsing to the newest packet would relabel a station our antenna
-    // genuinely hears as "internet only" the moment an iGate reported it — erasing the one fact
-    // the operator actually needs. The tag accumulates over every packet from the callsign.
-    clock = 1_700_000_000
-    const rf = pkt('W9BOTH-3', 'rf')
-    clock += 10
-    const net = pkt('W9BOTH-3', 'inet')
-    await mount([rf, net])
+    // The backend now derives this from when each channel last carried the station, so an
+    // internet copy arriving after our own reception cannot relabel it — the timestamps are both
+    // still there. This asserts the UI renders that faithfully.
+    await mount([
+      stn('W9BOTH-3', 'both', { lastRfUnix: clock - 60, lastInetUnix: clock }),
+    ])
     const row = screen.getByText('W9BOTH-3').closest('tr')!
     expect(row.querySelector('.aprs-src-both')).toBeTruthy()
     expect(row.querySelector('.aprs-src-inet')).toBeFalsy()
-  })
-
-  it('order does not matter — internet first, then RF, still reads as both', async () => {
-    clock = 1_700_000_000
-    const net = pkt('W9BOTH-3', 'inet')
-    clock += 10
-    const rf = pkt('W9BOTH-3', 'rf')
-    await mount([net, rf])
-    expect(screen.getByText('W9BOTH-3').closest('tr')!.querySelector('.aprs-src-both')).toBeTruthy()
   })
 })
 
 describe('the show-internet toggle', () => {
   it('hides internet-only stations from the list AND the map together', async () => {
-    await mount([pkt('W9RF-1', 'rf'), pkt('W9NET-2', 'inet'), pkt('W9BOTH-3', 'both')])
+    await mount([stn('W9RF-1', 'rf'), stn('W9NET-2', 'inet'), stn('W9BOTH-3', 'both')])
     expect(mapCalls()).toContain('W9NET-2')
 
     const toggle = screen.getByRole('button', { name: /internet/i })
@@ -145,12 +147,12 @@ describe('the show-internet toggle', () => {
   })
 
   it('names how many stations it will hide before you click it', async () => {
-    await mount([pkt('W9RF-1', 'rf'), pkt('W9NET-2', 'inet'), pkt('W9NET-4', 'inet')])
+    await mount([stn('W9RF-1', 'rf'), stn('W9NET-2', 'inet'), stn('W9NET-4', 'inet')])
     expect(screen.getByRole('button', { name: /internet 2/i })).toBeTruthy()
   })
 
   it('does not appear at all when nothing came from the internet', async () => {
-    await mount([pkt('W9RF-1', 'rf')])
+    await mount([stn('W9RF-1', 'rf')])
     expect(screen.queryByRole('button', { name: /internet/i })).toBeNull()
   })
 })
@@ -158,8 +160,8 @@ describe('the show-internet toggle', () => {
 describe('station symbols in the list', () => {
   it('draws the station\'s own symbol, not a uniform dot', async () => {
     await mount([
-      pkt('W9CAR-9', 'rf', { symbolTable: '/', symbolCode: '>' }),
-      pkt('W9WX-1', 'rf', { symbolTable: '/', symbolCode: '_' }),
+      stn('W9CAR-9', 'rf', { symbolTable: '/', symbolCode: '>' }),
+      stn('W9WX-1', 'rf', { symbolTable: '/', symbolCode: '_' }),
     ])
     // The title carries the meaning; the glyph is decorative and hidden from assistive tech.
     expect(screen.getByTitle('Car')).toBeTruthy()
@@ -168,13 +170,13 @@ describe('station symbols in the list', () => {
 
   it('shows the overlay character an operator put on an alternate-table symbol', async () => {
     // `R&` is the receive-only-iGate convention — the R is the whole point of the symbol.
-    await mount([pkt('W9GATE-1', 'rf', { symbolTable: 'R', symbolCode: '&' })])
+    await mount([stn('W9GATE-1', 'rf', { symbolTable: 'R', symbolCode: '&' })])
     const cell = screen.getByTitle('Gateway / iGate')
     expect(cell.querySelector('.aprs-sym-overlay')?.textContent).toBe('R')
   })
 
   it('an unrecognised symbol still draws a glyph rather than a blank cell', async () => {
-    await mount([pkt('W9ODD-1', 'rf', { symbolTable: '/', symbolCode: '\u0001' })])
+    await mount([stn('W9ODD-1', 'rf', { symbolTable: '/', symbolCode: '\u0001' })])
     const cell = screen.getByTitle('Unknown symbol')
     expect(cell.classList.contains('aprs-sym-unknown')).toBe(true)
     expect(cell.querySelector('svg path')?.getAttribute('d')).toBeTruthy()

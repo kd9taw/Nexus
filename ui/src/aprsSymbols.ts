@@ -262,6 +262,112 @@ export function glyphPath(id: GlyphId): Path2D {
   return p
 }
 
+/**
+ * What KIND of thing a station is. Colour carries this and nothing else.
+ *
+ * ⚠️ Category identity, never severity. It is tempting to paint an ambulance red, and it would be
+ * wrong: red reads as "something is happening" on a map where nothing is. An emergency vehicle is
+ * categorised as a vehicle, because that is what it is; a fire STATION is infrastructure at a fixed
+ * place. The map is not an incident board.
+ *
+ * These also must not fight the source ring — the ring is the RF-versus-internet channel and stays
+ * monochrome, so colour is free to mean something else entirely.
+ */
+export type SymbolCategory =
+  | 'fixed'
+  | 'mobile'
+  | 'air'
+  | 'marine'
+  | 'wx'
+  | 'infra'
+  | 'object'
+  | 'other'
+
+/** Which family each glyph belongs to. */
+const CATEGORY_OF: Record<GlyphId, SymbolCategory> = {
+  house: 'fixed',
+  antenna: 'fixed',
+  tent: 'fixed',
+  person: 'fixed',
+  car: 'mobile',
+  truck: 'mobile',
+  van: 'mobile',
+  jeep: 'mobile',
+  bus: 'mobile',
+  motorcycle: 'mobile',
+  bicycle: 'mobile',
+  rv: 'mobile',
+  // Emergency vehicles are VEHICLES. See the note on SymbolCategory.
+  ambulance: 'mobile',
+  police: 'mobile',
+  fire: 'mobile',
+  aircraft: 'air',
+  helicopter: 'air',
+  balloon: 'air',
+  boat: 'marine',
+  sailboat: 'marine',
+  weather: 'wx',
+  digipeater: 'infra',
+  igate: 'infra',
+  repeater: 'infra',
+  circle: 'object',
+  triangle: 'object',
+  dot: 'object',
+  question: 'other',
+  unknown: 'other',
+}
+
+/** The family a resolved symbol belongs to. */
+export function symbolCategory(glyph: GlyphId): SymbolCategory {
+  return CATEGORY_OF[glyph] ?? 'other'
+}
+
+/**
+ * The CSS custom property carrying each category's colour.
+ *
+ * Indirected through variables rather than hard-coded hexes so the palette is defined once per
+ * theme in `styles.css` and the canvas and the list icons cannot drift. The palette varies
+ * LIGHTNESS as well as hue, so the families stay separable for a colourblind operator and in
+ * greyscale; the fallback family is deliberately a desaturated neutral, since "we do not know what
+ * this is" should not compete for attention with the things we do know.
+ */
+export const CATEGORY_VAR: Record<SymbolCategory, string> = {
+  fixed: '--aprs-cat-fixed',
+  mobile: '--aprs-cat-mobile',
+  air: '--aprs-cat-air',
+  marine: '--aprs-cat-marine',
+  wx: '--aprs-cat-wx',
+  infra: '--aprs-cat-infra',
+  object: '--aprs-cat-object',
+  other: '--aprs-cat-other',
+}
+
+/**
+ * How faded a station is, from how long it has been silent.
+ *
+ * Composes with everything else multiplicatively: an internet-only station that is also going
+ * stale is dimmer than either alone, which is correct — both facts reduce how much it should be
+ * asserting. Returns 1 while the station is fresh, easing to `MIN_FADE` at the end of its window
+ * rather than snapping, so a station recedes instead of blinking.
+ */
+export const MIN_FADE = 0.35
+
+export function ageFade(
+  lastHeardUnix: number,
+  nowSec: number,
+  fadeAfterMin: number,
+  ttlMin: number,
+): number {
+  const silentMin = (nowSec - lastHeardUnix) / 60
+  if (silentMin <= fadeAfterMin) return 1
+  if (silentMin >= ttlMin) return MIN_FADE
+  // Linear across the stale band. `ttlMin > fadeAfterMin` is guaranteed by the backend, which
+  // derives one from the other, but guard anyway rather than divide by zero.
+  const span = Math.max(1e-6, ttlMin - fadeAfterMin)
+  const t = (silentMin - fadeAfterMin) / span
+  return 1 - t * (1 - MIN_FADE)
+}
+
 /** How a station's source is drawn once the dot has become a symbol. See `sourceRing`. */
 export type SourceRing = 'solid' | 'double' | 'dashed'
 

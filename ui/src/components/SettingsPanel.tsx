@@ -151,7 +151,7 @@ const CTCSS_TONES = [
   167.9, 173.8, 179.9, 186.2, 192.8, 203.5, 210.7, 218.1, 225.7, 233.6, 241.8, 250.3,
 ]
 
-const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm']
+const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm', 'aprsStationTtlMin']
 
 // Standard serial CAT baud rates offered in the Rig baud picker. A rig's manual lists its
 // supported rate(s); most modern rigs run 38400 or 115200. Auto-detect may set a value outside
@@ -4614,6 +4614,24 @@ export function SettingsPanel({
                     message is not wired up.
                   </span>
                 </div>
+
+                <label className="settings-field">
+                  <span className="settings-label">Keep stations for (min)</span>
+                  <input
+                    className="settings-input"
+                    type="number"
+                    min={5}
+                    max={1440}
+                    value={form.aprsStationTtlMin ?? 60}
+                    onChange={(e) => updateNum('aprsStationTtlMin', Number(e.target.value))}
+                  />
+                  <span className="settings-hint">
+                    How long a station stays on the map after its last packet. Stations start to fade
+                    at a third of this. An hour by default: fixed stations often beacon only every
+                    ten to thirty minutes, and a shorter window makes the slow ones blink off between
+                    their own beacons.
+                  </span>
+                </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">

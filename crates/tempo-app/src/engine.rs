@@ -959,6 +959,10 @@ pub struct Engine {
     aprs_tx_queue: VecDeque<Vec<f32>>,
     /// Rolling APRS message line-number (001..999) for outgoing messages, so the recipient can ack.
     aprs_msg_seq: u16,
+    /// Per-STATION state keyed by callsign-SSID — what the map and the station list read. Distinct
+    /// from `aprs_heard`, which is a packet LOG: see [`AprsStation`] for why conflating the two
+    /// made the map flash.
+    aprs_stations: std::collections::HashMap<String, AprsStation>,
     /// RF-heard TNC2 lines awaiting contribution to APRS-IS. Filled ONLY by [`AprsSource::Rf`]
     /// pushes and only while the uplink setting is on; drained by the APRS-IS thread, which
     /// applies the gating rules. Empty (and free) with the iGate off.
@@ -1296,10 +1300,154 @@ impl AprsHeard {
 /// same packet. Matches the APRS-IS server's own sliding duplicate window.
 const APRS_DUPE_MERGE_SECS: i64 = 30;
 
+/// Cap on the STATION store, by station count rather than packet count.
+///
+/// Sized so a busy filtered feed never churns visibly: a 150 km radius over a dense metro carries
+/// a few hundred stations, so this is several times the worst realistic case. Eviction is by
+/// oldest-last-heard, and the age window ([`Settings::aprs_station_ttl_min`]) does the real
+/// retention work — the cap is a memory ceiling, not a policy.
+pub const APRS_STATION_CAP: usize = 2000;
+
 /// Cap on RF-heard lines waiting to be gated to APRS-IS. Bounded so a feed that is down (or an
 /// uplink left on with no network) cannot grow the queue without limit; the oldest is dropped,
 /// because a stale position is the least valuable thing to contribute.
 const APRS_UPLINK_QUEUE_CAP: usize = 200;
+
+/// One STATION, accumulated from every packet it has sent — the unit the map and the station list
+/// are actually about.
+///
+/// ⭐ WHY THIS EXISTS. The packet log ([`Engine::aprs_heard`]) is a 300-entry ring capped by COUNT
+/// with no age expiry. That is fine for a scrolling log and wrong for a map: with the APRS-IS feed
+/// running, 300 packets is two to five minutes of traffic, so a station beaconing on a perfectly
+/// normal ten-minute cycle was evicted before its next beacon — it vanished from the map and came
+/// back, over and over. Operators saw the icons flashing. A map has to be about stations and their
+/// age, not about the last N packets to arrive.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AprsStation {
+    /// Callsign-SSID — the station identity, and the store key.
+    pub call: String,
+    /// Last known position. Sticky: see [`AprsStation::merge`] for why a later packet without one
+    /// must never erase it.
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub symbol_table: char,
+    pub symbol_code: char,
+    /// Kind of the most recent packet that carried real content.
+    pub kind: &'static str,
+    /// Most recent comment / status text.
+    pub text: String,
+    pub speed_knots: Option<u16>,
+    pub course_deg: Option<u16>,
+    /// Digipeater path of the most recent packet.
+    pub path: Vec<String>,
+    /// Most recent packet as a TNC2 line, for the raw readout.
+    pub raw: String,
+    /// Unix seconds of the most recent packet from this station, either source. Drives both the age
+    /// column and the fade.
+    pub last_heard_unix: i64,
+    /// Unix seconds this station was last decoded OFF THE AIR by this receiver, if ever.
+    pub last_rf_unix: Option<i64>,
+    /// Unix seconds this station last arrived via APRS-IS, if ever.
+    pub last_inet_unix: Option<i64>,
+    /// Derived from the two timestamps above — so "how did this reach us" can never drift from the
+    /// evidence for it.
+    pub source_kind: AprsSource,
+    /// Packets from this station this session.
+    pub packets: u32,
+    /// When this station was first heard this session.
+    pub first_heard_unix: i64,
+}
+
+impl AprsStation {
+    /// Start a station from its first packet.
+    fn new(h: &AprsHeard) -> AprsStation {
+        let mut st = AprsStation {
+            call: h.source.clone(),
+            lat: None,
+            lon: None,
+            symbol_table: ' ',
+            symbol_code: ' ',
+            kind: h.kind,
+            text: String::new(),
+            speed_knots: None,
+            course_deg: None,
+            path: Vec::new(),
+            raw: String::new(),
+            last_heard_unix: h.at_unix,
+            last_rf_unix: None,
+            last_inet_unix: None,
+            source_kind: h.source_kind,
+            packets: 0,
+            first_heard_unix: h.at_unix,
+        };
+        st.merge(h);
+        st
+    }
+
+    /// Fold another packet from this station into its state.
+    ///
+    /// ⚠️ **A packet without a position must not erase the position we already have.** A moving
+    /// station interleaves position reports with status and message packets, and the naive
+    /// "latest packet wins" rule would blank its coordinates every time one arrived — dropping it
+    /// off the map between beacons, which is the same bug in a different disguise. Same for the
+    /// symbol: a message packet carries none.
+    fn merge(&mut self, h: &AprsHeard) {
+        self.packets = self.packets.saturating_add(1);
+        self.last_heard_unix = self.last_heard_unix.max(h.at_unix);
+        match h.source_kind {
+            AprsSource::Rf => self.last_rf_unix = Some(h.at_unix),
+            AprsSource::Inet => self.last_inet_unix = Some(h.at_unix),
+            // A packet already merged as Both counts for both channels.
+            AprsSource::Both => {
+                self.last_rf_unix = Some(h.at_unix);
+                self.last_inet_unix = Some(h.at_unix);
+            }
+        }
+        self.source_kind = match (self.last_rf_unix, self.last_inet_unix) {
+            (Some(_), Some(_)) => AprsSource::Both,
+            (Some(_), None) => AprsSource::Rf,
+            (None, Some(_)) => AprsSource::Inet,
+            // Unreachable: the match above always set one.
+            (None, None) => self.source_kind,
+        };
+        if h.lat.is_some() && h.lon.is_some() {
+            self.lat = h.lat;
+            self.lon = h.lon;
+            // Course and speed belong to the position that carried them.
+            self.speed_knots = h.speed_knots;
+            self.course_deg = h.course_deg;
+        }
+        if h.symbol_table != ' ' || h.symbol_code != ' ' {
+            self.symbol_table = h.symbol_table;
+            self.symbol_code = h.symbol_code;
+        }
+        if !h.text.is_empty() {
+            self.text = h.text.clone();
+        }
+        if !h.path.is_empty() {
+            self.path = h.path.clone();
+        }
+        if !h.raw.is_empty() {
+            self.raw = h.raw.clone();
+        }
+        self.kind = h.kind;
+    }
+}
+
+/// The station roster plus the aging doctrine that produced it, so the UI cannot disagree with the
+/// backend about when a station is stale.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AprsStationsView {
+    /// Stations heard within the age window, newest-heard first.
+    pub stations: Vec<AprsStation>,
+    /// Minutes of silence after which a station is dropped entirely.
+    pub ttl_min: u32,
+    /// Minutes of silence after which a station starts to fade. Derived, never configured
+    /// separately — see [`Engine::aprs_stations`].
+    pub fade_after_min: u32,
+}
 
 /// What the APRS-IS internet feed is doing — the counterpart to [`AprsHealth`] for the other inlet.
 ///
@@ -1722,6 +1870,7 @@ impl Engine {
             rtty_seq: None,
             rtty_auto_over: false,
             aprs_arm: AprsArm::Off,
+            aprs_stations: std::collections::HashMap::new(),
             aprs_uplink_queue: VecDeque::new(),
             aprs_is_status: AprsIsStatus::default(),
             aprs_auto_arm_declined: false,
@@ -5483,15 +5632,90 @@ impl Engine {
             if newly_rf {
                 self.offer_aprs_uplink(&heard.raw);
             }
+            // The packet log keeps one entry, but the STATION was genuinely heard again — and via
+            // the other channel, which is exactly what upgrades its source tag.
+            self.merge_aprs_station(&heard);
             return;
         }
         if heard.source_kind == AprsSource::Rf {
             self.offer_aprs_uplink(&heard.raw);
         }
+        self.merge_aprs_station(&heard);
         self.aprs_heard.push(heard);
         if self.aprs_heard.len() > APRS_HEARD_CAP {
             let drop = self.aprs_heard.len() - APRS_HEARD_CAP;
             self.aprs_heard.drain(0..drop);
+        }
+    }
+
+    /// Fold a packet into its station's state, creating the station if it is new.
+    ///
+    /// Expired stations are pruned and the cap enforced HERE rather than on a timer, and only when
+    /// the store is actually over the cap — at feed rates a retain-per-packet would be pure waste.
+    fn merge_aprs_station(&mut self, h: &AprsHeard) {
+        if h.source.is_empty() {
+            return;
+        }
+        match self.aprs_stations.get_mut(&h.source) {
+            Some(st) => st.merge(h),
+            None => {
+                self.aprs_stations
+                    .insert(h.source.clone(), AprsStation::new(h));
+            }
+        }
+        if self.aprs_stations.len() <= APRS_STATION_CAP {
+            return;
+        }
+        // Over the ceiling: drop anything already past its age window first, since those would not
+        // have been shown anyway.
+        let cutoff = h.at_unix - i64::from(self.station_ttl_min()) * 60;
+        self.aprs_stations.retain(|_, st| st.last_heard_unix >= cutoff);
+        // Still over: evict the stations heard longest ago, which are the least useful to keep.
+        while self.aprs_stations.len() > APRS_STATION_CAP {
+            let Some(oldest) = self
+                .aprs_stations
+                .iter()
+                .min_by_key(|(_, st)| st.last_heard_unix)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            self.aprs_stations.remove(&oldest);
+        }
+    }
+
+    /// The configured station age window in minutes, clamped to something sane.
+    fn station_ttl_min(&self) -> u32 {
+        self.settings.aprs_station_ttl_min.clamp(5, 24 * 60)
+    }
+
+    /// The station roster as of `now`, newest-heard first, with stations past the age window
+    /// dropped — plus the aging thresholds themselves, so the UI's fade cannot disagree with the
+    /// backend's retention.
+    ///
+    /// **The aging doctrine.** A station is shown while it has been heard within
+    /// [`Settings::aprs_station_ttl_min`] (default 60) and starts to FADE after a third of that
+    /// (20 minutes at the default). The numbers come from how APRS is actually operated: mobiles
+    /// beacon every one to two minutes, fixed stations commonly every ten and as slowly as thirty,
+    /// so a 60-minute window survives two missed beacons from the slowest legitimate beaconer —
+    /// anything shorter reintroduces the flash for exactly those stations. The fade begins past the
+    /// slowest MOBILE rhythm, so a moving station never dims while it is still beaconing, but a
+    /// genuinely stale one visibly recedes instead of asserting it is still there. One setting, with
+    /// the fade derived, so the two can never be configured into contradicting each other.
+    pub fn aprs_stations(&self, now: i64) -> AprsStationsView {
+        let ttl_min = self.station_ttl_min();
+        let cutoff = now - i64::from(ttl_min) * 60;
+        let mut stations: Vec<AprsStation> = self
+            .aprs_stations
+            .values()
+            .filter(|st| st.last_heard_unix >= cutoff)
+            .cloned()
+            .collect();
+        stations.sort_by(|a, b| b.last_heard_unix.cmp(&a.last_heard_unix));
+        AprsStationsView {
+            stations,
+            ttl_min,
+            fade_after_min: (ttl_min / 3).max(1),
         }
     }
 
@@ -14718,6 +14942,175 @@ mod tests {
             format!("!4903.50N/07201.75W-{raw}").as_bytes(),
         );
         AprsHeard::from_packet(&AprsPacket::from_frame(&frame), at, kind, raw.to_string())
+    }
+
+    /// ⭐ THE FLASHING BUG, measured. The packet ring is capped by COUNT with no age expiry, so a
+    /// busy APRS-IS feed evicts stations that are still perfectly active — they vanish from the map
+    /// and reappear on their next beacon. This test pins the mechanism.
+    #[test]
+    fn the_packet_ring_evicts_stations_that_are_still_active() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // A modest filtered feed: 200 stations in range, each beaconing once. That is already
+        // under the 300-packet cap, so nothing is lost yet.
+        for i in 0..200 {
+            e.push_aprs_heard(aprs_pkt(&format!("W9AA-{}", i % 16), &format!("b{i}"), 1000 + i, AprsSource::Inet));
+        }
+        // ...then the feed keeps running for another 300 packets, which is 2-5 MINUTES of real
+        // traffic at 1-2 packets/second.
+        for i in 200..500 {
+            e.push_aprs_heard(aprs_pkt("W9NEW-1", &format!("b{i}"), 1000 + i, AprsSource::Inet));
+        }
+        let heard = e.aprs_heard();
+        assert_eq!(heard.len(), APRS_HEARD_CAP, "the ring is full");
+        // The station that beaconed at t=1000 is GONE, though only ~8 minutes of feed have passed
+        // and it is still transmitting every 10 minutes like every fixed station does.
+        assert!(
+            !heard.iter().any(|h| h.text == "b0"),
+            "the earliest beacon has been evicted purely by packet COUNT — this is the flash"
+        );
+    }
+
+    /// ⭐ THE FIX for the test above: the same churn, but the STATION store keeps every station
+    /// that is still active. This is the regression guard for the flashing bug.
+    #[test]
+    fn the_station_store_survives_the_ring_churn_that_evicted_them() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // 200 stations beacon once each...
+        for i in 0..200 {
+            e.push_aprs_heard(aprs_pkt(
+                &format!("W{i:04}"),
+                &format!("b{i}"),
+                1000 + i,
+                AprsSource::Inet,
+            ));
+        }
+        // ...then 400 more packets pour in from one chatty station, cycling the packet ring twice.
+        for i in 200..600 {
+            e.push_aprs_heard(aprs_pkt("W9NEW-1", &format!("c{i}"), 1000 + i, AprsSource::Inet));
+        }
+        // The packet log has churned, exactly as before — that is what a log does.
+        assert_eq!(e.aprs_heard().len(), APRS_HEARD_CAP);
+        // But every one of the 200 stations is still on the map, because minutes, not packets,
+        // decide whether a station is still there.
+        let view = e.aprs_stations(1600);
+        assert_eq!(view.stations.len(), 201, "200 beaconers + the chatty one");
+        assert!(view.stations.iter().any(|s| s.call == "W0000"));
+        assert!(view.stations.iter().any(|s| s.call == "W0199"));
+    }
+
+    #[test]
+    fn a_station_is_dropped_only_once_it_has_been_silent_past_the_window() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_pkt("W9AA-1", "beacon", 1000, AprsSource::Rf));
+        let ttl = i64::from(e.settings().aprs_station_ttl_min) * 60;
+        // A fixed station on a THIRTY-minute cycle: still shown while it is merely slow. This is
+        // the case a shorter window would blink off, which is the whole point of an hour.
+        assert_eq!(e.aprs_stations(1000 + 30 * 60).stations.len(), 1);
+        assert_eq!(e.aprs_stations(1000 + ttl).stations.len(), 1, "at the boundary");
+        assert!(
+            e.aprs_stations(1000 + ttl + 1).stations.is_empty(),
+            "and gone once genuinely stale"
+        );
+    }
+
+    #[test]
+    fn the_fade_threshold_is_derived_from_the_window_so_they_cannot_contradict() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let v = e.aprs_stations(0);
+        assert_eq!(v.ttl_min, 60, "the default hour");
+        assert_eq!(v.fade_after_min, 20, "a third of it — past the slowest mobile rhythm");
+        // An operator who shortens the window gets a proportionally earlier fade, never one that
+        // outlives the retention it is supposed to warn about.
+        let mut s = e.settings().clone();
+        s.aprs_station_ttl_min = 15;
+        e.apply_settings(s);
+        let v = e.aprs_stations(0);
+        assert_eq!(v.ttl_min, 15);
+        assert!(v.fade_after_min < v.ttl_min);
+    }
+
+    #[test]
+    fn a_packet_without_a_position_never_erases_the_one_we_have() {
+        // The other face of the same bug: a moving station interleaves positions with status and
+        // message packets, and "latest packet wins" would blank its coordinates every time one
+        // arrived — dropping it off the map between beacons.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_pkt("W9AA-9", "rolling", 1000, AprsSource::Rf));
+        let mut status = aprs_pkt("W9AA-9", "just a status", 1010, AprsSource::Rf);
+        status.lat = None;
+        status.lon = None;
+        status.symbol_table = ' ';
+        status.symbol_code = ' ';
+        status.kind = "status";
+        e.push_aprs_heard(status);
+        let st = &e.aprs_stations(1010).stations[0];
+        assert!(st.lat.is_some() && st.lon.is_some(), "the position is sticky");
+        assert_eq!(st.symbol_table, '/', "and so is the symbol");
+        assert_eq!(st.text, "just a status", "but the text is the latest");
+        assert_eq!(st.packets, 2);
+    }
+
+    #[test]
+    fn a_station_source_is_derived_from_when_each_channel_last_carried_it() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_pkt("W9AA-1", "p1", 1000, AprsSource::Inet));
+        assert_eq!(e.aprs_stations(1000).stations[0].source_kind, AprsSource::Inet);
+        // Our own antenna then hears it: the tag upgrades, and the evidence for it is visible.
+        e.push_aprs_heard(aprs_pkt("W9AA-1", "p2", 1100, AprsSource::Rf));
+        let st = &e.aprs_stations(1100).stations[0];
+        assert_eq!(st.source_kind, AprsSource::Both);
+        assert_eq!(st.last_rf_unix, Some(1100));
+        assert_eq!(st.last_inet_unix, Some(1000));
+        // A later internet-only packet must NOT demote it — we did hear it ourselves.
+        e.push_aprs_heard(aprs_pkt("W9AA-1", "p3", 1200, AprsSource::Inet));
+        assert_eq!(e.aprs_stations(1200).stations[0].source_kind, AprsSource::Both);
+    }
+
+    #[test]
+    fn the_store_is_capped_by_station_and_evicts_the_longest_unheard() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Every station within the age window, so only the cap can evict.
+        for i in 0..(APRS_STATION_CAP + 100) {
+            e.push_aprs_heard(aprs_pkt(&format!("W{i:04}"), "b", 100_000 + i as i64, AprsSource::Inet));
+        }
+        let view = e.aprs_stations(100_000 + APRS_STATION_CAP as i64 + 100);
+        assert!(view.stations.len() <= APRS_STATION_CAP, "bounded");
+        // The newest survived; the very first, heard longest ago, did not.
+        assert!(view
+            .stations
+            .iter()
+            .any(|s| s.call == format!("W{:04}", APRS_STATION_CAP + 99)));
+        assert!(!view.stations.iter().any(|s| s.call == "W0000"));
+    }
+
+    #[test]
+    fn stations_come_back_newest_heard_first() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_pkt("W9OLD-1", "a", 1000, AprsSource::Rf));
+        e.push_aprs_heard(aprs_pkt("W9MID-1", "b", 1100, AprsSource::Rf));
+        e.push_aprs_heard(aprs_pkt("W9NEW-1", "c", 1200, AprsSource::Rf));
+        let calls: Vec<String> = e.aprs_stations(1200).stations.iter().map(|s| s.call.clone()).collect();
+        assert_eq!(calls, vec!["W9NEW-1", "W9MID-1", "W9OLD-1"]);
+    }
+
+    #[test]
+    fn a_station_that_keeps_beaconing_is_never_dropped_however_long_the_feed_runs() {
+        // The operator-visible promise: an active station does not blink, ever.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut t = 1000i64;
+        for round in 0..40 {
+            // Our station beacons every 10 minutes, like a normal fixed station.
+            e.push_aprs_heard(aprs_pkt("W9ME-1", &format!("beacon {round}"), t, AprsSource::Rf));
+            // ...while the feed pours 200 packets from other stations in between.
+            for i in 0..200 {
+                e.push_aprs_heard(aprs_pkt(&format!("X{i:04}"), "x", t + i, AprsSource::Inet));
+            }
+            t += 600;
+            assert!(
+                e.aprs_stations(t).stations.iter().any(|s| s.call == "W9ME-1"),
+                "round {round}: the station must never vanish"
+            );
+        }
     }
 
     #[test]
