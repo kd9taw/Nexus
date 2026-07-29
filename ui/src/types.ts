@@ -1712,6 +1712,10 @@ export interface Settings {
   /** Run as a receive-only iGate: contribute packets THIS station heard on the air to APRS-IS.
    * Publishes under your callsign, so it is a separate opt-in from the feed itself. */
   aprsIsUplink?: boolean
+  /** Minutes a heard APRS station stays on the map after its last packet (default 60). Stations
+   * fade after a third of this. Shorter windows make slow fixed stations blink off between their
+   * own beacons — the bug the per-station store exists to fix. */
+  aprsStationTtlMin?: number
   /** Companion-mode UDP listen address (WSJT-X/JTDX). */
   companionAddr: string
   /** CW keyer backend: 'cat' | 'serial' | 'winkeyer' | 'soundcard'. Persisted (Rust `cwKeyer`);

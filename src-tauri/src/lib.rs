@@ -4858,6 +4858,20 @@ fn get_aprs_health(
     Ok(eng.aprs_health())
 }
 
+/// The APRS STATION roster — what the map and the station list draw, plus the aging thresholds
+/// that produced it.
+///
+/// Distinct from `get_aprs_heard`, which is the packet LOG. Conflating the two is what made the map
+/// flash: the log is capped by packet count with no age expiry, so a busy APRS-IS feed evicted
+/// stations that were still active. See `AprsStation`.
+#[tauri::command]
+fn get_aprs_stations(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::engine::AprsStationsView, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(eng.aprs_stations(now_unix()))
+}
+
 /// What the APRS-IS internet feed is doing: connected, verified, packets in, packets contributed,
 /// and how many the iGate rules refused. Polled beside `get_aprs_health` so the operator can tell
 /// an internet problem from an RF one — internet stations arriving while the RF chip stays silent
@@ -11049,6 +11063,7 @@ pub fn run() {
             get_aprs_heard,
             get_aprs_health,
             get_aprs_is_status,
+            get_aprs_stations,
             aprs_send_beacon,
             aprs_send_message,
             aprs_tune,

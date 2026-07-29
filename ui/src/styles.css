@@ -2907,10 +2907,35 @@ button.nb-chip:hover {
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
   --shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+
+  /* APRS symbol categories. Colour says WHAT a station is, never how urgent it is — the map is
+     not an incident board, so nothing here is alarm-red. Hue AND lightness both vary, so the
+     families stay separable for a colourblind operator and in greyscale. Tuned for the dark
+     theme's dark map; the light theme overrides them all. */
+  --aprs-cat-fixed: #93b4d8; /* light steel — homes, antennas, portable ops */
+  --aprs-cat-mobile: #f0b352; /* amber, the brightest: things that move and matter most */
+  --aprs-cat-air: #6fd8e8; /* pale cyan — sky */
+  --aprs-cat-marine: #6d8fe0; /* deeper blue, darker than air so the two never merge */
+  --aprs-cat-wx: #c39ae8; /* violet */
+  --aprs-cat-infra: #74d69a; /* green — the long-standing APRS colour for a digipeater */
+  --aprs-cat-object: #e8a0c0; /* rose — objects and event markers someone placed by hand */
+  --aprs-cat-other: #94a3b8; /* desaturated neutral: we do not know what this is */
 }
 
 /* ---- LIGHT (sunlight) ---- */
 [data-theme='light'] {
+  /* Same eight families, darkened and slightly desaturated: the light theme's map is a pale
+     surface, so the dark-theme inks would wash out on it. Ordering of lightness between the
+     families is preserved, so a station's category reads the same way in either theme. */
+  --aprs-cat-fixed: #3f6491;
+  --aprs-cat-mobile: #9a6410;
+  --aprs-cat-air: #10707f;
+  --aprs-cat-marine: #2f4da8;
+  --aprs-cat-wx: #7040a0;
+  --aprs-cat-infra: #1c7a48;
+  --aprs-cat-object: #a4457a;
+  --aprs-cat-other: #5b6675;
+
   --bg: #e5eaf0;
   --bg-elev: #fbfcfe;
   --bg-elev-2: #f4f6f9;
@@ -4792,7 +4817,7 @@ select optgroup {
 .heartbeat-btn {
   margin-top: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-2);
@@ -16238,7 +16263,7 @@ html[data-panel='needed'] {
   padding: var(--space-4);
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 .mv-packs-head {
@@ -16993,6 +17018,228 @@ html[data-panel='needed'] {
   color: var(--text-dim);
   cursor: help;
 }
+/* Station detail card — floats over the map's top-left, where APRS traffic is sparsest, and scrolls
+   internally so a weather station with every sensor fitted cannot push it off the map. */
+.aprs-card {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 30;
+  width: 19rem;
+  max-height: calc(100% - var(--space-4));
+  overflow-y: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+}
+.aprs-card:focus-visible {
+  outline: 2px solid var(--state-good);
+  outline-offset: 1px;
+}
+.aprs-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.aprs-card-glyph {
+  position: relative;
+  flex: 0 0 auto;
+  line-height: 0;
+}
+.aprs-card-overlay {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 2px;
+  border-radius: 7px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+}
+.aprs-card-id {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+.aprs-card-id strong {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.aprs-card-symname {
+  font-size: 11px;
+}
+.aprs-card-close {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.aprs-card-close:hover {
+  color: var(--text);
+}
+.aprs-card-rows {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.aprs-card-row {
+  display: grid;
+  grid-template-columns: 5.6rem 1fr;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+.aprs-card-row dt {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.aprs-card-row dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.aprs-card-none {
+  color: var(--text-faint);
+}
+.aprs-card-comment {
+  font-style: italic;
+}
+.aprs-card-section {
+  display: block;
+  margin: var(--space-2) 0 3px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.aprs-card-raw {
+  margin-top: var(--space-2);
+}
+.aprs-card-rawtoggle {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.aprs-card-rawtext {
+  margin: 3px 0 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.aprs-card-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.aprs-card-actions button,
+.aprs-card-actions a {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  text-decoration: none;
+}
+.aprs-card-actions button:hover,
+.aprs-card-actions a:hover {
+  color: var(--text);
+}
+
+/* The chip is a button now — it opens the feed controls. Reset the button chrome so it still reads
+   as a status chip rather than growing a border and a background. */
+.aprs-inet-wrap {
+  position: relative;
+  display: inline-flex;
+}
+button.aprs-inet {
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+button.aprs-inet:hover,
+button.aprs-inet.open {
+  border-color: var(--border);
+  background: var(--bg-elev);
+}
+/* Anchored under the chip, NOT modal: this is a small cluster of controls, not a task that should
+   take the screen. Escape and click-outside dismiss it. */
+.aprs-inet-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  width: 17rem;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.aprs-inet-detail {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.aprs-inet-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+.aprs-inet-row .settings-input {
+  width: 7rem;
+}
+.aprs-inet-row-wide {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.aprs-inet-row-wide .settings-input {
+  width: 100%;
+}
+.aprs-inet-note {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .aprs-inet-off {
   color: var(--text-faint);
 }
@@ -17330,7 +17577,7 @@ tr.sel .aprs-sym {
   max-width: min(90vw, 40rem);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border, #2a3340);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   background: var(--bg-panel, #12161d);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
   font-size: var(--fs-body);

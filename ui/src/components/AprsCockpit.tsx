@@ -1,4 +1,5 @@
 import { MapView } from './MapView'
+import { AprsStationCard } from './AprsStationCard'
 import type { NeedTag, Station } from '../types'
 import type { Theme } from '../useTheme'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -11,13 +12,17 @@ import {
   getAprsHeard,
   getAprsHealth,
   getAprsIsStatus,
+  getAprsStations,
+  setSettings,
   getSettings,
   type AprsHealth,
   type AprsHeard,
   type AprsIsStatus,
   type AprsSource,
+  type AprsStationsView,
 } from '../api'
-import { GLYPH_PATHS, resolveSymbol } from '../aprsSymbols'
+import type { Settings } from '../types'
+import { ageFade, CATEGORY_VAR, GLYPH_PATHS, resolveSymbol, symbolCategory } from '../aprsSymbols'
 import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
@@ -206,13 +211,69 @@ export type AprsDecodeState =
 export function AprsSymbolIcon({ table, code }: { table: string; code: string }) {
   const sym = resolveSymbol(table, code)
   return (
-    <span className={`aprs-sym${sym.known ? '' : ' aprs-sym-unknown'}`} title={sym.label}>
+    <span
+      className={`aprs-sym${sym.known ? '' : ' aprs-sym-unknown'}`}
+      title={sym.label}
+      // Same category colour the map paints, from the same variable — one palette, two renderers.
+      style={{ color: `var(${CATEGORY_VAR[symbolCategory(sym.glyph)]})` }}
+    >
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
         <path d={GLYPH_PATHS[sym.glyph]} fill="currentColor" />
       </svg>
       {sym.overlay && <span className="aprs-sym-overlay">{sym.overlay}</span>}
     </span>
   )
+}
+
+/** A roster with nothing in it, and the backend's own default thresholds. */
+const EMPTY_ROSTER: AprsStationsView = { stations: [], ttlMin: 60, fadeAfterMin: 20 }
+
+/**
+ * ⭐ THE RENDER-SIDE HALF OF THE FLASHING BUG. Keep the previous array when a poll brought back the
+ * same data, so React sees the same reference and nothing downstream re-runs.
+ *
+ * The poll fires every two seconds and used to `setHeard(h)` unconditionally. Tauri hands back a
+ * FRESH array every time, so the identity changed on every tick even when not a single packet had
+ * arrived. That invalidated the memo feeding MapView's `aprs` prop, which re-ran the draw effect,
+ * which reassigns `canvas.width` — and assigning canvas width RESETS THE BITMAP. So the entire map,
+ * relief and coastlines included, was torn down and repainted every two seconds whether or not
+ * anything had changed. That is a visible flash on its own, independent of the store churn, and it
+ * is why stations appeared to blink even while continuously present.
+ *
+ * Compares what actually drives the render rather than deep-equalling everything.
+ */
+function samePackets(a: AprsHeard[], b: AprsHeard[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].source !== b[i].source || a[i].atUnix !== b[i].atUnix || a[i].text !== b[i].text) {
+      return false
+    }
+  }
+  return true
+}
+
+/** As `samePackets`, for the station roster: identity, when it was last heard, and where it is. */
+function sameRoster(a: AprsStationsView, b: AprsStationsView): boolean {
+  if (a === b) return true
+  if (a.ttlMin !== b.ttlMin || a.fadeAfterMin !== b.fadeAfterMin) return false
+  if (a.stations.length !== b.stations.length) return false
+  for (let i = 0; i < a.stations.length; i++) {
+    const x = a.stations[i]
+    const y = b.stations[i]
+    if (
+      x.call !== y.call ||
+      x.lastHeardUnix !== y.lastHeardUnix ||
+      x.lat !== y.lat ||
+      x.lon !== y.lon ||
+      x.sourceKind !== y.sourceKind ||
+      x.symbolCode !== y.symbolCode ||
+      x.symbolTable !== y.symbolTable
+    ) {
+      return false
+    }
+  }
+  return true
 }
 
 /** Short tag shown in the station list's Via column. */
@@ -472,6 +533,15 @@ export function AprsCockpit({
   const [selected, setSelected] = useState<string | null>(null)
   const [freq, setFreq] = useState(144.39)
   const [heard, setHeard] = useState<AprsHeard[]>([])
+  // The STATION roster — what the list and map draw. The packet log above still feeds the packet
+  // pane and the message list, which are about events rather than stations.
+  const [roster, setRoster] = useState<AprsStationsView>(EMPTY_ROSTER)
+  // The operator's settings, held whole so a board write can ride along without clobbering the
+  // ~170 fields it does not touch. THE SAME state the Settings panel edits — see `writeAprsIs`.
+  const [settings, setSettingsState] = useState<Settings | null>(null)
+  const [inetOpen, setInetOpen] = useState(false)
+  const [savingInet, setSavingInet] = useState(false)
+  const inetPanelRef = useRef<HTMLDivElement | null>(null)
   const [health, setHealth] = useState<AprsHealth | null>(null)
   const [isStatus, setIsStatus] = useState<AprsIsStatus | null>(null)
   // Show stations the internet reported. On by default when the feed is running (there is no
@@ -547,6 +617,7 @@ export function AprsCockpit({
     prefilled.current = true
     void getSettings()
       .then((s) => {
+        setSettingsState(s)
         const ll = gridToLatLon(s.mygrid || '')
         if (ll) {
           setLat(ll.lat.toFixed(4))
@@ -564,7 +635,10 @@ export function AprsCockpit({
     const tick = () => {
       setNow(Math.floor(Date.now() / 1000))
       void getAprsHeard()
-        .then((h) => alive && setHeard(h))
+        .then((h) => alive && setHeard((prev) => (samePackets(prev, h) ? prev : h)))
+        .catch(() => {})
+      void getAprsStations()
+        .then((v) => alive && setRoster((prev) => (sameRoster(prev, v) ? prev : v)))
         .catch(() => {})
       void getAprsHealth()
         .then((h) => alive && setHealth(h))
@@ -583,6 +657,64 @@ export function AprsCockpit({
 
   // The chip judges against the rig's ACTUAL dial/mode and the APRS channel the operator has
   // selected — so it can say "you are on the FT8 frequency" instead of guessing from audio.
+  /**
+   * Write an APRS-IS setting from the board.
+   *
+   * ⭐ ONE SOURCE OF TRUTH. The board keeps no copy of anything — it writes the same `Settings`
+   * fields the Settings panel reads and writes, through the same `set_settings` command, so the two
+   * surfaces cannot disagree. Sends the WHOLE settings object with the change merged in:
+   * `set_settings` replaces the struct wholesale, so posting a partial would blank every one of the
+   * ~170 fields the board does not know about.
+   *
+   * The backend reconnects the feed only when the server, filter or callsign actually changed.
+   */
+  const writeAprsIs = (patch: Partial<Settings>) => {
+    if (!settings) return
+    const next = { ...settings, ...patch }
+    setSettingsState(next) // optimistic, so the control does not lag a round-trip
+    setSavingInet(true)
+    void setSettings(next)
+      .then(() => getSettings())
+      .then((fresh) => {
+        // Re-read rather than trust the optimistic copy: the engine merges live radio state into
+        // what it persists, so its version is authoritative.
+        setSettingsState(fresh)
+        setStatus(null)
+      })
+      .catch((e) => setStatus(String(e)))
+      .finally(() => setSavingInet(false))
+  }
+
+  // Escape closes the internet panel and a click outside dismisses it — the app's dialog idiom.
+  useEffect(() => {
+    if (!inetOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setInetOpen(false)
+      }
+    }
+    const onDown = (e: MouseEvent) => {
+      if (!inetPanelRef.current?.contains(e.target as Node)) setInetOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    // Deferred a tick so the click that OPENED the panel does not immediately close it.
+    const id = window.setTimeout(() => document.addEventListener('mousedown', onDown), 0)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDown)
+      window.clearTimeout(id)
+    }
+  }, [inetOpen])
+
+
+  // The selected station's record. One selection, three views of it: the list row, the map marker,
+  // and this card — all reading the same store entry, so they cannot disagree.
+  const selectedStation = useMemo(
+    () => roster.stations.find((st) => st.call === selected) ?? null,
+    [roster, selected],
+  )
+
   const decode = useMemo(
     () => aprsDecodeStatus(health, now, radio ?? null, freq),
     [health, now, radio, freq],
@@ -662,67 +794,51 @@ export function AprsCockpit({
       .catch((e) => setStatus(String(e)))
   }
 
-  // Per-STATION source, accumulated across every packet from that callsign — not just its latest.
-  // A station our antenna heard ten minutes ago and the internet has reported since is still a
-  // station we can hear, and the newest packet alone would quietly relabel it `inet`. Once RF, the
-  // station stays at least `both`.
-  const sourceByCall = useMemo(() => {
-    const m = new Map<string, AprsSource>()
-    for (const h of heard) {
-      const prior = m.get(h.source)
-      m.set(h.source, !prior || prior === h.sourceKind ? h.sourceKind : 'both')
-    }
-    return m
-  }, [heard])
-
-  // The "show internet stations" toggle. Applied ONCE here, so the list, the counts and the map
-  // can never disagree about which stations exist.
-  const visible = useMemo(
-    () => (showInet ? heard : heard.filter((h) => sourceByCall.get(h.source) !== 'inet')),
-    [heard, showInet, sourceByCall],
+  // The station roster, filtered by the "show internet stations" toggle. Applied ONCE here so the
+  // list, the counts and the map can never disagree about which stations exist.
+  //
+  // No per-station source accumulation any more: the backend store derives each station's source
+  // from when each channel last carried it, which is one source of truth instead of two that could
+  // drift.
+  const visibleStations = useMemo(
+    () => (showInet ? roster.stations : roster.stations.filter((st) => st.sourceKind !== 'inet')),
+    [roster, showInet],
   )
 
-  // How many VISIBLE stations actually carry a position — status and message packets carry none,
-  // so "nothing on the map" is a normal state worth naming.
+  // How many VISIBLE stations actually carry a position — a station heard only via a message or
+  // status packet has none, so "nothing on the map" is a normal state worth naming.
   const positioned = useMemo(
-    () => visible.filter((h) => h.lat != null && h.lon != null).length,
-    [visible],
+    () => visibleStations.filter((st) => st.lat != null && st.lon != null).length,
+    [visibleStations],
   )
 
-  // Messages get their OWN chronological list (newest first) — never collapsed by source, so a
-  // conversation of several lines from one station all show. Positions are the roster below.
+  // Messages keep their OWN chronological list from the PACKET log (newest first) — they are
+  // events, not stations, and a conversation of several lines from one station must all show.
   const messages = useMemo(
-    () => visible.filter((h) => h.kind === 'message').slice().reverse(),
-    [visible],
+    () => heard.filter((h) => h.kind === 'message').slice().reverse(),
+    [heard],
   )
 
-  // Collapse the POSITION stream to ONE row per station (latest wins — `heard` is oldest→newest),
-  // newest first, with distance + bearing from the operator's grid. Messages are excluded (above).
-  const rows = useMemo(() => {
-    const byCall = new Map<string, AprsHeard>()
-    for (const h of visible) {
-      if (h.kind === 'message') continue
-      byCall.set(h.source, h)
-    }
-    return [...byCall.values()]
-      .sort((a, b) => b.atUnix - a.atUnix)
-      .map((h) => {
-        const hasPos = h.lat != null && h.lon != null
-        const there = hasPos ? { lat: h.lat as number, lon: h.lon as number } : null
+  // The station rows: the backend already collapsed packets into stations and ordered them
+  // newest-heard first, so this only decorates them with distance + bearing from the operator.
+  const rows = useMemo(
+    () =>
+      visibleStations.map((st) => {
+        const there = st.lat != null && st.lon != null ? { lat: st.lat, lon: st.lon } : null
         return {
-          h,
-          src: sourceByCall.get(h.source) ?? h.sourceKind,
+          st,
           dist: me && there ? haversineKm(me, there) : null,
           brg: me && there ? bearingDeg(me, there) : null,
         }
-      })
-  }, [visible, me, sourceByCall])
+      }),
+    [visibleStations, me],
+  )
 
   // How many stations the internet contributed that our own receiver has NOT heard — the number
   // the toggle hides, and worth naming so its effect is never a surprise.
   const inetOnly = useMemo(
-    () => [...sourceByCall.values()].filter((s) => s === 'inet').length,
-    [sourceByCall],
+    () => roster.stations.filter((st) => st.sourceKind === 'inet').length,
+    [roster],
   )
 
   return (
@@ -846,15 +962,84 @@ export function AprsCockpit({
         {/* The OTHER inlet's health. Deliberately a second chip, not a merged one: the RF chain
             and the internet feed fail independently, and seeing a green internet chip beside a
             silent RF chip is the whole diagnostic — it proves the fault is in the radio path. */}
-        {isStatus?.enabled && (
-          <span
-            className={`aprs-inet aprs-inet-${inetState}`}
-            role="status"
-            title={inetDetail}
+        {/* ⭐ The internet chip is also the internet CONTROL. The chip's own guidance says "widen
+            the radius or add watched calls" when the feed is quiet, so the controls that act on
+            that advice have to be reachable from where the advice is given — one click, not a trip
+            to Settings. Grouped in a panel rather than inline because this cockpit already carries
+            a frequency picker, Re-tune, TX, Monitor, a decode chip and this one; three more inline
+            controls would be clutter. */}
+        <div className="aprs-inet-wrap" ref={inetPanelRef}>
+          <button
+            type="button"
+            className={`aprs-inet aprs-inet-${inetState}${inetOpen ? ' open' : ''}`}
+            aria-expanded={inetOpen}
+            aria-haspopup="dialog"
+            onClick={() => setInetOpen(!inetOpen)}
+            title={`${inetDetail}\n\nClick for internet feed controls.`}
           >
-            {inetLabel}
-          </span>
-        )}
+            {isStatus?.enabled ? inetLabel : 'Internet off'}
+          </button>
+          {inetOpen && (
+            <div className="aprs-inet-panel" role="dialog" aria-label="APRS-IS internet feed">
+              <p className="aprs-inet-detail">{inetDetail}</p>
+
+              <label className="aprs-inet-row">
+                <span>Internet feed</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!!settings?.aprsIsEnabled}
+                  className={`toggle${settings?.aprsIsEnabled ? ' on' : ''}`}
+                  disabled={!settings || savingInet}
+                  onClick={() => writeAprsIs({ aprsIsEnabled: !settings?.aprsIsEnabled })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+
+              <label className="aprs-inet-row">
+                <span>Radius (km)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={5000}
+                  className="settings-input"
+                  value={settings?.aprsIsRadiusKm ?? 150}
+                  disabled={!settings || savingInet}
+                  onChange={(e) => writeAprsIs({ aprsIsRadiusKm: Number(e.target.value) })}
+                />
+              </label>
+
+              <label className="aprs-inet-row aprs-inet-row-wide">
+                <span>Watched calls</span>
+                <input
+                  type="text"
+                  className="settings-input"
+                  placeholder="W9XYZ-9, KD9ABC"
+                  spellCheck={false}
+                  defaultValue={(settings?.aprsIsWatchCalls ?? []).join(', ')}
+                  disabled={!settings || savingInet}
+                  // On blur, not per keystroke: each write reconnects the feed, so committing
+                  // mid-callsign would drop the session on every character typed.
+                  onBlur={(e) =>
+                    writeAprsIs({
+                      aprsIsWatchCalls: e.target.value
+                        .split(',')
+                        .map((c) => c.trim().toUpperCase())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+              </label>
+
+              <p className="aprs-inet-note">
+                Changing the radius or watched calls reconnects the feed — the server does the
+                filtering, so a new subscription has to be sent. Server, port, traffic types and the
+                iGate live in Settings ▸ Modes ▸ APRS.
+              </p>
+            </div>
+          )}
+        </div>
         {/* Hide everything our own antenna has not heard. The count is named so the effect of
             the click is never a surprise. */}
         {inetOnly > 0 && (
@@ -982,39 +1167,47 @@ export function AprsCockpit({
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ h, src, dist, brg }) => (
+            {rows.map(({ st, dist, brg }) => (
               // Selecting here selects on the map and vice versa — one selection,
               // two views of it. Clicking the same row again clears it.
               <tr
-                key={h.source}
-                className={selected === h.source ? 'sel' : undefined}
-                onClick={() => setSelected(selected === h.source ? null : h.source)}
+                key={st.call}
+                className={selected === st.call ? 'sel' : undefined}
+                // A station going quiet fades in the list exactly as it does on the map, from the
+                // same thresholds the backend sent, so the two readings cannot disagree.
+                style={{
+                  opacity: ageFade(st.lastHeardUnix, now, roster.fadeAfterMin, roster.ttlMin),
+                }}
+                onClick={() => setSelected(selected === st.call ? null : st.call)}
                 title={
-                  h.lat != null && h.lon != null
-                    ? `Highlight ${h.source} on the map`
-                    : `${h.source} reported no position — nothing to highlight`
+                  st.lat != null && st.lon != null
+                    ? `Highlight ${st.call} on the map`
+                    : `${st.call} reported no position — nothing to highlight`
                 }
               >
-                <td className="aprs-age">{ageLabel(h.atUnix, now)}</td>
+                <td className="aprs-age">{ageLabel(st.lastHeardUnix, now)}</td>
                 <td className="aprs-sym-cell">
-                  <AprsSymbolIcon table={h.symbolTable} code={h.symbolCode} />
+                  <AprsSymbolIcon table={st.symbolTable} code={st.symbolCode} />
                 </td>
-                <td className="aprs-from">{h.source}</td>
-                <td className={`aprs-src aprs-src-${src}`} title={SOURCE_TITLE[src]}>
-                  {SOURCE_LABEL[src]}
+                <td className="aprs-from">{st.call}</td>
+                <td
+                  className={`aprs-src aprs-src-${st.sourceKind}`}
+                  title={SOURCE_TITLE[st.sourceKind]}
+                >
+                  {SOURCE_LABEL[st.sourceKind]}
                 </td>
-                <td className={`aprs-kind aprs-kind-${h.kind}`}>{h.kind}</td>
+                <td className={`aprs-kind aprs-kind-${st.kind}`}>{st.kind}</td>
                 <td className="aprs-pos">
-                  {h.lat != null && h.lon != null
-                    ? `${h.lat.toFixed(4)}, ${h.lon.toFixed(4)}${
-                        h.speedKnots ? ` · ${h.speedKnots}kt ${h.courseDeg}°` : ''
+                  {st.lat != null && st.lon != null
+                    ? `${st.lat.toFixed(4)}, ${st.lon.toFixed(4)}${
+                        st.speedKnots ? ` · ${st.speedKnots}kt ${st.courseDeg}°` : ''
                       }`
                     : '—'}
                 </td>
                 <td className="aprs-dist">
                   {dist != null ? `${Math.round(dist)} km ${brg != null ? compass(brg) : ''}` : ''}
                 </td>
-                <td className="aprs-info">{h.text}</td>
+                <td className="aprs-info">{st.text}</td>
               </tr>
             ))}
           </tbody>
@@ -1024,7 +1217,9 @@ export function AprsCockpit({
         <div className="aprs-map">
           <MapView
             embedded={{ aprs: true }}
-            aprs={visible}
+            aprs={visibleStations}
+            aprsFadeAfterMin={roster.fadeAfterMin}
+            aprsTtlMin={roster.ttlMin}
             selectedAprs={selected}
             onSelectAprs={setSelected}
             myGrid={myGrid}
@@ -1041,6 +1236,16 @@ export function AprsCockpit({
                 ? 'No positions heard yet — status and message packets carry none.'
                 : decode.detail}
             </div>
+          )}
+          {/* Selecting a station — from the map OR the list — opens its detail card over the map.
+              Both routes set the same `selected`, so the card serves both without a second path. */}
+          {selectedStation && (
+            <AprsStationCard
+              station={selectedStation}
+              nowSec={now}
+              me={me}
+              onClose={() => setSelected(null)}
+            />
           )}
         </div>
       </div>

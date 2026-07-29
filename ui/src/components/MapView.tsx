@@ -5,8 +5,16 @@
 // means one thing app-wide.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { workedGridSet } from '../coverage'
-import type { AprsHeard, AprsSource } from '../api'
-import { glyphPath, resolveSymbol, showSymbolAt, sourceRing } from '../aprsSymbols'
+import type { AprsStation } from '../api'
+import {
+  ageFade,
+  CATEGORY_VAR,
+  glyphPath,
+  resolveSymbol,
+  showSymbolAt,
+  sourceRing,
+  symbolCategory,
+} from '../aprsSymbols'
 import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects } from 'd3-geo'
 import { RotateCcw } from 'lucide-react'
@@ -107,7 +115,11 @@ interface Props {
   /** APRS stations to plot (the APRS section feeds these; the layer is never
    * polled here). Only those carrying a position are drawn — a status or message
    * packet has nothing to put on a map. */
-  aprs?: AprsHeard[]
+  /** The STATION roster (not the packet log) — see `AprsStation` for why that distinction matters. */
+  aprs?: AprsStation[]
+  /** Minutes of silence after which a station fades / is dropped, from the same backend read. */
+  aprsFadeAfterMin?: number
+  aprsTtlMin?: number
   /** Click an APRS station icon. Omitted = hover-only. */
   onSelectAprs?: (call: string) => void
   /** Highlighted APRS station (the list selection), drawn accented. */
@@ -366,6 +378,8 @@ export function MapView({
   aprs,
   onSelectAprs,
   selectedAprs,
+  aprsFadeAfterMin = 20,
+  aprsTtlMin = 60,
   focusBand = null,
   onFocusBand,
   outlook = null,
@@ -1061,19 +1075,11 @@ export function MapView({
       const positioned = aprs
         .filter((a) => a.lat != null && a.lon != null)
         .slice()
-        .sort((a, b) => a.atUnix - b.atUnix)
-      // Per-STATION source, accumulated over every packet — not the latest packet's tag. A station
-      // this receiver heard earlier is still a station it can hear, and colouring by the newest
-      // packet alone would silently demote it to "internet only" the moment an iGate reported it.
-      const srcByCall = new Map<string, AprsSource>()
-      for (const a of positioned) {
-        const prior = srcByCall.get(a.source)
-        srcByCall.set(a.source, !prior || prior === a.sourceKind ? a.sourceKind : 'both')
-      }
+        .sort((a, b) => a.lastHeardUnix - b.lastHeardUnix)
       for (const a of positioned) {
         const p = project(proj, { lat: a.lat as number, lon: a.lon as number })
         if (!p) continue
-        const isSel = sel != null && a.source.toUpperCase() === sel
+        const isSel = sel != null && a.call.toUpperCase() === sel
         ctx.globalAlpha = layers.aprs.opacity
         // Course/speed vector: only for a station actually under way. A parked
         // station with a stale course would otherwise draw a lie.
@@ -1092,14 +1098,19 @@ export function MapView({
         // reports it. A symbol glyph cannot be hollow without becoming unreadable, so the SHAPE
         // now says what the station IS and the RING says how it reached us. Same language: a
         // solid outline still means the operator's own antenna.
-        const src = srcByCall.get(a.source) ?? a.sourceKind
-        const { ring, alpha } = sourceRing(src)
+        // The store derives the station's source from when each channel last carried it, so there
+        // is nothing to accumulate here any more — one source of truth, no drift.
+        const { ring, alpha } = sourceRing(a.sourceKind)
+        // Silence dims a station on top of everything else. Multiplicative on purpose: an
+        // internet-only station going stale is dimmer than either fact alone, which is right —
+        // both reduce how much it should be asserting.
+        const fade = ageFade(a.lastHeardUnix, nowMs / 1000, aprsFadeAfterMin, aprsTtlMin)
         const ink = isSel ? '#5eead4' : 'rgba(203, 213, 225, 0.95)'
         if (drawSymbols) {
           const sym = resolveSymbol(a.symbolTable, a.symbolCode)
           const size = isSel ? 20 : 17
           ctx.save()
-          ctx.globalAlpha = layers.aprs.opacity * alpha
+          ctx.globalAlpha = layers.aprs.opacity * alpha * fade
           ctx.translate(p[0], p[1])
           // The ring first, so the glyph sits inside it rather than under it.
           ctx.strokeStyle = ink
@@ -1120,7 +1131,12 @@ export function MapView({
           if (sym.rotates && a.courseDeg != null && a.speedKnots != null && a.speedKnots > 1) {
             ctx.rotate((a.courseDeg * Math.PI) / 180)
           }
-          ctx.fillStyle = ink
+          // ⭐ Colour says WHAT the station is; the ring above already said how it reached us. The
+          // two channels stay independent, so neither has to compete for the same ink. A selected
+          // station keeps the accent so the selection is never ambiguous.
+          ctx.fillStyle = isSel
+            ? ink
+            : cssVar(CATEGORY_VAR[symbolCategory(sym.glyph)]) || ink
           ctx.translate(-size / 2, -size / 2)
           ctx.scale(size / 24, size / 24)
           ctx.fill(glyphPath(sym.glyph))
@@ -1129,7 +1145,7 @@ export function MapView({
           // operator's own annotation (an iGate's `I`, a digi's hop count) and must stay readable.
           if (sym.overlay) {
             ctx.save()
-            ctx.globalAlpha = layers.aprs.opacity * alpha
+            ctx.globalAlpha = layers.aprs.opacity * alpha * fade
             ctx.font = `700 ${Math.round(size * 0.5)}px ${cssVar('--font-mono') || 'monospace'}`
             ctx.textAlign = 'center'
             ctx.textBaseline = 'middle'
@@ -1146,7 +1162,7 @@ export function MapView({
           // Zoomed out: a screen of glyphs is unreadable mush, and the question at this scale is
           // "where is there traffic", not "what is each station". Back to dots.
           const r = isSel ? 5 : 3.5
-          ctx.globalAlpha = layers.aprs.opacity * alpha
+          ctx.globalAlpha = layers.aprs.opacity * alpha * fade
           if (ring === 'dashed') {
             ctx.strokeStyle = isSel ? '#5eead4' : 'rgba(148, 163, 184, 0.85)'
             ctx.lineWidth = 1.4
@@ -1172,9 +1188,9 @@ export function MapView({
         // turns a busy local net into a wall of text.
         if (isSel || (a.speedKnots != null && a.speedKnots > 1)) {
           ctx.fillStyle = cssVar('--text') || '#e2e8f0'
-          ctx.fillText(a.source, p[0] + 8, p[1])
+          ctx.fillText(a.call, p[0] + 8, p[1])
         }
-        placedAprsRef.current.push({ call: a.source, x: p[0], y: p[1] })
+        placedAprsRef.current.push({ call: a.call, x: p[0], y: p[1] })
       }
       ctx.globalAlpha = 1
     }
@@ -1787,7 +1803,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs])
+  }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -2064,9 +2080,9 @@ export function MapView({
       return `Ionosonde · measured MUF ${hit.muf.toFixed(1)} MHz here (KC2G) — a data point, not a station`
     }
     if (hit.kind === 'aprs') {
-      const a = aprs?.find((x) => x.source === hit.name)
+      const a = aprs?.find((x) => x.call === hit.name)
       if (!a) return hit.name
-      const age = Math.max(0, Math.round(Date.now() / 1000 - a.atUnix))
+      const age = Math.max(0, Math.round(Date.now() / 1000 - a.lastHeardUnix))
       const when = age < 60 ? `${age}s ago` : `${Math.round(age / 60)}m ago`
       const via = a.path.length > 0 ? ` · via ${a.path.join(',')}` : ' · direct'
       const moving =
@@ -2083,7 +2099,7 @@ export function MapView({
             : 'heard on RF'
       const sym = resolveSymbol(a.symbolTable, a.symbolCode)
       const what = sym.known ? ` · ${sym.label}${sym.overlay ? ` (${sym.overlay})` : ''}` : ''
-      return `${a.source}${what} · ${how} ${when}${via}${moving}${a.text ? ` — ${a.text}` : ''}`
+      return `${a.call}${what} · ${how} ${when}${via}${moving}${a.text ? ` — ${a.text}` : ''}`
     }
     if (hit.kind === 'sat') {
       const star = hit.chased ? '★' : '☆'

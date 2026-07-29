@@ -510,6 +510,16 @@ pub struct Settings {
     /// other way: internet→RF transmits unattended, which the alerts doctrine forbids.
     #[serde(default)]
     pub aprs_is_uplink: bool,
+    /// How long (minutes) a heard APRS station stays on the map after its last packet.
+    ///
+    /// The retention window for the STATION store, not the packet log. Default 60: mobiles beacon
+    /// every one to two minutes and fixed stations commonly every ten — as slowly as thirty — so an
+    /// hour survives two missed beacons from the slowest legitimate beaconer. Shorter windows make
+    /// slow fixed stations blink off between their own beacons, which is the bug this store exists
+    /// to fix. Stations begin to FADE after a third of this, which is derived rather than configured
+    /// so the two cannot contradict each other.
+    #[serde(default = "default_aprs_station_ttl_min")]
+    pub aprs_station_ttl_min: u32,
 
     // --- audio I/O ---
     /// Input (capture) device name. Empty = system default input.
@@ -1348,6 +1358,11 @@ fn default_aprs_is_port() -> u16 {
     14580
 }
 
+/// One hour — see the field doc for why an hour and not less.
+fn default_aprs_station_ttl_min() -> u32 {
+    60
+}
+
 /// 150 km: a generous horizon for 2 m simplex plus a digipeater hop or two.
 fn default_aprs_is_radius_km() -> u32 {
     150
@@ -1673,6 +1688,7 @@ impl Default for Settings {
             aprs_is_objects: true,
             aprs_is_messages: true,
             aprs_is_uplink: false,
+            aprs_station_ttl_min: default_aprs_station_ttl_min(),
             audio_in: String::new(),
             audio_out: String::new(),
             voice_mic_device: String::new(),
@@ -2774,6 +2790,7 @@ mod tests {
             "\"aprsIsObjects\":true",
             "\"aprsIsMessages\":true",
             "\"aprsIsUplink\":false",
+            "\"aprsStationTtlMin\":60",
         ] {
             assert!(json.contains(key), "missing wire key {key} in {json}");
         }
@@ -2797,6 +2814,7 @@ mod tests {
         assert_eq!(old.aprs_is_host, "rotate.aprs2.net");
         assert_eq!(old.aprs_is_port, 14580);
         assert_eq!(old.aprs_is_radius_km, 150);
+        assert_eq!(old.aprs_station_ttl_min, 60, "the station window defaults on upgrade");
         assert!(old.aprs_is_weather && old.aprs_is_objects && old.aprs_is_messages);
     }
 

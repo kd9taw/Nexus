@@ -150,6 +150,22 @@ impl AprsPacket {
         Frame::decode(bytes).as_ref().map(AprsPacket::from_frame)
     }
 
+    /// The station's weather readings, if this packet carries any.
+    ///
+    /// Both shapes converge here: a positionless `_` report, and an ordinary position report whose
+    /// comment carries the field sequence. `None` for everything else — including a moving station
+    /// whose `ddd/sss` course-and-speed slot merely LOOKS like a wind slot (see
+    /// [`wx::parse_position_comment`]).
+    pub fn weather(&self) -> Option<super::wx::AprsWx> {
+        use super::wx;
+        match &self.body {
+            AprsBody::Info(AprsInfo::Position(p)) => wx::parse_position_comment(&p.comment),
+            // A positionless weather report has an unrecognised DTI, so it lands in `Other`.
+            AprsBody::Info(AprsInfo::Other { dti: '_', body }) => wx::parse_positionless(body),
+            _ => None,
+        }
+    }
+
     /// The reported position (lat, lon) in degrees, from either a position report or a Mic-E — for
     /// mapping. `None` for message/status/unrecognized packets.
     pub fn position(&self) -> Option<(f64, f64)> {
