@@ -5,6 +5,28 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed: one internal error could leave the radio deaf until you restarted
+
+A safety lock guards the shared decoder, and if anything ever failed while holding it, that lock
+stayed broken for the rest of the session. Every decode and every transmit after it failed too —
+silently. The app kept running and the waterfall kept painting while nothing was being heard, and
+the only sign was a line in a log file you would never see. It now recovers and carries on.
+
+Not something that was reported on the air. It was found while tracking down the JT65 crash, and
+it is exactly the failure that crash would have triggered.
+
+### Fixed: the window could stop responding while a decode was running
+
+Transmitting and decoding both need the same audio engine, and the transmit side used to wait its
+turn while holding a lock the interface also needed. If a decode was still running when the next
+transmit came due, the whole window froze until it finished — under a second on a fast PC, several
+seconds on a Raspberry Pi.
+
+The transmission is now prepared without holding that lock. Nothing changes on the air: the same
+work happens at the same moment, the interface just stays alive through it.
+
 ## [0.20.0] — 2026-07-28
 
 ### Fixed: JT65 could crash Nexus outright, and it is transmitting again
