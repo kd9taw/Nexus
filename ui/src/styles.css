@@ -3201,10 +3201,18 @@ body.resizing {
   max-width: 1100px;
   margin: 0 auto;
 }
-/* Connect is the ONE .single view that must flex-FILL rather than block-scroll — its map
-   needs a definite height (see .connect-shell). Target it alone via :has(> .connect-shell)
-   so Log/Settings keep their block+scroll. Same fix the detached window already applies. */
-.layout.single:has(> .connect-shell) {
+/* Connect and APRS are the .single views that must flex-FILL rather than block-scroll —
+   their maps need a DEFINITE height (see .connect-shell / .aprs-body). Targeted via :has()
+   so Log/Settings keep their block+scroll. Same fix the detached window already applies.
+
+   ⚠️ WITHOUT THIS A MAP GROWS WITHOUT BOUND. `.layout.single` is `display:block;
+   overflow-y:auto`, so a child has no definite height to resolve against. MapView sizes its
+   canvas from the measured container, the taller canvas makes the container taller, and the
+   next measurement is larger again — the operator sees the map "slowly expanding infinitely
+   down". It is a feedback loop, not a sizing mistake, so no min/max-height on the map itself
+   fixes it; the ANCESTOR has to be bounded. */
+.layout.single:has(> .connect-shell),
+.layout.single:has(> .aprs-body) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -17409,7 +17417,11 @@ html[data-panel='needed'] {
 .aprs-body {
   display: grid;
   grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: var(--space-3);
+  /* flex:1 + min-height:0 only mean anything because the `.layout.single:has()` rule above
+     makes the parent a flex column. In the default block+scroll `.single` they are inert and
+     the map has no height to resolve against. */
   min-height: 0;
   flex: 1;
 }
@@ -17424,7 +17436,9 @@ html[data-panel='needed'] {
 .aprs-map {
   position: relative;
   min-width: 0;
-  min-height: 320px;
+  /* A hard floor here would push the grid past its parent on short windows — the additive-floor
+     clipping this codebase has already been bitten by. Floor only when there is room. */
+  min-height: min(320px, 100%);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;

@@ -18,6 +18,14 @@ frequency while an image is arriving. So the mistuning is now stated outright: a
 readout beside the line count, whenever it drifts past 10 Hz. The decoder already worked this out
 from the header and had simply never shown it to you.
 
+### Fixed: the APRS map grew without bound
+
+On the first test build the map crept steadily downward and never stopped. The section fills its
+window rather than being a scrolling page, and without that the map had no fixed height to work
+from: it sized itself from its container, which made the container taller, which made it size
+itself larger again. A loop, not a wrong number — which is why it looked like slow, endless growth
+rather than simply being the wrong size. The Connect map already had the same fix.
+
 ### APRS gets a map
 
 APRS had no map. Everything sat in a small area at the top left of the screen with the rest of the
