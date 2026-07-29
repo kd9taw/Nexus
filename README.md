@@ -236,6 +236,10 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   (`crates/tempo-core/src/rtty/demod.rs`) is **ported from fldigi's receive path** (`rtty.cxx` +
   `fftfilt.cxx`), implementing **Kok Chen W7AY**'s published ATC design as fldigi does; lineage and
   the deliberate differences are in **[NOTICE](NOTICE)**.
+- **[slowrx](https://github.com/windytan/slowrx)** (ISC) — **Oona Räisänen OH2EIQ**'s SSTV decoder,
+  by way of the MIT **[`slowrx.rs`](https://github.com/jasonherald/slowrx.rs)** Rust port by
+  **Jason Herald**. Nexus's SSTV *receiver* (`crates/tempo-sstv/`) is vendored from it; the SSTV
+  transmitter is original Nexus code (see **[NOTICE](NOTICE)**).
 - **[Hamlib](https://hamlib.github.io/)** — bundled `rigctld` for CAT control (GPL/LGPL).
 - **[FFTW](https://www.fftw.org/)** (GPL), **[Tauri](https://tauri.app/)**, React,
   [cpal](https://github.com/RustAudio/cpal), Natural Earth basemap (public domain).

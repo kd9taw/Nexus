@@ -214,6 +214,35 @@ is not affiliated with or endorsed by it.
 > Chen, W7AY (<http://www.w7ay.net/site/Technical/RTTY%20Sidebands/sidebands.html>) —
 > a paper, not source code. No W7AY or fldigi transmit code is used.
 
+### slowrx — SSTV receiver (via the `slowrx.rs` Rust port)
+License: **ISC** (the original C) and **MIT** (the Rust port).
+<https://github.com/windytan/slowrx> ·
+<https://github.com/jasonherald/slowrx.rs>
+
+Nexus's SSTV **receiver** (`crates/tempo-sstv/`) is vendored third-party code,
+and its lineage runs two steps:
+
+- **slowrx** — the C SSTV decoder by **Oona Räisänen (OH2EIQ)**, © 2007-2013,
+  **ISC License** (upstream `COPYING`). VIS detection, the mode-specification
+  tables, the frequency→pixel mappings, the sync/slant correlation, and the FSK
+  callsign-ID decode (`fsk.c`) originate here.
+- **`slowrx.rs`** — the pure-Rust port of that decoder by **Jason Herald**
+  (© 2026, **MIT**; crates.io `slowrx` v0.5.3, commit `aa384b4`). This is the
+  form Nexus vendored.
+
+Per-file headers under `crates/tempo-sstv/src/` name the slowrx C file each
+module translates (for example `src/fsk.rs` ← `fsk.c`, `src/mode_scottie.rs` ←
+`video.c`), and the crate keeps its own `crates/tempo-sstv/NOTICE.md` (slowrx's
+full ISC permission notice) and `crates/tempo-sstv/LICENSE` (the MIT text of the
+Rust port), which is why its manifest declares `license = "MIT"` rather than the
+workspace GPL-3.0-only. Nexus's own additions are the PD50/90/160/290 mode-table
+entries, a single-bin Goertzel FSK-ID slicer in place of slowrx's 2048-point FFT
+(same framing constants), and the **entire transmitter** (`src/encode*.rs`,
+original Nexus code covering all 15 modes). ISC and MIT are both permissive and
+GPL-compatible, so the vendored receiver redistributes cleanly inside the GPLv3
+whole. slowrx is an independent project, unmaintained upstream; Nexus is not
+affiliated with or endorsed by it.
+
 ---
 
 ## Bundled components (shipped in the Windows installer)
@@ -445,9 +474,10 @@ The bundled and linked components combine into the GPLv3 whole:
 - Permissive licenses (BSL-1.0 for Boost; MIT / Apache-2.0 for Tauri, cpal,
   sgp4, keyring, reqwest, hound, socket2, serde, React, TypeScript, Vite,
   Radix; ISC for d3-geo, topojson-client, world-atlas, us-atlas, lucide-react;
-  MIT for cty.dat and the CQ-zone data; public domain for the WMM, Natural
-  Earth, and Census-derived data) are compatible with redistribution under
-  GPLv3.
+  ISC for slowrx and MIT for the `slowrx.rs` port of it vendored at
+  `crates/tempo-sstv/`; MIT for cty.dat and the CQ-zone data; public domain for
+  the WMM, Natural Earth, and Census-derived data) are compatible with
+  redistribution under GPLv3.
 - MPL-2.0 (serialport) is GPL-compatible; its source-disclosure obligations
   apply per-file to that component.
 
