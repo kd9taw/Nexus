@@ -208,6 +208,12 @@ Nexus is GPLv3-only; the ported code is incorporated by electing version 3
 (see "License compatibility" below). fldigi is an independent project; Nexus
 is not affiliated with or endorsed by it.
 
+> The Nexus RTTY **transmitter** (`crates/tempo-audio/src/rtty_afsk.rs`) is
+> **not** derived from fldigi. Its shaped two-oscillator AFSK generator is an
+> independent implementation of the published FSK-generation analysis by Kok
+> Chen, W7AY (<http://www.w7ay.net/site/Technical/RTTY%20Sidebands/sidebands.html>) —
+> a paper, not source code. No W7AY or fldigi transmit code is used.
+
 ---
 
 ## Bundled components (shipped in the Windows installer)

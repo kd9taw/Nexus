@@ -14,8 +14,17 @@
 //!   to 264 samples would walk the far end's clock recovery off the straddle point
 //!   mid-message.
 //! - **Phase continuity + shaped edges.** Mark and space NCOs run continuously and a
-//!   bit edge raised-cosine cross-fades between them (the W7AY dual-oscillator
-//!   scheme) — no phase steps, no key clicks, narrow keying sidebands.
+//!   bit edge raised-cosine cross-fades between them — no phase steps, no key clicks,
+//!   narrow keying sidebands. Generating FSK from two free-running oscillators, and
+//!   what the bare switch between them costs in keying sidebands, is the analysis
+//!   **Kok Chen, W7AY** published in "FSK Sidebands"
+//!   (<http://www.w7ay.net/site/Technical/RTTY%20Sidebands/sidebands.html>); the
+//!   shaped cross-fade here is this generator's answer to it. Implemented from that
+//!   published design — no W7AY code is used, and this is NOT fldigi's shaped-RTTY
+//!   transmit path either (fldigi sums two *independently* sinc-shaped oscillators
+//!   and normalizes by a measured peak; here the two weights are complementary, so
+//!   the sum is bounded by construction). Contrast `tempo_core::rtty::demod`, whose
+//!   receive path IS ported from fldigi — see NOTICE.
 //!
 //! The ITA2/Baudot encoding itself (LTRS/FIGS, USOS, diddle) lives in
 //! `tempo_core::rtty`; this module takes the already-encoded 5-bit stream. Like
