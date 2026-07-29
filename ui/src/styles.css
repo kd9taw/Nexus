@@ -17401,3 +17401,71 @@ html[data-panel='needed'] {
   font-size: var(--fs-label);
   padding: var(--space-1) 0;
 }
+
+/* ── APRS: rail + map (2026-07-29) ──────────────────────────────────────────
+   The section was one vertical stack, so its controls bunched into the top-left
+   corner and the rest of a wide window was empty. APRS is a geographic mode; the
+   map is the point, and the controls belong beside it. */
+.aprs-body {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: var(--space-3);
+  min-height: 0;
+  flex: 1;
+}
+.aprs-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.aprs-map {
+  position: relative;
+  min-width: 0;
+  min-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+/* "Nothing plotted" is a NORMAL state — status and message packets carry no
+   position at all — so it is named rather than left as an empty planet. */
+.aprs-map-empty {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-3);
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  pointer-events: none;
+  max-width: 90%;
+  text-align: center;
+}
+/* The heard table is dense; inside a 420 px rail it needs to scroll itself
+   rather than force the whole rail wide. */
+.aprs-rail .aprs-table {
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+/* Narrow: stack, map first — it is the thing worth seeing on a small screen. */
+[data-viewport='narrow'] .aprs-body,
+[data-viewport='phone'] .aprs-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+[data-viewport='narrow'] .aprs-map,
+[data-viewport='phone'] .aprs-map {
+  order: -1;
+  min-height: 260px;
+}
+.aprs-rail .aprs-table tbody tr {
+  cursor: pointer;
+}
+.aprs-rail .aprs-table tbody tr.sel td {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}

@@ -1,3 +1,6 @@
+import { MapView } from './MapView'
+import type { NeedTag, Station } from '../types'
+import type { Theme } from '../useTheme'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
@@ -54,8 +57,14 @@ export function AprsCockpit({
   onTune,
   radio,
   onSetTxEnabled,
+  theme,
+  myGrid = '',
 }: {
   active: boolean
+  /** Palette for the embedded APRS map. */
+  theme: Theme
+  /** Operator's grid — centers the map on the station. */
+  myGrid?: string
   /** QSY to an APRS dial (MHz): 2 m FM simplex, auto-routing to the 2 m-capable radio. */
   onTune?: (dialMhz: number) => void
   /** Live rig readout (dial/band/mode + TX-enable) — the TopBar's is hidden on this view. */
@@ -65,12 +74,25 @@ export function AprsCockpit({
   onSetTxEnabled?: (on: boolean) => void
 }) {
   const [armed, setArmed] = useState(false)
+  // One selection shared by the list and the map — clicking either highlights both.
+  const [selected, setSelected] = useState<string | null>(null)
   const [freq, setFreq] = useState(144.39)
   const [heard, setHeard] = useState<AprsHeard[]>([])
   const [lat, setLat] = useState('')
   const [lon, setLon] = useState('')
   const [comment, setComment] = useState('Nexus APRS')
   const [symbol, setSymbol] = useState('>')
+  // Stable empty inputs for the embedded map (it plots APRS only — no decode
+  // stations, spots or needs), so MapView's per-tick projections don't rebuild.
+  const noStations = useMemo(() => [] as Station[], [])
+  const noNeeds = useMemo(() => new Map<string, NeedTag>(), [])
+  const noSelectCall = useMemo(() => () => {}, [])
+  // How many heard stations actually carry a position — status and message
+  // packets carry none, so "nothing on the map" is a normal state worth naming.
+  const positioned = useMemo(
+    () => heard.filter((h) => h.lat != null && h.lon != null).length,
+    [heard],
+  )
   const [path, setPath] = useState('WIDE1-1,WIDE2-1')
   const [msgTo, setMsgTo] = useState('')
   const [msgText, setMsgText] = useState('')
@@ -270,6 +292,16 @@ export function AprsCockpit({
         </button>
       </div>
 
+      {/* ⭐ APRS IS A GEOGRAPHIC MODE AND HAD NO MAP. Everything lived in one
+          vertical stack, so on any real window the controls bunched into the
+          top-left and the rest of the section was empty — operator, 2026-07-29:
+          "all information is in a small area in the top left, and you still have
+          three-quarters of a black box of items."
+          The controls and lists become a left rail; the map takes the space they
+          were not using. Positions were already in the packets (AprsHeard carries
+          lat/lon, course and speed) — nothing new is decoded for this. */}
+      <div className="aprs-body">
+        <div className="aprs-rail">
       <div className="aprs-beacon">
         <span className="aprs-beacon-title">Position beacon</span>
         <label>
@@ -369,7 +401,18 @@ export function AprsCockpit({
           </thead>
           <tbody>
             {rows.map(({ h, dist, brg }) => (
-              <tr key={h.source}>
+              // Selecting here selects on the map and vice versa — one selection,
+              // two views of it. Clicking the same row again clears it.
+              <tr
+                key={h.source}
+                className={selected === h.source ? 'sel' : undefined}
+                onClick={() => setSelected(selected === h.source ? null : h.source)}
+                title={
+                  h.lat != null && h.lon != null
+                    ? `Highlight ${h.source} on the map`
+                    : `${h.source} reported no position — nothing to highlight`
+                }
+              >
                 <td className="aprs-age">{ageLabel(h.atUnix, now)}</td>
                 <td className="aprs-from">{h.source}</td>
                 <td className={`aprs-kind aprs-kind-${h.kind}`}>{h.kind}</td>
@@ -389,6 +432,30 @@ export function AprsCockpit({
           </tbody>
         </table>
       )}
+        </div>
+        <div className="aprs-map">
+          <MapView
+            embedded={{ aprs: true }}
+            aprs={heard}
+            selectedAprs={selected}
+            onSelectAprs={setSelected}
+            myGrid={myGrid}
+            theme={theme}
+            stations={noStations}
+            prop={null}
+            selectedCall={null}
+            onSelectCall={noSelectCall}
+            needByCall={noNeeds}
+          />
+          {positioned === 0 && (
+            <div className="aprs-map-empty">
+              {armed
+                ? 'No positions heard yet — status and message packets carry none.'
+                : 'Monitor is off — arm it to plot stations.'}
+            </div>
+          )}
+        </div>
+      </div>
     </main>
   )
 }

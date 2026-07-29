@@ -2511,6 +2511,8 @@ export default function App() {
         {isViewEnabled('aprs') && (
           <div className="aprs-host" hidden={effectiveView !== 'aprs'}>
             <AprsCockpit
+              theme={theme}
+              myGrid={snap.mygrid}
               active={effectiveView === 'aprs'}
               onTune={handleAprsTune}
               radio={snap.radio}
