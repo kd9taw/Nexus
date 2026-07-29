@@ -8,6 +8,7 @@ import type { CalendarEntry, DxpedDayBest, DxpedWindow } from '../../types'
 import { LikelihoodHeatmap } from './LikelihoodHeatmap'
 import { DxpedMonth } from './DxpedMonth'
 import { DxpedDigest } from './DxpedDigest'
+import { dxpedColorIndex } from './dxpedLanes'
 
 function daysUntil(startUnix: number): string {
   const d = Math.round((startUnix - Date.now() / 1000) / 86400)
@@ -130,6 +131,9 @@ export function DxpedCalendar({
               className="cal-entry"
               key={`${e.call}-${e.startUnix}`}
               data-cal-call={e.call.toUpperCase()}
+              // The identity colour follows the operation off the grid: a bar you
+              // clicked and the entry you landed on carry the same rail.
+              data-dxc={dxpedColorIndex(e.call)}
             >
               <div className="cal-head">
                 <b className="cal-call">{e.call}</b>

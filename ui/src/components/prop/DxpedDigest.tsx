@@ -11,6 +11,7 @@
 // across per-entry rows where the operator had to assemble the comparison
 // themselves. This states the conclusion instead of the evidence.
 import type { CalendarEntry, DxpedWindow } from '../../types'
+import { dxpedColorIndex } from './dxpedLanes'
 
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -90,6 +91,9 @@ export function DxpedDigest({
           const live = isOnAir(e, now)
           return (
             <li key={`${call}-${e.startUnix}`} className={`dxd-row${live ? ' live' : ''}`}>
+              {/* Same slot the operation's calendar bar uses — the row and the bar
+                  are recognisably one thing without reading either callsign. */}
+              <span className="dxd-dot" data-dxc={dxpedColorIndex(call)} aria-hidden="true" />
               <button type="button" className="dxd-call" onClick={() => onSelect?.(e.call)}>
                 {chasing?.has(call) && <span aria-hidden="true">★ </span>}
                 {e.call}
