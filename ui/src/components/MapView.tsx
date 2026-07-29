@@ -5,7 +5,7 @@
 // means one thing app-wide.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { workedGridSet } from '../coverage'
-import type { AprsHeard } from '../api'
+import type { AprsHeard, AprsSource } from '../api'
 import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects } from 'd3-geo'
 import { RotateCcw } from 'lucide-react'
@@ -1059,6 +1059,14 @@ export function MapView({
         .filter((a) => a.lat != null && a.lon != null)
         .slice()
         .sort((a, b) => a.atUnix - b.atUnix)
+      // Per-STATION source, accumulated over every packet — not the latest packet's tag. A station
+      // this receiver heard earlier is still a station it can hear, and colouring by the newest
+      // packet alone would silently demote it to "internet only" the moment an iGate reported it.
+      const srcByCall = new Map<string, AprsSource>()
+      for (const a of positioned) {
+        const prior = srcByCall.get(a.source)
+        srcByCall.set(a.source, !prior || prior === a.sourceKind ? a.sourceKind : 'both')
+      }
       for (const a of positioned) {
         const p = project(proj, { lat: a.lat as number, lon: a.lon as number })
         if (!p) continue
@@ -1076,10 +1084,24 @@ export function MapView({
           ctx.lineTo(p[0] + Math.cos(rad) * len, p[1] + Math.sin(rad) * len)
           ctx.stroke()
         }
-        ctx.fillStyle = isSel ? '#5eead4' : 'rgba(203, 213, 225, 0.95)'
-        ctx.beginPath()
-        ctx.arc(p[0], p[1], isSel ? 5 : 3.5, 0, Math.PI * 2)
-        ctx.fill()
+        // ⭐ RF and internet stations must never look alike. A solid dot means THIS RECEIVER
+        // heard the station — the fact an operator actually cares about, because it is evidence
+        // about their own antenna. An internet-only station is drawn hollow and dimmer: present
+        // on the map, but visibly not something this radio has proven it can hear.
+        const src = srcByCall.get(a.source) ?? a.sourceKind
+        const r = isSel ? 5 : 3.5
+        if (src === 'inet') {
+          ctx.strokeStyle = isSel ? '#5eead4' : 'rgba(148, 163, 184, 0.85)'
+          ctx.lineWidth = 1.4
+          ctx.beginPath()
+          ctx.arc(p[0], p[1], r, 0, Math.PI * 2)
+          ctx.stroke()
+        } else {
+          ctx.fillStyle = isSel ? '#5eead4' : 'rgba(203, 213, 225, 0.95)'
+          ctx.beginPath()
+          ctx.arc(p[0], p[1], r, 0, Math.PI * 2)
+          ctx.fill()
+        }
         if (isSel) {
           ctx.strokeStyle = '#5eead4'
           ctx.lineWidth = 1.5
@@ -1992,7 +2014,15 @@ export function MapView({
         a.speedKnots != null && a.speedKnots > 1
           ? ` · ${Math.round(a.speedKnots)} kn${a.courseDeg != null ? ` @ ${Math.round(a.courseDeg)}°` : ''}`
           : ''
-      return `${a.source} · heard ${when}${via}${moving}${a.text ? ` — ${a.text}` : ''}`
+      // Say how it reached us before saying anything else about it — "heard" and "reported" are
+      // different claims, and the tooltip should not blur them.
+      const how =
+        a.sourceKind === 'inet'
+          ? 'reported by APRS-IS'
+          : a.sourceKind === 'both'
+            ? 'heard on RF + APRS-IS'
+            : 'heard on RF'
+      return `${a.source} · ${how} ${when}${via}${moving}${a.text ? ` — ${a.text}` : ''}`
     }
     if (hit.kind === 'sat') {
       const star = hit.chased ? '★' : '☆'

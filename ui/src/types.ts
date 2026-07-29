@@ -1679,6 +1679,28 @@ export interface Settings {
   /** DX-cluster nodes (host:port) — the SSB/phone aggregator. We connect to ALL of them
    * and union their human spots; RBN CW/digital connect automatically. */
   clusterHosts: string[]
+  /** Connect to APRS-IS and plot internet-reported stations beside the ones your antenna hears.
+   * Independent of the APRS RF decoder's arm state: the feed costs no RF resource and can key
+   * nothing, and internet stations arriving while the RF side stays silent is the diagnostic
+   * that proves a radio-chain fault. */
+  aprsIsEnabled?: boolean
+  /** APRS-IS server hostname (a regional Tier 2 rotate, or `rotate.aprs2.net`). */
+  aprsIsHost?: string
+  /** APRS-IS port. 14580 is the user-defined filter port clients and iGates should use. */
+  aprsIsPort?: number
+  /** Radius (km) around your station for the server-side range filter. 0 = no range limit. */
+  aprsIsRadiusKm?: number
+  /** Watched callsigns passed regardless of distance (the APRS-IS budlist). */
+  aprsIsWatchCalls?: string[]
+  /** Include weather stations and positionless weather reports. */
+  aprsIsWeather?: boolean
+  /** Include objects and items (repeaters, NWS alerts, event markers). */
+  aprsIsObjects?: boolean
+  /** Include APRS text messages. Display only — Nexus does not reply to an internet message. */
+  aprsIsMessages?: boolean
+  /** Run as a receive-only iGate: contribute packets THIS station heard on the air to APRS-IS.
+   * Publishes under your callsign, so it is a separate opt-in from the feed itself. */
+  aprsIsUplink?: boolean
   /** Companion-mode UDP listen address (WSJT-X/JTDX). */
   companionAddr: string
   /** CW keyer backend: 'cat' | 'serial' | 'winkeyer' | 'soundcard'. Persisted (Rust `cwKeyer`);

@@ -1204,7 +1204,16 @@ export interface AprsHeard {
   /** For a `message` kind: the sender's line number, if any. */
   msgId: string | null
   atUnix: number
+  /** WHERE this packet came from. `rf` = this station's own receiver decoded it; `inet` = the
+   * APRS-IS feed reported it; `both` = the same packet arrived each way. Never inferred — an RF
+   * sighting proves the antenna hears the station, an internet one proves nothing about range. */
+  sourceKind: AprsSource
+  /** The packet as a TNC2 monitor line, for the raw readout. */
+  raw: string
 }
+
+/** Where an APRS packet reached us from. See `AprsHeard.sourceKind`. */
+export type AprsSource = 'rf' | 'inet' | 'both'
 
 /** Arm/disarm the APRS RX decoder (session-only; RX decode). Returns the current heard list. */
 export async function aprsArm(on: boolean): Promise<AprsHeard[]> {
@@ -1241,6 +1250,36 @@ export interface AprsHealth {
 /** Poll the APRS decoder's health beside the heard list. */
 export async function getAprsHealth(): Promise<AprsHealth> {
   return invoke<AprsHealth>('get_aprs_health')
+}
+
+/** What the APRS-IS internet feed is doing (from `get_aprs_is_status`) — the counterpart to
+ * `AprsHealth` for the other inlet. The two fail independently, and that is the point: internet
+ * stations arriving while the RF chip stays silent proves the fault is in the radio chain. */
+export interface AprsIsStatus {
+  /** The operator has the feed switched on. Independent of the RF decoder's arm state. */
+  enabled: boolean
+  /** A session is up and the server answered the login. */
+  connected: boolean
+  /** The login was accepted as VERIFIED — required to upload. A read-only feed (`pass -1`) is
+   * unverified by design and works perfectly. */
+  verified: boolean
+  /** Packet lines received this session. */
+  packets: number
+  /** When the last line arrived — tells "connected but quiet" from "connected". */
+  lastPacketUnix: number | null
+  /** The operator has the receive-only iGate on. */
+  uplinkEnabled: boolean
+  /** Packets contributed to APRS-IS this session. */
+  uploaded: number
+  /** RF-heard packets the iGate rules refused (mostly the loop guard doing its job). */
+  gateRejected: number
+  /** The most recent refusal reason, for the tooltip. */
+  lastReject: string | null
+}
+
+/** Poll the APRS-IS feed's status beside the decoder health. */
+export async function getAprsIsStatus(): Promise<AprsIsStatus> {
+  return invoke<AprsIsStatus>('get_aprs_is_status')
 }
 
 /** Arm the decoder because the operator ENTERED the APRS view — receive-only, never ack-capable.

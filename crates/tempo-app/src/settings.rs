@@ -463,6 +463,54 @@ pub struct Settings {
     #[serde(default)]
     pub cluster_hosts: Vec<String>,
 
+    // --- APRS-IS (the internet side of APRS) ---
+    /// Connect to APRS-IS and plot internet-reported stations alongside the ones our own antenna
+    /// hears.
+    ///
+    /// ⚠️ **Deliberately independent of the RF decoder's arm state.** Arming APRS is a decision
+    /// about the receiver — it costs audio, and (armed explicitly) it is one of the two gates on an
+    /// unattended auto-ack. The internet feed has neither cost: it consumes no RF resource and can
+    /// never key a transmitter. Tying the two together would mean an operator who only wants to
+    /// watch the network must first arm a decoder they are not using — and, worse, would remove
+    /// the single most useful diagnostic this feed provides: internet stations plotting while the
+    /// RF chip stays silent proves the fault is in the radio chain and not in the app. The
+    /// *uplink* is different: it has nothing to send unless the RF decoder is running.
+    #[serde(default)]
+    pub aprs_is_enabled: bool,
+    /// APRS-IS server hostname. The regional Tier 2 rotate addresses (`noam.aprs2.net`,
+    /// `euro.aprs2.net`, …) are preferred; `rotate.aprs2.net` is the worldwide fallback.
+    #[serde(default = "default_aprs_is_host")]
+    pub aprs_is_host: String,
+    /// APRS-IS port. 14580 is the user-defined filter port — the one clients and iGates should
+    /// use. The full-feed ports (10152, 20152) would deliver the entire planet's traffic.
+    #[serde(default = "default_aprs_is_port")]
+    pub aprs_is_port: u16,
+    /// Radius (km) around the station for the server-side range filter. APRS is a local mode;
+    /// 150 km is a generous 2 m-plus-digipeater horizon. 0 = no range filter.
+    #[serde(default = "default_aprs_is_radius_km")]
+    pub aprs_is_radius_km: u32,
+    /// Watched callsigns passed regardless of distance (the APRS-IS budlist) — the friend or
+    /// club station you want to see wherever they are.
+    #[serde(default)]
+    pub aprs_is_watch_calls: Vec<String>,
+    /// Include weather stations and positionless weather reports in the feed.
+    #[serde(default = "default_true")]
+    pub aprs_is_weather: bool,
+    /// Include objects and items (repeaters, NWS alerts, event markers).
+    #[serde(default = "default_true")]
+    pub aprs_is_objects: bool,
+    /// Include APRS text messages. Display only — Nexus does not reply to an internet message.
+    #[serde(default = "default_true")]
+    pub aprs_is_messages: bool,
+    /// Run as a receive-only iGate: contribute packets THIS station heard on the air to APRS-IS.
+    ///
+    /// Off by default, and rightly so — it publishes under the operator's callsign to a global
+    /// network. Requires a real callsign (the passcode is derived from it) and the RF decoder
+    /// actually running, since there is nothing to contribute otherwise. Nexus never gates the
+    /// other way: internet→RF transmits unattended, which the alerts doctrine forbids.
+    #[serde(default)]
+    pub aprs_is_uplink: bool,
+
     // --- audio I/O ---
     /// Input (capture) device name. Empty = system default input.
     pub audio_in: String,
@@ -1289,6 +1337,22 @@ impl RadioProfilePatch {
 }
 
 /// serde default helper: booleans that default ON for absent fields in older settings.
+/// The worldwide Tier 2 rotate address. A regional rotate (`noam.aprs2.net`, `euro.aprs2.net`, …)
+/// is slightly better, but requires knowing where the operator is; this works everywhere.
+fn default_aprs_is_host() -> String {
+    "rotate.aprs2.net".to_string()
+}
+
+/// The user-defined filter port — the one APRS-IS asks clients and iGates to use.
+fn default_aprs_is_port() -> u16 {
+    14580
+}
+
+/// 150 km: a generous horizon for 2 m simplex plus a digipeater hop or two.
+fn default_aprs_is_radius_km() -> u32 {
+    150
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1597,6 +1661,18 @@ impl Default for Settings {
                 "ve7cc.net:23".to_string(),
                 "dxc.wa9pie.net:8000".to_string(),
             ],
+            // APRS-IS is OFF until the operator asks for it: it is an outbound connection to a
+            // public service under their callsign, which is theirs to opt into. The uplink is a
+            // second, separate opt-in for the same reason, doubly so — it publishes.
+            aprs_is_enabled: false,
+            aprs_is_host: default_aprs_is_host(),
+            aprs_is_port: default_aprs_is_port(),
+            aprs_is_radius_km: default_aprs_is_radius_km(),
+            aprs_is_watch_calls: Vec::new(),
+            aprs_is_weather: true,
+            aprs_is_objects: true,
+            aprs_is_messages: true,
+            aprs_is_uplink: false,
             audio_in: String::new(),
             audio_out: String::new(),
             voice_mic_device: String::new(),
@@ -2679,6 +2755,46 @@ mod tests {
         assert_eq!(s.rig_mode(), "USB");
         s.dial_mhz = 3.850; // 80 m
         assert_eq!(s.rig_mode(), "LSB");
+    }
+
+    #[test]
+    fn aprs_is_settings_use_the_exact_wire_keys_the_ui_writes() {
+        // The container `rename_all = "camelCase"` silently mangles any hand-written TS key that
+        // disagrees with it, and the failure is invisible: the key never matches, the backend
+        // quietly uses the serde default, and the control appears to do nothing. These are the
+        // exact strings `ui/src/types.ts` and `defaultSettings.json` carry.
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "\"aprsIsEnabled\":false",
+            "\"aprsIsHost\":\"rotate.aprs2.net\"",
+            "\"aprsIsPort\":14580",
+            "\"aprsIsRadiusKm\":150",
+            "\"aprsIsWatchCalls\":[]",
+            "\"aprsIsWeather\":true",
+            "\"aprsIsObjects\":true",
+            "\"aprsIsMessages\":true",
+            "\"aprsIsUplink\":false",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+    }
+
+    #[test]
+    fn aprs_is_is_off_until_the_operator_asks_and_the_uplink_is_a_second_choice() {
+        // Both are outbound connections to a public amateur service under the operator's own
+        // callsign, and the uplink PUBLISHES. Neither may ever arrive switched on.
+        let s = Settings::default();
+        assert!(!s.aprs_is_enabled);
+        assert!(!s.aprs_is_uplink);
+        // An old config predating APRS-IS must load without either turning itself on.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"KD9TAW","mygrid":"EN51"}"#).unwrap();
+        assert!(!old.aprs_is_enabled, "an upgrade must not opt the operator in");
+        assert!(!old.aprs_is_uplink);
+        // ...but the rest of the feed's defaults are present, so enabling it just works.
+        assert_eq!(old.aprs_is_host, "rotate.aprs2.net");
+        assert_eq!(old.aprs_is_port, 14580);
+        assert_eq!(old.aprs_is_radius_km, 150);
+        assert!(old.aprs_is_weather && old.aprs_is_objects && old.aprs_is_messages);
     }
 
     #[test]
