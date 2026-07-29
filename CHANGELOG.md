@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### APRS decode readout stops mixing up "now" with "a while ago"
+
+The new input-level reading immediately caught a sentence that contradicted itself: *"2 packets
+were heard but none passed the checksum... peak -99 dBFS."* Nothing is heard at -99 dBFS. The
+packet counts run from the moment you arm the decoder, while the level is whatever the radio is
+doing this instant — so two candidates from six minutes ago sat there asserting something about
+the present, right beside a live reading that flatly disagreed.
+
+Every claim now says when it was true. A failed-checksum count only speaks in the present tense
+while bursts are still arriving (within the last minute); after that it steps aside and the
+readout goes back to describing what the radio is actually doing. When it does speak it dates
+itself: *"2 bursts heard since arming, last one 20s ago — none passed the checksum"*, with the
+live level on its own clause.
+
+Decodes are treated differently on purpose. A packet that passed its checksum proves the whole
+chain works, and that stays worth knowing however long ago it was — so it keeps its place and
+carries its age instead: *"18 packets decoded since arming, last one 12m ago."*
+
+The level reading now says what window it measures (the most recent tenth of a second), so a low
+number reads as the gap between packets rather than something being wrong.
+
+Finally, packet-shaped patterns found in silence no longer count as packets at all. Given enough
+minutes the decoder will eventually find one in the noise floor, and reporting that as "packets
+heard" invented evidence for a problem that was not there.
+
 ### APRS tells you when the radio is simply on the wrong frequency
 
 The clearest report from testing: FT8 was decoding beautifully on 2 m at the very moment the APRS

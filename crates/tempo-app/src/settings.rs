@@ -2788,7 +2788,10 @@ mod tests {
         assert!(!s.aprs_is_uplink);
         // An old config predating APRS-IS must load without either turning itself on.
         let old: Settings = serde_json::from_str(r#"{"mycall":"KD9TAW","mygrid":"EN51"}"#).unwrap();
-        assert!(!old.aprs_is_enabled, "an upgrade must not opt the operator in");
+        assert!(
+            !old.aprs_is_enabled,
+            "an upgrade must not opt the operator in"
+        );
         assert!(!old.aprs_is_uplink);
         // ...but the rest of the feed's defaults are present, so enabling it just works.
         assert_eq!(old.aprs_is_host, "rotate.aprs2.net");

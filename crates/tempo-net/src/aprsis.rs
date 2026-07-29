@@ -114,7 +114,12 @@ pub fn login_response(line: &[u8]) -> Option<bool> {
     // "# logresp CALL verified, server NINTH" — the status is the second word after the keyword.
     let mut words = rest.split_whitespace();
     let _call = words.next()?;
-    Some(words.next()?.trim_end_matches(',').eq_ignore_ascii_case("verified"))
+    Some(
+        words
+            .next()?
+            .trim_end_matches(',')
+            .eq_ignore_ascii_case("verified"),
+    )
 }
 
 /// Live state of the feed, for the status chip. Written by the socket thread, read by the UI poll.
@@ -164,9 +169,7 @@ fn pump<R: Read, W: Write>(
                 }
                 Action::Packet(line) => {
                     state.packets.fetch_add(1, Ordering::Relaxed);
-                    state
-                        .last_packet_unix
-                        .store(now_unix(), Ordering::Relaxed);
+                    state.last_packet_unix.store(now_unix(), Ordering::Relaxed);
                     on_packet(&line);
                 }
             }
@@ -302,7 +305,9 @@ mod tests {
         let out = s.feed(b"");
         assert_eq!(
             out,
-            vec![Action::Send(b"user KD9TAW pass -1 vers Nexus 0.21.1\r\n".to_vec())]
+            vec![Action::Send(
+                b"user KD9TAW pass -1 vers Nexus 0.21.1\r\n".to_vec()
+            )]
         );
         assert!(s.feed(b"").is_empty(), "and only once");
     }
@@ -353,7 +358,10 @@ mod tests {
     fn an_unverified_login_is_recorded_as_such() {
         let mut s = Session::new("login\r\n");
         s.feed(b"# logresp N0CALL unverified, server T2OREGON\r\n");
-        assert!(!s.verified, "a read-only login may receive but never upload");
+        assert!(
+            !s.verified,
+            "a read-only login may receive but never upload"
+        );
     }
 
     #[test]
@@ -406,7 +414,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let state = FeedState::default();
         let outbox = Mutex::new(VecDeque::from(vec![
-            b"SP3VN>URRT29,WIDE1-1,qAO,KD9TAW:!hi".to_vec(),
+            b"SP3VN>URRT29,WIDE1-1,qAO,KD9TAW:!hi".to_vec()
         ]));
         pump(
             &wire[..],
@@ -432,7 +440,10 @@ mod tests {
         );
         assert_eq!(state.packets.load(Ordering::Relaxed), 1);
         assert_eq!(state.uploaded.load(Ordering::Relaxed), 1);
-        assert_eq!(state.last_packet_unix.load(Ordering::Relaxed), 1_700_000_000);
+        assert_eq!(
+            state.last_packet_unix.load(Ordering::Relaxed),
+            1_700_000_000
+        );
     }
 
     #[test]

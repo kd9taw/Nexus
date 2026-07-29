@@ -553,8 +553,7 @@ mod tests {
     /// `[spots]` anchor). Sampled from the live page 2026-07-29.
     #[test]
     fn extracts_the_expedition_site_from_the_call_cell() {
-        let with_site =
-            r#"<span class="call"><a href="https://3y0l.com/">3Y0L</a></span>"#;
+        let with_site = r#"<span class="call"><a href="https://3y0l.com/">3Y0L</a></span>"#;
         assert_eq!(
             expedition_site(with_site).as_deref(),
             Some("https://3y0l.com/")
@@ -608,7 +607,10 @@ mod tests {
         let plans = parse_adxo(html);
         assert_eq!(plans.len(), 2);
         assert_eq!(plans[0].call, "H49A");
-        assert_eq!(plans[0].website.as_deref(), Some("https://solomon2026.com/"));
+        assert_eq!(
+            plans[0].website.as_deref(),
+            Some("https://solomon2026.com/")
+        );
         // Unchanged behaviour: the call is still read from the cell TEXT, and the
         // spots anchor leaves the second operation with no site at all.
         assert_eq!(plans[1].call, "TY5FR");

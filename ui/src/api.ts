@@ -1252,6 +1252,10 @@ export interface AprsHealth {
   /** Of those, how many passed the FCS. Seen climbing while this does not = heard, but not cleanly. */
   framesDecoded: number
   lastDecodeUnix: number | null
+  /** When a frame candidate was last recovered. The counters are cumulative since arming and the
+   * level is live, so without this the UI cannot tell "failing right now" from "two turned up
+   * six minutes ago". */
+  lastFrameSeenUnix: number | null
 }
 
 /** Poll the APRS decoder's health beside the heard list. */

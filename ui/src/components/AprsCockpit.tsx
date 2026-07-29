@@ -79,8 +79,11 @@ const MIN_DRAINS_BEFORE_CAPTURE_FAULT = 5
 /** The peak level as dBFS, so "what is the decoder hearing" is a NUMBER on screen rather than an
  * inference from which message appeared. Exact zero has no logarithm — say so plainly. */
 function levelLabel(peak: number): string {
-  if (!(peak > 0)) return 'level: digital silence (exactly zero)'
-  return `level: peak ${Math.round(20 * Math.log10(peak))} dBFS`
+  // Say WHICH WINDOW the number measures. It is the peak sample of the most recent ~100 ms drain
+  // the decoder consumed — an instantaneous reading, not a decaying meter — so a number that
+  // looks alarmingly low may just be the gap between two packets.
+  if (!(peak > 0)) return 'input over the most recent 0.1 s: digital silence (exactly zero)'
+  return `input peak over the most recent 0.1 s: ${Math.round(20 * Math.log10(peak))} dBFS`
 }
 
 /** How long the tap may go without any samples ARRIVING before the capture counts as dead.
@@ -89,6 +92,15 @@ function levelLabel(peak: number): string {
  * iteration (blocking CAT, up to 2500 ms on slow serial), so gaps of a second or two are normal.
  * Judging on the instant would cry wolf constantly on a healthy station. */
 const AUDIO_STALE_SEC = 5
+
+/** How recently a frame candidate must have arrived for "packets are failing" to be a
+ * PRESENT-TENSE claim.
+ *
+ * 60 s. APRS bursts are sporadic — a station beacons every 1–10 minutes, and even a busy channel
+ * goes quiet for stretches — so a shorter window would flicker between "failing" and "quiet" in
+ * the ordinary gap between packets. Longer, and a couple of candidates from several minutes ago
+ * keep asserting something about right now, which is the bug this fixes. */
+const FRAME_RECENT_SEC = 60
 
 /** How far the dial may sit from the APRS channel before it counts as a different frequency.
  * 5 kHz — wider than any rounding or CAT read-back jitter, far narrower than a channel step. */
@@ -253,27 +265,38 @@ export function aprsDecodeStatus(
   // Decodes outrank everything below: once packets are landing, a squelched gap between them is
   // not news, and flicking back to a fault message between bursts is what made the readout
   // untrustworthy on air.
+  // A successful decode LATCHES this state, unlike the failure count below, and the difference
+  // is principled: a checksummed frame is a durable fact about the setup — it proves the whole
+  // chain works — whereas "candidates are failing" is a claim about current conditions. So the
+  // fact stays, and the WORDING carries its age rather than an eternal count masquerading as now.
   if (health.framesDecoded > 0) {
     return {
       state: 'decoding',
       label: `${health.framesDecoded} decoded`,
       detail:
         (health.lastDecodeUnix == null
-          ? `${health.framesDecoded} packets decoded.`
-          : `${health.framesDecoded} packets decoded, last ${ageLabel(health.lastDecodeUnix, nowSec)} ago.`) +
-        ` Input ${level}.`,
+          ? `${health.framesDecoded} packets decoded since arming.`
+          : `${health.framesDecoded} packets decoded since arming, last one ${ageLabel(health.lastDecodeUnix, nowSec)} ago.`) +
+        ` Live ${level}.`,
     }
   }
-  if (health.framesSeen > 0) {
+  // ⚠️ PRESENT TENSE ONLY. This claim is about what the channel is doing NOW, so it needs a
+  // recent candidate to stand on. The counter is cumulative since arming; left ungated it latched
+  // forever, and the chip ended up saying "2 packets were heard" beside a live level of -99 dBFS
+  // — two facts of completely different ages rendered as one sentence about the present.
+  const framesFresh =
+    health.lastFrameSeenUnix != null && nowSec - health.lastFrameSeenUnix <= FRAME_RECENT_SEC
+  if (health.framesSeen > 0 && framesFresh) {
     return {
       state: 'unreadable',
       label: `${health.framesSeen} failed CRC`,
       detail:
-        `${health.framesSeen} packets were heard but none passed the checksum. Some of that is ` +
-        'normal: when the squelch opens partway through a burst the start of the packet is lost, ' +
-        'and a part-heard packet can never pass. It is only a fault if nothing ever decodes — in ' +
-        'which case check the rig is on 144.390 in FM, and that the RX audio is not so hot that ' +
-        `it is clipping. Input ${level}.`,
+        `${health.framesSeen} bursts heard since arming, last one ` +
+        `${ageLabel(health.lastFrameSeenUnix as number, nowSec)} ago — none passed the checksum. ` +
+        'Some of that is normal: when the squelch opens partway through a burst the start of the ' +
+        'packet is lost, and a part-heard packet can never pass. It is only a fault if nothing ' +
+        'ever decodes — in which case check the rig is on 144.390 in FM, and that the RX audio ' +
+        `is not so hot that it is clipping. Live ${level}.`,
     }
   }
   // ARRIVING BUT SILENT. Overwhelmingly this is just a closed squelch, which is what an idle FM
@@ -286,13 +309,13 @@ export function aprsDecodeStatus(
         'The input is alive and delivering audio, but it is silent — normally that just means ' +
         'the squelch is closed between packets, which is what an idle FM channel looks like. To ' +
         'confirm the routing, open the squelch: hiss should show up here as a level. If it still ' +
-        `reads silent with the squelch open, the wrong input device is selected. Input ${level}.`,
+        `reads silent with the squelch open, the wrong input device is selected. Live ${level}.`,
     }
   }
   return {
     state: 'listening',
     label: 'Listening',
-    detail: `Audio is reaching the decoder and no packets have been heard yet — a quiet channel. Input ${level}.`,
+    detail: `Audio is reaching the decoder and no packets have been heard recently — a quiet channel. Live ${level}.`,
   }
 }
 

@@ -1160,7 +1160,22 @@ pub struct AprsHealth {
     pub frames_decoded: u64,
     /// Unix seconds of the most recent successful decode.
     pub last_decode_unix: Option<i64>,
+    /// Unix seconds a frame candidate was last recovered. Pairs with `frames_seen` the way
+    /// `last_decode_unix` pairs with `frames_decoded`: the counters are CUMULATIVE SINCE ARMING
+    /// and the audio level is LIVE, so without a timestamp the UI cannot tell "packets are
+    /// failing right now" from "two candidates turned up six minutes ago". Rendering those in
+    /// one present tense produced "2 packets were heard ... peak -99 dBFS" — self-contradictory,
+    /// because nothing is heard at -99 dBFS.
+    pub last_frame_seen_unix: Option<i64>,
 }
+
+/// Peak below which a drain is carrying silence rather than signal (-60 dBFS).
+///
+/// Used HERE only to decide whether a recovered frame is real evidence. Mirrors `SILENT_PEAK` in
+/// `AprsCockpit.tsx`, which draws the same boundary for what the operator is TOLD; the two are
+/// separate decisions and must move together. The operator's IC-9700 measures ~-99 dBFS with the
+/// squelch closed, so this sits ~39 dB above their noise floor.
+pub const APRS_SILENT_PEAK: f32 = 0.001;
 
 fn fmt_aprs_addr(a: &tempo_core::aprs::Address) -> String {
     if a.ssid == 0 {
@@ -5402,7 +5417,18 @@ impl Engine {
             self.aprs_health.audio_peak = audio_peak;
             self.aprs_health.last_audio_unix = Some(at_unix);
         }
-        self.aprs_health.frames_seen += frames_seen as u64;
+        // ⚠️ Frames recovered from a drain that carried SILENCE are not evidence of anything.
+        // The demodulator slices noise into random bits, and the HDLC flag-hunt will eventually
+        // find a 0x7E pattern in them — over minutes that is near-certain. A real AFSK burst is
+        // never below the silence floor, so anything found there is the deframer locking onto
+        // dither, and letting it drive an operator-facing "packets heard" claim manufactures
+        // evidence for a problem that does not exist. Decodes are exempt: a frame that passed a
+        // 16-bit FCS is real regardless of what the level meter said.
+        let carried_signal = audio_peak >= APRS_SILENT_PEAK;
+        if frames_seen > 0 && carried_signal {
+            self.aprs_health.frames_seen += frames_seen as u64;
+            self.aprs_health.last_frame_seen_unix = Some(at_unix);
+        }
         self.aprs_health.frames_decoded += frames_decoded as u64;
         if frames_decoded > 0 {
             self.aprs_health.last_decode_unix = Some(at_unix);
@@ -14712,7 +14738,12 @@ mod tests {
     fn a_dupe_outside_the_merge_window_is_a_genuinely_new_packet() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.push_aprs_heard(aprs_pkt("N0CALL-9", "home", 1000, AprsSource::Rf));
-        e.push_aprs_heard(aprs_pkt("N0CALL-9", "home", 1000 + APRS_DUPE_MERGE_SECS + 1, AprsSource::Rf));
+        e.push_aprs_heard(aprs_pkt(
+            "N0CALL-9",
+            "home",
+            1000 + APRS_DUPE_MERGE_SECS + 1,
+            AprsSource::Rf,
+        ));
         assert_eq!(e.aprs_heard().len(), 2, "a later beacon is not a duplicate");
     }
 
@@ -14751,9 +14782,17 @@ mod tests {
         s.aprs_is_uplink = true;
         e.apply_settings(s);
         e.push_aprs_heard(aprs_pkt("N0CALL-9", "from-the-air", 1000, AprsSource::Rf));
-        e.push_aprs_heard(aprs_pkt("W9XYZ-1", "from-the-internet", 1001, AprsSource::Inet));
+        e.push_aprs_heard(aprs_pkt(
+            "W9XYZ-1",
+            "from-the-internet",
+            1001,
+            AprsSource::Inet,
+        ));
         assert_eq!(e.take_aprs_uplink(), vec!["from-the-air".to_string()]);
-        assert!(e.take_aprs_uplink().is_empty(), "draining consumes the queue");
+        assert!(
+            e.take_aprs_uplink().is_empty(),
+            "draining consumes the queue"
+        );
     }
 
     #[test]
@@ -14765,7 +14804,10 @@ mod tests {
         s.aprs_is_uplink = true;
         e.apply_settings(s);
         e.push_aprs_heard(aprs_pkt("N0CALL-9", "beacon", 1000, AprsSource::Inet));
-        assert!(e.take_aprs_uplink().is_empty(), "the internet copy is not ours to gate");
+        assert!(
+            e.take_aprs_uplink().is_empty(),
+            "the internet copy is not ours to gate"
+        );
         e.push_aprs_heard(aprs_pkt("N0CALL-9", "beacon", 1002, AprsSource::Rf));
         assert_eq!(e.take_aprs_uplink(), vec!["beacon".to_string()]);
         assert_eq!(e.aprs_heard()[0].source_kind, AprsSource::Both);
@@ -14778,7 +14820,12 @@ mod tests {
         s.aprs_is_uplink = true;
         e.apply_settings(s);
         for i in 0..(APRS_UPLINK_QUEUE_CAP + 50) {
-            e.push_aprs_heard(aprs_pkt("N0CALL-9", &format!("p{i}"), 1000 + i as i64, AprsSource::Rf));
+            e.push_aprs_heard(aprs_pkt(
+                "N0CALL-9",
+                &format!("p{i}"),
+                1000 + i as i64,
+                AprsSource::Rf,
+            ));
         }
         let queued = e.take_aprs_uplink();
         assert_eq!(queued.len(), APRS_UPLINK_QUEUE_CAP);
@@ -15013,6 +15060,60 @@ mod tests {
         // Re-arming starts the count over with the rest of the health.
         e.set_aprs_arm(AprsArm::Explicit);
         assert_eq!(e.aprs_health().drains, 0);
+    }
+
+    // ---- Frame candidates carry a timestamp, and noise does not count as evidence ----
+
+    #[test]
+    fn a_frame_recovered_from_signal_is_counted_and_dated() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.note_aprs_rx(1200, 0.4, 1, 0, 9_000);
+        let h = e.aprs_health();
+        assert_eq!(h.frames_seen, 1);
+        assert_eq!(
+            h.last_frame_seen_unix,
+            Some(9_000),
+            "the UI needs to know WHEN, or a stale count claims the present"
+        );
+    }
+
+    #[test]
+    fn a_frame_found_in_silence_is_not_counted_as_evidence() {
+        // The deframer's flag-hunt finds 0x7E patterns in sliced noise given enough minutes.
+        // -99 dBFS dither (the operator's squelch-closed floor) is not a packet.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.note_aprs_rx(1200, 0.00001, 2, 0, 9_000);
+        let h = e.aprs_health();
+        assert_eq!(
+            h.frames_seen, 0,
+            "noise must not manufacture 'packets heard'"
+        );
+        assert_eq!(h.last_frame_seen_unix, None);
+    }
+
+    #[test]
+    fn a_decode_counts_however_quiet_the_meter_read() {
+        // A frame that passed a 16-bit FCS is real by construction — the level meter does not
+        // get a vote. Only the unverified candidates are gated.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.note_aprs_rx(1200, 0.00001, 1, 1, 9_000);
+        let h = e.aprs_health();
+        assert_eq!(h.frames_decoded, 1, "a checksummed frame is always real");
+        assert_eq!(h.last_decode_unix, Some(9_000));
+    }
+
+    #[test]
+    fn arming_clears_the_frame_freshness_stamp_with_the_counters() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.note_aprs_rx(1200, 0.4, 1, 0, 9_000);
+        e.set_aprs_arm(AprsArm::Explicit);
+        let h = e.aprs_health();
+        assert_eq!(h.frames_seen, 0);
+        assert_eq!(h.last_frame_seen_unix, None);
     }
 
     // ---- Receive-only tiers must never LOOK like they are transmitting ----

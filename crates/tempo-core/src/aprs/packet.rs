@@ -376,15 +376,18 @@ mod tests {
         )
         .unwrap();
         let (lat, lon) = pkt.position().expect("compressed position");
-        assert!((48.0..53.0).contains(&lat), "lat {lat} should be in Germany");
+        assert!(
+            (48.0..53.0).contains(&lat),
+            "lat {lat} should be in Germany"
+        );
         assert!((5.0..15.0).contains(&lon), "lon {lon} should be in Germany");
     }
 
     #[test]
     fn tnc2_decodes_mic_e_using_the_destination_field() {
         // Ham::APRS::FAP 23decode-mice.t asserts lat 41.7877 / lon -71.4202 for this exact line.
-        let pkt = AprsPacket::from_tnc2(b"OH7LZB-2>TQ4W2V,WIDE2-1,qAo,OH7LZB:`c51!f?>/]\"3x}=")
-            .unwrap();
+        let pkt =
+            AprsPacket::from_tnc2(b"OH7LZB-2>TQ4W2V,WIDE2-1,qAo,OH7LZB:`c51!f?>/]\"3x}=").unwrap();
         match &pkt.body {
             AprsBody::MicE(m) => {
                 assert!((m.lat - 41.7877).abs() < 1e-3, "lat {}", m.lat);
@@ -403,7 +406,10 @@ mod tests {
         line.push(0x1C);
         line.extend_from_slice(b">/]");
         let t = Tnc2::split(&line).unwrap();
-        assert!(t.info.contains(&0x1C), "the raw byte must survive the split");
+        assert!(
+            t.info.contains(&0x1C),
+            "the raw byte must survive the split"
+        );
         assert!(AprsPacket::from_tnc2(&line).is_some());
     }
 
@@ -429,8 +435,8 @@ mod tests {
 
         // `EL-IW4ENE` is a real APRS-IS source that AX.25 cannot represent (the SSID is not a
         // number). It must still decode — dropping it would erase every EchoLink/DMR gateway.
-        let msg = AprsPacket::from_tnc2(b"EL-IW4ENE>RXTLM-1,TCPIP,qAR,IW4ENE::N3HEV-9  :ack26")
-            .unwrap();
+        let msg =
+            AprsPacket::from_tnc2(b"EL-IW4ENE>RXTLM-1,TCPIP,qAR,IW4ENE::N3HEV-9  :ack26").unwrap();
         assert_eq!(msg.source.call, "EL-IW4ENE", "kept verbatim for display");
         match &msg.body {
             AprsBody::Info(AprsInfo::Message(m)) => {
@@ -448,7 +454,10 @@ mod tests {
             b"UU1AA>TEST,qAR,IGATE:}OF7LZB>DST,NET,GATE:}OF7LZC>DST,NET2,GATE2:!6013.69NR02450.97E&",
         )
         .unwrap();
-        assert_eq!(pkt.source.call, "OF7LZC", "the innermost station, not a wrapper");
+        assert_eq!(
+            pkt.source.call, "OF7LZC",
+            "the innermost station, not a wrapper"
+        );
         assert!(pkt.position().is_some());
     }
 
@@ -467,8 +476,8 @@ mod tests {
             &b""[..],
             b"no separators at all",
             b"SRC>DEST no colon",
-            b">DEST,PATH:info",     // empty source
-            b"SRC>:info",           // empty destination
+            b">DEST,PATH:info", // empty source
+            b"SRC>:info",       // empty destination
         ] {
             assert!(
                 AprsPacket::from_tnc2(line).is_none(),

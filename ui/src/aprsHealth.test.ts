@@ -29,6 +29,7 @@ function health(over: Partial<AprsHealth> = {}): AprsHealth {
     framesSeen: 0,
     framesDecoded: 0,
     lastDecodeUnix: null,
+    lastFrameSeenUnix: null,
     ...over,
   }
 }
@@ -102,7 +103,7 @@ describe('the level the decoder is hearing is a number on screen', () => {
 
 describe('failed checksums are honest about partial bursts', () => {
   it('says part-heard bursts are expected rather than reading as a hard fault', () => {
-    const s = aprsDecodeStatus(health({ framesSeen: 12 }), NOW)
+    const s = aprsDecodeStatus(health({ framesSeen: 12, lastFrameSeenUnix: NOW - 5 }), NOW)
     expect(s.state).toBe('unreadable')
     // Squelch opening mid-packet eats the opening flags — routine, not a misconfiguration.
     expect(s.detail).toMatch(/squelch|part|partial/i)
@@ -110,7 +111,7 @@ describe('failed checksums are honest about partial bursts', () => {
   })
 
   it('still names the real faults worth checking when NOTHING ever decodes', () => {
-    const s = aprsDecodeStatus(health({ framesSeen: 12 }), NOW)
+    const s = aprsDecodeStatus(health({ framesSeen: 12, lastFrameSeenUnix: NOW - 5 }), NOW)
     expect(s.detail).toMatch(/144\.390|clipping/i)
   })
 
@@ -125,7 +126,7 @@ describe('failed checksums are honest about partial bursts', () => {
   })
 
   it('frames seen but none decoded outranks a squelched gap', () => {
-    const s = aprsDecodeStatus(health({ audioPeak: 0, framesSeen: 3 }), NOW)
+    const s = aprsDecodeStatus(health({ audioPeak: 0, framesSeen: 3, lastFrameSeenUnix: NOW - 5 }), NOW)
     expect(s.state).toBe('unreadable')
   })
 })
@@ -272,5 +273,79 @@ describe('the wrong-frequency message names WHICH thing is wrong', () => {
   it('accepts data-FM submodes as FM — PKTFM is still FM on the air', () => {
     expect(aprsDecodeStatus(health(), NOW, { dialMhz: 144.39, sideband: 'PKTFM' }, 144.39).state)
       .toBe('listening')
+  })
+})
+
+// ⭐ THIRD ON-AIR REPORT (0.21.2). The dBFS readout landed and immediately caught the next
+// defect, in a sentence that contradicted itself:
+//
+//   "2 packets were heard but none passed the checksum... Input level: peak -99 dBFS."
+//
+// Nothing is "heard" at -99 dBFS. The counters are CUMULATIVE SINCE ARMING; the level is LIVE.
+// Two frame candidates from minutes ago — real bursts, or the deframer's flag-hunt locking onto
+// dither — latched the chip in `unreadable` forever, and the sentence then led with the stale
+// evidence and trailed with the live level as though both described now.
+//
+// Facts of different ages must never be rendered in one present tense.
+
+describe('a stale frame count decays instead of latching', () => {
+  it('frames from minutes ago no longer claim the present', () => {
+    const s = aprsDecodeStatus(
+      health({ audioPeak: 0.00001, framesSeen: 2, lastFrameSeenUnix: NOW - 360 }),
+      NOW,
+    )
+    expect(s.state).toBe('silent')
+  })
+
+  it('recent frames DO hold the unreadable state — it is still the present tense', () => {
+    const s = aprsDecodeStatus(
+      health({ audioPeak: 0.4, framesSeen: 2, lastFrameSeenUnix: NOW - 10 }),
+      NOW,
+    )
+    expect(s.state).toBe('unreadable')
+  })
+
+  it('decays to whatever the LIVE level says, not always to silent', () => {
+    // Audio present at hiss level with no recent frames: a quiet channel, not a fault.
+    const s = aprsDecodeStatus(
+      health({ audioPeak: 0.03, framesSeen: 2, lastFrameSeenUnix: NOW - 600 }),
+      NOW,
+    )
+    expect(s.state).toBe('listening')
+  })
+
+  it('a frame count with no timestamp at all cannot claim the present', () => {
+    const s = aprsDecodeStatus(
+      health({ audioPeak: 0.00001, framesSeen: 2, lastFrameSeenUnix: null }),
+      NOW,
+    )
+    expect(s.state).not.toBe('unreadable')
+  })
+})
+
+describe('every claim says WHEN it was true', () => {
+  it('the unreadable message dates the count and keeps the level separate', () => {
+    const s = aprsDecodeStatus(
+      health({ audioPeak: 0.4, framesSeen: 2, lastFrameSeenUnix: NOW - 20 }),
+      NOW,
+    )
+    expect(s.detail).toMatch(/since arming/i)
+    expect(s.detail).toMatch(/last one 20s ago/i)
+  })
+
+  it('the decode message dates the last decode rather than an eternal count', () => {
+    const s = aprsDecodeStatus(
+      health({ framesSeen: 20, framesDecoded: 18, lastDecodeUnix: NOW - 720 }),
+      NOW,
+    )
+    expect(s.state).toBe('decoding')
+    expect(s.detail).toMatch(/since arming/i)
+    expect(s.detail).toMatch(/12m ago/i)
+  })
+
+  it('the level says WHAT WINDOW it measured, so the number is readable', () => {
+    const s = aprsDecodeStatus(health({ audioPeak: 0.4 }), NOW)
+    // It is the peak of the most recent ~100 ms drain, not a decaying meter.
+    expect(s.detail).toMatch(/most recent|0\.1 s|100 ms/i)
   })
 })

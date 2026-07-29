@@ -38,7 +38,12 @@ use super::packet::Tnc2;
 /// which is why it belongs in ordinary settings and not the keychain. Nexus computes it from the
 /// operator's own configured callsign and never for anyone else's.
 pub fn passcode(call: &str) -> u16 {
-    let base = call.split('-').next().unwrap_or("").trim().to_ascii_uppercase();
+    let base = call
+        .split('-')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_uppercase();
     let mut hash: u16 = 0x73E2;
     // The reference C loop reads two bytes per iteration, which for an odd-length callsign reads
     // the NUL terminator as the second byte — XOR by zero. The index-parity form is equivalent and
@@ -263,10 +268,12 @@ fn gate_check_parts(t: &Tnc2) -> Result<(), GateReject> {
     }
     let src = t.source.trim().trim_end_matches('*');
     let src_base = src.split('-').next().unwrap_or(src);
-    let bogus = BOGUS_SOURCES.iter().any(|b| src_base.eq_ignore_ascii_case(b))
-        || BOGUS_SOURCE_PREFIXES.iter().any(|p| {
-            src_base.len() >= p.len() && src_base[..p.len()].eq_ignore_ascii_case(p)
-        });
+    let bogus = BOGUS_SOURCES
+        .iter()
+        .any(|b| src_base.eq_ignore_ascii_case(b))
+        || BOGUS_SOURCE_PREFIXES
+            .iter()
+            .any(|p| src_base.len() >= p.len() && src_base[..p.len()].eq_ignore_ascii_case(p));
     if bogus {
         return Err(GateReject::BogusSource(src.to_string()));
     }
@@ -455,7 +462,13 @@ mod tests {
     #[test]
     fn passcode_ignores_case_and_ssid() {
         // All four are the same station, so all four must verify with the same code.
-        for call in ["TESTCALL", "testcall", "tEsTcAlL", "TESTCALL-12", "TESTCALL-0"] {
+        for call in [
+            "TESTCALL",
+            "testcall",
+            "tEsTcAlL",
+            "TESTCALL-12",
+            "TESTCALL-0",
+        ] {
             assert_eq!(passcode(call), 31742, "passcode({call})");
         }
     }
@@ -529,7 +542,10 @@ mod tests {
     fn gate_refuses_every_forbidden_path_token() {
         // aprsc's own drop-rule regression fixtures (tests/t/11misc-drops.t).
         for (line, want) in [
-            (&b"SRC-1>APRS,RFONLY,WIDE2-1:>should drop, RFONLY"[..], "RFONLY"),
+            (
+                &b"SRC-1>APRS,RFONLY,WIDE2-1:>should drop, RFONLY"[..],
+                "RFONLY",
+            ),
             (b"SRC-1>APRS,NOGATE,WIDE2-1:>should drop, NOGATE", "NOGATE"),
             (b"SRC2>DST,DIGI,TCPXX,WIDE1-1:>unverified login", "TCPXX"),
             (b"SRC2>DST,DIGI,TCPXX*,WIDE1-1:>used marker too", "TCPXX"),
@@ -540,7 +556,10 @@ mod tests {
         ] {
             match gate_check(line) {
                 Err(GateReject::ForbiddenPath(t)) => assert_eq!(t, want),
-                other => panic!("{} must be refused, got {other:?}", String::from_utf8_lossy(line)),
+                other => panic!(
+                    "{} must be refused, got {other:?}",
+                    String::from_utf8_lossy(line)
+                ),
             }
         }
     }
@@ -580,7 +599,10 @@ mod tests {
 
     #[test]
     fn gate_refuses_generic_queries_and_bogus_sources() {
-        assert_eq!(gate_check(b"SRC>APRS,WIDE1-1:?APRS?"), Err(GateReject::GenericQuery));
+        assert_eq!(
+            gate_check(b"SRC>APRS,WIDE1-1:?APRS?"),
+            Err(GateReject::GenericQuery)
+        );
         assert_eq!(gate_check(b"SRC>APRS,WIDE1-1:"), Err(GateReject::Empty));
         for src in ["N0CALL", "NOCALL", "WIDE1-1", "TRACE", "RELAY"] {
             let line = format!("{src}>APRS,WIDE1-1:!4903.50N/07201.75W-");
@@ -589,7 +611,10 @@ mod tests {
                 "must be refused: {line}"
             );
         }
-        assert!(matches!(gate_check(b"not a packet"), Err(GateReject::Malformed)));
+        assert!(matches!(
+            gate_check(b"not a packet"),
+            Err(GateReject::Malformed)
+        ));
     }
 
     #[test]
@@ -638,8 +663,11 @@ mod tests {
 
     #[test]
     fn gated_line_preserves_used_digi_markers_and_a_pathless_packet() {
-        let out = gated_line(b"W4BTA-8>SXQV2U,K3NAL-1,WIDE1,N3KTX-7,WIDE2*:'h5io_,j/]=", "KD9TAW")
-            .unwrap();
+        let out = gated_line(
+            b"W4BTA-8>SXQV2U,K3NAL-1,WIDE1,N3KTX-7,WIDE2*:'h5io_,j/]=",
+            "KD9TAW",
+        )
+        .unwrap();
         assert_eq!(
             String::from_utf8_lossy(&out),
             "W4BTA-8>SXQV2U,K3NAL-1,WIDE1,N3KTX-7,WIDE2*,qAO,KD9TAW:'h5io_,j/]="
@@ -658,7 +686,10 @@ mod tests {
         line.push(0x1C);
         line.extend_from_slice(b">/]");
         let out = gated_line(&line, "KD9TAW").unwrap();
-        assert!(out.contains(&0x1C), "the raw Mic-E byte must survive the uplink");
+        assert!(
+            out.contains(&0x1C),
+            "the raw Mic-E byte must survive the uplink"
+        );
         assert!(out.ends_with(b">/]"));
     }
 
@@ -688,7 +719,10 @@ mod tests {
         let line = b"KD9TAW-9>APRS,WIDE1-1:!4903.50N/07201.75W-";
         assert!(w.accept(line, 1000));
         assert!(!w.accept(line, 1029), "still inside the 30 s window");
-        assert!(w.accept(line, 1031), "a genuine later beacon must not be swallowed");
+        assert!(
+            w.accept(line, 1031),
+            "a genuine later beacon must not be swallowed"
+        );
     }
 
     #[test]
