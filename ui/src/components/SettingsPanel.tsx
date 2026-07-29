@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AudioDevices, BandChannel, CatTestResult, DetectedRig, RadioStatus, Settings } from '../types'
+import type {
+  AudioDevices,
+  BandChannel,
+  CatTestResult,
+  DetectedRig,
+  RadioStatus,
+  RouteMode,
+  RoutingRule,
+  Settings,
+} from '../types'
 import {
   clearCloudlogKey,
   clearClublogPassword,
@@ -35,6 +44,9 @@ import {
   renameRadio,
   setActiveRadio,
   setRadioBands,
+  setRoutingRules,
+  setDefaultRadio,
+  routePreview,
   updateRadioProfile,
   type RadioProfilePatch,
   testCat,
@@ -200,6 +212,20 @@ const STOCK_WORKING_FREQUENCIES: WorkingFrequency[] = [
 /** Bands/modes offered in the override editor (the stock table's coverage). */
 const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '2m', '70cm', '23cm']
 const FREQ_MODES = ['FT8', 'FT4']
+
+/** The mode classes radio ROUTING decides on, with the operator-facing labels (must match the Rust
+ * `RouteMode::label`). Coarser than the submode list on purpose: five rules cover a whole station. */
+const ROUTE_MODES: [RouteMode, string][] = [
+  ['digital', 'Weak-signal digital'],
+  ['fm', 'FM & APRS'],
+  ['ssb', 'SSB phone'],
+  ['cw', 'CW'],
+  ['rtty', 'RTTY'],
+]
+const ROUTE_MODE_LABEL: Record<RouteMode, string> = Object.fromEntries(ROUTE_MODES) as Record<
+  RouteMode,
+  string
+>
 
 /** Settings is split into tabbed sections: only the active one renders, so a
  * keystroke re-renders ~one section's worth of inputs instead of the whole panel
@@ -529,6 +555,13 @@ export function SettingsPanel({
   // In-progress MHz text for the override row being edited — committed only when
   // it parses as a positive number, so a half-typed "14." never corrupts the form.
   const [mhzDraft, setMhzDraft] = useState<{ idx: number; text: string } | null>(null)
+  // The routing "test" probe: which (band, mode) the operator asked about, and the radio name the
+  // backend resolved it to. `null` result = not asked yet / the probe failed.
+  const [routeTest, setRouteTest] = useState<{ band: string; mode: RouteMode }>({
+    band: '2m',
+    mode: 'fm',
+  })
+  const [routeTestResult, setRouteTestResult] = useState<string | null>(null)
 
   // Dual-radio: if the active radio changes underneath us (the operator used the always-visible
   // TopBar switcher pills while Settings is open), the flat Rig/CAT form now describes the WRONG
@@ -929,7 +962,18 @@ export function SettingsPanel({
   const reloadRadios = () => {
     void getSettings().then((s) => {
       setForm((prev) =>
-        prev ? { ...prev, radios: s.radios, activeRadio: s.activeRadio, radioPegged: s.radioPegged } : s,
+        prev
+          ? {
+              ...prev,
+              radios: s.radios,
+              activeRadio: s.activeRadio,
+              radioPegged: s.radioPegged,
+              // The routing table is live state too (own verbs, restored across a stale-form Save),
+              // so it must come back from the backend here rather than from the form.
+              routingRules: s.routingRules,
+              defaultRadio: s.defaultRadio,
+            }
+          : s,
       )
       onSaved?.()
     })
@@ -959,6 +1003,56 @@ export function SettingsPanel({
       (s) => s && reloadRadios(),
     )
   }
+  // --- Band+mode routing rules. Live verbs like the roster above: each edit persists immediately
+  // and re-pulls, so the rules survive a later stale-form Save (and an edit made while the rig form
+  // is pointed at a non-active radio, where Save goes through update_radio_profile and drops the
+  // form entirely).
+  const mutateRules = (next: RoutingRule[]) => {
+    void withErrorToast(() => setRoutingRules(next), 'Could not save the routing rules').then(
+      (s) => s && reloadRadios(),
+    )
+  }
+  const handleAddRule = () => {
+    const first = form?.radios?.[0]?.id ?? 0
+    mutateRules([...(form?.routingRules ?? []), { bands: [], mode: null, radio: first }])
+  }
+  const handleRemoveRule = (i: number) => {
+    mutateRules((form?.routingRules ?? []).filter((_, n) => n !== i))
+  }
+  const handlePatchRule = (i: number, patch: Partial<RoutingRule>) => {
+    mutateRules((form?.routingRules ?? []).map((r, n) => (n === i ? { ...r, ...patch } : r)))
+  }
+  const handleToggleRuleBand = (i: number, band: string) => {
+    const rule = form?.routingRules?.[i]
+    if (!rule) return
+    handlePatchRule(i, {
+      bands: rule.bands.includes(band)
+        ? rule.bands.filter((b) => b !== band)
+        : [...rule.bands, band],
+    })
+  }
+  // Order IS the precedence (first match wins), so the operator needs to reorder rules.
+  const handleMoveRule = (i: number, delta: number) => {
+    const rules = [...(form?.routingRules ?? [])]
+    const to = i + delta
+    if (to < 0 || to >= rules.length) return
+    ;[rules[i], rules[to]] = [rules[to], rules[i]]
+    mutateRules(rules)
+  }
+  const handleSetDefaultRadio = (id: number | null) => {
+    void withErrorToast(() => setDefaultRadio(id), 'Could not set the default radio').then(
+      (s) => s && reloadRadios(),
+    )
+  }
+  // The "test" affordance: ask the backend where a (band, mode) resolves, so the operator can check
+  // the table without QSYing a rig. Answered by the same resolver the radio loop uses.
+  const runRouteTest = (band: string, mode: RouteMode) => {
+    setRouteTest({ band, mode })
+    void routePreview(band, mode)
+      .then((r) => setRouteTestResult(r.name))
+      .catch(() => setRouteTestResult(null))
+  }
+
   // EDIT a radio's config without touching what you're operating on: load that radio's profile
   // into the rig form LOCALLY (no backend call, no live rig swap, no dropped carrier). Save then
   // writes just this radio (via update_radio_profile) when it isn't the active one.
@@ -2107,6 +2201,177 @@ export function SettingsPanel({
                   : 'Run two rigs at once — e.g. an HF radio plus a VHF/UHF radio on a different antenna? Add a second radio; you can then Edit either one without interrupting the one you are operating on. Newcomers can ignore this.'}
               </span>
             </div>
+            {(form.radios?.length ?? 1) > 1 && (
+              <div className="routing-rules">
+                <span className="settings-hint">
+                  <strong>Route by band AND mode</strong> — band coverage above sends a whole band to
+                  one radio. Add rules here when TWO radios share a band and the MODE decides which
+                  one: 2 m FT8 to the digital rig, 2 m FM and APRS to the FM rig. Rules are checked
+                  top to bottom and the FIRST match wins; anything no rule matches falls back to band
+                  coverage, then to the default radio.
+                </span>
+                {(form.routingRules ?? []).length === 0 && (
+                  <p className="settings-note">
+                    No rules — routing is by band only (today&apos;s behavior).
+                  </p>
+                )}
+                {(form.routingRules ?? []).map((rule, i) => (
+                  <div className="routing-rule" key={i}>
+                    <div className="routing-rule-head">
+                      <span className="routing-rule-n">{i + 1}.</span>
+                      <select
+                        className="settings-input"
+                        value={rule.mode ?? ''}
+                        onChange={(e) =>
+                          handlePatchRule(i, {
+                            mode: e.target.value === '' ? null : (e.target.value as RouteMode),
+                          })
+                        }
+                        aria-label={`Rule ${i + 1} mode`}
+                      >
+                        <option value="">Any mode</option>
+                        {ROUTE_MODES.map(([v, label]) => (
+                          <option key={v} value={v}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="routing-rule-arrow">→</span>
+                      <select
+                        className="settings-input"
+                        value={rule.radio}
+                        onChange={(e) => handlePatchRule(i, { radio: Number(e.target.value) })}
+                        aria-label={`Rule ${i + 1} radio`}
+                      >
+                        {(form.radios ?? []).map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="settings-refresh"
+                        onClick={() => handleMoveRule(i, -1)}
+                        disabled={i === 0}
+                        title="Check this rule earlier (first match wins)"
+                        aria-label={`Move rule ${i + 1} up`}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-refresh"
+                        onClick={() => handleMoveRule(i, 1)}
+                        disabled={i === (form.routingRules?.length ?? 0) - 1}
+                        title="Check this rule later"
+                        aria-label={`Move rule ${i + 1} down`}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-refresh danger"
+                        onClick={() => handleRemoveRule(i)}
+                        aria-label={`Remove rule ${i + 1}`}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="band-chip-row">
+                      {FREQ_BANDS.map((b) => {
+                        const on = rule.bands.includes(b)
+                        return (
+                          <button
+                            key={b}
+                            type="button"
+                            className={`band-chip${on ? ' on' : ''}`}
+                            aria-pressed={on}
+                            onClick={() => handleToggleRuleBand(i, b)}
+                          >
+                            {b}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <span className="settings-hint">
+                      {rule.bands.length === 0 ? 'Any band' : rule.bands.join(', ')}
+                      {' · '}
+                      {rule.mode ? ROUTE_MODE_LABEL[rule.mode] : 'any mode'}
+                      {' → '}
+                      {form.radios?.find((r) => r.id === rule.radio)?.name ?? `Radio ${rule.radio}`}
+                    </span>
+                  </div>
+                ))}
+                <div className="radios-actions">
+                  <button type="button" className="settings-refresh" onClick={handleAddRule}>
+                    + Add routing rule
+                  </button>
+                  <label className="settings-input-row routing-default">
+                    <span className="settings-label">Everything else</span>
+                    <select
+                      className="settings-input"
+                      value={form.defaultRadio ?? ''}
+                      onChange={(e) =>
+                        handleSetDefaultRadio(e.target.value === '' ? null : Number(e.target.value))
+                      }
+                      aria-label="Default radio"
+                    >
+                      <option value="">Stay on the current radio</option>
+                      {(form.radios ?? []).map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {/* Test affordance: check the table without QSYing a rig. Answered by the same
+                    resolver the radio loop uses, so it can't drift from real behavior. */}
+                <div className="routing-test">
+                  <span className="settings-label">Test a band + mode</span>
+                  <div className="settings-input-row">
+                    <select
+                      className="settings-input"
+                      value={routeTest.band}
+                      onChange={(e) => runRouteTest(e.target.value, routeTest.mode)}
+                      aria-label="Test band"
+                    >
+                      {FREQ_BANDS.map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="settings-input"
+                      value={routeTest.mode}
+                      onChange={(e) => runRouteTest(routeTest.band, e.target.value as RouteMode)}
+                      aria-label="Test mode"
+                    >
+                      {ROUTE_MODES.map(([v, label]) => (
+                        <option key={v} value={v}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={() => runRouteTest(routeTest.band, routeTest.mode)}
+                    >
+                      Where would this go?
+                    </button>
+                  </div>
+                  {routeTestResult && (
+                    <p className="settings-note routing-test-result">
+                      {routeTest.band} {ROUTE_MODE_LABEL[routeTest.mode]} →{' '}
+                      <strong>{routeTestResult}</strong>
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
             {(form.radios?.length ?? 1) > 1 && (
               <label className="settings-field settings-simul-radios">
                 <span className="settings-input-row">

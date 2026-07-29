@@ -422,6 +422,17 @@ pub struct Settings {
     /// it never runs together — is never bothered with the picker. See [[reference-multiradio-architecture]].
     #[serde(default)]
     pub simultaneous_radios: bool,
+    /// Band+mode → radio routing rules, FIRST-MATCH-WINS (see [`RoutingRule`]). Lets a station
+    /// split ONE band between two rigs by mode — "2 m FT8 to the IC-9700, 2 m FM/APRS to the
+    /// FT-991A" — which the band-only `bands` coverage on each [`RadioProfile`] structurally
+    /// cannot express. EMPTY by default: an upgrading install keeps exactly today's band-coverage
+    /// behavior until the operator writes a rule.
+    #[serde(default)]
+    pub routing_rules: Vec<RoutingRule>,
+    /// Fallback radio when no rule and no band coverage claims a (band, mode) — "everything else
+    /// goes here". `None` (the default) = stay on the active radio, i.e. today's behavior.
+    #[serde(default)]
+    pub default_radio: Option<u32>,
 
     // --- network (WSJT-X parity) ---
     /// Emit the WSJT-X-compatible UDP protocol (for JTAlert/GridTracker/loggers).
@@ -1189,6 +1200,77 @@ impl Macros {
     }
 }
 
+/// The mode granularity radio ROUTING decides on — coarse enough that the operator writes five
+/// rules, fine enough to split one band between two rigs.
+///
+/// This is a REFINEMENT of the app's existing three-way `ModeClass` (CW / Phone / Digital, in
+/// `propagation::model`), not a parallel taxonomy: `Fm`+`Ssb` are both Phone and `Digital`+`Rtty`
+/// are both Digital. The refinement is forced by the station it serves — the coarse classes CANNOT
+/// express "2 m FT8 on the IC-9700 but 2 m FM on the FT-991A", because FT8 and APRS are both
+/// Digital and FM and SSB are both Phone. Two rigs on one band is exactly the case that made
+/// band-only routing insufficient.
+///
+/// Derived from live engine state by `Engine::route_mode`, whose inputs are the same ones
+/// [`Settings::rig_mode`] commands the rig from (`operating_mode`, `aprs_fm`, `phone_mode`,
+/// `dial_mhz`) — so a routing decision can never disagree with the mode the rig is about to be put
+/// in. SSTV is deliberately NOT a class: it has no operating section (it rides Phone, and
+/// `rig_mode_effective` only diverges while an image is actually queued), so an SSTV rule could
+/// never match at QSY time — a rule the operator could set and never see fire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RouteMode {
+    /// Weak-signal digital: FT8/FT4/FT1/DX1/JT/Q65/MSK144/WSPR — `OperatingMode::Digital`.
+    Digital,
+    /// FM voice and FM packet: repeaters, simplex, APRS. The class the FT-991A owns on 2 m.
+    Fm,
+    /// SSB/AM voice (and SSTV, which rides the phone segment on the same rig).
+    Ssb,
+    Cw,
+    Rtty,
+}
+
+impl RouteMode {
+    /// Operator-facing label (the Settings rule editor's dropdown).
+    pub fn label(self) -> &'static str {
+        match self {
+            RouteMode::Digital => "Weak-signal digital",
+            RouteMode::Fm => "FM & APRS",
+            RouteMode::Ssb => "SSB phone",
+            RouteMode::Cw => "CW",
+            RouteMode::Rtty => "RTTY",
+        }
+    }
+}
+
+/// One band+mode → radio routing rule. Evaluated FIRST-MATCH-WINS in `Settings::routing_rules`
+/// order, so a specific rule placed above a broad one wins.
+///
+/// Both selectors are "empty = any", which is how a rule stays readable: `bands: []` means every
+/// band, `mode: None` means every mode class. `{bands: ["2m"], mode: Some(Fm)} -> 991A` is the
+/// operator's APRS/repeater rule; `{bands: [], mode: Some(Digital)} -> 9700` would be "all digital
+/// on the 9700" regardless of band.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RoutingRule {
+    /// Bands this rule covers, e.g. `["2m", "70cm"]`. EMPTY = any band.
+    pub bands: Vec<String>,
+    /// Mode class this rule covers. `None` = any mode class.
+    pub mode: Option<RouteMode>,
+    /// The `RadioProfile::id` to hand off to.
+    pub radio: u32,
+}
+
+impl RoutingRule {
+    /// Does this rule cover `(band, mode)`? Band match is case-insensitive (the app writes "2m",
+    /// an imported config might carry "2M").
+    pub fn matches(&self, band: &str, mode: RouteMode) -> bool {
+        let band_ok =
+            self.bands.is_empty() || self.bands.iter().any(|b| b.eq_ignore_ascii_case(band));
+        let mode_ok = self.mode.is_none_or(|m| m == mode);
+        band_ok && mode_ok
+    }
+}
+
 /// One radio's complete, independently-configurable connection profile. A single-radio station has
 /// exactly one (migrated from the flat `Settings` rig/audio fields); adding a 2nd radio in Settings
 /// appends another. Serde-defaulted throughout so partial/older records load.
@@ -1633,6 +1715,10 @@ impl Default for Settings {
             active_radio: 0,
             radio_pegged: false,
             simultaneous_radios: false,
+            // No rules by default: routing stays band-only (per-radio `bands` coverage) until the
+            // operator writes one, so upgrading changes nothing.
+            routing_rules: Vec::new(),
+            default_radio: None,
             wsjtx_udp: false,
             wsjtx_udp_addr: "127.0.0.1:2237".to_string(),
             write_all_txt: false,
@@ -1850,9 +1936,58 @@ impl Settings {
         self.radios
             .iter()
             .filter(|p| p.enabled && p.id != self.active_radio)
-            .max_by_key(|p| rank(p))
+            // THREE radios make ties reachable for the first time: with two radios there is only
+            // ever ONE non-active candidate, so any tie was decided by the `> active_rank` filter.
+            // With three, two rigs can both list 20 m — and `max_by_key` returns the LAST maximum,
+            // i.e. roster order, silently. Break the tie on the LOWEST id (the radio the operator
+            // configured first) so the same band always lands on the same rig.
+            .min_by_key(|p| (std::cmp::Reverse(rank(p)), p.id))
             .filter(|p| rank(p) > active_rank)
             .map(|p| p.id)
+    }
+
+    /// Which radio should own `(band, mode)` — the full routing decision. Returns `Some(id)` only
+    /// when a DIFFERENT enabled radio should take over; `None` = stay on the active radio.
+    ///
+    /// Three tiers, in order:
+    /// 1. **[`RoutingRule`]s, first-match-wins.** An explicit rule is an operator instruction, so
+    ///    it hands off even when the active radio also covers the band — that is the whole point:
+    ///    2 m FT8 must leave the FT-991A for the IC-9700 although the 991A does 2 m too.
+    /// 2. **Band-only coverage** ([`Settings::radio_for_band`]) — the pre-rules behavior, kept so
+    ///    an install that never writes a rule behaves exactly as before.
+    /// 3. **[`Settings::default_radio`]** — the "everything else goes here" net.
+    ///
+    /// A rule/default naming a missing or DISABLED radio is skipped rather than obeyed (an
+    /// unplugged rig must never become the handoff target). Peg-lock is honored by the caller.
+    pub fn route_radio(&self, band: &str, mode: RouteMode) -> Option<u32> {
+        let usable = |id: u32| self.radios.iter().any(|p| p.id == id && p.enabled);
+        if let Some(rule) = self
+            .routing_rules
+            .iter()
+            .find(|r| r.matches(band, mode) && usable(r.radio))
+        {
+            // A matched rule is authoritative — INCLUDING "the rule points at the radio we are
+            // already on", which resolves to None (stay put) rather than falling through to a
+            // broader tier that would then move us off it.
+            return (rule.radio != self.active_radio).then_some(rule.radio);
+        }
+        self.radio_for_band(band).or_else(|| {
+            self.default_radio
+                .filter(|id| usable(*id) && *id != self.active_radio)
+        })
+    }
+
+    /// Drop routing state that points at a radio which no longer EXISTS, so a removed radio can
+    /// never leave a rule that silently never fires — or worse, a `default_radio` aimed at a gone
+    /// rig. A merely DISABLED radio keeps its rules (unplugging a rig for the afternoon must not
+    /// delete the routing table; `route_radio` skips a disabled target at resolve time instead).
+    /// Idempotent; called on load, on every save, and after `remove_radio`.
+    pub fn ensure_routing_targets(&mut self) {
+        let live: Vec<u32> = self.radios.iter().map(|p| p.id).collect();
+        self.routing_rules.retain(|r| live.contains(&r.radio));
+        if self.default_radio.is_some_and(|id| !live.contains(&id)) {
+            self.default_radio = None;
+        }
     }
 
     /// Append a new radio profile with a fresh (never-reused) id, a placeholder name, and CAT/rotator
@@ -1880,7 +2015,19 @@ impl Settings {
         };
         let rigctld_port = free_from(4532);
         let rotctld_port = free_from(4533);
-        let name = format!("Radio {}", self.radios.len() + 1);
+        // Walk to the first UNUSED "Radio N" rather than numbering by roster length. Length-based
+        // numbering collides the moment a radio is removed from the middle (add A/B/C → remove
+        // "Radio 2" → add → a SECOND "Radio 3"), and every conflict message the operator sees
+        // (`serial_port_conflicts`, `shared_audio_device`) names radios, so duplicates make those
+        // warnings ambiguous. Only reachable with three or more radios.
+        let mut n = self.radios.len() + 1;
+        let name = loop {
+            let candidate = format!("Radio {n}");
+            if !self.radios.iter().any(|p| p.name == candidate) {
+                break candidate;
+            }
+            n += 1;
+        };
         self.radios.push(RadioProfile {
             id: next_id,
             name,
@@ -1942,6 +2089,9 @@ impl Settings {
         }
         let before = self.radios.len();
         self.radios.retain(|p| p.id != id);
+        // A removed radio must not leave routing rules (or a default) aimed at it — otherwise the
+        // rule silently never fires and its band+mode falls through to a tier the operator can't see.
+        self.ensure_routing_targets();
         self.radios.len() != before
     }
 
@@ -2146,6 +2296,7 @@ impl Settings {
         // mirror the active profile into the flat fields so every existing consumer reads unchanged.
         s.ensure_radio_profiles();
         s.ensure_distinct_radio_ports(); // two live daemons (dual-radio) need distinct ports
+        s.ensure_routing_targets(); // drop rules aimed at radios this config no longer has
         s.sync_flat_from_active();
         s
     }
@@ -2561,6 +2712,301 @@ mod tests {
         s.ensure_radio_profiles(); // exactly one radio
         assert_eq!(s.radio_for_band("2m"), None);
         assert_eq!(s.radio_for_band("20m"), None);
+    }
+
+    /// THE canonical fixture: the operator's actual three-radio shack.
+    ///   radio 0 = FTdx10  — HF everything
+    ///   radio 1 = IC-9700 — 2 m / 70 cm WEAK-SIGNAL DIGITAL (FT8/FT4/…)
+    ///   radio 2 = FT-991A — APRS + 2 m FM / repeaters
+    /// Band coverage alone CANNOT express this: the 9700 and the 991A both cover 2 m, and it is the
+    /// MODE that decides which one. Every routing test below builds on this.
+    fn three_radio_shack() -> Settings {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles(); // radio 0 — FTdx10
+        let ic9700 = s.add_radio_profile();
+        let ft991a = s.add_radio_profile();
+        {
+            let mut set = |id: u32, name: &str, bands: Vec<String>| {
+                let p = s.radios.iter_mut().find(|p| p.id == id).unwrap();
+                p.name = name.to_string();
+                p.bands = bands;
+            };
+            set(0, "FTdx10", Vec::new()); // catch-all: HF everything
+            set(ic9700, "IC-9700", vec!["2m".into(), "70cm".into()]);
+            set(ft991a, "FT-991A", vec!["2m".into(), "70cm".into()]);
+        }
+        // The operator's spec as rules, first-match-wins. The FM rule sits ABOVE the digital rule
+        // only for readability — they can't both match, since a (band, mode) has one mode class.
+        s.routing_rules = vec![
+            RoutingRule {
+                bands: vec!["2m".into(), "70cm".into()],
+                mode: Some(RouteMode::Fm),
+                radio: ft991a,
+            },
+            RoutingRule {
+                bands: vec!["2m".into(), "70cm".into()],
+                mode: Some(RouteMode::Digital),
+                radio: ic9700,
+            },
+        ];
+        s.default_radio = Some(0); // everything else → the FTdx10
+        s.active_radio = 0;
+        s
+    }
+
+    #[test]
+    fn route_radio_splits_one_band_between_two_radios_by_mode() {
+        // The whole point of the feature: 2 m goes to a DIFFERENT rig depending on the mode class,
+        // which band-only routing structurally cannot do (both rigs list 2 m).
+        let s = three_radio_shack();
+        let (ic9700, ft991a) = (1, 2);
+
+        assert_eq!(
+            s.route_radio("2m", RouteMode::Digital),
+            Some(ic9700),
+            "2 m FT8 → the IC-9700"
+        );
+        assert_eq!(
+            s.route_radio("2m", RouteMode::Fm),
+            Some(ft991a),
+            "2 m FM / APRS → the FT-991A"
+        );
+        assert_eq!(
+            s.route_radio("70cm", RouteMode::Fm),
+            Some(ft991a),
+            "the rule's band SET covers 70 cm too"
+        );
+        assert_eq!(
+            s.route_radio("2M", RouteMode::Digital),
+            Some(ic9700),
+            "band match is case-insensitive"
+        );
+
+        // HF, every mode, stays on the FTdx10 (we're already on it → None = stay put).
+        for m in [
+            RouteMode::Digital,
+            RouteMode::Ssb,
+            RouteMode::Cw,
+            RouteMode::Rtty,
+            RouteMode::Fm,
+        ] {
+            assert_eq!(
+                s.route_radio("20m", m),
+                None,
+                "20 m {m:?} stays on the FTdx10"
+            );
+        }
+    }
+
+    #[test]
+    fn route_radio_swings_back_to_hf_from_a_vhf_radio() {
+        let mut s = three_radio_shack();
+        let (ic9700, ft991a) = (1, 2);
+        s.active_radio = ic9700;
+
+        // No rule covers 20 m, so the band-coverage tier decides: the 9700's explicit 2m/70cm list
+        // doesn't cover 20 m (rank 0) and the FTdx10's catch-all does (rank 1).
+        assert_eq!(
+            s.route_radio("20m", RouteMode::Ssb),
+            Some(0),
+            "20 m SSB swings back to the FTdx10"
+        );
+        assert_eq!(
+            s.route_radio("40m", RouteMode::Cw),
+            Some(0),
+            "40 m CW swings back to the FTdx10"
+        );
+        // From the 9700, 2 m FM still crosses to the 991A — a rule fires even between two VHF rigs.
+        assert_eq!(s.route_radio("2m", RouteMode::Fm), Some(ft991a));
+        // …and 2 m digital is a rule match naming the radio we're ALREADY on → stay put, rather
+        // than falling through to a broader tier that would move us off it.
+        assert_eq!(s.route_radio("2m", RouteMode::Digital), None);
+    }
+
+    #[test]
+    fn route_radio_is_first_match_wins() {
+        let mut s = three_radio_shack();
+        let (ic9700, ft991a) = (1, 2);
+        s.active_radio = 0;
+        // A broad catch-all rule ABOVE the specific ones swallows everything — order is the whole
+        // precedence model, so this must be visible and testable.
+        s.routing_rules.insert(
+            0,
+            RoutingRule {
+                bands: Vec::new(), // any band
+                mode: None,        // any mode
+                radio: ft991a,
+            },
+        );
+        assert_eq!(
+            s.route_radio("2m", RouteMode::Digital),
+            Some(ft991a),
+            "the catch-all is first, so it wins over the 2 m digital rule"
+        );
+        // Move it back below and the specific rule wins again.
+        let broad = s.routing_rules.remove(0);
+        s.routing_rules.push(broad);
+        assert_eq!(s.route_radio("2m", RouteMode::Digital), Some(ic9700));
+        assert_eq!(
+            s.route_radio("20m", RouteMode::Ssb),
+            Some(ft991a),
+            "the trailing catch-all now claims what nothing else did"
+        );
+    }
+
+    #[test]
+    fn route_radio_falls_back_to_band_coverage_then_the_default_radio() {
+        let mut s = three_radio_shack();
+        let (ic9700, ft991a) = (1, 2);
+
+        // TIER 2 — no rules at all: routing is exactly the pre-rules band-coverage behavior, so an
+        // install that never writes a rule is unchanged.
+        s.routing_rules.clear();
+        s.default_radio = None;
+        s.active_radio = 0;
+        assert_eq!(
+            s.route_radio("2m", RouteMode::Digital),
+            s.radio_for_band("2m"),
+            "with no rules, routing == band coverage"
+        );
+        assert_eq!(s.route_radio("20m", RouteMode::Ssb), None);
+
+        // TIER 3 — a band NOBODY covers falls to the default radio.
+        s.radios.iter_mut().find(|p| p.id == 0).unwrap().bands = vec!["20m".into(), "40m".into()]; // FTdx10 no longer a catch-all
+        s.active_radio = ic9700;
+        assert_eq!(
+            s.route_radio("6m", RouteMode::Ssb),
+            None,
+            "no coverage, no default → stay put"
+        );
+        s.default_radio = Some(0);
+        assert_eq!(
+            s.route_radio("6m", RouteMode::Ssb),
+            Some(0),
+            "no coverage → the default radio"
+        );
+        // The default never fires when it names the radio already active.
+        s.active_radio = 0;
+        assert_eq!(s.route_radio("6m", RouteMode::Ssb), None);
+        // A DISABLED default is not obeyed — an unplugged rig must never become the target.
+        s.active_radio = ic9700;
+        s.default_radio = Some(ft991a);
+        s.radios
+            .iter_mut()
+            .find(|p| p.id == ft991a)
+            .unwrap()
+            .enabled = false;
+        assert_eq!(s.route_radio("6m", RouteMode::Ssb), None);
+    }
+
+    #[test]
+    fn route_radio_skips_rules_aimed_at_a_disabled_radio() {
+        let mut s = three_radio_shack();
+        let ft991a = 2;
+        s.radios
+            .iter_mut()
+            .find(|p| p.id == ft991a)
+            .unwrap()
+            .enabled = false;
+        // The 2 m FM rule points at the unplugged 991A. Skip the RULE (don't obey it, don't let it
+        // consume the match) and fall through — else an APRS tune would hand off to a dead rig.
+        assert_eq!(
+            s.route_radio("2m", RouteMode::Fm),
+            Some(1),
+            "falls through to band coverage: the enabled IC-9700 also lists 2 m"
+        );
+    }
+
+    #[test]
+    fn removing_a_radio_drops_the_rules_that_pointed_at_it() {
+        let mut s = three_radio_shack();
+        let ft991a = 2;
+        assert!(s.remove_radio_profile(ft991a));
+        assert_eq!(
+            s.routing_rules.len(),
+            1,
+            "the FT-991A's FM rule went with it"
+        );
+        assert_eq!(s.routing_rules[0].radio, 1, "the IC-9700 rule survives");
+        // …and a default aimed at the removed radio is cleared, not left pointing at nothing.
+        s.default_radio = Some(ft991a);
+        s.ensure_routing_targets();
+        assert_eq!(s.default_radio, None);
+    }
+
+    #[test]
+    fn routing_rules_survive_a_settings_round_trip() {
+        let s = three_radio_shack();
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"routingRules\""),
+            "the wire key the UI writes must be camelCase"
+        );
+        assert!(json.contains("\"defaultRadio\""));
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.routing_rules, s.routing_rules);
+        assert_eq!(back.default_radio, s.default_radio);
+        // The EXACT mode tokens the UI's <select> writes. A hand-written TS union that disagrees
+        // fails INVISIBLY — serde falls back to the field default and the control appears dead —
+        // which is why `aprs_is_settings_use_the_exact_wire_keys_the_ui_writes` exists too.
+        for (m, wire) in [
+            (RouteMode::Digital, "\"digital\""),
+            (RouteMode::Fm, "\"fm\""),
+            (RouteMode::Ssb, "\"ssb\""),
+            (RouteMode::Cw, "\"cw\""),
+            (RouteMode::Rtty, "\"rtty\""),
+        ] {
+            assert_eq!(serde_json::to_string(&m).unwrap(), wire);
+        }
+        // `mode: null` (any mode) must round-trip, and be what an omitted key yields.
+        let any: RoutingRule = serde_json::from_str("{\"bands\":[\"2m\"],\"radio\":1}").unwrap();
+        assert_eq!(any.mode, None, "an omitted mode means ANY mode");
+        assert!(any.matches("2m", RouteMode::Cw) && any.matches("2m", RouteMode::Fm));
+        // An OLDER settings.json has neither key — it must load with no rules (today's behavior),
+        // not fail.
+        let old: Settings = serde_json::from_str("{\"mycall\":\"KD9TAW\"}").unwrap();
+        assert!(old.routing_rules.is_empty());
+        assert_eq!(old.default_radio, None);
+    }
+
+    #[test]
+    fn band_coverage_ties_break_on_the_lowest_id_not_roster_order() {
+        // Reachable only with THREE radios: two non-active rigs both explicitly listing the band.
+        // `max_by_key` returned the LAST maximum, so the winner was roster order — silently.
+        let mut s = three_radio_shack();
+        s.routing_rules.clear();
+        s.default_radio = None;
+        s.active_radio = 0;
+        s.radios.iter_mut().find(|p| p.id == 0).unwrap().bands = vec!["20m".into()];
+        // Both the IC-9700 (id 1) and the FT-991A (id 2) explicitly claim 2 m.
+        assert_eq!(
+            s.route_radio("2m", RouteMode::Ssb),
+            Some(1),
+            "lowest id wins the tie, deterministically"
+        );
+        // Order in the roster must not change the answer.
+        s.radios.swap(1, 2);
+        assert_eq!(s.route_radio("2m", RouteMode::Ssb), Some(1));
+    }
+
+    #[test]
+    fn add_radio_profile_never_duplicates_a_name() {
+        // Length-based numbering ("Radio {len+1}") collides once a radio is removed from the middle
+        // — and every port/audio conflict warning the operator reads names radios.
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let b = s.add_radio_profile(); // "Radio 2"
+        let _c = s.add_radio_profile(); // "Radio 3"
+        s.active_radio = 0;
+        assert!(s.remove_radio_profile(b));
+        let d = s.add_radio_profile();
+        let name = |id: u32| s.radios.iter().find(|p| p.id == id).unwrap().name.clone();
+        assert_ne!(name(d), name(2), "the 3rd radio's name is not reused");
+        let mut names: Vec<String> = s.radios.iter().map(|p| p.name.clone()).collect();
+        names.sort();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(names.len(), before, "every radio name is unique: {names:?}");
     }
 
     #[test]

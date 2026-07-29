@@ -9019,6 +9019,54 @@ select.settings-input {
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   color: var(--accent);
 }
+/* Band+mode routing rules. Ordered list — the number is the precedence, so it reads top-down. */
+.routing-rules {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.routing-rule {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.routing-rule-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.routing-rule-n {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.routing-rule-arrow {
+  color: var(--text-faint);
+}
+.routing-rule-head .settings-input {
+  width: auto;
+  min-width: 11ch;
+}
+.routing-default {
+  margin-left: auto;
+  gap: var(--space-2);
+}
+.routing-test {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+.routing-test .settings-input {
+  width: auto;
+}
+.routing-test-result {
+  font-variant-numeric: tabular-nums;
+}
 .radios-actions {
   display: flex;
   align-items: center;

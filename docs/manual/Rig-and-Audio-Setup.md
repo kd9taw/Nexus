@@ -120,15 +120,33 @@ To run WSJT-X alongside Nexus: enable the broker in Nexus, then point WSJT-X's H
 
 ---
 
-## Two Radios (Dual Radio)
+## Multiple Radios
 
-If you run two rigs — for example an HF radio and a VHF/UHF radio on separate antennas — Nexus can keep **both connected at once** and let you switch between them instantly.
+If you run more than one rig — an HF radio, a VHF/UHF weak-signal radio, an FM/APRS radio — Nexus keeps **all of them connected at once** and switches between them instantly.
 
-- **Add the second radio:** Settings → Rig, click **+ Add radio**. A new radio card appears. Give it a name (e.g. "IC-9700"), then click **Configure** on it to make it the active radio so the Rig/CAT + Audio settings below configure *that* radio. Set its model, port, baud, and audio, then Save. Switch back to your first radio the same way. Single-radio operators never see any of this beyond the "+ Add radio" button.
-- **Distinct daemon ports:** each radio runs its own bundled `rigctld` at the same time, so the two rigs must use **different rigctld TCP ports**. New radios are assigned a free port automatically, and any accidental collision is repaired on load — you don't normally have to think about it.
-- **Switching:** with two radios configured, a **switcher appears in the top bar** (one pill per radio, showing each rig's live frequency). Click a pill to switch. Both rigs stay connected the whole time — the non-active one is monitored (its frequency and S-meter stay live in the switcher), and switching is an instant handoff with no CAT reconnect, so the dial never bounces. When you switch to a radio, Nexus adopts the frequency it's *actually* on (you may have hand-tuned it).
-- **Band coverage (optional):** each radio can be given a set of bands it covers. (Automatic band-based routing — pick a band and Nexus selects the covering radio — is a planned follow-up.)
-- **What's shared:** you operate (waterfall, decode, transmit, audio) the **active** radio; the other stays connected for monitoring. Watching both waterfalls at the same time is a planned later addition.
+- **Add a radio:** Settings → Rig, click **+ Add radio**. A new radio card appears. Give it a name (e.g. "IC-9700"), then click **Edit** on it to configure its model, port, baud, and audio without changing the radio you are operating on. "Make active" switches your operating radio. Single-radio operators never see any of this beyond the "+ Add radio" button.
+- **Distinct daemon ports:** each radio runs its own bundled `rigctld` at the same time, so every rig must use a **different rigctld TCP port**. New radios are assigned a free port automatically, and any accidental collision is repaired on load — you don't normally have to think about it.
+- **Switching:** with two or more radios configured, a **switcher appears in the top bar** (one pill per radio, showing each rig's live frequency). Click a pill to switch. Every rig stays connected the whole time — the non-active ones are monitored (frequency and S-meter stay live in the switcher), and switching is an instant handoff with no CAT reconnect, so the dial never bounces. When you switch to a radio, Nexus adopts the frequency it's *actually* on (you may have hand-tuned it).
+- **What's shared:** you operate (waterfall, decode, transmit, audio) the **active** radio; the others stay connected for monitoring. Watching two waterfalls at the same time is a planned later addition — run two windows (below) for that.
+- **Running two at the same time:** with two or more radios, Settings → Rig offers **Run both radios at the same time**. Launching Nexus then asks which radio this window drives; open a second window for another. All windows share one logbook. Radios you add in one window are picked up by the others when they start.
+
+### Automatic Routing (band, and band + mode)
+
+When you pick a band, type a frequency, click a spot, or press APRS Tune, Nexus hands off to the radio configured for that work.
+
+- **Band coverage:** each radio card carries a set of bands it covers (none = covers everything). Pick 2 m and Nexus switches to the radio that lists 2 m. A radio that *explicitly* lists a band beats a "covers everything" radio; if two radios both list it, the first one you configured wins (so it is always the same rig).
+- **Band + mode rules:** band coverage cannot split one band between two rigs. If a 2 m/70 cm digital radio and an FM/APRS radio both cover 2 m, add rules to the **routing table** under your radios: a set of bands, a mode class, and the radio. Rules are checked top to bottom and the **first match wins**; the arrows reorder them.
+
+  | Bands | Mode | Radio |
+  | --- | --- | --- |
+  | 2 m, 70 cm | FM & APRS | FT-991A |
+  | 2 m, 70 cm | Weak-signal digital | IC-9700 |
+  | *(everything else)* | | FTdx10 |
+
+  The mode classes are **weak-signal digital** (FT8/FT4/FT1/JT/Q65/MSK144/WSPR), **FM & APRS**, **SSB phone** (SSTV rides here), **CW**, and **RTTY** — coarse on purpose, so a station fits in a few rules. SSTV has no rule of its own because it shares the phone section.
+- **Fallback order:** rules first, then band coverage, then the **default radio** ("Everything else") if you nominate one, otherwise stay on the current radio.
+- **Test it:** **"Where would this go?"** under the table resolves a band + mode to a radio without touching a rig. It asks the same code the radio loop uses.
+- **Peg-lock:** the peg control pins your active radio and suppresses all automatic switching.
 
 ---
 

@@ -96,6 +96,8 @@
   "activeRadio": 0,
   "radioPegged": false,
   "simultaneousRadios": false,
+  "routingRules": [],
+  "defaultRadio": null,
   "wsjtxUdp": false,
   "wsjtxUdpAddr": "127.0.0.1:2237",
   "writeAllTxt": false,
