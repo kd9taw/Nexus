@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # libtempo build deps. The native (host == target) CMake path locates the
       # FFTW3 single-precision library via pkg-config (`pkg_check_modules(FFTW3F
@@ -87,7 +87,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -155,10 +155,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -186,7 +186,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install libtempo build dependencies
         run: |
@@ -198,7 +198,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.87.0
 
       - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -220,7 +220,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
@@ -240,7 +240,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # MinGW-w64 cross toolchain: gcc/g++/gfortran for the Fortran/C/C++ modem,
       # cmake/ninja to drive the libtempo CMake project, and a host build-essential
@@ -258,7 +258,7 @@ jobs:
             build-essential
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -269,7 +269,7 @@ jobs:
           targets: x86_64-pc-windows-gnu
 
       - name: Cache cargo, FFTW, and build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -335,7 +335,7 @@ jobs:
         base: [bookworm, trixie]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # The DeepCW AI CW model is AGPL-3.0 (c) e04 and is NOT committed (15 MB binary,
       # gitignored — see src-tauri/resources/deepcw/README.md). A checkout therefore never
@@ -419,7 +419,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install build + driver dependencies
         run: |
@@ -436,7 +436,7 @@ jobs:
         with:
           toolchain: 1.93.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
