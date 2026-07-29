@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### APRS-IS settings moved into the APRS section
+
+They were filed under Logging & Connectors with the other network feeds, which is where they
+belong by type and not where anyone looked for them. They are now in **Settings ▸ Modes ▸ APRS**,
+beside RTTY and CW. Nothing about the feed or the iGate changed — only where you find them.
+
 ### APRS tells you when the radio is simply on the wrong frequency
 
 The clearest report from testing: FT8 was decoding beautifully on 2 m at the very moment the APRS

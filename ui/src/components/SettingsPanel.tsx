@@ -4456,6 +4456,193 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- APRS — the internet feed (APRS-IS) + the receive-only iGate. Lives HERE, beside
+               the other per-mode settings, because that is where operators look for it: the first
+               person to go hunting for these went to APRS, not to Integrations & Feeds. ---- */}
+          {tab === 'modes' && (
+          <fieldset className="settings-section">
+            <legend>APRS</legend>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">APRS-IS (internet feed)</span>
+              <div className="settings-grid">
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">APRS-IS feed</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.aprsIsEnabled}
+                      className={`toggle${form.aprsIsEnabled ? ' on' : ''}`}
+                      onClick={() => updateBool('aprsIsEnabled', !form.aprsIsEnabled)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    Plot stations the internet reports alongside the ones your own antenna hears —
+                    each one tagged so you can always tell which is which. Runs whether or not the
+                    APRS decoder is armed: it uses no radio and never transmits. If internet
+                    stations appear while your receiver stays silent, the fault is in the RF chain.
+                  </span>
+                </div>
+
+                <label className="settings-field">
+                  <span className="settings-label">Server</span>
+                  <input
+                    className="settings-input"
+                    value={form.aprsIsHost ?? ''}
+                    onChange={(e) => update('aprsIsHost', e.target.value)}
+                    placeholder="rotate.aprs2.net"
+                    spellCheck={false}
+                    disabled={!form.aprsIsEnabled}
+                  />
+                  <span className="settings-hint">
+                    Your regional Tier 2 rotate is best — noam / soam / euro / asia / aunz
+                    .aprs2.net. <code>rotate.aprs2.net</code> works anywhere.
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">Port</span>
+                  <input
+                    className="settings-input"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={form.aprsIsPort ?? 14580}
+                    onChange={(e) => updateNum('aprsIsPort', Number(e.target.value))}
+                    disabled={!form.aprsIsEnabled}
+                  />
+                  <span className="settings-hint">
+                    14580 is the filtered port clients and iGates should use. The full-feed ports
+                    would send you the entire planet.
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">Radius (km)</span>
+                  <input
+                    className="settings-input"
+                    type="number"
+                    min={0}
+                    max={5000}
+                    value={form.aprsIsRadiusKm ?? 150}
+                    onChange={(e) => updateNum('aprsIsRadiusKm', Number(e.target.value))}
+                    disabled={!form.aprsIsEnabled}
+                  />
+                  <span className="settings-hint">
+                    How far around your grid square to subscribe. APRS is a local mode; 150 km is a
+                    generous 2 m-plus-digipeater horizon. 0 = no distance limit (busy).
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">Watched calls</span>
+                  <input
+                    className="settings-input"
+                    value={(form.aprsIsWatchCalls ?? []).join(', ')}
+                    onChange={(e) =>
+                      setWatchCalls(
+                        e.target.value
+                          .split(',')
+                          .map((c) => c.trim().toUpperCase())
+                          .filter(Boolean),
+                      )
+                    }
+                    placeholder="W9XYZ-9, KD9ABC"
+                    spellCheck={false}
+                    disabled={!form.aprsIsEnabled}
+                  />
+                  <span className="settings-hint">
+                    Comma separated. These come through from anywhere on earth, however far outside
+                    your radius they are — the club tracker on a road trip, a friend chasing a summit.
+                  </span>
+                </label>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">Weather stations</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.aprsIsWeather !== false}
+                      className={`toggle${form.aprsIsWeather !== false ? ' on' : ''}`}
+                      onClick={() => updateBool('aprsIsWeather', form.aprsIsWeather === false)}
+                      disabled={!form.aprsIsEnabled}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">Include weather reports in the feed.</span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">Objects &amp; items</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.aprsIsObjects !== false}
+                      className={`toggle${form.aprsIsObjects !== false ? ' on' : ''}`}
+                      onClick={() => updateBool('aprsIsObjects', form.aprsIsObjects === false)}
+                      disabled={!form.aprsIsEnabled}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    Repeaters, NWS alerts and event markers other stations have placed on the map.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">Messages</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.aprsIsMessages !== false}
+                      className={`toggle${form.aprsIsMessages !== false ? ' on' : ''}`}
+                      onClick={() => updateBool('aprsIsMessages', form.aprsIsMessages === false)}
+                      disabled={!form.aprsIsEnabled}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    Show APRS text messages from the feed. Display only — replying to an internet
+                    message is not wired up.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">Receive-only iGate</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.aprsIsUplink}
+                      className={`toggle${form.aprsIsUplink ? ' on' : ''}`}
+                      onClick={() => updateBool('aprsIsUplink', !form.aprsIsUplink)}
+                      disabled={!form.aprsIsEnabled}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    Contribute packets <strong>your own antenna hears</strong> to APRS-IS, so
+                    stations in your area reach the global map through you. Publishes under{' '}
+                    {form.mycall ? <strong>{form.mycall.toUpperCase()}</strong> : 'your callsign'}, so
+                    it is a separate choice from watching the feed, and it needs the APRS decoder
+                    running to have anything to send. Nexus never sends the other way: gating the
+                    internet back onto the air means transmitting unattended.
+                  </span>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+          )}
+
           {/* ---- Frequencies (working-frequency table overrides) ---- */}
           {tab === 'frequencies' && (
           <fieldset className="settings-section">
@@ -5176,186 +5363,6 @@ export function SettingsPanel({
                   </span>
                 </div>
               </SettingsGroup>
-            </div>
-
-            {/* ---- APRS-IS: the internet side of APRS, and the receive-only iGate ---- */}
-            <div className="settings-featgroup">
-              <span className="settings-featgroup-title">APRS-IS (internet feed)</span>
-              <div className="settings-grid">
-                <div className="settings-field">
-                  <label className="settings-toggle">
-                    <span className="settings-label">APRS-IS feed</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={!!form.aprsIsEnabled}
-                      className={`toggle${form.aprsIsEnabled ? ' on' : ''}`}
-                      onClick={() => updateBool('aprsIsEnabled', !form.aprsIsEnabled)}
-                    >
-                      <span className="toggle-knob" />
-                    </button>
-                  </label>
-                  <span className="settings-hint">
-                    Plot stations the internet reports alongside the ones your own antenna hears —
-                    each one tagged so you can always tell which is which. Runs whether or not the
-                    APRS decoder is armed: it uses no radio and never transmits. If internet
-                    stations appear while your receiver stays silent, the fault is in the RF chain.
-                  </span>
-                </div>
-
-                <label className="settings-field">
-                  <span className="settings-label">Server</span>
-                  <input
-                    className="settings-input"
-                    value={form.aprsIsHost ?? ''}
-                    onChange={(e) => update('aprsIsHost', e.target.value)}
-                    placeholder="rotate.aprs2.net"
-                    spellCheck={false}
-                    disabled={!form.aprsIsEnabled}
-                  />
-                  <span className="settings-hint">
-                    Your regional Tier 2 rotate is best — noam / soam / euro / asia / aunz
-                    .aprs2.net. <code>rotate.aprs2.net</code> works anywhere.
-                  </span>
-                </label>
-
-                <label className="settings-field">
-                  <span className="settings-label">Port</span>
-                  <input
-                    className="settings-input"
-                    type="number"
-                    min={1}
-                    max={65535}
-                    value={form.aprsIsPort ?? 14580}
-                    onChange={(e) => updateNum('aprsIsPort', Number(e.target.value))}
-                    disabled={!form.aprsIsEnabled}
-                  />
-                  <span className="settings-hint">
-                    14580 is the filtered port clients and iGates should use. The full-feed ports
-                    would send you the entire planet.
-                  </span>
-                </label>
-
-                <label className="settings-field">
-                  <span className="settings-label">Radius (km)</span>
-                  <input
-                    className="settings-input"
-                    type="number"
-                    min={0}
-                    max={5000}
-                    value={form.aprsIsRadiusKm ?? 150}
-                    onChange={(e) => updateNum('aprsIsRadiusKm', Number(e.target.value))}
-                    disabled={!form.aprsIsEnabled}
-                  />
-                  <span className="settings-hint">
-                    How far around your grid square to subscribe. APRS is a local mode; 150 km is a
-                    generous 2 m-plus-digipeater horizon. 0 = no distance limit (busy).
-                  </span>
-                </label>
-
-                <label className="settings-field">
-                  <span className="settings-label">Watched calls</span>
-                  <input
-                    className="settings-input"
-                    value={(form.aprsIsWatchCalls ?? []).join(', ')}
-                    onChange={(e) =>
-                      setWatchCalls(
-                        e.target.value
-                          .split(',')
-                          .map((c) => c.trim().toUpperCase())
-                          .filter(Boolean),
-                      )
-                    }
-                    placeholder="W9XYZ-9, KD9ABC"
-                    spellCheck={false}
-                    disabled={!form.aprsIsEnabled}
-                  />
-                  <span className="settings-hint">
-                    Comma separated. These come through from anywhere on earth, however far outside
-                    your radius they are — the club tracker on a road trip, a friend chasing a summit.
-                  </span>
-                </label>
-
-                <div className="settings-field">
-                  <label className="settings-toggle">
-                    <span className="settings-label">Weather stations</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={form.aprsIsWeather !== false}
-                      className={`toggle${form.aprsIsWeather !== false ? ' on' : ''}`}
-                      onClick={() => updateBool('aprsIsWeather', form.aprsIsWeather === false)}
-                      disabled={!form.aprsIsEnabled}
-                    >
-                      <span className="toggle-knob" />
-                    </button>
-                  </label>
-                  <span className="settings-hint">Include weather reports in the feed.</span>
-                </div>
-
-                <div className="settings-field">
-                  <label className="settings-toggle">
-                    <span className="settings-label">Objects &amp; items</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={form.aprsIsObjects !== false}
-                      className={`toggle${form.aprsIsObjects !== false ? ' on' : ''}`}
-                      onClick={() => updateBool('aprsIsObjects', form.aprsIsObjects === false)}
-                      disabled={!form.aprsIsEnabled}
-                    >
-                      <span className="toggle-knob" />
-                    </button>
-                  </label>
-                  <span className="settings-hint">
-                    Repeaters, NWS alerts and event markers other stations have placed on the map.
-                  </span>
-                </div>
-
-                <div className="settings-field">
-                  <label className="settings-toggle">
-                    <span className="settings-label">Messages</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={form.aprsIsMessages !== false}
-                      className={`toggle${form.aprsIsMessages !== false ? ' on' : ''}`}
-                      onClick={() => updateBool('aprsIsMessages', form.aprsIsMessages === false)}
-                      disabled={!form.aprsIsEnabled}
-                    >
-                      <span className="toggle-knob" />
-                    </button>
-                  </label>
-                  <span className="settings-hint">
-                    Show APRS text messages from the feed. Display only — replying to an internet
-                    message is not wired up.
-                  </span>
-                </div>
-
-                <div className="settings-field">
-                  <label className="settings-toggle">
-                    <span className="settings-label">Receive-only iGate</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={!!form.aprsIsUplink}
-                      className={`toggle${form.aprsIsUplink ? ' on' : ''}`}
-                      onClick={() => updateBool('aprsIsUplink', !form.aprsIsUplink)}
-                      disabled={!form.aprsIsEnabled}
-                    >
-                      <span className="toggle-knob" />
-                    </button>
-                  </label>
-                  <span className="settings-hint">
-                    Contribute packets <strong>your own antenna hears</strong> to APRS-IS, so
-                    stations in your area reach the global map through you. Publishes under{' '}
-                    {form.mycall ? <strong>{form.mycall.toUpperCase()}</strong> : 'your callsign'}, so
-                    it is a separate choice from watching the feed, and it needs the APRS decoder
-                    running to have anything to send. Nexus never sends the other way: gating the
-                    internet back onto the air means transmitting unattended.
-                  </span>
-                </div>
-              </div>
             </div>
           </fieldset>
           )}
