@@ -17020,6 +17020,47 @@ html[data-panel='needed'] {
   font-weight: 500;
 }
 
+/* The station's APRS symbol in the list, drawn from the same path data the map canvas uses.
+   `currentColor` on the path means the glyph inherits the row's text colour, so it needs no
+   per-theme rule of its own and stays legible wherever the row is legible. */
+.aprs-sym-cell {
+  width: 1.75rem;
+  padding-right: 0;
+}
+.aprs-sym {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  cursor: help;
+}
+tr.sel .aprs-sym {
+  color: var(--text);
+}
+/* An unrecognised symbol still draws — the generic "not" glyph — but recedes, because it carries
+   no information about the station beyond "this code is not one we know". */
+.aprs-sym-unknown {
+  color: var(--text-faint);
+}
+/* The overlay character an operator puts on an alternate-table symbol (a gateway's `I`, a
+   digipeater's hop count). Sits on a plate so it reads against the glyph underneath. */
+.aprs-sym-overlay {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  min-width: 11px;
+  height: 11px;
+  padding: 0 1px;
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+}
+
 /* Operate cockpit: live FT8/FT4 decode-depth chips (Fast/Norm/Deep) in the header actions. */
 .cockpit-decode-depth {
   display: inline-flex;

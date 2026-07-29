@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### APRS stations look like what they are
+
+Every station on the APRS map was the same grey dot. The packets were carrying the answer the whole
+time — APRS stations pick their own icon, and Nexus was throwing it away.
+
+Stations now draw as their **actual APRS symbol**, on the map and in the station list: cars, trucks,
+bicycles and people, weather stations, digipeaters and iGates, campsites, balloons, boats and
+aircraft. Vehicles under way point the way they are heading. Where an operator has put an **overlay
+character** on their symbol — the `I` on a full iGate, the `R` on a receive-only one, the hop count
+on a digipeater — it shows on top of the icon, because that character is often the most useful thing
+about the station.
+
+- **You can still tell what your own antenna heard.** That used to be the solid-versus-hollow dot.
+  The shape now says what a station IS, so the ring around it says how it reached you: solid for RF,
+  doubled when you heard it both ways, dashed and dimmed for internet-only. Solid still means yours.
+- **Zoomed out, it stays calm.** Below a local scale the map goes back to plain dots — a continent
+  covered in icons answers a question nobody asked.
+- A symbol Nexus does not recognise draws the standard "unknown" glyph. Never a blank.
+
+The icons are drawn in Nexus rather than borrowed, so there is nothing extra to install.
+
 ### APRS tells you when the radio is simply on the wrong frequency
 
 The clearest report from testing: FT8 was decoding beautifully on 2 m at the very moment the APRS

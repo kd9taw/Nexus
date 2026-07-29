@@ -441,6 +441,103 @@ mod tests {
         }
     }
 
+    // ---- Symbols. The map draws these, so a symbol silently lost between the wire and the DTO
+    // is a station wearing the wrong icon — which looks exactly as confident as the right one.
+
+    #[test]
+    fn an_uncompressed_position_keeps_its_symbol_table_and_code() {
+        match AprsPacket::from_tnc2(
+            b"K7PIA-1>APDW14,WIDE2-2,qAR,VCAPK:!4710.42N112207.66W#PHG7160Buckley digi",
+        )
+        .unwrap()
+        .body
+        {
+            AprsBody::Info(AprsInfo::Position(p)) => {
+                assert_eq!(p.symbol_table, '1', "an OVERLAY, not the primary table");
+                assert_eq!(p.symbol_code, '#', "digipeater");
+            }
+            other => panic!("expected a position, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_overlay_character_survives_as_the_table_identifier() {
+        // Real captured overlaid stations: an iGate marked `G`, and the `R&` receive-only-gateway
+        // convention. The overlay rides in the TABLE slot, so a parser that normalised it to '\\'
+        // would erase the operator's own annotation.
+        for (line, table, code) in [
+            (
+                &b"YO2CK-10>APMI06,TCPIP*,qAC,FIFTH:@191803z4536.63NG02257.00E#PHG3430/iGate"[..],
+                'G',
+                '#',
+            ),
+            (b"XE2N-10>APDW16,qAR,XE2N-10:!2537.90NR10014.20W&", 'R', '&'),
+            (
+                b"S59DGO-5>APMI01,IR3UEZ-11,WIDE1*,qAR,IR4BA:@191802z4535.30NT01426.84E&PHG2830",
+                'T',
+                '&',
+            ),
+        ] {
+            match AprsPacket::from_tnc2(line).unwrap().body {
+                AprsBody::Info(AprsInfo::Position(p)) => {
+                    assert_eq!(p.symbol_table, table, "{}", String::from_utf8_lossy(line));
+                    assert_eq!(p.symbol_code, code, "{}", String::from_utf8_lossy(line));
+                }
+                other => panic!("expected a position, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_compressed_position_keeps_its_symbol_too() {
+        // Compressed layout: table, 4-byte lat, 4-byte lon, THEN the code. Off-by-one here quietly
+        // hands the renderer a character out of the base-91 coordinate.
+        match AprsPacket::from_tnc2(
+            b"SP2ST-4>APLS01,WIDE1-1,qAR,SP2ST-10:!\\3YK%S##VUY2HLoRa APRS 433.775MHz",
+        )
+        .unwrap()
+        .body
+        {
+            AprsBody::Info(AprsInfo::Position(p)) => {
+                assert_eq!(p.symbol_table, '\\');
+                assert_eq!(p.symbol_code, 'U');
+            }
+            other => panic!("expected a compressed position, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mic_e_reads_its_symbol_from_the_end_of_the_info_field() {
+        // Mic-E puts the CODE before the TABLE — the reverse of every other format. The FAP
+        // vector for this line decodes to a car on the primary table.
+        match AprsPacket::from_tnc2(b"OH7LZB-2>TQ4W2V,WIDE2-1,qAo,OH7LZB:`c51!f?>/]\"3x}=")
+            .unwrap()
+            .body
+        {
+            AprsBody::MicE(m) => {
+                assert_eq!(m.symbol_code, '>', "car");
+                assert_eq!(m.symbol_table, '/', "primary table");
+            }
+            other => panic!("expected Mic-E, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_object_carries_the_symbol_of_the_thing_it_marks() {
+        match AprsPacket::from_tnc2(
+            b"WX9WL-15>APN382,qAO,KB9MTD-2:;146.970LE*111111z4152.36N/08932.16WrT082 R45M",
+        )
+        .unwrap()
+        .body
+        {
+            AprsBody::Info(AprsInfo::Object { position, .. }) => {
+                assert_eq!(position.symbol_table, '/');
+                assert_eq!(position.symbol_code, 'r', "repeater");
+            }
+            other => panic!("expected an object, got {other:?}"),
+        }
+    }
+
     #[test]
     fn tnc2_unwraps_nested_third_party_to_the_innermost_originator() {
         // aprsc's own 13thirdparty.t acceptance case: three levels of `}` wrapping.
