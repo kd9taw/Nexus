@@ -122,6 +122,27 @@ weather stations, digipeaters and gateways, and hand-placed objects. Colour says
 antenna heard it, so the two never compete. The palette varies brightness as well as hue so the
 families stay apart for colourblind operators, and it has a separate version for the light theme.
 
+### CW keying now works with rigs that refuse 1200 baud on their keying port
+
+A tester with a new Yaesu FTX-1 could not key CW through the rig's built-in Standard COM port.
+Nexus reported that it could not open the port; Windows, asked directly, said "a device attached to
+the system is not functioning." The port was fine. Nexus was asking for it at 1200 baud, and the
+FTX-1's firmware refuses that one rate while accepting every other.
+
+A keying port sends no data at all — Nexus only flips a control line up and down, and the rig shapes
+the CW — so the baud rate never meant anything on the air. It was a number we had to name to open
+the port, and 1200 was an arbitrary choice that eventually met a radio that says no. Nexus now asks
+for 9600, and if a port refuses that it works down through 19200, 4800, 2400 and 1200 until one is
+accepted, then keys normally. Nothing to set, and nothing to notice: existing keying interfaces
+behave exactly as before.
+
+The same fix covers the other two places a control line is used this way — **true-FSK RTTY keying**
+and **serial PTT** — because the same port on the same radio would have refused those too.
+
+When a keying port genuinely cannot be opened, the message now quotes what the system actually said
+and which rates were tried, instead of guessing at causes. The tester above had to diagnose this in
+PowerShell because our error message withheld the one useful sentence.
+
 ### APRS decode readout stops mixing up "now" with "a while ago"
 
 The new input-level reading immediately caught a sentence that contradicted itself: *"2 packets

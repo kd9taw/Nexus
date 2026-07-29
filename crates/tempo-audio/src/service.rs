@@ -3173,25 +3173,32 @@ impl RadioLoop {
                             .as_ref()
                             .map(|(p, l, _)| p != port || l != line)
                             .unwrap_or(true);
+                        let mut open_err = None;
                         if reopen {
-                            self.serial_keyer = crate::serial_keyer::SerialKeyer::open(
+                            match crate::serial_keyer::SerialKeyer::open(
                                 port,
                                 crate::serial_keyer::KeyLine::parse(line),
-                            )
-                            .ok()
-                            .map(|sk| (port.clone(), line.clone(), sk));
+                            ) {
+                                Ok(sk) => {
+                                    self.serial_keyer = Some((port.clone(), line.clone(), sk))
+                                }
+                                // Report what the SYSTEM said, verbatim. Guessing at causes
+                                // while hiding the OS error is what sent the FTX-1 reporter
+                                // to PowerShell to diagnose a refused baud rate by hand.
+                                Err(e) => {
+                                    self.serial_keyer = None;
+                                    open_err = Some(format!(
+                                        "Serial keyline: {e}. If the port name is right, check \
+                                         that nothing else (CAT, another app) has it open."
+                                    ));
+                                }
+                            }
                         }
-                        let open_err = self.serial_keyer.is_none();
                         if let Some((_, _, sk)) = self.serial_keyer.as_ref() {
                             sk.send(&text, wpm);
                         }
                         if let Ok(mut eng) = engine.lock() {
-                            eng.set_cw_keyer_error(open_err.then(|| {
-                                format!(
-                                    "Serial keyline: couldn't open {port}. Check the port name \
-                                     and that nothing else (CAT, another app) has it open."
-                                )
-                            }));
+                            eng.set_cw_keyer_error(open_err);
                         }
                         handled = true; // the Serial backend owns this word (sent or errored)
                     }
@@ -3333,13 +3340,25 @@ impl RadioLoop {
                             .as_ref()
                             .map(|(p, l, _)| p != port || l != line)
                             .unwrap_or(true);
+                        let mut open_err_msg = None;
                         if reopen {
-                            self.rtty_keyer = crate::rtty_fsk::FskKeyer::open(
+                            match crate::rtty_fsk::FskKeyer::open(
                                 port,
                                 crate::rtty_fsk::KeyLine::parse(line),
-                            )
-                            .ok()
-                            .map(|k| (port.clone(), line.clone(), k));
+                            ) {
+                                Ok(k) => self.rtty_keyer = Some((port.clone(), line.clone(), k)),
+                                // Same honesty rule as the CW keyline: the OS error IS the
+                                // diagnosis (a refused baud rate reads nothing like a busy
+                                // port), so pass it through instead of guessing.
+                                Err(e) => {
+                                    self.rtty_keyer = None;
+                                    open_err_msg = Some(format!(
+                                        "FSK keyline: {e}. If the port name is right, check that \
+                                         nothing else (CAT, another app) has it open — or use \
+                                         the AFSK backend."
+                                    ));
+                                }
+                            }
                         }
                         let open_err = self.rtty_keyer.is_none();
                         let mut ptt_err = false;
@@ -3366,11 +3385,7 @@ impl RadioLoop {
                         if let Ok(mut eng) = engine.lock() {
                             eng.set_rtty_sending(!open_err);
                             eng.set_rtty_keyer_error(if open_err {
-                                Some(format!(
-                                    "FSK keyline: couldn't open {port}. Check the port name and \
-                                     that nothing else (CAT, another app) has it open — or use \
-                                     the AFSK backend."
-                                ))
+                                open_err_msg
                             } else if ptt_err {
                                 Some(
                                     "FSK keyer: the rig didn't accept PTT. Check your PTT \

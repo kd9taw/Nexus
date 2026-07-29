@@ -552,11 +552,10 @@ impl Rig {
             _ => return Ok(()),
         };
         if self.serial.is_none() {
-            // 1200 baud is arbitrary — we only toggle control lines, not data.
-            let opened = serialport::new(&port, 1200)
-                .timeout(Duration::from_millis(200))
-                .open()?;
-            self.serial = Some(opened);
+            // We only toggle control lines, never data, so the rate is meaningless —
+            // but some rigs refuse a given rate at open, so let `control_line` find one
+            // that works instead of hardcoding a rate the port may reject.
+            self.serial = Some(crate::control_line::open_control_line_port(&port)?);
         }
         let sp = self.serial.as_mut().unwrap();
         match line {
