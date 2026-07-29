@@ -211,3 +211,78 @@ describe('per-alert band scopes (dialMhz gate)', () => {
     expect(toasts).not.toHaveBeenCalled()
   })
 })
+
+// ── Repeat-alert regression (operator, 0.20.x): "someone turned ATNO on and they
+// were on the band with them and it alerted over and over ... on each cycle."
+describe('alerts do not repeat every cycle', () => {
+  it('the same station sending the same message does not re-alert when its measured frequency drifts', () => {
+    // THE BUG: the alert dedup key was `from|message|round(freqHz)`. A station's
+    // measured audio offset drifts a few Hz between transmissions, so rounded to
+    // 1 Hz it minted a NEW key nearly every cycle and alerted again. Frequency is a
+    // measurement, not identity.
+    const cq = { alertMyCall: true, alertNew: true, alertCq: true } as unknown as Settings
+    for (const hz of [1500.2, 1502.9, 1498.4, 1501.1, 1499.7]) {
+      processDecodes(
+        [
+          {
+            from: 'K1ABC',
+            message: 'CQ K1ABC FN42',
+            freqHz: hz,
+            directedToMe: false,
+            newDxcc: false,
+            newGrid: false,
+            isCq: true,
+          } as unknown as DecodeRow,
+        ],
+        cq,
+      )
+    }
+    expect(toasts).toHaveBeenCalledTimes(1)
+  })
+
+  it('a new DXCC alerts ONCE even when heavy CQ traffic floods the dedup store', () => {
+    // THE OTHER HALF, and the one the operator actually hit. Both kinds shared one
+    // 2000-entry set with FIFO eviction. Every CQ decode minted a unique key, so a
+    // busy band blew the cap in a minute or two and evicted the OLDEST entries —
+    // including the `dxcc:` entry written when the new one was first heard. The ATNO
+    // then re-alerted the next time that station decoded, and kept doing so.
+    const both = { alertMyCall: true, alertNew: true, alertCq: true } as unknown as Settings
+    const atno = () =>
+      ({
+        from: 'FT5ZM',
+        message: 'CQ FT5ZM',
+        freqHz: 1200,
+        country: 'Amsterdam & St Paul Is.',
+        directedToMe: false,
+        newDxcc: true,
+        newGrid: false,
+        isCq: true,
+      }) as unknown as DecodeRow
+
+    processDecodes([atno()], both)
+    expect(toasts).toHaveBeenCalledTimes(1)
+
+    // Flood well past the old 2000 cap with ordinary CQ traffic.
+    for (let i = 0; i < 3000; i++) {
+      processDecodes(
+        [
+          {
+            from: `N${i}AA`,
+            message: `CQ N${i}AA`,
+            freqHz: 1000 + (i % 900),
+            directedToMe: false,
+            newDxcc: false,
+            newGrid: false,
+            isCq: true,
+          } as unknown as DecodeRow,
+        ],
+        both,
+      )
+    }
+    toasts.mockClear()
+
+    // The new one decodes again. It must stay silent — it is not a new one twice.
+    processDecodes([atno()], both)
+    expect(toasts).not.toHaveBeenCalled()
+  })
+})

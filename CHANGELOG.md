@@ -18,6 +18,22 @@ frequency while an image is arriving. So the mistuning is now stated outright: a
 readout beside the line count, whenever it drifts past 10 Hz. The decoder already worked this out
 from the header and had simply never shown it to you.
 
+### Fixed: alerts repeating on every cycle
+
+A new-DXCC alert would fire again and again for the same station, once per transmission, instead
+of once when it appeared. Plain CQ alerts did the same.
+
+Two causes, and they compounded. An alert was identified partly by the station's measured audio
+frequency — which drifts a few hertz between transmissions — so the same station saying the same
+thing looked like a brand new event each time. And because every one of those counted as a
+separate remembered alert, a busy band filled the "already alerted" memory in a minute or two; the
+oldest entries were then discarded first, which included the record saying the new one had already
+been announced. So it announced it again.
+
+Alerts are now identified by who transmitted and what they said. The things that should only ever
+alert once — a new entity, a new grid, a watch-list hit — are remembered separately from the ones
+that legitimately repeat, so no amount of band traffic can push them out.
+
 ### Fixed: the APRS map grew without bound
 
 The map crept steadily downward and never stopped, eventually pushing itself off screen and
