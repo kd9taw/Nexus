@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The internet feed switches off from the APRS screen
+
+Turning the feed off meant a trip to Settings. The internet status chip on the APRS board is now
+also its control: click it for the feed switch, the range radius, and your watched callsigns. The
+radius is there because the chip's own advice when the feed goes quiet is "widen the radius" — the
+control belongs where the advice is.
+
+Server, port, which kinds of traffic to subscribe to, how long stations are remembered, and the
+receive-only iGate stay in **Settings ▸ Modes ▸ APRS**. Those are set once. The iGate especially:
+contributing to a global network under your callsign should be a considered decision, not something
+a stray click on a cockpit can start.
+
+Both places edit the same settings, so they can never disagree about whether the feed is on.
+
 ### Fixed: APRS map icons flashed on and off
 
 With the internet feed running, stations blinked in and out constantly. Two separate faults, both

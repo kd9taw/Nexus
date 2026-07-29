@@ -4817,7 +4817,7 @@ select optgroup {
 .heartbeat-btn {
   margin-top: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-2);
@@ -16263,7 +16263,7 @@ html[data-panel='needed'] {
   padding: var(--space-4);
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 .mv-packs-head {
@@ -17011,6 +17011,74 @@ html[data-panel='needed'] {
   color: var(--text-dim);
   cursor: help;
 }
+/* The chip is a button now — it opens the feed controls. Reset the button chrome so it still reads
+   as a status chip rather than growing a border and a background. */
+.aprs-inet-wrap {
+  position: relative;
+  display: inline-flex;
+}
+button.aprs-inet {
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+button.aprs-inet:hover,
+button.aprs-inet.open {
+  border-color: var(--border);
+  background: var(--bg-elev);
+}
+/* Anchored under the chip, NOT modal: this is a small cluster of controls, not a task that should
+   take the screen. Escape and click-outside dismiss it. */
+.aprs-inet-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  width: 17rem;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.aprs-inet-detail {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.aprs-inet-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+.aprs-inet-row .settings-input {
+  width: 7rem;
+}
+.aprs-inet-row-wide {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.aprs-inet-row-wide .settings-input {
+  width: 100%;
+}
+.aprs-inet-note {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .aprs-inet-off {
   color: var(--text-faint);
 }
@@ -17348,7 +17416,7 @@ tr.sel .aprs-sym {
   max-width: min(90vw, 40rem);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border, #2a3340);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   background: var(--bg-panel, #12161d);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
   font-size: var(--fs-body);

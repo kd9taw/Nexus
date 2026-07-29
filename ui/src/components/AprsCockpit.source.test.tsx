@@ -133,7 +133,11 @@ describe('the show-internet toggle', () => {
     await mount([stn('W9RF-1', 'rf'), stn('W9NET-2', 'inet'), stn('W9BOTH-3', 'both')])
     expect(mapCalls()).toContain('W9NET-2')
 
-    const toggle = screen.getByRole('button', { name: /internet/i })
+    // The status chip is also a button now, so match the show/hide toggle specifically: it is the
+    // one that reports a pressed state.
+    const toggle = screen
+      .getAllByRole('button', { name: /internet/i })
+      .find((b) => b.hasAttribute('aria-pressed'))!
     fireEvent.click(toggle)
 
     // Gone from the list...
@@ -153,7 +157,11 @@ describe('the show-internet toggle', () => {
 
   it('does not appear at all when nothing came from the internet', async () => {
     await mount([stn('W9RF-1', 'rf')])
-    expect(screen.queryByRole('button', { name: /internet/i })).toBeNull()
+    // The status chip remains (it is how the feed is switched on); the show/hide TOGGLE does not.
+    const pressable = screen
+      .getAllByRole('button', { name: /internet/i })
+      .filter((b) => b.hasAttribute('aria-pressed'))
+    expect(pressable).toHaveLength(0)
   })
 })
 
@@ -184,9 +192,14 @@ describe('station symbols in the list', () => {
 })
 
 describe('the APRS-IS status chip', () => {
-  it('stays hidden while the feed is switched off', async () => {
+  it('stays visible when the feed is off, because it is how the feed gets turned ON', async () => {
+    // It began as a pure status readout that hid itself when the feed was off. It is now also the
+    // control, so hiding it would strand an operator with no way to switch the feed on from the
+    // board — which was the whole request.
     await mount([])
-    expect(document.querySelector('.aprs-inet')).toBeNull()
+    const chip = document.querySelector('.aprs-inet')
+    expect(chip).toBeTruthy()
+    expect(chip?.textContent).toMatch(/internet off/i)
   })
 
   it('shows beside the RF decode chip once the feed is on, without replacing it', async () => {

@@ -12,6 +12,7 @@ import {
   getAprsHealth,
   getAprsIsStatus,
   getAprsStations,
+  setSettings,
   getSettings,
   type AprsHealth,
   type AprsHeard,
@@ -19,6 +20,7 @@ import {
   type AprsSource,
   type AprsStationsView,
 } from '../api'
+import type { Settings } from '../types'
 import { ageFade, CATEGORY_VAR, GLYPH_PATHS, resolveSymbol, symbolCategory } from '../aprsSymbols'
 import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
 
@@ -435,6 +437,12 @@ export function AprsCockpit({
   // The STATION roster — what the list and map draw. The packet log above still feeds the packet
   // pane and the message list, which are about events rather than stations.
   const [roster, setRoster] = useState<AprsStationsView>(EMPTY_ROSTER)
+  // The operator's settings, held whole so a board write can ride along without clobbering the
+  // ~170 fields it does not touch. THE SAME state the Settings panel edits — see `writeAprsIs`.
+  const [settings, setSettingsState] = useState<Settings | null>(null)
+  const [inetOpen, setInetOpen] = useState(false)
+  const [savingInet, setSavingInet] = useState(false)
+  const inetPanelRef = useRef<HTMLDivElement | null>(null)
   const [health, setHealth] = useState<AprsHealth | null>(null)
   const [isStatus, setIsStatus] = useState<AprsIsStatus | null>(null)
   // Show stations the internet reported. On by default when the feed is running (there is no
@@ -501,6 +509,7 @@ export function AprsCockpit({
     prefilled.current = true
     void getSettings()
       .then((s) => {
+        setSettingsState(s)
         const ll = gridToLatLon(s.mygrid || '')
         if (ll) {
           setLat(ll.lat.toFixed(4))
@@ -540,6 +549,57 @@ export function AprsCockpit({
 
   // The chip judges against the rig's ACTUAL dial/mode and the APRS channel the operator has
   // selected — so it can say "you are on the FT8 frequency" instead of guessing from audio.
+  /**
+   * Write an APRS-IS setting from the board.
+   *
+   * ⭐ ONE SOURCE OF TRUTH. The board keeps no copy of anything — it writes the same `Settings`
+   * fields the Settings panel reads and writes, through the same `set_settings` command, so the two
+   * surfaces cannot disagree. Sends the WHOLE settings object with the change merged in:
+   * `set_settings` replaces the struct wholesale, so posting a partial would blank every one of the
+   * ~170 fields the board does not know about.
+   *
+   * The backend reconnects the feed only when the server, filter or callsign actually changed.
+   */
+  const writeAprsIs = (patch: Partial<Settings>) => {
+    if (!settings) return
+    const next = { ...settings, ...patch }
+    setSettingsState(next) // optimistic, so the control does not lag a round-trip
+    setSavingInet(true)
+    void setSettings(next)
+      .then(() => getSettings())
+      .then((fresh) => {
+        // Re-read rather than trust the optimistic copy: the engine merges live radio state into
+        // what it persists, so its version is authoritative.
+        setSettingsState(fresh)
+        setStatus(null)
+      })
+      .catch((e) => setStatus(String(e)))
+      .finally(() => setSavingInet(false))
+  }
+
+  // Escape closes the internet panel and a click outside dismisses it — the app's dialog idiom.
+  useEffect(() => {
+    if (!inetOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setInetOpen(false)
+      }
+    }
+    const onDown = (e: MouseEvent) => {
+      if (!inetPanelRef.current?.contains(e.target as Node)) setInetOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    // Deferred a tick so the click that OPENED the panel does not immediately close it.
+    const id = window.setTimeout(() => document.addEventListener('mousedown', onDown), 0)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDown)
+      window.clearTimeout(id)
+    }
+  }, [inetOpen])
+
+
   const decode = useMemo(
     () => aprsDecodeStatus(health, now, radio ?? null, freq),
     [health, now, radio, freq],
@@ -776,15 +836,84 @@ export function AprsCockpit({
         {/* The OTHER inlet's health. Deliberately a second chip, not a merged one: the RF chain
             and the internet feed fail independently, and seeing a green internet chip beside a
             silent RF chip is the whole diagnostic — it proves the fault is in the radio path. */}
-        {isStatus?.enabled && (
-          <span
-            className={`aprs-inet aprs-inet-${inetState}`}
-            role="status"
-            title={inetDetail}
+        {/* ⭐ The internet chip is also the internet CONTROL. The chip's own guidance says "widen
+            the radius or add watched calls" when the feed is quiet, so the controls that act on
+            that advice have to be reachable from where the advice is given — one click, not a trip
+            to Settings. Grouped in a panel rather than inline because this cockpit already carries
+            a frequency picker, Re-tune, TX, Monitor, a decode chip and this one; three more inline
+            controls would be clutter. */}
+        <div className="aprs-inet-wrap" ref={inetPanelRef}>
+          <button
+            type="button"
+            className={`aprs-inet aprs-inet-${inetState}${inetOpen ? ' open' : ''}`}
+            aria-expanded={inetOpen}
+            aria-haspopup="dialog"
+            onClick={() => setInetOpen(!inetOpen)}
+            title={`${inetDetail}\n\nClick for internet feed controls.`}
           >
-            {inetLabel}
-          </span>
-        )}
+            {isStatus?.enabled ? inetLabel : 'Internet off'}
+          </button>
+          {inetOpen && (
+            <div className="aprs-inet-panel" role="dialog" aria-label="APRS-IS internet feed">
+              <p className="aprs-inet-detail">{inetDetail}</p>
+
+              <label className="aprs-inet-row">
+                <span>Internet feed</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!!settings?.aprsIsEnabled}
+                  className={`toggle${settings?.aprsIsEnabled ? ' on' : ''}`}
+                  disabled={!settings || savingInet}
+                  onClick={() => writeAprsIs({ aprsIsEnabled: !settings?.aprsIsEnabled })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+
+              <label className="aprs-inet-row">
+                <span>Radius (km)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={5000}
+                  className="settings-input"
+                  value={settings?.aprsIsRadiusKm ?? 150}
+                  disabled={!settings || savingInet}
+                  onChange={(e) => writeAprsIs({ aprsIsRadiusKm: Number(e.target.value) })}
+                />
+              </label>
+
+              <label className="aprs-inet-row aprs-inet-row-wide">
+                <span>Watched calls</span>
+                <input
+                  type="text"
+                  className="settings-input"
+                  placeholder="W9XYZ-9, KD9ABC"
+                  spellCheck={false}
+                  defaultValue={(settings?.aprsIsWatchCalls ?? []).join(', ')}
+                  disabled={!settings || savingInet}
+                  // On blur, not per keystroke: each write reconnects the feed, so committing
+                  // mid-callsign would drop the session on every character typed.
+                  onBlur={(e) =>
+                    writeAprsIs({
+                      aprsIsWatchCalls: e.target.value
+                        .split(',')
+                        .map((c) => c.trim().toUpperCase())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+              </label>
+
+              <p className="aprs-inet-note">
+                Changing the radius or watched calls reconnects the feed — the server does the
+                filtering, so a new subscription has to be sent. Server, port, traffic types and the
+                iGate live in Settings ▸ Modes ▸ APRS.
+              </p>
+            </div>
+          )}
+        </div>
         {/* Hide everything our own antenna has not heard. The count is named so the effect of
             the click is never a surprise. */}
         {inetOnly > 0 && (
