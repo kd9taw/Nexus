@@ -12,7 +12,7 @@
 //! serialize behind [`tempo_fast_sys::MODEM_LOCK`], the one lock shared across every
 //! mode that links `libtempo`.
 
-use tempo_fast_sys::MODEM_LOCK;
+use tempo_fast_sys::modem_lock;
 
 pub use tempo_fast_sys::{FT8_NMAX as NMAX, FT8_NN as NN, FT8_NZ as NZ};
 
@@ -49,7 +49,7 @@ pub fn encode(msg: &str) -> Vec<i32> {
     let bytes = msg.as_bytes();
     let mut itone = vec![0i32; NN];
     let mut nsym: i32 = 0;
-    let _guard = MODEM_LOCK.lock().unwrap();
+    let _guard = modem_lock();
     unsafe {
         tempo_fast_sys::ft8_encode(
             bytes.as_ptr() as *const _,
@@ -73,7 +73,7 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
     let cap = itone.len() * (NZ / NN); // NSPS per symbol = 1920
     let mut wave = vec![0f32; cap];
     let mut nwave: i32 = cap as i32;
-    let _guard = MODEM_LOCK.lock().unwrap();
+    let _guard = modem_lock();
     unsafe {
         tempo_fast_sys::ft8_gen_wave(
             itone.as_ptr(),
@@ -185,7 +185,7 @@ pub fn decode_frame_a7(
     let mut out = vec![tempo_fast_sys::Ft8DecodeT::default(); MAX_DECODES];
 
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::ft8_decode_frame(
                 iwave.as_ptr(),
@@ -224,7 +224,7 @@ pub fn decode_frame_a7(
 /// tracker). Call on band change / QSO change so a new band's audio is not
 /// probed with stale prior-cycle hypotheses. Mirrors `tempo_fast::harq_reset`.
 pub fn a7_reset() {
-    let _guard = MODEM_LOCK.lock().unwrap();
+    let _guard = modem_lock();
     unsafe {
         tempo_fast_sys::ft8_a7_reset();
     }

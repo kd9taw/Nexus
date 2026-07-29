@@ -127,7 +127,7 @@ pub fn run_slot(
     };
 
     // 2. Transmit decision for the NEW slot (now informed by the decode above).
-    slot_tx_phase(eng, rig, backend, rx, slot, now_ms, did_rx, rx_frame)
+    slot_tx_phase(eng, rig, backend, rx, slot, now_ms, did_rx, rx_frame, None)
 }
 
 /// Whether this boundary should decode the just-ended slot's RX audio: only when
@@ -154,8 +154,20 @@ pub fn slot_tx_phase(
     now_ms: f64,
     did_rx: bool,
     rx_frame: Option<Vec<f32>>,
+    // A waveform already built by the caller, or `None` to build it here.
+    //
+    // Building takes `MODEM_LOCK`, which a running decode holds for the length of
+    // that decode. Doing it here means doing it with the ENGINE mutex held, which
+    // is what froze the UI: every Tauri snapshot and command queued behind a
+    // decode. The radio loop therefore plans, RELEASES the engine, builds, and
+    // hands the result in through this argument. Timing on the air is unchanged —
+    // the same wait happens in the same place, just without the engine held.
+    prebuilt: Option<Vec<Vec<f32>>>,
 ) -> SlotAction {
-    let waves = eng.poll_tx(slot);
+    let waves = match prebuilt {
+        Some(w) => w,
+        None => eng.poll_tx(slot),
+    };
     if !waves.is_empty() {
         // Split Operation: move the TX dial (if the engine reduced the audio)
         // BEFORE the carrier keys.
@@ -222,13 +234,13 @@ mod tests {
                 _ => (false, None),
             };
             // Phase 2b: the TX decision — now informed by the decode above.
-            let act = slot_tx_phase(eng, rig, backend, rx, slot, now_ms, true, rx_frame);
+            let act = slot_tx_phase(eng, rig, backend, rx, slot, now_ms, true, rx_frame, None);
             (act, folded)
         } else {
             if prev_was_tx || currently_tx {
                 rx.clear();
             }
-            let act = slot_tx_phase(eng, rig, backend, rx, slot, now_ms, false, None);
+            let act = slot_tx_phase(eng, rig, backend, rx, slot, now_ms, false, None, None);
             (act, false)
         }
     }
@@ -259,6 +271,7 @@ mod tests {
             0,
             1000.0,
             false,
+            None,
             None,
         );
 

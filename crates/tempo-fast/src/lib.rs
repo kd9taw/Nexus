@@ -32,7 +32,7 @@ pub const SAMPLE_RATE: f32 = 12_000.0;
 // Serializes all access to the non-thread-safe Fortran modem. Shared across ALL
 // modes (FT1/FT8/FT4/DX1) that link the single libtempo — defined in ft1-sys so
 // ft1/ft8/ft4 contend on one lock (see tempo_fast_sys::MODEM_LOCK).
-use tempo_fast_sys::MODEM_LOCK;
+use tempo_fast_sys::modem_lock;
 
 /// Result of a decode attempt.
 #[derive(Debug, Clone)]
@@ -60,7 +60,7 @@ pub fn encode(msg: &str) -> Vec<i32> {
     let bytes = msg.as_bytes();
     let mut itone = vec![0i32; NN];
     let mut nsym: i32 = 0;
-    let _guard = MODEM_LOCK.lock().unwrap();
+    let _guard = modem_lock();
     unsafe {
         tempo_fast_sys::ft1_encode(
             bytes.as_ptr() as *const _,
@@ -84,7 +84,7 @@ pub fn encode_rv(msg: &str, rv: i32) -> Vec<i32> {
     let bytes = msg.as_bytes();
     let mut itone = vec![0i32; NN];
     let mut nsym: i32 = 0;
-    let _guard = MODEM_LOCK.lock().unwrap();
+    let _guard = modem_lock();
     unsafe {
         tempo_fast_sys::ft1_encode_rv(
             bytes.as_ptr() as *const _,
@@ -106,7 +106,7 @@ pub fn encode_rv(msg: &str, rv: i32) -> Vec<i32> {
 pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
     let mut wave = vec![0f32; NMAX];
     let mut nwave: i32 = NMAX as i32;
-    let _guard = MODEM_LOCK.lock().unwrap();
+    let _guard = modem_lock();
     unsafe {
         tempo_fast_sys::ft1_gen_wave(
             itone.as_ptr(),
@@ -142,7 +142,7 @@ pub fn decode_rt(wave: &[f32], f0: f32, snr_est: f32) -> Decoded {
     let mut ntype: i32 = -1;
     let mut nharderror: i32 = -1;
     {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::ft1_decode_rt(
                 wave.as_ptr(),
@@ -176,7 +176,7 @@ pub fn unpack77(bits77: &[i8]) -> Option<String> {
     let mut buf = [0i8; 64];
     let mut success: i32 = 0;
     {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::ft1_unpack(
                 bits77.as_ptr(),
@@ -277,7 +277,7 @@ pub fn decode_frame(
     let mut out = vec![tempo_fast_sys::Ft1DecodeT::default(); MAX_DECODES];
 
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::ft1_decode_frame(
                 iwave.as_ptr(),
@@ -317,7 +317,7 @@ pub fn decode_frame(
 /// does not joint-combine with stale RV frames from a previous one. Buffers
 /// otherwise persist across [`decode_frame`] calls and self-expire after 30 s.
 pub fn harq_reset() {
-    let _guard = MODEM_LOCK.lock().unwrap();
+    let _guard = modem_lock();
     unsafe { tempo_fast_sys::ft1_harq_reset() }
 }
 
@@ -337,7 +337,7 @@ fn cstr_field(buf: &[u8]) -> String {
 ///
 /// Like the rest of the modem these calls serialize behind the global lock.
 pub mod deep {
-    use super::{Decode, MODEM_LOCK, SAMPLE_RATE};
+    use super::{modem_lock, Decode, SAMPLE_RATE};
 
     /// DX1 standard calling carrier (Hz).
     pub const F0: f32 = 1500.0;
@@ -359,7 +359,7 @@ pub mod deep {
         let cap = frame_len();
         let mut wave = vec![0f32; cap];
         let n = {
-            let _guard = MODEM_LOCK.lock().unwrap();
+            let _guard = modem_lock();
             unsafe {
                 tempo_fast_sys::dx1_encode_wave(
                     bytes.as_ptr() as *const _,
@@ -398,7 +398,7 @@ pub mod deep {
         let mut snr: f32 = 0.0;
         let mut sync: f32 = 0.0;
         let nharderr = {
-            let _guard = MODEM_LOCK.lock().unwrap();
+            let _guard = modem_lock();
             unsafe {
                 tempo_fast_sys::dx1_decode_buf(
                     wave.as_ptr(),
@@ -453,7 +453,7 @@ pub mod deep {
         }
         let mut out = vec![tempo_fast_sys::Dx1DecodeT::default(); MAX_DX1_DECODES];
         let n = {
-            let _guard = MODEM_LOCK.lock().unwrap();
+            let _guard = modem_lock();
             unsafe {
                 tempo_fast_sys::dx1_decode_band(
                     wave.as_ptr(),

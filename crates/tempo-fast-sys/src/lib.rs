@@ -5,7 +5,7 @@
 #![allow(non_camel_case_types)]
 
 use std::os::raw::{c_char, c_float, c_int, c_void};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// Serializes ALL access to the non-thread-safe `libtempo` modem.
 ///
@@ -15,7 +15,41 @@ use std::sync::Mutex;
 /// (`ft1`, `ft8`, `ft4`) must serialize behind this single mutex — a per-crate
 /// lock would not prevent an FT1 decode from racing an FT8 decode on the shared
 /// FFTW plan cache. It lives here because this crate owns the one native library.
+///
+/// ⚠️ **Acquire it with [`modem_lock`], never by calling `.lock().unwrap()` on this
+/// static directly.** It stays public for documentation and for the tests that reason
+/// about it; the unwrap is what turned one panic into a dead radio for the session.
 pub static MODEM_LOCK: Mutex<()> = Mutex::new(());
+
+/// Acquire [`MODEM_LOCK`], recovering rather than dying if it was POISONED.
+///
+/// # Why this exists rather than `.lock().unwrap()`
+/// Every one of these call sites used to unwrap. A `Mutex` in Rust is poisoned
+/// permanently the moment ANY thread panics while holding it, and every later
+/// `.lock()` then returns `Err` forever — so a single panic anywhere in the modem
+/// took out **every decode and every transmit for the rest of the session**, and did
+/// it silently:
+///
+/// * on the decode worker the panic is swallowed by a `catch_unwind`, so the app
+///   keeps running and the waterfall keeps painting while it has gone completely
+///   deaf — one line on stderr is the only trace;
+/// * on the radio loop it surfaces as the "RADIO ENGINE CRASHED" banner with dead
+///   TX/RX until restart.
+///
+/// Recovering is the right call here specifically because of what this mutex
+/// guards. It protects process-global Fortran state, and every guarded region is a
+/// single FFI call with the argument checks done OUTSIDE the lock — so there is
+/// almost nothing left that can panic under it, and if something does, the state is
+/// no more suspect than the panic already made it. Weigh that against the
+/// alternative, which is not "fail safe" but "the radio is dead until you notice and
+/// restart". A stale decode is caught by the CRC; a deaf receiver is not caught by
+/// anything.
+///
+/// This is the same recovery the audio device layer already uses
+/// (`unwrap_or_else(|e| e.into_inner())`); the modem was the outlier.
+pub fn modem_lock() -> MutexGuard<'static, ()> {
+    MODEM_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Total channel symbols per FT1 frame.
 pub const FT1_NN: usize = 99;
@@ -1035,5 +1069,44 @@ mod tests {
         for p in [0u16, 1, 10, 20, 45, 90, 600] {
             assert!(!q65_period_supported(p), "period {p} must not be supported");
         }
+    }
+
+    /// REGRESSION — one panic under the modem lock used to kill the radio for the
+    /// whole session.
+    ///
+    /// `Mutex` poisoning in Rust is PERMANENT and process-wide: the instant any
+    /// thread panics while holding the lock, every later `.lock()` returns `Err`
+    /// forever. All 29 acquisition sites unwrapped that, so a single panic anywhere
+    /// in the modem made every subsequent decode AND transmit panic in turn — and
+    /// silently, because the decode worker's `catch_unwind` swallows it and the app
+    /// keeps running, waterfall painting, stone deaf.
+    ///
+    /// This deliberately poisons the real lock (there is only one, and poisoning
+    /// cannot be undone) and then asserts the modem is still usable afterwards.
+    #[test]
+    fn a_panic_under_the_modem_lock_does_not_kill_the_modem() {
+        // Poison it for real, the way a panicking decode would.
+        let poisoned = std::thread::spawn(|| {
+            let _guard = modem_lock();
+            panic!("simulated panic while holding the modem lock");
+        })
+        .join();
+        assert!(poisoned.is_err(), "the helper thread was supposed to panic");
+        assert!(
+            MODEM_LOCK.is_poisoned(),
+            "precondition: the lock must actually be poisoned, or this proves nothing"
+        );
+
+        // The unwrap that used to be here would panic on every one of these.
+        for _ in 0..3 {
+            let _guard = modem_lock();
+        }
+
+        // And the modem still answers — a real FFI call through the recovered lock.
+        let nmax = {
+            let _guard = modem_lock();
+            fst4_nmax(60)
+        };
+        assert_eq!(nmax, 720_000, "the modem is still usable after poisoning");
     }
 }

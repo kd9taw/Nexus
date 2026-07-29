@@ -49,7 +49,7 @@
 //! Type-1 messages, which carry the callsign outright, are unaffected — and they
 //! are the majority of WSPR traffic.
 
-use tempo_fast_sys::MODEM_LOCK;
+use tempo_fast_sys::modem_lock;
 
 pub use tempo_fast_sys::{WSPR_NMAX as NMAX, WSPR_PERIOD_S as PERIOD_S};
 
@@ -107,7 +107,7 @@ pub fn encode(msg: &str) -> Option<Vec<u8>> {
     let c = std::ffi::CString::new(msg).ok()?;
     let mut sym = vec![0u8; NSYM];
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe { tempo_fast_sys::wspr_encode_msg(c.as_ptr(), sym.as_mut_ptr()) }
     };
     (n as usize == NSYM).then_some(sym)
@@ -233,7 +233,7 @@ pub fn decode_frame(
     let mut out = vec![tempo_fast_sys::WsprDecodeT::default(); MAX_DECODES];
 
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::wspr_decode_core(
                 iwave.as_ptr(),
