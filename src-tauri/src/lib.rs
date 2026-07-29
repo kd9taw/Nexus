@@ -4766,6 +4766,11 @@ struct SstvStateDto {
     preview_rgb_base64: Option<String>,
     preview_width: u32,
     preview_height: u32,
+    /// Radio mistuning in Hz (`observed_leader_hz - 1900`) for the in-flight
+    /// image. The band view shows decoded pixels INSTEAD of the spectrum while an
+    /// image comes in, so this is the one thing the spectrum would have told you
+    /// that the picture cannot.
+    hedr_shift_hz: f64,
     /// Saved images, oldest first (persisted in the sstv-gallery folder).
     gallery: Vec<tempo_app::dto::SstvGalleryEntry>,
     // ----- TX side (an operator-initiated image transmission) -----
@@ -4800,6 +4805,7 @@ fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
             .map(|p| b64_encode(&p.preview_rgb)),
         preview_width: p.map_or(0, |p| p.preview_w),
         preview_height: p.map_or(0, |p| p.preview_h),
+        hedr_shift_hz: p.map_or(0.0, |p| p.hedr_shift_hz),
         gallery: eng.sstv_gallery().to_vec(),
         sending: eng.sstv_sending(),
         tx_mode: eng.sstv_tx_mode().map(str::to_string),

@@ -5,6 +5,11 @@ import { SstvView } from './SstvView'
 import * as api from '../api'
 import type { AppSnapshot, SstvState } from '../types'
 
+// The idle band view mounts the real Waterfall, which needs `window.matchMedia`
+// and a working canvas 2D context — jsdom provides neither. These tests are about
+// the SSTV panel, so the waterfall is stubbed rather than propped up.
+vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
+
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
   sstvArm: vi.fn(),
@@ -54,6 +59,7 @@ const IDLE: SstvState = {
   previewRgbBase64: null,
   previewWidth: 0,
   previewHeight: 0,
+  hedrShiftHz: 0,
   gallery: [],
   sending: false,
   txMode: null,

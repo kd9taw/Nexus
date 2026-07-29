@@ -2499,6 +2499,7 @@ export default function App() {
           <div className="sstv-host" hidden={effectiveView !== 'sstv'}>
             <SstvView
               snap={snap}
+              theme={theme}
               onSnap={setSnap}
               active={effectiveView === 'sstv'}
               onSetFrequency={handleSetFrequency}

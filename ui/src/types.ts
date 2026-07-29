@@ -897,6 +897,11 @@ export interface SstvState {
   previewRgbBase64: string | null
   previewWidth: number
   previewHeight: number
+  /** Radio mistuning in Hz (`observed_leader_hz - 1900`) for the in-flight image.
+   * The band view replaces the spectrum with decoded pixels while an image comes
+   * in, so this states the one thing the spectrum would have shown that the
+   * picture cannot. 0 when idle. */
+  hedrShiftHz: number
   gallery: SstvGalleryEntry[]
   /** An image is queued or streaming to the rig (the cockpit's TX indicator). */
   sending: boolean

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvState } from '../types'
+import { Waterfall } from './Waterfall'
 import { CockpitHeader } from './CockpitHeader'
 import { FrequencyControl } from './FrequencyControl'
 import { PanelsMenu } from './PanelsMenu'
@@ -85,6 +86,8 @@ interface Props {
   /** Live snapshot — may be absent while the app is still connecting; the shell
    * (canvas / gallery) renders without it, only the header needs it. */
   snap?: AppSnapshot | null
+  /** Palette name for the band waterfall (same value the Operate cockpit uses). */
+  theme?: string
   /** Apply a snapshot returned by a command without waiting for the poll. */
   onSnap?: (snap: AppSnapshot) => void
   /** True when SSTV is the visible view. The view stays MOUNTED in its
@@ -213,7 +216,7 @@ function GalleryThumb({ entry }: { entry: SstvGalleryEntry }) {
  * receiver keeps listening while the operator is on another section.
  * txState=false: nothing here transmits.
  */
-export function SstvView({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, panels }: Props) {
+export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, panels }: Props) {
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
   // Transmit composer and the Gallery are removable + seam-resizable in the bounded lower region.
   const host = panels ? panelHost(panels, { menu: SSTV_PANEL_IDS, side: [], main: 'gallery', labels: SSTV_PANEL_LABELS }) : null
@@ -546,13 +549,47 @@ export function SstvView({ snap, onSnap, active = true, onSetFrequency, onSetTxE
             {preview && <canvas ref={canvasRef} className="sstv-live-canvas" />}
             <div className="sstv-live-caption" role="status">
               {caption}
+              {/* The one thing the spectrum would have shown that the picture
+                  cannot: whether the radio is on frequency. Free — the decoder
+                  already derives it from the VIS leader and used it only for
+                  diagnostics. Hidden below ±10 Hz, which is not worth a glance. */}
+              {Math.abs(sstv?.hedrShiftHz ?? 0) >= 10 && (
+                <span className="sstv-tuneoff">
+                  {' · tuning '}
+                  {(sstv?.hedrShiftHz ?? 0) > 0 ? '+' : ''}
+                  {Math.round(sstv?.hedrShiftHz ?? 0)} Hz
+                </span>
+              )}
             </div>
           </div>
         ) : (
-          <div className="sstv-canvas-empty">
-            {armed
-              ? 'Armed — waiting for a VIS header…'
-              : 'Tune 14.230 / 145.800 — images decode here'}
+          // ⭐ THE BAND, WHEN NOTHING IS DECODING. The operator had no way to see
+          // what was on the frequency: "I've got no waterfall. It'd be nice to have
+          // a waterfall ... to understand what's on the band right now."
+          //
+          // The SAME REGION becomes the picture once a VIS lands (the branch
+          // above), which is the operator's other ask — "as the band is coming in
+          // with the signal, actually show the image in the band as it decodes" —
+          // and they chose the picture REPLACING the band over an overlay or a
+          // split. One place: it is the band until there is an image, then it is
+          // the image.
+          <div className="sstv-band">
+            <Waterfall
+              theme={theme}
+              active={active}
+              transmitting={snap?.radio.transmitting ?? false}
+              rxOffsetHz={0}
+              txOffsetHz={0}
+              hint="the band — a picture takes this space when one arrives"
+            />
+            {/* The guidance stays on screen. A waterfall shows you the band but
+                does not tell you WHERE to point the radio, and this view is often
+                the first place a new operator lands. */}
+            <div className="sstv-band-caption">
+              {armed
+                ? 'Armed — waiting for a VIS header…'
+                : 'Tune 14.230 / 145.800 — images decode here'}
+            </div>
           </div>
         )}
       </section>

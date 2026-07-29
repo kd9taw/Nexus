@@ -1156,6 +1156,16 @@ pub struct SstvProgress {
     /// Raw RGB preview bytes (`preview_w × preview_h × 3`), nearest-neighbor
     /// downscale of the partial image.
     pub preview_rgb: Vec<u8>,
+    /// Radio mistuning for this image, in Hz: `observed_leader_hz - 1900`, taken
+    /// from the VIS header.
+    ///
+    /// Surfaced because the SSTV band view REPLACES the spectrum with decoded
+    /// pixels while an image is coming in (operator's explicit choice), and the
+    /// thing that costs you is exactly what the spectrum would have shown: whether
+    /// you are tuned right. The decoder already computed it and used it only for
+    /// diagnostics — stating the number outright is cheaper than making the
+    /// operator infer it from a picture that is skewed.
+    pub hedr_shift_hz: f64,
 }
 
 /// A ready-to-transmit SSTV image: the whole pre-encoded 12 kHz PCM buffer, the
