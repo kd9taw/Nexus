@@ -5,6 +5,30 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Credit where the code came from
+
+Two of the modes Nexus decodes stand on other people's work, and the NOTICE file — the document
+that records exactly what Nexus borrowed and from whom — did not say so. It does now.
+
+The RTTY decoder is a port of **fldigi**'s receive path, by Dave Freese W1HKJ and Stefan Fendt
+DL1SMF, whose own lineage runs back to Tomi Manninen OH2BNS's gmfsk. The threshold detector that
+makes it print through noise is a design Kok Chen W7AY published and gave away. The SSTV receiver
+is vendored from **slowrx** by Oona Räisänen OH2EIQ, reaching Nexus through Jason Herald's Rust
+port of it. Each now has a full entry in NOTICE naming the project, the author, the license, and
+which files came from where, plus a line in the README credits.
+
+Nothing about how the radio behaves changes — these are comments and documents. What changes is
+that anyone reading the source can now trace every borrowed line to the person who wrote it.
+
+Two smaller corrections in the same pass. The RTTY *transmitter* is Nexus's own code, not fldigi's,
+and its file header now says so outright, so no future reader assumes the transmit side came along
+with the receive side. That header also credited "the W7AY dual-oscillator scheme" without naming
+Kok Chen or linking what he actually published; it now cites the paper, and is honest that the
+shaped edge treatment is Nexus's answer to the problem that paper measures, not something taken
+from it.
+
 ## [0.21.0] — 2026-07-29
 
 ### APRS gets a map
