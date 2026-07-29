@@ -223,6 +223,18 @@ const FREQ_POLL_MS: f64 = 180.0;
 /// doesn't permanently kill read-back; small enough that a truly dead link still stops the loop
 /// blocking within ~2 s.
 const FREQ_MISS_LIMIT: u32 = 3;
+/// First re-probe delay after the CAT breaker trips (ms). Short enough that a transient stall —
+/// a band-stack switch, a USB-serial spike, the reconnect churn a refused command causes — costs
+/// a couple of seconds of read-back, not the whole session.
+const CAT_RETRY_BASE_MS: f64 = 2_000.0;
+/// Re-probe ceiling after repeated failures (ms). A genuinely unplugged rig settles at one cheap
+/// timeout per ~30 s: enough to notice a cable going back in, cheap enough to ignore.
+const CAT_RETRY_MAX_MS: f64 = 30_000.0;
+/// How many times a REFUSED dial is re-sent before we stop asking. Much smaller than
+/// [`MODE_SET_MAX_TRIES`]: a rejected mode is often a settling rig that will accept it shortly,
+/// whereas a rejected FREQUENCY is nearly always a hard fact about the radio's range — and each
+/// retry costs a full CAT round-trip on a link that is already unhappy.
+const DIAL_SET_MAX_TRIES: u32 = 3;
 /// Hamlib func tokens for the Expert DSP toggles, in the engine's `[nb, nr, notch, comp, vox]`
 /// order. `ANF` (auto-notch) is the notch we expose — it works as a bare on/off toggle, unlike
 /// `MN` (manual notch) which needs a separate NOTCHF frequency level.
@@ -1515,6 +1527,34 @@ struct RadioLoop {
     /// Last known CAT health (from connect/Test-CAT): `Some(false)` = configured but failing,
     /// so we skip the read-back poll to avoid blocking the loop on a dead read every cycle.
     cat_ok: Option<bool>,
+    /// When (ms, loop clock) a tripped CAT breaker may try ONE probe read again.
+    ///
+    /// ⚠️ THE BUG THIS EXISTS FOR: `cat_ok = Some(false)` used to be a permanent latch. It gates
+    /// both read-back paths, and the only thing that cleared it was a successful `set_freq`/
+    /// `set_mode` from the retune block — which does not fire while the commanded dial and mode
+    /// already equal `last_dial`/`last_mode`. So a link that came back stayed dead for the rest of
+    /// the session: proven by driving 40 loop ticks against a perfectly healthy rigctld after a
+    /// trip and observing ZERO commands on the wire. The breaker's job is to stop the loop
+    /// blocking on a dead read EVERY cycle — that is rate-limiting, not a one-way door.
+    cat_retry_at: f64,
+    /// Current breaker re-probe interval (ms), doubling on each failed retry to
+    /// [`CAT_RETRY_MAX_MS`]. A genuinely dead link settles at one cheap timeout per ~30 s
+    /// instead of one per tick; a link that recovers is picked up within seconds.
+    cat_retry_ms: f64,
+    /// A dial frequency the rig REFUSED (`RPRT <negative>`) — do not keep re-sending it. Mirrors
+    /// `mode_giveup`: the operator's HF-only radio cannot be talked into covering 2 m by asking
+    /// 8 times a second. Cleared by an explicit operator retune (the force branch) or any
+    /// successful dial set.
+    dial_giveup: Option<u64>,
+    /// Consecutive refusals of the currently-commanded dial, against [`DIAL_SET_MAX_TRIES`].
+    dial_fail_count: u32,
+    /// RX frequency ranges (Hz) read from the rig's Hamlib capability table once per CAT
+    /// confirmation. `None` = not probed yet or unknown (must fail OPEN — see
+    /// [`crate::rig::Rig::read_rx_ranges`]).
+    rx_ranges: Option<Vec<(u64, u64)>>,
+    /// Whether the range probe has been attempted for the current CAT confirmation, so an
+    /// unsupported `\dump_state` costs one round-trip per rig — not one per poll.
+    rx_ranges_probed: bool,
     /// Lazy S-meter capability: `None` = not yet probed, `Some(true)` = rig reports
     /// STRENGTH (keep polling it), `Some(false)` = rig answered the dial but not
     /// STRENGTH (no CAT S-meter — stop polling it so we don't burn a round-trip every
@@ -1662,6 +1702,12 @@ impl RadioLoop {
             last_freq_poll: now_unix_ms(),
             freq_misses: 0,
             cat_ok: None,
+            cat_retry_at: 0.0,
+            cat_retry_ms: CAT_RETRY_BASE_MS,
+            dial_giveup: None,
+            dial_fail_count: 0,
+            rx_ranges: None,
+            rx_ranges_probed: false,
             handoff_deferred: false,
             smeter_supported: None,
             smeter_misses: 0,
@@ -1872,6 +1918,77 @@ impl RadioLoop {
         }
     }
 
+    /// Push a dial frequency to the rig, honouring a REFUSAL.
+    ///
+    /// Returns `None` when the rig accepted it (the caller counts that as a retune), or
+    /// `Some(note)` describing the refusal for the CAT status detail.
+    ///
+    /// THE BUG THIS EXISTS FOR (FTdx10 field report): an out-of-range frequency — 144.390 sent to
+    /// an HF-only radio when the APRS cockpit opened — used to be indistinguishable from success,
+    /// because `Rig::set_freq` threw its reply away. The loop advanced `last_dial` to a frequency
+    /// the radio was never on, reported "CAT confirmed", suppressed the read-back that would have
+    /// corrected it, and left the operator's dial reading 144.390 with a dead link.
+    ///
+    /// Three things a refusal must do, and all three matter:
+    ///  1. NOT advance `last_dial` — we did not move the radio, so nothing may claim we did;
+    ///  2. stop asking, past a small budget — a radio's frequency range is a hard fact, and every
+    ///     retry is a round-trip on a link that is already unhappy;
+    ///  3. HEAL the app's belief from the rig itself. `set_frequency` writes the dial optimistically
+    ///     the moment the operator asks, so on a refusal the UI is showing a frequency that exists
+    ///     nowhere but in our own state. Read the rig and adopt what it says.
+    fn push_dial(
+        &mut self,
+        rig: &mut Rig,
+        dial: u64,
+        engine: &Arc<Mutex<Engine>>,
+    ) -> Option<String> {
+        match rig.set_freq(dial) {
+            Ok(()) => {
+                self.last_dial = dial;
+                self.dial_fail_count = 0;
+                self.dial_giveup = None;
+                None
+            }
+            Err(e) => {
+                self.dial_fail_count += 1;
+                let mhz = dial as f64 / 1_000_000.0;
+                if self.dial_fail_count < DIAL_SET_MAX_TRIES {
+                    return Some(format!(
+                        "{mhz:.4} MHz {} ({}/{DIAL_SET_MAX_TRIES})",
+                        dial_failure_brief(&e),
+                        self.dial_fail_count
+                    ));
+                }
+                // Budget spent: this radio will not go there. Stop asking, and stop showing a dial
+                // the radio refused — the rig's own frequency is the only true answer.
+                self.dial_giveup = Some(dial);
+                self.dial_fail_count = 0;
+                eprintln!(
+                    "tempo-audio: set_freq({dial}) refused {DIAL_SET_MAX_TRIES} times — giving up \
+                     (the radio does not appear to cover {mhz:.4} MHz)."
+                );
+                let healed = rig.read_freq().ok();
+                if let Ok(mut eng) = engine.lock() {
+                    if let Some(hz) = healed {
+                        self.last_dial = hz;
+                        eng.observe_rig_freq(hz);
+                    }
+                    eng.set_rig_refused_dial(Some(mhz));
+                }
+                Some(match healed {
+                    Some(hz) => format!(
+                        "the radio refused {mhz:.4} MHz — it does not cover that frequency; \
+                         still on {:.4} MHz",
+                        hz as f64 / 1_000_000.0
+                    ),
+                    None => format!(
+                        "the radio refused {mhz:.4} MHz — it does not cover that frequency"
+                    ),
+                })
+            }
+        }
+    }
+
     fn reset_for_handoff(&mut self) {
         self.last_dial = 0; // != any real dial → force the retune to command the restored freq
         self.last_mode = String::new(); // force the mode re-assert
@@ -1894,6 +2011,16 @@ impl RadioLoop {
         self.last_freq_poll = 0.0;
         self.freq_misses = 0;
         self.cat_ok = None; // re-establish CAT health from the new rig
+        self.cat_retry_at = 0.0;
+        self.cat_retry_ms = CAT_RETRY_BASE_MS;
+        // ⚠️ MUST reset with the radio. Carrying the OLD radio's frequency ranges over a handoff
+        // would be a fail-CLOSED bug — the exact inverse of the capability gate's safety property:
+        // an HF-only rig's range list inherited by the IC-9700 would block APRS on the one radio
+        // that can actually do it. Same for a dial the old radio refused; the new one may accept it.
+        self.rx_ranges = None;
+        self.rx_ranges_probed = false;
+        self.dial_giveup = None;
+        self.dial_fail_count = 0;
         self.smeter_supported = None;
         self.smeter_misses = 0;
         self.func_supported = [None; 5];
@@ -2326,6 +2453,8 @@ impl RadioLoop {
             // the CAT status so the operator (and we) can SEE the mode the rig was told to use
             // and whether it accepted it — turning "modes won't switch" from a guess into data.
             let mut retune_note: Option<String> = None;
+            // A DIAL refusal, held separately so the mode note below cannot bury it.
+            let mut dial_note: Option<String> = None;
             if can_retune {
                 if force_retune {
                     // The operator just clicked a section / worked a Needed spot / QSY'd.
@@ -2340,9 +2469,19 @@ impl RadioLoop {
                     self.mode_giveup = None;
                     self.mode_fail_count = 0;
                     self.mode_saw_reject = false;
-                    if dial != self.last_dial && rig.set_freq(dial).is_ok() {
-                        self.last_dial = dial;
-                        retuned = true;
+                    // An explicit operator retune also clears a dial give-up: they may have just
+                    // switched to a radio that CAN reach it, so a re-click must always try again.
+                    self.dial_giveup = None;
+                    self.dial_fail_count = 0;
+                    if dial != self.last_dial {
+                        match self.push_dial(rig, dial, engine) {
+                            // A refused DIAL outranks any mode note produced below: "the radio
+                            // refused 144.390 MHz" is the answer to the operator's question, and a
+                            // cheerful "rig set to FM" beside a dial that never moved is how this
+                            // bug stayed invisible in the first place.
+                            Some(note) => dial_note = Some(note),
+                            None => retuned = true,
+                        }
                     }
                     if !md.trim().is_empty() {
                         // A dial-only QSY (wheel/nudge) re-enters this force path with the SAME mode;
@@ -2372,9 +2511,18 @@ impl RadioLoop {
                         }
                     }
                 } else {
-                    if dial != self.last_dial && rig.set_freq(dial).is_ok() {
-                        self.last_dial = dial;
-                        retuned = true;
+                    // `dial_giveup` stops a frequency the radio has REFUSED from being re-sent on
+                    // every tick — the HF-only-rig-on-2 m storm, and the same shape as
+                    // `mode_giveup` below.
+                    if dial != self.last_dial && self.dial_giveup != Some(dial) {
+                        match self.push_dial(rig, dial, engine) {
+                            // A refused DIAL outranks any mode note produced below: "the radio
+                            // refused 144.390 MHz" is the answer to the operator's question, and a
+                            // cheerful "rig set to FM" beside a dial that never moved is how this
+                            // bug stayed invisible in the first place.
+                            Some(note) => dial_note = Some(note),
+                            None => retuned = true,
+                        }
                     }
                     // Apply the section's mode — unless it's the one we already gave up on
                     // (rig kept rejecting it). `last_mode` only ever holds a mode actually
@@ -2486,8 +2634,11 @@ impl RadioLoop {
                 // clear the matching "no rig control" UI warning, once, on the flip.
                 if self.cat_ok != Some(true) {
                     self.cat_ok = Some(true);
+                    self.cat_retry_ms = CAT_RETRY_BASE_MS;
+                    self.cat_retry_at = 0.0;
                     // Re-probe rig capabilities (S-meter + DSP funcs) on a fresh CAT confirmation,
                     // so swapping to a different rig doesn't inherit the old one's verdict.
+                    self.rx_ranges_probed = false;
                     self.smeter_supported = None;
                     self.smeter_misses = 0;
                     self.func_supported = [None; 5];
@@ -2505,9 +2656,19 @@ impl RadioLoop {
             } else if self.tx_until_ms.is_none()
                 && !self.tuning_keyed
                 && !self.manual_ptt_applied
-                && self.cat_ok != Some(false)
+                // A TRIPPED breaker skips the poll — but only until its re-probe is due. It exists
+                // to stop the loop blocking on a dead read every cycle, which is rate-limiting;
+                // implemented as a permanent latch it left a recovered link dead for the session.
+                && (self.cat_ok != Some(false) || now >= self.cat_retry_at)
                 && now - self.last_rig_poll >= RIG_POLL_MS
             {
+                let breaker_probe = self.cat_ok == Some(false);
+                if breaker_probe {
+                    // Schedule the NEXT attempt before trying this one, doubling the wait, so a
+                    // link that stays dead costs one timeout per ~30 s rather than one per tick.
+                    self.cat_retry_ms = (self.cat_retry_ms * 2.0).min(CAT_RETRY_MAX_MS);
+                    self.cat_retry_at = now + self.cat_retry_ms;
+                }
                 self.last_rig_poll = now;
                 self.last_freq_poll = now; // heavy tick reads the dial too — don't double-read below
                 self.rig_poll_ticks = self.rig_poll_ticks.wrapping_add(1);
@@ -2534,10 +2695,44 @@ impl RadioLoop {
                 match rig.read_freq() {
                     Ok(hz) => {
                         self.freq_misses = 0; // a good read clears the breaker's miss run
+                        // A tripped breaker's re-probe answered: the link is BACK. Reset the health
+                        // verdict + the backoff and re-probe the rig's capabilities, exactly like
+                        // the successful-command path above — otherwise read-back stays disabled
+                        // for the session even though the radio is answering perfectly.
+                        if breaker_probe {
+                            self.cat_ok = Some(true);
+                            self.cat_retry_ms = CAT_RETRY_BASE_MS;
+                            self.cat_retry_at = 0.0;
+                            self.smeter_supported = None;
+                            self.smeter_misses = 0;
+                            self.func_supported = [None; 5];
+                            self.func_misses = [0; 5];
+                            self.func_state = [None; 5];
+                            self.level_supported = [None; 4];
+                            self.level_misses = [0; 4];
+                            self.rx_ranges_probed = false;
+                            if let Ok(mut eng) = engine.lock() {
+                                eng.set_cat_status(
+                                    Some(true),
+                                    "CAT recovered — the radio is answering again".to_string(),
+                                );
+                            }
+                        }
                         if hz != self.last_dial {
                             self.last_dial = hz;
                             if let Ok(mut eng) = engine.lock() {
                                 eng.observe_rig_freq(hz);
+                            }
+                        }
+                        // Read the radio's frequency-range table ONCE per CAT confirmation, so the
+                        // app can know a radio cannot reach 2 m BEFORE commanding it there (the
+                        // HF-only-rig report). Cheap: one round-trip per rig, never per poll, and
+                        // an unsupported `\dump_state` is remembered as unknown → callers fail open.
+                        if !self.rx_ranges_probed {
+                            self.rx_ranges_probed = true;
+                            self.rx_ranges = rig.read_rx_ranges();
+                            if let Ok(mut eng) = engine.lock() {
+                                eng.observe_rig_rx_ranges(self.rx_ranges.clone());
                             }
                         }
                         // RF power / mic gain / NR / AGC read-backs mirror the rig's real knob
@@ -2776,6 +2971,14 @@ impl RadioLoop {
                         }
                         if rig.has_control() && self.freq_misses >= FREQ_MISS_LIMIT {
                             self.cat_ok = Some(false);
+                            // Arm the re-probe. Without this the breaker is a one-way door: it
+                            // gates both read-back paths, and the only other clearer is a
+                            // successful set_freq/set_mode, which the retune block does not send
+                            // while the commanded dial/mode already match `last_dial`/`last_mode`.
+                            if !breaker_probe {
+                                self.cat_retry_ms = CAT_RETRY_BASE_MS;
+                            }
+                            self.cat_retry_at = now + self.cat_retry_ms;
                             // Re-probe funcs on recovery; don't leave stale toggle states shown.
                             self.func_supported = [None; 5];
                             self.func_misses = [0; 5];
@@ -2863,7 +3066,7 @@ impl RadioLoop {
             // Surface the mode-set outcome to the CAT status so the operator can SEE the mode
             // the rig was commanded into (and any rejection) — emitted only on a real change
             // or failure, so it never spams. A success implies CAT is alive (Some(true)).
-            if let Some(note) = retune_note {
+            if let Some(note) = dial_note.or(retune_note) {
                 let ok = if note.starts_with("rig set to") {
                     Some(true)
                 } else {
@@ -5121,6 +5324,20 @@ fn mode_command_failed(md: &str, e: &std::io::Error) -> String {
             format!("no reply from the rig over CAT — couldn't set {md}: {e}")
         }
         _ => format!("can't reach the radio's CAT link — couldn't set {md}: {e}"),
+    }
+}
+
+/// One short clause naming WHY a dial set failed, for the retry notes. Distinguishes the rig
+/// actively refusing (`ErrorKind::Other` — a `RPRT <negative>` reply) from the link not answering,
+/// because the two have completely different fixes: a different radio vs a cable/daemon.
+fn dial_failure_brief(e: &std::io::Error) -> &'static str {
+    use std::io::ErrorKind::*;
+    match e.kind() {
+        Other => "refused by the rig",
+        TimedOut | UnexpectedEof | ConnectionReset | ConnectionAborted | BrokenPipe => {
+            "no reply from the rig"
+        }
+        _ => "CAT link unreachable",
     }
 }
 
@@ -8210,7 +8427,7 @@ mod tests {
 
         // A slot over is in flight — the rig is KEYED. A QSY must not happen mid-TX...
         state.tx_until_ms = Some(now_unix_ms() + 60_000.0);
-        engine.lock().unwrap().aprs_tune(144.390);
+        engine.lock().unwrap().aprs_tune(144.390).unwrap();
         run(&mut state, &mut rig, &mut backend, 3, &mut tick);
         assert!(
             !commanded_freqs(&log).contains(&144_390_000),
@@ -8264,6 +8481,553 @@ mod tests {
             Some("FM"),
             "and FM must still be the last mode commanded — nothing re-asserts SSB after it: {modes:?}"
         );
+    }
+
+    // ---- An HF-only rig commanded to a frequency it cannot reach (FTdx10 + APRS, 0.21.x) ----
+    //
+    // Field report: CAT works in Phone/CW; opening the APRS cockpit auto-tunes 144.390, the
+    // FTdx10 (HF/50 MHz only) refuses it, and CAT is dead until Nexus restarts — with the dial
+    // still reading 144.390 because no read-back ever corrects it. Drive the REAL loop against a
+    // rigctld that refuses out-of-range frequencies and watch what the loop does.
+
+    /// A rigctld standing in for an **HF-only rig**: it accepts `F` only inside `lo..=hi` Hz and
+    /// answers `RPRT -1` to anything outside, WITHOUT moving — exactly what Hamlib's newcat
+    /// backend does when asked for 2 m on a rig whose range list stops at 54 MHz. `f` always
+    /// reports where the rig really is, so a refused set is observable as "the dial never moved".
+    fn range_limited_rigctld(lo: u64, hi: u64, start: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        std::thread::spawn(move || {
+            let mut cur = start;
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut out = match stream.try_clone() {
+                    Ok(o) => o,
+                    Err(_) => return,
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    rec.lock().unwrap().push(line.clone());
+                    let reply = if let Some(hz) = line.strip_prefix("F ") {
+                        match hz.trim().parse::<u64>() {
+                            // In range: the rig moves and confirms.
+                            Ok(v) if (lo..=hi).contains(&v) => {
+                                cur = v;
+                                "RPRT 0\n".to_string()
+                            }
+                            // Out of range: refused, and the dial STAYS where it was.
+                            _ => "RPRT -1\n".to_string(),
+                        }
+                    } else if line.trim() == "f" {
+                        format!("{cur}\n")
+                    } else if line.trim() == "m" {
+                        "USB\n2400\n".to_string()
+                    } else {
+                        "RPRT 0\n".to_string()
+                    };
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, seen)
+    }
+
+    #[test]
+    fn a_refused_out_of_range_qsy_never_wedges_cat_or_pollutes_the_dial() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        // The tester's radio: an FTdx10 — HF + 6 m, nothing above 54 MHz. Sitting on 20 m.
+        let (addr, log) = range_limited_rigctld(1_800_000, 54_000_000, 14_074_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop,
+                       rig: &mut Rig,
+                       backend: &mut MockBackend,
+                       n: usize,
+                       tick: &mut f64| {
+            for _ in 0..n {
+                *tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+
+        // Scene: working 20 m phone. CAT is healthy — this rig answers everything in band.
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+        assert!(
+            commanded_freqs(&log).contains(&14_250_000),
+            "scene: the in-range QSY reached the rig: {:?}",
+            commanded_freqs(&log)
+        );
+        assert_ne!(state.cat_ok, Some(false), "scene: CAT is healthy to start");
+
+        // The operator opens the APRS cockpit, which auto-tunes the 2 m APRS channel.
+        engine.lock().unwrap().aprs_tune(144.390).unwrap();
+        run(&mut state, &mut rig, &mut backend, 12, &mut tick);
+
+        // 1. The refusal must not be read as proof the link is alive.
+        let snap = engine.lock().unwrap().snapshot();
+        assert!(
+            !snap.radio.cat_detail.contains("rig accepted a command"),
+            "a REFUSED command must never be reported as CAT confirmation: {:?}",
+            snap.radio.cat_detail
+        );
+
+        // 2. The dial state must not keep a frequency the radio refused. With CAT alive the
+        //    read-back knows exactly where the rig is; the app must agree with it.
+        assert!(
+            (snap.radio.dial_mhz - 144.390).abs() > 1e-6,
+            "the app adopted a commanded-but-refused dial and no read-back corrected it \
+             (dial reads {} MHz)",
+            snap.radio.dial_mhz
+        );
+
+        // 3. CAT must still be alive — the whole field report is that it is not.
+        assert_ne!(
+            state.cat_ok,
+            Some(false),
+            "a refused out-of-range frequency wedged the CAT link"
+        );
+        assert!(
+            rig.read_freq().is_ok(),
+            "the CAT session must survive a refused command"
+        );
+
+        // 4. And the refusal must not become a per-tick retry storm on the CAT link.
+        let attempts = commanded_freqs(&log)
+            .iter()
+            .filter(|hz| **hz == 144_390_000)
+            .count();
+        assert!(
+            attempts <= 3,
+            "a definitively refused frequency must not be re-sent every loop tick \
+             (sent {attempts} times)"
+        );
+    }
+
+    #[test]
+    fn a_tripped_cat_breaker_recovers_instead_of_latching_for_the_session() {
+        // ⭐ THE WEDGE. `cat_ok = Some(false)` gates BOTH read-back paths, and the only thing that
+        // used to clear it was a successful set_freq/set_mode from the retune block — which does
+        // not fire while the commanded dial and mode already equal `last_dial`/`last_mode`. So any
+        // transient that tripped the breaker killed CAT for the rest of the session.
+        //
+        // Measured before the fix: 40 loop ticks against a perfectly healthy rigctld produced ZERO
+        // commands on the wire. Not a read, not a set. That is the "CAT is dead until I restart
+        // Nexus" the FTdx10 tester reported, and it is a bug about the breaker, not about APRS.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = range_limited_rigctld(1_800_000, 54_000_000, 14_250_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        for _ in 0..4 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                )
+                .unwrap();
+        }
+        assert_ne!(state.cat_ok, Some(false), "scene: CAT healthy");
+
+        // A transient trips the breaker (a few slow replies: reconnect churn, a USB spike, or the
+        // stalls a refused out-of-range command causes). The link itself is fine.
+        state.cat_ok = Some(false);
+        state.freq_misses = FREQ_MISS_LIMIT;
+        state.cat_retry_at = tick + CAT_RETRY_BASE_MS;
+        let before = log.lock().unwrap().len();
+
+        // Run well past the first re-probe window.
+        for _ in 0..40 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                )
+                .unwrap();
+        }
+        let after: Vec<String> = log.lock().unwrap()[before..].to_vec();
+        assert!(
+            !after.is_empty(),
+            "a tripped breaker spoke to the radio ZERO times in 40 ticks — the link is healthy \
+             and Nexus never tried again (this is the session-long wedge)"
+        );
+        assert_eq!(
+            state.cat_ok,
+            Some(true),
+            "the re-probe succeeded, so the breaker must reset: CAT is answering"
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.cat_ok,
+            Some(true),
+            "and the operator must be told the link came back"
+        );
+    }
+
+    #[test]
+    fn the_breaker_re_probe_backs_off_on_a_link_that_stays_dead() {
+        // The breaker's PURPOSE is to stop the loop blocking on a dead read every cycle, so the
+        // recovery path must not undo it: a link that stays dead has to cost progressively less,
+        // not one timeout per tick.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_port = listener.local_addr().unwrap().port();
+        drop(listener); // nothing listening: every command errors instantly
+        let mut rig = Rig::rigctld(&format!("127.0.0.1:{dead_port}"));
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        // Trip it the honest way: consecutive heavy-poll read failures.
+        for _ in 0..FREQ_MISS_LIMIT {
+            state.last_rig_poll = tick - RIG_POLL_MS - 1.0;
+            tick += 400.0;
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                )
+                .unwrap();
+        }
+        assert_eq!(state.cat_ok, Some(false), "breaker tripped");
+        let first_retry = state.cat_retry_at;
+        assert!(
+            first_retry > tick,
+            "a re-probe must be SCHEDULED, not left to chance"
+        );
+
+        // Each failed re-probe pushes the next one further out, to the ceiling.
+        let mut last_gap = 0.0f64;
+        for _ in 0..8 {
+            tick = state.cat_retry_at + 1.0;
+            let at_before = state.cat_retry_at;
+            state.last_rig_poll = tick - RIG_POLL_MS - 1.0;
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                )
+                .unwrap();
+            let gap = state.cat_retry_at - at_before;
+            assert!(
+                gap >= last_gap,
+                "the re-probe interval must never shrink while the link stays dead"
+            );
+            last_gap = gap;
+            assert_eq!(state.cat_ok, Some(false), "still dead — breaker stays open");
+        }
+        assert!(
+            state.cat_retry_ms >= CAT_RETRY_MAX_MS,
+            "backoff reached its ceiling ({} ms) so a dead rig costs ~one timeout per 30 s",
+            state.cat_retry_ms
+        );
+    }
+
+    #[test]
+    fn a_refused_dial_is_given_up_on_and_the_app_stops_showing_it() {
+        // The APRS-on-an-HF-rig path, end to end through the real loop: the cockpit's auto-tune
+        // asks for 144.390, the radio refuses it, and the operator must be left looking at where
+        // the radio ACTUALLY is — with the CAT link intact and no per-tick retry storm.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = range_limited_rigctld(1_800_000, 54_000_000, 14_250_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        for _ in 0..4 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                )
+                .unwrap();
+        }
+
+        // No CAT capability data in this scene (the stub does not answer `\dump_state` with a
+        // limited list), so the engine-level gate cannot know — this exercises the BACKSTOP.
+        engine.lock().unwrap().aprs_tune(144.390).unwrap();
+        for _ in 0..20 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                )
+                .unwrap();
+        }
+
+        let snap = engine.lock().unwrap().snapshot();
+        assert!(
+            !snap.radio.cat_detail.contains("rig accepted a command"),
+            "a REFUSED command must never be reported as CAT confirmation: {:?}",
+            snap.radio.cat_detail
+        );
+        assert!(
+            (snap.radio.dial_mhz - 14.250).abs() < 1e-6,
+            "the app must show where the radio really is, not the frequency it refused \
+             (dial reads {} MHz)",
+            snap.radio.dial_mhz
+        );
+        assert_eq!(
+            state.dial_giveup,
+            Some(144_390_000),
+            "the refused dial is given up on, so it is not re-sent every tick"
+        );
+        assert_ne!(
+            state.cat_ok,
+            Some(false),
+            "and the CAT session survives a refused command"
+        );
+        assert!(rig.read_freq().is_ok(), "the link still answers");
+        let attempts = commanded_freqs(&log)
+            .iter()
+            .filter(|hz| **hz == 144_390_000)
+            .count();
+        assert!(
+            attempts <= DIAL_SET_MAX_TRIES as usize,
+            "a definitively refused frequency must not be re-sent every loop tick \
+             (sent {attempts} times)"
+        );
+    }
+
+    #[test]
+    fn the_refusal_is_what_the_operator_is_told_not_the_mode_note() {
+        // The dial and the mode are commanded in the same pass, and the mode SUCCEEDS on a rig that
+        // has FM but not 2 m. A cheerful "rig set to FM" beside a dial that never moved is exactly
+        // how this bug stayed invisible, so the refusal has to win the status line.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, _log) = range_limited_rigctld(1_800_000, 54_000_000, 14_250_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        for _ in 0..4 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                )
+                .unwrap();
+        }
+        engine.lock().unwrap().aprs_tune(144.390).unwrap();
+        // Step until the give-up fires, capturing the status AT THAT MOMENT. The CAT detail is a
+        // running commentary, not a latch — once the dial has healed back to HF the loop legitimately
+        // re-commands USB and says so, which is current news. What must never happen is a mode
+        // success burying the refusal in the very tick the refusal occurred.
+        let mut detail_at_giveup = None;
+        for _ in 0..20 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                )
+                .unwrap();
+            let snap = engine.lock().unwrap().snapshot();
+            if snap.radio.refused_dial_mhz.is_some() && detail_at_giveup.is_none() {
+                detail_at_giveup = Some(snap.radio.cat_detail.clone());
+            }
+        }
+        let detail = detail_at_giveup.expect("the loop must give up on the refused dial");
+        assert!(
+            detail.contains("144.3900") && detail.contains("does not cover"),
+            "the CAT status must name the refusal, not a mode success: {detail:?}"
+        );
+        // And the refusal survives as a durable fact for the UI, independent of the status line.
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.refused_dial_mhz,
+            Some(144.39),
+            "the refused frequency stays recorded so the cockpit can name it"
+        );
+    }
+
+    #[test]
+    fn a_radio_handoff_drops_the_previous_radios_coverage() {
+        // ⚠️ FAIL-OPEN, NOT FAIL-CLOSED. Coverage belongs to the radio: carrying an HF-only rig's
+        // range list across a handoff would block a QSY on the VHF radio that just became active —
+        // the exact inverse of what the capability gate is for, and it would break the operator's
+        // real FTDX10 + IC-9700 setup.
+        let mut state = loop_state();
+        state.rx_ranges = Some(vec![(30_000, 60_000_000)]);
+        state.rx_ranges_probed = true;
+        state.dial_giveup = Some(144_390_000);
+        state.cat_ok = Some(false);
+        state.cat_retry_ms = CAT_RETRY_MAX_MS;
+
+        state.reset_for_handoff();
+
+        assert_eq!(state.rx_ranges, None, "the new radio's coverage is unknown");
+        assert!(!state.rx_ranges_probed, "so it must be re-probed");
+        assert_eq!(
+            state.dial_giveup, None,
+            "a dial the OLD radio refused may be perfectly fine on the new one"
+        );
+        assert_eq!(state.cat_retry_ms, CAT_RETRY_BASE_MS, "backoff starts fresh");
+
+        // …and the engine drops it on the switch too, so the window before the next poll is open.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let r1 = e.add_radio();
+        e.set_active_radio(0);
+        e.observe_rig_rx_ranges(Some(vec![(30_000, 60_000_000)]));
+        assert_eq!(e.rig_covers_mhz(144.390), Some(false));
+        e.set_active_radio(r1);
+        assert_eq!(
+            e.rig_covers_mhz(144.390),
+            None,
+            "unknown (allow) after the switch — never the old radio's answer"
+        );
+    }
+
+    #[test]
+    fn an_explicit_retune_retries_a_given_up_dial() {
+        // Giving up must not be permanent — the operator may have just switched to a radio that
+        // CAN reach it. Same principle as `mode_giveup`, and the reason a re-click of a given-up
+        // mode is never ignored.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = range_limited_rigctld(1_800_000, 54_000_000, 14_250_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        state.dial_giveup = Some(144_390_000);
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.aprs_tune(144.390).unwrap(); // an explicit operator retune arms immediate_retune
+        }
+        let before = commanded_freqs(&log).len();
+        for _ in 0..3 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                )
+                .unwrap();
+        }
+        assert!(
+            commanded_freqs(&log)[before..].contains(&144_390_000),
+            "an explicit retune must try a given-up dial again: {:?}",
+            commanded_freqs(&log)
+        );
+    }
+
+    #[test]
+    fn the_loop_reads_the_radios_frequency_ranges_and_the_gate_uses_them() {
+        // The capability gate is only as good as the data behind it: prove the loop actually asks
+        // the radio what it covers and that the answer reaches the engine, so `aprs_tune` can refuse
+        // 2 m on an HF-only rig BEFORE commanding it there.
+        struct HfOnly;
+        impl crate::rigctld_server::RigBackend for HfOnly {
+            fn freq_hz(&self) -> u64 {
+                14_250_000
+            }
+            fn mode(&self) -> (String, u32) {
+                ("USB".into(), 2400)
+            }
+            fn ptt(&self) -> bool {
+                false
+            }
+            fn set_freq(&self, hz: u64) -> bool {
+                (1_800_000..=54_000_000).contains(&hz)
+            }
+            fn set_mode(&self, _m: &str, _p: u32) -> bool {
+                true
+            }
+            fn set_ptt(&self, _on: bool) -> bool {
+                true
+            }
+            /// An FTdx10's real receive coverage: 30 kHz – 60 MHz. No 2 m.
+            fn rx_ranges(&self) -> Option<Vec<(u64, u64)>> {
+                Some(vec![(30_000, 60_000_000)])
+            }
+        }
+        let backend_rig: Arc<dyn crate::rigctld_server::RigBackend> = Arc::new(HfOnly);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || crate::rigctld_server::serve(listener, backend_rig));
+
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::rigctld(&format!("127.0.0.1:{port}"));
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        let mut tick = 0.0f64;
+        for _ in 0..6 {
+            state.last_rig_poll = tick - RIG_POLL_MS - 1.0; // make the heavy poll due every tick
+            tick += 400.0;
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            state.rx_ranges,
+            Some(vec![(30_000, 60_000_000)]),
+            "the loop read the radio's RX range table over CAT"
+        );
+        let eng = engine.lock().unwrap();
+        assert_eq!(
+            eng.rig_covers_mhz(144.390),
+            Some(false),
+            "so the engine KNOWS this radio cannot reach the APRS channel"
+        );
+        assert_eq!(eng.rig_covers_mhz(14.250), Some(true));
+        // …and the snapshot carries it, so the cockpit chip can be honest about it too.
+        let snap = eng.snapshot();
+        assert_eq!(snap.radio.rx_ranges_mhz.len(), 1);
+        assert!((snap.radio.rx_ranges_mhz[0].1 - 60.0).abs() < 1e-6);
     }
 
     #[test]

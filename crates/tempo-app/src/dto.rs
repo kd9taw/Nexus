@@ -593,6 +593,15 @@ pub struct RadioStatus {
     /// "VOX — no CAT", or a specific error ("rigctld not reachable…").
     #[serde(default)]
     pub cat_detail: String,
+    /// The radio's RECEIVE frequency ranges (MHz, inclusive `[lo, hi]` pairs) from Hamlib's
+    /// capability table. **EMPTY = unknown, which means ALLOW** — no CAT, caps not probed, or a
+    /// `\dump_state` we could not parse. Lets the UI avoid offering a "move the radio" control at
+    /// a frequency the radio provably cannot reach (an HF-only rig and the 2 m APRS channel).
+    #[serde(default)]
+    pub rx_ranges_mhz: Vec<(f64, f64)>,
+    /// The dial (MHz) the radio most recently REFUSED, so the UI can name it. `None` = none.
+    #[serde(default)]
+    pub refused_dial_mhz: Option<f64>,
     /// The CW keyer backend: "cat" (the rig generates CW → rig in CW mode) or "soundcard"
     /// (a keyed audio tone → rig deliberately in USB/LSB). Surfaced so the CW cockpit's
     /// toggle reflects the ACTUAL backend setting instead of a stale local default — that

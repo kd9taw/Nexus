@@ -746,6 +746,14 @@ export interface RadioStatus {
   catOk?: boolean | null
   /** Human-readable rig/CAT status (read frequency, or a specific error). */
   catDetail?: string
+  /** The radio's RECEIVE coverage as `[loMhz, hiMhz]` pairs, from Hamlib's capability table.
+   * **EMPTY/absent = UNKNOWN, which means ALLOW** — no CAT, caps not polled yet, or a
+   * `\dump_state` we couldn't parse. Never render an empty list as "covers nothing": it is how
+   * the UI avoids offering a "move the radio" control at a frequency the radio provably cannot
+   * reach (an HF-only rig and the 2 m APRS channel) WITHOUT blocking anything on a guess. */
+  rxRangesMhz?: [number, number][]
+  /** The dial (MHz) the radio most recently REFUSED, so the UI can name it. */
+  refusedDialMhz?: number | null
   /** The CW keyer backend the engine is actually using: 'cat' (rig in CW) or
    * 'soundcard' (rig in USB/LSB). Lets the CW cockpit toggle show the REAL state. */
   cwKeyer?: string

@@ -24,6 +24,41 @@ signal-to-noise. Comfortably clear of any packet you can actually hear.
 The WAV analysis tool now reports the measured twist of each burst, so a real recording will say
 what the local digipeater's signal actually looks like.
 
+### Opening APRS on an HF-only radio no longer breaks CAT
+
+Reported on an FTdx10, which covers HF and 6 m and has no 2 m at all. Rig control worked normally
+in the Phone and CW cockpits; clicking into APRS killed it, and it stayed dead until Nexus was
+restarted. Going back to Phone afterwards showed the dial parked on 144.390 — a frequency the
+radio had never been on.
+
+Opening the APRS cockpit tunes your radio to the APRS channel, which is on 2 m. On a radio that
+cannot go there the radio refused the command, and Nexus did not notice: it took the refusal for
+success, wrote 144.390 into its own idea of where the radio was, and stopped checking. Everything
+after that followed from believing a thing that never happened.
+
+Three fixes, and each one stands on its own:
+
+**Nexus now knows what your radio covers before it commands it anywhere.** It reads the receive
+range straight out of the radio's own capability table over CAT, so an HF-only radio is never sent
+to 2 m in the first place. Where the ranges cannot be read — no rig control, or a rig-control
+daemon that does not report them — nothing is blocked; the check only ever refuses on information
+it actually has.
+
+**A refused command is now treated as a refusal.** Nexus checks what the radio said back, keeps
+showing where the radio really is rather than where it was asked to go, tells you the radio would
+not accept that frequency, and stops asking after a few tries instead of hammering the link.
+
+**Rig control recovers on its own.** Nexus stops polling a radio that has stopped answering, which
+is right — but that state used to be permanent, so any hiccup meant no rig control until you
+restarted. It now retries quietly, backing off to about once every thirty seconds, and picks the
+radio back up within a couple of seconds of it answering again. This one is not specific to APRS:
+anything that interrupted the link used to cost you rig control for the rest of the session.
+
+**In the cockpit**, an HF-only station now reads *"No 2 m radio"* with an explanation, instead of a
+Tune button that could only ever fail. The internet feed is genuinely useful without a VHF radio —
+it shows APRS traffic other stations have reported — so the view tells you that rather than
+looking broken.
+
 ### APRS decode readout stops mixing up "now" with "a while ago"
 
 The new input-level reading immediately caught a sentence that contradicted itself: *"2 packets

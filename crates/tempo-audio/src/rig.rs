@@ -130,6 +130,62 @@ pub fn reply_ok(reply: &str) -> bool {
     reply.lines().any(|l| l.trim() == "RPRT 0")
 }
 
+/// Parse the RECEIVE frequency ranges (Hz, inclusive) out of a rigctld `\dump_state` reply.
+///
+/// The format is Hamlib's own machine-readable capability dump — the one its NETRIGCTL backend
+/// parses to reconstruct a remote rig's caps, so it is stable in a way the prose `dump_caps`
+/// output is not. Grounded in Hamlib 4.7.1 `tests/rigctl_parse.c` (`declare_proto_rig(dump_state)`):
+///
+/// ```text
+/// 1                                             protocol version (RIGCTLD_PROT_VER)
+/// 1035                                          rig model
+/// 0                                             ITU region (deprecated, always 0)
+/// 30000.000000 60000000.000000 0x1ff -1 -1 0x3 0x3     RX range: start end modes lo_pwr hi_pwr vfo ant
+/// …more RX ranges…
+/// 0 0 0 0 0 0 0                                 END of the RX list
+/// 1800000.000000 2000000.000000 0x1ff 5 100 0x3 0x3    TX ranges follow…
+/// 0 0 0 0 0 0 0                                 END of the TX list
+/// ```
+///
+/// Deliberately strict: `None` unless the reply really looks like a dump_state (leading protocol
+/// version, then ≥1 well-formed 7-field range line, then the all-zero terminator). Everything
+/// else — an `RPRT` error, our own broker's shorter answer, a future format — reads as "unknown",
+/// and the caller must then fail OPEN rather than assume nothing is covered.
+pub fn parse_dump_state_rx_ranges(reply: &str) -> Option<Vec<(u64, u64)>> {
+    let mut lines = reply.lines().map(str::trim).filter(|l| !l.is_empty());
+    // Line 1 is the protocol version. Accept only versions whose range-list layout we know
+    // (0 and 1 share it); anything else may have moved the lists and must read as unknown.
+    if !matches!(lines.next()?.parse::<u32>().ok()?, 0 | 1) {
+        return None;
+    }
+    lines.next()?.parse::<i64>().ok()?; // rig model
+    lines.next()?.parse::<i64>().ok()?; // ITU region
+    let mut ranges = Vec::new();
+    for line in lines {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() != 7 {
+            return None; // not the range-list shape we were promised — refuse to guess
+        }
+        // Frequencies print through FREQFMT (`freq_t` is a double), so "30000.000000".
+        let start = f[0].parse::<f64>().ok()?;
+        let end = f[1].parse::<f64>().ok()?;
+        if start == 0.0 && end == 0.0 {
+            // The all-zero terminator closes the RX list. TX ranges follow; we don't need them.
+            return (!ranges.is_empty()).then_some(ranges);
+        }
+        if !(start.is_finite() && end.is_finite()) || start < 0.0 || end < start {
+            return None;
+        }
+        ranges.push((start as u64, end as u64));
+    }
+    None // ran out of lines without ever seeing the terminator
+}
+
+/// Whether `hz` falls inside any of `ranges`. `ranges` empty is caller-checked, not handled here.
+pub fn ranges_cover(ranges: &[(u64, u64)], hz: u64) -> bool {
+    ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&hz))
+}
+
 /// Parse a rigctld `u <FUNC>` (get-function) reply. In the default protocol a SUCCESSFUL get
 /// returns the value ONLY — `0` or `1` on its own line, with NO `RPRT` — while an error returns
 /// `RPRT <negative>` (e.g. `-11` ENAVAIL = the rig doesn't have this func). So an `RPRT` line
@@ -383,6 +439,57 @@ impl Rig {
         }
     }
 
+    /// Send a command whose reply is MANY lines with no length or terminator we can predict
+    /// (`\dump_state`), reading until the peer goes quiet for one read window.
+    ///
+    /// Kept separate from [`Rig::command`] on purpose: that one returns at the first newline,
+    /// which for a multi-line reply would leave the rest in the socket to be misread as the NEXT
+    /// command's answer — the exact desync the drop-on-failure guard exists for. This drains to
+    /// quiet and, like `command`, drops the stream on any failure so nothing is left behind.
+    fn command_multiline(&mut self, line: &str) -> std::io::Result<String> {
+        match self.command_multiline_inner(line) {
+            Ok(reply) => Ok(reply),
+            Err(e) => {
+                self.stream = None; // force a clean reconnect on the next call
+                Err(e)
+            }
+        }
+    }
+
+    fn command_multiline_inner(&mut self, line: &str) -> std::io::Result<String> {
+        let stream = self.ensure_connected()?;
+        stream.set_nonblocking(false)?;
+        // A short per-read window is the "peer went quiet" signal; the overall deadline bounds a
+        // chatty or stalled daemon. Both are generous enough for a local rigctld's ~40-line dump.
+        stream.set_read_timeout(Some(Duration::from_millis(300)))?;
+        stream.write_all(line.as_bytes())?;
+        let deadline = std::time::Instant::now() + Duration::from_millis(2_000);
+        let mut out = Vec::with_capacity(2048);
+        let mut buf = [0u8; 1024];
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) => break, // peer closed — parse what we have
+                Ok(n) => out.extend_from_slice(&buf[..n]),
+                Err(ref e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break; // quiet for a full window: the reply is complete
+                }
+                Err(e) => return Err(e),
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+        }
+        if out.is_empty() {
+            return Err(std::io::Error::other("no reply to a multi-line command"));
+        }
+        Ok(String::from_utf8_lossy(&out).to_string())
+    }
+
     /// Key (true) or unkey (false) the transmitter. No-op under VOX (and under CAT
     /// keying when no control channel is configured — degrades to VOX).
     ///
@@ -472,11 +579,45 @@ impl Rig {
     }
 
     /// Set the dial frequency (Hz). No-op unless a CAT control channel is configured.
+    ///
+    /// Surfaces a rig REJECTION (`RPRT <negative>` — e.g. a frequency outside the radio's range,
+    /// the HF-only-rig-asked-for-2 m report) as an `Err`, exactly like [`Rig::set_mode`]. This
+    /// used to `map(|_| ())` the reply away, which made a refusal indistinguishable from success:
+    /// the caller advanced its `last_dial` to a frequency the radio was never on, suppressed the
+    /// read-back that would have corrected it, and reported "CAT confirmed — rig accepted a
+    /// command" off the back of a refusal. A command's outcome is in its reply; throwing the
+    /// reply away is throwing the outcome away.
     pub fn set_freq(&mut self, hz: u64) -> std::io::Result<()> {
         if self.control.is_none() {
             return Ok(());
         }
-        self.command(&freq_line(hz)).map(|_| ())
+        let reply = self.command(&freq_line(hz))?;
+        if reply_ok(&reply) || reply.is_empty() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!(
+                "rigctld freq error: {reply:?}"
+            )))
+        }
+    }
+
+    /// The radio's RECEIVE frequency ranges (Hz, inclusive), straight from Hamlib's backend
+    /// capability table via rigctld's `\dump_state`.
+    ///
+    /// This is how Nexus can know a radio cannot reach 2 m BEFORE commanding it there. RX (not TX)
+    /// ranges are the right list: monitoring APRS needs only receive, and RX coverage is a superset
+    /// of TX coverage on every rig, so a frequency outside the RX list is unreachable either way.
+    ///
+    /// `None` on any doubt — no CAT, an unparseable or unexpected reply, an empty list, or a
+    /// protocol version we don't recognise. **Unknown must always FAIL OPEN** at the call site
+    /// (command it and let the rig answer): a capability probe that guessed "not covered" would
+    /// block legitimate QSYs, which is far worse than the refusal it was trying to avoid.
+    pub fn read_rx_ranges(&mut self) -> Option<Vec<(u64, u64)>> {
+        self.control.as_ref()?;
+        // `\dump_state` is a long, multi-line reply; the normal per-command read stops at the
+        // first newline. Read to the deadline instead and parse whatever arrived.
+        let reply = self.command_multiline("\\dump_state\n").ok()?;
+        parse_dump_state_rx_ranges(&reply)
     }
 
     /// Set the operating mode (e.g. "USB") + passband. A BLANK mode is a no-op —
@@ -1050,6 +1191,150 @@ mod tests {
         assert!(rig.keyed);
         rig.ptt(false).unwrap();
         assert!(!rig.keyed);
+    }
+
+    #[test]
+    fn set_freq_errors_when_the_rig_refuses_the_frequency() {
+        // ⭐ THE FTdx10 BUG, at its narrowest. `F` sent to a radio that cannot reach the frequency
+        // (2 m on an HF-only rig) answers `RPRT -1`. set_freq used to `map(|_| ())` that away, so a
+        // refusal was indistinguishable from success — and the whole wedge followed from there: the
+        // radio loop advanced `last_dial` to a frequency the radio was never on, suppressed the
+        // read-back that would have corrected it, and told the operator "CAT confirmed — rig
+        // accepted a command".
+        let (addr, _log) = mock_rigctld(|l| {
+            if l.starts_with('F') {
+                "RPRT -1\n".to_string()
+            } else {
+                "RPRT 0\n".to_string()
+            }
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let err = rig.set_freq(144_390_000).unwrap_err();
+        // Same kind contract as set_mode: `Other` = the RIG actively refused, as opposed to a
+        // timeout / unreachable link. The loop's note wording depends on telling those apart.
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
+
+        // An accepted frequency still returns Ok — the guard must not break ordinary QSYs.
+        let (addr2, _l2) = mock_rigctld(ok_reply(14_074_000));
+        let mut rig2 = Rig::rigctld(&addr2);
+        assert!(rig2.set_freq(14_074_000).is_ok());
+
+        // No CAT configured: still a silent no-op success (VOX rigs have no dial to set).
+        assert!(Rig::vox().set_freq(144_390_000).is_ok());
+    }
+
+    #[test]
+    fn dump_state_rx_ranges_parse_a_real_hamlib_capability_dump() {
+        // Byte layout taken from Hamlib 4.7.1 `tests/rigctl_parse.c` dump_state: protocol version,
+        // rig model, ITU region, then 7-field RX range rows terminated by an all-zero row, then the
+        // TX rows. Frequencies print through FREQFMT (freq_t is a double).
+        let ftdx10 = "1\n1035\n0\n\
+                      30000.000000 60000000.000000 0x1ff -1 -1 0x3 0x3\n\
+                      0 0 0 0 0 0 0\n\
+                      1800000.000000 2000000.000000 0x1ff 5 100 0x3 0x3\n\
+                      0 0 0 0 0 0 0\n\
+                      0xffffffff 1\n0 0\n";
+        let r = parse_dump_state_rx_ranges(ftdx10).expect("a real dump parses");
+        assert_eq!(r, vec![(30_000, 60_000_000)]);
+        // The whole point: 2 m is NOT covered, and 20 m is — without commanding the radio anywhere.
+        assert!(!ranges_cover(&r, 144_390_000), "an HF/6 m rig cannot do 2 m");
+        assert!(ranges_cover(&r, 14_074_000));
+        // TX ranges must not leak into the RX list (parsing must stop at the RX terminator).
+        assert!(
+            ranges_cover(&r, 30_000_000),
+            "the RX list, not the ham-band TX list"
+        );
+
+        // A multi-range VHF/UHF rig (IC-9700 shape) — every band it really covers.
+        let ic9700 = "0\n1035\n1\n\
+                      144000000.000000 148000000.000000 0x1ff -1 -1 0x3 0x3\n\
+                      430000000.000000 450000000.000000 0x1ff -1 -1 0x3 0x3\n\
+                      0 0 0 0 0 0 0\n\
+                      0 0 0 0 0 0 0\n";
+        let r2 = parse_dump_state_rx_ranges(ic9700).unwrap();
+        assert_eq!(r2.len(), 2);
+        assert!(ranges_cover(&r2, 144_390_000), "the APRS channel is covered");
+        assert!(!ranges_cover(&r2, 14_074_000), "…but 20 m is not");
+    }
+
+    #[test]
+    fn an_unrecognised_dump_state_reads_as_unknown_so_callers_fail_open() {
+        // ⚠️ THE SAFETY PROPERTY. Anything we cannot positively parse must read as UNKNOWN, never
+        // as "covers nothing" — a capability probe that wrongly answered "no" would block
+        // legitimate QSYs, which is worse than the refused command it exists to avoid.
+        for reply in [
+            "RPRT -1\n",                       // the verb is not implemented
+            "RPRT -11\n",                      // not available
+            "",                                // nothing came back
+            "1\n1035\n0\n0 0 0 0 0 0 0\n",     // well-formed but an EMPTY rx list
+            "1\n1035\n0\n30000 60000000\n",    // wrong field count
+            "9\n1035\n0\n30000 7500 0 0 0 0 0\n0 0 0 0 0 0 0\n", // unknown protocol version
+            "hello\nworld\n",                  // not a dump_state at all
+            "1\n1035\n0\n30000.0 60000000.0 0x1ff -1 -1 0x3 0x3\n", // no terminator
+        ] {
+            assert_eq!(
+                parse_dump_state_rx_ranges(reply),
+                None,
+                "must read as unknown, not as a range list: {reply:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_range_probe_leaves_nothing_in_the_socket_for_the_next_command() {
+        // ⚠️ THE DESYNC HAZARD, and the reason `\dump_state` gets its own reader. It replies with
+        // ~40 lines; the ordinary `command` returns at the FIRST newline, which would leave the rest
+        // in the socket to be read as the next command's answer — after which every command is
+        // judged on a previous one's reply. This is the failure mode the drop-on-error guard exists
+        // for, and a successful multi-line reply slips straight past that guard.
+        let dump = "0\n1035\n1\n\
+                    30000.000000 60000000.000000 0xffffffff -1 -1 0x3 0x0\n\
+                    0 0 0 0 0 0 0\n\
+                    1800000.000000 2000000.000000 0xffffffff 5 100 0x3 0x0\n\
+                    0 0 0 0 0 0 0\n\
+                    0xffffffff 1\n0 0\n0xffffffff 2700\n0 0\n0\n0\n0\n0\n0\n0\n";
+        let (addr, log) = mock_rigctld(move |l| {
+            if l.starts_with("\\dump_state") {
+                dump.to_string()
+            } else if l.trim() == "f" {
+                "14074000\n".to_string()
+            } else {
+                "RPRT 0\n".to_string()
+            }
+        });
+        let mut rig = Rig::rigctld(&addr);
+        assert_eq!(
+            rig.read_rx_ranges(),
+            Some(vec![(30_000, 60_000_000)]),
+            "the probe read the whole dump"
+        );
+        // THE ASSERTION THAT MATTERS: the very next command gets its OWN answer.
+        assert_eq!(
+            rig.read_freq().expect("a clean read after the dump"),
+            14_074_000,
+            "a leftover dump_state line was read as the dial"
+        );
+        assert!(rig.set_mode("USB", 0).is_ok(), "and commands still succeed");
+        let sent = log.lock().unwrap().clone();
+        assert!(
+            sent.iter().any(|l| l.starts_with("\\dump_state")),
+            "the probe really went on the wire: {sent:?}"
+        );
+
+        // A rig/daemon that doesn't implement the verb: unknown, and nothing is disturbed.
+        let (addr2, _l2) = mock_rigctld(|l| {
+            if l.trim() == "f" {
+                "7074000\n".to_string()
+            } else {
+                "RPRT -11\n".to_string()
+            }
+        });
+        let mut rig2 = Rig::rigctld(&addr2);
+        assert_eq!(rig2.read_rx_ranges(), None, "unrecognised → unknown");
+        assert_eq!(rig2.read_freq().unwrap(), 7_074_000, "link still clean");
+
+        // No CAT: no probe, no error, no socket.
+        assert_eq!(Rig::vox().read_rx_ranges(), None);
     }
 
     #[test]
