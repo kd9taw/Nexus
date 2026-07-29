@@ -430,7 +430,7 @@ mod tests {
         // jt65_cabi.f90's constants the buffer contract is broken.
         assert_eq!(NMAX, 60 * 12_000);
         assert_eq!(NPTS, 52 * 12_000);
-        assert!(NPTS < NMAX, "the read window must fit inside the buffer");
+        const { assert!(NPTS < NMAX, "the read window must fit inside the buffer") };
         assert_eq!(PERIOD_S, 60);
     }
 

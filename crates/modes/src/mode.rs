@@ -969,7 +969,7 @@ mod tx_capability_tests {
         {
             let _ = make_mode(kind); // never refuses
         }
-        assert!(RxOnlyMode.capabilities().tx == false);
+        assert!(!RxOnlyMode.capabilities().tx);
     }
 }
 

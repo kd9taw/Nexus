@@ -928,7 +928,13 @@ impl std::fmt::Debug for DecoderCtx {
 /// that file silently never executed, which is worse than having none. Pulling it in here puts
 /// those tests on the normal `cargo test -p tempo-fast-sys --lib` path. It is `cfg(test)` so
 /// nothing is added to the shipped library.
+///
+/// `allow(dead_code)` because this target cannot see the file's real consumer: the
+/// gate's entry point (`unclassified`) is called from `build.rs`, which is a separate
+/// compilation unit, so from here it looks unused and `-D warnings` fails the build.
+/// The allow covers the seam, not a genuinely dead function.
 #[cfg(test)]
+#[allow(dead_code)]
 #[path = "../manifest_gate.rs"]
 mod manifest_gate;
 
