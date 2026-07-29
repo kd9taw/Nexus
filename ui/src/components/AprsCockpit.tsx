@@ -51,18 +51,51 @@ function ageLabel(atUnix: number, nowSec: number): string {
   return `${Math.floor(s / 3600)}h`
 }
 
-/** Below this peak the tap is carrying nothing — even an open squelch on a quiet channel sits
- * well above it. Digital silence from a codec is exactly 0. */
+// ─── CALIBRATION SEAM ────────────────────────────────────────────────────────────────────────
+// These two constants draw the silent-vs-hiss boundary, and they are currently REASONED, not
+// MEASURED. A squelched codec that emits exact digital zeros makes any positive threshold work;
+// one that emits low-level dither does not, and that is the case we have no numbers for.
+//
+// To calibrate: capture the peak readout (now shown in dBFS in the chip) on the operator's rig in
+// two resting states — (B) squelch closed, no signal, and (C) squelch open on a dead-quiet
+// channel. SILENT_PEAK belongs between those two, with margin. If they turn out to overlap, the
+// level alone cannot separate them and the discriminator has to change (tracking a noise floor
+// while samples flow is the obvious next move) — deliberately NOT built ahead of that data,
+// because guessing an adaptation rule now just risks a second wrong heuristic on the operator's
+// screen. Nothing outside this block encodes the boundary.
+
+/** Peak below which the input counts as carrying silence rather than signal. -60 dBFS.
+ * Digital silence from a squelched codec is exactly 0; open-squelch hiss measures far above. */
 const SILENT_PEAK = 0.001
 
-/** How long the tap may go without audio before we call the decoder deaf.
+/** Drains the decode thread must have reported before an absent arrival stamp is called a fault.
+ * ~1 s at the thread's 100 ms poll — long enough that arming never flashes a capture alarm. */
+const MIN_DRAINS_BEFORE_CAPTURE_FAULT = 5
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The peak level as dBFS, so "what is the decoder hearing" is a NUMBER on screen rather than an
+ * inference from which message appeared. Exact zero has no logarithm — say so plainly. */
+function levelLabel(peak: number): string {
+  if (!(peak > 0)) return 'level: digital silence (exactly zero)'
+  return `level: peak ${Math.round(20 * Math.log10(peak))} dBFS`
+}
+
+/** How long the tap may go without any samples ARRIVING before the capture counts as dead.
  *
  * The decode thread polls every 100 ms but the radio loop that feeds it can take far longer per
  * iteration (blocking CAT, up to 2500 ms on slow serial), so gaps of a second or two are normal.
  * Judging on the instant would cry wolf constantly on a healthy station. */
 const AUDIO_STALE_SEC = 5
 
-export type AprsDecodeState = 'off' | 'deaf' | 'listening' | 'unreadable' | 'decoding'
+export type AprsDecodeState =
+  | 'off'
+  /** Nothing arriving from the capture device at all — a real fault. */
+  | 'nocapture'
+  /** Arriving, but at zero level — squelch closed. The normal resting state of an FM channel. */
+  | 'silent'
+  | 'listening'
+  | 'unreadable'
+  | 'decoding'
 
 /**
  * Turn decoder health into what the operator should be told.
@@ -84,26 +117,35 @@ export function aprsDecodeStatus(
       detail: 'The APRS decoder is not running. Arm Monitor to decode the RX audio.',
     }
   }
-  const audioStale =
+  const level = levelLabel(health.audioPeak)
+  // NOTHING ARRIVING — the only genuine capture fault. Held apart from a zero LEVEL (below),
+  // because the two have opposite fixes. Waits for a few drains so arming cannot flash an alarm
+  // before the decode thread has reported anything.
+  const noArrivals =
     health.lastAudioUnix == null || nowSec - health.lastAudioUnix > AUDIO_STALE_SEC
-  if (audioStale || health.audioPeak < SILENT_PEAK) {
+  if (noArrivals && health.drains >= MIN_DRAINS_BEFORE_CAPTURE_FAULT) {
     return {
-      state: 'deaf',
-      label: 'No audio',
+      state: 'nocapture',
+      label: 'No input',
       detail:
-        'Armed, but no audio is reaching the decoder. Check that Settings → Audio input is the ' +
-        'radio (not a microphone or a disconnected device) — what you hear on the speaker does ' +
-        'not tell you what the app is capturing.',
+        'Armed, but no audio samples are arriving at all — the capture device is not delivering ' +
+        'anything. Check that Settings → Audio input is the radio (not a microphone or a ' +
+        'disconnected device); what you hear on the speaker does not tell you what the app is ' +
+        'capturing.',
     }
   }
+  // Decodes outrank everything below: once packets are landing, a squelched gap between them is
+  // not news, and flicking back to a fault message between bursts is what made the readout
+  // untrustworthy on air.
   if (health.framesDecoded > 0) {
     return {
       state: 'decoding',
       label: `${health.framesDecoded} decoded`,
       detail:
-        health.lastDecodeUnix == null
+        (health.lastDecodeUnix == null
           ? `${health.framesDecoded} packets decoded.`
-          : `${health.framesDecoded} packets decoded, last ${ageLabel(health.lastDecodeUnix, nowSec)} ago.`,
+          : `${health.framesDecoded} packets decoded, last ${ageLabel(health.lastDecodeUnix, nowSec)} ago.`) +
+        ` Input ${level}.`,
     }
   }
   if (health.framesSeen > 0) {
@@ -111,15 +153,30 @@ export function aprsDecodeStatus(
       state: 'unreadable',
       label: `${health.framesSeen} failed CRC`,
       detail:
-        `${health.framesSeen} packets were heard but none passed the checksum. The signal is ` +
-        'arriving corrupted: check that the rig is on 144.390 in FM, and that the RX audio is ' +
-        'not so hot that it is clipping.',
+        `${health.framesSeen} packets were heard but none passed the checksum. Some of that is ` +
+        'normal: when the squelch opens partway through a burst the start of the packet is lost, ' +
+        'and a part-heard packet can never pass. It is only a fault if nothing ever decodes — in ' +
+        'which case check the rig is on 144.390 in FM, and that the RX audio is not so hot that ' +
+        `it is clipping. Input ${level}.`,
+    }
+  }
+  // ARRIVING BUT SILENT. Overwhelmingly this is just a closed squelch, which is what an idle FM
+  // channel looks like — so it names the squelch first and does not read as a fault.
+  if (health.audioPeak < SILENT_PEAK) {
+    return {
+      state: 'silent',
+      label: 'Silent',
+      detail:
+        'The input is alive and delivering audio, but it is silent — normally that just means ' +
+        'the squelch is closed between packets, which is what an idle FM channel looks like. To ' +
+        'confirm the routing, open the squelch: hiss should show up here as a level. If it still ' +
+        `reads silent with the squelch open, the wrong input device is selected. Input ${level}.`,
     }
   }
   return {
     state: 'listening',
     label: 'Listening',
-    detail: 'Audio is reaching the decoder and no packets have been heard yet — a quiet channel.',
+    detail: `Audio is reaching the decoder and no packets have been heard yet — a quiet channel. Input ${level}.`,
   }
 }
 
@@ -425,9 +482,10 @@ export function AprsCockpit({
         >
           {arm === 'auto' ? '● Monitoring (auto)' : arm === 'explicit' ? '● Monitoring' : 'Monitor'}
         </button>
-        {/* Decode health. An empty APRS screen used to be one answer to three different
-            questions — deaf app, unreadable channel, quiet band — so it never told the
-            operator which of the two fixable ones they were looking at. */}
+        {/* Decode health, carrying the live input level. An empty APRS screen used to be one
+            answer to several different questions — dead capture, squelched channel, unreadable
+            signal, quiet band. Only ONE of those is a fault, and the first cut of this chip
+            called the most common of them (a closed squelch) a broken audio device. */}
         <span
           className={`aprs-health aprs-health-${decode.state}`}
           role="status"

@@ -1225,8 +1225,12 @@ export interface AprsHealth {
   arm: 'off' | 'auto' | 'explicit'
   /** Peak |sample| of the last drain that carried audio (empty drains do not clobber it). */
   audioPeak: number
-  /** When audio last arrived at the tap. Null while armed = nothing has ever arrived. */
+  /** When audio last ARRIVED at the tap, at any level. Distinct from the level on purpose: a
+   * squelched codec streams digital zeros, so this stays fresh while `audioPeak` is 0. */
   lastAudioUnix: number | null
+  /** Drains reported since arming, carrying audio or not — lets "never heard anything" be told
+   * apart from "have not looked yet", so arming does not flash a capture alarm. */
+  drains: number
   /** HDLC frames recovered since arming, BEFORE the AX.25 FCS check. */
   framesSeen: number
   /** Of those, how many passed the FCS. Seen climbing while this does not = heard, but not cleanly. */

@@ -16929,8 +16929,15 @@ html[data-panel='needed'] {
 .aprs-health-off {
   color: var(--text-faint);
 }
-.aprs-health-deaf {
+/* A genuine fault: nothing is arriving from the capture device. */
+.aprs-health-nocapture {
   color: var(--state-weak);
+}
+/* NOT a fault, and deliberately not coloured like one: an idle FM channel with the squelch
+   closed reads as silent almost all the time. Colouring this red is what made a healthy
+   station look broken for ~90% of the session. */
+.aprs-health-silent {
+  color: var(--text-dim);
 }
 .aprs-health-unreadable {
   color: var(--state-ok);

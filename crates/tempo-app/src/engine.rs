@@ -1091,9 +1091,21 @@ pub struct AprsHealth {
     /// CAT — up to 2500 ms on slow serial). Empty drains are therefore normal and frequent, and
     /// letting one zero this would flap the readout to "no audio" on a perfectly healthy channel.
     pub audio_peak: f32,
-    /// Unix seconds audio last arrived at the tap. Paired with `audio_peak` because the honest
-    /// test for a deaf decoder is "nothing for a while", not "nothing this instant".
+    /// Unix seconds audio last arrived at the tap — samples ARRIVING, at any level.
+    ///
+    /// ⚠️ This and [`AprsHealth::audio_peak`] answer different questions and must never be merged
+    /// back into one "no audio" test. A squelched USB codec streams a continuous run of digital
+    /// ZEROS: samples keep arriving (this stays fresh) while the level is zero. Nothing arriving
+    /// at all is a broken capture device; arriving-but-silent is an idle FM channel. Conflating
+    /// them told an operator with a perfectly good setup to go fix their audio routing.
     pub last_audio_unix: Option<i64>,
+    /// Drains the decode thread has reported since arming, carrying audio or not.
+    ///
+    /// Exists so "we have never seen audio" can be told apart from "we have not looked yet":
+    /// arming resets this health, and the cockpit re-reads it immediately, so for a fraction of a
+    /// second `last_audio_unix` is legitimately `None`. Without this the chip flashed a
+    /// check-your-input-device alarm every time the operator armed Monitor.
+    pub drains: u64,
     /// HDLC frames the deframer recovered since arming: candidates, BEFORE the FCS check.
     pub frames_seen: u64,
     /// Of those, how many passed the FCS and became packets. `frames_seen` climbing while this
@@ -5281,6 +5293,7 @@ impl Engine {
         at_unix: i64,
     ) {
         self.aprs_health.arm = self.aprs_arm;
+        self.aprs_health.drains += 1;
         if samples > 0 {
             self.aprs_health.audio_peak = audio_peak;
             self.aprs_health.last_audio_unix = Some(at_unix);
@@ -14641,6 +14654,56 @@ mod tests {
         assert_eq!(e.aprs_health().arm, AprsArm::Auto);
         e.set_aprs_arm(AprsArm::Explicit);
         assert_eq!(e.aprs_health().arm, AprsArm::Explicit);
+    }
+
+    // ---- A squelched codec is NOT a dead capture device (on-air report, 0.21.1) ----
+    //
+    // An FM rig's USB codec streams a continuous run of digital ZEROS while the squelch is closed.
+    // Samples keep arriving; only the level is zero. The health struct has to keep those two facts
+    // separate, because the UI turns them into opposite messages: "your audio device is broken"
+    // versus "the channel is idle between packets".
+
+    #[test]
+    fn a_zero_filled_drain_still_counts_as_audio_arriving() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.note_aprs_rx(1200, 0.0, 0, 0, 5_000);
+        let h = e.aprs_health();
+        assert_eq!(
+            h.last_audio_unix,
+            Some(5_000),
+            "samples arrived — the capture device is alive and must not be blamed"
+        );
+        assert_eq!(h.audio_peak, 0.0, "and the level honestly reads silent");
+    }
+
+    #[test]
+    fn a_drain_with_no_samples_leaves_the_arrival_stamp_alone() {
+        // The genuinely-dead-capture case, and also the ordinary empty drain: the decode thread
+        // out-polls the radio loop, so empty drains are routine and must not fake an arrival.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        for i in 0..20 {
+            e.note_aprs_rx(0, 0.0, 0, 0, 5_000 + i);
+        }
+        let h = e.aprs_health();
+        assert_eq!(h.last_audio_unix, None, "nothing ever arrived");
+        assert_eq!(h.drains, 20, "but we have definitely been looking");
+    }
+
+    #[test]
+    fn drains_distinguish_never_looked_from_never_heard() {
+        // Arming resets health; the cockpit re-reads it immediately. Before the decode thread has
+        // reported anything, `None` means "not yet", not "your device is dead" — the UI needs to
+        // tell those apart or it flashes an alarm on every arm.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        assert_eq!(e.aprs_health().drains, 0, "not looked yet");
+        e.note_aprs_rx(0, 0.0, 0, 0, 5_000);
+        assert_eq!(e.aprs_health().drains, 1);
+        // Re-arming starts the count over with the rest of the health.
+        e.set_aprs_arm(AprsArm::Explicit);
+        assert_eq!(e.aprs_health().drains, 0);
     }
 
     // ---- Receive-only tiers must never LOOK like they are transmitting ----

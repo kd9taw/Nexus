@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### APRS no longer calls a closed squelch a broken audio device
+
+Testing 0.21.1 on the air, the APRS decode readout sat on "no audio is reaching the decoder —
+check your audio input" for most of a session, on a rig whose audio was set up correctly.
+
+A squelched radio does not send the app silence in the sense of *nothing*; its USB codec keeps
+streaming a continuous run of digital zeros. Audio was arriving the whole time — it just had no
+level. The readout tested for those two things in one breath and reported the wrong one, so an
+idle FM channel between packets, which is what APRS looks like nearly all the time, was announced
+as a fault in your audio routing.
+
+Those are now separate, and only one of them is a fault:
+
+- **"Silent"** — the input is alive and delivering audio with nothing on it. Almost always just
+  the squelch being closed between packets. The message says so, and says to open the squelch and
+  watch for hiss if you want to confirm the routing. It is no longer coloured as a problem.
+- **"No input"** — no audio samples are arriving at all. This one really does mean the capture
+  device is wrong or gone, and still points you at Settings.
+
+The readout also now shows the **input level in dBFS**, so what the decoder is hearing is a number
+you can read rather than something to infer from which message appeared. And arming Monitor no
+longer flashes a capture warning in the instant before the first audio arrives.
+
+Two related honesty fixes: failed-checksum counts now explain that packets caught part-way through
+— which is what happens when the squelch opens mid-burst — can never pass their checksum, so some
+failures on a busy channel are expected rather than a sign of a misconfigured radio. And once
+packets are decoding, the readout stays on the decode count instead of flicking back to a warning
+during the quiet gaps between them.
+
 ### APRS: stations you could hear now actually show up on the map
 
 Operators reported hearing plenty of APRS traffic on 144.390 while the map stayed empty. The
