@@ -213,14 +213,23 @@ export function aprsDecodeStatus(
     const notFm = modeKnown && !/fm/i.test(radio.sideband)
     const offChannel = Math.abs(radio.dialMhz - wantDialMhz) > DIAL_TOLERANCE_MHZ
     if (offChannel || notFm) {
-      const where = `${radio.dialMhz.toFixed(3)}${modeKnown ? ` ${radio.sideband.toUpperCase()}` : ''}`
+      const want = wantDialMhz.toFixed(3)
+      const mode = radio.sideband.toUpperCase()
+      // Name the thing that is actually wrong. Restating a frequency the operator is already on
+      // reads as noise; "you are in USB and this needs FM" is the answer to the question they
+      // are really asking.
+      const detail = !offChannel
+        ? `The radio is on ${want} but in ${mode} — APRS needs FM. FM packet audio demodulated ` +
+          'as SSB is garbled, so nothing will decode however strong the signal is.'
+        : notFm
+          ? `The radio is on ${radio.dialMhz.toFixed(3)} ${mode} — APRS needs ${want} FM. ` +
+            'Nothing on this channel can decode as APRS packet, whatever the audio level says.'
+          : `The radio is on ${radio.dialMhz.toFixed(3)} — APRS needs ${want}. Nothing on this ` +
+            'channel can decode as APRS packet, whatever the audio level says.'
       return {
         state: 'wrongfreq',
-        label: 'Wrong frequency',
-        detail:
-          `The radio is on ${where} — APRS needs ${wantDialMhz.toFixed(3)} FM. Nothing on this ` +
-          'channel can decode as APRS packet, whatever the audio level says. Tune to the APRS ' +
-          'channel to start hearing it.',
+        label: offChannel ? 'Wrong frequency' : 'Wrong mode',
+        detail: `${detail} Tune to the APRS channel to start hearing it.`,
       }
     }
   }

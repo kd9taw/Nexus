@@ -19,6 +19,11 @@ it says so first and offers a one-click fix: **"The radio is on 144.174 USB — 
 FM"**, with a Tune button beside it. It judges against the APRS channel *you have selected*, so
 144.800 in Europe or 145.175 in Australia is correct, not a warning.
 
+It names whichever thing is actually wrong. Sitting on the right frequency in the wrong mode is
+its own trap — the signal looks strong and decodes nothing — so that case reads **"on 144.390 but
+in USB — APRS needs FM"** and explains that FM packet audio demodulated as SSB is garbled. Data-FM
+submodes such as PKTFM count as FM, because on the air they are.
+
 The Tune control also speaks now. Tuning while an FT8 over is in flight cannot move the radio
 immediately — the rig will not accept a frequency change mid-transmission — so instead of
 appearing to do nothing it says the radio will move when the over ends.

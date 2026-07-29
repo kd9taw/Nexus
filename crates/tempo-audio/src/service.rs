@@ -8241,6 +8241,29 @@ mod tests {
             144.390,
             "and the app agrees the radio is on the APRS frequency"
         );
+
+        // What MODE token actually went on the wire. APRS is FM: a 2 m packet signal
+        // demodulated as SSB is garbled audio, so an APRS tune that lands the frequency but
+        // leaves the rig in USB would decode nothing while looking perfectly tuned.
+        //
+        // ⚠️ SCOPE: this proves what we SEND, not what a rig accepts — a rigctld dummy accepts
+        // bogus mode tokens (see reference-build-verify-limits), so only the radio can confirm
+        // the far end. KD9TAW confirmed on the real IC-9700 that APRS Tune sets FM.
+        let modes: Vec<String> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c.strip_prefix("M ").map(|m| m.to_string()))
+            .collect();
+        assert!(
+            modes.iter().any(|m| m.starts_with("FM")),
+            "the APRS tune must command FM, not a data/SSB submode: {modes:?}"
+        );
+        assert_eq!(
+            modes.last().map(|m| m.split_whitespace().next().unwrap_or("")),
+            Some("FM"),
+            "and FM must still be the last mode commanded — nothing re-asserts SSB after it: {modes:?}"
+        );
     }
 
     #[test]
