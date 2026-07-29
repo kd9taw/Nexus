@@ -528,9 +528,14 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               {detail.status && <span className={`sat-chip ${detail.status === 'alive' ? 'alive' : 'dead'}`}>{detail.status}</span>}
             </h2>
             <div
+              /* Square-ish and growing with the column rather than pinned at
+                 260px: a globe is only readable at size, and this is the one
+                 the operator opens to read a single pass. */
               style={{
                 width: '100%',
-                height: 260,
+                aspectRatio: '1 / 1',
+                maxHeight: '52vh',
+                minHeight: 260,
                 borderRadius: 8,
                 overflow: 'hidden',
                 border: '1px solid var(--border)',

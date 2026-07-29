@@ -87,9 +87,17 @@ export function rarityMeta(
 }
 
 /** Likelihood score (0..1) → an `rgb(...)` fill from the perceptual inferno LUT. */
-export function heatColor(score: number): string {
+export function heatColor(score: number, alpha = 1): string {
   const [r, g, b] = sampleLut('inferno', Math.max(0, Math.min(1, score)))
-  return `rgb(${r}, ${g}, ${b})`
+  // `alpha` lets a caller sit the ramp BACK against the panel rather than on top
+  // of it. The inferno LUT runs black → purple → red → orange → yellow, which is
+  // right for a matrix you are reading deliberately and much too loud for one you
+  // are scrolling past: the operator's words for the DXpedition calendar were
+  // "really loud ... a lot of yellows, oranges, and reds, and that really
+  // dominates the whole screen". Blending toward the background keeps the ranking
+  // legible while giving the page back to the text. Full strength is still the
+  // default, so ActivityMatrix is untouched.
+  return alpha >= 1 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
 /** UTC hour (0–23) → "14Z". */

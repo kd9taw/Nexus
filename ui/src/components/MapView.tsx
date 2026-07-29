@@ -1045,7 +1045,19 @@ export function MapView({
       ctx.font = `500 10px ${cssVar('--font-mono') || 'monospace'}`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
+      // ⭐ THE DETAIL GLOBE SHOWS ONE BIRD, NOT ALL OF THEM. Every satellite drew
+      // its own past trail + dashed projection, so opening a single bird's detail
+      // produced a globe criss-crossed with a dozen unrelated tracks and the pass
+      // you actually clicked was unreadable. Operator, 2026-07-29: "it's giving me
+      // a lot of trails of other satellites, which makes things look confusing ...
+      // when you click on something, maybe you only see that satellite."
+      //
+      // Scoped to the EMBEDDED detail globe via `focusSat`. The full Connect/map
+      // satellite layer is unchanged — there, seeing every bird at once is the
+      // whole point of turning the layer on.
+      const soloSat = focusSat ? focusSat.toUpperCase() : null
       for (const b of sats.birds) {
+        if (soloSat && b.name.toUpperCase() !== soloSat) continue
         const isChased = chasedSet.has(b.name.toUpperCase())
         const live = posAt(b.track, nowSecs) ?? { lat: b.lat, lon: b.lon }
         const p = project(proj, live)

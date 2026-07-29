@@ -9,7 +9,15 @@ import { Tooltip, TooltipProvider } from '../ui/Tooltip'
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 const TICKS = [0, 6, 12, 18]
 
-export function LikelihoodHeatmap({ outlook }: { outlook: BandOutlook[] }) {
+export function LikelihoodHeatmap({
+  outlook,
+  /** Sit the ramp back against the panel — for lists the operator SCROLLS rather
+   * than studies. See `heatColor`'s alpha note. */
+  muted = false,
+}: {
+  outlook: BandOutlook[]
+  muted?: boolean
+}) {
   if (outlook.length === 0) return null
   const nowH = nowUtcHour()
   return (
@@ -39,7 +47,7 @@ export function LikelihoodHeatmap({ outlook }: { outlook: BandOutlook[] }) {
                 <Tooltip key={h} side="top" content={`${o.band} ${fmtZ(h)} — ${pct(s)}`}>
                   <span
                     className={`heatmap-cell${h === nowH ? ' now' : ''}`}
-                    style={{ background: heatColor(s) }}
+                    style={{ background: heatColor(s, muted ? 0.5 : 1) }}
                   />
                 </Tooltip>
               )
