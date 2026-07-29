@@ -231,6 +231,11 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   (`ui/src/waterfallHistory.ts`) are ported from AetherSDR's `DssRenderer` /
   `WaterfallHistoryBuffer`; its `PanadapterStream` was a wire-format reference for the
   native Flex DAX/VITA path (see **[NOTICE](NOTICE)**).
+- **[fldigi](http://www.w1hkj.com/)** (GPL-3.0-or-later) — **Dave Freese W1HKJ** and **Stefan Fendt
+  DL1SMF** (descended from **Tomi Manninen OH2BNS**'s gmfsk). Nexus's RTTY demodulator
+  (`crates/tempo-core/src/rtty/demod.rs`) is **ported from fldigi's receive path** (`rtty.cxx` +
+  `fftfilt.cxx`), implementing **Kok Chen W7AY**'s published ATC design as fldigi does; lineage and
+  the deliberate differences are in **[NOTICE](NOTICE)**.
 - **[Hamlib](https://hamlib.github.io/)** — bundled `rigctld` for CAT control (GPL/LGPL).
 - **[FFTW](https://www.fftw.org/)** (GPL), **[Tauri](https://tauri.app/)**, React,
   [cpal](https://github.com/RustAudio/cpal), Natural Earth basemap (public domain).

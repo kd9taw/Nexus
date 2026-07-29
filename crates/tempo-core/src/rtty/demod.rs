@@ -17,6 +17,12 @@
 //! value is carried out as a per-character soft confidence instead of being
 //! discarded — that soft metric plus the [`RttyDemod`] trait is the decoder-
 //! ensemble seam.
+//!
+//! Upstream project: fldigi <http://www.w1hkj.com/> (source:
+//! <https://sourceforge.net/p/fldigi/fldigi/>). The ATC slicer follows the
+//! design Kok Chen W7AY published at <http://www.w7ay.net/site/Technical/ATC/>,
+//! as fldigi implements it. Full lineage entry: NOTICE, "fldigi — RTTY
+//! demodulator".
 
 use super::baudot::BaudotDecoder;
 use microfft::Complex32;

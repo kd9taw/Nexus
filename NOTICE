@@ -183,6 +183,31 @@ AetherSDR's `PanadapterStream` as a **reference for the public wire-format layou
 implementation itself is original (see the FlexRadio SmartSDR note below). AetherSDR
 is an independent project; Nexus is not affiliated with it.
 
+### fldigi — RTTY demodulator
+License: **GNU GPL, version 3 or later** (GPL-3.0-or-later). <http://www.w1hkj.com/> ·
+<https://sourceforge.net/p/fldigi/fldigi/>
+
+Nexus's RTTY receive path (`crates/tempo-core/src/rtty/demod.rs`) is **ported
+from fldigi**: `src/cw_rtty/rtty.cxx` (Copyright (C) 2012 Dave Freese, W1HKJ,
+and Stefan Fendt, DL1SMF; descended from Tomi Manninen, OH2BNS's gmfsk modem,
+also GPL) and `src/filters/fftfilt.cxx` (Copyright (C) 2006-2008 Dave Freese,
+W1HKJ). The ported design comprises the mark/space baseband mixers, the
+overlap-add FFT filters with the Feher raised-cosine "enhanced Nyquist"
+response (K = 1.4), the envelope/noise-follower time constants, the
+SNR-optimized Automatic Threshold Correction (ATC) slicer — a design published
+by Kok Chen, W7AY (<http://www.w7ay.net/site/Technical/ATC/>), followed here as
+fldigi implements it — the straddle-point bit-clock recovery, and the async
+character state machine. The Baudot tables in
+`crates/tempo-core/src/rtty/baudot.rs` are the US-TTY tables fldigi uses on the
+air. The file header carries the same attribution, and the deliberate
+differences are documented there: 12 kHz sample rate (vs fldigi's 8 kHz), a
+per-character soft-confidence output (fldigi discards the slicer's continuous
+value), an acquire-then-freeze AFC (fldigi's is free-running), and a
+matched-filter-based signal-presence squelch. fldigi is GPL-3.0-or-later and
+Nexus is GPLv3-only; the ported code is incorporated by electing version 3
+(see "License compatibility" below). fldigi is an independent project; Nexus
+is not affiliated with or endorsed by it.
+
 ---
 
 ## Bundled components (shipped in the Windows installer)
@@ -408,8 +433,9 @@ a courtesy to the operators and communities who provide them:
 
 The bundled and linked components combine into the GPLv3 whole:
 
-- GPLv3 / LGPL / GPLv2-or-later (WSJT-X, Hamlib, FFTW) combine into the
-  GPLv3 whole (FFTW's v2-or-later is satisfied by electing v3).
+- GPLv3 / LGPL / GPLv2-or-later (WSJT-X, Hamlib, FFTW, fldigi) combine into the
+  GPLv3 whole (FFTW's v2-or-later and fldigi's v3-or-later are satisfied by
+  electing v3).
 - Permissive licenses (BSL-1.0 for Boost; MIT / Apache-2.0 for Tauri, cpal,
   sgp4, keyring, reqwest, hound, socket2, serde, React, TypeScript, Vite,
   Radix; ISC for d3-geo, topojson-client, world-atlas, us-atlas, lucide-react;
