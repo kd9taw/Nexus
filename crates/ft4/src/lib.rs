@@ -10,7 +10,7 @@
 //! Not thread-safe; serializes behind [`tempo_fast_sys::MODEM_LOCK`] — the single lock
 //! shared across every mode (FT1/FT8/FT4/DX1) that links `libtempo`.
 
-use tempo_fast_sys::MODEM_LOCK;
+use tempo_fast_sys::modem_lock;
 
 pub use tempo_fast_sys::{FT4_NMAX as NMAX, FT4_NN as NN};
 
@@ -47,7 +47,7 @@ pub fn encode(msg: &str) -> Vec<i32> {
     let bytes = msg.as_bytes();
     let mut itone = vec![0i32; NN];
     let mut nsym: i32 = 0;
-    let _guard = MODEM_LOCK.lock().unwrap();
+    let _guard = modem_lock();
     unsafe {
         tempo_fast_sys::ft4_encode(
             bytes.as_ptr() as *const _,
@@ -70,7 +70,7 @@ pub fn encode(msg: &str) -> Vec<i32> {
 pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
     let mut wave = vec![0f32; NMAX];
     let mut nwave: i32 = NMAX as i32;
-    let _guard = MODEM_LOCK.lock().unwrap();
+    let _guard = modem_lock();
     unsafe {
         tempo_fast_sys::ft4_gen_wave(
             itone.as_ptr(),
@@ -117,7 +117,7 @@ pub fn decode_frame(
     let mut out = vec![tempo_fast_sys::Ft4DecodeT::default(); MAX_DECODES];
 
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::ft4_decode_frame(
                 iwave.as_ptr(),

@@ -54,7 +54,7 @@
 //! holds the shared symbol-spectra state (`s1` alone is 258 KB) and the decoder
 //! keeps SAVE state besides; see `modem-state-manifest.toml`.
 
-use tempo_fast_sys::MODEM_LOCK;
+use tempo_fast_sys::modem_lock;
 
 pub use tempo_fast_sys::{JT65_NMAX as NMAX, JT65_NPTS as NPTS, JT65_NSUBMODES as NSUBMODES};
 
@@ -108,7 +108,7 @@ pub fn encode(msg: &str) -> Option<Vec<i32>> {
     let c = std::ffi::CString::new(msg).ok()?;
     let mut itone = vec![0i32; NN];
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::jt65_encode_msg(
                 c.as_ptr(),
@@ -249,7 +249,7 @@ pub fn decode_frame(
     let mut out = vec![tempo_fast_sys::Jt65DecodeT::default(); MAX_DECODES];
 
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::jt65_decode_frame(
                 iwave.as_ptr(),

@@ -39,7 +39,7 @@
 //! Q65 adds process-global C state on top of the Fortran SAVE state: `codec` in
 //! q65_subs.c and the q65_hist decode ring. See `modem-state-manifest.toml` GROUP H.
 
-use tempo_fast_sys::MODEM_LOCK;
+use tempo_fast_sys::modem_lock;
 
 pub use tempo_fast_sys::{
     q65_nmax as nmax, q65_period_supported as period_supported, Q65_NMAX_MAX as NMAX_MAX,
@@ -86,7 +86,7 @@ pub fn encode(msg: &str) -> Option<Vec<i32>> {
     let c = std::ffi::CString::new(msg).ok()?;
     let mut itone = vec![0i32; NN];
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::q65_encode_msg(
                 c.as_ptr(),
@@ -169,7 +169,7 @@ pub fn gen_wave(
     }
     let mut wave = vec![0f32; NN * nsps];
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::q65_gen_wave(
                 itone.as_ptr(),
@@ -278,7 +278,7 @@ pub fn decode_frame(
     let mut out = vec![tempo_fast_sys::Q65DecodeT::default(); MAX_DECODES];
 
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::q65_decode_frame(
                 iwave.as_ptr(),
