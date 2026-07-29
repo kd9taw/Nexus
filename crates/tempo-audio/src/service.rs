@@ -176,6 +176,10 @@ fn cat_down_message(t: &Transport, err: &std::io::Error) -> String {
 use tempo_app::dto::{SourceKind, Tier};
 use tempo_app::settings::{RadioProfile, Settings};
 use tempo_core::message::Msg;
+// Band label → club-log meter string. Lives in `tempo_net` beside the two
+// protocols that consume it (N1MM `<band>`, N3FJP `fldBand`), because the
+// shell's per-QSO N1MM forwarder needs the identical conversion.
+use tempo_net::band_for_interop;
 use tempo_net::pskreporter::{PskReporter, Spot};
 use tempo_net::server::WsjtxServer;
 use tempo_net::wsjtx::{
@@ -4792,24 +4796,17 @@ impl RadioLoop {
                                         call: q.call.clone(),
                                         band: band_for_interop(&q.band),
                                         mode: mode_str.to_string(),
-                                        timestamp: {
-                                            let (d, t) = cabrillo_like_dt(when);
-                                            format!("{d} {t}")
-                                        },
+                                        timestamp: tempo_net::n1mm::utc_timestamp(when),
                                         section: q.section.clone(),
+                                        // A contest exchange carries no grid.
+                                        gridsquare: String::new(),
                                         points: tempo_core::fieldday::qso_points_for_mode(&q.mode),
                                         contestname: contest.to_string(),
                                         freq_10hz: (dial_mhz * 1e5) as u64,
                                         sent_exchange: myexch.clone(),
                                         operator: operator.clone(),
-                                        // 32-hex dedup id: time + index + call hash.
-                                        id: format!(
-                                            "{:016x}{:016x}",
-                                            when.wrapping_mul(31).wrapping_add(i as u64),
-                                            q.call.bytes().fold(0u64, |a, b| {
-                                                a.wrapping_mul(131).wrapping_add(b as u64)
-                                            })
-                                        ),
+                                        // 32-hex dedup id: time + batch index + call hash.
+                                        id: tempo_net::n1mm::dedup_id(when, &q.call, i as u64),
                                     };
                                     if let Err(e) = tempo_net::n1mm::send_contact(&n1_addr, &c) {
                                         eprintln!("tempo: N1MM broadcast failed: {e}");
@@ -4873,45 +4870,6 @@ impl RadioLoop {
 // callsign-gating live here where they can be tested.
 
 /// The WSJT-X mode string for a link [`Tier`].
-/// Band label → the meter-string the club-log protocols expect ("20m" → "20").
-/// The centimeter bands need real values, not a blind alpha-strip ("70cm"
-/// would have read as SEVENTY METERS in N3FJP).
-fn band_for_interop(label: &str) -> String {
-    match label {
-        "70cm" => "0.7".to_string(),
-        "33cm" => "0.33".to_string(),
-        "23cm" => "0.23".to_string(),
-        other => other
-            .trim_end_matches(|c: char| c.is_alphabetic())
-            .to_string(),
-    }
-}
-
-/// Unix secs → ("YYYY-MM-DD", "HH:MM:SS") UTC for the N1MM timestamp.
-fn cabrillo_like_dt(unix: u64) -> (String, String) {
-    let secs_of_day = unix % 86_400;
-    let days = (unix / 86_400) as i64;
-    let (h, m, sec) = (
-        (secs_of_day / 3600) as u32,
-        ((secs_of_day % 3600) / 60) as u32,
-        (secs_of_day % 60) as u32,
-    );
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let mo = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let y = if mo <= 2 { y + 1 } else { y };
-    (
-        format!("{y:04}-{mo:02}-{d:02}"),
-        format!("{h:02}:{m:02}:{sec:02}"),
-    )
-}
-
 fn tier_mode(tier: Tier) -> &'static str {
     match tier {
         Tier::TempoFast => "TempoFast",

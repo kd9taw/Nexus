@@ -506,6 +506,53 @@ pub struct PendingUpload {
 /// worker tick / 2 s), so a permanently-down service eventually stops retrying.
 pub const MAX_UPLOAD_RETRIES: u8 = 20;
 
+/// Where the STANDING N1MM broadcast should go, or `None` when it is off.
+///
+/// Two independent conditions, both required: the operator's toggle, and an
+/// address to send to. Pulled out of [`Engine::push_to_n1mm`] so "am I
+/// broadcasting?" is a pure, testable question rather than a condition buried in
+/// the log path.
+pub fn n1mm_broadcast_target(s: &Settings) -> Option<String> {
+    let addr = s.n1mm_addr.trim();
+    (s.n1mm_upload && !addr.is_empty()).then(|| addr.to_string())
+}
+
+/// Fill an N1MM `<contactinfo>` for an ORDINARY logged QSO.
+///
+/// The Field Day emitter in the radio loop fills the contest fields (class,
+/// section, points, exchange) from the contest log. This is the other audience: a
+/// live map/dashboard plotting each contact as it is logged, so what matters is
+/// who, where, which band/frequency, which mode and when. The contest fields are
+/// honestly blank — a ragchew claims no contest points and belongs to no section.
+pub fn n1mm_contact_for(
+    rec: &tempo_core::logbook::QsoRecord,
+    mycall: &str,
+) -> tempo_net::n1mm::N1mmContact {
+    tempo_net::n1mm::N1mmContact {
+        mycall: mycall.to_string(),
+        call: rec.call.clone(),
+        band: tempo_net::band_for_interop(&rec.band),
+        // The logged mode token, passed through as-is. A Nexus-native tier
+        // (TempoFast / FT1 / DX1) is reported under its real name rather than
+        // mapped onto a mode it is not — a map that says "FT8" for an FT1 contact
+        // is a wrong answer, where an unknown-but-true label is merely unfamiliar.
+        mode: rec.mode.to_uppercase(),
+        timestamp: tempo_net::n1mm::utc_timestamp(rec.when_unix),
+        section: String::new(),
+        gridsquare: rec.grid.clone().unwrap_or_default(),
+        points: 0,
+        contestname: tempo_net::n1mm::GENERAL_LOG.to_string(),
+        freq_10hz: (rec.freq_mhz * 1e5) as u64,
+        // A plain QSO's "exchange" is the signal report — what N1MM's own DX log
+        // puts here.
+        sent_exchange: rec.rst_sent.clone().unwrap_or_default(),
+        // One station, one operator on this path (the rotating-operator field is
+        // Field Day's, and Field Day does not come through here).
+        operator: mycall.to_string(),
+        id: tempo_net::n1mm::dedup_id(rec.when_unix, &rec.call, 0),
+    }
+}
+
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
@@ -4134,6 +4181,7 @@ impl Engine {
             }
         }
         self.push_to_hrd(&rec);
+        self.push_to_n1mm(&rec);
         // Queue for the shell's connector auto-upload worker (QRZ/ClubLog/eQSL).
         // This is THE funnel: auto-logged FT8 QSOs, cockpit logs, and manual
         // Logbook entries all pass through here, so the Settings auto-upload
@@ -4181,6 +4229,36 @@ impl Engine {
         if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
             let _ = sock.send_to(adif.as_bytes(), self.settings.hrd_udp_addr.trim());
         }
+    }
+
+    /// Broadcast a logged QSO as an N1MM `<contactinfo>` datagram — the STANDING
+    /// output, on for every logged contact rather than only during a Field Day
+    /// event. Live map/dashboard consumers (OpenHamClock, GridTracker) plot each
+    /// contact from it as it is logged.
+    ///
+    /// Deliberately here, beside `push_to_hrd`, and NOT on the shell's upload
+    /// worker: that worker DRAINS `pending_uploads`, and a record it drains with
+    /// every HTTP connector switched off is consumed and dropped — so routing this
+    /// through it would mean an operator running N1MM as their only integration
+    /// silently lost the log-first-configure-later guarantee (enable QRZ an hour
+    /// in, and this session's QSOs would no longer upload). Firing from the funnel
+    /// itself also puts the packet on the wire in the same instant as the HRD
+    /// datagram, which is how operators compare the two in Wireshark.
+    ///
+    /// Spawned, so a hostname that needs DNS can never stall a log write while the
+    /// engine mutex is held. Best-effort: a dashboard that is not running is not an
+    /// error worth interrupting an operator over, so it goes to stderr like the
+    /// Field Day emitter's failures.
+    fn push_to_n1mm(&self, rec: &QsoRecord) {
+        let Some(addr) = n1mm_broadcast_target(&self.settings) else {
+            return;
+        };
+        let contact = n1mm_contact_for(rec, &self.settings.mycall);
+        std::thread::spawn(move || {
+            if let Err(e) = tempo_net::n1mm::send_contact(&addr, &contact) {
+                eprintln!("tempo: N1MM broadcast failed: {e}");
+            }
+        });
     }
 
     /// Build the ADIF upload payload (header + the records at `indices`) for TQSL.
@@ -12755,6 +12833,217 @@ mod tests {
         assert_eq!(snap.upload_tick, t0 + 1, "note bumps the tick");
         assert_eq!(snap.upload_note.as_deref(), Some("Uploaded N0CALL to QRZ"));
         assert!(snap.upload_ok);
+    }
+
+    /// THE NO-DOUBLE-SEND GUARANTEE for the interop broadcasts. Two emitters push
+    /// contacts to the club network: the radio loop's Field-Day emitter (which
+    /// reads the FD CONTEST log) and the shell's per-QSO forwarder (which drains
+    /// `pending_uploads`, fed only by `log_qso`). One packet per contact holds
+    /// only while those two sources stay disjoint — so a Field Day contact must
+    /// never appear in the upload queue, even with an FD session live. If a
+    /// future change routes FD contacts through `log_qso`, this fails, and the
+    /// N1MM/N3FJP standing forwarders need a Field-Day exclusion before it lands.
+    #[test]
+    fn a_field_day_contact_never_enters_the_general_upload_queue() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(e.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
+        assert_eq!(
+            e.snapshot().field_day.map(|f| f.qso_count),
+            Some(2),
+            "both contacts are in the FD contest log"
+        );
+        assert!(
+            e.take_pending_uploads().is_empty(),
+            "FD contacts belong to the FD emitter alone — queueing them here would \
+             broadcast every Field Day QSO twice"
+        );
+
+        // The converse: an ordinary contact logged DURING an FD session is a
+        // genuinely different QSO (it is not in the contest log), so it still
+        // reaches the general forwarder exactly once.
+        e.log_qso(qrec("N0CALL", "20m"));
+        let pending = e.take_pending_uploads();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].rec.call, "N0CALL");
+    }
+
+    // ---- N1MM+ standing broadcast (every logged QSO, event or not) ------------
+
+    fn plain_qso() -> QsoRecord {
+        QsoRecord {
+            grid: Some("FN31pr".into()),
+            freq_mhz: 14.074,
+            mode: "FT8".into(),
+            rst_sent: Some("-12".into()),
+            when_unix: 1_782_583_500, // 2026-06-27 18:05:00 UTC
+            ..qrec("W1AW", "20m")
+        }
+    }
+
+    /// The standing toggle is the switch, the address is the destination, and BOTH
+    /// are required — a toggle with nowhere to send is off, and an address alone
+    /// must not opt an upgrading operator in.
+    #[test]
+    fn the_standing_n1mm_broadcast_needs_the_toggle_and_an_address() {
+        let mut s = Settings {
+            n1mm_addr: "127.0.0.1:12061".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            n1mm_broadcast_target(&s),
+            None,
+            "an address alone must never start broadcasting — that is the upgrade path"
+        );
+        s.n1mm_upload = true;
+        assert_eq!(
+            n1mm_broadcast_target(&s).as_deref(),
+            Some("127.0.0.1:12061")
+        );
+        // Trimmed, so a pasted address with a stray space still resolves.
+        s.n1mm_addr = "  127.0.0.1  ".into();
+        assert_eq!(n1mm_broadcast_target(&s).as_deref(), Some("127.0.0.1"));
+        // On, but nowhere to send.
+        s.n1mm_addr = "   ".into();
+        assert_eq!(n1mm_broadcast_target(&s), None);
+    }
+
+    /// What a map consumer (OpenHamClock / GridTracker) actually needs off an
+    /// ORDINARY QSO: who, where, which band/frequency, which mode, when.
+    #[test]
+    fn an_ordinary_qso_broadcasts_the_fields_a_map_plots_from() {
+        let c = n1mm_contact_for(&plain_qso(), "KD9TAW");
+        let xml = tempo_net::n1mm::build_contactinfo(&c);
+        for needle in [
+            "<call>W1AW</call>",
+            "<mycall>KD9TAW</mycall>",
+            "<operator>KD9TAW</operator>",
+            "<gridsquare>FN31pr</gridsquare>",
+            "<band>20</band>", // meters, never MHz
+            "<mode>FT8</mode>",
+            "<timestamp>2026-06-27 18:05:00</timestamp>",
+            "<rxfreq>1407400</rxfreq>", // 10 Hz units
+            "<txfreq>1407400</txfreq>",
+        ] {
+            assert!(xml.contains(needle), "missing {needle} in {xml}");
+        }
+        // Not a contest contact: N1MM's general log is "DX", there is no section,
+        // and claiming contest points for a ragchew would be fabricating a score.
+        assert!(xml.contains("<contestname>DX</contestname>"), "{xml}");
+        assert!(xml.contains("<section></section>"), "{xml}");
+        assert!(xml.contains("<points>0</points>"), "{xml}");
+        // A plain QSO's "exchange" is the signal report — what N1MM's DX log sends.
+        assert!(xml.contains("<SentExchange>-12</SentExchange>"), "{xml}");
+    }
+
+    /// No grid in the record → no element (the consumer falls back to its own
+    /// callsign→country lookup instead of plotting a contact at Null Island).
+    #[test]
+    fn a_gridless_qso_broadcasts_no_grid() {
+        let rec = QsoRecord {
+            grid: None,
+            ..plain_qso()
+        };
+        let xml = tempo_net::n1mm::build_contactinfo(&n1mm_contact_for(&rec, "KD9TAW"));
+        assert!(!xml.contains("gridsquare"), "{xml}");
+    }
+
+    /// THE REPORTED BUG, as the acceptance case. A tester configured the N1MM
+    /// output on 127.0.0.1:12061 alongside HRD on 12060, logged QSOs outside any
+    /// Field Day event, and Wireshark showed HRD sending and N1MM sending nothing.
+    ///
+    /// This drives the real log path — `log_qso` on a configured engine — and
+    /// watches the datagram arrive on the port that was configured. Nothing is
+    /// stubbed: the send is the same `push_to_n1mm` an operator's QSO fires.
+    #[test]
+    fn logging_an_ordinary_qso_broadcasts_to_the_configured_port() {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let configured = listener.local_addr().unwrap().to_string();
+
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        {
+            let mut s = e.settings().clone();
+            s.n1mm_addr = configured;
+            s.n1mm_upload = true;
+            e.apply_settings(s);
+        }
+        // No Field Day event anywhere in sight — the tester's exact situation.
+        assert!(e.snapshot().field_day.is_none());
+        e.log_qso(plain_qso());
+
+        let mut buf = [0u8; 4096];
+        let (n, _) = listener
+            .recv_from(&mut buf)
+            .expect("logging a QSO broadcasts a contactinfo datagram");
+        let xml = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(xml.starts_with("<?xml"), "{xml}");
+        assert!(xml.contains("<call>W1AW</call>"), "{xml}");
+        assert!(xml.contains("<gridsquare>FN31pr</gridsquare>"), "{xml}");
+        assert!(xml.contains("<mycall>KD9TAW</mycall>"), "{xml}");
+
+        // One QSO, one packet.
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        assert!(
+            listener.recv_from(&mut buf).is_err(),
+            "a single QSO must not broadcast twice"
+        );
+    }
+
+    /// The switch OFF is silence — not "sends to a default", not "sends anyway".
+    #[test]
+    fn the_broadcast_is_silent_while_the_toggle_is_off() {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(400)))
+            .unwrap();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        {
+            let mut s = e.settings().clone();
+            // Address configured, toggle never touched — the pre-change state, and
+            // what every upgrading operator's settings.json looks like.
+            s.n1mm_addr = listener.local_addr().unwrap().to_string();
+            e.apply_settings(s);
+        }
+        e.log_qso(plain_qso());
+        let mut buf = [0u8; 4096];
+        assert!(
+            listener.recv_from(&mut buf).is_err(),
+            "an address alone must broadcast nothing outside a Field Day event"
+        );
+    }
+
+    /// The reason this fires from the log funnel and NOT from the shell's upload
+    /// worker: that worker DRAINS `pending_uploads`, and a record drained with every
+    /// HTTP connector off is consumed and dropped. Broadcasting must therefore not
+    /// make a record look "handled" — an operator running N1MM as their only
+    /// integration still has this session's QSOs queued when they later enable QRZ.
+    #[test]
+    fn broadcasting_does_not_consume_the_pending_upload() {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        {
+            let mut s = e.settings().clone();
+            s.n1mm_addr = listener.local_addr().unwrap().to_string();
+            s.n1mm_upload = true;
+            e.apply_settings(s);
+        }
+        e.log_qso(plain_qso());
+        let pending = e.take_pending_uploads();
+        assert_eq!(pending.len(), 1, "the QSO is still owed to the connectors");
+        assert_eq!(pending[0].legs, upload_legs::ALL, "and owes every leg");
     }
 
     #[test]

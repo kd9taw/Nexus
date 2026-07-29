@@ -143,6 +143,35 @@ When a keying port genuinely cannot be opened, the message now quotes what the s
 and which rates were tried, instead of guessing at causes. The tester above had to diagnose this in
 PowerShell because our error message withheld the one useful sentence.
 
+### Fixed: the N1MM contact broadcast sent nothing unless Field Day was running
+
+Set the N1MM address, log QSOs, watch the network: nothing. An operator running it alongside Ham
+Radio Deluxe saw HRD's packets go out on 12060 and not one from Nexus on 12061. The address had
+looked like a standing integration sitting next to HRD, and it was not one — the broadcast only
+ever fired during a Field Day event, and said so nowhere.
+
+**Settings ▸ Logging & Connectors ▸ N1MM+ Integration** now has a **Broadcast every QSO** switch.
+Turn it on and each logged contact goes out as an N1MM contact packet, event or not — from the
+digital modes, from the CW and Phone cockpits, from a hand-typed logbook entry, all of them. Point
+OpenHamClock or GridTracker at the address and every QSO plots on its map as you log it. The
+packet leaves at the moment the QSO is logged, in the same breath as the HRD one. Turn the switch
+on with the address field empty and Nexus fills in the usual local target for you.
+
+The address field now also states which of the two it is doing, so a configured-but-silent output
+can never look like a working one again.
+
+It is off after an upgrade, and nothing but that switch can turn it on — your contacts do not
+start going out over the network because you installed a new version.
+
+Field Day is untouched. During an event, contest contacts still go out the way they always have,
+carrying your class, section and points; the standing broadcast only ever carries the contacts in
+your regular log. A contact is never sent twice, so it is safe to leave the switch on through a
+Field Day weekend. An ordinary QSO carries what a map needs — call, grid, band, frequency, mode,
+time — and honestly claims no contest points.
+
+If you run several consumers on one machine, name the port. 12060 is often already taken (HRD
+listens there), and the port you type is the port that is used.
+
 ### APRS decode readout stops mixing up "now" with "a while ago"
 
 The new input-level reading immediately caught a sentence that contradicted itself: *"2 packets

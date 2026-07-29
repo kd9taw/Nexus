@@ -1983,6 +1983,8 @@ export interface Settings {
   cloudlogUpload?: boolean
   /** N1MM contact broadcast target ("host" or "host:port"). Empty = off. */
   n1mmAddr?: string
+  /** Broadcast the N1MM contact datagram for EVERY logged QSO, not just Field Day. Default off. */
+  n1mmUpload?: boolean
   /** DXpedition special op: 'none' | 'hound' | 'superhound' (SuperFox hound). */
   specialOp?: 'none' | 'hound' | 'superhound'
   /** WSJT-X Split Operation: keep TX audio 1500-2000 Hz via dial shifts. */

@@ -5598,11 +5598,49 @@ export function SettingsPanel({
                   spellCheck={false}
                 />
                 <span className="settings-hint">
-                  N1MM+ contact broadcast target (host:port, UDP). Nexus sends an N1MM-compatible
-                  contact UDP packet for each FD QSO, so N1MM can display the contact on the network.
-                  Leave blank to disable.
+                  Where the N1MM contact packets go (host:port, UDP). Name the port — consumers
+                  stack on one host, and 12060 is often already taken by another logger. Leave
+                  blank to disable.{' '}
+                  {form.n1mmUpload ? (
+                    <strong>Sending for every logged QSO.</strong>
+                  ) : (
+                    <strong>
+                      An address alone sends nothing outside a Field Day event — turn on Broadcast
+                      every QSO below for everyday logging.
+                    </strong>
+                  )}
                 </span>
               </label>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Broadcast every QSO</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.n1mmUpload ?? false}
+                    className={`toggle${form.n1mmUpload ? ' on' : ''}`}
+                    onClick={() => {
+                      const on = !form.n1mmUpload
+                      updateBool('n1mmUpload', on)
+                      // A toggle with nowhere to send is a dead switch the operator
+                      // cannot diagnose. Turning it on with a blank address fills in
+                      // the standard local target — visible in the field above and
+                      // editable, not a hidden default.
+                      if (on && !form.n1mmAddr?.trim()) update('n1mmAddr', '127.0.0.1:12060')
+                    }}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Send the contact packet for <strong>every</strong> logged QSO, not just Field Day
+                  — point OpenHamClock or GridTracker at the address above and each contact plots on
+                  its map as you log it. One packet per QSO: this never doubles up with the Field Day
+                  broadcast, so it is safe to leave on through an event. Off by default; with it off,
+                  packets go out <em>only</em> while a Field Day event is running.
+                </span>
+              </div>
             </div>
           </fieldset>
           </>
