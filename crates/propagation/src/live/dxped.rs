@@ -259,7 +259,16 @@ fn parse_adxo(html: &str) -> Vec<DxpeditionPlan> {
     plans
 }
 
-fn extract_cells(orig: &str, lower: &str) -> Vec<String> {
+/// One parsed `<td>`: the display text with tags stripped, plus the raw inner
+/// HTML. The raw HTML is kept because the operation's own website is carried in
+/// the MARKUP, not the text — NG3K links the callsign to it, and `strip_tags`
+/// throws that away.
+struct Cell {
+    text: String,
+    html: String,
+}
+
+fn extract_cells(orig: &str, lower: &str) -> Vec<Cell> {
     let mut cells = Vec::new();
     let mut i = 0usize;
     while let Some(off) = lower[i..].find("<td") {
@@ -272,10 +281,42 @@ fn extract_cells(orig: &str, lower: &str) -> Vec<String> {
             break;
         };
         let content_end = content_start + close;
-        cells.push(strip_tags(&orig[content_start..content_end]));
+        let html = &orig[content_start..content_end];
+        cells.push(Cell {
+            text: strip_tags(html),
+            html: html.to_string(),
+        });
         i = content_end + 4;
     }
     cells
+}
+
+/// The operation's own website from the CALL cell, if the source published one.
+///
+/// NG3K wraps the callsign in an anchor exactly when the operation has a site:
+/// `<td class="call"><span class="call"><a href="https://3y0l.com/">3Y0L</a></span></td>`
+/// (12 of 38 announcements on a sampled page). The same cell usually ALSO holds a
+/// `<span class="spots">` anchor pointing at a DXWatch cluster query — that is a
+/// spot search, not the expedition, so only the anchor inside the `call` span
+/// counts. Anything that is not plain http/https is refused here rather than at
+/// the point of opening: this HTML is third-party, and a `javascript:` or `file:`
+/// href must never reach the operator's browser.
+fn expedition_site(cell_html: &str) -> Option<String> {
+    let lower = cell_html.to_ascii_lowercase();
+    let span = lower.find("<span class=\"call\"")?;
+    // Stay inside that span — the spots anchor lives in the NEXT one.
+    let end = lower[span..]
+        .find("</span")
+        .map(|e| span + e)
+        .unwrap_or(lower.len());
+    let href = lower[span..end].find("href=\"")? + span + 6;
+    let close = cell_html[href..].find('"')? + href;
+    let url = cell_html[href..close].trim();
+    let scheme_ok = {
+        let u = url.to_ascii_lowercase();
+        u.starts_with("http://") || u.starts_with("https://")
+    };
+    (scheme_ok && !url.contains(char::is_whitespace)).then(|| url.replace("&amp;", "&"))
 }
 
 fn strip_tags(s: &str) -> String {
@@ -298,21 +339,22 @@ fn strip_tags(s: &str) -> String {
         .join(" ")
 }
 
-fn plan_from_cells(cells: &[String]) -> Option<DxpeditionPlan> {
+fn plan_from_cells(cells: &[Cell]) -> Option<DxpeditionPlan> {
     if cells.len() < 4 {
         return None;
     }
-    let start = parse_date(&cells[0])?;
-    let end = parse_date(&cells[1])?;
-    let entity = cells[2].trim().to_string();
-    let call = cells[3].split_whitespace().next()?.to_uppercase();
+    let start = parse_date(&cells[0].text)?;
+    let end = parse_date(&cells[1].text)?;
+    let entity = cells[2].text.trim().to_string();
+    let call = cells[3].text.split_whitespace().next()?.to_uppercase();
     if entity.is_empty() || call.is_empty() {
         return None;
     }
+    let website = expedition_site(&cells[3].html);
     let info = cells[4..]
         .iter()
+        .map(|c| c.text.clone())
         .max_by_key(|c| c.len())
-        .cloned()
         .unwrap_or_default();
     let up = info.to_uppercase();
     let ft8_mode = if up.contains("SUPER FOX") || up.contains("SUPERFOX") {
@@ -336,6 +378,7 @@ fn plan_from_cells(cells: &[String]) -> Option<DxpeditionPlan> {
         modes: parse_modes(&info),
         ft8_mode,
         most_wanted_rank: None,
+        website,
     })
 }
 
@@ -503,6 +546,73 @@ mod tests {
         assert_eq!(c9.entity, "Mozambique");
         assert_eq!(c9.ft8_mode, Some(Ft8DxpMode::SuperFox));
         assert!(c9.bands.contains(&Band::B20)); // HF expands
+    }
+
+    /// The call cell exactly as NG3K emits it, both shapes: an operation WITH its
+    /// own site (the callsign is the anchor) and one without (only the DXWatch
+    /// `[spots]` anchor). Sampled from the live page 2026-07-29.
+    #[test]
+    fn extracts_the_expedition_site_from_the_call_cell() {
+        let with_site =
+            r#"<span class="call"><a href="https://3y0l.com/">3Y0L</a></span>"#;
+        assert_eq!(
+            expedition_site(with_site).as_deref(),
+            Some("https://3y0l.com/")
+        );
+    }
+
+    #[test]
+    fn the_spots_link_is_not_an_expedition_site() {
+        // THE trap in this cell: 6 of 38 sampled rows carry a DXWatch cluster-query
+        // anchor and no site. Taking the first href in the cell would send the
+        // operator to a spot search and call it the expedition's webpage.
+        let spots_only = r#"<span class="call">TY5FR</span><br><span class="spots">
+              <a href="http://www.dxwatch.com/dxsd1.php?f=0&amp;t=dx&amp;c=TY5FR">[spots]</a>
+               </span>"#;
+        assert_eq!(expedition_site(spots_only), None);
+        // …and when BOTH are present, the site wins and the spots query is ignored.
+        let both = r#"<span class="call"><a href="https://vk9xy2026.com/">VK9XY</a></span><br><span class="spots"><a href="http://www.dxwatch.com/dxsd1.php?c=VK9XY">[spots]</a></span>"#;
+        assert_eq!(
+            expedition_site(both).as_deref(),
+            Some("https://vk9xy2026.com/")
+        );
+    }
+
+    #[test]
+    fn refuses_a_non_http_scheme() {
+        // This HTML is third-party. A javascript:/file: href must die at the parser,
+        // not at the point where the operator's browser is asked to open it.
+        for bad in [
+            r#"<span class="call"><a href="javascript:alert(1)">X</a></span>"#,
+            r#"<span class="call"><a href="file:///etc/passwd">X</a></span>"#,
+            r#"<span class="call"><a href="/relative/path">X</a></span>"#,
+        ] {
+            assert_eq!(expedition_site(bad), None, "accepted {bad}");
+        }
+    }
+
+    /// Both rows are copied verbatim from the live page (2026-07-29), whitespace
+    /// included. That matters in the second one: `strip_tags` does not insert a
+    /// word boundary where a tag was, so the only thing separating the callsign
+    /// from the `[spots]` label is the source's own newline inside the span. Trim
+    /// it and the cell text becomes "TY5FR[spots]" and the call stops resolving —
+    /// so keep these fixtures byte-faithful rather than tidying them up.
+    #[test]
+    fn a_row_carries_its_site_through_to_the_plan() {
+        let html = r#"<table>
+<tr class="adxoitem"><td class="date">2026 Oct07</td><td class="date">2026 Oct21</td><td class="cty">Solomon Is</td><td class="call"><span class="call"><a href="https://solomon2026.com/">H49A</a></span></td><td class="qsl">LoTW</td><td class="rep">OPDX</td><td class="info">By team; HF + 6m; CW SSB FT8</td></tr>
+<tr class="adxoitem"><td class="date">2026 Jul07</td><td class="date">2026 Aug04</td><td class="cty">Benin</td><td><span class="call">TY5FR</span><br><span class="spots">
+			  <a href="http://www.dxwatch.com/dxsd1.php?c=TY5FR">[spots]</a>
+			   </span></td><td class="qsl">LoTW</td><td class="rep">TDDX</td><td class="info">By DL1BUG; 160-10m; CW SSB</td></tr>
+</table>"#;
+        let plans = parse_adxo(html);
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].call, "H49A");
+        assert_eq!(plans[0].website.as_deref(), Some("https://solomon2026.com/"));
+        // Unchanged behaviour: the call is still read from the cell TEXT, and the
+        // spots anchor leaves the second operation with no site at all.
+        assert_eq!(plans[1].call, "TY5FR");
+        assert_eq!(plans[1].website, None);
     }
 
     #[test]
