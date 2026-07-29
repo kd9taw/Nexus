@@ -34,6 +34,12 @@ Alerts are now identified by who transmitted and what they said. The things that
 alert once — a new entity, a new grid, a watch-list hit — are remembered separately from the ones
 that legitimately repeat, so no amount of band traffic can push them out.
 
+### Fixed: the APRS section now fills the window
+
+With the runaway fixed, APRS went to the opposite extreme: everything sat in a short box across the
+top with most of the window empty below it. The section was not being told to fill its space the
+way every other full-screen view is. It now does, so the map gets the room.
+
 ### Fixed: the APRS map grew without bound
 
 The map crept steadily downward and never stopped, eventually pushing itself off screen and

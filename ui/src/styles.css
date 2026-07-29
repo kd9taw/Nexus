@@ -3220,21 +3220,27 @@ body.resizing {
   max-width: 1100px;
   margin: 0 auto;
 }
-/* Connect and APRS are the .single views that must flex-FILL rather than block-scroll —
-   their maps need a DEFINITE height (see .connect-shell / .aprs-body). Targeted via :has()
-   so Log/Settings keep their block+scroll. Same fix the detached window already applies.
-
-   ⚠️ WITHOUT THIS A MAP GROWS WITHOUT BOUND. `.layout.single` is `display:block;
-   overflow-y:auto`, so a child has no definite height to resolve against. MapView sizes its
-   canvas from the measured container, the taller canvas makes the container taller, and the
-   next measurement is larger again — the operator sees the map "slowly expanding infinitely
-   down". It is a feedback loop, not a sizing mistake, so no min/max-height on the map itself
-   fixes it; the ANCESTOR has to be bounded. */
-.layout.single:has(> .connect-shell),
-.layout.single:has(> .aprs-body) {
+/* Connect must flex-FILL rather than block-scroll — its map needs a DEFINITE height
+   (see .connect-shell). Targeted via :has() so Log/Settings keep their block+scroll.
+   Same fix the detached window already applies. */
+.layout.single:has(> .connect-shell) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+/* APRS, via the TRIPLE-CLASS (0,3,0) pattern the other cockpits use — `.layout.single`
+   is (0,2,0) and would otherwise win and collapse the chain back to block+scroll.
+   Same fix as `.layout.single.cw-cockpit` / `.rtty-cockpit` / `.sstv-view`.
+
+   ⚠️ THIS IS ALSO WHAT KEEPS THE MAP BOUNDED. Under block+scroll a child has no definite
+   height to resolve against, MapView sizes its canvas from the measured container, and the
+   container then grows to fit it — a feedback loop, not a sizing mistake. (The canvas is
+   also out of flow now, see `.map-canvas-wrap > canvas`, which closes it structurally.) */
+.layout.single.aprs-cockpit {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .panel {
@@ -16303,12 +16309,19 @@ html[data-panel='needed'] {
    accumulating in the background across navigation. TX stays disabled (a
    later, safety-reviewed wave).
    =========================================================================== */
+/* ⭐ `display: contents` so the <main> inside participates DIRECTLY in the app's flex
+   column. Without it the host is an ordinary block, the <main> gets content height,
+   and the view renders as a short box with dead space below it — which is exactly what
+   APRS did (operator screenshot, 0.20.5) before `.aprs-host` was added here. Every
+   full-view host needs this; it is not optional chrome. */
 .rtty-host,
-.sstv-host {
+.sstv-host,
+.aprs-host {
   display: contents;
 }
 .rtty-host[hidden],
-.sstv-host[hidden] {
+.sstv-host[hidden],
+.aprs-host[hidden] {
   display: none;
 }
 /* Triple-class (0,3,0) so `.layout.single` can't collapse the flex chain — same

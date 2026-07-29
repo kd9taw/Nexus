@@ -21,12 +21,25 @@ const css = readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url))
 
 describe('APRS layout invariants', () => {
   it('the APRS view flex-FILLS its .single layout instead of block-scrolling', () => {
-    // Without this the map has no definite height and grows without bound.
-    expect(css).toMatch(/\.layout\.single:has\(>\s*\.aprs-body\)/)
-    const rule = /\.layout\.single:has\(>\s*\.aprs-body\)[^{]*\{([^}]*)\}/.exec(css)
-    expect(rule, 'the :has(> .aprs-body) rule must exist').not.toBeNull()
+    // Triple-class (0,3,0): `.layout.single` is (0,2,0) and would otherwise win and
+    // collapse the chain back to block+scroll. Without a definite height the map has
+    // nothing to resolve against and grows without bound.
+    const rule = /\.layout\.single\.aprs-cockpit\s*\{([^}]*)\}/.exec(css)
+    expect(rule, 'the .layout.single.aprs-cockpit rule must exist').not.toBeNull()
     expect(rule![1]).toMatch(/display:\s*flex/)
     expect(rule![1]).toMatch(/flex-direction:\s*column/)
+    expect(rule![1]).toMatch(/min-height:\s*0/)
+  })
+
+  it('the host is display:contents so the view fills the window', () => {
+    // Operator screenshot, 0.20.5: the map stopped growing but the whole section sat
+    // in a short box with three quarters of the window empty below it. `.aprs-host`
+    // was a plain block div, so the <main> inside got CONTENT height instead of
+    // participating in the app's flex column. Every other full-view host
+    // (.operate-host / .rtty-host / .sstv-host) already carried this.
+    const rule = /(^|\})[^{}]*\.aprs-host[^{}]*\{([^}]*)\}/m.exec(css)
+    expect(rule, '.aprs-host must have a rule').not.toBeNull()
+    expect(rule![2]).toMatch(/display:\s*contents/)
   })
 
   it('the map cell can shrink: bounded row track and no hard min-height floor', () => {
