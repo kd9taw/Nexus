@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### APRS packet decoder measured against tone imbalance ("twist")
+
+Twist — the two packet tones arriving at unequal volume, the net effect of the sending TNC, the
+transmitter's deviation and the receiver's audio shaping — is the classic reason packet decoders
+struggle on real signals. Nothing in our test suite had ever modelled it, because the suite
+generated its own perfectly balanced tones.
+
+It now does, and the decoder came out clean: packets still decode with the tones up to 24 dB apart,
+far beyond the roughly 9 dB that real signals show. That is a property of how this decoder works
+rather than luck — it compares the two tones against each other within each bit, so making one
+quieter scales both sides of the comparison equally. What twist does cost is noise margin on the
+quieter tone: about 4 dB of it at the realistic worst case, leaving decodes working down to 9 dB
+signal-to-noise. Comfortably clear of any packet you can actually hear.
+
+The WAV analysis tool now reports the measured twist of each burst, so a real recording will say
+what the local digipeater's signal actually looks like.
+
 ### APRS decode readout stops mixing up "now" with "a while ago"
 
 The new input-level reading immediately caught a sentence that contradicted itself: *"2 packets

@@ -16,6 +16,12 @@
 //! - **clock error** between the sender's TNC and our sample rate,
 //! - **noise**, down to the point where AX.25's checksum is doing the real work.
 //!
+//! **TWIST** (added after the 4th field round) is the classic real-Bell-202 killer: the two tones
+//! arriving at unequal amplitudes, the net of TNC pre-emphasis x TX deviation x RX de-emphasis.
+//! Real-world range is roughly ±9 dB, and it is the reason Dire Wolf ships multiple demodulator
+//! profiles. Our suite generated from our own modulator — perfectly flat — so it had never been
+//! modelled at all. The measured answer is in `twist_*` below, and it is not what was expected.
+//!
 //! ⚠️ STILL A GAP: this is impaired synthetic audio, not a recording off the air. A real capture
 //! (multipath, squelch crashes, colliding packets, other stations' PTT clicks) would be strictly
 //! better evidence, and there is no such fixture in the tree.
@@ -258,4 +264,112 @@ fn a_digipeated_packet_keeps_the_originating_station() {
         "the used-digi marks survive"
     );
     assert!(matches!(pkt.body, AprsBody::Info(_)));
+}
+
+// ─── TWIST ───────────────────────────────────────────────────────────────────────────────────
+//
+// MEASURED RESULT, and it refutes the hypothesis it was written to test: this demodulator is
+// essentially immune to twist on its own. Pure net tilt decodes cleanly to ±24 dB, far outside the
+// ±9 dB real-world range.
+//
+// WHY, mechanically: the discriminator compares mark ENERGY against space energy **within one bit
+// window**, and only one tone is present in a bit. A static amplitude imbalance scales both terms
+// of that comparison by the same factor, so it cannot move the decision. (Worst-case inter-tone
+// leakage measures -11.8 dB, and twist does not eat that margin in the steady state.) There is
+// nothing here that an envelope-tracking design would do better — this architecture never had an
+// envelope comparison to lose.
+//
+// What twist DOES cost is SNR on the weaker tone, measured:
+//
+//     twist    minimum reliable SNR    cost
+//      0 dB          5 dB              +0
+//     +3 dB          5 dB              +0
+//     +6 dB          7 dB              +2
+//     +9 dB          9 dB              +4
+//    +12 dB         13 dB              +8
+//
+// So at the worst realistic twist we still decode down to 9 dB SNR — a margin an audible local
+// burst clears easily. Twist is therefore NOT an explanation for 0-of-N CRC failures on a strong
+// signal, and no twist-compensation stage is warranted on this evidence.
+
+const SPB: usize = 10;
+
+/// Modulate with TWIST — mark and space at different amplitudes, continuous phase like the real
+/// modulator. The louder tone is normalised to 1.0 so peak level is constant across a sweep, which
+/// keeps this a test of IMBALANCE rather than of level.
+fn modulate_twisted(twist_db: f32) -> Vec<f32> {
+    let bits = nrzi_encode(&encode_frame(&frame().encode(), 32, 3));
+    let r = 10f32.powf(twist_db / 20.0);
+    let (a_mark, a_space) = if r >= 1.0 { (1.0, 1.0 / r) } else { (r, 1.0) };
+    let (d_mark, d_space) = (
+        std::f32::consts::TAU * 1200.0 / SAMPLE_RATE,
+        std::f32::consts::TAU * 2200.0 / SAMPLE_RATE,
+    );
+    let mut out = Vec::with_capacity(bits.len() * SPB);
+    let mut phase = 0.0f32;
+    for &lvl in &bits {
+        let (step, amp) = if lvl {
+            (d_mark, a_mark)
+        } else {
+            (d_space, a_space)
+        };
+        for _ in 0..SPB {
+            out.push(phase.sin() * amp);
+            phase += step;
+            if phase >= std::f32::consts::TAU {
+                phase -= std::f32::consts::TAU;
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn twist_across_the_whole_real_world_range_decodes() {
+    // ±9 dB is the range the TNC-test literature describes; go well past it in both directions.
+    for twist in [-12.0f32, -9.0, -6.0, -3.0, 0.0, 3.0, 6.0, 9.0, 12.0] {
+        assert_recovered(&modulate_twisted(twist), &format!("twist {twist:+} dB"));
+    }
+}
+
+#[test]
+fn twist_far_beyond_anything_physical_still_decodes() {
+    // Pins the mechanism: a per-bit energy COMPARISON cannot be moved by scaling both of its
+    // terms. If someone later replaces the discriminator with an envelope/threshold design, this
+    // is the test that will catch the twist sensitivity it introduces.
+    for twist in [-24.0f32, -18.0, 18.0, 24.0] {
+        assert_recovered(
+            &modulate_twisted(twist),
+            &format!("extreme twist {twist:+} dB"),
+        );
+    }
+}
+
+#[test]
+fn twist_costs_snr_on_the_weaker_tone_but_stays_usable() {
+    // The real cost, and the shape of it: at the worst realistic twist we still want a decode at
+    // 12 dB SNR, which any audible local burst clears.
+    let mut audio = modulate_twisted(9.0);
+    awgn(&mut audio, 12.0, 0xC0FFEE);
+    assert_recovered(&audio, "twist +9 dB at 12 dB SNR");
+
+    let mut audio = modulate_twisted(-9.0);
+    awgn(&mut audio, 12.0, 0xBEEF);
+    assert_recovered(&audio, "twist -9 dB at 12 dB SNR");
+}
+
+#[test]
+fn twist_composes_with_the_rest_of_the_real_world_stack() {
+    // De-emphasis already tilts the path ~5 dB; twist in the SAME direction stacks with it, and
+    // net tilt is what matters. This is the one place the composition genuinely bites, so pin that
+    // a realistic combination still works.
+    let mut audio = highpass(&deemphasis(&modulate_twisted(6.0)), 300.0);
+    for x in audio.iter_mut() {
+        *x *= 0.25;
+    }
+    awgn(&mut audio, 20.0, 0x1234);
+    assert_recovered(
+        &audio,
+        "twist +6 dB + de-emphasis + DC block + quiet + noise",
+    );
 }

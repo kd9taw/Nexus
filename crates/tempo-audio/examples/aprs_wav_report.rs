@@ -17,11 +17,16 @@
 //!   -140 dBFS). Level costs headroom and margin against noise, nothing more.
 //! * **clipped** — samples at/near full scale. FSK survives hard limiting (measured: decodes 30 dB
 //!   into clipping), so this is a headroom warning, not a cause.
-//! * **mark/space tilt** — how loud a 1200 Hz mark is when a mark is sent, versus a 2200 Hz space
-//!   when a space is sent. Near 0 dB is a flat audio path. Strongly negative means the space tone
-//!   is rolled off: the rig's RX filter, de-emphasis, or a narrow-FM setting — not anything in
-//!   software. THE interesting number when level and clipping are both fine. (Pattern- and
-//!   phase-independent by construction; see `tone_tilt_db` for the two wrong instruments first.)
+//! * **twist** — how loud a 1200 Hz mark is when a mark is sent, versus a 2200 Hz space when a
+//!   space is sent: the net imbalance after TNC pre-emphasis x TX deviation x RX de-emphasis. Near
+//!   0 dB is a flat path; real signals run to roughly ±9 dB. Positive means the space tone is being
+//!   rolled off (narrow-FM setting, RX filter, de-emphasis).
+//!
+//!   Our demodulator is MEASURED to be immune to twist by itself — clean decode to ±24 dB, because
+//!   a per-bit energy comparison cannot be moved by scaling both of its terms (see the `twist_*`
+//!   tests in tempo-core/tests/aprs_offair.rs). What twist costs is SNR on the weaker tone: +4 dB
+//!   of required SNR at ±9 dB of twist. So a large number here is worth reporting to the operator,
+//!   but on this evidence it does not by itself explain a failed checksum.
 //! * **frames / CRC** — candidates recovered, and for each failure how far it got: a frame whose
 //!   addresses parse but whose FCS fails was nearly right (bit errors in the payload); a frame
 //!   whose length is implausible never had sync at all.
@@ -249,7 +254,7 @@ fn main() {
             .filter(|(p, _)| *p >= a && *p < b + 2400)
             .count();
         println!(
-            "  #{:<2} {:>6.2}-{:>6.2} s  peak {} dBFS  clipped {clipped:<5}  mark/space tilt {balance}  frames {here}",
+            "  #{:<2} {:>6.2}-{:>6.2} s  peak {} dBFS  clipped {clipped:<5}  twist {balance}  frames {here}",
             n + 1,
             a as f32 / MODEM_RATE as f32,
             b as f32 / MODEM_RATE as f32,
