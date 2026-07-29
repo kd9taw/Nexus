@@ -41,6 +41,10 @@ struct InFlight {
     height: u32,
     pixels: Vec<[u8; 3]>,
     lines_done: u32,
+    /// `observed_leader_hz - 1900` from this image's VIS header — how far off
+    /// frequency the radio is. Carried so the band view can state it while the
+    /// decoded picture is standing in for the spectrum.
+    hedr_shift_hz: f64,
 }
 
 /// Spawn the SSTV RX decode thread. `gallery_dir` is the operator-browsable
@@ -96,7 +100,11 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
         let mut progress_dirty = false;
         for ev in events {
             match ev {
-                SstvEvent::VisDetected { mode, .. } => {
+                SstvEvent::VisDetected {
+                    mode,
+                    hedr_shift_hz,
+                    ..
+                } => {
                     let spec = tempo_sstv::for_mode(mode);
                     inflight = Some(InFlight {
                         mode_name: spec.name,
@@ -104,6 +112,7 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
                         height: spec.image_lines,
                         pixels: vec![[0u8; 3]; (spec.line_pixels * spec.image_lines) as usize],
                         lines_done: 0,
+                        hedr_shift_hz,
                     });
                     progress_dirty = true;
                 }
@@ -161,6 +170,7 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
                             preview_w: pw,
                             preview_h: ph,
                             preview_rgb: rgb,
+                            hedr_shift_hz: img.hedr_shift_hz,
                         }));
                     }
                 }

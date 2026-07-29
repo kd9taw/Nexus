@@ -3,8 +3,11 @@
 // heatmap so the operator can plan when to chase it. When the P.533 windows
 // command has data for a call, its headline + grid replace the heuristic ones
 // (badged), and the ★ lets the operator chase before the expedition even starts.
+import { useState } from 'react'
 import type { CalendarEntry, DxpedDayBest, DxpedWindow } from '../../types'
 import { LikelihoodHeatmap } from './LikelihoodHeatmap'
+import { DxpedMonth } from './DxpedMonth'
+import { DxpedDigest } from './DxpedDigest'
 
 function daysUntil(startUnix: number): string {
   const d = Math.round((startUnix - Date.now() / 1000) / 86400)
@@ -64,17 +67,70 @@ export function DxpedCalendar({
   onToggleAlarm?: (call: string) => void
   onAlarmLead?: (call: string, leadMin: number) => void
 }) {
+  // MONTH GRID IS THE LANDING VIEW (operator, 2026-07-29). The per-entry list is
+  // still here and still complete — it carries the heatmaps and the alarm/chase
+  // controls — but it is no longer what greets you. "I think we could do better
+  // ... the DXpedition calendar could be one section of it shown as a traditional
+  // calendar."
+  const [view, setView] = useState<'month' | 'list'>('month')
   if (entries.length === 0) return null
+  // Clicking a bar or a digest row jumps to that operation in the list, which is
+  // where the detail lives. Scrolling beats a modal: the surrounding entries are
+  // context the operator wants.
+  const openEntry = (call: string) => {
+    setView('list')
+    // Defer to the paint that mounts the list.
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-cal-call="${call.toUpperCase()}"]`)
+        ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+  }
   return (
     <section className="dxped-calendar panel" aria-label="DXpedition calendar">
-      <h2>DXpedition calendar — when to plan your chase</h2>
-      <div className="cal-list">
+      <div className="cal-topbar">
+        <h2>DXpedition calendar — when to plan your chase</h2>
+        <div className="cal-viewtabs" role="tablist" aria-label="Calendar view">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'month'}
+            className={view === 'month' ? 'on' : ''}
+            onClick={() => setView('month')}
+          >
+            Calendar
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'list'}
+            className={view === 'list' ? 'on' : ''}
+            onClick={() => setView('list')}
+          >
+            Details
+          </button>
+        </div>
+      </div>
+      <DxpedDigest
+        entries={entries}
+        windows={windows}
+        chasing={chasing}
+        onSelect={openEntry}
+      />
+      {view === 'month' && (
+        <DxpedMonth entries={entries} chasing={chasing} onSelect={openEntry} />
+      )}
+      <div className="cal-list" hidden={view !== 'list'}>
         {entries.map((e) => {
           const w = windows?.get(e.call.toUpperCase())
           const isChased = chasing?.has(e.call.toUpperCase()) ?? false
           const alarm = alarms?.[e.call.toUpperCase()]
           return (
-            <div className="cal-entry" key={`${e.call}-${e.startUnix}`}>
+            <div
+              className="cal-entry"
+              key={`${e.call}-${e.startUnix}`}
+              data-cal-call={e.call.toUpperCase()}
+            >
               <div className="cal-head">
                 <b className="cal-call">{e.call}</b>
                 <span className="cal-entity">{e.entity}</span>
@@ -140,7 +196,7 @@ export function DxpedCalendar({
                   {e.bands.join(' ')} {e.modes.length > 0 && <span className="cal-modes">· {e.modes.join('/')}</span>}
                 </div>
               )}
-              <LikelihoodHeatmap outlook={w?.outlook ?? e.outlook} />
+              <LikelihoodHeatmap outlook={w?.outlook ?? e.outlook} muted />
             </div>
           )
         })}

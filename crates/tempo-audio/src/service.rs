@@ -3979,6 +3979,9 @@ impl RadioLoop {
                         bslot,
                         true,
                         Some(frame),
+                        // The worker has just finished, so the modem is free — no
+                        // contention here, and no reason to release the engine.
+                        None,
                     )?;
                 }
                 DecodeApplied::Early { n } => {
@@ -4093,8 +4096,8 @@ impl RadioLoop {
                         tempo_app::dto::Tier::Ft8 | tempo_app::dto::Tier::Ft4
                     );
                     if !has_early_pass || self.early_done_slot == Some(slot.wrapping_sub(1)) {
-                        let _ =
-                            self.key_boundary_tx(&mut eng, rig, backend, now, slot, false, None);
+                        let _ = self
+                            .key_boundary_tx(&mut eng, rig, backend, now, slot, false, None, None);
                     }
                     let job = eng.build_decode_job(frame, slot, DecodePass::Boundary);
                     self.decode.dispatch(job);
@@ -4133,8 +4136,46 @@ impl RadioLoop {
                          period on this hardware.",
                         self.dropped_decodes
                     );
+                    // ⭐ BUILD THIS OVER WITH THE ENGINE MUTEX RELEASED.
+                    //
+                    // This is the ONE branch where the modem is contended: we are
+                    // here because a decode from an earlier slot is STILL RUNNING,
+                    // and that decode holds `MODEM_LOCK` for its whole duration.
+                    // The TX build needs the same lock, so it waits — and it used
+                    // to wait while holding the engine mutex, which every Tauri
+                    // snapshot poll and every UI command also needs. The window
+                    // went "not responding" for as long as the decoder took
+                    // (sub-second here, seconds on a Pi).
+                    //
+                    // Plan under the lock, release, build, re-acquire, commit. On
+                    // the air nothing changes: the same wait happens at the same
+                    // point, and `commit_tx` refuses the plan if the tier moved
+                    // underneath us while the engine was unlocked.
+                    //
+                    // Skipped entirely when this slot was already keyed at its
+                    // boundary — `finish_boundary` is then housekeeping-only and
+                    // never runs the TX decision, so planning would advance the
+                    // sequencer and write an ALL.TXT Tx line for an over that is
+                    // not sent.
+                    let already_keyed =
+                        self.boundary_keyed.map(|k| k.slot == slot).unwrap_or(false);
+                    let prebuilt = if already_keyed {
+                        None
+                    } else {
+                        match eng.plan_tx(slot) {
+                            Some(plan) => {
+                                drop(eng);
+                                let wave = plan.waveform.build();
+                                eng = engine.lock().map_err(|e| e.to_string())?;
+                                Some(eng.commit_tx(&plan, wave))
+                            }
+                            // Planned to nothing: hand the empty result straight
+                            // through so the TX phase is not re-run under the lock.
+                            None => Some(Vec::new()),
+                        }
+                    };
                     self.finish_boundary(
-                        &mut eng, rig, backend, sinks, station, now, slot, false, None,
+                        &mut eng, rig, backend, sinks, station, now, slot, false, None, prebuilt,
                     )?;
                 }
             } else {
@@ -4146,7 +4187,7 @@ impl RadioLoop {
                 }
                 // Nothing to decode -> run the TX decision + emission immediately.
                 self.finish_boundary(
-                    &mut eng, rig, backend, sinks, station, now, slot, false, None,
+                    &mut eng, rig, backend, sinks, station, now, slot, false, None, None,
                 )?;
             }
         }
@@ -4188,6 +4229,8 @@ impl RadioLoop {
         slot: u64,
         did_rx: bool,
         rx_frame: Option<Vec<f32>>,
+        // See `slot_tx_phase`: a waveform built with the engine mutex RELEASED.
+        prebuilt: Option<Vec<Vec<f32>>>,
     ) -> Result<(), String> {
         // Key-at-boundary (the WSJT-X ordering, operator-approved 2026-07-21): when
         // this slot's TX decision already ran AT the boundary, this call is the
@@ -4211,7 +4254,7 @@ impl RadioLoop {
         // decode ALREADY folded (inline when there was nothing to decode, or via the
         // worker result otherwise), then the housekeeping back-to-back.
         let cur_dial = eng.settings().dial_hz();
-        let action = self.key_boundary_tx(eng, rig, backend, now, slot, did_rx, rx_frame);
+        let action = self.key_boundary_tx(eng, rig, backend, now, slot, did_rx, rx_frame, prebuilt);
         let did_rx = action.did_rx;
         let tx_this_slot = action.tx_this_slot;
         self.emit_boundary_housekeeping(
@@ -4232,6 +4275,7 @@ impl RadioLoop {
     /// parallel. Records `boundary_keyed` so `finish_boundary` never keys the same
     /// slot twice.
     #[allow(clippy::too_many_arguments)] // mirrors slot_tx_phase's boundary parameter set
+    #[allow(clippy::too_many_arguments)]
     fn key_boundary_tx<B: AudioBackend>(
         &mut self,
         eng: &mut Engine,
@@ -4241,6 +4285,8 @@ impl RadioLoop {
         slot: u64,
         did_rx: bool,
         rx_frame: Option<Vec<f32>>,
+        // See `slot_tx_phase`: a waveform built with the engine mutex RELEASED.
+        prebuilt: Option<Vec<Vec<f32>>>,
     ) -> crate::slot::SlotAction {
         // Dial BEFORE keying: Split Operation may shift the TX dial inside
         // slot_tx_phase, and the deferred status emission reports the pre-shift dial.
@@ -4262,6 +4308,7 @@ impl RadioLoop {
             now,
             did_rx,
             rx_frame,
+            prebuilt,
         );
         if let Some(t) = action.tx_until_ms {
             self.tx_until_ms = Some(t);

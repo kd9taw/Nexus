@@ -2499,6 +2499,7 @@ export default function App() {
           <div className="sstv-host" hidden={effectiveView !== 'sstv'}>
             <SstvView
               snap={snap}
+              theme={theme}
               onSnap={setSnap}
               active={effectiveView === 'sstv'}
               onSetFrequency={handleSetFrequency}
@@ -2510,6 +2511,8 @@ export default function App() {
         {isViewEnabled('aprs') && (
           <div className="aprs-host" hidden={effectiveView !== 'aprs'}>
             <AprsCockpit
+              theme={theme}
+              myGrid={snap.mygrid}
               active={effectiveView === 'aprs'}
               onTune={handleAprsTune}
               radio={snap.radio}

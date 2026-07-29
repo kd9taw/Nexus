@@ -5,6 +5,116 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### SSTV shows you the band, then shows you the picture
+
+The SSTV screen had no waterfall at all, so there was no way to see what was on the frequency
+before an image arrived. That space is now a live waterfall — and when a signal starts decoding,
+the same space becomes the picture, building downward as it comes in.
+
+Because the picture stands where the spectrum was, you cannot see whether the radio is off
+frequency while an image is arriving. So the mistuning is now stated outright: a "tuning +12 Hz"
+readout beside the line count, whenever it drifts past 10 Hz. The decoder already worked this out
+from the header and had simply never shown it to you.
+
+### QRZ confirmations arrive on their own
+
+Nexus could already pull your QRZ logbook down — QSOs logged elsewhere and their confirmations —
+but only when you pressed Sync. Turn on Settings ▸ Logbook & QSL ▸ QRZ ▸ "Pull confirmations
+automatically" and it happens hourly instead, so confirmations appear as people post them.
+
+Only what CHANGED is fetched after the first run, so an hourly check is a small request rather than
+your whole logbook twenty-four times a day. It is off by default, a failed check never skips the
+span it missed, and the schedule survives a restart.
+
+As before, a QRZ confirmation shows the contact as confirmed but never counts toward DXCC or WAS —
+those need LoTW or a paper card, and counting QRZ would inflate them.
+
+### Fixed: alerts repeating on every cycle
+
+A new-DXCC alert would fire again and again for the same station, once per transmission, instead
+of once when it appeared. Plain CQ alerts did the same.
+
+Two causes, and they compounded. An alert was identified partly by the station's measured audio
+frequency — which drifts a few hertz between transmissions — so the same station saying the same
+thing looked like a brand new event each time. And because every one of those counted as a
+separate remembered alert, a busy band filled the "already alerted" memory in a minute or two; the
+oldest entries were then discarded first, which included the record saying the new one had already
+been announced. So it announced it again.
+
+Alerts are now identified by who transmitted and what they said. The things that should only ever
+alert once — a new entity, a new grid, a watch-list hit — are remembered separately from the ones
+that legitimately repeat, so no amount of band traffic can push them out.
+
+### Fixed: the APRS section now fills the window
+
+With the runaway fixed, APRS went to the opposite extreme: everything sat in a short box across the
+top with most of the window empty below it. The section was not being told to fill its space the
+way every other full-screen view is. It now does, so the map gets the room.
+
+### Fixed: the APRS map grew without bound
+
+The map crept steadily downward and never stopped, eventually pushing itself off screen and
+turning the page into one long vertical scroll.
+
+The map draws onto a canvas sized in real screen pixels, which on a display running above 100%
+scaling is larger than the space it was measured against. That made its container taller, which
+made the next measurement larger, which made the canvas larger again. A loop rather than a wrong
+number, which is why it grew steadily instead of just being the wrong size — and why it would not
+show up at all on a display set to 100%.
+
+The canvas is now taken out of the page flow entirely, so its pixel size can no longer affect the
+layout that measures it. The waterfall was fixed the same way for the same reason.
+
+### APRS gets a map
+
+APRS had no map. Everything sat in a small area at the top left of the screen with the rest of the
+window empty. Stations, their tracks and their paths now plot geographically, with the controls and
+lists moved to a rail beside it. On a narrow window the map comes first.
+
+Nothing new is decoded for this — position, course and speed were already in the packets, with
+nowhere to draw them. Clicking a station on the map highlights its row in the list, and the reverse.
+
+### A DXpedition calendar you can actually read at a glance
+
+The DXpedition view now opens on a traditional month calendar with today clearly marked and each
+operation drawn across the days it runs. Clicking one opens its detail.
+
+Above it, a plain-language summary of what to chase: which are on the air now, which start soonest,
+the best band and time for each, and the best day or two to try. All of that was already being
+calculated and simply spread across the page for you to assemble yourself.
+
+The dense band-by-hour heatmaps move behind a "Details" tab and are toned down when shown, so the
+page is no longer a wall of yellow, orange and red when you scroll it.
+
+### Satellites: one pass at a time, on a bigger globe
+
+Clicking a satellite drew every OTHER satellite's ground track too, so the pass you had just chosen
+was buried under a dozen unrelated lines. Now only the selected bird is drawn.
+
+The globe was also locked to a fixed width no matter how large the window was. It now grows with
+the space available.
+### Fixed: one internal error could leave the radio deaf until you restarted
+
+A safety lock guards the shared decoder, and if anything ever failed while holding it, that lock
+stayed broken for the rest of the session. Every decode and every transmit after it failed too —
+silently. The app kept running and the waterfall kept painting while nothing was being heard, and
+the only sign was a line in a log file you would never see. It now recovers and carries on.
+
+Not something that was reported on the air. It was found while tracking down the JT65 crash, and
+it is exactly the failure that crash would have triggered.
+
+### Fixed: the window could stop responding while a decode was running
+
+Transmitting and decoding both need the same audio engine, and the transmit side used to wait its
+turn while holding a lock the interface also needed. If a decode was still running when the next
+transmit came due, the whole window froze until it finished — under a second on a fast PC, several
+seconds on a Raspberry Pi.
+
+The transmission is now prepared without holding that lock. Nothing changes on the air: the same
+work happens at the same moment, the interface just stays alive through it.
+
 ## [0.20.0] — 2026-07-28
 
 ### Fixed: JT65 could crash Nexus outright, and it is transmitting again

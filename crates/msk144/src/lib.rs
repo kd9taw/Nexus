@@ -41,7 +41,7 @@
 //! the MSK40 hashed-callsign table and the recent-shorthand ring); see
 //! `modem-state-manifest.toml`.
 
-use tempo_fast_sys::MODEM_LOCK;
+use tempo_fast_sys::modem_lock;
 
 pub use tempo_fast_sys::{
     msk144_nmax as nmax, msk144_period_supported as period_supported, MSK144_BAUD as BAUD,
@@ -90,7 +90,7 @@ pub fn encode(msg: &str) -> Option<Vec<i32>> {
     let c = std::ffi::CString::new(msg).ok()?;
     let mut itone = vec![0i32; NN];
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::msk144_encode_msg(
                 c.as_ptr(),
@@ -241,7 +241,7 @@ pub fn decode_frame(
     let mut out = vec![tempo_fast_sys::Msk144DecodeT::default(); MAX_DECODES];
 
     let n = {
-        let _guard = MODEM_LOCK.lock().unwrap();
+        let _guard = modem_lock();
         unsafe {
             tempo_fast_sys::msk144_decode_frame(
                 iwave.as_ptr(),

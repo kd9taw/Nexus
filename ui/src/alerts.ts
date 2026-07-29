@@ -14,7 +14,13 @@ import { pushToast } from './toast'
 import { announce } from './announce'
 import { matchWatchlist, watchLabel, type WatchFilter } from './watchlist'
 
-const alertedDecodes = new Set<string>()
+// ⭐ TWO SETS, DELIBERATELY. The "once ever" dedups (a new DXCC, a new grid, a
+// watch-list hit) must NEVER be evicted by churn from the repeating kinds — that
+// is precisely how an ATNO started re-alerting every cycle. See `alertedRepeat`.
+const alertedOnce = new Set<string>()
+// The kinds that legitimately repeat as an exchange advances (mycall / cq). Bounded,
+// because a busy band produces these continuously.
+const alertedRepeat = new Set<string>()
 // Every decode key ever seen (not just alert-worthy) — drives the batch
 // freshness check for the decode tick + screen-reader batch summaries.
 const seenDecodes = new Set<string>()
@@ -58,6 +64,19 @@ function beep(freq: number): void {
 
 function decodeKey(d: DecodeRow): string {
   return `${d.from ?? '?'}|${d.message}|${Math.round(d.freqHz)}`
+}
+
+/** Identity of a decode for ALERT dedup — deliberately WITHOUT the frequency.
+ *
+ * ⚠️ `decodeKey` includes `Math.round(d.freqHz)`, and a station's MEASURED audio
+ * offset drifts a few Hz between transmissions (rig drift plus the decoder's own
+ * estimate). Rounded to 1 Hz that is a different integer nearly every cycle, so the
+ * same station sending the same message minted a NEW key every time and alerted
+ * again — the operator's "it alerted over and over ... on each cycle".
+ *
+ * Frequency is a MEASUREMENT, not identity. Who said what is the identity. */
+function alertIdentity(d: DecodeRow): string {
+  return `${d.from ?? '?'}|${d.message}`
 }
 
 type AlertKind = 'mycall' | 'newdxcc' | 'newgrid' | 'cq'
@@ -214,8 +233,8 @@ export function processDecodes(
       const hit = matchWatchlist(d, watchlist)
       if (hit) {
         const wkey = `watch:${hit.id}:${call ?? '?'}`
-        if (!alertedDecodes.has(wkey)) {
-          alertedDecodes.add(wkey)
+        if (!alertedOnce.has(wkey)) {
+          alertedOnce.add(wkey)
           const where = d.country ? ` — ${d.country}` : ''
           doubleBeep(BEEP_HZ.newdxcc)
           pushToast(`⭐ Watch ${watchLabel(hit)}: ${call ?? 'station'}${where}`, 'success', 15000, {
@@ -252,6 +271,7 @@ export function processDecodes(
     // station — except a RARE grid, which dedups once per GRID (a second rover
     // in the same water grid isn't a second event); mycall/cq dedup on the
     // exact decode (they may legitimately repeat as the exchange advances).
+    const onceEver = kind === 'newdxcc' || kind === 'newgrid'
     const key =
       kind === 'newdxcc'
         ? `dxcc:${d.country ?? d.from ?? '?'}`
@@ -259,9 +279,10 @@ export function processDecodes(
           ? rareGrid && d.grid
             ? `rgrid:${d.grid.toUpperCase()}`
             : `grid:${d.from ?? '?'}`
-          : `${kind}:${decodeKey(d)}`
-    if (alertedDecodes.has(key)) continue
-    alertedDecodes.add(key)
+          : `${kind}:${alertIdentity(d)}`
+    const seen = onceEver ? alertedOnce : alertedRepeat
+    if (seen.has(key)) continue
+    seen.add(key)
 
     const who = call ?? 'station'
     const where = d.country ? ` — ${d.country}` : ''
@@ -316,15 +337,22 @@ export function processDecodes(
     }
   }
 
-  // Keep the dedup set bounded over a long session (Field Day / contests) WITHOUT
-  // a wholesale clear — that would re-alert every familiar station. Evict the
-  // oldest entries (Set preserves insertion order) so recent dedups survive.
+  // Keep the REPEATING dedups bounded over a long session (Field Day / contests)
+  // WITHOUT a wholesale clear — that would re-alert every familiar station. Evict
+  // the oldest (Set preserves insertion order) so recent dedups survive.
+  //
+  // ⭐ ONLY this set is evicted. It used to be one shared set, and that is what made
+  // an ATNO re-alert: every CQ decode minted a unique key (frequency was in the key,
+  // and it drifts), so on a busy band the 2000-entry cap blew in a minute or two and
+  // FIFO eviction dropped the OLDEST entries first — which included the `dxcc:` entry
+  // written when the new one was first heard. The durable dedups now live in
+  // `alertedOnce`, where no amount of CQ traffic can reach them.
   const CAP = 2000
-  if (alertedDecodes.size > CAP) {
+  if (alertedRepeat.size > CAP) {
     const drop = Math.floor(CAP * 0.2)
     let i = 0
-    for (const k of alertedDecodes) {
-      alertedDecodes.delete(k)
+    for (const k of alertedRepeat) {
+      alertedRepeat.delete(k)
       if (++i >= drop) break
     }
   }

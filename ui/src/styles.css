@@ -2324,7 +2324,26 @@ button.nb-chip:hover {
   position: relative;
   flex: 1;
   min-width: 0;
+  /* Must be able to shrink: an in-flow child taller than its share would otherwise
+     grow this box instead of overflowing it. */
+  min-height: 0;
   background: var(--bg);
+}
+/* ⭐ THE MAP CANVAS IS OUT OF FLOW, for exactly the reason `.waterfall-canvas` is.
+   `canvas.height` is set to `h * devicePixelRatio` (device px). In flow, that
+   attribute IS the canvas's intrinsic size, so on any display with scaling above
+   100% (dpr > 1) the canvas is taller than the box that measured it -> the parent
+   grows -> the ResizeObserver re-fires with the bigger height -> the canvas grows
+   again. Geometric, and it looks like the map "slowly expanding infinitely down"
+   with the page growing into one long vertical scroll (operator, 0.20.4).
+   dpr == 1 hides it completely, which is why it survived review on a 100% display.
+   Absolute + inset:0 means the intrinsic size can never reach layout at all, so the
+   loop is structurally impossible rather than merely balanced. The inline
+   width/height:100% on the element still drive the DISPLAY size off the stage. */
+.map-canvas-wrap > canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
 }
 .map-hover {
   position: absolute;
@@ -3201,13 +3220,27 @@ body.resizing {
   max-width: 1100px;
   margin: 0 auto;
 }
-/* Connect is the ONE .single view that must flex-FILL rather than block-scroll — its map
-   needs a definite height (see .connect-shell). Target it alone via :has(> .connect-shell)
-   so Log/Settings keep their block+scroll. Same fix the detached window already applies. */
+/* Connect must flex-FILL rather than block-scroll — its map needs a DEFINITE height
+   (see .connect-shell). Targeted via :has() so Log/Settings keep their block+scroll.
+   Same fix the detached window already applies. */
 .layout.single:has(> .connect-shell) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+/* APRS, via the TRIPLE-CLASS (0,3,0) pattern the other cockpits use — `.layout.single`
+   is (0,2,0) and would otherwise win and collapse the chain back to block+scroll.
+   Same fix as `.layout.single.cw-cockpit` / `.rtty-cockpit` / `.sstv-view`.
+
+   ⚠️ THIS IS ALSO WHAT KEEPS THE MAP BOUNDED. Under block+scroll a child has no definite
+   height to resolve against, MapView sizes its canvas from the measured container, and the
+   container then grows to fit it — a feedback loop, not a sizing mistake. (The canvas is
+   also out of flow now, see `.map-canvas-wrap > canvas`, which closes it structurally.) */
+.layout.single.aprs-cockpit {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .panel {
@@ -14615,7 +14648,13 @@ html[data-panel='needed'] {
 /* ============ Satellites section (SatellitesView) ============ */
 .sats-view {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
+  /* The globe column was a FIXED 300px against a 1fr schedule, so the detail
+     globe stayed postage-stamp sized however wide the window got. Operator,
+     2026-07-29: "we've got a lot of room with the satellites listing that could
+     be compressed over to the left to allow the globes to be bigger."
+     Both columns now share the growth: the schedule keeps enough width for its
+     eight columns, and everything past that goes to the globe. */
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.85fr);
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: var(--space-3);
   padding: var(--space-3);
@@ -16270,12 +16309,19 @@ html[data-panel='needed'] {
    accumulating in the background across navigation. TX stays disabled (a
    later, safety-reviewed wave).
    =========================================================================== */
+/* ⭐ `display: contents` so the <main> inside participates DIRECTLY in the app's flex
+   column. Without it the host is an ordinary block, the <main> gets content height,
+   and the view renders as a short box with dead space below it — which is exactly what
+   APRS did (operator screenshot, 0.20.5) before `.aprs-host` was added here. Every
+   full-view host needs this; it is not optional chrome. */
 .rtty-host,
-.sstv-host {
+.sstv-host,
+.aprs-host {
   display: contents;
 }
 .rtty-host[hidden],
-.sstv-host[hidden] {
+.sstv-host[hidden],
+.aprs-host[hidden] {
   display: none;
 }
 /* Triple-class (0,3,0) so `.layout.single` can't collapse the flex chain — same
@@ -17168,4 +17214,304 @@ html[data-panel='needed'] {
   color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ── DXpedition month grid + chase digest (2026-07-29) ──────────────────────
+   The calendar's landing view. Deliberately QUIET: the old view carried
+   saturated yellow/orange/red on every row and "really dominates the whole
+   screen" (operator). Here the grid is neutral, TODAY is the single strong
+   accent, and colour appears only on an entity the operator is chasing. */
+.cal-topbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.cal-viewtabs {
+  display: flex;
+  gap: 2px;
+}
+.cal-viewtabs button {
+  font-size: var(--fs-label);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.cal-viewtabs button.on {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Digest — the "what to chase" answer, stated rather than implied. */
+.dxd {
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+.dxd-h {
+  font-size: var(--fs-label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 0 0 var(--space-1) 0;
+}
+.dxd-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.dxd-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--fs-label);
+}
+.dxd-call {
+  font-weight: 700;
+  font-family: var(--font-mono);
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  cursor: pointer;
+}
+.dxd-call:hover {
+  color: var(--accent);
+}
+.dxd-entity {
+  color: var(--text-dim);
+}
+.dxd-when {
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+}
+.dxd-row.live .dxd-when {
+  color: var(--accent);
+  font-weight: 700;
+}
+.dxd-best {
+  margin-left: auto;
+}
+.dxd-days {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* Month grid. */
+.dxm {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-2);
+}
+.dxm-head,
+.dxm-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+.dxm-wd {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  text-align: center;
+  padding-bottom: 2px;
+}
+.dxm-day {
+  min-height: 62px;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 2px 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+/* Days already gone stay readable but stop competing for attention. */
+.dxm-day.past {
+  opacity: 0.45;
+}
+.dxm-day.today {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.dxm-dom {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+.dxm-day.today .dxm-dom {
+  color: var(--accent);
+  font-weight: 700;
+}
+.dxm-todaytag {
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+}
+/* A run of days reads as ONE bar: square inner edges, rounded only where the
+   operation actually starts and ends. */
+.dxm-bar {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-radius: 0;
+  padding: 1px var(--space-1);
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  cursor: pointer;
+  background: var(--border-soft);
+  color: var(--text);
+  min-height: 15px;
+}
+.dxm-bar.starts {
+  border-top-left-radius: 3px;
+  border-bottom-left-radius: 3px;
+}
+.dxm-bar.ends {
+  border-top-right-radius: 3px;
+  border-bottom-right-radius: 3px;
+}
+.dxm-bar:hover {
+  background: var(--border);
+}
+/* The ONE place colour is spent: an entity the operator chose to chase. */
+.dxm-bar.chased {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--text);
+  font-weight: 700;
+}
+.dxm-barcall {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+.dxm-barcont {
+  display: block;
+  height: 1em;
+}
+/* Narrow: a seven-column grid cannot compress below a readable cell, so it
+   SCROLLS in its own container rather than vanishing (hiding it would leave the
+   month view showing nothing at all) — and the page body still never scrolls
+   sideways. */
+.dxm {
+  overflow-x: auto;
+}
+[data-viewport='narrow'] .dxm-head,
+[data-viewport='narrow'] .dxm-week,
+[data-viewport='phone'] .dxm-head,
+[data-viewport='phone'] .dxm-week {
+  min-width: 460px;
+}
+
+/* SSTV band view: the waterfall that stands in for the picture when nothing is
+   decoding. Fills the same region the image occupies, so the two states swap in
+   place rather than reflowing the view. */
+.sstv-band {
+  width: 100%;
+  height: 100%;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* Radio mistuning, stated because the decoded picture is standing where the
+   spectrum was and cannot show it. */
+.sstv-tuneoff {
+  font-family: var(--font-mono);
+  color: var(--warn, #e8a13c);
+}
+.sstv-band-caption {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  padding: var(--space-1) 0;
+}
+
+/* ── APRS: rail + map (2026-07-29) ──────────────────────────────────────────
+   The section was one vertical stack, so its controls bunched into the top-left
+   corner and the rest of a wide window was empty. APRS is a geographic mode; the
+   map is the point, and the controls belong beside it. */
+.aprs-body {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--space-3);
+  /* flex:1 + min-height:0 only mean anything because the `.layout.single:has()` rule above
+     makes the parent a flex column. In the default block+scroll `.single` they are inert and
+     the map has no height to resolve against. */
+  min-height: 0;
+  flex: 1;
+}
+.aprs-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.aprs-map {
+  position: relative;
+  min-width: 0;
+  /* A hard floor here would push the grid past its parent on short windows — the additive-floor
+     clipping this codebase has already been bitten by. Floor only when there is room. */
+  min-height: min(320px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+/* "Nothing plotted" is a NORMAL state — status and message packets carry no
+   position at all — so it is named rather than left as an empty planet. */
+.aprs-map-empty {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-3);
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  pointer-events: none;
+  max-width: 90%;
+  text-align: center;
+}
+/* The heard table is dense; inside a 420 px rail it needs to scroll itself
+   rather than force the whole rail wide. */
+.aprs-rail .aprs-table {
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+/* Narrow: stack, map first — it is the thing worth seeing on a small screen. */
+[data-viewport='narrow'] .aprs-body,
+[data-viewport='phone'] .aprs-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+[data-viewport='narrow'] .aprs-map,
+[data-viewport='phone'] .aprs-map {
+  order: -1;
+  min-height: 260px;
+}
+.aprs-rail .aprs-table tbody tr {
+  cursor: pointer;
+}
+.aprs-rail .aprs-table tbody tr.sel td {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }

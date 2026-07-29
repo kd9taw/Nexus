@@ -897,6 +897,11 @@ export interface SstvState {
   previewRgbBase64: string | null
   previewWidth: number
   previewHeight: number
+  /** Radio mistuning in Hz (`observed_leader_hz - 1900`) for the in-flight image.
+   * The band view replaces the spectrum with decoded pixels while an image comes
+   * in, so this states the one thing the spectrum would have shown that the
+   * picture cannot. 0 when idle. */
+  hedrShiftHz: number
   gallery: SstvGalleryEntry[]
   /** An image is queued or streaming to the rig (the cockpit's TX indicator). */
   sending: boolean
@@ -2026,6 +2031,12 @@ export interface Settings {
   /** Auto-upload each logged QSO to the QRZ.com logbook. Needs the QRZ Logbook API
    *  key in the keychain (distinct from the lookup password). */
   qrzLogbookUpload: boolean
+  /** Pull confirmations down from QRZ on a timer (the manual sync always existed). */
+  qrzAutoSync: boolean
+  /** Hours between automatic pulls. */
+  qrzSyncHours: number
+  /** Unix seconds of the last successful automatic pull; 0 = never. */
+  qrzLastSyncUnix: number
   /** ClubLog account email (not a callsign); app-password is in the keychain. */
   clublogEmail: string
   /** ClubLog logbook callsign to upload into (empty → your callsign). */

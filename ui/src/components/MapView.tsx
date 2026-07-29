@@ -5,6 +5,7 @@
 // means one thing app-wide.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { workedGridSet } from '../coverage'
+import type { AprsHeard } from '../api'
 import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects } from 'd3-geo'
 import { RotateCcw } from 'lucide-react'
@@ -97,7 +98,15 @@ interface Props {
    * showing just the basemap + the birds, centered on `focusSat`. Suppresses the
    * toolbar, layer panel, and every overlay rail/legend, and never touches the
    * operator's persisted Connect-map projection. */
-  embedded?: { focusSat?: string }
+  embedded?: { focusSat?: string; aprs?: boolean }
+  /** APRS stations to plot (the APRS section feeds these; the layer is never
+   * polled here). Only those carrying a position are drawn — a status or message
+   * packet has nothing to put on a map. */
+  aprs?: AprsHeard[]
+  /** Click an APRS station icon. Omitted = hover-only. */
+  onSelectAprs?: (call: string) => void
+  /** Highlighted APRS station (the list selection), drawn accented. */
+  selectedAprs?: string | null
 }
 
 /** Color for an ionosonde's measured MUF (MHz): a cold→hot scale (blue low → red high)
@@ -208,6 +217,7 @@ type LayerKey =
   | 'cqzones'
   | 'coverage'
   | 'sats'
+  | 'aprs'
   | 'coast'
   | 'states'
   | 'grid'
@@ -242,6 +252,9 @@ const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   cqzones: { label: 'CQ zones', visible: false, opacity: 0.6 },
   coverage: { label: 'My coverage (worked)', visible: false, opacity: 0.45 },
   sats: { label: 'Satellites (amateur)', visible: false, opacity: 0.9 },
+  // Off by default on Connect — APRS has its own section, and this layer is fed
+  // by that section rather than polled here.
+  aprs: { label: 'APRS stations', visible: false, opacity: 0.95 },
   rings: { label: 'Range rings', visible: true, opacity: 0.55 },
   heat: { label: 'Band heat (openings)', visible: true, opacity: 0.55 },
   // Free until a real event: sectors draw only while a band is actually open,
@@ -259,6 +272,18 @@ const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
 // nothing else — no spots, stations, MUF, rings, or space-weather overlays.
 const EMBED_LAYERS: Record<LayerKey, Layer> = (() => {
   const on = new Set<LayerKey>(['daynight', 'relief', 'coast', 'grid', 'sats'])
+  const out = {} as Record<LayerKey, Layer>
+  for (const k of Object.keys(DEFAULT_LAYERS) as LayerKey[]) {
+    out[k] = { ...DEFAULT_LAYERS[k], visible: on.has(k) }
+  }
+  return out
+})()
+// The APRS section's map: a clean planet with terrain and borders (APRS is a
+// LOCAL, terrestrial picture — states matter, the greyline does not) plus the
+// station layer. Same embedded contract as the satellite globe: no toolbar, no
+// rails, and the operator's persisted Connect-map layer choices are untouched.
+const APRS_EMBED_LAYERS: Record<LayerKey, Layer> = (() => {
+  const on = new Set<LayerKey>(['relief', 'coast', 'states', 'grid', 'aprs'])
   const out = {} as Record<LayerKey, Layer>
   for (const k of Object.keys(DEFAULT_LAYERS) as LayerKey[]) {
     out[k] = { ...DEFAULT_LAYERS[k], visible: on.has(k) }
@@ -333,6 +358,9 @@ export function MapView({
   intent,
   onWorkSpot,
   onSelectSat,
+  aprs,
+  onSelectAprs,
+  selectedAprs,
   focusBand = null,
   onFocusBand,
   outlook = null,
@@ -362,7 +390,9 @@ export function MapView({
   )
   const [colorBy, setColorBy] = useState<'need' | 'snr'>('need')
   const [pathMode, setPathMode] = useState<'sp' | 'lp'>('sp')
-  const [layers, setLayers] = useState(() => (embedded ? EMBED_LAYERS : DEFAULT_LAYERS))
+  const [layers, setLayers] = useState(() =>
+    embedded ? (embedded.aprs ? APRS_EMBED_LAYERS : EMBED_LAYERS) : DEFAULT_LAYERS,
+  )
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<{ x: number; y: number; text: string; info?: boolean } | null>(null)
   // The hovered feature's call — drives the on-canvas hover ring (changes only
@@ -444,6 +474,7 @@ export function MapView({
   // Satellite hitboxes, captured at draw time (positions interpolate every tick,
   // so hit-testing must read what was actually drawn, not recompute).
   const placedSatsRef = useRef<Array<{ name: string; x: number; y: number; chased: boolean }>>([])
+  const placedAprsRef = useRef<Array<{ call: string; x: number; y: number }>>([])
   // Sat single-click navigation is DELAYED one double-click window: the first
   // click of a dbl-click-to-★ would otherwise unmount this map before the
   // second click could land (review catch — the gesture was unreachable).
@@ -990,6 +1021,61 @@ export function MapView({
       }
       ctx.globalAlpha = 1
     }
+    // APRS stations: a dot per positioned station, the operator's selection
+    // accented, plus a short course/speed vector for anything moving. Fed by the
+    // APRS section rather than polled here, so the layer is inert on Connect
+    // unless someone turns it on and something supplies it.
+    placedAprsRef.current = []
+    if (layers.aprs.visible && aprs && aprs.length > 0) {
+      const sel = selectedAprs ? selectedAprs.toUpperCase() : null
+      ctx.font = `500 10px ${cssVar('--font-mono') || 'monospace'}`
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'middle'
+      // Newest last so a station that has moved draws its current dot on top of
+      // its older one rather than under it.
+      const positioned = aprs
+        .filter((a) => a.lat != null && a.lon != null)
+        .slice()
+        .sort((a, b) => a.atUnix - b.atUnix)
+      for (const a of positioned) {
+        const p = project(proj, { lat: a.lat as number, lon: a.lon as number })
+        if (!p) continue
+        const isSel = sel != null && a.source.toUpperCase() === sel
+        ctx.globalAlpha = layers.aprs.opacity
+        // Course/speed vector: only for a station actually under way. A parked
+        // station with a stale course would otherwise draw a lie.
+        if (a.speedKnots != null && a.speedKnots > 1 && a.courseDeg != null) {
+          const len = Math.min(26, 6 + a.speedKnots * 0.5)
+          const rad = ((a.courseDeg - 90) * Math.PI) / 180
+          ctx.strokeStyle = isSel ? '#5eead4' : 'rgba(148, 163, 184, 0.8)'
+          ctx.lineWidth = 1.2
+          ctx.beginPath()
+          ctx.moveTo(p[0], p[1])
+          ctx.lineTo(p[0] + Math.cos(rad) * len, p[1] + Math.sin(rad) * len)
+          ctx.stroke()
+        }
+        ctx.fillStyle = isSel ? '#5eead4' : 'rgba(203, 213, 225, 0.95)'
+        ctx.beginPath()
+        ctx.arc(p[0], p[1], isSel ? 5 : 3.5, 0, Math.PI * 2)
+        ctx.fill()
+        if (isSel) {
+          ctx.strokeStyle = '#5eead4'
+          ctx.lineWidth = 1.5
+          ctx.beginPath()
+          ctx.arc(p[0], p[1], 9, 0, Math.PI * 2)
+          ctx.stroke()
+        }
+        // Label only the selection and anything moving — labelling every station
+        // turns a busy local net into a wall of text.
+        if (isSel || (a.speedKnots != null && a.speedKnots > 1)) {
+          ctx.fillStyle = cssVar('--text') || '#e2e8f0'
+          ctx.fillText(a.source, p[0] + 8, p[1])
+        }
+        placedAprsRef.current.push({ call: a.source, x: p[0], y: p[1] })
+      }
+      ctx.globalAlpha = 1
+    }
+
     // Amateur satellites: mini satellite icons at the INTERPOLATED live
     // position (the track lets the icon actually move between 30 s polls),
     // a fading trail of where the bird just was, and a dashed projection of
@@ -1045,7 +1131,19 @@ export function MapView({
       ctx.font = `500 10px ${cssVar('--font-mono') || 'monospace'}`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
+      // ⭐ THE DETAIL GLOBE SHOWS ONE BIRD, NOT ALL OF THEM. Every satellite drew
+      // its own past trail + dashed projection, so opening a single bird's detail
+      // produced a globe criss-crossed with a dozen unrelated tracks and the pass
+      // you actually clicked was unreadable. Operator, 2026-07-29: "it's giving me
+      // a lot of trails of other satellites, which makes things look confusing ...
+      // when you click on something, maybe you only see that satellite."
+      //
+      // Scoped to the EMBEDDED detail globe via `focusSat`. The full Connect/map
+      // satellite layer is unchanged — there, seeing every bird at once is the
+      // whole point of turning the layer on.
+      const soloSat = focusSat ? focusSat.toUpperCase() : null
       for (const b of sats.birds) {
+        if (soloSat && b.name.toUpperCase() !== soloSat) continue
         const isChased = chasedSet.has(b.name.toUpperCase())
         const live = posAt(b.track, nowSecs) ?? { lat: b.lat, lon: b.lon }
         const p = project(proj, live)
@@ -1775,6 +1873,7 @@ export function MapView({
     | { kind: 'dxped'; d: number; card: WorkableCard }
     | { kind: 'spot'; d: number; sp: MapSpot }
     | { kind: 'sat'; d: number; name: string; chased: boolean }
+    | { kind: 'aprs'; d: number; name: string }
     | { kind: 'muf'; d: number; muf: number }
   const hitTest = (mx: number, my: number): MapHit | null => {
     if (layers.stations.visible) {
@@ -1800,6 +1899,14 @@ export function MapView({
         // Generous 10 px target on a ~3 px dot — small dots were genuinely
         // hard to hit (operator report).
         if (d < 10 && (!best || d < best.d)) best = { kind: 'spot', d, sp }
+      }
+      if (best) return best
+    }
+    if (layers.aprs.visible) {
+      let best: MapHit | null = null
+      for (const { call, x, y } of placedAprsRef.current) {
+        const d = Math.hypot(x - mx, y - my)
+        if (d < 10 && (!best || d < best.d)) best = { kind: 'aprs', d, name: call }
       }
       if (best) return best
     }
@@ -1853,6 +1960,18 @@ export function MapView({
     if (hit.kind === 'muf') {
       return `Ionosonde · measured MUF ${hit.muf.toFixed(1)} MHz here (KC2G) — a data point, not a station`
     }
+    if (hit.kind === 'aprs') {
+      const a = aprs?.find((x) => x.source === hit.name)
+      if (!a) return hit.name
+      const age = Math.max(0, Math.round(Date.now() / 1000 - a.atUnix))
+      const when = age < 60 ? `${age}s ago` : `${Math.round(age / 60)}m ago`
+      const via = a.path.length > 0 ? ` · via ${a.path.join(',')}` : ' · direct'
+      const moving =
+        a.speedKnots != null && a.speedKnots > 1
+          ? ` · ${Math.round(a.speedKnots)} kn${a.courseDeg != null ? ` @ ${Math.round(a.courseDeg)}°` : ''}`
+          : ''
+      return `${a.source} · heard ${when}${via}${moving}${a.text ? ` — ${a.text}` : ''}`
+    }
     if (hit.kind === 'sat') {
       const star = hit.chased ? '★' : '☆'
       const now = Date.now() / 1000
@@ -1882,7 +2001,9 @@ export function MapView({
             ? hit.sp.call
             : hit.kind === 'sat'
               ? hit.name // drives the hover ring around the icon
-              : null // muf diamonds: info-only, no ring
+              : hit.kind === 'aprs'
+                ? hit.name
+                : null // muf diamonds: info-only, no ring
       : null
   /** Pointer event → CANVAS LAYOUT coords (the space dots are projected in).
    * The app's UI scale (`.app { zoom: var(--ui-zoom) }`) makes visual px ≠
@@ -1952,6 +2073,13 @@ export function MapView({
       }
       const [mx, my] = canvasXY(e)
       const hit = hitTest(mx, my)
+      if (hit?.kind === 'aprs') {
+        // Selecting on the map selects in the list, and vice versa — one
+        // selection, two views of it. No defer: nothing unmounts on an APRS
+        // select, so the click can land immediately.
+        onSelectAprs?.(hit.name)
+        return
+      }
       if (hit?.kind === 'sat') {
         // A sat click opens the bird's passes — it must NOT clear the station
         // selection (the operator may be mid-QSO watching a pass approach).

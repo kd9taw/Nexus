@@ -1156,6 +1156,16 @@ pub struct SstvProgress {
     /// Raw RGB preview bytes (`preview_w × preview_h × 3`), nearest-neighbor
     /// downscale of the partial image.
     pub preview_rgb: Vec<u8>,
+    /// Radio mistuning for this image, in Hz: `observed_leader_hz - 1900`, taken
+    /// from the VIS header.
+    ///
+    /// Surfaced because the SSTV band view REPLACES the spectrum with decoded
+    /// pixels while an image is coming in (operator's explicit choice), and the
+    /// thing that costs you is exactly what the spectrum would have shown: whether
+    /// you are tuned right. The decoder already computed it and used it only for
+    /// diagnostics — stating the number outright is cheaper than making the
+    /// operator infer it from a picture that is skewed.
+    pub hedr_shift_hz: f64,
 }
 
 /// A ready-to-transmit SSTV image: the whole pre-encoded 12 kHz PCM buffer, the
@@ -1256,6 +1266,75 @@ pub(crate) const HUNT_TTL_SECS: u64 = 4 * 3600;
 const DT_WINDOW: usize = 16;
 /// Time-sync is considered OK while median(|dt|) is under this many seconds.
 const DT_OK_THRESHOLD: f32 = 0.5;
+
+/// The waveform an over needs, reduced to plain data.
+///
+/// Deliberately carries no borrow of the engine: this is the half of a transmit
+/// that touches the MODEM, and the modem is serialized behind
+/// `tempo_fast_sys::MODEM_LOCK`, which a running decode can hold for the length
+/// of that decode. Building it while the ENGINE mutex is held made every Tauri
+/// snapshot poll and every UI command queue up behind a decode — the window
+/// went "not responding" for as long as the decoder took. Splitting the build
+/// out lets the radio loop release the engine before it waits.
+///
+/// Nothing here changes WHEN we key: the wait is the same wait, in the same
+/// place. Only the engine lock is no longer held across it.
+pub enum TxWaveform {
+    /// DX1: 8-FSK, non-coherent.
+    Deep { text: String, f0: f32 },
+    /// FT1: 4-CPM. `rv` is the IR-HARQ redundancy version (QSO retransmissions
+    /// escalate it; Chat and Field Day always send RV0).
+    Fast { text: String, f0: f32, rv: i32 },
+    /// Everything driven by the `modes` trait — FT8, FT4, Q65, FST4, MSK144,
+    /// JT65, and the WSPR/FST4W beacons.
+    Native {
+        kind: modes::ModeKind,
+        text: String,
+        f0: f32,
+    },
+}
+
+impl TxWaveform {
+    /// Synthesise the audio. **Takes the modem lock; call it with no other lock
+    /// held.** Returns empty on any refusal, which every caller already treats
+    /// as "do not key".
+    pub fn build(&self) -> Vec<f32> {
+        match self {
+            TxWaveform::Deep { text, f0 } => {
+                tempo_fast::deep::encode_wave(text, *f0, tempo_fast::SAMPLE_RATE)
+            }
+            TxWaveform::Fast { text, f0, rv } => {
+                tx::build_rv(text, tempo_fast::SAMPLE_RATE, *f0, *rv).wave
+            }
+            TxWaveform::Native { kind, text, f0 } => {
+                let Some(mode) = modes::tx_mode(*kind) else {
+                    return Vec::new();
+                };
+                let tones = mode.encode(text);
+                if tones.is_empty() {
+                    return Vec::new();
+                }
+                mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, *f0)
+            }
+        }
+    }
+}
+
+/// A decided over: what to send, and the slot/tier it was decided for.
+///
+/// `slot` and `tier` are carried so [`Engine::commit_tx`] can REFUSE a plan that
+/// no longer matches the engine. The radio loop releases the engine mutex while
+/// [`TxWaveform::build`] runs, so the operator can change tier or the slot can
+/// roll over in between — keying a waveform built for the previous tier is
+/// exactly the wrong-mode emission the transmit guards exist to prevent.
+pub struct TxPlan {
+    pub slot: u64,
+    pub tier: Tier,
+    pub waveform: TxWaveform,
+    /// Beacon overs run the wall-clock watchdog at COMMIT, matching the order
+    /// the single-shot path used (build, then check).
+    beacon: bool,
+}
 
 impl Engine {
     /// Construct from explicit identity (back-compat; uses default settings).
@@ -6765,7 +6844,7 @@ impl Engine {
     /// The TX-safety invariants still apply in full — this is only reached after
     /// `poll_tx`'s `tx_enabled` / `tx_allowed` / operating-mode guards, so a beacon
     /// keys unattended only once the operator has explicitly armed transmit.
-    fn poll_beacon_tx(&mut self, slot: u64) -> Vec<Vec<f32>> {
+    fn plan_beacon_tx(&mut self, slot: u64) -> Option<TxPlan> {
         // ⭐ 0% MEANS SILENT, WHICHEVER SCHEDULER IS SELECTED. This check used to
         // live only inside `BeaconScheduler::next_is_tx`, which the Round-Robin arm
         // below never calls — so a station with an RR slot left over from a
@@ -6776,7 +6855,7 @@ impl Engine {
             self.beacon_decided_slot = Some(slot);
             self.beacon_tx_this_slot = false;
             self.app.set_transmitting(false);
-            return Vec::new();
+            return None;
         }
         if self.beacon_decided_slot != Some(slot) {
             self.beacon_decided_slot = Some(slot);
@@ -6800,59 +6879,38 @@ impl Engine {
         }
         if !self.beacon_tx_this_slot {
             self.app.set_transmitting(false);
-            return Vec::new();
+            return None;
         }
 
         // Misconfigured (no power, no grid) ⇒ stay silent. The UI surfaces the
         // reason; publishing a wrong report is worse than not beaconing.
         let Ok(msg) = self.beacon_message() else {
             self.app.set_transmitting(false);
-            return Vec::new();
+            return None;
         };
         let Some(kind) = self.tier_mode_kind(self.app.tier()) else {
             self.app.set_transmitting(false);
-            return Vec::new();
+            return None;
         };
-        let Some(mode) = modes::tx_mode(kind) else {
+        // Resolved here rather than in the builder so a decode-only mode reaching
+        // the beacon path is refused BEFORE any of the keying machinery runs.
+        if modes::tx_mode(kind).is_none() {
             self.app.set_transmitting(false);
-            return Vec::new();
-        };
-        let itone = mode.encode(&msg);
-        if itone.is_empty() {
-            self.app.set_transmitting(false);
-            return Vec::new();
+            return None;
         }
-        let wave = mode.gen_wave(&itone, tempo_fast::SAMPLE_RATE, self.tx_offset_hz());
-        if wave.is_empty() {
-            self.app.set_transmitting(false);
-            return Vec::new();
-        }
-        // ⭐ THE WALL-CLOCK WATCHDOG APPLIES HERE TOO. It is implemented inline in
-        // the QSO arm of `poll_tx`, ~240 lines below the branch that sent us here,
-        // so a beacon had NO duration bound at all: Settings offers "TX watchdog:
-        // 6 min" and it silently did not cover the two modes most likely to be left
-        // running unattended. An armed beacon keyed on schedule indefinitely and the
-        // UI never showed a trip.
-        //
-        // Checked BEFORE keying, not after: an FST4W-1800 over is 30 minutes, so a
-        // watchdog evaluated only at over boundaries would let a single transmission
-        // run five times past its own limit.
-        let limit_secs = u64::from(self.settings.tx_watchdog_min) * 60;
-        if limit_secs > 0 {
-            let now = now_unix_secs();
-            let start = *self.tx_watchdog_start.get_or_insert(now);
-            if now.saturating_sub(start) >= limit_secs {
-                self.tx_watchdog = true;
-                self.tx_enabled = false;
-                self.app.set_transmitting(false);
-                return Vec::new();
-            }
-        }
-        self.app.set_transmitting(true);
-        vec![wave]
+        Some(TxPlan {
+            slot,
+            tier: self.app.tier(),
+            waveform: TxWaveform::Native {
+                kind,
+                text: msg,
+                f0: self.tx_offset_hz(),
+            },
+            beacon: true,
+        })
     }
 
-    pub fn poll_tx(&mut self, slot: u64) -> Vec<Vec<f32>> {
+    pub fn plan_tx(&mut self, slot: u64) -> Option<TxPlan> {
         // Coordinated QSY: execute a scheduled move the moment it comes due,
         // regardless of TX/RX/mute state (no-op while the feature is disabled).
         self.qsy_execute_due(slot);
@@ -6861,7 +6919,7 @@ impl Engine {
         // steady tune carrier separately (also privilege-gated at set_tune).
         if !self.tx_enabled || self.tuning || !self.tx_allowed() {
             self.app.set_transmitting(false);
-            return Vec::new();
+            return None;
         }
         // RECEIVE-ONLY TIER: stop HERE, with the other "we are not transmitting"
         // guards — not at the wave builder below.
@@ -6881,7 +6939,7 @@ impl Engine {
         // backstop for any future path that latches `tx_enabled` directly.
         if self.tier_is_rx_only(self.app.tier()) {
             self.app.set_transmitting(false);
-            return Vec::new();
+            return None;
         }
         // Phone / CW sections own the rig: the FT8/FT1 slot sequencer must NOT key the
         // radio while the operator is on voice or CW (the keyer/PTT drive those modes).
@@ -6889,7 +6947,7 @@ impl Engine {
         // phone over (shared PTT + output ring) — a wrong-mode/spurious-emission bug.
         if self.settings.operating_mode != crate::settings::OperatingMode::Digital {
             self.app.set_transmitting(false);
-            return Vec::new();
+            return None;
         }
         // BEACON TIER (WSPR / FST4W): a separate transmit path — there is no
         // exchange, so it never reaches the QSO sequencer below. The only decision
@@ -6910,7 +6968,7 @@ impl Engine {
         // beacon must clear all of it. Only the QSO-specific machinery below —
         // identity packing, parity, the sequencer — is genuinely inapplicable.
         if self.tier_is_beacon(self.app.tier()) {
-            return self.poll_beacon_tx(slot);
+            return self.plan_beacon_tx(slot);
         }
         // Delivery ACKs we now owe (heard a directed message addressed to us) ride out on
         // the chat broadcast path — closing the store-and-forward loop. Only reached when
@@ -6932,12 +6990,12 @@ impl Engine {
         let needs_grid = !matches!(self.mode, Mode::FieldDay { .. });
         if self.structured_tx_ready(needs_grid).is_err() {
             self.app.set_transmitting(false);
-            return Vec::new();
+            return None;
         }
 
         if slot % 2 != self.tx_parity {
             self.app.set_transmitting(false);
-            return Vec::new();
+            return None;
         }
         // Coordinated QSY (initiator): announce a hop on this over by queueing the
         // directive ahead of normal broadcasts. Live in Chat only — the auto-QSO /
@@ -7126,7 +7184,7 @@ impl Engine {
                         // and cut it ~20 ms later on the next tick — a brief spurious
                         // emission every time the watchdog fired.
                         self.app.set_transmitting(false);
-                        return Vec::new();
+                        return None;
                     }
                     // ⭐ AN OVER LONGER THAN THE WHOLE LIMIT CAN NEVER BE TRANSMITTED.
                     //
@@ -7151,7 +7209,7 @@ impl Engine {
                         self.tx_watchdog = true;
                         self.tx_enabled = false;
                         self.app.set_transmitting(false);
-                        return Vec::new();
+                        return None;
                     }
                 }
                 // Record this transmission so the decode feed shows our own calls
@@ -7194,18 +7252,19 @@ impl Engine {
                 }
                 // Robust tier (DX1) modulates 8-FSK; fast tier (FT1) uses 4-CPM.
                 // Both place the signal at the operator's TX audio offset.
-                let wave = match self.app.tier() {
+                let waveform = match self.app.tier() {
                     // Robust tier: 8-FSK non-coherent.
-                    Tier::TempoDeep => tempo_fast::deep::encode_wave(
-                        &t,
-                        self.tx_offset_hz,
-                        tempo_fast::SAMPLE_RATE,
-                    ),
+                    Tier::TempoDeep => TxWaveform::Deep {
+                        text: t,
+                        f0: self.tx_offset_hz,
+                    },
                     // FT1: 4-CPM. QSO mode escalates tx_rv for IR-HARQ
                     // retransmissions; Chat/Field Day keep tx_rv = 0 (RV0 = tx::build).
-                    Tier::TempoFast => {
-                        tx::build_rv(&t, tempo_fast::SAMPLE_RATE, self.tx_offset_hz, tx_rv).wave
-                    }
+                    Tier::TempoFast => TxWaveform::Fast {
+                        text: t,
+                        f0: self.tx_offset_hz,
+                        rv: tx_rv,
+                    },
                     // FT8 / FT4: encode + synthesize via the active mode (no IR-HARQ).
                     // Split Operation reduces the audio into 1500–2000 Hz and
                     // leaves the matching dial shift for the slot core to apply
@@ -7218,32 +7277,91 @@ impl Engine {
                         // over is abandoned. Every mode shipped today declares tx, so None
                         // means a decode-only mode reached the TX path, which is a bug —
                         // refusing to key is the correct response to it.
-                        let Some(mode) = modes::tx_mode(kind) else {
+                        //
+                        // Checked HERE, in the planner, and not left to the builder: the
+                        // builder returns a bare empty wave, which reads as "nothing to
+                        // send" rather than "this mode must never key".
+                        if modes::tx_mode(kind).is_none() {
                             self.app.set_transmitting(false);
-                            return Vec::new();
-                        };
-                        let tones = mode.encode(&t);
+                            return None;
+                        }
+                        // The split reduction is engine state (the slot core applies the
+                        // matching dial shift before PTT), so it is decided here even
+                        // though only the builder consumes f0.
                         let (f0, shift) = self.split_reduce(self.tx_offset_hz);
                         self.tx_dial_shift_hz = shift;
-                        mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0)
+                        TxWaveform::Native { kind, text: t, f0 }
                     }
                 };
-                // Bail out on an EMPTY OUTER vec, never `vec![empty_wave]`. Callers gate
-                // on `waves.is_empty()` and then index `waves.first()` / `waves.len()-1`
-                // and call `rig.ptt(true)`; a zero-length wave passes that guard and
-                // walks into the keying path with nothing to send. Returning no waves at
-                // all is the only shape every downstream branch already handles.
-                if wave.is_empty() {
-                    self.app.set_transmitting(false);
-                    return Vec::new();
-                }
-                vec![wave]
+                Some(TxPlan {
+                    slot,
+                    tier: self.app.tier(),
+                    waveform,
+                    beacon: false,
+                })
             }
             None => {
                 self.app.set_transmitting(false);
-                Vec::new()
+                None
             }
         }
+    }
+
+    /// Decide, build and commit an over in one call — the whole transmit decision
+    /// for `slot`, exactly as it has always behaved.
+    ///
+    /// This is [`Self::plan_tx`] + [`TxWaveform::build`] + [`Self::commit_tx`] run
+    /// back to back. The radio loop drives those three separately so it can RELEASE
+    /// THE ENGINE MUTEX across the build, which takes the modem lock and can
+    /// therefore wait out an entire decode; every other caller wants this one.
+    pub fn poll_tx(&mut self, slot: u64) -> Vec<Vec<f32>> {
+        let Some(plan) = self.plan_tx(slot) else {
+            return Vec::new();
+        };
+        let wave = plan.waveform.build();
+        self.commit_tx(&plan, wave)
+    }
+
+    /// Accept a built waveform and produce the over, or refuse it.
+    ///
+    /// Refuses a plan that no longer describes this engine. The radio loop builds
+    /// with the engine mutex RELEASED, so between plan and commit the operator can
+    /// change tier — keying a waveform built for the previous tier is a wrong-mode
+    /// emission, precisely what the transmit guards exist to prevent. The check is
+    /// cheap and makes the race unrepresentable rather than merely unlikely.
+    pub fn commit_tx(&mut self, plan: &TxPlan, wave: Vec<f32>) -> Vec<Vec<f32>> {
+        if plan.tier != self.app.tier() {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        }
+        // Bail out on an EMPTY OUTER vec, never `vec![empty_wave]`. Callers gate
+        // on `waves.is_empty()` and then index `waves.first()` / `waves.len()-1`
+        // and call `rig.ptt(true)`; a zero-length wave passes that guard and
+        // walks into the keying path with nothing to send. Returning no waves at
+        // all is the only shape every downstream branch already handles.
+        if wave.is_empty() {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        }
+        // The BEACON path runs the wall-clock watchdog HERE rather than in the
+        // planner, preserving the order the single-shot path used (build, then
+        // check): a build that produces nothing still leaves the watchdog clock
+        // unstarted, exactly as before.
+        if plan.beacon {
+            let limit_secs = u64::from(self.settings.tx_watchdog_min) * 60;
+            if limit_secs > 0 {
+                let now = now_unix_secs();
+                let start = *self.tx_watchdog_start.get_or_insert(now);
+                if now.saturating_sub(start) >= limit_secs {
+                    self.tx_watchdog = true;
+                    self.tx_enabled = false;
+                    self.app.set_transmitting(false);
+                    return Vec::new();
+                }
+            }
+            self.app.set_transmitting(true);
+        }
+        vec![wave]
     }
 
     /// Decode a captured frame and fold it into the app *and* the active mode's
@@ -9293,6 +9411,7 @@ mod tests {
             preview_w: 2,
             preview_h: 1,
             preview_rgb: vec![1, 2, 3, 4, 5, 6],
+            hedr_shift_hz: 0.0,
         }));
         assert_eq!(e.sstv_progress().unwrap().lines_done, 40);
 
@@ -14485,6 +14604,42 @@ mod tests {
                 "FT8 must never be refused by the length rule (watchdog {min} min)"
             );
         }
+    }
+
+    #[test]
+    fn commit_tx_refuses_a_plan_whose_tier_changed_while_the_engine_was_unlocked() {
+        // The radio loop plans an over, RELEASES the engine mutex to build the
+        // waveform (the build takes MODEM_LOCK and can wait out a whole decode),
+        // then re-acquires to commit. The operator can change tier inside that
+        // window, and keying an FT8 waveform on Q65 is a wrong-mode emission —
+        // exactly what the transmit guards exist to prevent.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_enabled(true);
+        e.start_cq(None).unwrap();
+
+        // Plan on FT8, at a slot the parity accepts.
+        let mut plan = None;
+        for slot in 0..4u64 {
+            if let Some(p) = e.plan_tx(slot) {
+                plan = Some(p);
+                break;
+            }
+        }
+        let plan = plan.expect("FT8 CQ should plan an over");
+        let wave = plan.waveform.build();
+        assert!(!wave.is_empty(), "precondition: the FT8 over built");
+
+        // The operator switches tier before the commit lands.
+        e.set_tier(Tier::Q65);
+        assert!(
+            e.commit_tx(&plan, wave).is_empty(),
+            "an over planned on FT8 must not key after a switch to Q65"
+        );
+        assert!(
+            !e.snapshot().radio.transmitting,
+            "the refusal must also clear the transmitting latch"
+        );
     }
 
     #[test]

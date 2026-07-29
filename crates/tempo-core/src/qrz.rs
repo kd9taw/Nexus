@@ -347,6 +347,61 @@ pub fn build_fetch_body(api_key: &str) -> String {
     format!("KEY={}&ACTION=FETCH", pct(api_key.trim()))
 }
 
+/// A DELTA fetch: only records QRZ has touched since `since_date` (`YYYY-MM-DD`, UTC).
+///
+/// This is what makes an automatic hourly sync reasonable. The bare
+/// [`build_fetch_body`] pulls the WHOLE logbook every run, which is fine for a button
+/// the operator presses and rude on a timer against someone else's server.
+///
+/// From QRZ's Logbook API guide: `"MODSINCE:2023-01-01" only return records modified
+/// since this date`.
+///
+/// ⚠️ **ONE option, deliberately.** QRZ's guide contradicts itself on how to combine
+/// them — the prose says "separated by the ampersand or semicolon (& or ;)" while the
+/// example reads `BAND:80m,MODE:SSB,MAX:400`. Sending a single option sidesteps a
+/// disagreement we cannot test from here without an account.
+///
+/// ⚠️ **NOT `STATUS:CONFIRMED`, even though it exists.** This sync deliberately merges
+/// QSOs the operator logged elsewhere (a phone in the field) as well as confirmations;
+/// filtering to confirmed-only would silently drop those.
+///
+/// ⚠️ **MODSINCE is DATE granularity, not a timestamp** — the guide shows only
+/// `YYYY-MM-DD`. Callers should therefore reach back a day rather than pass the exact
+/// last-sync date, so nothing falls through a UTC day boundary or QRZ's own clock. Re-
+/// fetching a day of overlap is free: `reconcile` is idempotent (a second run yields
+/// all-zero counts).
+pub fn build_fetch_since_body(api_key: &str, since_date: &str) -> String {
+    let d = since_date.trim();
+    if d.is_empty() {
+        return build_fetch_body(api_key);
+    }
+    format!(
+        "KEY={}&ACTION=FETCH&OPTION={}",
+        pct(api_key.trim()),
+        pct(&format!("MODSINCE:{d}")),
+    )
+}
+
+/// The `YYYY-MM-DD` to hand [`build_fetch_since_body`] for a sync whose last success was
+/// `last_ok_unix`, reaching `overlap_days` back for the reasons in that function's note.
+/// `None` (never synced) yields `None` — the caller does a full fetch to seed the log.
+pub fn fetch_since_date(last_ok_unix: Option<u64>, overlap_days: u64) -> Option<String> {
+    let t = last_ok_unix?.saturating_sub(overlap_days.saturating_mul(86_400));
+    let days = (t / 86_400) as i64;
+    // Civil date from a Unix day count (Howard Hinnant's algorithm) — no chrono here.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    Some(format!("{y:04}-{m:02}-{d:02}"))
+}
+
 /// Split a FETCH response at the `ADIF=` field boundary. The ADIF payload itself contains `&`,
 /// `=`, and newlines, so it CANNOT be split as an ordinary `name=value` pair — QRZ always emits
 /// it last. Everything before the boundary is the small metadata header; everything after is the
@@ -735,6 +790,46 @@ mod tests {
         assert_eq!(QrzPushResult::Duplicate.to_upload_outcome(), U::Duplicate);
         assert_eq!(QrzPushResult::AuthFail.to_upload_outcome(), U::AuthFail);
         assert_eq!(QrzPushResult::Fail.to_upload_outcome(), U::Rejected);
+    }
+
+    #[test]
+    fn delta_fetch_sends_exactly_one_modsince_option() {
+        // QRZ's guide contradicts itself on how to COMBINE options (prose says & or ;,
+        // the example uses commas), so we send one and sidestep it.
+        let b = build_fetch_since_body("abc123", "2026-07-28");
+        assert_eq!(b, "KEY=abc123&ACTION=FETCH&OPTION=MODSINCE%3A2026-07-28");
+        assert_eq!(b.matches("OPTION=").count(), 1, "exactly one OPTION");
+        assert!(!b.contains("STATUS"), "must not filter to confirmed-only");
+    }
+
+    #[test]
+    fn an_empty_since_falls_back_to_the_full_fetch() {
+        assert_eq!(
+            build_fetch_since_body("abc123", "   "),
+            build_fetch_body("abc123")
+        );
+    }
+
+    #[test]
+    fn never_synced_means_no_since_date_so_the_caller_seeds_with_a_full_fetch() {
+        assert_eq!(fetch_since_date(None, 1), None);
+    }
+
+    #[test]
+    fn the_since_date_reaches_back_past_the_day_boundary() {
+        // MODSINCE is DATE granularity, so a sync at 00:30 UTC that passed its own date
+        // would miss anything QRZ stamped late on the previous day. 2026-07-28T00:30Z
+        // with one day of overlap must ask for the 27th.
+        let t = 1_785_197_400u64; // 2026-07-28T00:30:00Z
+        assert_eq!(fetch_since_date(Some(t), 1).as_deref(), Some("2026-07-27"));
+        assert_eq!(fetch_since_date(Some(t), 0).as_deref(), Some("2026-07-28"));
+    }
+
+    #[test]
+    fn the_since_date_is_a_real_civil_date_across_a_leap_year() {
+        // 2024-03-01T12:00:00Z back one day must be 2024-02-29, not 2024-02-28.
+        let t = 1_709_294_400u64;
+        assert_eq!(fetch_since_date(Some(t), 1).as_deref(), Some("2024-02-29"));
     }
 
     #[test]
