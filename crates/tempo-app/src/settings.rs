@@ -240,6 +240,17 @@ pub struct Settings {
     /// FD QSO. Empty = off; "host:port" or "host" (default port 12060).
     #[serde(default)]
     pub n1mm_addr: String,
+    /// Broadcast the N1MM `<contactinfo>` datagram for EVERY logged QSO, not just
+    /// Field Day contacts — the standing output a live map/dashboard consumer
+    /// (OpenHamClock, GridTracker) needs to plot each contact as it is logged.
+    /// Sends to the same `n1mm_addr`; empty address = off regardless.
+    ///
+    /// Off by default, and no code path may turn it on: an upgrade must never
+    /// start putting an operator's QSOs on the network they did not ask for.
+    /// Cannot double-send with the Field-Day emitter — the two read disjoint logs
+    /// (`a_field_day_contact_never_enters_the_general_upload_queue`).
+    #[serde(default)]
+    pub n1mm_upload: bool,
     /// ARRL/RAC section, e.g. "WI".
     pub fd_section: String,
     /// The current OPERATOR at the key (call or initials) — Field Day rotates
@@ -1585,6 +1596,7 @@ impl Default for Settings {
             n3fjp_use_enter: true,
             n3fjp_report_band: false,
             n1mm_addr: String::new(),
+            n1mm_upload: false, // never opt an operator into a network broadcast
             // Deliberately EMPTY: a contest exchange goes on the air, so it must
             // be the operator's own — set_mode refuses Field Day until both the
             // class and section are set (a "WI" default sent wrong exchanges for

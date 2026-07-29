@@ -10,5 +10,9 @@ description = "Nexus UI-facing application logic: wraps tempo-core into serializ
 [dependencies]
 tempo-core = { path = "../tempo-core" }
 modes = { path = "../modes" }
+# Wire formats for the per-QSO interop broadcasts fired from `log_qso` (N1MM
+# <contactinfo>). A leaf crate over std sockets — tempo-core already reaches it
+# through `modes`, so this is an explicit edge on an existing arrow, not a new one.
+tempo-net = { path = "../tempo-net" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

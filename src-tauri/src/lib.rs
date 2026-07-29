@@ -10795,7 +10795,10 @@ pub fn run() {
                     )
                 };
                 // DXKeeper counts toward "anything enabled" — otherwise a station using ONLY
-                // DXKeeper would drain nothing and never forward a single QSO.
+                // DXKeeper would drain nothing and never forward a single QSO. (The N1MM
+                // broadcast deliberately does NOT appear here: it fires from the log funnel
+                // itself, so it never consumes a queued record that a still-disabled
+                // connector is waiting to be turned on for.)
                 if !(q || c || e || h || n || cl || dxk.is_some()) {
                     // Nothing enabled: LEAVE the queue intact (bounded at 256) so
                     // flipping a toggle on later still uploads this session's

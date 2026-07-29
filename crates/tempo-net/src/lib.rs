@@ -52,3 +52,36 @@ pub const FEED_STOP_OBSERVE_SECS: u64 = 2;
 pub use pskreporter::{PskReporter, Spot};
 pub use server::{WsjtxServer, APP_ID};
 pub use wsjtx::{Decode, Inbound, QsoLogged, Status};
+
+/// Band label → the meter-string the club-log protocols expect ("20m" → "20").
+///
+/// Shared by [`n1mm`] (`<band>`) and [`n3fjp`] (`fldBand` / `CHANGEBM`): both
+/// bucket by METERS, never MHz. The centimeter bands need real values, not a
+/// blind alpha-strip ("70cm" would have read as SEVENTY METERS in N3FJP).
+pub fn band_for_interop(label: &str) -> String {
+    match label {
+        "70cm" => "0.7".to_string(),
+        "33cm" => "0.33".to_string(),
+        "23cm" => "0.23".to_string(),
+        other => other
+            .trim_end_matches(|c: char| c.is_alphabetic())
+            .to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::band_for_interop;
+
+    #[test]
+    fn band_labels_convert_to_meter_strings() {
+        assert_eq!(band_for_interop("20m"), "20");
+        assert_eq!(band_for_interop("160m"), "160");
+        assert_eq!(band_for_interop("6m"), "6");
+        // The trap: an alpha-strip alone turns the cm bands into absurd meter
+        // counts, and the club log silently files the contact on the wrong band.
+        assert_eq!(band_for_interop("70cm"), "0.7");
+        assert_eq!(band_for_interop("33cm"), "0.33");
+        assert_eq!(band_for_interop("23cm"), "0.23");
+    }
+}

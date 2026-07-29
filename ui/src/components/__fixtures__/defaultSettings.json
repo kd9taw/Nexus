@@ -24,6 +24,7 @@
   "dxkeeperBasePort": 52000,
   "dxkeeperUploads": false,
   "n1mmAddr": "",
+  "n1mmUpload": false,
   "fdSection": "",
   "fdOperator": "",
   "beacon": false,
