@@ -5,10 +5,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   aprsArm,
+  aprsAutoArm,
   aprsSendBeacon,
   aprsSendMessage,
   getAprsHeard,
+  getAprsHealth,
   getSettings,
+  type AprsHealth,
   type AprsHeard,
 } from '../api'
 import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
@@ -48,6 +51,78 @@ function ageLabel(atUnix: number, nowSec: number): string {
   return `${Math.floor(s / 3600)}h`
 }
 
+/** Below this peak the tap is carrying nothing — even an open squelch on a quiet channel sits
+ * well above it. Digital silence from a codec is exactly 0. */
+const SILENT_PEAK = 0.001
+
+/** How long the tap may go without audio before we call the decoder deaf.
+ *
+ * The decode thread polls every 100 ms but the radio loop that feeds it can take far longer per
+ * iteration (blocking CAT, up to 2500 ms on slow serial), so gaps of a second or two are normal.
+ * Judging on the instant would cry wolf constantly on a healthy station. */
+const AUDIO_STALE_SEC = 5
+
+export type AprsDecodeState = 'off' | 'deaf' | 'listening' | 'unreadable' | 'decoding'
+
+/**
+ * Turn decoder health into what the operator should be told.
+ *
+ * THE BUG THIS EXISTS FOR: an empty APRS screen looked the same whether the app was listening to
+ * the wrong sound card, hearing a channel whose every frame failed the checksum, or sitting on a
+ * quiet band. Only successfully-decoded frames ever reached the UI, so "nothing here" was the
+ * single answer to three completely different questions — and the first two are faults the
+ * operator can fix in seconds once told.
+ */
+export function aprsDecodeStatus(
+  health: AprsHealth | null,
+  nowSec: number,
+): { state: AprsDecodeState; label: string; detail: string } {
+  if (!health || health.arm === 'off') {
+    return {
+      state: 'off',
+      label: 'Monitor off',
+      detail: 'The APRS decoder is not running. Arm Monitor to decode the RX audio.',
+    }
+  }
+  const audioStale =
+    health.lastAudioUnix == null || nowSec - health.lastAudioUnix > AUDIO_STALE_SEC
+  if (audioStale || health.audioPeak < SILENT_PEAK) {
+    return {
+      state: 'deaf',
+      label: 'No audio',
+      detail:
+        'Armed, but no audio is reaching the decoder. Check that Settings → Audio input is the ' +
+        'radio (not a microphone or a disconnected device) — what you hear on the speaker does ' +
+        'not tell you what the app is capturing.',
+    }
+  }
+  if (health.framesDecoded > 0) {
+    return {
+      state: 'decoding',
+      label: `${health.framesDecoded} decoded`,
+      detail:
+        health.lastDecodeUnix == null
+          ? `${health.framesDecoded} packets decoded.`
+          : `${health.framesDecoded} packets decoded, last ${ageLabel(health.lastDecodeUnix, nowSec)} ago.`,
+    }
+  }
+  if (health.framesSeen > 0) {
+    return {
+      state: 'unreadable',
+      label: `${health.framesSeen} failed CRC`,
+      detail:
+        `${health.framesSeen} packets were heard but none passed the checksum. The signal is ` +
+        'arriving corrupted: check that the rig is on 144.390 in FM, and that the RX audio is ' +
+        'not so hot that it is clipping.',
+    }
+  }
+  return {
+    state: 'listening',
+    label: 'Listening',
+    detail: 'Audio is reaching the decoder and no packets have been heard yet — a quiet channel.',
+  }
+}
+
 /**
  * APRS cockpit — monitor decoded packets and send a position beacon. RX-first: arming starts the
  * AFSK-1200 decoder; a beacon is an explicit, gated one-shot send (never automatic).
@@ -73,11 +148,16 @@ export function AprsCockpit({
    * beacon/message is gated off with no way to turn TX on). */
   onSetTxEnabled?: (on: boolean) => void
 }) {
-  const [armed, setArmed] = useState(false)
+  // NO local `armed` state. Arming lives on the ENGINE and is session state that outlives this
+  // component, so a local copy drifts: a remount came back up saying "Monitor" while the decoder
+  // was still running, and its first click then sent arm(true) at an already-armed engine. The
+  // health poll below already carries the flag — one source of truth for the button AND the
+  // decode chip, which can therefore never disagree.
   // One selection shared by the list and the map — clicking either highlights both.
   const [selected, setSelected] = useState<string | null>(null)
   const [freq, setFreq] = useState(144.39)
   const [heard, setHeard] = useState<AprsHeard[]>([])
+  const [health, setHealth] = useState<AprsHealth | null>(null)
   const [lat, setLat] = useState('')
   const [lon, setLon] = useState('')
   const [comment, setComment] = useState('Nexus APRS')
@@ -101,6 +181,7 @@ export function AprsCockpit({
   const [me, setMe] = useState<LatLon | null>(null)
   const prefilled = useRef(false)
   const autoTuned = useRef(false)
+  const autoArmed = useRef(false)
 
   // Default to the APRS radio on ENTERING the view: hand off to the 2 m-capable rig, land on the
   // selected APRS frequency in FM. This is the operator's "hitting APRS should default to the 9700"
@@ -115,6 +196,27 @@ export function AprsCockpit({
       onTune(freq)
     }
   }, [active, onTune, freq])
+
+  // Arm the decoder on ENTERING the view, so APRS does not open on a dead screen the operator has
+  // to notice and fix. Rising edge of `active`, not mount — the cockpit is kept alive across
+  // navigation (App.tsx renders it hidden), so it mounts once per session.
+  //
+  // ⚠️ RECEIVE-ONLY, and the engine is what guarantees that: `aprs_auto_arm` never confers the
+  // auto-ack, only upgrades from off, and refuses once the operator has explicitly stopped the
+  // decoder this session. The policy lives there rather than in a ref here so it cannot be lost
+  // to a remount — which is exactly how the armed-state desync happened.
+  useEffect(() => {
+    if (!active) {
+      autoArmed.current = false
+      return
+    }
+    if (autoArmed.current) return
+    autoArmed.current = true
+    void aprsAutoArm()
+      .then(() => getAprsHealth())
+      .then(setHealth)
+      .catch(() => {})
+  }, [active])
 
   // Prefill the beacon lat/lon from the operator's grid (and remember it for distance/bearing), once.
   useEffect(() => {
@@ -132,7 +234,7 @@ export function AprsCockpit({
       .catch(() => {})
   }, [])
 
-  // Poll the heard list (and tick the age clock) while the cockpit is visible.
+  // Poll the heard list + decoder health (and tick the age clock) while the cockpit is visible.
   useEffect(() => {
     if (!active) return
     let alive = true
@@ -140,6 +242,9 @@ export function AprsCockpit({
       setNow(Math.floor(Date.now() / 1000))
       void getAprsHeard()
         .then((h) => alive && setHeard(h))
+        .catch(() => {})
+      void getAprsHealth()
+        .then((h) => alive && setHealth(h))
         .catch(() => {})
     }
     tick()
@@ -150,11 +255,28 @@ export function AprsCockpit({
     }
   }, [active])
 
+  const decode = useMemo(() => aprsDecodeStatus(health, now), [health, now])
+  // The engine's arm state, as of the last poll. Null health (before the first poll) reads as
+  // disarmed, which matches how the engine starts.
+  const arm = health?.arm ?? 'off'
+  const armed = arm !== 'off'
+
   const toggleArm = () => {
-    const next = !armed
-    setArmed(next)
-    void aprsArm(next)
-      .then(setHeard)
+    // A plain start/stop toggle. Clicking it while armed ALWAYS stops — including when the
+    // decoder was auto-armed on view entry. It deliberately does NOT "upgrade" an auto-arm to an
+    // explicit one: the button reads "● Monitoring", so a click is the operator reaching for
+    // stop, and turning that same click into "grant unattended-transmit capability" would be the
+    // most dangerous surprise available here. Explicit arm is reached from OFF, which is what the
+    // auto-arm tooltip tells the operator.
+    //
+    // Re-read health after the round trip rather than assuming it worked: an arm the engine
+    // refuses must not leave the button claiming to be monitoring.
+    void aprsArm(!armed)
+      .then((h) => {
+        setHeard(h)
+        return getAprsHealth()
+      })
+      .then(setHealth)
       .catch((e) => setStatus(String(e)))
   }
 
@@ -281,15 +403,38 @@ export function AprsCockpit({
             {radio.txEnabled ? 'TX On' : 'TX Off'}
           </button>
         )}
+        {/* Three states, because "decoding" and "may transmit an ack by itself" are different
+            things and the operator has to be able to tell them apart. Auto-armed must never look
+            ack-capable — see aprs_auto_ack's gate. */}
         <button
           type="button"
           className={`np-chip${armed ? ' active' : ''}`}
           aria-pressed={armed}
           onClick={toggleArm}
-          title="Arm the APRS decoder on the RX audio"
+          title={
+            arm === 'explicit'
+              ? 'You armed the decoder, so automatic acks are allowed — an incoming message ' +
+                'addressed to you is acked when TX is on. Click to stop.'
+              : arm === 'auto'
+                ? 'Armed automatically when you opened APRS: RECEIVE ONLY. It will never send ' +
+                  'an automatic ack. To allow those, stop it and arm it yourself, then turn TX ' +
+                  'on. Click to stop.'
+                : 'Arm the APRS decoder on the RX audio. Arming it yourself also allows ' +
+                  'automatic acks once TX is on.'
+          }
         >
-          {armed ? '● Monitoring' : 'Monitor'}
+          {arm === 'auto' ? '● Monitoring (auto)' : arm === 'explicit' ? '● Monitoring' : 'Monitor'}
         </button>
+        {/* Decode health. An empty APRS screen used to be one answer to three different
+            questions — deaf app, unreadable channel, quiet band — so it never told the
+            operator which of the two fixable ones they were looking at. */}
+        <span
+          className={`aprs-health aprs-health-${decode.state}`}
+          role="status"
+          title={decode.detail}
+        >
+          {decode.label}
+        </span>
       </div>
 
       {/* ⭐ APRS IS A GEOGRAPHIC MODE AND HAD NO MAP. Everything lived in one
@@ -384,9 +529,7 @@ export function AprsCockpit({
       )}
 
       {rows.length === 0 ? (
-        <div className="np-empty">
-          {armed ? 'Listening… decoded packets will appear here.' : 'Monitor is off — arm it to decode APRS.'}
-        </div>
+        <div className="np-empty">{decode.detail}</div>
       ) : (
         <table className="aprs-table">
           <thead>
@@ -449,9 +592,9 @@ export function AprsCockpit({
           />
           {positioned === 0 && (
             <div className="aprs-map-empty">
-              {armed
+              {decode.state === 'decoding'
                 ? 'No positions heard yet — status and message packets carry none.'
-                : 'Monitor is off — arm it to plot stations.'}
+                : decode.detail}
             </div>
           )}
         </div>

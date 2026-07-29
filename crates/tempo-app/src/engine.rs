@@ -940,13 +940,20 @@ pub struct Engine {
     /// over has fully keyed out — the edge the service tick turns into exactly one
     /// `on_tx_complete` (restarting the sequencer's reply timer).
     rtty_auto_over: bool,
-    /// APRS (AFSK-1200 / AX.25) RX decoder armed (session-only, never persisted). RX decode only.
-    aprs_armed: bool,
+    /// APRS (AFSK-1200 / AX.25) RX decoder arm state + HOW it was armed (session-only, never
+    /// persisted). See [`AprsArm`] — the distinction gates the auto-ack, so it is TX-safety state.
+    aprs_arm: AprsArm,
+    /// The operator explicitly stopped the decoder this session, so entering the APRS view must
+    /// not quietly start it again behind them. Session-only; a manual arm always still works.
+    aprs_auto_arm_declined: bool,
     /// Drain buffer for the APRS decode thread (same pattern as `rtty_audio`). Empty while disarmed.
     aprs_audio: Vec<f32>,
     /// Recently-decoded APRS packets, newest last, capped at [`APRS_HEARD_CAP`]. Pushed by the
     /// decode thread; polled by the cockpit.
     aprs_heard: Vec<AprsHeard>,
+    /// Decoder health — see [`AprsHealth`]. Written by the decode thread on every drain (not only
+    /// when something decodes: "nothing arrived" is the reading that matters most). Reset on arm.
+    aprs_health: AprsHealth,
     /// Pre-rendered APRS TX audio (12 kHz) — beacons, messages, acks. The radio loop keys ONE at a
     /// time via [`Engine::poll_aprs_tx`]; Stop TX / halt clears it.
     aprs_tx_queue: VecDeque<Vec<f32>>,
@@ -1032,6 +1039,68 @@ pub struct AprsHeard {
     pub msg_id: Option<String>,
     /// Unix seconds the packet was decoded (drives the age column).
     pub at_unix: i64,
+}
+
+/// How the APRS decoder came to be armed.
+///
+/// ⚠️ TX SAFETY, not bookkeeping. Entering the APRS view arms the decoder so the operator does not
+/// land on a dead screen — but that convenience must not also arm an UNATTENDED TRANSMITTER.
+/// [`Engine::aprs_auto_ack`] keys the radio with nobody asking, so it stays behind TWO independent
+/// operator acts: arming Monitor by hand AND enabling TX. Auto-arm supplies neither, so
+/// [`AprsArm::Auto`] is receive-only, always. See the tests around
+/// `auto_armed_never_auto_acks_even_with_tx_enabled`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AprsArm {
+    /// Not decoding.
+    #[default]
+    Off,
+    /// Armed by entering the APRS view. Decodes; NEVER auto-acks.
+    Auto,
+    /// Armed by an explicit operator act. The only state in which an ack may key — and even then
+    /// only with TX enabled and every gate in [`Engine::aprs_tx_gate`] satisfied.
+    Explicit,
+}
+
+impl AprsArm {
+    /// Whether the decoder is running at all (either way of being armed).
+    pub fn is_armed(self) -> bool {
+        self != AprsArm::Off
+    }
+}
+
+/// What the APRS decoder is actually HEARING — the readout that tells a silent screen apart from
+/// a silent band.
+///
+/// Only frames that pass the AX.25 FCS ever become an [`AprsHeard`], and everything else is
+/// dropped without a trace. That made three very different situations look identical: the app
+/// listening to the wrong sound card, a mistuned/over-driven channel whose every frame fails CRC,
+/// and a genuinely quiet band. All three showed an empty list and an empty map. These counters
+/// separate them — audio level proves the tap is fed, and seen-vs-decoded proves whether the
+/// demodulator is finding packets it cannot check.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AprsHealth {
+    /// Armed-ness AND how it was armed — one field, so "is it running" and "may it ack" can never
+    /// drift apart. The UI derives armed-ness from this rather than carrying a second flag.
+    pub arm: AprsArm,
+    /// Peak |sample| of the last drain that actually CARRIED audio.
+    ///
+    /// Deliberately not "the last drain": the decode thread polls every 100 ms while the radio
+    /// loop, which feeds the tap, can take far longer than that per iteration (it issues blocking
+    /// CAT — up to 2500 ms on slow serial). Empty drains are therefore normal and frequent, and
+    /// letting one zero this would flap the readout to "no audio" on a perfectly healthy channel.
+    pub audio_peak: f32,
+    /// Unix seconds audio last arrived at the tap. Paired with `audio_peak` because the honest
+    /// test for a deaf decoder is "nothing for a while", not "nothing this instant".
+    pub last_audio_unix: Option<i64>,
+    /// HDLC frames the deframer recovered since arming: candidates, BEFORE the FCS check.
+    pub frames_seen: u64,
+    /// Of those, how many passed the FCS and became packets. `frames_seen` climbing while this
+    /// stays put is the signature of a channel being heard but not cleanly.
+    pub frames_decoded: u64,
+    /// Unix seconds of the most recent successful decode.
+    pub last_decode_unix: Option<i64>,
 }
 
 fn fmt_aprs_addr(a: &tempo_core::aprs::Address) -> String {
@@ -1523,9 +1592,11 @@ impl Engine {
             rtty_keyer_error: None,
             rtty_seq: None,
             rtty_auto_over: false,
-            aprs_armed: false,
+            aprs_arm: AprsArm::Off,
+            aprs_auto_arm_declined: false,
             aprs_audio: Vec::new(),
             aprs_heard: Vec::new(),
+            aprs_health: AprsHealth::default(),
             aprs_tx_queue: VecDeque::new(),
             aprs_msg_seq: 0,
             aprs_fm: false,
@@ -5016,7 +5087,7 @@ impl Engine {
                 self.rtty_audio.drain(0..drop);
             }
         }
-        if self.aprs_armed {
+        if self.aprs_arm.is_armed() {
             self.aprs_audio.extend_from_slice(samples);
             if self.aprs_audio.len() > RX_TAP_CAP {
                 let drop = self.aprs_audio.len() - RX_TAP_CAP;
@@ -5150,18 +5221,89 @@ impl Engine {
         std::mem::take(&mut self.rtty_audio)
     }
 
-    /// Arm/disarm the APRS RX decoder. Session-only (never persisted). Disarming stops the audio
-    /// tap immediately but keeps the heard list readable.
-    pub fn set_aprs_armed(&mut self, on: bool) {
-        if !on {
+    /// Arm/disarm the APRS RX decoder by an EXPLICIT operator act. Session-only (never persisted).
+    /// Disarming stops the audio tap immediately but keeps the heard list readable.
+    ///
+    /// [`AprsArm::Explicit`] is the only arm that permits an auto-ack. Passing [`AprsArm::Auto`]
+    /// here would claim an operator act that never happened — use [`Engine::aprs_auto_arm`] for
+    /// view entry, which applies the policy rather than trusting its caller.
+    pub fn set_aprs_arm(&mut self, arm: AprsArm) {
+        if arm == AprsArm::Off {
             self.aprs_audio.clear();
+            // An operator who stopped the decoder has made a decision. Remember it for the rest of
+            // the session so re-entering the view cannot restart it behind them.
+            self.aprs_auto_arm_declined = true;
         }
-        self.aprs_armed = on;
+        // Health counts what THIS listening session has heard, so arming starts them over —
+        // otherwise a stale "0 decoded" from a previous session reads as a live fault.
+        self.aprs_health = AprsHealth {
+            arm,
+            ..Default::default()
+        };
+        self.aprs_arm = arm;
     }
 
-    /// Whether the APRS RX decoder is armed (read by the decode thread's gate).
+    /// Arm the decoder because the operator ENTERED the APRS view — receive-only, never
+    /// ack-capable. Returns whether this call armed it.
+    ///
+    /// Only ever an upgrade from [`AprsArm::Off`]: it will not demote an explicit arm to RX-only,
+    /// and it refuses outright once the operator has explicitly stopped the decoder this session.
+    /// The policy lives here rather than in the UI so it survives a remount and is testable.
+    pub fn aprs_auto_arm(&mut self) -> bool {
+        if self.aprs_arm != AprsArm::Off || self.aprs_auto_arm_declined {
+            return false;
+        }
+        self.aprs_health = AprsHealth {
+            arm: AprsArm::Auto,
+            ..Default::default()
+        };
+        self.aprs_arm = AprsArm::Auto;
+        true
+    }
+
+    /// How the decoder was armed — the auto-ack gate, and what the cockpit shows the operator.
+    pub fn aprs_arm_source(&self) -> AprsArm {
+        self.aprs_arm
+    }
+
+    /// Record what the decode thread just heard: how many samples it consumed and their peak, how
+    /// many HDLC frames the deframer recovered, and how many of those survived the FCS. Called on
+    /// every drain while armed — including drains that carry nothing, which is the whole point.
+    ///
+    /// `samples == 0` records only that this drain was empty; it must NOT overwrite the level, or
+    /// the ordinary case of the decode thread out-polling the radio loop reads as a dead input.
+    pub fn note_aprs_rx(
+        &mut self,
+        samples: usize,
+        audio_peak: f32,
+        frames_seen: usize,
+        frames_decoded: usize,
+        at_unix: i64,
+    ) {
+        self.aprs_health.arm = self.aprs_arm;
+        if samples > 0 {
+            self.aprs_health.audio_peak = audio_peak;
+            self.aprs_health.last_audio_unix = Some(at_unix);
+        }
+        self.aprs_health.frames_seen += frames_seen as u64;
+        self.aprs_health.frames_decoded += frames_decoded as u64;
+        if frames_decoded > 0 {
+            self.aprs_health.last_decode_unix = Some(at_unix);
+        }
+    }
+
+    /// Snapshot of APRS decoder health for the cockpit poll.
+    pub fn aprs_health(&self) -> AprsHealth {
+        AprsHealth {
+            arm: self.aprs_arm,
+            ..self.aprs_health
+        }
+    }
+
+    /// Whether the APRS RX decoder is armed at all (read by the decode thread's gate).
+    /// Deliberately source-agnostic: BOTH kinds of arm decode. Only the ack cares which.
     pub fn aprs_armed(&self) -> bool {
-        self.aprs_armed
+        self.aprs_arm.is_armed()
     }
 
     /// Drain the armed APRS audio tap (12 kHz mono since the last take). Called by the decode
@@ -5297,6 +5439,14 @@ impl Engine {
     /// truly targets our base callsign AND TX is enabled/allowed (we never key an ack on our own).
     pub fn aprs_auto_ack(&mut self, from: &str, addressee: &str, msg_id: &str) {
         use tempo_core::aprs;
+        // ⚠️ THE AUTO-ARM GATE. An ack is an UNATTENDED transmission — nobody asked for it at the
+        // moment it keys. It therefore requires two independent operator acts, and this is the
+        // first: the operator armed Monitor THEMSELVES. A decoder armed merely by entering the
+        // APRS view has no such act behind it and is receive-only, however the TX gates below
+        // stand. Never relax this to `aprs_armed()`.
+        if self.aprs_arm != AprsArm::Explicit {
+            return;
+        }
         if msg_id.is_empty() {
             return; // no id → sender isn't asking for an ack
         }
@@ -14393,6 +14543,104 @@ mod tests {
             "expected a TX-off refusal, got: {err}"
         );
         assert!(e.poll_aprs_tx().is_none(), "nothing queued");
+    }
+
+    // ---- Auto-arm is RX-ONLY: it must never confer the auto-ack ----
+    //
+    // Entering the APRS view arms the decoder so the operator does not face a dead screen. That
+    // convenience must not also arm an UNATTENDED TRANSMITTER. An auto-ack keys the radio with
+    // nobody asking, so it stays behind TWO independent operator acts: arming Monitor by hand AND
+    // enabling TX. Auto-arm supplies neither. These pin that invariant — weakening any of them
+    // means the app can transmit because someone navigated to a screen.
+
+    /// Arm explicitly and enable TX — the only configuration in which an ack may key.
+    fn armed_engine(arm: AprsArm) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        match arm {
+            AprsArm::Auto => {
+                assert!(e.aprs_auto_arm(), "auto-arm should take from Off");
+            }
+            other => e.set_aprs_arm(other),
+        }
+        e.set_tx_enabled(true);
+        e
+    }
+
+    #[test]
+    fn auto_armed_never_auto_acks_even_with_tx_enabled() {
+        let mut e = armed_engine(AprsArm::Auto);
+        assert!(
+            e.aprs_armed(),
+            "the decoder IS running — this is RX-only, not off"
+        );
+        assert_eq!(e.aprs_arm_source(), AprsArm::Auto);
+        e.aprs_auto_ack("N0CALL-7", "W9XYZ", "042");
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "an auto-armed decoder must never queue an unattended ack"
+        );
+    }
+
+    #[test]
+    fn explicitly_armed_with_tx_on_does_auto_ack() {
+        // The other side of the gate: with both operator acts present, the ack works as before.
+        let mut e = armed_engine(AprsArm::Explicit);
+        e.aprs_auto_ack("N0CALL-7", "W9XYZ", "042");
+        assert!(
+            e.poll_aprs_tx().is_some(),
+            "explicit arm + TX enabled is the configuration that acks"
+        );
+    }
+
+    #[test]
+    fn explicit_arm_still_needs_tx_enabled_to_ack() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit); // TX left off
+        e.aprs_auto_ack("N0CALL-7", "W9XYZ", "042");
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "both acts are required, not either"
+        );
+    }
+
+    #[test]
+    fn auto_arm_only_upgrades_from_off_and_never_downgrades() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        assert!(
+            !e.aprs_auto_arm(),
+            "auto-arm must not touch an explicit arm"
+        );
+        assert_eq!(
+            e.aprs_arm_source(),
+            AprsArm::Explicit,
+            "re-entering the view must not demote an explicit arm to RX-only"
+        );
+    }
+
+    #[test]
+    fn an_operator_who_stopped_the_decoder_is_not_overridden_on_re_entry() {
+        // Explicit disarm is a decision, not a transient state. Re-entering the APRS view must not
+        // quietly start the decoder up again behind them.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.set_aprs_arm(AprsArm::Off);
+        assert!(!e.aprs_auto_arm(), "no re-arm after an explicit stop");
+        assert!(!e.aprs_armed());
+        // But the operator may always start it again by hand.
+        e.set_aprs_arm(AprsArm::Explicit);
+        assert_eq!(e.aprs_arm_source(), AprsArm::Explicit);
+    }
+
+    #[test]
+    fn health_reports_how_the_decoder_was_armed() {
+        // The UI cannot tell the operator that auto-armed is RX-only unless it can SEE the source.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert_eq!(e.aprs_health().arm, AprsArm::Off);
+        e.aprs_auto_arm();
+        assert_eq!(e.aprs_health().arm, AprsArm::Auto);
+        e.set_aprs_arm(AprsArm::Explicit);
+        assert_eq!(e.aprs_health().arm, AprsArm::Explicit);
     }
 
     // ---- Receive-only tiers must never LOOK like they are transmitting ----

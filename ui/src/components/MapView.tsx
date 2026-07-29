@@ -32,6 +32,10 @@ import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { gridToLatLon, haversineKm, bearingDeg, magneticDeg, type LatLon } from '../grid'
 import { openingModeColor } from '../bandColors'
 import {
+  APRS_HOME_ZOOM,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  aprsMapCenter,
   basemap,
   usStateBorders,
   graticule,
@@ -435,7 +439,14 @@ export function MapView({
   const flareActive = flareRScale(xrayEff ?? 0) >= 1
   // Interactive view: zoom (wheel), Globe rotation + flat-map pan (drag). Reset
   // when the projection changes (rotation/pan don't carry across projections).
-  const DEFAULT_VIEW: MapView3 = { zoom: 1, rotate: null, panX: 0, panY: 0 }
+  // The APRS map opens on the LOCAL picture — see APRS_HOME_ZOOM for why a whole
+  // planet is the wrong opening view for a 2 m packet section.
+  const DEFAULT_VIEW: MapView3 = {
+    zoom: embedded?.aprs ? APRS_HOME_ZOOM : 1,
+    rotate: null,
+    panX: 0,
+    panY: 0,
+  }
   const [view, setView] = useState<MapView3>(DEFAULT_VIEW)
   const dragRef = useRef<{ x: number; y: number; base: MapView3; moved: boolean } | null>(null)
   useEffect(() => setView(DEFAULT_VIEW), [kind]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -563,7 +574,18 @@ export function MapView({
     surfaceSet(PROJECTION_KEY, kind)
   }, [kind, embedded])
 
-  const me = useMemo(() => gridToLatLon(myGrid), [myGrid])
+  // The operator's real QTH — drives the "you are here" marker, and normally the
+  // projection centre too.
+  const myQth = useMemo(() => gridToLatLon(myGrid), [myGrid])
+  // Projection centre. Identical to `myQth` everywhere except the APRS map, which
+  // borrows the middle of the heard traffic when no grid is configured — without a
+  // centre the draw below bails out entirely and the section shows a blank box.
+  const me = useMemo(
+    () => (embedded?.aprs ? aprsMapCenter(myQth, aprs ?? []) : myQth),
+    [embedded?.aprs, myQth, aprs],
+  )
+  // Never draw "you are here" at a borrowed centre — that would invent a QTH.
+  const showQth = myQth != null
   // Wheel-zoom — a NON-passive native listener so we can preventDefault (React's
   // onWheel is passive). Re-attaches once the canvas mounts (keyed on `me`).
   useEffect(() => {
@@ -572,7 +594,7 @@ export function MapView({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
-      setView((v) => ({ ...v, zoom: Math.max(0.5, Math.min(10, v.zoom * factor)) }))
+      setView((v) => ({ ...v, zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, v.zoom * factor)) }))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
@@ -810,7 +832,7 @@ export function MapView({
 
     const proj = makeProjection(kind, me, w, h, view)
     const path = geoPath(proj, ctx)
-    const c = project(proj, me)
+    const c = showQth ? project(proj, myQth ?? me) : null
 
     // Globe space backdrop: a star field + an atmospheric halo, so the orthographic
     // disc reads as a planet in space rather than a flat green coin. Read the disc
@@ -1684,7 +1706,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones])
+  }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the

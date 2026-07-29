@@ -61,6 +61,61 @@ export function graticule(): GeoPermissibleObjects {
   return geoGraticule().step([20, 10])() as unknown as GeoPermissibleObjects
 }
 
+/** Zoom limits for the interactive view (wheel). The ceiling has to clear
+ * [`APRS_HOME_ZOOM`] — a local packet picture needs far more magnification than a
+ * propagation map, and the old ceiling of 10 could not reach it. */
+export const MIN_ZOOM = 0.5
+export const MAX_ZOOM = 200
+
+/** Opening zoom for the APRS section's embedded map.
+ *
+ * APRS is a LOCAL, terrestrial mode: 2 m simplex plus a digipeater or two reaches
+ * tens of km, not thousands. On the shared globe at `zoom: 1` the Earth's radius
+ * maps to the canvas radius — about 23 km per pixel — so a station 40 km away
+ * plotted 1.7 px from the operator, underneath their own QTH marker. Every local
+ * station drew as one indistinguishable smear and the map read as empty.
+ *
+ * 25 puts that same station 43 px out and reaches roughly 275 km in every
+ * direction — far enough that WIDE2-2 digipeated traffic is still on the map,
+ * close enough that a local net spreads across it instead of stacking up. */
+export const APRS_HOME_ZOOM = 25
+
+/**
+ * Where the APRS map should be centred: the operator's QTH when their grid is set,
+ * otherwise the middle of the traffic they can actually hear.
+ *
+ * The fallback exists because [`MapView`] skips the whole draw without a centre —
+ * with no grid configured the APRS section showed a blank box while its station
+ * list filled up. This map is about OTHER stations, so it does not need to know
+ * where the operator is. Returns null only when there is neither.
+ *
+ * Longitudes are averaged as unit vectors, not arithmetically: a net straddling the
+ * antimeridian (NZ/Fiji) would otherwise average to lon 0 and centre the map on the
+ * Gulf of Guinea — the Null-Island bug this codebase has met before.
+ */
+export function aprsMapCenter(
+  operator: LatLon | null,
+  heard: ReadonlyArray<{ lat?: number | null; lon?: number | null }>,
+): LatLon | null {
+  if (operator) return operator
+  let n = 0
+  let lat = 0
+  let x = 0
+  let y = 0
+  for (const h of heard) {
+    if (h.lat == null || h.lon == null || !Number.isFinite(h.lat) || !Number.isFinite(h.lon)) {
+      continue
+    }
+    const rad = (h.lon * Math.PI) / 180
+    lat += h.lat
+    x += Math.cos(rad)
+    y += Math.sin(rad)
+    n += 1
+  }
+  if (n === 0) return null
+  return { lat: lat / n, lon: (Math.atan2(y / n, x / n) * 180) / Math.PI }
+}
+
 /**
  * Build a d3 projection for the chosen view. Globe = orthographic (a real 3-D
  * sphere you can spin); AEQD = azimuthal-equidistant disc rotated to put `center`

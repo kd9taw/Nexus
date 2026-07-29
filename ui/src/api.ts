@@ -1216,6 +1216,36 @@ export async function getAprsHeard(): Promise<AprsHeard[]> {
   return invoke<AprsHeard[]>('get_aprs_heard')
 }
 
+/** What the APRS decoder is hearing (from `get_aprs_health`) — lets an empty map say WHY it is
+ * empty instead of looking identical whether the app is deaf, mistuned, or the band is quiet. */
+export interface AprsHealth {
+  /** Armed-ness AND how it was armed. `auto` (armed by entering the view) is RECEIVE-ONLY and
+   * never auto-acks; only `explicit` (the operator armed it themselves) can, and even then only
+   * with TX enabled. One field so "is it running" and "may it ack" cannot drift apart. */
+  arm: 'off' | 'auto' | 'explicit'
+  /** Peak |sample| of the last drain that carried audio (empty drains do not clobber it). */
+  audioPeak: number
+  /** When audio last arrived at the tap. Null while armed = nothing has ever arrived. */
+  lastAudioUnix: number | null
+  /** HDLC frames recovered since arming, BEFORE the AX.25 FCS check. */
+  framesSeen: number
+  /** Of those, how many passed the FCS. Seen climbing while this does not = heard, but not cleanly. */
+  framesDecoded: number
+  lastDecodeUnix: number | null
+}
+
+/** Poll the APRS decoder's health beside the heard list. */
+export async function getAprsHealth(): Promise<AprsHealth> {
+  return invoke<AprsHealth>('get_aprs_health')
+}
+
+/** Arm the decoder because the operator ENTERED the APRS view — receive-only, never ack-capable.
+ * Only upgrades from off, and refuses once the operator has explicitly stopped it this session
+ * (the engine owns that policy). Returns whether this call armed it. */
+export async function aprsAutoArm(): Promise<boolean> {
+  return invoke<boolean>('aprs_auto_arm')
+}
+
 /** Queue an APRS position beacon — an explicit operator send (the engine validates TX-enable /
  * privileges / no other over and rejects with the reason). Symbols are single chars. */
 export async function aprsSendBeacon(

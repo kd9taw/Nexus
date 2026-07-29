@@ -4609,8 +4609,23 @@ fn aprs_arm(
     on: bool,
 ) -> Result<Vec<tempo_app::engine::AprsHeard>, String> {
     let mut eng = state.lock().map_err(|e| e.to_string())?;
-    eng.set_aprs_armed(on);
+    // An EXPLICIT operator act — the only arm that permits an unattended auto-ack. View entry
+    // goes through `aprs_auto_arm` instead, which cannot confer that.
+    eng.set_aprs_arm(if on {
+        tempo_app::engine::AprsArm::Explicit
+    } else {
+        tempo_app::engine::AprsArm::Off
+    });
     Ok(eng.aprs_heard())
+}
+
+/// Arm the decoder because the operator ENTERED the APRS view. Receive-only: never confers the
+/// auto-ack, only upgrades from off, and refuses once the operator has explicitly stopped it this
+/// session. Returns whether this call armed it.
+#[tauri::command]
+fn aprs_auto_arm(state: State<'_, SharedEngine>) -> Result<bool, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(eng.aprs_auto_arm())
 }
 
 /// The decoded-APRS list, newest last (poll while the APRS cockpit is visible).
@@ -4620,6 +4635,16 @@ fn get_aprs_heard(
 ) -> Result<Vec<tempo_app::engine::AprsHeard>, String> {
     let eng = state.lock().map_err(|e| e.to_string())?;
     Ok(eng.aprs_heard())
+}
+
+/// What the APRS decoder is hearing: audio level at the tap, HDLC frames seen, how many passed the
+/// FCS, and when the last one landed. Polled beside `get_aprs_heard` so an empty map can say WHY.
+#[tauri::command]
+fn get_aprs_health(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::engine::AprsHealth, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(eng.aprs_health())
 }
 
 /// Queue an APRS position beacon to transmit — an explicit operator send, the ONLY way APRS TX
@@ -10755,7 +10780,9 @@ pub fn run() {
             rtty_arm,
             get_rtty_state,
             aprs_arm,
+            aprs_auto_arm,
             get_aprs_heard,
+            get_aprs_health,
             aprs_send_beacon,
             aprs_send_message,
             aprs_tune,
