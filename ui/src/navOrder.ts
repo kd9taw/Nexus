@@ -14,10 +14,12 @@ const KEY = 'nexus.navOrder'
  * Ids present in `saved` lead, in that order. Any id NOT in `saved` — a section added in a later
  * release, or one the operator never dragged — keeps its default relative position AFTER them, so
  * a new section can never vanish just because it isn't in an old saved order. Ids in `saved` that
- * no longer exist are dropped.
+ * no longer exist are dropped, and a repeated id is kept once (at its first position) — a drag
+ * can't produce one, but a hand-edited or half-written stored value can, and it would otherwise
+ * render that section twice.
  */
 export function orderNav(defaultIds: string[], saved: string[]): string[] {
-  const known = saved.filter((id) => defaultIds.includes(id))
+  const known = [...new Set(saved.filter((id) => defaultIds.includes(id)))]
   const seen = new Set(known)
   const rest = defaultIds.filter((id) => !seen.has(id))
   return [...known, ...rest]

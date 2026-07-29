@@ -38,6 +38,19 @@ describe('orderNav', () => {
   it('empty saved order → the default order, unchanged', () => {
     expect(orderNav(DEFAULT, [])).toEqual(DEFAULT)
   })
+
+  it('a repeated saved id yields ONE icon, not two', () => {
+    // moveNav can't produce a duplicate, but a hand-edited or half-written
+    // localStorage value can — and a duplicated id used to render the section twice.
+    expect(orderNav(DEFAULT, ['spots', 'spots', 'connect'])).toEqual([
+      'spots',
+      'connect',
+      'needed',
+      'logbook',
+      'awards',
+      'stats',
+    ])
+  })
 })
 
 describe('moveNav', () => {
