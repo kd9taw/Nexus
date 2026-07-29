@@ -82,6 +82,7 @@ function stn(call: string, lastHeardUnix = T): AprsStation {
     sourceKind: 'rf',
     packets: 1,
     firstHeardUnix: lastHeardUnix,
+    wx: null,
   }
 }
 

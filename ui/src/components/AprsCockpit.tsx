@@ -1,4 +1,5 @@
 import { MapView } from './MapView'
+import { AprsStationCard } from './AprsStationCard'
 import type { NeedTag, Station } from '../types'
 import type { Theme } from '../useTheme'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -600,6 +601,13 @@ export function AprsCockpit({
   }, [inetOpen])
 
 
+  // The selected station's record. One selection, three views of it: the list row, the map marker,
+  // and this card — all reading the same store entry, so they cannot disagree.
+  const selectedStation = useMemo(
+    () => roster.stations.find((st) => st.call === selected) ?? null,
+    [roster, selected],
+  )
+
   const decode = useMemo(
     () => aprsDecodeStatus(health, now, radio ?? null, freq),
     [health, now, radio, freq],
@@ -1110,6 +1118,16 @@ export function AprsCockpit({
                 ? 'No positions heard yet — status and message packets carry none.'
                 : decode.detail}
             </div>
+          )}
+          {/* Selecting a station — from the map OR the list — opens its detail card over the map.
+              Both routes set the same `selected`, so the card serves both without a second path. */}
+          {selectedStation && (
+            <AprsStationCard
+              station={selectedStation}
+              nowSec={now}
+              me={me}
+              onClose={() => setSelected(null)}
+            />
           )}
         </div>
       </div>

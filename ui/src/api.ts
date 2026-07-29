@@ -1252,6 +1252,25 @@ export interface AprsStation {
   sourceKind: AprsSource
   packets: number
   firstHeardUnix: number
+  /** Weather readings, when this station sends them. Sticky like the position. */
+  wx: AprsWx | null
+}
+
+/** APRS weather readings — the common core of the WX format (APRS 1.0.1 ch. 12). Every field is
+ * optional: real stations omit what they have no sensor for, and the wire's placeholder for
+ * "no reading" must never be shown as a measurement of zero. */
+export interface AprsWx {
+  windDirDeg: number | null
+  windMph: number | null
+  gustMph: number | null
+  tempF: number | null
+  /** Hundredths of an inch. */
+  rain1hIn100: number | null
+  rain24hIn100: number | null
+  rainMidnightIn100: number | null
+  humidityPct: number | null
+  /** Tenths of a hectopascal — 10156 is 1015.6 hPa. */
+  pressureTenthHpa: number | null
 }
 
 /** The station roster plus the aging thresholds that produced it, so the UI's fade can never

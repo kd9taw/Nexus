@@ -17011,6 +17011,160 @@ html[data-panel='needed'] {
   color: var(--text-dim);
   cursor: help;
 }
+/* Station detail card — floats over the map's top-left, where APRS traffic is sparsest, and scrolls
+   internally so a weather station with every sensor fitted cannot push it off the map. */
+.aprs-card {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 30;
+  width: 19rem;
+  max-height: calc(100% - var(--space-4));
+  overflow-y: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+}
+.aprs-card:focus-visible {
+  outline: 2px solid var(--state-good);
+  outline-offset: 1px;
+}
+.aprs-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.aprs-card-glyph {
+  position: relative;
+  flex: 0 0 auto;
+  line-height: 0;
+}
+.aprs-card-overlay {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 2px;
+  border-radius: 7px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+}
+.aprs-card-id {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+.aprs-card-id strong {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.aprs-card-symname {
+  font-size: 11px;
+}
+.aprs-card-close {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.aprs-card-close:hover {
+  color: var(--text);
+}
+.aprs-card-rows {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.aprs-card-row {
+  display: grid;
+  grid-template-columns: 5.6rem 1fr;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+.aprs-card-row dt {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.aprs-card-row dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.aprs-card-none {
+  color: var(--text-faint);
+}
+.aprs-card-comment {
+  font-style: italic;
+}
+.aprs-card-section {
+  display: block;
+  margin: var(--space-2) 0 3px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.aprs-card-raw {
+  margin-top: var(--space-2);
+}
+.aprs-card-rawtoggle {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.aprs-card-rawtext {
+  margin: 3px 0 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.aprs-card-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.aprs-card-actions button,
+.aprs-card-actions a {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  text-decoration: none;
+}
+.aprs-card-actions button:hover,
+.aprs-card-actions a:hover {
+  color: var(--text);
+}
+
 /* The chip is a button now — it opens the feed controls. Reset the button chrome so it still reads
    as a status chip rather than growing a border and a background. */
 .aprs-inet-wrap {

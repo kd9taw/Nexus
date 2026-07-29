@@ -81,6 +81,7 @@ function stn(
     sourceKind,
     packets: 1,
     firstHeardUnix: clock,
+    wx: null,
     ...over,
   }
 }

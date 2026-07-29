@@ -1051,6 +1051,8 @@ pub struct AprsHeard {
     pub at_unix: i64,
     /// WHERE this packet came from. Never inferred — see [`AprsSource`].
     pub source_kind: AprsSource,
+    /// Weather readings, when this packet carried any.
+    pub wx: Option<AprsWxDto>,
     /// The packet as a TNC2 monitor line, for the raw readout and (RF only) for the iGate uplink.
     /// Lossy UTF-8: this field is for DISPLAY. The uplink re-renders from the frame bytes so a
     /// non-UTF-8 information field is never corrupted on its way to the network.
@@ -1284,6 +1286,7 @@ impl AprsHeard {
             msg_id,
             at_unix,
             source_kind,
+            wx: pkt.weather().map(AprsWxDto::from),
             raw,
         }
     }
@@ -1312,6 +1315,41 @@ pub const APRS_STATION_CAP: usize = 2000;
 /// uplink left on with no network) cannot grow the queue without limit; the oldest is dropped,
 /// because a stale position is the least valuable thing to contribute.
 const APRS_UPLINK_QUEUE_CAP: usize = 200;
+
+/// A weather report on the wire — the serializable mirror of [`tempo_core::aprs::AprsWx`].
+///
+/// tempo-core carries no serde dependency, so turning its types into wire DTOs is this crate's job.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AprsWxDto {
+    pub wind_dir_deg: Option<u16>,
+    pub wind_mph: Option<u16>,
+    pub gust_mph: Option<u16>,
+    pub temp_f: Option<i16>,
+    /// Hundredths of an inch.
+    pub rain_1h_in100: Option<u16>,
+    pub rain_24h_in100: Option<u16>,
+    pub rain_midnight_in100: Option<u16>,
+    pub humidity_pct: Option<u8>,
+    /// Tenths of a hectopascal — 10156 is 1015.6 hPa.
+    pub pressure_tenth_hpa: Option<u32>,
+}
+
+impl From<tempo_core::aprs::AprsWx> for AprsWxDto {
+    fn from(w: tempo_core::aprs::AprsWx) -> Self {
+        AprsWxDto {
+            wind_dir_deg: w.wind_dir_deg,
+            wind_mph: w.wind_mph,
+            gust_mph: w.gust_mph,
+            temp_f: w.temp_f,
+            rain_1h_in100: w.rain_1h_in100,
+            rain_24h_in100: w.rain_24h_in100,
+            rain_midnight_in100: w.rain_midnight_in100,
+            humidity_pct: w.humidity_pct,
+            pressure_tenth_hpa: w.pressure_tenth_hpa,
+        }
+    }
+}
 
 /// One STATION, accumulated from every packet it has sent — the unit the map and the station list
 /// are actually about.
@@ -1357,6 +1395,9 @@ pub struct AprsStation {
     pub packets: u32,
     /// When this station was first heard this session.
     pub first_heard_unix: i64,
+    /// Latest weather readings, when this station sends them. Sticky like the position: a status
+    /// packet from a weather station must not blank its last reading.
+    pub wx: Option<AprsWxDto>,
 }
 
 impl AprsStation {
@@ -1380,6 +1421,7 @@ impl AprsStation {
             source_kind: h.source_kind,
             packets: 0,
             first_heard_unix: h.at_unix,
+            wx: None,
         };
         st.merge(h);
         st
@@ -1424,6 +1466,11 @@ impl AprsStation {
         }
         if !h.text.is_empty() {
             self.text = h.text.clone();
+        }
+        // Sticky, for the same reason the position is: a weather station also sends status and
+        // message packets, and those must not blank its last reading.
+        if h.wx.is_some() {
+            self.wx = h.wx;
         }
         if !h.path.is_empty() {
             self.path = h.path.clone();
@@ -15027,6 +15074,53 @@ mod tests {
         let v = e.aprs_stations(0);
         assert_eq!(v.ttl_min, 15);
         assert!(v.fade_after_min < v.ttl_min);
+    }
+
+    #[test]
+    fn a_weather_station_carries_its_readings_onto_the_station_record() {
+        use tempo_core::aprs::AprsPacket;
+        // Real captured CWOP packet. The readings used to sit unparsed in the comment.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let pkt = AprsPacket::from_tnc2(
+            b"WB8HRV>APRS,WIDE1-1:@291813z3913.47N/08424.67W_220/004g011t085r000p000P000h68b10156.DsVP",
+        )
+        .unwrap();
+        e.push_aprs_heard(AprsHeard::from_packet(&pkt, 1000, AprsSource::Rf, String::new()));
+        let wx = e.aprs_stations(1000).stations[0].wx.expect("weather parsed");
+        assert_eq!(wx.temp_f, Some(85));
+        assert_eq!(wx.wind_dir_deg, Some(220));
+        assert_eq!(wx.gust_mph, Some(11));
+        assert_eq!(wx.humidity_pct, Some(68));
+        assert_eq!(wx.pressure_tenth_hpa, Some(10156));
+    }
+
+    #[test]
+    fn a_mobile_station_never_gains_phantom_weather() {
+        use tempo_core::aprs::AprsPacket;
+        // Its `098/065` course-and-speed slot is byte-identical to a wind slot.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let pkt = AprsPacket::from_tnc2(
+            b"K9LGE-5>APDR16,WIDE1-1:=4153.96N/08857.08W$098/065/146.520MHz/A=000829 Blue Dodge",
+        )
+        .unwrap();
+        e.push_aprs_heard(AprsHeard::from_packet(&pkt, 1000, AprsSource::Rf, String::new()));
+        assert!(e.aprs_stations(1000).stations[0].wx.is_none());
+    }
+
+    #[test]
+    fn a_weather_stations_readings_survive_a_later_status_packet() {
+        use tempo_core::aprs::AprsPacket;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let wxp = AprsPacket::from_tnc2(
+            b"WB8HRV>APRS,WIDE1-1:@291813z3913.47N/08424.67W_220/004g011t085r000p000P000h68b10156",
+        )
+        .unwrap();
+        e.push_aprs_heard(AprsHeard::from_packet(&wxp, 1000, AprsSource::Rf, String::new()));
+        let status = AprsPacket::from_tnc2(b"WB8HRV>APRS,WIDE1-1:>station online").unwrap();
+        e.push_aprs_heard(AprsHeard::from_packet(&status, 1010, AprsSource::Rf, String::new()));
+        let st = &e.aprs_stations(1010).stations[0];
+        assert!(st.wx.is_some(), "readings are sticky, like the position");
+        assert_eq!(st.wx.unwrap().temp_f, Some(85));
     }
 
     #[test]

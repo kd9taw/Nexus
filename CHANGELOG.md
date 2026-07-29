@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Click an APRS station for everything known about it
+
+Clicking a station used to highlight it and nothing else. It now opens a detail card, from either the
+map or the list:
+
+- The symbol at readable size, with what it actually **means** in words.
+- **How it reached you, per source, with separate ages** — "your receiver decoded this station
+  4 min ago; the internet feed reported it 20 s ago". Those are two different facts and only one of
+  them says anything about your antenna, so they are never merged into a single "last heard".
+- Position with grid square, and distance and bearing from your station.
+- Course, speed and altitude when the station is moving.
+- The comment text, the digipeater path, and whether the packet reached you **direct or digipeated**.
+- The raw packet, collapsed until you want it.
+- One click to QRZ, or to the station's page on aprs.fi.
+
+### Weather stations now report the weather
+
+A weather station's readings were arriving and being shown as the raw field string —
+`220/004g011t085r000p000P000h68b10156`. Nexus now reads it: temperature, wind direction and speed,
+gusts, rainfall, humidity and barometric pressure, in the station's detail card.
+
+A sensor a station does not have is left out rather than shown as zero. `r...` on the wire means "no
+rain gauge fitted", not "no rain", and reporting 0.00 in would be inventing a measurement.
+
 ### The internet feed switches off from the APRS screen
 
 Turning the feed off meant a trip to Settings. The internet status chip on the APRS board is now
