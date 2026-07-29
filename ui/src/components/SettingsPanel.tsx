@@ -5833,6 +5833,31 @@ export function SettingsPanel({
                 </div>
 
                 <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">Pull confirmations automatically</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.qrzAutoSync}
+                      className={`toggle${form.qrzAutoSync ? ' on' : ''}`}
+                      onClick={() => updateBool('qrzAutoSync', !form.qrzAutoSync)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    As people confirm on QRZ, the confirmations flow in on their own — no need to
+                    press Sync. After the first run only what CHANGED is fetched. QRZ confirmations
+                    show as confirmed but never count toward DXCC or WAS, which need LoTW or a card.
+                    {form.qrzLastSyncUnix > 0 && (
+                      <>
+                        {' '}Last pull: {new Date(form.qrzLastSyncUnix * 1000).toLocaleString()}.
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                <div className="settings-field">
                   <span className="settings-label">Two-way sync</span>
                   <div className="settings-input-row">
                     <button

@@ -2031,6 +2031,12 @@ export interface Settings {
   /** Auto-upload each logged QSO to the QRZ.com logbook. Needs the QRZ Logbook API
    *  key in the keychain (distinct from the lookup password). */
   qrzLogbookUpload: boolean
+  /** Pull confirmations down from QRZ on a timer (the manual sync always existed). */
+  qrzAutoSync: boolean
+  /** Hours between automatic pulls. */
+  qrzSyncHours: number
+  /** Unix seconds of the last successful automatic pull; 0 = never. */
+  qrzLastSyncUnix: number
   /** ClubLog account email (not a callsign); app-password is in the keychain. */
   clublogEmail: string
   /** ClubLog logbook callsign to upload into (empty → your callsign). */

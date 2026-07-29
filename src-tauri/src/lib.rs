@@ -7943,6 +7943,20 @@ fn sync_qrz(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
 }
 
 fn sync_qrz_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
+    sync_qrz_since(&state, None)
+}
+
+/// The QRZ pull. `since_unix` = the last SUCCESSFUL automatic sync, which turns this
+/// into a MODSINCE delta; `None` fetches the whole logbook (the manual button, and the
+/// first automatic run, which seeds the high-water).
+///
+/// The delta is what makes an hourly timer defensible: a full FETCH returns the entire
+/// logbook every run, which is fine for a button press and rude against QRZ's servers
+/// twenty-four times a day.
+fn sync_qrz_since(
+    engine: &SharedEngine,
+    since_unix: Option<u64>,
+) -> Result<LotwSyncResult, String> {
     let key = qrz_logbook_keychain()?.get_password().map_err(|_| {
         "No QRZ Logbook API key stored — this is the per-logbook key from logbook.qrz.com \
          (Settings ▸ Logbook & QSL ▸ QRZ), NOT your QRZ password."
@@ -7950,7 +7964,13 @@ fn sync_qrz_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, Strin
     })?;
     // Build + send the FETCH; the body carries the key, so it's dropped right after.
     let resp = {
-        let body = tempo_core::qrz::build_fetch_body(&key);
+        // One day of overlap: MODSINCE is DATE granularity, so a run just after
+        // midnight UTC that asked for its own date would miss anything QRZ stamped
+        // late on the previous day. Re-reading a day is free — reconcile is idempotent.
+        let body = match tempo_core::qrz::fetch_since_date(since_unix.filter(|&t| t > 0), 1) {
+            Some(d) => tempo_core::qrz::build_fetch_since_body(&key, &d),
+            None => tempo_core::qrz::build_fetch_body(&key),
+        };
         propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?
     };
     let fetched = tempo_core::qrz::parse_fetch(&resp);
@@ -7959,7 +7979,7 @@ fn sync_qrz_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, Strin
             .reason
             .unwrap_or_else(|| "QRZ rejected the FETCH — check your Logbook API key.".into()));
     }
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine.lock().map_err(|e| e.to_string())?;
     let (added, summary) = eng.merge_qrz_report(&fetched.adif);
     let mut result: LotwSyncResult = summary.into();
     result.added = added;
@@ -10377,6 +10397,60 @@ pub fn run() {
             }
         }
     });
+
+    // Pull QRZ confirmations on a timer — the "as people confirm on QRZ, they should
+    // flow to Nexus" half of the sync. Opt-in (`qrz_auto_sync`, default off), because
+    // it is repeated traffic to someone else's server.
+    //
+    // The tick is 5 minutes but the WORK is gated on `qrz_sync_hours` (default 1), so
+    // the thread is nearly always a settings read and a sleep. A short tick is what
+    // lets a just-enabled toggle take effect promptly and survives the machine
+    // sleeping through a due time.
+    //
+    // The high-water (`qrz_last_sync_unix`) is persisted, so it survives a restart and
+    // the next run stays a delta rather than re-pulling the whole logbook.
+    {
+        let sync_engine = engine.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(300));
+            let (on, hours, last) = {
+                let Ok(eng) = sync_engine.lock() else { continue };
+                let s = eng.settings();
+                (s.qrz_auto_sync, s.qrz_sync_hours.max(1), s.qrz_last_sync_unix)
+            };
+            if !on {
+                continue;
+            }
+            let now = now_unix().max(0) as u64;
+            if last > 0 && now.saturating_sub(last) < u64::from(hours) * 3_600 {
+                continue;
+            }
+            // HTTP off the engine lock (the lock is taken inside, around the merge).
+            match sync_qrz_since(&sync_engine, Some(last)) {
+                Ok(r) => {
+                    if let Ok(mut eng) = sync_engine.lock() {
+                        let mut s = eng.settings().clone();
+                        s.qrz_last_sync_unix = now;
+                        eng.apply_settings(s);
+                        if let Err(e) = eng.settings().save(&settings_path()) {
+                            eprintln!("[qrz-sync] settings save failed: {e}");
+                        }
+                    }
+                    // Quiet unless something actually changed — an hourly "0 new"
+                    // line would bury the log it shares with everything else.
+                    if r.added > 0 || r.newly_confirmed_any > 0 {
+                        eprintln!(
+                            "[qrz-sync] {} new QSO(s), {} newly confirmed",
+                            r.added, r.newly_confirmed_any
+                        );
+                    }
+                }
+                // Leave the high-water ALONE on failure so the next run covers the
+                // same span — a network blip must not create a hole in the delta.
+                Err(e) => eprintln!("[qrz-sync] failed: {e}"),
+            }
+        });
+    }
 
     // Persist Tempo conversation threads to disk on a slow cadence so chat history
     // survives a restart — only writes when something changed (no idle disk churn).

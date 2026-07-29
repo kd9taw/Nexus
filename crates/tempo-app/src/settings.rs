@@ -801,6 +801,24 @@ pub struct Settings {
     /// Logbook **API key** in the keychain (distinct from the lookup password).
     /// Off by default.
     pub qrz_logbook_upload: bool,
+    /// Pull confirmations DOWN from the QRZ logbook automatically, on a timer.
+    ///
+    /// The manual sync has always existed; this is the "as people confirm on QRZ,
+    /// they should flow to Nexus" half. Off by default — it is repeated traffic to
+    /// someone else's server, so the operator opts in.
+    ///
+    /// Uses a MODSINCE delta once seeded, so a run costs only what changed. QRZ
+    /// confirmations set `confirmed` but never `award_confirmed`; see `QslRcvd::qrz`.
+    #[serde(default)]
+    pub qrz_auto_sync: bool,
+    /// Hours between automatic QRZ pulls. Confirmations trickle in over days, so the
+    /// 1 h default is already far faster than the data changes. Clamped ≥ 1 at use.
+    #[serde(default = "default_qrz_sync_hours")]
+    pub qrz_sync_hours: u32,
+    /// Unix seconds of the last SUCCESSFUL automatic pull — the delta high-water.
+    /// 0 = never, which makes the next run a full seeding fetch.
+    #[serde(default)]
+    pub qrz_last_sync_unix: u64,
     /// ClubLog account email (NOT a callsign). The app-password lives in the OS
     /// keychain; the api key + email are non-secret and live here.
     pub clublog_email: String,
@@ -966,6 +984,10 @@ fn default_lotw_max_age_days() -> u32 {
 
 fn default_prop_engine() -> String {
     "heuristic".to_string()
+}
+
+fn default_qrz_sync_hours() -> u32 {
+    1
 }
 
 fn default_fd_power() -> u32 {
@@ -1650,6 +1672,9 @@ impl Default for Settings {
             qrz_username: String::new(),
             hamqth_username: String::new(),
             qrz_logbook_upload: false,
+            qrz_auto_sync: false,
+            qrz_sync_hours: default_qrz_sync_hours(),
+            qrz_last_sync_unix: 0,
             clublog_email: String::new(),
             clublog_callsign: String::new(),
             clublog_api_key: String::new(),

@@ -18,6 +18,19 @@ frequency while an image is arriving. So the mistuning is now stated outright: a
 readout beside the line count, whenever it drifts past 10 Hz. The decoder already worked this out
 from the header and had simply never shown it to you.
 
+### QRZ confirmations arrive on their own
+
+Nexus could already pull your QRZ logbook down — QSOs logged elsewhere and their confirmations —
+but only when you pressed Sync. Turn on Settings ▸ Logbook & QSL ▸ QRZ ▸ "Pull confirmations
+automatically" and it happens hourly instead, so confirmations appear as people post them.
+
+Only what CHANGED is fetched after the first run, so an hourly check is a small request rather than
+your whole logbook twenty-four times a day. It is off by default, a failed check never skips the
+span it missed, and the schedule survives a restart.
+
+As before, a QRZ confirmation shows the contact as confirmed but never counts toward DXCC or WAS —
+those need LoTW or a paper card, and counting QRZ would inflate them.
+
 ### Fixed: alerts repeating on every cycle
 
 A new-DXCC alert would fire again and again for the same station, once per transmission, instead
