@@ -432,6 +432,8 @@ describe('burst level advice is measured at BURST time, not gap time', () => {
     const s = aprsDecodeStatus(health({ audioPeak: 0.03 }), NOW)
     expect(s.detail).toMatch(/-30/)
     expect(s.detail).toMatch(/hiss/i)
+  })
+})
 
 // ⭐ THIRD ON-AIR REPORT, 0.21.x, Yaesu FTdx10 — an HF/50 MHz radio with no 2 m at all.
 // Opening the APRS cockpit auto-tuned 144.390, the radio refused it, and the CAT link was dead
