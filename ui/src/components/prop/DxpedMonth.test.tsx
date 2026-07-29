@@ -3,9 +3,10 @@
 // A calendar that puts an operation on the wrong day, or a digest that ranks a
 // finished expedition above a live one, looks perfectly fine and is useless.
 import { describe, it, expect, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { DxpedMonth } from './DxpedMonth'
 import { DxpedDigest } from './DxpedDigest'
+import { dxpedColorIndex } from './dxpedLanes'
 import type { CalendarEntry, DxpedWindow } from '../../types'
 
 /** 2026-07-29 00:00 UTC — a Wednesday, so weekday placement is checkable. */
@@ -51,11 +52,10 @@ describe('DxpedMonth', () => {
     expect(screen.getAllByText('VK9CM')).toHaveLength(1)
   })
 
-  it('places an operation on its own days and nowhere else', () => {
-    // Dates are UTC-MIDNIGHT aligned on purpose. An operation running noon-to-noon
-    // genuinely touches three calendar days, which is correct but makes a poor
-    // assertion — this pins the boundary case instead: a run ending exactly at a
-    // day boundary must NOT paint that day.
+  it('draws ONE bar spanning the run, not a chip per day', () => {
+    // Dates are UTC-MIDNIGHT aligned on purpose. This pins the boundary case: a
+    // run ending exactly at a day boundary must NOT paint that day, and the whole
+    // run is a single grid item spanning its columns.
     const midnight = Date.UTC(2026, 6, 29) / 1000
     const start = midnight + 3 * DAY
     render(
@@ -65,7 +65,74 @@ describe('DxpedMonth', () => {
       />,
     )
     const bars = screen.getAllByTitle(/^T33T/)
+    expect(bars).toHaveLength(1)
+    // NOW is a Wednesday, so the row starts Mon 27 Jul and start+3d is Sat 1 Aug
+    // — the weekend, column 6, running into Sunday.
+    expect(bars[0].style.gridColumn).toBe('6 / span 2')
+  })
+
+  it('splits a run at the week boundary and labels BOTH rows', () => {
+    // Two anonymous continuation rows was the bug. Each week row carries the
+    // callsign; the edge it crosses is what goes square and flush.
+    const midnight = Date.UTC(2026, 6, 29) / 1000
+    render(
+      <DxpedMonth
+        entries={[entry({ call: 'VP8PJ', startUnix: midnight, endUnix: midnight + 9 * DAY })]}
+        nowUnix={NOW}
+      />,
+    )
+    const bars = screen.getAllByTitle(/^VP8PJ/)
     expect(bars).toHaveLength(2)
+    expect(screen.getAllByText('VP8PJ')).toHaveLength(2)
+    expect(bars[0].className).toContain('cont-next')
+    expect(bars[0].className).not.toContain('cont-prev')
+    expect(bars[1].className).toContain('cont-prev')
+    expect(bars[1].className).not.toContain('cont-next')
+  })
+
+  it('gives an operation the same colour slot everywhere it appears', () => {
+    const midnight = Date.UTC(2026, 6, 29) / 1000
+    render(
+      <DxpedMonth
+        entries={[entry({ call: 'VK9CM', startUnix: midnight, endUnix: midnight + 9 * DAY })]}
+        nowUnix={NOW}
+      />,
+    )
+    const slots = screen.getAllByTitle(/^VK9CM/).map((b) => b.getAttribute('data-dxc'))
+    expect(new Set(slots).size).toBe(1)
+    expect(slots[0]).toBe(String(dxpedColorIndex('VK9CM')))
+  })
+
+  it('shows bands on a bar wide enough to hold them, and never on a narrow one', () => {
+    const midnight = Date.UTC(2026, 6, 29) / 1000
+    const bands = ['160m', '80m', '40m', '20m']
+    render(
+      <DxpedMonth
+        entries={[
+          entry({ call: 'WIDE', bands, startUnix: midnight, endUnix: midnight + 5 * DAY }),
+          entry({ call: 'NARROW', bands, startUnix: midnight, endUnix: midnight + DAY }),
+        ]}
+        nowUnix={NOW}
+      />,
+    )
+    expect(screen.getByText('160m·80m·40m+1')).toBeTruthy()
+    expect(screen.getAllByText('160m·80m·40m+1')).toHaveLength(1)
+    // Both bars still name their operation — bands are what gets dropped.
+    expect(screen.getByText('NARROW')).toBeTruthy()
+  })
+
+  it('offers "+N" rather than silently hiding a crowded day', () => {
+    const midnight = Date.UTC(2026, 6, 29) / 1000
+    const crowd = Array.from({ length: 6 }, (_, i) =>
+      entry({ call: `OP${i}`, startUnix: midnight, endUnix: midnight + 2 * DAY }),
+    )
+    render(<DxpedMonth entries={crowd} nowUnix={NOW} maxLanes={4} />)
+    const more = screen.getAllByText('+3')
+    expect(more.length).toBeGreaterThan(0)
+    // Only three of the six got a bar; the rest are behind the chip, not lost.
+    expect(screen.queryByText('OP5')).toBeNull()
+    fireEvent.click(more[0])
+    expect(screen.getByText('OP5')).toBeTruthy()
   })
 
   it('renders nothing at all when there are no announcements', () => {

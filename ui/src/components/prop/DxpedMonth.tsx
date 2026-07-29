@@ -8,48 +8,50 @@
 // can, and it is the format every other calendar in the world already taught the
 // operator to read.
 //
-// Deliberately QUIET. The old view carried saturated yellow/orange/red on every
-// row, which "really dominates the whole screen" — colour was doing work that
-// position and weight do better. Here the grid is neutral, TODAY is the one strong
-// accent, and a bar only takes colour when the operator is chasing it.
+// SPAN BARS (operator, 2026-07-29, second pass): the first cut stacked one chip
+// per day INSIDE each day cell, which never read as a continuous operation — the
+// cell padding broke the run visually, the per-day sort let a bar change lanes
+// mid-run, and continuation days were anonymous grey strips. Now the WEEK is the
+// grid: day cells span its full height as the background, and one bar element per
+// week row is placed `grid-column: start / span n`. A spanning grid item covers
+// the gutters between the tracks it spans, so the bar is genuinely continuous and
+// paints over the intermediate cell borders. Geometry, lanes and colour live in
+// dxpedLanes.ts (pure, tested) — this file only renders them.
+//
+// Still deliberately QUIET. The old view carried saturated yellow/orange/red on
+// every row, which "really dominates the whole screen". Colour here is IDENTITY,
+// not severity: a solid spine plus a low tint, text stays neutral. TODAY is still
+// the one strong accent, and a chased operation still gets the loud treatment.
+import { useState } from 'react'
 import type { CalendarEntry } from '../../types'
+import {
+  BANDS_MIN_SPAN,
+  buildWeeks,
+  compactBands,
+  dayStart,
+  dxpedColorIndex,
+  layoutCalendar,
+} from './dxpedLanes'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-/** UTC midnight for a day offset from a given day-start. */
-function dayStart(unix: number): number {
-  const d = new Date(unix * 1000)
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000
+const DATE_FMT: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', timeZone: 'UTC' }
+
+/** The announced run, inclusive — `endUnix` is exclusive, so the last day on the
+ * air is the second before it. Printing the exclusive end claims a day too many. */
+function runDates(e: CalendarEntry): string {
+  const from = new Date(e.startUnix * 1000).toLocaleDateString(undefined, DATE_FMT)
+  const to = new Date((e.endUnix - 1) * 1000).toLocaleDateString(undefined, DATE_FMT)
+  return from === to ? from : `${from} – ${to}`
 }
 
-/** The Monday on or before `unix` — grids read Mon–Sun here to match the ham
- * contest week, and because weekend operations should not be split across rows. */
-function weekStart(unix: number): number {
-  const d = new Date(unix * 1000)
-  const dow = (d.getUTCDay() + 6) % 7 // 0 = Monday
-  return dayStart(unix) - dow * 86_400
-}
-
-/** Rows of 7 UTC-midnight day stamps covering every entry, from this week on. */
-function buildWeeks(entries: CalendarEntry[], todayUnix: number, weeks: number): number[][] {
-  const first = weekStart(todayUnix)
-  // Extend to cover the last entry that ends in the future, capped so a single
-  // year-out announcement cannot stretch the grid to 50 rows.
-  const lastEnd = entries.reduce((m, e) => Math.max(m, e.endUnix), todayUnix)
-  const needed = Math.ceil((lastEnd - first) / (7 * 86_400)) + 1
-  const rows = Math.min(Math.max(needed, 2), weeks)
-  return Array.from({ length: rows }, (_, r) =>
-    Array.from({ length: 7 }, (_, c) => first + (r * 7 + c) * 86_400),
-  )
-}
-
-/** Entries touching a given UTC day, longest-running first so the bars stack
- * predictably instead of reordering as the week advances. */
-function entriesOn(entries: CalendarEntry[], day: number): CalendarEntry[] {
-  const end = day + 86_400
-  return entries
-    .filter((e) => e.startUnix < end && e.endUnix > day)
-    .sort((a, b) => b.endUnix - b.startUnix - (a.endUnix - a.startUnix))
+/** Everything the bar cannot fit: the full band list, the modes, the headline. */
+function barDetail(e: CalendarEntry): string {
+  const parts = [`${e.call} — ${e.entity}`, runDates(e)]
+  if (e.bands.length > 0) parts.push(e.bands.join(' '))
+  if (e.modes.length > 0) parts.push(e.modes.join('/'))
+  if (e.best) parts.push(e.best)
+  return parts.join(' · ')
 }
 
 export function DxpedMonth({
@@ -58,6 +60,7 @@ export function DxpedMonth({
   onSelect,
   nowUnix,
   maxWeeks = 10,
+  maxLanes = 4,
 }: {
   entries: CalendarEntry[]
   chasing?: Set<string>
@@ -66,11 +69,23 @@ export function DxpedMonth({
   /** Injectable for tests; defaults to the wall clock. */
   nowUnix?: number
   maxWeeks?: number
+  /** Lane rows a week may spend before the rest collapse into "+N" chips. */
+  maxLanes?: number
 }) {
+  // Weeks the operator opened past the lane cap. Keyed by week-start so the set
+  // survives the grid sliding forward a row at UTC midnight.
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set<number>())
   const now = nowUnix ?? Math.floor(Date.now() / 1000)
   const today = dayStart(now)
   if (entries.length === 0) return null
-  const weeks = buildWeeks(entries, now, maxWeeks)
+  const rows = layoutCalendar(entries, buildWeeks(entries, now, maxWeeks), maxLanes, expanded)
+
+  const toggleWeek = (weekStart: number) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(weekStart)) next.add(weekStart)
+      return next
+    })
 
   return (
     <div className="dxm" aria-label="DXpedition month grid">
@@ -81,62 +96,113 @@ export function DxpedMonth({
           </div>
         ))}
       </div>
-      {weeks.map((week) => (
-        <div className="dxm-week" key={week[0]} role="row">
-          {week.map((day) => {
-            const isToday = day === today
-            const past = day < today
-            const d = new Date(day * 1000)
-            const onAir = entriesOn(entries, day)
-            // First of the month earns its name, so a grid spanning a boundary
-            // does not silently roll over.
-            const dom = d.getUTCDate()
-            const label =
-              dom === 1
-                ? `${d.toLocaleString(undefined, { month: 'short', timeZone: 'UTC' })} 1`
-                : String(dom)
-            return (
-              <div
-                key={day}
-                role="gridcell"
-                className={`dxm-day${isToday ? ' today' : ''}${past ? ' past' : ''}`}
-              >
-                <div className="dxm-dom">
-                  {label}
-                  {isToday && <span className="dxm-todaytag">TODAY</span>}
+      {rows.map((row) => {
+        const isOpen = expanded.has(row.weekStart)
+        // An opened week earns one extra row for the control that closes it again.
+        const extraRow = isOpen && row.laneRows > maxLanes
+        const trackCount = row.laneRows + (extraRow ? 1 : 0)
+        // Day number, one track per lane, then a spacer that eats the slack. The
+        // spacer is load-bearing: the day cell's min-height has to come from
+        // SOMEWHERE, and without a trailing 1fr it stretches the auto header row
+        // instead, leaving a quiet week's single bar floating near the bottom of
+        // the cell instead of sitting under the date.
+        const lanes = trackCount > 0 ? `repeat(${trackCount}, var(--dxm-lane)) ` : ''
+        return (
+          <div
+            className="dxm-week"
+            key={row.weekStart}
+            role="row"
+            style={{ gridTemplateRows: `auto ${lanes}1fr` }}
+          >
+            {row.days.map((day, col) => {
+              const isToday = day === today
+              const d = new Date(day * 1000)
+              // First of the month earns its name, so a grid spanning a boundary
+              // does not silently roll over.
+              const dom = d.getUTCDate()
+              const label =
+                dom === 1
+                  ? `${d.toLocaleString(undefined, { month: 'short', timeZone: 'UTC' })} 1`
+                  : String(dom)
+              return (
+                <div
+                  key={day}
+                  role="gridcell"
+                  className={`dxm-day${isToday ? ' today' : ''}${day < today ? ' past' : ''}`}
+                  style={{ gridColumn: col + 1 }}
+                >
+                  <div className="dxm-dom">
+                    {label}
+                    {isToday && <span className="dxm-todaytag">TODAY</span>}
+                  </div>
                 </div>
-                {onAir.map((e) => {
-                  const call = e.call.toUpperCase()
-                  const isChased = chasing?.has(call) ?? false
-                  // Bars are continuous across days: only the first day of a run
-                  // carries the callsign, the rest are unlabelled continuations.
-                  const startsHere = e.startUnix >= day && e.startUnix < day + 86_400
-                  const endsHere = e.endUnix > day && e.endUnix <= day + 86_400
-                  const edge = `${startsHere ? ' starts' : ''}${endsHere ? ' ends' : ''}`
-                  return (
-                    <button
-                      key={`${call}-${e.startUnix}`}
-                      type="button"
-                      className={`dxm-bar${isChased ? ' chased' : ''}${edge}`}
-                      onClick={() => onSelect?.(e.call)}
-                      title={`${e.call} — ${e.entity}${e.best ? ` · ${e.best}` : ''}`}
-                    >
-                      {startsHere ? (
-                        <span className="dxm-barcall">
-                          {isChased && <span aria-hidden="true">★ </span>}
-                          {e.call}
-                        </span>
-                      ) : (
-                        <span className="dxm-barcont" aria-hidden="true" />
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
-            )
-          })}
-        </div>
-      ))}
+              )
+            })}
+            {row.segments.map((seg) => {
+              const e = seg.entry
+              const isChased = chasing?.has(seg.call) ?? false
+              // Bands only where the bar is wide enough to hold them without
+              // ellipsing the callsign away — the callsign is what you scan for.
+              const bands = seg.span >= BANDS_MIN_SPAN ? compactBands(e.bands) : ''
+              const edge = `${seg.contPrev ? ' cont-prev' : ''}${seg.contNext ? ' cont-next' : ''}`
+              return (
+                <button
+                  key={`${seg.call}-${e.startUnix}`}
+                  type="button"
+                  className={`dxm-bar${isChased ? ' chased' : ''}${edge}`}
+                  data-dxc={dxpedColorIndex(seg.call)}
+                  style={{
+                    gridColumn: `${seg.startCol + 1} / span ${seg.span}`,
+                    gridRow: seg.lane + 2,
+                  }}
+                  onClick={() => onSelect?.(e.call)}
+                  title={barDetail(e)}
+                  aria-label={`${barDetail(e)}${isChased ? ' · chasing' : ''}`}
+                >
+                  <span className="dxm-barcall">
+                    {isChased && <span aria-hidden="true">★ </span>}
+                    {e.call}
+                  </span>
+                  {bands && (
+                    <span className="dxm-barbands" aria-hidden="true">
+                      {bands}
+                    </span>
+                  )}
+                  {seg.contNext && (
+                    <span className="dxm-barmore" aria-hidden="true">
+                      ›
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+            {row.overflowByCol.map((n, col) =>
+              n > 0 ? (
+                <button
+                  key={`more-${col}`}
+                  type="button"
+                  className="dxm-more"
+                  style={{ gridColumn: col + 1, gridRow: row.laneRows + 1 }}
+                  onClick={() => toggleWeek(row.weekStart)}
+                  title={`${n} more operation${n === 1 ? '' : 's'} on this day — show the whole week`}
+                >
+                  +{n}
+                </button>
+              ) : null,
+            )}
+            {extraRow && (
+              <button
+                type="button"
+                className="dxm-more dxm-less"
+                style={{ gridColumn: '1 / -1', gridRow: trackCount + 1 }}
+                onClick={() => toggleWeek(row.weekStart)}
+              >
+                show fewer
+              </button>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

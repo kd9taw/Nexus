@@ -5,6 +5,29 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### DXpedition calendar: one operation, one bar
+
+A multi-day DXpedition was drawn as a separate little chip on each of its days, so a ten-day
+operation looked like ten unrelated things. Each operation is now a single bar running across the
+days it is on the air. Where a run crosses into the next week it picks up again on the following
+row, named and flagged so you can follow it.
+
+Every operation also gets its own colour, and keeps it — on its calendar bar, on its dot in the
+"what to chase" summary, and on the rail beside its entry in Details. The colour means nothing but
+"this is that one", which is what lets you pick an operation out of a busy fortnight without
+reading a single callsign. Today is still the strongest thing on the grid, and an operation you are
+chasing still stands out from the rest.
+
+Bars wide enough to hold it now carry the bands the operation announced, low bands first, so
+whether they are bringing 160 and 80 is visible without opening anything. Hovering any bar gives
+the full picture: entity, dates, every band, the modes, and your modelled best shot.
+
+When more operations overlap than a week has room for, the day says "+2" instead of quietly hiding
+them; clicking opens that week out and clicking again closes it. Operations that do not overlap in
+time now share a row rather than each burning one, so the calendar stays short.
+
 ## [0.21.0] — 2026-07-29
 
 ### APRS gets a map

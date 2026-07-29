@@ -863,6 +863,10 @@ button.nb-chip:hover {
 .cal-entry {
   border-top: 1px solid var(--border-soft);
   padding-top: var(--space-3);
+  /* The identity rail — same hashed slot as this operation's calendar bar, so
+     jumping from a bar to its detail lands somewhere recognisable. */
+  border-left: 3px solid var(--dxc, transparent);
+  padding-left: var(--space-2);
 }
 .cal-head {
   display: flex;
@@ -2862,6 +2866,23 @@ button.nb-chip:hover {
   --alert-warning: #f7c243;
   --alert-info: #79c0f1;
   --focus-ring: #4cc9f0;
+  /* DXpedition identity palette — 10 hues ~36° apart, cycled by a hash of the
+     callsign (components/prop/dxpedLanes.ts). These carry NO severity meaning:
+     they exist so one operation's bar, digest row and detail entry read as the
+     same thing across the calendar. Cyan is deliberately absent — --accent owns
+     it, and TODAY is the one strong accent in the grid. Light and saturated
+     here; the light theme re-states them darker (both a solid spine and a
+     color-mix tint have to hold up against the surface behind them). */
+  --dxc-0: #6aa9f2;
+  --dxc-1: #9d95ee;
+  --dxc-2: #cd8ce8;
+  --dxc-3: #ee87c8;
+  --dxc-4: #f4879a;
+  --dxc-5: #ea9a68;
+  --dxc-6: #d3b155;
+  --dxc-7: #a9c257;
+  --dxc-8: #62cd8e;
+  --dxc-9: #4fcbb6;
   /* back-compat aliases (migrate component usages incrementally) */
   --state-good: var(--snr-strong);
   --state-ok: var(--snr-marginal);
@@ -2915,6 +2936,19 @@ button.nb-chip:hover {
   --alert-warning: #a76d00;
   --alert-info: #0070a6;
   --focus-ring: #0d8ecf;
+  /* DXpedition identity palette, light inks — the same ten hues as dark, taken
+     darker and more saturated so the solid spine reads against the off-white
+     panel and the low-alpha tint does not wash out to nothing. */
+  --dxc-0: #1f6fc4;
+  --dxc-1: #5a4fbe;
+  --dxc-2: #8e42b5;
+  --dxc-3: #b23a8e;
+  --dxc-4: #c03b52;
+  --dxc-5: #b5601f;
+  --dxc-6: #8f7413;
+  --dxc-7: #5f8117;
+  --dxc-8: #16874a;
+  --dxc-9: #0d8375;
   --state-good: var(--snr-strong);
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
@@ -17274,6 +17308,14 @@ html[data-panel='needed'] {
   flex-wrap: wrap;
   font-size: var(--fs-label);
 }
+.dxd-dot {
+  flex: none;
+  align-self: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dxc, var(--border));
+}
 .dxd-call {
   font-weight: 700;
   font-family: var(--font-mono);
@@ -17305,12 +17347,17 @@ html[data-panel='needed'] {
   color: var(--text-dim);
 }
 
-/* Month grid. */
+/* Month grid. The WEEK is the grid, not the day cell: day cells span the row's
+   full height as its background (grid-row: 1 / -1), and each operation is ONE bar
+   placed across the columns it runs for. A spanning grid item covers the gutters
+   between the tracks it spans, which is what makes the bar continuous instead of
+   a row of chips. Row tracks come from the component (auto + N lanes). */
 .dxm {
   display: flex;
   flex-direction: column;
   gap: 2px;
   margin-top: var(--space-2);
+  --dxm-lane: 16px;
 }
 .dxm-head,
 .dxm-week {
@@ -17327,13 +17374,13 @@ html[data-panel='needed'] {
   padding-bottom: 2px;
 }
 .dxm-day {
+  /* Spans every lane row, so it is the cell BEHIND the bars rather than their
+     container — the bars are grid-placed siblings painted over it. */
+  grid-row: 1 / -1;
   min-height: 62px;
   border: 1px solid var(--border-soft);
   border-radius: 4px;
   padding: 2px 3px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   overflow: hidden;
 }
 /* Days already gone stay readable but stop competing for attention. */
@@ -17360,49 +17407,130 @@ html[data-panel='needed'] {
   font-size: var(--fs-micro);
   letter-spacing: 0.08em;
 }
-/* A run of days reads as ONE bar: square inner edges, rounded only where the
-   operation actually starts and ends. */
+/* Each operation's identity colour, hashed from its callsign — the same slot on
+   the bar, the digest row and the detail entry, so one operation reads as one
+   thing wherever it turns up. */
+[data-dxc='0'] {
+  --dxc: var(--dxc-0);
+}
+[data-dxc='1'] {
+  --dxc: var(--dxc-1);
+}
+[data-dxc='2'] {
+  --dxc: var(--dxc-2);
+}
+[data-dxc='3'] {
+  --dxc: var(--dxc-3);
+}
+[data-dxc='4'] {
+  --dxc: var(--dxc-4);
+}
+[data-dxc='5'] {
+  --dxc: var(--dxc-5);
+}
+[data-dxc='6'] {
+  --dxc: var(--dxc-6);
+}
+[data-dxc='7'] {
+  --dxc: var(--dxc-7);
+}
+[data-dxc='8'] {
+  --dxc: var(--dxc-8);
+}
+[data-dxc='9'] {
+  --dxc: var(--dxc-9);
+}
+
+/* One span bar. Colour is IDENTITY, not severity — a solid spine plus a low
+   tint, ink stays neutral, so ten of these on screen stay calm. Rounded and
+   inset only at the operation's real start/end; a run continuing past the week
+   edge goes square and flush so the eye carries it to the next row. */
 .dxm-bar {
-  display: block;
-  width: 100%;
-  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+  margin: 0 2px;
+  padding: 0 var(--space-1);
   border: none;
-  border-radius: 0;
-  padding: 1px var(--space-1);
+  border-radius: 3px;
   font-size: var(--fs-micro);
   font-family: var(--font-mono);
-  line-height: 1.5;
+  line-height: 1;
+  text-align: left;
   cursor: pointer;
-  background: var(--border-soft);
   color: var(--text);
-  min-height: 15px;
+  background: color-mix(in srgb, var(--dxc, var(--border-soft)) 20%, transparent);
+  box-shadow: inset 3px 0 0 0 var(--dxc, var(--border));
 }
-.dxm-bar.starts {
-  border-top-left-radius: 3px;
-  border-bottom-left-radius: 3px;
+.dxm-bar.cont-prev {
+  margin-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
 }
-.dxm-bar.ends {
-  border-top-right-radius: 3px;
-  border-bottom-right-radius: 3px;
+.dxm-bar.cont-next {
+  margin-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
 }
 .dxm-bar:hover {
-  background: var(--border);
+  background: color-mix(in srgb, var(--dxc, var(--border-soft)) 34%, transparent);
 }
-/* The ONE place colour is spent: an entity the operator chose to chase. */
+/* An entity the operator chose to chase still shouts louder than the rest. */
 .dxm-bar.chased {
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
-  color: var(--text);
+  background: color-mix(in srgb, var(--dxc, var(--accent)) 40%, transparent);
   font-weight: 700;
 }
 .dxm-barcall {
+  flex: 0 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: block;
 }
-.dxm-barcont {
-  display: block;
-  height: 1em;
+/* Bands ride the right end, dimmer than the callsign — the answer to "what do I
+   need to be ready for", available without opening anything. */
+.dxm-barbands {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-dim);
+}
+/* "…and it carries on past Sunday." */
+.dxm-barmore {
+  flex: none;
+  margin-left: auto;
+  opacity: 0.55;
+}
+.dxm-barbands ~ .dxm-barmore {
+  margin-left: 0;
+}
+/* The lane cap's escape hatch: a day with more operations than the week has room
+   for says so, rather than hiding them behind an overflow clip. */
+.dxm-more {
+  align-self: center;
+  justify-self: start;
+  margin: 0 2px;
+  padding: 0 3px;
+  border: none;
+  border-radius: 3px;
+  background: var(--border-soft);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  line-height: 1.4;
+  cursor: pointer;
+}
+.dxm-more:hover {
+  background: var(--border);
+  color: var(--text);
+}
+.dxm-less {
+  justify-self: center;
+  padding: 0 var(--space-2);
 }
 /* Narrow: a seven-column grid cannot compress below a readable cell, so it
    SCROLLS in its own container rather than vanishing (hiding it would leave the
