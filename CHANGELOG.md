@@ -5,6 +5,42 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### APRS: stations you could hear now actually show up on the map
+
+Operators reported hearing plenty of APRS traffic on 144.390 while the map stayed empty. The
+packets were decoding the whole time. The map was the problem, in three separate ways:
+
+- **It opened showing the whole planet.** APRS is a local mode — 2 m simplex plus a digipeater or
+  two reaches tens of kilometres — but the map opened at a scale where roughly 23 km fell on a
+  single pixel. A station 40 km away drew less than two pixels from your own marker, so an entire
+  local net stacked up underneath it as one dot. The APRS map now opens on the local picture,
+  reaching about 275 km in each direction, and you can zoom in much further than before.
+- **New decodes did not redraw it.** A freshly decoded station did not appear until something
+  unrelated repainted the map, which on a resting screen meant waiting up to a minute. Clicking a
+  station in the list had the same delay before the map highlighted it. Both are immediate now.
+- **With no grid set it drew nothing at all.** If your station's grid square was empty the APRS
+  map had no centre and painted an empty box — no coastline, no stations. It now centres on the
+  traffic you are hearing instead.
+
+### APRS tells you what it is hearing
+
+An empty APRS screen used to mean three very different things, and looked identical for all of
+them: the app listening to the wrong sound card, a signal arriving too corrupted to check, or a
+genuinely quiet channel. Only packets that passed their checksum ever reached the screen, so
+everything else vanished without trace.
+
+The APRS header now carries a decode readout that says which one you are looking at — no audio
+reaching the decoder, packets heard but failing their checksum, listening on a quiet channel, or
+decoding normally with a count and how long ago the last one landed. Hovering it explains what to
+check. The empty list and empty map say the same thing rather than a generic "nothing here".
+
+The first two are worth calling out because both are fixable in seconds: what comes out of your
+speaker tells you nothing about which device the app is capturing, and packets that all fail their
+checksum usually mean the radio is off frequency or the receive audio is driven hard enough to
+clip.
+
 ## [0.21.0] — 2026-07-29
 
 ### APRS gets a map
