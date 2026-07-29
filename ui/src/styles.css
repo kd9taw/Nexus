@@ -894,6 +894,25 @@ button.nb-chip:hover {
   font-size: var(--fs-label);
   font-weight: 600;
 }
+/* "Open their page" on a detail entry. Quiet by default; the QRZ fallback is
+   dimmer still, so a real expedition site is the one that draws the eye. */
+.cal-site {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  padding: 0 var(--space-1);
+  cursor: pointer;
+}
+.cal-site:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.cal-site.fallback {
+  color: var(--text-faint);
+  border-color: var(--border-soft);
+}
 .cal-meta {
   font-family: var(--font-mono);
   font-size: var(--fs-label);

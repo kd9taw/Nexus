@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### DXpedition calendar: click an operation to read up on it
+
+Clicking an operation on the calendar now opens its webpage in your browser, so the announcement
+you are looking at is one click from the team's own page — bands, schedule, QSL route, pilot
+station. The Details rail carries the same link on each entry, labelled, so you can see where it
+goes before you click it.
+
+About a third of announced operations publish a website, and the calendar source has been
+carrying those links all along — Nexus was throwing them away while reading the page. The rest
+now open the callsign's QRZ page instead, which is where their details and QSL route live when
+there is no expedition site. Either way the tooltip names the destination first, and says plainly
+when it is the QRZ fallback rather than the operation's own page.
+
+Clicking a calendar bar still selects that operation in the Details rail as it did before, so
+nothing that used to work costs you an extra click now.
+
 ### APRS: stations you could hear now actually show up on the map
 
 Operators reported hearing plenty of APRS traffic on 144.390 while the map stayed empty. The

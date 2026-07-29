@@ -748,6 +748,13 @@ export async function openQrzPage(call: string): Promise<void> {
   await invoke('open_qrz_page', { call })
 }
 
+/** Open a DXpedition's own webpage in the system browser, falling back to the
+ * callsign's QRZ page when the calendar source published no site. The backend
+ * re-validates the URL's scheme — it is third-party data. */
+export async function openDxpedPage(call: string, url?: string | null): Promise<void> {
+  await invoke('open_dxped_page', { call, url: url ?? null })
+}
+
 export async function revealAllTxt(): Promise<void> {
   await invoke('reveal_all_txt')
 }

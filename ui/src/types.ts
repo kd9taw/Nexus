@@ -296,6 +296,9 @@ export interface CalendarEntry {
   outlook: BandOutlook[]
   /** One-line headline, e.g. "20m Good 1400–1700Z". */
   best: string
+  /** The operation's own website when the calendar source published one (about a
+   * third do). Absent → the UI falls back to the callsign's QRZ page. */
+  website?: string | null
 }
 export interface DxpedDashboard {
   workableNow: WorkableCard[]
