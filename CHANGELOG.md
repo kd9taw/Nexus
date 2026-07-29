@@ -20,11 +20,17 @@ from the header and had simply never shown it to you.
 
 ### Fixed: the APRS map grew without bound
 
-On the first test build the map crept steadily downward and never stopped. The section fills its
-window rather than being a scrolling page, and without that the map had no fixed height to work
-from: it sized itself from its container, which made the container taller, which made it size
-itself larger again. A loop, not a wrong number — which is why it looked like slow, endless growth
-rather than simply being the wrong size. The Connect map already had the same fix.
+The map crept steadily downward and never stopped, eventually pushing itself off screen and
+turning the page into one long vertical scroll.
+
+The map draws onto a canvas sized in real screen pixels, which on a display running above 100%
+scaling is larger than the space it was measured against. That made its container taller, which
+made the next measurement larger, which made the canvas larger again. A loop rather than a wrong
+number, which is why it grew steadily instead of just being the wrong size — and why it would not
+show up at all on a display set to 100%.
+
+The canvas is now taken out of the page flow entirely, so its pixel size can no longer affect the
+layout that measures it. The waterfall was fixed the same way for the same reason.
 
 ### APRS gets a map
 

@@ -51,6 +51,22 @@ describe('APRS layout invariants', () => {
     expect(rail![1]).toMatch(/overflow-y:\s*auto/)
   })
 
+  it('the map canvas is OUT OF FLOW so its device-px size cannot grow the page', () => {
+    // The 0.20.4 bug: canvas.height is set to h * devicePixelRatio. In flow that
+    // attribute is the canvas's intrinsic size, so on a display scaled above 100%
+    // (dpr > 1) it exceeds the box that measured it -> parent grows -> the
+    // ResizeObserver re-fires larger -> geometric runaway. dpr == 1 hides it
+    // entirely, which is exactly why it reached an operator. `.waterfall-canvas`
+    // already carries this fix and documents the same reasoning.
+    const rule = /\.map-canvas-wrap\s*>\s*canvas\s*\{([^}]*)\}/.exec(css)
+    expect(rule, '.map-canvas-wrap > canvas rule must exist').not.toBeNull()
+    expect(rule![1]).toMatch(/position:\s*absolute/)
+    expect(rule![1]).toMatch(/inset:\s*0/)
+    // And the wrap must be able to shrink, or an in-flow child grows it instead.
+    const wrap = /\.map-canvas-wrap\s*\{([^}]*)\}/.exec(css)
+    expect(wrap![1]).toMatch(/min-height:\s*0/)
+  })
+
   it('restacks on narrow via [data-viewport], never a zoom-blind @media', () => {
     // UI zoom lives on the non-root `.app`, so a raw max-width query fires against the
     // UNZOOMED width and mis-fires at every zoom level.

@@ -2324,7 +2324,26 @@ button.nb-chip:hover {
   position: relative;
   flex: 1;
   min-width: 0;
+  /* Must be able to shrink: an in-flow child taller than its share would otherwise
+     grow this box instead of overflowing it. */
+  min-height: 0;
   background: var(--bg);
+}
+/* ⭐ THE MAP CANVAS IS OUT OF FLOW, for exactly the reason `.waterfall-canvas` is.
+   `canvas.height` is set to `h * devicePixelRatio` (device px). In flow, that
+   attribute IS the canvas's intrinsic size, so on any display with scaling above
+   100% (dpr > 1) the canvas is taller than the box that measured it -> the parent
+   grows -> the ResizeObserver re-fires with the bigger height -> the canvas grows
+   again. Geometric, and it looks like the map "slowly expanding infinitely down"
+   with the page growing into one long vertical scroll (operator, 0.20.4).
+   dpr == 1 hides it completely, which is why it survived review on a 100% display.
+   Absolute + inset:0 means the intrinsic size can never reach layout at all, so the
+   loop is structurally impossible rather than merely balanced. The inline
+   width/height:100% on the element still drive the DISPLAY size off the stage. */
+.map-canvas-wrap > canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
 }
 .map-hover {
   position: absolute;
