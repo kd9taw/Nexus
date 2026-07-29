@@ -20,6 +20,9 @@ use crate::service::SHUTDOWN;
 /// cost is negligible (one lock + bool read).
 const POLL: Duration = Duration::from_millis(100);
 
+/// A sample this close to full scale is clipped for reporting purposes (-0.09 dBFS).
+const CLIP_PEAK: f32 = 0.99;
+
 /// Spawn the APRS RX decode thread (call once at startup, beside `spawn_rtty_rx`).
 pub fn spawn_aprs_rx(engine: Arc<Mutex<Engine>>) {
     std::thread::Builder::new()
@@ -48,6 +51,10 @@ pub(crate) struct DecodeStep {
     pub frames_seen: usize,
     /// Peak |sample| of the audio consumed — 0.0 means the tap is being fed silence.
     pub audio_peak: f32,
+    /// Samples at/near full scale. A burst hitting the rails in the rig→app path shows up here;
+    /// Bell-202 survives hard limiting (measured: decodes 30 dB into clipping), but it costs the
+    /// operator headroom and is worth telling them about.
+    pub clipped_samples: usize,
 }
 
 /// One decode step: audio in, packets + health out.
@@ -57,9 +64,11 @@ pub(crate) struct DecodeStep {
 /// audio and check what comes out the far end. `run` below is then just the plumbing around it.
 pub(crate) fn decode_step(demod: &mut Demod, deframer: &mut Deframer, audio: &[f32]) -> DecodeStep {
     let audio_peak = audio.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    let clipped_samples = audio.iter().filter(|s| s.abs() >= CLIP_PEAK).count();
     let frames = deframer.push(&demod.feed(audio));
     DecodeStep {
         frames_seen: frames.len(),
+        clipped_samples,
         packets: frames
             .iter()
             .filter_map(|f| {
@@ -99,7 +108,7 @@ fn run(engine: Arc<Mutex<Engine>>) {
             // empty drain WITHOUT clobbering the last real level — this poll runs faster than the
             // radio loop feeds it, so empty drains are routine, not evidence of a fault.
             if let Ok(mut e) = engine.lock() {
-                e.note_aprs_rx(0, 0.0, 0, 0, now_unix());
+                e.note_aprs_rx(0, 0.0, 0, 0, 0, now_unix());
             }
             continue;
         }
@@ -123,6 +132,7 @@ fn run(engine: Arc<Mutex<Engine>>) {
             e.note_aprs_rx(
                 audio.len(),
                 step.audio_peak,
+                step.clipped_samples,
                 step.frames_seen,
                 step.packets.len(),
                 at,

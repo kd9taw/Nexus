@@ -1256,6 +1256,13 @@ export interface AprsHealth {
    * level is live, so without this the UI cannot tell "failing right now" from "two turned up
    * six minutes ago". */
   lastFrameSeenUnix: number | null
+  /** Peak of the drain that carried the most recent frame candidate — the BURST-TIME level.
+   * `audioPeak` between packets is the gap/hiss level, which is what misled the field report. */
+  framePeak: number
+  /** Largest burst-time peak this session. */
+  maxFramePeak: number
+  /** Near-full-scale samples in the drain that carried the last frame candidate. */
+  frameClippedSamples: number
 }
 
 /** Poll the APRS decoder's health beside the heard list. */

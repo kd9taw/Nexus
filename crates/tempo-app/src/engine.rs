@@ -1167,14 +1167,41 @@ pub struct AprsHealth {
     /// one present tense produced "2 packets were heard ... peak -99 dBFS" — self-contradictory,
     /// because nothing is heard at -99 dBFS.
     pub last_frame_seen_unix: Option<i64>,
+    /// Peak of the drain that carried the most recent frame candidate — the BURST-TIME level.
+    ///
+    /// `audio_peak` is the live drain peak, which between packets is the gap/hiss level. An
+    /// operator reading it seconds after a burst sees the gap, not the burst: the field report
+    /// "-62 dBFS" was read 9 s after the packet. Advice about burst level has to be based on the
+    /// level *during a burst*, so it is captured when the candidate is counted.
+    pub frame_peak: f32,
+    /// Largest burst-time peak this listening session — the best look the decoder has had at a
+    /// real packet, so a single quiet burst doesn't set the verdict forever.
+    pub max_frame_peak: f32,
+    /// Near-full-scale samples in the drain that carried the most recent frame candidate.
+    /// Non-zero means the burst is hitting the rails somewhere in the rig→app path.
+    pub frame_clipped_samples: u32,
 }
 
-/// Peak below which a drain is carrying silence rather than signal (-60 dBFS).
+/// Below this peak a recovered "frame" cannot be told from the deframer's flag-hunt locking onto
+/// dither, so it is not counted as evidence (-80 dBFS).
 ///
-/// Used HERE only to decide whether a recovered frame is real evidence. Mirrors `SILENT_PEAK` in
-/// `AprsCockpit.tsx`, which draws the same boundary for what the operator is TOLD; the two are
-/// separate decisions and must move together. The operator's IC-9700 measures ~-99 dBFS with the
-/// squelch closed, so this sits ~39 dB above their noise floor.
+/// ⚠️ MEASURED, not guessed, and deliberately far below any plausible signal. Two field data
+/// points from KD9TAW's IC-9700 bracket it: squelch-closed dither reads **-99 dBFS** (19 dB below
+/// this, so noise is rejected) and a real burst read **-62 dBFS** (18 dB above, so it counts).
+///
+/// It is NOT a decodability threshold. The Bell-202 discriminator compares mark ENERGY against
+/// space energy, so absolute level cancels — measured decode holds down to -140 dBFS in the
+/// absence of noise. Only SNR matters. Anything about "too quiet to decode" is therefore wrong;
+/// see `APRS_HEALTHY_BURST_MIN` for what low level actually costs.
+pub const APRS_NOISE_FLOOR_PEAK: f32 = 0.0001;
+
+/// Peak below which a drain reads as silence for DISPLAY purposes (-60 dBFS). Mirrors
+/// `SILENT_PEAK` in `AprsCockpit.tsx`; the two must move together.
+///
+/// Note this is 20 dB ABOVE [`APRS_NOISE_FLOOR_PEAK`], and that gap is deliberate: a burst at
+/// -62 dBFS is quiet enough to display as near-silence but far too loud to dismiss as dither.
+/// Gating frame counting on THIS value (as the first cut did) discarded real packets — the field
+/// burst that failed CRC sat 2 dB below it.
 pub const APRS_SILENT_PEAK: f32 = 0.001;
 
 fn fmt_aprs_addr(a: &tempo_core::aprs::Address) -> String {
@@ -5403,10 +5430,12 @@ impl Engine {
     ///
     /// `samples == 0` records only that this drain was empty; it must NOT overwrite the level, or
     /// the ordinary case of the decode thread out-polling the radio loop reads as a dead input.
+    #[allow(clippy::too_many_arguments)]
     pub fn note_aprs_rx(
         &mut self,
         samples: usize,
         audio_peak: f32,
+        clipped_samples: usize,
         frames_seen: usize,
         frames_decoded: usize,
         at_unix: i64,
@@ -5424,10 +5453,15 @@ impl Engine {
         // dither, and letting it drive an operator-facing "packets heard" claim manufactures
         // evidence for a problem that does not exist. Decodes are exempt: a frame that passed a
         // 16-bit FCS is real regardless of what the level meter said.
-        let carried_signal = audio_peak >= APRS_SILENT_PEAK;
+        let carried_signal = audio_peak >= APRS_NOISE_FLOOR_PEAK;
         if frames_seen > 0 && carried_signal {
             self.aprs_health.frames_seen += frames_seen as u64;
             self.aprs_health.last_frame_seen_unix = Some(at_unix);
+            // Burst-time level, captured NOW — by the time the operator looks, the live peak is
+            // the gap between packets.
+            self.aprs_health.frame_peak = audio_peak;
+            self.aprs_health.max_frame_peak = self.aprs_health.max_frame_peak.max(audio_peak);
+            self.aprs_health.frame_clipped_samples = clipped_samples as u32;
         }
         self.aprs_health.frames_decoded += frames_decoded as u64;
         if frames_decoded > 0 {
@@ -15023,7 +15057,7 @@ mod tests {
     fn a_zero_filled_drain_still_counts_as_audio_arriving() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_aprs_arm(AprsArm::Explicit);
-        e.note_aprs_rx(1200, 0.0, 0, 0, 5_000);
+        e.note_aprs_rx(1200, 0.0, 0, 0, 0, 5_000);
         let h = e.aprs_health();
         assert_eq!(
             h.last_audio_unix,
@@ -15040,7 +15074,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_aprs_arm(AprsArm::Explicit);
         for i in 0..20 {
-            e.note_aprs_rx(0, 0.0, 0, 0, 5_000 + i);
+            e.note_aprs_rx(0, 0.0, 0, 0, 0, 5_000 + i);
         }
         let h = e.aprs_health();
         assert_eq!(h.last_audio_unix, None, "nothing ever arrived");
@@ -15055,7 +15089,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_aprs_arm(AprsArm::Explicit);
         assert_eq!(e.aprs_health().drains, 0, "not looked yet");
-        e.note_aprs_rx(0, 0.0, 0, 0, 5_000);
+        e.note_aprs_rx(0, 0.0, 0, 0, 0, 5_000);
         assert_eq!(e.aprs_health().drains, 1);
         // Re-arming starts the count over with the rest of the health.
         e.set_aprs_arm(AprsArm::Explicit);
@@ -15068,7 +15102,7 @@ mod tests {
     fn a_frame_recovered_from_signal_is_counted_and_dated() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_aprs_arm(AprsArm::Explicit);
-        e.note_aprs_rx(1200, 0.4, 1, 0, 9_000);
+        e.note_aprs_rx(1200, 0.4, 0, 1, 0, 9_000);
         let h = e.aprs_health();
         assert_eq!(h.frames_seen, 1);
         assert_eq!(
@@ -15084,7 +15118,7 @@ mod tests {
         // -99 dBFS dither (the operator's squelch-closed floor) is not a packet.
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_aprs_arm(AprsArm::Explicit);
-        e.note_aprs_rx(1200, 0.00001, 2, 0, 9_000);
+        e.note_aprs_rx(1200, 0.00001, 0, 2, 0, 9_000);
         let h = e.aprs_health();
         assert_eq!(
             h.frames_seen, 0,
@@ -15099,7 +15133,7 @@ mod tests {
         // get a vote. Only the unverified candidates are gated.
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_aprs_arm(AprsArm::Explicit);
-        e.note_aprs_rx(1200, 0.00001, 1, 1, 9_000);
+        e.note_aprs_rx(1200, 0.00001, 0, 1, 1, 9_000);
         let h = e.aprs_health();
         assert_eq!(h.frames_decoded, 1, "a checksummed frame is always real");
         assert_eq!(h.last_decode_unix, Some(9_000));
@@ -15109,11 +15143,78 @@ mod tests {
     fn arming_clears_the_frame_freshness_stamp_with_the_counters() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_aprs_arm(AprsArm::Explicit);
-        e.note_aprs_rx(1200, 0.4, 1, 0, 9_000);
+        e.note_aprs_rx(1200, 0.4, 0, 1, 0, 9_000);
         e.set_aprs_arm(AprsArm::Explicit);
         let h = e.aprs_health();
         assert_eq!(h.frames_seen, 0);
         assert_eq!(h.last_frame_seen_unix, None);
+    }
+
+    // ---- Burst-time level, and the corrected noise gate ----
+
+    #[test]
+    fn burst_time_level_is_captured_when_the_frame_is_counted() {
+        // The field trap: the operator read the LIVE peak 9 s after the burst and saw the gap.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.note_aprs_rx(1200, 0.25, 0, 1, 0, 9_000); // the burst
+        e.note_aprs_rx(1200, 0.00002, 0, 0, 0, 9_001); // quiet gap after it
+        let h = e.aprs_health();
+        assert_eq!(h.frame_peak, 0.25, "burst level, not the gap level");
+        assert_eq!(h.max_frame_peak, 0.25);
+        assert!(
+            h.audio_peak < 0.001,
+            "the LIVE peak has moved on, as it should"
+        );
+    }
+
+    #[test]
+    fn the_session_keeps_the_best_look_it_had_at_a_burst() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.note_aprs_rx(1200, 0.3, 0, 1, 0, 9_000);
+        e.note_aprs_rx(1200, 0.01, 0, 1, 0, 9_100); // a weaker burst later
+        assert_eq!(
+            e.aprs_health().max_frame_peak,
+            0.3,
+            "one quiet burst must not set the verdict for the session"
+        );
+    }
+
+    #[test]
+    fn clipped_samples_in_the_burst_drain_are_reported() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.note_aprs_rx(1200, 0.999, 412, 1, 0, 9_000);
+        assert_eq!(e.aprs_health().frame_clipped_samples, 412);
+    }
+
+    #[test]
+    fn a_quiet_but_real_burst_is_no_longer_discarded_as_noise() {
+        // ⚠️ THE REGRESSION THIS FIXES. The first gate discarded frames below -60 dBFS; the
+        // operator's real burst measured -62 and would have been thrown away, showing "Silent"
+        // during an audible packet. -62 dBFS is 18 dB above the measured dither floor.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.note_aprs_rx(1200, 0.0008, 0, 1, 0, 9_000); // -62 dBFS
+        assert_eq!(
+            e.aprs_health().frames_seen,
+            1,
+            "a real burst 18 dB above the dither floor must count"
+        );
+    }
+
+    #[test]
+    fn dither_far_below_any_signal_still_does_not_count() {
+        // -99 dBFS: the operator's measured squelch-closed floor, 19 dB below the gate.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.note_aprs_rx(1200, 0.0000112, 0, 3, 0, 9_000);
+        assert_eq!(
+            e.aprs_health().frames_seen,
+            0,
+            "flag-matches in dither are not packets"
+        );
     }
 
     // ---- Receive-only tiers must never LOOK like they are transmitting ----

@@ -103,6 +103,54 @@ const AUDIO_STALE_SEC = 5
  * keep asserting something about right now, which is the bug this fixes. */
 const FRAME_RECENT_SEC = 60
 
+// ─── HEALTHY BURST BAND ──────────────────────────────────────────────────────────────────────
+// What a packet burst SHOULD measure at the app's input, and what the operator can watch between
+// packets. These are headroom targets, NOT decodability thresholds — see the note below.
+//
+// ⚠️ MEASURED: absolute level does not decide whether a frame decodes. The Bell-202 discriminator
+// compares mark ENERGY against space energy, so level cancels — decode holds to -140 dBFS on a
+// clean signal, down to ~9 dB SNR over the operator's measured -99 dBFS dither floor, and through
+// 30 dB of hard clipping (FSK survives limiting). So a burst outside this band costs MARGIN, and
+// is worth fixing for that reason; it is never the explanation for a failed checksum.
+const HEALTHY_BURST_MIN = 0.0316 // -30 dBFS
+const HEALTHY_BURST_MAX = 0.5 // -6 dBFS
+/** At or above this a burst is hitting the rails (-1 dBFS). */
+const CLIPPING_PEAK = 0.891
+/** What open-squelch hiss should read — the thing the operator can watch between packets. */
+const HISS_TARGET = '-30 to -25 dBFS'
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** dBFS for a peak, as a bare number (no label). */
+function dbfs(peak: number): string {
+  return peak > 0 ? `${Math.round(20 * Math.log10(peak))} dBFS` : 'silence'
+}
+
+/** Headroom advice for a burst, or '' when it sits in the healthy band.
+ *
+ * Deliberately framed as headroom. The operator asked why frames fail; the honest answer is that
+ * level is not it, so this says what level costs rather than what it prevents. */
+function burstLevelAdvice(health: AprsHealth): string {
+  const peak = Math.max(health.framePeak, health.maxFramePeak)
+  if (peak <= 0) return ''
+  if (health.frameClippedSamples > 0 || peak >= CLIPPING_PEAK) {
+    return (
+      ` The burst is CLIPPING (peaked ${dbfs(peak)}, ${health.frameClippedSamples} sample(s) at the ` +
+      'rails) — lower the rig\'s USB AF output level, or the Windows input level for that device. ' +
+      'Packet survives a lot of clipping, so this costs headroom rather than decodes, but there is ' +
+      'no reason to run into the rails.'
+    )
+  }
+  if (peak < HEALTHY_BURST_MIN) {
+    return (
+      ` The burst peaked ${dbfs(peak)}, well below the healthy ${dbfs(HEALTHY_BURST_MIN)} to ` +
+      `${dbfs(HEALTHY_BURST_MAX)} band — raise the rig's USB AF output level (IC-9700: SET > ` +
+      'Connectors > USB AF Output Level) or the Windows input level for that device. That buys ' +
+      'margin against noise; it is not by itself why a checksum fails.'
+    )
+  }
+  return ''
+}
+
 /** How far the dial may sit from the APRS channel before it counts as a different frequency.
  * 5 kHz — wider than any rounding or CAT read-back jitter, far narrower than a channel step. */
 const DIAL_TOLERANCE_MHZ = 0.005
@@ -316,8 +364,9 @@ export function aprsDecodeStatus(
         `${ageLabel(health.lastFrameSeenUnix as number, nowSec)} ago — none passed the checksum. ` +
         'Some of that is normal: when the squelch opens partway through a burst the start of the ' +
         'packet is lost, and a part-heard packet can never pass. It is only a fault if nothing ' +
-        'ever decodes — in which case check the rig is on 144.390 in FM, and that the RX audio ' +
-        `is not so hot that it is clipping. Live ${level}.`,
+        'ever decodes — in which case check the rig is on 144.390 in FM.' +
+        burstLevelAdvice(health) +
+        ` Last burst peaked ${dbfs(Math.max(health.framePeak, health.maxFramePeak))}; live ${level}.`,
     }
   }
   // ARRIVING BUT SILENT. Overwhelmingly this is just a closed squelch, which is what an idle FM
@@ -336,7 +385,10 @@ export function aprsDecodeStatus(
   return {
     state: 'listening',
     label: 'Listening',
-    detail: `Audio is reaching the decoder and no packets have been heard recently — a quiet channel. Live ${level}.`,
+    detail:
+      'Audio is reaching the decoder and no packets have been heard recently — a quiet channel. ' +
+      `Live ${level}. With the squelch open, hiss should sit around ${HISS_TARGET}; a packet burst ` +
+      `should peak ${dbfs(HEALTHY_BURST_MIN)} to ${dbfs(HEALTHY_BURST_MAX)}.`,
   }
 }
 

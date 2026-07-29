@@ -30,6 +30,9 @@ function health(over: Partial<AprsHealth> = {}): AprsHealth {
     framesDecoded: 0,
     lastDecodeUnix: null,
     lastFrameSeenUnix: null,
+    framePeak: 0,
+    maxFramePeak: 0,
+    frameClippedSamples: 0,
     ...over,
   }
 }
@@ -347,5 +350,87 @@ describe('every claim says WHEN it was true', () => {
     const s = aprsDecodeStatus(health({ audioPeak: 0.4 }), NOW)
     // It is the peak of the most recent ~100 ms drain, not a decaying meter.
     expect(s.detail).toMatch(/most recent|0\.1 s|100 ms/i)
+  })
+})
+
+// ⭐ FOURTH ON-AIR ROUND. Operator heard a burst, the app detected it, CRC failed, live peak read
+// -62 dBFS — read NINE SECONDS after the burst, so that number was the gap, not the packet. Then
+// they raised the path and read -15 dBFS of open-squelch hiss, with 4 bursts and 0 CRC passes.
+//
+// Two lessons baked in here. First: advice about burst level must be measured AT BURST TIME, never
+// from the live drain peak. Second — and this is the one that changes what we SAY — measurement
+// shows level is NOT why frames fail. The Bell-202 discriminator compares mark energy against
+// space energy, so absolute level cancels: decode holds to -140 dBFS clean, to ~9 dB SNR over the
+// measured -99 dBFS dither floor, and through 30 dB of hard clipping. So the chip reports level as
+// HEADROOM, and must not claim it is the cause of a CRC failure.
+
+const QUIET_BURST = 0.0008 // -62 dBFS, the operator's measured burst
+const HEALTHY_BURST = 0.1 // -20 dBFS
+const HOT_BURST = 0.995 // ~0 dBFS
+
+describe('burst level advice is measured at BURST time, not gap time', () => {
+  it('reports the burst peak, not the live gap peak', () => {
+    // The exact field trap: live drain is quiet hiss, the burst was louder.
+    const s = aprsDecodeStatus(
+      health({
+        audioPeak: 0.00001,
+        framePeak: HEALTHY_BURST,
+        maxFramePeak: HEALTHY_BURST,
+        framesSeen: 1,
+        lastFrameSeenUnix: NOW - 9,
+      }),
+      NOW,
+    )
+    expect(s.state).toBe('unreadable')
+    expect(s.detail).toMatch(/burst/i)
+    expect(s.detail).toMatch(/-20 dBFS/)
+  })
+
+  it('flags a burst far below the healthy band, with the number and where to fix it', () => {
+    const s = aprsDecodeStatus(
+      health({ framePeak: QUIET_BURST, maxFramePeak: QUIET_BURST, framesSeen: 1, lastFrameSeenUnix: NOW - 5 }),
+      NOW,
+    )
+    expect(s.detail).toMatch(/-62 dBFS/)
+    expect(s.detail).toMatch(/USB AF Output/i)
+  })
+
+  it('does NOT claim low level is why the checksum failed — measurement says otherwise', () => {
+    const s = aprsDecodeStatus(
+      health({ framePeak: QUIET_BURST, maxFramePeak: QUIET_BURST, framesSeen: 1, lastFrameSeenUnix: NOW - 5 }),
+      NOW,
+    )
+    expect(s.detail).toMatch(/headroom|margin/i)
+    expect(s.detail).not.toMatch(/too quiet to decode|cannot decode because/i)
+  })
+
+  it('flags a CLIPPING burst and says to turn it down', () => {
+    const s = aprsDecodeStatus(
+      health({
+        framePeak: HOT_BURST,
+        maxFramePeak: HOT_BURST,
+        frameClippedSamples: 400,
+        framesSeen: 4,
+        lastFrameSeenUnix: NOW - 5,
+      }),
+      NOW,
+    )
+    expect(s.detail).toMatch(/clipping/i)
+    expect(s.detail).toMatch(/lower|reduce/i)
+  })
+
+  it('says nothing about level when the burst sits in the healthy band', () => {
+    const s = aprsDecodeStatus(
+      health({ framePeak: HEALTHY_BURST, maxFramePeak: HEALTHY_BURST, framesSeen: 2, lastFrameSeenUnix: NOW - 5 }),
+      NOW,
+    )
+    expect(s.detail).not.toMatch(/USB AF Output/i)
+    expect(s.detail).not.toMatch(/clipping/i)
+  })
+
+  it('states the healthy band and a hiss target the operator can actually watch', () => {
+    const s = aprsDecodeStatus(health({ audioPeak: 0.03 }), NOW)
+    expect(s.detail).toMatch(/-30/)
+    expect(s.detail).toMatch(/hiss/i)
   })
 })

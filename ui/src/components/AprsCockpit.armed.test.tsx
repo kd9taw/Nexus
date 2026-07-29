@@ -39,6 +39,9 @@ vi.mock('../api', () => ({
     framesDecoded: 0,
     lastDecodeUnix: null,
     lastFrameSeenUnix: null,
+    framePeak: 0,
+    maxFramePeak: 0,
+    frameClippedSamples: 0,
   })),
   getAprsIsStatus: vi.fn(async () => ({
     enabled: false,
@@ -67,6 +70,9 @@ function health(over: Partial<AprsHealth> = {}): AprsHealth {
     framesDecoded: 0,
     lastDecodeUnix: null,
     lastFrameSeenUnix: null,
+    framePeak: 0,
+    maxFramePeak: 0,
+    frameClippedSamples: 0,
     ...over,
   }
 }
