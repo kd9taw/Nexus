@@ -2,10 +2,11 @@
 // The month grid + chase digest: the parts where getting it wrong is silent.
 // A calendar that puts an operation on the wrong day, or a digest that ranks a
 // finished expedition above a live one, looks perfectly fine and is useless.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { DxpedMonth } from './DxpedMonth'
 import { DxpedDigest } from './DxpedDigest'
+import { DxpedCalendar } from './DxpedCalendar'
 import { dxpedColorIndex } from './dxpedLanes'
 import type { CalendarEntry, DxpedWindow } from '../../types'
 
@@ -138,6 +139,61 @@ describe('DxpedMonth', () => {
   it('renders nothing at all when there are no announcements', () => {
     const { container } = render(<DxpedMonth entries={[]} nowUnix={NOW} />)
     expect(container.firstChild).toBeNull()
+  })
+
+  it('a bar click opens the page AND still syncs the details rail', () => {
+    // Both, deliberately. The operator asked a click to open the webpage; the
+    // rail sync is what the click already did, and losing it would make the
+    // calendar unable to reach the detail at all.
+    const onSelect = vi.fn()
+    const onOpenPage = vi.fn()
+    const e = entry({ call: '3Y0L', website: 'https://3y0l.com/' })
+    render(
+      <DxpedMonth entries={[e]} nowUnix={NOW} onSelect={onSelect} onOpenPage={onOpenPage} />,
+    )
+    fireEvent.click(screen.getByTitle(/^3Y0L/))
+    expect(onSelect).toHaveBeenCalledWith('3Y0L')
+    expect(onOpenPage).toHaveBeenCalledWith(e)
+  })
+
+  it('tells the operator where the click goes before they click it', () => {
+    render(
+      <DxpedMonth
+        entries={[
+          entry({ call: 'SITE', website: 'https://3y0l.com/' }),
+          entry({ call: 'NOSITE', startUnix: NOW + 2 * DAY, endUnix: NOW + 3 * DAY }),
+        ]}
+        nowUnix={NOW}
+      />,
+    )
+    expect(screen.getByTitle(/^SITE/).title).toContain('https://3y0l.com/')
+    // The fallback says so rather than pretending it is the expedition's site.
+    const fallback = screen.getByTitle(/^NOSITE/).title
+    expect(fallback).toContain('No website announced')
+    expect(fallback).toContain('https://www.qrz.com/db/NOSITE')
+  })
+})
+
+describe('DxpedCalendar — the details rail', () => {
+  it('reaches the same page from the detail entry, labelled', () => {
+    // The bar and the rail must both get there; the rail is where the operator
+    // can SEE which of the two destinations it is before committing.
+    const openPage = vi.fn()
+    const site = entry({ call: '3Y0L', website: 'https://3y0l.com/' })
+    const none = entry({ call: 'TY5FR', startUnix: NOW + 2 * DAY, endUnix: NOW + 3 * DAY })
+    render(<DxpedCalendar entries={[site, none]} openPage={openPage} />)
+    // The rail is `hidden` behind the Details tab, so it is correctly absent from
+    // the a11y tree until the operator switches to it.
+    expect(screen.queryAllByRole('button', { name: /↗/ })).toHaveLength(0)
+    fireEvent.click(screen.getByRole('tab', { name: 'Details' }))
+    const buttons = screen.getAllByRole('button', { name: /↗/ })
+    expect(buttons).toHaveLength(2)
+    expect(buttons[0].textContent).toContain('Website')
+    expect(buttons[0].title).toContain('https://3y0l.com/')
+    expect(buttons[1].textContent).toContain('QRZ')
+    expect(buttons[1].title).toContain('No website announced')
+    fireEvent.click(buttons[0])
+    expect(openPage).toHaveBeenCalledWith(site)
   })
 })
 

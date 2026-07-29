@@ -10269,13 +10269,11 @@ fn app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
-/// Open a station's QRZ.com profile in the operator's default browser (the roster /
-/// logbook "who is this?" affordance). The call is sanitized to callsign characters
+/// A callsign's QRZ.com profile URL. The call is sanitized to callsign characters
 /// so a crafted string can never smuggle a different URL through; a portable suffix
 /// ("PJ4/K1ABC") keeps only its base call, which is what QRZ's db pages key on.
-#[tauri::command]
-fn open_qrz_page(app: tauri::AppHandle, call: String) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
+/// `None` when nothing callsign-shaped survives.
+fn qrz_url(call: &str) -> Option<String> {
     // Longest slash-separated token = the base call (portable prefixes/suffixes are
     // shorter than the call itself in practice: PJ4/K1ABC, K1ABC/P).
     let base = call
@@ -10286,11 +10284,48 @@ fn open_qrz_page(app: tauri::AppHandle, call: String) -> Result<(), String> {
         .filter(|c| c.is_ascii_alphanumeric())
         .collect::<String>()
         .to_ascii_uppercase();
-    if base.is_empty() {
-        return Err("no callsign".into());
-    }
+    (!base.is_empty()).then(|| format!("https://www.qrz.com/db/{base}"))
+}
+
+/// Open a station's QRZ.com profile in the operator's default browser (the roster /
+/// logbook "who is this?" affordance).
+#[tauri::command]
+fn open_qrz_page(app: tauri::AppHandle, call: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = qrz_url(&call).ok_or("no callsign")?;
     app.opener()
-        .open_url(format!("https://www.qrz.com/db/{base}"), None::<&str>)
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Which page a DXpedition calendar entry opens: the operation's own site when the
+/// calendar source published a usable one, else the callsign's QRZ page (roughly
+/// two thirds of announcements carry no site, and QRZ is where an expedition's
+/// details and QSL route live anyway).
+///
+/// The scheme is re-checked HERE even though the feed parser already refused
+/// anything but http/https: this is the trust boundary that actually hands a URL
+/// to the operator's browser, and it must not depend on an upstream filter
+/// staying correct. A rejected URL falls back to QRZ rather than failing.
+fn dxped_page_url(call: &str, url: Option<&str>) -> Option<String> {
+    url.map(str::trim)
+        .filter(|u| {
+            let lower = u.to_ascii_lowercase();
+            (lower.starts_with("http://") || lower.starts_with("https://"))
+                && !u.contains(char::is_whitespace)
+        })
+        .map(str::to_string)
+        .or_else(|| qrz_url(call))
+}
+
+/// Open a DXpedition's webpage — the calendar's "tell me more about this
+/// operation" affordance.
+#[tauri::command]
+fn open_dxped_page(app: tauri::AppHandle, call: String, url: Option<String>) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let target = dxped_page_url(&call, url.as_deref()).ok_or("no page to open")?;
+    app.opener()
+        .open_url(target, None::<&str>)
         .map_err(|e| e.to_string())
 }
 
@@ -10974,6 +11009,7 @@ pub fn run() {
             all_txt_location,
             reveal_all_txt,
             open_qrz_page,
+            open_dxped_page,
             app_version,
             radio_launch_info,
             choose_radio,
@@ -11360,8 +11396,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        b64_decode, b64_encode, install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
-        parse_sstv_mode, profile_dir_name, sanitize_profile,
+        b64_decode, b64_encode, dxped_page_url, install_block_reason, is_complete_lotw_body,
+        iss_pass_from_tles, parse_sstv_mode, profile_dir_name, sanitize_profile,
     };
 
     /// THE SELF-UPDATE SAFETY GATE. Installing restarts the app, and this app keys a
@@ -11546,5 +11582,52 @@ mod tests {
         assert!(parse_sstv_mode("martin2").is_some());
         assert!(parse_sstv_mode("robot36").is_some());
         assert!(parse_sstv_mode("nonsense").is_none());
+    }
+
+    #[test]
+    fn dxped_page_prefers_the_operation_site() {
+        assert_eq!(
+            dxped_page_url("3Y0L", Some("https://3y0l.com/")).as_deref(),
+            Some("https://3y0l.com/")
+        );
+    }
+
+    #[test]
+    fn dxped_page_falls_back_to_qrz_without_a_site() {
+        // Two thirds of announcements have no site; the base call is what QRZ keys
+        // on, so a portable designator must not reach the URL.
+        assert_eq!(
+            dxped_page_url("TY5FR", None).as_deref(),
+            Some("https://www.qrz.com/db/TY5FR")
+        );
+        assert_eq!(
+            dxped_page_url("PJ4/K1ABC", None).as_deref(),
+            Some("https://www.qrz.com/db/K1ABC")
+        );
+    }
+
+    #[test]
+    fn dxped_page_refuses_a_hostile_url_instead_of_opening_it() {
+        // The feed is third-party HTML. If anything but http/https reaches here it
+        // is dropped and the operator gets QRZ — never the crafted scheme.
+        for bad in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "  javascript:alert(1)  ",
+            "/relative",
+            "",
+        ] {
+            assert_eq!(
+                dxped_page_url("3Y0L", Some(bad)).as_deref(),
+                Some("https://www.qrz.com/db/3Y0L"),
+                "{bad} was not rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn dxped_page_gives_up_when_there_is_nothing_to_open() {
+        assert_eq!(dxped_page_url("", None), None);
+        assert_eq!(dxped_page_url("///", Some("nonsense")), None);
     }
 }

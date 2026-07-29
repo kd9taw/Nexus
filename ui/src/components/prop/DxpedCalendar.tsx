@@ -9,6 +9,8 @@ import { LikelihoodHeatmap } from './LikelihoodHeatmap'
 import { DxpedMonth } from './DxpedMonth'
 import { DxpedDigest } from './DxpedDigest'
 import { dxpedColorIndex } from './dxpedLanes'
+import { dxpedLink, dxpedLinkTitle } from './dxpedLink'
+import { openDxpedPage } from '../../api'
 
 function daysUntil(startUnix: number): string {
   const d = Math.round((startUnix - Date.now() / 1000) / 86400)
@@ -56,6 +58,7 @@ export function DxpedCalendar({
   alarms,
   onToggleAlarm,
   onAlarmLead,
+  openPage = (e) => void openDxpedPage(e.call, e.website),
 }: {
   entries: CalendarEntry[]
   /** Modelled windows by call (get_dxped_windows) — preferred over the entry's
@@ -67,6 +70,8 @@ export function DxpedCalendar({
   alarms?: Record<string, { leadMin: number }>
   onToggleAlarm?: (call: string) => void
   onAlarmLead?: (call: string, leadMin: number) => void
+  /** Opens an operation's page in the system browser. Injectable for tests. */
+  openPage?: (entry: CalendarEntry) => void
 }) {
   // MONTH GRID IS THE LANDING VIEW (operator, 2026-07-29). The per-entry list is
   // still here and still complete — it carries the heatmaps and the alarm/chase
@@ -119,13 +124,19 @@ export function DxpedCalendar({
         onSelect={openEntry}
       />
       {view === 'month' && (
-        <DxpedMonth entries={entries} chasing={chasing} onSelect={openEntry} />
+        <DxpedMonth
+          entries={entries}
+          chasing={chasing}
+          onSelect={openEntry}
+          onOpenPage={openPage}
+        />
       )}
       <div className="cal-list" hidden={view !== 'list'}>
         {entries.map((e) => {
           const w = windows?.get(e.call.toUpperCase())
           const isChased = chasing?.has(e.call.toUpperCase()) ?? false
           const alarm = alarms?.[e.call.toUpperCase()]
+          const link = dxpedLink(e)
           return (
             <div
               className="cal-entry"
@@ -147,6 +158,19 @@ export function DxpedCalendar({
                     {w?.best ?? e.best}
                     {w && <span className="cp-engine">{w.engine === 'p533' ? 'P.533' : 'modelled'}</span>}
                   </span>
+                )}
+                {/* The same page the calendar bar opens, reachable from the detail
+                    too — and here it is LABELLED, so "website" vs "QRZ fallback"
+                    is visible rather than a surprise after the browser opens. */}
+                {link && (
+                  <button
+                    type="button"
+                    className={`cal-site${link.kind === 'qrz' ? ' fallback' : ''}`}
+                    onClick={() => openPage(e)}
+                    title={dxpedLinkTitle(link)}
+                  >
+                    ↗ {link.label}
+                  </button>
                 )}
                 {onToggleChase && (
                   <button

@@ -85,6 +85,10 @@ pub struct DxpeditionPlan {
     pub ft8_mode: Option<Ft8DxpMode>,
     /// ClubLog most-wanted rank (1 = rarest), if known.
     pub most_wanted_rank: Option<u32>,
+    /// The operation's own website, when the calendar source published one —
+    /// NG3K links the callsign to it (~a third of announcements have one).
+    /// Always `http`/`https`; the parser refuses any other scheme.
+    pub website: Option<String>,
 }
 
 impl DxpeditionPlan {
@@ -354,6 +358,9 @@ pub struct CalendarEntry {
     pub outlook: Vec<BandOutlook>,
     /// One-line headline, e.g. "20m Good 1400–1700Z".
     pub best: String,
+    /// The operation's own website when the source published one, so the UI can
+    /// open it. `None` → the UI falls back to the callsign's QRZ page.
+    pub website: Option<String>,
 }
 
 /// The DXpedition dashboard: what's workable on air **now**, plus the forward
@@ -421,6 +428,7 @@ impl DxpeditionTracker {
                         distance_km: dist,
                         outlook,
                         best,
+                        website: p.website.clone(),
                     });
                 }
                 continue; // upcoming or ended → no live card
@@ -594,6 +602,7 @@ mod tests {
             modes: vec![],
             ft8_mode: Some(Ft8DxpMode::FoxHound),
             most_wanted_rank: Some(40),
+            website: None,
         };
         let mut needs = NeedsSet::default();
         needs.atno.insert("Mozambique".to_string());
@@ -651,6 +660,7 @@ mod tests {
             modes: vec![],
             ft8_mode: None,
             most_wanted_rank: None,
+            website: None,
         };
         let needs = LogNeeds::new(); // empty log → every DXCC entity is ATNO
         let advisory = PropAdvisor::new("KD9TAW", "EN52").advise(NOW, &[], &SpaceWx::default());
@@ -714,6 +724,7 @@ mod tests {
             modes: vec![],
             ft8_mode: None,
             most_wanted_rank: None,
+            website: None,
         };
         let mut needs = LogNeeds::new();
         needs.add("W9ZZZ", "20m", "FT8", None, None, true); // United States, 20m, Digital, confirmed
@@ -736,6 +747,7 @@ mod tests {
             modes: vec![],
             ft8_mode: None,
             most_wanted_rank: None,
+            website: None,
         };
         let needs = NeedsSet::default(); // nothing needed
         let wx = SpaceWx::default();

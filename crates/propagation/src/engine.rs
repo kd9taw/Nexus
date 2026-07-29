@@ -422,6 +422,7 @@ mod tests {
                 modes: vec!["CW".into(), "SSB".into(), "FT8".into()],
                 ft8_mode: Some(Ft8DxpMode::FoxHound),
                 most_wanted_rank: Some(38),
+                website: None,
             },
             DxpeditionPlan {
                 call: "VP8XYZ".to_string(),
@@ -433,6 +434,7 @@ mod tests {
                 modes: vec!["CW".into(), "FT8".into()],
                 ft8_mode: Some(Ft8DxpMode::SuperFox),
                 most_wanted_rank: Some(7),
+                website: None,
             },
         ];
 

@@ -32,6 +32,7 @@ import {
   dxpedColorIndex,
   layoutCalendar,
 } from './dxpedLanes'
+import { dxpedLink, dxpedLinkTitle } from './dxpedLink'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -58,14 +59,19 @@ export function DxpedMonth({
   entries,
   chasing,
   onSelect,
+  onOpenPage,
   nowUnix,
   maxWeeks = 10,
   maxLanes = 4,
 }: {
   entries: CalendarEntry[]
   chasing?: Set<string>
-  /** Clicking a bar opens that operation — the list view scrolls to it. */
+  /** Clicking a bar selects that operation — the list view scrolls to it. */
   onSelect?: (call: string) => void
+  /** …and opens its webpage, which is what the operator asked a bar click to do.
+   * BOTH fire: the browser gets the page, and the Details rail is already on that
+   * operation when they come back, so the click costs nothing it used to do. */
+  onOpenPage?: (entry: CalendarEntry) => void
   /** Injectable for tests; defaults to the wall clock. */
   nowUnix?: number
   maxWeeks?: number
@@ -145,6 +151,7 @@ export function DxpedMonth({
               // ellipsing the callsign away — the callsign is what you scan for.
               const bands = seg.span >= BANDS_MIN_SPAN ? compactBands(e.bands) : ''
               const edge = `${seg.contPrev ? ' cont-prev' : ''}${seg.contNext ? ' cont-next' : ''}`
+              const link = dxpedLink(e)
               return (
                 <button
                   key={`${seg.call}-${e.startUnix}`}
@@ -155,9 +162,14 @@ export function DxpedMonth({
                     gridColumn: `${seg.startCol + 1} / span ${seg.span}`,
                     gridRow: seg.lane + 2,
                   }}
-                  onClick={() => onSelect?.(e.call)}
-                  title={barDetail(e)}
-                  aria-label={`${barDetail(e)}${isChased ? ' · chasing' : ''}`}
+                  onClick={() => {
+                    onSelect?.(e.call)
+                    onOpenPage?.(e)
+                  }}
+                  title={`${barDetail(e)}${link ? `\n${dxpedLinkTitle(link)}` : ''}`}
+                  aria-label={`${barDetail(e)}${isChased ? ' · chasing' : ''}${
+                    link ? ` · opens ${link.url}` : ''
+                  }`}
                 >
                   <span className="dxm-barcall">
                     {isChased && <span aria-hidden="true">★ </span>}
