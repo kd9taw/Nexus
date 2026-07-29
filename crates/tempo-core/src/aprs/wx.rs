@@ -220,7 +220,11 @@ mod tests {
         assert_eq!(wx.wind_mph, Some(4));
         assert_eq!(wx.gust_mph, Some(11));
         assert_eq!(wx.temp_f, Some(85));
-        assert_eq!(wx.rain_1h_in100, Some(0), "this one HAS a gauge, reading zero");
+        assert_eq!(
+            wx.rain_1h_in100,
+            Some(0),
+            "this one HAS a gauge, reading zero"
+        );
         assert_eq!(wx.humidity_pct, Some(68));
         assert_eq!(wx.pressure_hpa(), Some(1015.6));
         // The trailing `.DsVP` software tag must not derail the parse.
@@ -258,20 +262,39 @@ mod tests {
     fn humidity_of_00_means_one_hundred_percent() {
         // The field is two digits, so 100 cannot be written; the spec encodes it as 00. Reporting
         // 0% relative humidity would be a physically absurd reading in a saturated fog.
-        assert_eq!(parse_position_comment("000/000t050h00").unwrap().humidity_pct, Some(100));
-        assert_eq!(parse_position_comment("000/000t050h99").unwrap().humidity_pct, Some(99));
+        assert_eq!(
+            parse_position_comment("000/000t050h00")
+                .unwrap()
+                .humidity_pct,
+            Some(100)
+        );
+        assert_eq!(
+            parse_position_comment("000/000t050h99")
+                .unwrap()
+                .humidity_pct,
+            Some(99)
+        );
     }
 
     #[test]
     fn a_negative_temperature_parses() {
         // `t-05` is -5 °F. Reading it unsigned would report a summer day mid-blizzard.
-        assert_eq!(parse_position_comment("000/000t-05h50").unwrap().temp_f, Some(-5));
+        assert_eq!(
+            parse_position_comment("000/000t-05h50").unwrap().temp_f,
+            Some(-5)
+        );
     }
 
     #[test]
     fn wind_direction_360_normalises_to_north() {
-        assert_eq!(parse_position_comment("360/005t050").unwrap().wind_dir_deg, Some(0));
-        assert_eq!(parse_position_comment("000/005t050").unwrap().wind_dir_deg, Some(0));
+        assert_eq!(
+            parse_position_comment("360/005t050").unwrap().wind_dir_deg,
+            Some(0)
+        );
+        assert_eq!(
+            parse_position_comment("000/005t050").unwrap().wind_dir_deg,
+            Some(0)
+        );
     }
 
     #[test]

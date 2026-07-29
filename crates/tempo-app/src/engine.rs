@@ -5968,7 +5968,8 @@ impl Engine {
         // Over the ceiling: drop anything already past its age window first, since those would not
         // have been shown anyway.
         let cutoff = h.at_unix - i64::from(self.station_ttl_min()) * 60;
-        self.aprs_stations.retain(|_, st| st.last_heard_unix >= cutoff);
+        self.aprs_stations
+            .retain(|_, st| st.last_heard_unix >= cutoff);
         // Still over: evict the stations heard longest ago, which are the least useful to keep.
         while self.aprs_stations.len() > APRS_STATION_CAP {
             let Some(oldest) = self
@@ -7377,9 +7378,7 @@ impl Engine {
             .as_ref()
             .map(|r| {
                 r.iter()
-                    .map(|(lo, hi)| {
-                        (*lo as f64 / 1_000_000.0, *hi as f64 / 1_000_000.0)
-                    })
+                    .map(|(lo, hi)| (*lo as f64 / 1_000_000.0, *hi as f64 / 1_000_000.0))
                     .collect()
             })
             .unwrap_or_default();
@@ -15339,7 +15338,7 @@ mod tests {
         let r1 = e.add_radio();
         e.set_radio_bands(r1, vec!["2m".into()]); // the VHF radio
         e.set_active_radio(0); // operating HF when APRS opens
-        // The ACTIVE (HF) radio's caps say no 2 m…
+                               // The ACTIVE (HF) radio's caps say no 2 m…
         e.observe_rig_rx_ranges(Some(vec![(30_000, 60_000_000)]));
         assert_eq!(e.rig_covers_mhz(144.390), Some(false));
         // …but a hand-off is available, so the tune must proceed and switch radios.
@@ -15840,12 +15839,22 @@ mod tests {
         // A modest filtered feed: 200 stations in range, each beaconing once. That is already
         // under the 300-packet cap, so nothing is lost yet.
         for i in 0..200 {
-            e.push_aprs_heard(aprs_pkt(&format!("W9AA-{}", i % 16), &format!("b{i}"), 1000 + i, AprsSource::Inet));
+            e.push_aprs_heard(aprs_pkt(
+                &format!("W9AA-{}", i % 16),
+                &format!("b{i}"),
+                1000 + i,
+                AprsSource::Inet,
+            ));
         }
         // ...then the feed keeps running for another 300 packets, which is 2-5 MINUTES of real
         // traffic at 1-2 packets/second.
         for i in 200..500 {
-            e.push_aprs_heard(aprs_pkt("W9NEW-1", &format!("b{i}"), 1000 + i, AprsSource::Inet));
+            e.push_aprs_heard(aprs_pkt(
+                "W9NEW-1",
+                &format!("b{i}"),
+                1000 + i,
+                AprsSource::Inet,
+            ));
         }
         let heard = e.aprs_heard();
         assert_eq!(heard.len(), APRS_HEARD_CAP, "the ring is full");
@@ -15873,7 +15882,12 @@ mod tests {
         }
         // ...then 400 more packets pour in from one chatty station, cycling the packet ring twice.
         for i in 200..600 {
-            e.push_aprs_heard(aprs_pkt("W9NEW-1", &format!("c{i}"), 1000 + i, AprsSource::Inet));
+            e.push_aprs_heard(aprs_pkt(
+                "W9NEW-1",
+                &format!("c{i}"),
+                1000 + i,
+                AprsSource::Inet,
+            ));
         }
         // The packet log has churned, exactly as before — that is what a log does.
         assert_eq!(e.aprs_heard().len(), APRS_HEARD_CAP);
@@ -15893,7 +15907,11 @@ mod tests {
         // A fixed station on a THIRTY-minute cycle: still shown while it is merely slow. This is
         // the case a shorter window would blink off, which is the whole point of an hour.
         assert_eq!(e.aprs_stations(1000 + 30 * 60).stations.len(), 1);
-        assert_eq!(e.aprs_stations(1000 + ttl).stations.len(), 1, "at the boundary");
+        assert_eq!(
+            e.aprs_stations(1000 + ttl).stations.len(),
+            1,
+            "at the boundary"
+        );
         assert!(
             e.aprs_stations(1000 + ttl + 1).stations.is_empty(),
             "and gone once genuinely stale"
@@ -15905,7 +15923,10 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         let v = e.aprs_stations(0);
         assert_eq!(v.ttl_min, 60, "the default hour");
-        assert_eq!(v.fade_after_min, 20, "a third of it — past the slowest mobile rhythm");
+        assert_eq!(
+            v.fade_after_min, 20,
+            "a third of it — past the slowest mobile rhythm"
+        );
         // An operator who shortens the window gets a proportionally earlier fade, never one that
         // outlives the retention it is supposed to warn about.
         let mut s = e.settings().clone();
@@ -15925,8 +15946,15 @@ mod tests {
             b"WB8HRV>APRS,WIDE1-1:@291813z3913.47N/08424.67W_220/004g011t085r000p000P000h68b10156.DsVP",
         )
         .unwrap();
-        e.push_aprs_heard(AprsHeard::from_packet(&pkt, 1000, AprsSource::Rf, String::new()));
-        let wx = e.aprs_stations(1000).stations[0].wx.expect("weather parsed");
+        e.push_aprs_heard(AprsHeard::from_packet(
+            &pkt,
+            1000,
+            AprsSource::Rf,
+            String::new(),
+        ));
+        let wx = e.aprs_stations(1000).stations[0]
+            .wx
+            .expect("weather parsed");
         assert_eq!(wx.temp_f, Some(85));
         assert_eq!(wx.wind_dir_deg, Some(220));
         assert_eq!(wx.gust_mph, Some(11));
@@ -15943,7 +15971,12 @@ mod tests {
             b"K9LGE-5>APDR16,WIDE1-1:=4153.96N/08857.08W$098/065/146.520MHz/A=000829 Blue Dodge",
         )
         .unwrap();
-        e.push_aprs_heard(AprsHeard::from_packet(&pkt, 1000, AprsSource::Rf, String::new()));
+        e.push_aprs_heard(AprsHeard::from_packet(
+            &pkt,
+            1000,
+            AprsSource::Rf,
+            String::new(),
+        ));
         assert!(e.aprs_stations(1000).stations[0].wx.is_none());
     }
 
@@ -15955,9 +15988,19 @@ mod tests {
             b"WB8HRV>APRS,WIDE1-1:@291813z3913.47N/08424.67W_220/004g011t085r000p000P000h68b10156",
         )
         .unwrap();
-        e.push_aprs_heard(AprsHeard::from_packet(&wxp, 1000, AprsSource::Rf, String::new()));
+        e.push_aprs_heard(AprsHeard::from_packet(
+            &wxp,
+            1000,
+            AprsSource::Rf,
+            String::new(),
+        ));
         let status = AprsPacket::from_tnc2(b"WB8HRV>APRS,WIDE1-1:>station online").unwrap();
-        e.push_aprs_heard(AprsHeard::from_packet(&status, 1010, AprsSource::Rf, String::new()));
+        e.push_aprs_heard(AprsHeard::from_packet(
+            &status,
+            1010,
+            AprsSource::Rf,
+            String::new(),
+        ));
         let st = &e.aprs_stations(1010).stations[0];
         assert!(st.wx.is_some(), "readings are sticky, like the position");
         assert_eq!(st.wx.unwrap().temp_f, Some(85));
@@ -15978,7 +16021,10 @@ mod tests {
         status.kind = "status";
         e.push_aprs_heard(status);
         let st = &e.aprs_stations(1010).stations[0];
-        assert!(st.lat.is_some() && st.lon.is_some(), "the position is sticky");
+        assert!(
+            st.lat.is_some() && st.lon.is_some(),
+            "the position is sticky"
+        );
         assert_eq!(st.symbol_table, '/', "and so is the symbol");
         assert_eq!(st.text, "just a status", "but the text is the latest");
         assert_eq!(st.packets, 2);
@@ -15988,7 +16034,10 @@ mod tests {
     fn a_station_source_is_derived_from_when_each_channel_last_carried_it() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.push_aprs_heard(aprs_pkt("W9AA-1", "p1", 1000, AprsSource::Inet));
-        assert_eq!(e.aprs_stations(1000).stations[0].source_kind, AprsSource::Inet);
+        assert_eq!(
+            e.aprs_stations(1000).stations[0].source_kind,
+            AprsSource::Inet
+        );
         // Our own antenna then hears it: the tag upgrades, and the evidence for it is visible.
         e.push_aprs_heard(aprs_pkt("W9AA-1", "p2", 1100, AprsSource::Rf));
         let st = &e.aprs_stations(1100).stations[0];
@@ -15997,7 +16046,10 @@ mod tests {
         assert_eq!(st.last_inet_unix, Some(1000));
         // A later internet-only packet must NOT demote it — we did hear it ourselves.
         e.push_aprs_heard(aprs_pkt("W9AA-1", "p3", 1200, AprsSource::Inet));
-        assert_eq!(e.aprs_stations(1200).stations[0].source_kind, AprsSource::Both);
+        assert_eq!(
+            e.aprs_stations(1200).stations[0].source_kind,
+            AprsSource::Both
+        );
     }
 
     #[test]
@@ -16005,7 +16057,12 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         // Every station within the age window, so only the cap can evict.
         for i in 0..(APRS_STATION_CAP + 100) {
-            e.push_aprs_heard(aprs_pkt(&format!("W{i:04}"), "b", 100_000 + i as i64, AprsSource::Inet));
+            e.push_aprs_heard(aprs_pkt(
+                &format!("W{i:04}"),
+                "b",
+                100_000 + i as i64,
+                AprsSource::Inet,
+            ));
         }
         let view = e.aprs_stations(100_000 + APRS_STATION_CAP as i64 + 100);
         assert!(view.stations.len() <= APRS_STATION_CAP, "bounded");
@@ -16023,7 +16080,12 @@ mod tests {
         e.push_aprs_heard(aprs_pkt("W9OLD-1", "a", 1000, AprsSource::Rf));
         e.push_aprs_heard(aprs_pkt("W9MID-1", "b", 1100, AprsSource::Rf));
         e.push_aprs_heard(aprs_pkt("W9NEW-1", "c", 1200, AprsSource::Rf));
-        let calls: Vec<String> = e.aprs_stations(1200).stations.iter().map(|s| s.call.clone()).collect();
+        let calls: Vec<String> = e
+            .aprs_stations(1200)
+            .stations
+            .iter()
+            .map(|s| s.call.clone())
+            .collect();
         assert_eq!(calls, vec!["W9NEW-1", "W9MID-1", "W9OLD-1"]);
     }
 
@@ -16034,14 +16096,22 @@ mod tests {
         let mut t = 1000i64;
         for round in 0..40 {
             // Our station beacons every 10 minutes, like a normal fixed station.
-            e.push_aprs_heard(aprs_pkt("W9ME-1", &format!("beacon {round}"), t, AprsSource::Rf));
+            e.push_aprs_heard(aprs_pkt(
+                "W9ME-1",
+                &format!("beacon {round}"),
+                t,
+                AprsSource::Rf,
+            ));
             // ...while the feed pours 200 packets from other stations in between.
             for i in 0..200 {
                 e.push_aprs_heard(aprs_pkt(&format!("X{i:04}"), "x", t + i, AprsSource::Inet));
             }
             t += 600;
             assert!(
-                e.aprs_stations(t).stations.iter().any(|s| s.call == "W9ME-1"),
+                e.aprs_stations(t)
+                    .stations
+                    .iter()
+                    .any(|s| s.call == "W9ME-1"),
                 "round {round}: the station must never vanish"
             );
         }

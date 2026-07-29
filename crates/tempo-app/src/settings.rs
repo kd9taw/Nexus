@@ -3272,7 +3272,10 @@ mod tests {
         assert_eq!(old.aprs_is_host, "rotate.aprs2.net");
         assert_eq!(old.aprs_is_port, 14580);
         assert_eq!(old.aprs_is_radius_km, 150);
-        assert_eq!(old.aprs_station_ttl_min, 60, "the station window defaults on upgrade");
+        assert_eq!(
+            old.aprs_station_ttl_min, 60,
+            "the station window defaults on upgrade"
+        );
         assert!(old.aprs_is_weather && old.aprs_is_objects && old.aprs_is_messages);
     }
 
