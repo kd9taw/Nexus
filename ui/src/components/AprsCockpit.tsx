@@ -147,7 +147,11 @@ export function AprsCockpit({
    * beacon/message is gated off with no way to turn TX on). */
   onSetTxEnabled?: (on: boolean) => void
 }) {
-  const [armed, setArmed] = useState(false)
+  // NO local `armed` state. Arming lives on the ENGINE and is session state that outlives this
+  // component, so a local copy drifts: a remount came back up saying "Monitor" while the decoder
+  // was still running, and its first click then sent arm(true) at an already-armed engine. The
+  // health poll below already carries the flag — one source of truth for the button AND the
+  // decode chip, which can therefore never disagree.
   // One selection shared by the list and the map — clicking either highlights both.
   const [selected, setSelected] = useState<string | null>(null)
   const [freq, setFreq] = useState(144.39)
@@ -229,12 +233,20 @@ export function AprsCockpit({
   }, [active])
 
   const decode = useMemo(() => aprsDecodeStatus(health, now), [health, now])
+  // The engine's flag, as of the last poll. Null health (before the first poll) reads as
+  // disarmed, which matches how the engine starts.
+  const armed = health?.armed ?? false
 
   const toggleArm = () => {
-    const next = !armed
-    setArmed(next)
-    void aprsArm(next)
-      .then(setHeard)
+    // Re-read health straight after the round trip rather than assuming it worked: an arm that
+    // the engine refuses must not leave the button claiming to be monitoring. One IPC hop, so
+    // the button still responds immediately — it just responds with the truth.
+    void aprsArm(!armed)
+      .then((h) => {
+        setHeard(h)
+        return getAprsHealth()
+      })
+      .then(setHealth)
       .catch((e) => setStatus(String(e)))
   }
 

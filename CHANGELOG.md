@@ -41,6 +41,15 @@ speaker tells you nothing about which device the app is capturing, and packets t
 checksum usually mean the radio is off frequency or the receive audio is driven hard enough to
 clip.
 
+### APRS Monitor button now reports the decoder, not its own guess
+
+The Monitor button tracked its own idea of whether the decoder was running, which could disagree
+with the decoder itself. Leaving the APRS screen and coming back showed "Monitor" — as though
+nothing was running — while packets kept decoding into the list beside it, and the next click then
+re-armed an already-armed decoder instead of stopping it. An arm the app refused also still lit the
+button up as if it had worked. The button, the decode readout and the empty-state text now all
+report the decoder's actual state.
+
 ## [0.21.0] — 2026-07-29
 
 ### APRS gets a map
