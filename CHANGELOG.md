@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: APRS went silent on a three-radio station
+
+0.21.4 could send an APRS activation to the wrong radio. With three radios where two of them cover
+2 m, nothing in the app had a reason to prefer one over the other, and the one it picked changed in
+0.21.4 — so a station whose APRS audio was set up on one rig suddenly found the app listening to
+the other. Audio configured for a different mode means silence, and nothing on screen said which
+radio was being listened to.
+
+A tie between two equally capable radios now goes to the radio you nominated as your default. If
+you have not set one, the choice stays consistent rather than arbitrary, and a routing rule still
+overrides everything — a rule for `2m` + `FM` pointing at a specific radio is the way to say this
+unambiguously.
+
 ### APRS packet decoder measured against tone imbalance ("twist")
 
 Twist — the two packet tones arriving at unequal volume, the net effect of the sending TNC, the

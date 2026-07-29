@@ -1961,15 +1961,31 @@ impl Settings {
             }
         };
         let active_rank = self.active_profile().map(&rank).unwrap_or(0);
-        self.radios
+        // THREE radios make ties reachable for the first time: with two radios there is only ever
+        // ONE non-active candidate, so any tie was decided by the `> active_rank` filter. With
+        // three, two rigs can both list 2 m.
+        //
+        // ⚠️ A TIE HAS NO CORRECT AUTOMATIC ANSWER, and picking one silently shipped a regression.
+        // `max_by_key` returned the LAST maximum — roster order — which for KD9TAW's shack landed
+        // on the FT-991A and decoded APRS. Switching to the lowest id landed on the IC-9700, whose
+        // audio is configured for FT8, so the APRS tap followed the wrong radio and the section went
+        // silent with nothing visibly wrong. Both rules are arbitrary; the bug was letting an
+        // arbitrary rule decide something the operator cares about.
+        //
+        // So: prefer the radio the operator NOMINATED (`default_radio`) when it is one of the tied
+        // candidates — a tie is exactly when an expressed preference should be consulted — and fall
+        // back to the lowest id for determinism when there is none. A routing rule still outranks
+        // all of this (see `route_radio`), and remains the way to state an unambiguous intent.
+        let best = self
+            .radios
             .iter()
             .filter(|p| p.enabled && p.id != self.active_radio)
-            // THREE radios make ties reachable for the first time: with two radios there is only
-            // ever ONE non-active candidate, so any tie was decided by the `> active_rank` filter.
-            // With three, two rigs can both list 20 m — and `max_by_key` returns the LAST maximum,
-            // i.e. roster order, silently. Break the tie on the LOWEST id (the radio the operator
-            // configured first) so the same band always lands on the same rig.
-            .min_by_key(|p| (std::cmp::Reverse(rank(p)), p.id))
+            .map(&rank)
+            .max()?;
+        self.radios
+            .iter()
+            .filter(|p| p.enabled && p.id != self.active_radio && rank(p) == best)
+            .min_by_key(|p| (self.default_radio != Some(p.id), p.id))
             .filter(|p| rank(p) > active_rank)
             .map(|p| p.id)
     }
@@ -3015,6 +3031,61 @@ mod tests {
         // Order in the roster must not change the answer.
         s.radios.swap(1, 2);
         assert_eq!(s.route_radio("2m", RouteMode::Ssb), Some(1));
+    }
+
+    #[test]
+    fn a_band_coverage_tie_prefers_the_operators_DEFAULT_radio() {
+        // ⚠️ THE 0.21.4 REGRESSION. The operator's shack is exactly the tie case: three radios, the
+        // IC-9700 (id 1) and FT-991A (id 2) both listing 2 m, and their working APRS audio is on the
+        // 991A. 0.21.3's `max_by_key` returned the LAST maximum, i.e. roster order, which happened
+        // to land on the 991A and decoded. 0.21.4 broke the tie on the LOWEST id, which lands on the
+        // 9700 — whose audio is set up for FT8 — so the tap followed the wrong radio and APRS went
+        // silent with nothing visibly wrong.
+        //
+        // Neither rule was ever RIGHT: both are arbitrary. What is not arbitrary is that the
+        // operator has already said which radio they prefer. A tie is exactly when to consult it.
+        let mut s = three_radio_shack();
+        s.routing_rules.clear();
+        s.active_radio = 0;
+        s.radios.iter_mut().find(|p| p.id == 0).unwrap().bands = vec!["20m".into()];
+        let ft991a = s.radios.iter().find(|p| p.name == "FT-991A").unwrap().id;
+        s.default_radio = Some(ft991a);
+        assert_eq!(
+            s.route_radio("2m", RouteMode::Fm),
+            Some(ft991a),
+            "a tie must go to the radio the operator nominated, not to whichever id is lower"
+        );
+        // And roster order still must not decide it.
+        s.radios.swap(1, 2);
+        assert_eq!(s.route_radio("2m", RouteMode::Fm), Some(ft991a));
+    }
+
+    #[test]
+    fn a_default_radio_that_cannot_reach_the_band_does_not_win_the_tie() {
+        // The preference is a tie-BREAK among capable candidates, never an override that sends a
+        // 2 m activation to an HF-only rig.
+        let mut s = three_radio_shack();
+        s.routing_rules.clear();
+        s.active_radio = 0;
+        s.radios.iter_mut().find(|p| p.id == 0).unwrap().bands = vec!["20m".into()];
+        s.default_radio = Some(0); // FTdx10, 20 m only
+        assert_eq!(
+            s.route_radio("2m", RouteMode::Fm),
+            Some(1),
+            "an incapable default is ignored; the deterministic tie-break still applies"
+        );
+    }
+
+    #[test]
+    fn without_a_default_radio_a_tie_stays_deterministic() {
+        // Unchanged from 0.21.4: with no expressed preference, the same band always lands on the
+        // same rig. Arbitrary, but stable — and the operator's lever is a routing rule.
+        let mut s = three_radio_shack();
+        s.routing_rules.clear();
+        s.default_radio = None;
+        s.active_radio = 0;
+        s.radios.iter_mut().find(|p| p.id == 0).unwrap().bands = vec!["20m".into()];
+        assert_eq!(s.route_radio("2m", RouteMode::Fm), Some(1));
     }
 
     #[test]
