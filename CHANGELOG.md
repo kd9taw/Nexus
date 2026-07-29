@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### APRS now sees the whole network, and can contribute to it
+
+APRS used to show you exactly what your own antenna decoded, and nothing else. That is the honest
+picture of what your radio can reach, but on a quiet channel it is also indistinguishable from a
+broken receiver — which is what several operators were looking at.
+
+Nexus can now also connect to **APRS-IS**, the internet side of APRS, and plot what the wider
+network is reporting near you alongside what you actually hear. Turn it on in
+**Settings ▸ Integrations & Feeds ▸ APRS-IS**.
+
+- **Every station is tagged with how it reached you** — `RF` when your own receiver decoded it,
+  `net` when only the internet reported it, `RF+net` when both did. On the map an RF station is a
+  solid dot and an internet-only station is a hollow one, so you can never mistake "the network
+  says this station exists" for "my antenna can hear this station". One click hides the internet
+  stations entirely, leaving the view of what this radio genuinely reaches.
+- **It is also a diagnostic.** The internet feed runs whether or not the APRS decoder is armed, and
+  gets its own status chip beside the decoder's. Internet stations appearing while the RF chip
+  stays silent tells you the fault is in the radio chain — antenna, cable, sound card, tuning —
+  and not in the app. That was previously guesswork.
+- **You choose what comes through.** A radius around your grid square (150 km by default — APRS is
+  a local mode), a list of watched callsigns that come through from anywhere however far away they
+  are, and switches for weather stations, objects and items, and text messages.
+- **No passcode needed to watch.** The feed connects read-only, which every APRS-IS server accepts
+  from any licensed operator.
+
+### APRS: you can put your corner of the map on the network
+
+With the feed running you can also switch on a **receive-only iGate**: packets *your own antenna
+hears* are contributed to APRS-IS, so stations around you reach the global map through your
+station. It is a separate switch from the feed, because it publishes under your callsign.
+
+Nexus only ever sends packets it actually heard on the air, and honours every rule the network
+asks of an iGate: it never re-sends a packet that already came from the internet, never sends one
+whose sender marked it `NOGATE` or `RFONLY`, suppresses duplicates, and caps its own upload rate so
+a stuck transmitter nearby cannot flood the network in your name.
+
+**Nexus does not gate the other way** — internet traffic is never transmitted on the air. That
+direction means a radio keying up unattended, which is not something this app will do.
+
 ### APRS: stations you could hear now actually show up on the map
 
 Operators reported hearing plenty of APRS traffic on 144.390 while the map stayed empty. The

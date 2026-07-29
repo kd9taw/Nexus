@@ -347,6 +347,214 @@ fn start_cluster_feed(
     });
 }
 
+// ---------------------------------------------------------------------------------------------
+// APRS-IS — the internet inlet for APRS, and the receive-only iGate
+// ---------------------------------------------------------------------------------------------
+
+/// The running APRS-IS feed, if any. One feed per process, unlike the multi-node cluster
+/// aggregator: APRS-IS is a single logical network and a second login would be a duplicate.
+struct AprsIsFeed {
+    /// Everything a change of which forces a reconnect — the server, and the login line (which
+    /// carries the callsign, the passcode, and the whole server-side filter).
+    fingerprint: String,
+    /// Set to stop both this feed's threads. They own `Arc`s to the state and outbox, so nothing
+    /// else needs to be held here to keep them alive.
+    stop: Arc<std::sync::atomic::AtomicBool>,
+}
+
+static APRS_IS_FEED: Mutex<Option<AprsIsFeed>> = Mutex::new(None);
+
+/// Reconcile the APRS-IS feed with settings: start it, stop it, or reconnect it under a changed
+/// server/filter/callsign. Called at startup and after every Save, so a filter edit takes effect
+/// without a restart.
+///
+/// ⚠️ **Deliberately independent of the APRS RF decoder's arm state.** See the doc comment on
+/// `Settings::aprs_is_enabled` for why: the feed costs no RF resource, can key nothing, and its
+/// value as a diagnostic depends on it running while the RF side is silent.
+fn sync_aprs_is_feed(engine: &SharedEngine) {
+    let (want, login, addr) = {
+        let Ok(eng) = engine.lock() else { return };
+        let s = eng.settings();
+        let call = s.mycall.trim().to_string();
+        // A real callsign is required even read-only: it is the login identity on a public
+        // amateur service, and `pass -1` still names us to every server on the network.
+        let want = s.aprs_is_enabled && is_real_call(&call);
+        // The uplink additionally needs the passcode, which is derived from that same callsign.
+        let code = s
+            .aprs_is_uplink
+            .then(|| tempo_core::aprs::is::passcode(&call));
+        let filter = tempo_core::aprs::is::FilterSpec {
+            range_km: Some(s.aprs_is_radius_km),
+            center: propagation::geo::maidenhead_to_latlon(s.mygrid.trim()),
+            buddies: s.aprs_is_watch_calls.clone(),
+            weather: s.aprs_is_weather,
+            objects: s.aprs_is_objects,
+            messages: s.aprs_is_messages,
+        }
+        .build();
+        let login = tempo_core::aprs::is::login_line(
+            &call,
+            code,
+            "Nexus",
+            env!("CARGO_PKG_VERSION"),
+            &filter,
+        );
+        let host = s.aprs_is_host.trim();
+        let host = if host.is_empty() {
+            "rotate.aprs2.net"
+        } else {
+            host
+        };
+        (want, login, format!("{host}:{}", s.aprs_is_port))
+    };
+
+    let fingerprint = format!("{addr}\u{1}{login}");
+    let mut slot = APRS_IS_FEED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(f) = slot.as_ref() {
+        if want && f.fingerprint == fingerprint {
+            return; // already running exactly this
+        }
+        // Server, filter, callsign or uplink changed — the login line carries all of them, so the
+        // only way to apply it is a fresh session.
+        f.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        *slot = None;
+    }
+    if !want {
+        if let Ok(mut eng) = engine.lock() {
+            eng.set_aprs_is_status(Default::default());
+        }
+        return;
+    }
+
+    conn_log("APRS-IS", "info", format!("connecting to {addr}"));
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let state = Arc::new(tempo_net::aprsis::FeedState::default());
+    let outbox = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    *slot = Some(AprsIsFeed {
+        fingerprint,
+        stop: stop.clone(),
+    });
+    drop(slot);
+
+    // The socket thread: receive lines, decode them, push them into the SAME store the RF decoder
+    // writes — tagged `Inet` so nothing downstream has to guess where a station came from.
+    {
+        let eng = engine.clone();
+        let (stop, state, outbox) = (stop.clone(), state.clone(), outbox.clone());
+        std::thread::Builder::new()
+            .name("aprs-is".into())
+            .spawn(move || {
+                tempo_net::aprsis::run(
+                    &addr,
+                    &login,
+                    |line| {
+                        let Some(pkt) = tempo_core::aprs::AprsPacket::from_tnc2(line) else {
+                            return;
+                        };
+                        if let Ok(mut e) = eng.lock() {
+                            e.push_aprs_heard(tempo_app::engine::AprsHeard::from_packet(
+                                &pkt,
+                                now_unix(),
+                                tempo_app::engine::AprsSource::Inet,
+                                String::from_utf8_lossy(line).into_owned(),
+                            ));
+                        }
+                    },
+                    &stop,
+                    &state,
+                    &outbox,
+                );
+            })
+            .expect("spawn aprs-is");
+    }
+
+    // The bridge thread: mirrors feed state into the engine for the status chip, and carries
+    // RF-heard packets the other way. Separate from the socket thread on purpose — the uplink
+    // must keep flowing on a quiet feed, and it must never run inside a socket callback.
+    {
+        let eng = engine.clone();
+        std::thread::Builder::new()
+            .name("aprs-is-gate".into())
+            .spawn(move || aprs_is_bridge(eng, stop, state, outbox))
+            .expect("spawn aprs-is-gate");
+    }
+}
+
+/// Carry packets between the engine and the APRS-IS socket once per second: publish the feed's
+/// live state for the status chip, and gate RF-heard packets into the upload queue.
+///
+/// **This is where the iGate's published behaviour is decided.** Every packet passes, in order:
+/// the RF-only rule (enforced upstream — only `AprsSource::Rf` pushes queue at all), the path
+/// guards, the duplicate window, then the rate cap. A packet failing any of them is counted and
+/// dropped, never sent.
+fn aprs_is_bridge(
+    engine: SharedEngine,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    state: Arc<tempo_net::aprsis::FeedState>,
+    outbox: Arc<Mutex<std::collections::VecDeque<Vec<u8>>>>,
+) {
+    use std::sync::atomic::Ordering;
+    let mut dupes = tempo_core::aprs::is::DupeWindow::default();
+    let mut rate = tempo_core::aprs::is::RateCap::default();
+    let mut rejected: u64 = 0;
+    let mut last_reject: Option<String> = None;
+    while !stop.load(Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let (queued, igate_call, uplink_on) = {
+            let Ok(mut e) = engine.lock() else { continue };
+            let call = e.settings().mycall.trim().to_string();
+            let on = e.settings().aprs_is_uplink;
+            (e.take_aprs_uplink(), call, on)
+        };
+        let now = now_unix();
+        let mut to_send: Vec<Vec<u8>> = Vec::new();
+        // Only a VERIFIED login may upload; without one the server refuses us anyway, and gating
+        // work on packets that can never be sent is pointless.
+        if uplink_on && state.verified.load(Ordering::Relaxed) {
+            for line in queued {
+                let bytes = line.as_bytes();
+                if let Err(why) = tempo_core::aprs::is::gate_check(bytes) {
+                    rejected += 1;
+                    last_reject = Some(why.reason());
+                    continue;
+                }
+                if !dupes.accept(bytes, now) {
+                    rejected += 1;
+                    last_reject = Some("duplicate".into());
+                    continue;
+                }
+                if !rate.accept(now) {
+                    rejected += 1;
+                    last_reject = Some("rate cap".into());
+                    continue;
+                }
+                if let Some(gated) = tempo_core::aprs::is::gated_line(bytes, &igate_call) {
+                    to_send.push(gated);
+                }
+            }
+        }
+        if !to_send.is_empty() {
+            if let Ok(mut q) = outbox.lock() {
+                q.extend(to_send);
+            }
+        }
+        let last_packet = state.last_packet_unix.load(Ordering::Relaxed);
+        if let Ok(mut e) = engine.lock() {
+            e.set_aprs_is_status(tempo_app::engine::AprsIsStatus {
+                // `enabled` / `uplink_enabled` are re-derived from settings by the getter.
+                connected: state.connected.load(Ordering::Relaxed),
+                verified: state.verified.load(Ordering::Relaxed),
+                packets: state.packets.load(Ordering::Relaxed),
+                last_packet_unix: (last_packet > 0).then_some(last_packet),
+                uploaded: state.uploaded.load(Ordering::Relaxed),
+                gate_rejected: rejected,
+                last_reject: last_reject.clone(),
+                ..Default::default()
+            });
+        }
+    }
+}
+
 /// Spawn ONE human DX-cluster node feed (an SSB/phone source). Per-host once-latch via
 /// [`HUMAN_NODES_STARTED`] (so re-running the aggregator only spawns nodes not already up).
 /// Each parsed spot stamps BOTH the aggregate `cluster_last` AND `phone_cluster_last`, and the
@@ -3724,6 +3932,9 @@ fn set_settings(
     if cluster_enabled {
         start_cluster_feeds(spots.inner(), &cluster_hosts, &mycall, health.inner());
     }
+    // Reconnects only when the server, filter, callsign or uplink actually changed — the login
+    // line carries all of them, so any edit to one needs a fresh session.
+    sync_aprs_is_feed(state.inner());
     start_pskr_feed(live_paths.inner(), &mycall, health.inner());
     start_wspr_feed(live_paths.inner(), &mycall);
     if opening_regional {
@@ -4645,6 +4856,18 @@ fn get_aprs_health(
 ) -> Result<tempo_app::engine::AprsHealth, String> {
     let eng = state.lock().map_err(|e| e.to_string())?;
     Ok(eng.aprs_health())
+}
+
+/// What the APRS-IS internet feed is doing: connected, verified, packets in, packets contributed,
+/// and how many the iGate rules refused. Polled beside `get_aprs_health` so the operator can tell
+/// an internet problem from an RF one — internet stations arriving while the RF chip stays silent
+/// is the diagnostic that proves the fault is in the radio chain.
+#[tauri::command]
+fn get_aprs_is_status(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::engine::AprsIsStatus, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(eng.aprs_is_status())
 }
 
 /// Queue an APRS position beacon to transmit — an explicit operator send, the ONLY way APRS TX
@@ -10232,6 +10455,9 @@ pub fn run() {
     }
     start_pskr_feed(&live_paths, &cluster_call, &health);
     start_wspr_feed(&live_paths, &cluster_call);
+    // The APRS-IS feed is independent of the APRS RF decoder's arm state by design, so it comes
+    // up here with the other network feeds rather than when the APRS view is entered.
+    sync_aprs_is_feed(&engine);
     // Integrated rotator: launch the bundled rotctld when a model is configured.
     if let Ok(eng) = engine.lock() {
         sync_rotctld(eng.settings());
@@ -10783,6 +11009,7 @@ pub fn run() {
             aprs_auto_arm,
             get_aprs_heard,
             get_aprs_health,
+            get_aprs_is_status,
             aprs_send_beacon,
             aprs_send_message,
             aprs_tune,

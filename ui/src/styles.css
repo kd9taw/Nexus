@@ -16939,6 +16939,53 @@ html[data-panel='needed'] {
   color: var(--state-good);
 }
 
+/* APRS-IS feed status — a SECOND chip beside the RF decode one, never merged with it. The two
+   inlets fail independently, and a green internet chip next to a silent RF chip is precisely the
+   diagnostic: it proves the fault is in the radio chain, not the app. */
+.aprs-inet {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: help;
+}
+.aprs-inet-off {
+  color: var(--text-faint);
+}
+.aprs-inet-connecting {
+  color: var(--state-weak);
+}
+.aprs-inet-quiet {
+  color: var(--state-ok);
+}
+.aprs-inet-live {
+  color: var(--state-good);
+}
+
+/* Station-list source tag. RF reads at full weight because it is the load-bearing fact — this
+   receiver heard the station. An internet-only station is dimmed to match its hollow map marker:
+   present, but not something this radio has proven it can reach. */
+.aprs-src {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: help;
+}
+.aprs-src-rf {
+  color: var(--state-good);
+}
+.aprs-src-both {
+  color: var(--state-ok);
+}
+.aprs-src-inet {
+  color: var(--text-faint);
+  font-weight: 500;
+}
+
 /* Operate cockpit: live FT8/FT4 decode-depth chips (Fast/Norm/Deep) in the header actions. */
 .cockpit-decode-depth {
   display: inline-flex;

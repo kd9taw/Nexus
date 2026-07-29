@@ -60,6 +60,20 @@ impl Address {
         }
     }
 
+    /// Render as TNC2 text: `CALL`, `CALL-9`, and a trailing `*` when the has-been-repeated bit is
+    /// set. The inverse of [`Address::parse`], and the form APRS-IS expects in an uploaded path.
+    pub fn to_tnc2(&self) -> String {
+        let mut s = self.call.clone();
+        if self.ssid != 0 {
+            s.push('-');
+            s.push_str(&self.ssid.to_string());
+        }
+        if self.cbit {
+            s.push('*');
+        }
+        s
+    }
+
     /// Parse `"N0CALL-9"` / `"APRS"` / `"WIDE1-1*"` (a trailing `*` marks a used digi → C-bit set).
     /// `None` on an empty/over-long call, non-alphanumeric call, or SSID > 15.
     pub fn parse(s: &str) -> Option<Address> {
@@ -141,6 +155,25 @@ impl Frame {
             path,
             info: info.to_vec(),
         }
+    }
+
+    /// Render to a TNC2 monitor line — `SRC>DEST,digi1,digi2*:info` — as raw BYTES.
+    ///
+    /// Bytes, not `String`, on purpose: real info fields carry non-UTF-8 (a raw `0x1C`/`0x1D` Mic-E
+    /// data-type byte, a `0xB0` degree sign in a comment), and a lossy conversion would silently
+    /// corrupt a packet on its way to APRS-IS. The header is ASCII by construction.
+    pub fn to_tnc2(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + self.info.len());
+        out.extend_from_slice(self.source.to_tnc2().as_bytes());
+        out.push(b'>');
+        out.extend_from_slice(self.dest.to_tnc2().as_bytes());
+        for d in &self.path {
+            out.push(b',');
+            out.extend_from_slice(d.to_tnc2().as_bytes());
+        }
+        out.push(b':');
+        out.extend_from_slice(&self.info);
+        out
     }
 
     /// Encode to the AX.25 byte sequence WITHOUT HDLC flags/bit-stuffing, WITH the 2-byte FCS

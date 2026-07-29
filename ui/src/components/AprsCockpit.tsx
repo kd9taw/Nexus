@@ -10,9 +10,12 @@ import {
   aprsSendMessage,
   getAprsHeard,
   getAprsHealth,
+  getAprsIsStatus,
   getSettings,
   type AprsHealth,
   type AprsHeard,
+  type AprsIsStatus,
+  type AprsSource,
 } from '../api'
 import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
 
@@ -61,6 +64,66 @@ const SILENT_PEAK = 0.001
  * iteration (blocking CAT, up to 2500 ms on slow serial), so gaps of a second or two are normal.
  * Judging on the instant would cry wolf constantly on a healthy station. */
 const AUDIO_STALE_SEC = 5
+
+/** Short tag shown in the station list's Via column. */
+export const SOURCE_LABEL: Record<AprsSource, string> = {
+  rf: 'RF',
+  inet: 'net',
+  both: 'RF+net',
+}
+
+/** Why the tag matters — an RF sighting is evidence about YOUR station, an internet one is not. */
+export const SOURCE_TITLE: Record<AprsSource, string> = {
+  rf: 'Your receiver decoded this station off the air',
+  inet: 'Reported by APRS-IS — your receiver has not heard this station',
+  both: 'Heard off the air by your receiver AND reported by APRS-IS',
+}
+
+/** How long the APRS-IS feed may go quiet before we say so. Far longer than the RF equivalent:
+ * a tight range filter on a rural grid legitimately delivers a packet every few minutes. */
+const INET_QUIET_SEC = 300
+
+export type AprsInetState = 'off' | 'connecting' | 'quiet' | 'live'
+
+/**
+ * Turn APRS-IS feed status into what the operator should be told.
+ *
+ * Exported and pure so the wording is testable without a socket — the same treatment the decode
+ * chip gets, and for the same reason: these three states looked identical as an empty list.
+ */
+export function aprsInetStatus(
+  st: AprsIsStatus | null,
+  nowSec: number,
+): { state: AprsInetState; label: string; detail: string } {
+  if (!st || !st.enabled) {
+    return { state: 'off', label: 'Internet off', detail: 'The APRS-IS feed is switched off.' }
+  }
+  const gate = st.uplinkEnabled
+    ? ` iGate on: ${st.uploaded} contributed${st.gateRejected ? `, ${st.gateRejected} held back${st.lastReject ? ` (last: ${st.lastReject})` : ''}` : ''}.`
+    : ''
+  if (!st.connected) {
+    return {
+      state: 'connecting',
+      label: 'Internet connecting',
+      detail: `Not connected to APRS-IS yet — retrying with backoff.${gate}`,
+    }
+  }
+  // Connected but nothing arriving: a real state, and usually a filter that is too tight rather
+  // than a fault. Say which, rather than leaving an empty list to be read as broken.
+  const quiet = st.lastPacketUnix == null || nowSec - st.lastPacketUnix > INET_QUIET_SEC
+  if (quiet) {
+    return {
+      state: 'quiet',
+      label: 'Internet quiet',
+      detail: `Connected, but no packets ${st.packets > 0 ? 'recently' : 'yet'} — nothing matches your filter. Widen the radius or add watched calls.${gate}`,
+    }
+  }
+  return {
+    state: 'live',
+    label: `Internet ${st.packets}`,
+    detail: `Connected${st.verified ? ' and verified' : ' read-only'} — ${st.packets} packets received.${gate}`,
+  }
+}
 
 export type AprsDecodeState = 'off' | 'deaf' | 'listening' | 'unreadable' | 'decoding'
 
@@ -158,6 +221,11 @@ export function AprsCockpit({
   const [freq, setFreq] = useState(144.39)
   const [heard, setHeard] = useState<AprsHeard[]>([])
   const [health, setHealth] = useState<AprsHealth | null>(null)
+  const [isStatus, setIsStatus] = useState<AprsIsStatus | null>(null)
+  // Show stations the internet reported. On by default when the feed is running (there is no
+  // point subscribing to a feed you then hide), but one click hides every station our own antenna
+  // has not heard — which is the honest view of what this radio can actually reach.
+  const [showInet, setShowInet] = useState(true)
   const [lat, setLat] = useState('')
   const [lon, setLon] = useState('')
   const [comment, setComment] = useState('Nexus APRS')
@@ -167,12 +235,6 @@ export function AprsCockpit({
   const noStations = useMemo(() => [] as Station[], [])
   const noNeeds = useMemo(() => new Map<string, NeedTag>(), [])
   const noSelectCall = useMemo(() => () => {}, [])
-  // How many heard stations actually carry a position — status and message
-  // packets carry none, so "nothing on the map" is a normal state worth naming.
-  const positioned = useMemo(
-    () => heard.filter((h) => h.lat != null && h.lon != null).length,
-    [heard],
-  )
   const [path, setPath] = useState('WIDE1-1,WIDE2-1')
   const [msgTo, setMsgTo] = useState('')
   const [msgText, setMsgText] = useState('')
@@ -246,6 +308,9 @@ export function AprsCockpit({
       void getAprsHealth()
         .then((h) => alive && setHealth(h))
         .catch(() => {})
+      void getAprsIsStatus()
+        .then((s) => alive && setIsStatus(s))
+        .catch(() => {})
     }
     tick()
     const id = window.setInterval(tick, 2000)
@@ -256,6 +321,11 @@ export function AprsCockpit({
   }, [active])
 
   const decode = useMemo(() => aprsDecodeStatus(health, now), [health, now])
+  const {
+    state: inetState,
+    label: inetLabel,
+    detail: inetDetail,
+  } = useMemo(() => aprsInetStatus(isStatus, now), [isStatus, now])
   // The engine's arm state, as of the last poll. Null health (before the first poll) reads as
   // disarmed, which matches how the engine starts.
   const arm = health?.arm ?? 'off'
@@ -313,33 +383,68 @@ export function AprsCockpit({
       .catch((e) => setStatus(String(e)))
   }
 
+  // Per-STATION source, accumulated across every packet from that callsign — not just its latest.
+  // A station our antenna heard ten minutes ago and the internet has reported since is still a
+  // station we can hear, and the newest packet alone would quietly relabel it `inet`. Once RF, the
+  // station stays at least `both`.
+  const sourceByCall = useMemo(() => {
+    const m = new Map<string, AprsSource>()
+    for (const h of heard) {
+      const prior = m.get(h.source)
+      m.set(h.source, !prior || prior === h.sourceKind ? h.sourceKind : 'both')
+    }
+    return m
+  }, [heard])
+
+  // The "show internet stations" toggle. Applied ONCE here, so the list, the counts and the map
+  // can never disagree about which stations exist.
+  const visible = useMemo(
+    () => (showInet ? heard : heard.filter((h) => sourceByCall.get(h.source) !== 'inet')),
+    [heard, showInet, sourceByCall],
+  )
+
+  // How many VISIBLE stations actually carry a position — status and message packets carry none,
+  // so "nothing on the map" is a normal state worth naming.
+  const positioned = useMemo(
+    () => visible.filter((h) => h.lat != null && h.lon != null).length,
+    [visible],
+  )
+
   // Messages get their OWN chronological list (newest first) — never collapsed by source, so a
   // conversation of several lines from one station all show. Positions are the roster below.
   const messages = useMemo(
-    () => heard.filter((h) => h.kind === 'message').slice().reverse(),
-    [heard],
+    () => visible.filter((h) => h.kind === 'message').slice().reverse(),
+    [visible],
   )
 
   // Collapse the POSITION stream to ONE row per station (latest wins — `heard` is oldest→newest),
   // newest first, with distance + bearing from the operator's grid. Messages are excluded (above).
   const rows = useMemo(() => {
-    const bySource = new Map<string, AprsHeard>()
-    for (const h of heard) {
+    const byCall = new Map<string, AprsHeard>()
+    for (const h of visible) {
       if (h.kind === 'message') continue
-      bySource.set(h.source, h)
+      byCall.set(h.source, h)
     }
-    return [...bySource.values()]
+    return [...byCall.values()]
       .sort((a, b) => b.atUnix - a.atUnix)
       .map((h) => {
         const hasPos = h.lat != null && h.lon != null
         const there = hasPos ? { lat: h.lat as number, lon: h.lon as number } : null
         return {
           h,
+          src: sourceByCall.get(h.source) ?? h.sourceKind,
           dist: me && there ? haversineKm(me, there) : null,
           brg: me && there ? bearingDeg(me, there) : null,
         }
       })
-  }, [heard, me])
+  }, [visible, me, sourceByCall])
+
+  // How many stations the internet contributed that our own receiver has NOT heard — the number
+  // the toggle hides, and worth naming so its effect is never a surprise.
+  const inetOnly = useMemo(
+    () => [...sourceByCall.values()].filter((s) => s === 'inet').length,
+    [sourceByCall],
+  )
 
   return (
     <main className="layout single needed-panel aprs-cockpit">
@@ -435,6 +540,35 @@ export function AprsCockpit({
         >
           {decode.label}
         </span>
+        {/* The OTHER inlet's health. Deliberately a second chip, not a merged one: the RF chain
+            and the internet feed fail independently, and seeing a green internet chip beside a
+            silent RF chip is the whole diagnostic — it proves the fault is in the radio path. */}
+        {isStatus?.enabled && (
+          <span
+            className={`aprs-inet aprs-inet-${inetState}`}
+            role="status"
+            title={inetDetail}
+          >
+            {inetLabel}
+          </span>
+        )}
+        {/* Hide everything our own antenna has not heard. The count is named so the effect of
+            the click is never a surprise. */}
+        {inetOnly > 0 && (
+          <button
+            type="button"
+            className={`np-chip${showInet ? ' on' : ''}`}
+            aria-pressed={showInet}
+            onClick={() => setShowInet(!showInet)}
+            title={
+              showInet
+                ? `Hide the ${inetOnly} station${inetOnly === 1 ? '' : 's'} only the internet has reported, leaving what this radio actually hears`
+                : `Show the ${inetOnly} station${inetOnly === 1 ? '' : 's'} the internet feed reports`
+            }
+          >
+            {showInet ? `Internet ${inetOnly}` : `Internet ${inetOnly} hidden`}
+          </button>
+        )}
       </div>
 
       {/* ⭐ APRS IS A GEOGRAPHIC MODE AND HAD NO MAP. Everything lived in one
@@ -536,6 +670,7 @@ export function AprsCockpit({
             <tr>
               <th>Age</th>
               <th>From</th>
+              <th>Via</th>
               <th>Type</th>
               <th>Position</th>
               <th>Dist</th>
@@ -543,7 +678,7 @@ export function AprsCockpit({
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ h, dist, brg }) => (
+            {rows.map(({ h, src, dist, brg }) => (
               // Selecting here selects on the map and vice versa — one selection,
               // two views of it. Clicking the same row again clears it.
               <tr
@@ -558,6 +693,9 @@ export function AprsCockpit({
               >
                 <td className="aprs-age">{ageLabel(h.atUnix, now)}</td>
                 <td className="aprs-from">{h.source}</td>
+                <td className={`aprs-src aprs-src-${src}`} title={SOURCE_TITLE[src]}>
+                  {SOURCE_LABEL[src]}
+                </td>
                 <td className={`aprs-kind aprs-kind-${h.kind}`}>{h.kind}</td>
                 <td className="aprs-pos">
                   {h.lat != null && h.lon != null
@@ -579,7 +717,7 @@ export function AprsCockpit({
         <div className="aprs-map">
           <MapView
             embedded={{ aprs: true }}
-            aprs={heard}
+            aprs={visible}
             selectedAprs={selected}
             onSelectAprs={setSelected}
             myGrid={myGrid}

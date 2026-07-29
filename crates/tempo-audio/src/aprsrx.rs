@@ -11,7 +11,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tempo_app::engine::{AprsHeard, Engine};
+use tempo_app::engine::{AprsHeard, AprsSource, Engine};
 use tempo_core::aprs::{AprsPacket, Deframer, Demod};
 
 use crate::service::SHUTDOWN;
@@ -40,7 +40,11 @@ fn now_unix() -> i64 {
 /// it cannot verify — a mistuned or over-driven channel, which is a completely different fault
 /// from hearing nothing at all.
 pub(crate) struct DecodeStep {
-    pub packets: Vec<AprsPacket>,
+    /// Each decoded packet paired with the TNC2 monitor line it came from. The line is kept
+    /// because the RX iGate contributes packets VERBATIM — re-encoding a parsed packet would
+    /// normalise away exactly the evidence (the digipeater path, an information field this parser
+    /// does not decode) that APRS-IS wants. Bytes, not `String`: a Mic-E info field is not UTF-8.
+    pub packets: Vec<(AprsPacket, Vec<u8>)>,
     pub frames_seen: usize,
     /// Peak |sample| of the audio consumed — 0.0 means the tap is being fed silence.
     pub audio_peak: f32,
@@ -58,7 +62,10 @@ pub(crate) fn decode_step(demod: &mut Demod, deframer: &mut Deframer, audio: &[f
         frames_seen: frames.len(),
         packets: frames
             .iter()
-            .filter_map(|f| AprsPacket::from_bytes(f))
+            .filter_map(|f| {
+                let frame = tempo_core::aprs::Frame::decode(f)?;
+                Some((AprsPacket::from_frame(&frame), frame.to_tnc2()))
+            })
             .collect(),
         audio_peak,
     }
@@ -103,7 +110,14 @@ fn run(engine: Arc<Mutex<Engine>>) {
         let heard: Vec<AprsHeard> = step
             .packets
             .iter()
-            .map(|pkt| AprsHeard::from_packet(pkt, at))
+            .map(|(pkt, tnc2)| {
+                AprsHeard::from_packet(
+                    pkt,
+                    at,
+                    AprsSource::Rf,
+                    String::from_utf8_lossy(tnc2).into_owned(),
+                )
+            })
             .collect();
         if let Ok(mut e) = engine.lock() {
             e.note_aprs_rx(
@@ -155,11 +169,14 @@ mod tests {
             let step = decode_step(&mut demod, &mut deframer, chunk);
             seen += step.frames_seen;
             peak = peak.max(step.audio_peak);
-            heard.extend(
-                step.packets
-                    .iter()
-                    .map(|p| AprsHeard::from_packet(p, 1_700_000_000)),
-            );
+            heard.extend(step.packets.iter().map(|(p, tnc2)| {
+                AprsHeard::from_packet(
+                    p,
+                    1_700_000_000,
+                    AprsSource::Rf,
+                    String::from_utf8_lossy(tnc2).into_owned(),
+                )
+            }));
         }
         (heard, seen, peak)
     }
@@ -177,6 +194,13 @@ mod tests {
         assert!((h.lat.expect("mappable latitude") - 49.058_333).abs() < 1e-4);
         assert!((h.lon.expect("mappable longitude") - (-72.029_166)).abs() < 1e-4);
         assert!(peak > 0.5, "the demodulator saw real audio, peak {peak}");
+        // The off-air chain also produces the exact TNC2 line the RX iGate would contribute —
+        // path and information field verbatim, no re-encoding.
+        assert_eq!(h.source_kind, AprsSource::Rf);
+        assert_eq!(
+            h.raw,
+            "KD9TAW-9>APZNEX,WIDE1-1,WIDE2-1:!4903.50N/07201.75W-Nexus"
+        );
     }
 
     #[test]

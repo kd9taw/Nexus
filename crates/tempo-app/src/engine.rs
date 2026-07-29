@@ -959,6 +959,12 @@ pub struct Engine {
     aprs_tx_queue: VecDeque<Vec<f32>>,
     /// Rolling APRS message line-number (001..999) for outgoing messages, so the recipient can ack.
     aprs_msg_seq: u16,
+    /// RF-heard TNC2 lines awaiting contribution to APRS-IS. Filled ONLY by [`AprsSource::Rf`]
+    /// pushes and only while the uplink setting is on; drained by the APRS-IS thread, which
+    /// applies the gating rules. Empty (and free) with the iGate off.
+    aprs_uplink_queue: VecDeque<String>,
+    /// Live APRS-IS feed state, written by the socket thread. Session-only, never persisted.
+    aprs_is_status: AprsIsStatus,
     /// APRS holds the rig in FM SIMPLEX (session-only, never persisted). Set by [`Engine::aprs_tune`];
     /// makes `rig_mode_effective` command FM and forces the repeater config to simplex (APRS is not
     /// a Phone/Digital operating section, so it can't ride the Phone-FM override). Cleared by any
@@ -1039,6 +1045,47 @@ pub struct AprsHeard {
     pub msg_id: Option<String>,
     /// Unix seconds the packet was decoded (drives the age column).
     pub at_unix: i64,
+    /// WHERE this packet came from. Never inferred — see [`AprsSource`].
+    pub source_kind: AprsSource,
+    /// The packet as a TNC2 monitor line, for the raw readout and (RF only) for the iGate uplink.
+    /// Lossy UTF-8: this field is for DISPLAY. The uplink re-renders from the frame bytes so a
+    /// non-UTF-8 information field is never corrupted on its way to the network.
+    pub raw: String,
+}
+
+/// Where a packet reached us from — doctrine, not decoration.
+///
+/// "My antenna heard this" and "a server told me about it" are different facts with different
+/// operational meaning: the first proves the RF chain works and the station is genuinely within
+/// reach, the second proves neither. The operator must be able to tell them apart at a glance, so
+/// this rides every station everywhere it is shown, and the internet feed can be hidden entirely.
+///
+/// It also gates the iGate: only [`AprsSource::Rf`] is ever offered for upload. That is the first
+/// and least negotiable of the gating rules, and it is enforced here — structurally, by which
+/// packets can reach the queue — rather than by a check that could be forgotten.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AprsSource {
+    /// Decoded off the air by this station's own receiver.
+    #[default]
+    Rf,
+    /// Delivered by the APRS-IS internet feed.
+    Inet,
+    /// Heard both ways — the same packet arrived off-air and over the internet.
+    Both,
+}
+
+impl AprsSource {
+    /// Merge two sightings of the same packet. RF + internet = [`AprsSource::Both`]; anything else
+    /// keeps what it had. Never downgrades: once our own antenna has heard a station, no later
+    /// internet copy may erase that.
+    pub fn merged(self, other: AprsSource) -> AprsSource {
+        if self == other {
+            self
+        } else {
+            AprsSource::Both
+        }
+    }
 }
 
 /// How the APRS decoder came to be armed.
@@ -1123,8 +1170,14 @@ fn render_aprs_frame(frame: &tempo_core::aprs::Frame) -> Vec<f32> {
 }
 
 impl AprsHeard {
-    /// Flatten a decoded packet for display, stamped with its decode time.
-    pub fn from_packet(pkt: &tempo_core::aprs::AprsPacket, at_unix: i64) -> Self {
+    /// Flatten a decoded packet for display, stamped with its decode time, where it came from, and
+    /// the TNC2 line it was decoded from.
+    pub fn from_packet(
+        pkt: &tempo_core::aprs::AprsPacket,
+        at_unix: i64,
+        source_kind: AprsSource,
+        raw: String,
+    ) -> Self {
         use tempo_core::aprs::{AprsBody, AprsInfo};
         let pos = pkt.position();
         let mut addressee = None;
@@ -1199,8 +1252,57 @@ impl AprsHeard {
             addressee,
             msg_id,
             at_unix,
+            source_kind,
+            raw,
         }
     }
+
+    /// The duplicate key for store-level merging: the same station saying the same thing. Matches
+    /// the APRS-IS server's own rule — origin, destination, and payload, with the PATH EXCLUDED,
+    /// because one transmission reaching us off-air and again through an iGate is one packet.
+    fn dupe_key(&self) -> (&str, &str, &str) {
+        (&self.source, self.kind, &self.text)
+    }
+}
+
+/// How long after a packet lands a second copy of it (from the other source) still counts as the
+/// same packet. Matches the APRS-IS server's own sliding duplicate window.
+const APRS_DUPE_MERGE_SECS: i64 = 30;
+
+/// Cap on RF-heard lines waiting to be gated to APRS-IS. Bounded so a feed that is down (or an
+/// uplink left on with no network) cannot grow the queue without limit; the oldest is dropped,
+/// because a stale position is the least valuable thing to contribute.
+const APRS_UPLINK_QUEUE_CAP: usize = 200;
+
+/// What the APRS-IS internet feed is doing — the counterpart to [`AprsHealth`] for the other inlet.
+///
+/// Deliberately separate from `AprsHealth`: the two answer different questions and fail
+/// independently. A green internet chip beside a silent RF chip is precisely the diagnostic the
+/// feed was added to provide — internet stations plotting while the antenna hears nothing proves
+/// the fault is in the RF chain, not in the app.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AprsIsStatus {
+    /// The operator has the feed switched on. (Independent of the RF decoder's arm state.)
+    pub enabled: bool,
+    /// A session is up and the server answered the login.
+    pub connected: bool,
+    /// The login was accepted as VERIFIED — the precondition for any upload. A read-only feed
+    /// (`pass -1`) is unverified by design and works perfectly.
+    pub verified: bool,
+    /// Packet lines received from the feed this session.
+    pub packets: u64,
+    /// Unix seconds of the most recent line — tells "connected but quiet" from "connected".
+    pub last_packet_unix: Option<i64>,
+    /// The operator has the RX iGate on.
+    pub uplink_enabled: bool,
+    /// Packets contributed to APRS-IS this session.
+    pub uploaded: u64,
+    /// RF-heard packets the gating rules refused. Not an error — it is mostly the loop guard doing
+    /// its job — but a counter that only ever climbs is worth showing.
+    pub gate_rejected: u64,
+    /// The most recent refusal reason, for the tooltip.
+    pub last_reject: Option<String>,
 }
 /// SSTV gallery session-list cap (mirrors the on-disk `gallery.json` cap).
 pub(crate) const SSTV_GALLERY_CAP: usize = 200;
@@ -1593,6 +1695,8 @@ impl Engine {
             rtty_seq: None,
             rtty_auto_over: false,
             aprs_arm: AprsArm::Off,
+            aprs_uplink_queue: VecDeque::new(),
+            aprs_is_status: AprsIsStatus::default(),
             aprs_auto_arm_declined: false,
             aprs_audio: Vec::new(),
             aprs_heard: Vec::new(),
@@ -5313,12 +5417,76 @@ impl Engine {
     }
 
     /// Record a freshly decoded APRS packet (newest last), capped at [`APRS_HEARD_CAP`]. Called by
-    /// the decode thread.
+    /// the RF decode thread and by the APRS-IS feed — one store, two inlets.
+    ///
+    /// **Merges duplicates rather than listing them twice.** A local station is routinely heard
+    /// both ways: our own receiver decodes it, and moments later an iGate puts the same packet on
+    /// APRS-IS. Appending both would double every nearby station in the list and stack two markers
+    /// on the map. So a packet matching a recent one keeps the FIRST entry — which preserves when
+    /// we actually heard it — and upgrades its source to [`AprsSource::Both`].
+    ///
+    /// This is also the only door to the iGate uplink, and it is the structural enforcement of the
+    /// rule that only RF-heard packets may be gated: an [`AprsSource::Inet`] packet cannot reach
+    /// the queue from here, so no later code path has to remember not to send it.
     pub fn push_aprs_heard(&mut self, heard: AprsHeard) {
+        if let Some(prior) = self
+            .aprs_heard
+            .iter_mut()
+            .rev()
+            .take_while(|h| heard.at_unix - h.at_unix <= APRS_DUPE_MERGE_SECS)
+            .find(|h| h.dupe_key() == heard.dupe_key())
+        {
+            let merged = prior.source_kind.merged(heard.source_kind);
+            let newly_rf = merged != prior.source_kind && heard.source_kind == AprsSource::Rf;
+            prior.source_kind = merged;
+            // A packet the internet showed us first and our antenna then heard for itself is a
+            // genuine RF reception, and the iGate should contribute it.
+            if newly_rf {
+                self.offer_aprs_uplink(&heard.raw);
+            }
+            return;
+        }
+        if heard.source_kind == AprsSource::Rf {
+            self.offer_aprs_uplink(&heard.raw);
+        }
         self.aprs_heard.push(heard);
         if self.aprs_heard.len() > APRS_HEARD_CAP {
             let drop = self.aprs_heard.len() - APRS_HEARD_CAP;
             self.aprs_heard.drain(0..drop);
+        }
+    }
+
+    /// Offer an RF-heard TNC2 line to the iGate uplink queue. No-op unless the operator has turned
+    /// the uplink on. The APRS-IS thread drains this and applies the path guards, the duplicate
+    /// window and the rate cap before anything reaches the network.
+    fn offer_aprs_uplink(&mut self, raw: &str) {
+        if !self.settings.aprs_is_uplink || raw.is_empty() {
+            return;
+        }
+        // A bounded queue: if the feed is down, packets age out rather than growing without limit.
+        if self.aprs_uplink_queue.len() >= APRS_UPLINK_QUEUE_CAP {
+            self.aprs_uplink_queue.pop_front();
+        }
+        self.aprs_uplink_queue.push_back(raw.to_string());
+    }
+
+    /// Drain the iGate uplink queue (RF-heard TNC2 lines awaiting gating). Called by the APRS-IS
+    /// thread; empty whenever the uplink is off.
+    pub fn take_aprs_uplink(&mut self) -> Vec<String> {
+        self.aprs_uplink_queue.drain(..).collect()
+    }
+
+    /// Record the APRS-IS feed's live state, written by the socket thread on each poll.
+    pub fn set_aprs_is_status(&mut self, status: AprsIsStatus) {
+        self.aprs_is_status = status;
+    }
+
+    /// Snapshot of the APRS-IS feed for the cockpit's internet status chip.
+    pub fn aprs_is_status(&self) -> AprsIsStatus {
+        AprsIsStatus {
+            enabled: self.settings.aprs_is_enabled,
+            uplink_enabled: self.settings.aprs_is_uplink,
+            ..self.aprs_is_status.clone()
         }
     }
 
@@ -14500,6 +14668,135 @@ mod tests {
         assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
     }
 
+    /// One decoded packet, ready to push. `raw` doubles as the payload text so two calls with
+    /// different `raw` are genuinely different packets.
+    fn aprs_pkt(call: &str, raw: &str, at: i64, kind: AprsSource) -> AprsHeard {
+        use tempo_core::aprs::{Address, AprsPacket, Frame};
+        let frame = Frame::ui(
+            Address::new("APRS", 0),
+            Address::parse(call).expect("test callsign"),
+            vec![Address::new("WIDE1", 1)],
+            format!("!4903.50N/07201.75W-{raw}").as_bytes(),
+        );
+        AprsHeard::from_packet(&AprsPacket::from_frame(&frame), at, kind, raw.to_string())
+    }
+
+    #[test]
+    fn the_same_packet_heard_both_ways_merges_instead_of_listing_twice() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_pkt("N0CALL-9", "home", 1000, AprsSource::Rf));
+        e.push_aprs_heard(aprs_pkt("N0CALL-9", "home", 1005, AprsSource::Inet));
+        let heard = e.aprs_heard();
+        assert_eq!(heard.len(), 1, "one packet, not two rows");
+        assert_eq!(heard[0].source_kind, AprsSource::Both);
+        assert_eq!(
+            heard[0].at_unix, 1000,
+            "the FIRST sighting is kept — when OUR antenna heard it"
+        );
+    }
+
+    #[test]
+    fn a_dupe_outside_the_merge_window_is_a_genuinely_new_packet() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_pkt("N0CALL-9", "home", 1000, AprsSource::Rf));
+        e.push_aprs_heard(aprs_pkt("N0CALL-9", "home", 1000 + APRS_DUPE_MERGE_SECS + 1, AprsSource::Rf));
+        assert_eq!(e.aprs_heard().len(), 2, "a later beacon is not a duplicate");
+    }
+
+    #[test]
+    fn different_stations_and_different_payloads_never_merge() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_pkt("N0CALL-9", "home", 1000, AprsSource::Rf));
+        e.push_aprs_heard(aprs_pkt("W9XYZ-1", "home", 1001, AprsSource::Inet));
+        e.push_aprs_heard(aprs_pkt("N0CALL-9", "moving", 1002, AprsSource::Inet));
+        assert_eq!(e.aprs_heard().len(), 3);
+    }
+
+    #[test]
+    fn source_merge_never_downgrades_an_rf_sighting() {
+        assert_eq!(AprsSource::Rf.merged(AprsSource::Inet), AprsSource::Both);
+        assert_eq!(AprsSource::Inet.merged(AprsSource::Rf), AprsSource::Both);
+        assert_eq!(AprsSource::Both.merged(AprsSource::Inet), AprsSource::Both);
+        assert_eq!(AprsSource::Rf.merged(AprsSource::Rf), AprsSource::Rf);
+    }
+
+    #[test]
+    fn the_uplink_queue_stays_empty_while_the_igate_is_off() {
+        // The default. An operator who never enables the iGate must never queue a byte for it.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(!e.settings().aprs_is_uplink);
+        e.push_aprs_heard(aprs_pkt("N0CALL-9", "home", 1000, AprsSource::Rf));
+        assert!(e.take_aprs_uplink().is_empty());
+    }
+
+    #[test]
+    fn only_rf_heard_packets_are_ever_offered_to_the_igate() {
+        // THE gating rule, enforced structurally: an internet packet cannot reach the queue, so
+        // no downstream code has to remember not to send it back where it came from.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.aprs_is_uplink = true;
+        e.apply_settings(s);
+        e.push_aprs_heard(aprs_pkt("N0CALL-9", "from-the-air", 1000, AprsSource::Rf));
+        e.push_aprs_heard(aprs_pkt("W9XYZ-1", "from-the-internet", 1001, AprsSource::Inet));
+        assert_eq!(e.take_aprs_uplink(), vec!["from-the-air".to_string()]);
+        assert!(e.take_aprs_uplink().is_empty(), "draining consumes the queue");
+    }
+
+    #[test]
+    fn a_station_the_internet_showed_first_still_gates_once_we_hear_it_ourselves() {
+        // The merge must not swallow the RF sighting's contribution: our antenna genuinely heard
+        // this packet, which is exactly what an iGate exists to report.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.aprs_is_uplink = true;
+        e.apply_settings(s);
+        e.push_aprs_heard(aprs_pkt("N0CALL-9", "beacon", 1000, AprsSource::Inet));
+        assert!(e.take_aprs_uplink().is_empty(), "the internet copy is not ours to gate");
+        e.push_aprs_heard(aprs_pkt("N0CALL-9", "beacon", 1002, AprsSource::Rf));
+        assert_eq!(e.take_aprs_uplink(), vec!["beacon".to_string()]);
+        assert_eq!(e.aprs_heard()[0].source_kind, AprsSource::Both);
+    }
+
+    #[test]
+    fn the_uplink_queue_is_bounded_when_the_feed_is_down() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.aprs_is_uplink = true;
+        e.apply_settings(s);
+        for i in 0..(APRS_UPLINK_QUEUE_CAP + 50) {
+            e.push_aprs_heard(aprs_pkt("N0CALL-9", &format!("p{i}"), 1000 + i as i64, AprsSource::Rf));
+        }
+        let queued = e.take_aprs_uplink();
+        assert_eq!(queued.len(), APRS_UPLINK_QUEUE_CAP);
+        assert_eq!(queued[0], "p50", "the oldest are dropped, not the newest");
+    }
+
+    #[test]
+    fn the_internet_feed_runs_independently_of_the_rf_arm() {
+        // The decision, asserted: an internet packet lands on the map with the RF decoder OFF.
+        // Arming is about the receiver; the feed costs no RF resource and can key nothing. This
+        // is also the diagnostic — internet stations plotting on a silent RF chip prove the fault
+        // is in the radio path.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert_eq!(e.aprs_arm_source(), AprsArm::Off);
+        e.push_aprs_heard(aprs_pkt("W9XYZ-1", "internet", 1000, AprsSource::Inet));
+        assert_eq!(e.aprs_heard().len(), 1);
+        assert!(!e.aprs_armed(), "and the decoder is still off");
+    }
+
+    #[test]
+    fn aprs_is_status_reports_the_operator_switches_from_settings() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.aprs_is_enabled = true;
+        s.aprs_is_uplink = true;
+        e.apply_settings(s);
+        let st = e.aprs_is_status();
+        assert!(st.enabled && st.uplink_enabled);
+        assert!(!st.connected, "no socket in a headless test");
+    }
+
     #[test]
     fn aprs_heard_flattens_position_and_mice_packets() {
         use tempo_core::aprs::{Address, AprsPacket, Frame};
@@ -14510,8 +14807,15 @@ mod tests {
             vec![Address::new("WIDE1", 1)],
             b"!4903.50N/07201.75W-Home",
         );
-        let h = AprsHeard::from_packet(&AprsPacket::from_frame(&pos), 1000);
+        let h = AprsHeard::from_packet(
+            &AprsPacket::from_frame(&pos),
+            1000,
+            AprsSource::Rf,
+            String::from_utf8_lossy(&pos.to_tnc2()).into_owned(),
+        );
         assert_eq!(h.source, "N0CALL-9");
+        assert_eq!(h.source_kind, AprsSource::Rf);
+        assert_eq!(h.raw, "N0CALL-9>APRS,WIDE1-1:!4903.50N/07201.75W-Home");
         assert_eq!(h.kind, "position");
         assert_eq!(h.text, "Home");
         assert_eq!(h.path, vec!["WIDE1-1".to_string()]);
@@ -14524,7 +14828,12 @@ mod tests {
             vec![],
             &[0x60, b'(', b'#', b'H', 0x1e, 0x1e, b'O', b'>', b'/'],
         );
-        let hm = AprsHeard::from_packet(&AprsPacket::from_frame(&mice), 2000);
+        let hm = AprsHeard::from_packet(
+            &AprsPacket::from_frame(&mice),
+            2000,
+            AprsSource::Rf,
+            String::new(),
+        );
         assert_eq!(hm.kind, "mice");
         assert_eq!(hm.speed_knots, Some(20));
         assert_eq!(hm.course_deg, Some(251));

@@ -13,12 +13,20 @@
 //!   stations.
 //! - [`qds`] — the shared Qt `QDataStream` (big-endian) byte codec the WSJT-X
 //!   protocol is framed with.
+//! - [`cluster`] / [`aprsis`] — long-lived telnet sessions against public ham
+//!   services (DX cluster / RBN, and APRS-IS). Same shape: a blocking thread
+//!   with reconnect backoff around a pure `Read`/`Write` pump.
 //!
-//! Everything is pure Rust over `std` UDP and byte buffers; encoders take plain
-//! field arguments so there is no dependency on the rest of the workspace. The
+//! Everything is pure Rust over `std` sockets and byte buffers; encoders take
+//! plain field arguments so there is no dependency on the rest of the workspace
+//! (`tempo-core` depends on `modes` which depends on THIS crate, so the arrow
+//! cannot be reversed). [`aprsis`] therefore owns only wire framing; the APRS
+//! protocol it carries — TNC2 splitting, the passcode, the iGate gating rules —
+//! lives in `tempo_core::aprs::is`, and the caller joins the two. The
 //! datagram layouts are exhaustively unit-tested (build-bytes / loopback only —
 //! no test ever touches the real network).
 
+pub mod aprsis;
 pub mod cluster;
 pub mod dxkeeper;
 pub mod flexcat;
