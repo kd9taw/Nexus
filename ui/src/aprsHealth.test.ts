@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { aprsDecodeStatus } from './components/AprsCockpit'
+import { aprsDecodeStatus, radioCoversMhz } from './components/AprsCockpit'
 import type { AprsHealth } from './api'
 
 // WHY THIS FILE EXISTS (original): only frames that passed the AX.25 checksum ever reached the UI,
@@ -347,5 +347,113 @@ describe('every claim says WHEN it was true', () => {
     const s = aprsDecodeStatus(health({ audioPeak: 0.4 }), NOW)
     // It is the peak of the most recent ~100 ms drain, not a decaying meter.
     expect(s.detail).toMatch(/most recent|0\.1 s|100 ms/i)
+  })
+})
+
+// ⭐ THIRD ON-AIR REPORT, 0.21.x, Yaesu FTdx10 — an HF/50 MHz radio with no 2 m at all.
+// Opening the APRS cockpit auto-tuned 144.390, the radio refused it, and the CAT link was dead
+// until Nexus restarted. The chip's job here is narrow but important: say the honest thing, and
+// do NOT offer a [Tune] button whose only possible outcome is another refusal.
+//
+// The fail-open rule is the load-bearing part. Coverage is UNKNOWN far more often than it is
+// absent — no CAT, first poll not in yet, a rigctld whose \dump_state we cannot parse — and a
+// chip that read "unknown" as "no VHF radio" would tell IC-9700 operators their radio can't do
+// APRS. Only a positively-parsed range list may ever say no.
+const HF_ONLY: [number, number][] = [[0.03, 60]] // FTdx10 (Hamlib rigs/yaesu/ftdx10.c): 30 kHz – 60 MHz receive
+const VHF_UHF: [number, number][] = [
+  [144, 148],
+  [430, 450],
+]
+
+describe('an HF-only radio is told the truth instead of being made to look broken', () => {
+  it('says the radio has no 2 m rather than blaming the frequency, mode or audio', () => {
+    const s = aprsDecodeStatus(
+      health({ audioPeak: 0 }),
+      NOW,
+      { dialMhz: 14.25, sideband: 'USB', rxRangesMhz: HF_ONLY },
+      APRS_DIAL,
+    )
+    expect(s.state).toBe('norf')
+    // Crucially NOT 'wrongfreq' — that state offers a Tune button, and tuning cannot work here.
+    expect(s.state).not.toBe('wrongfreq')
+  })
+
+  it('names what is needed AND the path that still works on this station', () => {
+    const s = aprsDecodeStatus(
+      health(),
+      NOW,
+      { dialMhz: 14.25, sideband: 'USB', rxRangesMhz: HF_ONLY },
+      APRS_DIAL,
+    )
+    expect(s.detail).toMatch(/VHF/)
+    // The APRS-IS feed is genuinely useful on an HF-only station: the view must not read as dead.
+    expect(s.detail).toMatch(/internet/i)
+    expect(s.detail).toMatch(/144\.390/)
+  })
+
+  it('outranks even "Monitor off" — arming the decoder cannot help', () => {
+    const s = aprsDecodeStatus(
+      health({ arm: 'off' }),
+      NOW,
+      { dialMhz: 14.25, sideband: 'USB', rxRangesMhz: HF_ONLY },
+      APRS_DIAL,
+    )
+    expect(s.state).toBe('norf')
+  })
+
+  it('and survives a null health (before the first poll)', () => {
+    const s = aprsDecodeStatus(
+      null,
+      NOW,
+      { dialMhz: 14.25, sideband: 'USB', rxRangesMhz: HF_ONLY },
+      APRS_DIAL,
+    )
+    expect(s.state).toBe('norf')
+  })
+
+  it('FAILS OPEN: unknown coverage never claims the radio lacks VHF', () => {
+    for (const ranges of [undefined, [] as [number, number][]]) {
+      const s = aprsDecodeStatus(
+        health(),
+        NOW,
+        { dialMhz: 144.174, sideband: 'USB', rxRangesMhz: ranges },
+        APRS_DIAL,
+      )
+      expect(s.state, `ranges=${JSON.stringify(ranges)}`).not.toBe('norf')
+      // The ordinary CAT-aware verdict still applies — nothing is lost by not knowing.
+      expect(s.state).toBe('wrongfreq')
+    }
+  })
+
+  it('a radio that DOES cover 2 m is judged normally', () => {
+    const covered = { dialMhz: 144.39, sideband: 'FM', rxRangesMhz: VHF_UHF }
+    expect(aprsDecodeStatus(health(), NOW, covered, APRS_DIAL).state).toBe('listening')
+    // …and it still gets the wrong-frequency verdict when parked on FT8.
+    const ft8 = { dialMhz: 144.174, sideband: 'USB', rxRangesMhz: VHF_UHF }
+    expect(aprsDecodeStatus(health(), NOW, ft8, APRS_DIAL).state).toBe('wrongfreq')
+  })
+
+  it('judges the SELECTED channel, so a European pick on an HF rig is also out of range', () => {
+    const s = aprsDecodeStatus(
+      health(),
+      NOW,
+      { dialMhz: 14.25, sideband: 'USB', rxRangesMhz: HF_ONLY },
+      144.8,
+    )
+    expect(s.state).toBe('norf')
+    expect(s.detail).toMatch(/144\.800/)
+  })
+
+  it('a 6 m-capable HF rig is correctly told it covers 50 MHz but not 144', () => {
+    // Guards the range arithmetic itself: the FTdx10 really does reach 6 m (50 MHz).
+    expect(radioCoversMhz(HF_ONLY, 50.313)).toBe(true)
+    expect(radioCoversMhz(HF_ONLY, 144.39)).toBe(false)
+    expect(radioCoversMhz(VHF_UHF, 144.39)).toBe(true)
+    expect(radioCoversMhz(VHF_UHF, 50.313)).toBe(false)
+    // Inclusive bounds, and unknown stays unknown.
+    expect(radioCoversMhz([[144, 148]], 144)).toBe(true)
+    expect(radioCoversMhz([[144, 148]], 148)).toBe(true)
+    expect(radioCoversMhz(undefined, 144.39)).toBe(null)
+    expect(radioCoversMhz([], 144.39)).toBe(null)
   })
 })

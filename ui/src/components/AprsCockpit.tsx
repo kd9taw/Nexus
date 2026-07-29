@@ -107,15 +107,35 @@ const FRAME_RECENT_SEC = 60
  * 5 kHz — wider than any rounding or CAT read-back jitter, far narrower than a channel step. */
 const DIAL_TOLERANCE_MHZ = 0.005
 
-/** The rig state the chip judges against. Only the two facts that decide whether APRS can
- * possibly hear anything: where the dial is, and whether the rig is in FM. */
+/** The rig state the chip judges against. Only the facts that decide whether APRS can possibly
+ * hear anything: where the dial is, whether the rig is in FM, and — above both — whether the
+ * radio can reach the APRS channel at all. */
 export interface AprsRadio {
   dialMhz: number
   sideband: string
+  /** The radio's RECEIVE coverage as `[loMhz, hiMhz]` pairs, from Hamlib's capability table.
+   * **EMPTY = unknown, which means ALLOW.** Never treat an empty list as "covers nothing": the
+   * probe legitimately comes up empty with no CAT, before the first poll, or on a rigctld whose
+   * `\dump_state` we could not parse, and refusing a QSY on a guess is worse than the refused
+   * command the check exists to avoid. */
+  rxRangesMhz?: [number, number][]
+}
+
+/** Whether `mhz` is inside the radio's known receive coverage. `null` = unknown → allow. */
+export function radioCoversMhz(
+  ranges: [number, number][] | undefined,
+  mhz: number,
+): boolean | null {
+  if (!ranges || ranges.length === 0) return null
+  return ranges.some(([lo, hi]) => mhz >= lo && mhz <= hi)
 }
 
 export type AprsDecodeState =
   | 'off'
+  /** The radio physically cannot receive the APRS channel — an HF-only rig and 2 m. Above every
+   * other verdict because it is the only one no amount of tuning, squelch or audio routing can
+   * fix, and because offering a [Tune] button here would be offering a control that cannot work. */
+  | 'norf'
   /** CAT says the radio is not where APRS lives. Dispositive: no audio-level reading can
    * substitute for the fact that a different frequency is being received. */
   | 'wrongfreq'
@@ -223,6 +243,24 @@ export function aprsDecodeStatus(
   radio?: AprsRadio | null,
   wantDialMhz?: number,
 ): { state: AprsDecodeState; label: string; detail: string } {
+  // ⭐⭐ ABOVE EVERYTHING, including the decoder's own state: can this radio even receive the APRS
+  // channel? The FTdx10 report — an HF/6 m radio, and opening APRS commanded it to 144.390, which
+  // it refused. This is a fact about the hardware, so it outranks "Monitor off": arming the decoder
+  // cannot help, and neither can tuning, squelch, or audio routing. Saying so is also the only way
+  // the view stops looking broken on a station that simply has no VHF radio.
+  //
+  // Coverage unknown (no CAT, not yet probed, unparseable caps) deliberately falls through — the
+  // rest of the ladder still applies and nothing is claimed that we cannot back up.
+  if (radio && wantDialMhz != null && radioCoversMhz(radio.rxRangesMhz, wantDialMhz) === false) {
+    return {
+      state: 'norf',
+      label: 'No 2 m radio',
+      detail:
+        `This radio doesn't cover ${wantDialMhz.toFixed(3)} MHz, so it can't receive RF APRS. ` +
+        'RF APRS needs a VHF radio. The internet feed works without one — turn it on to see ' +
+        'APRS traffic reported by other stations.',
+    }
+  }
   if (!health || health.arm === 'off') {
     return {
       state: 'off',
@@ -360,7 +398,15 @@ export function AprsCockpit({
   /** QSY to an APRS dial (MHz): 2 m FM simplex, auto-routing to the 2 m-capable radio. */
   onTune?: (dialMhz: number) => void
   /** Live rig readout (dial/band/mode + TX-enable) — the TopBar's is hidden on this view. */
-  radio?: { dialMhz: number; band: string; sideband: string; txEnabled: boolean; transmitting?: boolean }
+  radio?: {
+    dialMhz: number
+    band: string
+    sideband: string
+    txEnabled: boolean
+    transmitting?: boolean
+    /** Receive coverage from Hamlib's caps; EMPTY = unknown = allow (see `radioCoversMhz`). */
+    rxRangesMhz?: [number, number][]
+  }
   /** Arm/disarm TX (the TopBar's Enable-Tx is hidden here, so APRS carries its own — otherwise a
    * beacon/message is gated off with no way to turn TX on). */
   onSetTxEnabled?: (on: boolean) => void
@@ -399,19 +445,28 @@ export function AprsCockpit({
   const autoTuned = useRef(false)
   const autoArmed = useRef(false)
 
+  // Can the radio reach the selected APRS channel? `null` = unknown, which must read as "yes,
+  // try it" — the backend's refusal handling is the backstop for a radio whose caps we can't read.
+  const canReachAprs = radioCoversMhz(radio?.rxRangesMhz, freq) !== false
+
   // Default to the APRS radio on ENTERING the view: hand off to the 2 m-capable rig, land on the
   // selected APRS frequency in FM. This is the operator's "hitting APRS should default to the 9700"
   // — done once per entry (rising edge of `active`), never on every render, and never keys TX.
+  //
+  // ⚠️ GATED ON COVERAGE. On an HF-only radio this auto-tune was the whole bug: entering the view
+  // commanded 144.390 at a radio that cannot go there, and the fallout (a refused command reported
+  // as success, a dial stuck on a frequency the radio was never on, a wedged CAT link) all followed
+  // from it. Never command a radio somewhere it provably cannot go.
   useEffect(() => {
     if (!active) {
       autoTuned.current = false
       return
     }
-    if (!autoTuned.current && onTune) {
+    if (!autoTuned.current && onTune && canReachAprs) {
       autoTuned.current = true
       onTune(freq)
     }
-  }, [active, onTune, freq])
+  }, [active, onTune, freq, canReachAprs])
 
   // Arm the decoder on ENTERING the view, so APRS does not open on a dead screen the operator has
   // to notice and fix. Rising edge of `active`, not mount — the cockpit is kept alive across
@@ -635,9 +690,12 @@ export function AprsCockpit({
               onChange={(e) => {
                 // Selecting a frequency retunes the rig immediately (band-picker behavior) — no
                 // separate Tune click needed. Switches to the 2 m radio + FM simplex via onTune.
+                // The SELECTION always sticks (it drives the health chip's "which channel do you
+                // mean", and every APRS channel is 2 m — so on an HF-only radio a pick must still
+                // register); only the RETUNE is gated on the radio being able to get there.
                 const f = Number(e.target.value)
                 setFreq(f)
-                tuneToAprs(f)
+                if (radioCoversMhz(radio?.rxRangesMhz, f) !== false) tuneToAprs(f)
               }}
               title="APRS frequency by region — selecting one tunes the rig (2 m FM, AFSK-1200)"
             >
@@ -647,11 +705,19 @@ export function AprsCockpit({
                 </option>
               ))}
             </select>
+            {/* No "move the radio" control at a frequency the radio cannot reach — a button whose
+                only possible outcome is a refusal is worse than no button. The health chip beside
+                it carries the explanation. */}
             <button
               type="button"
               className="np-chip"
+              disabled={!canReachAprs}
               onClick={() => tuneToAprs(freq)}
-              title="Re-tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)"
+              title={
+                canReachAprs
+                  ? 'Re-tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)'
+                  : `This radio doesn't cover ${freq.toFixed(3)} MHz — RF APRS needs a VHF radio.`
+              }
             >
               Re-tune
             </button>

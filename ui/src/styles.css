@@ -16948,6 +16948,13 @@ html[data-panel='needed'] {
 .aprs-health-off {
   color: var(--text-faint);
 }
+/* The radio cannot reach 2 m at all (an HF-only station). NOT coloured as a fault: nothing is
+   broken and there is nothing to fix — it is a fact about the hardware, and the internet feed
+   still works. Colouring it red would tell an HF operator their APRS view is broken when it is
+   doing exactly what their station can do. */
+.aprs-health-norf {
+  color: var(--text-dim);
+}
 /* The dial is not on the APRS channel — the one state the operator can fix in one click,
    and the one that outranks every guess drawn from the audio. */
 .aprs-health-wrongfreq {

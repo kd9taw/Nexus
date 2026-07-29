@@ -48,6 +48,13 @@ pub trait RigBackend: Send + Sync {
     fn set_vfo(&self, _vfo: &str) -> bool {
         true
     }
+    /// The radio's RECEIVE frequency ranges (Hz, inclusive) for `\dump_state`. `None` = don't
+    /// answer the verb (`RPRT -1`), which every client must read as "capabilities unknown" and
+    /// therefore fail OPEN. Implement it to let a client know what this radio can and cannot reach
+    /// without having to command it there and see what happens.
+    fn rx_ranges(&self) -> Option<Vec<(u64, u64)>> {
+        None
+    }
     // ---- extended verbs (the full surface Nexus's own `Rig` client uses) ----
     /// Read a level (`l NAME`). Return the reply VALUE line(s) without trailing newline
     /// (e.g. `"-12"` for STRENGTH dB, `"0.50"` for RFPOWER 0..1).
@@ -136,6 +143,43 @@ const DUMP_STATE: &str = concat!(
     "0x0\n",                                              // has_set_parm
 );
 
+/// The `\dump_state` reply for `backend`.
+///
+/// Uses [`DUMP_STATE`] verbatim unless the backend declares real RX ranges, in which case its RX
+/// list is substituted. The wide default is deliberate for a broker fronting an arbitrary radio: a
+/// NET-rigctl client (WSJT-X) must be allowed to set any freq/mode, and a client reading these
+/// ranges as capability must therefore see "covers everything" rather than a guess.
+fn dump_state(backend: &dyn RigBackend) -> String {
+    let Some(ranges) = backend.rx_ranges().filter(|r| !r.is_empty()) else {
+        return DUMP_STATE.to_string();
+    };
+    let mut out = String::with_capacity(DUMP_STATE.len());
+    let mut lines = DUMP_STATE.lines();
+    for _ in 0..3 {
+        // protocol version, rig model, ITU region — unchanged
+        out.push_str(lines.next().unwrap_or("0"));
+        out.push('\n');
+    }
+    for (lo, hi) in ranges {
+        // Same 7 fields Hamlib emits: start end modes low_power high_power vfo ant.
+        out.push_str(&format!("{lo} {hi} 0xffffffff -1 -1 0x3 0x0\n"));
+    }
+    // Skip the default RX rows (up to and including their all-zero terminator), keep the rest.
+    let mut in_rx = true;
+    for line in lines {
+        if in_rx {
+            if line.trim() == "0 0 0 0 0 0 0" {
+                in_rx = false;
+                out.push_str("0 0 0 0 0 0 0\n");
+            }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 fn rprt(ok: bool) -> String {
     if ok {
         "RPRT 0\n".into()
@@ -177,7 +221,7 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
     }
     match line {
         "" => Handled::Reply(String::new()),
-        "\\dump_state" => Handled::Reply(DUMP_STATE.to_string()),
+        "\\dump_state" => Handled::Reply(dump_state(backend)),
         // No VFO mode → the client sends commands without an explicit VFO argument.
         "\\chk_vfo" => Handled::Reply("CHKVFO 0\n".into()),
         "\\get_powerstat" => Handled::Reply("1\n".into()), // powered on

@@ -811,6 +811,16 @@ pub struct Engine {
     pending_func: [Option<bool>; 5],
     /// Rig RX passband width (Hz) from the poll; `None` = unknown / rig default. Observed-only.
     rig_passband: Option<u32>,
+    /// The radio's RECEIVE frequency ranges (Hz, inclusive), read once per CAT confirmation from
+    /// Hamlib's capability table. `None` = unknown (not probed, no CAT, or an unparseable reply).
+    ///
+    /// This is what lets Nexus know a radio cannot reach 2 m BEFORE commanding it there — the
+    /// FTdx10 report, where opening APRS auto-tuned 144.390 at an HF-only radio. **`None` must
+    /// always fail OPEN** (see [`Self::rig_covers_mhz`]).
+    rig_rx_ranges: Option<Vec<(u64, u64)>>,
+    /// The last dial (MHz) the radio REFUSED, for the UI to explain itself. Set by the radio loop
+    /// when it gives up on an out-of-range frequency; cleared by any accepted QSY.
+    rig_refused_dial_mhz: Option<f64>,
     /// Pending RX filter-width set (Hz) from the UI; the loop drains + applies it via set_mode.
     pending_passband: Option<u32>,
     /// Pending native-scope control one-shots from the UI (native Icom CI-V only): span in Hz
@@ -1681,6 +1691,8 @@ impl Engine {
             rig_tx_comp_db: None,
             rig_mode: None,
             rig_funcs: [None; 5],
+            rig_rx_ranges: None,
+            rig_refused_dial_mhz: None,
             pending_func: [None; 5],
             rig_passband: None,
             pending_passband: None,
@@ -2169,6 +2181,12 @@ impl Engine {
         // The band-gate in `rig_mode_effective` already prevents an FM leak onto a non-2 m band;
         // this clears the flag outright so it never lingers pointed at a different radio.
         self.aprs_fm = false;
+        // Frequency coverage belongs to the RADIO, so it must not survive the switch. Dropping it to
+        // "unknown" makes the window before the loop re-probes fail OPEN; keeping the old radio's
+        // list would let an HF-only rig's ranges block a QSY on the VHF radio that just became
+        // active — a fail-CLOSED bug, and the inverse of what the gate is for.
+        self.rig_rx_ranges = None;
+        self.rig_refused_dial_mhz = None;
         // Fold the OUTGOING radio's live flat CAT/audio edits into its own profile BEFORE we mirror
         // the new radio in — otherwise an unsaved flat change made while this radio was active (e.g. a
         // live Pwr/tx_level tweak) is discarded by `sync_flat_from_active` below. `active_radio` still
@@ -2287,6 +2305,9 @@ impl Engine {
         // A normal QSY leaves the APRS FM-simplex context (aprs_tune re-sets it right after its own
         // set_frequency call), so FM never lingers onto the next band the operator tunes.
         self.aprs_fm = false;
+        // A fresh QSY request is a fresh attempt: drop any earlier refusal so a stale "the radio
+        // refused 144.390" can't sit on screen next to a frequency that worked.
+        self.rig_refused_dial_mhz = None;
         // Dual-Radio P4 auto band-routing: a commanded band pick (dropdown / manual entry) that a
         // DIFFERENT radio covers better hands off to that radio FIRST, then the tune below lands it on
         // the requested dial — so selecting 2 m activates the IC-9700 (which has 2 m configured) and
@@ -3270,6 +3291,32 @@ impl Engine {
     /// poll. A `None` slot = the rig doesn't support that func (its toggle hides). Observed-only.
     pub fn observe_rig_funcs(&mut self, funcs: [Option<bool>; 5]) {
         self.rig_funcs = funcs;
+    }
+
+    /// Adopt the radio's RX frequency ranges (Hz) from the radio loop's capability probe.
+    /// `None` = unknown, which every caller must treat as "allow" — see [`Self::rig_covers_mhz`].
+    pub fn observe_rig_rx_ranges(&mut self, ranges: Option<Vec<(u64, u64)>>) {
+        self.rig_rx_ranges = ranges;
+    }
+
+    /// Record (or clear) the dial the radio refused, so the UI can say WHICH frequency and why.
+    pub fn set_rig_refused_dial(&mut self, mhz: Option<f64>) {
+        self.rig_refused_dial_mhz = mhz;
+    }
+
+    /// Can the active radio RECEIVE `mhz`? `None` = **unknown, so don't block anything** — no CAT,
+    /// caps not probed yet, or a `\dump_state` we couldn't parse.
+    ///
+    /// Fail-open is the whole safety property here. A capability probe that wrongly answered "no"
+    /// would refuse legitimate QSYs and be far more damaging than the refused command it exists to
+    /// prevent, so only a range list we positively parsed may ever say no.
+    pub fn rig_covers_mhz(&self, mhz: f64) -> Option<bool> {
+        let ranges = self.rig_rx_ranges.as_ref()?;
+        if ranges.is_empty() {
+            return None;
+        }
+        let hz = (mhz * 1_000_000.0).round() as u64;
+        Some(ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&hz)))
     }
 
     /// Drop all rig func states (→ the toggles hide) — called on a breaker trip so a half-open
@@ -5595,12 +5642,30 @@ impl Engine {
     /// hands off to the VHF rig). Distinct from the raw `set_frequency` the mode dropdowns use
     /// because APRS is not a Phone/Digital operating section: without this the rig kept the previous
     /// section's mode (DATA/USB) and a 2 m packet signal never demodulated. Cleared by the next QSY.
-    pub fn aprs_tune(&mut self, dial_mhz: f64) {
+    /// ⚠️ CAPABILITY-GATED. Refuses when the radio provably cannot receive `dial_mhz` — the FTdx10
+    /// report: opening the APRS cockpit auto-tuned 144.390 at an HF-only radio, the rig refused it,
+    /// and the app was left showing a frequency the radio had never been on. Commanding a radio
+    /// somewhere it cannot go has no upside, so the check comes BEFORE the QSY, not after the
+    /// failure. Unknown coverage (no CAT, caps unreadable) still tunes — the loop's refusal
+    /// handling is the backstop.
+    pub fn aprs_tune(&mut self, dial_mhz: f64) -> Result<(), String> {
+        // Judge the radio that would actually be USED: on a 2-radio HF+VHF station `set_frequency`
+        // hands off to whichever radio covers 2 m, so the ACTIVE radio's coverage is the wrong
+        // question there — blocking on it would break the exact IC-9700 setup aprs_tune exists for.
+        let hands_off_to_a_2m_radio =
+            !self.settings.radio_pegged && self.settings.radio_for_band("2m").is_some();
+        if !hands_off_to_a_2m_radio && self.rig_covers_mhz(dial_mhz) == Some(false) {
+            return Err(format!(
+                "This radio doesn't cover {dial_mhz:.3} MHz, so it can't receive RF APRS. \
+                 RF APRS needs a VHF radio; the internet feed works without one."
+            ));
+        }
         // set_frequency does the radio hand-off + dial + band and clears aprs_fm; re-arm FM after so
         // the loop commands FM (via rig_mode_effective) with simplex plumbing (via fm_repeater_config).
         self.set_frequency(dial_mhz, "2m", "FM");
         self.aprs_fm = true;
         self.immediate_retune = true;
+        Ok(())
     }
 
     /// Queue one APRS text message to `addressee` — an explicit operator send. Assigns a rolling
@@ -6817,6 +6882,20 @@ impl Engine {
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
         s.radio.cat_detail = self.cat_status.1.clone();
+        // The radio's RX coverage, in MHz, for the UI to gate a "move the radio" control on. Empty
+        // = unknown, which the UI must read as "allow" for the same fail-open reason the engine does.
+        s.radio.rx_ranges_mhz = self
+            .rig_rx_ranges
+            .as_ref()
+            .map(|r| {
+                r.iter()
+                    .map(|(lo, hi)| {
+                        (*lo as f64 / 1_000_000.0, *hi as f64 / 1_000_000.0)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        s.radio.refused_dial_mhz = self.rig_refused_dial_mhz;
         s.radio.cw_wpm = self.settings.cw_wpm;
         s.radio.split_tx_mhz = self.split_tx_mhz;
         s.radio.cw_keyer = match self.settings.cw_keyer {
@@ -14225,7 +14304,7 @@ mod tests {
         e.set_radio_bands(r1, vec!["2m".into()]); // 9700 covers 2 m (operator confirmed this is ON)
         e.set_active_radio(0); // back on the FTDX10, as when the operator opens APRS
 
-        e.aprs_tune(144.390);
+        e.aprs_tune(144.390).unwrap();
         assert_eq!(
             e.settings.active_radio, r1,
             "APRS Tune switched to the IC-9700"
@@ -14235,6 +14314,87 @@ mod tests {
             "landed on the APRS dial"
         );
         assert_eq!(e.rig_mode_effective(), "FM");
+    }
+
+    #[test]
+    fn aprs_tune_refuses_a_radio_that_cannot_reach_2m() {
+        // ⭐ THE FTdx10 REPORT. HF/6 m only radio, single-radio station. Opening the APRS cockpit
+        // auto-tunes 144.390; commanding a radio somewhere it physically cannot go has no upside,
+        // so the capability check must come BEFORE the QSY — not after the rig refuses it.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.band = "20m".into();
+        e.settings.dial_mhz = 14.250;
+        // Hamlib's capability table for an FTdx10: 30 kHz – 60 MHz receive, nothing above.
+        e.observe_rig_rx_ranges(Some(vec![(30_000, 60_000_000)]));
+        assert_eq!(e.rig_covers_mhz(144.390), Some(false));
+        assert_eq!(e.rig_covers_mhz(14.250), Some(true));
+
+        let err = e.aprs_tune(144.390).expect_err("must refuse, not command");
+        // The message is what the operator reads, so it must say the useful thing: RF needs a VHF
+        // radio, AND that the internet feed still works (an HF-only station is not shut out).
+        assert!(err.contains("144.390"), "names the frequency: {err}");
+        assert!(err.contains("VHF"), "names what is needed: {err}");
+        assert!(
+            err.to_lowercase().contains("internet"),
+            "offers the path that DOES work on this station: {err}"
+        );
+        // And nothing moved: no dial pollution, no band change, no FM context left armed.
+        assert!(
+            (e.settings.dial_mhz - 14.250).abs() < 1e-9,
+            "the dial must not adopt a frequency we never commanded"
+        );
+        assert_eq!(e.settings.band, "20m", "nor the band");
+        assert_ne!(e.rig_mode_effective(), "FM", "nor the APRS FM context");
+    }
+
+    #[test]
+    fn aprs_tune_allows_2m_when_coverage_is_unknown_or_present() {
+        // FAIL OPEN. A capability probe that wrongly says "no" is worse than the refused command it
+        // exists to prevent, so only a positively-parsed range list may ever block a QSY.
+        let mut unknown = Engine::new("KD9TAW", "EN52", 0);
+        unknown.settings.ensure_radio_profiles();
+        assert_eq!(unknown.rig_covers_mhz(144.390), None, "nothing probed yet");
+        assert!(
+            unknown.aprs_tune(144.390).is_ok(),
+            "unknown coverage must not block the tune"
+        );
+
+        // An empty list is also unknown, not "covers nothing".
+        let mut empty = Engine::new("KD9TAW", "EN52", 0);
+        empty.settings.ensure_radio_profiles();
+        empty.observe_rig_rx_ranges(Some(vec![]));
+        assert_eq!(empty.rig_covers_mhz(144.390), None);
+        assert!(empty.aprs_tune(144.390).is_ok());
+
+        // A radio that DOES cover 2 m tunes normally.
+        let mut vhf = Engine::new("KD9TAW", "EN52", 0);
+        vhf.settings.ensure_radio_profiles();
+        vhf.observe_rig_rx_ranges(Some(vec![(144_000_000, 148_000_000)]));
+        assert!(vhf.aprs_tune(144.390).is_ok());
+        assert!((vhf.settings.dial_mhz - 144.390).abs() < 1e-9);
+        assert_eq!(vhf.rig_mode_effective(), "FM");
+    }
+
+    #[test]
+    fn aprs_tune_judges_coverage_on_the_radio_that_would_actually_be_used() {
+        // The dual-radio case must not be caught by the gate: the ACTIVE radio is the HF-only rig,
+        // but set_frequency hands off to the 2 m radio, so that is the radio to judge. Blocking here
+        // would break the operator's real 9700 setup — the very thing aprs_tune was built for.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.band = "20m".into();
+        e.settings.dial_mhz = 14.250;
+        let r1 = e.add_radio();
+        e.set_radio_bands(r1, vec!["2m".into()]); // the VHF radio
+        e.set_active_radio(0); // operating HF when APRS opens
+        // The ACTIVE (HF) radio's caps say no 2 m…
+        e.observe_rig_rx_ranges(Some(vec![(30_000, 60_000_000)]));
+        assert_eq!(e.rig_covers_mhz(144.390), Some(false));
+        // …but a hand-off is available, so the tune must proceed and switch radios.
+        e.aprs_tune(144.390).expect("must hand off, not refuse");
+        assert_eq!(e.settings.active_radio, r1, "handed off to the 2 m radio");
+        assert!((e.settings.dial_mhz - 144.390).abs() < 1e-9);
     }
 
     #[test]
@@ -14249,7 +14409,7 @@ mod tests {
         e.settings.rptr_shift = "minus".into();
         e.settings.ctcss_tone_hz = 100.0;
 
-        e.aprs_tune(144.390);
+        e.aprs_tune(144.390).unwrap();
         assert_eq!(e.settings.band, "2m");
         assert!((e.settings.dial_mhz - 144.390).abs() < 1e-9);
         assert_eq!(e.rig_mode_effective(), "FM", "APRS parks the rig in FM");
@@ -14271,7 +14431,7 @@ mod tests {
         );
 
         // A normal QSY away from APRS also drops the flag outright.
-        e.aprs_tune(144.390); // re-arm
+        e.aprs_tune(144.390).unwrap(); // re-arm
         e.set_frequency(14.074, "20m", "USB");
         assert_ne!(
             e.rig_mode_effective(),
