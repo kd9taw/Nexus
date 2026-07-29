@@ -87,8 +87,22 @@ function levelLabel(peak: number): string {
  * Judging on the instant would cry wolf constantly on a healthy station. */
 const AUDIO_STALE_SEC = 5
 
+/** How far the dial may sit from the APRS channel before it counts as a different frequency.
+ * 5 kHz — wider than any rounding or CAT read-back jitter, far narrower than a channel step. */
+const DIAL_TOLERANCE_MHZ = 0.005
+
+/** The rig state the chip judges against. Only the two facts that decide whether APRS can
+ * possibly hear anything: where the dial is, and whether the rig is in FM. */
+export interface AprsRadio {
+  dialMhz: number
+  sideband: string
+}
+
 export type AprsDecodeState =
   | 'off'
+  /** CAT says the radio is not where APRS lives. Dispositive: no audio-level reading can
+   * substitute for the fact that a different frequency is being received. */
+  | 'wrongfreq'
   /** Nothing arriving from the capture device at all — a real fault. */
   | 'nocapture'
   /** Arriving, but at zero level — squelch closed. The normal resting state of an FM channel. */
@@ -109,12 +123,41 @@ export type AprsDecodeState =
 export function aprsDecodeStatus(
   health: AprsHealth | null,
   nowSec: number,
+  radio?: AprsRadio | null,
+  wantDialMhz?: number,
 ): { state: AprsDecodeState; label: string; detail: string } {
   if (!health || health.arm === 'off') {
     return {
       state: 'off',
       label: 'Monitor off',
       detail: 'The APRS decoder is not running. Arm Monitor to decode the RX audio.',
+    }
+  }
+  // ⭐ TOP OF THE LADDER: what the radio is actually receiving.
+  //
+  // A second on-air report had FT8 decoding perfectly on 2 m while this chip insisted there was
+  // no audio. The capture path was fine; the dial was simply parked on the FT8 frequency in USB.
+  // One receiver, one dial — APRS's channel was never being received. No amount of reasoning
+  // about audio levels can reach that conclusion, and every message below it was therefore
+  // advice about the wrong problem. CAT knows, so CAT speaks first.
+  //
+  // Judged against the frequency the operator SELECTED, never a hardcoded 144.390: the APRS
+  // channel is regional (144.800 in Europe, 145.175 in Australia…), and telling a correctly
+  // tuned European operator they are on the wrong frequency would be its own bug.
+  if (radio && wantDialMhz != null) {
+    const modeKnown = radio.sideband.trim() !== ''
+    const notFm = modeKnown && !/fm/i.test(radio.sideband)
+    const offChannel = Math.abs(radio.dialMhz - wantDialMhz) > DIAL_TOLERANCE_MHZ
+    if (offChannel || notFm) {
+      const where = `${radio.dialMhz.toFixed(3)}${modeKnown ? ` ${radio.sideband.toUpperCase()}` : ''}`
+      return {
+        state: 'wrongfreq',
+        label: 'Wrong frequency',
+        detail:
+          `The radio is on ${where} — APRS needs ${wantDialMhz.toFixed(3)} FM. Nothing on this ` +
+          'channel can decode as APRS packet, whatever the audio level says. Tune to the APRS ' +
+          'channel to start hearing it.',
+      }
     }
   }
   const level = levelLabel(health.audioPeak)
@@ -200,7 +243,7 @@ export function AprsCockpit({
   /** QSY to an APRS dial (MHz): 2 m FM simplex, auto-routing to the 2 m-capable radio. */
   onTune?: (dialMhz: number) => void
   /** Live rig readout (dial/band/mode + TX-enable) — the TopBar's is hidden on this view. */
-  radio?: { dialMhz: number; band: string; sideband: string; txEnabled: boolean }
+  radio?: { dialMhz: number; band: string; sideband: string; txEnabled: boolean; transmitting?: boolean }
   /** Arm/disarm TX (the TopBar's Enable-Tx is hidden here, so APRS carries its own — otherwise a
    * beacon/message is gated off with no way to turn TX on). */
   onSetTxEnabled?: (on: boolean) => void
@@ -312,7 +355,25 @@ export function AprsCockpit({
     }
   }, [active])
 
-  const decode = useMemo(() => aprsDecodeStatus(health, now), [health, now])
+  // The chip judges against the rig's ACTUAL dial/mode and the APRS channel the operator has
+  // selected — so it can say "you are on the FT8 frequency" instead of guessing from audio.
+  const decode = useMemo(
+    () => aprsDecodeStatus(health, now, radio ?? null, freq),
+    [health, now, radio, freq],
+  )
+
+  /** Tune to the selected APRS channel, and SAY what happened. A tune the radio cannot take
+   * right now (an over in flight) must never look like a button that did nothing — the operator
+   * pressed a control whose whole meaning is "move the radio". */
+  const tuneToAprs = (mhz: number) => {
+    if (!onTune) return
+    onTune(mhz)
+    setStatus(
+      radio?.transmitting
+        ? `Transmitting right now — the radio will move to ${mhz.toFixed(3)} when this over ends.`
+        : `Tuning to ${mhz.toFixed(3)} FM…`,
+    )
+  }
   // The engine's arm state, as of the last poll. Null health (before the first poll) reads as
   // disarmed, which matches how the engine starts.
   const arm = health?.arm ?? 'off'
@@ -417,7 +478,7 @@ export function AprsCockpit({
                 // separate Tune click needed. Switches to the 2 m radio + FM simplex via onTune.
                 const f = Number(e.target.value)
                 setFreq(f)
-                onTune(f)
+                tuneToAprs(f)
               }}
               title="APRS frequency by region — selecting one tunes the rig (2 m FM, AFSK-1200)"
             >
@@ -430,7 +491,7 @@ export function AprsCockpit({
             <button
               type="button"
               className="np-chip"
-              onClick={() => onTune(freq)}
+              onClick={() => tuneToAprs(freq)}
               title="Re-tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)"
             >
               Re-tune
@@ -493,6 +554,18 @@ export function AprsCockpit({
         >
           {decode.label}
         </span>
+        {/* One-click resolution for the one state that has one. The chip names who owns the
+            dial; this button takes it back. */}
+        {decode.state === 'wrongfreq' && onTune && (
+          <button
+            type="button"
+            className="np-chip aprs-health-fix"
+            onClick={() => tuneToAprs(freq)}
+            title={`Tune the radio to ${freq.toFixed(3)} FM for APRS`}
+          >
+            Tune to {freq.toFixed(3)}
+          </button>
+        )}
       </div>
 
       {/* ⭐ APRS IS A GEOGRAPHIC MODE AND HAD NO MAP. Everything lived in one

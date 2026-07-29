@@ -150,3 +150,96 @@ describe('the states that were already right stay right', () => {
     expect(s.detail).toContain('30s')
   })
 })
+
+// ⭐ SECOND ON-AIR REPORT, same session. FT8 was decoding beautifully on 2 m at the moment the
+// APRS chip claimed there was no audio — which proves the capture path end to end and means the
+// radio was simply parked on the FT8 frequency in USB. One receiver, one dial: APRS's 144.390 FM
+// was never being received at all.
+//
+// No audio-level message can ever say that. The app KNOWS the dial and mode from CAT, so when the
+// radio is not where APRS lives, that fact outranks every inference drawn from the audio.
+const RADIO_FT8 = { dialMhz: 144.174, sideband: 'USB' }
+const RADIO_APRS = { dialMhz: 144.39, sideband: 'FM' }
+const APRS_DIAL = 144.39
+
+describe('the chip names who owns the dial', () => {
+  it('says the radio is on the wrong frequency instead of blaming the audio', () => {
+    const s = aprsDecodeStatus(health({ audioPeak: 0 }), NOW, RADIO_FT8, APRS_DIAL)
+    expect(s.state).toBe('wrongfreq')
+    expect(s.detail).toMatch(/144\.174/)
+    expect(s.detail).toMatch(/144\.390/)
+  })
+
+  it('names the MODE when the dial is right but the rig is not in FM', () => {
+    const s = aprsDecodeStatus(
+      health(),
+      NOW,
+      { dialMhz: 144.39, sideband: 'USB' },
+      APRS_DIAL,
+    )
+    expect(s.state).toBe('wrongfreq')
+    expect(s.detail).toMatch(/FM/)
+  })
+
+  it('is quiet when the radio IS on the APRS channel', () => {
+    expect(aprsDecodeStatus(health(), NOW, RADIO_APRS, APRS_DIAL).state).toBe('listening')
+  })
+
+  it('judges against the SELECTED APRS frequency, not a hardcoded North American one', () => {
+    // 144.800 is the European channel. A European operator correctly tuned there must not be
+    // told they are on the wrong frequency.
+    const eu = { dialMhz: 144.8, sideband: 'FM' }
+    expect(aprsDecodeStatus(health(), NOW, eu, 144.8).state).toBe('listening')
+    // ...and the same radio IS wrong if the operator picked the North American channel.
+    expect(aprsDecodeStatus(health(), NOW, eu, 144.39).state).toBe('wrongfreq')
+  })
+
+  it('does not invent a verdict when the rig mode is unknown', () => {
+    const s = aprsDecodeStatus(health(), NOW, { dialMhz: 144.39, sideband: '' }, APRS_DIAL)
+    expect(s.state).not.toBe('wrongfreq')
+  })
+
+  it('tolerates small dial offsets rather than nagging about rounding', () => {
+    const s = aprsDecodeStatus(health(), NOW, { dialMhz: 144.3901, sideband: 'FM' }, APRS_DIAL)
+    expect(s.state).not.toBe('wrongfreq')
+  })
+})
+
+describe('the state ladder never hides a higher fact behind a lower guess', () => {
+  it('a wrong dial outranks a dead capture — the dial is the dispositive fact', () => {
+    const s = aprsDecodeStatus(
+      health({ audioPeak: 0, lastAudioUnix: null, drains: 500 }),
+      NOW,
+      RADIO_FT8,
+      APRS_DIAL,
+    )
+    expect(s.state).toBe('wrongfreq')
+  })
+
+  it('a wrong dial outranks a silent input', () => {
+    const s = aprsDecodeStatus(health({ audioPeak: 0 }), NOW, RADIO_FT8, APRS_DIAL)
+    expect(s.state).toBe('wrongfreq')
+  })
+
+  it('a wrong dial outranks frames failing their checksum', () => {
+    // Exactly the operator's 10%: FT8 audio through an AFSK demodulator throws up occasional
+    // flag patterns that never pass a checksum. Blaming the signal there is misleading.
+    const s = aprsDecodeStatus(health({ framesSeen: 9 }), NOW, RADIO_FT8, APRS_DIAL)
+    expect(s.state).toBe('wrongfreq')
+  })
+
+  it('a dead capture still outranks a silent input when the dial is fine', () => {
+    const s = aprsDecodeStatus(
+      health({ audioPeak: 0, lastAudioUnix: null, drains: 500 }),
+      NOW,
+      RADIO_APRS,
+      APRS_DIAL,
+    )
+    expect(s.state).toBe('nocapture')
+  })
+
+  it('still works with no radio information at all', () => {
+    // Callers without CAT data must keep the old behaviour rather than crash or over-claim.
+    expect(aprsDecodeStatus(health({ audioPeak: 0 }), NOW).state).toBe('silent')
+  })
+})

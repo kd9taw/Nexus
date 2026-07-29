@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### APRS tells you when the radio is simply on the wrong frequency
+
+The clearest report from testing: FT8 was decoding beautifully on 2 m at the very moment the APRS
+screen insisted there was no audio. Both were true. The radio has one receiver and one dial, and
+it was parked on the FT8 frequency in USB — so the APRS channel was never being received at all,
+and every message about audio levels was advice about the wrong problem.
+
+The APRS readout now looks at the radio itself. When the dial or the mode is not where APRS lives
+it says so first and offers a one-click fix: **"The radio is on 144.174 USB — APRS needs 144.390
+FM"**, with a Tune button beside it. It judges against the APRS channel *you have selected*, so
+144.800 in Europe or 145.175 in Australia is correct, not a warning.
+
+The Tune control also speaks now. Tuning while an FT8 over is in flight cannot move the radio
+immediately — the rig will not accept a frequency change mid-transmission — so instead of
+appearing to do nothing it says the radio will move when the over ends.
+
 ### APRS no longer calls a closed squelch a broken audio device
 
 Testing 0.21.1 on the air, the APRS decode readout sat on "no audio is reaching the decoder —

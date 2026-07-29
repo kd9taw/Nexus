@@ -16929,6 +16929,14 @@ html[data-panel='needed'] {
 .aprs-health-off {
   color: var(--text-faint);
 }
+/* The dial is not on the APRS channel — the one state the operator can fix in one click,
+   and the one that outranks every guess drawn from the audio. */
+.aprs-health-wrongfreq {
+  color: var(--state-ok);
+}
+.aprs-health-fix {
+  font-size: 11px;
+}
 /* A genuine fault: nothing is arriving from the capture device. */
 .aprs-health-nocapture {
   color: var(--state-weak);

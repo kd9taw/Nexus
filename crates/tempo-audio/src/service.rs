@@ -6165,6 +6165,56 @@ mod tests {
         (addr, seen)
     }
 
+    /// A rigctld that behaves like a REAL rig: it remembers the frequency it was set to and
+    /// answers a dial READ with it — but reports the PREVIOUS value for `lag` reads after a
+    /// change, modelling Hamlib's get-cache / a slow serial chain. That lag is the documented
+    /// hazard behind the read-back guard: a stale read adopted as a knob QSY reverts the QSY.
+    fn lagging_rigctld_stub(lag: usize) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        std::thread::spawn(move || {
+            let mut cur: u64 = 144_174_000;
+            let mut stale: u64 = 144_174_000;
+            let mut pending = 0usize;
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut out = match stream.try_clone() {
+                    Ok(o) => o,
+                    Err(_) => return,
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    rec.lock().unwrap().push(line.clone());
+                    let reply = if let Some(hz) = line.strip_prefix("F ") {
+                        if let Ok(v) = hz.trim().parse::<u64>() {
+                            cur = v;
+                            pending = lag;
+                        }
+                        "RPRT 0\n".to_string()
+                    } else if line.trim() == "f" {
+                        let report = if pending > 0 {
+                            pending -= 1;
+                            stale
+                        } else {
+                            stale = cur;
+                            cur
+                        };
+                        format!("{report}\n")
+                    } else {
+                        "RPRT 0\n".to_string()
+                    };
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, seen)
+    }
+
     /// Arrange the standard two-radio switch scene: engine with radio 0 active + radio 1 LIVE
     /// in the monitor pool (a control-bearing conn matching r1's profile transport).
     fn switch_scene() -> (Arc<Mutex<Engine>>, MonitorPool, RadioLoop, u32, u16) {
@@ -8088,6 +8138,108 @@ mod tests {
         assert_eq!(
             state.last_mode, "USB",
             "last_mode tracks what was actually applied (the fallback)"
+        );
+    }
+
+    // ---- APRS Tune vs a running FT8 session (operator report, 0.21.1) ----
+    //
+    // "I clicked APRS Tune while FT8 was running and the radio did not move. No error." The
+    // engine-level test `aprs_tune_switches_to_the_2m_radio_like_every_other_qsy` passes, so the
+    // gap is specifically the FT-ACTIVE state it does not model. Drive the REAL loop against a
+    // recording rigctld and watch what actually reaches the rig.
+
+    /// Freqs (Hz) the rig was commanded, in order, from a recording rigctld's log.
+    fn commanded_freqs(log: &Arc<Mutex<Vec<String>>>) -> Vec<u64> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|c| {
+                c.strip_prefix("F ")
+                    .and_then(|h| h.trim().parse::<u64>().ok())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn aprs_tune_lands_and_stays_while_ft8_is_running() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        // A rig whose dial read-back LAGS two polls behind a set — the documented hazard the
+        // read-back guard exists for, and the state the operator's report points at.
+        let (addr, log) = lagging_rigctld_stub(2);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop,
+                       rig: &mut Rig,
+                       backend: &mut MockBackend,
+                       n: usize,
+                       tick: &mut f64| {
+            for _ in 0..n {
+                *tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+
+        // The operator is running FT8 on 2 m: Digital section, 144.174, TX armed.
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("digital", false);
+            e.set_frequency(144.174, "2m", "USB");
+            e.set_tx_enabled(true);
+        }
+        run(&mut state, &mut rig, &mut backend, 3, &mut tick);
+        assert!(
+            commanded_freqs(&log).contains(&144_174_000),
+            "scene: the loop settled on the FT8 frequency: {:?}",
+            commanded_freqs(&log)
+        );
+
+        // A slot over is in flight — the rig is KEYED. A QSY must not happen mid-TX...
+        state.tx_until_ms = Some(now_unix_ms() + 60_000.0);
+        engine.lock().unwrap().aprs_tune(144.390);
+        run(&mut state, &mut rig, &mut backend, 3, &mut tick);
+        assert!(
+            !commanded_freqs(&log).contains(&144_390_000),
+            "a QSY must never be pushed while the rig is keyed"
+        );
+
+        // ...but the moment the over ends it must LAND. The operator pressed a button whose
+        // entire meaning is "move the radio"; dropping that intent silently is the bug.
+        state.tx_until_ms = None;
+        run(&mut state, &mut rig, &mut backend, 3, &mut tick);
+        assert!(
+            commanded_freqs(&log).contains(&144_390_000),
+            "the deferred APRS tune must land once TX ends: {:?}",
+            commanded_freqs(&log)
+        );
+
+        // And it must STAY. This half catches the FT machinery re-asserting its own frequency
+        // after an initially-successful QSY (the section-follow class).
+        run(&mut state, &mut rig, &mut backend, 8, &mut tick);
+        assert_eq!(
+            commanded_freqs(&log).last().copied(),
+            Some(144_390_000),
+            "APRS must still own the dial after further FT8 loop iterations: {:?}",
+            commanded_freqs(&log)
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.dial_mhz,
+            144.390,
+            "and the app agrees the radio is on the APRS frequency"
         );
     }
 
