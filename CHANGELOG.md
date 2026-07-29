@@ -5,6 +5,48 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### SSTV shows you the band, then shows you the picture
+
+The SSTV screen had no waterfall at all, so there was no way to see what was on the frequency
+before an image arrived. That space is now a live waterfall — and when a signal starts decoding,
+the same space becomes the picture, building downward as it comes in.
+
+Because the picture stands where the spectrum was, you cannot see whether the radio is off
+frequency while an image is arriving. So the mistuning is now stated outright: a "tuning +12 Hz"
+readout beside the line count, whenever it drifts past 10 Hz. The decoder already worked this out
+from the header and had simply never shown it to you.
+
+### APRS gets a map
+
+APRS had no map. Everything sat in a small area at the top left of the screen with the rest of the
+window empty. Stations, their tracks and their paths now plot geographically, with the controls and
+lists moved to a rail beside it. On a narrow window the map comes first.
+
+Nothing new is decoded for this — position, course and speed were already in the packets, with
+nowhere to draw them. Clicking a station on the map highlights its row in the list, and the reverse.
+
+### A DXpedition calendar you can actually read at a glance
+
+The DXpedition view now opens on a traditional month calendar with today clearly marked and each
+operation drawn across the days it runs. Clicking one opens its detail.
+
+Above it, a plain-language summary of what to chase: which are on the air now, which start soonest,
+the best band and time for each, and the best day or two to try. All of that was already being
+calculated and simply spread across the page for you to assemble yourself.
+
+The dense band-by-hour heatmaps move behind a "Details" tab and are toned down when shown, so the
+page is no longer a wall of yellow, orange and red when you scroll it.
+
+### Satellites: one pass at a time, on a bigger globe
+
+Clicking a satellite drew every OTHER satellite's ground track too, so the pass you had just chosen
+was buried under a dozen unrelated lines. Now only the selected bird is drawn.
+
+The globe was also locked to a fixed width no matter how large the window was. It now grows with
+the space available.
+
 ## [0.20.0] — 2026-07-28
 
 ### Fixed: JT65 could crash Nexus outright, and it is transmitting again
