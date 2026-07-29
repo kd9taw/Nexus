@@ -9303,6 +9303,7 @@ mod tests {
             preview_w: 2,
             preview_h: 1,
             preview_rgb: vec![1, 2, 3, 4, 5, 6],
+            hedr_shift_hz: 0.0,
         }));
         assert_eq!(e.sstv_progress().unwrap().lines_done, 40);
 
