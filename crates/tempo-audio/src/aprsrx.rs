@@ -88,9 +88,11 @@ fn run(engine: Arc<Mutex<Engine>>) {
         if audio.is_empty() {
             // NOT a `continue` before reporting: an armed decoder that is being handed nothing is
             // exactly the "the app is deaf" case the operator needs told about, and it is
-            // invisible if we only ever report drains that carried audio.
+            // invisible if we only ever report drains that carried audio. The engine records the
+            // empty drain WITHOUT clobbering the last real level — this poll runs faster than the
+            // radio loop feeds it, so empty drains are routine, not evidence of a fault.
             if let Ok(mut e) = engine.lock() {
-                e.note_aprs_rx(0.0, 0, 0, now_unix());
+                e.note_aprs_rx(0, 0.0, 0, 0, now_unix());
             }
             continue;
         }
@@ -104,7 +106,13 @@ fn run(engine: Arc<Mutex<Engine>>) {
             .map(|pkt| AprsHeard::from_packet(pkt, at))
             .collect();
         if let Ok(mut e) = engine.lock() {
-            e.note_aprs_rx(step.audio_peak, step.frames_seen, step.packets.len(), at);
+            e.note_aprs_rx(
+                audio.len(),
+                step.audio_peak,
+                step.frames_seen,
+                step.packets.len(),
+                at,
+            );
             for h in heard {
                 // Auto-ack a message addressed to us that carries a line number. The engine's
                 // gate decides whether it actually keys (our call / TX enabled / privileges).

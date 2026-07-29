@@ -14,6 +14,7 @@ function health(over: Partial<AprsHealth> = {}): AprsHealth {
   return {
     armed: true,
     audioPeak: 0.4,
+    lastAudioUnix: NOW,
     framesSeen: 0,
     framesDecoded: 0,
     lastDecodeUnix: null,
@@ -28,6 +29,19 @@ describe('APRS decode health tells the three empty-screen cases apart', () => {
     expect(s.detail).toMatch(/input/i)
     // The heart of the report: hearing it on the speaker says nothing about what is captured.
     expect(s.detail).toMatch(/hear/i)
+  })
+
+  it('armed with audio that stopped arriving reads as DEAF', () => {
+    expect(aprsDecodeStatus(health({ lastAudioUnix: NOW - 60 }), NOW).state).toBe('deaf')
+    expect(aprsDecodeStatus(health({ lastAudioUnix: null }), NOW).state).toBe('deaf')
+  })
+
+  it('does NOT cry deaf over the ordinary gap between drains', () => {
+    // The decode thread polls every 100 ms; the radio loop that feeds it can take seconds per
+    // iteration on slow serial CAT, so empty drains are routine. Judging "no audio" on the
+    // instant would flap the readout to a fault on a perfectly healthy station.
+    expect(aprsDecodeStatus(health({ lastAudioUnix: NOW - 2 }), NOW).state).toBe('listening')
+    expect(aprsDecodeStatus(health({ lastAudioUnix: NOW - 3 }), NOW).state).toBe('listening')
   })
 
   it('audio arriving with no packets reads as a QUIET BAND, not a fault', () => {

@@ -1050,9 +1050,16 @@ pub struct AprsHeard {
 #[serde(rename_all = "camelCase")]
 pub struct AprsHealth {
     pub armed: bool,
-    /// Peak |sample| of the most recent audio the demodulator consumed. ~0 while armed means the
-    /// decoder is deaf — whatever the operator can hear is not reaching this tap.
+    /// Peak |sample| of the last drain that actually CARRIED audio.
+    ///
+    /// Deliberately not "the last drain": the decode thread polls every 100 ms while the radio
+    /// loop, which feeds the tap, can take far longer than that per iteration (it issues blocking
+    /// CAT — up to 2500 ms on slow serial). Empty drains are therefore normal and frequent, and
+    /// letting one zero this would flap the readout to "no audio" on a perfectly healthy channel.
     pub audio_peak: f32,
+    /// Unix seconds audio last arrived at the tap. Paired with `audio_peak` because the honest
+    /// test for a deaf decoder is "nothing for a while", not "nothing this instant".
+    pub last_audio_unix: Option<i64>,
     /// HDLC frames the deframer recovered since arming: candidates, BEFORE the FCS check.
     pub frames_seen: u64,
     /// Of those, how many passed the FCS and became packets. `frames_seen` climbing while this
@@ -5194,18 +5201,25 @@ impl Engine {
         self.aprs_armed = on;
     }
 
-    /// Record what the decode thread just heard: the peak level of the audio it consumed, how many
-    /// HDLC frames the deframer recovered, and how many of those survived the FCS. Called on every
-    /// drain while armed — including drains that decode nothing, which is the whole point.
+    /// Record what the decode thread just heard: how many samples it consumed and their peak, how
+    /// many HDLC frames the deframer recovered, and how many of those survived the FCS. Called on
+    /// every drain while armed — including drains that carry nothing, which is the whole point.
+    ///
+    /// `samples == 0` records only that this drain was empty; it must NOT overwrite the level, or
+    /// the ordinary case of the decode thread out-polling the radio loop reads as a dead input.
     pub fn note_aprs_rx(
         &mut self,
+        samples: usize,
         audio_peak: f32,
         frames_seen: usize,
         frames_decoded: usize,
         at_unix: i64,
     ) {
         self.aprs_health.armed = self.aprs_armed;
-        self.aprs_health.audio_peak = audio_peak;
+        if samples > 0 {
+            self.aprs_health.audio_peak = audio_peak;
+            self.aprs_health.last_audio_unix = Some(at_unix);
+        }
         self.aprs_health.frames_seen += frames_seen as u64;
         self.aprs_health.frames_decoded += frames_decoded as u64;
         if frames_decoded > 0 {

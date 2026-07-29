@@ -1220,8 +1220,10 @@ export async function getAprsHeard(): Promise<AprsHeard[]> {
  * empty instead of looking identical whether the app is deaf, mistuned, or the band is quiet. */
 export interface AprsHealth {
   armed: boolean
-  /** Peak |sample| of the audio the demodulator last consumed. ~0 while armed = nothing arriving. */
+  /** Peak |sample| of the last drain that carried audio (empty drains do not clobber it). */
   audioPeak: number
+  /** When audio last arrived at the tap. Null while armed = nothing has ever arrived. */
+  lastAudioUnix: number | null
   /** HDLC frames recovered since arming, BEFORE the AX.25 FCS check. */
   framesSeen: number
   /** Of those, how many passed the FCS. Seen climbing while this does not = heard, but not cleanly. */

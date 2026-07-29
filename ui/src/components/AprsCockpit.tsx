@@ -54,6 +54,13 @@ function ageLabel(atUnix: number, nowSec: number): string {
  * well above it. Digital silence from a codec is exactly 0. */
 const SILENT_PEAK = 0.001
 
+/** How long the tap may go without audio before we call the decoder deaf.
+ *
+ * The decode thread polls every 100 ms but the radio loop that feeds it can take far longer per
+ * iteration (blocking CAT, up to 2500 ms on slow serial), so gaps of a second or two are normal.
+ * Judging on the instant would cry wolf constantly on a healthy station. */
+const AUDIO_STALE_SEC = 5
+
 export type AprsDecodeState = 'off' | 'deaf' | 'listening' | 'unreadable' | 'decoding'
 
 /**
@@ -76,7 +83,9 @@ export function aprsDecodeStatus(
       detail: 'The APRS decoder is not running. Arm Monitor to decode the RX audio.',
     }
   }
-  if (health.audioPeak < SILENT_PEAK) {
+  const audioStale =
+    health.lastAudioUnix == null || nowSec - health.lastAudioUnix > AUDIO_STALE_SEC
+  if (audioStale || health.audioPeak < SILENT_PEAK) {
     return {
       state: 'deaf',
       label: 'No audio',
@@ -87,14 +96,13 @@ export function aprsDecodeStatus(
     }
   }
   if (health.framesDecoded > 0) {
-    const age = health.lastDecodeUnix != null ? Math.max(0, nowSec - health.lastDecodeUnix) : null
     return {
       state: 'decoding',
       label: `${health.framesDecoded} decoded`,
       detail:
-        age == null
+        health.lastDecodeUnix == null
           ? `${health.framesDecoded} packets decoded.`
-          : `${health.framesDecoded} packets decoded, last ${ageLabel(nowSec - age, nowSec)} ago.`,
+          : `${health.framesDecoded} packets decoded, last ${ageLabel(health.lastDecodeUnix, nowSec)} ago.`,
     }
   }
   if (health.framesSeen > 0) {
