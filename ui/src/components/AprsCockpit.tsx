@@ -17,6 +17,7 @@ import {
   type AprsIsStatus,
   type AprsSource,
 } from '../api'
+import { GLYPH_PATHS, resolveSymbol } from '../aprsSymbols'
 import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
@@ -125,6 +126,26 @@ export type AprsDecodeState =
   | 'listening'
   | 'unreadable'
   | 'decoding'
+
+/**
+ * A station's APRS symbol, drawn from the SAME path data the map canvas uses so the list and the
+ * map can never show different icons for the same station.
+ *
+ * Purely decorative next to the callsign it sits beside, so it is hidden from assistive tech and
+ * its meaning is carried by the `title` instead — a screen reader hearing "Car" between the age
+ * and the callsign learns nothing the row does not already say.
+ */
+export function AprsSymbolIcon({ table, code }: { table: string; code: string }) {
+  const sym = resolveSymbol(table, code)
+  return (
+    <span className={`aprs-sym${sym.known ? '' : ' aprs-sym-unknown'}`} title={sym.label}>
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+        <path d={GLYPH_PATHS[sym.glyph]} fill="currentColor" />
+      </svg>
+      {sym.overlay && <span className="aprs-sym-overlay">{sym.overlay}</span>}
+    </span>
+  )
+}
 
 /** Short tag shown in the station list's Via column. */
 export const SOURCE_LABEL: Record<AprsSource, string> = {
@@ -833,6 +854,7 @@ export function AprsCockpit({
           <thead>
             <tr>
               <th>Age</th>
+              <th aria-label="Symbol" />
               <th>From</th>
               <th>Via</th>
               <th>Type</th>
@@ -856,6 +878,9 @@ export function AprsCockpit({
                 }
               >
                 <td className="aprs-age">{ageLabel(h.atUnix, now)}</td>
+                <td className="aprs-sym-cell">
+                  <AprsSymbolIcon table={h.symbolTable} code={h.symbolCode} />
+                </td>
                 <td className="aprs-from">{h.source}</td>
                 <td className={`aprs-src aprs-src-${src}`} title={SOURCE_TITLE[src]}>
                   {SOURCE_LABEL[src]}

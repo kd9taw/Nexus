@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { workedGridSet } from '../coverage'
 import type { AprsHeard, AprsSource } from '../api'
+import { glyphPath, resolveSymbol, showSymbolAt, sourceRing } from '../aprsSymbols'
 import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects } from 'd3-geo'
 import { RotateCcw } from 'lucide-react'
@@ -1050,6 +1051,8 @@ export function MapView({
     placedAprsRef.current = []
     if (layers.aprs.visible && aprs && aprs.length > 0) {
       const sel = selectedAprs ? selectedAprs.toUpperCase() : null
+      // Symbols only once the view is local enough for them to be legible; see SYMBOL_MIN_ZOOM.
+      const drawSymbols = showSymbolAt(view.zoom)
       ctx.font = `500 10px ${cssVar('--font-mono') || 'monospace'}`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
@@ -1084,29 +1087,85 @@ export function MapView({
           ctx.lineTo(p[0] + Math.cos(rad) * len, p[1] + Math.sin(rad) * len)
           ctx.stroke()
         }
-        // ⭐ RF and internet stations must never look alike. A solid dot means THIS RECEIVER
-        // heard the station — the fact an operator actually cares about, because it is evidence
-        // about their own antenna. An internet-only station is drawn hollow and dimmer: present
-        // on the map, but visibly not something this radio has proven it can hear.
+        // ⭐ RF and internet stations must never look alike. That distinction used to live in the
+        // dot — solid meant THIS RECEIVER heard the station, hollow meant only the internet
+        // reports it. A symbol glyph cannot be hollow without becoming unreadable, so the SHAPE
+        // now says what the station IS and the RING says how it reached us. Same language: a
+        // solid outline still means the operator's own antenna.
         const src = srcByCall.get(a.source) ?? a.sourceKind
-        const r = isSel ? 5 : 3.5
-        if (src === 'inet') {
-          ctx.strokeStyle = isSel ? '#5eead4' : 'rgba(148, 163, 184, 0.85)'
-          ctx.lineWidth = 1.4
+        const { ring, alpha } = sourceRing(src)
+        const ink = isSel ? '#5eead4' : 'rgba(203, 213, 225, 0.95)'
+        if (drawSymbols) {
+          const sym = resolveSymbol(a.symbolTable, a.symbolCode)
+          const size = isSel ? 20 : 17
+          ctx.save()
+          ctx.globalAlpha = layers.aprs.opacity * alpha
+          ctx.translate(p[0], p[1])
+          // The ring first, so the glyph sits inside it rather than under it.
+          ctx.strokeStyle = ink
+          ctx.lineWidth = 1.2
+          ctx.setLineDash(ring === 'dashed' ? [2.5, 2.5] : [])
           ctx.beginPath()
-          ctx.arc(p[0], p[1], r, 0, Math.PI * 2)
+          ctx.arc(0, 0, size * 0.72, 0, Math.PI * 2)
           ctx.stroke()
+          // "Both" doubles the ring rather than dimming anything — more evidence, not less.
+          if (ring === 'double') {
+            ctx.beginPath()
+            ctx.arc(0, 0, size * 0.86, 0, Math.PI * 2)
+            ctx.stroke()
+          }
+          ctx.setLineDash([])
+          // Vehicles are drawn nose-up, so a moving one turns to its course. A parked station
+          // keeps a stale course, so only rotate something actually under way.
+          if (sym.rotates && a.courseDeg != null && a.speedKnots != null && a.speedKnots > 1) {
+            ctx.rotate((a.courseDeg * Math.PI) / 180)
+          }
+          ctx.fillStyle = ink
+          ctx.translate(-size / 2, -size / 2)
+          ctx.scale(size / 24, size / 24)
+          ctx.fill(glyphPath(sym.glyph))
+          ctx.restore()
+          // The overlay character rides on top of the glyph, unrotated and unscaled — it is the
+          // operator's own annotation (an iGate's `I`, a digi's hop count) and must stay readable.
+          if (sym.overlay) {
+            ctx.save()
+            ctx.globalAlpha = layers.aprs.opacity * alpha
+            ctx.font = `700 ${Math.round(size * 0.5)}px ${cssVar('--font-mono') || 'monospace'}`
+            ctx.textAlign = 'center'
+            ctx.textBaseline = 'middle'
+            // A dark plate under the character so it reads against any glyph beneath it.
+            ctx.fillStyle = cssVar('--bg') || '#0b1220'
+            ctx.beginPath()
+            ctx.arc(p[0], p[1], size * 0.3, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.fillStyle = ink
+            ctx.fillText(sym.overlay, p[0], p[1])
+            ctx.restore() // also restores font/textAlign/textBaseline for the labels below
+          }
         } else {
-          ctx.fillStyle = isSel ? '#5eead4' : 'rgba(203, 213, 225, 0.95)'
-          ctx.beginPath()
-          ctx.arc(p[0], p[1], r, 0, Math.PI * 2)
-          ctx.fill()
+          // Zoomed out: a screen of glyphs is unreadable mush, and the question at this scale is
+          // "where is there traffic", not "what is each station". Back to dots.
+          const r = isSel ? 5 : 3.5
+          ctx.globalAlpha = layers.aprs.opacity * alpha
+          if (ring === 'dashed') {
+            ctx.strokeStyle = isSel ? '#5eead4' : 'rgba(148, 163, 184, 0.85)'
+            ctx.lineWidth = 1.4
+            ctx.beginPath()
+            ctx.arc(p[0], p[1], r, 0, Math.PI * 2)
+            ctx.stroke()
+          } else {
+            ctx.fillStyle = ink
+            ctx.beginPath()
+            ctx.arc(p[0], p[1], r, 0, Math.PI * 2)
+            ctx.fill()
+          }
         }
+        ctx.globalAlpha = layers.aprs.opacity
         if (isSel) {
           ctx.strokeStyle = '#5eead4'
           ctx.lineWidth = 1.5
           ctx.beginPath()
-          ctx.arc(p[0], p[1], 9, 0, Math.PI * 2)
+          ctx.arc(p[0], p[1], drawSymbols ? 16 : 9, 0, Math.PI * 2)
           ctx.stroke()
         }
         // Label only the selection and anything moving — labelling every station
@@ -2022,7 +2081,9 @@ export function MapView({
           : a.sourceKind === 'both'
             ? 'heard on RF + APRS-IS'
             : 'heard on RF'
-      return `${a.source} · ${how} ${when}${via}${moving}${a.text ? ` — ${a.text}` : ''}`
+      const sym = resolveSymbol(a.symbolTable, a.symbolCode)
+      const what = sym.known ? ` · ${sym.label}${sym.overlay ? ` (${sym.overlay})` : ''}` : ''
+      return `${a.source}${what} · ${how} ${when}${via}${moving}${a.text ? ` — ${a.text}` : ''}`
     }
     if (hit.kind === 'sat') {
       const star = hit.chased ? '★' : '☆'

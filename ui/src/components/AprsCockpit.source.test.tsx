@@ -155,6 +155,32 @@ describe('the show-internet toggle', () => {
   })
 })
 
+describe('station symbols in the list', () => {
+  it('draws the station\'s own symbol, not a uniform dot', async () => {
+    await mount([
+      pkt('W9CAR-9', 'rf', { symbolTable: '/', symbolCode: '>' }),
+      pkt('W9WX-1', 'rf', { symbolTable: '/', symbolCode: '_' }),
+    ])
+    // The title carries the meaning; the glyph is decorative and hidden from assistive tech.
+    expect(screen.getByTitle('Car')).toBeTruthy()
+    expect(screen.getByTitle('Weather station')).toBeTruthy()
+  })
+
+  it('shows the overlay character an operator put on an alternate-table symbol', async () => {
+    // `R&` is the receive-only-iGate convention — the R is the whole point of the symbol.
+    await mount([pkt('W9GATE-1', 'rf', { symbolTable: 'R', symbolCode: '&' })])
+    const cell = screen.getByTitle('Gateway / iGate')
+    expect(cell.querySelector('.aprs-sym-overlay')?.textContent).toBe('R')
+  })
+
+  it('an unrecognised symbol still draws a glyph rather than a blank cell', async () => {
+    await mount([pkt('W9ODD-1', 'rf', { symbolTable: '/', symbolCode: '\u0001' })])
+    const cell = screen.getByTitle('Unknown symbol')
+    expect(cell.classList.contains('aprs-sym-unknown')).toBe(true)
+    expect(cell.querySelector('svg path')?.getAttribute('d')).toBeTruthy()
+  })
+})
+
 describe('the APRS-IS status chip', () => {
   it('stays hidden while the feed is switched off', async () => {
     await mount([])
