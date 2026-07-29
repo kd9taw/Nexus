@@ -140,18 +140,17 @@ mod imp {
     }
 
     impl FskKeyer {
-        /// Open `port` and spawn the keying thread. 1200 baud is arbitrary — only a
-        /// control line is toggled, no data bytes are sent. Both lines are explicitly
-        /// driven deasserted first: the Linux kernel asserts DTR *and* RTS on open, and
-        /// the thread only manages the keyed line, so the un-keyed line (typically PTT)
-        /// would otherwise stay asserted all session — the CW keyer's stuck-PTT bug
-        /// (see the CRITICAL note in `serial_keyer.rs`). Deasserted is also the correct
-        /// FSK idle: mark.
+        /// Open `port` and spawn the keying thread. The port's baud rate carries no
+        /// meaning — only a control line is toggled, no data bytes are sent — so
+        /// [`crate::control_line`] picks a rate the port will actually accept (the
+        /// keyed BAUD is the RTTY baud, passed to `send`, and is unrelated). Both lines
+        /// are explicitly driven deasserted first: the Linux kernel asserts DTR *and*
+        /// RTS on open, and the thread only manages the keyed line, so the un-keyed line
+        /// (typically PTT) would otherwise stay asserted all session — the CW keyer's
+        /// stuck-PTT bug (see the CRITICAL note in `serial_keyer.rs`). Deasserted is
+        /// also the correct FSK idle: mark.
         pub fn open(port: &str, line: KeyLine) -> std::io::Result<Self> {
-            let mut sp = serialport::new(port, 1200)
-                .timeout(Duration::from_millis(200))
-                .open()
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            let mut sp = crate::control_line::open_control_line_port(port)?;
             let _ = sp.write_data_terminal_ready(false);
             let _ = sp.write_request_to_send(false);
             let (tx, rx) = mpsc::channel();

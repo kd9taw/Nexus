@@ -30,6 +30,10 @@ pub mod backend;
 /// feature; `device::CpalBackend` owns one per capture stream.
 pub mod capture_resample;
 pub mod civ;
+/// Opening a serial port used ONLY for DTR/RTS control lines (CW keyline, FSK
+/// keyline, serial PTT): the baud ladder that heals a rig refusing a given rate.
+/// Pure fallback logic, unit-tested; the real open rides the `serial` feature.
+pub mod control_line;
 /// FlexRadio native DAX RX audio orchestrator (Phase 2) — same VITA-49 path as flexspectrum.
 #[cfg(feature = "device")]
 pub mod flexdax;

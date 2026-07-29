@@ -96,13 +96,13 @@ mod imp {
     }
 
     impl SerialKeyer {
-        /// Open `port` and spawn the keying thread. 1200 baud is arbitrary — only the DTR/RTS
-        /// control line is toggled, no data bytes are sent. Both lines start idle (deasserted).
+        /// Open `port` and spawn the keying thread. The baud rate carries no meaning here —
+        /// only the DTR/RTS control line is toggled, no data bytes are sent — so
+        /// [`crate::control_line`] picks a rate the port will actually accept (some rigs
+        /// refuse a given rate at open; the FTX-1 refuses 1200). Both lines start idle
+        /// (deasserted).
         pub fn open(port: &str, line: KeyLine) -> std::io::Result<Self> {
-            let mut sp = serialport::new(port, 1200)
-                .timeout(Duration::from_millis(200))
-                .open()
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            let mut sp = crate::control_line::open_control_line_port(port)?;
             // CRITICAL (Linux stuck-PTT): the kernel asserts DTR *and* RTS when a serial port
             // is opened, and serialport's `dtr_on_open(false)` is documented as unreliable on
             // Linux. The keying thread only manages the ONE line it keys, so on a conventional
