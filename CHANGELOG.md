@@ -32,6 +32,12 @@ Finally, packet-shaped patterns found in silence no longer count as packets at a
 minutes the decoder will eventually find one in the noise floor, and reporting that as "packets
 heard" invented evidence for a problem that was not there.
 
+### APRS-IS settings moved into the APRS section
+
+They were filed under Logging & Connectors with the other network feeds, which is where they
+belong by type and not where anyone looked for them. They are now in **Settings ▸ Modes ▸ APRS**,
+beside RTTY and CW. Nothing about the feed or the iGate changed — only where you find them.
+
 ### APRS tells you when the radio is simply on the wrong frequency
 
 The clearest report from testing: FT8 was decoding beautifully on 2 m at the very moment the APRS
