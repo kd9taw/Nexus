@@ -1216,6 +1216,24 @@ export async function getAprsHeard(): Promise<AprsHeard[]> {
   return invoke<AprsHeard[]>('get_aprs_heard')
 }
 
+/** What the APRS decoder is hearing (from `get_aprs_health`) — lets an empty map say WHY it is
+ * empty instead of looking identical whether the app is deaf, mistuned, or the band is quiet. */
+export interface AprsHealth {
+  armed: boolean
+  /** Peak |sample| of the audio the demodulator last consumed. ~0 while armed = nothing arriving. */
+  audioPeak: number
+  /** HDLC frames recovered since arming, BEFORE the AX.25 FCS check. */
+  framesSeen: number
+  /** Of those, how many passed the FCS. Seen climbing while this does not = heard, but not cleanly. */
+  framesDecoded: number
+  lastDecodeUnix: number | null
+}
+
+/** Poll the APRS decoder's health beside the heard list. */
+export async function getAprsHealth(): Promise<AprsHealth> {
+  return invoke<AprsHealth>('get_aprs_health')
+}
+
 /** Queue an APRS position beacon — an explicit operator send (the engine validates TX-enable /
  * privileges / no other over and rejects with the reason). Symbols are single chars. */
 export async function aprsSendBeacon(

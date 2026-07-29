@@ -947,6 +947,9 @@ pub struct Engine {
     /// Recently-decoded APRS packets, newest last, capped at [`APRS_HEARD_CAP`]. Pushed by the
     /// decode thread; polled by the cockpit.
     aprs_heard: Vec<AprsHeard>,
+    /// Decoder health — see [`AprsHealth`]. Written by the decode thread on every drain (not only
+    /// when something decodes: "nothing arrived" is the reading that matters most). Reset on arm.
+    aprs_health: AprsHealth,
     /// Pre-rendered APRS TX audio (12 kHz) — beacons, messages, acks. The radio loop keys ONE at a
     /// time via [`Engine::poll_aprs_tx`]; Stop TX / halt clears it.
     aprs_tx_queue: VecDeque<Vec<f32>>,
@@ -1032,6 +1035,31 @@ pub struct AprsHeard {
     pub msg_id: Option<String>,
     /// Unix seconds the packet was decoded (drives the age column).
     pub at_unix: i64,
+}
+
+/// What the APRS decoder is actually HEARING — the readout that tells a silent screen apart from
+/// a silent band.
+///
+/// Only frames that pass the AX.25 FCS ever become an [`AprsHeard`], and everything else is
+/// dropped without a trace. That made three very different situations look identical: the app
+/// listening to the wrong sound card, a mistuned/over-driven channel whose every frame fails CRC,
+/// and a genuinely quiet band. All three showed an empty list and an empty map. These counters
+/// separate them — audio level proves the tap is fed, and seen-vs-decoded proves whether the
+/// demodulator is finding packets it cannot check.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AprsHealth {
+    pub armed: bool,
+    /// Peak |sample| of the most recent audio the demodulator consumed. ~0 while armed means the
+    /// decoder is deaf — whatever the operator can hear is not reaching this tap.
+    pub audio_peak: f32,
+    /// HDLC frames the deframer recovered since arming: candidates, BEFORE the FCS check.
+    pub frames_seen: u64,
+    /// Of those, how many passed the FCS and became packets. `frames_seen` climbing while this
+    /// stays put is the signature of a channel being heard but not cleanly.
+    pub frames_decoded: u64,
+    /// Unix seconds of the most recent successful decode.
+    pub last_decode_unix: Option<i64>,
 }
 
 fn fmt_aprs_addr(a: &tempo_core::aprs::Address) -> String {
@@ -1526,6 +1554,7 @@ impl Engine {
             aprs_armed: false,
             aprs_audio: Vec::new(),
             aprs_heard: Vec::new(),
+            aprs_health: AprsHealth::default(),
             aprs_tx_queue: VecDeque::new(),
             aprs_msg_seq: 0,
             aprs_fm: false,
@@ -5156,7 +5185,40 @@ impl Engine {
         if !on {
             self.aprs_audio.clear();
         }
+        // Health counts what THIS listening session has heard, so arming starts them over —
+        // otherwise a stale "0 decoded" from a previous session reads as a live fault.
+        self.aprs_health = AprsHealth {
+            armed: on,
+            ..Default::default()
+        };
         self.aprs_armed = on;
+    }
+
+    /// Record what the decode thread just heard: the peak level of the audio it consumed, how many
+    /// HDLC frames the deframer recovered, and how many of those survived the FCS. Called on every
+    /// drain while armed — including drains that decode nothing, which is the whole point.
+    pub fn note_aprs_rx(
+        &mut self,
+        audio_peak: f32,
+        frames_seen: usize,
+        frames_decoded: usize,
+        at_unix: i64,
+    ) {
+        self.aprs_health.armed = self.aprs_armed;
+        self.aprs_health.audio_peak = audio_peak;
+        self.aprs_health.frames_seen += frames_seen as u64;
+        self.aprs_health.frames_decoded += frames_decoded as u64;
+        if frames_decoded > 0 {
+            self.aprs_health.last_decode_unix = Some(at_unix);
+        }
+    }
+
+    /// Snapshot of APRS decoder health for the cockpit poll.
+    pub fn aprs_health(&self) -> AprsHealth {
+        AprsHealth {
+            armed: self.aprs_armed,
+            ..self.aprs_health
+        }
     }
 
     /// Whether the APRS RX decoder is armed (read by the decode thread's gate).

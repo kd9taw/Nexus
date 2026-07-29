@@ -16879,6 +16879,32 @@ html[data-panel='needed'] {
   white-space: nowrap;
 }
 
+/* Decode health: is the decoder actually hearing anything? Colour carries the
+   severity, the tooltip carries what to do about it. Both fault states earn a
+   colour because both are fixable by the operator in seconds. */
+.aprs-health {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: help;
+}
+.aprs-health-off {
+  color: var(--text-faint);
+}
+.aprs-health-deaf {
+  color: var(--state-weak);
+}
+.aprs-health-unreadable {
+  color: var(--state-ok);
+}
+.aprs-health-decoding {
+  color: var(--state-good);
+}
+
 /* Operate cockpit: live FT8/FT4 decode-depth chips (Fast/Norm/Deep) in the header actions. */
 .cockpit-decode-depth {
   display: inline-flex;

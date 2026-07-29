@@ -4622,6 +4622,16 @@ fn get_aprs_heard(
     Ok(eng.aprs_heard())
 }
 
+/// What the APRS decoder is hearing: audio level at the tap, HDLC frames seen, how many passed the
+/// FCS, and when the last one landed. Polled beside `get_aprs_heard` so an empty map can say WHY.
+#[tauri::command]
+fn get_aprs_health(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::engine::AprsHealth, String> {
+    let eng = state.lock().map_err(|e| e.to_string())?;
+    Ok(eng.aprs_health())
+}
+
 /// Queue an APRS position beacon to transmit — an explicit operator send, the ONLY way APRS TX
 /// keys. The engine validates every gate (TX armed, privileges, no tune carrier, no other over)
 /// and returns WHY a send was refused; the radio loop keys the rendered AFSK audio with PTT.
@@ -10756,6 +10766,7 @@ pub fn run() {
             get_rtty_state,
             aprs_arm,
             get_aprs_heard,
+            get_aprs_health,
             aprs_send_beacon,
             aprs_send_message,
             aprs_tune,

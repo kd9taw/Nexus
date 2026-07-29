@@ -8,7 +8,9 @@ import {
   aprsSendBeacon,
   aprsSendMessage,
   getAprsHeard,
+  getAprsHealth,
   getSettings,
+  type AprsHealth,
   type AprsHeard,
 } from '../api'
 import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
@@ -48,6 +50,70 @@ function ageLabel(atUnix: number, nowSec: number): string {
   return `${Math.floor(s / 3600)}h`
 }
 
+/** Below this peak the tap is carrying nothing — even an open squelch on a quiet channel sits
+ * well above it. Digital silence from a codec is exactly 0. */
+const SILENT_PEAK = 0.001
+
+export type AprsDecodeState = 'off' | 'deaf' | 'listening' | 'unreadable' | 'decoding'
+
+/**
+ * Turn decoder health into what the operator should be told.
+ *
+ * THE BUG THIS EXISTS FOR: an empty APRS screen looked the same whether the app was listening to
+ * the wrong sound card, hearing a channel whose every frame failed the checksum, or sitting on a
+ * quiet band. Only successfully-decoded frames ever reached the UI, so "nothing here" was the
+ * single answer to three completely different questions — and the first two are faults the
+ * operator can fix in seconds once told.
+ */
+export function aprsDecodeStatus(
+  health: AprsHealth | null,
+  nowSec: number,
+): { state: AprsDecodeState; label: string; detail: string } {
+  if (!health || !health.armed) {
+    return {
+      state: 'off',
+      label: 'Monitor off',
+      detail: 'The APRS decoder is not running. Arm Monitor to decode the RX audio.',
+    }
+  }
+  if (health.audioPeak < SILENT_PEAK) {
+    return {
+      state: 'deaf',
+      label: 'No audio',
+      detail:
+        'Armed, but no audio is reaching the decoder. Check that Settings → Audio input is the ' +
+        'radio (not a microphone or a disconnected device) — what you hear on the speaker does ' +
+        'not tell you what the app is capturing.',
+    }
+  }
+  if (health.framesDecoded > 0) {
+    const age = health.lastDecodeUnix != null ? Math.max(0, nowSec - health.lastDecodeUnix) : null
+    return {
+      state: 'decoding',
+      label: `${health.framesDecoded} decoded`,
+      detail:
+        age == null
+          ? `${health.framesDecoded} packets decoded.`
+          : `${health.framesDecoded} packets decoded, last ${ageLabel(nowSec - age, nowSec)} ago.`,
+    }
+  }
+  if (health.framesSeen > 0) {
+    return {
+      state: 'unreadable',
+      label: `${health.framesSeen} failed CRC`,
+      detail:
+        `${health.framesSeen} packets were heard but none passed the checksum. The signal is ` +
+        'arriving corrupted: check that the rig is on 144.390 in FM, and that the RX audio is ' +
+        'not so hot that it is clipping.',
+    }
+  }
+  return {
+    state: 'listening',
+    label: 'Listening',
+    detail: 'Audio is reaching the decoder and no packets have been heard yet — a quiet channel.',
+  }
+}
+
 /**
  * APRS cockpit — monitor decoded packets and send a position beacon. RX-first: arming starts the
  * AFSK-1200 decoder; a beacon is an explicit, gated one-shot send (never automatic).
@@ -78,6 +144,7 @@ export function AprsCockpit({
   const [selected, setSelected] = useState<string | null>(null)
   const [freq, setFreq] = useState(144.39)
   const [heard, setHeard] = useState<AprsHeard[]>([])
+  const [health, setHealth] = useState<AprsHealth | null>(null)
   const [lat, setLat] = useState('')
   const [lon, setLon] = useState('')
   const [comment, setComment] = useState('Nexus APRS')
@@ -132,7 +199,7 @@ export function AprsCockpit({
       .catch(() => {})
   }, [])
 
-  // Poll the heard list (and tick the age clock) while the cockpit is visible.
+  // Poll the heard list + decoder health (and tick the age clock) while the cockpit is visible.
   useEffect(() => {
     if (!active) return
     let alive = true
@@ -140,6 +207,9 @@ export function AprsCockpit({
       setNow(Math.floor(Date.now() / 1000))
       void getAprsHeard()
         .then((h) => alive && setHeard(h))
+        .catch(() => {})
+      void getAprsHealth()
+        .then((h) => alive && setHealth(h))
         .catch(() => {})
     }
     tick()
@@ -149,6 +219,8 @@ export function AprsCockpit({
       window.clearInterval(id)
     }
   }, [active])
+
+  const decode = useMemo(() => aprsDecodeStatus(health, now), [health, now])
 
   const toggleArm = () => {
     const next = !armed
@@ -290,6 +362,16 @@ export function AprsCockpit({
         >
           {armed ? '● Monitoring' : 'Monitor'}
         </button>
+        {/* Decode health. An empty APRS screen used to be one answer to three different
+            questions — deaf app, unreadable channel, quiet band — so it never told the
+            operator which of the two fixable ones they were looking at. */}
+        <span
+          className={`aprs-health aprs-health-${decode.state}`}
+          role="status"
+          title={decode.detail}
+        >
+          {decode.label}
+        </span>
       </div>
 
       {/* ⭐ APRS IS A GEOGRAPHIC MODE AND HAD NO MAP. Everything lived in one
@@ -384,9 +466,7 @@ export function AprsCockpit({
       )}
 
       {rows.length === 0 ? (
-        <div className="np-empty">
-          {armed ? 'Listening… decoded packets will appear here.' : 'Monitor is off — arm it to decode APRS.'}
-        </div>
+        <div className="np-empty">{decode.detail}</div>
       ) : (
         <table className="aprs-table">
           <thead>
@@ -449,9 +529,9 @@ export function AprsCockpit({
           />
           {positioned === 0 && (
             <div className="aprs-map-empty">
-              {armed
+              {decode.state === 'decoding'
                 ? 'No positions heard yet — status and message packets carry none.'
-                : 'Monitor is off — arm it to plot stations.'}
+                : decode.detail}
             </div>
           )}
         </div>
