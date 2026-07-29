@@ -243,3 +243,34 @@ describe('the state ladder never hides a higher fact behind a lower guess', () =
     expect(aprsDecodeStatus(health({ audioPeak: 0 }), NOW).state).toBe('silent')
   })
 })
+
+describe('the wrong-frequency message names WHICH thing is wrong', () => {
+  it('mode-only: says the dial is right and the mode is not', () => {
+    // The operator asked outright "should APRS be FM or USB?" — so the message has to answer
+    // that, not just restate the frequency they are already on.
+    const s = aprsDecodeStatus(health(), NOW, { dialMhz: 144.39, sideband: 'USB' }, 144.39)
+    expect(s.state).toBe('wrongfreq')
+    expect(s.label).toMatch(/mode/i)
+    expect(s.detail).toMatch(/needs FM/i)
+    // Explains WHY, so it reads as a reason rather than a rule.
+    expect(s.detail).toMatch(/garbl|demodulat/i)
+  })
+
+  it('frequency-only: names the dial, not the mode', () => {
+    const s = aprsDecodeStatus(health(), NOW, { dialMhz: 144.174, sideband: 'FM' }, 144.39)
+    expect(s.state).toBe('wrongfreq')
+    expect(s.detail).toMatch(/144\.174/)
+    expect(s.detail).toMatch(/144\.390/)
+  })
+
+  it('both wrong: names both', () => {
+    const s = aprsDecodeStatus(health(), NOW, { dialMhz: 144.174, sideband: 'USB' }, 144.39)
+    expect(s.detail).toMatch(/144\.174 USB/)
+    expect(s.detail).toMatch(/144\.390 FM/)
+  })
+
+  it('accepts data-FM submodes as FM — PKTFM is still FM on the air', () => {
+    expect(aprsDecodeStatus(health(), NOW, { dialMhz: 144.39, sideband: 'PKTFM' }, 144.39).state)
+      .toBe('listening')
+  })
+})
