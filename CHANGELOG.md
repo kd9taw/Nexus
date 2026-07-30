@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.21.5] — 2026-07-29
+## [Unreleased]
 
 ### Fixed: the Call Roster and Band Activity filters reset on every restart
 
@@ -41,9 +41,7 @@ map and the band strip, so a station worth chasing could be painted in the colou
 interesting thing about it anywhere it appeared. Every surface now takes a station's strongest
 need, from one shared piece of logic rather than three.
 
-## [Unreleased]
-
-### APRS says which radio it is listening to
+## [0.21.5] — 2026-07-29
 
 ### APRS now sees the whole network, and can contribute to it
 
