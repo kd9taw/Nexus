@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { modeClassOf, visibleNeeds, workTarget } from './needs'
-import type { BandChannel, NeedAlert } from '../types'
+import {
+  NEED_TIER,
+  chaseRank,
+  modeClassOf,
+  strongestNeed,
+  topNeedByCall,
+  visibleNeeds,
+  workTarget,
+} from './needs'
+import type { BandChannel, NeedAlert, NeedTag } from '../types'
 
 function alert(call: string, mode: string, band = '20m', freqMhz: number | null = null): NeedAlert {
   return {
@@ -100,5 +108,183 @@ describe('modeClassOf (map-spot → cockpit routing)', () => {
     for (const m of ['FT8', 'FT4', 'RTTY', 'PSK31', 'JS8', 'weird', '', null, undefined]) {
       expect(modeClassOf(m)).toBe('Digital')
     }
+  })
+})
+
+// ── Chase ranking ────────────────────────────────────────────────────────────────────
+// "Sort by need has no discernible order — a new band-mode sits three quarters of the way
+// down the list" (operator report). Two separate defects were behind it, and both are
+// pinned below: the roster ranked a station by ONE tag chosen arbitrarily among its alerts,
+// and it collapsed the backend's priority (rarity boost, activation bumps) into a bare
+// ordinal. The ranking itself is not invented here — it mirrors NeedTag::tier().
+
+/** A need alert with the tags + priority under test. */
+function ranked(tags: NeedTag[], priority: number, band = '20m'): NeedAlert {
+  return {
+    call: 'W1AW',
+    entity: 'Test',
+    band,
+    zone: 14,
+    tags,
+    priority,
+    headline: 'Need',
+    mode: 'Digital',
+    freqMhz: null,
+  }
+}
+
+describe('NEED_TIER mirrors the backend gradient', () => {
+  it('ranks the award needs in the documented order, strictly descending', () => {
+    // Pinned as an ORDER, not as a set of magic numbers: this is the claim the roster and
+    // the Needed board both depend on. Values themselves are NeedTag::tier() verbatim.
+    const ladder: NeedTag[] = [
+      'Wanted', 'NewEntity', 'NewZone', 'NewState', 'NewGrid', 'NewBand', 'NewMode', 'Confirm',
+    ]
+    const weights = ladder.map((t) => NEED_TIER[t])
+    expect(weights).toEqual([120, 100, 70, 60, 55, 50, 30, 10])
+    for (let i = 1; i < weights.length; i++) {
+      expect(weights[i], `${ladder[i]} must rank below ${ladder[i - 1]}`).toBeLessThan(weights[i - 1])
+    }
+  })
+
+  it('gives the appended program tags no primary weight', () => {
+    // The backend appends these onto an existing award need and expresses their pull as a
+    // priority bump; weighting them here would double-count it.
+    for (const t of ['Dxped', 'Pota', 'Sota'] as NeedTag[]) expect(NEED_TIER[t]).toBe(0)
+  })
+})
+
+describe('strongestNeed', () => {
+  it('picks the highest-priority alert whatever order they arrive in', () => {
+    const weak = ranked(['Confirm'], 10, '40m')
+    const strong = ranked(['NewEntity'], 100, '20m')
+    expect(strongestNeed([weak, strong])?.band).toBe('20m')
+    expect(strongestNeed([strong, weak])?.band).toBe('20m')
+  })
+
+  it('keeps the earlier alert on a tie (the backend orders them descending)', () => {
+    const first = ranked(['NewBand'], 50, '20m')
+    const second = ranked(['NewBand'], 50, '40m')
+    expect(strongestNeed([first, second])?.band).toBe('20m')
+  })
+
+  it('skips alerts carrying no tags, and reads nothing as nothing', () => {
+    expect(strongestNeed([ranked([], 999)])).toBeNull()
+    expect(strongestNeed([])).toBeNull()
+    expect(strongestNeed(undefined)).toBeNull()
+    expect(strongestNeed(null)).toBeNull()
+  })
+})
+
+describe('topNeedByCall', () => {
+  // The map every surface colours rows from — roster, band strip and map. It used to be
+  // built by writing each alert into the same slot with NO guard, so the last one won; the
+  // backend orders alerts priority-descending, making that reliably the WEAKEST.
+  it('colours a multi-band call from its STRONGEST alert', () => {
+    const byCall = new Map([
+      ['DL1ABC', [ranked(['NewEntity'], 100, '20m'), ranked(['Confirm'], 10, '40m')]],
+    ])
+    expect(topNeedByCall(byCall).get('DL1ABC')).toBe('NewEntity')
+  })
+
+  it('does not depend on the order the alerts arrive in', () => {
+    const strong = ranked(['NewEntity'], 100, '20m')
+    const weak = ranked(['Confirm'], 10, '40m')
+    expect(topNeedByCall(new Map([['W1AW', [strong, weak]]])).get('W1AW')).toBe('NewEntity')
+    expect(topNeedByCall(new Map([['W1AW', [weak, strong]]])).get('W1AW')).toBe('NewEntity')
+  })
+
+  it('takes the lead tag of that alert, not the highest tag across all of them', () => {
+    // tags[0] within one alert is already its own strongest reason (the backend sorts it),
+    // so the answer is "the best alert's lead tag" — not a union re-ranked here.
+    const byCall = new Map([['K9LC', [ranked(['NewBand', 'Pota'], 50)]]])
+    expect(topNeedByCall(byCall).get('K9LC')).toBe('NewBand')
+  })
+
+  it('omits a call whose every alert is tagless, so has() still means "needed"', () => {
+    const byCall = new Map([['NOBODY', [ranked([], 99)]]])
+    expect(topNeedByCall(byCall).has('NOBODY')).toBe(false)
+  })
+
+  it('keeps the calls apart and passes the keys through untouched', () => {
+    const byCall = new Map([
+      ['A', [ranked(['NewGrid'], 55)]],
+      ['B', [ranked(['NewMode'], 30)]],
+    ])
+    const m = topNeedByCall(byCall)
+    expect([...m]).toEqual([
+      ['A', 'NewGrid'],
+      ['B', 'NewMode'],
+    ])
+    expect(topNeedByCall(new Map()).size).toBe(0)
+  })
+})
+
+describe('chaseRank', () => {
+  it('ranks a multi-band call by its STRONGEST need, not its last', () => {
+    // THE ROOT CAUSE. needByCall (App.tsx) writes one tag per call with no guard, so for a
+    // station heard on two bands the LAST alert wins — and the backend hands them out
+    // priority-descending, making that the weakest. Ranking off the alert set fixes it.
+    const alerts = [ranked(['NewEntity'], 100, '20m'), ranked(['Confirm'], 10, '40m')]
+    expect(chaseRank(alerts, 'Confirm')).toBe(100)
+    expect(chaseRank(alerts, 'Confirm')).toBeGreaterThan(chaseRank([ranked(['NewBand'], 50)], 'NewBand'))
+  })
+
+  it('keeps the backend rarity boost, which a bare tag ladder would throw away', () => {
+    // A rare grid is 55 + 20 = 75 and an ultra-rare 55 + 30 = 85, so either outranks a new
+    // zone (70) even though the bare NewGrid tier (55) sits below it.
+    const rareGrid = ranked(['NewGrid'], 75)
+    const newZone = ranked(['NewZone'], 70)
+    expect(chaseRank([rareGrid], 'NewGrid')).toBeGreaterThan(chaseRank([newZone], 'NewZone'))
+    expect(NEED_TIER.NewGrid).toBeLessThan(NEED_TIER.NewZone) // …the opposite way round on tags alone
+  })
+
+  it('floats a park activation above a bare confirm but below the award tiers', () => {
+    // OTA_ACTIVATION_PRIORITY = 20: above Confirm (10), below NewMode (30).
+    const pota = ranked(['Pota'], 20)
+    expect(chaseRank([pota], 'Pota')).toBeGreaterThan(chaseRank([ranked(['Confirm'], 10)], 'Confirm'))
+    expect(chaseRank([pota], 'Pota')).toBeLessThan(chaseRank([ranked(['NewMode'], 30)], 'NewMode'))
+  })
+
+  it('falls back to the tag tier for a host that passes no alert set', () => {
+    expect(chaseRank(undefined, 'NewEntity')).toBe(NEED_TIER.NewEntity)
+    expect(chaseRank([], 'NewBand')).toBe(NEED_TIER.NewBand)
+    expect(chaseRank(undefined, 'NewEntity')).toBeGreaterThan(chaseRank(undefined, 'NewMode'))
+  })
+
+  it('ranks a station with nothing needed below every real need', () => {
+    expect(chaseRank(undefined, null)).toBe(0)
+    expect(chaseRank([], undefined)).toBe(0)
+    // Including the weakest real one — a workable-but-unneeded station must never outrank a
+    // confirm, and a park activation must beat it too.
+    expect(chaseRank(undefined, null)).toBeLessThan(chaseRank([ranked(['Confirm'], 10)], 'Confirm'))
+    expect(chaseRank(undefined, null)).toBeLessThan(chaseRank([ranked(['Pota'], 20)], 'Pota'))
+  })
+
+  it("pins the operator's complaint: a new-mode row outranks anything merely workable", () => {
+    // The report said "new band-mode". There is no such rank: LogNeeds::need short-circuits,
+    // so a slot needed on band AND mode reports NewBand alone and the two are mutually
+    // exclusive. The nearest real rank is NewMode — band worked, this mode class not — so
+    // that is what this pins: above a workable row, below new band and new entity.
+    const newMode = chaseRank([ranked(['NewMode'], 30)], 'NewMode')
+    const workable = chaseRank(undefined, null)
+    const newBand = chaseRank([ranked(['NewBand'], 50)], 'NewBand')
+    const newEntity = chaseRank([ranked(['NewEntity'], 100)], 'NewEntity')
+    expect(newMode).toBeGreaterThan(workable)
+    expect(newMode).toBeLessThan(newBand)
+    expect(newBand).toBeLessThan(newEntity)
+  })
+
+  it('sorts a mixed roster into chase order end to end', () => {
+    const rows = [
+      { call: 'PLAIN', rank: chaseRank(undefined, null) },
+      { call: 'MODE', rank: chaseRank([ranked(['NewMode'], 30)], 'NewMode') },
+      { call: 'ENTITY', rank: chaseRank([ranked(['NewEntity'], 100)], 'NewEntity') },
+      { call: 'CONFIRM', rank: chaseRank([ranked(['Confirm'], 10)], 'Confirm') },
+      { call: 'BAND', rank: chaseRank([ranked(['NewBand'], 50)], 'NewBand') },
+      { call: 'WANTED', rank: chaseRank([ranked(['Wanted', 'NewEntity'], 120)], 'Wanted') },
+    ]
+    rows.sort((a, b) => b.rank - a.rank)
+    expect(rows.map((r) => r.call)).toEqual(['WANTED', 'ENTITY', 'BAND', 'MODE', 'CONFIRM', 'PLAIN'])
   })
 })

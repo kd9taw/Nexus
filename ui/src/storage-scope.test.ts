@@ -31,6 +31,7 @@ export const PER_SURFACE = [
   'nexus.connect.intent',
   'nexus.connect.map3d',
   'nexus.connect.projection',
+  'nexus.decodes.filter',
   'nexus.logbook.globespin',
   'nexus.operate.layout',
   'nexus.operateLayout',
@@ -40,6 +41,7 @@ export const PER_SURFACE = [
   'nexus.ota.sortAsc',
   'nexus.ota.sortKey',
   'nexus.phonescope.dss',
+  'nexus.roster.filters',
   'nexus.spotlegend',
   'nexus.split.cw.scope',
   'nexus.split.operate.waterfall',
@@ -97,6 +99,30 @@ const DEDUPE = [
   'nexus.sats.alarms.fired',
   'nexus.update.dismissedVersion',
   'tempo-achievements-seen',
+]
+
+/**
+ * Keys held in sessionStorage through SpotsPanel's `useSessionState`. sessionStorage is
+ * already per-webview by the platform, so these need no scope suffix — the same guarantee
+ * PER_SURFACE buys, by a different mechanism (windowScope.test.ts leans on it for seenSet).
+ * Their lifetime is deliberately shorter: the Spots filters are meant to survive a view
+ * switch and die on app exit, unlike the roster/board filters, which persist across restarts.
+ *
+ * Listed AND scanned for (see `classifies every useSessionState key`), because the raw-storage
+ * scan below structurally cannot see them: the helper takes the key as a PARAMETER, so no
+ * literal ever appears at a `sessionStorage.*` call site. This list used to name a stale trio
+ * — `nexus.spots.modes` (renamed to hiddenModes), `.bands`, `.sort` — while the four keys
+ * added after it went unlisted entirely, so it recorded a verdict on one key that no longer
+ * existed and none on four that did.
+ */
+const SESSION_SCOPED = [
+  'nexus.spots.bands',
+  'nexus.spots.filtersOpen',
+  'nexus.spots.hiddenModes',
+  'nexus.spots.licensedOnly',
+  'nexus.spots.query',
+  'nexus.spots.sort',
+  'nexus.spots.states',
 ]
 
 describe('zero migration: the main window keeps the exact key strings already on disk', () => {
@@ -244,19 +270,15 @@ describe('call sites agree with the classification', () => {
    * `nexus.__probe` is exempt: it is a write-then-delete probe for read-only storage, never
    * persisted, so it has no scope to get wrong.
    *
-   * The three `nexus.spots.*` keys use sessionStorage, which is already per-webview by the
-   * platform — that is not an accident we are tolerating, it is the same guarantee by a
-   * different mechanism, and windowScope.test.ts leans on it for seenSet. They are listed
-   * so the exemption is a decision on the record rather than an omission.
+   * The sessionStorage keys are classified in SESSION_SCOPED and checked by their own scan —
+   * this one cannot see them at all (the key reaches `sessionStorage` as a parameter), which
+   * is exactly why hand-listing them here had gone stale unnoticed.
    */
   it('classifies every storage key in the tree', () => {
     const EXEMPT = new Set([
       'nexus.__probe', // transient write/delete probe
-      'nexus.spots.modes', // sessionStorage — per-webview by the platform
-      'nexus.spots.bands',
-      'nexus.spots.sort',
     ])
-    const classified = new Set([...PER_SURFACE, ...SHARED, ...DEDUPE])
+    const classified = new Set([...PER_SURFACE, ...SHARED, ...DEDUPE, ...SESSION_SCOPED])
     const seen = new Set<string>()
     for (const file of sources(SRC)) {
       const text = readFileSync(file, 'utf8')
@@ -274,6 +296,36 @@ describe('call sites agree with the classification', () => {
     }
     const unclassified = [...seen].filter((k) => !classified.has(k) && !EXEMPT.has(k)).sort()
     expect(unclassified).toEqual([])
+  })
+
+  /**
+   * The sessionStorage seam, scanned rather than remembered.
+   *
+   * `useSessionState(key, init)` receives its key as a PARAMETER, so the raw-storage scan
+   * above — which resolves only literals and same-file `const`s — sees none of these keys and
+   * can never report them unclassified. That blind spot is how the hand-written exemption came
+   * to name a renamed key and miss four real ones for four releases.
+   *
+   * Asserted as SET EQUALITY, so it fails in both directions: a new `useSessionState` key is
+   * unclassified until listed, a renamed one breaks its old entry, and a stale entry for a key
+   * no longer in the tree fails too. Same contract the `INDIRECT` seams get for `surface*`.
+   */
+  it('classifies every useSessionState key', () => {
+    const sessionKeys = new Set<string>()
+    for (const file of sources(SRC)) {
+      const text = readFileSync(file, 'utf8')
+      // `[^(]*` skips any generic argument (`useSessionState<string[]>('…')`) without
+      // tripping over `>` inside it. The helper's own definition takes `key: string`, not a
+      // literal, so it never matches itself.
+      for (const m of text.matchAll(/useSessionState[^(]*\(\s*'([^']*)'/g)) sessionKeys.add(m[1])
+    }
+    expect([...sessionKeys].sort()).toEqual([...SESSION_SCOPED].sort())
+  })
+
+  it('keeps the sessionStorage keys OUT of the per-surface scope helper', () => {
+    // They are already per-webview; routing one through surfaceKey would suffix a key that is
+    // private by construction, and the pop-out would silently start from empty.
+    expect(SESSION_SCOPED.filter((k) => routed.has(k))).toEqual([])
   })
 
   it('leaves NO per-surface key on a raw localStorage call', () => {

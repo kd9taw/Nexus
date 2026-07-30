@@ -3,7 +3,99 @@
 // frequency); these gate them by the operator's enabled modes and resolve a click into
 // a concrete QSY + cockpit target.
 
-import type { BandChannel, NeedAlert } from '../types'
+import type { BandChannel, NeedAlert, NeedTag } from '../types'
+
+/**
+ * Chase-importance weight per need tag — the UI mirror of the backend's `NeedTag::tier()`
+ * (crates/propagation/src/needalert.rs), carrying its VERBATIM numbers rather than an
+ * ordinal shorthand. Keeping the real values puts a row ranked from a bare tag and a row
+ * ranked from a backend `priority` on ONE scale, so the two paths in [`chaseRank`] can never
+ * disagree about which of two stations matters more.
+ *
+ * The gradient: a call the operator asked for by name > a new entity > new zone > new state
+ * > new grid > new band (entity worked, this band not) > new mode (band worked, this mode
+ * class not) > worked-but-unconfirmed. Dxped/Pota/Sota are never a primary tier — the
+ * backend appends them onto an existing award need and expresses their pull as a priority
+ * bump instead, so they weigh 0 here exactly as they do there.
+ *
+ * NOTE there is no "new band-mode" rank, here or in the backend: `LogNeeds::need` decides
+ * the DXCC axis with a short-circuit that never consults mode once the band is missing, so
+ * a slot needed on band AND mode reports NewBand alone (dxped.rs). Band and mode needs are
+ * mutually exclusive, not combinable.
+ */
+export const NEED_TIER: Record<NeedTag, number> = {
+  Wanted: 120,
+  NewEntity: 100,
+  NewZone: 70,
+  NewState: 60,
+  NewGrid: 55,
+  NewBand: 50,
+  NewMode: 30,
+  Confirm: 10,
+  Dxped: 0,
+  Pota: 0,
+  Sota: 0,
+}
+
+/**
+ * The strongest of one call's alerts. A station heard on several bands carries one alert per
+ * band/mode, and what decides whether to work it now is its BEST reason, never an arbitrary
+ * one. Highest `priority` wins; a tie keeps the earlier entry, which is the stronger one
+ * given the backend hands these out priority-descending. Alerts with no tags are skipped —
+ * they carry no reason to work anyone.
+ */
+export function strongestNeed(alerts: NeedAlert[] | null | undefined): NeedAlert | null {
+  let best: NeedAlert | null = null
+  for (const a of alerts ?? []) {
+    if (a.tags.length === 0) continue
+    if (best == null || a.priority > best.priority) best = a
+  }
+  return best
+}
+
+/**
+ * Top need tag per UPPERCASE callsign, taken from each call's STRONGEST alert — the map the
+ * roster, band strip and map colour their rows from.
+ *
+ * The strongest, not an arbitrary one. A call heard on several bands carries one alert per
+ * band/mode, and the map this replaces was built by writing every alert into the same slot
+ * with no guard, so the LAST one won; since the backend hands alerts out priority-descending
+ * that was reliably the WEAKEST. A new entity on 20 m that also wanted a confirmation on
+ * 40 m was therefore coloured as the confirmation.
+ *
+ * Calls whose every alert is tagless are omitted, so `has(call)` still means "something is
+ * needed here".
+ */
+export function topNeedByCall(alertsByCall: Map<string, NeedAlert[]>): Map<string, NeedTag> {
+  const m = new Map<string, NeedTag>()
+  for (const [call, alerts] of alertsByCall) {
+    const tag = strongestNeed(alerts)?.tags[0]
+    if (tag) m.set(call, tag)
+  }
+  return m
+}
+
+/**
+ * How badly the operator should want this station right now — the weight behind "sort by
+ * need".
+ *
+ * Prefers the backend's own `priority`, which is exactly what the Needed board sorts on
+ * (NeededPanel's 'priority' key), so the roster and the board rank a station identically.
+ * That number is `tier()` plus the grid-rarity boost plus the DXped/OTA bumps, so an
+ * ultra-rare grid or a live park activation keeps the pull the backend gave it instead of
+ * collapsing back into its bare tag.
+ *
+ * Falls back to the tag's tier for hosts that pass only the top-tag map, and to 0 for a
+ * station with nothing needed — below every real need, the OTA floor of 20 included.
+ */
+export function chaseRank(
+  alerts: NeedAlert[] | null | undefined,
+  tag: NeedTag | null | undefined,
+): number {
+  const best = strongestNeed(alerts)
+  if (best) return best.priority
+  return tag ? NEED_TIER[tag] : 0
+}
 
 /** Which need rows are visible given the enabled operating-mode features. Digital needs
  * always show; CW/Phone needs only when that mode is enabled — so a pure-digital op's
