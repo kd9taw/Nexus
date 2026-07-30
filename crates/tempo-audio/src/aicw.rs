@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tempo_app::engine::Engine;
+use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::settings::OperatingMode;
 
 use crate::service::SHUTDOWN;
@@ -62,9 +62,9 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
         }
         std::thread::sleep(IDLE_POLL);
         // Gates: feature on + CW cockpit active (brief lock).
-        let on = match engine.lock() {
-            Ok(e) => e.settings().ai_cw_enabled && e.settings().operating_mode == OperatingMode::Cw,
-            Err(_) => false,
+        let on = {
+            let e = engine_lock(&engine);
+            e.settings().ai_cw_enabled && e.settings().operating_mode == OperatingMode::Cw
         };
         if !on {
             emitted_until = 0.0; // ring + stream clock reset when the feature is off
@@ -96,9 +96,9 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
         }
         // A full 15 s window + the absolute stream position of its end, copied under a
         // brief lock; decode runs off-lock.
-        let window = match engine.lock() {
-            Ok(e) => e.ai_cw_window(),
-            Err(_) => None,
+        let window = {
+            let e = engine_lock(&engine);
+            e.ai_cw_window()
         };
         let Some((window, fed)) = window else {
             set_status(&engine, "listening…");
@@ -135,7 +135,8 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
                     }
                 }
                 emitted_until = cutoff.max(emitted_until);
-                if let Ok(mut e) = engine.lock() {
+                {
+                    let mut e = engine_lock(&engine);
                     e.set_ai_cw_status("");
                     if !fresh.trim().is_empty() {
                         e.push_ai_cw_text(&fresh);
@@ -154,7 +155,5 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
 }
 
 fn set_status(engine: &Arc<Mutex<Engine>>, s: &str) {
-    if let Ok(mut e) = engine.lock() {
-        e.set_ai_cw_status(s);
-    }
+    engine_lock(engine).set_ai_cw_status(s);
 }

@@ -10196,42 +10196,31 @@ struct EngineRig(SharedEngine);
 #[cfg(feature = "radio")]
 impl tempo_audio::rigctld_server::RigBackend for EngineRig {
     fn freq_hz(&self) -> u64 {
-        self.0
-            .lock()
-            .map(|e| (e.settings().dial_mhz * 1_000_000.0).round() as u64)
-            .unwrap_or(0)
+        (engine_lock(&self.0).settings().dial_mhz * 1_000_000.0).round() as u64
     }
     fn mode(&self) -> (String, u32) {
         // Report the CAT mode to a foreign app sharing the radio. When Nexus sets
         // the mode, report that; when it's obeying the radio (rig_mode empty),
         // best-effort report the sideband.
-        let m = self
-            .0
-            .lock()
-            .map(|e| {
-                let s = e.settings();
-                let rm = s.rig_mode();
-                if !rm.is_empty() {
-                    rm
-                } else if s.sideband.trim().is_empty() {
-                    "USB".into()
-                } else {
-                    s.sideband.clone()
-                }
-            })
-            .unwrap_or_else(|_| "USB".into());
+        let m = {
+            let e = engine_lock(&self.0);
+            let s = e.settings();
+            let rm = s.rig_mode();
+            if !rm.is_empty() {
+                rm
+            } else if s.sideband.trim().is_empty() {
+                "USB".into()
+            } else {
+                s.sideband.clone()
+            }
+        };
         (m, 2700)
     }
     fn ptt(&self) -> bool {
-        self.0
-            .lock()
-            .map(|e| e.snapshot().radio.transmitting)
-            .unwrap_or(false)
+        engine_lock(&self.0).snapshot().radio.transmitting
     }
     fn set_freq(&self, hz: u64) -> bool {
-        let Ok(mut e) = self.0.lock() else {
-            return false;
-        };
+        let mut e = engine_lock(&self.0);
         let mhz = hz as f64 / 1_000_000.0;
         // Derive the band label from the freq; keep the current band if off-plan.
         let band = propagation::model::Band::from_mhz(mhz)
@@ -10249,9 +10238,7 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         true
     }
     fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
-        let Ok(mut e) = self.0.lock() else {
-            return false;
-        };
+        let mut e = engine_lock(&self.0);
         let (mhz, band) = {
             let s = e.settings();
             (s.dial_mhz, s.band.clone())
@@ -10271,8 +10258,11 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
     fn set_ptt(&self, on: bool) -> bool {
         // v2 arbitration: a foreign app may key ONLY when the operator opted in
         // (Settings cat_broker_ptt), TX is enabled/legal, and Nexus is idle —
-        // the engine owns the decision (Engine::broker_ptt). Un-key always lands.
-        self.0.lock().map(|mut e| e.broker_ptt(on)).unwrap_or(false)
+        // the engine owns the decision (Engine::broker_ptt). Un-key always lands,
+        // and it must land on a POISONED engine too: this call is the broker's
+        // client-disconnect fail-safe, and a raw .lock() here left the rig keyed
+        // in exactly the panic case the recovering accessor exists for.
+        engine_lock(&self.0).broker_ptt(on)
     }
 }
 

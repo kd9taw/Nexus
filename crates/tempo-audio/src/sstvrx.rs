@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tempo_app::dto::SstvGalleryEntry;
-use tempo_app::engine::{Engine, SstvProgress};
+use tempo_app::engine::{engine_lock, Engine, SstvProgress};
 use tempo_sstv::{SstvDecoder, SstvEvent};
 
 use crate::service::SHUTDOWN;
@@ -67,10 +67,7 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
             return;
         }
         std::thread::sleep(POLL);
-        let armed = match engine.lock() {
-            Ok(e) => e.sstv_armed(),
-            Err(_) => false,
-        };
+        let armed = engine_lock(&engine).sstv_armed();
         if !armed {
             // Disarm drops the decoder + any partial image (the engine already
             // cleared its progress in `set_sstv_armed`); re-arm starts clean.
@@ -88,10 +85,7 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
                 }
             }
         }
-        let audio = match engine.lock() {
-            Ok(mut e) => e.take_sstv_audio(),
-            Err(_) => continue,
-        };
+        let audio = engine_lock(&engine).take_sstv_audio();
         if audio.is_empty() {
             continue;
         }
@@ -142,12 +136,11 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
                     // The callsign burst that trailed the just-saved image:
                     // stamp it onto that gallery entry and re-persist the JSON.
                     if let Some(path) = last_finished_path.clone() {
-                        if let Ok(mut e) = engine.lock() {
-                            e.set_sstv_gallery_fsk_id(&path, text);
-                            let snapshot = e.sstv_gallery().to_vec();
-                            drop(e);
-                            sstv_store::save_gallery(&gallery_dir, &snapshot);
-                        }
+                        let mut e = engine_lock(&engine);
+                        e.set_sstv_gallery_fsk_id(&path, text);
+                        let snapshot = e.sstv_gallery().to_vec();
+                        drop(e);
+                        sstv_store::save_gallery(&gallery_dir, &snapshot);
                     }
                 }
                 // `SstvEvent` is #[non_exhaustive]: future event kinds are
@@ -159,7 +152,8 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
             if let Some(img) = inflight.as_ref() {
                 let (pw, ph, rgb) =
                     sstv_store::downscale_rgb(img.width, img.height, &img.pixels, PREVIEW_MAX_W);
-                if let Ok(mut e) = engine.lock() {
+                {
+                    let mut e = engine_lock(&engine);
                     // Disarm race guard: if the operator disarmed while this
                     // batch decoded, don't resurrect stale progress.
                     if e.sstv_armed() {
@@ -198,30 +192,26 @@ fn finish_image(
     let path = gallery_dir.join(&filename);
     if let Err(e) = sstv_store::write_bmp(&path, image.width, image.height, &image.pixels) {
         eprintln!("sstv-rx: failed to save {}: {e}", path.display());
-        if let Ok(mut e) = engine.lock() {
-            e.set_sstv_progress(None);
-        }
+        engine_lock(engine).set_sstv_progress(None);
         return None;
     }
     let path_str = path.to_string_lossy().into_owned();
     // Record on the session gallery (freq stamped under the same lock), then
     // persist the whole capped list beside the images.
-    let snapshot: Vec<SstvGalleryEntry> = match engine.lock() {
-        Ok(mut e) => {
-            let entry = SstvGalleryEntry {
-                path: path_str.clone(),
-                mode: img.mode_name.to_string(),
-                finished_utc: sstv_store::utc_iso(unix),
-                freq_mhz: e.settings().dial_mhz,
-                lines: image.height,
-                // Filled in later if the trailing FSK-ID burst decodes.
-                fsk_id: None,
-            };
-            e.push_sstv_gallery(entry);
-            e.set_sstv_progress(None);
-            e.sstv_gallery().to_vec()
-        }
-        Err(_) => return None,
+    let snapshot: Vec<SstvGalleryEntry> = {
+        let mut e = engine_lock(engine);
+        let entry = SstvGalleryEntry {
+            path: path_str.clone(),
+            mode: img.mode_name.to_string(),
+            finished_utc: sstv_store::utc_iso(unix),
+            freq_mhz: e.settings().dial_mhz,
+            lines: image.height,
+            // Filled in later if the trailing FSK-ID burst decodes.
+            fsk_id: None,
+        };
+        e.push_sstv_gallery(entry);
+        e.set_sstv_progress(None);
+        e.sstv_gallery().to_vec()
     };
     sstv_store::save_gallery(gallery_dir, &snapshot);
     Some(path_str)

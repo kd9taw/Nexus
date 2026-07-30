@@ -3620,10 +3620,15 @@ impl Engine {
         // Anything owning the transmitter — a mic key, a tune carrier, a slot
         // over, a voice/CW/RTTY/SSTV over — refuses the foreign key: granting it
         // mid-transmission double-keys the rig. One arbiter, not a partial copy.
+        // EXCEPT the broker's own already-held key: a re-asserted `T 1` from the
+        // current holder (a retry, a periodic assert) is idempotent — real
+        // rigctld answers RPRT 0 to a redundant key-down, and refusing it fails
+        // the client mid-over while the rig stays keyed. Nexus's own mic wins.
+        let re_assert = self.broker_ptt && !self.manual_ptt;
         if !self.settings.cat_broker_ptt
             || !self.tx_enabled
             || !self.tx_allowed()
-            || self.tx_owner().is_some()
+            || (!re_assert && self.tx_owner().is_some())
         {
             return false;
         }
@@ -7369,11 +7374,6 @@ impl Engine {
         self.rx_offset_hz
     }
 
-    /// Whether the operator's license class permits transmitting at the CURRENT dial + mode.
-    /// `Open` always permits. Judges the EMITTED RF, not the bare dial: for digital the signal
-    /// sits at the dial + the TX audio offset (≈+1.5 kHz on USB), so a dial just below a
-    /// higher-class-only edge can still emit inside it. Every TX path ANDs this in; the
-    /// snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
     /// The current TX-gate inputs, stamped into every [`TxPlan`] and re-checked
     /// by [`Self::commit_tx`] — see [`TxGateStamp`] for why.
     fn tx_gate_stamp(&self) -> TxGateStamp {
@@ -7386,6 +7386,11 @@ impl Engine {
         }
     }
 
+    /// Whether the operator's license class permits transmitting at the CURRENT dial + mode.
+    /// `Open` always permits. Judges the EMITTED RF, not the bare dial: for digital the signal
+    /// sits at the dial + the TX audio offset (≈+1.5 kHz on USB), so a dial just below a
+    /// higher-class-only edge can still emit inside it. Every TX path ANDs this in; the
+    /// snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
     pub fn tx_allowed(&self) -> bool {
         use crate::settings::OperatingMode;
         let class = self.settings.license_class;
@@ -8753,12 +8758,15 @@ impl Engine {
             // and a decoder that panics every slot reads as a quiet band. Surface it
             // on the persistent error lane (shared with audio errors — a later
             // successful device reopen may clear it, which is acceptable; the common
-            // case is that it stays up until the operator sees it).
-            self.audio_error = Some(format!(
-                "A {:?} decode crashed and was contained — receive continues. This \
-                 is a bug; please report it.",
-                result.pass
-            ));
+            // case is that it stays up until the operator sees it). Never STOMP a
+            // live audio/CAT error though — that lane's owner outranks a notice.
+            if self.audio_error.is_none() {
+                self.audio_error = Some(format!(
+                    "A {:?} decode crashed and was contained — receive continues. This \
+                     is a bug; please report it.",
+                    result.pass
+                ));
+            }
             return DecodeApplied::Stale;
         }
         let DecodeResult {
@@ -17505,7 +17513,18 @@ mod tests {
             "Stop TX between plan and commit must kill the planned over"
         );
 
-        // (4) Control: nothing moved → the over keys.
+        // (4) A TX-offset drag during the build: set_tx_offset bumps NO
+        // generation, so only the stamped VALUE can catch it — this is the case
+        // that keeps the stamp's fields honest (every other case above also
+        // bumps the generation, which would mask a deleted field).
+        let (mut e, plan, wave) = mk();
+        e.set_tx_offset(777.0);
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "an offset moved during the build must refuse via the value stamp"
+        );
+
+        // (5) Control: nothing moved → the over keys.
         let (mut e, plan, wave) = mk();
         assert!(
             !e.commit_tx(&plan, wave, plan.slot).is_empty(),

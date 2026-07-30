@@ -12,7 +12,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tempo_app::engine::Engine;
+use tempo_app::engine::{engine_lock, Engine};
 use tempo_core::rtty::{tone_pair, RttyConfig, RttyDemod, RttyDemodulator};
 
 use crate::service::SHUTDOWN;
@@ -45,8 +45,9 @@ fn run(engine: Arc<Mutex<Engine>>) {
             return;
         }
         std::thread::sleep(POLL);
-        let (armed, cfg, reset) = match engine.lock() {
-            Ok(mut e) => (
+        let (armed, cfg, reset) = {
+            let mut e = engine_lock(&engine);
+            (
                 e.rtty_armed(),
                 (
                     e.rtty_baud(),
@@ -55,8 +56,7 @@ fn run(engine: Arc<Mutex<Engine>>) {
                     e.rtty_center_hz(),
                 ),
                 e.take_rtty_afc_reset(),
-            ),
-            Err(_) => continue,
+            )
         };
         if !armed {
             demod = None;
@@ -66,10 +66,7 @@ fn run(engine: Arc<Mutex<Engine>>) {
             demod = None; // rebuild below: fresh AFC acquire on the new config
             applied = cfg;
         }
-        let audio = match engine.lock() {
-            Ok(mut e) => e.take_rtty_audio(),
-            Err(_) => continue,
-        };
+        let audio = engine_lock(&engine).take_rtty_audio();
         if audio.is_empty() {
             continue;
         }
@@ -86,8 +83,6 @@ fn run(engine: Arc<Mutex<Engine>>) {
         // The heavy part — mixers, FFT filters, ATC, clock recovery — off-lock.
         let chars = d.feed(&audio);
         let (afc_hz, afc_locked) = (d.afc_offset_hz(), d.afc_locked());
-        if let Ok(mut e) = engine.lock() {
-            e.push_rtty_decode(&chars, afc_hz, afc_locked);
-        }
+        engine_lock(&engine).push_rtty_decode(&chars, afc_hz, afc_locked);
     }
 }

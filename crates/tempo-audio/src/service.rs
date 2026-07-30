@@ -531,10 +531,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
     // Switching = a HANDOFF (swap the active Rig with a pool one) — no teardown, so no read-back race.
     let pool: MonitorPool = Arc::new(Mutex::new(Vec::new()));
     // The active radio at startup (so the monitor thread doesn't also open it).
-    let mut last_active = engine
-        .lock()
-        .map(|e| e.settings().active_radio)
-        .unwrap_or(0);
+    let mut last_active = engine_lock(&engine).settings().active_radio;
     // Raised the moment a switch intent is seen, dropped when the handoff completes: the
     // monitor thread pauses its pool work while set, so a switch never queues behind slow
     // monitor CAT reads (the pool lock is otherwise held for whole read bursts).
@@ -1768,10 +1765,7 @@ impl RadioLoop {
         // short-circuits before any lock). Folding it into the key makes toggling take effect
         // on the next tick (key flips Some↔None → the worker starts/stops).
         let flex_enabled = matches!(kind, Some(SpectrumKind::FlexVita))
-            && engine
-                .lock()
-                .map(|e| e.settings().flex_native_pan)
-                .unwrap_or(false);
+            && engine_lock(engine).settings().flex_native_pan;
         let key = match kind {
             None => None,
             Some(SpectrumKind::FlexVita) if !flex_enabled => None, // opt-in off → no worker
@@ -1781,10 +1775,7 @@ impl RadioLoop {
         // Flex user can want native audio without the native pan, or vice versa. Same short-circuit
         // discipline: only read the toggle when a scope-capable Flex is active.
         let dax_enabled = matches!(kind, Some(SpectrumKind::FlexVita))
-            && engine
-                .lock()
-                .map(|e| e.settings().flex_native_audio)
-                .unwrap_or(false);
+            && engine_lock(engine).settings().flex_native_audio;
         let dax_key = if dax_enabled {
             Some((rig_model, is_network))
         } else {
@@ -2437,17 +2428,14 @@ impl RadioLoop {
                 // CAT frames (NOT the waveform stream), so no 115200 requirement — but they share
                 // the half-duplex bus, so hold them until unkey (same reason the stream pauses).
                 if !keyed_now {
-                    let (span, refl, fixed) = engine
-                        .lock()
-                        .ok()
-                        .map(|mut e| {
-                            (
-                                e.take_scope_span_request(),
-                                e.take_scope_ref_request(),
-                                e.take_scope_fixed_request(),
-                            )
-                        })
-                        .unwrap_or((None, None, None));
+                    let (span, refl, fixed) = {
+                        let mut e = engine_lock(engine);
+                        (
+                            e.take_scope_span_request(),
+                            e.take_scope_ref_request(),
+                            e.take_scope_fixed_request(),
+                        )
+                    };
                     if let Some(hz) = span {
                         d.set_scope_span(hz);
                     }
@@ -3799,11 +3787,10 @@ impl RadioLoop {
                 }
             }
             // RX DSP levels: NR level (0..1) + AGC speed — applied on change like mic gain.
-            let (nr, agc) = engine
-                .lock()
-                .ok()
-                .map(|e| (e.nr_level(), e.agc()))
-                .unwrap_or((None, None));
+            let (nr, agc) = {
+                let e = engine_lock(engine);
+                (e.nr_level(), e.agc())
+            };
             if let Some(n) = nr {
                 if Some(n) != self.last_nr_level && rig.set_rx_level("NR", n).is_ok() {
                     self.last_nr_level = Some(n);
@@ -5087,10 +5074,7 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
         "time.google.com:123",
     ];
     loop {
-        let enabled = engine
-            .lock()
-            .map(|e| e.settings().clock_check)
-            .unwrap_or(false);
+        let enabled = engine_lock(&engine).settings().clock_check;
         let offset = if enabled {
             tempo_net::sntp::query_any(&SERVERS, Duration::from_secs(3)).ok()
         } else {

@@ -505,13 +505,29 @@ mod tests {
     }
 
     #[test]
-    fn eight_bit_bytes_in_message_object_and_status_bodies_do_not_panic() {
-        // The same fixed-layout hazard exists for the 9-byte addressee / object name
-        // regions; a raw 8-bit byte anywhere in them must degrade, never panic.
-        let _ = parse(b":N0CALL\xB0  :hello");
-        let _ = parse(b";OBJ\xB0     *092345z4903.50N/07201.75W-x");
-        let _ = parse(b">\xB0 status with 8-bit noise");
-        let _ = parse(b"@09234\xB0z4903.50N/07201.75W>car");
+    fn eight_bit_bytes_in_message_object_and_status_bodies_still_parse() {
+        // The byte-first rewrite's ACCEPTANCE contract for the other fixed-layout
+        // regions: an 8-bit byte inside a 9-byte addressee/object-name region (or
+        // a position timestamp) is replaced and the packet still parses to its
+        // real type — where the old char-boundary guards rejected the whole
+        // packet to Other. Real igate feeds carry latin-1 in exactly these spots.
+        match parse(b":N0CALL\xB0  :hello") {
+            AprsInfo::Message(m) => assert_eq!(m.text, "hello"),
+            o => panic!("expected a message, got {o:?}"),
+        }
+        assert!(matches!(
+            parse(b";OBJ\xB0     *092345z4903.50N/07201.75W-x"),
+            AprsInfo::Object { .. }
+        ));
+        assert!(matches!(
+            parse(b">\xB0 status with 8-bit noise"),
+            AprsInfo::Status { .. }
+        ));
+        // A degree sign inside the 7-byte timestamp: the coordinates still count.
+        match parse(b"@09234\xB0z4903.50N/07201.75W>car") {
+            AprsInfo::Position(p) => assert!((p.lat - 49.0583333).abs() < 1e-6),
+            o => panic!("expected a position, got {o:?}"),
+        }
     }
 
     fn b91(mut v: u32) -> [u8; 4] {

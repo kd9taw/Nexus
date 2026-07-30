@@ -11,7 +11,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tempo_app::engine::{AprsHeard, AprsSource, Engine};
+use tempo_app::engine::{engine_lock, AprsHeard, AprsSource, Engine};
 use tempo_core::aprs::{AprsPacket, Deframer, Demod};
 
 use crate::service::SHUTDOWN;
@@ -89,27 +89,19 @@ fn run(engine: Arc<Mutex<Engine>>) {
             return;
         }
         std::thread::sleep(POLL);
-        let armed = match engine.lock() {
-            Ok(e) => e.aprs_armed(),
-            Err(_) => continue,
-        };
+        let armed = engine_lock(&engine).aprs_armed();
         if !armed {
             decoder = None;
             continue;
         }
-        let audio = match engine.lock() {
-            Ok(mut e) => e.take_aprs_audio(),
-            Err(_) => continue,
-        };
+        let audio = engine_lock(&engine).take_aprs_audio();
         if audio.is_empty() {
             // NOT a `continue` before reporting: an armed decoder that is being handed nothing is
             // exactly the "the app is deaf" case the operator needs told about, and it is
             // invisible if we only ever report drains that carried audio. The engine records the
             // empty drain WITHOUT clobbering the last real level — this poll runs faster than the
             // radio loop feeds it, so empty drains are routine, not evidence of a fault.
-            if let Ok(mut e) = engine.lock() {
-                e.note_aprs_rx(0, 0.0, 0, 0, 0, now_unix());
-            }
+            engine_lock(&engine).note_aprs_rx(0, 0.0, 0, 0, 0, now_unix());
             continue;
         }
         let (demod, deframer) = decoder.get_or_insert_with(|| (Demod::new(), Deframer::new()));
@@ -128,7 +120,8 @@ fn run(engine: Arc<Mutex<Engine>>) {
                 )
             })
             .collect();
-        if let Ok(mut e) = engine.lock() {
+        {
+            let mut e = engine_lock(&engine);
             e.note_aprs_rx(
                 audio.len(),
                 step.audio_peak,

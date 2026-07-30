@@ -65,6 +65,8 @@ carried a multibyte character — from a hand-edited file, another logger's expo
 WSJT-X logging datagram — could crash the radio loop itself, ending TX/RX until restart. Both
 parsers now treat malformed input as the one bad packet or record it is and carry on.
 
+### Fixed: the Call Roster and Band Activity filters reset on every restart
+
 "Needed only" and "Hide worked" on the Operate Call Roster, and the Band Activity filter chip
 (All / CQ / To me / On RX / B4 / New), now come back the way you left them. They were held in
 screen state only, so every launch put them back to showing everything and you re-ticked them at

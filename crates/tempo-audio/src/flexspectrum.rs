@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
 use tempo_app::dto::Spectrum;
-use tempo_app::engine::Engine;
+use tempo_app::engine::{engine_lock, Engine};
 use tempo_net::flexcat::{parse_meter_defs, parse_pan_status, FlexCat, FlexMsg, MeterDef};
 use tempo_net::flexvita::{
     convert_meter_raw, dbm_to_watts, parse_fft, parse_meter_values, parse_vita, FftReassembler,
@@ -167,7 +167,8 @@ fn route_meters(
     if smeter.is_none() && swr.is_none() && alc.is_none() && po_w.is_none() {
         return;
     }
-    if let Ok(mut e) = engine.lock() {
+    {
+        let mut e = engine_lock(engine);
         if let Some(db) = smeter {
             e.observe_rig_smeter(db);
         }
