@@ -18,10 +18,10 @@ adds things stock WSJT-X doesn't have — country and worked-before flags on eve
 decode, one-click "work it" that jumps band/mode/frequency together, and a Needed
 board that ranks the stations on the air by what they're worth to *your* log.
 
-But WSJT-X still has **more modes** (Q65, MSK144, WSPR, and others Nexus does not
-implement), and it runs on macOS and Linux where Nexus ships Windows only today.
-Nexus speaks WSJT-X's UDP protocol, so it isn't all-or-nothing — your
-GridTracker / JTAlert / logger workflow survives either way.
+Nexus now transmits and receives **Q65, FST4, FST4W, MSK144, JT65 and WSPR** as
+well, so the mode gap has largely closed. WSJT-X still runs on macOS, which Nexus
+does not. Nexus speaks WSJT-X's UDP protocol, so it isn't all-or-nothing: your
+GridTracker, JTAlert and logger workflow survives either way.
 
 ### What is TempoFast, in one sentence?
 
@@ -61,7 +61,7 @@ distance and rough conditions, and what you decoded versus what you expected —
 including the surprises (false decodes, retransmissions that combined, stations
 you saw that others didn't). Field reports are the single most useful contribution
 right now. Open a ticket on the SourceForge tracker at
-<https://sourceforge.net/p/nexus-ham-radio/tickets/>.
+<https://github.com/kd9taw/Nexus/issues/new/choose>.
 
 ---
 
@@ -148,29 +148,40 @@ modes you already run.
 
 ### Where is the source code, and can I contribute?
 
-The repository is <https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/>. Contributions are welcome —
+The repository is <https://github.com/kd9taw/Nexus>. Contributions are welcome —
 issues, field reports, and pull requests all help. The most valuable contributions
 during beta are **on-air decode reports** for TempoFast and TempoDeep and **rig confirmations**
 for radios beyond the two the author has bench-verified.
 
 ### Mac or Linux?
 
-Not yet as a shipping build. The codebase is cross-platform Rust/Tauri, but only
-the **Windows** installer ships today (built, in fact, by cross-compiling from
-Linux). If you want a native macOS or Linux build, say so on the issue tracker —
-interest is what prioritizes it.
+**Linux ships**, as a `.deb` and an AppImage, and there is a separate arm64 `.deb`
+for 64-bit Raspberry Pi OS on a Pi 3, 4 or 5. On a slower Pi, Settings, Decode
+depth, Fast keeps FT8 and FT4 decoding in real time. CAT on Linux uses the system
+Hamlib; the `.deb` pulls `libhamlib-utils` in for you and AppImage users should
+`sudo apt install libhamlib-utils`.
+
+**macOS does not ship.** The codebase is cross-platform Rust and Tauri, so it is a
+packaging and testing job rather than a port. If you want it, say so on the issue
+tracker, because interest is what prioritises it.
 
 ### Will there be automatic updates?
 
-Nexus checks SourceForge for new releases and notifies you in-app with a Download
-button when one is available. Installing is still manual — download the new
-installer (and verify its SHA-256), then run it over your existing install.
+They already work. A new version downloads quietly in the background and then
+offers to install. Nothing installs behind your back and nothing happens on a
+schedule: the button waits for you, and it stands down while you are transmitting,
+tuning, in a contact or running CQ, and tells you which. Restarting mid-contact
+would lose the contact, so it will not. Every update is signed and verified before
+it is applied, and an altered installer is refused.
+
+Windows and the Linux AppImage update in place. The `.deb` packages, including both
+Raspberry Pi builds, are managed by your package system and notify you instead.
 
 ---
 
 **More:** [Quick Start](Quick-Start) · [Install](Install) · [Rig Setup](Rig-Setup)
 · [Documentation](Documentation) · the deep protocol docs on
-[SourceForge](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/protocols).
+[SourceForge](https://github.com/kd9taw/Nexus/tree/main/docs).
 
 *License: GPL-3.0 · by KD9TAW · Repository:
-<https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/>*
+<https://github.com/kd9taw/Nexus>*
