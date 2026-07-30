@@ -862,6 +862,10 @@ export function MapView({
 
   // Draw.
   useEffect(() => {
+    // Empty the cssVar memo BEFORE any token is read: each draw then resolves
+    // each token exactly once (the point of the memo), and the first frame
+    // after a theme switch can never paint from the old theme's cache.
+    invalidateCssVarCache()
     const canvas = canvasRef.current
     const { w, h } = size
     if (!canvas || w === 0 || h === 0 || !me) return
@@ -1832,10 +1836,8 @@ export function MapView({
       ctx.lineWidth = 1.5
       ctx.stroke()
     }
-    // theme is a draw dependency so colors refresh on theme switch — and the
-    // cssVar cache empties FIRST, or the memoized tokens would repaint the old
-    // theme's colors.
-    invalidateCssVarCache()
+    // theme is a draw dependency so colors refresh on theme switch (the cssVar
+    // memo is emptied at the top of this effect).
     void theme
   }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick])
 
