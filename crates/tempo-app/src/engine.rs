@@ -11121,10 +11121,9 @@ mod tests {
             .collect();
         e.ingest_decodes_for_test(&rows, 2);
 
-        use std::sync::atomic::Ordering;
-        tempo_core::logbook::LOG_SWEEPS.store(0, Ordering::Relaxed);
+        tempo_core::logbook::LOG_SWEEPS.with(|c| c.set(0));
         let _snap = e.snapshot();
-        let sweeps = tempo_core::logbook::LOG_SWEEPS.load(Ordering::Relaxed);
+        let sweeps = tempo_core::logbook::LOG_SWEEPS.with(|c| c.get());
         assert!(
             sweeps <= 2,
             "snapshot() swept the logbook {sweeps} times for 40 decode rows — \

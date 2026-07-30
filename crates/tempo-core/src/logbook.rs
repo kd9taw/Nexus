@@ -15,13 +15,17 @@ use std::path::Path;
 /// comment. A test that pins "snapshot performs a bounded number of sweeps"
 /// stops the SHAPE from recurring, not just the instance. Release builds
 /// compile this away.
+/// PER-THREAD, not a process global: the test harness runs tests in parallel,
+/// and a shared counter would count every OTHER test's sweeps into the bound.
 #[cfg(debug_assertions)]
-pub static LOG_SWEEPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    pub static LOG_SWEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[inline]
 fn note_log_sweep() {
     #[cfg(debug_assertions)]
-    LOG_SWEEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    LOG_SWEEPS.with(|c| c.set(c.get() + 1));
 }
 
 /// One logged contact.
