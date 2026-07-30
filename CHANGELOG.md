@@ -36,6 +36,11 @@ as the confirmation, well down the list. And among stations of equal need the ro
 quietest first, which is backwards: of two equally-needed stations the louder one is the better
 bet. Both are fixed, and the row's colour now names the same need the sort ranked it by.
 
+That weakest-need mix-up was not confined to the roster. The same per-station need was feeding the
+map and the band strip, so a station worth chasing could be painted in the colour of the least
+interesting thing about it anywhere it appeared. Every surface now takes a station's strongest
+need, from one shared piece of logic rather than three.
+
 ## [Unreleased]
 
 ### APRS says which radio it is listening to

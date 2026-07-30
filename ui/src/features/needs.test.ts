@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { NEED_TIER, chaseRank, modeClassOf, strongestNeed, visibleNeeds, workTarget } from './needs'
+import {
+  NEED_TIER,
+  chaseRank,
+  modeClassOf,
+  strongestNeed,
+  topNeedByCall,
+  visibleNeeds,
+  workTarget,
+} from './needs'
 import type { BandChannel, NeedAlert, NeedTag } from '../types'
 
 function alert(call: string, mode: string, band = '20m', freqMhz: number | null = null): NeedAlert {
@@ -165,6 +173,50 @@ describe('strongestNeed', () => {
     expect(strongestNeed([])).toBeNull()
     expect(strongestNeed(undefined)).toBeNull()
     expect(strongestNeed(null)).toBeNull()
+  })
+})
+
+describe('topNeedByCall', () => {
+  // The map every surface colours rows from — roster, band strip and map. It used to be
+  // built by writing each alert into the same slot with NO guard, so the last one won; the
+  // backend orders alerts priority-descending, making that reliably the WEAKEST.
+  it('colours a multi-band call from its STRONGEST alert', () => {
+    const byCall = new Map([
+      ['DL1ABC', [ranked(['NewEntity'], 100, '20m'), ranked(['Confirm'], 10, '40m')]],
+    ])
+    expect(topNeedByCall(byCall).get('DL1ABC')).toBe('NewEntity')
+  })
+
+  it('does not depend on the order the alerts arrive in', () => {
+    const strong = ranked(['NewEntity'], 100, '20m')
+    const weak = ranked(['Confirm'], 10, '40m')
+    expect(topNeedByCall(new Map([['W1AW', [strong, weak]]])).get('W1AW')).toBe('NewEntity')
+    expect(topNeedByCall(new Map([['W1AW', [weak, strong]]])).get('W1AW')).toBe('NewEntity')
+  })
+
+  it('takes the lead tag of that alert, not the highest tag across all of them', () => {
+    // tags[0] within one alert is already its own strongest reason (the backend sorts it),
+    // so the answer is "the best alert's lead tag" — not a union re-ranked here.
+    const byCall = new Map([['K9LC', [ranked(['NewBand', 'Pota'], 50)]]])
+    expect(topNeedByCall(byCall).get('K9LC')).toBe('NewBand')
+  })
+
+  it('omits a call whose every alert is tagless, so has() still means "needed"', () => {
+    const byCall = new Map([['NOBODY', [ranked([], 99)]]])
+    expect(topNeedByCall(byCall).has('NOBODY')).toBe(false)
+  })
+
+  it('keeps the calls apart and passes the keys through untouched', () => {
+    const byCall = new Map([
+      ['A', [ranked(['NewGrid'], 55)]],
+      ['B', [ranked(['NewMode'], 30)]],
+    ])
+    const m = topNeedByCall(byCall)
+    expect([...m]).toEqual([
+      ['A', 'NewGrid'],
+      ['B', 'NewMode'],
+    ])
+    expect(topNeedByCall(new Map()).size).toBe(0)
   })
 })
 

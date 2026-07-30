@@ -55,7 +55,7 @@ import { useJourneyUnlocks } from './useJourneyUnlocks'
 import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
-import { visibleNeeds, workTarget, modeClassOf } from './features/needs'
+import { visibleNeeds, workTarget, modeClassOf, topNeedByCall } from './features/needs'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
@@ -122,7 +122,7 @@ import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { tickIssAutoArm } from './features/issAutoArm'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
-import type { PropagationSnapshot, FeedHealth, NeedTag, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult } from './types'
+import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult } from './types'
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
@@ -710,15 +710,6 @@ export default function App() {
     () => visibleNeeds(needAlerts, { cw: cwEnabled, phone: phoneEnabled }),
     [needAlerts, cwEnabled, phoneEnabled],
   )
-  // Need-tier per heard call (top tag) for roster/map colouring — from the GATED set so
-  // a disabled mode never colours a station the board hides.
-  const needByCall = useMemo(() => {
-    const m = new Map<string, NeedTag>()
-    for (const a of visibleAlerts) {
-      if (a.tags.length > 0) m.set(a.call.toUpperCase(), a.tags[0])
-    }
-    return m
-  }, [visibleAlerts])
   // Activity TYPE per heard call (POTA / SOTA / DXpedition), independent of the need tier.
   // needByCall keeps only tags[0], so a POTA activator that's ALSO a new band shows the band
   // colour and loses the program tag — this map surfaces the program badge regardless, so the
@@ -746,6 +737,11 @@ export default function App() {
     }
     return m
   }, [visibleAlerts])
+  // Need-tier per heard call for roster/map/band-strip colouring — each call's STRONGEST
+  // need, derived from the grouped set above so there is ONE definition of that (shared with
+  // the roster's "sort by need"). From the GATED alerts, so a disabled mode never colours a
+  // station the board hides.
+  const needByCall = useMemo(() => topNeedByCall(needAlertsByCall), [needAlertsByCall])
   const [typingTick, setTypingTick] = useState(0)
   const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
