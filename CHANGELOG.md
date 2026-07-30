@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: the Call Roster and Band Activity filters reset on every restart
+
+"Needed only" and "Hide worked" on the Operate Call Roster, and the Band Activity filter chip
+(All / CQ / To me / On RX / B4 / New), now come back the way you left them. They were held in
+screen state only, so every launch put them back to showing everything and you re-ticked them at
+the start of each session.
+
+Each pane remembers its own set, so a torn-off Operate window can sit on Needed-only while the
+docked one still shows the whole band. A window that has never been given its own filters opens on
+the ones you are already using rather than on defaults. If you have never touched these controls,
+nothing changes: both checkboxes start off and the chip starts on All, exactly as before.
+
+A stored value that is damaged, or left over from a build whose filters were named differently, is
+ignored rather than applied. The roster can never come up quietly hiding rows with no ticked
+checkbox to explain why.
+
+## [Unreleased]
+
 ### APRS says which radio it is listening to
 
 If more than one of your radios covers the APRS band, the decode readout now names the one it is

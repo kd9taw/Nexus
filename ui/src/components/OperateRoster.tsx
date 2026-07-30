@@ -11,6 +11,7 @@ import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, mag
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
 import { isIgnored } from '../txMessages'
+import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../operateFilters'
 import { RarityChip } from './RarityChip'
 
 interface Props {
@@ -103,8 +104,20 @@ export function OperateRoster({
       .catch(() => {})
   }, [])
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'need', dir: 'desc' })
-  const [neededOnly, setNeededOnly] = useState(false)
-  const [hideWorked, setHideWorked] = useState(false)
+  // Persisted per-surface (operateFilters.ts): the operator ticks Needed-only once and it is
+  // still ticked after a restart. Defaults are both off, so nothing changes for anyone who
+  // has never touched them.
+  const [filters, setFilters] = useState(loadRosterFilters)
+  const { neededOnly, hideWorked } = filters
+  // Merges against the LIVE previous value (NeededPanel's toggleBand pattern) so ticking one
+  // checkbox can never write away the other's state.
+  const setFilter = (patch: Partial<RosterFilters>) => {
+    setFilters((prev) => {
+      const next = { ...prev, ...patch }
+      saveRosterFilters(next)
+      return next
+    })
+  }
   const me = useMemo(() => gridToLatLon(myGrid), [myGrid])
 
   const rows = useMemo(() => {
@@ -204,10 +217,18 @@ export function OperateRoster({
         <strong>Call Roster</strong>
         <span className="or-count">{rows.length}</span>
         <label className="or-filter">
-          <input type="checkbox" checked={neededOnly} onChange={(e) => setNeededOnly(e.target.checked)} /> Needed only
+          <input
+            type="checkbox"
+            checked={neededOnly}
+            onChange={(e) => setFilter({ neededOnly: e.target.checked })}
+          /> Needed only
         </label>
         <label className="or-filter">
-          <input type="checkbox" checked={hideWorked} onChange={(e) => setHideWorked(e.target.checked)} /> Hide worked
+          <input
+            type="checkbox"
+            checked={hideWorked}
+            onChange={(e) => setFilter({ hideWorked: e.target.checked })}
+          /> Hide worked
         </label>
         {onSpot && (
           <button
