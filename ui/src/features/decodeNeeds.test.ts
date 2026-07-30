@@ -109,3 +109,26 @@ describe('resolveDecodeNeeds', () => {
     expect(r.cats[0]).toBe('entity')
   })
 })
+
+// The mirror of the false-positive: the backend sends the SPECIFIC submode as the
+// display label ('FT8'/'FT4'/'RTTY') while the decode feed describes itself by class
+// ('Digital'). The old raw `a.mode === feedMode` was never true for those rows, so every
+// genuine NewMode/Confirm pill was silently dropped on the digital feed.
+describe('mode-class + band normalization on the decode feed', () => {
+  for (const m of ['FT8', 'FT4', 'RTTY', 'Digital']) {
+    it(`keeps a mode-gated need whose label is '${m}' on the Digital feed`, () => {
+      const r = resolveDecodeNeeds(decode(), '20m', [alert(['NewMode'], '20m', { mode: m })])
+      expect(r.cats).toContain('mode')
+    })
+  }
+
+  it('still withholds a CW mode need from the digital feed', () => {
+    const r = resolveDecodeNeeds(decode(), '20m', [alert(['NewMode'], '20m', { mode: 'CW' })])
+    expect(r.cats).not.toContain('mode')
+  })
+
+  it('folds band-label case — a real log carries both 20m and 20M', () => {
+    const r = resolveDecodeNeeds(decode(), '20M', [alert(['NewBand'], '20m')])
+    expect(r.cats).toContain('band')
+  })
+})

@@ -41,6 +41,51 @@ map and the band strip, so a station worth chasing could be painted in the colou
 interesting thing about it anywhere it appeared. Every surface now takes a station's strongest
 need, from one shared piece of logic rather than three.
 
+### Fixed: the Needed board no longer claims a "new mode" you already worked
+
+An operator with roughly 11,000 FT8 contacts was shown a new mode needed for Asiatic Russia on
+30m, on a band and entity they have six confirmed FT8 contacts with. The need behind it was real —
+they have never worked that entity on CW — but nothing on the screen said so, so the board looked
+like it could not read the log.
+
+Two separate things were wrong, and both are fixed.
+
+- **The row said the wrong thing.** A mode need is judged per DXCC entity and mode class across
+  *all* bands, which is what the per-mode DXCC awards count. The headline appended whichever band
+  the station happened to be spotted on, turning "you have never worked Asiatic Russia on CW" into
+  "New mode — CW Asiatic Russia 30m". Mode rows now read **"New mode — CW Asiatic Russia (any
+  band)"** and state exactly the claim being made. Band slots remain the separate **new band** row.
+- **The roster showed chips you could not act on.** Need chips on the Call Roster and Stations
+  panel were keyed by callsign alone and pooled every alert for that call, so a CW mode need painted
+  an unlabelled `MODE` chip onto a 30m FT8 roster. Chips, row colour, and the **Needed** filter are
+  now scoped to the band and mode class actually in front of you, matching what Band Activity has
+  always done. A genuinely cross-band need still shows on the Needed board, where the band is named.
+
+Three further mis-classifications surfaced in the same audit, each of which could invent or hide a
+need:
+
+- **Phone contacts logged as `PH`** — the token the N3FJP family exports, and present in real
+  imported logs — were counted as *digital*. They credited a digital mode slot they never earned
+  and left the phone slot reading unworked. `PH` and the digital-voice modes (`DIGITALVOICE`,
+  `DSTAR`, `FUSION`, `M17`, `FREEDV`) are now classed as phone everywhere, including in LoTW
+  confirmation matching, where the mismatch could leave a confirmed contact showing as a
+  confirmation opportunity forever. This is read-side: existing logs reclassify with no re-import.
+- **Band labels are compared case-insensitively.** A log that carries both `30m` and `30M` (both
+  spellings occur in a real logbook) credited the same slot in the awards engine but not in the
+  decode feed's chip gate.
+- **Nexus's own tier names are recognised on POTA/SOTA spots.** `TempoFast`/`TempoDeep`/`FT1`/`DX1`
+  fell through to guessing the mode from the frequency, which on a CW-only band segment could invent
+  a CW mode need.
+
+This works together with the strongest-need ranking above rather than against it: the band and mode
+gate decides which of a station's needs count on the surface you are looking at, and the ranking then
+picks the most valuable of those. So a row is ranked by the best reason to work that station **that
+you can actually act on right now**, and its colour, its chip, its screen-reader label and its place
+in "sort by need" all name that same need.
+
+
+### APRS says which radio it is listening to
+
 ## [0.21.5] — 2026-07-29
 
 ### APRS now sees the whole network, and can contribute to it

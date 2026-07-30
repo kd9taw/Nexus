@@ -10,7 +10,7 @@ import type { NeedAlert, NeedTag, Station } from '../types'
 import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, magneticDeg } from '../grid'
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
-import { chaseRank, strongestNeed } from '../features/needs'
+import { alertsForSurface, chaseRank, strongestNeed } from '../features/needs'
 import { isIgnored } from '../txMessages'
 import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../operateFilters'
 import { RarityChip } from './RarityChip'
@@ -23,6 +23,13 @@ interface Props {
   /** FULL per-call alerts — a station needed on several dimensions (grid AND
    * band…) shows EVERY need chip, not just the top tier (operator report). */
   needAlertsByCall?: Map<string, NeedAlert[]>
+  /** The band and operating mode THIS roster is showing, so a cross-band/cross-mode
+   * alert can't paint a chip the operator cannot close here (see `tagsForSurface`).
+   * The maps above are keyed by callsign alone and carry every band and mode, which is
+   * how a CW "new mode" need appeared on a 30m FT8 roster. Omit both to keep the
+   * ungated behaviour (surfaces that intentionally span bands, e.g. the map). */
+  band?: string
+  feedMode?: string
   selectedCall: string | null
   onSelect: (call: string) => void
   onCall: (call: string, grid?: string) => void
@@ -77,6 +84,8 @@ export function OperateRoster({
   ignoredCalls,
   onToggleIgnore,
   onSpot,
+  band,
+  feedMode,
 }: Props) {
   // QTH magnetic declination (WMM) — the Brg column's tooltip shows the compass
   // heading a rotator zeroed on magnetic north needs.
@@ -106,21 +115,32 @@ export function OperateRoster({
   const rows = useMemo(() => {
     const built = stations.map((s) => {
       const up = s.call.toUpperCase()
-      const alerts = needAlertsByCall?.get(up)
-      // Lead tag from the call's STRONGEST alert, so the row's colour, its aria-label and
-      // its "sort by need" rank all name the same need. needByCall holds one tag per call
-      // and resolves a multi-band station to whichever alert came LAST (App.tsx), which is
-      // its WEAKEST — a new entity on 20 m with a mere confirm on 40 m ranked as the
-      // confirm, three quarters of the way down the list (operator report).
-      const need = strongestNeed(alerts)?.tags[0] ?? needByCall.get(up) ?? null
-      // Union of ALL need forms for the row (deduped, insertion-ordered by the
-      // alerts). Falls back to the single top tag when the full map is absent.
-      let needAll: NeedTag[] = need ? [need] : []
+      const raw = needAlertsByCall?.get(up)
+      // SURFACE GATE FIRST, rank what survives. The alerts map is keyed by callsign and
+      // spans every band and mode, so ungated it painted a MODE chip from a CW need onto a
+      // 30m FT8 roster (operator report 2026-07-29) — and let that unclosable need pick the
+      // row's colour and its place in "sort by need". `alertsForSurface` drops what this
+      // band + mode class cannot close; everything below then ranks only what is left.
+      const alerts = band != null && feedMode != null ? alertsForSurface(raw, band, feedMode) : raw
+      // Lead tag from the call's STRONGEST surviving alert, so the row's colour, its
+      // aria-label and its chase rank all name the same need. needByCall resolved a
+      // multi-band station to whichever alert came LAST, which is its WEAKEST — a new entity
+      // on 20 m with a mere confirm on 40 m ranked as the confirm, three quarters of the way
+      // down the list (operator report). It stays as the fallback for hosts that pass only
+      // the top-tag map; when alerts WERE supplied and the gate cleared every one, nothing
+      // is needed here, so the row stays null rather than reaching for an ungated tag.
+      const need: NeedTag | null =
+        strongestNeed(alerts)?.tags[0] ??
+        (raw && raw.length > 0 ? null : (needByCall.get(up) ?? null))
+      // Union of ALL need forms for the row (deduped, insertion-ordered by the alerts), from
+      // the GATED set so the chip cluster and the row colour can never disagree.
+      let needAll: NeedTag[] = []
       if (alerts && alerts.length > 0) {
         const seen = new Set<NeedTag>()
         for (const a of alerts) for (const t of a.tags) seen.add(t)
-        if (seen.size > 0) needAll = [...seen]
+        needAll = [...seen]
       }
+      if (need && needAll.length === 0) needAll = [need]
       const ll = s.grid ? gridToLatLon(s.grid) : null
       return {
         s,
@@ -175,7 +195,18 @@ export function OperateRoster({
       return b.s.snr - a.s.snr // tiebreak: stronger signal first
     })
     return f
-  }, [stations, needByCall, needAlertsByCall, me, currentSlot, sort, neededOnly, hideWorked])
+  }, [
+    stations,
+    needByCall,
+    needAlertsByCall,
+    band,
+    feedMode,
+    me,
+    currentSlot,
+    sort,
+    neededOnly,
+    hideWorked,
+  ])
 
   // Keyboard: arrow through rows, Enter selects, Shift+Enter works, Alt+Enter ignores.
   const roving = useRovingList(rows.length, (i, mods) => {

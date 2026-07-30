@@ -366,12 +366,20 @@ pub fn score_slots(
         NeedTag::NewZone => format!("New CQ zone {} on {} — {}", info.cq_zone, band, info.entity),
         NeedTag::NewBand => format!("New band — {} {}", info.entity, band),
         // Name the mode class — with CW/Phone needs flowing, a NewMode CW row and a
-        // NewMode Phone row for the same entity/band must read differently.
+        // NewMode Phone row for the same entity must read differently.
+        //
+        // The band is deliberately ABSENT (operator report 2026-07-29). `LogNeeds`
+        // keys `worked_mode` as (entity, mode-class) with NO band — a mode need means
+        // "never worked this entity in this mode class on ANY band", which is exactly
+        // what the per-mode DXCC awards count (band slots are DXCC Challenge's axis,
+        // and NewBand's job). Appending the band the station happened to be heard on
+        // made a true "never worked Asiatic Russia on CW" need render as
+        // "New mode — CW Asiatic Russia 30m", which an operator with six 30m FT8
+        // contacts there reads — correctly — as a false claim. Say what we check.
         NeedTag::NewMode => format!(
-            "New mode — {} {} {}",
+            "New mode — {} {} (any band)",
             ModeClass::from_adif(mode).label(),
-            info.entity,
-            band
+            info.entity
         ),
         NeedTag::NewGrid => format!(
             "New grid — {} on {} ({})",
@@ -482,9 +490,14 @@ const OTA_ACTIVATION_PRIORITY: u32 = 20;
 fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
     match mode.trim().to_ascii_uppercase().as_str() {
         "CW" => ModeClass::Cw,
-        "SSB" | "USB" | "LSB" | "PHONE" | "AM" | "FM" | "DV" => ModeClass::Phone,
-        "FT8" | "FT4" | "TempoFast" | "RTTY" | "PSK" | "PSK31" | "PSK63" | "JT65" | "JT9"
-        | "JS8" | "MFSK" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
+        "SSB" | "USB" | "LSB" | "PHONE" | "PH" | "AM" | "FM" | "DV" => ModeClass::Phone,
+        // The subject is already uppercased, so a mixed-case arm here is DEAD: the old
+        // "TempoFast" arm never matched and dropped Nexus's own tiers through to the
+        // frequency fallback, which can answer Cw/Phone from the band plan alone and
+        // fabricate a NewMode. Spell the tiers in upper case with the rest.
+        "FT8" | "FT4" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "RTTY" | "PSK" | "PSK31"
+        | "PSK63" | "JT65" | "JT9" | "JS8" | "MFSK" | "MSK144" | "OLIVIA" | "DATA" | "DIGI"
+        | "SSTV" => ModeClass::Digital,
         _ => crate::model::classify_spot_mode(freq_mhz),
     }
 }

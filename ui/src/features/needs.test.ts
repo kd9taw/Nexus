@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   NEED_TIER,
+  alertsForSurface,
   chaseRank,
   modeClassOf,
   strongestNeed,
+  tagsForSurface,
   topNeedByCall,
   visibleNeeds,
   workTarget,
@@ -108,6 +110,72 @@ describe('modeClassOf (map-spot → cockpit routing)', () => {
     for (const m of ['FT8', 'FT4', 'RTTY', 'PSK31', 'JS8', 'weird', '', null, undefined]) {
       expect(modeClassOf(m)).toBe('Digital')
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Field report 2026-07-29: the Needed system claimed a "new mode on 30m" for
+// Asiatic Russia on an operator who has six 30m FT8 contacts with that entity.
+// The backend need was real (they have never worked it on CW) but the roster
+// chips are keyed by CALL alone, so a CW alert painted an unqualified MODE chip
+// onto their 30m FT8 surface. tagsForSurface is the gate those maps were missing.
+// ---------------------------------------------------------------------------
+describe('tagsForSurface (the false "new mode" gate)', () => {
+  const ar = (tags: NeedTag[], mode: string, band = '30m'): NeedAlert => ({
+    call: 'RF9C',
+    entity: 'Asiatic Russia',
+    band,
+    zone: 17,
+    tags,
+    priority: 30,
+    headline: 'New mode — CW Asiatic Russia',
+    mode,
+    freqMhz: null,
+  })
+
+  it('drops a CW new-mode need from a 30m FT8 surface (the operator report)', () => {
+    expect(tagsForSurface(ar(['NewMode'], 'CW'), '30m', 'FT8')).toEqual([])
+  })
+
+  it('keeps a digital new-mode need on a digital surface', () => {
+    expect(tagsForSurface(ar(['NewMode'], 'FT8'), '30m', 'FT8')).toEqual(['NewMode'])
+  })
+
+  it('matches the backend submode vocabulary against a class label', () => {
+    // The backend sends mode: 'FT8'/'FT4'/'RTTY' verbatim for digital rows, but the
+    // decode feed describes itself as the class 'Digital'. Raw === never matched.
+    for (const m of ['FT8', 'FT4', 'RTTY', 'Digital']) {
+      expect(tagsForSurface(ar(['NewMode'], m), '30m', 'Digital')).toEqual(['NewMode'])
+    }
+  })
+
+  it('folds band-label case (a real log carries both 30M and 30m)', () => {
+    expect(tagsForSurface(ar(['NewBand'], 'FT8', '30m'), '30M', 'FT8')).toEqual(['NewBand'])
+    expect(tagsForSurface(ar(['NewBand'], 'FT8', ' 30M '), '30m', 'FT8')).toEqual(['NewBand'])
+  })
+
+  it('keeps an all-time-new entity on any band and any mode', () => {
+    expect(tagsForSurface(ar(['NewEntity'], 'CW', '20m'), '30m', 'FT8')).toEqual(['NewEntity'])
+  })
+
+  it('drops a cross-band new-band claim', () => {
+    expect(tagsForSurface(ar(['NewBand'], 'FT8', '20m'), '30m', 'FT8')).toEqual([])
+  })
+
+  it('keeps a same-class new-mode need scored on another band (the predicate is entity-wide)', () => {
+    // worked_mode is keyed (entity, mode-class) with NO band, so a digital mode need
+    // is closable on any band — including this one.
+    expect(tagsForSurface(ar(['NewMode'], 'FT8', '20m'), '30m', 'FT8')).toEqual(['NewMode'])
+  })
+
+  it('drops a cross-band confirmation (confirmed_band IS per band)', () => {
+    expect(tagsForSurface(ar(['Confirm'], 'FT8', '20m'), '30m', 'FT8')).toEqual([])
+  })
+
+  it('keeps program flags regardless of band or mode', () => {
+    expect(tagsForSurface(ar(['Pota', 'Sota', 'Dxped', 'Wanted'], 'CW', '20m'), '30m', 'FT8')).toEqual(
+      ['Pota', 'Sota', 'Dxped', 'Wanted'],
+    )
   })
 })
 
@@ -286,5 +354,78 @@ describe('chaseRank', () => {
     ]
     rows.sort((a, b) => b.rank - a.rank)
     expect(rows.map((r) => r.call)).toEqual(['WANTED', 'ENTITY', 'BAND', 'MODE', 'CONFIRM', 'PLAIN'])
+  })
+})
+
+// ── The composition point ────────────────────────────────────────────────────────────
+// Two independently-correct systems meet here: the surface gate decides what a band +
+// mode class can legitimately claim, and strongestNeed/chaseRank rank what survives.
+// Feeding ungated alerts into the ranking would let a need the operator CANNOT close
+// pick a row's colour and its place in "sort by need" — which is the field report.
+describe('alertsForSurface (gate, then rank)', () => {
+  const a = (tags: NeedTag[], mode: string, band: string, priority: number): NeedAlert => ({
+    call: 'RF9C',
+    entity: 'Asiatic Russia',
+    band,
+    zone: 17,
+    tags,
+    priority,
+    headline: '',
+    mode,
+    freqMhz: null,
+  })
+
+  it('drops an alert with nothing left to claim here', () => {
+    // A CW new-mode need on a 30m FT8 roster: real, but not closable on this surface.
+    expect(alertsForSurface([a(['NewMode'], 'CW', '30m', 30)], '30m', 'FT8')).toEqual([])
+  })
+
+  it('keeps an alert rewritten to only its applicable tags', () => {
+    const got = alertsForSurface([a(['NewEntity', 'Confirm'], 'FT8', '20m', 100)], '30m', 'FT8')
+    expect(got).toHaveLength(1)
+    // NewEntity is band-agnostic and survives; Confirm is per-band and does not.
+    expect(got[0].tags).toEqual(['NewEntity'])
+    expect(got[0].priority).toBe(100) // lead tag survived — keep the backend's number
+  })
+
+  it('repairs priority when the gate removes the alert LEAD tag', () => {
+    // 30m CW alert tagged [NewMode, NewZone] seen on the 30m FT8 roster. The zone need is
+    // genuine and stays, but the backend priority of 30 was computed from NewMode — left
+    // alone it would rank a needed CQ zone below a bare new band.
+    const got = alertsForSurface([a(['NewMode', 'NewZone'], 'CW', '30m', 30)], '30m', 'FT8')
+    expect(got).toHaveLength(1)
+    expect(got[0].tags).toEqual(['NewZone'])
+    expect(got[0].priority).toBe(NEED_TIER.NewZone) // 70, not 30
+  })
+
+  it('leaves the ungated alert objects untouched (no mutation)', () => {
+    const src = a(['NewMode', 'NewZone'], 'CW', '30m', 30)
+    alertsForSurface([src], '30m', 'FT8')
+    expect(src.tags).toEqual(['NewMode', 'NewZone'])
+    expect(src.priority).toBe(30)
+  })
+
+  it('handles a missing alerts map', () => {
+    expect(alertsForSurface(undefined, '30m', 'FT8')).toEqual([])
+    expect(alertsForSurface(null, '30m', 'FT8')).toEqual([])
+  })
+
+  it('ranks only what survives the gate — the field report end to end', () => {
+    // The operator on 30m FT8. Two alerts for one call: a CW new-mode (priority 30, NOT
+    // closable here) and a digital confirm on this band (priority 10, closable).
+    const alerts = [a(['NewMode'], 'CW', '30m', 30), a(['Confirm'], 'FT8', '30m', 10)]
+    // Ungated, the CW need is "strongest" and would colour the row MODE — the false claim.
+    expect(strongestNeed(alerts)?.tags[0]).toBe('NewMode')
+    // Gated first, the only real claim on this surface wins.
+    const gated = alertsForSurface(alerts, '30m', 'FT8')
+    expect(strongestNeed(gated)?.tags[0]).toBe('Confirm')
+    expect(chaseRank(gated, 'Confirm')).toBe(10)
+  })
+
+  it('still lets the strongest CLOSABLE need win over a weaker one', () => {
+    const alerts = [a(['Confirm'], 'FT8', '30m', 10), a(['NewEntity'], 'FT8', '30m', 100)]
+    const gated = alertsForSurface(alerts, '30m', 'FT8')
+    expect(strongestNeed(gated)?.tags[0]).toBe('NewEntity')
+    expect(chaseRank(gated, 'NewEntity')).toBe(100)
   })
 })

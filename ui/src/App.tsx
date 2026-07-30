@@ -1874,6 +1874,8 @@ export default function App() {
       unreadByPeer={unreadByPeer}
       needByCall={needByCall}
       needAlertsByCall={needAlertsByCall}
+      band={snap.radio.band}
+      feedMode={tier}
       onSelect={handleSelect}
       onCall={handleWorkStation}
       conversations={snap.conversations}
@@ -1892,6 +1894,8 @@ export default function App() {
       unreadByPeer={unreadByPeer}
       needByCall={needByCall}
       needAlertsByCall={needAlertsByCall}
+      band={snap.radio.band}
+      feedMode={tier}
       onSelect={handleSelect}
       onCall={handleWorkStation}
       conversations={snap.conversations}

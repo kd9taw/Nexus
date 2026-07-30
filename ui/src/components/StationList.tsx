@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Conversation as Conv, NeedAlert, NeedTag, Station, Tier } from '../types'
 import { StationCard } from './StationCard'
+import { tagsForSurface } from '../features/needs'
 
 type Presence = Station['presence'] | 'offline'
 
@@ -17,6 +18,12 @@ interface Props {
   /** ALL need forms per call (uppercased) — lets the roster show every reason a
    * station is worth working (like the decode feed), not just the top tier. */
   needAlertsByCall?: Map<string, NeedAlert[]>
+  /** The band and operating mode THIS roster is showing. The maps above are keyed by
+   * callsign alone and span every band and mode, so without these a need the operator
+   * cannot close here still paints a pill — a CW "new mode" on a 30m FT8 roster
+   * (operator report 2026-07-29). Omit both to keep the ungated behaviour. */
+  band?: string
+  feedMode?: string
   onSelect: (call: string) => void
   onCall: (call: string, tier?: Tier | null) => void
   /** Open conversation threads (incl. the "*" band feed) — drives the recents list
@@ -60,19 +67,28 @@ export function StationList({
   bandUnread,
   onSelectBand,
   dropAfterCycles,
+  band,
+  feedMode,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all')
 
-  // The full set of need tags per call — union of every alert's tags, deduped,
-  // falling back to the single top tier when the alerts map isn't provided. This
-  // is what lets the roster show the SAME pills the decode feed does (operator
-  // report: pills appeared in Band Activity / Rx Frequency but not the roster).
+  // The full set of need tags per call — union of every alert's tags, deduped, falling
+  // back to the single top tier when the alerts map isn't provided. This is what lets
+  // the roster show the SAME pills the decode feed does (operator report: pills appeared
+  // in Band Activity / Rx Frequency but not the roster) — and, since the decode feed
+  // gates by band + mode class, the roster must gate identically or it shows pills the
+  // feed correctly withholds. `tagsForSurface` is that shared gate.
   const needAll = (call: string, top: NeedTag | null): NeedTag[] => {
     const alerts = needAlertsByCall?.get(call.toUpperCase())
     if (alerts && alerts.length > 0) {
       const seen = new Set<NeedTag>()
-      for (const a of alerts) for (const t of a.tags) seen.add(t)
-      if (seen.size > 0) return [...seen]
+      for (const a of alerts) {
+        const tags = band != null && feedMode != null ? tagsForSurface(a, band, feedMode) : a.tags
+        for (const t of tags) seen.add(t)
+      }
+      // An alert that applies to no tag HERE means nothing is needed on this surface —
+      // don't fall back to the ungated top tier, that's the bug this gate exists for.
+      return [...seen]
     }
     return top ? [top] : []
   }
@@ -106,13 +122,19 @@ export function StationList({
     }
     if (filter === 'heard-now') list = list.filter((s) => s.presence === 'active')
     else if (filter === 'beaconing') list = list.filter((s) => s.heardCount >= 3)
-    else if (filter === 'needed') list = list.filter((s) => needByCall.has(s.call.toUpperCase()))
+    // "Needed" means needed HERE — a station whose only need is on another band or in
+    // another mode class isn't workable off this filter, so gate it the same way the
+    // pills are gated (otherwise the filter and the pills disagree on the same row).
+    else if (filter === 'needed')
+      list = list.filter(
+        (s) => needAll(s.call, needByCall.get(s.call.toUpperCase()) ?? null).length > 0,
+      )
     // sort: presence (active first), then strongest SNR
     const order: Record<string, number> = { active: 0, idle: 1, stale: 2 }
     return [...list].sort(
       (a, b) => order[a.presence] - order[b.presence] || b.snr - a.snr,
     )
-  }, [stations, filter, needByCall])
+  }, [stations, filter, needByCall, needAlertsByCall, band, feedMode, currentSlot, dropAfterCycles])
 
   return (
     <aside className="station-list panel">

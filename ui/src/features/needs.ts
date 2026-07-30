@@ -138,6 +138,89 @@ export function modeClassOf(mode: string | null | undefined): 'CW' | 'Phone' | '
   return 'Digital'
 }
 
+/** Band labels compare case- and whitespace-insensitively. A real logbook carries both
+ * `30m` and `30M` (the operator's audited log has 699 of one and 212 of the other), and a
+ * spot's label is canonicalised by the backend while the radio's comes from settings — a
+ * raw `===` between the two silently drops every need on the band. */
+export function sameBand(a: string | null | undefined, b: string | null | undefined): boolean {
+  return (a ?? '').trim().toUpperCase() === (b ?? '').trim().toUpperCase()
+}
+
+/** Need tags that survive on ANY band, because the predicate behind them carries no band:
+ * an all-time-new entity is new everywhere; a DXpedition/POTA/SOTA/wanted flag is a
+ * property of the station. `NewMode` belongs here too — the backend keys `worked_mode` as
+ * (entity, mode-class) with no band, so a mode need is closable on whatever band you hear
+ * the station on. Everything else (NewBand, and NewZone/NewGrid/NewState for 5BWAZ/VUCC/
+ * 5BWAS, plus Confirm from the per-band `confirmed_band` set) is a per-band claim and must
+ * match the band in front of the operator. */
+const BAND_AGNOSTIC_TAGS: ReadonlySet<NeedTag> = new Set<NeedTag>([
+  'NewEntity',
+  'NewMode',
+  'Dxped',
+  'Pota',
+  'Sota',
+  'Wanted',
+])
+
+/** Need tags that are additionally MODE-specific: a CW-only "new mode", or an
+ * unconfirmed contact, cannot be closed from a digital surface. NewBand is deliberately
+ * absent — a band slot closes in any mode. */
+const MODE_GATED_TAGS: ReadonlySet<NeedTag> = new Set<NeedTag>(['NewMode', 'Confirm'])
+
+/**
+ * The need tags an alert may legitimately claim on a surface showing stations heard on
+ * `band` in `feedMode`. This is the gate the call-keyed need maps were missing.
+ *
+ * Field report 2026-07-29: the Needed system flagged a "new mode on 30m" for Asiatic
+ * Russia against an operator with six 30m FT8 contacts there. The backend need was
+ * genuine — they have never worked that entity on CW — but the roster/station-list chips
+ * are keyed by CALLSIGN alone and unioned every alert's tags with no band or mode filter,
+ * so a CW alert painted an unqualified MODE chip onto a 30m FT8 screen. Both sides go
+ * through `modeClassOf` because the backend sends the specific submode (`FT8`/`FT4`/
+ * `RTTY`) as a display label while a feed describes itself by class (`Digital`) — a raw
+ * `===` between those two is never true, which dropped real pills on the decode feed.
+ */
+export function tagsForSurface(alert: NeedAlert, band: string, feedMode: string): NeedTag[] {
+  const sameModeClass = modeClassOf(alert.mode) === modeClassOf(feedMode)
+  const sameBandLabel = sameBand(alert.band, band)
+  return alert.tags.filter((t) => {
+    if (MODE_GATED_TAGS.has(t) && !sameModeClass) return false
+    return BAND_AGNOSTIC_TAGS.has(t) || sameBandLabel
+  })
+}
+
+/**
+ * The alerts that still say something on a surface showing `band` in `feedMode`, each
+ * rewritten to only the tags it may claim there. An alert left with no applicable tag is
+ * dropped entirely — it carries no reason to work this station HERE.
+ *
+ * This is the composition point for the two halves of the need pipeline: the surface gate
+ * decides what is ELIGIBLE, then [`strongestNeed`]/[`chaseRank`] rank what survives. Feeding
+ * ungated alerts into the ranking would let a need the operator cannot close here choose the
+ * row's colour and its place in the sort.
+ *
+ * `priority` is repaired when the gate removes the alert's LEAD tag. The backend computes
+ * priority from `tags[0]` (plus the grid-rarity and OTA bumps), so once that tag is withheld
+ * the number describes a claim this surface is not making — a 30m CW alert tagged
+ * [NewMode, NewZone] seen on the 30m FT8 roster keeps its genuine new-zone need, but its
+ * priority of 30 would rank that zone below a bare new band. Falling back to the surviving
+ * lead's `NEED_TIER` re-states it honestly. The bumps are deliberately not carried over:
+ * they were earned by the tag that just went away.
+ */
+export function alertsForSurface(
+  alerts: NeedAlert[] | null | undefined,
+  band: string,
+  feedMode: string,
+): NeedAlert[] {
+  const out: NeedAlert[] = []
+  for (const a of alerts ?? []) {
+    const tags = tagsForSurface(a, band, feedMode)
+    if (tags.length === 0) continue
+    out.push(tags[0] === a.tags[0] ? { ...a, tags } : { ...a, tags, priority: NEED_TIER[tags[0]] })
+  }
+  return out
+}
+
 /** Resolve ANY need (CW / Phone / Digital) into a work target — N1MM-style: a single click
  * changes the band, mode, AND frequency to exactly the spot's. Uses the spot's exact
  * frequency when the cluster/RBN carried one, else the band's default channel. Returns null

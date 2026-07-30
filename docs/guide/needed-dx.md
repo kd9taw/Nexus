@@ -14,9 +14,12 @@ Each row is one opportunity, ranked by value to your log:
 
 - **ATNO** (all-time-new-one, 100) — an entity you've never worked,
 - **new zone** (70),
-- **new band** (50),
-- **new mode** (30),
-- **confirmation opportunity** (10).
+- **new band** (50) — an entity you've worked, but never on *this* band,
+- **new mode** (30) — an entity you've worked, but never in this **mode class**
+  (CW / Phone / digital) on **any** band. The row reads "(any band)" because that
+  is the whole claim: it is the per-mode DXCC axis, not a band slot. Working the
+  station on the band in front of you closes it.
+- **confirmation opportunity** (10) — worked on this band, not yet confirmed.
 
 DXpedition, POTA, and SOTA chips layer on top. Rows dedupe by (call, band,
 mode-class), so the same DX on 20m CW and 20m FT8 are two distinct, separately
