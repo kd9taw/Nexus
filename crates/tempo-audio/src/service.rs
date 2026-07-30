@@ -4381,23 +4381,32 @@ impl RadioLoop {
                     // not sent.
                     let already_keyed =
                         self.boundary_keyed.map(|k| k.slot == slot).unwrap_or(false);
-                    let prebuilt = if already_keyed {
-                        None
+                    let (prebuilt, now_tx) = if already_keyed {
+                        (None, now)
                     } else {
                         match eng.plan_tx(slot) {
                             Some(plan) => {
                                 drop(eng);
                                 let wave = plan.waveform.build();
                                 eng = engine.lock().map_err(|e| e.to_string())?;
-                                Some(eng.commit_tx(&plan, wave))
+                                // Re-read the clock AFTER the build (it waited out
+                                // MODEM_LOCK): commit_tx refuses if the T/R slot
+                                // rolled over meanwhile, and the PTT-hold deadline
+                                // must be measured from when the audio actually
+                                // starts — the boundary tick's `now` would leave
+                                // the tail short by the whole build time.
+                                let now = now_unix_ms() - self.clock_offset_ms as f64;
+                                let waves =
+                                    eng.commit_tx(&plan, wave, self.clock.slot_index(now));
+                                (Some(waves), now)
                             }
                             // Planned to nothing: hand the empty result straight
                             // through so the TX phase is not re-run under the lock.
-                            None => Some(Vec::new()),
+                            None => (Some(Vec::new()), now),
                         }
                     };
                     self.finish_boundary(
-                        &mut eng, rig, backend, sinks, station, now, slot, false, None, prebuilt,
+                        &mut eng, rig, backend, sinks, station, now_tx, slot, false, None, prebuilt,
                     )?;
                 }
             } else {

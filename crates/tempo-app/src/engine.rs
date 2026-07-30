@@ -781,6 +781,10 @@ pub struct Engine {
     /// Split Operation — the audio was reduced into 1500–2000 Hz and the loop
     /// must move the TX dial by this much before keying. 0 = no shift.
     tx_dial_shift_hz: i64,
+    /// TX-gate generation, stamped into every [`TxPlan`] and bumped by the
+    /// arming/QSY verbs so `commit_tx` refuses an over planned before them —
+    /// see [`TxGateStamp`].
+    tx_gate_gen: u64,
     /// Desired rig SPLIT state: `Some(tx_dial_mhz)` = split on with that TX dial;
     /// `None` = simplex. Set by work_spot (pile-up "UP n" spots) and cleared by any
     /// plain QSY/work; the loop applies it via `split_dirty` (one-shot).
@@ -1830,13 +1834,15 @@ impl TxWaveform {
     }
 }
 
-/// A decided over: what to send, and the slot/tier it was decided for.
+/// A decided over: what to send, and the slot/tier/gate state it was decided for.
 ///
-/// `slot` and `tier` are carried so [`Engine::commit_tx`] can REFUSE a plan that
-/// no longer matches the engine. The radio loop releases the engine mutex while
-/// [`TxWaveform::build`] runs, so the operator can change tier or the slot can
-/// roll over in between — keying a waveform built for the previous tier is
-/// exactly the wrong-mode emission the transmit guards exist to prevent.
+/// `slot`, `tier` and `stamp` are carried so [`Engine::commit_tx`] can REFUSE a
+/// plan that no longer matches the engine. The radio loop releases the engine
+/// mutex while [`TxWaveform::build`] runs, so the operator can change tier, QSY,
+/// change operating mode, or press Stop TX — and the slot can roll over — in
+/// between; keying a waveform built for the previous state is exactly the
+/// wrong-mode / out-of-privilege / wrong-slot emission the transmit guards exist
+/// to prevent.
 pub struct TxPlan {
     pub slot: u64,
     pub tier: Tier,
@@ -1844,6 +1850,30 @@ pub struct TxPlan {
     /// Beacon overs run the wall-clock watchdog at COMMIT, matching the order
     /// the single-shot path used (build, then check).
     beacon: bool,
+    /// Everything the TX gate evaluated when this plan was made — see
+    /// [`TxGateStamp`].
+    stamp: TxGateStamp,
+}
+
+/// Every input the TX gate read when a plan was made. [`Engine::commit_tx`]
+/// refuses a plan whose stamp no longer matches: all of these are writable by
+/// Tauri commands on another thread while the radio loop has the engine RELEASED
+/// for the waveform build, and `tx_allowed()` is NOT re-evaluated at the key —
+/// privileges are not uniform within a band, so an in-band QSY during the build
+/// could otherwise key outside the operator's privileges.
+///
+/// The generation counter closes the value-identical hole: Stop TX followed by a
+/// re-arm restores every value above, and the over planned before the stop must
+/// still refuse. `halt_tx` / `set_tx_enabled` / `set_tune` / `set_frequency` /
+/// `set_operating_mode` / `apply_settings` each bump it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TxGateStamp {
+    dial_hz: u64,
+    /// The sideband folded to the one bit `tx_allowed()` reads.
+    lsb: bool,
+    tx_offset_hz: f32,
+    operating_mode: crate::settings::OperatingMode,
+    generation: u64,
 }
 
 impl Engine {
@@ -1962,6 +1992,7 @@ impl Engine {
             cq_dir: None,
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
+            tx_gate_gen: 0,
             split_tx_mhz: None,
             split_dirty: false,
             rit_hz: 0,
@@ -2197,6 +2228,10 @@ impl Engine {
     /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place. The
     /// operating mode returns to Chat.
     pub fn apply_settings(&mut self, s: Settings) {
+        // A settings save can rewrite anything the TX gate reads (dial, mode,
+        // offsets, license class) — an over planned before it must not key
+        // (commit_tx checks the generation).
+        self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         // What the active tier resolves to BEFORE the save — the per-mode period /
         // submode fields live in `Settings`, so this can change under us. See the
         // decoder rebuild at the end of this function.
@@ -2693,6 +2728,10 @@ impl Engine {
         {
             self.clear_cw_decode();
         }
+        // ANY QSY — band change or in-band dial move — invalidates an over planned
+        // against the old dial: privileges are not uniform within a band, and
+        // commit_tx re-checks nothing else (the stamp + generation are the check).
+        self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.settings.dial_mhz = dial_mhz;
         self.settings.band = band.to_string();
         self.settings.sideband = mode.to_string();
@@ -2962,6 +3001,8 @@ impl Engine {
             "rtty" => OperatingMode::Rtty,
             _ => OperatingMode::Digital,
         };
+        // A mode change invalidates any planned over (commit_tx checks the generation).
+        self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.settings.operating_mode = om;
         // SAFETY re-clamp: entering a mode with a lower power ceiling (SSB → FT8) must bring the
         // rig DOWN to the cap now, not wait for the operator to touch the power slider. If a cap
@@ -5344,6 +5385,9 @@ impl Engine {
     /// clear the TX indicator. Wired to the WSJT-X UDP "HaltTx" control so a
     /// logger / JTAlert can stop Tempo keying.
     pub fn halt_tx(&mut self) {
+        // Kill any over planned before this instant — even one whose gate values
+        // all match again by commit time (commit_tx checks the generation).
+        self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         // Stop transmitting AND stay stopped: disable TX so the auto-sequencer
         // doesn't immediately re-arm on the next slot (WSJT-X "Halt Tx" also
         // unchecks Enable Tx). Drop any tune carrier and queued audio too.
@@ -5522,6 +5566,9 @@ impl Engine {
         if on && self.tier_is_rx_only(self.app.tier()) {
             return;
         }
+        // Arm state changed hands: an over planned under the old state must not
+        // key (commit_tx checks the generation).
+        self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         // Read-only launch: arming TX is the moment the operator commits to
         // transmitting — arm a retune NOW so the mode assert runs a tick BEFORE the
         // key on the normal FT8 path (on a slow-serial rig an assert at the key
@@ -5653,6 +5700,8 @@ impl Engine {
     /// suppressed (the radio loop plays a continuous f0 sine for ATU/amp tuning).
     /// Turning tuning on is an operator action and resets the watchdog count.
     pub fn set_tune(&mut self, on: bool) {
+        // A tune toggle invalidates any planned over (commit_tx checks the generation).
+        self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
         self.tuning = on && self.tx_allowed();
@@ -7238,6 +7287,18 @@ impl Engine {
     /// sits at the dial + the TX audio offset (≈+1.5 kHz on USB), so a dial just below a
     /// higher-class-only edge can still emit inside it. Every TX path ANDs this in; the
     /// snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
+    /// The current TX-gate inputs, stamped into every [`TxPlan`] and re-checked
+    /// by [`Self::commit_tx`] — see [`TxGateStamp`] for why.
+    fn tx_gate_stamp(&self) -> TxGateStamp {
+        TxGateStamp {
+            dial_hz: self.settings.dial_hz(),
+            lsb: self.settings.sideband.eq_ignore_ascii_case("LSB"),
+            tx_offset_hz: self.tx_offset_hz,
+            operating_mode: self.settings.operating_mode,
+            generation: self.tx_gate_gen,
+        }
+    }
+
     pub fn tx_allowed(&self) -> bool {
         use crate::settings::OperatingMode;
         let class = self.settings.license_class;
@@ -7983,6 +8044,7 @@ impl Engine {
                 f0: self.tx_offset_hz(),
             },
             beacon: true,
+            stamp: self.tx_gate_stamp(),
         })
     }
 
@@ -8375,6 +8437,7 @@ impl Engine {
                     tier: self.app.tier(),
                     waveform,
                     beacon: false,
+                    stamp: self.tx_gate_stamp(),
                 })
             }
             None => {
@@ -8396,7 +8459,9 @@ impl Engine {
             return Vec::new();
         };
         let wave = plan.waveform.build();
-        self.commit_tx(&plan, wave)
+        // One thread, no unlock between plan and commit → the planned slot IS the
+        // current slot.
+        self.commit_tx(&plan, wave, slot)
     }
 
     /// Accept a built waveform and produce the over, or refuse it.
@@ -8406,8 +8471,20 @@ impl Engine {
     /// change tier — keying a waveform built for the previous tier is a wrong-mode
     /// emission, precisely what the transmit guards exist to prevent. The check is
     /// cheap and makes the race unrepresentable rather than merely unlikely.
-    pub fn commit_tx(&mut self, plan: &TxPlan, wave: Vec<f32>) -> Vec<Vec<f32>> {
-        if plan.tier != self.app.tier() {
+    pub fn commit_tx(&mut self, plan: &TxPlan, wave: Vec<f32>, current_slot: u64) -> Vec<Vec<f32>> {
+        // WHOLE-plan validity, not just the tier. Everything the gate read when
+        // planning — dial, sideband, TX offset, operating mode, plus the arming
+        // verbs via the generation — can move while the engine is unlocked for
+        // the build. And the slot: a build that outran the remaining period must
+        // not key the over into the WRONG T/R slot (on top of the station being
+        // worked, on the wrong parity — WSJT-X never keys a stale slot;
+        // `current_slot` is the caller's LIVE clock reading, not the tick it
+        // planned on). Same shape as the tier check: it makes the race
+        // unrepresentable rather than merely unlikely.
+        if plan.tier != self.app.tier()
+            || plan.slot != current_slot
+            || plan.stamp != self.tx_gate_stamp()
+        {
             self.app.set_transmitting(false);
             return Vec::new();
         }
@@ -17266,12 +17343,75 @@ mod tests {
         // The operator switches tier before the commit lands.
         e.set_tier(Tier::Q65);
         assert!(
-            e.commit_tx(&plan, wave).is_empty(),
+            e.commit_tx(&plan, wave, plan.slot).is_empty(),
             "an over planned on FT8 must not key after a switch to Q65"
         );
         assert!(
             !e.snapshot().radio.transmitting,
             "the refusal must also clear the transmitting latch"
+        );
+    }
+
+    #[test]
+    fn commit_tx_refuses_a_plan_the_world_moved_under() {
+        // The tier check alone is not the gate. Everything `tx_allowed()` read —
+        // dial, offset, sideband, operating mode — plus the T/R slot and the
+        // arming verbs can move while the engine mutex is released for the
+        // build; each must refuse on its own.
+        let mk = || {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+            e.set_tx_enabled(true);
+            e.start_cq(None).unwrap();
+            let mut plan = None;
+            for slot in 0..4u64 {
+                if let Some(p) = e.plan_tx(slot) {
+                    plan = Some(p);
+                    break;
+                }
+            }
+            let plan = plan.expect("an armed FT8 CQ plans an over");
+            let wave = plan.waveform.build();
+            assert!(!wave.is_empty(), "precondition: the over built");
+            (e, plan, wave)
+        };
+
+        // (1) Slot rollover during the build: keying the over into the wrong T/R
+        // slot is transmitting on top of the station being worked, on the wrong
+        // parity — the refusal TxPlan's doc always promised.
+        let (mut e, plan, wave) = mk();
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot + 2).is_empty(),
+            "a stale slot must refuse"
+        );
+
+        // (2) In-band QSY during the build: same band, new dial. Privileges are
+        // not uniform within a band, and set_frequency halts TX only on a BAND
+        // change — the stamp is what catches this one.
+        let (mut e, plan, wave) = mk();
+        e.set_frequency(14.080, "20m", "USB");
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "an in-band dial move must refuse the planned over"
+        );
+
+        // (3) Stop TX between plan and commit, then re-arm: every gate VALUE
+        // matches again, so only the generation can see it. Stop must stay
+        // stopped for the over that was already planned.
+        let (mut e, plan, wave) = mk();
+        e.halt_tx();
+        e.set_tx_enabled(true);
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "Stop TX between plan and commit must kill the planned over"
+        );
+
+        // (4) Control: nothing moved → the over keys.
+        let (mut e, plan, wave) = mk();
+        assert!(
+            !e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "an unchanged plan still commits"
         );
     }
 
