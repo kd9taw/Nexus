@@ -8,15 +8,16 @@
 
 use std::path::Path;
 
-/// Whole-log sweep counter, DEBUG BUILDS ONLY — instrumentation for the
-/// traversal-bound test. A per-row `worked_before()` inside `snapshot()` once
-/// held the engine mutex long enough to stall the waterfall for 1–2 s, was
-/// fixed with a prebuilt set, and then regrew 240 lines below the fix's own
-/// comment. A test that pins "snapshot performs a bounded number of sweeps"
-/// stops the SHAPE from recurring, not just the instance. Release builds
-/// compile this away.
-/// PER-THREAD, not a process global: the test harness runs tests in parallel,
-/// and a shared counter would count every OTHER test's sweeps into the bound.
+// Whole-log sweep counter, DEBUG BUILDS ONLY — instrumentation for the
+// traversal-bound test. A per-row `worked_before()` inside `snapshot()` once
+// held the engine mutex long enough to stall the waterfall for 1–2 s, was
+// fixed with a prebuilt set, and then regrew 240 lines below the fix's own
+// comment. A test that pins "snapshot performs a bounded number of sweeps"
+// stops the SHAPE from recurring, not just the instance. Release builds
+// compile this away. PER-THREAD, not a process global: the test harness runs
+// tests in parallel, and a shared counter would count every OTHER test's
+// sweeps into the bound. (Plain comments: doc comments can't attach through
+// the thread_local! macro.)
 #[cfg(debug_assertions)]
 thread_local! {
     pub static LOG_SWEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
