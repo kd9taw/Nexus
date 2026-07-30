@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: the propagation advisor stops changing its mind on identical data
+
+On a quiet band with one or two spots — exactly when you lean on it — the advisor's "best
+region", the beam heading, and the confidence word could flip between polls with nothing
+changed on the air, and when two openings tied, which one got the single "just opened — jump
+on it now" alert was re-rolled every poll. Ties are now broken deterministically everywhere
+one reaches the screen, so identical data always gives the same answer. The same fix covers
+the Journey "most QSOs in a day" date, which station leaves a full APRS list, and the link
+readout's frequency on equal-strength decodes.
+
+### Fixed: the torn-off band map disagreed with the docked one about who you need
+
+On a pop-out band map or a second-monitor Connect map, a station that is an all-time-new
+entity on the band in front of you could be painted in the dim "needs a confirmation" colour
+because it also wants a QSL on another band — while the docked window showed it correctly.
+Both windows now colour from the same shared logic, and a test pins the rule.
+
+### Fixed: the 3-D globe's open-band glow was frozen
+
+The globe's band heat updated its "breathing" only once a minute, so an open band could sit
+dimmer than a closed one and the opening wedges never pulsed — on the 2-D map, that motion is
+how you tell a live opening from stale spots at a glance. The globe now breathes exactly like
+the map, from one shared clock, and stays still only when nothing is open (or the tab is
+hidden).
+
+### Fixed: logging could freeze the app when HRD forwarding pointed at a slow hostname
+
+Forwarding a logged QSO to Ham Radio Deluxe resolved the target hostname while holding the
+app's main lock — with DNS slow or down, every logged contact froze the interface for the
+timeout and could cost the transmit slot right after logging. The send now runs off-thread,
+like the N1MM forwarder always has.
+
+### Fixed: watch-list stations vanished from a filtered Needed board
+
+Turning on any Needed-board filter hid the callsigns you explicitly asked to be told about —
+the watch-list tier had no filter bucket, even though it outranks everything. It has its own
+chip now, and the dupe cue ("already worked this station on this band") also lights for
+contacts that arrived from a LoTW or QRZ import, which a case-sensitive compare left dark.
+
+### Fixed: the shipped AI CW decoder was on a vulnerable model loader
+
+Turning on the supply-chain scan for the desktop build's own dependency set (it was never
+scanned — only the test tree was) surfaced a known out-of-bounds read in the neural-net model
+loader the AI CW decoder ships with, plus two denial-of-service advisories in an XML parser.
+All three are gone: the decoder moved to the patched inference library (also ending a
+situation where the tested decoder version differed from the shipped one), and the XML
+parser was shed entirely. CI now scans the shipped dependency set, runs the 38 propagation
+tests that previously ran nowhere — including the ones that prove connector credentials
+never travel unencrypted — and keeps the two dependency trees aligned.
+
+
 ### Fixed: the Call Roster and Band Activity filters reset on every restart
 
 "Needed only" and "Hide worked" on the Operate Call Roster, and the Band Activity filter chip
