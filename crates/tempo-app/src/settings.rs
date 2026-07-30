@@ -1941,6 +1941,19 @@ impl Settings {
         self.radios.iter().find(|p| p.id == self.active_radio)
     }
 
+    /// How many enabled radios EXPLICITLY list `band`.
+    ///
+    /// More than one means a band activation had a real choice to make, and the operator cannot tell
+    /// from the radio itself which way it went. Catch-all radios (empty `bands`) are excluded on
+    /// purpose: they rank below an explicit claim in [`Settings::radio_for_band`], so a single
+    /// explicit radio plus any number of catch-alls is not ambiguous — the explicit one always wins.
+    pub fn radios_covering(&self, band: &str) -> u32 {
+        self.radios
+            .iter()
+            .filter(|p| p.enabled && p.bands.iter().any(|b| b.eq_ignore_ascii_case(band)))
+            .count() as u32
+    }
+
     /// Which radio should own `band` (Dual-Radio P4 auto band-routing). Returns `Some(id)` only when a
     /// DIFFERENT enabled radio covers the band *better* than the active one — else `None` (stay put).
     ///
@@ -3034,7 +3047,28 @@ mod tests {
     }
 
     #[test]
-    fn a_band_coverage_tie_prefers_the_operators_DEFAULT_radio() {
+    fn radios_covering_counts_only_explicit_claims() {
+        let mut s = three_radio_shack();
+        // FTdx10 (id 0) is a catch-all; the 9700 and 991A both claim 2 m explicitly.
+        s.radios.iter_mut().find(|p| p.id == 0).unwrap().bands = Vec::new();
+        assert_eq!(
+            s.radios_covering("2m"),
+            2,
+            "a catch-all does not make 2 m ambiguous — an explicit claim outranks it"
+        );
+        assert_eq!(s.radios_covering("20m"), 0, "nobody claims 20 m explicitly");
+        // Disabling one removes the ambiguity.
+        let ic = s.radios.iter().find(|p| p.name == "IC-9700").unwrap().id;
+        s.radios.iter_mut().find(|p| p.id == ic).unwrap().enabled = false;
+        assert_eq!(
+            s.radios_covering("2m"),
+            1,
+            "a disabled radio is not a candidate"
+        );
+    }
+
+    #[test]
+    fn a_band_coverage_tie_prefers_the_operators_default_radio() {
         // ⚠️ THE 0.21.4 REGRESSION. The operator's shack is exactly the tie case: three radios, the
         // IC-9700 (id 1) and FT-991A (id 2) both listing 2 m, and their working APRS audio is on the
         // 991A. 0.21.3's `max_by_key` returned the LAST maximum, i.e. roster order, which happened

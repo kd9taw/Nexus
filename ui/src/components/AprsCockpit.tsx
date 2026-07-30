@@ -337,6 +337,38 @@ export function aprsInetStatus(
 }
 
 
+/** Which radio the decoder is listening to — but ONLY when more than one radio could be.
+ *
+ * ⚠️ THE FIFTH INSTANCE of one failure class in a single day of field testing: the section goes
+ * silent and nothing on screen says why. Here the cause was a merge changing which of two
+ * 2 m-capable radios a band activation resolves to; the APRS tap follows the ACTIVE radio, so it
+ * ended up on the rig whose audio was set up for FT8. Wrong-radio silence is indistinguishable from
+ * a dead band unless the app names the radio, and that cost a whole field session to find.
+ *
+ * Returns null when there is nothing to disambiguate — one capable radio, no name, or a decoder
+ * that is not running. A calm cockpit does not narrate what it did not have to choose.
+ */
+export function aprsRadioNote(
+  health: AprsHealth | null,
+): { label: string; detail: string } | null {
+  if (!health || health.arm === 'off') return null
+  // Total by construction: this reads fields that arrive over IPC, and a health snapshot missing
+  // one of them must not take the whole cockpit down with it. An absent field means "nothing to
+  // say", which is also the right answer during a version skew between UI and backend.
+  const count = health.bandRadioCount
+  if (typeof count !== 'number' || count <= 1) return null
+  const name = (health.radioName ?? '').trim()
+  if (name === '') return null
+  return {
+    label: `on ${name}`,
+    detail:
+      `${health.bandRadioCount} of your radios cover this band, so APRS had a choice to make. It ` +
+      `follows the active radio, currently ${name} — if that is not the rig your packet audio is ` +
+      'wired to, this is why nothing is decoding. Routing rules decide which radio a band goes ' +
+      'to: Settings → Radios.',
+  }
+}
+
 /**
  * Turn decoder health into what the operator should be told.
  *
@@ -739,6 +771,7 @@ export function AprsCockpit({
   } = useMemo(() => aprsInetStatus(isStatus, now), [isStatus, now])
   // The engine's arm state, as of the last poll. Null health (before the first poll) reads as
   // disarmed, which matches how the engine starts.
+  const radioNote = useMemo(() => aprsRadioNote(health), [health])
   const arm = health?.arm ?? 'off'
   const armed = arm !== 'off'
 
@@ -949,6 +982,11 @@ export function AprsCockpit({
         </span>
         {/* One-click resolution for the one state that has one. The chip names who owns the
             dial; this button takes it back. */}
+        {radioNote && (
+          <span className="aprs-radio" role="status" title={radioNote.detail}>
+            {radioNote.label}
+          </span>
+        )}
         {decode.state === 'wrongfreq' && onTune && (
           <button
             type="button"

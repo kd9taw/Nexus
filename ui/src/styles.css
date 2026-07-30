@@ -17028,6 +17028,18 @@ html[data-panel='needed'] {
 .aprs-health-norf {
   color: var(--text-dim);
 }
+/* Which radio is being listened to. Informational, never a fault colour: on a multi-radio
+   station this is normal context, and it only appears when there was a choice to make. */
+.aprs-radio {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: help;
+}
+
 /* The dial is not on the APRS channel — the one state the operator can fix in one click,
    and the one that outranks every guess drawn from the audio. */
 .aprs-health-wrongfreq {
