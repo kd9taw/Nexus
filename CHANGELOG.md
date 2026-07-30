@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: APRS stations disappearing off the map again
+
+A tester reported real off-air decodes vanishing from the APRS map within seconds, while stations
+coming from the internet feed looked fine. This was our own doing, and it was introduced by the
+previous fix for the flashing icons.
+
+That fix was right that the whole map was being redrawn every two seconds whether or not anything
+had changed. It was wrong that the redraw was merely wasteful. The map is a canvas — whatever was
+painted stays painted until something repaints it — and on the APRS screen that two-second redraw
+was the **only** thing repainting it. The next scheduled redraw after it was removed could be up to
+a **minute** away, so a station could sit invisible until the clock came round. Internet stations
+escaped it because the feed changes the data constantly, which forces a redraw of its own; a quiet
+2 m channel with a handful of decodes does not.
+
+The APRS map now keeps its own repaint schedule instead of relying on a side effect, and a station's
+fade is measured against the actual time rather than a clock that only advanced once a minute — so a
+decode from five seconds ago no longer draws as if it were a minute old.
+
+**Station retention itself was never at fault.** An hour's retention, the twenty-minute fade, the
+timestamps on off-air decodes, and the behaviour of an upgraded settings file were all measured
+directly and all behave as designed.
+
 ### APRS packet decoder measured against tone imbalance ("twist")
 
 Twist — the two packet tones arriving at unequal volume, the net effect of the sending TNC, the

@@ -410,6 +410,31 @@ export function sourceRing(source: 'rf' | 'inet' | 'both'): {
  */
 export const SYMBOL_MIN_ZOOM = 4
 
+/**
+ * How often the APRS map must repaint itself, in ms.
+ *
+ * ⭐ THE REGRESSION THIS EXISTS TO FIX (0.21.4 → 0.21.5). The map canvas is STATEFUL: the draw
+ * effect reassigns `canvas.width`, which resets the bitmap, and between runs whatever was painted
+ * simply persists. So the canvas is only correct as often as the draw effect runs.
+ *
+ * On the APRS board nothing else runs it. The shared 1 s `pulseTick` is gated on the heat, openings,
+ * flare or satellite layers, and `APRS_EMBED_LAYERS` enables none of them; the only other idle
+ * trigger is `nowMs`, a **60-second** greyline clock. Until 0.21.4 the map was kept painting by
+ * accident: the 2 s poll handed `aprs` a freshly allocated array every tick, so the prop identity
+ * changed constantly and forced a redraw. Making that identity stable was a real win for React —
+ * and it removed the only thing repainting the canvas, leaving stations able to disappear for up to
+ * a minute.
+ *
+ * So the cadence is now EXPLICIT rather than a side effect of allocation. 2 s matches the
+ * long-shipped behaviour this replaces; gated so only a visible APRS layer with stations on it pays.
+ */
+export const APRS_REDRAW_MS = 2000
+
+/** The repaint interval for an APRS map, or `null` when nothing needs repainting. */
+export function aprsRedrawMs(layerVisible: boolean, stationCount: number): number | null {
+  return layerVisible && stationCount > 0 ? APRS_REDRAW_MS : null
+}
+
 /** Should a symbol be drawn at this zoom, or a plain dot? */
 export function showSymbolAt(zoom: number): boolean {
   return zoom >= SYMBOL_MIN_ZOOM

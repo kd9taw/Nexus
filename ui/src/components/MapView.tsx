@@ -8,6 +8,7 @@ import { workedGridSet } from '../coverage'
 import type { AprsStation } from '../api'
 import {
   ageFade,
+  aprsRedrawMs,
   CATEGORY_VAR,
   glyphPath,
   resolveSymbol,
@@ -433,6 +434,10 @@ export function MapView({
   // never redraws for a pulse nobody can see. (The flare layer shares the tick:
   // its absorption field breathes on the same 1 s cadence while a flare is live.)
   const [pulseTick, setPulseTick] = useState(0)
+  // ⭐ The APRS map's OWN repaint clock — see `aprsRedrawMs` for why it has to exist. The shared
+  // pulse tick above is gated on layers the APRS embed never enables, and `nowMs` is a 60 s clock,
+  // so without this the canvas can hold a stale picture (or a cleared one) for a whole minute.
+  const [aprsTick, setAprsTick] = useState(0)
   const hasOpening = (prop?.openings?.length ?? 0) > 0
   // Flare PREVIEW: release builds have no devtools, so the operator needs an
   // in-app way to SEE the layer on a quiet sun. The Layers-panel button
@@ -558,6 +563,15 @@ export function MapView({
     }, 1_000)
     return () => clearInterval(id)
   }, [heatPulsing, openingsPulsing, flarePulsing, satsMoving])
+  const aprsRedraw = aprsRedrawMs(layers.aprs.visible, aprs?.length ?? 0)
+  useEffect(() => {
+    if (aprsRedraw == null) return
+    const id = setInterval(() => {
+      // No redraws for a hidden tab, like every other tick here.
+      if (!document.hidden) setAprsTick((t) => t + 1)
+    }, aprsRedraw)
+    return () => clearInterval(id)
+  }, [aprsRedraw])
   // Apply the Connect intent preset (soft) whenever it changes — sets projection,
   // default color-by, and which optional layers are on. The user can still tweak
   // any control afterwards; switching intent re-applies.
@@ -1067,6 +1081,7 @@ export function MapView({
       const sel = selectedAprs ? selectedAprs.toUpperCase() : null
       // Symbols only once the view is local enough for them to be legible; see SYMBOL_MIN_ZOOM.
       const drawSymbols = showSymbolAt(view.zoom)
+      const drawNowSec = Date.now() / 1000
       ctx.font = `500 10px ${cssVar('--font-mono') || 'monospace'}`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
@@ -1104,7 +1119,9 @@ export function MapView({
         // Silence dims a station on top of everything else. Multiplicative on purpose: an
         // internet-only station going stale is dimmer than either fact alone, which is right —
         // both reduce how much it should be asserting.
-        const fade = ageFade(a.lastHeardUnix, nowMs / 1000, aprsFadeAfterMin, aprsTtlMin)
+        // Wall clock, deliberately NOT `nowMs`: that is the 60 s greyline tick, which would
+        // quantise a station's fade into minute-wide steps and report a fresh decode as a minute old.
+        const fade = ageFade(a.lastHeardUnix, drawNowSec, aprsFadeAfterMin, aprsTtlMin)
         const ink = isSel ? '#5eead4' : 'rgba(203, 213, 225, 0.95)'
         if (drawSymbols) {
           const sym = resolveSymbol(a.symbolTable, a.symbolCode)
@@ -1803,7 +1820,7 @@ export function MapView({
     }
     // theme is a draw dependency so colors refresh on theme switch.
     void theme
-  }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin])
+  }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
