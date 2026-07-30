@@ -275,6 +275,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_degree_sign_survives_both_production_inlets() {
+        // The two inlets every off-air and APRS-IS packet funnels through. A raw latin-1
+        // degree sign inside the fixed position layout must degrade the one packet, not
+        // kill the receive thread (`from_frame` is documented as "never fails").
+        let frame = Frame::ui(
+            Address::new("APRS", 0),
+            Address::new("N0CALL", 9),
+            vec![],
+            b"!4903.5\xB0N/07201.75W-Nexus test",
+        );
+        let pkt = AprsPacket::from_frame(&frame);
+        assert_eq!(pkt.source.call, "N0CALL");
+
+        let mut line = b"N0CALL-9>APRS,TCPIP*:".to_vec();
+        line.extend_from_slice(b"!4903.5\xB0N/07201.75W-Nexus test");
+        let pkt = AprsPacket::from_tnc2(&line).expect("well-formed TNC2 line");
+        assert_eq!(pkt.source.call, "N0CALL");
+    }
+
+    #[test]
     fn decodes_a_position_frame() {
         let frame = Frame::ui(
             Address::new("APRS", 0),

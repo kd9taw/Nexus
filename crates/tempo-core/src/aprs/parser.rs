@@ -60,40 +60,52 @@ pub enum AprsInfo {
     },
 }
 
-fn parse_lat(s: &str) -> Option<f64> {
-    // "DDMM.hhN" — 8 ASCII chars.
-    if s.len() != 8 || !s.is_ascii() {
+fn parse_lat(b: &[u8]) -> Option<f64> {
+    // "DDMM.hhN" — 8 ASCII bytes. Takes raw bytes and validates ASCII before any str view
+    // exists, so the fixed offsets below cannot land inside a multi-byte char.
+    if b.len() != 8 || !b.is_ascii() {
         return None;
     }
+    let s = std::str::from_utf8(&b[0..7]).ok()?;
     let deg: f64 = s[0..2].parse().ok()?;
     let min: f64 = s[2..7].parse().ok()?; // "MM.hh"
     if !(0.0..60.0).contains(&min) || deg > 90.0 {
         return None;
     }
     let mag = deg + min / 60.0;
-    match s.as_bytes()[7] {
+    match b[7] {
         b'N' => Some(mag),
         b'S' => Some(-mag),
         _ => None,
     }
 }
 
-fn parse_lon(s: &str) -> Option<f64> {
-    // "DDDMM.hhW" — 9 ASCII chars.
-    if s.len() != 9 || !s.is_ascii() {
+fn parse_lon(b: &[u8]) -> Option<f64> {
+    // "DDDMM.hhW" — 9 ASCII bytes; same raw-byte contract as [`parse_lat`].
+    if b.len() != 9 || !b.is_ascii() {
         return None;
     }
+    let s = std::str::from_utf8(&b[0..8]).ok()?;
     let deg: f64 = s[0..3].parse().ok()?;
     let min: f64 = s[3..8].parse().ok()?;
     if !(0.0..60.0).contains(&min) || deg > 180.0 {
         return None;
     }
     let mag = deg + min / 60.0;
-    match s.as_bytes()[8] {
+    match b[8] {
         b'E' => Some(mag),
         b'W' => Some(-mag),
         _ => None,
     }
+}
+
+/// Lossy-decode a genuinely free-text region (comment, message/status text, names) for
+/// storage. Fixed-layout regions are parsed as raw bytes BEFORE this runs: replacement
+/// expands an 8-bit byte (a latin-1 degree sign is routine off the air) into a 3-byte
+/// U+FFFD, which shifts every later fixed offset — decode-then-slice panicked on exactly
+/// that, so the order is load-bearing.
+fn lossy(b: &[u8]) -> String {
+    String::from_utf8_lossy(b).into_owned()
 }
 
 /// Format degrees as `DDMM.hhH`. `deg_width` is 2 (lat) or 3 (lon); `pos`/`neg` are the hemisphere
@@ -129,36 +141,38 @@ fn base91(b: &[u8]) -> Option<f64> {
 }
 
 impl Position {
-    fn parse(body: &str, messaging: bool, has_ts: bool) -> Option<Position> {
+    fn parse(body: &[u8], messaging: bool, has_ts: bool) -> Option<Position> {
         let (timestamp, rest) = if has_ts {
-            if body.len() < 7 || !body.is_char_boundary(7) {
+            if body.len() < 7 {
                 return None;
             }
-            (Some(body[..7].to_string()), &body[7..])
+            (Some(lossy(&body[..7])), &body[7..])
         } else {
             (None, body)
         };
         // Uncompressed positions start with a digit (the latitude's tens); compressed positions
         // start with the symbol-table char. Route on the first byte.
-        match rest.as_bytes().first()? {
+        match rest.first()? {
             b'0'..=b'9' => Self::parse_uncompressed(rest, timestamp, messaging),
             _ => Self::parse_compressed(rest, timestamp, messaging),
         }
     }
 
     fn parse_uncompressed(
-        rest: &str,
+        rest: &[u8],
         timestamp: Option<String>,
         messaging: bool,
     ) -> Option<Position> {
-        // lat(8) + symtable(1) + lon(9) + symcode(1) = 19 fixed chars, then the comment.
-        if rest.len() < 19 || !rest.is_char_boundary(19) {
+        // lat(8) + symtable(1) + lon(9) + symcode(1) = 19 fixed BYTES, then the comment.
+        // The whole fixed region is sliced from raw bytes — `&[u8]` indexing cannot land
+        // inside a char — and only the trailing comment is UTF-8-decoded.
+        if rest.len() < 19 {
             return None;
         }
         let lat = parse_lat(&rest[0..8])?;
-        let symbol_table = rest.as_bytes()[8] as char;
+        let symbol_table = rest[8] as char;
         let lon = parse_lon(&rest[9..18])?;
-        let symbol_code = rest.as_bytes()[18] as char;
+        let symbol_code = rest[18] as char;
         Some(Position {
             lat,
             lon,
@@ -166,29 +180,28 @@ impl Position {
             symbol_code,
             timestamp,
             messaging,
-            comment: rest[19..].to_string(),
+            comment: lossy(&rest[19..]),
         })
     }
 
-    /// Compressed (base-91) position: `<sym-table><YYYY lat><XXXX lon><sym-code><cs><T>` = 13 chars,
+    /// Compressed (base-91) position: `<sym-table><YYYY lat><XXXX lon><sym-code><cs><T>` = 13 bytes,
     /// then the comment. `lat = 90 − Y/380926`, `lon = −180 + X/190463` (APRS 1.0.1 §9).
     fn parse_compressed(
-        rest: &str,
+        rest: &[u8],
         timestamp: Option<String>,
         messaging: bool,
     ) -> Option<Position> {
-        let b = rest.as_bytes();
-        if b.len() < 13 || !rest.is_char_boundary(13) {
+        if rest.len() < 13 {
             return None;
         }
-        let symbol_table = b[0] as char;
-        let lat = 90.0 - base91(&b[1..5])? / 380_926.0;
-        let lon = -180.0 + base91(&b[5..9])? / 190_463.0;
+        let symbol_table = rest[0] as char;
+        let lat = 90.0 - base91(&rest[1..5])? / 380_926.0;
+        let lon = -180.0 + base91(&rest[5..9])? / 190_463.0;
         if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
             return None;
         }
-        let symbol_code = b[9] as char;
-        // b[10..13] = compression type (course/speed, altitude, or range) — kept out of the comment.
+        let symbol_code = rest[9] as char;
+        // rest[10..13] = compression type (course/speed, altitude, or range) — kept out of the comment.
         Some(Position {
             lat,
             lon,
@@ -196,7 +209,7 @@ impl Position {
             symbol_code,
             timestamp,
             messaging,
-            comment: rest[13..].to_string(),
+            comment: lossy(&rest[13..]),
         })
     }
 }
@@ -210,10 +223,10 @@ pub fn parse(info: &[u8]) -> AprsInfo {
             body: String::new(),
         };
     };
-    let s = String::from_utf8_lossy(info);
     let dti = dti_byte as char;
-    // DTI is ASCII → byte 1 is a char boundary.
-    let body = if dti_byte.is_ascii() { &s[1..] } else { &s[..] };
+    // DTI is one byte; a non-ASCII first byte is "no DTI" — the whole field stays the body.
+    // Everything downstream takes raw bytes and decodes only its free-text tail (see [`lossy`]).
+    let body: &[u8] = if dti_byte.is_ascii() { &info[1..] } else { info };
 
     let parsed = match dti {
         '!' => Position::parse(body, false, false).map(AprsInfo::Position),
@@ -225,20 +238,20 @@ pub fn parse(info: &[u8]) -> AprsInfo {
         ';' => parse_object(body),
         _ => None,
     };
-    parsed.unwrap_or(AprsInfo::Other {
+    parsed.unwrap_or_else(|| AprsInfo::Other {
         dti,
-        body: body.to_string(),
+        body: lossy(body),
     })
 }
 
-/// Parse an object report body: `NNNNNNNNN` (9-char name) + `*` (live) / `_` (killed) + a
+/// Parse an object report body: `NNNNNNNNN` (9-byte name) + `*` (live) / `_` (killed) + a
 /// timestamped position (uncompressed or compressed).
-fn parse_object(body: &str) -> Option<AprsInfo> {
-    if body.len() < 10 || !body.is_char_boundary(9) {
+fn parse_object(body: &[u8]) -> Option<AprsInfo> {
+    if body.len() < 10 {
         return None;
     }
-    let name = body[..9].trim_end().to_string();
-    let killed = match body.as_bytes()[9] {
+    let name = lossy(&body[..9]).trim_end().to_string();
+    let killed = match body[9] {
         b'*' => false,
         b'_' => true,
         _ => return None,
@@ -251,18 +264,20 @@ fn parse_object(body: &str) -> Option<AprsInfo> {
     })
 }
 
-fn parse_message(body: &str) -> Option<AprsInfo> {
-    // ":<addressee: 9 chars>:<text>[{id]"
-    if body.len() < 10 || !body.is_char_boundary(9) || body.as_bytes()[9] != b':' {
+fn parse_message(body: &[u8]) -> Option<AprsInfo> {
+    // ":<addressee: 9 bytes>:<text>[{id]"
+    if body.len() < 10 || body[9] != b':' {
         return None;
     }
-    let addressee = body[..9].trim_end().to_string();
-    let payload = &body[10..];
-    let (text, id) = match payload.rsplit_once('{') {
-        Some((t, i)) if !i.is_empty() && i.chars().all(|c| c.is_ascii_alphanumeric()) => {
-            (t.to_string(), Some(i.to_string()))
-        }
-        _ => (payload.to_string(), None),
+    let addressee = lossy(&body[..9]).trim_end().to_string();
+    let payload = lossy(&body[10..]);
+    let with_id = payload
+        .rsplit_once('{')
+        .filter(|(_, i)| !i.is_empty() && i.chars().all(|c| c.is_ascii_alphanumeric()))
+        .map(|(t, i)| (t.to_string(), i.to_string()));
+    let (text, id) = match with_id {
+        Some((t, i)) => (t, Some(i)),
+        None => (payload, None),
     };
     Some(AprsInfo::Message(Message {
         addressee,
@@ -271,21 +286,17 @@ fn parse_message(body: &str) -> Option<AprsInfo> {
     }))
 }
 
-fn parse_status(body: &str) -> AprsInfo {
+fn parse_status(body: &[u8]) -> AprsInfo {
     // A status may open with a zulu day/hour/min timestamp "DDHHMMz".
-    if body.len() >= 7
-        && body.is_char_boundary(7)
-        && body.as_bytes()[6] == b'z'
-        && body[..6].bytes().all(|b| b.is_ascii_digit())
-    {
+    if body.len() >= 7 && body[6] == b'z' && body[..6].iter().all(|b| b.is_ascii_digit()) {
         AprsInfo::Status {
-            timestamp: Some(body[..7].to_string()),
-            text: body[7..].to_string(),
+            timestamp: Some(lossy(&body[..7])),
+            text: lossy(&body[7..]),
         }
     } else {
         AprsInfo::Status {
             timestamp: None,
-            text: body.to_string(),
+            text: lossy(body),
         }
     }
 }
@@ -457,6 +468,50 @@ mod tests {
         let info = parse(b"!nonsense");
         assert!(matches!(info, AprsInfo::Other { dti: '!', .. }));
         assert_eq!(info.encode(), b"!nonsense");
+    }
+
+    #[test]
+    fn eight_bit_bytes_inside_the_fixed_position_layout_do_not_panic() {
+        // Real trackers and igate feeds emit latin-1 — a degree sign (0xB0) is routine.
+        // Lossy UTF-8 decoding expands each such byte to a 3-byte U+FFFD, so any
+        // char-boundary arithmetic over the fixed 19-byte position layout panics.
+        // One placement per fixed field: latitude, symbol table, longitude.
+        for info in [
+            b"!4903.5\xB0N/07201.75W-Nexus test".as_slice(),
+            b"!4903.50\xB0/07201.75W-Nexus test",
+            b"!4903.50N/07201.7\xB0W-Nexus test",
+        ] {
+            // A malformed position degrades to Other; it must never take the thread.
+            assert!(matches!(parse(info), AprsInfo::Other { dti: '!', .. }));
+        }
+    }
+
+    #[test]
+    fn eight_bit_bytes_in_the_free_text_comment_still_yield_a_position() {
+        // The comment is the one genuinely free-text field: 8-bit bytes there are
+        // replaced (U+FFFD), not rejected — the coordinates still count.
+        match parse(b"!4903.50N/07201.75W-25\xB0C and sunny") {
+            AprsInfo::Position(p) => {
+                assert!((p.lat - 49.0583333).abs() < 1e-6);
+                assert_eq!(p.comment, "25\u{FFFD}C and sunny");
+            }
+            o => panic!("expected a position, got {o:?}"),
+        }
+        // Valid multi-byte UTF-8 in the comment survives verbatim.
+        match parse("!4903.50N/07201.75W-caf\u{e9} \u{2615}".as_bytes()) {
+            AprsInfo::Position(p) => assert_eq!(p.comment, "caf\u{e9} \u{2615}"),
+            o => panic!("expected a position, got {o:?}"),
+        }
+    }
+
+    #[test]
+    fn eight_bit_bytes_in_message_object_and_status_bodies_do_not_panic() {
+        // The same fixed-layout hazard exists for the 9-byte addressee / object name
+        // regions; a raw 8-bit byte anywhere in them must degrade, never panic.
+        let _ = parse(b":N0CALL\xB0  :hello");
+        let _ = parse(b";OBJ\xB0     *092345z4903.50N/07201.75W-x");
+        let _ = parse(b">\xB0 status with 8-bit noise");
+        let _ = parse(b"@09234\xB0z4903.50N/07201.75W>car");
     }
 
     fn b91(mut v: u32) -> [u8; 4] {
