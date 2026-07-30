@@ -7,7 +7,12 @@ use serde::{Deserialize, Serialize};
 use crate::geo::maidenhead_to_latlon;
 
 /// HF/VHF bands Nexus reasons about (FT8/FT4 relevant).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// `Ord` follows declaration order (low band → high) and exists so collections
+/// keyed on Band can be `BTreeMap`/`BTreeSet`: several operator-visible answers
+/// (the advisor's region/bearing, the single "go now" opening alert) were
+/// decided by HashMap iteration order on ties — a coin flip re-rolled per poll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Band {
     B160,
     B80,
@@ -291,7 +296,9 @@ fn hf_segment(freq_mhz: f64) -> Option<ModeClass> {
 }
 
 /// Coarse world region (for "point NE at Europe" style guidance).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// `Ord` (declaration order) exists for deterministic tie-breaks — see [`Band`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Region {
     NorthAmerica,
     SouthAmerica,

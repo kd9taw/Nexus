@@ -408,6 +408,9 @@ pub fn generate_insights(
             a.confidence_score
                 .partial_cmp(&b.confidence_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                // Deterministic final tiebreak — which of two tied openings gets
+                // THE "go now" alert must not re-roll each poll.
+                .then_with(|| a.band.cmp(&b.band))
         })
     {
         let two_way = o.reciprocal_pairs > 0;

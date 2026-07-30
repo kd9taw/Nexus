@@ -8,6 +8,22 @@
 
 use std::path::Path;
 
+/// Whole-log sweep counter, DEBUG BUILDS ONLY — instrumentation for the
+/// traversal-bound test. A per-row `worked_before()` inside `snapshot()` once
+/// held the engine mutex long enough to stall the waterfall for 1–2 s, was
+/// fixed with a prebuilt set, and then regrew 240 lines below the fix's own
+/// comment. A test that pins "snapshot performs a bounded number of sweeps"
+/// stops the SHAPE from recurring, not just the instance. Release builds
+/// compile this away.
+#[cfg(debug_assertions)]
+pub static LOG_SWEEPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[inline]
+fn note_log_sweep() {
+    #[cfg(debug_assertions)]
+    LOG_SWEEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// One logged contact.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QsoRecord {
@@ -503,6 +519,7 @@ impl Logbook {
     /// the fix for the waterfall stall: `snapshot()` ran the multiplicative sweep under the
     /// engine mutex that the waterfall's spectrum fetch also needs.
     pub fn worked_call_set(&self) -> std::collections::HashSet<String> {
+        note_log_sweep();
         self.records
             .iter()
             .map(|r| r.call.to_ascii_uppercase())
@@ -510,6 +527,7 @@ impl Logbook {
     }
 
     pub fn worked_before(&self, call: &str) -> bool {
+        note_log_sweep();
         self.records
             .iter()
             .any(|r| r.call.eq_ignore_ascii_case(call))
@@ -517,6 +535,7 @@ impl Logbook {
 
     /// True if `call` was worked on `band` (band-specific dupe check).
     pub fn worked_before_band(&self, call: &str, band: &str) -> bool {
+        note_log_sweep();
         self.records
             .iter()
             .any(|r| r.call.eq_ignore_ascii_case(call) && r.band.eq_ignore_ascii_case(band))

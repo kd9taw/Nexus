@@ -1177,7 +1177,10 @@ fn compute_bests(d: &[Derived], power_w: Option<f64>) -> Vec<PersonalBest> {
     for x in d {
         *by_day.entry(x.q.when_unix.div_euclid(86_400)).or_default() += 1;
     }
-    if let Some((day, n)) = by_day.iter().max_by_key(|(_, n)| **n) {
+    // Deterministic tiebreak — ties go to the LATER day, matching the
+    // same-function rule below ("ties go to the later year"): without it the
+    // "most QSOs in a day" date re-rolled per launch on a count tie.
+    if let Some((day, n)) = by_day.iter().max_by_key(|(day, n)| (**n, **day)) {
         bests.push(PersonalBest {
             id: "busiest-day".into(),
             title: "Most QSOs in a day".into(),

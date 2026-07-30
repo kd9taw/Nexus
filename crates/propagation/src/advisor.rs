@@ -354,10 +354,20 @@ impl PropAdvisor {
         by_region: &HashMap<Region, (HashSet<String>, HashSet<String>)>,
         region_pts: &HashMap<Region, (f64, f64, u32)>,
     ) -> Option<RegionReport> {
+        // Deterministic final tiebreak (HashMap order otherwise — the same rule
+        // the per-region band pick states below): a fresh RandomState per poll
+        // made a 1–2-station tie return a different region, BEARING and
+        // confidence word on every refresh, exactly on the quiet bands where
+        // the operator leans on the answer. Ties break on the canonical Region
+        // order, so identical data always names the same region.
         let (region, (hm, ih)) = by_region
             .iter()
             .filter(|(r, _)| **r != Region::Unknown)
-            .max_by_key(|(_, (hm, ih))| hm.union(ih).count())?;
+            .max_by(|a, b| {
+                (a.1 .0.union(&a.1 .1).count())
+                    .cmp(&b.1 .0.union(&b.1 .1).count())
+                    .then_with(|| a.0.cmp(b.0))
+            })?;
         let stations = hm.union(ih).count() as u32;
         let bidirectional = !hm.is_empty() && !ih.is_empty();
         let bearing = self

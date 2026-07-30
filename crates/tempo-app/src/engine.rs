@@ -4364,9 +4364,17 @@ impl Engine {
         if let Some(pos) = adif.find("<EOR>") {
             adif.insert_str(pos, &station);
         }
-        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
-            let _ = sock.send_to(adif.as_bytes(), self.settings.hrd_udp_addr.trim());
-        }
+        // OFF-THREAD like push_to_n1mm below, and for the same reason: the target
+        // is a hostname, so `send_to`'s ToSocketAddrs resolves DNS INLINE — and
+        // this runs from log_qso under the engine mutex. A slow resolver froze
+        // every snapshot poll AND the slot loop for the timeout: a missed T/R
+        // boundary right after logging.
+        let addr = self.settings.hrd_udp_addr.trim().to_string();
+        std::thread::spawn(move || {
+            if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                let _ = sock.send_to(adif.as_bytes(), &addr);
+            }
+        });
     }
 
     /// Broadcast a logged QSO as an N1MM `<contactinfo>` datagram — the STANDING
@@ -6031,7 +6039,10 @@ impl Engine {
             let Some(oldest) = self
                 .aprs_stations
                 .iter()
-                .min_by_key(|(_, st)| st.last_heard_unix)
+                // Timestamps are 1-second resolution, so same-second ties are the
+                // NORMAL case — break on the callsign so which station vanishes
+                // is stable, not HashMap order.
+                .min_by_key(|(k, st)| (st.last_heard_unix, (*k).clone()))
                 .map(|(k, _)| k.clone())
             else {
                 break;
@@ -7267,10 +7278,12 @@ impl Engine {
         } else {
             // Bounded: a chatty logger can paint thousands of calls over a
             // session, and the whole map rides every snapshot poll. Evict an
-            // arbitrary old entry past the cap (newest paint wins).
+            // entry past the cap (newest paint wins). Deterministic victim —
+            // first in callsign order — not `.keys().next()`'s arbitrary
+            // HashMap entry, so which highlight disappears is stable.
             const MAX_HIGHLIGHTS: usize = 2048;
             if self.highlights.len() >= MAX_HIGHLIGHTS && !self.highlights.contains_key(&k) {
-                if let Some(old) = self.highlights.keys().next().cloned() {
+                if let Some(old) = self.highlights.keys().min().cloned() {
                     self.highlights.remove(&old);
                 }
             }
@@ -7714,10 +7727,14 @@ impl Engine {
                     .addressee()
                     .map(|a| a.eq_ignore_ascii_case(mycall))
                     .unwrap_or(false);
-                // Worked-before (B4): the decode's sender is in the logbook.
+                // Worked-before (B4): the decode's sender is in the logbook —
+                // via the SAME prebuilt set as the roster above. The per-row
+                // `worked_before()` this replaces was the exact O(rows × log)
+                // sweep the set was built to end, re-grown 240 lines below the
+                // comment explaining the 1–2 s waterfall stall it caused.
                 let worked = from
                     .as_deref()
-                    .map(|c| self.station.logbook.worked_before(c))
+                    .map(|c| worked.contains(&c.to_ascii_uppercase()))
                     .unwrap_or(false);
                 // New-grid (B3): the decode carries a Maidenhead grid we've never
                 // worked ON THIS BAND. Grid is present on CQ/grid forms. Per band
@@ -11082,6 +11099,37 @@ mod tests {
         e.set_rx_offset(1000.0);
         e.call_station_ctx("W1AW", None, None, None, None);
         assert_eq!(e.rx_offset_hz(), 1000.0, "no freq → no move");
+    }
+
+    #[test]
+    fn snapshot_performs_a_bounded_number_of_logbook_sweeps() {
+        // The stranded-fix class, pinned as a SHAPE: worked_call_set() exists so
+        // snapshot() sweeps the log once, yet a per-decode-row worked_before()
+        // regrew 240 lines below it — O(rows × log) under the engine mutex, the
+        // exact sweep whose comment documents a 1–2 s waterfall stall. This
+        // bound fails the suite wherever a per-row sweep reappears.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        for i in 0..25 {
+            let mut r = qrec(&format!("W{i}ABC"), "20m");
+            r.mode = "FT8".into();
+            e.log_qso(r);
+        }
+        // A busy period: 40 decode rows for the snapshot to fold.
+        let rows: Vec<modes::Decode> = (0..40)
+            .map(|i| dec_snr(&format!("CQ K{}AA FN3{}", i % 10, i % 10), -8))
+            .collect();
+        e.ingest_decodes_for_test(&rows, 2);
+
+        use std::sync::atomic::Ordering;
+        tempo_core::logbook::LOG_SWEEPS.store(0, Ordering::Relaxed);
+        let _snap = e.snapshot();
+        let sweeps = tempo_core::logbook::LOG_SWEEPS.load(Ordering::Relaxed);
+        assert!(
+            sweeps <= 2,
+            "snapshot() swept the logbook {sweeps} times for 40 decode rows — \
+             a per-row sweep has regrown (use the prebuilt worked set)"
+        );
     }
 
     #[test]

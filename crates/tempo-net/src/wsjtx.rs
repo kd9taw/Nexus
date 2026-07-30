@@ -52,6 +52,11 @@ pub mod msg_type {
     // our HaltTx and KILLED TX, and a real HaltTx(8) was silently ignored.
     pub const HALT_TX: u32 = 8;
     pub const FREE_TEXT: u32 = 9;
+    // DO NOT DELETE the three test-only constants below (WSPR_DECODE,
+    // SWITCH_CONFIGURATION, CONFIGURE): their COMPLETENESS is the guard. The
+    // numbering test pins the full canonical table, and a gap in the table is
+    // exactly what allowed the +1 shift above — a dead-code sweep that removes
+    // them re-opens the FreeText-parsed-as-HaltTx class.
     pub const WSPR_DECODE: u32 = 10;
     pub const LOCATION: u32 = 11;
     pub const LOGGED_ADIF: u32 = 12;
