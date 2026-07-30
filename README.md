@@ -424,7 +424,7 @@ contributions welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)** and the
 **[⬇ Download](https://github.com/kd9taw/Nexus/releases/latest)** ·
 **[📖 Manual](docs/manual/)** ·
 **[💬 Discussion group](https://groups.io/g/hamradiotools)** ·
-**[🐛 Report a bug](https://sourceforge.net/p/nexus-ham-radio/tickets/)** ·
+**[🐛 Report a bug](https://github.com/kd9taw/Nexus/issues)** ·
 **[🌐 hamradiotools.io](https://hamradiotools.io)**
 
 </sub></div>
