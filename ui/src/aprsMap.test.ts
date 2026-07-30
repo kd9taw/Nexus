@@ -96,6 +96,24 @@ describe('the APRS map redraws when a packet arrives', () => {
   it('lists the APRS selection as a draw dependency', () => {
     expect(drawEffectDeps().split(',').map((s) => s.trim())).toContain('selectedAprs')
   })
+
+  it('lists the APRS repaint clock as a draw dependency', () => {
+    // ⭐ Without this the canvas stops repainting. See `aprsRedrawMs`: the map bitmap is stateful,
+    // and on the APRS board nothing else runs the draw effect on a human cadence.
+    expect(drawEffectDeps().split(',').map((s) => s.trim())).toContain('aprsTick')
+  })
+
+  it('the APRS embed enables NONE of the layers the shared 1 s pulse tick is gated on', () => {
+    // This is WHY the APRS map needs a clock of its own, and it is the fact that made the
+    // stable-identity change break painting. If someone later adds one of these layers to the APRS
+    // embed, the shared tick starts firing and this test should be revisited — not deleted.
+    const embed = /const APRS_EMBED_LAYERS[\s\S]*?new Set<LayerKey>\(\[([^\]]*)\]\)/.exec(src)
+    expect(embed, 'APRS_EMBED_LAYERS must declare its visible layers').not.toBeNull()
+    const on = embed![1]
+    for (const gated of ['heat', 'openings', 'flare', 'sats']) {
+      expect(on, `${gated} would enable the shared pulse tick`).not.toContain(`'${gated}'`)
+    }
+  })
 })
 
 describe('the APRS map can be zoomed to a town, not just a continent', () => {

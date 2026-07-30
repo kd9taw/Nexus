@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   ageFade,
+  APRS_REDRAW_MS,
+  aprsRedrawMs,
   CATEGORY_VAR,
   GLYPH_PATHS,
   MIN_FADE,
@@ -281,5 +283,40 @@ describe('age fade', () => {
 
   it('survives a degenerate window without dividing by zero', () => {
     expect(Number.isFinite(ageFade(heard(30), NOW, 60, 60))).toBe(true)
+  })
+})
+
+describe('the APRS map keeps repainting itself', () => {
+  it('asks for a repaint clock only when there is an APRS layer with stations on it', () => {
+    expect(aprsRedrawMs(true, 5)).toBe(APRS_REDRAW_MS)
+    // No layer, or nothing on it: no clock, so no other map view pays for this.
+    expect(aprsRedrawMs(false, 5)).toBeNull()
+    expect(aprsRedrawMs(true, 0)).toBeNull()
+  })
+
+  it('repaints often enough that a station can never be missing for long', () => {
+    // ⭐ THE REGRESSION GUARD. Until 0.21.4 the canvas was kept painting by ACCIDENT: the 2 s poll
+    // handed the map a freshly allocated array every tick, so the prop identity changed and forced
+    // a redraw. Making that identity stable removed the only thing repainting a stateful canvas,
+    // and stations could sit invisible until the 60 s greyline clock came round. The cadence is
+    // explicit now, and must stay well under that minute.
+    expect(APRS_REDRAW_MS).toBeLessThanOrEqual(5000)
+    expect(APRS_REDRAW_MS).toBeGreaterThanOrEqual(1000) // ...but not a busy-loop
+  })
+})
+
+describe('the fade is driven by a wall clock', () => {
+  it('a station heard seconds ago is fully bright, not faded', () => {
+    // The bug this pins: computing the fade from the 60 s greyline clock reported a fresh decode as
+    // up to a minute old, quantising the fade into minute-wide steps.
+    const now = 1_700_000_000
+    for (const secondsAgo of [0, 1, 5, 30, 60, 120]) {
+      expect(ageFade(now - secondsAgo, now, 20, 60), `${secondsAgo}s ago`).toBe(1)
+    }
+  })
+
+  it('and a station is only dropped by the backend, never dimmed to nothing', () => {
+    // Whatever the clock says, the floor keeps a still-retained station visible.
+    expect(ageFade(1_700_000_000 - 59 * 60, 1_700_000_000, 20, 60)).toBeGreaterThan(0)
   })
 })
