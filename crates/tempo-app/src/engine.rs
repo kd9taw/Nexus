@@ -9886,7 +9886,12 @@ mod tests {
         let mut s = e.settings().clone();
         s.aprs_station_ttl_min = 0;
         e.apply_settings(s);
-        e.push_aprs_heard(aprs_pkt("W0OLD", "!4903.50N/07201.75W-", 1000, AprsSource::Rf));
+        e.push_aprs_heard(aprs_pkt(
+            "W0OLD",
+            "!4903.50N/07201.75W-",
+            1000,
+            AprsSource::Rf,
+        ));
         // A year later the station is still in the view, and ttl_min = 0 travels to the UI
         // so the fade path knows to stand down too.
         let v = e.aprs_stations(1000 + 365 * 24 * 3600);
