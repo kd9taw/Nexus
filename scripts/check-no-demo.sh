@@ -34,6 +34,13 @@ if grep -rnE "mockEngine|demoPropagation|nextSpectrumRow|from '\.\.?/mock'|DemoB
   report "TS mock/demo reference in ui/src"
 fi
 
+# --- Stylesheet: the banner's styling must not ship either — pre-positioned
+# CSS means a later <div className="demo-banner"> renders fully styled, and
+# this gate's header promises the BUILT bundle is fingerprint-free. ---
+if grep -rnE "demo-banner" ui/src/styles.css ui/dist/assets/*.css 2>/dev/null; then
+  report "demo-banner styling present in the stylesheet"
+fi
+
 # --- Built bundle: prove the mock dataset tree-shook out of the shipped JS ---
 if ls ui/dist/assets/*.js >/dev/null 2>&1; then
   if grep -roiE "demoPropagation|mockEngine|nextSpectrumRow|Demo Operator" ui/dist/assets/*.js 2>/dev/null; then

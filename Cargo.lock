@@ -108,7 +108,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "regex",
@@ -428,7 +428,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1862,7 +1862,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2171,7 +2171,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2477,9 +2477,9 @@ dependencies = [
 
 [[package]]
 name = "tract-core"
-version = "0.21.17"
+version = "0.21.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10b98285f3cd7252890edd0dde202541d3cafb0c4f2f60d3b2cac1c1a2d027dd"
+checksum = "5789d123fff5312089b0e8fa12f51a321985b943867c1f63bdb213ab7ded71d5"
 dependencies = [
  "anyhow",
  "anymap3",
@@ -2528,9 +2528,9 @@ dependencies = [
 
 [[package]]
 name = "tract-hir"
-version = "0.21.17"
+version = "0.21.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8180a759c2a88d4672108aeca080d763a25334d28d89be877991cf0b2d82105f"
+checksum = "1fd940d75d8492b7bf3b0209e45af8240d773f0e36e1818d0f3cf147801f292f"
 dependencies = [
  "derive-new",
  "log",
@@ -2539,9 +2539,9 @@ dependencies = [
 
 [[package]]
 name = "tract-linalg"
-version = "0.21.17"
+version = "0.21.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a4f0f9c134faf99e3cf78b46d797398982e04ad46a3ad5223bcf8c0bd4af360"
+checksum = "6e5cfc80efc3172bfc7f8adc1b417c82551493485afb2c8533c5e740caa190ab"
 dependencies = [
  "byteorder",
  "cc",
@@ -2567,9 +2567,9 @@ dependencies = [
 
 [[package]]
 name = "tract-nnef"
-version = "0.21.17"
+version = "0.21.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7deea37a9d80337c90a364d5e412edd0c2e93620b6227ba72c45e358ddcc8a5b"
+checksum = "955b1035ac1192cd1cecee6b9731d20d4da1ef5a60e515e6cfcaadc34468bfa6"
 dependencies = [
  "byteorder",
  "flate2",
@@ -2582,9 +2582,9 @@ dependencies = [
 
 [[package]]
 name = "tract-onnx"
-version = "0.21.17"
+version = "0.21.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f8c0249a443d8841db260317210920258d4f45f174ab3754ac54301b5308434"
+checksum = "6fa5e47e0a24227c6649af03f0796f327732d865c5a4d8e04ae5e97293bcf47f"
 dependencies = [
  "bytes",
  "derive-new",
@@ -2600,9 +2600,9 @@ dependencies = [
 
 [[package]]
 name = "tract-onnx-opl"
-version = "0.21.17"
+version = "0.21.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "148d0e0d08e120f3f5ae0e8ef5f78dae384cfbb82c978ce9613d5e9c540c3bdf"
+checksum = "a7c830456e4c35b20ed3ac7e7d3566c79879c4b7e754430082b09ed609aa75f7"
 dependencies = [
  "getrandom 0.2.17",
  "log",
@@ -2833,7 +2833,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

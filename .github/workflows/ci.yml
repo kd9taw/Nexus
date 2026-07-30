@@ -116,6 +116,23 @@ jobs:
       - name: cargo test tempo-audio --features device,serial
         run: cargo test -p tempo-audio --features device,serial
 
+      # `--workspace` uses DEFAULT features, so the propagation `live` tests —
+      # including the seven that assert QRZ/ClubLog/LoTW credentials are never
+      # sent over plain HTTP or echoed into an error — compiled in NO job and
+      # never ran (measured: 326 vs 364 tests). The MSRV job's `cargo check`
+      # doesn't even type-check test code (`--all-targets` is what would).
+      - name: cargo clippy propagation --features live
+        run: cargo clippy -p propagation --features live --all-targets -- -D warnings
+
+      - name: cargo test propagation --features live
+        run: cargo test -p propagation --features live
+
+      # The DeepCW inference bridge: compiled by no other Linux job (the model
+      # file is gitignored, so only compile coverage is possible here — see the
+      # documented silent-lobotomy trap in the release runbook).
+      - name: cargo check tempo-audio --features device,serial,ai-cw
+        run: cargo check -p tempo-audio --features device,serial,ai-cw --all-targets
+
       # src-tauri is its OWN workspace root (empty `[workspace]` table in its
       # Cargo.toml), so `--workspace` above does NOT reach it — verified by
       # planting a type error in src-tauri and watching both `cargo test
@@ -226,6 +243,60 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories bans sources licenses
+
+      # src-tauri is its OWN workspace root with its OWN Cargo.lock (see the
+      # planted-error note above): the job above never scans the 281 packages
+      # that ship ONLY in the desktop shell, and the two lockfiles can pin
+      # different versions of shared deps — so CI tested a different dependency
+      # set than shipped (45 divergences measured). Do NOT "fix" this by making
+      # src-tauri a workspace member; it needs a WebView toolchain Linux lacks.
+      - name: cargo-deny (src-tauri lockfile)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources licenses
+          manifest-path: src-tauri/Cargo.toml
+
+      # Shared deps must resolve identically in both lockfiles where semver
+      # allows it, or CI tests a different dependency set than ships (measured
+      # before this gate: 45 divergences, including the tract inference stack
+      # the AI CW decoder actually runs on). Incompatible-major pairs (the
+      # tauri stack legitimately requires newer majors than the workspace) are
+      # REPORTED, not failed — they cannot align. KNOWN_BLOCKED names the pairs
+      # where BOTH directions are wedged by hard requirements, each with the
+      # blocker recorded; new compatible drift fails until aligned with
+      # `cargo update -p <name> --precise <ver>`.
+      - name: lockfile divergence (workspace vs src-tauri)
+        run: |
+          python3 - <<'PY'
+          import re, sys
+          # time family: workspace capped `<0.3.42` (a pinned dependent), while
+          # src-tauri's plist 1.9 requires `^0.3.47` — neither side can move.
+          KNOWN_BLOCKED = {"time", "time-core", "time-macros"}
+          def pins(path):
+              t = open(path).read()
+              return dict(re.findall(r'name = "([^"]+)"\nversion = "([^"]+)"', t))
+          def compat(v):
+              p = v.split('+')[0].split('.')
+              return (p[0], p[1]) if p[0] == '0' else (p[0],)
+          ws, st = pins('Cargo.lock'), pins('src-tauri/Cargo.lock')
+          diff = {n: (ws[n], st[n]) for n in ws.keys() & st.keys() if ws[n] != st[n]}
+          bad = []
+          for n, (a, b) in sorted(diff.items()):
+              if compat(a) != compat(b):
+                  print(f"info: incompatible majors (cannot align) {n}: {a} vs {b}")
+              elif n in KNOWN_BLOCKED:
+                  print(f"info: known-blocked {n}: {a} vs {b}")
+              else:
+                  bad.append((n, a, b))
+          for n, a, b in bad:
+              print(f"DIVERGED {n}: workspace {a} vs src-tauri {b}")
+          if bad:
+              print(f"{len(bad)} alignable shared dependencies resolve differently — "
+                    "`cargo update -p <name> --precise <ver>` one side into line "
+                    "(or add to KNOWN_BLOCKED with the blocking requirement named).")
+              sys.exit(1)
+          print("lockfiles agree on all alignable shared dependencies")
+          PY
 
   # Job 5 — Windows cross-compile. The desktop shell (src-tauri) is outside the
   # workspace and needs a WebView/MinGW toolchain the Linux test job lacks, so
