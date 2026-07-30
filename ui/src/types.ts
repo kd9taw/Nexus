@@ -1014,6 +1014,12 @@ export interface LoggedQso {
   notes?: string | null
   /** Transmit power in watts (ADIF TX_PWR). */
   txPower?: number | null
+  /**
+   * The cty.dat-RESOLVED entity for this row's callsign — the award identity
+   * every "new one"/entity-count comparison keys on. `country` is display
+   * text whose spelling depends on who wrote it (QRZ vs cty.dat differ).
+   */
+  entity?: string | null
   /** Contact time, seconds since the Unix epoch (UTC). */
   whenUnix: number
   /**

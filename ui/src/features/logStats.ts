@@ -116,7 +116,10 @@ export function computeLogStats(log: LoggedQso[]): LogStats {
 
   for (const q of log) {
     calls.add(q.call.trim().toUpperCase())
-    const c = q.country?.trim()
+    // The RESOLVED entity when the backend supplied one, country as legacy
+    // fallback — counting raw country strings tallied "Germany" and "Fed. Rep.
+    // of Germany" (and three Russias) as separate entities.
+    const c = (q.entity ?? q.country)?.trim()
     if (c) countries.add(c.toUpperCase())
     if (q.confirmed) confirmed++
     if (q.awardConfirmed) awardConfirmed++
@@ -144,7 +147,7 @@ export function computeLogStats(log: LoggedQso[]): LogStats {
     .map(([label, count]) => ({ label, count }))
     .sort((a, b) => a.label.localeCompare(b.label)) // chronological
 
-  const entities = byCountDesc(tallyByCI(log, (q) => q.country))
+  const entities = byCountDesc(tallyByCI(log, (q) => q.entity ?? q.country))
 
   return {
     total: log.length,

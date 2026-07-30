@@ -450,6 +450,12 @@ export async function getLog(): Promise<LoggedQso[]> {
   return invoke<LoggedQso[]>('get_log')
 }
 
+/** The cty.dat-resolved DXCC entity for a callsign, or null — the award
+ * identity the "new one" badge keys on (never the QRZ country string). */
+export async function resolveEntity(call: string): Promise<string | null> {
+  return invoke<string | null>('resolve_entity', { call })
+}
+
 /** Edit logbook entry `index` (a correction). `index` is the position in the
  *  `getLog()` array. Confirmation/credit/upload state is preserved server-side. */
 export async function editQso(index: number, record: LoggedQso): Promise<AppSnapshot> {

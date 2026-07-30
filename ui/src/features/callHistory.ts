@@ -33,15 +33,28 @@ const EMPTY: CallHistory = {
   modes: [],
 }
 
-/** True only when the entity is KNOWN (non-empty `country`) and no log row's country
- * matches it case-insensitively — never claims "new DXCC" for a blank/unresolved country. */
+/** The award-identity key for a log row: the cty.dat-RESOLVED `entity` when the
+ * backend supplied one, else the stored free-text `country` as a legacy
+ * fallback. ONE key function for every entity comparison — keying on the raw
+ * country string made the two identity systems disagree (QRZ writes "Germany"/
+ * "Russia"; cty.dat says "Fed. Rep. of Germany"/"European Russia"), so the
+ * NEW ONE badge fired on every German and Russian contact forever and the
+ * Statistics and Awards entity counts could never match. Comparison only —
+ * never display. */
+export function entityKey(q: { entity?: string | null; country?: string | null }): string {
+  return (q.entity ?? q.country ?? '').trim().toUpperCase()
+}
+
+/** True only when the entity is KNOWN (non-empty resolved entity, or country as
+ * the caller's fallback) and no log row's award identity matches it — never
+ * claims "new DXCC" for a blank/unresolved entity. */
 export function isNewEntity(
-  log: { country?: string | null }[],
-  country: string | null | undefined,
+  log: { entity?: string | null; country?: string | null }[],
+  entity: string | null | undefined,
 ): boolean {
-  const c = (country ?? '').trim().toUpperCase()
+  const c = (entity ?? '').trim().toUpperCase()
   if (!c) return false
-  return !log.some((q) => (q.country ?? '').trim().toUpperCase() === c)
+  return !log.some((q) => entityKey(q) === c)
 }
 
 export interface EntitySlots {
@@ -60,16 +73,21 @@ export interface EntitySlots {
  * are normalized (trim + UPPER) so membership tests tolerate case/whitespace; they are used
  * only for comparison, never displayed. */
 export function entitySlots(
-  log: { country?: string | null; band?: string | null; mode?: string | null }[],
-  country: string | null | undefined,
+  log: {
+    entity?: string | null
+    country?: string | null
+    band?: string | null
+    mode?: string | null
+  }[],
+  entity: string | null | undefined,
 ): EntitySlots {
-  const c = (country ?? '').trim().toUpperCase()
+  const c = (entity ?? '').trim().toUpperCase()
   if (!c) return { workedEver: false, bandsWorked: [], modesWorked: [] }
   const bandsWorked: string[] = []
   const modesWorked: string[] = []
   let workedEver = false
   for (const q of log) {
-    if ((q.country ?? '').trim().toUpperCase() !== c) continue
+    if (entityKey(q) !== c) continue
     workedEver = true
     const b = (q.band ?? '').trim().toUpperCase()
     const m = (q.mode ?? '').trim().toUpperCase()

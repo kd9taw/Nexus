@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, LoggedQso } from '../types'
-import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, searchParks, setCwPeerInfo, type Park } from '../api'
+import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { callHistory, entitySlots, isNewEntity } from '../features/callHistory'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
 import { RecallPanel } from './RecallPanel'
@@ -383,15 +383,36 @@ export function LogEntry({ compactRecall,
     [allLog, logCall, snap.radio.band],
   )
 
-  // New-DXCC check rides on the QRZ lookup having populated `logCountry` (no client-side
-  // cty.dat) — an unresolved country falls back to the plain "not in your log" line.
-  const newEntity = useMemo(() => isNewEntity(allLog, logCountry), [allLog, logCountry])
+  // The award identity for the badges: cty.dat resolved from the CALL (a local
+  // in-process table — no network), never the QRZ country string. Keying on the
+  // QRZ spelling made NEW ONE fire on every German/Russian contact forever,
+  // because "Germany" can never match the "Fed. Rep. of Germany" already in the
+  // log. `logCountry` remains the display text and the legacy fallback.
+  const [logEntity, setLogEntity] = useState<string | null>(null)
+  useEffect(() => {
+    const call = logCall.trim()
+    if (!call) {
+      setLogEntity(null)
+      return
+    }
+    let stale = false
+    void resolveEntity(call)
+      .then((e) => {
+        if (!stale) setLogEntity(e)
+      })
+      .catch(() => {})
+    return () => {
+      stale = true
+    }
+  }, [logCall])
+  const entityForBadge = logEntity ?? logCountry
+  const newEntity = useMemo(() => isNewEntity(allLog, entityForBadge), [allLog, entityForBadge])
 
   // DXCC-Challenge axis: the entity is already worked, but is THIS band (or mode) a new
   // slot for it? Only meaningful once the entity is in the log (an ATNO is owned by
-  // `newEntity` above; a blank/unresolved country yields workedEver=false and falls through
+  // `newEntity` above; a blank/unresolved entity yields workedEver=false and falls through
   // to the plain "not in your log" line). Bands/modes are entity-wide; band wins over mode.
-  const slots = useMemo(() => entitySlots(allLog, logCountry), [allLog, logCountry])
+  const slots = useMemo(() => entitySlots(allLog, entityForBadge), [allLog, entityForBadge])
   const newBandSlot =
     slots.workedEver && !slots.bandsWorked.includes(snap.radio.band.trim().toUpperCase())
   const newModeSlot =

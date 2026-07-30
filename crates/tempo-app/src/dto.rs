@@ -904,6 +904,14 @@ pub struct LoggedQso {
     /// DXCC entity name (country), resolved from the callsign — the key DXer field.
     #[serde(default)]
     pub country: Option<String>,
+    /// The cty.dat-RESOLVED entity for this row's callsign, filled by the
+    /// command layer (which owns the table). THE award identity for UI
+    /// comparisons: the stored `country` is free text whose spelling depends on
+    /// who wrote it (QRZ says "Germany"/"Russia", cty.dat says "Fed. Rep. of
+    /// Germany"/"European Russia"), so keying "new one" or entity counts on it
+    /// made the two systems disagree forever. `country` is display text.
+    #[serde(default)]
+    pub entity: Option<String>,
     /// US state (ADIF STATE, 2-letter) for WAS, when known.
     #[serde(default)]
     pub state: Option<String>,
@@ -1013,6 +1021,8 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             call: r.call,
             grid: r.grid,
             country: r.country,
+            // Filled by the command layer (get_log) — tempo-app has no cty.dat.
+            entity: None,
             state: r.state,
             band: r.band,
             freq_mhz: r.freq_mhz,

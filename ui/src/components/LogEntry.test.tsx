@@ -14,6 +14,7 @@ vi.mock('../api', () => ({
   lookupPark: vi.fn(() => Promise.resolve(null)),
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
   qrzLookup: vi.fn(() => Promise.resolve(null)),
+  resolveEntity: vi.fn(() => Promise.resolve(null)),
   searchParks: vi.fn(() => Promise.resolve([])),
   setCwPeerInfo: vi.fn(() => Promise.resolve()),
 }))

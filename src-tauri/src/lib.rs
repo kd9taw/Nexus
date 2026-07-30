@@ -6711,11 +6711,30 @@ fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnaps
     Ok(snap)
 }
 
-/// The full logbook as serializable contacts (for the UI log view).
+/// The full logbook as serializable contacts (for the UI log view). Each row
+/// carries the cty.dat-RESOLVED entity for its callsign — the award identity
+/// the UI compares on; the stored free-text COUNTRY is display only (QRZ and
+/// cty.dat spell entities differently, which made the DXCC totals disagree and
+/// the NEW ONE badge fire on every German/Russian contact forever).
 #[tauri::command]
 fn get_log(state: State<'_, SharedEngine>) -> Result<Vec<LoggedQso>, String> {
     let eng = state.lock().map_err(|e| e.to_string())?;
-    Ok(eng.get_log().into_iter().map(LoggedQso::from).collect())
+    Ok(eng
+        .get_log()
+        .into_iter()
+        .map(|r| {
+            let mut q = LoggedQso::from(r);
+            q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+            q
+        })
+        .collect())
+}
+
+/// The cty.dat-resolved DXCC entity for a callsign, or null — the log-entry
+/// form keys its "new one" badge on this, not on the QRZ country string.
+#[tauri::command]
+fn resolve_entity(call: String) -> Option<String> {
+    propagation::dxcc::resolve(&call).map(|i| i.entity.to_string())
 }
 
 /// Edit logbook entry `index` (oldest-first, as returned by `get_log`) — a
@@ -11394,6 +11413,7 @@ pub fn run() {
             discard_pending_log,
             log_qso,
             get_log,
+            resolve_entity,
             edit_qso,
             mark_qsl_sent,
             delete_qso,
