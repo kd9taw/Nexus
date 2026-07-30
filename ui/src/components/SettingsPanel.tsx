@@ -2423,7 +2423,7 @@ export function SettingsPanel({
                     className="settings-refresh"
                     onClick={handleLoadProfile}
                     disabled={!selectedProfile}
-                    title="Apply this profile (saves it as the active settings)"
+                    title="Apply this profile — merged onto your current settings. Your callsign, license class, radio roster and sync history never come from a profile, and anything the profile predates keeps its current value."
                   >
                     Load
                   </button>

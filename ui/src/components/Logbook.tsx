@@ -862,7 +862,11 @@ export function Logbook({
           <div className="logbook-form-actions">
             {err && <span className="settings-error" role="alert">{err}</span>}
             {editIndex !== null && (
-              <span className="logbook-editing-note">Editing — confirmation/upload state is kept.</span>
+              <span className="logbook-editing-note">
+                Editing — confirmations and upload state are kept, unless you change the
+                callsign: a corrected call re-sends to every service and drops
+                confirmations matched on the old one.
+              </span>
             )}
             <button type="submit" className="settings-save" disabled={!draft.call.trim()}>
               {editIndex !== null ? 'Save' : 'Log'}

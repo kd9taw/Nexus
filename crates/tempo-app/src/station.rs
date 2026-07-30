@@ -69,10 +69,13 @@ pub struct StationCore {
     pub(crate) logbook: Logbook,
     /// ADIF file the logbook is persisted to, if the shell set one.
     pub(crate) log_path: Option<PathBuf>,
-    /// Last-seen mtime of the SHARED `log.adi`, for the two-instance freshness watcher
-    /// ([`sync_shared_log_if_changed`]): re-read + reconcile only when another instance has
-    /// touched the file, so a monitoring radio's worked-before/needs stay current cheaply.
-    pub(crate) last_log_mtime: Option<std::time::SystemTime>,
+    /// Last-seen (mtime, byte length) of the SHARED `log.adi` — the freshness
+    /// fingerprint for the two-instance watcher and the pre-stamp recovery gate:
+    /// re-read + reconcile only when another instance has touched the file. The
+    /// length rides along because mtime granularity can be as coarse as 2 s on
+    /// FAT/SMB shares (a NAS-shared log is supported), where a same-tick sibling
+    /// write would otherwise be invisible.
+    pub(crate) last_log_mtime: Option<(std::time::SystemTime, u64)>,
     /// ADIF journal for the Field Day contest log, if the shell set one — the
     /// in-memory FD log (which lives only inside `Mode::FieldDay`) is
     /// rewritten here on every logged contact and merged back in when a Field
@@ -564,29 +567,36 @@ impl StationCore {
     /// resurrects a record we just edited or deleted, PROVIDED callers run this
     /// BEFORE their mutation, while our copy still holds the record being changed.
     /// No-op without a log path or on a read error.
-    /// Returns whether the disk was actually re-read (mtime moved).
+    /// Returns whether the disk was actually re-read (fingerprint moved).
     fn recover_external_appends(&mut self) -> bool {
         let Some(path) = self.log_path.clone() else {
             return false;
         };
-        // mtime-gate: the stamp/save paths run this up to three times per
+        // Fingerprint gate: the stamp/save paths run this up to three times per
         // logged QSO, and an unconditional read re-parsed the whole multi-MB
-        // log each time. When the file hasn't moved since we last read or
-        // WROTE it (save_log records our own writes), the disk holds exactly
+        // log each time. When the file's (mtime, len) matches what we last read
+        // or WROTE (save_log records our own writes), the disk holds exactly
         // what we hold — skip the parse. A stat error falls through to the
         // full read: never skip on uncertainty.
-        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        if mtime.is_some() && mtime == self.last_log_mtime {
+        let stamp = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok().map(|t| (t, m.len())));
+        if stamp.is_some() && stamp == self.last_log_mtime {
             return false;
         }
-        let disk = std::fs::read_to_string(&path).unwrap_or_default();
+        // A FAILED read records nothing: stamping the fingerprint here would
+        // make the gate treat the failure as "reconciled", and the next full
+        // rewrite would drop whatever the other instance wrote. Retry instead.
+        let Ok(disk) = std::fs::read_to_string(&path) else {
+            return false;
+        };
         if !disk.is_empty() {
             // Field-level MERGE, not an additive import: fold in another instance's appends AND
             // upgrade shared records' confirmation/upload/QSL-sent state from disk, so this
             // instance's imminent full-file rewrite can't clobber what the other one wrote.
             self.logbook.reconcile_disk(&disk);
         }
-        self.last_log_mtime = mtime;
+        self.last_log_mtime = stamp;
         true
     }
 
@@ -598,13 +608,13 @@ impl StationCore {
             return;
         };
         match self.logbook.save(&path) {
-            // The mtime comes from save() itself (statted pre-rename), so a
-            // concurrent instance's rename can never be recorded as our write.
-            Ok(mtime) => self.last_log_mtime = mtime,
+            // The fingerprint comes from save() itself (statted pre-rename), so
+            // a concurrent instance's rename can never be recorded as our write.
+            Ok(stamp) => self.last_log_mtime = stamp,
             Err(e) => {
                 eprintln!("tempo: {context} save failed: {e}");
                 // Disk ≠ memory now: drop the gate so the next recovery
-                // re-reads instead of trusting a stale mtime.
+                // re-reads instead of trusting a stale fingerprint.
                 self.last_log_mtime = None;
             }
         }

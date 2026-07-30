@@ -973,6 +973,22 @@ pub struct LoggedQso {
     /// Previously dropped from the DTO, so parks were invisible to the log form + table.
     #[serde(default)]
     pub ota: OtaDto,
+    /// Import-carried award identity + the unmodelled-field remainder (see
+    /// `QsoRecord`). Carried through the DTO so a per-row connector push and an
+    /// edit round-trip don't strip a satellite QSO's credit fields or a master
+    /// log's foreign fields.
+    #[serde(default)]
+    pub dxcc: Option<u32>,
+    #[serde(default)]
+    pub prop_mode: Option<String>,
+    #[serde(default)]
+    pub sat_name: Option<String>,
+    #[serde(default)]
+    pub operator: Option<String>,
+    #[serde(default)]
+    pub station_callsign: Option<String>,
+    #[serde(default)]
+    pub extra: Vec<(String, String)>,
 }
 
 /// On-the-air (POTA/SOTA) references for a QSO — serde mirror of `tempo_core::logbook::Ota`.
@@ -1049,6 +1065,12 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             credit_submitted: r.credit_submitted,
             upload: r.upload.into(),
             ota: r.ota.into(),
+            dxcc: r.dxcc,
+            prop_mode: r.prop_mode,
+            sat_name: r.sat_name,
+            operator: r.operator,
+            station_callsign: r.station_callsign,
+            extra: r.extra,
         }
     }
 }
@@ -1130,14 +1152,14 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             ota: q.ota.into(),
             // Carried through the DTO round trip (a UI edit of an imported
             // date-only record must not fabricate time-knowledge). update_record
-            // additionally guards the unchanged-when_unix case.
+            // additionally guards the unchanged-time-of-day case.
             time_known: q.time_known,
-            dxcc: None,
-            prop_mode: None,
-            sat_name: None,
-            operator: None,
-            station_callsign: None,
-            extra: Vec::new(),
+            dxcc: q.dxcc,
+            prop_mode: q.prop_mode,
+            sat_name: q.sat_name,
+            operator: q.operator,
+            station_callsign: q.station_callsign,
+            extra: q.extra,
         }
     }
 }

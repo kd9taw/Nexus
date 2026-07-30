@@ -1048,6 +1048,15 @@ export interface LoggedQso {
   upload?: UploadState
   /** POTA/SOTA references — my activation (my*) and the station I hunted (their*). */
   ota?: Ota
+  /** Import-carried award identity + the unmodelled-field remainder — carried
+   * through the DTO so per-row pushes and edits never strip a satellite QSO's
+   * credit fields or a master log's foreign fields. Not edited by the form. */
+  dxcc?: number | null
+  propMode?: string | null
+  satName?: string | null
+  operator?: string | null
+  stationCallsign?: string | null
+  extra?: [string, string][]
 }
 
 /** On-the-air (POTA/SOTA) references for a QSO. POTA maps to ADIF SIG/SIG_INFO, SOTA to SOTA_REF. */

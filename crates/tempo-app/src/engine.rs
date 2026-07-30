@@ -1871,8 +1871,12 @@ impl Engine {
         // A settings.json persisted before band canonicalisation can still carry
         // a channel TOKEN ("2m-fm") as the band — a QSO logged before the first
         // QSY would inherit it. Same boundary rule as set_frequency: canonical
-        // in, always.
+        // in, always. The per-radio band mirrors get the same scrub, or a radio
+        // switch would restore a legacy token straight back into settings.band.
         settings.band = crate::bandplan::canonical_band(&settings.band);
+        for r in &mut settings.radios {
+            r.last_band = crate::bandplan::canonical_band(&r.last_band);
+        }
         let mut app = AppState::new(&settings.mycall, &settings.mygrid);
         app.set_radio(settings.dial_mhz, &settings.band, &settings.sideband);
         app.set_implicit_ack(settings.chat_implicit_ack);
@@ -2683,7 +2687,15 @@ impl Engine {
         // from the old band's slots. The heard-stations roster goes with it —
         // those stations aren't on the new band (operator report: stale roster
         // entries lingered across QSY). (In-band QSY keeps both — same activity.)
-        if !self.settings.band.eq_ignore_ascii_case(band) {
+        //
+        // A channel-CLASS hop on one band counts as a context change too: 2 m
+        // USB weak-signal → 2 m FM simplex is a 1.3 MHz move into different
+        // activity, and before band canonicalisation the differing channel
+        // labels tripped this block. The stored band no longer distinguishes
+        // channels, so the FM/SSB family line carries that signal.
+        let fm_hop =
+            self.settings.sideband.eq_ignore_ascii_case("FM") != mode.eq_ignore_ascii_case("FM");
+        if !self.settings.band.eq_ignore_ascii_case(band) || fm_hop {
             self.clear_decode_context();
             self.app.clear_stations();
             // The a7 cross-cycle AP table holds the OLD band's decodes — replaying

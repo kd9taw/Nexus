@@ -352,7 +352,12 @@ impl Logbook {
                 // only `mark_qsl_sent` mutates it. (Kept even on a call fix: the
                 // card WAS mailed; that's history, not credit.)
                 rec.qsl_sent = old.qsl_sent;
-                if rec.call.eq_ignore_ascii_case(&old.call) {
+                // TRIMMED comparison: an imported record can carry a padded
+                // CALL, while the edit form always sends a trimmed one — an
+                // untrimmed compare would read every ordinary edit of such a
+                // record as a callsign correction and strip its confirmations.
+                let call_changed = !rec.call.trim().eq_ignore_ascii_case(old.call.trim());
+                if !call_changed {
                     // Ordinary edit (band/grid/name/…): derived state rides along.
                     rec.confirmed = old.confirmed;
                     rec.award_confirmed = old.award_confirmed;
@@ -374,15 +379,31 @@ impl Logbook {
                     rec.credit_granted = Vec::new();
                     rec.credit_submitted = Vec::new();
                     rec.upload = UploadState::default();
+                    // The RESURRECTION guard: an imported LOTW_QSL_SENT=Y rides
+                    // in `extra`, and the parser's fallback would re-derive
+                    // upload.lotw = Accepted from it on the next load — quietly
+                    // undoing the clear above and excluding the corrected QSO
+                    // from the LoTW batch forever. It described the BUSTED
+                    // call's upload; it goes with the stamps.
+                    rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
+                    // Call-derived identity re-derives from the NEW call: the
+                    // busted call's entity/state must not ride along. (country
+                    // refills from the resolver on the save path; dxcc/state
+                    // stay empty until a lookup supplies them.)
+                    rec.dxcc = None;
+                    rec.country = None;
+                    rec.state = None;
                 }
-                // Never clobber a known country/state to None on edit (the edit
-                // form doesn't carry them) — preserve the old value when the
-                // incoming record left them empty.
-                if rec.country.is_none() {
-                    rec.country = old.country.clone();
-                }
-                if rec.state.is_none() {
-                    rec.state = old.state.clone();
+                // Never clobber a known country/state to None on an ORDINARY
+                // edit (the form doesn't carry them) — but on a call correction
+                // the old values describe the busted call and stay cleared.
+                if !call_changed {
+                    if rec.country.is_none() {
+                        rec.country = old.country.clone();
+                    }
+                    if rec.state.is_none() {
+                        rec.state = old.state.clone();
+                    }
                 }
                 // The edit form doesn't carry the contact end time — preserve the
                 // stored TIME_OFF rather than wiping it on a name/grid edit.
@@ -399,8 +420,9 @@ impl Logbook {
                     rec.ota = old.ota.clone();
                 }
                 // The edit form carries none of the import-carried identity —
-                // an edit must never bleach it off the record.
-                if rec.dxcc.is_none() {
+                // an edit must never bleach it off the record. (dxcc is
+                // call-derived: preserved on an ordinary edit only.)
+                if !call_changed && rec.dxcc.is_none() {
                     rec.dxcc = old.dxcc;
                 }
                 if rec.prop_mode.is_none() {
@@ -417,10 +439,18 @@ impl Logbook {
                 }
                 if rec.extra.is_empty() {
                     rec.extra = old.extra.clone();
+                    if call_changed {
+                        // The preservation must not undo the resurrection guard
+                        // above: the busted call's LOTW_QSL_SENT goes, whether
+                        // the extra set came from the payload or from `old`.
+                        rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
+                    }
                 }
-                // An edit that did not TOUCH the time must not fabricate
-                // time-knowledge onto an imported, time-less record.
-                if rec.when_unix == old.when_unix {
+                // An edit that did not touch the TIME OF DAY must not fabricate
+                // time-knowledge onto an imported, time-less record — keyed on
+                // the time-of-day, not the whole timestamp, so a DATE fix on a
+                // date-only import stays honestly time-unknown.
+                if rec.when_unix % 86_400 == old.when_unix % 86_400 {
                     rec.time_known = old.time_known;
                 }
                 self.records[index] = rec;
@@ -481,7 +511,20 @@ impl Logbook {
         let mut added = Vec::new();
         let mut skipped = 0usize;
         for rec in parse_adif(text) {
-            if seen.insert(dedup_key(&rec)) {
+            // LEGACY-MODE BRIDGE: rows this file imported under an earlier build
+            // read MODE only, so a WSJT-X "MODE=MFSK + SUBMODE=FT4" row is stored
+            // as "MFSK" — while the same source row now parses as "FT4". Without
+            // this probe, re-importing an already-imported file would double-log
+            // every FT4/Q65/FST4/FST4W row. The stored MFSK copy stays as-is;
+            // the incoming promoted twin counts as the duplicate it is.
+            let legacy_twin = promoted_submode(&rec.mode).is_some().then(|| {
+                let mut k = dedup_key(&rec);
+                k.2 = "MFSK".to_string();
+                k
+            });
+            if legacy_twin.is_some_and(|k| seen.contains(&k)) {
+                skipped += 1;
+            } else if seen.insert(dedup_key(&rec)) {
                 added.push(rec.clone());
                 self.records.push(rec);
             } else {
@@ -661,11 +704,15 @@ impl Logbook {
     /// rename, so a crash mid-write can't truncate the log). Needed after a
     /// [`merge_report`](Self::merge_report), which mutates existing records (unlike
     /// the append-only [`append`](Self::append)).
-    /// Returns the persisted file's mtime (statted on the TMP, before the
-    /// rename — rename preserves it, and statting the final path AFTER the
-    /// rename races another instance's own rename: recording THEIR mtime as
-    /// ours would make the recovery gate skip their write).
-    pub fn save(&self, path: &Path) -> std::io::Result<Option<std::time::SystemTime>> {
+    /// Returns the persisted file's (mtime, byte length) — the recovery-gate
+    /// fingerprint. Statted on the TMP, before the rename: rename preserves the
+    /// mtime, and statting the final path AFTER the rename races another
+    /// instance's own rename (recording THEIR stamp as ours would make the gate
+    /// skip their write). The length rides along because mtime alone is only as
+    /// fine as the filesystem's clock — 2 s on FAT/SMB shares, where a shared
+    /// NAS log is a supported deployment — and a same-tick sibling write would
+    /// otherwise be invisible.
+    pub fn save(&self, path: &Path) -> std::io::Result<Option<(std::time::SystemTime, u64)>> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -675,9 +722,11 @@ impl Logbook {
         // the rename onto the final path stays atomic (last writer wins the whole file, intact).
         let tmp = path.with_extension(format!("adi.{}.tmp", std::process::id()));
         std::fs::write(&tmp, self.adif())?;
-        let mtime = std::fs::metadata(&tmp).and_then(|m| m.modified()).ok();
+        let stamp = std::fs::metadata(&tmp)
+            .ok()
+            .and_then(|m| m.modified().ok().map(|t| (t, m.len())));
         std::fs::rename(&tmp, path)?;
-        Ok(mtime)
+        Ok(stamp)
     }
 
     /// Merge a confirmation/credit report (ADIF — e.g. a LoTW export) into the
@@ -1067,7 +1116,11 @@ pub fn adif_record_with_station(r: &QsoRecord, station_call: &str, my_grid: &str
     if !call.is_empty() && r.station_callsign.is_none() {
         extra.push_str(&field("STATION_CALLSIGN", call));
     }
-    if !grid.is_empty() {
+    // Same duplicate-field guard for MY_GRIDSQUARE: it is not a modelled field,
+    // so an imported record's own copy rides in `extra` and is already emitted
+    // by adif_record — appending a second, conflicting one hands TQSL undefined
+    // territory on the award-signing path.
+    if !grid.is_empty() && !r.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE") {
         extra.push_str(&field("MY_GRIDSQUARE", grid));
     }
     if extra.is_empty() {
@@ -1286,7 +1339,14 @@ fn take_ota_side(
 /// verbatim — losslessness by construction, not by a hand-kept census.
 fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRecord> {
     let f = &mut f;
-    let call = f.remove("CALL")?;
+    // TRIMMED at the boundary: a whitespace-padded CALL from a sloppy export
+    // otherwise never compares equal to the UI's trimmed edit payload, and an
+    // ordinary edit would then read as a callsign CORRECTION — stripping the
+    // record's confirmations under the H19 ruling.
+    let call = f
+        .remove("CALL")
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())?;
     // `.get()` slicing (not `s[a..b]`): arbitrary UTF-8 from the file — a
     // multibyte char inside the fixed date offsets must degrade, never panic.
     let (y, mo, d) = f
@@ -1303,9 +1363,9 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     // Time of day is OPTIONAL knowledge: absent (or unparseable) TIME_ON keeps
     // the date's midnight anchor for ordering but records `time_known = false`
     // — the writer then emits NO fabricated time and the LoTW/eQSL batches
-    // exclude the record. An explicit "000000" is a real, measured midnight.
+    // exclude the record. (`time_known` is finalized at the record build below,
+    // where the off-time is in scope — see the fabricated-midnight note there.)
     let time_on = f.remove("TIME_ON").as_deref().and_then(parse_adif_time);
-    let time_known = time_on.is_some();
     let (h, mi, s) = time_on.unwrap_or((0, 0, 0));
     // Per-source truth first; the two consumption booleans derive from it
     // (any-channel for display, LoTW+paper for award counting — never eQSL/QRZ).
@@ -1461,7 +1521,18 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             .filter(|s| !s.is_empty()),
         tx_power: f.remove("TX_PWR").and_then(|s| s.trim().parse().ok()),
         when_unix: unix_from_ymdhms(y, mo, d, h, mi, s),
-        time_known,
+        // FABRICATED-MIDNIGHT MIGRATION: every date-only import that earlier
+        // builds wrote carries an invented `<TIME_ON:6>000000` — reading that
+        // back as a measured time would cement the fabrication for the whole
+        // legacy corpus (11k+ rows in the reference log) and leave the LoTW
+        // exclusion inert exactly where it matters. A midnight WITH an off-time
+        // is a real, natively-logged 00:00 UTC contact (the native writer always
+        // records both); a midnight with NO off-time is a date-only import and
+        // reads as time-unknown. The false-negative (a genuine midnight QSO from
+        // a source with no off-times) shows up honestly in the excluded count
+        // and is one edit away from uploading.
+        time_known: time_on.is_some()
+            && !((h, mi, s) == (0, 0, 0) && time_off_unix.is_none()),
         time_off_unix,
         confirmed,
         award_confirmed,
@@ -1809,12 +1880,23 @@ mod tests {
         let back = &parse_adif(&(adif_header() + &out))[0];
         assert!(!back.time_known);
 
-        // A REAL midnight QSO (TIME_ON present as 000000) stays a known time.
-        let midnight =
+        // THE FABRICATED-MIDNIGHT MIGRATION: earlier builds wrote an invented
+        // <TIME_ON:6>000000 on every date-only import — 11k+ rows in the
+        // reference log — so a bare midnight reads back as time-UNKNOWN, or the
+        // whole legacy corpus would cement its fabrication and the LoTW
+        // exclusion would be inert exactly where it matters. A midnight WITH an
+        // off-time is a real, natively-logged 00:00 UTC contact and stays known.
+        let bare_midnight =
             "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>000000<BAND:3>20m<MODE:3>FT8<EOR>";
         assert!(
-            parse_adif(midnight)[0].time_known,
-            "an explicit 00:00:00 is a measured time, not an unknown one"
+            !parse_adif(bare_midnight)[0].time_known,
+            "a bare 000000 is the legacy fabrication, not a measurement"
+        );
+        let real_midnight = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>000000\
+                             <TIME_OFF:6>000130<BAND:3>20m<MODE:3>FT8<EOR>";
+        assert!(
+            parse_adif(real_midnight)[0].time_known,
+            "a midnight with an off-time is a genuine 00:00 UTC contact"
         );
 
         // TIME_OFF accepts the 4-digit form too.
@@ -2112,6 +2194,77 @@ mod tests {
             !lb.update_record(9, rec("X", "20m", 1)),
             "out-of-range is false"
         );
+    }
+
+    #[test]
+    fn a_call_correction_survives_a_save_and_reload_uncleared() {
+        // The resurrection the adversarial review caught: an imported
+        // LOTW_QSL_SENT=Y rode in `extra`, was re-emitted on save, and the
+        // parser's fallback re-derived upload.lotw = Accepted on the next load
+        // — quietly undoing the correction's clear and excluding the corrected
+        // QSO from the LoTW batch forever.
+        let adif = "<CALL:4>W1AX<QSO_DATE:8>20260101<TIME_ON:6>120000<BAND:3>20m\
+                    <MODE:3>FT8<LOTW_QSL_RCVD:1>Y<LOTW_QSL_SENT:1>Y<EOR>";
+        let mut lb = Logbook::new();
+        lb.import_adif(&(adif_header() + adif));
+        assert!(
+            lb.records()[0].upload.lotw.is_some(),
+            "precondition: imported as already-sent"
+        );
+        let mut fixed = lb.records()[0].clone();
+        fixed.call = "W1AW".into();
+        fixed.extra = Vec::new(); // the edit payload always arrives with extra empty
+        assert!(lb.update_record(0, fixed));
+        assert!(lb.records()[0].upload.lotw.is_none());
+        // Save → reload: the clear must STICK.
+        let back = parse_adif(&(adif_header() + &adif_record(&lb.records()[0])));
+        assert!(
+            back[0].upload.lotw.is_none(),
+            "LOTW_QSL_SENT must not resurrect the cleared upload stamp"
+        );
+        assert!(!back[0].confirmed, "nor the stripped confirmation");
+
+        // And a PADDED imported call is trimmed at the boundary, so an ordinary
+        // edit of such a record never reads as a call correction.
+        let padded =
+            "<CALL:6> W1AW <QSO_DATE:8>20260101<TIME_ON:6>120000<BAND:3>20m<MODE:3>FT8<EOR>";
+        assert_eq!(parse_adif(padded)[0].call, "W1AW");
+    }
+
+    #[test]
+    fn reimporting_a_wsjtx_log_after_submode_promotion_adds_no_duplicates() {
+        // Rows imported by a pre-promotion build are stored as bare "MFSK";
+        // the same source row now parses as "FT4". The legacy-twin probe must
+        // treat the promoted row as the duplicate it is.
+        let legacy =
+            "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m<MODE:4>MFSK<EOR>";
+        let promoted = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m\
+                        <MODE:4>MFSK<SUBMODE:3>FT4<EOR>";
+        let mut lb = Logbook::new();
+        lb.import_adif(&(adif_header() + legacy));
+        let (added, skipped) = lb.import_adif(&(adif_header() + promoted));
+        assert!(added.is_empty(), "the promoted twin is the same QSO");
+        assert_eq!(skipped, 1);
+        assert_eq!(lb.records().len(), 1);
+    }
+
+    #[test]
+    fn the_lotw_signing_path_never_emits_two_my_gridsquares() {
+        // An imported record's own MY_GRIDSQUARE rides in `extra` and is emitted
+        // by adif_record; the station appender must not add a second, conflicting
+        // one — a duplicate field hands TQSL undefined territory.
+        let rich = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m\
+                    <MODE:3>FT8<MY_GRIDSQUARE:6>EN61AB<EOR>";
+        let r = &parse_adif(rich)[0];
+        let out = adif_record_with_station(r, "KD9TAW", "EN52XX");
+        assert_eq!(out.matches("MY_GRIDSQUARE").count(), 1, "{out}");
+        assert!(out.contains("EN61AB"), "the record's own grid wins: {out}");
+        // A record WITHOUT its own grid still gets the station's.
+        let bare = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m<MODE:3>FT8<EOR>";
+        let r = &parse_adif(bare)[0];
+        let out = adif_record_with_station(r, "KD9TAW", "EN52XX");
+        assert_eq!(out.matches("MY_GRIDSQUARE").count(), 1);
+        assert!(out.contains("EN52XX"));
     }
 
     #[test]
