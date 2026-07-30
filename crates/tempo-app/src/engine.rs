@@ -1885,6 +1885,41 @@ pub struct TxPlan {
     stamp: TxGateStamp,
 }
 
+/// A keying source that currently owns the transmitter — see [`Engine::tx_owner`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxOwner {
+    /// The slot sequencer's over (FT8/FT4/FT1-family) is in flight.
+    Slot,
+    /// The steady tune carrier is up.
+    Tune,
+    /// A held mic key — the operator's, or a CAT-broker client's.
+    ManualPtt,
+    /// The voice keyer is playing a message.
+    Voice,
+    /// CW is sending (queue non-empty).
+    Cw,
+    /// An RTTY over is in flight or queued.
+    Rtty,
+    /// An SSTV image is in flight.
+    Sstv,
+}
+
+impl TxOwner {
+    /// The operator-facing refusal, naming who holds the transmitter.
+    pub fn busy_reason(self) -> String {
+        match self {
+            TxOwner::Slot => "Another transmission is in flight — stop it first",
+            TxOwner::Tune => "Tune carrier is up — stop tuning first",
+            TxOwner::ManualPtt => "Mic PTT is held — release it first",
+            TxOwner::Voice => "A voice message is transmitting — stop it first",
+            TxOwner::Cw => "CW is sending — stop it first",
+            TxOwner::Rtty => "RTTY is transmitting — stop it first",
+            TxOwner::Sstv => "An SSTV image is transmitting — stop it first",
+        }
+        .to_string()
+    }
+}
+
 /// Every input the TX gate read when a plan was made. [`Engine::commit_tx`]
 /// refuses a plan whose stamp no longer matches: all of these are writable by
 /// Tauri commands on another thread while the radio loop has the engine RELEASED
@@ -3582,14 +3617,13 @@ impl Engine {
             self.broker_ptt = false;
             return true; // un-key always succeeds
         }
+        // Anything owning the transmitter — a mic key, a tune carrier, a slot
+        // over, a voice/CW/RTTY/SSTV over — refuses the foreign key: granting it
+        // mid-transmission double-keys the rig. One arbiter, not a partial copy.
         if !self.settings.cat_broker_ptt
             || !self.tx_enabled
             || !self.tx_allowed()
-            || self.manual_ptt
-            // A live tune carrier or an FT8 over in flight also owns the rig —
-            // granting a foreign key mid-transmission double-keys it (review).
-            || self.tuning
-            || self.app.radio.transmitting
+            || self.tx_owner().is_some()
         {
             return false;
         }
@@ -6222,8 +6256,9 @@ impl Engine {
 
     /// The up-front APRS-TX gate: every reason a beacon would be refused, checked before anything is
     /// queued so the operator learns WHY. No operating-mode gate (a beacon is a one-shot manual
-    /// action on whatever the rig is set to — typically FM on 144.390); the `transmitting` check
-    /// keeps it from ever keying over another mode's over.
+    /// action on whatever the rig is set to — typically FM on 144.390); [`Engine::tx_owner`]
+    /// keeps it from ever keying over ANY other transmission — including a held mic, which the
+    /// old four-flag copy of this preamble did not know about.
     fn aprs_tx_gate(&self) -> Result<(), String> {
         if !self.tx_enabled {
             return Err("TX is off — enable TX first".to_string());
@@ -6233,11 +6268,8 @@ impl Engine {
                 "TX locked — this frequency is outside your license privileges".to_string(),
             );
         }
-        if self.tuning {
-            return Err("Tune carrier is up — stop tuning first".to_string());
-        }
-        if self.app.radio.transmitting {
-            return Err("Another transmission is in flight — stop it first".to_string());
+        if let Some(owner) = self.tx_owner() {
+            return Err(owner.busy_reason());
         }
         Ok(())
     }
@@ -6469,13 +6501,49 @@ impl Engine {
     }
 
     /// Pop the next queued APRS beacon audio for the radio loop to key, or `None` while any TX gate
-    /// is down (Monitor off / outside privileges / a tune carrier up / another over in flight) —
-    /// the queue is then HELD, so a beacon never keys unexpectedly.
+    /// is down (Monitor off / outside privileges / anything else owning the transmitter) — the
+    /// queue is then HELD, so a beacon never keys unexpectedly. Ownership comes from the ONE
+    /// arbiter ([`Engine::tx_owner`]): the four-flag copy that used to live here knew nothing of
+    /// mic/broker PTT, the voice keyer, CW, RTTY or SSTV.
     pub fn poll_aprs_tx(&mut self) -> Option<Vec<f32>> {
-        if !self.tx_enabled || !self.tx_allowed() || self.tuning || self.app.radio.transmitting {
+        if !self.tx_enabled || !self.tx_allowed() || self.tx_owner().is_some() {
             return None;
         }
         self.aprs_tx_queue.pop_front()
+    }
+
+    /// Who owns the transmitter right now, if anyone — THE single answer to the
+    /// question every TX gate asks, folding every ENGINE-VISIBLE keying source.
+    /// The mode gates ([`Self::aprs_tx_gate`], [`Self::rtty_tx_gate`],
+    /// [`Self::sstv_tx_gate`]), [`Self::poll_aprs_tx`] and the broker-PTT grant
+    /// all call this, so a NEW keying source is added here ONCE and every gate
+    /// learns it at the same time. The triplicated preambles each knew a
+    /// different subset — the SSTV gate's field list was the only complete one,
+    /// and this generalises it.
+    ///
+    /// Engine-visible only: a one-shot over already PLAYING (APRS/voice/CW audio
+    /// mid-buffer) is fenced by the radio loop's `tx_until_ms` + physical-PTT
+    /// guards, which are the loop's own state, not the engine's. The APRS queue
+    /// is pending work, not ownership — it keys only through `poll_aprs_tx`,
+    /// behind this arbiter.
+    pub fn tx_owner(&self) -> Option<TxOwner> {
+        if self.app.radio.transmitting {
+            Some(TxOwner::Slot)
+        } else if self.tuning {
+            Some(TxOwner::Tune)
+        } else if self.manual_ptt || self.broker_ptt {
+            Some(TxOwner::ManualPtt)
+        } else if self.voice_tx.is_some() {
+            Some(TxOwner::Voice)
+        } else if !self.cw_queue.is_empty() {
+            Some(TxOwner::Cw)
+        } else if self.rtty_sending || !self.rtty_queue.is_empty() {
+            Some(TxOwner::Rtty)
+        } else if self.sstv_tx.is_some() || self.sstv_sending {
+            Some(TxOwner::Sstv)
+        } else {
+            None
+        }
     }
 
     /// Append freshly decoded RTTY characters + the demod's current AFC state.
@@ -6626,11 +6694,12 @@ impl Engine {
                 "TX locked — this frequency is outside your license privileges".to_string(),
             );
         }
-        if self.tuning {
-            return Err("Tune carrier is up — stop tuning first".to_string());
-        }
-        if self.app.radio.transmitting {
-            return Err("Another transmission is in flight — stop it first".to_string());
+        // Ownership from the ONE arbiter — everything except RTTY itself: sending
+        // while RTTY transmits queues BEHIND the current over (type-ahead).
+        if let Some(owner) = self.tx_owner() {
+            if owner != TxOwner::Rtty {
+                return Err(owner.busy_reason());
+            }
         }
         // FSK line-conflict guard: the FSK DATA line and a serial PTT line must never
         // be the same physical line — PTT rides its own path (CAT PTT or the other
@@ -7083,25 +7152,13 @@ impl Engine {
                 "TX locked — this frequency is outside your license privileges".to_string(),
             );
         }
-        if self.tuning {
-            return Err("Tune carrier is up — stop tuning first".to_string());
-        }
-        if self.app.radio.transmitting {
-            return Err("Another transmission is in flight — stop it first".to_string());
-        }
-        // Phone-shared TX sources: a live mic key (ours or a foreign broker client), a
-        // queued/playing voice message, or a RTTY over must not overlap the image.
-        if self.manual_ptt || self.broker_ptt {
-            return Err("Mic PTT is held — release it first".to_string());
-        }
-        if self.voice_tx.is_some() {
-            return Err("A voice message is transmitting — stop it first".to_string());
-        }
-        if self.rtty_sending || !self.rtty_queue.is_empty() {
-            return Err("RTTY is transmitting — stop it first".to_string());
-        }
-        if self.sstv_tx.is_some() || self.sstv_sending {
-            return Err("Already transmitting an image — stop it first".to_string());
+        // Ownership from the ONE arbiter. This gate's field list was the complete
+        // one the other gates lacked; `tx_owner()` is that list, generalised.
+        if let Some(owner) = self.tx_owner() {
+            return Err(match owner {
+                TxOwner::Sstv => "Already transmitting an image — stop it first".to_string(),
+                o => o.busy_reason(),
+            });
         }
         Ok(())
     }
@@ -17986,6 +18043,41 @@ mod tests {
         // And the snapshot path (source_label read under the engine guard —
         // §C3's trigger) survives too.
         let _ = e.snapshot();
+    }
+
+    #[test]
+    fn aprs_never_keys_over_a_live_mic_or_another_over() {
+        // The APRS queue must HOLD while ANY keying source owns the transmitter.
+        // The old four-flag copy of the gate knew nothing of mic/broker PTT or
+        // the voice keyer, so an armed auto-ack (the app's only unattended-TX
+        // path) laid AFSK-1200 over a live phone over.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tx_enabled(true);
+        e.aprs_beacon(41.88, -87.63, '/', '-', "test", &[])
+            .expect("beacon queues");
+
+        e.set_ptt(true); // live mic
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "the beacon must hold under a held mic"
+        );
+        assert!(
+            e.aprs_tx_gate().is_err(),
+            "and the auto-ack gate refuses under a held mic"
+        );
+        e.set_ptt(false);
+
+        e.voice_tx = Some(vec![0.0; 128]); // a voice-keyer over in flight
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "the beacon must hold under a voice over"
+        );
+        e.voice_tx = None;
+
+        assert!(
+            e.poll_aprs_tx().is_some(),
+            "released → the held beacon keys"
+        );
     }
 
     #[test]

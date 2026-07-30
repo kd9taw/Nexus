@@ -3491,9 +3491,11 @@ impl RadioLoop {
 
         // APRS beacon: an explicit one-shot position beacon. The engine already rendered the
         // AFSK-1200 audio (12 kHz mono); key PTT, play it, and drop PTT via `tx_until_ms` — the
-        // same seam the voice/CW soundcard keyer uses. The `tx_until_ms` guard plus poll_aprs_tx's
-        // own gate mean a beacon never keys over another mode's over.
-        if self.tx_until_ms.is_none() {
+        // same seam the voice/CW soundcard keyer uses. The `tx_until_ms` guard covers the
+        // one-shot overs, `!manual_ptt_applied` covers a PHYSICALLY held mic (whose unkey path
+        // deliberately refuses to drop PTT under a held key — an injected packet would ride the
+        // live over), and poll_aprs_tx's tx_owner() gate covers everything the engine can see.
+        if self.tx_until_ms.is_none() && !self.manual_ptt_applied {
             let beacon = Some(engine_lock(engine)).and_then(|mut e| e.poll_aprs_tx());
             if let Some(buf) = beacon.filter(|b| !b.is_empty()) {
                 self.ensure_commanded(rig); // read-only launch: assert before key
