@@ -10,7 +10,7 @@ Every logged contact stores: callsign, Maidenhead grid, DXCC country, US state (
 
 The record also carries per-source upload state for each outbound connector (LoTW, eQSL, QRZ Logbook, ClubLog), two confirmation flags (`confirmed` and `award_confirmed` — see below), `credit_granted`, and `credit_submitted` vectors that mirror LoTW's CREDIT_GRANTED/CREDIT_SUBMITTED ADIF fields.
 
-**Every ADIF field survives an import.** Fields Nexus does not model (COUNTY, contest exchanges, QSL dates, and anything else another logger wrote) are preserved verbatim on the record and re-emitted on every export. IOTA is stored and displayed.
+**Every ADIF field survives an import.** Fields Nexus does not model (COUNTY, contest exchanges, QSL dates, and anything else another logger wrote) are preserved verbatim on the record and re-emitted on every export. Modelled fields are re-emitted in normalized form (trimmed, canonical case); a value too malformed to parse degrades to its field's empty state rather than aborting the import. IOTA is stored and displayed.
 
 ---
 

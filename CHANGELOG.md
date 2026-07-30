@@ -72,7 +72,8 @@ the services accept), but the importer read only the MODE field — so the app's
 every Tempo QSO as plain "MFSK" at launch, and the next save wrote that loss to disk
 permanently. The importer now reads the identity fields the exporter writes, and a WSJT-X log's
 FT4/Q65/FST4 rows (which ride the same MFSK-plus-submode shape) import as their real modes too.
-No Tempo QSOs exist in any log yet, so this lands before the first one does.
+A Tempo row already collapsed by an earlier build reads as MFSK on disk; the original
+identity is recoverable from the one-time `log.adi.bak` made on first load.
 
 ### Fixed: logging from a named channel mis-filed the QSO's band forever
 
@@ -80,8 +81,9 @@ Working a contact from a suffixed band-plan channel (the 2 m FM simplex data cha
 second channel, the DX/EU windows) stored the channel id — "2m-fm", "6m-2" — as the QSO's band,
 pushed that exact string to QRZ and eQSL, earned no DXCC/VUCC/WAS credit, and could never be
 confirmed. The channel id is now translated to the real band the moment it enters the app, so
-the log, the uploads, the awards engine and the Needed board all see the same "2m". Your log has
-no affected rows, so nothing needs repair.
+the log, the uploads, the awards engine and the Needed board all see the same "2m". A QSO that
+was already logged with a channel id keeps it as stored; the fix protects everything logged from
+now on.
 
 ### Fixed: imported contacts claiming midnight could never confirm at LoTW or eQSL
 
@@ -90,7 +92,9 @@ asserting that midnight as fact. LoTW and eQSL match on the two operators' times
 those contacts sat unmatched forever while the "Upload to LoTW" count never went down. The app
 now remembers that a time is unknown, never writes an invented one, accepts the 4-digit HHMM
 time form other loggers use, and leaves time-less contacts out of upload batches — the button's
-tooltip says how many and why. A contact genuinely made at 00:00:00 still counts as timed.
+tooltip says how many and why. Contacts an earlier build already stamped with an invented
+00:00:00 are recognized too: a bare midnight with no end-of-contact time reads as "time
+unknown" (a genuine 00:00 UTC contact carries one, and still counts as timed).
 
 ### Fixed: correcting a busted callsign now actually reaches LoTW and the other services
 

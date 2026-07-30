@@ -8216,7 +8216,15 @@ async fn upload_lotw_report_impl(
                     .into(),
             );
         }
-        let batch = indices.unwrap_or_else(|| eng.lotw_unsent_indices());
+        let mut batch = indices.unwrap_or_else(|| eng.lotw_unsent_indices());
+        // Caller-supplied indices (the Awards per-bucket buttons) bypass
+        // lotw_unsent_indices' time_known exclusion — filter HERE, at the one
+        // choke point every batch passes: LoTW matches on time, so a record
+        // with no known time of day can never confirm and must not be signed.
+        {
+            let records = eng.get_log();
+            batch.retain(|&i| records.get(i).map(|r| r.time_known).unwrap_or(false));
+        }
         if batch.is_empty() {
             return Ok(UploadReportDto {
                 dispatched: 0,
