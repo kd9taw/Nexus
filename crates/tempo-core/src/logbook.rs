@@ -1219,20 +1219,23 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
     };
     // TIME_OFF / QSO_DATE_OFF (optional contact end). Per ADIF, QSO_DATE_OFF falls back
     // to QSO_DATE when only TIME_OFF is present.
+    // Same `.get()` (not `s[a..b]`) contract as TIME_ON/QSO_DATE above: these values are
+    // arbitrary UTF-8 from the same untrusted inlets, so a raw byte slice would panic on
+    // a multibyte char inside the fixed offsets.
     let time_off_unix = f.get("TIME_OFF").filter(|t| t.len() >= 6).map(|t| {
         let (oh, omi, os) = (
-            t[0..2].parse::<u32>().unwrap_or(0),
-            t[2..4].parse::<u32>().unwrap_or(0),
-            t[4..6].parse::<u32>().unwrap_or(0),
+            t.get(0..2).and_then(|x| x.parse::<u32>().ok()).unwrap_or(0),
+            t.get(2..4).and_then(|x| x.parse::<u32>().ok()).unwrap_or(0),
+            t.get(4..6).and_then(|x| x.parse::<u32>().ok()).unwrap_or(0),
         );
         let (oy, omo, od) = f
             .get("QSO_DATE_OFF")
             .filter(|s| s.len() >= 8)
             .map(|s| {
                 (
-                    s[0..4].parse::<i32>().unwrap_or(y),
-                    s[4..6].parse::<u32>().unwrap_or(mo),
-                    s[6..8].parse::<u32>().unwrap_or(d),
+                    s.get(0..4).and_then(|x| x.parse::<i32>().ok()).unwrap_or(y),
+                    s.get(4..6).and_then(|x| x.parse::<u32>().ok()).unwrap_or(mo),
+                    s.get(6..8).and_then(|x| x.parse::<u32>().ok()).unwrap_or(d),
                 )
             })
             .unwrap_or((y, mo, d));
@@ -2273,11 +2276,65 @@ mod tests {
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].call, "TEST");
 
+        // A1b: the same multibyte guard on the OFF pair — TIME_OFF/QSO_DATE_OFF parse the
+        // same fixed offsets and are fed by the same untrusted inlets (file import, LoTW/
+        // eQSL/QRZ merges, and a WSJT-X LoggedADIF datagram inside the radio loop).
+        let off_time = "<CALL:4>TEST<QSO_DATE:8>20240704<TIME_ON:6>131500<TIME_OFF:7>1é3456<EOR>";
+        let recs = parse_adif(off_time);
+        assert_eq!(recs.len(), 1);
+        let off_date = "<CALL:4>TEST<QSO_DATE:8>20240704<TIME_ON:6>131500\
+                        <TIME_OFF:6>131622<QSO_DATE_OFF:9>202é0701<EOR>";
+        let recs = parse_adif(off_date);
+        assert_eq!(recs.len(), 1);
+
         // Regression: a normal record still parses cleanly.
         let ok = "<CALL:6>KD9TAW<QSO_DATE:8>20240704<TIME_ON:6>131500<BAND:3>20M<MODE:3>FT8<EOR>";
         let recs = parse_adif(ok);
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].call, "KD9TAW");
+    }
+
+    #[test]
+    fn adif_parser_survives_arbitrary_field_soup() {
+        // Deterministic pseudo-fuzz (xorshift, fixed seed — reproducible, no dependency):
+        // ADIF-shaped records whose values mix digits, multibyte chars and lying length
+        // prefixes. A lying prefix hands later fields bytes from the middle of earlier
+        // ones — exactly how a fixed-offset field picks up arbitrary UTF-8. Every parse
+        // must degrade, never panic: this input is reachable from a hand-edited file or
+        // an inbound LoggedADIF datagram.
+        let mut s = 0x243F_6A88_85A3_08D3u64;
+        let mut rng = move |m: usize| -> usize {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s % m as u64) as usize
+        };
+        const CHARS: [&str; 12] = ["0", "1", "9", "é", "°", "☃", "z", "-", ".", " ", "<", ">"];
+        const FIELDS: [&str; 9] = [
+            "CALL",
+            "QSO_DATE",
+            "TIME_ON",
+            "TIME_OFF",
+            "QSO_DATE_OFF",
+            "MODE",
+            "BAND",
+            "GRIDSQUARE",
+            "FREQ",
+        ];
+        for _ in 0..2000 {
+            let mut rec = String::new();
+            for _ in 0..1 + rng(6) {
+                let name = FIELDS[rng(FIELDS.len())];
+                let mut val = String::new();
+                for _ in 0..rng(12) {
+                    val.push_str(CHARS[rng(CHARS.len())]);
+                }
+                let lie = (val.len() + rng(5)).saturating_sub(2);
+                rec.push_str(&format!("<{name}:{lie}>{val}"));
+            }
+            rec.push_str("<EOR>");
+            let _ = parse_adif(&rec);
+        }
     }
 
     #[test]
