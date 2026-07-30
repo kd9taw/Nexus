@@ -358,6 +358,8 @@ export function ageFade(
   fadeAfterMin: number,
   ttlMin: number,
 ): number {
+  // ttl 0 = the operator chose keep-forever: no fade, ever.
+  if (ttlMin <= 0) return 1
   const silentMin = (nowSec - lastHeardUnix) / 60
   if (silentMin <= fadeAfterMin) return 1
   if (silentMin >= ttlMin) return MIN_FADE

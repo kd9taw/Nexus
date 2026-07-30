@@ -19,6 +19,12 @@ station looked like a dead band. With the radio named, that is a glance instead 
 
 On a single-radio station, or when only one radio covers the band, nothing is shown: there was no
 choice to make and saying so would just be clutter.
+### Stations can be kept on the APRS map forever
+
+Setting "Keep stations for" to 0 now means exactly that: no fade, no removal — every station
+stays until the 2000-station ceiling. Added while chasing a field report of stations vanishing
+far too quickly; with removal off entirely, anything that still disappears proves the fault is
+somewhere else. It stays because some operators genuinely want an all-day picture.
 
 ### Fixed: APRS went silent on a three-radio station
 
