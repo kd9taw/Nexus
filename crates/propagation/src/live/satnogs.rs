@@ -53,6 +53,61 @@ pub struct Transmitter {
     pub mode: Option<String>,
     pub uplink_low_hz: Option<u64>,
     pub downlink_low_hz: Option<u64>,
+    /// ⭐ LOAD-BEARING FOR DOPPLER. On an INVERTING linear transponder the
+    /// uplink runs BACKWARDS relative to the downlink and the sidebands swap
+    /// (LSB up / USB down). Tuning up the band moves your uplink DOWN. A
+    /// station that gets this wrong lands on someone else entirely, which is
+    /// why it must be per-transponder DATA and never a global setting.
+    /// `false` when SatNOGS doesn't say — non-inverting is the safe reading
+    /// for the FM/beacon majority.
+    pub invert: bool,
+    /// Passband edges. A linear transponder is a BAND, not a frequency: the
+    /// centre-only model cannot express "the operator is 12 kHz up the
+    /// passband". `None` for single-frequency transmitters.
+    pub uplink_high_hz: Option<u64>,
+    pub downlink_high_hz: Option<u64>,
+    /// Per-leg modes. The single `mode` field above cannot express the
+    /// USB-down/LSB-up an inverting transponder needs.
+    pub uplink_mode: Option<String>,
+    pub downlink_mode: Option<String>,
+    /// SatNOGS `type`: "Transmitter" (beacon, downlink only), "Transponder"
+    /// (linear, a passband), "Transceiver" (FM repeater). The three drive
+    /// genuinely different operating behaviour, so the distinction is kept
+    /// rather than inferred from which frequencies happen to be present.
+    pub kind: Option<String>,
+}
+
+impl Transmitter {
+    /// True when this is a LINEAR transponder — a passband to tune inside,
+    /// not a fixed channel. Derived from the declared type first, falling back
+    /// to "it has an uplink passband wider than a channel".
+    pub fn is_linear(&self) -> bool {
+        if let Some(k) = &self.kind {
+            return k.eq_ignore_ascii_case("Transponder");
+        }
+        matches!(
+            (self.downlink_low_hz, self.downlink_high_hz),
+            (Some(lo), Some(hi)) if hi > lo + 10_000
+        )
+    }
+
+    /// Centre of the downlink passband (or the single downlink frequency).
+    pub fn downlink_centre_hz(&self) -> Option<u64> {
+        centre(self.downlink_low_hz, self.downlink_high_hz)
+    }
+
+    /// Centre of the uplink passband (or the single uplink frequency).
+    pub fn uplink_centre_hz(&self) -> Option<u64> {
+        centre(self.uplink_low_hz, self.uplink_high_hz)
+    }
+}
+
+fn centre(lo: Option<u64>, hi: Option<u64>) -> Option<u64> {
+    match (lo, hi) {
+        (Some(l), Some(h)) if h > l => Some(l + (h - l) / 2),
+        (Some(l), _) => Some(l),
+        _ => None,
+    }
 }
 
 /// Parse the `/api/satellites` array into [`SatStatus`]. Pure — unit-testable
@@ -111,6 +166,24 @@ pub fn parse_transmitters(json: &str) -> Vec<Transmitter> {
             mode: item.get("mode").and_then(Value::as_str).map(str::to_string),
             uplink_low_hz: item.get("uplink_low").and_then(Value::as_u64),
             downlink_low_hz: item.get("downlink_low").and_then(Value::as_u64),
+            // Absent/garbage `invert` reads as NON-inverting: that is the safe
+            // default (the FM/beacon majority), and a wrongly-inverted uplink
+            // transmits somewhere the operator never intended.
+            invert: item
+                .get("invert")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            uplink_high_hz: item.get("uplink_high").and_then(Value::as_u64),
+            downlink_high_hz: item.get("downlink_high").and_then(Value::as_u64),
+            uplink_mode: item
+                .get("uplink_mode")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            downlink_mode: item
+                .get("downlink_mode")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            kind: item.get("type").and_then(Value::as_str).map(str::to_string),
         });
     }
     out
@@ -227,6 +300,56 @@ mod tests {
         // Crafted: mode null → None, alive false preserved (not fabricated true).
         assert_eq!(x[2].mode, None);
         assert!(!x[2].alive);
+    }
+
+    #[test]
+    fn linear_transponder_fields_drive_doppler() {
+        // The shape SatNOGS publishes for a linear INVERTING transponder — the
+        // RS-44 / AO-7 class every satellite operator actually uses. Without
+        // these fields the Doppler engine cannot be correct: the uplink runs
+        // backwards and the sidebands swap.
+        let json = r#"[
+          {"norad_cat_id":44909,"description":"Linear Transponder","alive":true,
+           "type":"Transponder","invert":true,
+           "uplink_low":145935000,"uplink_high":145995000,"uplink_mode":"LSB",
+           "downlink_low":435610000,"downlink_high":435670000,"downlink_mode":"USB"},
+          {"norad_cat_id":25544,"description":"FM Repeater","alive":true,
+           "type":"Transceiver","invert":false,
+           "uplink_low":145990000,"downlink_low":437800000,"mode":"FM"}
+        ]"#;
+        let x = parse_transmitters(json);
+        assert_eq!(x.len(), 2);
+
+        let lin = &x[0];
+        assert!(lin.invert, "an inverting transponder MUST report it");
+        assert!(lin.is_linear());
+        assert_eq!(lin.uplink_high_hz, Some(145_995_000));
+        assert_eq!(lin.downlink_high_hz, Some(435_670_000));
+        assert_eq!(lin.uplink_mode.as_deref(), Some("LSB"));
+        assert_eq!(lin.downlink_mode.as_deref(), Some("USB"));
+        // Centres, not edges — what the radio parks on before the operator tunes.
+        assert_eq!(lin.uplink_centre_hz(), Some(145_965_000));
+        assert_eq!(lin.downlink_centre_hz(), Some(435_640_000));
+
+        let fm = &x[1];
+        assert!(!fm.invert);
+        assert!(!fm.is_linear(), "an FM repeater is a channel, not a passband");
+        // A single-frequency channel: centre IS the frequency.
+        assert_eq!(fm.downlink_centre_hz(), Some(437_800_000));
+        assert_eq!(fm.uplink_centre_hz(), Some(145_990_000));
+    }
+
+    #[test]
+    fn absent_invert_reads_as_non_inverting() {
+        // Fail SAFE: a missing/garbage `invert` must never produce a reversed
+        // uplink, which would transmit somewhere the operator never intended.
+        let json = r#"[{"norad_cat_id":1,"description":"x","alive":true,
+                        "downlink_low":435000000},
+                       {"norad_cat_id":2,"description":"y","alive":true,
+                        "invert":"yes","downlink_low":435000000}]"#;
+        let x = parse_transmitters(json);
+        assert!(!x[0].invert, "absent invert → non-inverting");
+        assert!(!x[1].invert, "non-boolean invert → non-inverting");
     }
 
     #[test]

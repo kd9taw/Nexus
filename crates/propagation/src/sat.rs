@@ -218,6 +218,40 @@ pub fn look_at(tle: &Tle, observer: (f64, f64), unix: i64) -> Option<(f64, f64)>
     Some((az, el))
 }
 
+/// Slant range and RANGE-RATE of `tle` from `observer` at `unix` —
+/// `(range km, range-rate km/s)`, the two numbers Doppler correction is built
+/// from. `None` if the TLE is unparseable or the propagation diverges.
+///
+/// ⭐ SIGN CONVENTION, asserted by test: range-rate is **POSITIVE while the
+/// satellite is RECEDING** (range increasing). A receding bird's signal arrives
+/// LOW, so the downlink correction is `f × (1 − ṙ/c)`. Getting this backwards is
+/// invisible in review and doubles the error on the air, which is why the
+/// convention is pinned here rather than left to the caller.
+///
+/// The observer is NOT stationary: the ground station rotates with the Earth at
+/// up to ~0.46 km/s at the equator, which is ~10% of a LEO range-rate and tens of
+/// hertz at 435 MHz — real error, not rounding. Both bodies' velocities are
+/// therefore taken in the Earth-fixed frame: the satellite's TEME velocity is
+/// rotated to ECEF *and* corrected for the frame's own rotation
+/// (`v_ecef = R(θ)·v_teme − ω × r_ecef`), and the observer's Earth-fixed velocity
+/// is then identically zero.
+pub fn range_rate(tle: &Tle, observer: (f64, f64), unix: i64) -> Option<(f64, f64)> {
+    let (constants, epoch_unix) = prepare(tle)?;
+    let (obs_lat_deg, obs_lon_deg) = observer;
+    let obs = geodetic_to_ecef(obs_lat_deg, obs_lon_deg, 0.0);
+    let (sat, vel) = sat_ecef_with_velocity(&constants, epoch_unix, unix)?;
+
+    let d = [sat[0] - obs[0], sat[1] - obs[1], sat[2] - obs[2]];
+    let range = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    if !(range.is_finite() && range > 0.0) {
+        return None;
+    }
+    // ṙ = (d · v) / |d| — the component of relative velocity along the line of
+    // sight. The observer is fixed in this frame, so relative velocity IS `vel`.
+    let rate = (d[0] * vel[0] + d[1] * vel[1] + d[2] * vel[2]) / range;
+    rate.is_finite().then_some((range, rate))
+}
+
 /// Sampled look-angle trajectory of `tle` over `observer` from `aos_unix` to
 /// `los_unix` **inclusive**, one `(unix, azimuth °, elevation °)` per `step_secs`
 /// (clamped to ≥ 5 s so a zero step can't spin). The TLE is parsed ONCE — this is
@@ -314,6 +348,37 @@ fn sat_ecef(constants: &sgp4::Constants, epoch_unix: i64, unix: i64) -> Option<[
     // TEME → ECEF: rotate about the pole by +GMST (R3(θ)). z is preserved.
     let (s, c) = gmst_rad(unix).sin_cos();
     Some([x * c + y * s, -x * s + y * c, z])
+}
+
+/// Earth's rotation rate (rad/s) — the sidereal rate, not 2π/86400. Used to take
+/// the TEME→ECEF frame rotation out of the satellite's velocity.
+const EARTH_ROT_RAD_S: f64 = 7.292_115_146_7e-5;
+
+/// [`sat_ecef`] plus the Earth-fixed VELOCITY (km/s) at the same instant.
+///
+/// Rotating a TEME velocity into ECEF is not just `R3(θ)·v`: the target frame is
+/// itself rotating, so the frame's contribution `ω × r` must be removed, or the
+/// result carries a spurious ~0.46 km/s tangential term at LEO altitudes.
+fn sat_ecef_with_velocity(
+    constants: &sgp4::Constants,
+    epoch_unix: i64,
+    unix: i64,
+) -> Option<([f64; 3], [f64; 3])> {
+    let minutes = (unix - epoch_unix) as f64 / 60.0;
+    let prediction = constants.propagate(sgp4::MinutesSinceEpoch(minutes)).ok()?;
+    let [x, y, z] = prediction.position;
+    let [vx, vy, vz] = prediction.velocity;
+    let (s, c) = gmst_rad(unix).sin_cos();
+    // Same R3(θ) rotation `sat_ecef` applies, to both vectors.
+    let r = [x * c + y * s, -x * s + y * c, z];
+    let v_rot = [vx * c + vy * s, -vx * s + vy * c, vz];
+    // …then subtract the frame rotation: ω × r with ω = (0, 0, ω_e).
+    let v = [
+        v_rot[0] + EARTH_ROT_RAD_S * r[1],
+        v_rot[1] - EARTH_ROT_RAD_S * r[0],
+        v_rot[2],
+    ];
+    (r.iter().chain(v.iter()).all(|c| c.is_finite())).then_some((r, v))
 }
 
 /// Greenwich Mean Sidereal Time (radians, 0..2π) at a UTC instant, IAU-1982.
@@ -428,6 +493,77 @@ mod tests {
             line1: ISS_L1.to_string(),
             line2: ISS_L2.to_string(),
         }
+    }
+
+    #[test]
+    fn range_rate_sign_is_positive_while_receding() {
+        // THE convention test. Doppler multiplies by (1 − ṙ/c) on the downlink,
+        // so a sign error here doesn't cancel — it doubles the error, and it is
+        // invisible in review. Pin it against the range actually changing.
+        let tle = iss();
+        let obs = (0.0, 0.0); // equator/prime meridian: the observer-rotation term is largest here
+        // Walk a full orbit in 30 s steps; at every sample the sign of ṙ must
+        // agree with the direction the measured range is moving.
+        let mut checked_receding = 0;
+        let mut checked_approaching = 0;
+        for k in 0..180 {
+            let t = ISS_EPOCH_UNIX + k * 30;
+            let (Some((r0, rate)), Some((r1, _))) =
+                (range_rate(&tle, obs, t), range_rate(&tle, obs, t + 2))
+            else {
+                continue;
+            };
+            let measured = (r1 - r0) / 2.0; // km/s by finite difference
+            // Only judge samples where the motion is unambiguous (away from the
+            // turning point at TCA, where the finite difference is dominated by
+            // curvature rather than by the rate itself).
+            if measured.abs() < 0.5 {
+                continue;
+            }
+            assert_eq!(
+                rate > 0.0,
+                measured > 0.0,
+                "t={t}: range-rate {rate:.4} km/s disagrees with the measured \
+                 range change {measured:.4} km/s (r0={r0:.1} r1={r1:.1})"
+            );
+            // And the magnitude must match the finite difference closely.
+            assert!(
+                (rate - measured).abs() < 0.05,
+                "t={t}: analytic {rate:.4} vs measured {measured:.4} km/s"
+            );
+            if rate > 0.0 {
+                checked_receding += 1;
+            } else {
+                checked_approaching += 1;
+            }
+        }
+        assert!(
+            checked_receding > 10 && checked_approaching > 10,
+            "the orbit must exercise BOTH directions (receding {checked_receding}, \
+             approaching {checked_approaching})"
+        );
+    }
+
+    #[test]
+    fn range_rate_is_bounded_and_agrees_with_range() {
+        // A LEO range-rate cannot exceed the orbital velocity (~7.7 km/s); a
+        // value outside that means the frame conversion is wrong (the classic
+        // symptom of forgetting the ω × r term is a constant offset).
+        let tle = iss();
+        let obs = (40.0, -88.0); // mid-latitude, like the operator's grid
+        let mut saw = 0;
+        for k in 0..120 {
+            let t = ISS_EPOCH_UNIX + k * 45;
+            let Some((range, rate)) = range_rate(&tle, obs, t) else {
+                continue;
+            };
+            assert!(range > 300.0 && range < 45_000.0, "range {range} km at {t}");
+            assert!(rate.abs() < 8.0, "range-rate {rate} km/s at {t} is unphysical");
+            // The look_at path must agree that this is the same geometry.
+            assert!(look_at(&tle, obs, t).is_some());
+            saw += 1;
+        }
+        assert!(saw > 100, "expected samples across the orbit, saw {saw}");
     }
 
     #[test]

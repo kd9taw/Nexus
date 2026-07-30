@@ -20,6 +20,7 @@ pub mod advisor;
 pub mod awards;
 pub mod chirp;
 pub mod dxcc;
+pub mod doppler;
 pub mod dxped;
 pub mod engine;
 pub mod fccstate;
