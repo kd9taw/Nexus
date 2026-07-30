@@ -9,7 +9,7 @@ the TempoFast/TempoDeep tiers** (more on that below).
 
 Nexus is maintained by KD9TAW
 &lt;kd9taw@protonmail.com&gt;. The canonical repo is
-<https://sourceforge.net/p/nexus-ham-radio/code/>.
+<https://github.com/kd9taw/Nexus>; SourceForge mirrors it.
 
 ---
 
