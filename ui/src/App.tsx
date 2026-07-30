@@ -2228,6 +2228,7 @@ export default function App() {
         <main className="layout single">
           <MemoriesView
             onPopOut={() => void openPanelWindow('memories')}
+            myGrid={settings?.mygrid ?? ''}
             dialMhz={snap.radio.dialMhz}
             dialMode={
               lastOpModeRef.current === 'cw'

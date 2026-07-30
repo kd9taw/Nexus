@@ -9,27 +9,34 @@ import type {
 import {
   exportChannels,
   geocodeCity,
-  getSettings,
   radioprogListProjects,
   radioprogSaveProject,
   repeaterSearch,
+  repeaterTune,
   saveTextToDownloads,
-  setFrequency,
-  setSettings,
 } from '../api'
-import { addMemoryDeduped, memoriesStore } from '../features/memories'
-import { bandLabelForMhz } from '../band'
+import {
+  addMemoryDeduped,
+  findEquivalent,
+  memoriesStore,
+  saveFavoriteFromDial,
+  updateMemory,
+  useMemories,
+} from '../features/memories'
 import {
   autoRadiusMi,
   BAND_CHIPS,
   bandOfMhz,
   deriveNames,
+  favoriteName,
   isProgrammable,
   miToKm,
   modeBadge,
   NAME_CAPS,
   octant,
   RADIUS_CHIPS_MI,
+  repeaterMemory,
+  rigRepeaterParams,
   sanitizeName,
 } from '../features/radioprog'
 import { gridToLatLon, isValidGrid } from '../grid'
@@ -88,32 +95,6 @@ interface Props {
   myGrid: string
   /** CAT link alive — gates the per-row TUNE buttons. */
   catOk?: boolean
-}
-
-/** A channel's FM repeater parameters for the rig path (tune-now + memory bank):
- * shift direction, offset magnitude override (Hz — the EXACT machine offset, so
- * odd splits key right), and the CTCSS tone. */
-function rigRepeaterParams(c: ProgChannel): {
-  shift: 'simplex' | 'plus' | 'minus'
-  offsetHz: number
-  toneHz: number
-} {
-  const toneHz = c.toneMode === 'tone' || c.toneMode === 'tsql' ? c.rtoneHz : 0
-  if (c.duplex === 'simplex') return { shift: 'simplex', offsetHz: 0, toneHz }
-  if (c.duplex === 'split') {
-    // Split stores the absolute TX in offsetMhz — derive direction + magnitude.
-    const diff = c.offsetMhz - c.rxMhz
-    return {
-      shift: diff >= 0 ? 'plus' : 'minus',
-      offsetHz: Math.round(Math.abs(diff) * 1e6),
-      toneHz,
-    }
-  }
-  return {
-    shift: c.duplex,
-    offsetHz: Math.round(c.offsetMhz * 1e6),
-    toneHz,
-  }
 }
 
 /**
@@ -263,6 +244,23 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
 
   const inList = useMemo(() => new Set(rows.map((r) => r.channel.id)), [rows])
 
+  // Which shown machines are already starred — live from the shared bank, so the
+  // stars stay right when the operator unstars one in the Memories section.
+  const bank = useMemories()
+  const starredIds = useMemo(() => {
+    const out = new Set<string>()
+    for (const row of shown) {
+      const input = repeaterMemory(row.channel, '')
+      const hit = findEquivalent(bank, {
+        rxMhz: input.rxMhz,
+        mode: input.mode,
+        ctcssEncHz: input.ctcssEncHz,
+      })
+      if (hit?.favorite) out.add(row.channel.id)
+    }
+    return out
+  }, [shown, bank])
+
   // ── builder ops ──
   const addRow = (row: RepeaterSearchRow) => {
     if (inList.has(row.channel.id)) {
@@ -355,33 +353,55 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     else setChirpDialog(true)
   }
 
-  /** Tune the CAT rig to a repeater NOW: FM + the machine's exact shift/offset/
-   * tone through the existing settings→service→set_fm_repeater path. */
+  /** Tune the CAT rig to a repeater NOW — one atomic backend step that routes on
+   * FM (so 2 m repeater work reaches the FM radio even when the operator came
+   * from a digital section) and lands the shift/offset/tone with the QSY. */
   const tuneTo = (c: ProgChannel) => {
-    const band = bandLabelForMhz(c.rxMhz)
-    if (!band) {
-      pushToast(`${c.rxMhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
-      return
-    }
-    void (async () => {
-      const { shift, offsetHz, toneHz } = rigRepeaterParams(c)
-      const s = await getSettings()
-      await setSettings({
-        ...s,
-        phoneMode: 'fm',
-        rptrShift: shift,
-        ctcssToneHz: toneHz,
-        rptrOffsetOverrideHz: offsetHz,
+    const { shift, offsetHz, toneHz } = rigRepeaterParams(c)
+    void repeaterTune(c.rxMhz, shift, offsetHz, toneHz)
+      .then(() => {
+        const shiftLabel =
+          shift === 'simplex'
+            ? 'simplex'
+            : `${shift === 'plus' ? '+' : '−'}${(offsetHz / 1e6).toFixed(2)} MHz`
+        pushToast(
+          `Tuned ${c.rxMhz.toFixed(4)} FM — ${shiftLabel}${toneHz ? ` · tone ${toneHz.toFixed(1)}` : ''}`,
+          'success',
+          4000,
+        )
       })
-      await setFrequency(c.rxMhz, band, 'FM')
-      const shiftLabel =
-        shift === 'simplex' ? 'simplex' : `${shift === 'plus' ? '+' : '−'}${(offsetHz / 1e6).toFixed(2)} MHz`
-      pushToast(
-        `Tuned ${c.rxMhz.toFixed(4)} FM — ${shiftLabel}${toneHz ? ` · tone ${toneHz.toFixed(1)}` : ''}`,
-        'success',
-        4000,
-      )
-    })().catch((e) => pushToast(String(e), 'error'))
+      .catch((e) => pushToast(String(e), 'error'))
+  }
+
+  /** ★ one machine straight into the favorites list — the whole point of the
+   * feature: fetch, star, and it's on the cockpit MEM strip and in Memories
+   * without a trip through the channel-list builder. Starring an equivalent
+   * channel the bank already holds stars THAT row rather than duplicating it
+   * (memoryKey identity), and the star toggles back off. */
+  const toggleStar = (row: RepeaterSearchRow) => {
+    const input = repeaterMemory(row.channel, favoriteName(row.channel), {
+      lat: row.record.lat,
+      lon: row.record.lon,
+    })
+    let msg = ''
+    memoriesStore.update((bank) => {
+      const existing = findEquivalent(bank, {
+        rxMhz: input.rxMhz,
+        mode: input.mode,
+        ctcssEncHz: input.ctcssEncHz,
+      })
+      if (existing?.favorite) {
+        msg = `${existing.name} unstarred — still in Memories`
+        return updateMemory(bank, existing.id, { favorite: false })
+      }
+      const res = saveFavoriteFromDial(bank, input)
+      msg =
+        res.result === 'starred'
+          ? `${existing?.name ?? input.name} starred — already in Memories`
+          : `${input.name} ★ — on the cockpit MEM strip and in Memories`
+      return res.bank
+    })
+    pushToast(msg, 'success', 4000)
   }
 
   /** Save the whole list into the shared Memories store (with the FM repeater
@@ -397,19 +417,13 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       for (const r of displayRows) {
         const c = r.channel
         if (!(c.mode === 'fm' || c.mode === 'nfm' || c.mode === 'am')) continue
-        const { shift, offsetHz, toneHz } = rigRepeaterParams(c)
-        const res = addMemoryDeduped(next, {
-          name: sanitizeName(r.displayName, nameCap) || c.name,
-          rxMhz: c.rxMhz,
-          mode: 'FM',
-          kind: shift === 'simplex' && !toneHz ? 'simplex' : 'repeater',
-          offsetDir: shift,
-          offsetMhz: offsetHz ? offsetHz / 1e6 : undefined,
-          toneMode: toneHz ? 'tone' : 'none',
-          ctcssEncHz: toneHz || undefined,
-          callsign: c.source?.callsign || undefined,
-          source: 'program',
-        })
+        // No site coordinates here: the builder list persists channels only
+        // (radioprog.json), so a reloaded row has no record to read lat/lon from.
+        // ★-ing from the results list is the path that carries them.
+        const res = addMemoryDeduped(
+          next,
+          repeaterMemory(c, sanitizeName(r.displayName, nameCap) || c.name),
+        )
         next = res.bank
         if (res.added) n += 1
         else dup += 1
@@ -741,6 +755,21 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     {!r.operational && <span className="pota-badge rp-offair-badge">OFF-AIR</span>}
                   </span>
                   <span className="rp-actions" role="cell">
+                    {programmable && (
+                      <button
+                        type="button"
+                        className={`rp-star${starredIds.has(c.id) ? ' on' : ''}`}
+                        onClick={() => toggleStar(row)}
+                        aria-pressed={starredIds.has(c.id)}
+                        title={
+                          starredIds.has(c.id)
+                            ? 'Unstar — keeps the channel in Memories, drops it off the cockpit strip'
+                            : 'Star this repeater — saves it to Memories and the cockpit MEM strip for one-click tuning'
+                        }
+                      >
+                        {starredIds.has(c.id) ? '★' : '☆'}
+                      </button>
+                    )}
                     {catOk && programmable && (
                       <button
                         type="button"

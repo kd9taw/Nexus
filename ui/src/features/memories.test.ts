@@ -10,6 +10,7 @@ import {
   deleteMemory,
   derivedName,
   emptyBank,
+  findEquivalent,
   hotkeyRecallTarget,
   memoryKey,
   migrateV1Channel,
@@ -18,6 +19,7 @@ import {
   planRecall,
   saveFavoriteFromDial,
   setMemoryGroups,
+  siteOffset,
   toChirpCsv,
   toggleFavorite,
   updateMemory,
@@ -383,5 +385,109 @@ describe('hotkeyRecallTarget — Ctrl+1..9 quick recall', () => {
 
   it('returns null when there are no favorites', () => {
     expect(hotkeyRecallTarget(chord({ code: 'Digit1' }), emptyBank())).toBeNull()
+  })
+})
+
+// ── repeater favorites: the site coordinates and the identity lookup ──────────
+
+describe('siteOffset', () => {
+  // EN52 square centre is 42.5 N, 89.0 W; the machine below sits ~20 km due north.
+  const rptr = mem({ kind: 'repeater', rxMhz: 146.94, mode: 'FM', lat: 42.68, lon: -89.02 })
+
+  it('measures from the grid it is GIVEN, so distance follows the operator', () => {
+    const home = siteOffset(rptr, 'EN52')
+    expect(home).not.toBeNull()
+    expect(home!.km).toBeCloseTo(20.1, 0)
+    // Due north-ish: 355°, i.e. not the 0-is-a-default-value trap.
+    expect(home!.bearing).toBeGreaterThan(340)
+
+    // Same starred machine, operator activating a park two grids west — the SAME
+    // stored memory must now report a different distance. Nothing is baked.
+    const away = siteOffset(rptr, 'EN42')
+    expect(away!.km).toBeGreaterThan(home!.km + 50)
+  })
+
+  it('is null when there is nothing to measure', () => {
+    expect(siteOffset(mem({ lat: 42.68, lon: -89.02 }), 'nonsense')).toBeNull()
+    // Most memories are frequencies, not places — an HF net has no site.
+    expect(siteOffset(mem({ rxMhz: 3.965 }), 'EN52')).toBeNull()
+    // A half-known site is not a site.
+    expect(siteOffset(mem({ lat: 42.68 }), 'EN52')).toBeNull()
+  })
+})
+
+describe('a starred repeater survives save → load', () => {
+  // The real persistence boundary: saveBank JSON-stringifies and loadBank runs the
+  // parsed value back through coerceBank, so this is the round-trip that matters.
+  const roundTrip = (b: ReturnType<typeof emptyBank>) => coerceBank(JSON.parse(JSON.stringify(b)))
+
+  it('keeps the star, the repeater plumbing AND the site coordinates', () => {
+    const starred = saveFavoriteFromDial(emptyBank(), {
+      name: 'W9ABC 94',
+      rxMhz: 146.94,
+      mode: 'FM',
+      kind: 'repeater',
+      offsetDir: 'minus',
+      offsetMhz: 0.6,
+      toneMode: 'tone',
+      ctcssEncHz: 103.5,
+      lat: 42.68,
+      lon: -89.02,
+      source: 'program',
+    })
+    expect(starred.result).toBe('added')
+
+    const back = roundTrip(starred.bank)
+    expect(back.memories).toHaveLength(1)
+    expect(back.memories[0]).toMatchObject({
+      name: 'W9ABC 94',
+      favorite: true,
+      kind: 'repeater',
+      offsetDir: 'minus',
+      offsetMhz: 0.6,
+      ctcssEncHz: 103.5,
+      lat: 42.68,
+      lon: -89.02,
+    })
+    // Still locatable and still recallable after the trip through storage.
+    expect(siteOffset(back.memories[0], 'EN52')!.km).toBeCloseTo(20.1, 0)
+    expect(planRecall(back.memories[0]).settingsPatch).toMatchObject({
+      phoneMode: 'fm',
+      rptrShift: 'minus',
+      rptrOffsetOverrideHz: 600_000,
+      ctcssToneHz: 103.5,
+    })
+  })
+
+  it('survives a WESTERN longitude, which a positive-number guard would drop', () => {
+    // The trap: every other optional numeric field on a Memory is validated with
+    // posNum. Longitude in the Americas is negative and lat/lon 0 is a real place.
+    const b = roundTrip(addMemory(emptyBank(), { rxMhz: 146.94, mode: 'FM', lat: 0, lon: -122.5 }))
+    expect(b.memories[0].lon).toBe(-122.5)
+    expect(b.memories[0].lat).toBe(0)
+  })
+
+  it('drops impossible coordinates instead of storing them', () => {
+    const b = roundTrip(addMemory(emptyBank(), { rxMhz: 146.94, mode: 'FM', lat: 999, lon: -89 }))
+    expect(b.memories[0].lat).toBeUndefined()
+    expect(b.memories[0].lon).toBe(-89)
+  })
+})
+
+describe('findEquivalent', () => {
+  const bank = addMemory(emptyBank(), {
+    id: 'm-rptr',
+    name: 'W9ABC 94',
+    rxMhz: 146.94,
+    mode: 'FM',
+    ctcssEncHz: 103.5,
+  })
+
+  it('matches on the same freq + mode + tone identity dedupe uses', () => {
+    expect(findEquivalent(bank, { rxMhz: 146.94, mode: 'fm', ctcssEncHz: 103.5 })?.id).toBe('m-rptr')
+    // A different tone on the same output is a different machine's access.
+    expect(findEquivalent(bank, { rxMhz: 146.94, mode: 'FM', ctcssEncHz: 100 })).toBeUndefined()
+    expect(findEquivalent(bank, { rxMhz: 146.94, mode: 'USB', ctcssEncHz: 103.5 })).toBeUndefined()
+    expect(findEquivalent(emptyBank(), { rxMhz: 146.94, mode: 'FM', ctcssEncHz: 103.5 })).toBeUndefined()
   })
 })
