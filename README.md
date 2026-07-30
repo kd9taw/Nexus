@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/img/nexus-banner.svg" alt="Nexus — the all-mode amateur radio operations center" width="840" />
+<img src="docs/img/nexus-banner.jpg" alt="Nexus — the all-mode amateur radio operations center" width="840" />
 
 **One app from antenna to award. Eleven modes, real rig control, APRS, propagation, DX chasing, and a logbook that computes your awards offline.**
 
