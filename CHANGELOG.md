@@ -7,7 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed: the Call Roster and Band Activity filters reset on every restart
+### Fixed: every transmitting mode now refuses to key without a real callsign and grid
+
+The blank-identity guard that has always protected FT8 and FT4 now covers every mode that can
+transmit. Before this, selecting Q65, FST4, MSK144 or JT65 and pressing Call CQ with no callsign
+set would key the rig and send a standard message with the identity missing — an unidentified
+transmission. WSPR and FST4W beaconing now insist on a real callsign and a real grid too, not
+merely a non-empty box, since those reports are published to wsprnet under whatever you typed.
+The check is wired into each mode's own capability declaration, so a future mode gets the guard
+the day it learns to transmit.
+
+### Fixed: an over planned just before you changed something could still go out against the old settings
+
+There is a short window while a transmission is being prepared in which the app used to re-check
+only the mode tier before keying. Stop TX pressed in that window, a QSY to a new frequency on the
+same band, a sideband or operating-mode change, or the T/R period rolling over could all slip
+through, and the prepared over went out anyway — against the frequency, mode or slot you had just
+left. The commit step now re-checks everything the go/no-go decision was based on and quietly
+drops the over if any of it moved; the next slot plans a fresh one. The PTT hold time is also now
+measured from when the audio actually starts rather than from the start of the preparation, so
+the tail is never cut short.
+
+### Fixed: one internal crash could silently kill receive — or all of TX/RX — for the whole session
+
+A crash inside one decode used to be contained but leave the decoder's lock unusable, so every
+later period failed instantly: the waterfall kept painting and the app looked alive while it had
+gone completely deaf, and switching modes or opening the snapshot could freeze the UI with it. In
+the worst case the radio loop thread itself stopped — with nothing left to drop PTT if it died
+mid-over, and the "RADIO ENGINE STOPPED" banner unable to appear in exactly that case. All of the
+app's shared state now recovers from a crashed thread instead of seizing, the radio loop drops
+PTT before it ever exits on an error, and a contained decode crash now shows up as a visible
+notice instead of a line in a log nobody sees.
+
+### Fixed: an APRS beacon or auto-ack could transmit on top of your live microphone or a logger's over
+
+With the mic keyed on FM — or WSJT-X keying the rig through Nexus's CAT broker — a queued APRS
+beacon or an armed auto-ack would key anyway and lay packet audio across the transmission in
+progress. Every transmit gate now asks one shared "who owns the transmitter" arbiter that knows
+about all of it: a slot over, the tune carrier, your mic, a broker client's key, the voice keyer,
+CW, RTTY and SSTV. APRS holds its queue until the air is actually free, and a broker client asking
+to key while an SSTV image or voice message is playing is now refused too.
+
+### Fixed: the tune carrier's auto-release could be configured into a minutes-long unattended carrier
+
+The "Tune after t s" auto-release honoured any number typed into it, and settings.json is
+hand-editable — a mistyped 120 for 12 meant a two-minute continuous carrier into your finals or a
+dead load with nothing to catch it. The auto-release is now capped at 60 seconds however the
+setting got its value; deliberate longer settings up to that minute still work.
+
+### Fixed: one malformed APRS packet or log record could kill APRS receive or the whole radio session
+
+A single APRS position report carrying an 8-bit character — a latin-1 degree sign from a real
+tracker or an APRS-IS feed is enough — crashed the APRS receive thread, and the station list
+simply stopped updating for the session with no sign anything was wrong. Roughly one in ten
+corrupted position packets could do it. Separately, an ADIF record whose end-of-contact time
+carried a multibyte character — from a hand-edited file, another logger's export, or a bad
+WSJT-X logging datagram — could crash the radio loop itself, ending TX/RX until restart. Both
+parsers now treat malformed input as the one bad packet or record it is and carry on.
 
 "Needed only" and "Hide worked" on the Operate Call Roster, and the Band Activity filter chip
 (All / CQ / To me / On RX / B4 / New), now come back the way you left them. They were held in
