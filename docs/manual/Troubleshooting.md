@@ -239,7 +239,7 @@ Use the **Test N3FJP** button in Settings to send the `<CMD><PROGRAM></CMD>` han
 - **VOACAP itself** is not integrated; per-path predictions come from the native
   ITU-R P.533 engine (the same standard class VOACAP implements) or the
   statistical heuristic, both labeled "modelled" in Connect.
-- **COUNTY and IOTA** ADIF fields are not stored; contacts imported from other loggers lose these fields silently.
+- **Unmodelled ADIF fields** (COUNTY, contest exchanges, QSL dates, …) survive import and export verbatim but are not displayed; IOTA is stored and shown.
 - **LoTW background periodic sync** is not automatic — trigger downloads manually or on a schedule from Settings.
 - **Transmit-privilege lockout** models US FCC Part 97 / ITU Region 2 rules only. Non-US operators should set license class to **Open**.
 - **Theme and UI scale** are stored in browser localStorage, not in `settings.json` — they do not roam with a copied settings file.

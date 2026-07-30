@@ -904,6 +904,14 @@ pub struct LoggedQso {
     /// DXCC entity name (country), resolved from the callsign — the key DXer field.
     #[serde(default)]
     pub country: Option<String>,
+    /// The cty.dat-RESOLVED entity for this row's callsign, filled by the
+    /// command layer (which owns the table). THE award identity for UI
+    /// comparisons: the stored `country` is free text whose spelling depends on
+    /// who wrote it (QRZ says "Germany"/"Russia", cty.dat says "Fed. Rep. of
+    /// Germany"/"European Russia"), so keying "new one" or entity counts on it
+    /// made the two systems disagree forever. `country` is display text.
+    #[serde(default)]
+    pub entity: Option<String>,
     /// US state (ADIF STATE, 2-letter) for WAS, when known.
     #[serde(default)]
     pub state: Option<String>,
@@ -931,6 +939,12 @@ pub struct LoggedQso {
     pub tx_power: Option<f64>,
     /// Contact time, Unix seconds (UTC).
     pub when_unix: u64,
+    /// Whether the time of day is actually KNOWN. `false` for imported
+    /// date-only records: `when_unix` then anchors at midnight for ordering,
+    /// no TIME_ON is written, and LoTW/eQSL sends exclude the record (both
+    /// match on time). Defaults `true` so legacy payloads keep their meaning.
+    #[serde(default = "default_true")]
+    pub time_known: bool,
     /// Confirmed via ANY channel (LoTW / eQSL / paper QSL).
     pub confirmed: bool,
     /// Award-eligible confirmation (LoTW or paper only — eQSL excluded). Drives
@@ -1007,6 +1021,8 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             call: r.call,
             grid: r.grid,
             country: r.country,
+            // Filled by the command layer (get_log) — tempo-app has no cty.dat.
+            entity: None,
             state: r.state,
             band: r.band,
             freq_mhz: r.freq_mhz,
@@ -1019,6 +1035,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             notes: r.notes,
             tx_power: r.tx_power,
             when_unix: r.when_unix,
+            time_known: r.time_known,
             confirmed: r.confirmed,
             award_confirmed: r.award_confirmed,
             qsl_rcvd: QslRcvdDto {
@@ -1111,6 +1128,16 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             credit_submitted: q.credit_submitted,
             upload: q.upload.into(),
             ota: q.ota.into(),
+            // Carried through the DTO round trip (a UI edit of an imported
+            // date-only record must not fabricate time-knowledge). update_record
+            // additionally guards the unchanged-when_unix case.
+            time_known: q.time_known,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
         }
     }
 }

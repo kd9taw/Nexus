@@ -271,11 +271,15 @@ export function Logbook({
   }
 
   // QSOs not yet sent to LoTW: award-unconfirmed + never uploaded or a prior bounce.
-  const unsentLotw = log.filter(
-    (q) =>
-      !q.awardConfirmed &&
-      (!q.upload?.lotw || ['rejected', 'authfail'].includes(q.upload.lotw.outcome)),
-  ).length
+  // Mirrors the backend batch builder (lotw_unsent_indices): award-unconfirmed,
+  // never-sent-or-bounced, AND the time of day is known — LoTW matches on time,
+  // so a date-only import can never confirm and is excluded, with the count
+  // shown separately so the operator learns why instead of wondering.
+  const lotwEligible = (q: LoggedQso) =>
+    !q.awardConfirmed &&
+    (!q.upload?.lotw || ['rejected', 'authfail'].includes(q.upload.lotw.outcome))
+  const unsentLotw = log.filter((q) => lotwEligible(q) && q.timeKnown !== false).length
+  const timelessLotw = log.filter((q) => lotwEligible(q) && q.timeKnown === false).length
 
   // Sign + upload the unsent batch to LoTW via the operator's TQSL.
   const onUploadLotw = async () => {
@@ -709,7 +713,12 @@ export function Logbook({
             className="export-btn"
             onClick={onUploadLotw}
             disabled={uploading || unsentLotw === 0}
-            title="Sign + upload your un-uploaded QSOs to LoTW via TQSL (set your Station Location in Settings)"
+            title={
+              `Sign + upload your un-uploaded QSOs to LoTW via TQSL (set your Station Location in Settings)` +
+              (timelessLotw
+                ? ` — ${timelessLotw} imported QSO${timelessLotw === 1 ? ' has' : 's have'} no time of day and can never match at LoTW, so they are not sent`
+                : '')
+            }
           >
             {uploading ? 'Uploading…' : `Upload to LoTW${unsentLotw ? ` (${unsentLotw})` : ''}`}
           </button>

@@ -56,7 +56,7 @@ import {
   n3fjpTestConnection,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { loadProfiles, saveProfile, deleteProfile, type Profile } from '../profiles'
+import { loadProfiles, mergeProfile, saveProfile, deleteProfile, type Profile } from '../profiles'
 import { getConnectionLog, getCredentialsStatus } from '../api'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
@@ -1317,20 +1317,29 @@ export function SettingsPanel({
 
   // Config profiles: snapshot the current settings under a name, then switch the whole
   // rig/antenna/CAT/band setup in one move (loading applies via the normal Save path).
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
     if (!form || !newProfileName.trim()) return
-    setProfiles(saveProfile(newProfileName, form))
+    // Snapshot the last-SAVED settings, never the dirty form — a half-edited
+    // form must not become a named configuration.
+    const saved = await getSettings()
+    setProfiles(saveProfile(newProfileName, saved))
     pushToast(`Profile "${newProfileName.trim()}" saved`, 'success')
     setNewProfileName('')
   }
   const handleLoadProfile = async () => {
     const p = profiles.find((x) => x.name === selectedProfile)
     if (!p) return
-    setForm(p.settings)
+    // MERGE onto the current settings (see profiles.mergeProfile): identity,
+    // license class, the radio roster and sync cursors never import, and a key
+    // the profile predates keeps its current value — the raw replay this
+    // replaces silently removed the per-mode power ceilings from any profile
+    // saved before those fields existed.
+    const merged = mergeProfile(await getSettings(), p.settings)
+    setForm(merged)
     // A profile is a whole-station config, so the form no longer describes whichever radio was
-    // being edited — drop back to the active radio or the load would route into a radio patch.
-    setEditingRadioId(p.settings.activeRadio)
-    await setSettings(p.settings)
+    // being edited — drop back to the active radio (the MACHINE's, never the profile's).
+    setEditingRadioId(merged.activeRadio)
+    await setSettings(merged)
     onSaved?.()
     pushToast(`Loaded profile "${p.name}"`, 'success')
   }

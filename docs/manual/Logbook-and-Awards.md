@@ -10,15 +10,26 @@ Every logged contact stores: callsign, Maidenhead grid, DXCC country, US state (
 
 The record also carries per-source upload state for each outbound connector (LoTW, eQSL, QRZ Logbook, ClubLog), two confirmation flags (`confirmed` and `award_confirmed` — see below), `credit_granted`, and `credit_submitted` vectors that mirror LoTW's CREDIT_GRANTED/CREDIT_SUBMITTED ADIF fields.
 
-**County (ADIF COUNTY) and IOTA are not stored.** Contacts imported from other loggers that carry these fields will lose them silently on round-trip.
+**Every ADIF field survives an import.** Fields Nexus does not model (COUNTY, contest exchanges, QSL dates, and anything else another logger wrote) are preserved verbatim on the record and re-emitted on every export. IOTA is stored and displayed.
 
 ---
 
 ## ADIF Import and Export
 
-Nexus implements ADIF v3.1.4 as a full round-trip. Every QsoRecord field serializes with correct ADIF tag names, length prefixes, and TIME_ON/TIME_OFF/QSO_DATE encoding. App-specific upload state is carried in four `APP_TEMPO_UL_*` app-defined fields, so an exported ADIF file preserves the full sync state when re-imported.
+Nexus implements ADIF v3.1.4 as a lossless round-trip. The fields Nexus models (including
+the numeric DXCC entity, PROP_MODE/SAT_NAME for satellite credit, OPERATOR and
+STATION_CALLSIGN) serialize with correct ADIF tag names, length prefixes, and
+TIME_ON/TIME_OFF/QSO_DATE encoding — ADIF's 4-digit HHMM time form is accepted on import,
+and a record whose source carried no time of day is exported without a fabricated TIME_ON.
+Fields Nexus does not model are preserved verbatim per record and re-emitted on export, so
+importing a master log from another logger loses nothing. App-specific upload state is
+carried in four `APP_TEMPO_UL_*` app-defined fields, so an exported ADIF file preserves the
+full sync state when re-imported.
 
-Import deduplication keys on call (upper-cased) + band (lower-cased) + mode (upper-cased) + UTC day. A re-import of the same file adds zero records; every entry is returned as skipped, not duplicated. If you merge two loggers' exports, only genuinely new call/band/mode/day combinations are inserted.
+Import deduplication keys on call (upper-cased) + band (lower-cased) + mode (upper-cased) +
+the exact QSO timestamp — the same station worked twice on one day (a rover from two grids,
+a second contact after an opening) stays two records, while a true re-import of the same
+file adds zero records; every entry is returned as skipped, not duplicated.
 
 POTA and SOTA references round-trip through standard ADIF field names (`MY_SIG`/`MY_SIG_INFO`/`SIG`/`SIG_INFO` for POTA/WWFF; `MY_SOTA_REF`/`SOTA_REF` for SOTA), so exports upload cleanly to pota.app and the SOTA database without custom extensions.
 
@@ -208,7 +219,7 @@ Journey is deliberately white-hat: there are no decaying streaks (the streak wid
 
 ## Limits / Not Yet
 
-- **County and IOTA** are not stored in QsoRecord and are not round-tripped through ADIF. Contacts from other loggers that carry these fields lose them on import.
+- **Unmodelled ADIF fields ride along, but are not displayed.** COUNTY, contest exchanges and QSL dates survive import/export verbatim; they have no UI of their own yet.
 - **LoTW upload requires a separately installed TQSL** (from the ARRL). Nexus does not bundle TQSL or handle Callsign Certificate management.
 - **QRZ grid and state** are subscriber-only on the free QRZ XML tier and will be absent for non-subscribers.
 - **ClubLog developer API key** is baked into official installer builds but never committed to the public GPLv3 source. Operators building from source must supply their own key via the build environment or Settings.

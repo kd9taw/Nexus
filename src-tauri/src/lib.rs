@@ -5714,9 +5714,9 @@ fn get_licensed_band_plan(
             .into_iter()
             .filter(|c| {
                 // Channel band ids may carry a suffix ("2m-call") — privilege-check
-                // the base band.
-                let base = c.band.split('-').next().unwrap_or(&c.band);
-                tempo_app::privileges::segment_start(class, base, priv_mode).is_some()
+                // the base band, via THE canonicaliser (one home, not a hand-split).
+                let base = tempo_app::bandplan::canonical_band(&c.band);
+                tempo_app::privileges::segment_start(class, &base, priv_mode).is_some()
             })
             .collect());
     }
@@ -6714,11 +6714,30 @@ fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnaps
     Ok(snap)
 }
 
-/// The full logbook as serializable contacts (for the UI log view).
+/// The full logbook as serializable contacts (for the UI log view). Each row
+/// carries the cty.dat-RESOLVED entity for its callsign — the award identity
+/// the UI compares on; the stored free-text COUNTRY is display only (QRZ and
+/// cty.dat spell entities differently, which made the DXCC totals disagree and
+/// the NEW ONE badge fire on every German/Russian contact forever).
 #[tauri::command]
 fn get_log(state: State<'_, SharedEngine>) -> Result<Vec<LoggedQso>, String> {
     let eng = engine_lock(&state);
-    Ok(eng.get_log().into_iter().map(LoggedQso::from).collect())
+    Ok(eng
+        .get_log()
+        .into_iter()
+        .map(|r| {
+            let mut q = LoggedQso::from(r);
+            q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+            q
+        })
+        .collect())
+}
+
+/// The cty.dat-resolved DXCC entity for a callsign, or null — the log-entry
+/// form keys its "new one" badge on this, not on the QRZ country string.
+#[tauri::command]
+fn resolve_entity(call: String) -> Option<String> {
+    propagation::dxcc::resolve(&call).map(|i| i.entity.to_string())
 }
 
 /// Edit logbook entry `index` (oldest-first, as returned by `get_log`) — a
@@ -9033,6 +9052,16 @@ async fn eqsl_push_qso(
 }
 
 fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<UploadReportDto, String> {
+    // eQSL matches on the two operators' times agreeing: a record with no known
+    // time of day can never match — sending it just parks it at eQSL unmatched
+    // forever. Refuse with the reason instead of fabricating a midnight.
+    if !record.time_known {
+        return Err(
+            "This imported QSO has no time of day — eQSL matches on time, so it \
+             can never confirm. Add the time to the record first."
+                .to_string(),
+        );
+    }
     let user = {
         let eng = engine_lock(&engine);
         eng.settings().eqsl_username.trim().to_string()
@@ -11387,6 +11416,7 @@ pub fn run() {
             discard_pending_log,
             log_qso,
             get_log,
+            resolve_entity,
             edit_qso,
             mark_qsl_sent,
             delete_qso,

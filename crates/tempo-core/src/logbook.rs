@@ -44,6 +44,13 @@ pub struct QsoRecord {
     pub tx_power: Option<f64>,
     /// Contact START time, Unix seconds (UTC) — ADIF `QSO_DATE`/`TIME_ON`.
     pub when_unix: u64,
+    /// Whether TIME_ON was actually KNOWN. `false` for imported records whose
+    /// source carried no time of day: `when_unix` then holds the date at
+    /// 00:00:00 UTC for ordering only, the ADIF writer emits NO fabricated
+    /// TIME_ON, and the LoTW/eQSL batch builders exclude the record (both
+    /// services match on time — asserting midnight parked such records as
+    /// permanently unmatched, re-uploaded forever).
+    pub time_known: bool,
     /// Contact END time, Unix seconds (UTC) — ADIF `QSO_DATE_OFF`/`TIME_OFF` (when the
     /// closing 73/RR73 completed). `None` for imported/legacy records with no off-time.
     pub time_off_unix: Option<u64>,
@@ -80,6 +87,24 @@ pub struct QsoRecord {
     /// for POTA, `MY_SOTA_REF`/`SOTA_REF` for SOTA), so exports upload cleanly to
     /// pota.app / the SOTA database. Default all-`None`.
     pub ota: Ota,
+    /// ADIF `DXCC` — the NUMERIC canonical entity id. The award-grade identity
+    /// (free-text COUNTRY spellings differ between cty.dat and QRZ), carried
+    /// through imports so a master log keeps it.
+    pub dxcc: Option<u32>,
+    /// ADIF `PROP_MODE` / `SAT_NAME` — LoTW requires both for satellite award
+    /// credit; stripping them at import made those QSOs uncreditable forever.
+    pub prop_mode: Option<String>,
+    pub sat_name: Option<String>,
+    /// ADIF `OPERATOR` / `STATION_CALLSIGN` — who operated / which station
+    /// logged it (multi-op and club logs depend on the distinction).
+    pub operator: Option<String>,
+    pub station_callsign: Option<String>,
+    /// Every ADIF field this parser does NOT model, preserved verbatim
+    /// (uppercased name, untouched value) and re-emitted on write — BY
+    /// CONSTRUCTION (the parser CONSUMES what it models; the remainder lands
+    /// here), so the preserved set can never drift from the code. Sorted for a
+    /// deterministic write order.
+    pub extra: Vec<(String, String)>,
 }
 
 /// Per-channel INBOUND confirmation state — which source(s) actually confirmed
@@ -323,15 +348,33 @@ impl Logbook {
     pub fn update_record(&mut self, index: usize, mut rec: QsoRecord) -> bool {
         match self.records.get(index) {
             Some(old) => {
-                rec.confirmed = old.confirmed;
-                rec.award_confirmed = old.award_confirmed;
-                rec.qsl_rcvd = old.qsl_rcvd;
-                // A field-edit (busted call, wrong band) must not wipe an
-                // operator-declared QSL-sent mark — only `mark_qsl_sent` mutates it.
+                // A field-edit must not wipe an operator-declared QSL-sent mark —
+                // only `mark_qsl_sent` mutates it. (Kept even on a call fix: the
+                // card WAS mailed; that's history, not credit.)
                 rec.qsl_sent = old.qsl_sent;
-                rec.credit_granted = old.credit_granted.clone();
-                rec.credit_submitted = old.credit_submitted.clone();
-                rec.upload = old.upload.clone();
+                if rec.call.eq_ignore_ascii_case(&old.call) {
+                    // Ordinary edit (band/grid/name/…): derived state rides along.
+                    rec.confirmed = old.confirmed;
+                    rec.award_confirmed = old.award_confirmed;
+                    rec.qsl_rcvd = old.qsl_rcvd;
+                    rec.credit_granted = old.credit_granted.clone();
+                    rec.credit_submitted = old.credit_submitted.clone();
+                    rec.upload = old.upload.clone();
+                } else {
+                    // CALLSIGN correction — operator ruling (2026-07-30): the
+                    // services hold the OLD call, so clearing the upload stamps
+                    // re-queues the corrected QSO to every one of them; and a
+                    // confirmation (or granted credit) matched against the busted
+                    // call is credit this QSO never earned — stripped, never
+                    // silently carried over. (LoTW itself still holds the
+                    // old-call record; nothing we send can retract it.)
+                    rec.confirmed = false;
+                    rec.award_confirmed = false;
+                    rec.qsl_rcvd = QslRcvd::default();
+                    rec.credit_granted = Vec::new();
+                    rec.credit_submitted = Vec::new();
+                    rec.upload = UploadState::default();
+                }
                 // Never clobber a known country/state to None on edit (the edit
                 // form doesn't carry them) — preserve the old value when the
                 // incoming record left them empty.
@@ -354,6 +397,31 @@ impl Logbook {
                     && rec.ota.their_ref.is_none();
                 if incoming_ota_empty {
                     rec.ota = old.ota.clone();
+                }
+                // The edit form carries none of the import-carried identity —
+                // an edit must never bleach it off the record.
+                if rec.dxcc.is_none() {
+                    rec.dxcc = old.dxcc;
+                }
+                if rec.prop_mode.is_none() {
+                    rec.prop_mode = old.prop_mode.clone();
+                }
+                if rec.sat_name.is_none() {
+                    rec.sat_name = old.sat_name.clone();
+                }
+                if rec.operator.is_none() {
+                    rec.operator = old.operator.clone();
+                }
+                if rec.station_callsign.is_none() {
+                    rec.station_callsign = old.station_callsign.clone();
+                }
+                if rec.extra.is_empty() {
+                    rec.extra = old.extra.clone();
+                }
+                // An edit that did not TOUCH the time must not fabricate
+                // time-knowledge onto an imported, time-less record.
+                if rec.when_unix == old.when_unix {
+                    rec.time_known = old.time_known;
                 }
                 self.records[index] = rec;
                 true
@@ -460,9 +528,11 @@ impl Logbook {
                 if !q.band.eq_ignore_ascii_case(&row.band) {
                     return false;
                 }
-                // Midnight-looking stamps (00:00:00) read as date-only exports.
-                let row_timed = row.when_unix % 86_400 != 0;
-                let q_timed = q.when_unix % 86_400 != 0;
+                // Date-only exports carry no time of day — `time_known` is the
+                // explicit truth now (a REAL 00:00:00 QSO no longer reads as
+                // date-only, which the old midnight-modulo heuristic got wrong).
+                let row_timed = row.time_known;
+                let q_timed = q.time_known;
                 if row_timed && q_timed {
                     q.when_unix.abs_diff(row.when_unix) <= WINDOW_SECS
                 } else {
@@ -825,7 +895,12 @@ pub fn adif_record(r: &QsoRecord) -> String {
         None => out.push_str(&field("MODE", &r.mode)),
     }
     out.push_str(&field("QSO_DATE", &format!("{y:04}{mo:02}{d:02}")));
-    out.push_str(&field("TIME_ON", &format!("{h:02}{mi:02}{s:02}")));
+    // NEVER assert a time nobody measured: an imported record with no time of
+    // day used to re-emit <TIME_ON:6>000000 as fact on every export and upload,
+    // and LoTW/eQSL (which match on time) then held it unmatched forever.
+    if r.time_known {
+        out.push_str(&field("TIME_ON", &format!("{h:02}{mi:02}{s:02}")));
+    }
     // TIME_OFF / QSO_DATE_OFF — the contact's end (closing 73/RR73), when recorded.
     if let Some(off) = r.time_off_unix {
         let (oy, omo, od, oh, omi, os) = datetime_utc(off);
@@ -852,6 +927,24 @@ pub fn adif_record(r: &QsoRecord) -> String {
     }
     if let Some(p) = r.tx_power {
         out.push_str(&field("TX_PWR", &format!("{p}")));
+    }
+    // Award-relevant identity carried through imports: the NUMERIC entity id,
+    // the satellite pair LoTW requires for satellite credit, and who operated /
+    // which station logged it.
+    if let Some(x) = r.dxcc {
+        out.push_str(&field("DXCC", &x.to_string()));
+    }
+    if let Some(p) = &r.prop_mode {
+        out.push_str(&field("PROP_MODE", p));
+    }
+    if let Some(sn) = &r.sat_name {
+        out.push_str(&field("SAT_NAME", sn));
+    }
+    if let Some(op) = &r.operator {
+        out.push_str(&field("OPERATOR", op));
+    }
+    if let Some(sc) = &r.station_callsign {
+        out.push_str(&field("STATION_CALLSIGN", sc));
     }
     // Emit each confirming channel FAITHFULLY (the old two-bool collapse
     // rewrote paper cards as LOTW_QSL_RCVD on every save). Legacy in-memory
@@ -932,6 +1025,11 @@ pub fn adif_record(r: &QsoRecord) -> String {
     {
         out.push_str(&field("IOTA", iota));
     }
+    // Fields this build does not model, preserved from import verbatim — see
+    // [`QsoRecord::extra`]. Emitted last so modelled fields always lead.
+    for (k, v) in &r.extra {
+        out.push_str(&field(k, v));
+    }
     out.push_str("<EOR>\n");
     out
 }
@@ -957,7 +1055,10 @@ pub fn adif_record_with_station(r: &QsoRecord, station_call: &str, my_grid: &str
     let mut extra = String::new();
     let call = station_call.trim();
     let grid = my_grid.trim();
-    if !call.is_empty() {
+    // The record may already carry its own STATION_CALLSIGN (imported multi-op
+    // logs) — emitted by adif_record. Don't append a second one: TQSL takes the
+    // record's own; a duplicate field is undefined territory.
+    if !call.is_empty() && r.station_callsign.is_none() {
         extra.push_str(&field("STATION_CALLSIGN", call));
     }
     if !grid.is_empty() {
@@ -986,6 +1087,27 @@ fn adif_submode(mode: &str) -> Option<&'static str> {
     match mode.trim().to_ascii_uppercase().as_str() {
         "TEMPOFAST" => Some("TEMPOFAST"),
         "TEMPODEEP" => Some("TEMPODEEP"),
+        _ => None,
+    }
+}
+
+/// Submodes the PARSER promotes to the record's mode — the reverse of
+/// [`adif_submode`]'s cascade, plus the WSJT-X family submodes that are
+/// first-class modes here (WSJT-X writes FT4/Q65/FST4/FST4W as MODE=MFSK +
+/// SUBMODE). Returns the canonical in-app spelling.
+///
+/// Deliberately NOT every SUBMODE: Log4OM-style phone submodes (SSB+USB/LSB)
+/// must not rename phone rows — the import dedup key is the RAW mode + exact
+/// second, so a promotion there would duplicate every phone row on the next
+/// re-import of the same log.
+fn promoted_submode(sub: &str) -> Option<&'static str> {
+    match sub.trim().to_ascii_uppercase().as_str() {
+        "TEMPOFAST" => Some("TempoFast"),
+        "TEMPODEEP" => Some("TempoDeep"),
+        "FT4" => Some("FT4"),
+        "Q65" => Some("Q65"),
+        "FST4" => Some("FST4"),
+        "FST4W" => Some("FST4W"),
         _ => None,
     }
 }
@@ -1067,10 +1189,9 @@ fn parse_adif(text: &str) -> Vec<QsoRecord> {
         i = end + 1;
         let upper = tag.to_ascii_uppercase();
         if upper == "EOR" {
-            if let Some(rec) = record_from(&cur) {
+            if let Some(rec) = record_from(std::mem::take(&mut cur)) {
                 records.push(rec);
             }
-            cur.clear();
             continue;
         }
         // NAME:len or NAME:len:type
@@ -1091,13 +1212,79 @@ fn parse_adif(text: &str) -> Vec<QsoRecord> {
     records
 }
 
-fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecord> {
-    let call = f.get("CALL")?.clone();
-    // Slice with `.get()` (not `s[a..b]`): the field value is arbitrary UTF-8 from the
-    // file, so a multibyte char inside the fixed date/time offsets would panic on a raw
-    // byte slice — `.get()` returns None on a non-char-boundary and falls back instead.
+/// ADIF Time: 6 digits HHMMSS **or 4 digits HHMM** — both legal per the spec.
+/// The 4-digit form used to be silently discarded to midnight. `.get()` slicing:
+/// the value is arbitrary UTF-8 from the file, so a multibyte char inside the
+/// fixed offsets must degrade, never panic.
+fn parse_adif_time(t: &str) -> Option<(u32, u32, u32)> {
+    let t = t.trim();
+    let two = |a: usize| t.get(a..a + 2).and_then(|x| x.parse::<u32>().ok());
+    match t.len() {
+        4 => Some((two(0)?, two(2)?, 0)),
+        n if n >= 6 => Some((two(0).unwrap_or(0), two(2).unwrap_or(0), two(4).unwrap_or(0))),
+        _ => None,
+    }
+}
+
+/// Consume an ADIF Y/N flag ("Y" = true). `remove`, not `get`: consumed =
+/// modelled, and whatever record_from leaves in the map becomes
+/// [`QsoRecord::extra`].
+fn take_yes(f: &mut std::collections::HashMap<String, String>, k: &str) -> bool {
+    f.remove(k).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
+}
+
+/// Consume an `APP_TEMPO_UL_*` upload stamp: "{outcome}|{when}|{detail}" —
+/// splitn(3) so a detail containing '|' survives intact.
+fn take_upload(
+    f: &mut std::collections::HashMap<String, String>,
+    k: &str,
+) -> Option<UploadStatus> {
+    let v = f.remove(k)?;
+    let mut it = v.splitn(3, '|');
+    let outcome = UploadOutcome::from_code(it.next()?)?;
+    let when_unix = it.next()?.parse::<i64>().ok()?;
+    let detail = it.next().filter(|s| !s.is_empty()).map(|s| s.to_string());
+    Some(UploadStatus {
+        outcome,
+        when_unix,
+        detail,
+    })
+}
+
+/// Consume one OTA side (my_* or their_*): a SOTA ref (dedicated field) takes
+/// precedence; else a SIG=POTA/WWFF pair; else the ADIF 3.1.4 dedicated
+/// POTA_REF (what pota.app's exports carry — may hold a comma list, verbatim).
+fn take_ota_side(
+    f: &mut std::collections::HashMap<String, String>,
+    sig: &str,
+    sig_info: &str,
+    sota: &str,
+    pota: &str,
+) -> (Option<String>, Option<String>) {
+    let sota_v = f.remove(sota).filter(|s| !s.is_empty());
+    let (sig_v, sig_info_v) = (f.remove(sig), f.remove(sig_info));
+    let pota_v = f.remove(pota).filter(|s| !s.is_empty());
+    if let Some(r) = sota_v {
+        (Some("SOTA".to_string()), Some(r.to_ascii_uppercase()))
+    } else if let (Some(p), Some(r)) = (sig_v, sig_info_v) {
+        (Some(p.to_ascii_uppercase()), Some(r.to_ascii_uppercase()))
+    } else if let Some(r) = pota_v {
+        (Some("POTA".to_string()), Some(r.to_ascii_uppercase()))
+    } else {
+        (None, None)
+    }
+}
+
+/// Build a record from one ADIF record's fields, CONSUMING the map: every
+/// modelled field is `remove`d, and the remainder becomes [`QsoRecord::extra`]
+/// verbatim — losslessness by construction, not by a hand-kept census.
+fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRecord> {
+    let f = &mut f;
+    let call = f.remove("CALL")?;
+    // `.get()` slicing (not `s[a..b]`): arbitrary UTF-8 from the file — a
+    // multibyte char inside the fixed date offsets must degrade, never panic.
     let (y, mo, d) = f
-        .get("QSO_DATE")
+        .remove("QSO_DATE")
         .filter(|s| s.len() >= 8)
         .map(|s| {
             (
@@ -1107,18 +1294,13 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
             )
         })
         .unwrap_or((1970, 1, 1));
-    let (h, mi, s) = f
-        .get("TIME_ON")
-        .filter(|s| s.len() >= 6)
-        .map(|t| {
-            (
-                t.get(0..2).and_then(|x| x.parse().ok()).unwrap_or(0),
-                t.get(2..4).and_then(|x| x.parse().ok()).unwrap_or(0),
-                t.get(4..6).and_then(|x| x.parse().ok()).unwrap_or(0),
-            )
-        })
-        .unwrap_or((0, 0, 0));
-    let rcvd = |k: &str| f.get(k).is_some_and(|v| v.eq_ignore_ascii_case("Y"));
+    // Time of day is OPTIONAL knowledge: absent (or unparseable) TIME_ON keeps
+    // the date's midnight anchor for ordering but records `time_known = false`
+    // — the writer then emits NO fabricated time and the LoTW/eQSL batches
+    // exclude the record. An explicit "000000" is a real, measured midnight.
+    let time_on = f.remove("TIME_ON").as_deref().and_then(parse_adif_time);
+    let time_known = time_on.is_some();
+    let (h, mi, s) = time_on.unwrap_or((0, 0, 0));
     // Per-source truth first; the two consumption booleans derive from it
     // (any-channel for display, LoTW+paper for award counting — never eQSL/QRZ).
     // A QRZ Logbook FETCH marks a native confirmation in APP_QRZLOG_STATUS=C (some exports use
@@ -1126,12 +1308,12 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
     // never wrongly earns award credit. LOTW_QSL_RCVD / EQSL_QSL_RCVD that QRZ re-reports still
     // flow to their own award-grade channels.
     let qrz_status = f
-        .get("APP_QRZLOG_STATUS")
+        .remove("APP_QRZLOG_STATUS")
         .is_some_and(|v| v.eq_ignore_ascii_case("C") || v.eq_ignore_ascii_case("Y"));
     let qsl_rcvd = QslRcvd {
-        card: rcvd("QSL_RCVD"),
-        lotw: rcvd("LOTW_QSL_RCVD"),
-        eqsl: rcvd("EQSL_QSL_RCVD"),
+        card: take_yes(f, "QSL_RCVD"),
+        lotw: take_yes(f, "LOTW_QSL_RCVD"),
+        eqsl: take_yes(f, "EQSL_QSL_RCVD"),
         qrz: qrz_status,
     };
     let confirmed = qsl_rcvd.any();
@@ -1139,11 +1321,9 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
     // Operator-declared OUTBOUND QSL request. Absent fields ⇒ default (not sent),
     // matching the QslRcvd legacy tolerance. QSLSDATE is date-only → UTC midnight.
     let qsl_sent = QslSent {
-        sent: f
-            .get("QSL_SENT")
-            .is_some_and(|v| v.eq_ignore_ascii_case("Y")),
-        via: f.get("QSL_SENT_VIA").and_then(|v| QslVia::from_code(v)),
-        date_unix: f.get("QSLSDATE").filter(|s| s.len() >= 8).map(|s| {
+        sent: take_yes(f, "QSL_SENT"),
+        via: f.remove("QSL_SENT_VIA").and_then(|v| QslVia::from_code(&v)),
+        date_unix: f.remove("QSLSDATE").filter(|s| s.len() >= 8).map(|s| {
             let (sy, smo, sd) = (
                 s.get(0..4).and_then(|x| x.parse().ok()).unwrap_or(1970),
                 s.get(4..6).and_then(|x| x.parse().ok()).unwrap_or(1),
@@ -1153,33 +1333,21 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         }),
     };
     let credit_granted = f
-        .get("CREDIT_GRANTED")
-        .map(|s| parse_credit(s))
+        .remove("CREDIT_GRANTED")
+        .map(|s| parse_credit(&s))
         .unwrap_or_default();
     let credit_submitted = f
-        .get("CREDIT_SUBMITTED")
-        .map(|s| parse_credit(s))
+        .remove("CREDIT_SUBMITTED")
+        .map(|s| parse_credit(&s))
         .unwrap_or_default();
-    // Outbound upload state: "{outcome}|{when}|{detail}" — splitn(3) so a detail
-    // containing '|' survives intact.
-    let parse_ul = |k: &str| -> Option<UploadStatus> {
-        let v = f.get(k)?;
-        let mut it = v.splitn(3, '|');
-        let outcome = UploadOutcome::from_code(it.next()?)?;
-        let when_unix = it.next()?.parse::<i64>().ok()?;
-        let detail = it.next().filter(|s| !s.is_empty()).map(|s| s.to_string());
-        Some(UploadStatus {
-            outcome,
-            when_unix,
-            detail,
-        })
-    };
     let upload = UploadState {
         // Prefer Nexus's own upload record; otherwise honor the standard ADIF
         // `LOTW_QSL_SENT=Y` — the QSO was already uploaded to LoTW by whatever tool
         // wrote the ADIF, so an imported log isn't counted as needing a LoTW upload it
         // already had (the inflated "Upload to LoTW (N)" count on an imported log).
-        lotw: parse_ul("APP_TEMPO_UL_LOTW").or_else(|| {
+        // LOTW_QSL_SENT itself is only INSPECTED (get, not remove): it stays in
+        // `extra` and round-trips verbatim for other loggers.
+        lotw: take_upload(f, "APP_TEMPO_UL_LOTW").or_else(|| {
             f.get("LOTW_QSL_SENT")
                 .is_some_and(|v| v.eq_ignore_ascii_case("Y"))
                 .then_some(UploadStatus {
@@ -1188,100 +1356,106 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
                     detail: Some("LOTW_QSL_SENT (imported)".into()),
                 })
         }),
-        eqsl: parse_ul("APP_TEMPO_UL_EQSL"),
-        qrz: parse_ul("APP_TEMPO_UL_QRZ"),
-        clublog: parse_ul("APP_TEMPO_UL_CLUBLOG"),
+        eqsl: take_upload(f, "APP_TEMPO_UL_EQSL"),
+        qrz: take_upload(f, "APP_TEMPO_UL_QRZ"),
+        clublog: take_upload(f, "APP_TEMPO_UL_CLUBLOG"),
     };
-    // Parks/Summits On The Air: a SOTA ref (dedicated field) takes precedence; else a
-    // SIG=POTA/WWFF pair. `parse_ota` reads one side (my_* or their_*).
-    let parse_ota =
-        |sig: &str, sig_info: &str, sota: &str, pota: &str| -> (Option<String>, Option<String>) {
-            if let Some(r) = f.get(sota).filter(|s| !s.is_empty()) {
-                (Some("SOTA".to_string()), Some(r.to_ascii_uppercase()))
-            } else if let (Some(p), Some(r)) = (f.get(sig), f.get(sig_info)) {
-                (Some(p.to_ascii_uppercase()), Some(r.to_ascii_uppercase()))
-            } else if let Some(r) = f.get(pota).filter(|s| !s.is_empty()) {
-                // ADIF 3.1.4 dedicated POTA_REF/MY_POTA_REF — what pota.app's hunter/
-                // activator exports carry (may hold a comma list; keep it verbatim).
-                (Some("POTA".to_string()), Some(r.to_ascii_uppercase()))
-            } else {
-                (None, None)
-            }
-        };
-    let (my_program, my_ref) = parse_ota("MY_SIG", "MY_SIG_INFO", "MY_SOTA_REF", "MY_POTA_REF");
-    let (their_program, their_ref) = parse_ota("SIG", "SIG_INFO", "SOTA_REF", "POTA_REF");
+    let (my_program, my_ref) =
+        take_ota_side(f, "MY_SIG", "MY_SIG_INFO", "MY_SOTA_REF", "MY_POTA_REF");
+    let (their_program, their_ref) = take_ota_side(f, "SIG", "SIG_INFO", "SOTA_REF", "POTA_REF");
     let ota = Ota {
         my_program,
         my_ref,
         their_program,
         their_ref,
-        iota: f.get("IOTA").and_then(|s| valid_iota(s)),
+        iota: f.remove("IOTA").and_then(|s| valid_iota(&s)),
     };
     // TIME_OFF / QSO_DATE_OFF (optional contact end). Per ADIF, QSO_DATE_OFF falls back
-    // to QSO_DATE when only TIME_OFF is present.
-    // Same `.get()` (not `s[a..b]`) contract as TIME_ON/QSO_DATE above: these values are
-    // arbitrary UTF-8 from the same untrusted inlets, so a raw byte slice would panic on
-    // a multibyte char inside the fixed offsets.
-    let time_off_unix = f.get("TIME_OFF").filter(|t| t.len() >= 6).map(|t| {
-        let (oh, omi, os) = (
-            t.get(0..2).and_then(|x| x.parse::<u32>().ok()).unwrap_or(0),
-            t.get(2..4).and_then(|x| x.parse::<u32>().ok()).unwrap_or(0),
-            t.get(4..6).and_then(|x| x.parse::<u32>().ok()).unwrap_or(0),
-        );
-        let (oy, omo, od) = f
-            .get("QSO_DATE_OFF")
-            .filter(|s| s.len() >= 8)
-            .map(|s| {
-                (
-                    s.get(0..4).and_then(|x| x.parse::<i32>().ok()).unwrap_or(y),
-                    s.get(4..6).and_then(|x| x.parse::<u32>().ok()).unwrap_or(mo),
-                    s.get(6..8).and_then(|x| x.parse::<u32>().ok()).unwrap_or(d),
-                )
-            })
-            .unwrap_or((y, mo, d));
-        unix_from_ymdhms(oy, omo, od, oh, omi, os)
-    });
-    Some(QsoRecord {
+    // to QSO_DATE when only TIME_OFF is present; the 4-digit HHMM form is legal here too.
+    let off_date = f.remove("QSO_DATE_OFF");
+    let time_off_unix = f
+        .remove("TIME_OFF")
+        .as_deref()
+        .and_then(parse_adif_time)
+        .map(|(oh, omi, os)| {
+            let (oy, omo, od) = off_date
+                .filter(|s| s.len() >= 8)
+                .map(|s| {
+                    (
+                        s.get(0..4).and_then(|x| x.parse().ok()).unwrap_or(y),
+                        s.get(4..6).and_then(|x| x.parse().ok()).unwrap_or(mo),
+                        s.get(6..8).and_then(|x| x.parse().ok()).unwrap_or(d),
+                    )
+                })
+                .unwrap_or((y, mo, d));
+            unix_from_ymdhms(oy, omo, od, oh, omi, os)
+        });
+    // The WRITER's identity cascade, mirrored: APP_TEMPO_MODE (the exact
+    // protocol, ours) → a promoted SUBMODE (see promoted_submode) → MODE.
+    // Reading MODE alone collapsed every Tempo QSO to bare "MFSK" on the
+    // next load, and the next full save wrote that collapse back to disk.
+    // All three are consumed either way (the writer re-derives them from
+    // `mode`); an UNpromoted submode (Log4OM's SSB+USB) goes back into the
+    // map so it lands in `extra` and round-trips verbatim.
+    let app_mode = f.remove("APP_TEMPO_MODE");
+    let submode = f.remove("SUBMODE");
+    let mode_field = f.remove("MODE");
+    let mode = app_mode
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .or_else(|| {
+            submode
+                .as_deref()
+                .and_then(promoted_submode)
+                .map(str::to_string)
+        })
+        .or_else(|| mode_field.clone())
+        .unwrap_or_default();
+    if let Some(sub) = submode.filter(|s| promoted_submode(s).is_none()) {
+        f.insert("SUBMODE".to_string(), sub);
+    }
+    let rec = QsoRecord {
         call,
-        grid: f.get("GRIDSQUARE").cloned(),
+        grid: f.remove("GRIDSQUARE"),
         country: f
-            .get("COUNTRY")
+            .remove("COUNTRY")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         state: f
-            .get("STATE")
+            .remove("STATE")
             .map(|s| s.trim().to_ascii_uppercase())
             .filter(|s| !s.is_empty()),
-        band: f.get("BAND").cloned().unwrap_or_default(),
-        freq_mhz: f.get("FREQ").and_then(|s| s.parse().ok()).unwrap_or(0.0),
-        mode: f.get("MODE").cloned().unwrap_or_default(),
+        band: f.remove("BAND").unwrap_or_default(),
+        freq_mhz: f.remove("FREQ").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+        mode,
         // RST is a string (CW "599" / phone "59" / digital "-12") per ADIF.
         rst_sent: f
-            .get("RST_SENT")
+            .remove("RST_SENT")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         rst_rcvd: f
-            .get("RST_RCVD")
+            .remove("RST_RCVD")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         name: f
-            .get("NAME")
+            .remove("NAME")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         qth: f
-            .get("QTH")
+            .remove("QTH")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         comment: f
-            .get("COMMENT")
+            .remove("COMMENT")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         notes: f
-            .get("NOTES")
+            .remove("NOTES")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
-        tx_power: f.get("TX_PWR").and_then(|s| s.trim().parse().ok()),
+        tx_power: f.remove("TX_PWR").and_then(|s| s.trim().parse().ok()),
         when_unix: unix_from_ymdhms(y, mo, d, h, mi, s),
+        time_known,
         time_off_unix,
         confirmed,
         award_confirmed,
@@ -1291,7 +1465,32 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
         credit_submitted,
         upload,
         ota,
-    })
+        dxcc: f.remove("DXCC").and_then(|s| s.trim().parse().ok()),
+        prop_mode: f
+            .remove("PROP_MODE")
+            .map(|s| s.trim().to_ascii_uppercase())
+            .filter(|s| !s.is_empty()),
+        sat_name: f
+            .remove("SAT_NAME")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        operator: f
+            .remove("OPERATOR")
+            .map(|s| s.trim().to_ascii_uppercase())
+            .filter(|s| !s.is_empty()),
+        station_callsign: f
+            .remove("STATION_CALLSIGN")
+            .map(|s| s.trim().to_ascii_uppercase())
+            .filter(|s| !s.is_empty()),
+        // Whatever the parser did not consume is a field it does not model —
+        // preserved verbatim, by construction. Sorted: deterministic writes.
+        extra: {
+            let mut extra: Vec<(String, String)> = f.drain().collect();
+            extra.sort();
+            extra
+        },
+    };
+    Some(rec)
 }
 
 /// Parse an ADIF credit list (`CREDIT_GRANTED`/`CREDIT_SUBMITTED`): comma-separated
@@ -1418,6 +1617,13 @@ mod tests {
             credit_submitted: Vec::new(),
             upload: Default::default(),
             ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
         }
     }
 
@@ -1520,6 +1726,125 @@ mod tests {
         );
         // Round-trip fidelity: our own log can still tell TempoFast from TempoDeep.
         assert!(adif.contains("APP_TEMPO_MODE"), "app field missing: {adif}");
+    }
+
+    #[test]
+    fn every_loggable_mode_round_trips_through_its_own_adif() {
+        // The old assertion here was write-side only — it checked the identity
+        // fields were EMITTED and never parsed the record back, which is exactly
+        // the half that was broken: every restart re-read a TempoFast QSO as
+        // bare "MFSK" and the next full save made that permanent on disk.
+        for mode in [
+            "FT8",
+            "FT4",
+            "TempoFast",
+            "TempoDeep",
+            "Q65",
+            "FST4",
+            "FST4W",
+            "WSPR",
+            "MSK144",
+            "JT65",
+            "CW",
+            "SSB",
+            "RTTY",
+            "SSTV",
+        ] {
+            let mut r = rec("W1AW", "20m", 1_753_500_000);
+            r.mode = mode.into();
+            let adif = adif_header() + &adif_record(&r);
+            let back = &parse_adif(&adif)[0];
+            assert_eq!(
+                back.mode, mode,
+                "mode identity must survive the app's own file"
+            );
+        }
+        // The WSJT-X shape for the family submodes (their FT4/Q65/FST4 ride
+        // MODE=MFSK + SUBMODE) resolves to the first-class mode on import.
+        let wsjtx = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345\
+                     <BAND:3>20m<MODE:4>MFSK<SUBMODE:3>FT4<EOR>";
+        assert_eq!(parse_adif(wsjtx)[0].mode, "FT4");
+        // A phone submode must NOT rename the row — the import dedup key is the
+        // RAW mode + exact second, so promoting SSB→USB would duplicate every
+        // phone row on the next re-import of the same log.
+        let ssb = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345\
+                   <BAND:3>20m<MODE:3>SSB<SUBMODE:3>USB<EOR>";
+        assert_eq!(parse_adif(ssb)[0].mode, "SSB");
+    }
+
+    #[test]
+    fn unknown_time_is_never_fabricated_and_hhmm_is_accepted() {
+        // ADIF's Time type is legally 6 digits (HHMMSS) OR 4 (HHMM). The old
+        // parse discarded the 4-digit form to midnight, and an absent TIME_ON
+        // became midnight too — then the writer re-asserted <TIME_ON:6>000000 as
+        // fact on every export and upload. LoTW matches on the two operators'
+        // times agreeing within 30 minutes, so those records could never
+        // confirm, forever, on every service.
+        //
+        // 4-digit HHMM parses to the real time.
+        let hhmm = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:4>1423<BAND:3>20m<MODE:3>FT8<EOR>";
+        let r = &parse_adif(hhmm)[0];
+        assert!(r.time_known, "a 4-digit time IS a time");
+        assert_eq!(r.when_unix % 86_400, 14 * 3600 + 23 * 60);
+
+        // Absent TIME_ON → the date is kept for ordering, the time is UNKNOWN,
+        // and the writer emits QSO_DATE with NO fabricated TIME_ON.
+        let dateonly = "<CALL:4>K1JT<QSO_DATE:8>20260701<BAND:3>20m<MODE:3>FT8<EOR>";
+        let r = &parse_adif(dateonly)[0];
+        assert!(!r.time_known, "no TIME_ON → time unknown, not midnight-as-fact");
+        assert_eq!(r.when_unix % 86_400, 0, "date keeps its midnight anchor");
+        let out = adif_record(r);
+        assert!(
+            !out.contains("TIME_ON"),
+            "never assert a time nobody measured: {out}"
+        );
+        assert!(out.contains("<QSO_DATE:8>20260701"), "{out}");
+        // And it round-trips as still-unknown.
+        let back = &parse_adif(&(adif_header() + &out))[0];
+        assert!(!back.time_known);
+
+        // A REAL midnight QSO (TIME_ON present as 000000) stays a known time.
+        let midnight =
+            "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>000000<BAND:3>20m<MODE:3>FT8<EOR>";
+        assert!(
+            parse_adif(midnight)[0].time_known,
+            "an explicit 00:00:00 is a measured time, not an unknown one"
+        );
+
+        // TIME_OFF accepts the 4-digit form too.
+        let off4 = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345\
+                    <TIME_OFF:4>0130<BAND:3>20m<MODE:3>FT8<EOR>";
+        let r = &parse_adif(off4)[0];
+        assert_eq!(r.time_off_unix.map(|t| t % 86_400), Some(3600 + 30 * 60));
+    }
+
+    #[test]
+    fn foreign_adif_fields_survive_a_round_trip_verbatim() {
+        // A third-party master log carries decades of fields this parser does
+        // not model. They must ride through import → save → re-read untouched —
+        // the old parser silently discarded them at import, permanently.
+        let rich = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m\
+                    <MODE:3>FT8<DXCC:3>291<PROP_MODE:3>SAT<SAT_NAME:5>RS-44\
+                    <OPERATOR:6>KD9TAW<STATION_CALLSIGN:6>KD9TAW\
+                    <CONTEST_ID:6>ARRL-B<SRX:3>042<QSL_VIA:6>BUREAU<EOR>";
+        let r = &parse_adif(rich)[0];
+        assert_eq!(r.dxcc, Some(291), "numeric DXCC is modelled now");
+        assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(r.sat_name.as_deref(), Some("RS-44"));
+        assert_eq!(r.operator.as_deref(), Some("KD9TAW"));
+        assert_eq!(r.station_callsign.as_deref(), Some("KD9TAW"));
+        // The unmodelled remainder is preserved BY CONSTRUCTION (whatever the
+        // parser didn't consume), not by a hand-kept list that drifts.
+        let extra: std::collections::HashMap<_, _> = r.extra.iter().cloned().collect();
+        assert_eq!(extra.get("CONTEST_ID").map(String::as_str), Some("ARRL-B"));
+        assert_eq!(extra.get("SRX").map(String::as_str), Some("042"));
+        assert_eq!(extra.get("QSL_VIA").map(String::as_str), Some("BUREAU"));
+        // And the writer re-emits all of it, exactly once.
+        let out = adif_header() + &adif_record(r);
+        let back = &parse_adif(&out)[0];
+        assert_eq!(back.dxcc, Some(291));
+        assert_eq!(back.extra, r.extra, "foreign fields survive the round trip");
+        assert_eq!(out.matches("CONTEST_ID").count(), 1, "no duplication");
     }
 
     #[test]
@@ -1731,11 +2056,18 @@ mod tests {
     }
 
     #[test]
-    fn update_record_fixes_human_fields_but_preserves_derived_state() {
+    fn a_call_correction_requeues_the_upload_and_strips_wrong_call_credit() {
+        // Operator ruling (2026-07-30). Work a new one, mis-copy the call, it
+        // uploads as W1AX; fix it to W1AW. The services still hold W1AX — the
+        // record must RE-QUEUE (upload stamps cleared), and any confirmation
+        // matched against the busted call is credit this QSO never earned, so
+        // it goes too. The old behavior preserved both: Nexus showed W1AW,
+        // LoTW held W1AX forever, and the QSO could never confirm.
         let mut lb = Logbook::new();
         let mut original = rec("W1AX", "20m", 1_700_000_000); // busted call: should be W1AW
         original.confirmed = true;
         original.award_confirmed = true;
+        original.qsl_rcvd.lotw = true;
         original.credit_granted = vec!["DXCC".into()];
         original.qsl_sent = QslSent {
             sent: true,
@@ -1749,37 +2081,82 @@ mod tests {
         });
         lb.add(original);
 
-        // Correct the call (and clear the derived fields in the edit payload — they
-        // must NOT be honored).
-        let mut fixed = rec("W1AW", "40m", 1_700_000_000);
-        fixed.confirmed = false;
-        fixed.award_confirmed = false;
+        let fixed = rec("W1AW", "20m", 1_700_000_000);
         assert!(lb.update_record(0, fixed));
 
         let r = &lb.records()[0];
         assert_eq!(r.call, "W1AW", "human field corrected");
-        assert_eq!(r.band, "40m");
         assert!(
-            r.confirmed && r.award_confirmed,
-            "derived confirmation preserved"
-        );
-        assert_eq!(
-            r.credit_granted,
-            vec!["DXCC".to_string()],
-            "credit preserved"
-        );
-        assert_eq!(
-            r.upload.lotw.as_ref().map(|s| s.outcome),
-            Some(UploadOutcome::Accepted),
-            "upload state preserved"
+            r.upload.lotw.is_none(),
+            "upload stamps cleared — the corrected QSO re-queues to every service"
         );
         assert!(
-            r.qsl_sent.sent && r.qsl_sent.via == Some(QslVia::Direct),
-            "QSL-sent mark preserved across an edit"
+            !r.confirmed && !r.award_confirmed && !r.qsl_rcvd.lotw,
+            "a confirmation matched on the busted call is stripped"
+        );
+        assert!(
+            r.credit_granted.is_empty(),
+            "granted credit rode the stripped confirmation"
+        );
+        assert!(
+            r.qsl_sent.sent,
+            "the operator's own outbound-card mark is history, not credit — kept"
         );
         assert!(
             !lb.update_record(9, rec("X", "20m", 1)),
             "out-of-range is false"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_edit_preserves_derived_state() {
+        // A band/grid/name fix (call unchanged) keeps confirmations, credit,
+        // upload stamps, the QSL-sent mark — and the import-carried identity
+        // the edit form never carries (extra fields, DXCC, satellite pair).
+        let mut lb = Logbook::new();
+        let mut original = rec("W1AW", "20m", 1_700_000_000);
+        original.confirmed = true;
+        original.award_confirmed = true;
+        original.credit_granted = vec!["DXCC".into()];
+        original.qsl_sent = QslSent {
+            sent: true,
+            via: Some(QslVia::Direct),
+            date_unix: Some(1_700_000_000),
+        };
+        original.upload.lotw = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 1,
+            detail: None,
+        });
+        original.dxcc = Some(291);
+        original.sat_name = Some("RS-44".into());
+        original.extra = vec![("CONTEST_ID".into(), "ARRL-B".into())];
+        original.time_known = false; // an imported, time-less record
+        lb.add(original);
+
+        // The edit form's payload: band fixed, call unchanged, none of the
+        // derived/import-carried fields present, when_unix untouched.
+        let mut edit = rec("W1AW", "40m", 1_700_000_000);
+        edit.confirmed = false;
+        edit.award_confirmed = false;
+        assert!(lb.update_record(0, edit));
+
+        let r = &lb.records()[0];
+        assert_eq!(r.band, "40m");
+        assert!(r.confirmed && r.award_confirmed, "confirmation preserved");
+        assert_eq!(r.credit_granted, vec!["DXCC".to_string()]);
+        assert_eq!(
+            r.upload.lotw.as_ref().map(|s| s.outcome),
+            Some(UploadOutcome::Accepted),
+            "upload state preserved on an ordinary edit"
+        );
+        assert!(r.qsl_sent.sent && r.qsl_sent.via == Some(QslVia::Direct));
+        assert_eq!(r.dxcc, Some(291), "import-carried DXCC survives an edit");
+        assert_eq!(r.sat_name.as_deref(), Some("RS-44"));
+        assert_eq!(r.extra.len(), 1, "foreign fields survive an edit");
+        assert!(
+            !r.time_known,
+            "an unchanged time must not fabricate time-knowledge"
         );
     }
 

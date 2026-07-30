@@ -1014,8 +1014,21 @@ export interface LoggedQso {
   notes?: string | null
   /** Transmit power in watts (ADIF TX_PWR). */
   txPower?: number | null
+  /**
+   * The cty.dat-RESOLVED entity for this row's callsign — the award identity
+   * every "new one"/entity-count comparison keys on. `country` is display
+   * text whose spelling depends on who wrote it (QRZ vs cty.dat differ).
+   */
+  entity?: string | null
   /** Contact time, seconds since the Unix epoch (UTC). */
   whenUnix: number
+  /**
+   * Whether the time of day is actually KNOWN. `false` for imported date-only
+   * records — whenUnix then anchors at midnight for ordering only, and
+   * LoTW/eQSL sends exclude the record (both services match on time).
+   * Optional: older payloads mean "known".
+   */
+  timeKnown?: boolean
   /** Confirmed via ANY channel (LoTW / eQSL / paper QSL). */
   confirmed: boolean
   /** Award-eligible confirmation (LoTW or paper only — eQSL excluded). */

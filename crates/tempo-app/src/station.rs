@@ -38,8 +38,10 @@ use crate::engine::{
 /// [`StationCore::set_dxcc_resolver`]). A record with no BAND keys as "", which
 /// matches no live band and so never suppresses a need.
 fn band_key(band: &str) -> String {
-    let b = band.trim().to_ascii_lowercase();
-    b.strip_suffix("-fm").unwrap_or(&b).to_string()
+    // THE canonicaliser (bandplan::canonical_band), then lower-cased: the old
+    // hand-rolled strip here handled only "-fm", so a legacy "6m-2"/"2m-call"
+    // row keyed as its own phantom band and never suppressed a need.
+    crate::bandplan::canonical_band(band).to_ascii_lowercase()
 }
 
 /// The operator's station: one log, one identity of record, one set of outbound
@@ -285,11 +287,7 @@ impl StationCore {
         }
         self.state_resolve = Some(resolve);
         if changed {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: backfill_state save failed: {e}");
-                }
-            }
+            self.save_log("backfill_state");
         }
     }
 
@@ -353,11 +351,7 @@ impl StationCore {
         }
         self.dxcc_resolve = Some(resolve);
         if changed {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: backfill_country save failed: {e}");
-                }
-            }
+            self.save_log("backfill_country");
         }
     }
 
@@ -570,10 +564,21 @@ impl StationCore {
     /// resurrects a record we just edited or deleted, PROVIDED callers run this
     /// BEFORE their mutation, while our copy still holds the record being changed.
     /// No-op without a log path or on a read error.
-    fn recover_external_appends(&mut self) {
+    /// Returns whether the disk was actually re-read (mtime moved).
+    fn recover_external_appends(&mut self) -> bool {
         let Some(path) = self.log_path.clone() else {
-            return;
+            return false;
         };
+        // mtime-gate: the stamp/save paths run this up to three times per
+        // logged QSO, and an unconditional read re-parsed the whole multi-MB
+        // log each time. When the file hasn't moved since we last read or
+        // WROTE it (save_log records our own writes), the disk holds exactly
+        // what we hold — skip the parse. A stat error falls through to the
+        // full read: never skip on uncertainty.
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if mtime.is_some() && mtime == self.last_log_mtime {
+            return false;
+        }
         let disk = std::fs::read_to_string(&path).unwrap_or_default();
         if !disk.is_empty() {
             // Field-level MERGE, not an additive import: fold in another instance's appends AND
@@ -581,6 +586,21 @@ impl StationCore {
             // instance's imminent full-file rewrite can't clobber what the other one wrote.
             self.logbook.reconcile_disk(&disk);
         }
+        self.last_log_mtime = mtime;
+        true
+    }
+
+    /// THE way to persist the logbook: save, then record the file's fresh mtime
+    /// so the recovery gate above doesn't re-parse our own write on the next
+    /// stamp. Every full-log rewrite in this file funnels through here.
+    fn save_log(&mut self, context: &str) {
+        let Some(path) = self.log_path.clone() else {
+            return;
+        };
+        if let Err(e) = self.logbook.save(&path) {
+            eprintln!("tempo: {context} save failed: {e}");
+        }
+        self.last_log_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     }
 
     /// Two-instance freshness watcher: if the SHARED `log.adi`'s mtime moved since we last
@@ -594,13 +614,14 @@ impl StationCore {
         let Some(path) = self.log_path.clone() else {
             return false;
         };
-        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        // Only act on a real, CHANGED mtime (a missing file / stat error leaves us on last-good).
-        if mtime.is_none() || mtime == self.last_log_mtime {
+        // A missing file / stat error leaves us on last-good; the recovery owns
+        // the mtime gate and records what it read.
+        if std::fs::metadata(&path).and_then(|m| m.modified()).is_err() {
             return false;
         }
-        self.last_log_mtime = mtime;
-        self.recover_external_appends();
+        if !self.recover_external_appends() {
+            return false;
+        }
         self.refresh_worked_index();
         true
     }
@@ -622,11 +643,7 @@ impl StationCore {
         self.recover_external_appends();
         let ok = self.logbook.update_record(index, rec);
         if ok {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: update_qso save failed: {e}");
-                }
-            }
+            self.save_log("update_qso");
             self.refresh_worked_index();
         }
         ok
@@ -640,11 +657,7 @@ impl StationCore {
         self.recover_external_appends();
         let ok = self.logbook.mark_qsl_sent(index, via, now_unix_secs());
         if ok {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: mark_qsl_sent save failed: {e}");
-                }
-            }
+            self.save_log("mark_qsl_sent");
         }
         ok
     }
@@ -659,11 +672,7 @@ impl StationCore {
         self.recover_external_appends();
         let ok = self.logbook.delete(index);
         if ok {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: delete_qso save failed: {e}");
-                }
-            }
+            self.save_log("delete_qso");
             self.refresh_worked_index();
         }
         ok
@@ -676,11 +685,7 @@ impl StationCore {
     pub fn clear_logbook(&mut self) -> usize {
         let n = self.logbook.clear();
         if n > 0 {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: clear_logbook save failed: {e}");
-                }
-            }
+            self.save_log("clear_logbook");
             self.refresh_worked_index();
         }
         n
@@ -712,11 +717,7 @@ impl StationCore {
         self.recover_external_appends();
         let summary = self.logbook.merge_report(text);
         self.last_lotw_reconcile = Some(summary.clone());
-        if let Some(path) = &self.log_path {
-            if let Err(e) = self.logbook.save(path) {
-                eprintln!("tempo: merge_lotw_report save failed: {e}");
-            }
-        }
+        self.save_log("merge_lotw_report");
         summary
     }
 
@@ -727,11 +728,7 @@ impl StationCore {
         self.recover_external_appends();
         let out = self.logbook.stamp_ota_refs(text);
         if out.0 > 0 {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: import_pota_log save failed: {e}");
-                }
-            }
+            self.save_log("import_pota_log");
         }
         out
     }
@@ -745,11 +742,7 @@ impl StationCore {
         self.recover_external_appends();
         let promoted = self.logbook.merge_own_echo(text, when_unix);
         if promoted > 0 {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: merge_lotw_own_echo save failed: {e}");
-                }
-            }
+            self.save_log("merge_lotw_own_echo");
         }
         promoted
     }
@@ -779,11 +772,7 @@ impl StationCore {
         self.recover_external_appends();
         let changed = self.logbook.stamp_qrz_upload(pushed, status);
         if changed {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: stamp_qrz_upload save failed: {e}");
-                }
-            }
+            self.save_log("stamp_qrz_upload");
         }
         changed
     }
@@ -805,11 +794,7 @@ impl StationCore {
         self.recover_external_appends();
         let changed = self.logbook.stamp_clublog_upload(pushed, status);
         if changed {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: stamp_clublog_upload save failed: {e}");
-                }
-            }
+            self.save_log("stamp_clublog_upload");
         }
         changed
     }
@@ -831,11 +816,7 @@ impl StationCore {
         self.recover_external_appends();
         let changed = self.logbook.stamp_eqsl_upload(pushed, status);
         if changed {
-            if let Some(path) = &self.log_path {
-                if let Err(e) = self.logbook.save(path) {
-                    eprintln!("tempo: stamp_eqsl_upload save failed: {e}");
-                }
-            }
+            self.save_log("stamp_eqsl_upload");
         }
         changed
     }
@@ -848,11 +829,7 @@ impl StationCore {
         self.recover_external_appends();
         let summary = self.logbook.merge_report(text);
         self.last_eqsl_reconcile = Some(summary.clone());
-        if let Some(path) = &self.log_path {
-            if let Err(e) = self.logbook.save(path) {
-                eprintln!("tempo: merge_eqsl_report save failed: {e}");
-            }
-        }
+        self.save_log("merge_eqsl_report");
         summary
     }
 
@@ -875,11 +852,7 @@ impl StationCore {
         // rows and the reconciled confirmations.
         let (added, summary) = self.logbook.merge_downloaded(text);
         self.last_qrz_reconcile = Some(summary.clone());
-        if let Some(path) = &self.log_path {
-            if let Err(e) = self.logbook.save(path) {
-                eprintln!("tempo: merge_qrz_report save failed: {e}");
-            }
-        }
+        self.save_log("merge_qrz_report");
         self.backfill_country();
         self.refresh_worked_index();
         (added.len(), summary)
@@ -930,6 +903,11 @@ impl StationCore {
             .enumerate()
             .filter(|(_, r)| !r.award_confirmed)
             .filter(|(_, r)| r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent()))
+            // LoTW matches on both operators' times agreeing (±30 min): a record
+            // with NO known time can never match, so signing and sending it just
+            // parks it at LoTW as unmatched forever — and, being re-sendable, it
+            // kept the "Upload to LoTW (N)" count from ever clearing.
+            .filter(|(_, r)| r.time_known)
             .map(|(i, _)| i)
             .collect()
     }
@@ -955,11 +933,7 @@ impl StationCore {
                 });
             }
         }
-        if let Some(path) = &self.log_path {
-            if let Err(e) = self.logbook.save(path) {
-                eprintln!("tempo: lotw upload stamp save failed: {e}");
-            }
-        }
+        self.save_log("lotw upload stamp");
     }
 
     /// Append a completed SSTV image to the session gallery (newest last),
@@ -1058,6 +1032,13 @@ mod grid_tests {
             credit_submitted: Vec::new(),
             upload: Default::default(),
             ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
         }
     }
 
