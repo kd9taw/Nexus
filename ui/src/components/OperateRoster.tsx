@@ -10,8 +10,9 @@ import type { NeedAlert, NeedTag, Station } from '../types'
 import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, magneticDeg } from '../grid'
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
-import { tagsForSurface } from '../features/needs'
+import { alertsForSurface, chaseRank, strongestNeed } from '../features/needs'
 import { isIgnored } from '../txMessages'
+import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../operateFilters'
 import { RarityChip } from './RarityChip'
 
 interface Props {
@@ -42,24 +43,6 @@ interface Props {
 }
 
 type SortKey = 'need' | 'call' | 'country' | 'grid' | 'dist' | 'bearing' | 'snr' | 'age'
-
-// Mirrors the backend NeedTag::tier() gradient (needalert.rs) so "sort by need" is the
-// SAME ranking here as on the Needed board: entity > zone > state > grid > band > mode.
-// A new state outranks a bare new grid (the operator's WAS-over-VUCC gradient); these
-// used to be tied at 4, which let grids sort alongside/above states.
-const NEED_RANK: Record<NeedTag, number> = {
-  Wanted: 8,
-  NewEntity: 7,
-  NewZone: 6,
-  NewState: 5,
-  NewGrid: 4,
-  NewBand: 3,
-  NewMode: 2,
-  Confirm: 1,
-  Dxped: 0,
-  Pota: 0,
-  Sota: 0,
-}
 
 // The call roster shows only ACTIVELY-heard stations: a station drops off once
 // it hasn't been decoded for this many T/R cycles, so the list reflects who's
@@ -113,42 +96,57 @@ export function OperateRoster({
       .catch(() => {})
   }, [])
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'need', dir: 'desc' })
-  const [neededOnly, setNeededOnly] = useState(false)
-  const [hideWorked, setHideWorked] = useState(false)
+  // Persisted per-surface (operateFilters.ts): the operator ticks Needed-only once and it is
+  // still ticked after a restart. Defaults are both off, so nothing changes for anyone who
+  // has never touched them.
+  const [filters, setFilters] = useState(loadRosterFilters)
+  const { neededOnly, hideWorked } = filters
+  // Merges against the LIVE previous value (NeededPanel's toggleBand pattern) so ticking one
+  // checkbox can never write away the other's state.
+  const setFilter = (patch: Partial<RosterFilters>) => {
+    setFilters((prev) => {
+      const next = { ...prev, ...patch }
+      saveRosterFilters(next)
+      return next
+    })
+  }
   const me = useMemo(() => gridToLatLon(myGrid), [myGrid])
 
   const rows = useMemo(() => {
     const built = stations.map((s) => {
-      // Union of ALL need forms for the row (deduped, insertion-ordered by the
-      // alerts), gated to what this band + mode can actually close: the alerts map is
-      // keyed by callsign and spans every band and mode, so ungated it painted a MODE
-      // chip from a CW need onto a 30m FT8 roster (operator report 2026-07-29). The
-      // gated union also supplies the row's colour, so the chip cluster and the colour
-      // can never disagree. Falls back to the top-tag map when no alerts are supplied.
+      const up = s.call.toUpperCase()
+      const raw = needAlertsByCall?.get(up)
+      // SURFACE GATE FIRST, rank what survives. The alerts map is keyed by callsign and
+      // spans every band and mode, so ungated it painted a MODE chip from a CW need onto a
+      // 30m FT8 roster (operator report 2026-07-29) — and let that unclosable need pick the
+      // row's colour and its place in "sort by need". `alertsForSurface` drops what this
+      // band + mode class cannot close; everything below then ranks only what is left.
+      const alerts = band != null && feedMode != null ? alertsForSurface(raw, band, feedMode) : raw
+      // Lead tag from the call's STRONGEST surviving alert, so the row's colour, its
+      // aria-label and its chase rank all name the same need. needByCall resolved a
+      // multi-band station to whichever alert came LAST, which is its WEAKEST — a new entity
+      // on 20 m with a mere confirm on 40 m ranked as the confirm, three quarters of the way
+      // down the list (operator report). It stays as the fallback for hosts that pass only
+      // the top-tag map; when alerts WERE supplied and the gate cleared every one, nothing
+      // is needed here, so the row stays null rather than reaching for an ungated tag.
+      const need: NeedTag | null =
+        strongestNeed(alerts)?.tags[0] ??
+        (raw && raw.length > 0 ? null : (needByCall.get(up) ?? null))
+      // Union of ALL need forms for the row (deduped, insertion-ordered by the alerts), from
+      // the GATED set so the chip cluster and the row colour can never disagree.
       let needAll: NeedTag[] = []
-      const alerts = needAlertsByCall?.get(s.call.toUpperCase())
       if (alerts && alerts.length > 0) {
         const seen = new Set<NeedTag>()
-        for (const a of alerts) {
-          const tags = band != null && feedMode != null ? tagsForSurface(a, band, feedMode) : a.tags
-          for (const t of tags) seen.add(t)
-        }
+        for (const a of alerts) for (const t of a.tags) seen.add(t)
         needAll = [...seen]
       }
-      // Highest-ranking gated tag colours the row; without alerts, the top-tag map.
-      const need: NeedTag | null =
-        needAll.length > 0
-          ? needAll.reduce((best, t) => (NEED_RANK[t] > NEED_RANK[best] ? t : best))
-          : alerts && alerts.length > 0
-            ? null // alerts existed but none apply here — genuinely nothing needed
-            : (needByCall.get(s.call.toUpperCase()) ?? null)
       if (need && needAll.length === 0) needAll = [need]
       const ll = s.grid ? gridToLatLon(s.grid) : null
       return {
         s,
         need,
         needAll,
-        needRank: need ? NEED_RANK[need] : 0,
+        needRank: chaseRank(alerts, need),
         distKm: me && ll ? haversineKm(me, ll) : Infinity,
         brg: me && ll ? bearingDeg(me, ll) : 999,
         age: currentSlot - s.lastHeardSlot,
@@ -189,8 +187,12 @@ export function OperateRoster({
           c = a.age - b.age
           break
       }
-      if (c === 0) c = b.s.snr - a.s.snr // tiebreak: stronger signal first
-      return c * dir
+      // The DIRECTION applies to the chosen column only. Multiplying the tiebreak by it too
+      // inverted it on every descending sort — including the default need-desc view, where
+      // stations of equal need came out weakest-signal-first. Of two equally-needed stations
+      // the louder one is the better bet, whichever way the column is pointing.
+      if (c !== 0) return c * dir
+      return b.s.snr - a.s.snr // tiebreak: stronger signal first
     })
     return f
   }, [
@@ -239,10 +241,18 @@ export function OperateRoster({
         <strong>Call Roster</strong>
         <span className="or-count">{rows.length}</span>
         <label className="or-filter">
-          <input type="checkbox" checked={neededOnly} onChange={(e) => setNeededOnly(e.target.checked)} /> Needed only
+          <input
+            type="checkbox"
+            checked={neededOnly}
+            onChange={(e) => setFilter({ neededOnly: e.target.checked })}
+          /> Needed only
         </label>
         <label className="or-filter">
-          <input type="checkbox" checked={hideWorked} onChange={(e) => setHideWorked(e.target.checked)} /> Hide worked
+          <input
+            type="checkbox"
+            checked={hideWorked}
+            onChange={(e) => setFilter({ hideWorked: e.target.checked })}
+          /> Hide worked
         </label>
         {onSpot && (
           <button

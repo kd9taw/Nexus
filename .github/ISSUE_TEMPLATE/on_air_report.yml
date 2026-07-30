@@ -1,0 +1,159 @@
+name: On-air report (Tempo)
+description: Report a real over-the-air TempoFast or TempoDeep result, success or failure
+title: "[on-air] "
+labels: ["on-air report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the most useful thing anyone outside the project can send.
+
+        TempoFast and TempoDeep have closed real links on the air, including a
+        completed two-station QSO on 6 m. What is still missing is a proper
+        characterisation of **decode rate against signal level** on real paths,
+        with real propagation and real QRM in it. Every sensitivity figure quoted
+        anywhere for these modes is a bench number from AWGN and fading sweeps.
+
+        A failure is as valuable as a success here, and a partial report is
+        welcome. If it is more of a conversation than a result, a Discussion is
+        fine instead.
+
+        One thing worth checking before you file: the clock reading in the top
+        bar, **at both ends**. A few tenths of a second of UTC error is invisible
+        on FT8 and used to be fatal to Tempo. Both stations also need a build at
+        0.19.6 or newer for the transmit-offset fix.
+
+  - type: input
+    id: callsign_grid
+    attributes:
+      label: Your callsign and grid
+      placeholder: "KD9TAW / EN52"
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Nexus version, both stations if you know it
+      placeholder: "0.21.5 here, 0.21.0 at the other end"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Tier
+      options:
+        - TempoFast
+        - TempoDeep
+        - Both, on the same path
+    validations:
+      required: true
+
+  - type: textarea
+    id: station
+    attributes:
+      label: Station
+      description: Rig, how audio and PTT are wired, antenna and power.
+      placeholder: |
+        FTdx10, USB CODEC, CAT PTT. 40 m dipole at 10 m, 25 W.
+    validations:
+      required: false
+
+  - type: input
+    id: path
+    attributes:
+      label: Band, dial frequency and mode
+      placeholder: "6 m, 50.310 USB"
+    validations:
+      required: true
+
+  - type: input
+    id: when
+    attributes:
+      label: Date and time, UTC
+      placeholder: "2026-07-26 0130Z"
+    validations:
+      required: false
+
+  - type: input
+    id: distance
+    attributes:
+      label: Other station's grid and approximate distance
+      placeholder: "EM10, about 1300 km"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: decoded
+    attributes:
+      label: Did it decode?
+      options:
+        - Yes, reliably
+        - Intermittently
+        - No
+        - Seen in the waterfall but never decoded
+    validations:
+      required: true
+
+  - type: input
+    id: numbers
+    attributes:
+      label: Reported SNR and dT
+      description: As Nexus showed them. If decode rate varied, say roughly how many slots in how many.
+      placeholder: "-14 dB, dT +0.1. Around 8 of 10 slots."
+    validations:
+      required: false
+
+  - type: input
+    id: clocks
+    attributes:
+      label: Clock reading at each end
+      description: From the top bar. This has been the cause more than once.
+      placeholder: "+0.02 s here, +0.31 s at the other end"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: harq
+    attributes:
+      label: Did incremental redundancy help?
+      description: >-
+        The decode badge reports how many redundancy versions were combined. If a
+        frame failed alone and landed after a retransmission, that is the
+        mechanism working and it is worth recording.
+      options:
+        - Yes, a frame landed after combining
+        - No, single-transmission decodes only
+        - Did not notice
+        - Not applicable
+      default: 2
+    validations:
+      required: false
+
+  - type: input
+    id: comparison
+    attributes:
+      label: How did FT8 or JS8 do on the same path, if you tried?
+      placeholder: "FT8 decoded him at -19 the same evening. Tempo would not."
+    validations:
+      required: false
+
+  - type: textarea
+    id: story
+    attributes:
+      label: What worked and what did not
+      description: Free text. Be specific. This is the part that moves the roadmap.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots, logs or audio
+      description: >-
+        A waterfall capture, the decode feed, an ADIF snippet, or a short WAV of
+        the received signal. A WAV is the single most useful artefact, because it
+        can be replayed against the decoder here.
+    validations:
+      required: false

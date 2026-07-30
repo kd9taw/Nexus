@@ -4,6 +4,7 @@ import type { DecodeRow, NeedAlert, Tier } from '../types'
 import { resolveDecodeNeeds, isAwardNeed } from '../features/decodeNeeds'
 import { NEED_VISUALS, type NeedCat } from '../features/needVisuals'
 import {
+  DECODE_FILTERS,
   DecodeHistory,
   fmtUtc,
   orderEntries,
@@ -12,6 +13,7 @@ import {
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
+import { loadDecodeFilter, saveDecodeFilter } from '../operateFilters'
 import { gridFromMessage, isIgnored } from '../txMessages'
 import { StateBlock } from './StateBlock'
 import { RarityChip } from './RarityChip'
@@ -169,8 +171,16 @@ export function OperateDecodes({
   }
   const histRef = { current: history ?? (localHistRef.current as DecodeHistory) }
   const [, setTick] = useState(0)
-  const [filterState, setFilter] = useState<DecodeFilter>('all')
+  // Persisted per-surface (operateFilters.ts) so the chip survives a restart. Only the pane
+  // that RENDERS chips can write one: the locked panes (Rx Frequency) show no filter bar, so
+  // their filterState is dead — `filter` below takes lockedFilter — and 'rx' can never
+  // overwrite the Band Activity chip the operator chose.
+  const [filterState, setFilterState] = useState<DecodeFilter>(loadDecodeFilter)
   const filter = lockedFilter ?? filterState
+  const pickFilter = (f: DecodeFilter) => {
+    saveDecodeFilter(f)
+    setFilterState(f)
+  }
   const [sort, setSort] = useState<DecodeSort>('time')
 
   // Bottom-pinned auto-scroll (WSJT-X flow). pinnedRef is the live value the
@@ -282,13 +292,13 @@ export function OperateDecodes({
         ) : (
           <div className="od-controls">
             <div className="od-filters" role="group" aria-label="Filter decodes">
-              {(['all', 'cq', 'me', 'rx', 'b4', 'new'] as DecodeFilter[]).map((f) => (
+              {DECODE_FILTERS.map((f) => (
                 <button
                   key={f}
                   type="button"
                   className={`od-chip${filter === f ? ' active' : ''}`}
                   aria-pressed={filter === f}
-                  onClick={() => setFilter(f)}
+                  onClick={() => pickFilter(f)}
                   title={FILTER_TITLE[f]}
                 >
                   {FILTER_LABEL[f]}

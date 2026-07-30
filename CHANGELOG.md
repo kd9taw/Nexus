@@ -5,6 +5,42 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.5] — 2026-07-29
+
+### Fixed: the Call Roster and Band Activity filters reset on every restart
+
+"Needed only" and "Hide worked" on the Operate Call Roster, and the Band Activity filter chip
+(All / CQ / To me / On RX / B4 / New), now come back the way you left them. They were held in
+screen state only, so every launch put them back to showing everything and you re-ticked them at
+the start of each session.
+
+Each pane remembers its own set, so a torn-off Operate window can sit on Needed-only while the
+docked one still shows the whole band. A window that has never been given its own filters opens on
+the ones you are already using rather than on defaults. If you have never touched these controls,
+nothing changes: both checkboxes start off and the chip starts on All, exactly as before.
+
+A stored value that is damaged, or left over from a build whose filters were named differently, is
+ignored rather than applied. The roster can never come up quietly hiding rows with no ticked
+checkbox to explain why.
+
+### Fixed: "sort by need" on the Call Roster had no discernible order
+
+Sorting the roster by Need now ranks by how much the station is worth working: a call you asked
+for by name, then a new entity, new zone, new state, new grid, new band, new mode, then one you
+have worked but not confirmed. That is the same ranking the Needed board uses, so the two agree
+row for row, and a rare grid or a live park activation keeps the extra pull it has on the board.
+
+Two things were wrong. A station heard on more than one band was ranked by its WEAKEST need
+instead of its best, so a new country on 20 metres that also needed a confirmation on 40 sorted
+as the confirmation, well down the list. And among stations of equal need the roster listed the
+quietest first, which is backwards: of two equally-needed stations the louder one is the better
+bet. Both are fixed, and the row's colour now names the same need the sort ranked it by.
+
+That weakest-need mix-up was not confined to the roster. The same per-station need was feeding the
+map and the band strip, so a station worth chasing could be painted in the colour of the least
+interesting thing about it anywhere it appeared. Every surface now takes a station's strongest
+need, from one shared piece of logic rather than three.
+
 ## [Unreleased]
 
 ### Fixed: the Needed board no longer claims a "new mode" you already worked
@@ -43,11 +79,14 @@ need:
   fell through to guessing the mode from the frequency, which on a CW-only band segment could invent
   a CW mode need.
 
-Highest-priority-wins is also restored for the roster's need colour: the lowest-priority alert for a
-call was overwriting the highest, so a bare mode need could displace an ATNO as a row's colour and
-its screen-reader label.
+This works together with the strongest-need ranking above rather than against it: the band and mode
+gate decides which of a station's needs count on the surface you are looking at, and the ranking then
+picks the most valuable of those. So a row is ranked by the best reason to work that station **that
+you can actually act on right now**, and its colour, its chip, its screen-reader label and its place
+in "sort by need" all name that same need.
 
-## [0.21.5] — 2026-07-29
+
+### APRS says which radio it is listening to
 
 ### APRS now sees the whole network, and can contribute to it
 

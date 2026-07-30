@@ -5,6 +5,10 @@ import type { DecodeRow, Tier } from './types'
 // Rx-Frequency pane filter, and the band/tier history wipe — are unit-testable.
 
 export type DecodeFilter = 'all' | 'cq' | 'me' | 'rx' | 'b4' | 'new'
+/** The filter chips in bar order. A runtime list so the bar OperateDecodes renders and the
+ *  validator that sanitizes the persisted chip (operateFilters.ts) cannot drift apart — a
+ *  chip added here appears in both, instead of one being silently reset on restart. */
+export const DECODE_FILTERS: readonly DecodeFilter[] = ['all', 'cq', 'me', 'rx', 'b4', 'new']
 export type DecodeSort = 'time' | 'snr' | 'freq' | 'dt'
 
 /** A decode plus the slot + wall-clock time it was first heard (history bookkeeping). */

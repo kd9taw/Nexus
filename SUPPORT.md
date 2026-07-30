@@ -20,18 +20,29 @@ The **[operator manual](docs/manual/)** is your full guide:
 
 ## 2. Ask a question
 
-For setup help, usage questions, or general discussion, join the
-**[hamradiotools groups.io list](https://groups.io/g/hamradiotools)**. To report a
-bug, open a **[ticket](https://sourceforge.net/p/nexus-ham-radio/tickets/)** on the
-SourceForge project. Quick on-air chatter is welcome on the list too.
+For setup help, usage questions, or general discussion, use
+**[GitHub Discussions](https://github.com/kd9taw/Nexus/discussions)**, the
+**[hamradiotools groups.io list](https://groups.io/g/hamradiotools)**, or
+**[Discord](https://discord.gg/3Ugtz6MjRE)** if you are mid-session and stuck.
+Quick on-air chatter is welcome on the list too.
 
 ## 3. Report something
 
-Reports go to the **[SourceForge ticket tracker](https://sourceforge.net/p/nexus-ham-radio/tickets/)** — [open a new ticket](https://sourceforge.net/p/nexus-ham-radio/tickets/new/) and name the kind in the title:
+Reports go to **[GitHub Issues](https://github.com/kd9taw/Nexus/issues/new/choose)**. There is a form for
+each kind, and each one asks for the details that actually decide an
+investigation, so you are not left guessing what to include:
 
-- **Bug** — include your OS, radio, Nexus version, and the steps to reproduce.
-- **TempoFast/TempoDeep on-air result (success or failure)** — the data the TempoFast/TempoDeep tiers need most. Include your call + grid, the other station's call + grid, band and dial frequency, tier (TempoFast or TempoDeep), reported SNR, dT, cycle/transmission count, and whether it decoded (plus any surprises — false decodes, retransmissions that combined, stations others didn't see).
-- **Feature idea** — what you want and the operating scenario it serves.
+- **Bug** — the form asks for your Nexus version, platform, radio and
+  interface, how many radios you have configured, and what the app said. The
+  version and platform matter more than they look: several faults existed on
+  one platform and not the other.
+- **Tempo on-air result, success or failure** — the data these tiers need most.
+  The form covers the path, the numbers, and the clock reading at both ends,
+  which has been the cause more than once.
+- **Feature idea** — what you want and the operating situation it serves.
+
+A partial report is worth far more than a missing one. File it even if you
+cannot fill in everything.
 
 ## 4. Reach the maintainer
 
