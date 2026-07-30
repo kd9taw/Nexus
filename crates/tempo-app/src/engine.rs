@@ -15225,7 +15225,8 @@ mod tests {
         // that is ambiguous — and the ambiguity resolves the WRONG way here, because coverage-tier
         // ties go to the lowest id (the IC-9700). APRS must route on the FM mode class.
         let (mut e, ic9700, ft991a) = three_radio_engine();
-        e.aprs_tune(144.390);
+        e.aprs_tune(144.390)
+            .expect("aprs_tune should succeed in this scenario");
         assert_eq!(
             e.settings.active_radio, ft991a,
             "APRS routed to the FT-991A (the FM radio), not the IC-9700"
@@ -15242,7 +15243,8 @@ mod tests {
         // Operate (Digital) must still route APRS to the FM radio — that is what `route_intent` is.
         let (mut e, _ic9700, ft991a) = three_radio_engine();
         e.set_operating_mode("operate", false); // sitting in the FT8 cockpit
-        e.aprs_tune(144.390);
+        e.aprs_tune(144.390)
+            .expect("aprs_tune should succeed in this scenario");
         assert_eq!(e.settings.active_radio, ft991a);
     }
 
@@ -15407,7 +15409,8 @@ mod tests {
         e.set_radio_pegged(true);
         e.work_spot("operate", 144.174, "2m");
         assert_eq!(e.settings.active_radio, 0, "pegged → no auto-switch");
-        e.aprs_tune(144.390);
+        e.aprs_tune(144.390)
+            .expect("aprs_tune should succeed in this scenario");
         assert_eq!(
             e.settings.active_radio, 0,
             "pegged → APRS doesn't switch either"
@@ -15457,7 +15460,8 @@ mod tests {
         // In the APRS context, a QSY that stays on 2 m routes FM; one that leaves 2 m routes on the
         // underlying section, because `aprs_fm` is meaningless off 2 m (same gate as rig_mode_effective).
         e.settings.operating_mode = OperatingMode::Digital;
-        e.aprs_tune(144.390);
+        e.aprs_tune(144.390)
+            .expect("aprs_tune should succeed in this scenario");
         assert_eq!(e.route_mode("2m", 144.800), RouteMode::Fm);
         assert_eq!(e.route_mode("20m", 14.074), RouteMode::Digital);
     }
@@ -15496,7 +15500,8 @@ mod tests {
         assert_eq!(e.settings.default_radio, Some(0));
         assert_eq!(e.settings.radios.len(), 3, "…nor the third radio");
         // …and routing still works after the save.
-        e.aprs_tune(144.390);
+        e.aprs_tune(144.390)
+            .expect("aprs_tune should succeed in this scenario");
         assert_eq!(e.settings.active_radio, ft991a);
     }
 
