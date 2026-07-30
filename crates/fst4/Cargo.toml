@@ -5,7 +5,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Safe Rust wrapper over libtempo's native FST4 decoder (WSJT-X FST4, 15 s T/R, DECODE ONLY)"
+description = "Safe Rust wrapper over libtempo's native FST4 codec (WSJT-X FST4, 15 s T/R, decode + TX encode)"
 
 [dependencies]
 tempo-fast-sys = { path = "../tempo-fast-sys" }

@@ -36,10 +36,11 @@
 //! a percentage of 2-minute intervals, unattended — which is why the operating
 //! layer routes these tiers through a beacon scheduler instead of the auto-sequencer.
 //!
-//! # DECODE-ONLY NOTE (historical)
-//! `ModeKind::Wspr` reports `Capabilities { tx: false }`, so `modes::tx_mode()`
-//! refuses to hand it to the transmit path. WSPR transmit is also an operating
-//! decision, not just a code one: a beacon keys unattended on a schedule.
+//! # TX since 0.20.0 (was decode-only)
+//! `ModeKind::Wspr` reports `Capabilities { tx: true }`. Keying it remains an
+//! OPERATING decision, not just a code one: a beacon keys unattended on a
+//! schedule, which is why the beacon scheduler — never the auto-sequencer —
+//! owns it.
 //!
 //! # ⚠️ Hashed callsigns do not resolve
 //! The hashed-callsign table is off (upstream's own `-H`), because it persisted

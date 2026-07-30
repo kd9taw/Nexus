@@ -18,10 +18,9 @@
 //! `interleave63`, `graycode65`, and `rs_encode` from Karn's `wrapkarn.c` — the same
 //! Reed-Solomon codec the decoder uses, so encode and decode share one RS layer.
 //!
-//! # DECODE-ONLY NOTE (historical)
-//! `ModeKind::Jt65` reports `Capabilities { tx: false }`, so `modes::tx_mode()`
-//! refuses to hand it to the transmit path. Adding TX means adding those entry
-//! points in the C ABI, flipping that flag, AND passing the FT-mode TX approval
+//! # TX since 0.20.0 (was decode-only)
+//! `ModeKind::Jt65` reports `Capabilities { tx: true }` and the `packjt`-based
+//! `encode` is wired. Any further TX change still passes the FT-mode approval
 //! gate.
 //!
 //! # ⭐ The legacy message layer

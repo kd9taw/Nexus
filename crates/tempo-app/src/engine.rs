@@ -4581,7 +4581,9 @@ impl Engine {
                 // MSG = FT1/DX1 free-text paradigm. Remember which structured
                 // tier we're leaving so a dx(FT4) → msg → dx round-trip returns
                 // to FT4 (it used to default back to FT8 — the tier was lost).
-                if !matches!(self.app.tier(), Tier::TempoFast | Tier::TempoDeep) {
+                // `is_chat()`, the exact mirror of the dx branch below — never a
+                // hand-kept tier list.
+                if !self.app.tier().is_chat() {
                     self.last_dx_tier = Some(self.app.tier());
                     self.set_tier(self.last_msg_tier.unwrap_or(Tier::TempoFast));
                 }
@@ -5296,26 +5298,39 @@ impl Engine {
         self.app.tier()
     }
 
-    /// Whether the operator's identity is sufficient to transmit a STANDARD (FT8/FT4)
-    /// message — a real callsign AND a valid Maidenhead grid, exactly what WSJT-X
-    /// requires to build a CQ/Tx1. The command layer calls this before entering a
-    /// keying FT8/FT4 mode (Call CQ / work a station) so the operator gets a concrete
-    /// reason instead of a grid-less call or a silently-suppressed over. FT1/DX1
-    /// free-text isn't grid-bound, so it returns `Ok`.
+    /// Whether the operator's identity is sufficient to transmit a STANDARD
+    /// structured message — a real callsign AND a valid Maidenhead grid, exactly
+    /// what WSJT-X requires to build a CQ/Tx1. The command layer calls this before
+    /// entering a keying mode (Call CQ / work a station) so the operator gets a
+    /// concrete reason instead of a grid-less call or a silently-suppressed over.
+    ///
+    /// The MODE PLUGIN decides whether it is identity-gated
+    /// (`Capabilities::structured_identity`), so a tier gains this gate the moment
+    /// it gains TX — the old `Ft8 | Ft4` allow-list failed OPEN for all six tiers
+    /// that gained TX later, and pack77's free-text fallback happily encoded a
+    /// blank-call `"CQ "`. Free-text tiers (TempoFast, and TempoDeep which has no
+    /// `ModeKind` at all) are exempt: their frames are not grid-bound.
     pub fn structured_tx_ready(&self, needs_grid: bool) -> Result<(), String> {
-        if !matches!(self.tier(), Tier::Ft8 | Tier::Ft4) {
+        let tier = self.tier();
+        let gated = self
+            .tier_mode_kind(tier)
+            .is_some_and(|k| modes::make_mode(k).capabilities().structured_identity);
+        if !gated {
             return Ok(());
         }
         if !tempo_core::message::is_callsign(&self.settings.mycall) {
-            return Err("Set your callsign in Settings before transmitting FT8/FT4.".into());
+            return Err(format!(
+                "Set your callsign in Settings before transmitting {}.",
+                tier.label()
+            ));
         }
         // CQ/QSO messages carry the grid (Tx1); Field Day exchanges ("3A IL") do NOT,
         // so only require a grid when the message actually sends one.
         if needs_grid && !tempo_core::message::is_valid_grid(&self.settings.mygrid) {
-            return Err(
-                "Set your Maidenhead grid (e.g. EN52) in Settings before transmitting FT8/FT4."
-                    .into(),
-            );
+            return Err(format!(
+                "Set your Maidenhead grid (e.g. EN52) in Settings before transmitting {}.",
+                tier.label()
+            ));
         }
         Ok(())
     }
@@ -7365,9 +7380,15 @@ impl Engine {
     fn split_reduce(&self, tx_hz: f32) -> (f32, i64) {
         use crate::settings::SplitMode;
         let t = tx_hz.round() as i64;
+        // The mode plugin declares whether Split Operation applies
+        // (`Capabilities::split_reduce`) — FT8/FT4 today, and a new mode makes the
+        // decision at declaration instead of silently falling out of a tier list.
+        let applies = self
+            .tier_mode_kind(self.app.tier())
+            .is_some_and(|k| modes::make_mode(k).capabilities().split_reduce);
         if self.settings.split_mode == SplitMode::None
             || self.split_tx_mhz.is_some()
-            || !matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4)
+            || !applies
             || (1500..=2000).contains(&t)
         {
             return (tx_hz, 0);
@@ -7866,10 +7887,13 @@ impl Engine {
     fn beacon_message(&self) -> Result<String, String> {
         let call = self.settings.mycall.trim();
         let grid = self.settings.mygrid.trim();
-        if call.is_empty() {
+        // The same validators as the QSO identity gate — PRESENCE is not IDENTITY.
+        // The old emptiness/length checks let "???" go out as a scheduled unattended
+        // beacon and get published to wsprnet under a call that does not exist.
+        if !tempo_core::message::is_callsign(call) {
             return Err("Set your callsign before beaconing".to_string());
         }
-        if grid.len() < 4 {
+        if !tempo_core::message::is_valid_grid(grid) {
             return Err("Set your 4-character grid before beaconing".to_string());
         }
         if self.settings.beacon_power_dbm <= 0 {
@@ -8031,14 +8055,15 @@ impl Engine {
         if matches!(self.mode, Mode::Chat) {
             self.send_pending_acks(slot);
         }
-        // Identity backstop for STANDARD (FT8/FT4) messages: never put a frame on the
-        // air without the callsign + grid those messages require. WSJT-X refuses to
-        // build a CQ/Tx1 without them; an empty/invalid grid here would otherwise emit a
-        // grid-less call (the reported bug). FT1/DX1 free-text isn't grid-bound, so it's
+        // Identity backstop for STANDARD structured messages: never put a frame on
+        // the air without the callsign + grid those messages require. WSJT-X refuses
+        // to build a CQ/Tx1 without them; an empty/invalid grid here would otherwise
+        // emit a grid-less call (the reported bug). The mode plugin decides which
+        // tiers are gated (`Capabilities::structured_identity` — every structured TX
+        // tier, not an Ft8|Ft4 list); FT1/DX1 free-text isn't grid-bound, so it's
         // exempt. This is the last line of defense — the command layer also blocks
-        // entering a keying FT8/FT4 mode without a valid identity (with a clear message).
-        // (structured_tx_ready returns Ok off the FT8/FT4 tier, so FT1/DX1 free-text is
-        // exempt; Field Day exchanges carry no grid, so only the callsign is required.)
+        // entering a keying mode without a valid identity (with a clear message).
+        // (Field Day exchanges carry no grid, so only the callsign is required.)
         let needs_grid = !matches!(self.mode, Mode::FieldDay { .. });
         if self.structured_tx_ready(needs_grid).is_err() {
             self.app.set_transmitting(false);
@@ -8606,11 +8631,12 @@ impl Engine {
     /// parity / history conventions match the boundary ingest exactly; the
     /// boundary pass then ingests only what this pass missed.
     pub fn ingest_early(&mut self, frame: &[f32], slot: u64) -> usize {
-        if self.source_kind != SourceKind::Native
-            || !matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4)
-        {
+        let early = self
+            .tier_mode_kind(self.app.tier())
+            .is_some_and(|k| modes::make_mode(k).capabilities().early_decode);
+        if self.source_kind != SourceKind::Native || !early {
             // Companion DRAINS a UDP queue (an early drain would steal the
-            // boundary's decodes); FT1/DX1 decode full frames only.
+            // boundary's decodes); modes without `early_decode` take full frames only.
             return 0;
         }
         let job = self.build_decode_job(frame.to_vec(), slot, DecodePass::Early);
@@ -8813,13 +8839,17 @@ impl Engine {
     /// (the standard sequencer then handles the whole hound exchange). Gated on
     /// Hound so normal operation (where free text may carry ';') is untouched.
     fn hound_split(&self, decodes: Vec<modes::Decode>) -> Vec<modes::Decode> {
+        let fox_capable = self
+            .tier_mode_kind(self.app.tier())
+            .is_some_and(|k| modes::make_mode(k).capabilities().fox_hound);
         if !matches!(
             self.settings.special_op,
             crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
-        ) || !matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4)
+        ) || !fox_capable
         {
-            // Fox multiplexing is an FT8 DXpedition construct — FT1/DX1 free
-            // text may legitimately contain ';' and must never be split.
+            // Fox multiplexing is an FT8 DXpedition construct — the mode declares
+            // `fox_hound` (FT8 only, matching WSJT-X). Free text may legitimately
+            // contain ';' and must never be split.
             return decodes;
         }
         // The Fox we're working (for reconstructing its implied sender below).
@@ -11198,6 +11228,100 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "", 0);
         e.set_tier(Tier::TempoFast);
         assert!(e.structured_tx_ready(true).is_ok(), "FT1 is not grid-bound");
+    }
+
+    #[test]
+    fn every_structured_tx_tier_refuses_a_blank_identity() {
+        // §97.119: no structured mode may key a standard message with a blank or
+        // invalid identity. The gate used to be an Ft8|Ft4 allow-list that failed
+        // OPEN for every tier that later gained TX — Call CQ on Q65/FST4/MSK144/
+        // JT65 keyed the rig with a blank mycall. The gate now asks the mode
+        // plugin (`Capabilities::structured_identity`), so it widens with TX by
+        // construction.
+        for tier in [
+            Tier::Ft8,
+            Tier::Ft4,
+            Tier::Q65,
+            Tier::Fst4,
+            Tier::Msk144,
+            Tier::Jt65,
+        ] {
+            let mut e = Engine::new("", "EN52", 0);
+            e.set_tier(tier);
+            assert!(
+                e.structured_tx_ready(true).is_err(),
+                "{tier:?}: a blank mycall must refuse structured TX"
+            );
+            e.set_mode("qso-run").unwrap(); // engine set_mode doesn't gate; arms TX
+            assert!(
+                e.poll_tx(0).is_empty() && e.poll_tx(1).is_empty(),
+                "{tier:?}: the slot backstop must not key with a blank mycall"
+            );
+
+            let mut e = Engine::new("W9XYZ", "", 0);
+            e.set_tier(tier);
+            assert!(
+                e.structured_tx_ready(true).is_err(),
+                "{tier:?}: a CQ carries the grid — a blank grid must refuse"
+            );
+
+            let mut e = Engine::new("W9XYZ", "EN52", 0);
+            e.set_tier(tier);
+            assert!(
+                e.structured_tx_ready(true).is_ok(),
+                "{tier:?}: a valid call+grid is ready"
+            );
+        }
+        // The free-text chat tiers carry no structured identity and stay exempt
+        // (TempoDeep has no ModeKind at all — absence of a kind is exemption, not
+        // refusal, per tier_is_rx_only's contract).
+        for tier in [Tier::TempoFast, Tier::TempoDeep] {
+            let mut e = Engine::new("", "", 0);
+            e.set_tier(tier);
+            assert!(
+                e.structured_tx_ready(true).is_ok(),
+                "{tier:?}: free text is exempt from the structured-identity gate"
+            );
+        }
+    }
+
+    #[test]
+    fn beacon_identity_must_be_real_not_merely_present() {
+        // WSPR/FST4W reports are published to wsprnet: presence is not identity.
+        // "???" passed the old emptiness check and went out as an unattended
+        // scheduled beacon under a call that does not exist.
+        let mut e = Engine::new("???", "EN52", 0);
+        {
+            let mut s = e.settings().clone();
+            s.beacon_power_dbm = 30;
+            e.apply_settings(s);
+        }
+        assert!(
+            e.beacon_message().is_err(),
+            "a non-callsign mycall must refuse to beacon"
+        );
+
+        let mut e = Engine::new("W9XYZ", "E9", 0);
+        {
+            let mut s = e.settings().clone();
+            s.beacon_power_dbm = 30;
+            e.apply_settings(s);
+        }
+        assert!(
+            e.beacon_message().is_err(),
+            "a non-grid must refuse to beacon"
+        );
+
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        {
+            let mut s = e.settings().clone();
+            s.beacon_power_dbm = 30;
+            e.apply_settings(s);
+        }
+        assert!(
+            e.beacon_message().is_ok(),
+            "a real identity with a declared power beacons"
+        );
     }
 
     #[test]

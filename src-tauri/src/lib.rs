@@ -3863,10 +3863,12 @@ fn get_spectrum_row(
 #[tauri::command]
 fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot, String> {
     let mut eng = state.lock().map_err(|e| e.to_string())?;
-    // Refuse to enter a keying FT8/FT4 mode without the identity its messages need, so
-    // the operator gets a clear reason instead of a silently-suppressed over. Calling
-    // CQ sends a grid (CQ/Tx1); a Field Day run sends an exchange with no grid (callsign
-    // only). qso-monitor / fieldday-sp are passive on entry (the backstop covers TX).
+    // Refuse to enter a keying structured mode without the identity its messages need,
+    // so the operator gets a clear reason instead of a silently-suppressed over. The
+    // mode plugin decides which tiers are gated (Capabilities::structured_identity —
+    // every structured TX tier, not just FT8/FT4). Calling CQ sends a grid (CQ/Tx1); a
+    // Field Day run sends an exchange with no grid (callsign only). qso-monitor /
+    // fieldday-sp are passive on entry (the backstop covers TX).
     match mode.as_str() {
         "qso-run" => eng.structured_tx_ready(true)?,
         "fieldday-run" => eng.structured_tx_ready(false)?,
@@ -6600,8 +6602,9 @@ fn call_station(
     freq: Option<f32>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = state.lock().map_err(|e| e.to_string())?;
-    // Working a station keys a standard FT8/FT4 message (your grid in Tx1) — refuse
-    // without a valid callsign + grid so we never emit a grid-less directed call.
+    // Working a station keys a standard structured message (your grid in Tx1) — refuse
+    // without a valid callsign + grid so we never emit a grid-less directed call. The
+    // mode plugin decides which tiers are gated (Capabilities::structured_identity).
     eng.structured_tx_ready(true)?;
     let g = grid.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let msg = message.as_deref().map(str::trim).filter(|s| !s.is_empty());

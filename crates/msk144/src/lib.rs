@@ -8,12 +8,11 @@
 //! This wraps `msk144_decode_frame` in `msk144_cabi.f90`, which drives the vendored
 //! WSJT-X `mskrtd` decoder.
 //!
-//! # DECODE ONLY — no encode, no gen_wave
-//! There is deliberately no `encode` or `gen_wave` here, and none in the C ABI.
-//! `ModeKind::Msk144` reports `Capabilities { tx: false }`, so `modes::tx_mode()`
-//! refuses to hand it to the transmit path. Adding TX means adding those entry
-//! points in the C ABI, flipping that flag, AND passing the FT-mode TX approval
-//! gate — three deliberate steps.
+//! # TX since 0.20.0 (was decode-only)
+//! `encode` is wired here and `ModeKind::Msk144` reports `Capabilities
+//! { tx: true }`. The three deliberate steps the old decode-only note demanded —
+//! C-ABI entry points, the capability flip, the FT-mode TX approval gate — all
+//! happened; any further TX change still passes that gate.
 //!
 //! # ⭐ A sliding-window decoder behind a frame-shaped API
 //! `mskrtd` analyses ONE 7168-sample block per call and is driven at half-block

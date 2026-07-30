@@ -300,7 +300,7 @@ impl ModeKind {
 
 /// Per-mode capability flags. Drives UI affordances and operating logic so the
 /// generic engine need not special-case mode names.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
     /// This mode can TRANSMIT.
     ///
@@ -332,6 +332,42 @@ pub struct Capabilities {
     pub beacon_only: bool,
     /// Has contest sub-modes / exchanges.
     pub contest: bool,
+    /// This mode's STANDARD messages embed the station identity — the callsign,
+    /// and for CQ/Tx1 the grid. TX must refuse to build one from a blank or
+    /// invalid identity: pack77's free-text fallback happily encodes `"CQ "`,
+    /// so without this gate the rig keys an unidentified transmission (§97.119).
+    ///
+    /// ⭐ `Default` sets this `true` — the FAIL-CLOSED direction, deliberately
+    /// opposite to every other flag here. The gate used to be an `Ft8 | Ft4`
+    /// allow-list in the engine, which failed OPEN for all six tiers that later
+    /// gained TX; a mode that forgets to declare must GET the gate, not escape
+    /// it. Free-text modes (FT1) opt out explicitly.
+    pub structured_identity: bool,
+    /// Runs the WSJT-X-style EARLY decode pass (decode the partial capture a few
+    /// seconds before the slot boundary). FT8/FT4 only today — the other
+    /// decoders take full frames.
+    pub early_decode: bool,
+    /// WSJT-X Split Operation applies: a TX audio offset outside 1500–2000 Hz
+    /// reduces into that window with a compensating dial shift.
+    pub split_reduce: bool,
+}
+
+impl Default for Capabilities {
+    fn default() -> Self {
+        Capabilities {
+            tx: false,
+            fox_hound: false,
+            ir_harq: false,
+            free_text: false,
+            beacon_only: false,
+            contest: false,
+            // The one deliberate `true`: identity-gating fails CLOSED — see the
+            // field doc. Everything else defaults to "can't", which is safe.
+            structured_identity: true,
+            early_decode: false,
+            split_reduce: false,
+        }
+    }
 }
 
 /// A weak-signal digital mode: the unit of pluggability for the whole app.
@@ -499,6 +535,9 @@ impl Mode for Ft8Mode {
             contest: true,
             // A QSO mode: it has an exchange to sequence.
             beacon_only: false,
+            structured_identity: true,
+            early_decode: true,
+            split_reduce: true,
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
@@ -597,6 +636,9 @@ impl Mode for Ft4Mode {
             contest: true,
             // A QSO mode: it has an exchange to sequence.
             beacon_only: false,
+            structured_identity: true,
+            early_decode: true,
+            split_reduce: true,
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
@@ -668,6 +710,11 @@ impl Mode for Ft1Mode {
             contest: true,
             // A QSO mode: it has an exchange to sequence.
             beacon_only: false,
+            // The one deliberate opt-OUT: TempoFast is a free-text chat mode —
+            // its frames are not grid-bound and carry no standard CQ/Tx1 shape.
+            structured_identity: false,
+            early_decode: false,
+            split_reduce: false,
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
@@ -1022,6 +1069,10 @@ impl Mode for Fst4Mode {
             // beacon carrying callsign/grid/power on a schedule. Both transmit; only
             // one has anything for the sequencer to do.
             beacon_only: self.wspr,
+            // Both shapes embed callsign+grid — identity-gated either way.
+            structured_identity: true,
+            early_decode: false,
+            split_reduce: false,
         }
     }
 
@@ -1130,6 +1181,9 @@ impl Mode for Q65Mode {
             // history that used to arrive through a file the headless build removed,
             // because that file let one chain's callers reach another.
             contest: false,
+            structured_identity: true,
+            early_decode: false,
+            split_reduce: false,
             // A QSO mode: it has an exchange to sequence.
             beacon_only: false,
         }
@@ -1232,6 +1286,9 @@ impl Mode for Msk144Mode {
             ir_harq: false,
             free_text: true,
             contest: false,
+            structured_identity: true,
+            early_decode: false,
+            split_reduce: false,
             // A QSO mode: it has an exchange to sequence. ⚠️ But a METEOR-SCATTER
             // one — the far end may hear a single 72 ms frame out of ~200 and a
             // contact can take many minutes of apparent silence. The sequencer's
@@ -1345,6 +1402,9 @@ impl Mode for Jt65Mode {
             contest: false,
             // A QSO mode: it has an exchange to sequence.
             beacon_only: false,
+            structured_identity: true,
+            early_decode: false,
+            split_reduce: false,
         }
     }
 
@@ -1425,6 +1485,10 @@ impl Mode for WsprMode {
             // A beacon keys unattended on a schedule. `beacon_only` keeps the QSO
             // sequencer away from it — see Capabilities::beacon_only.
             beacon_only: true,
+            // The payload IS the identity (published to wsprnet) — gated.
+            structured_identity: true,
+            early_decode: false,
+            split_reduce: false,
         }
     }
 
