@@ -38,8 +38,10 @@ use crate::engine::{
 /// [`StationCore::set_dxcc_resolver`]). A record with no BAND keys as "", which
 /// matches no live band and so never suppresses a need.
 fn band_key(band: &str) -> String {
-    let b = band.trim().to_ascii_lowercase();
-    b.strip_suffix("-fm").unwrap_or(&b).to_string()
+    // THE canonicaliser (bandplan::canonical_band), then lower-cased: the old
+    // hand-rolled strip here handled only "-fm", so a legacy "6m-2"/"2m-call"
+    // row keyed as its own phantom band and never suppressed a need.
+    crate::bandplan::canonical_band(band).to_ascii_lowercase()
 }
 
 /// The operator's station: one log, one identity of record, one set of outbound
@@ -930,6 +932,11 @@ impl StationCore {
             .enumerate()
             .filter(|(_, r)| !r.award_confirmed)
             .filter(|(_, r)| r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent()))
+            // LoTW matches on both operators' times agreeing (±30 min): a record
+            // with NO known time can never match, so signing and sending it just
+            // parks it at LoTW as unmatched forever — and, being re-sendable, it
+            // kept the "Upload to LoTW (N)" count from ever clearing.
+            .filter(|(_, r)| r.time_known)
             .map(|(i, _)| i)
             .collect()
     }
@@ -1058,6 +1065,13 @@ mod grid_tests {
             credit_submitted: Vec::new(),
             upload: Default::default(),
             ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
         }
     }
 

@@ -6878,6 +6878,13 @@ impl Engine {
             credit_submitted: Vec::new(),
             upload: Default::default(),
             ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
         }
     }
 
@@ -9306,6 +9313,13 @@ impl Engine {
             credit_submitted: Vec::new(),
             upload: Default::default(),
             ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
         }
     }
 
@@ -13089,6 +13103,13 @@ mod tests {
             credit_submitted: vec![],
             upload: Default::default(),
             ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
         });
         let pending = e.take_pending_uploads();
         assert_eq!(pending.len(), 1, "manual log_qso queues for upload");
@@ -13366,6 +13387,13 @@ mod tests {
             credit_submitted: vec![],
             upload: Default::default(),
             ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
         }
     }
 
@@ -13925,6 +13953,13 @@ mod tests {
             credit_submitted: vec![],
             upload: Default::default(),
             ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
         });
 
         // A CQ from a same-entity station in a NEW grid → new_grid, not new_dxcc.

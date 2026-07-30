@@ -342,6 +342,13 @@ mod tests {
             credit_submitted: Vec::new(),
             upload: Default::default(),
             ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
         }
     }
 

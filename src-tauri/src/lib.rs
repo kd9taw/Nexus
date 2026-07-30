@@ -9028,6 +9028,16 @@ async fn eqsl_push_qso(
 }
 
 fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<UploadReportDto, String> {
+    // eQSL matches on the two operators' times agreeing: a record with no known
+    // time of day can never match — sending it just parks it at eQSL unmatched
+    // forever. Refuse with the reason instead of fabricating a midnight.
+    if !record.time_known {
+        return Err(
+            "This imported QSO has no time of day — eQSL matches on time, so it \
+             can never confirm. Add the time to the record first."
+                .to_string(),
+        );
+    }
     let user = {
         let eng = engine.lock().map_err(|e| e.to_string())?;
         eng.settings().eqsl_username.trim().to_string()

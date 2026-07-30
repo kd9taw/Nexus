@@ -1016,6 +1016,13 @@ export interface LoggedQso {
   txPower?: number | null
   /** Contact time, seconds since the Unix epoch (UTC). */
   whenUnix: number
+  /**
+   * Whether the time of day is actually KNOWN. `false` for imported date-only
+   * records — whenUnix then anchors at midnight for ordering only, and
+   * LoTW/eQSL sends exclude the record (both services match on time).
+   * Optional: older payloads mean "known".
+   */
+  timeKnown?: boolean
   /** Confirmed via ANY channel (LoTW / eQSL / paper QSL). */
   confirmed: boolean
   /** Award-eligible confirmation (LoTW or paper only — eQSL excluded). */
