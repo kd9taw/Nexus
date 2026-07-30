@@ -54,19 +54,6 @@ export function strongestNeed(alerts: NeedAlert[] | null | undefined): NeedAlert
 }
 
 /**
- * Top need tag per UPPERCASE callsign, taken from each call's STRONGEST alert — the map the
- * roster, band strip and map colour their rows from.
- *
- * The strongest, not an arbitrary one. A call heard on several bands carries one alert per
- * band/mode, and the map this replaces was built by writing every alert into the same slot
- * with no guard, so the LAST one won; since the backend hands alerts out priority-descending
- * that was reliably the WEAKEST. A new entity on 20 m that also wanted a confirmation on
- * 40 m was therefore coloured as the confirmation.
- *
- * Calls whose every alert is tagless are omitted, so `has(call)` still means "something is
- * needed here".
- */
-/**
  * Group gated alerts per UPPERCASE callsign — THE one grouping every host
  * (docked App, pop-out DetachedPanel, any future surface) derives its
  * colour/badge maps from. The pop-out once re-rolled this by hand with the
@@ -101,6 +88,19 @@ export function activityTypeByCall(alerts: NeedAlert[]): Map<string, 'Pota' | 'S
   return m
 }
 
+/**
+ * Top need tag per UPPERCASE callsign, taken from each call's STRONGEST alert — the map the
+ * roster, band strip and map colour their rows from.
+ *
+ * The strongest, not an arbitrary one. A call heard on several bands carries one alert per
+ * band/mode, and the map this replaces was built by writing every alert into the same slot
+ * with no guard, so the LAST one won; since the backend hands alerts out priority-descending
+ * that was reliably the WEAKEST. A new entity on 20 m that also wanted a confirmation on
+ * 40 m was therefore coloured as the confirmation.
+ *
+ * Calls whose every alert is tagless are omitted, so `has(call)` still means "something is
+ * needed here".
+ */
 export function topNeedByCall(alertsByCall: Map<string, NeedAlert[]>): Map<string, NeedTag> {
   const m = new Map<string, NeedTag>()
   for (const [call, alerts] of alertsByCall) {

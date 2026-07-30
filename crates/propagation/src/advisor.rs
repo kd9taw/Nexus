@@ -598,6 +598,38 @@ mod tests {
 
     const NOW: i64 = 1_700_000_000;
 
+    #[test]
+    fn best_region_tie_is_deterministic_not_hashmap_order() {
+        // A 1-station tie across regions is the NORMAL quiet-band case, and the
+        // pick sets the reported region, the BEARING and the confidence word.
+        // Before the tiebreak, 2,000 fresh HashMaps returned a different winner
+        // per poll (measured: Af 762 / Eu 620 / Sa 618 — a coin flip). The
+        // canonical Region order must give the same answer on every build.
+        use std::collections::{HashMap, HashSet};
+        let mk = || {
+            let mut by_region: HashMap<Region, (HashSet<String>, HashSet<String>)> =
+                HashMap::new();
+            for r in [Region::Europe, Region::SouthAmerica, Region::Africa] {
+                by_region
+                    .entry(r)
+                    .or_default()
+                    .0
+                    .insert("K1JT".to_string());
+            }
+            by_region
+        };
+        let pts: HashMap<Region, (f64, f64, u32)> = HashMap::new();
+        let adv = PropAdvisor::new("KD9TAW", "EN52");
+        let first = adv.best_region(&mk(), &pts).map(|r| r.region);
+        for _ in 0..50 {
+            assert_eq!(
+                adv.best_region(&mk(), &pts).map(|r| r.region),
+                first,
+                "a tied best_region must not re-roll with HashMap order"
+            );
+        }
+    }
+
     fn path(tx: &str, txg: &str, rx: &str, rxg: &str, band: Band) -> PathSpot {
         PathSpot {
             time: NOW - 60,

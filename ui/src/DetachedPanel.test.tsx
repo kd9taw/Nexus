@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { DetachedPanel } from './DetachedPanel'
-import { selectPeer, workSpot, setFrequency } from './api'
+import { selectPeer, workSpot, setFrequency, getNeedAlerts } from './api'
 import { readEnabledModes } from './useFeatures'
 import type { NeedAlert } from './types'
 
@@ -10,10 +10,20 @@ import type { NeedAlert } from './types'
 // map, an empty-space click, re-clicking the selected dot, and the Selection pane's
 // ✕ all funnel through onSelectCall(null); this button stands in for that path.
 vi.mock('./components/ConnectView', () => ({
-  ConnectView: ({ onSelectCall }: { onSelectCall: (c: string | null) => void }) => (
-    <button data-testid="deselect" onClick={() => onSelectCall(null)}>
-      deselect
-    </button>
+  ConnectView: ({
+    onSelectCall,
+    needByCall,
+  }: {
+    onSelectCall: (c: string | null) => void
+    needByCall?: Map<string, string>
+  }) => (
+    <>
+      <button data-testid="deselect" onClick={() => onSelectCall(null)}>
+        deselect
+      </button>
+      {/* The colour the POP-OUT computed, surfaced so a test can see it. */}
+      <span data-testid="need-dl1abc">{needByCall?.get('DL1ABC') ?? '-'}</span>
+    </>
   ),
 }))
 
@@ -74,6 +84,27 @@ beforeEach(() => {
 // Unmount between cases — this project runs vitest without globals, so RTL's
 // auto-cleanup isn't registered; without it a second render duplicates testids.
 afterEach(() => cleanup())
+
+describe('DetachedPanel need colours match the docked window', () => {
+  // The stranded-fix regression, at the surface that had it: the pop-out built
+  // its own need map with the pre-fix last-wins loop, and the backend hands
+  // alerts out priority-DESCENDING, so a call that is a NEW ENTITY on 20 m and
+  // merely wants a confirmation on 40 m was painted the dim Confirm colour on
+  // the torn-off map while the docked window showed NewEntity. Asserting
+  // through the RENDERED pop-out is what makes this fail if the hand-rolled
+  // map ever comes back — a helper-only test cannot see it.
+  it('colours a multi-band call from its STRONGEST need', async () => {
+    const alerts = [
+      { call: 'DL1ABC', band: '20m', mode: 'Ft8', tags: ['NewEntity'], priority: 100 },
+      { call: 'DL1ABC', band: '40m', mode: 'Ft8', tags: ['Confirm'], priority: 10 },
+    ] as unknown as NeedAlert[]
+    vi.mocked(getNeedAlerts).mockResolvedValueOnce(alerts)
+    await act(async () => {
+      render(<DetachedPanel panel="connect" />)
+    })
+    expect(screen.getByTestId('need-dl1abc').textContent).toBe('NewEntity')
+  })
+})
 
 describe('DetachedPanel selection forwarding', () => {
   // Regression: the pop-out onSelect had an `if (call)` guard that silently swallowed

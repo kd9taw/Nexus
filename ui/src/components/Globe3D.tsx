@@ -660,11 +660,11 @@ export default function Globe3D({
     // operator's "heat missing on 3D" report).
     {
       const openBands = new Set((prop?.openings ?? []).map((o) => o.band))
-      // LIVE time, NOT nowMs — the exact value the 2-D map's comment warns
-      // against: the 60 s tick landed the sine on an arbitrary level once a
-      // minute, so an OPEN band could render dimmer than a closed one for a
-      // full minute. `pulseTick` (gated 1 s, below) forces the redraws.
-      const pulse = heatPulse(Date.now())
+      // Colours are baked at the STEADY level; the breath rides the material
+      // opacity in the 1 s animation effect below (see `pulseTick`). Rebuilding
+      // this whole cloud once a second — hundreds of spots, new typed arrays —
+      // is what the narrow effect avoids.
+      const pulse = 1
       syncCloud(
         g,
         store,
@@ -687,7 +687,28 @@ export default function Globe3D({
         glowSprite(),
       )
     }
-  }, [ready, nowMs, pulseTick, xrayLong, show.flare, show.aurora, show.muf, show.pca, show.heat, auroraPts, muf, pca, spots])
+  }, [ready, nowMs, xrayLong, show.flare, show.aurora, show.muf, show.pca, show.heat, auroraPts, muf, pca, spots])
+
+  // THE BREATH — the only per-second work: two material writes, no geometry,
+  // no rebuild. The heat cloud dims/brightens and the opening wedges pulse,
+  // exactly like the 2-D map's, while the heavy overlay effects above stay on
+  // their own (60 s / data-driven) cadences.
+  useEffect(() => {
+    if (!ready) return
+    const now = Date.now()
+    const heat = cloudsRef.current['heat']
+    if (heat) {
+      ;(heat.material as THREE.PointsMaterial).opacity = 0.9 * heatPulse(now)
+    }
+    const sector = sectorPulse(now)
+    for (const [key, grp] of Object.entries(linesRef.current)) {
+      if (!key.startsWith('openings-')) continue
+      grp.traverse((o) => {
+        const m = (o as THREE.Line).material as THREE.LineBasicMaterial | undefined
+        if (m && 'opacity' in m) m.opacity = sector
+      })
+    }
+  }, [ready, pulseTick])
 
   // Self-fetch satellites while the layer is on (~30 s, like the 2-D map).
   useEffect(() => {
@@ -896,10 +917,10 @@ export default function Globe3D({
         `openings-${mode}`,
         lines,
         openingModeColor(mode),
-        // Breathing, like the 2-D map's wedges — the parity contract this file
-        // states for labels applies to the pulse too (a static 0.9 read as
-        // stale data next to the docked map).
-        sectorPulse(Date.now()),
+        // Steady level at build time; the 1 s animation effect above breathes
+        // it (the 2-D map's wedges pulse, and the parity contract this file
+        // states for labels applies to the pulse too).
+        0.9,
         show.openings && lines.length > 0,
         // Above EVERY fill (see SECTOR_OUTLINE_ALT): the outline used to sit at exactly the
         // fills' 0.006, so each wedge's border was coplanar with its own cap.
@@ -937,7 +958,7 @@ export default function Globe3D({
       4,
       show.coverage,
     )
-  }, [ready, nowMs, pulseTick, qth, show.rings, show.cqzones, show.coverage, show.greyline, show.openings, cqzones, workedGrids, prop])
+  }, [ready, nowMs, qth, show.rings, show.cqzones, show.coverage, show.greyline, show.openings, cqzones, workedGrids, prop])
 
   // My decodes + DXpeditions as distinct point clouds.
   useEffect(() => {

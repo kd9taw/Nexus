@@ -53,9 +53,10 @@ scanned — only the test tree was) surfaced a known out-of-bounds read in the n
 loader the AI CW decoder ships with, plus two denial-of-service advisories in an XML parser.
 All three are gone: the decoder moved to the patched inference library (also ending a
 situation where the tested decoder version differed from the shipped one), and the XML
-parser was shed entirely. CI now scans the shipped dependency set, runs the 38 propagation
-tests that previously ran nowhere — including the ones that prove connector credentials
-never travel unencrypted — and keeps the two dependency trees aligned.
+parser was replaced by its patched line. CI now scans the shipped dependency set, runs the
+38 propagation tests that previously ran nowhere — including the ones that prove connector
+credentials never travel unencrypted — and keeps the two dependency trees aligned. Building
+Nexus from source now needs Rust 1.91 (the patched inference library's own minimum).
 
 
 ### Fixed: the Call Roster and Band Activity filters reset on every restart

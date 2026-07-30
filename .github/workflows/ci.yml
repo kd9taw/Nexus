@@ -13,7 +13,9 @@
 # toolchain: 1.93.1) instead of floating @stable. A floating stable silently rolls
 # rustfmt/clippy forward and reformats/re-lints the whole tree the day a new Rust
 # ships — which is exactly what bit this repo. Bump the version below deliberately
-# to adopt newer lints. The MSRV job intentionally stays pinned at 1.87.0.
+# to adopt newer lints. The MSRV job intentionally stays pinned at 1.91.0
+# (raised from 1.87 when the RUSTSEC-2026-0217 fix moved deepcw to tract 0.23,
+# whose own rust-version is 1.91 — a security bump outranks MSRV stability).
 
 name: CI
 
@@ -196,10 +198,10 @@ jobs:
         run: bash scripts/check-no-demo.sh
 
   # Job 3 — MSRV: the workspace must compile on the pinned minimum toolchain
-  # (Cargo.toml [workspace.package] rust-version = "1.87"). Build-only check,
+  # (Cargo.toml [workspace.package] rust-version = "1.91"). Build-only check,
   # incl. the propagation `live` feature (the heaviest dep set).
   msrv:
-    name: MSRV (1.87) check
+    name: MSRV (1.91) check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -211,8 +213,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gfortran libfftw3-dev libboost-dev cmake ninja-build pkg-config
 
-      - name: Set up Rust 1.87 toolchain
-        uses: dtolnay/rust-toolchain@1.87.0
+      - name: Set up Rust 1.91 toolchain
+        uses: dtolnay/rust-toolchain@1.91.0
 
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v6
@@ -269,30 +271,37 @@ jobs:
         run: |
           python3 - <<'PY'
           import re, sys
-          # time family: workspace capped `<0.3.42` (a pinned dependent), while
-          # src-tauri's plist 1.9 requires `^0.3.47` — neither side can move.
-          KNOWN_BLOCKED = {"time", "time-core", "time-macros"}
+          # Pairs wedged on BOTH sides by hard requirements go here, each with
+          # the blocking requirement named. (The time family lived here until
+          # the tract 0.23 bump dropped time from the workspace tree entirely.)
+          KNOWN_BLOCKED = set()
           def pins(path):
-              t = open(path).read()
-              return dict(re.findall(r'name = "([^"]+)"\nversion = "([^"]+)"', t))
-          def compat(v):
+              d = {}
+              for n, v in re.findall(r'name = "([^"]+)"\nversion = "([^"]+)"', open(path).read()):
+                  d.setdefault(n, []).append(v)
+              return d
+          def ck(v):
               p = v.split('+')[0].split('.')
               return (p[0], p[1]) if p[0] == '0' else (p[0],)
           ws, st = pins('Cargo.lock'), pins('src-tauri/Cargo.lock')
-          diff = {n: (ws[n], st[n]) for n in ws.keys() & st.keys() if ws[n] != st[n]}
           bad = []
-          for n, (a, b) in sorted(diff.items()):
-              if compat(a) != compat(b):
-                  print(f"info: incompatible majors (cannot align) {n}: {a} vs {b}")
-              elif n in KNOWN_BLOCKED:
-                  print(f"info: known-blocked {n}: {a} vs {b}")
-              else:
-                  bad.append((n, a, b))
-          for n, a, b in bad:
-              print(f"DIVERGED {n}: workspace {a} vs src-tauri {b}")
+          for n in sorted(ws.keys() & st.keys()):
+              # A name can appear at SEVERAL majors in one lockfile (src-tauri
+              # holds reqwest 0.12 AND 0.13); compare per semver-compat range,
+              # where cargo guarantees a single resolved version per side.
+              a = {ck(v): v for v in ws[n]}
+              b = {ck(v): v for v in st[n]}
+              for key in sorted(a.keys() & b.keys()):
+                  if a[key] != b[key]:
+                      if n in KNOWN_BLOCKED:
+                          print(f"info: known-blocked {n}: {a[key]} vs {b[key]}")
+                      else:
+                          bad.append((n, a[key], b[key]))
+          for n, x, y in bad:
+              print(f"DIVERGED {n}: workspace {x} vs src-tauri {y}")
           if bad:
               print(f"{len(bad)} alignable shared dependencies resolve differently — "
-                    "`cargo update -p <name> --precise <ver>` one side into line "
+                    "`cargo update -p <name>@<ver> --precise <ver>` one side into line "
                     "(or add to KNOWN_BLOCKED with the blocking requirement named).")
               sys.exit(1)
           print("lockfiles agree on all alignable shared dependencies")

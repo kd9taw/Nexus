@@ -761,7 +761,13 @@ pub struct Engine {
     pending_cw_id: bool,
     /// JTAlert-style callsign highlights from UDP HighlightCallsign (type 13):
     /// uppercased call → (bg, fg) CSS hex. None/None entries are removed.
-    highlights: std::collections::HashMap<String, (Option<String>, Option<String>)>,
+    /// Value = (insertion sequence, bg, fg). The sequence exists so the
+    /// at-cap eviction is OLDEST-FIRST: evicting `.keys().min()` was
+    /// deterministic but age-blind and lexicographically biased — digit-prefixed
+    /// DX calls (2E0, 9M, 5B…) sort below letters and were always the victims.
+    highlights: std::collections::HashMap<String, (u64, Option<String>, Option<String>)>,
+    /// Monotonic insertion counter for the highlight FIFO above.
+    highlight_seq: u64,
     /// Bumped by an inbound UDP Clear (type 3) — the UI watches it and erases
     /// the matching pane(s). Visual-only: the engine's decode context (answer
     /// parity, history) is NOT a window and stays intact.
@@ -1957,6 +1963,7 @@ impl Engine {
             pending_tx_disable: false,
             pending_cw_id: false,
             highlights: std::collections::HashMap::new(),
+            highlight_seq: 0,
             clear_tick: 0,
             pending_udp_clear: None,
             cq_dir: None,
@@ -6041,8 +6048,13 @@ impl Engine {
                 .iter()
                 // Timestamps are 1-second resolution, so same-second ties are the
                 // NORMAL case — break on the callsign so which station vanishes
-                // is stable, not HashMap order.
-                .min_by_key(|(k, st)| (st.last_heard_unix, (*k).clone()))
+                // is stable, not HashMap order. min_by (borrowing comparator),
+                // not min_by_key: a tuple key would clone every callsign per scan.
+                .min_by(|(ka, sa), (kb, sb)| {
+                    sa.last_heard_unix
+                        .cmp(&sb.last_heard_unix)
+                        .then_with(|| ka.cmp(kb))
+                })
                 .map(|(k, _)| k.clone())
             else {
                 break;
@@ -6090,7 +6102,14 @@ impl Engine {
             .filter(|st| st.last_heard_unix >= cutoff)
             .cloned()
             .collect();
-        stations.sort_by(|a, b| b.last_heard_unix.cmp(&a.last_heard_unix));
+        // Same-second ties are the NORMAL case (1 s timestamps — see the
+        // eviction above): without a final tiebreak the stable sort preserved
+        // HashMap order and the rendered roster reshuffled between polls.
+        stations.sort_by(|a, b| {
+            b.last_heard_unix
+                .cmp(&a.last_heard_unix)
+                .then_with(|| a.call.cmp(&b.call))
+        });
         AprsStationsView {
             stations,
             ttl_min,
@@ -7278,16 +7297,24 @@ impl Engine {
         } else {
             // Bounded: a chatty logger can paint thousands of calls over a
             // session, and the whole map rides every snapshot poll. Evict an
-            // entry past the cap (newest paint wins). Deterministic victim —
-            // first in callsign order — not `.keys().next()`'s arbitrary
-            // HashMap entry, so which highlight disappears is stable.
+            // entry past the cap (newest paint wins). Deterministic AND
+            // age-honest: evict the OLDEST insertion (callsign as the final
+            // tiebreak), never an arbitrary HashMap entry and never the
+            // lexicographic minimum — that one systematically blacked out
+            // digit-prefixed DX calls, which sort below every letter.
             const MAX_HIGHLIGHTS: usize = 2048;
             if self.highlights.len() >= MAX_HIGHLIGHTS && !self.highlights.contains_key(&k) {
-                if let Some(old) = self.highlights.keys().min().cloned() {
+                let victim = self
+                    .highlights
+                    .iter()
+                    .min_by(|(ka, va), (kb, vb)| va.0.cmp(&vb.0).then_with(|| ka.cmp(kb)))
+                    .map(|(k, _)| k.clone());
+                if let Some(old) = victim {
                     self.highlights.remove(&old);
                 }
             }
-            self.highlights.insert(k, (bg, fg));
+            self.highlight_seq = self.highlight_seq.wrapping_add(1);
+            self.highlights.insert(k, (self.highlight_seq, bg, fg));
         }
     }
 
@@ -7843,7 +7870,7 @@ impl Engine {
         s.highlights = self
             .highlights
             .iter()
-            .map(|(call, (bg, fg))| crate::dto::HighlightEntry {
+            .map(|(call, (_, bg, fg))| crate::dto::HighlightEntry {
                 call: call.clone(),
                 bg: bg.clone(),
                 fg: fg.clone(),
@@ -11102,6 +11129,9 @@ mod tests {
     }
 
     #[test]
+    // The counter only exists in debug builds; without this gate a
+    // `cargo test --release` fails to COMPILE the whole lib-test target.
+    #[cfg(debug_assertions)]
     fn snapshot_performs_a_bounded_number_of_logbook_sweeps() {
         // The stranded-fix class, pinned as a SHAPE: worked_call_set() exists so
         // snapshot() sweeps the log once, yet a per-decode-row worked_before()

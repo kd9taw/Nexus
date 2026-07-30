@@ -40,7 +40,7 @@ import cqzonesUrl from '../data/cqzones.geojson?url'
 import { satChasingSet, toggleSatChasing } from '../features/satChase'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { gridToLatLon, haversineKm, bearingDeg, magneticDeg, type LatLon } from '../grid'
-import { heatPulse, sectorPulse } from '../features/pulse'
+import { heatBoost, sectorPulse } from '../features/pulse'
 import { openingModeColor } from '../bandColors'
 import {
   APRS_HOME_ZOOM,
@@ -1518,14 +1518,14 @@ export function MapView({
         octx.globalCompositeOperation = 'lighter'
         const openBands = new Set((prop?.openings ?? []).map((o) => o.band))
         // Live time, NOT nowMs (the 60 s greyline tick — it froze the sine). The
-        // 1 s pulseTick effect forces the redraws that make this animate. Shared
-        // with the 3-D globe (features/pulse.ts) so 2D↔3D parity is structural.
-        const pulse = heatPulse(Date.now())
+        // 1 s pulseTick effect forces the redraws that make this animate. The
+        // math is shared with the 3-D globe (features/pulse.ts: heatBoost, used
+        // per spot below) so 2D↔3D parity is structural.
         for (const { sp, xy } of placedSpots) {
           if (focusBand && sp.band !== focusBand) continue
           const ageMin = sp.ageSecs / 60
           const fade = ageMin < 10 ? 1 : ageMin < 30 ? 0.55 : 0.25
-          const boost = openBands.has(sp.band) ? pulse : 0.55
+          const boost = heatBoost(openBands.has(sp.band), Date.now())
           const r = (sp.heardMe ? 46 : 34) / 3
           const x = xy[0] / 3
           const y = xy[1] / 3

@@ -36,8 +36,16 @@ fi
 
 # --- Stylesheet: the banner's styling must not ship either — pre-positioned
 # CSS means a later <div className="demo-banner"> renders fully styled, and
-# this gate's header promises the BUILT bundle is fingerprint-free. ---
-if grep -rnE "demo-banner" ui/src/styles.css ui/dist/assets/*.css 2>/dev/null; then
+# this gate's header promises the BUILT bundle is fingerprint-free.
+# Existence-filtered operands: grep exits 2 on an unopenable path EVEN IF
+# another operand matched, so a literal unexpanded ui/dist glob silently
+# passed the gate. ---
+css_files="ui/src/styles.css"
+for f in ui/dist/assets/*.css; do
+  [ -e "$f" ] && css_files="$css_files $f"
+done
+# shellcheck disable=SC2086
+if grep -rnE "demo-banner" $css_files; then
   report "demo-banner styling present in the stylesheet"
 fi
 

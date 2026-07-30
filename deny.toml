@@ -16,25 +16,29 @@ ignore = [
     # gtk 0.18) — every tauri v2 app carries these ten; the fix is upstream tauri
     # moving to gtk4/verso. Ships only in the Pi/Linux builds (the Windows build
     # never compiles them). Revisit on a tauri major.
-    "RUSTSEC-2024-0411", # atk
-    "RUSTSEC-2024-0412", # atk-sys
-    "RUSTSEC-2024-0413", # gtk-rs gtk3
-    "RUSTSEC-2024-0414", # gdk
-    "RUSTSEC-2024-0415", # gdk-sys
-    "RUSTSEC-2024-0416", # gdkwayland-sys
+    "RUSTSEC-2024-0411", # gdkwayland-sys
+    "RUSTSEC-2024-0412", # gdk
+    "RUSTSEC-2024-0413", # atk
+    "RUSTSEC-2024-0414", # gdkx11-sys
+    "RUSTSEC-2024-0415", # gtk
+    "RUSTSEC-2024-0416", # atk-sys
     "RUSTSEC-2024-0417", # gdkx11
-    "RUSTSEC-2024-0418", # gdkx11-sys
-    "RUSTSEC-2024-0419", # gtk-sys
-    "RUSTSEC-2024-0420", # gtk3-macros
+    "RUSTSEC-2024-0418", # gdk-sys
+    "RUSTSEC-2024-0419", # gtk3-macros
+    "RUSTSEC-2024-0420", # gtk-sys
+    # glib 0.18 UNSOUND advisory (VariantStrIter UB) — same archived gtk-rs
+    # family. cargo-deny v2 does not surface unsound-class advisories, so this
+    # entry is the pre-adjudication: known, Linux/Pi-only, upstream-blocked.
+    "RUSTSEC-2024-0429", # glib
     # proc-macro-error: archived; compile-time only, in the same gtk3 macro chain.
     "RUSTSEC-2024-0370",
     # unic-* family: archived; Unicode TABLE data used by urlpattern → tauri-utils
     # at config/build time. No untrusted input path; goes when tauri-utils does.
-    "RUSTSEC-2025-0075", # unic-char-property
-    "RUSTSEC-2025-0080", # unic-char-range
-    "RUSTSEC-2025-0081", # unic-common
-    "RUSTSEC-2025-0098", # unic-ucd-ident
-    "RUSTSEC-2025-0100", # unic-ucd-version
+    "RUSTSEC-2025-0075", # unic-char-range
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
 ]
 
 [licenses]
