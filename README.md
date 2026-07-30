@@ -251,7 +251,7 @@ spot goes to and which one an APRS tune goes to.
 | **WSJT-X UDP protocol** | Full outbound Decode / Status / QsoLogged / Heartbeat + inbound HaltTx, Clear, Replay, Location, Highlight — JTAlert and GridTracker see a WSJT-X |
 | **CAT broker** | Nexus serves a rigctld-compatible TCP port so WSJT-X, N1MM+, and loggers share the radio through it |
 | **Companion mode** | Ride an upstream WSJT-X / JTDX / MSHV decode stream over UDP instead of owning the rig |
-| **N1MM+** | Native `<contactinfo>` UDP broadcast. **Broadcast every QSO** sends each logged contact, event or not, from every mode — point OpenHamClock or GridTracker at the address and contacts plot as you log them. Off until you switch it on |
+| **N1MM+** | Native `<contactinfo>` UDP broadcast. **Broadcast every QSO** sends each logged contact, event or not, from every mode. Point OpenHamClock or GridTracker at the address and contacts plot as you log them. Off until you switch it on |
 | **N3FJP** | Real-time Field Day and everyday ACLog QSO push over the official TCP API, with a connection Test button |
 | **APRS-IS** | Read-only network feed with a radius and watched callsigns, plus an optional receive-only iGate that contributes only what your antenna heard |
 | **DXKeeper (DXLab)** | Each logged QSO pushed to DXKeeper's TCP Network Service |
@@ -348,7 +348,7 @@ the full design.
 ```bash
 git clone https://github.com/kd9taw/Nexus.git nexus
 cd nexus
-cargo test --workspace                  # Rust core — NOTE: excludes src-tauri
+cargo test --workspace                  # Rust core (NOTE: this excludes src-tauri)
 cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio
 cd ui && npm install && npm test        # UI suites (vitest)
 # Windows installer, cross-compiled from Linux/WSL2:
