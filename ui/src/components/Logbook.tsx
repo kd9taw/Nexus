@@ -537,12 +537,14 @@ export function Logbook({
         ?? (existing ? existing.whenUnix : Math.floor(Date.now() / 1000)),
       confirmed: existing ? existing.confirmed : false,
       awardConfirmed: existing ? existing.awardConfirmed : false,
-      // Editing a QSO that was already sent to LoTW/QRZ/eQSL/ClubLog: the SERVICES still hold
-      // the old values, so keeping the "uploaded" stamps would leave Nexus silently disagreeing
-      // with them forever. Clearing the stamps re-queues it, so the corrected QSO actually
-      // reaches the services. (An edit that changes nothing they hold still re-sends — harmless,
-      // and far better than a permanent silent divergence.)
-      upload: editIndex !== null ? undefined : existing?.upload,
+      // Upload/confirmation policy lives in the BACKEND (Logbook::update_record),
+      // which this payload cannot override: a CALLSIGN correction clears the
+      // upload stamps (the corrected QSO re-queues to every service) and strips
+      // confirmations matched on the busted call; every other edit preserves
+      // them. The `upload: undefined` this line used to carry was triple-dead —
+      // dropped by JSON.stringify, refilled by serde's default, and overwritten
+      // from the stored record anyway.
+      upload: existing?.upload,
     }
     if (editIndex !== null) {
       const idx = editIndex
