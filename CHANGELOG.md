@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: Tempo QSOs no longer lose their protocol identity when the app restarts
+
+A TempoFast or TempoDeep contact rides in ADIF as MFSK plus a submode (that is what TQSL and
+the services accept), but the importer read only the MODE field — so the app's own log re-read
+every Tempo QSO as plain "MFSK" at launch, and the next save wrote that loss to disk
+permanently. The importer now reads the identity fields the exporter writes, and a WSJT-X log's
+FT4/Q65/FST4 rows (which ride the same MFSK-plus-submode shape) import as their real modes too.
+No Tempo QSOs exist in any log yet, so this lands before the first one does.
+
+### Fixed: logging from a named channel mis-filed the QSO's band forever
+
+Working a contact from a suffixed band-plan channel (the 2 m FM simplex data channel, the 6 m
+second channel, the DX/EU windows) stored the channel id — "2m-fm", "6m-2" — as the QSO's band,
+pushed that exact string to QRZ and eQSL, earned no DXCC/VUCC/WAS credit, and could never be
+confirmed. The channel id is now translated to the real band the moment it enters the app, so
+the log, the uploads, the awards engine and the Needed board all see the same "2m". Your log has
+no affected rows, so nothing needs repair.
+
+### Fixed: imported contacts claiming midnight could never confirm at LoTW or eQSL
+
+Contacts imported without a time of day used to become 00:00:00 — and were then uploaded
+asserting that midnight as fact. LoTW and eQSL match on the two operators' times agreeing, so
+those contacts sat unmatched forever while the "Upload to LoTW" count never went down. The app
+now remembers that a time is unknown, never writes an invented one, accepts the 4-digit HHMM
+time form other loggers use, and leaves time-less contacts out of upload batches — the button's
+tooltip says how many and why. A contact genuinely made at 00:00:00 still counts as timed.
+
+### Fixed: correcting a busted callsign now actually reaches LoTW and the other services
+
+Fixing a mis-copied call used to change it only inside Nexus: the record still counted as
+"already uploaded", so the correction never went out, the QSO could never confirm — and any
+confirmation that had matched the WRONG call stayed attached to the corrected contact. A
+callsign correction now clears the upload record (the QSO re-queues to every service under the
+right call) and removes confirmations and credit earned under the wrong one. Ordinary edits —
+band, grid, name — keep everything, as before. Note that LoTW itself still holds the record
+uploaded under the old call; nothing an upload can send retracts it.
+
+### Fixed: the NEW ONE badge cried wolf on entire countries, and the two DXCC counts disagreed
+
+The awards engine identifies a DXCC entity from the callsign; the log screens compared the
+free-text country name, which QRZ spells its own way — "Germany" can never match the
+"Fed. Rep. of Germany" already in your log, so every German and Russian contact showed NEW ONE
+forever, and Statistics and Awards counted entities differently. Every comparison now uses the
+callsign-resolved entity; the country text is display only. Your log carries both spelling
+families today, so you should see both numbers agree for the first time.
+
+### Fixed: loading a saved config profile could silently remove your RF power ceiling
+
+A profile saved before a given setting existed used to load with that setting reset to its
+default — and for the per-mode power caps the default is "no cap", so loading a three-week-old
+profile quietly re-armed full power at FT8's 100% duty cycle. Loading is now a merge: anything
+the profile doesn't carry keeps its current value, and your callsign, license class, radio
+roster and sync history never come from a profile at all. Saving a profile now snapshots the
+last-saved settings rather than a half-edited form.
+
+### Fixed: importing a master log from another logger silently threw fields away
+
+The importer kept only the fields Nexus models and discarded the rest — contest exchanges, QSL
+dates, COUNTY, and the satellite fields LoTW requires for satellite credit were gone from the
+moment of import, while the manual claimed a full round-trip. Every field now survives import
+and export verbatim, and the award-relevant ones (numeric DXCC entity, PROP_MODE/SAT_NAME,
+OPERATOR, STATION_CALLSIGN) are first-class. Upload bookkeeping also stopped re-reading the
+whole log file before every stamp, which matters on a multi-megabyte log.
+
 ### Fixed: the Call Roster and Band Activity filters reset on every restart
 
 "Needed only" and "Hide worked" on the Operate Call Roster, and the Band Activity filter chip
