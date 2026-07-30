@@ -715,7 +715,13 @@ export default function App() {
   const needByCall = useMemo(() => {
     const m = new Map<string, NeedTag>()
     for (const a of visibleAlerts) {
-      if (a.tags.length > 0) m.set(a.call.toUpperCase(), a.tags[0])
+      const k = a.call.toUpperCase()
+      // FIRST wins: the backend returns alerts priority-descending, so without this
+      // guard the LAST (lowest-priority) alert for a call overwrote the highest — a
+      // bare "new mode" could displace an ATNO as the row's colour and aria label.
+      // typeByCall below has always had this guard; this map was missing it.
+      if (m.has(k)) continue
+      if (a.tags.length > 0) m.set(k, a.tags[0])
     }
     return m
   }, [visibleAlerts])
@@ -1878,6 +1884,8 @@ export default function App() {
       unreadByPeer={unreadByPeer}
       needByCall={needByCall}
       needAlertsByCall={needAlertsByCall}
+      band={snap.radio.band}
+      feedMode={tier}
       onSelect={handleSelect}
       onCall={handleWorkStation}
       conversations={snap.conversations}
@@ -1896,6 +1904,8 @@ export default function App() {
       unreadByPeer={unreadByPeer}
       needByCall={needByCall}
       needAlertsByCall={needAlertsByCall}
+      band={snap.radio.band}
+      feedMode={tier}
       onSelect={handleSelect}
       onCall={handleWorkStation}
       conversations={snap.conversations}

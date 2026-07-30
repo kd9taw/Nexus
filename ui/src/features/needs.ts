@@ -3,7 +3,7 @@
 // frequency); these gate them by the operator's enabled modes and resolve a click into
 // a concrete QSY + cockpit target.
 
-import type { BandChannel, NeedAlert } from '../types'
+import type { BandChannel, NeedAlert, NeedTag } from '../types'
 
 /** Which need rows are visible given the enabled operating-mode features. Digital needs
  * always show; CW/Phone needs only when that mode is enabled — so a pure-digital op's
@@ -44,6 +44,57 @@ export function modeClassOf(mode: string | null | undefined): 'CW' | 'Phone' | '
   if (m === 'SSB' || m === 'USB' || m === 'LSB' || m === 'FM' || m === 'AM' || m === 'PHONE')
     return 'Phone'
   return 'Digital'
+}
+
+/** Band labels compare case- and whitespace-insensitively. A real logbook carries both
+ * `30m` and `30M` (the operator's audited log has 699 of one and 212 of the other), and a
+ * spot's label is canonicalised by the backend while the radio's comes from settings — a
+ * raw `===` between the two silently drops every need on the band. */
+export function sameBand(a: string | null | undefined, b: string | null | undefined): boolean {
+  return (a ?? '').trim().toUpperCase() === (b ?? '').trim().toUpperCase()
+}
+
+/** Need tags that survive on ANY band, because the predicate behind them carries no band:
+ * an all-time-new entity is new everywhere; a DXpedition/POTA/SOTA/wanted flag is a
+ * property of the station. `NewMode` belongs here too — the backend keys `worked_mode` as
+ * (entity, mode-class) with no band, so a mode need is closable on whatever band you hear
+ * the station on. Everything else (NewBand, and NewZone/NewGrid/NewState for 5BWAZ/VUCC/
+ * 5BWAS, plus Confirm from the per-band `confirmed_band` set) is a per-band claim and must
+ * match the band in front of the operator. */
+const BAND_AGNOSTIC_TAGS: ReadonlySet<NeedTag> = new Set<NeedTag>([
+  'NewEntity',
+  'NewMode',
+  'Dxped',
+  'Pota',
+  'Sota',
+  'Wanted',
+])
+
+/** Need tags that are additionally MODE-specific: a CW-only "new mode", or an
+ * unconfirmed contact, cannot be closed from a digital surface. NewBand is deliberately
+ * absent — a band slot closes in any mode. */
+const MODE_GATED_TAGS: ReadonlySet<NeedTag> = new Set<NeedTag>(['NewMode', 'Confirm'])
+
+/**
+ * The need tags an alert may legitimately claim on a surface showing stations heard on
+ * `band` in `feedMode`. This is the gate the call-keyed need maps were missing.
+ *
+ * Field report 2026-07-29: the Needed system flagged a "new mode on 30m" for Asiatic
+ * Russia against an operator with six 30m FT8 contacts there. The backend need was
+ * genuine — they have never worked that entity on CW — but the roster/station-list chips
+ * are keyed by CALLSIGN alone and unioned every alert's tags with no band or mode filter,
+ * so a CW alert painted an unqualified MODE chip onto a 30m FT8 screen. Both sides go
+ * through `modeClassOf` because the backend sends the specific submode (`FT8`/`FT4`/
+ * `RTTY`) as a display label while a feed describes itself by class (`Digital`) — a raw
+ * `===` between those two is never true, which dropped real pills on the decode feed.
+ */
+export function tagsForSurface(alert: NeedAlert, band: string, feedMode: string): NeedTag[] {
+  const sameModeClass = modeClassOf(alert.mode) === modeClassOf(feedMode)
+  const sameBandLabel = sameBand(alert.band, band)
+  return alert.tags.filter((t) => {
+    if (MODE_GATED_TAGS.has(t) && !sameModeClass) return false
+    return BAND_AGNOSTIC_TAGS.has(t) || sameBandLabel
+  })
 }
 
 /** Resolve ANY need (CW / Phone / Digital) into a work target — N1MM-style: a single click

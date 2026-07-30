@@ -42,10 +42,20 @@ pub struct ReconcileSummary {
 
 /// CW / Phone / Digital bucket for tolerant matching — LoTW reports vary in
 /// submode naming and exact time, so we match on the mode *class* + day.
+///
+/// The voice vocabulary MUST stay in step with `propagation::ModeClass::from_adif`
+/// (tempo-core can't depend on propagation, so this is kept aligned by hand and by
+/// test on both sides). When the two disagree, a QSO gets two identities inside one
+/// crate: classed Phone by the awards matrix but Digital here, so its LoTW
+/// confirmation never matches and the contact sits forever as a phantom
+/// "worked, needs a confirmation" need. `PH` is the N3FJP phone token, present in
+/// real imported logs. `""` stays "Other" — a mode-less row must not silently
+/// match a digital confirmation.
 pub fn mode_class(mode: &str) -> &'static str {
-    match mode.to_ascii_uppercase().as_str() {
+    match mode.trim().to_ascii_uppercase().as_str() {
         "CW" => "CW",
-        "SSB" | "USB" | "LSB" | "AM" | "FM" | "PHONE" | "DIGITALVOICE" => "Phone",
+        "SSB" | "USB" | "LSB" | "AM" | "FM" | "PHONE" | "PH" | "DV" | "C4FM" | "DIGITALVOICE"
+        | "DSTAR" | "FUSION" | "M17" | "FREEDV" => "Phone",
         "" => "Other",
         _ => "Digital", // FT8/FT4/RTTY/JT*/MFSK/PSK/FT1/DX1/… → data
     }

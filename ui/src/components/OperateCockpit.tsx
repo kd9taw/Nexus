@@ -979,6 +979,11 @@ export function OperateCockpit({
                     currentSlot={snap.radio.slot}
                     needByCall={needByCall}
                     needAlertsByCall={needAlertsByCall}
+                    // Scope the need chips to what this cockpit can actually close, so a
+                    // cross-band or cross-mode alert for the same callsign can't claim a
+                    // need here (a CW "new mode" on a 30m FT8 roster).
+                    band={snap.radio.band}
+                    feedMode={tier}
                     selectedCall={selectedCall}
                     onSelect={onSelect}
                     onCall={onCall}

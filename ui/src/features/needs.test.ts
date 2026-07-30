@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { modeClassOf, visibleNeeds, workTarget } from './needs'
-import type { BandChannel, NeedAlert } from '../types'
+import { modeClassOf, tagsForSurface, visibleNeeds, workTarget } from './needs'
+import type { BandChannel, NeedAlert, NeedTag } from '../types'
 
 function alert(call: string, mode: string, band = '20m', freqMhz: number | null = null): NeedAlert {
   return {
@@ -100,5 +100,71 @@ describe('modeClassOf (map-spot → cockpit routing)', () => {
     for (const m of ['FT8', 'FT4', 'RTTY', 'PSK31', 'JS8', 'weird', '', null, undefined]) {
       expect(modeClassOf(m)).toBe('Digital')
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Field report 2026-07-29: the Needed system claimed a "new mode on 30m" for
+// Asiatic Russia on an operator who has six 30m FT8 contacts with that entity.
+// The backend need was real (they have never worked it on CW) but the roster
+// chips are keyed by CALL alone, so a CW alert painted an unqualified MODE chip
+// onto their 30m FT8 surface. tagsForSurface is the gate those maps were missing.
+// ---------------------------------------------------------------------------
+describe('tagsForSurface (the false "new mode" gate)', () => {
+  const ar = (tags: NeedTag[], mode: string, band = '30m'): NeedAlert => ({
+    call: 'RF9C',
+    entity: 'Asiatic Russia',
+    band,
+    zone: 17,
+    tags,
+    priority: 30,
+    headline: 'New mode — CW Asiatic Russia',
+    mode,
+    freqMhz: null,
+  })
+
+  it('drops a CW new-mode need from a 30m FT8 surface (the operator report)', () => {
+    expect(tagsForSurface(ar(['NewMode'], 'CW'), '30m', 'FT8')).toEqual([])
+  })
+
+  it('keeps a digital new-mode need on a digital surface', () => {
+    expect(tagsForSurface(ar(['NewMode'], 'FT8'), '30m', 'FT8')).toEqual(['NewMode'])
+  })
+
+  it('matches the backend submode vocabulary against a class label', () => {
+    // The backend sends mode: 'FT8'/'FT4'/'RTTY' verbatim for digital rows, but the
+    // decode feed describes itself as the class 'Digital'. Raw === never matched.
+    for (const m of ['FT8', 'FT4', 'RTTY', 'Digital']) {
+      expect(tagsForSurface(ar(['NewMode'], m), '30m', 'Digital')).toEqual(['NewMode'])
+    }
+  })
+
+  it('folds band-label case (a real log carries both 30M and 30m)', () => {
+    expect(tagsForSurface(ar(['NewBand'], 'FT8', '30m'), '30M', 'FT8')).toEqual(['NewBand'])
+    expect(tagsForSurface(ar(['NewBand'], 'FT8', ' 30M '), '30m', 'FT8')).toEqual(['NewBand'])
+  })
+
+  it('keeps an all-time-new entity on any band and any mode', () => {
+    expect(tagsForSurface(ar(['NewEntity'], 'CW', '20m'), '30m', 'FT8')).toEqual(['NewEntity'])
+  })
+
+  it('drops a cross-band new-band claim', () => {
+    expect(tagsForSurface(ar(['NewBand'], 'FT8', '20m'), '30m', 'FT8')).toEqual([])
+  })
+
+  it('keeps a same-class new-mode need scored on another band (the predicate is entity-wide)', () => {
+    // worked_mode is keyed (entity, mode-class) with NO band, so a digital mode need
+    // is closable on any band — including this one.
+    expect(tagsForSurface(ar(['NewMode'], 'FT8', '20m'), '30m', 'FT8')).toEqual(['NewMode'])
+  })
+
+  it('drops a cross-band confirmation (confirmed_band IS per band)', () => {
+    expect(tagsForSurface(ar(['Confirm'], 'FT8', '20m'), '30m', 'FT8')).toEqual([])
+  })
+
+  it('keeps program flags regardless of band or mode', () => {
+    expect(tagsForSurface(ar(['Pota', 'Sota', 'Dxped', 'Wanted'], 'CW', '20m'), '30m', 'FT8')).toEqual(
+      ['Pota', 'Sota', 'Dxped', 'Wanted'],
+    )
   })
 })

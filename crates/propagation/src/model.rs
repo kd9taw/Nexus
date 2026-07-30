@@ -150,10 +150,19 @@ pub enum ModeClass {
 impl ModeClass {
     /// Classify an ADIF MODE string. Anything not clearly CW or phone (incl.
     /// FT8/FT4/FT1/RTTY/PSK/JT* and blank) is treated as Digital.
+    ///
+    /// The phone arm carries more than the ADIF enumeration on purpose: this runs over
+    /// IMPORTED logs, and the loggers operators import from write their own house
+    /// spellings. `PH` is what the N3FJP family emits for phone (a real 11k-QSO log
+    /// audited 2026-07-29 held 8 of them) and every digital-voice flavour is a voice
+    /// contact. Getting one of these wrong costs twice: the QSO credits a DIGITAL mode
+    /// slot it never earned (hiding a real digital need) AND leaves the phone slot
+    /// looking unworked (fabricating a phantom "new mode" on phone).
     pub fn from_adif(mode: &str) -> ModeClass {
         match mode.trim().to_ascii_uppercase().as_str() {
             "CW" => ModeClass::Cw,
-            "SSB" | "USB" | "LSB" | "AM" | "FM" | "PHONE" | "DV" | "C4FM" => ModeClass::Phone,
+            "SSB" | "USB" | "LSB" | "AM" | "FM" | "PHONE" | "PH" | "DV" | "C4FM"
+            | "DIGITALVOICE" | "DSTAR" | "FUSION" | "M17" | "FREEDV" => ModeClass::Phone,
             _ => ModeClass::Digital,
         }
     }

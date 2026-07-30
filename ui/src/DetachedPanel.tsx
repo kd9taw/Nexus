@@ -487,6 +487,8 @@ export function DetachedPanel({ panel }: { panel: string }) {
         unreadByPeer={{}}
         needByCall={needByCall}
         needAlertsByCall={needAlertsByCall}
+        band={snap.radio.band}
+        feedMode={snap.link.tier}
         onSelect={onSelect}
         onCall={(call) => onCall(call)}
         conversations={snap.conversations as Conv[]}

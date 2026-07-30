@@ -1,5 +1,6 @@
 import type { DecodeRow, NeedAlert, NeedTag } from '../types'
 import { NEED_PRECEDENCE, NEED_VISUALS, type NeedCat } from './needVisuals'
+import { tagsForSurface } from './needs'
 
 const TAG_TO_CAT: Record<NeedTag, NeedCat> = {
   NewEntity: 'entity',
@@ -14,18 +15,6 @@ const TAG_TO_CAT: Record<NeedTag, NeedCat> = {
   Sota: 'sota',
   Wanted: 'wanted',
 }
-
-/** Tags that apply regardless of which band the alert was scored for (an all-time-new
- * entity is new on every band; a DXpedition/POTA/SOTA flag is a property of the station,
- * not the band). Band-specific tags (NewBand/NewMode/Confirm — and NewZone/NewGrid/NewState,
- * all judged PER BAND by the backend: 5BWAZ/VUCC/5BWAS) only count when the alert's band
- * matches the decode's band, or a cross-band alert would paint a false pill on this row. */
-const BAND_AGNOSTIC: ReadonlySet<NeedCat> = new Set<NeedCat>(['entity', 'dxped', 'pota', 'sota', 'wanted'])
-
-/** Tags that are also MODE-specific: a CW-only "new mode" or an unconfirmed CW QSO can
- * never be closed on the digital feed, so they must match the feed's mode class too.
- * (NewBand is mode-agnostic — working a new band-slot in any mode satisfies it.) */
-const MODE_GATED: ReadonlySet<NeedCat> = new Set<NeedCat>(['mode', 'confirm'])
 
 export interface DecodeNeeds {
   /** Applicable need categories, ordered by precedence — the micro-icon cluster. */
@@ -52,20 +41,15 @@ export function resolveDecodeNeeds(
   // Decode-native flags (engine-computed against the worked-entity/grid indices).
   if (d.newDxcc) set.add('entity')
   if (d.newGrid) set.add('grid')
-  // Alert-derived tags: band-agnostic apply anywhere; band-specific need a band match;
-  // mode-specific (NewMode/Confirm) additionally need the feed's mode (a CW need can't
-  // be closed on the FT8 feed — avoids a false award nudge that overrides B4 dimming).
+  // Alert-derived tags: `tagsForSurface` owns the band/mode policy (band-agnostic tags
+  // apply anywhere; per-band claims need a band match; NewMode/Confirm additionally need
+  // the feed's mode class, so a CW need can't be closed on the FT8 feed). It lives in
+  // features/needs.ts because the roster and station list need the SAME gate — they were
+  // missing it entirely, which is how a CW need painted a MODE chip on a 30m FT8 screen.
   for (const a of alerts) {
-    const sameBand = a.band === band
-    const sameMode = a.mode === feedMode
-    for (const t of a.tags) {
+    for (const t of tagsForSurface(a, band, feedMode)) {
       const cat = TAG_TO_CAT[t]
-      if (!cat) continue
-      if (BAND_AGNOSTIC.has(cat)) {
-        set.add(cat)
-      } else if (sameBand && !(MODE_GATED.has(cat) && !sameMode)) {
-        set.add(cat)
-      }
+      if (cat) set.add(cat)
     }
   }
   const cats = NEED_PRECEDENCE.filter((c) => set.has(c))
