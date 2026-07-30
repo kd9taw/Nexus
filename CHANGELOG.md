@@ -5,20 +5,253 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.21.5] — 2026-07-29
 
-### APRS says which radio it is listening to
+### APRS now sees the whole network, and can contribute to it
 
-If more than one of your radios covers the APRS band, the decode readout now names the one it is
-actually listening to — "on FT-991A" — and its tooltip explains that APRS follows the active radio
-and that routing rules decide which radio a band goes to.
+APRS used to show you exactly what your own antenna decoded, and nothing else. That is the honest
+picture of what your radio can reach, but on a quiet channel it is also indistinguishable from a
+broken receiver — which is what several operators were looking at.
 
-This is the missing piece behind the bug below. When the app picked the other radio, the only
-symptom was silence, and nothing on screen said which radio was being listened to — so a working
-station looked like a dead band. With the radio named, that is a glance instead of an afternoon.
+Nexus can now also connect to **APRS-IS**, the internet side of APRS, and plot what the wider
+network is reporting near you alongside what you actually hear. Turn it on in
+**Settings ▸ Modes ▸ APRS**, where every APRS setting now lives, beside RTTY and CW.
 
-On a single-radio station, or when only one radio covers the band, nothing is shown: there was no
-choice to make and saying so would just be clutter.
+- **Every station is tagged with how it reached you** — `RF` when your own receiver decoded it,
+  `net` when only the internet reported it, `RF+net` when both did. You can never mistake "the
+  network says this station exists" for "my antenna can hear this station", and one click hides the
+  internet stations entirely, leaving the view of what this radio genuinely reaches.
+- **It is also a diagnostic.** The internet feed runs whether or not the APRS decoder is armed, and
+  gets its own status chip beside the decoder's. Internet stations appearing while the RF chip stays
+  silent tells you the fault is in the radio chain — antenna, cable, sound card, tuning — and not in
+  the app. That was previously guesswork.
+- **You choose what comes through.** A radius around your grid square (150 km by default — APRS is
+  a local mode), a list of watched callsigns that come through from anywhere however far away they
+  are, and switches for weather stations, objects and items, and text messages.
+- **No passcode needed to watch.** The feed connects read-only, which every APRS-IS server accepts
+  from any licensed operator.
+
+The internet status chip on the APRS board is also its control: click it for the feed switch, the
+range radius, and your watched callsigns. The radius is there because the chip's own advice when the
+feed goes quiet is "widen the radius" — the control belongs where the advice is. Both places edit
+the same settings, so they can never disagree about whether the feed is on.
+
+With the feed running you can also switch on a **receive-only iGate**: packets *your own antenna
+hears* are contributed to APRS-IS, so stations around you reach the global map through your station.
+It is a separate switch from the feed, and it stays in Settings rather than on the cockpit, because
+it publishes under your callsign — contributing to a global network under your own call should be a
+considered decision, not something a stray click can start.
+
+Nexus only ever sends packets it actually heard on the air, and honours every rule the network asks
+of an iGate: it never re-sends a packet that already came from the internet, never sends one whose
+sender marked it `NOGATE` or `RFONLY`, suppresses duplicates, and caps its own upload rate so a
+stuck transmitter nearby cannot flood the network in your name.
+
+**Nexus does not gate the other way** — internet traffic is never transmitted on the air. That
+direction means a radio keying up unattended, which is not something this app will do.
+
+### The APRS map grows up
+
+Every station on the APRS map was the same grey dot. The packets were carrying the answer the whole
+time — APRS stations pick their own icon, and Nexus was throwing it away.
+
+Stations now draw as their **actual APRS symbol**, on the map and in the station list: cars, trucks,
+bicycles and people, weather stations, digipeaters and iGates, campsites, balloons, boats and
+aircraft. Vehicles under way point the way they are heading. Where an operator has put an **overlay
+character** on their symbol — the `I` on a full iGate, the `R` on a receive-only one, the hop count
+on a digipeater — it shows on top of the icon, because that character is often the most useful thing
+about the station. A symbol Nexus does not recognise draws the standard "unknown" glyph, never a
+blank. The icons are drawn in Nexus rather than borrowed, so there is nothing extra to install.
+
+Symbols also carry a colour for their family: homes and portable stations, vehicles, aircraft,
+boats, weather stations, digipeaters and gateways, and hand-placed objects. Colour says what a
+station *is* — nothing here means urgency. The palette varies brightness as well as hue so the
+families stay apart for colourblind operators, and it has a separate version for the light theme.
+
+**You can still tell what your own antenna heard.** That used to be the solid-versus-hollow dot.
+The shape now says what a station IS, so the ring around it says how it reached you: solid for RF,
+doubled when you heard it both ways, dashed and dimmed for internet-only. Solid still means yours.
+Below a local scale the map goes back to plain dots — a continent covered in icons answers a
+question nobody asked.
+
+**The map opens on the local picture.** APRS is a local mode — 2 m simplex plus a digipeater or two
+reaches tens of kilometres — so the map now opens reaching about 275 km in each direction, and you
+can zoom in much further than before. Previously it opened at a scale where roughly 23 km fell on a
+single pixel, so a station 40 km away drew less than two pixels from your own marker and an entire
+local net stacked up underneath it as one dot. A freshly decoded station now appears the moment it
+lands rather than waiting up to a minute for something unrelated to repaint the screen, and clicking
+a station in the list highlights it on the map immediately. With no grid square set, the map centres
+on the traffic you are hearing instead of painting an empty box with no coastline and no stations.
+
+**Click a station for everything known about it.** Clicking used to highlight it and nothing else.
+It now opens a detail card, from either the map or the list:
+
+- The symbol at readable size, with what it actually **means** in words.
+- **How it reached you, per source, with separate ages** — "your receiver decoded this station
+  4 min ago; the internet feed reported it 20 s ago". Those are two different facts and only one of
+  them says anything about your antenna, so they are never merged into a single "last heard".
+- Position with grid square, and distance and bearing from your station.
+- Course, speed and altitude when the station is moving.
+- **The weather, when it is a weather station.** Those readings used to be shown as the raw field
+  string — `220/004g011t085r000p000P000h68b10156`. Nexus now reads it: temperature, wind direction
+  and speed, gusts, rainfall, humidity and barometric pressure. A sensor a station does not have is
+  left out rather than shown as zero — `r...` on the wire means "no rain gauge fitted", not "no
+  rain", and reporting 0.00 in would be inventing a measurement.
+- The comment text, the digipeater path, and whether the packet reached you **direct or digipeated**.
+- The raw packet, collapsed until you want it.
+- One click to QRZ, or to the station's page on aprs.fi.
+
+Behind all of it, the map keeps **stations**, each with its own history: last position, when it was
+last heard by your radio and by the internet, symbol, course and speed. A station stays for an hour
+after its last packet and starts to fade after twenty minutes of silence, so a quiet station recedes
+instead of vanishing. You can change the hour in **Settings ▸ Modes ▸ APRS**, and setting "Keep
+stations for" to 0 means exactly that — no fade, no removal, every station kept until the
+2000-station ceiling — because some operators genuinely want an all-day picture.
+
+### APRS tells you exactly why it is not decoding
+
+An empty APRS screen used to mean half a dozen very different things and looked identical for all of
+them: the app listening to the wrong sound card, the radio parked on another frequency, a signal
+arriving too corrupted to check, or a genuinely quiet channel. Only packets that passed their
+checksum ever reached the screen, so everything else vanished without trace.
+
+The APRS header now carries a decode readout that names which one you are looking at, in six honest
+states: **no input**, **silent**, **wrong frequency or mode**, **bursts heard but failing their
+checksum**, **listening on a quiet channel**, and **decoding** with a count and how long ago the
+last packet landed. Beside them it shows the **input level in dBFS**, so what the decoder is hearing
+is a number you can read rather than something to infer from which message appeared. Hovering
+explains what to check, and the empty list and empty map say the same thing rather than a generic
+"nothing here".
+
+**A closed squelch is not a broken audio device.** A squelched radio does not send the app silence
+in the sense of *nothing*; its USB codec keeps streaming a continuous run of digital zeros. Audio is
+arriving the whole time — it just has no level. So **"Silent"** (the input alive with nothing on it,
+almost always the squelch closed between packets) is a separate state from **"No input"** (no audio
+samples arriving at all), and only the second is a fault. An idle FM channel between packets is what
+APRS looks like nearly all the time, so "Silent" is not coloured as a problem; it says to open the
+squelch and watch for hiss if you want to confirm the routing. "No input" really does mean the
+capture device is wrong or gone, and still points you at Settings.
+
+**A mistuned radio is named as one.** FT8 decoding beautifully on 2 m at the same moment the APRS
+screen insists there is no audio are both true statements: the radio has one receiver and one dial,
+and parked on the FT8 frequency in USB it is never receiving the APRS channel at all — so every
+message about audio levels would be advice about the wrong problem. The readout now looks at the
+radio itself, says so first, and offers a one-click fix: **"The radio is on 144.174 USB — APRS needs
+144.390 FM"**, with a Tune button beside it. It judges against the APRS channel *you have selected*,
+so 144.800 in Europe or 145.175 in Australia is correct, not a warning. Sitting on the right
+frequency in the wrong mode is its own trap — the signal looks strong and decodes nothing — so that
+case reads **"on 144.390 but in USB — APRS needs FM"** and explains that FM packet audio demodulated
+as SSB is garbled. Data-FM submodes such as PKTFM count as FM, because on the air they are. Tuning
+while an FT8 over is in flight cannot move the radio immediately — the rig will not accept a
+frequency change mid-transmission — so rather than appearing to do nothing, the Tune button says the
+radio will move when the over ends.
+
+**It says which radio it is listening to.** If more than one of your radios covers the APRS band,
+the readout names the one it is actually listening to — "on FT-991A" — and its tooltip explains that
+APRS follows the active radio and that routing rules decide which radio a band goes to. Without
+that, a station whose APRS audio is set up on one rig while the app listens to the other has exactly
+one symptom: silence. A working station looks like a dead band. With the radio named, that is a
+glance instead of an afternoon. On a single-radio station, or when only one radio covers the band,
+nothing is shown — there was no choice to make and saying so would just be clutter.
+
+**Every claim says when it was true.** The packet counts run from the moment you arm the decoder,
+while the level is whatever the radio is doing this instant, and mixing the two produces sentences
+that contradict themselves: *"2 packets were heard but none passed the checksum... peak -99 dBFS."*
+Nothing is heard at -99 dBFS. A failed-checksum count now only speaks in the present tense while
+bursts are still arriving, within the last minute, and dates itself when it does: *"2 bursts heard
+since arming, last one 20s ago — none passed the checksum"*, with the live level on its own clause.
+Decodes are treated differently on purpose — a packet that passed its checksum proves the whole
+chain works, and that stays worth knowing however long ago it was, so it keeps its place and carries
+its age instead: *"18 packets decoded since arming, last one 12m ago."* The level reading says what
+window it measures, the most recent tenth of a second, so a low number reads as the gap between
+packets rather than something being wrong. And once packets are decoding, the readout stays on the
+decode count instead of flicking back to a warning during the quiet gaps between them.
+
+Three smaller pieces of the same honesty. A failed-checksum count explains that a packet caught
+part-way through — which is what happens when the squelch opens mid-burst — can never pass its
+checksum, so some failures on a busy channel are expected rather than a sign of a misconfigured
+radio. Packet-shaped patterns found in silence do not count as packets at all: given enough minutes
+the decoder will eventually find one in the noise floor, and reporting that as "packets heard"
+invents evidence for a problem that is not there. And the Monitor button, the decode readout and the
+empty-state text all report the decoder's actual state rather than the button's own guess, so
+leaving the APRS screen and coming back can never show "Monitor" — as though nothing were running —
+while packets keep decoding into the list beside it.
+
+None of this is covering for a fragile decoder. The packet decoder was measured against "twist" —
+the two packet tones arriving at unequal volume, which is the classic reason packet decoders
+struggle on real signals — and packets still decode with the tones up to 24 dB apart, far beyond the
+roughly 9 dB that real signals show.
+
+### APRS starts listening when you open it — receive only
+
+Opening APRS now starts the decoder for you, so the screen is not dead until you find the Monitor
+button. This is strictly receive: a decoder started this way will **never** send an automatic ack,
+whatever your TX setting.
+
+Automatic acks stay behind two deliberate acts, and opening a screen is not one of them: you arm
+Monitor yourself, **and** TX is on. That is now enforced rather than assumed — an unattended
+transmission should never follow from navigating somewhere. The Monitor button says which state you
+are in, reading "Monitoring (auto)" when APRS started it for you, and its tooltip spells out whether
+acks can go out.
+
+Clicking Monitor always means start or stop, as before. It never quietly upgrades an
+automatically-started decoder into one that can transmit — to allow acks, stop it and start it
+yourself. And if you stop the decoder, it stays stopped: coming back to the APRS screen will not
+restart it behind you.
+
+### Route each mode to the radio that does it best
+
+Nexus already handed a band to the radio configured for it: pick 2 m and it switched to your VHF
+rig. But a band is not fine enough. If you have a 2 m/70 cm rig for weak-signal digital and a
+different rig for FM and APRS, both of them cover 2 m — and Nexus had no way to tell them apart, so
+a 2 m FT8 spot and an APRS tune went to whichever radio it happened to pick first.
+
+You can now route on the band **and the mode**. In **Settings ▸ Radio** there is a routing table
+under your radios: pick a set of bands, pick a mode class, pick the radio. Rules are checked top to
+bottom and the first match wins, so a specific rule above a broad one takes precedence — and the
+arrows beside each rule let you reorder them. Anything no rule matches falls back to the band
+coverage you already set on each radio, and then to a default radio you can nominate for everything
+else.
+
+A three-radio shack maps onto two rules. Digital to the 9700, APRS and repeaters to the 991A, HF to
+the FTdx10:
+
+| Bands | Mode | Radio |
+| --- | --- | --- |
+| 2 m, 70 cm | FM & APRS | FT-991A |
+| 2 m, 70 cm | Weak-signal digital | IC-9700 |
+| *(everything else)* | | FTdx10 |
+
+The mode classes are deliberately coarse — weak-signal digital, FM & APRS, SSB phone, CW, RTTY —
+so a whole station fits in a handful of rules rather than one per submode. Every action that used
+to consult the band table now consults band + mode: the band picker, a typed frequency, clicking a
+spot on the Needed board or a DXpedition card, and APRS Tune. Peg-lock still pins your radio and
+stops all of it, exactly as before.
+
+There is a **"Where would this go?"** control under the table. Pick a band and a mode and it tells
+you which radio that combination resolves to, without touching a rig — it asks the same code the
+radio does, so it cannot tell you one thing and then do another.
+
+If you never add a rule, nothing changes: routing stays band-only, as it was.
+
+**And a third radio now works properly.** Two radios worked. A third did not, for a reason that
+only ever shows up at three: each radio's window keeps its own settings file, seeded once from the
+shared one the first time that window opens. With two radios you always add the second one before
+those per-window files exist, so both windows learn about both radios. The third radio is the first
+one you add *after* they exist — so it landed in exactly one window's settings and nowhere else. The
+launch picker (which reads the shared file) never offered it, the other window never monitored it,
+and there was no way to repair it from inside the app.
+
+Adding or removing a radio now updates the shared config too, and every window picks up radios added
+elsewhere when it starts. The routing table above is shared the same way, since which rig does 2 m
+FM is a decision about your station, not about one window.
+
+Three smaller things that also only bite at three radios: a band claimed by two rigs now always goes
+to the same one (it used to depend on the order they happened to sit in the list); adding a radio
+after removing one no longer produces two radios with the same name, which made the port and audio
+conflict warnings ambiguous; and a window launched pointing at a radio that no longer exists now
+says so instead of quietly driving the first radio's serial port — which is the port another window
+is already using.
 
 ### Star a repeater straight from the search results
 
@@ -36,79 +269,95 @@ Starred repeaters also remember where the machine physically is, so Memories sho
 in what direction each one is. That is measured from your current grid every time it is displayed
 rather than stored, so the distances follow you when you operate portable.
 
-### Fixed: tuning a repeater could pick the wrong radio, and the wrong mode
+Program's per-repeater Tune button tunes in a single step that knows it is FM, which is what makes
+it land correctly on a multi-radio station and after you have been operating something other than
+voice. Naming FM explicitly settles both decisions at once: the machine's frequency, shift, offset
+and tone all go to the radio you mapped for FM, and the rig ends up in FM rather than in whatever
+data mode the last section you operated left it in — a repeater is inaudible in a data mode. Tuning
+does not move you out of Program or arm transmit; it puts the radio on the repeater so you can
+listen. Any later retune, section change, radio switch, or a turn of the VFO knob down to HF
+releases the FM hold, so FM never follows you somewhere it does not belong.
 
-Program's per-repeater Tune button now tunes in a single step that knows it is FM.
+### DXpedition calendar: one operation, one bar
 
-Two things were wrong before, both only visible on a multi-radio station or when you had been
-operating something other than voice. The tune announced no mode intent, so with a routing rule
-sending 2 m FM to one radio and 2 m digital to another, tuning a 2 m repeater while the app was in
-FT8 handed the frequency to the FT8 radio. And because the rig's mode follows whichever section you
-last operated, the same tune could leave the radio in a data mode, where a repeater is inaudible.
+A multi-day DXpedition was drawn as a separate little chip on each of its days, so a ten-day
+operation looked like ten unrelated things. Each operation is now a single bar running across the
+days it is on the air. Where a run crosses into the next week it picks up again on the following
+row, named and flagged so you can follow it.
 
-The Tune button now names FM explicitly for both decisions, so the machine's frequency, shift, offset
-and tone all land together on the radio you mapped for FM. It does not move you out of Program or
-arm transmit; it puts the radio on the repeater so you can listen. Any later retune, section change,
-radio switch, or a turn of the VFO knob down to HF releases the FM hold, so FM never follows you
-somewhere it does not belong.
-### Stations can be kept on the APRS map forever
+Every operation also gets its own colour, and keeps it — on its calendar bar, on its dot in the
+"what to chase" summary, and on the rail beside its entry in Details. The colour means nothing but
+"this is that one", which is what lets you pick an operation out of a busy fortnight without
+reading a single callsign. Today is still the strongest thing on the grid, and an operation you are
+chasing still stands out from the rest.
 
-Setting "Keep stations for" to 0 now means exactly that: no fade, no removal — every station
-stays until the 2000-station ceiling. Added while chasing a field report of stations vanishing
-far too quickly; with removal off entirely, anything that still disappears proves the fault is
-somewhere else. It stays because some operators genuinely want an all-day picture.
+Bars wide enough to hold it now carry the bands the operation announced, low bands first, so
+whether they are bringing 160 and 80 is visible without opening anything. Hovering any bar gives
+the full picture: entity, dates, every band, the modes, and your modelled best shot.
 
-### Fixed: APRS went silent on a three-radio station
+When more operations overlap than a week has room for, the day says "+2" instead of quietly hiding
+them; clicking opens that week out and clicking again closes it. Operations that do not overlap in
+time now share a row rather than each burning one, so the calendar stays short.
 
-0.21.4 could send an APRS activation to the wrong radio. With three radios where two of them cover
-2 m, nothing in the app had a reason to prefer one over the other, and the one it picked changed in
-0.21.4 — so a station whose APRS audio was set up on one rig suddenly found the app listening to
-the other. Audio configured for a different mode means silence, and nothing on screen said which
-radio was being listened to.
+**Clicking an operation also opens its webpage** in your browser, so the announcement you are
+looking at is one click from the team's own page — bands, schedule, QSL route, pilot station. The
+Details rail carries the same link on each entry, labelled, so you can see where it goes before you
+click it. About a third of announced operations publish a website, and the calendar source has been
+carrying those links all along — Nexus was throwing them away while reading the page. The rest now
+open the callsign's QRZ page instead, which is where their details and QSL route live when there is
+no expedition site. Either way the tooltip names the destination first, and says plainly when it is
+the QRZ fallback rather than the operation's own page. Clicking a calendar bar still selects that
+operation in the Details rail as it did before, so nothing that used to work costs you an extra
+click now.
 
-A tie between two equally capable radios now goes to the radio you nominated as your default. If
-you have not set one, the choice stays consistent rather than arbitrary, and a routing rule still
-overrides everything — a rule for `2m` + `FM` pointing at a specific radio is the way to say this
-unambiguously.
+### Fixed: the N1MM contact broadcast sent nothing unless Field Day was running
 
-### Fixed: APRS stations disappearing off the map again
+Set the N1MM address, log QSOs, watch the network: nothing. An operator running it alongside Ham
+Radio Deluxe saw HRD's packets go out on 12060 and not one from Nexus on 12061. The address had
+looked like a standing integration sitting next to HRD, and it was not one — the broadcast only
+ever fired during a Field Day event, and said so nowhere.
 
-A tester reported real off-air decodes vanishing from the APRS map within seconds, while stations
-coming from the internet feed looked fine. This was our own doing, and it was introduced by the
-previous fix for the flashing icons.
+**Settings ▸ Logging & Connectors ▸ N1MM+ Integration** now has a **Broadcast every QSO** switch.
+Turn it on and each logged contact goes out as an N1MM contact packet, event or not — from the
+digital modes, from the CW and Phone cockpits, from a hand-typed logbook entry, all of them. Point
+OpenHamClock or GridTracker at the address and every QSO plots on its map as you log it. The
+packet leaves at the moment the QSO is logged, in the same breath as the HRD one. Turn the switch
+on with the address field empty and Nexus fills in the usual local target for you. The address
+field now also states which of the two it is doing, so a configured-but-silent output can never
+look like a working one again.
 
-That fix was right that the whole map was being redrawn every two seconds whether or not anything
-had changed. It was wrong that the redraw was merely wasteful. The map is a canvas — whatever was
-painted stays painted until something repaints it — and on the APRS screen that two-second redraw
-was the **only** thing repainting it. The next scheduled redraw after it was removed could be up to
-a **minute** away, so a station could sit invisible until the clock came round. Internet stations
-escaped it because the feed changes the data constantly, which forces a redraw of its own; a quiet
-2 m channel with a handful of decodes does not.
+It is off after an upgrade, and nothing but that switch can turn it on — your contacts do not
+start going out over the network because you installed a new version.
 
-The APRS map now keeps its own repaint schedule instead of relying on a side effect, and a station's
-fade is measured against the actual time rather than a clock that only advanced once a minute — so a
-decode from five seconds ago no longer draws as if it were a minute old.
+Field Day is untouched. During an event, contest contacts still go out the way they always have,
+carrying your class, section and points; the standing broadcast only ever carries the contacts in
+your regular log. A contact is never sent twice, so it is safe to leave the switch on through a
+Field Day weekend. An ordinary QSO carries what a map needs — call, grid, band, frequency, mode,
+time — and honestly claims no contest points.
 
-**Station retention itself was never at fault.** An hour's retention, the twenty-minute fade, the
-timestamps on off-air decodes, and the behaviour of an upgraded settings file were all measured
-directly and all behave as designed.
+If you run several consumers on one machine, name the port. 12060 is often already taken (HRD
+listens there), and the port you type is the port that is used.
 
-### APRS packet decoder measured against tone imbalance ("twist")
+### CW keying now works with rigs that refuse 1200 baud on their keying port
 
-Twist — the two packet tones arriving at unequal volume, the net effect of the sending TNC, the
-transmitter's deviation and the receiver's audio shaping — is the classic reason packet decoders
-struggle on real signals. Nothing in our test suite had ever modelled it, because the suite
-generated its own perfectly balanced tones.
+A tester with a new Yaesu FTX-1 could not key CW through the rig's built-in Standard COM port.
+Nexus reported that it could not open the port; Windows, asked directly, said "a device attached to
+the system is not functioning." The port was fine. Nexus was asking for it at 1200 baud, and the
+FTX-1's firmware refuses that one rate while accepting every other.
 
-It now does, and the decoder came out clean: packets still decode with the tones up to 24 dB apart,
-far beyond the roughly 9 dB that real signals show. That is a property of how this decoder works
-rather than luck — it compares the two tones against each other within each bit, so making one
-quieter scales both sides of the comparison equally. What twist does cost is noise margin on the
-quieter tone: about 4 dB of it at the realistic worst case, leaving decodes working down to 9 dB
-signal-to-noise. Comfortably clear of any packet you can actually hear.
+A keying port sends no data at all — Nexus only flips a control line up and down, and the rig shapes
+the CW — so the baud rate never meant anything on the air. It was a number we had to name to open
+the port, and 1200 was an arbitrary choice that eventually met a radio that says no. Nexus now asks
+for 9600, and if a port refuses that it works down through 19200, 4800, 2400 and 1200 until one is
+accepted, then keys normally. Nothing to set, and nothing to notice: existing keying interfaces
+behave exactly as before.
 
-The WAV analysis tool now reports the measured twist of each burst, so a real recording will say
-what the local digipeater's signal actually looks like.
+The same fix covers the other two places a control line is used this way — **true-FSK RTTY keying**
+and **serial PTT** — because the same port on the same radio would have refused those too.
+
+When a keying port genuinely cannot be opened, the message now quotes what the system actually said
+and which rates were tried, instead of guessing at causes. The tester above had to diagnose this in
+PowerShell because our error message withheld the one useful sentence.
 
 ### Opening APRS on an HF-only radio no longer breaks CAT
 
@@ -132,404 +381,21 @@ it actually has.
 
 **A refused command is now treated as a refusal.** Nexus checks what the radio said back, keeps
 showing where the radio really is rather than where it was asked to go, tells you the radio would
-not accept that frequency, and stops asking after a few tries instead of hammering the link.
+not accept that frequency, and stops asking after a few tries instead of hammering the link. A
+command your rig will not take no longer wedges rig control until you restart the app, whatever the
+rig and whatever the command.
 
 **Rig control recovers on its own.** Nexus stops polling a radio that has stopped answering, which
 is right — but that state used to be permanent, so any hiccup meant no rig control until you
 restarted. It now retries quietly, backing off to about once every thirty seconds, and picks the
 radio back up within a couple of seconds of it answering again. This one is not specific to APRS:
-anything that interrupted the link used to cost you rig control for the rest of the session.
+anything that interrupted the link used to cost you rig control for the rest of the session, on
+every rig Nexus talks to.
 
 **In the cockpit**, an HF-only station now reads *"No 2 m radio"* with an explanation, instead of a
 Tune button that could only ever fail. The internet feed is genuinely useful without a VHF radio —
 it shows APRS traffic other stations have reported — so the view tells you that rather than
 looking broken.
-
-### Click an APRS station for everything known about it
-
-Clicking a station used to highlight it and nothing else. It now opens a detail card, from either the
-map or the list:
-
-- The symbol at readable size, with what it actually **means** in words.
-- **How it reached you, per source, with separate ages** — "your receiver decoded this station
-  4 min ago; the internet feed reported it 20 s ago". Those are two different facts and only one of
-  them says anything about your antenna, so they are never merged into a single "last heard".
-- Position with grid square, and distance and bearing from your station.
-- Course, speed and altitude when the station is moving.
-- The comment text, the digipeater path, and whether the packet reached you **direct or digipeated**.
-- The raw packet, collapsed until you want it.
-- One click to QRZ, or to the station's page on aprs.fi.
-
-### Weather stations now report the weather
-
-A weather station's readings were arriving and being shown as the raw field string —
-`220/004g011t085r000p000P000h68b10156`. Nexus now reads it: temperature, wind direction and speed,
-gusts, rainfall, humidity and barometric pressure, in the station's detail card.
-
-A sensor a station does not have is left out rather than shown as zero. `r...` on the wire means "no
-rain gauge fitted", not "no rain", and reporting 0.00 in would be inventing a measurement.
-
-### The internet feed switches off from the APRS screen
-
-Turning the feed off meant a trip to Settings. The internet status chip on the APRS board is now
-also its control: click it for the feed switch, the range radius, and your watched callsigns. The
-radius is there because the chip's own advice when the feed goes quiet is "widen the radius" — the
-control belongs where the advice is.
-
-Server, port, which kinds of traffic to subscribe to, how long stations are remembered, and the
-receive-only iGate stay in **Settings ▸ Modes ▸ APRS**. Those are set once. The iGate especially:
-contributing to a global network under your callsign should be a considered decision, not something
-a stray click on a cockpit can start.
-
-Both places edit the same settings, so they can never disagree about whether the feed is on.
-
-### Fixed: APRS map icons flashed on and off
-
-With the internet feed running, stations blinked in and out constantly. Two separate faults, both
-fixed.
-
-The map was built on the **last 300 packets** rather than on stations. Three hundred packets is two
-to five minutes of a busy feed, so a station beaconing on a perfectly ordinary ten-minute cycle was
-pushed out before its next beacon — it disappeared, came back, disappeared again. The map now keeps
-**stations**, with their own history: last position, when each was last heard by your radio and by
-the internet, symbol, course and speed. A station stays for an hour after its last packet and starts
-to fade after twenty minutes of silence, so a quiet station recedes instead of vanishing. You can
-change the hour in **Settings ▸ Modes ▸ APRS**.
-
-Separately, the whole map was being torn down and repainted **every two seconds** whether anything
-had changed or not. That alone made icons flicker even for stations that never went away. The map now
-repaints only when something has actually moved, arrived, or aged.
-
-### APRS stations are coloured by what they are
-
-Symbols now carry a colour for their family: homes and portable stations, vehicles, aircraft, boats,
-weather stations, digipeaters and gateways, and hand-placed objects. Colour says what a station *is*
-— nothing here means urgency — and it is independent of the ring that tells you whether your own
-antenna heard it, so the two never compete. The palette varies brightness as well as hue so the
-families stay apart for colourblind operators, and it has a separate version for the light theme.
-
-### CW keying now works with rigs that refuse 1200 baud on their keying port
-
-A tester with a new Yaesu FTX-1 could not key CW through the rig's built-in Standard COM port.
-Nexus reported that it could not open the port; Windows, asked directly, said "a device attached to
-the system is not functioning." The port was fine. Nexus was asking for it at 1200 baud, and the
-FTX-1's firmware refuses that one rate while accepting every other.
-
-A keying port sends no data at all — Nexus only flips a control line up and down, and the rig shapes
-the CW — so the baud rate never meant anything on the air. It was a number we had to name to open
-the port, and 1200 was an arbitrary choice that eventually met a radio that says no. Nexus now asks
-for 9600, and if a port refuses that it works down through 19200, 4800, 2400 and 1200 until one is
-accepted, then keys normally. Nothing to set, and nothing to notice: existing keying interfaces
-behave exactly as before.
-
-The same fix covers the other two places a control line is used this way — **true-FSK RTTY keying**
-and **serial PTT** — because the same port on the same radio would have refused those too.
-
-When a keying port genuinely cannot be opened, the message now quotes what the system actually said
-and which rates were tried, instead of guessing at causes. The tester above had to diagnose this in
-PowerShell because our error message withheld the one useful sentence.
-
-### Fixed: the N1MM contact broadcast sent nothing unless Field Day was running
-
-Set the N1MM address, log QSOs, watch the network: nothing. An operator running it alongside Ham
-Radio Deluxe saw HRD's packets go out on 12060 and not one from Nexus on 12061. The address had
-looked like a standing integration sitting next to HRD, and it was not one — the broadcast only
-ever fired during a Field Day event, and said so nowhere.
-
-**Settings ▸ Logging & Connectors ▸ N1MM+ Integration** now has a **Broadcast every QSO** switch.
-Turn it on and each logged contact goes out as an N1MM contact packet, event or not — from the
-digital modes, from the CW and Phone cockpits, from a hand-typed logbook entry, all of them. Point
-OpenHamClock or GridTracker at the address and every QSO plots on its map as you log it. The
-packet leaves at the moment the QSO is logged, in the same breath as the HRD one. Turn the switch
-on with the address field empty and Nexus fills in the usual local target for you.
-
-The address field now also states which of the two it is doing, so a configured-but-silent output
-can never look like a working one again.
-
-It is off after an upgrade, and nothing but that switch can turn it on — your contacts do not
-start going out over the network because you installed a new version.
-
-Field Day is untouched. During an event, contest contacts still go out the way they always have,
-carrying your class, section and points; the standing broadcast only ever carries the contacts in
-your regular log. A contact is never sent twice, so it is safe to leave the switch on through a
-Field Day weekend. An ordinary QSO carries what a map needs — call, grid, band, frequency, mode,
-time — and honestly claims no contest points.
-
-If you run several consumers on one machine, name the port. 12060 is often already taken (HRD
-listens there), and the port you type is the port that is used.
-
-### Route each mode to the radio that does it best
-
-Nexus already handed a band to the radio configured for it: pick 2 m and it switched to your VHF
-rig. But a band is not fine enough. If you have a 2 m/70 cm rig for weak-signal digital and a
-different rig for FM and APRS, both of them cover 2 m — and Nexus had no way to tell them apart,
-so a 2 m FT8 spot and an APRS tune went to whichever radio it happened to pick first.
-
-You can now route on the band **and the mode**. In **Settings ▸ Radio** there is a routing table
-under your radios: pick a set of bands, pick a mode class, pick the radio. Rules are checked top to
-bottom and the first match wins, so a specific rule above a broad one takes precedence — and the
-arrows beside each rule let you reorder them. Anything no rule matches falls back to the band
-coverage you already set on each radio, and then to a default radio you can nominate for
-everything else.
-
-A three-radio shack maps onto two rules. Digital to the 9700, APRS and repeaters to the 991A, HF to
-the FTdx10:
-
-| Bands | Mode | Radio |
-| --- | --- | --- |
-| 2 m, 70 cm | FM & APRS | FT-991A |
-| 2 m, 70 cm | Weak-signal digital | IC-9700 |
-| *(everything else)* | | FTdx10 |
-
-The mode classes are deliberately coarse — weak-signal digital, FM & APRS, SSB phone, CW, RTTY —
-so a whole station fits in a handful of rules rather than one per submode. Every action that used
-to consult the band table now consults band + mode: the band picker, a typed frequency, clicking a
-spot on the Needed board or a DXpedition card, and APRS Tune. Peg-lock still pins your radio and
-stops all of it, exactly as before.
-
-There is a **"Where would this go?"** control under the table. Pick a band and a mode and it tells
-you which radio that combination resolves to, without touching a rig — it asks the same code the
-radio does, so it cannot tell you one thing and then do another.
-
-If you never add a rule, nothing changes: routing stays band-only, as it was.
-
-### A third radio now works properly
-
-Two radios worked. A third did not, for a reason that only ever shows up at three: each radio's
-window keeps its own settings file, seeded once from the shared one the first time that window
-opens. With two radios you always add the second one before those per-window files exist, so both
-windows learn about both radios. The third radio is the first one you add *after* they exist — so
-it landed in exactly one window's settings and nowhere else. The launch picker (which reads the
-shared file) never offered it, the other window never monitored it, and there was no way to repair
-it from inside the app.
-
-Adding or removing a radio now updates the shared config too, and every window picks up radios
-added elsewhere when it starts. The routing table is shared the same way, since which rig does 2 m
-FM is a decision about your station, not about one window.
-
-Three smaller things that also only bite at three radios: a band claimed by two rigs now always
-goes to the same one (it used to depend on the order they happened to sit in the list); adding a
-radio after removing one no longer produces two radios with the same name, which made the port and
-audio conflict warnings ambiguous; and a window launched pointing at a radio that no longer exists
-now says so instead of quietly driving the first radio's serial port — which is the port another
-window is already using.
-
-### APRS decode readout stops mixing up "now" with "a while ago"
-
-The new input-level reading immediately caught a sentence that contradicted itself: *"2 packets
-were heard but none passed the checksum... peak -99 dBFS."* Nothing is heard at -99 dBFS. The
-packet counts run from the moment you arm the decoder, while the level is whatever the radio is
-doing this instant — so two candidates from six minutes ago sat there asserting something about
-the present, right beside a live reading that flatly disagreed.
-
-Every claim now says when it was true. A failed-checksum count only speaks in the present tense
-while bursts are still arriving (within the last minute); after that it steps aside and the
-readout goes back to describing what the radio is actually doing. When it does speak it dates
-itself: *"2 bursts heard since arming, last one 20s ago — none passed the checksum"*, with the
-live level on its own clause.
-
-Decodes are treated differently on purpose. A packet that passed its checksum proves the whole
-chain works, and that stays worth knowing however long ago it was — so it keeps its place and
-carries its age instead: *"18 packets decoded since arming, last one 12m ago."*
-
-The level reading now says what window it measures (the most recent tenth of a second), so a low
-number reads as the gap between packets rather than something being wrong.
-
-Finally, packet-shaped patterns found in silence no longer count as packets at all. Given enough
-minutes the decoder will eventually find one in the noise floor, and reporting that as "packets
-heard" invented evidence for a problem that was not there.
-
-### APRS-IS settings moved into the APRS section
-
-They were filed under Logging & Connectors with the other network feeds, which is where they
-belong by type and not where anyone looked for them. They are now in **Settings ▸ Modes ▸ APRS**,
-beside RTTY and CW. Nothing about the feed or the iGate changed — only where you find them.
-
-### APRS stations look like what they are
-
-Every station on the APRS map was the same grey dot. The packets were carrying the answer the whole
-time — APRS stations pick their own icon, and Nexus was throwing it away.
-
-Stations now draw as their **actual APRS symbol**, on the map and in the station list: cars, trucks,
-bicycles and people, weather stations, digipeaters and iGates, campsites, balloons, boats and
-aircraft. Vehicles under way point the way they are heading. Where an operator has put an **overlay
-character** on their symbol — the `I` on a full iGate, the `R` on a receive-only one, the hop count
-on a digipeater — it shows on top of the icon, because that character is often the most useful thing
-about the station.
-
-- **You can still tell what your own antenna heard.** That used to be the solid-versus-hollow dot.
-  The shape now says what a station IS, so the ring around it says how it reached you: solid for RF,
-  doubled when you heard it both ways, dashed and dimmed for internet-only. Solid still means yours.
-- **Zoomed out, it stays calm.** Below a local scale the map goes back to plain dots — a continent
-  covered in icons answers a question nobody asked.
-- A symbol Nexus does not recognise draws the standard "unknown" glyph. Never a blank.
-
-The icons are drawn in Nexus rather than borrowed, so there is nothing extra to install.
-
-### APRS tells you when the radio is simply on the wrong frequency
-
-The clearest report from testing: FT8 was decoding beautifully on 2 m at the very moment the APRS
-screen insisted there was no audio. Both were true. The radio has one receiver and one dial, and
-it was parked on the FT8 frequency in USB — so the APRS channel was never being received at all,
-and every message about audio levels was advice about the wrong problem.
-
-The APRS readout now looks at the radio itself. When the dial or the mode is not where APRS lives
-it says so first and offers a one-click fix: **"The radio is on 144.174 USB — APRS needs 144.390
-FM"**, with a Tune button beside it. It judges against the APRS channel *you have selected*, so
-144.800 in Europe or 145.175 in Australia is correct, not a warning.
-
-It names whichever thing is actually wrong. Sitting on the right frequency in the wrong mode is
-its own trap — the signal looks strong and decodes nothing — so that case reads **"on 144.390 but
-in USB — APRS needs FM"** and explains that FM packet audio demodulated as SSB is garbled. Data-FM
-submodes such as PKTFM count as FM, because on the air they are.
-
-The Tune control also speaks now. Tuning while an FT8 over is in flight cannot move the radio
-immediately — the rig will not accept a frequency change mid-transmission — so instead of
-appearing to do nothing it says the radio will move when the over ends.
-
-### APRS no longer calls a closed squelch a broken audio device
-
-Testing 0.21.1 on the air, the APRS decode readout sat on "no audio is reaching the decoder —
-check your audio input" for most of a session, on a rig whose audio was set up correctly.
-
-A squelched radio does not send the app silence in the sense of *nothing*; its USB codec keeps
-streaming a continuous run of digital zeros. Audio was arriving the whole time — it just had no
-level. The readout tested for those two things in one breath and reported the wrong one, so an
-idle FM channel between packets, which is what APRS looks like nearly all the time, was announced
-as a fault in your audio routing.
-
-Those are now separate, and only one of them is a fault:
-
-- **"Silent"** — the input is alive and delivering audio with nothing on it. Almost always just
-  the squelch being closed between packets. The message says so, and says to open the squelch and
-  watch for hiss if you want to confirm the routing. It is no longer coloured as a problem.
-- **"No input"** — no audio samples are arriving at all. This one really does mean the capture
-  device is wrong or gone, and still points you at Settings.
-
-The readout also now shows the **input level in dBFS**, so what the decoder is hearing is a number
-you can read rather than something to infer from which message appeared. And arming Monitor no
-longer flashes a capture warning in the instant before the first audio arrives.
-
-Two related honesty fixes: failed-checksum counts now explain that packets caught part-way through
-— which is what happens when the squelch opens mid-burst — can never pass their checksum, so some
-failures on a busy channel are expected rather than a sign of a misconfigured radio. And once
-packets are decoding, the readout stays on the decode count instead of flicking back to a warning
-during the quiet gaps between them.
-
-### APRS now sees the whole network, and can contribute to it
-
-APRS used to show you exactly what your own antenna decoded, and nothing else. That is the honest
-picture of what your radio can reach, but on a quiet channel it is also indistinguishable from a
-broken receiver — which is what several operators were looking at.
-
-Nexus can now also connect to **APRS-IS**, the internet side of APRS, and plot what the wider
-network is reporting near you alongside what you actually hear. Turn it on in
-**Settings ▸ Integrations & Feeds ▸ APRS-IS**.
-
-- **Every station is tagged with how it reached you** — `RF` when your own receiver decoded it,
-  `net` when only the internet reported it, `RF+net` when both did. On the map an RF station is a
-  solid dot and an internet-only station is a hollow one, so you can never mistake "the network
-  says this station exists" for "my antenna can hear this station". One click hides the internet
-  stations entirely, leaving the view of what this radio genuinely reaches.
-- **It is also a diagnostic.** The internet feed runs whether or not the APRS decoder is armed, and
-  gets its own status chip beside the decoder's. Internet stations appearing while the RF chip
-  stays silent tells you the fault is in the radio chain — antenna, cable, sound card, tuning —
-  and not in the app. That was previously guesswork.
-- **You choose what comes through.** A radius around your grid square (150 km by default — APRS is
-  a local mode), a list of watched callsigns that come through from anywhere however far away they
-  are, and switches for weather stations, objects and items, and text messages.
-- **No passcode needed to watch.** The feed connects read-only, which every APRS-IS server accepts
-  from any licensed operator.
-
-### APRS: you can put your corner of the map on the network
-
-With the feed running you can also switch on a **receive-only iGate**: packets *your own antenna
-hears* are contributed to APRS-IS, so stations around you reach the global map through your
-station. It is a separate switch from the feed, because it publishes under your callsign.
-
-Nexus only ever sends packets it actually heard on the air, and honours every rule the network
-asks of an iGate: it never re-sends a packet that already came from the internet, never sends one
-whose sender marked it `NOGATE` or `RFONLY`, suppresses duplicates, and caps its own upload rate so
-a stuck transmitter nearby cannot flood the network in your name.
-
-**Nexus does not gate the other way** — internet traffic is never transmitted on the air. That
-direction means a radio keying up unattended, which is not something this app will do.
-
-### DXpedition calendar: click an operation to read up on it
-
-Clicking an operation on the calendar now opens its webpage in your browser, so the announcement
-you are looking at is one click from the team's own page — bands, schedule, QSL route, pilot
-station. The Details rail carries the same link on each entry, labelled, so you can see where it
-goes before you click it.
-
-About a third of announced operations publish a website, and the calendar source has been
-carrying those links all along — Nexus was throwing them away while reading the page. The rest
-now open the callsign's QRZ page instead, which is where their details and QSL route live when
-there is no expedition site. Either way the tooltip names the destination first, and says plainly
-when it is the QRZ fallback rather than the operation's own page.
-
-Clicking a calendar bar still selects that operation in the Details rail as it did before, so
-nothing that used to work costs you an extra click now.
-
-### APRS: stations you could hear now actually show up on the map
-
-Operators reported hearing plenty of APRS traffic on 144.390 while the map stayed empty. The
-packets were decoding the whole time. The map was the problem, in three separate ways:
-
-- **It opened showing the whole planet.** APRS is a local mode — 2 m simplex plus a digipeater or
-  two reaches tens of kilometres — but the map opened at a scale where roughly 23 km fell on a
-  single pixel. A station 40 km away drew less than two pixels from your own marker, so an entire
-  local net stacked up underneath it as one dot. The APRS map now opens on the local picture,
-  reaching about 275 km in each direction, and you can zoom in much further than before.
-- **New decodes did not redraw it.** A freshly decoded station did not appear until something
-  unrelated repainted the map, which on a resting screen meant waiting up to a minute. Clicking a
-  station in the list had the same delay before the map highlighted it. Both are immediate now.
-- **With no grid set it drew nothing at all.** If your station's grid square was empty the APRS
-  map had no centre and painted an empty box — no coastline, no stations. It now centres on the
-  traffic you are hearing instead.
-
-### APRS tells you what it is hearing
-
-An empty APRS screen used to mean three very different things, and looked identical for all of
-them: the app listening to the wrong sound card, a signal arriving too corrupted to check, or a
-genuinely quiet channel. Only packets that passed their checksum ever reached the screen, so
-everything else vanished without trace.
-
-The APRS header now carries a decode readout that says which one you are looking at — no audio
-reaching the decoder, packets heard but failing their checksum, listening on a quiet channel, or
-decoding normally with a count and how long ago the last one landed. Hovering it explains what to
-check. The empty list and empty map say the same thing rather than a generic "nothing here".
-
-The first two are worth calling out because both are fixable in seconds: what comes out of your
-speaker tells you nothing about which device the app is capturing, and packets that all fail their
-checksum usually mean the radio is off frequency or the receive audio is driven hard enough to
-clip.
-
-### APRS starts listening when you open it — receive only
-
-Opening APRS now starts the decoder for you, so the screen is not dead until you find the Monitor
-button. This is strictly receive: a decoder started this way will **never** send an automatic ack,
-whatever your TX setting.
-
-Automatic acks stay behind two deliberate acts, and opening a screen is not one of them: you arm
-Monitor yourself, **and** TX is on. That is unchanged except that it is now enforced rather than
-assumed — an unattended transmission should never follow from navigating somewhere. The Monitor
-button says which state you are in, reading "Monitoring (auto)" when APRS started it for you, and
-its tooltip spells out whether acks can go out.
-
-Clicking Monitor always means start or stop, as before. It never quietly upgrades an
-automatically-started decoder into one that can transmit — to allow acks, stop it and start it
-yourself. And if you stop the decoder, it stays stopped: coming back to the APRS screen will not
-restart it behind you.
-
-### APRS Monitor button now reports the decoder, not its own guess
-
-The Monitor button tracked its own idea of whether the decoder was running, which could disagree
-with the decoder itself. Leaving the APRS screen and coming back showed "Monitor" — as though
-nothing was running — while packets kept decoding into the list beside it, and the next click then
-re-armed an already-armed decoder instead of stopping it. An arm the app refused also still lit the
-button up as if it had worked. The button, the decode readout and the empty-state text now all
-report the decoder's actual state.
 
 ### Credit where the code came from
 
@@ -552,27 +418,6 @@ with the receive side. That header also credited "the W7AY dual-oscillator schem
 Kok Chen or linking what he actually published; it now cites the paper, and is honest that the
 shaped edge treatment is Nexus's answer to the problem that paper measures, not something taken
 from it.
-
-### DXpedition calendar: one operation, one bar
-
-A multi-day DXpedition was drawn as a separate little chip on each of its days, so a ten-day
-operation looked like ten unrelated things. Each operation is now a single bar running across the
-days it is on the air. Where a run crosses into the next week it picks up again on the following
-row, named and flagged so you can follow it.
-
-Every operation also gets its own colour, and keeps it — on its calendar bar, on its dot in the
-"what to chase" summary, and on the rail beside its entry in Details. The colour means nothing but
-"this is that one", which is what lets you pick an operation out of a busy fortnight without
-reading a single callsign. Today is still the strongest thing on the grid, and an operation you are
-chasing still stands out from the rest.
-
-Bars wide enough to hold it now carry the bands the operation announced, low bands first, so
-whether they are bringing 160 and 80 is visible without opening anything. Hovering any bar gives
-the full picture: entity, dates, every band, the modes, and your modelled best shot.
-
-When more operations overlap than a week has room for, the day says "+2" instead of quietly hiding
-them; clicking opens that week out and clicking again closes it. Operations that do not overlap in
-time now share a row rather than each burning one, so the calendar stays short.
 
 ## [0.21.0] — 2026-07-29
 
