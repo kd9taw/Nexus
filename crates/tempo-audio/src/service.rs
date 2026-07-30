@@ -1985,9 +1985,9 @@ impl RadioLoop {
                          still on {:.4} MHz",
                         hz as f64 / 1_000_000.0
                     ),
-                    None => format!(
-                        "the radio refused {mhz:.4} MHz — it does not cover that frequency"
-                    ),
+                    None => {
+                        format!("the radio refused {mhz:.4} MHz — it does not cover that frequency")
+                    }
                 })
             }
         }
@@ -2699,10 +2699,10 @@ impl RadioLoop {
                 match rig.read_freq() {
                     Ok(hz) => {
                         self.freq_misses = 0; // a good read clears the breaker's miss run
-                        // A tripped breaker's re-probe answered: the link is BACK. Reset the health
-                        // verdict + the backoff and re-probe the rig's capabilities, exactly like
-                        // the successful-command path above — otherwise read-back stays disabled
-                        // for the session even though the radio is answering perfectly.
+                                              // A tripped breaker's re-probe answered: the link is BACK. Reset the health
+                                              // verdict + the backoff and re-probe the rig's capabilities, exactly like
+                                              // the successful-command path above — otherwise read-back stays disabled
+                                              // for the session even though the radio is answering perfectly.
                         if breaker_probe {
                             self.cat_ok = Some(true);
                             self.cat_retry_ms = CAT_RETRY_BASE_MS;
@@ -8777,7 +8777,14 @@ mod tests {
             tick += 400.0;
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
                 )
                 .unwrap();
         }
@@ -8795,7 +8802,14 @@ mod tests {
             tick += 400.0;
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
                 )
                 .unwrap();
         }
@@ -8838,7 +8852,14 @@ mod tests {
             tick += 400.0;
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
                 )
                 .unwrap();
         }
@@ -8857,7 +8878,14 @@ mod tests {
             state.last_rig_poll = tick - RIG_POLL_MS - 1.0;
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
                 )
                 .unwrap();
             let gap = state.cat_retry_at - at_before;
@@ -8897,7 +8925,14 @@ mod tests {
             tick += 400.0;
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
                 )
                 .unwrap();
         }
@@ -8909,7 +8944,14 @@ mod tests {
             tick += 400.0;
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
                 )
                 .unwrap();
         }
@@ -8970,7 +9012,14 @@ mod tests {
             tick += 400.0;
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
                 )
                 .unwrap();
         }
@@ -8984,7 +9033,14 @@ mod tests {
             tick += 400.0;
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
                 )
                 .unwrap();
             let snap = engine.lock().unwrap().snapshot();
@@ -9026,7 +9082,10 @@ mod tests {
             state.dial_giveup, None,
             "a dial the OLD radio refused may be perfectly fine on the new one"
         );
-        assert_eq!(state.cat_retry_ms, CAT_RETRY_BASE_MS, "backoff starts fresh");
+        assert_eq!(
+            state.cat_retry_ms, CAT_RETRY_BASE_MS,
+            "backoff starts fresh"
+        );
 
         // …and the engine drops it on the switch too, so the window before the next poll is open.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -9066,7 +9125,14 @@ mod tests {
             tick += 400.0;
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
                 )
                 .unwrap();
         }
@@ -9129,7 +9195,14 @@ mod tests {
             tick += 400.0;
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, tick, &mut ra, &mut rr, &mut station,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
                 )
                 .unwrap();
         }

@@ -1236,7 +1236,10 @@ mod tests {
         let r = parse_dump_state_rx_ranges(ftdx10).expect("a real dump parses");
         assert_eq!(r, vec![(30_000, 60_000_000)]);
         // The whole point: 2 m is NOT covered, and 20 m is — without commanding the radio anywhere.
-        assert!(!ranges_cover(&r, 144_390_000), "an HF/6 m rig cannot do 2 m");
+        assert!(
+            !ranges_cover(&r, 144_390_000),
+            "an HF/6 m rig cannot do 2 m"
+        );
         assert!(ranges_cover(&r, 14_074_000));
         // TX ranges must not leak into the RX list (parsing must stop at the RX terminator).
         assert!(
@@ -1252,7 +1255,10 @@ mod tests {
                       0 0 0 0 0 0 0\n";
         let r2 = parse_dump_state_rx_ranges(ic9700).unwrap();
         assert_eq!(r2.len(), 2);
-        assert!(ranges_cover(&r2, 144_390_000), "the APRS channel is covered");
+        assert!(
+            ranges_cover(&r2, 144_390_000),
+            "the APRS channel is covered"
+        );
         assert!(!ranges_cover(&r2, 14_074_000), "…but 20 m is not");
     }
 
@@ -1262,13 +1268,13 @@ mod tests {
         // as "covers nothing" — a capability probe that wrongly answered "no" would block
         // legitimate QSYs, which is worse than the refused command it exists to avoid.
         for reply in [
-            "RPRT -1\n",                       // the verb is not implemented
-            "RPRT -11\n",                      // not available
-            "",                                // nothing came back
-            "1\n1035\n0\n0 0 0 0 0 0 0\n",     // well-formed but an EMPTY rx list
-            "1\n1035\n0\n30000 60000000\n",    // wrong field count
+            "RPRT -1\n",                                            // the verb is not implemented
+            "RPRT -11\n",                                           // not available
+            "",                                                     // nothing came back
+            "1\n1035\n0\n0 0 0 0 0 0 0\n", // well-formed but an EMPTY rx list
+            "1\n1035\n0\n30000 60000000\n", // wrong field count
             "9\n1035\n0\n30000 7500 0 0 0 0 0\n0 0 0 0 0 0 0\n", // unknown protocol version
-            "hello\nworld\n",                  // not a dump_state at all
+            "hello\nworld\n",              // not a dump_state at all
             "1\n1035\n0\n30000.0 60000000.0 0x1ff -1 -1 0x3 0x3\n", // no terminator
         ] {
             assert_eq!(
