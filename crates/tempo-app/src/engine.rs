@@ -2693,19 +2693,35 @@ impl Engine {
         // activity, and before band canonicalisation the differing channel
         // labels tripped this block. The stored band no longer distinguishes
         // channels, so the FM/SSB family line carries that signal.
+        let band_changed = !self.settings.band.eq_ignore_ascii_case(band);
+        // A channel-CLASS hop on ONE band is a context change too: 2 m USB
+        // weak-signal → 2 m FM simplex is a 1.3 MHz move into different
+        // activity. Before band canonicalisation the differing channel labels
+        // tripped the band test; the stored band no longer distinguishes
+        // channels, so the FM/SSB family line carries that signal.
         let fm_hop =
             self.settings.sideband.eq_ignore_ascii_case("FM") != mode.eq_ignore_ascii_case("FM");
-        if !self.settings.band.eq_ignore_ascii_case(band) || fm_hop {
+        if band_changed || fm_hop {
+            // Stale ACTIVITY: the old band's/segment's decodes, roster and AP
+            // table describe stations that are not here (operator report: stale
+            // roster entries lingered across QSY).
             self.clear_decode_context();
             self.app.clear_stations();
             // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
             // them as AP hypotheses on the new band would seed wrong-call decodes.
             modes::reset_ft8_a7();
-            // Band switch mid-QSO: without a halt the sequencer keeps calling a
-            // station that isn't on the new band (operator report — directed
-            // calls kept going out after a Needed-click QSY). Same semantics as
-            // the Halt Tx button; working a new spot re-arms AFTER this, so the
-            // click-a-needed → QSY → call flow is unaffected.
+        }
+        if band_changed {
+            // ⚠️ BAND CHANGE ONLY — this is an FT-mode TX/timing behaviour and
+            // deliberately NOT widened to the FM hop: without a halt the
+            // sequencer keeps calling a station that isn't on the new band
+            // (operator report — directed calls kept going out after a
+            // Needed-click QSY), but aborting an over in flight for a
+            // same-band channel move would cancel a live FT8 transmission the
+            // loop is mid-way through sending. A queued QSY still lands the
+            // moment the over completes (the loop's mid-TX retune gate).
+            // Same semantics as the Halt Tx button; working a new spot re-arms
+            // AFTER this, so the click-a-needed → QSY → call flow is unaffected.
             self.halt_tx();
         }
         // A band change drops the transient mode override, so a QSY re-asserts the auto sideband
