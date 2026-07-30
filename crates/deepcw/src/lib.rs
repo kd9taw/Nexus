@@ -177,14 +177,20 @@ impl DeepCw {
     pub fn load(engine_dir: &Path) -> Result<Self, String> {
         let meta_path = engine_dir.join("model.onnx.json");
         let model_path = engine_dir.join("model.onnx");
+        // The engine is a PAIR — weights + metadata sidecar — and both are
+        // gitignored, so a build that stages only one silently ships a decoder
+        // that cannot load. Report WHICH half is missing.
+        if !model_path.exists() {
+            return Err(format!("model weights missing: {}", model_path.display()));
+        }
+        if !meta_path.exists() {
+            return Err(format!("model metadata missing: {}", meta_path.display()));
+        }
         let meta: Metadata = serde_json::from_str(
             &std::fs::read_to_string(&meta_path)
                 .map_err(|e| format!("read {}: {e}", meta_path.display()))?,
         )
         .map_err(|e| format!("parse metadata: {e}"))?;
-        if !model_path.exists() {
-            return Err(format!("model not found at {}", model_path.display()));
-        }
         Ok(DeepCw {
             model_path,
             meta,

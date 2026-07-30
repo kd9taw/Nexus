@@ -105,6 +105,21 @@ if [ "$GUI" = 1 ]; then
   ( cd "$REPO/ui" && npm install >/dev/null )       # deps; cargo tauri runs the build
   [ -f "$REPO/src-tauri/icons/icon.ico" ] || python3 "$REPO/scripts/gen-icons.py"
   bash "$REPO/scripts/fetch-hamlib.sh"              # bundle Hamlib for CAT (no-op if staged)
+  # THE SILENT-LOBOTOMY GUARD. The DeepCW engine is a PAIR of gitignored files
+  # (weights + metadata sidecar), so a fresh clone — and every git WORKTREE,
+  # which checks out tracked files only — builds an installer whose AI CW
+  # decoder can never load, with no build-time sign of it. Shipped once exactly
+  # that way (0.21.6: model.onnx staged, model.onnx.json forgotten -> "model not
+  # installed" on the operator's rig). Fail here instead.
+  DEEPCW="$REPO/src-tauri/resources/deepcw"
+  for f in model.onnx model.onnx.json; do
+    if [ ! -s "$DEEPCW/$f" ]; then
+      warn "stage BOTH halves from a checkout that has them:"
+      warn "  cp <checkout>/src-tauri/resources/deepcw/model.onnx.json $DEEPCW/"
+      die "DeepCW resource missing or empty: $DEEPCW/$f"
+    fi
+  done
+  ok "DeepCW engine staged (weights + metadata)"
   # cargo tauri build enables asset embedding (custom-protocol — the fix for the
   # blank "page cannot be displayed" screen) and bundles the offline installer.
   ( cd "$REPO/src-tauri" && cargo tauri build --target "$TARGET" --features radio,custom-protocol --bundles nsis )

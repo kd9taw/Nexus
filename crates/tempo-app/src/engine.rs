@@ -5015,7 +5015,13 @@ impl Engine {
     /// CW copy is stale (operator report: the CW decode area lingered across a QSY).
     fn clear_cw_decode(&mut self) {
         self.ai_cw_text.clear();
-        self.ai_cw_status.clear();
+        // ⚠️ NOT the status: that describes the DECODER'S HEALTH, not the
+        // transcript. Clearing it on a QSY erased a live fault ("model not
+        // installed") and the cockpit then rendered its idle placeholder —
+        // so a band change made a dead decoder look like a listening one, and
+        // the 30 s load-retry backoff kept the lie up until the next attempt.
+        // A successful decode clears it (aicw.rs), which is the only state
+        // that means "healthy".
         self.ai_cw_audio.clear();
         self.ai_cw_fed = 0;
         self.cw_stream.clear();
@@ -11104,14 +11110,21 @@ mod tests {
         // copy is stale and must clear.
         let mut e = Engine::new("W9XYZ", "EN61", 0); // default dial is 20 m
         e.ai_cw_text = "CQ CQ DE K1ABC K1ABC".into();
-        e.ai_cw_status = "copying".into();
+        // A FAULT the decoder reported — decoder HEALTH, not transcript.
+        e.ai_cw_status = "model not installed".into();
         // Band change (band picker, or a cross-band needed-click) clears the copy.
         e.set_frequency(7.030, "40m", "USB");
         assert!(
             e.ai_cw_text.is_empty(),
             "band-change QSY clears the CW decode"
         );
-        assert!(e.ai_cw_status.is_empty());
+        assert_eq!(
+            e.ai_cw_status, "model not installed",
+            "a QSY must NOT erase a decoder fault: clearing it made the cockpit \
+             fall back to its idle 'listening…' placeholder, so a band change \
+             turned a dead decoder into an apparently healthy one for the whole \
+             30 s load-retry backoff (operator report, 0.21.6)"
+        );
         // Same-band QSY by working a needed spot must ALSO clear (a new signal on
         // the same band still means new copy).
         e.ai_cw_text = "W1AW 599 599".into();
