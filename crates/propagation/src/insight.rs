@@ -408,6 +408,12 @@ pub fn generate_insights(
             a.confidence_score
                 .partial_cmp(&b.confidence_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                // Deterministic final tiebreak — which of two tied openings gets
+                // THE "go now" alert must not re-roll each poll. Through the
+                // Band enum's Ord (higher band wins): the field is a String
+                // LABEL, and comparing labels ranks "6m" over "15m" by the
+                // accident of the first digit.
+                .then_with(|| Band::from_label(&a.band).cmp(&Band::from_label(&b.band)))
         })
     {
         let two_way = o.reciprocal_pairs > 0;

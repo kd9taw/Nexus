@@ -150,6 +150,9 @@ const COMMON_BANDS = ['160m', '80m', '40m', '30m', '20m', '17m', '15m', '12m', '
 const NEED_TYPE_OPTS: { value: NeedTypeFilter; label: string }[] = [
   // (DXped restores the old "DXped only" toggle as a need-type chip.)
   { value: 'all', label: 'All' },
+  // Watch-list first: Wanted is the TOP tier (120) — the bucket existed
+  // without a chip, so the rows it filters could be hidden but never asked for.
+  { value: 'wanted', label: 'Watch list' },
   { value: 'atno', label: 'ATNO' },
   { value: 'newBand', label: 'New band' },
   { value: 'newMode', label: 'New mode' },

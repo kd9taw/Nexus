@@ -1045,7 +1045,11 @@ impl OpeningTracker {
         for s in signals {
             by_band.insert(s.band, s);
         }
-        let mut bands: HashSet<Band> = by_band.keys().copied().collect();
+        // BTreeSet: events are pushed in canonical band order, so the stable
+        // confidence sort below cannot inherit a per-poll HashSet order — exact
+        // confidence ties are reachable BY CONSTRUCTION (the weak floor pins to
+        // 0.05, Tropo to 0.5, vanished bands to 0.0).
+        let mut bands: std::collections::BTreeSet<Band> = by_band.keys().copied().collect();
         bands.extend(self.states.keys().copied());
 
         let mut events = Vec::new();
@@ -1167,6 +1171,8 @@ impl OpeningTracker {
             b.confidence
                 .partial_cmp(&a.confidence)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                // Deterministic final tiebreak: higher band first, the better DX bet.
+                .then_with(|| b.band.cmp(&a.band))
         });
         events
     }

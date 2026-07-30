@@ -8,6 +8,27 @@
 
 use std::path::Path;
 
+// Whole-log sweep counter, DEBUG BUILDS ONLY — instrumentation for the
+// traversal-bound test. A per-row `worked_before()` inside `snapshot()` once
+// held the engine mutex long enough to stall the waterfall for 1–2 s, was
+// fixed with a prebuilt set, and then regrew 240 lines below the fix's own
+// comment. A test that pins "snapshot performs a bounded number of sweeps"
+// stops the SHAPE from recurring, not just the instance. Release builds
+// compile this away. PER-THREAD, not a process global: the test harness runs
+// tests in parallel, and a shared counter would count every OTHER test's
+// sweeps into the bound. (Plain comments: doc comments can't attach through
+// the thread_local! macro.)
+#[cfg(debug_assertions)]
+thread_local! {
+    pub static LOG_SWEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn note_log_sweep() {
+    #[cfg(debug_assertions)]
+    LOG_SWEEPS.with(|c| c.set(c.get() + 1));
+}
+
 /// One logged contact.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QsoRecord {
@@ -616,6 +637,7 @@ impl Logbook {
     /// the fix for the waterfall stall: `snapshot()` ran the multiplicative sweep under the
     /// engine mutex that the waterfall's spectrum fetch also needs.
     pub fn worked_call_set(&self) -> std::collections::HashSet<String> {
+        note_log_sweep();
         self.records
             .iter()
             .map(|r| r.call.to_ascii_uppercase())
@@ -623,6 +645,7 @@ impl Logbook {
     }
 
     pub fn worked_before(&self, call: &str) -> bool {
+        note_log_sweep();
         self.records
             .iter()
             .any(|r| r.call.eq_ignore_ascii_case(call))
@@ -630,6 +653,7 @@ impl Logbook {
 
     /// True if `call` was worked on `band` (band-specific dupe check).
     pub fn worked_before_band(&self, call: &str, band: &str) -> bool {
+        note_log_sweep();
         self.records
             .iter()
             .any(|r| r.call.eq_ignore_ascii_case(call) && r.band.eq_ignore_ascii_case(band))

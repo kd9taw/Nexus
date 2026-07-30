@@ -29,19 +29,31 @@ pub fn fetch_paths(mycall: &str, window_secs: i64) -> Result<Vec<PathSpot>, Stri
         window_secs.max(1),
         APPCONTACT
     );
+    // Same transport discipline as every other connector (qrz/clublog/eqsl/
+    // lotw/…): HTTPS only, no redirects, and errors REDACTED to fixed strings —
+    // reqwest's Display can echo the request URL, and while this endpoint
+    // carries no credential today, the next person adding auth to a PSKR-style
+    // fetch copies whichever template exists.
     let c = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent(UA)
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| e.to_string())?;
-    let xml = c
+        .map_err(|_| "PSK Reporter: HTTP client initialization failed".to_string())?;
+    let resp = c
         .get(&url)
         .send()
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
+        .map_err(|_| "PSK Reporter: request failed (network)".to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "PSK Reporter: server returned HTTP {}",
+            resp.status().as_u16()
+        ));
+    }
+    let xml = resp
         .text()
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| "PSK Reporter: response read failed".to_string())?;
     Ok(parse_reports(&xml))
 }
 

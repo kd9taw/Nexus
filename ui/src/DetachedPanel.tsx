@@ -13,7 +13,6 @@ import type {
   Conversation as Conv,
   ModeRequest,
   NeedAlert,
-  NeedTag,
   PropagationSnapshot,
   Settings,
   SourceKind,
@@ -67,7 +66,7 @@ import { OperateCockpit } from './components/OperateCockpit'
 import { FieldDayScoreboard } from './components/FieldDayView'
 import { Waterfall } from './components/Waterfall'
 import { StationList } from './components/StationList'
-import { visibleNeeds, modeClassOf, workTarget } from './features/needs'
+import { visibleNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall } from './features/needs'
 import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { readEnabledModes } from './useFeatures'
@@ -240,31 +239,15 @@ export function DetachedPanel({ panel }: { panel: string }) {
     () => visibleNeeds(needAlerts, readEnabledModes()),
     [needAlerts],
   )
-  const needByCall = useMemo(() => {
-    const m = new Map<string, NeedTag>()
-    for (const a of gatedAlerts) if (a.tags.length > 0) m.set(a.call.toUpperCase(), a.tags[0])
-    return m
-  }, [gatedAlerts])
-  const typeByCall = useMemo(() => {
-    const m = new Map<string, 'Pota' | 'Sota' | 'Dxped'>()
-    for (const a of gatedAlerts) {
-      const k = a.call.toUpperCase()
-      if (m.has(k)) continue
-      const t = a.tags.find((x) => x === 'Pota' || x === 'Sota' || x === 'Dxped')
-      if (t) m.set(k, t as 'Pota' | 'Sota' | 'Dxped')
-    }
-    return m
-  }, [gatedAlerts])
-  const needAlertsByCall = useMemo(() => {
-    const m = new Map<string, NeedAlert[]>()
-    for (const a of gatedAlerts) {
-      const k = a.call.toUpperCase()
-      const arr = m.get(k)
-      if (arr) arr.push(a)
-      else m.set(k, [a])
-    }
-    return m
-  }, [gatedAlerts])
+  // The SHARED chain, same as App.tsx — the hand-rolled loop this replaces was
+  // the pre-fix last-tag-wins map (backend orders alerts priority-DESCENDING,
+  // so "last" was reliably the WEAKEST need): a new entity on the band in
+  // front of you painted in the dim confirmation colour, but only on the
+  // pop-out, so the two windows disagreed about the same callsign.
+  const grouped = useMemo(() => alertsByCall(gatedAlerts), [gatedAlerts])
+  const needByCall = useMemo(() => topNeedByCall(grouped), [grouped])
+  const typeByCall = useMemo(() => activityTypeByCall(gatedAlerts), [gatedAlerts])
+  const needAlertsByCall = grouped
 
   if (isBandMap) {
     if (!snap) return <div className="app detached" />

@@ -11052,63 +11052,6 @@ select.settings-input {
   text-decoration: underline;
 }
 
-/* ---- Live-demo banner (browser/mock mode only) ---- */
-.demo-banner {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 14px;
-  font-size: 12.5px;
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elev));
-  border-bottom: 1px solid transparent;
-  border-image: linear-gradient(90deg, #ffb000, #3cc88c) 1;
-}
-.demo-banner-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #3cc88c;
-  box-shadow: 0 0 0 0 color-mix(in srgb, #3cc88c 70%, transparent);
-  animation: demo-pulse 2s ease-out infinite;
-}
-@keyframes demo-pulse {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, #3cc88c 60%, transparent); }
-  70% { box-shadow: 0 0 0 7px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-.demo-banner-text { flex: 1; }
-.demo-banner-text strong { color: #3cc88c; }
-.demo-banner-cta {
-  flex: 0 0 auto;
-  padding: 3px var(--space-3);
-  border-radius: var(--radius-sm);
-  font-weight: 700;
-  font-size: 12px;
-  color: var(--bg);
-  background: linear-gradient(90deg, #ffb000, #3cc88c);
-  text-decoration: none;
-  white-space: nowrap;
-}
-.demo-banner-cta:hover { filter: brightness(1.08); }
-.demo-banner-dismiss {
-  flex: 0 0 auto;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 13px;
-  line-height: 1;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  transition: var(--transition);
-}
-.demo-banner-dismiss:hover {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--text);
-}
-
 /* ===========================================================================
    Toasts (transient notifications)
    =========================================================================== */

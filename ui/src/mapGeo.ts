@@ -56,9 +56,15 @@ export function usStateBorders(): GeoPermissibleObjects {
   return statesCache
 }
 
-/** A 20°×10° graticule (Maidenhead field boundaries) as a GeoJSON object. */
+/** A 20°×10° graticule (Maidenhead field boundaries) as a GeoJSON object.
+ * Cached like its three siblings above — it was the one basemap geometry
+ * rebuilt (2,519 coordinates) inside the draw effect on every call. */
+let graticuleCache: GeoPermissibleObjects | null = null
 export function graticule(): GeoPermissibleObjects {
-  return geoGraticule().step([20, 10])() as unknown as GeoPermissibleObjects
+  if (!graticuleCache) {
+    graticuleCache = geoGraticule().step([20, 10])() as unknown as GeoPermissibleObjects
+  }
+  return graticuleCache
 }
 
 /** Zoom limits for the interactive view (wheel). The ceiling has to clear

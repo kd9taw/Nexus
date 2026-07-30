@@ -13,7 +13,9 @@
 # toolchain: 1.93.1) instead of floating @stable. A floating stable silently rolls
 # rustfmt/clippy forward and reformats/re-lints the whole tree the day a new Rust
 # ships — which is exactly what bit this repo. Bump the version below deliberately
-# to adopt newer lints. The MSRV job intentionally stays pinned at 1.87.0.
+# to adopt newer lints. The MSRV job intentionally stays pinned at 1.91.0
+# (raised from 1.87 when the RUSTSEC-2026-0217 fix moved deepcw to tract 0.23,
+# whose own rust-version is 1.91 — a security bump outranks MSRV stability).
 
 name: CI
 
@@ -116,6 +118,23 @@ jobs:
       - name: cargo test tempo-audio --features device,serial
         run: cargo test -p tempo-audio --features device,serial
 
+      # `--workspace` uses DEFAULT features, so the propagation `live` tests —
+      # including the seven that assert QRZ/ClubLog/LoTW credentials are never
+      # sent over plain HTTP or echoed into an error — compiled in NO job and
+      # never ran (measured: 326 vs 364 tests). The MSRV job's `cargo check`
+      # doesn't even type-check test code (`--all-targets` is what would).
+      - name: cargo clippy propagation --features live
+        run: cargo clippy -p propagation --features live --all-targets -- -D warnings
+
+      - name: cargo test propagation --features live
+        run: cargo test -p propagation --features live
+
+      # The DeepCW inference bridge: compiled by no other Linux job (the model
+      # file is gitignored, so only compile coverage is possible here — see the
+      # documented silent-lobotomy trap in the release runbook).
+      - name: cargo check tempo-audio --features device,serial,ai-cw
+        run: cargo check -p tempo-audio --features device,serial,ai-cw --all-targets
+
       # src-tauri is its OWN workspace root (empty `[workspace]` table in its
       # Cargo.toml), so `--workspace` above does NOT reach it — verified by
       # planting a type error in src-tauri and watching both `cargo test
@@ -179,10 +198,10 @@ jobs:
         run: bash scripts/check-no-demo.sh
 
   # Job 3 — MSRV: the workspace must compile on the pinned minimum toolchain
-  # (Cargo.toml [workspace.package] rust-version = "1.87"). Build-only check,
+  # (Cargo.toml [workspace.package] rust-version = "1.91"). Build-only check,
   # incl. the propagation `live` feature (the heaviest dep set).
   msrv:
-    name: MSRV (1.87) check
+    name: MSRV (1.91) check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -194,8 +213,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gfortran libfftw3-dev libboost-dev cmake ninja-build pkg-config
 
-      - name: Set up Rust 1.87 toolchain
-        uses: dtolnay/rust-toolchain@1.87.0
+      - name: Set up Rust 1.91 toolchain
+        uses: dtolnay/rust-toolchain@1.91.0
 
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v6
@@ -226,6 +245,67 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories bans sources licenses
+
+      # src-tauri is its OWN workspace root with its OWN Cargo.lock (see the
+      # planted-error note above): the job above never scans the 281 packages
+      # that ship ONLY in the desktop shell, and the two lockfiles can pin
+      # different versions of shared deps — so CI tested a different dependency
+      # set than shipped (45 divergences measured). Do NOT "fix" this by making
+      # src-tauri a workspace member; it needs a WebView toolchain Linux lacks.
+      - name: cargo-deny (src-tauri lockfile)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources licenses
+          manifest-path: src-tauri/Cargo.toml
+
+      # Shared deps must resolve identically in both lockfiles where semver
+      # allows it, or CI tests a different dependency set than ships (measured
+      # before this gate: 45 divergences, including the tract inference stack
+      # the AI CW decoder actually runs on). Incompatible-major pairs (the
+      # tauri stack legitimately requires newer majors than the workspace) are
+      # REPORTED, not failed — they cannot align. KNOWN_BLOCKED names the pairs
+      # where BOTH directions are wedged by hard requirements, each with the
+      # blocker recorded; new compatible drift fails until aligned with
+      # `cargo update -p <name> --precise <ver>`.
+      - name: lockfile divergence (workspace vs src-tauri)
+        run: |
+          python3 - <<'PY'
+          import re, sys
+          # Pairs wedged on BOTH sides by hard requirements go here, each with
+          # the blocking requirement named. (The time family lived here until
+          # the tract 0.23 bump dropped time from the workspace tree entirely.)
+          KNOWN_BLOCKED = set()
+          def pins(path):
+              d = {}
+              for n, v in re.findall(r'name = "([^"]+)"\nversion = "([^"]+)"', open(path).read()):
+                  d.setdefault(n, []).append(v)
+              return d
+          def ck(v):
+              p = v.split('+')[0].split('.')
+              return (p[0], p[1]) if p[0] == '0' else (p[0],)
+          ws, st = pins('Cargo.lock'), pins('src-tauri/Cargo.lock')
+          bad = []
+          for n in sorted(ws.keys() & st.keys()):
+              # A name can appear at SEVERAL majors in one lockfile (src-tauri
+              # holds reqwest 0.12 AND 0.13); compare per semver-compat range,
+              # where cargo guarantees a single resolved version per side.
+              a = {ck(v): v for v in ws[n]}
+              b = {ck(v): v for v in st[n]}
+              for key in sorted(a.keys() & b.keys()):
+                  if a[key] != b[key]:
+                      if n in KNOWN_BLOCKED:
+                          print(f"info: known-blocked {n}: {a[key]} vs {b[key]}")
+                      else:
+                          bad.append((n, a[key], b[key]))
+          for n, x, y in bad:
+              print(f"DIVERGED {n}: workspace {x} vs src-tauri {y}")
+          if bad:
+              print(f"{len(bad)} alignable shared dependencies resolve differently — "
+                    "`cargo update -p <name>@<ver> --precise <ver>` one side into line "
+                    "(or add to KNOWN_BLOCKED with the blocking requirement named).")
+              sys.exit(1)
+          print("lockfiles agree on all alignable shared dependencies")
+          PY
 
   # Job 5 — Windows cross-compile. The desktop shell (src-tauri) is outside the
   # workspace and needs a WebView/MinGW toolchain the Linux test job lacks, so

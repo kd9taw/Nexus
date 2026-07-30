@@ -598,7 +598,13 @@ impl AppState {
         self.radio.slot = slot;
 
         // Update the link from the strongest (highest-SNR) decode this slot.
-        if let Some(best) = decodes.iter().max_by_key(|d| d.snr) {
+        // SNR is integer dB, so ties are routine — break to the LOWEST audio
+        // frequency (stable, and the readout's DT/freq then belong to the same
+        // decode on every identical batch, not to whichever came last).
+        if let Some(best) = decodes
+            .iter()
+            .max_by_key(|d| (d.snr, std::cmp::Reverse(d.freq as i64)))
+        {
             self.link.snr_db = best.snr as f32;
             self.link.dt_sec = best.dt;
             self.link.freq_hz = best.freq;

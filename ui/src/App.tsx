@@ -55,7 +55,7 @@ import { useJourneyUnlocks } from './useJourneyUnlocks'
 import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
-import { visibleNeeds, workTarget, modeClassOf, topNeedByCall } from './features/needs'
+import { visibleNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
@@ -714,29 +714,11 @@ export default function App() {
   // needByCall keeps only tags[0], so a POTA activator that's ALSO a new band shows the band
   // colour and loses the program tag — this map surfaces the program badge regardless, so the
   // band strip/map can flag "this is a park/summit/DXped" even when a higher need wins the colour.
-  const typeByCall = useMemo(() => {
-    const m = new Map<string, 'Pota' | 'Sota' | 'Dxped'>()
-    for (const a of visibleAlerts) {
-      const k = a.call.toUpperCase()
-      if (m.has(k)) continue
-      const t = a.tags.find((x) => x === 'Pota' || x === 'Sota' || x === 'Dxped')
-      if (t) m.set(k, t as 'Pota' | 'Sota' | 'Dxped')
-    }
-    return m
-  }, [visibleAlerts])
+  const typeByCall = useMemo(() => activityTypeByCall(visibleAlerts), [visibleAlerts])
   // Full alert set per heard call (all bands/modes) for the band-activity decode feed's
   // need-icons + row colouring — richer than needByCall's top-tag-only map. Keyed
   // UPPERCASE; from the same GATED visibleAlerts so a disabled mode never tags a row.
-  const needAlertsByCall = useMemo(() => {
-    const m = new Map<string, NeedAlert[]>()
-    for (const a of visibleAlerts) {
-      const k = a.call.toUpperCase()
-      const arr = m.get(k)
-      if (arr) arr.push(a)
-      else m.set(k, [a])
-    }
-    return m
-  }, [visibleAlerts])
+  const needAlertsByCall = useMemo(() => alertsByCall(visibleAlerts), [visibleAlerts])
   // Need-tier per heard call for roster/map/band-strip colouring — each call's STRONGEST
   // need, derived from the grouped set above so there is ONE definition of that (shared with
   // the roster's "sort by need"). From the GATED alerts, so a disabled mode never colours a

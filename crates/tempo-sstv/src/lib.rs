@@ -64,7 +64,6 @@ pub mod mode_robot;
 pub mod mode_scottie;
 pub mod modespec;
 pub mod resample;
-#[allow(dead_code)]
 pub(crate) mod snr;
 pub(crate) mod sync;
 pub(crate) mod tone;

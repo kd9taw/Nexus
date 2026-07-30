@@ -6,6 +6,7 @@ import type { NeedAlert, NeedTag } from './types'
 /** Need-type filter buckets surfaced in the filter bar. */
 export type NeedTypeFilter =
   | 'all'
+  | 'wanted'
   | 'atno'
   | 'newBand'
   | 'newMode'
@@ -38,8 +39,12 @@ export const DEFAULT_FILTERS: NeededFilters = {
   modes: { ...ALL_MODES_ON },
 }
 
-/** NeedTag → filter bucket mapping. */
-const TAG_TO_BUCKET: Partial<Record<NeedTag, NeedTypeFilter>> = {
+/** NeedTag → filter bucket mapping. TOTAL (`Record`, not `Partial`) on
+ * purpose: the map used to omit `Wanted` — the TOP tier at 120 — so any active
+ * filter hid the operator's own watch-list rows, with no chip to ask for them.
+ * A new NeedTag now fails to compile until it names its bucket. */
+const TAG_TO_BUCKET: Record<NeedTag, NeedTypeFilter> = {
+  Wanted:    'wanted',
   NewEntity: 'atno',
   NewBand:   'newBand',
   NewMode:   'newMode',
@@ -56,7 +61,7 @@ const TAG_TO_BUCKET: Partial<Record<NeedTag, NeedTypeFilter>> = {
  * from an older build; an unknown value must fall back to 'all', not silently
  * empty the board with no active chip. */
 export const NEED_TYPE_VALUES: readonly NeedTypeFilter[] = [
-  'all', 'atno', 'newBand', 'newMode', 'newZone', 'newGrid', 'newState', 'confirm', 'dxped', 'pota', 'sota',
+  'all', 'wanted', 'atno', 'newBand', 'newMode', 'newZone', 'newGrid', 'newState', 'confirm', 'dxped', 'pota', 'sota',
 ]
 
 /** True when the alert matches the given filter set (all filters AND together). */
