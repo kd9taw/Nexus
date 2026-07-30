@@ -7,6 +7,7 @@ import {
   strongestNeed,
   tagsForSurface,
   topNeedByCall,
+  alertsByCall,
   visibleNeeds,
   workTarget,
 } from './needs'
@@ -241,6 +242,18 @@ describe('strongestNeed', () => {
     expect(strongestNeed([])).toBeNull()
     expect(strongestNeed(undefined)).toBeNull()
     expect(strongestNeed(null)).toBeNull()
+  })
+})
+
+describe('alertsByCall → topNeedByCall (the shared host chain)', () => {
+  // The exact pre-fix failure, end to end through the SHARED helpers every host
+  // must use: the backend hands alerts out priority-DESCENDING, so a last-wins
+  // grouping coloured a NewEntity-on-20m + Confirm-on-40m call as the dim
+  // Confirm — but only on whichever pop-out re-rolled the map by hand.
+  it('NewEntity on 20m + Confirm on 40m resolves to NewEntity', () => {
+    const alerts = [ranked(['NewEntity'], 100, '20m'), ranked(['Confirm'], 10, '40m')]
+    const top = topNeedByCall(alertsByCall(alerts))
+    expect(top.get(alerts[0].call.toUpperCase())).toBe('NewEntity')
   })
 })
 

@@ -97,7 +97,11 @@ export function callHistory(log: LoggedQso[], call: string, band: string): CallH
     if (q.mode && !modes.includes(q.mode)) modes.push(q.mode)
     if (q.whenUnix > lastUnix) lastUnix = q.whenUnix
     if (q.confirmed) confirmedCount++
-    if (band && q.band === band) dupeThisBand = true
+    // Case-folded like every sibling (band_key, dedup_key, reconcile): LoTW
+    // exports spell bands uppercase, so a raw compare left the dupe cue dark
+    // for every imported contact.
+    if (band && (q.band ?? '').trim().toLowerCase() === band.trim().toLowerCase())
+      dupeThisBand = true
   }
   return {
     qsos,

@@ -40,6 +40,7 @@ import cqzonesUrl from '../data/cqzones.geojson?url'
 import { satChasingSet, toggleSatChasing } from '../features/satChase'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { gridToLatLon, haversineKm, bearingDeg, magneticDeg, type LatLon } from '../grid'
+import { heatPulse, sectorPulse } from '../features/pulse'
 import { openingModeColor } from '../bandColors'
 import {
   APRS_HOME_ZOOM,
@@ -356,8 +357,20 @@ function fadeStop(hex: string): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, 0)`
 }
 
+// Memoized per token: 24 call sites, several inside the per-station / per-APRS
+// draw loops — hundreds of live getComputedStyle reads per frame at full map,
+// worst during a big opening when the frame budget is already gone. The values
+// are pure theme tokens, so the cache empties when the theme changes (below).
+const cssVarCache = new Map<string, string>()
+export function invalidateCssVarCache(): void {
+  cssVarCache.clear()
+}
 function cssVar(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888'
+  const hit = cssVarCache.get(name)
+  if (hit !== undefined) return hit
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888'
+  cssVarCache.set(name, v)
+  return v
 }
 function snrToken(snr: number): { v: string; r: number } {
   if (snr >= -12) return { v: '--snr-strong', r: 5 }
@@ -1501,8 +1514,9 @@ export function MapView({
         octx.globalCompositeOperation = 'lighter'
         const openBands = new Set((prop?.openings ?? []).map((o) => o.band))
         // Live time, NOT nowMs (the 60 s greyline tick — it froze the sine). The
-        // 1 s pulseTick effect forces the redraws that make this animate.
-        const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 450)
+        // 1 s pulseTick effect forces the redraws that make this animate. Shared
+        // with the 3-D globe (features/pulse.ts) so 2D↔3D parity is structural.
+        const pulse = heatPulse(Date.now())
         for (const { sp, xy } of placedSpots) {
           if (focusBand && sp.band !== focusBand) continue
           const ageMin = sp.ageSecs / 60
@@ -1538,7 +1552,7 @@ export function MapView({
       for (const o of prop?.openings ?? []) {
         if (!(o.maxKm > 0)) continue
         const color = openingModeColor(o.mode)
-        const pulse = 0.75 + 0.25 * Math.sin(Date.now() / 700)
+        const pulse = sectorPulse(Date.now())
         // Wedge outline: QTH → arc across the far edge → back. Sampled along
         // great-circle destination points so it follows the projection.
         const STEPS = 16
@@ -1818,7 +1832,10 @@ export function MapView({
       ctx.lineWidth = 1.5
       ctx.stroke()
     }
-    // theme is a draw dependency so colors refresh on theme switch.
+    // theme is a draw dependency so colors refresh on theme switch — and the
+    // cssVar cache empties FIRST, or the memoized tokens would repaint the old
+    // theme's colors.
+    invalidateCssVarCache()
     void theme
   }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick])
 

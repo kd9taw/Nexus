@@ -66,6 +66,41 @@ export function strongestNeed(alerts: NeedAlert[] | null | undefined): NeedAlert
  * Calls whose every alert is tagless are omitted, so `has(call)` still means "something is
  * needed here".
  */
+/**
+ * Group gated alerts per UPPERCASE callsign — THE one grouping every host
+ * (docked App, pop-out DetachedPanel, any future surface) derives its
+ * colour/badge maps from. The pop-out once re-rolled this by hand with the
+ * pre-fix last-tag-wins loop, so the torn-off band map coloured a new entity
+ * as the weakest need while the docked window showed it correctly.
+ */
+export function alertsByCall(alerts: NeedAlert[]): Map<string, NeedAlert[]> {
+  const m = new Map<string, NeedAlert[]>()
+  for (const a of alerts) {
+    const k = a.call.toUpperCase()
+    const arr = m.get(k)
+    if (arr) arr.push(a)
+    else m.set(k, [a])
+  }
+  return m
+}
+
+/**
+ * Activity TYPE per heard call (POTA / SOTA / DXpedition), independent of the
+ * need tier: topNeedByCall keeps only the strongest tag, so a POTA activator
+ * that is ALSO a new band would lose its program badge to the band colour —
+ * this map surfaces the program regardless.
+ */
+export function activityTypeByCall(alerts: NeedAlert[]): Map<string, 'Pota' | 'Sota' | 'Dxped'> {
+  const m = new Map<string, 'Pota' | 'Sota' | 'Dxped'>()
+  for (const a of alerts) {
+    const k = a.call.toUpperCase()
+    if (m.has(k)) continue
+    const t = a.tags.find((x) => x === 'Pota' || x === 'Sota' || x === 'Dxped')
+    if (t) m.set(k, t as 'Pota' | 'Sota' | 'Dxped')
+  }
+  return m
+}
+
 export function topNeedByCall(alertsByCall: Map<string, NeedAlert[]>): Map<string, NeedTag> {
   const m = new Map<string, NeedTag>()
   for (const [call, alerts] of alertsByCall) {
