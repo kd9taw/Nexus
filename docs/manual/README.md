@@ -57,4 +57,4 @@ Nexus is a free, GPLv3, all-mode amateur radio operations center: FT8/FT4 digita
 ---
 
 *Nexus is GPL-3.0. Author: KD9TAW. Source: [sourceforge.net/projects/nexus-ham-radio](https://sourceforge.net/projects/nexus-ham-radio).*
-*The FT8/FT4 tier is the production core. TempoFast/TempoDeep are simulation-validated, not yet proven on the air — on-air decode-rate reports are the remaining gate.*
+*The FT8/FT4 tier is the production core. TempoFast and TempoDeep have closed real links on the air, and their published thresholds are still bench numbers; on-air decode-rate reports are the remaining gate.*

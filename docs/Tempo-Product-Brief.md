@@ -45,7 +45,7 @@ The core isn't the interface — it's the waveforms. Tempo gives you a two-tier 
 **TempoFast — the fast tier, built for conversation**
 - A **4-second cycle** (~3.5 s of waveform), designed to be narrow (est. **~42–67 Hz**).
 - A **coherent** 4-CPM waveform — wrings the most information out of every second of air time. That's the speed lever.
-- **Incremental-redundancy retransmission (IR-HARQ)** — live and on by default. A frame that fails standalone is buffered and joint-turbo-combined with its RV1/RV2 resends, accumulating coding gain across retransmits — unusual for amateur text modes. Measured ~+2.5 dB threshold shift and ~2× QSO completion in the −11…−13 dB zone through the full pipeline *(simulation-validated; not yet confirmed on the air)*.
+- **Incremental-redundancy retransmission (IR-HARQ)** — live and on by default. A frame that fails standalone is buffered and joint-turbo-combined with its RV1/RV2 resends, accumulating coding gain across retransmits — unusual for amateur text modes. Measured ~+2.5 dB threshold shift and ~2× QSO completion in the −11…−13 dB zone through the full pipeline *(bench measurement from simulation, not an on-air result)*.
 
 **TempoDeep — the robust tier, built to survive the path**
 - **Non-coherent 8-FSK**, ~50 Hz wide, 15-second cycle. Never relies on carrier phase, so it **rides through fading** that collapses coherent modes.
@@ -95,9 +95,9 @@ For the full protocol deep-dive, see [TempoFast-Protocol.md](TempoFast-Protocol.
 We'd rather under-promise. Here's exactly where things stand:
 
 - **The app is feature-complete and runs on Windows.** The installer is a ~210 MB per-user, **unsigned, cross-compiled** build that bundles WebView2 and Hamlib offline — no admin rights, no internet needed. Expect a SmartScreen warning ("More info → Run anyway"), as with any unsigned beta. macOS / Linux desktop builds are Phase 2.
-- **The waveforms are validated by simulation only** — AWGN and Rayleigh-fading sweeps in the test harness. They have **not yet been confirmed on the air.** The simulated thresholds (TempoFast ~−15 dB, TempoDeep ~−18.6 dB) are bench numbers, not field results.
+- **The waveforms have closed real links on the air**, including a completed two-station QSO (KD9TAW and N9UM, 6 m) on 2026-07-26. **Their published thresholds are still bench numbers** (TempoFast ~−15 dB, TempoDeep ~−18.6 dB) from AWGN and Rayleigh-fading sweeps in the test harness, not field results.
 - **On-air decode-rate-vs-SNR validation is the #1 remaining gate** — the single biggest reason the project needs operators.
-- **Shipped in v0.2.0 (beta):** **IR-HARQ** joint-turbo soft-combining is now live end-to-end and on by default; **TempoDeep full-passband acquisition** now decodes every signal across 200–2900 Hz per slot (the tuned RX offset is now just a waterfall marker / TX-pairing hint). The Windows cross-build is validated — modem self-tests, `tempo.exe`, and the NSIS installer all cross-build clean, with 5/5 Windows test exes passing. **Still simulation- and cross-build-validated only — not yet confirmed on the air.**
+- **Shipped in v0.2.0 (beta):** **IR-HARQ** joint-turbo soft-combining is now live end-to-end and on by default; **TempoDeep full-passband acquisition** now decodes every signal across 200–2900 Hz per slot (the tuned RX offset is now just a waterfall marker / TX-pairing hint). The Windows cross-build is validated — modem self-tests, `tempo.exe`, and the NSIS installer all cross-build clean, with 5/5 Windows test exes passing. **The figures remain bench and cross-build measurements rather than on-air results.**
 - **Known limits:** Tempo chat conversations run on the TempoFast tier only; FT8/FT4 operating is a separate, fully live mode.
 
 ---

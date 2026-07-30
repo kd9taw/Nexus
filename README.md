@@ -364,7 +364,7 @@ The modem is Fortran + C behind a Rust FFI, so the **GNU toolchain** is required
 
 - **[Comprehensive overview](docs/OVERVIEW.md)** — every surface, in depth
 - **[Operator manual](docs/manual/)** — setup, per-mode operating guides, integrations, troubleshooting
-- **[Tempo protocol specification](docs/FT1-Protocol.md)** — the native waveforms, for implementers
+- **[Tempo protocol specification](docs/Tempo-Protocol.md)** — the native waveforms, for implementers
 - **[Frequency plan](docs/FREQUENCIES.md)** — where the TempoFast/TempoDeep tiers live on the bands
 - **[Changelog](CHANGELOG.md)** — every release, in operator-facing prose
 

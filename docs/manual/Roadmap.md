@@ -29,7 +29,7 @@ These items are not yet built. They are listed in rough priority order within th
 
 **The gating item — on-air TempoFast/TempoDeep validation**
 
-Everything else in digital modes is downstream of this. Nexus ships simulation-validated TempoFast (AWGN 50 % ≈ −15 dB) and TempoDeep (≈ −18.6 dB AWGN, ~3.7 dB fading penalty) modems with IR-HARQ combining (~+2.5 dB measured through the full live pipeline). What simulation cannot answer is decode-rate vs. SNR on real, varied HF paths across different operators and antenna systems. Until on-air validation produces honest reports — band, dial, tier, distance, conditions, decode counts vs. expectation — the TempoFast/TempoDeep modes should not be treated as operationally reliable. This is the single highest-priority unsolved problem.
+Everything else in digital modes is downstream of this. Nexus ships bench-validated TempoFast (AWGN 50 % ≈ −15 dB) and TempoDeep (≈ −18.6 dB AWGN, ~3.7 dB fading penalty) modems with IR-HARQ combining (~+2.5 dB measured through the full live pipeline). What simulation cannot answer is decode-rate vs. SNR on real, varied HF paths across different operators and antenna systems. Both tiers have closed real links on the air, including a completed two-station QSO on 6 m. Until on-air validation produces honest reports — band, dial, tier, distance, conditions, decode counts vs. expectation — the TempoFast/TempoDeep modes should not be treated as operationally reliable. This is the single highest-priority unsolved problem.
 
 **Operating modes**
 - Contest modes (NA VHF, RTTY Roundup, WW Digi) — serial exchange, contest dupe logic, dedicated log.

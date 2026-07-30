@@ -80,7 +80,7 @@ If you hear the band by ear but Nexus decodes nothing, check in order:
 
 1. Confirm you are on a **TempoFast or TempoDeep calling frequency**, not an FT8/FT4 dial. The two tier waveforms decode nothing of each other.
 2. Both ends must be on the **same tier** (TempoFast or TempoDeep) — the tier toggle is in the top bar.
-3. All SNR performance figures for TempoFast/TempoDeep are simulation-validated only; on-air decode behavior may differ from the spec thresholds.
+3. All SNR performance figures for TempoFast/TempoDeep are bench numbers from simulation, so on-air decode behaviour may differ from the spec thresholds.
 
 ---
 

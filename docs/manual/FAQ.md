@@ -59,7 +59,7 @@ The Coordinated QSY (Roam) feature — if enabled — is plain-text, in-the-clea
 
 ### Is TempoFast proven on-air?
 
-**Honestly: beta, simulation-validated only.** The simulated SNR thresholds (TempoFast ≈ −15 dB AWGN, TempoDeep ≈ −18.6 dB AWGN, ~3.7 dB Rayleigh-fading penalty) and IR-HARQ gains (~+2.5 dB through the live pipeline) have not yet been confirmed over real propagation paths. The app itself is feature-complete and the modem library passes loopback integration tests, but on-air decode-rate-vs-SNR validation is the project's primary remaining gate.
+**Honestly: the modes work on the air, the numbers are from the bench.** The first TempoFast decode over the air was 2026-07-21 and the first two-station QSO (KD9TAW and N9UM, 6 m) completed 2026-07-26. But the SNR thresholds (TempoFast ≈ −15 dB AWGN, TempoDeep ≈ −18.6 dB AWGN, ~3.7 dB Rayleigh-fading penalty) and IR-HARQ gains (~+2.5 dB through the live pipeline) all come from simulation, and have not been measured over real propagation paths. Decode rate against signal level on the air is the primary remaining gate.
 
 If you get it on the air, honest decode reports (band, dial, distance, conditions, what you heard vs. what you expected) are the single most useful contribution. See [How to help](#how-do-i-help-the-project).
 

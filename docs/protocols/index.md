@@ -18,8 +18,8 @@ speed-versus-reach-versus-robustness decision, not a decision about what you can
 
 ## One honest table
 
-Performance figures for **TempoFast and TempoDeep are simulation-validated only** — not yet
-on-air proven. FT8/FT4 figures are the commonly-cited operational values. Thresholds
+Performance figures for **TempoFast and TempoDeep are bench numbers** from simulation, not
+on-air measurements, though both tiers have closed real links on the air. FT8/FT4 figures are the commonly-cited operational values. Thresholds
 are 50%-decode points in a 2500 Hz reference bandwidth.
 
 | | **FT8** | **FT4** | **[TempoFast](ft1.md)** | **[TempoDeep](dx1.md)** |
@@ -53,7 +53,7 @@ are 50%-decode points in a 2500 Hz reference bandwidth.
 TempoFast and TempoDeep are **experimental modes in open beta.** The waveforms are implemented
 and TempoFast's IR-HARQ is live, but every sensitivity number is from **simulation** — AWGN
 and Rayleigh-fading bench sweeps, re-validated in the test suite and the Windows
-cross-build. They are **not on-air proven.** Decode-rate-versus-SNR on real bands is
+cross-build. They are bench numbers rather than field results. Decode rate against signal level on real bands is
 the project's #1 remaining gate, and honest field reports are the most valuable thing
 a beta operator can send back.
 

@@ -18,7 +18,8 @@ and the Connect map — see the [README](../README.md) crate map and the
 
 > **Validation status — read this first.** The TempoFast and TempoDeep waveforms are validated
 > by **simulation and Windows cross-build only** (AWGN and Rayleigh-fading sweeps,
-> plus the Windows test exes), **not yet on-air / hardware-validated**. IR-HARQ
+> plus the Windows test exes). Both tiers have closed real links on the air; the
+> figures themselves are bench numbers. IR-HARQ
 > joint combining and full-passband TempoDeep receive are **live** (see §6), but their
 > on-air gains are unproven. Nothing here should be read as an on-air sensitivity
 > claim for TempoFast/TempoDeep — **on-air decode-rate-vs-SNR is their open gate.**
@@ -686,7 +687,7 @@ the bundled UI rather than a blank page).
   (self-contained). Released as **v0.2.0 (beta)**.
 
 **Validation status (the hard gate):** simulation- and Windows-cross-build-validated,
-**not yet on-air / hardware-validated**. TempoFast AWGN 50% ≈ −15 dB; TempoDeep AWGN 50%
+**bench numbers, not on-air measurements**. TempoFast AWGN 50% ≈ −15 dB; TempoDeep AWGN 50%
 ≈ −18.6 dB with a ~3.7 dB fading penalty. IR-HARQ and full-passband TempoDeep are live
 (§6) but their gains are simulation-measured only. **On-air decode-rate-vs-SNR is
 pending** and is the remaining gate before relying on Nexus operationally.

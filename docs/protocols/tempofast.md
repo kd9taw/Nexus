@@ -4,8 +4,9 @@
 story; for the full DSP and math, see [TempoFast-Protocol.md](../TempoFast-Protocol.md).*
 
 > **Read this first.** TempoFast is **experimental and in open beta.** Every sensitivity
-> number below is **simulation-validated only** — bench sweeps in AWGN and
-> Rayleigh fading, not on-air proven. And the headline honesty: **TempoFast does not
+> number below is a **bench figure** from sweeps in AWGN and
+> Rayleigh fading rather than an on-air measurement, though the mode itself has
+> closed real links on the air. And the headline honesty: **TempoFast does not
 > beat FT8 on raw sensitivity.** It trades roughly 6 dB of single-shot reach
 > (−15 vs ~−21 dB, simulated) for a nearly 4× faster cycle plus a retransmission-
 > combining path FT8 doesn't have. Proving
@@ -97,9 +98,9 @@ and there is a HARQ on/off toggle for A/B comparison.
 
 ## The honest numbers
 
-Every figure in this table is **simulation-validated** — from the project's AWGN and
+Every figure in this table is a **bench number** from the project's AWGN and
 Rayleigh-fading test harnesses, re-validated in the Rust test suite and the Windows
-cross-build. **None of it is on-air proven yet.** Thresholds are 50%-decode points
+cross-build, rather than an on-air measurement. Thresholds are 50%-decode points
 referenced to a 2500 Hz noise bandwidth, the standard yardstick for these modes.
 
 | What | Figure | Basis |

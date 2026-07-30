@@ -2,7 +2,7 @@
 
 Tempo is Nexus's chat-first weak-signal text layer: two waveform tiers, a presence roster, store-and-forward directed messaging, an IR-HARQ rescue mechanism, and opt-in Coordinated QSY — all built on the WSJT-X 77-bit message format.
 
-> **Honest beta framing.** Every SNR threshold and HARQ gain figure in this page is simulation-validated, not on-air proven. Decode-rate-vs-SNR validation on a real radio path is the project's primary remaining gate. If you get Tempo on the air, honest reports are exactly what the project needs. See [Roadmap](Roadmap.md).
+> **Honest framing.** Tempo works on the air: the first TempoFast decode was 2026-07-21 and the first two-station QSO (KD9TAW and N9UM, 6 m) completed 2026-07-26. Every SNR threshold and HARQ gain figure on this page is still a bench number from simulation, so decode rate against signal level on a real path is the primary remaining gate. If you get Tempo on the air, honest reports are exactly what the project needs. Check the clock reading at **both** ends first: a few tenths of a second of UTC error is invisible on FT8 and was fatal to Tempo before 0.19.6. See [Roadmap](Roadmap.md).
 
 ---
 
@@ -90,7 +90,7 @@ Chat and Field Day modes always send RV0 — the escalating ARQ only applies in 
 
 The engine tracks a **session IR-HARQ rescue count** — the number of frames recovered by combining two or more retransmissions. This counter appears in the Nexus UI. A HARQ badge on a decode row (e.g. `HARQ.RV1`) shows how many redundancy versions were combined for that frame.
 
-**Simulated gains (not on-air proven):**
+**Simulated gains (bench figures, not on-air measurements):**
 - Combiner gain in AWGN: **+1.3 dB**
 - Combiner gain under 1 Hz/1 ms fading (3-TX): **+3.2 dB**
 - Through the full live pipeline: **~+2.5 dB threshold shift**, **~2× QSO completion** in the −11 to −13 dB marginal zone
@@ -145,7 +145,7 @@ For full legal framing and Part 97 citations see [Privacy and Coordinated QSY](P
 
 ## Limits / not yet
 
-- **All SNR thresholds and HARQ gains are simulation-validated only.** TempoFast ≈ −15 dB AWGN, TempoDeep ≈ −18.6 dB AWGN, TempoDeep ~3.7 dB fading penalty, HARQ combiner +1.3/+3.2 dB, pipeline ~+2.5 dB: none of these have been confirmed on the air. On-air decode-rate-vs-SNR validation is the project's primary remaining gate. Do not cite these as guaranteed on-air sensitivity.
+- **All SNR thresholds and HARQ gains are bench numbers.** TempoFast ≈ −15 dB AWGN, TempoDeep ≈ −18.6 dB AWGN, TempoDeep ~3.7 dB fading penalty, HARQ combiner +1.3/+3.2 dB, pipeline ~+2.5 dB: every one comes from simulation rather than a measurement on the air. The modes do work on the air, but decode rate against signal level there is uncharacterised, so do not cite these as guaranteed on-air sensitivity.
 - **TempoFast occupied bandwidth is not a published constant.** Source lists an estimate of ~42–67 Hz; the protocol doc explicitly warns against citing older round numbers.
 - **IR-HARQ applies to TempoFast QSO mode only.** Chat and Field Day always send RV0; TempoDeep has no IR-HARQ.
 - **Free-text is capped at 9 chunks (~90 characters).** Messages beyond this are silently truncated by the backend.

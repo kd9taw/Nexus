@@ -4,7 +4,7 @@
 
 An operator-friendly tour of how the TempoFast/TempoDeep protocol layer is built and how its messages move. This is the *summary* — for the full design, the tiering rationale, and the DSP derivations, read the developer reference: [`docs/ARCHITECTURE.md`](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/ARCHITECTURE.md).
 
-> **Validation status (v0.2.0 beta).** Nexus's two waveforms — including **live IR-HARQ** and **full-passband TempoDeep acquisition** — are validated by **simulation + Windows cross-build** (AWGN + fading), **not yet on-air**. On-air decode-rate-vs-SNR is the open gate. The FT8/FT4 tier is Phase 2 (internals compiled in, no decode wired). Nothing here is an on-air sensitivity claim.
+> **Validation status.** Nexus's two waveforms, including **live IR-HARQ** and **full-passband TempoDeep acquisition**, have closed real links on the air: first TempoFast decode 2026-07-21, first two-station Tempo QSO 2026-07-26. Their performance figures come from **simulation and the Windows cross-build** (AWGN and fading), so decode rate against signal level on real paths is the open gate and nothing here is an on-air sensitivity claim. **The FT8/FT4 tier is the production core of the application**, not a future phase; the "Phase 2" framing in older revisions of this document is obsolete.
 
 ---
 
@@ -49,7 +49,7 @@ The live engine is **transport-agnostic**: the host drives it once per slot — 
 
 On the **TempoFast** fast tier, IR-HARQ (incremental-redundancy hybrid ARQ) is wired **end-to-end** and on by default. A frame that fails to decode standalone (RV0) is **buffered and joint-turbo-combined** with its retransmissions: each redundancy version carries a distinct Costas sync and punctured `LDPC(348,91)` parity (RV0 = the base 174 bits; RV1/RV2 = 87 new parity + 87 repeated systematic). Costas variants are RV0 `[0,2,3,1]`, RV1 `[1,3,2,0]`, RV2 `[3,0,2,1]`. Combiner slots expire after 30 s with a ±10 Hz frequency tolerance.
 
-A coherent CPM-Costas discriminator (`ft1_rv_detect`) identifies which RV arrived (>99% accurate, <1% false to −11 dB), and the **QSO sequencer drives the escalation**: RV 0→1→2 on an implicit NAK, resetting on an implicit ACK. Measured combiner gain is +1.3 dB AWGN and +3.2 dB under 1 Hz / 1 ms fading (both 3-TX); through the full live pipeline that's ≈ +2.5 dB threshold shift and ≈ 2× QSO completion in the −11…−13 dB zone — **simulation-measured, not yet on-air.** The UI surfaces a `HARQ.RVn` decode badge, an on/off toggle (default on), and a session rescue counter; `Decode.rv` carries how many RVs were combined.
+A coherent CPM-Costas discriminator (`ft1_rv_detect`) identifies which RV arrived (>99% accurate, <1% false to −11 dB), and the **QSO sequencer drives the escalation**: RV 0→1→2 on an implicit NAK, resetting on an implicit ACK. Measured combiner gain is +1.3 dB AWGN and +3.2 dB under 1 Hz / 1 ms fading (both 3-TX); through the full live pipeline that's ≈ +2.5 dB threshold shift and ≈ 2× QSO completion in the −11…−13 dB zone — **bench-measured in simulation**, not on the air. The UI surfaces a `HARQ.RVn` decode badge, an on/off toggle (default on), and a session rescue counter; `Decode.rv` carries how many RVs were combined.
 
 ---
 

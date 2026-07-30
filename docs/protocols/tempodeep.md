@@ -5,7 +5,7 @@ This page is the approachable story; the full DSP is in
 [TempoFast-Protocol.md](../TempoFast-Protocol.md).*
 
 > **Read this first.** TempoDeep is **experimental and in open beta.** Its sensitivity and
-> fading figures are **simulation-validated only** — bench sweeps, not on-air proven.
+> fading figures are **bench numbers** from sweeps rather than on-air measurements.
 > The use cases below (NVIS, polar, rough conditions) are stated as **design
 > intent**, not as demonstrated results. On-air characterization is the goal of the
 > beta.
@@ -47,7 +47,7 @@ whole reason the mode exists.
 
 ## The facts
 
-All performance figures are **simulation-validated only.** Thresholds are 50%-decode
+All performance figures are **bench numbers** from simulation. Thresholds are 50%-decode
 points in a 2500 Hz reference bandwidth.
 
 | Property | Value |

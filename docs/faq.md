@@ -26,7 +26,7 @@ GridTracker/JTAlert/logger workflow survives either way. See [interop.md](intero
 
 FT8's message set on a 4-second cycle with cellular-style retransmission combining —
 keyboard chat at conversation speed, still down in the weak-signal noise (open beta;
-simulation-validated). The longer story is in [protocols/ft1.md](protocols/ft1.md).
+bench figures). The longer story is in [protocols/tempofast.md](protocols/tempofast.md).
 
 ### Is TempoFast more sensitive than FT8?
 
@@ -34,7 +34,7 @@ simulation-validated). The longer story is in [protocols/ft1.md](protocols/ft1.m
 roughly 6 dB of raw single-shot sensitivity against FT8 (about 2.5 dB against FT4)
 for a nearly 4× faster cycle plus an IR-HARQ path that lets weak retransmissions
 combine instead of being wasted. FT8's ~−21 dB threshold is the most sensitive here;
-TempoFast's ~−15 dB sits about where FT4 does. Those numbers are **simulation-validated
+TempoFast's ~−15 dB sits about where FT4 does. Those numbers are **bench figures
 only.** If you want maximum reach in
 one shot, use FT8; if you want a conversation, use TempoFast. When the path is fading, use
 [TempoDeep](protocols/dx1.md).
@@ -48,8 +48,9 @@ NVIS, polar, and rough paths. Details in [protocols/dx1.md](protocols/dx1.md).
 
 ### Are the TempoFast/TempoDeep performance numbers proven?
 
-They are **simulation-validated** — AWGN and Rayleigh-fading bench sweeps, re-checked
-in the test suite and the Windows cross-build. They are **not on-air proven.**
+The modes work on the air: first TempoFast decode 2026-07-21, first two-station QSO
+2026-07-26. The **numbers** come from AWGN and Rayleigh-fading bench sweeps, re-checked
+in the test suite and the Windows cross-build, rather than from the air.
 Decode-rate-versus-SNR on real bands is the project's #1 remaining gate, and it is
 what the open beta exists to establish. Every dB figure Nexus publishes is labeled
 "simulated" for exactly this reason.

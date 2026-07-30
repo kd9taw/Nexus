@@ -29,7 +29,8 @@ Five rules shape every feature, and knowing them makes the rest of this document
 4. **Part 97 first.** Nexus never transmits on launch; TX is an explicit operator latch. The
    declared license class is enforced as a real sub-band transmit lockout. Coordinated QSY is
    announced in the clear — Nexus contains no encryption, no obscured meaning, no secret hops.
-5. **Honest labels.** Modelled data says "modelled." Simulation-validated waveforms say so. WFD
+5. **Honest labels.** Modelled data says "modelled." A figure from the bench says so rather than
+   passing as an on-air measurement. WFD
    scoring that can't be computed in-app shows raw counts instead of a fake total. The UI never
    dresses an estimate as a measurement.
 
@@ -292,7 +293,7 @@ joint-turbo-combines failed frames with their retransmissions (RV0→RV1→RV2) 
 frequency moves with deterministic timing and automatic return-home on lost sync. It is not
 privacy, not encryption, and is off by default.
 
-**Status, honestly:** every TempoFast/TempoDeep number above is simulation-validated (AWGN + fading sweeps);
+**Status, honestly:** both tiers have closed real links on the air, and every TempoFast/TempoDeep number above is a bench figure from AWGN and fading sweeps;
 none are proven on the air yet. On-air decode-rate-vs-SNR reports are the project's open gate
 and the most valuable contribution a tester can make. The FT8/FT4 tier carries the daily-driver
 load while this layer earns its stripes.

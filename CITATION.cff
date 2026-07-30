@@ -51,7 +51,7 @@ preferred-citation:
     - name: KD9TAW
       email: kd9taw@protonmail.com
   year: 2026
-  url: "https://github.com/kd9taw/Nexus/blob/main/docs/FT1-Protocol.md"
+  url: "https://github.com/kd9taw/Nexus/blob/main/docs/Tempo-Protocol.md"
   license: GPL-3.0-only
   abstract: >-
     TempoFast is a coherent 4-ary continuous-phase modulation (4-CPM, h=1/2,

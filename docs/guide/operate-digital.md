@@ -176,7 +176,7 @@ On top of the waveform:
 
 ### Honest status of TempoFast/TempoDeep
 
-Every TempoFast and TempoDeep performance number above is **simulation-validated** (AWGN and
+Every TempoFast and TempoDeep performance number above is a **bench figure** (AWGN and
 fading sweeps); none are proven on the air yet. **TempoFast does not beat FT8 on raw
 sensitivity — it trades roughly 6 dB of raw single-shot sensitivity for a
 nearly 4× faster cycle plus HARQ.** On-air
