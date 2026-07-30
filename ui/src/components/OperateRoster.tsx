@@ -10,6 +10,7 @@ import type { NeedAlert, NeedTag, Station } from '../types'
 import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, magneticDeg } from '../grid'
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
+import { chaseRank, strongestNeed } from '../features/needs'
 import { isIgnored } from '../txMessages'
 import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../operateFilters'
 import { RarityChip } from './RarityChip'
@@ -35,24 +36,6 @@ interface Props {
 }
 
 type SortKey = 'need' | 'call' | 'country' | 'grid' | 'dist' | 'bearing' | 'snr' | 'age'
-
-// Mirrors the backend NeedTag::tier() gradient (needalert.rs) so "sort by need" is the
-// SAME ranking here as on the Needed board: entity > zone > state > grid > band > mode.
-// A new state outranks a bare new grid (the operator's WAS-over-VUCC gradient); these
-// used to be tied at 4, which let grids sort alongside/above states.
-const NEED_RANK: Record<NeedTag, number> = {
-  Wanted: 8,
-  NewEntity: 7,
-  NewZone: 6,
-  NewState: 5,
-  NewGrid: 4,
-  NewBand: 3,
-  NewMode: 2,
-  Confirm: 1,
-  Dxped: 0,
-  Pota: 0,
-  Sota: 0,
-}
 
 // The call roster shows only ACTIVELY-heard stations: a station drops off once
 // it hasn't been decoded for this many T/R cycles, so the list reflects who's
@@ -122,11 +105,17 @@ export function OperateRoster({
 
   const rows = useMemo(() => {
     const built = stations.map((s) => {
-      const need = needByCall.get(s.call.toUpperCase()) ?? null
+      const up = s.call.toUpperCase()
+      const alerts = needAlertsByCall?.get(up)
+      // Lead tag from the call's STRONGEST alert, so the row's colour, its aria-label and
+      // its "sort by need" rank all name the same need. needByCall holds one tag per call
+      // and resolves a multi-band station to whichever alert came LAST (App.tsx), which is
+      // its WEAKEST — a new entity on 20 m with a mere confirm on 40 m ranked as the
+      // confirm, three quarters of the way down the list (operator report).
+      const need = strongestNeed(alerts)?.tags[0] ?? needByCall.get(up) ?? null
       // Union of ALL need forms for the row (deduped, insertion-ordered by the
       // alerts). Falls back to the single top tag when the full map is absent.
       let needAll: NeedTag[] = need ? [need] : []
-      const alerts = needAlertsByCall?.get(s.call.toUpperCase())
       if (alerts && alerts.length > 0) {
         const seen = new Set<NeedTag>()
         for (const a of alerts) for (const t of a.tags) seen.add(t)
@@ -137,7 +126,7 @@ export function OperateRoster({
         s,
         need,
         needAll,
-        needRank: need ? NEED_RANK[need] : 0,
+        needRank: chaseRank(alerts, need),
         distKm: me && ll ? haversineKm(me, ll) : Infinity,
         brg: me && ll ? bearingDeg(me, ll) : 999,
         age: currentSlot - s.lastHeardSlot,
@@ -178,8 +167,12 @@ export function OperateRoster({
           c = a.age - b.age
           break
       }
-      if (c === 0) c = b.s.snr - a.s.snr // tiebreak: stronger signal first
-      return c * dir
+      // The DIRECTION applies to the chosen column only. Multiplying the tiebreak by it too
+      // inverted it on every descending sort — including the default need-desc view, where
+      // stations of equal need came out weakest-signal-first. Of two equally-needed stations
+      // the louder one is the better bet, whichever way the column is pointing.
+      if (c !== 0) return c * dir
+      return b.s.snr - a.s.snr // tiebreak: stronger signal first
     })
     return f
   }, [stations, needByCall, needAlertsByCall, me, currentSlot, sort, neededOnly, hideWorked])

@@ -23,6 +23,19 @@ A stored value that is damaged, or left over from a build whose filters were nam
 ignored rather than applied. The roster can never come up quietly hiding rows with no ticked
 checkbox to explain why.
 
+### Fixed: "sort by need" on the Call Roster had no discernible order
+
+Sorting the roster by Need now ranks by how much the station is worth working: a call you asked
+for by name, then a new entity, new zone, new state, new grid, new band, new mode, then one you
+have worked but not confirmed. That is the same ranking the Needed board uses, so the two agree
+row for row, and a rare grid or a live park activation keeps the extra pull it has on the board.
+
+Two things were wrong. A station heard on more than one band was ranked by its WEAKEST need
+instead of its best, so a new country on 20 metres that also needed a confirmation on 40 sorted
+as the confirmation, well down the list. And among stations of equal need the roster listed the
+quietest first, which is backwards: of two equally-needed stations the louder one is the better
+bet. Both are fixed, and the row's colour now names the same need the sort ranked it by.
+
 ## [Unreleased]
 
 ### APRS says which radio it is listening to
