@@ -199,11 +199,12 @@ const TUNE_FREQ_HZ: f32 = 1500.0;
 /// How many ms of tune carrier to queue per loop iteration (keeps the output
 /// ring fed across the loop's sleep without building a large backlog).
 const TUNE_CHUNK_MS: f32 = 40.0;
-/// Safety auto-release for the tune carrier: never hold PTT + carrier longer
-/// than this, in case a "tune off" click is lost.
-/// Default tune auto-release — now settings.tune_timeout_secs (same 12 s).
-#[allow(dead_code)]
-const MAX_TUNE_MS: f64 = 12_000.0;
+/// HARD CEILING on the tune auto-release: never hold PTT + a steady carrier
+/// longer than this, whatever `settings.tune_timeout_secs` says — the setting
+/// is a bare numeric field AND settings.json is hand-editable, so one mistyped
+/// digit (120 for 12) must not buy a two-minute unattended carrier into the
+/// finals or a dead load. Clamped at the point of use, not only in the UI.
+const MAX_TUNE_MS: f64 = 60_000.0;
 /// Safety auto-stop for a forgotten QSO recording: cap a single recording at 2 hours so a
 /// recording the operator forgot to stop can't fill the disk unbounded (~86 MB/hour).
 const MAX_QSO_REC_MS: f64 = 2.0 * 60.0 * 60.0 * 1000.0;
@@ -3944,9 +3945,10 @@ impl RadioLoop {
         let mut is_tuning = eng.tuning();
         if is_tuning {
             if let Some(start) = self.tune_started_ms {
-                // Operator-configurable auto-release (WSJT-X "Tune after t s");
-                // the old fixed MAX_TUNE_MS is the default value.
-                let max_ms = (eng.settings().tune_timeout_secs.max(1) as f64) * 1000.0;
+                // Operator-configurable auto-release (WSJT-X "Tune after t s"),
+                // floored at 1 s and CLAMPED to the MAX_TUNE_MS hard ceiling.
+                let max_ms =
+                    ((eng.settings().tune_timeout_secs.max(1) as f64) * 1000.0).min(MAX_TUNE_MS);
                 if now - start > max_ms {
                     eng.set_tune(false);
                     is_tuning = false;
