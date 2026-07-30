@@ -1,0 +1,200 @@
+name: Bug report
+description: Report something in Nexus that is broken or behaves incorrectly
+title: "[bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Nexus.
+
+        The fields below are the ones that have actually decided real
+        investigations. The version and the platform matter more than they look:
+        several faults existed on Windows and not Linux, or appeared in one
+        release and not the one before it.
+
+        If you only have some of this, file it anyway. A partial report is worth
+        far more than a missing one.
+
+  - type: input
+    id: version
+    attributes:
+      label: Nexus version
+      description: Shown under the Nexus wordmark, top left. If you built from source, the commit.
+      placeholder: "0.21.5"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows x64
+        - Linux (.deb)
+        - Linux (AppImage)
+        - Raspberry Pi (arm64 .deb)
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: os_version
+    attributes:
+      label: OS version
+      placeholder: "Windows 11 24H2, or Debian 13, or Raspberry Pi OS 64-bit"
+    validations:
+      required: false
+
+  - type: textarea
+    id: rig
+    attributes:
+      label: Radio and interface
+      description: |
+        The rig model, how CAT is connected, and how audio gets in and out. If
+        you use an interface box, name it.
+      placeholder: |
+        IC-9700 on native CI-V, USB, 115200. Audio over the rig's USB CODEC.
+        Or: FT-991A through a Digirig Mobile, CAT and keying on the one cable.
+        Or, for a pure layout or interface bug: not relevant.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: radio_count
+    attributes:
+      label: How many radios are configured in Nexus?
+      description: >-
+        Worth asking because some faults only appear at two or three. A band
+        claimed by more than one radio has to be resolved by something, and that
+        is where several bugs have lived.
+      options:
+        - One
+        - Two
+        - Three
+      default: 0
+    validations:
+      required: true
+
+  - type: input
+    id: routing
+    attributes:
+      label: Routing rules, if you have any
+      description: >-
+        Settings, Radio, the routing table. Leave blank if you have not added
+        rules. Relevant to anything that went to the wrong radio.
+      placeholder: "2 m + 70 cm / FM & APRS -> FT-991A. Everything else -> FTdx10."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - FT8
+        - FT4
+        - Q65
+        - FST4 / FST4W
+        - MSK144
+        - JT65
+        - WSPR
+        - TempoFast
+        - TempoDeep
+        - RTTY
+        - SSTV
+        - APRS
+        - SSB or FM phone
+        - CW
+        - Not mode-specific
+    validations:
+      required: true
+
+  - type: input
+    id: freq
+    attributes:
+      label: Band and dial frequency
+      placeholder: "2 m, 144.390 FM. Or 20 m, 14.074 USB."
+    validations:
+      required: false
+
+  - type: input
+    id: where
+    attributes:
+      label: Where in the app
+      placeholder: "APRS map / Operate roster / Needed board / Connect / Program / Settings"
+    validations:
+      required: false
+
+  - type: textarea
+    id: readout
+    attributes:
+      label: What did the app say?
+      description: |
+        Quote it exactly, including the part that looked wrong. Nexus is built to
+        name the fault rather than go quiet, so its own wording is usually the
+        fastest route to the cause. This includes the APRS decode readout, a CAT
+        failure message, an upload result, or the text under a status chip.
+      placeholder: >-
+        "The radio is on 144.174 USB, APRS needs 144.390 FM", but the radio was
+        already on 144.390.
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What happened, and what you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: on_air
+    attributes:
+      label: Was this on the air?
+      description: A real RF path and a loopback test fail in different ways, so this changes triage.
+      options:
+        - On the air, real RF path
+        - Loopback, file or simulated
+        - Not applicable
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Whichever of these applies. Any one of them can turn a multi-day hunt
+        into a single look.
+
+        - **The app crashed or vanished:** attach `nexus-crash.txt`. On Windows
+          it is written beside the program, or in your `%TEMP%` folder. It holds
+          addresses and module names only, with no callsign and no log data.
+        - **Rig control or CAT:** Settings, Connections. For a native-CI-V Icom,
+          turn on the CI-V bus diagnostic log in Settings, reproduce the fault,
+          turn it off, and attach the capture.
+        - **Decodes:** turn on the ALL.TXT decode log in Settings and use Reveal
+          in folder to find it.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Screenshots, a waterfall capture, a WAV sample, an ADIF snippet.
+    validations:
+      required: false

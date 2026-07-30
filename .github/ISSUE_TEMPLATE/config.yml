@@ -1,11 +1,20 @@
 blank_issues_enabled: false
 contact_links:
   - name: 📖 Documentation
-    url: https://github.com/kd9taw/nexus/tree/main/docs
-    about: Quick start, install, section guides, rig setup, protocols, FAQ, and troubleshooting — check here first.
-  - name: 💬 Questions & general discussion
-    url: https://github.com/kd9taw/nexus/discussions
-    about: For setup help, usage questions, and general discussion (including quick on-air chatter), please open a GitHub Discussion rather than an issue.
+    url: https://github.com/kd9taw/Nexus/tree/main/docs/manual
+    about: Getting started, rig and audio setup, per-mode operating guides, integrations, and troubleshooting. Worth a look first.
+  - name: 💬 Questions and setup help
+    url: https://github.com/kd9taw/Nexus/discussions
+    about: Setup problems, usage questions, and general discussion belong in a Discussion rather than an issue.
+  - name: 🗣️ Discord
+    url: https://discord.gg/3Ugtz6MjRE
+    about: Live chat with the community. The fastest route when you are mid-session and stuck.
+  - name: 📬 Groups.io
+    url: https://groups.io/g/hamradiotools
+    about: The mailing list, for longer discussion, announcements, and searchable history.
+  - name: 📋 Changelog
+    url: https://github.com/kd9taw/Nexus/blob/main/CHANGELOG.md
+    about: Every release in plain language. Worth checking whether the thing you hit is already fixed.
   - name: ✉️ Email the maintainer
     url: mailto:kd9taw@protonmail.com
-    about: For anything that does not fit a Discussion, contact KD9TAW directly.
+    about: For anything that does not fit the above, contact KD9TAW directly.

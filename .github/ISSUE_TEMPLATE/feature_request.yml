@@ -1,0 +1,95 @@
+name: Feature request
+description: Suggest an improvement or new capability for Nexus
+title: "[feat] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Nexus aims to put the whole station in one modern app
+        without hiding the radio from you.
+
+        The most actionable requests describe the operating situation first. What
+        were you trying to do, and what got in the way? A problem stated well
+        often has a better solution than the one either of us thought of first.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What is awkward or impossible today. Describe the situation at the radio,
+        not just the feature you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: Be as specific as you can about behaviour, and about anything that touches transmit.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds, or how other software handles it
+      description: >-
+        What you do today instead, or how WSJT-X, JTDX, JS8Call, N1MM or a logger
+        approaches the same thing. Prior art is genuinely useful, including when
+        the answer is that everyone does it badly.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: persona
+    attributes:
+      label: Which kind of operating does this serve?
+      description: >-
+        Nexus serves three groups that want different things, and a feature tuned
+        for one can read as clutter to the others. Saying which helps balance it.
+      multiple: true
+      options:
+        - POTA and SOTA, hunting or activating
+        - Chasing DX and awards
+        - Rag chewing and casual operating
+        - Contesting or Field Day
+        - EmComm
+        - Accessibility and eyes-free operating
+        - Building, testing or protocol work
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area does it touch?
+      multiple: true
+      options:
+        - Operate, digital (FT8, FT4, the other WSJT-X modes, roster, sequencer, waterfall)
+        - Tempo chat (TempoFast, TempoDeep)
+        - Phone and CW cockpits
+        - RTTY or SSTV
+        - APRS
+        - Connect (map, propagation, band openings, panes)
+        - DX chasing (Needed board, Pounce, DXpeditions, awards, Journey)
+        - Satellites and rotator
+        - Logbook and QSL (ADIF, LoTW, QRZ, ClubLog, eQSL, HRDLog)
+        - Rig control and setup (CAT, PTT, audio, wizard, routing, multi-radio)
+        - Memories and Program (repeaters, CHIRP)
+        - Modem and DSP (libtempo, decode pipeline)
+        - Interop (WSJT-X UDP, GridTracker, JTAlert, N1MM, N3FJP, PSK Reporter, cluster)
+        - Field Day, POTA, SOTA
+        - Accessibility
+        - Other, or not sure
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Mockups, references, links.
+    validations:
+      required: false
