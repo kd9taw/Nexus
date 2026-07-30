@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tempo_app::engine::{DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine};
+use tempo_app::engine::{engine_lock, DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine};
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
 
@@ -444,7 +444,8 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
         Err(e) => {
             // Surface a sound-card open failure to the UI (which would otherwise
             // see only a silent, blank waterfall) before the loop bails out.
-            if let Ok(mut eng) = engine.lock() {
+            {
+                let mut eng = engine_lock(&engine);
                 eng.set_audio_error(Some(format!("Sound card failed to open: {e}")));
             }
             return Err(e);
@@ -469,7 +470,8 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
     // the rig). Mid-session rig SWITCHES pass `allow_coexist=false` when they reuse their own port.
     let (mut rig, rigctld_proc, init_probe) = open_rig(&applied, true);
     let init_freq = init_probe.freq_hz;
-    if let Ok(mut eng) = engine.lock() {
+    {
+        let mut eng = engine_lock(&engine);
         eng.set_cat_status(init_probe.ok, init_probe.detail);
         // Read-only-launch seed: the rig's OWN dial/mode become the app's belief, under
         // the same lock and BEFORE the loop starts — so the UI's first snapshot poll
@@ -589,7 +591,8 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
         // an actual rebuild only when the setting changed — the rebind re-sends the
         // WSJT-X Heartbeat so GridTracker/JTAlert register the client immediately.
         // The lock is released before state.step (which takes its own).
-        if let Ok(e) = engine.lock() {
+        {
+            let e = engine_lock(&engine);
             let s = e.settings();
             if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str())
                 != (wsjtx_applied.0, wsjtx_applied.1.as_str())
@@ -608,7 +611,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
             cfg_dial_hz: cfg.dial_hz,
         };
         let now = now_unix_ms();
-        state.step(
+        let stepped = state.step(
             &engine,
             &mut backend,
             &mut rig,
@@ -625,7 +628,16 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
             },
             &mut |t: &Transport, allow_coexist: bool| open_rig(t, allow_coexist),
             &mut station,
-        )?;
+        );
+        if let Err(e) = stepped {
+            // This thread is the ONLY thing that ever drops PTT — the tx_until_ms
+            // deadline, the hard stop and the idle self-heal all die with it, and
+            // RigctldProc's Drop kills the daemon without unkeying. An exit
+            // mid-over would leave the carrier up until the operator notices, so
+            // best-effort unkey on EVERY error exit, not only the SHUTDOWN path.
+            let _ = rig.ptt(false);
+            return Err(e);
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -759,22 +771,17 @@ fn monitor_loop(
             return;
         }
         // Desired monitor set (enabled, non-active, has a rig model), snapshot under a brief lock.
-        let (active, want): (u32, Vec<(u32, Transport)>) = match engine.lock() {
-            Ok(e) => {
-                let s = e.settings();
-                let active = s.active_radio;
-                let want = s
-                    .radios
-                    .iter()
-                    .filter(|p| p.enabled && p.id != active && p.rig_model != 0)
-                    .map(|p| (p.id, Transport::from_profile(p)))
-                    .collect();
-                (active, want)
-            }
-            Err(_) => {
-                std::thread::sleep(Duration::from_millis(200));
-                continue;
-            }
+        let (active, want): (u32, Vec<(u32, Transport)>) = {
+            let e = engine_lock(&engine);
+            let s = e.settings();
+            let active = s.active_radio;
+            let want = s
+                .radios
+                .iter()
+                .filter(|p| p.enabled && p.id != active && p.rig_model != 0)
+                .map(|p| (p.id, Transport::from_profile(p)))
+                .collect();
+            (active, want)
         };
         // A switch is mid-flight: stay off the pool entirely so the handoff's try_lock wins
         // on its next 20 ms tick (a monitor poll can hold the lock for whole read bursts).
@@ -854,7 +861,8 @@ fn reconcile_pool(
         crate::civ::diag::note("monitor pool: closing daemon(s) — a recycle drops+unkeys them");
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
         p.retain(|c| !to_close.contains(&c.id)); // drop kills each daemon
-        if let Ok(mut e) = engine.lock() {
+        {
+            let mut e = engine_lock(engine);
             for id in &to_close {
                 e.forget_radio_live(*id);
             }
@@ -862,7 +870,8 @@ fn reconcile_pool(
     }
     for (id, t) in to_open {
         let (rig, proc, ok) = open_monitor(&t); // slow (spawn) — pool lock NOT held
-        if let Ok(mut e) = engine.lock() {
+        {
+            let mut e = engine_lock(engine);
             e.observe_radio_cat(id, ok);
         }
         // Exponential backoff on a failed open: 1 s, 2 s, 4 s … capped at 60 s, so
@@ -937,7 +946,8 @@ fn poll_monitors(
         match conn.rig.read_freq() {
             Ok(hz) => {
                 conn.freq_misses = 0;
-                if let Ok(mut e) = engine.lock() {
+                {
+                    let mut e = engine_lock(engine);
                     e.observe_radio_freq(conn.id, hz);
                     e.observe_radio_cat(conn.id, Some(true));
                 }
@@ -946,7 +956,8 @@ fn poll_monitors(
                 }
                 if conn.ticks % 3 == 0 {
                     if let Some(mm) = conn.rig.read_mode() {
-                        if let Ok(mut e) = engine.lock() {
+                        {
+                            let mut e = engine_lock(engine);
                             e.observe_radio_mode(conn.id, mm);
                         }
                     }
@@ -954,7 +965,8 @@ fn poll_monitors(
                         match conn.rig.read_smeter_db() {
                             Some(db) => {
                                 conn.smeter_supported = Some(true);
-                                if let Ok(mut e) = engine.lock() {
+                                {
+                                    let mut e = engine_lock(engine);
                                     e.observe_radio_smeter(conn.id, db);
                                 }
                             }
@@ -971,7 +983,8 @@ fn poll_monitors(
                 // STREAK means the radio is really unreachable (the flashing-pill fix).
                 conn.freq_misses = conn.freq_misses.saturating_add(1);
                 if conn.freq_misses >= 3 {
-                    if let Ok(mut e) = engine.lock() {
+                    {
+                        let mut e = engine_lock(engine);
                         e.observe_radio_cat(conn.id, Some(false));
                     }
                 }
@@ -993,12 +1006,10 @@ fn handoff_if_switched(
     pending: &std::sync::atomic::AtomicBool,
 ) {
     use std::sync::atomic::Ordering;
-    let (active, want_active) = match engine.lock() {
-        Ok(e) => {
-            let s = e.settings();
-            (s.active_radio, Transport::from_settings(s))
-        }
-        Err(_) => return,
+    let (active, want_active) = {
+        let e = engine_lock(engine);
+        let s = e.settings();
+        (s.active_radio, Transport::from_settings(s))
     };
     if active == *last_active {
         // No switch in flight (or the intent vanished before the handoff won the pool —
@@ -1041,7 +1052,8 @@ fn handoff_if_switched(
                                       // same-model Icoms) double-commands the old rig's CAT link: exactly the "commands the old
                                       // rig … once per retry tick" isolation failure. Also stop the hardware keyers now, like the
                                       // shutdown unkey, so a mid-CW/RTTY switch doesn't keep keying after the abort is consumed.
-        if let Ok(mut e) = engine.lock() {
+        {
+            let mut e = engine_lock(engine);
             let _ = e.take_cw_abort();
             let _ = e.take_rtty_abort();
             // Same for SSTV: this handoff already unkeyed (above), so consume the abort a
@@ -1122,7 +1134,8 @@ fn handoff_if_switched(
         // `rig_differs` won't see a diff and tear the just-handed-off rig back down. (Audio fields stay
         // zeroed → `audio_differs` fires → the RX codec rebuilds to the new radio, the one device swap.)
         state.applied.broker_self_port = want_active.broker_self_port;
-        if let Ok(mut e) = engine.lock() {
+        {
+            let mut e = engine_lock(engine);
             e.forget_radio_live(active);
         }
         // The new active rig is ALREADY connected + on its own frequency; reset the per-rig caches so
@@ -1150,7 +1163,8 @@ fn handoff_if_switched(
         // (both radios configured) always ADOPTS above. A switch during a radio's very first monitor
         // open can transiently coexist onto the monitor daemon; it self-heals on the next reconcile.
         p.retain(|c| c.id != active);
-        if let Ok(mut e) = engine.lock() {
+        {
+            let mut e = engine_lock(engine);
             e.forget_radio_live(active);
         }
         // The active radio changed — force the RX audio to rebuild to the new radio's device even if
@@ -1780,12 +1794,12 @@ impl RadioLoop {
         }
         // Read the Flex API IP once for whichever worker (re)starts (a later IP edit takes effect on
         // the next radio re-select). Lock only on this rare transition, never per tick.
-        let (ip, dial_hz) = match engine.lock() {
-            Ok(e) => (
+        let (ip, dial_hz) = {
+            let e = engine_lock(engine);
+            (
                 e.settings().flex_radio_ip.trim().to_string(),
                 (e.settings().dial_mhz * 1_000_000.0) as u64,
-            ),
-            Err(_) => return,
+            )
         };
         // Panadapter worker: tear down the old (its Drop stops threads + removes the pan) before
         // starting the new one.
@@ -1819,7 +1833,8 @@ impl RadioLoop {
                     // nothing and the operator had a toggle that appeared to be on. The sound
                     // card still works (dax_src stays None), so this is a warning, not a fault.
                     Err(e) => {
-                        if let Ok(mut eng) = engine.lock() {
+                        {
+                            let mut eng = engine_lock(engine);
                             eng.set_audio_error(Some(format!(
                                 "Native Flex audio couldn't start ({e}). Using the sound card \
                                  instead — check the Flex API address in Settings."
@@ -1865,7 +1880,8 @@ impl RadioLoop {
     fn report_ptt(&mut self, engine: &Arc<Mutex<Engine>>, failed: bool) {
         if failed {
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.set_audio_error(Some(
                         "The rig didn't accept PTT — check your PTT method and CAT/port. \
                          Modem audio may be going out while the radio is still receiving."
@@ -1875,7 +1891,8 @@ impl RadioLoop {
                 self.err_owner = ErrOwner::Ptt;
             }
         } else if self.err_owner == ErrOwner::Ptt {
-            if let Ok(mut eng) = engine.lock() {
+            {
+                let mut eng = engine_lock(engine);
                 eng.set_audio_error(None);
             }
             self.err_owner = ErrOwner::None;
@@ -1972,7 +1989,8 @@ impl RadioLoop {
                      (the radio does not appear to cover {mhz:.4} MHz)."
                 );
                 let healed = rig.read_freq().ok();
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     if let Some(hz) = healed {
                         self.last_dial = hz;
                         eng.observe_rig_freq(hz);
@@ -2093,7 +2111,8 @@ impl RadioLoop {
                 self.dax_tee_set = false;
             }
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Dax) {
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.set_audio_error(Some(
                         "Native Flex audio is selected but no audio is arriving — switched back \
                          to the sound card. Check the Flex API address, that DAX is enabled on \
@@ -2140,7 +2159,7 @@ impl RadioLoop {
             let can_retune =
                 self.tx_until_ms.is_none() && !self.tuning_keyed && !self.handoff_deferred;
             let (want, dial, md, reprobe_req, force_retune, split_req, fm) = {
-                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let mut eng = engine_lock(engine);
                 // FM repeater config (shift, band-offset magnitude, CTCSS) — applied below
                 // only when the mode policy resolves to FM. Computed first (owned) so the
                 // mutable take_* calls that follow don't fight the settings borrow. APRS forces
@@ -2194,7 +2213,8 @@ impl RadioLoop {
                     self.tuning_keyed = false;
                     self.manual_ptt_applied = false;
                     self.tune_started_ms = None;
-                    if let Ok(mut eng) = engine.lock() {
+                    {
+                        let mut eng = engine_lock(engine);
                         eng.halt_tx();
                     }
                 }
@@ -2221,13 +2241,15 @@ impl RadioLoop {
                 self.mode_giveup = None; // and a fresh rig may well accept what the old rejected
                 self.mode_saw_reject = false;
                 self.cat_ok = ok;
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.set_cat_status(ok, detail);
                 }
             } else if reprobe_req {
                 let (ok, detail) = reprobe(rig, &want);
                 self.cat_ok = ok;
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.set_cat_status(ok, detail);
                 }
             }
@@ -2256,7 +2278,8 @@ impl RadioLoop {
                     self.tuning_keyed = false;
                     self.manual_ptt_applied = false;
                     self.tune_started_ms = None;
-                    if let Ok(mut eng) = engine.lock() {
+                    {
+                        let mut eng = engine_lock(engine);
                         eng.halt_tx();
                     }
                 }
@@ -2269,7 +2292,8 @@ impl RadioLoop {
                         if let Some((ring, rate)) = backend.spectrum_tap() {
                             self.rx_tap.publish_card(ring, rate);
                         }
-                        if let Ok(mut eng) = engine.lock() {
+                        {
+                            let mut eng = engine_lock(engine);
                             eng.set_audio_error(None);
                         }
                         self.err_owner = ErrOwner::None;
@@ -2280,7 +2304,8 @@ impl RadioLoop {
                         self.voice_mic_open = false;
                     }
                     Err(e) => {
-                        if let Ok(mut eng) = engine.lock() {
+                        {
+                            let mut eng = engine_lock(engine);
                             eng.set_audio_error(Some(format!("Audio device failed to open: {e}")));
                         }
                         // A REAL device error owns the line — monitor/voice-mic
@@ -2325,7 +2350,8 @@ impl RadioLoop {
                 let effective = want.monitor_enabled && !guarded;
                 let outcome =
                     backend.set_monitor(effective, &want.monitor_device, want.monitor_level);
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     match outcome {
                         Err(e) => {
                             // Write only over None or our own prior notice — a
@@ -2627,7 +2653,8 @@ impl RadioLoop {
                                       // The app just commanded a new dial/mode — drop the stale read-back mode + passband
                                       // width so a band/mode change can't flash a false "rig: X" mismatch or show the
                                       // prior mode's filter width before the next poll reads the rig's true state.
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.clear_rig_mode();
                     eng.clear_rig_passband();
                 }
@@ -2650,7 +2677,8 @@ impl RadioLoop {
                     self.func_state = [None; 5];
                     self.level_supported = [None; 4];
                     self.level_misses = [0; 4];
-                    if let Ok(mut eng) = engine.lock() {
+                    {
+                        let mut eng = engine_lock(engine);
                         eng.set_cat_status(
                             Some(true),
                             "CAT confirmed — rig accepted a command".to_string(),
@@ -2715,7 +2743,8 @@ impl RadioLoop {
                             self.level_supported = [None; 4];
                             self.level_misses = [0; 4];
                             self.rx_ranges_probed = false;
-                            if let Ok(mut eng) = engine.lock() {
+                            {
+                                let mut eng = engine_lock(engine);
                                 eng.set_cat_status(
                                     Some(true),
                                     "CAT recovered — the radio is answering again".to_string(),
@@ -2724,7 +2753,8 @@ impl RadioLoop {
                         }
                         if hz != self.last_dial {
                             self.last_dial = hz;
-                            if let Ok(mut eng) = engine.lock() {
+                            {
+                                let mut eng = engine_lock(engine);
                                 eng.observe_rig_freq(hz);
                             }
                         }
@@ -2735,7 +2765,8 @@ impl RadioLoop {
                         if !self.rx_ranges_probed {
                             self.rx_ranges_probed = true;
                             self.rx_ranges = rig.read_rx_ranges();
-                            if let Ok(mut eng) = engine.lock() {
+                            {
+                                let mut eng = engine_lock(engine);
                                 eng.observe_rig_rx_ranges(self.rx_ranges.clone());
                             }
                         }
@@ -2749,7 +2780,8 @@ impl RadioLoop {
                         if self.level_supported[LVL_RFPOWER] != Some(false) {
                             let ok = match rig.read_level("RFPOWER") {
                                 Ok(frac) => {
-                                    if let Ok(mut eng) = engine.lock() {
+                                    {
+                                        let mut eng = engine_lock(engine);
                                         eng.observe_rig_power(frac);
                                     }
                                     true
@@ -2765,7 +2797,8 @@ impl RadioLoop {
                         if self.level_supported[LVL_MICGAIN] != Some(false) {
                             let ok = match rig.read_level("MICGAIN") {
                                 Ok(frac) => {
-                                    if let Ok(mut eng) = engine.lock() {
+                                    {
+                                        let mut eng = engine_lock(engine);
                                         eng.observe_rig_mic_gain(frac);
                                     }
                                     true
@@ -2781,7 +2814,8 @@ impl RadioLoop {
                         if self.level_supported[LVL_NR] != Some(false) {
                             let ok = match rig.read_level("NR") {
                                 Ok(frac) => {
-                                    if let Ok(mut eng) = engine.lock() {
+                                    {
+                                        let mut eng = engine_lock(engine);
                                         eng.observe_rig_nr_level(frac);
                                     }
                                     true
@@ -2797,7 +2831,8 @@ impl RadioLoop {
                         if self.level_supported[LVL_AGC] != Some(false) {
                             let ok = match rig.read_agc() {
                                 Some(v) => {
-                                    if let Ok(mut eng) = engine.lock() {
+                                    {
+                                        let mut eng = engine_lock(engine);
                                         eng.observe_rig_agc(agc_from_hamlib(v).to_string());
                                     }
                                     true
@@ -2822,7 +2857,8 @@ impl RadioLoop {
                                 Some(db) => {
                                     self.smeter_supported = Some(true);
                                     self.smeter_misses = 0;
-                                    if let Ok(mut eng) = engine.lock() {
+                                    {
+                                        let mut eng = engine_lock(engine);
                                         eng.observe_rig_smeter(db);
                                     }
                                 }
@@ -2834,7 +2870,8 @@ impl RadioLoop {
                                     if self.smeter_misses >= 3 {
                                         self.smeter_supported = Some(false);
                                         // Don't leave the last good reading frozen on the UI.
-                                        if let Ok(mut eng) = engine.lock() {
+                                        {
+                                            let mut eng = engine_lock(engine);
                                             eng.clear_rig_smeter();
                                         }
                                     }
@@ -2851,7 +2888,8 @@ impl RadioLoop {
                         if self.rig_poll_ticks.is_multiple_of(4) {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
                             let (m, pb) = rig.read_mode_passband();
-                            if let Ok(mut eng) = engine.lock() {
+                            {
+                                let mut eng = engine_lock(engine);
                                 if let Some(ref mm) = m {
                                     eng.observe_rig_mode(mm.clone());
                                 }
@@ -2862,16 +2900,15 @@ impl RadioLoop {
                             // set it against, and re-queue on a failed/rejected set — so a CAT
                             // hiccup or a split `m` read never silently swallows the operator's click.
                             if let Some(ref mode) = m {
-                                let width_req = engine
-                                    .lock()
-                                    .ok()
-                                    .and_then(|mut e| e.take_passband_request());
+                                let width_req = engine_lock(engine).take_passband_request();
                                 if let Some(hz) = width_req {
                                     if rig.set_passband(mode, hz).is_ok() {
-                                        if let Ok(mut eng) = engine.lock() {
+                                        {
+                                            let mut eng = engine_lock(engine);
                                             eng.observe_rig_passband(Some(hz)); // optimistic; next read confirms
                                         }
-                                    } else if let Ok(mut eng) = engine.lock() {
+                                    } else {
+                                        let mut eng = engine_lock(engine);
                                         eng.request_filter_width(hz); // re-queue for the next cycle
                                     }
                                 }
@@ -2880,7 +2917,7 @@ impl RadioLoop {
                         // Apply any pending DSP-func toggle from the UI promptly — the dial read
                         // proved the link is alive. Drain under the lock, RELEASE it, then do the
                         // set_func TCP round-trip so the UI thread never blocks on the socket.
-                        let func_reqs = engine.lock().ok().map(|mut e| e.take_func_requests());
+                        let func_reqs = Some(engine_lock(engine)).map(|mut e| e.take_func_requests());
                         if let Some(reqs) = func_reqs {
                             let mut changed = false;
                             for i in 0..RIG_FUNCS.len() {
@@ -2892,7 +2929,8 @@ impl RadioLoop {
                                 }
                             }
                             if changed {
-                                if let Ok(mut eng) = engine.lock() {
+                                {
+                                    let mut eng = engine_lock(engine);
                                     eng.observe_rig_funcs(self.func_state);
                                 }
                             }
@@ -2900,13 +2938,13 @@ impl RadioLoop {
                         // Apply pending RIT/XIT/VFO clarifier requests (CAT-panel controls). Drain
                         // under the lock, RELEASE it, then do the CAT round-trip. Write-only +
                         // optimistic — the snapshot already mirrors the commanded value.
-                        if let Some(hz) = engine.lock().ok().and_then(|mut e| e.take_rit_apply()) {
+                        if let Some(hz) = Some(engine_lock(engine)).and_then(|mut e| e.take_rit_apply()) {
                             let _ = rig.set_rit(hz);
                         }
-                        if let Some(hz) = engine.lock().ok().and_then(|mut e| e.take_xit_apply()) {
+                        if let Some(hz) = Some(engine_lock(engine)).and_then(|mut e| e.take_xit_apply()) {
                             let _ = rig.set_xit(hz);
                         }
-                        if let Some(vfo_b) = engine.lock().ok().and_then(|mut e| e.take_vfo_apply())
+                        if let Some(vfo_b) = Some(engine_lock(engine)).and_then(|mut e| e.take_vfo_apply())
                         {
                             let _ = rig.set_vfo(if vfo_b { "VFOB" } else { "VFOA" });
                         }
@@ -2951,7 +2989,8 @@ impl RadioLoop {
                                         }
                                     }
                                 }
-                                if let Ok(mut eng) = engine.lock() {
+                                {
+                                    let mut eng = engine_lock(engine);
                                     eng.observe_rig_funcs(self.func_state);
                                 }
                             }
@@ -2998,7 +3037,8 @@ impl RadioLoop {
                                 self.applied.rig_conn
                             ));
                             let msg = cat_down_message(&self.applied, &e);
-                            if let Ok(mut eng) = engine.lock() {
+                            {
+                                let mut eng = engine_lock(engine);
                                 // Clear the read-backs so a dead link doesn't freeze the
                                 // S-meter needle or flash a stale mode-mismatch tag.
                                 eng.clear_rig_smeter();
@@ -3030,7 +3070,8 @@ impl RadioLoop {
                 if let Ok(hz) = rig.read_freq() {
                     if hz != self.last_dial {
                         self.last_dial = hz;
-                        if let Ok(mut eng) = engine.lock() {
+                        {
+                            let mut eng = engine_lock(engine);
                             eng.observe_rig_freq(hz);
                         }
                     }
@@ -3053,7 +3094,8 @@ impl RadioLoop {
                                 // The desired state must not outlive the rejection —
                                 // a SPLIT badge claiming a split the rig isn't
                                 // running would burn the operator mid-pile-up.
-                                if let Ok(mut eng) = engine.lock() {
+                                {
+                                    let mut eng = engine_lock(engine);
                                     eng.split_rejected();
                                 }
                                 "rig rejected split — work the pile-up manually".to_string()
@@ -3076,7 +3118,8 @@ impl RadioLoop {
                 } else {
                     self.cat_ok
                 };
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.set_cat_status(ok, note);
                 }
             }
@@ -3090,7 +3133,7 @@ impl RadioLoop {
         {
             let ready = now >= self.cw_busy_until;
             let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key) = {
-                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let mut eng = engine_lock(engine);
                 (
                     eng.take_cw_abort(),
                     eng.cw_wpm(),
@@ -3201,7 +3244,8 @@ impl RadioLoop {
                         if let Some((_, _, sk)) = self.serial_keyer.as_ref() {
                             sk.send(&text, wpm);
                         }
-                        if let Ok(mut eng) = engine.lock() {
+                        {
+                            let mut eng = engine_lock(engine);
                             eng.set_cw_keyer_error(open_err);
                         }
                         handled = true; // the Serial backend owns this word (sent or errored)
@@ -3230,7 +3274,8 @@ impl RadioLoop {
                             let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
                             self.tx_until_ms =
                                 Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                            if let Ok(mut eng) = engine.lock() {
+                            {
+                                let mut eng = engine_lock(engine);
                                 eng.set_cw_keyer_error(ptt_err.then(|| {
                                     "Soundcard keyer: the rig didn't accept PTT. Check your PTT \
                                      method + that Nexus's audio output is routed to the rig \
@@ -3249,7 +3294,8 @@ impl RadioLoop {
                         }
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         let cw_err = rig.send_morse(&text).is_err();
-                        if let Ok(mut eng) = engine.lock() {
+                        {
+                            let mut eng = engine_lock(engine);
                             eng.set_cw_keyer_error(cw_err.then(|| {
                                 "Your rig didn't accept CAT CW keying (Hamlib send_morse). \
                                  Use the WinKeyer keyer, or the Soundcard keyer (which needs \
@@ -3275,7 +3321,7 @@ impl RadioLoop {
         {
             let ready = now >= self.rtty_busy_until;
             let (abort, msg, baud, shift, reverse, fsk_port_line) = {
-                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let mut eng = engine_lock(engine);
                 // Keep the cockpit's sending indicator honest each tick: an over is
                 // "sending" until its computed duration has fully played out.
                 eng.set_rtty_sending(now < self.rtty_busy_until);
@@ -3316,7 +3362,8 @@ impl RadioLoop {
                 let _ = rig.ptt(false);
                 self.tx_until_ms = None;
                 self.rtty_busy_until = 0.0; // a fresh send after Stop keys immediately
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.set_rtty_sending(false);
                 }
             }
@@ -3386,7 +3433,8 @@ impl RadioLoop {
                             // Nothing keyed — don't sit "busy" for a send that never started.
                             self.rtty_busy_until = 0.0;
                         }
-                        if let Ok(mut eng) = engine.lock() {
+                        {
+                            let mut eng = engine_lock(engine);
                             eng.set_rtty_sending(!open_err);
                             eng.set_rtty_keyer_error(if open_err {
                                 open_err_msg
@@ -3425,7 +3473,8 @@ impl RadioLoop {
                             let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
                             self.tx_until_ms =
                                 Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                            if let Ok(mut eng) = engine.lock() {
+                            {
+                                let mut eng = engine_lock(engine);
                                 eng.set_rtty_sending(true);
                                 eng.set_rtty_keyer_error(ptt_err.then(|| {
                                     "AFSK keyer: the rig didn't accept PTT. Check your PTT \
@@ -3445,7 +3494,7 @@ impl RadioLoop {
         // same seam the voice/CW soundcard keyer uses. The `tx_until_ms` guard plus poll_aprs_tx's
         // own gate mean a beacon never keys over another mode's over.
         if self.tx_until_ms.is_none() {
-            let beacon = engine.lock().ok().and_then(|mut e| e.poll_aprs_tx());
+            let beacon = Some(engine_lock(engine)).and_then(|mut e| e.poll_aprs_tx());
             if let Some(buf) = beacon.filter(|b| !b.is_empty()) {
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now();
@@ -3471,7 +3520,7 @@ impl RadioLoop {
             // open/close takes the cpal host lock, so it runs OUTSIDE the engine lock, and
             // it never touches the main capture stream, so the decode path never restarts.
             let recording_active = {
-                let eng = engine.lock().map_err(|e| e.to_string())?;
+                let eng = engine_lock(engine);
                 eng.is_recording()
             };
             let want_mic =
@@ -3488,7 +3537,8 @@ impl RadioLoop {
                         // error or a live monitor notice is not ours to stomp
                         // (review: the mic failure erased both kinds).
                         if matches!(self.err_owner, ErrOwner::None | ErrOwner::VoiceMic) {
-                            if let Ok(mut eng) = engine.lock() {
+                            {
+                                let mut eng = engine_lock(engine);
                                 eng.set_audio_error(Some(format!(
                                     "Voice mic could not open: {e} — recording from the shared \
                                      input instead"
@@ -3509,7 +3559,8 @@ impl RadioLoop {
                 }
                 self.voice_mic_failed = false;
                 if self.err_owner == ErrOwner::VoiceMic {
-                    if let Ok(mut eng) = engine.lock() {
+                    {
+                        let mut eng = engine_lock(engine);
                         eng.set_audio_error(None);
                     }
                     self.err_owner = ErrOwner::None;
@@ -3532,7 +3583,7 @@ impl RadioLoop {
             };
 
             let (abort, samples, qso_rec, qso_path) = {
-                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let mut eng = engine_lock(engine);
                 if eng.is_recording() {
                     eng.push_record_samples(rec_samples);
                 }
@@ -3577,7 +3628,8 @@ impl RadioLoop {
                             // Don't spin re-trying every 20 ms: clear the engine flag (so the
                             // REC badge stops lying) and surface why via the audio-error chip.
                             Err(e) => {
-                                if let Ok(mut eng) = engine.lock() {
+                                {
+                                    let mut eng = engine_lock(engine);
                                     eng.stop_qso_recording();
                                     eng.set_audio_error(Some(format!(
                                         "Could not start QSO recording: {e}"
@@ -3598,7 +3650,8 @@ impl RadioLoop {
                     // cap): the (false,true) arm next pass finalizes the file.
                     if let Some(start) = self.qso_started_ms {
                         if now - start > MAX_QSO_REC_MS {
-                            if let Ok(mut eng) = engine.lock() {
+                            {
+                                let mut eng = engine_lock(engine);
                                 eng.stop_qso_recording();
                             }
                         }
@@ -3625,7 +3678,7 @@ impl RadioLoop {
         // Stop/halt/disarm/exit via the abort. One image in flight, no queue.
         {
             let abort = {
-                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let mut eng = engine_lock(engine);
                 eng.take_sstv_abort()
             };
             if abort {
@@ -3635,7 +3688,8 @@ impl RadioLoop {
                 backend.flush_output();
                 let _ = rig.ptt(false);
                 self.tx_until_ms = None;
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.set_sstv_sending(false);
                 }
             }
@@ -3650,7 +3704,7 @@ impl RadioLoop {
                 && !self.manual_ptt_applied
             {
                 let job = {
-                    let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                    let mut eng = engine_lock(engine);
                     eng.poll_sstv_tx()
                 };
                 if let Some(job) = job {
@@ -3661,7 +3715,8 @@ impl RadioLoop {
                     // tx_until_ms expiry below drops it even if every other mechanism fails.
                     let until = now + job.duration_ms + crate::slot::TX_TAIL_MS;
                     self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                    if let Ok(mut eng) = engine.lock() {
+                    {
+                        let mut eng = engine_lock(engine);
                         eng.set_sstv_sending(true);
                     }
                     // A NAK here means modem audio would go out into a receiving rig — surface it.
@@ -3689,7 +3744,8 @@ impl RadioLoop {
                 }
                 let played_ms = elapsed.clamp(0.0, feed.total_ms);
                 let total_ms = feed.total_ms;
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.set_sstv_tx_progress(played_ms, total_ms);
                 }
                 // Done once every sample is fed AND the audio has played out; the PTT drop
@@ -3700,7 +3756,8 @@ impl RadioLoop {
             };
             if done {
                 self.sstv_feed = None;
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.set_sstv_sending(false);
                 }
             }
@@ -3710,7 +3767,7 @@ impl RadioLoop {
         // Phone section drives these (the FT8 TX path is idle there), so no PTT clash.
         {
             let (ptt, power) = {
-                let mut eng = engine.lock().map_err(|e| e.to_string())?;
+                let mut eng = engine_lock(engine);
                 let ptt = eng.manual_ptt();
                 (ptt, eng.rf_power_to_command())
             };
@@ -3732,7 +3789,7 @@ impl RadioLoop {
                     self.last_rf_power = Some(p);
                 }
             }
-            let mic = engine.lock().ok().and_then(|e| e.mic_gain());
+            let mic = Some(engine_lock(engine)).and_then(|e| e.mic_gain());
             if let Some(mg) = mic {
                 if Some(mg) != self.last_mic_gain && rig.set_mic_gain(mg).is_ok() {
                     self.last_mic_gain = Some(mg);
@@ -3799,7 +3856,8 @@ impl RadioLoop {
                     };
                     self.tx_meter_idx = self.tx_meter_idx.wrapping_add(1);
                     self.last_tx_meter_poll = now;
-                    if let Ok(mut eng) = engine.lock() {
+                    {
+                        let mut eng = engine_lock(engine);
                         eng.observe_rig_tx_meters(swr, alc, po, comp);
                     }
                 }
@@ -3807,7 +3865,8 @@ impl RadioLoop {
                 // Just unkeyed (or CAT tripped): blank the bars once.
                 self.last_tx_meter_poll = 0.0;
                 self.tx_meter_idx = 0;
-                if let Ok(mut eng) = engine.lock() {
+                {
+                    let mut eng = engine_lock(engine);
                     eng.clear_rig_tx_meters();
                 }
             }
@@ -3816,7 +3875,7 @@ impl RadioLoop {
         // `mut`: a tier/period change below replaces the clock, and everything after
         // it must use the NEW numbering — see the rebuild.
         let mut slot = self.clock.slot_index(now);
-        let mut eng = engine.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(engine);
         // Split-Operation teardown catch-all: the moment NO over is pending,
         // restore a Fake-It-shifted VFO and drop an audio Rig-split. ONE drain
         // point, deliberately not per-exit-path: expiry, hard stop, UDP HaltTx
@@ -4388,7 +4447,7 @@ impl RadioLoop {
                             Some(plan) => {
                                 drop(eng);
                                 let wave = plan.waveform.build();
-                                eng = engine.lock().map_err(|e| e.to_string())?;
+                                eng = engine_lock(engine);
                                 // Re-read the clock AFTER the build (it waited out
                                 // MODEM_LOCK): commit_tx refuses if the T/R slot
                                 // rolled over meanwhile, and the PTT-hold deadline
@@ -4430,7 +4489,7 @@ impl RadioLoop {
                 && now - station.last_psk_flush >= PSK_FLUSH_SECS * 1000.0
             {
                 let (rx_call, rx_grid) = {
-                    let eng = engine.lock().map_err(|e| e.to_string())?;
+                    let eng = engine_lock(engine);
                     let s = eng.snapshot();
                     (s.mycall.clone(), s.mygrid.clone())
                 };
@@ -5033,7 +5092,8 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
         } else {
             None
         };
-        if let Ok(mut e) = engine.lock() {
+        {
+            let mut e = engine_lock(&engine);
             e.set_clock_offset_ms(offset);
         }
         std::thread::sleep(Duration::from_secs(600)); // ~10 min

@@ -42,7 +42,7 @@ use tempo_app::dto::{
     AppSnapshot, DiagnosticsReportDto, ImportStats, LoggedQso, LotwSyncResult, SourceKind,
     Spectrum, Tier, UploadReportDto,
 };
-use tempo_app::engine::Engine;
+use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::settings::{Settings, VoiceMessage};
 
 /// The engine, shared between UI commands and the radio loop.
@@ -373,7 +373,7 @@ static APRS_IS_FEED: Mutex<Option<AprsIsFeed>> = Mutex::new(None);
 /// value as a diagnostic depends on it running while the RF side is silent.
 fn sync_aprs_is_feed(engine: &SharedEngine) {
     let (want, login, addr) = {
-        let Ok(eng) = engine.lock() else { return };
+        let eng = engine_lock(engine);
         let s = eng.settings();
         let call = s.mycall.trim().to_string();
         // A real callsign is required even read-only: it is the login identity on a public
@@ -420,7 +420,8 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
         *slot = None;
     }
     if !want {
-        if let Ok(mut eng) = engine.lock() {
+        {
+            let mut eng = engine_lock(&engine);
             eng.set_aprs_is_status(Default::default());
         }
         return;
@@ -451,7 +452,8 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
                         let Some(pkt) = tempo_core::aprs::AprsPacket::from_tnc2(line) else {
                             return;
                         };
-                        if let Ok(mut e) = eng.lock() {
+                        {
+                            let mut e = engine_lock(&eng);
                             e.push_aprs_heard(tempo_app::engine::AprsHeard::from_packet(
                                 &pkt,
                                 now_unix(),
@@ -501,7 +503,7 @@ fn aprs_is_bridge(
     while !stop.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_secs(1));
         let (queued, igate_call, uplink_on) = {
-            let Ok(mut e) = engine.lock() else { continue };
+            let mut e = engine_lock(&engine);
             let call = e.settings().mycall.trim().to_string();
             let on = e.settings().aprs_is_uplink;
             (e.take_aprs_uplink(), call, on)
@@ -539,7 +541,8 @@ fn aprs_is_bridge(
             }
         }
         let last_packet = state.last_packet_unix.load(Ordering::Relaxed);
-        if let Ok(mut e) = engine.lock() {
+        {
+            let mut e = engine_lock(&engine);
             e.set_aprs_is_status(tempo_app::engine::AprsIsStatus {
                 // `enabled` / `uplink_enabled` are re-derived from settings by the getter.
                 connected: state.connected.load(Ordering::Relaxed),
@@ -1114,7 +1117,7 @@ struct RadioLaunchInfo {
 /// stations (or multi-radio-off) get `show_picker=false` → the UI proceeds straight to operating.
 #[tauri::command]
 fn radio_launch_info(state: State<'_, SharedEngine>) -> Result<RadioLaunchInfo, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     let s = eng.settings();
     let enabled: Vec<_> = s.radios.iter().filter(|r| r.enabled).collect();
     let show_picker = s.simultaneous_radios && enabled.len() >= 2 && active_profile().is_none();
@@ -1636,7 +1639,7 @@ fn recordings_dir() -> PathBuf {
 /// Full UI snapshot (`AppSnapshot`) — the UI renders all three zones from this.
 #[tauri::command]
 async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     // Drain any buffered ALL.TXT decode lines (the engine is I/O-free) and snapshot,
     // then release the lock before the file append so the UI poll never waits on disk.
     let all_txt = eng.take_all_txt_pending();
@@ -1654,7 +1657,7 @@ fn send_message(
     peer: String,
     text: String,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.send_message(&peer, &text);
     Ok(eng.snapshot())
 }
@@ -1668,7 +1671,7 @@ fn resend_chat(
     peer: String,
     ack_id: Option<char>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     if !eng.resend_message(&peer, ack_id) {
         return Err(format!("no resendable message for {peer}"));
     }
@@ -1681,7 +1684,7 @@ fn select_peer(
     state: State<'_, SharedEngine>,
     peer: Option<String>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     match peer.as_deref() {
         Some(p) => eng.select_peer(p),
         // Deselect must reach the engine too — a lingering active peer kept stale
@@ -1707,7 +1710,7 @@ fn archive_conversation(
     // Scope the lock: `persist_conversations` locks internally, and `SharedEngine` is a
     // non-reentrant std Mutex — calling it inside this scope would self-deadlock.
     let (snap, text) = {
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         eng.archive_conversation(&peer);
         (
             eng.snapshot(),
@@ -1731,7 +1734,7 @@ fn set_tier(state: State<'_, SharedEngine>, tier: String) -> Result<AppSnapshot,
         serde_json::from_value(serde_json::Value::String(tier.clone())).map_err(|_| {
             format!("invalid tier {tier:?}: expected \"FT1\", \"FT8\", \"FT4\", or \"DX1\"")
         })?;
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_tier(tier);
     Ok(eng.snapshot())
 }
@@ -1743,7 +1746,7 @@ fn set_tier(state: State<'_, SharedEngine>, tier: String) -> Result<AppSnapshot,
 fn set_source(state: State<'_, SharedEngine>, kind: String) -> Result<AppSnapshot, String> {
     let kind: SourceKind = serde_json::from_value(serde_json::Value::String(kind.clone()))
         .map_err(|_| format!("invalid source {kind:?}: expected \"native\" or \"companion\""))?;
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_source(kind)?;
     // Persist the choice so it survives restart (set_source recorded it in settings).
     if let Err(e) = eng.settings().save(&settings_path()) {
@@ -1768,7 +1771,7 @@ async fn get_propagation(
     wx_history: State<'_, SharedWxHistory>,
 ) -> Result<propagation::PropagationSnapshot, String> {
     let (mycall, mygrid, needs, local_spots) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let s = eng.settings();
         let (mycall, mygrid) = (s.mycall.clone(), s.mygrid.clone());
         // Derive the operator's needs from the ADIF logbook (cty.dat-resolved).
@@ -2118,7 +2121,7 @@ async fn get_path_outlook(
     cache: State<'_, PropCache>,
 ) -> Result<propagation::PathPrediction, String> {
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
@@ -2180,7 +2183,7 @@ async fn get_band_outlook(
 ) -> Result<propagation::PathPrediction, String> {
     const RING_TTL_SECS: u64 = 6 * 3600;
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
@@ -2324,7 +2327,7 @@ async fn get_dxped_windows(
     // week planner). Clamped so a bad caller can't request an unbounded sweep.
     let days = days.unwrap_or(1).clamp(1, 10);
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
@@ -2471,7 +2474,7 @@ async fn get_getting_out(
     live_paths: State<'_, SharedLivePaths>,
 ) -> Result<propagation::GettingOut, String> {
     let (mycall, mygrid) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let s = eng.settings();
         (s.mycall.clone(), s.mygrid.clone())
     };
@@ -2595,7 +2598,7 @@ async fn get_pca(
 #[tauri::command]
 fn get_declination(state: State<'_, SharedEngine>) -> Result<Option<f64>, String> {
     let mygrid = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         eng.settings().mygrid.clone()
     };
     Ok(propagation::wmm::declination_for_grid(&mygrid, now_unix()))
@@ -3024,7 +3027,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
     const VIEW_TTL_SECS: u64 = 600;
     const STALE_DAYS: f64 = 30.0;
     let mygrid = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         eng.settings().mygrid.clone()
     };
     let now = now_unix();
@@ -3291,7 +3294,7 @@ async fn get_sat_schedule(
     const STALE_DAYS: f64 = 30.0;
     let hours = hours.clamp(1, 72);
     let mygrid = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         eng.settings().mygrid.clone()
     };
     let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
@@ -3364,7 +3367,7 @@ async fn get_sat_schedule(
 #[tauri::command]
 async fn get_iss_pass(state: State<'_, SharedEngine>) -> Result<Option<SatPassDto>, String> {
     let mygrid = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         eng.settings().mygrid.clone()
     };
     let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
@@ -3427,7 +3430,7 @@ async fn get_sat_detail(
     name: String,
 ) -> Result<SatDetailDto, String> {
     let mygrid = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         eng.settings().mygrid.clone()
     };
     let obs = propagation::geo::maidenhead_to_latlon(mygrid.trim());
@@ -3531,7 +3534,7 @@ async fn start_sat_track(
     aos_unix: Option<i64>,
 ) -> Result<Option<SatTrackDto>, String> {
     let (mygrid, addr) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let st = eng.settings();
         (st.mygrid.clone(), effective_rotator_addr(st))
     };
@@ -3701,7 +3704,7 @@ async fn stop_sat_track(state: State<'_, SharedEngine>) -> Result<(), String> {
         *g = None;
     }
     let addr = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         effective_rotator_addr(eng.settings())
     };
     if let Some(addr) = addr {
@@ -3854,7 +3857,7 @@ fn get_spectrum_row(
     }
     // Nothing published yet: a Companion/UDP source has no local capture, so its row is
     // computed on demand from the last decoded buffer. Rare, low-rate, and correct to block on.
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(eng.spectrum_row())
 }
 
@@ -3862,7 +3865,7 @@ fn get_spectrum_row(
 /// | "fieldday-sp". Returns the refreshed snapshot.
 #[tauri::command]
 fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     // Refuse to enter a keying structured mode without the identity its messages need,
     // so the operator gets a clear reason instead of a silently-suppressed over. The
     // mode plugin decides which tiers are gated (Capabilities::structured_identity —
@@ -3881,7 +3884,7 @@ fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot,
 /// Current operator/station settings.
 #[tauri::command]
 fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     // Defensive: re-mirror the ACTIVE radio's profile into the flat fields the UI reads (idempotent —
     // a no-op when already in sync). Guarantees the Settings Rig/Audio form always shows the active
     // radio's own CAT + audio device, independent of which code path last flipped the active radio.
@@ -3926,7 +3929,7 @@ fn set_settings(
     let opening_regional = settings.opening_regional;
 
     let snap = {
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         // The LoTW sync cursor is bound to the exact query (notably the username);
         // if the username changed, reset it to a full pull so a config edit can't
         // silently skip confirmations.
@@ -4087,19 +4090,16 @@ fn restart_live_feeds(
         }
         PSKR_STARTED.store(false, SeqCst);
         PSKR_REGION_STARTED.store(false, SeqCst);
-        let (cluster_enabled, cluster_hosts, mycall, mygrid, opening_regional) = match engine.lock()
-        {
-            Ok(eng) => {
-                let st = eng.settings();
-                (
-                    st.cluster_enabled,
-                    st.cluster_hosts.clone(),
-                    st.mycall.clone(),
-                    st.mygrid.clone(),
-                    st.opening_regional,
-                )
-            }
-            Err(_) => return,
+        let (cluster_enabled, cluster_hosts, mycall, mygrid, opening_regional) = {
+            let eng = engine_lock(&engine);
+            let st = eng.settings();
+            (
+                st.cluster_enabled,
+                st.cluster_hosts.clone(),
+                st.mycall.clone(),
+                st.mygrid.clone(),
+                st.opening_regional,
+            )
         };
         if cluster_enabled {
             start_cluster_feeds(&spots, &cluster_hosts, &mycall, &health);
@@ -4117,7 +4117,7 @@ fn restart_live_feeds(
 /// not in Field Day mode.
 #[tauri::command]
 fn export_log(state: State<'_, SharedEngine>, format: String) -> Result<String, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     eng.export_log(&format)
         .ok_or_else(|| "nothing to export (enter Field Day mode first)".to_string())
 }
@@ -4126,7 +4126,7 @@ fn export_log(state: State<'_, SharedEngine>, format: String) -> Result<String, 
 /// `format` ("adif" | "csv"). Independent of the Field Day contest log.
 #[tauri::command]
 fn export_general_log(state: State<'_, SharedEngine>, format: String) -> Result<String, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(eng.export_logbook(&format))
 }
 
@@ -4193,7 +4193,7 @@ fn civ_diagnostic_status() -> String {
 /// Transmit an open broadcast (FT8-style "to all") free-text message.
 #[tauri::command]
 fn broadcast(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.broadcast(&text);
     Ok(eng.snapshot())
 }
@@ -4400,7 +4400,7 @@ async fn probe_cat_ports(
         // Read the configured model, then release the lock for the seconds-long probe so
         // the UI's snapshot polling never blocks on it.
         let model = {
-            let eng = state.lock().map_err(|e| e.to_string())?;
+            let eng = engine_lock(&state);
             let s = eng.settings();
             // The radio being configured owns the fallback model. Fall back to the flat
             // mirror only when no radio was named (the setup wizard's single-radio path).
@@ -4537,7 +4537,7 @@ async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<()
     #[cfg(feature = "radio")]
     {
         let host = {
-            let eng = state.lock().map_err(|e| e.to_string())?;
+            let eng = engine_lock(&state);
             effective_rotator_addr(eng.settings())
         };
         let Some(host) = host else {
@@ -4591,7 +4591,7 @@ async fn stop_rotator(state: State<'_, SharedEngine>) -> Result<(), String> {
     #[cfg(feature = "radio")]
     {
         let host = {
-            let eng = state.lock().map_err(|e| e.to_string())?;
+            let eng = engine_lock(&state);
             effective_rotator_addr(eng.settings())
         };
         let Some(host) = host else {
@@ -4622,7 +4622,7 @@ async fn point_rotator_at_call(
     #[cfg(feature = "radio")]
     {
         let (host, mygrid) = {
-            let eng = state.lock().map_err(|e| e.to_string())?;
+            let eng = engine_lock(&state);
             (
                 effective_rotator_addr(eng.settings()),
                 eng.settings().mygrid.clone(),
@@ -4658,7 +4658,7 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
     #[cfg(feature = "radio")]
     {
         let host = {
-            let eng = state.lock().map_err(|e| e.to_string())?;
+            let eng = engine_lock(&state);
             effective_rotator_addr(eng.settings())
         };
         let Some(host) = host else {
@@ -4719,7 +4719,7 @@ struct CwDecodeResult {
 /// CW cockpit. Empty text unless there's a clear keyed signal under the marker.
 #[tauri::command]
 fn cw_decode(state: State<'_, SharedEngine>, sensitivity: f32) -> Result<CwDecodeResult, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_cw_sensitivity(sensitivity); // operator slider; scales the decode gates
     let d = eng.cw_decode();
     let sent = eng.cw_sent();
@@ -4756,7 +4756,7 @@ fn cw_decode(state: State<'_, SharedEngine>, sensitivity: f32) -> Result<CwDecod
 /// Toggle the AI CW decoder (beta) — persisted; the decode thread + audio ring follow it.
 #[tauri::command]
 fn set_ai_cw(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_ai_cw_enabled(on);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist ai-cw toggle: {e}");
@@ -4767,7 +4767,7 @@ fn set_ai_cw(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, St
 /// Clear the streaming CW decoder's accumulated transcript (the cockpit's Clear button).
 #[tauri::command]
 fn cw_clear(state: State<'_, SharedEngine>) -> Result<(), String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.cw_clear();
     Ok(())
 }
@@ -4775,7 +4775,7 @@ fn cw_clear(state: State<'_, SharedEngine>) -> Result<(), String> {
 /// Expand a CW macro to the exact text it will send, WITHOUT sending — the reply preview.
 #[tauri::command]
 fn preview_cw(state: State<'_, SharedEngine>, text: String) -> Result<String, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(eng.preview_cw(&text))
 }
 
@@ -4792,7 +4792,7 @@ struct SkimHitDto {
 /// passband (the multi-signal sibling of `cw_decode`).
 #[tauri::command]
 fn cw_skim(state: State<'_, SharedEngine>) -> Result<Vec<SkimHitDto>, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(eng
         .cw_skim()
         .into_iter()
@@ -4876,7 +4876,7 @@ fn rtty_state_dto(eng: &Engine) -> RttyStateDto {
 /// so the app never launches armed). Returns the fresh state.
 #[tauri::command]
 fn rtty_arm(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_rtty_armed(on);
     Ok(rtty_state_dto(&eng))
 }
@@ -4884,7 +4884,7 @@ fn rtty_arm(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, St
 /// The live RTTY state (poll while the RTTY cockpit is visible).
 #[tauri::command]
 fn get_rtty_state(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(rtty_state_dto(&eng))
 }
 
@@ -4895,7 +4895,7 @@ fn aprs_arm(
     state: State<'_, SharedEngine>,
     on: bool,
 ) -> Result<Vec<tempo_app::engine::AprsHeard>, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     // An EXPLICIT operator act — the only arm that permits an unattended auto-ack. View entry
     // goes through `aprs_auto_arm` instead, which cannot confer that.
     eng.set_aprs_arm(if on {
@@ -4911,7 +4911,7 @@ fn aprs_arm(
 /// session. Returns whether this call armed it.
 #[tauri::command]
 fn aprs_auto_arm(state: State<'_, SharedEngine>) -> Result<bool, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     Ok(eng.aprs_auto_arm())
 }
 
@@ -4920,7 +4920,7 @@ fn aprs_auto_arm(state: State<'_, SharedEngine>) -> Result<bool, String> {
 fn get_aprs_heard(
     state: State<'_, SharedEngine>,
 ) -> Result<Vec<tempo_app::engine::AprsHeard>, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(eng.aprs_heard())
 }
 
@@ -4930,7 +4930,7 @@ fn get_aprs_heard(
 fn get_aprs_health(
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::engine::AprsHealth, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(eng.aprs_health())
 }
 
@@ -4944,7 +4944,7 @@ fn get_aprs_health(
 fn get_aprs_stations(
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::engine::AprsStationsView, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(eng.aprs_stations(now_unix()))
 }
 
@@ -4956,7 +4956,7 @@ fn get_aprs_stations(
 fn get_aprs_is_status(
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::engine::AprsIsStatus, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(eng.aprs_is_status())
 }
 
@@ -4974,7 +4974,7 @@ fn aprs_send_beacon(
     comment: String,
     path: Vec<String>,
 ) -> Result<(), String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     let table = symbol_table.chars().next().unwrap_or('/');
     let code = symbol_code.chars().next().unwrap_or('>');
     eng.aprs_beacon(lat, lon, table, code, &comment, &path)
@@ -4988,7 +4988,7 @@ fn aprs_send_message(
     addressee: String,
     text: String,
 ) -> Result<(), String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.aprs_send_message(&addressee, &text)
 }
 
@@ -5000,7 +5000,7 @@ fn aprs_send_message(
 /// HF-only rig asked for the 2 m APRS channel. The message is operator-facing.
 #[tauri::command]
 fn aprs_tune(state: State<'_, SharedEngine>, dial_mhz: f64) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.aprs_tune(dial_mhz)?;
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist frequency: {e}");
@@ -5024,7 +5024,7 @@ fn repeater_tune(
     offset_hz: i64,
     tone_hz: f32,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.repeater_tune(output_mhz, &shift, offset_hz, tone_hz)?;
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist frequency: {e}");
@@ -5039,7 +5039,7 @@ fn repeater_tune(
 /// queued text via the configured backend (soundcard AFSK / true-FSK keyline).
 #[tauri::command]
 fn rtty_send(state: State<'_, SharedEngine>, text: String) -> Result<RttyStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.rtty_send_text(&text)?;
     Ok(rtty_state_dto(&eng))
 }
@@ -5047,7 +5047,7 @@ fn rtty_send(state: State<'_, SharedEngine>, text: String) -> Result<RttyStateDt
 /// Stop RTTY now: abort the over in progress, drop everything queued, and unkey.
 #[tauri::command]
 fn rtty_stop(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.rtty_stop();
     Ok(rtty_state_dto(&eng))
 }
@@ -5055,7 +5055,7 @@ fn rtty_stop(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
 /// Clear the decoded-RTTY transcript (the cockpit's Clear button). RX display only.
 #[tauri::command]
 fn rtty_clear(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.rtty_clear();
     Ok(rtty_state_dto(&eng))
 }
@@ -5064,7 +5064,7 @@ fn rtty_clear(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
 /// an AFC frozen on the wrong neighbor. RX only; never touches TX.
 #[tauri::command]
 fn rtty_afc_reset(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_rtty_afc_reset();
     Ok(rtty_state_dto(&eng))
 }
@@ -5074,7 +5074,7 @@ fn rtty_afc_reset(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String
 /// it needs no TX/privilege gate and is safe during a transmission.
 #[tauri::command]
 fn rtty_net(state: State<'_, SharedEngine>, hz: f32) -> Result<RttyStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.rtty_net(hz);
     Ok(rtty_state_dto(&eng))
 }
@@ -5085,7 +5085,7 @@ fn rtty_net(state: State<'_, SharedEngine>, hz: f32) -> Result<RttyStateDto, Str
 /// starts from an explicit CQ/Answer (the human-initiate gate).
 #[tauri::command]
 fn rtty_set_auto(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_rtty_auto(on);
     Ok(rtty_state_dto(&eng))
 }
@@ -5094,7 +5094,7 @@ fn rtty_set_auto(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDt
 /// TX gate and returns WHY a start was refused (Auto off, TX locked, …).
 #[tauri::command]
 fn rtty_auto_cq(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.rtty_auto_cq()?;
     Ok(rtty_state_dto(&eng))
 }
@@ -5103,7 +5103,7 @@ fn rtty_auto_cq(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> 
 /// gate re-check + reason on refusal.
 #[tauri::command]
 fn rtty_auto_answer(state: State<'_, SharedEngine>, call: String) -> Result<RttyStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.rtty_auto_answer(&call)?;
     Ok(rtty_state_dto(&eng))
 }
@@ -5111,7 +5111,7 @@ fn rtty_auto_answer(state: State<'_, SharedEngine>, call: String) -> Result<Rtty
 /// Operator kills the live auto session: abort the sequencer, drop the queue, unkey.
 #[tauri::command]
 fn rtty_auto_abort(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.rtty_auto_abort();
     Ok(rtty_state_dto(&eng))
 }
@@ -5184,7 +5184,7 @@ fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
 /// fresh state.
 #[tauri::command]
 fn sstv_arm(state: State<'_, SharedEngine>, on: bool) -> Result<SstvStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_sstv_armed(on);
     Ok(sstv_state_dto(&eng))
 }
@@ -5192,7 +5192,7 @@ fn sstv_arm(state: State<'_, SharedEngine>, on: bool) -> Result<SstvStateDto, St
 /// The live SSTV RX state (poll while the SSTV view is visible).
 #[tauri::command]
 fn get_sstv_state(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(sstv_state_dto(&eng))
 }
 
@@ -5263,14 +5263,14 @@ fn sstv_send(
     // Pre-flight the TX gate under a SHORT lock so a refused send (wrong frequency, TX
     // off, another over in flight) fails fast BEFORE we spend CPU on the encode.
     {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         eng.sstv_tx_gate()?;
     }
     // Encode the whole 12 kHz waveform OFF the engine lock (tens of ms even for PD290).
     let samples = tempo_sstv::encode_image(sstv_mode, &img, 12_000).map_err(|e| e.to_string())?;
     // Re-take the lock and hand it to the gated engine path (re-runs the full gate + the
     // duration-budget check; nothing keys until the radio loop takes it).
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.sstv_send(samples, spec.name.to_string())?;
     Ok(sstv_state_dto(&eng))
 }
@@ -5279,7 +5279,7 @@ fn sstv_send(
 /// unkey (the radio loop flushes the output ring on its next tick). Mirrors `rtty_stop`.
 #[tauri::command]
 fn sstv_stop(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.sstv_stop();
     Ok(sstv_state_dto(&eng))
 }
@@ -5347,7 +5347,7 @@ fn b64_encode(data: &[u8]) -> String {
 /// clears anything queued; `true` re-enables it and clears a tripped watchdog.
 #[tauri::command]
 fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_tx_enabled(enabled);
     Ok(eng.snapshot())
 }
@@ -5357,7 +5357,7 @@ fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSn
 /// restart. Returns the refreshed snapshot.
 #[tauri::command]
 fn set_tx_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_tx_level(level);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: set_tx_level save failed: {e}");
@@ -5370,7 +5370,7 @@ fn set_tx_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapsho
 /// the refreshed snapshot.
 #[tauri::command]
 fn set_rx_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_rx_gain(gain);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: set_rx_gain save failed: {e}");
@@ -5385,7 +5385,7 @@ fn set_rx_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot,
 #[tauri::command]
 fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
     let (snap, settings) = {
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         eng.set_active_radio(id);
         if let Err(e) = eng.settings().save(&settings_path()) {
             eprintln!("tempo: set_active_radio save failed: {e}");
@@ -5403,7 +5403,7 @@ fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapsh
 /// active radio (P4 routing respects it). Persisted. Returns the refreshed snapshot.
 #[tauri::command]
 fn set_peg_lock(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_radio_pegged(on);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: set_peg_lock save failed: {e}");
@@ -5416,7 +5416,7 @@ fn set_peg_lock(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot,
 /// snapshot — the switcher then shows the new radio.
 #[tauri::command]
 fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.add_radio();
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: add_radio save failed: {e}");
@@ -5430,7 +5430,7 @@ fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// Remove a radio from the roster (no-op on the active or last radio). Returns the snapshot.
 #[tauri::command]
 fn remove_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.remove_radio(id);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: remove_radio save failed: {e}");
@@ -5448,7 +5448,7 @@ fn rename_radio(
     id: u32,
     name: String,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.rename_radio(id, &name);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: rename_radio save failed: {e}");
@@ -5464,7 +5464,7 @@ fn set_radio_bands(
     id: u32,
     bands: Vec<String>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_radio_bands(id, bands);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: set_radio_bands save failed: {e}");
@@ -5480,7 +5480,7 @@ fn set_routing_rules(
     state: State<'_, SharedEngine>,
     rules: Vec<tempo_app::settings::RoutingRule>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_routing_rules(rules);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: set_routing_rules save failed: {e}");
@@ -5496,7 +5496,7 @@ fn set_default_radio(
     state: State<'_, SharedEngine>,
     id: Option<u32>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_default_radio(id);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: set_default_radio save failed: {e}");
@@ -5513,7 +5513,7 @@ fn route_preview(
     band: String,
     mode: tempo_app::settings::RouteMode,
 ) -> Result<RoutePreview, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     let id = eng.route_preview(&band, mode);
     let name = eng
         .settings()
@@ -5542,7 +5542,7 @@ fn update_radio_profile(
     id: u32,
     patch: tempo_app::settings::RadioProfilePatch,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.update_radio_profile(id, patch);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: update_radio_profile save failed: {e}");
@@ -5555,7 +5555,7 @@ fn update_radio_profile(
 /// f0 sine. Returns the refreshed snapshot.
 #[tauri::command]
 fn set_tune(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_tune(on);
     Ok(eng.snapshot())
 }
@@ -5563,7 +5563,7 @@ fn set_tune(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, Str
 /// Stop transmitting now: drop any queued frames and clear the TX indicator.
 #[tauri::command]
 fn halt_tx(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.halt_tx();
     Ok(eng.snapshot())
 }
@@ -5586,12 +5586,12 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
     #[cfg(feature = "radio")]
     {
         {
-            let mut eng = state.lock().map_err(|e| e.to_string())?;
+            let mut eng = engine_lock(&state);
             eng.request_cat_reprobe();
         }
         // The radio loop polls at ~50 Hz; allow time for a rigctld spawn + probe.
         std::thread::sleep(std::time::Duration::from_millis(1300));
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let r = eng.snapshot().radio;
         Ok(CatTestResult {
             ok: r.cat_ok.unwrap_or(false),
@@ -5656,7 +5656,7 @@ fn get_band_plan(
     // Tier-aware (FT8/FT4 → the standard WSJT-X watering holes; FT1/DX1 →
     // native plan) WITH the operator's Settings ▸ Frequencies overrides applied
     // — the band picker must show the dials the engine will actually QSY to.
-    Ok(state.lock().map_err(|e| e.to_string())?.band_plan())
+    Ok(engine_lock(&state).band_plan())
 }
 
 /// Set the operator's amateur license class (Technician/General/Extra/Open) — drives the
@@ -5664,7 +5664,7 @@ fn get_band_plan(
 /// wizard and Settings.
 #[tauri::command]
 fn set_license_class(state: State<'_, SharedEngine>, class: String) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_license_class(&class);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist license class: {e}");
@@ -5698,7 +5698,7 @@ fn get_licensed_band_plan(
         ("1.25m", "VHF"),
         ("70cm", "UHF"),
     ];
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     let class = eng.settings().license_class;
     // RTTY / SSTV: fixed standard watering-hole channels (like WSJT-X's per-mode
     // dials), license-filtered per band — a Technician sees only the bands their
@@ -5766,7 +5766,7 @@ fn set_frequency(
     band: String,
     mode: String,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_frequency(dial_mhz, &band, &mode);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist frequency: {e}");
@@ -5786,7 +5786,7 @@ fn set_operating_mode(
     mode: String,
     follow_freq: bool,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_operating_mode(&mode, follow_freq);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist operating mode: {e}");
@@ -5833,7 +5833,7 @@ fn work_spot(
             .find_map(|cs| cs.split_offset_khz())
         })
     });
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.work_spot_split(&mode, freq_mhz, &band, split_up_khz);
     eng.note_work_call(call); // cross-window prefill hint (pop-out band map → main window log)
     if let Err(e) = eng.settings().save(&settings_path()) {
@@ -5847,7 +5847,7 @@ fn work_spot(
 /// and the radio loop keys it via the rig. Operator-initiated; respects Monitor.
 #[tauri::command]
 fn send_cw(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.send_cw(&text);
     Ok(eng.snapshot())
 }
@@ -5863,7 +5863,7 @@ fn set_cw_peer_info(
     name: String,
     peer_state: String,
 ) -> Result<(), String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_cw_peer_info(call, name, peer_state);
     Ok(())
 }
@@ -5871,7 +5871,7 @@ fn set_cw_peer_info(
 /// Set the CW keyer speed in WPM (5–50).
 #[tauri::command]
 fn set_cw_wpm(state: State<'_, SharedEngine>, wpm: u32, commit: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_cw_wpm(wpm);
     // `commit` gates the DISK write, not the live change. Two reasons it isn't unconditional:
     // (1) this is driven by a range slider — one drag is ~45 calls, and each save is a
@@ -5891,7 +5891,7 @@ fn set_cw_wpm(state: State<'_, SharedEngine>, wpm: u32, commit: bool) -> Result<
 /// immediately (it's a discrete chip click, not a slider, so no save-storm concern).
 #[tauri::command]
 fn set_decode_depth(state: State<'_, SharedEngine>, depth: u8) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_decode_depth(depth);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: set_decode_depth save failed: {e}");
@@ -5902,7 +5902,7 @@ fn set_decode_depth(state: State<'_, SharedEngine>, depth: u8) -> Result<AppSnap
 /// Abort CW in progress (Esc) — stops the rig keyer and clears the queue.
 #[tauri::command]
 fn stop_cw(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.stop_cw();
     Ok(eng.snapshot())
 }
@@ -5911,7 +5911,7 @@ fn stop_cw(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// talk; respects Monitor (a key request is ignored while TX is disabled).
 #[tauri::command]
 fn set_ptt(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_ptt(on);
     Ok(eng.snapshot())
 }
@@ -5919,7 +5919,7 @@ fn set_ptt(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, Stri
 /// Set RF output power as a 0.0–1.0 fraction; the radio loop applies it to the rig.
 #[tauri::command]
 fn set_rf_power(state: State<'_, SharedEngine>, power: f32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_rf_power(power);
     Ok(eng.snapshot())
 }
@@ -5927,7 +5927,7 @@ fn set_rf_power(state: State<'_, SharedEngine>, power: f32) -> Result<AppSnapsho
 /// Set mic gain as a 0.0–1.0 fraction; the radio loop applies it to the rig.
 #[tauri::command]
 fn set_mic_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_mic_gain(gain);
     Ok(eng.snapshot())
 }
@@ -5935,7 +5935,7 @@ fn set_mic_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot
 /// Set the noise-reduction level as a 0.0–1.0 fraction; the radio loop applies it.
 #[tauri::command]
 fn set_nr_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_nr_level(level);
     Ok(eng.snapshot())
 }
@@ -5943,7 +5943,7 @@ fn set_nr_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapsho
 /// Set the AGC speed ("fast"|"mid"|"slow"); the radio loop applies it to the rig.
 #[tauri::command]
 fn set_agc(state: State<'_, SharedEngine>, speed: String) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_agc(&speed);
     Ok(eng.snapshot())
 }
@@ -5952,7 +5952,7 @@ fn set_agc(state: State<'_, SharedEngine>, speed: String) -> Result<AppSnapshot,
 /// `Some(tx)` = TX split to that dial (e.g. "up 5"), `None` = back to simplex.
 #[tauri::command]
 fn set_split(state: State<'_, SharedEngine>, tx_mhz: Option<f64>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_split(tx_mhz);
     Ok(eng.snapshot())
 }
@@ -5965,7 +5965,7 @@ fn set_rig_func(
     func: String,
     on: bool,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_rig_func(&func, on);
     Ok(eng.snapshot())
 }
@@ -5977,7 +5977,7 @@ fn set_sideband_override(
     state: State<'_, SharedEngine>,
     mode: Option<String>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_sideband_override(mode.as_deref());
     Ok(eng.snapshot())
 }
@@ -5985,7 +5985,7 @@ fn set_sideband_override(
 /// Set the rig RX filter/passband width in Hz; the radio loop applies it via set_mode next cycle.
 #[tauri::command]
 fn set_filter_width(state: State<'_, SharedEngine>, hz: u32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_filter_width(hz);
     Ok(eng.snapshot())
 }
@@ -5993,7 +5993,7 @@ fn set_filter_width(state: State<'_, SharedEngine>, hz: u32) -> Result<AppSnapsh
 /// Set the native Icom scope SPAN (± half-width, Hz); applied to the rig by the radio loop.
 #[tauri::command]
 fn set_scope_span(state: State<'_, SharedEngine>, hz: u32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_scope_span(hz);
     Ok(eng.snapshot())
 }
@@ -6001,7 +6001,7 @@ fn set_scope_span(state: State<'_, SharedEngine>, hz: u32) -> Result<AppSnapshot
 /// Set the native Icom scope REFERENCE level (tenths of a dB, −200..+200).
 #[tauri::command]
 fn set_scope_ref(state: State<'_, SharedEngine>, tenths_db: i32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_scope_ref(tenths_db);
     Ok(eng.snapshot())
 }
@@ -6009,7 +6009,7 @@ fn set_scope_ref(state: State<'_, SharedEngine>, tenths_db: i32) -> Result<AppSn
 /// Set the FlexRadio native-panadapter BANDWIDTH (Hz); the FlexSpectrum worker applies it live.
 #[tauri::command]
 fn set_flex_pan_span(state: State<'_, SharedEngine>, hz: f64) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_flex_pan_span(hz);
     Ok(eng.snapshot())
 }
@@ -6020,7 +6020,7 @@ fn set_flex_pan_ref(
     state: State<'_, SharedEngine>,
     ref_dbm: Option<i32>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_flex_pan_ref(ref_dbm);
     Ok(eng.snapshot())
 }
@@ -6028,7 +6028,7 @@ fn set_flex_pan_ref(
 /// Set the native Icom scope center/fixed mode (`true` = fixed band-edge view).
 #[tauri::command]
 fn set_scope_fixed(state: State<'_, SharedEngine>, fixed: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_scope_fixed(fixed);
     Ok(eng.snapshot())
 }
@@ -6036,7 +6036,7 @@ fn set_scope_fixed(state: State<'_, SharedEngine>, fixed: bool) -> Result<AppSna
 /// Set the RIT (receive incremental tuning) offset in Hz — 0 turns RIT off. Applied next loop.
 #[tauri::command]
 fn set_rit(state: State<'_, SharedEngine>, hz: i32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_rit(hz);
     Ok(eng.snapshot())
 }
@@ -6044,7 +6044,7 @@ fn set_rit(state: State<'_, SharedEngine>, hz: i32) -> Result<AppSnapshot, Strin
 /// Set the XIT (transmit incremental tuning) offset in Hz — 0 turns XIT off.
 #[tauri::command]
 fn set_xit(state: State<'_, SharedEngine>, hz: i32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_xit(hz);
     Ok(eng.snapshot())
 }
@@ -6052,7 +6052,7 @@ fn set_xit(state: State<'_, SharedEngine>, hz: i32) -> Result<AppSnapshot, Strin
 /// Select the active VFO ("A" / "B").
 #[tauri::command]
 fn set_vfo(state: State<'_, SharedEngine>, vfo: String) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_vfo(vfo.trim().eq_ignore_ascii_case("B"));
     Ok(eng.snapshot())
 }
@@ -6060,7 +6060,7 @@ fn set_vfo(state: State<'_, SharedEngine>, vfo: String) -> Result<AppSnapshot, S
 /// Swap the active VFO (A↔B).
 #[tauri::command]
 fn swap_vfo(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.request_swap_vfo();
     Ok(eng.snapshot())
 }
@@ -6073,7 +6073,7 @@ fn set_cw_keyer(
     backend: String,
     pitch: f32,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_cw_keyer(&backend, pitch);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist CW keyer: {e}");
@@ -6088,7 +6088,7 @@ fn set_cw_keyer(
 #[tauri::command]
 fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSnapshot, String> {
     let file = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         eng.voice_messages()
             .iter()
             .find(|m| m.slot == slot)
@@ -6104,7 +6104,7 @@ fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSna
     {
         let samples = tempo_audio::voice::read_wav_12k(&file)
             .map_err(|e| format!("Could not read voice message: {e}"))?;
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         eng.send_voice(samples);
         Ok(eng.snapshot())
     }
@@ -6118,7 +6118,7 @@ fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSna
 /// Stop voice playback in progress (Esc) — flush queued audio + unkey.
 #[tauri::command]
 fn stop_voice(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.stop_voice();
     Ok(eng.snapshot())
 }
@@ -6127,7 +6127,7 @@ fn stop_voice(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// the engine until `stop_voice_recording`.
 #[tauri::command]
 fn start_voice_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.start_recording();
     Ok(eng.snapshot())
 }
@@ -6136,7 +6136,7 @@ fn start_voice_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, 
 /// to tear down cleanly when the operator leaves the Phone section mid-record.
 #[tauri::command]
 fn cancel_voice_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     let _ = eng.stop_recording(); // take + drop the buffer
     Ok(eng.snapshot())
 }
@@ -6150,7 +6150,7 @@ fn stop_voice_recording(
     label: String,
 ) -> Result<Vec<VoiceMessage>, String> {
     let samples = {
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         eng.stop_recording()
     };
     if samples.is_empty() {
@@ -6161,7 +6161,7 @@ fn stop_voice_recording(
         let path = voice_dir().join(format!("slot{slot}.wav"));
         tempo_audio::voice::write_wav_12k_atomic(&path, &samples)
             .map_err(|e| format!("Could not save recording: {e}"))?;
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         let lbl = (!label.trim().is_empty()).then_some(label.as_str());
         eng.set_voice_message(slot, lbl, Some(&path.to_string_lossy()));
         if let Err(e) = eng.settings().save(&settings_path()) {
@@ -6205,7 +6205,7 @@ fn import_voice_message(
         let path = dir.join(format!("slot{slot}.wav"));
         tempo_audio::voice::write_wav_12k_atomic(&path, &samples)
             .map_err(|e| format!("Could not save the import: {e}"))?;
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         let lbl = (!label.trim().is_empty()).then_some(label.as_str());
         eng.set_voice_message(slot, lbl, Some(&path.to_string_lossy()));
         if let Err(e) = eng.settings().save(&settings_path()) {
@@ -6227,7 +6227,7 @@ fn set_voice_label(
     slot: u8,
     label: String,
 ) -> Result<Vec<VoiceMessage>, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_voice_message(slot, Some(&label), None);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist voice label: {e}");
@@ -6241,7 +6241,7 @@ fn clear_voice_message(
     state: State<'_, SharedEngine>,
     slot: u8,
 ) -> Result<Vec<VoiceMessage>, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.clear_voice_message(slot);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist voice clear: {e}");
@@ -6254,7 +6254,7 @@ fn clear_voice_message(
 /// The configured voice-keyer message slots (for the Phone cockpit's keyer strip).
 #[tauri::command]
 fn get_voice_messages(state: State<'_, SharedEngine>) -> Result<Vec<VoiceMessage>, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(eng.voice_messages().to_vec())
 }
 
@@ -6277,7 +6277,7 @@ fn start_qso_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, St
             .map(|d| d.as_millis())
             .unwrap_or(0);
         let path = dir.join(format!("qso-{ms}.wav"));
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         eng.start_qso_recording(&path.to_string_lossy());
         Ok(eng.snapshot())
     }
@@ -6294,7 +6294,7 @@ fn start_qso_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, St
 fn stop_qso_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     #[cfg(feature = "radio")]
     {
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         eng.stop_qso_recording();
         Ok(eng.snapshot())
     }
@@ -6309,7 +6309,7 @@ fn stop_qso_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
 /// odd/"2nd". Two stations must use OPPOSITE periods to complete a QSO. Persists.
 #[tauri::command]
 fn set_tx_even(state: State<'_, SharedEngine>, even: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_tx_even(even);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist tx period: {e}");
@@ -6322,7 +6322,7 @@ fn set_tx_even(state: State<'_, SharedEngine>, even: bool) -> Result<AppSnapshot
 /// selection (set_tx_even) turns it off.
 #[tauri::command]
 fn set_tx_cycle_auto(state: State<'_, SharedEngine>, auto: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_tx_cycle_auto(auto);
     Ok(eng.snapshot())
 }
@@ -6331,7 +6331,7 @@ fn set_tx_cycle_auto(state: State<'_, SharedEngine>, auto: bool) -> Result<AppSn
 /// stations enter each other's rosters and store-and-forward can deliver. Persisted.
 #[tauri::command]
 fn set_beacon(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_beacon(on);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist heartbeat setting: {e}");
@@ -6343,7 +6343,7 @@ fn set_beacon(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, S
 /// cooperating apps (JTAlert/GridTracker) mirror it. 0 = Band, 1 = Rx, 2 = both.
 #[tauri::command]
 fn notify_erase(state: State<'_, SharedEngine>, window: u8) -> Result<(), String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.notify_erase(window);
     Ok(())
 }
@@ -6352,7 +6352,7 @@ fn notify_erase(state: State<'_, SharedEngine>, window: u8) -> Result<(), String
 /// audio with the current settings; only newly-found lines are ingested.
 #[tauri::command]
 fn redecode(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     let _ = eng.redecode();
     Ok(eng.snapshot())
 }
@@ -6361,7 +6361,7 @@ fn redecode(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// for a plain CQ (also clears a sticky directed token).
 #[tauri::command]
 fn start_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.start_cq(dir.as_deref())?;
     Ok(eng.snapshot())
 }
@@ -6371,7 +6371,7 @@ fn start_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSn
 /// never goes out malformed). `dir` = an optional directed-CQ token (None = plain CQ).
 #[tauri::command]
 fn call_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.call_cq(dir.as_deref())?;
     Ok(eng.snapshot())
 }
@@ -6380,7 +6380,7 @@ fn call_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSna
 /// every idle TX slot until answered (auto-pauses) or stopped.
 #[tauri::command]
 fn set_chat_cq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_chat_cq(on)?;
     Ok(eng.snapshot())
 }
@@ -6388,7 +6388,7 @@ fn set_chat_cq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, 
 /// Resume a paused chat CQ run now (skip the idle auto-resume wait).
 #[tauri::command]
 fn resume_chat_cq(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.resume_chat_cq()?;
     Ok(eng.snapshot())
 }
@@ -6402,7 +6402,7 @@ fn override_next_tx(
     grid: Option<String>,
     text: String,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.override_next_tx(&call, grid.as_deref(), &text);
     Ok(eng.snapshot())
 }
@@ -6411,7 +6411,7 @@ fn override_next_tx(
 /// follows unless "Hold Tx Freq" is on. Persists.
 #[tauri::command]
 fn set_rx_offset(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_rx_offset(hz);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist rx offset: {e}");
@@ -6422,7 +6422,7 @@ fn set_rx_offset(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot,
 /// Set the transmit audio offset (Hz) — the red waterfall marker. Persists.
 #[tauri::command]
 fn set_tx_offset(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_tx_offset(hz);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist tx offset: {e}");
@@ -6434,7 +6434,7 @@ fn set_tx_offset(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot,
 /// Persists.
 #[tauri::command]
 fn set_hold_tx_freq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_hold_tx_freq(on);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist hold-tx: {e}");
@@ -6601,7 +6601,7 @@ fn call_station(
     snr: Option<i32>,
     freq: Option<f32>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     // Working a station keys a standard structured message (your grid in Tx1) — refuse
     // without a valid callsign + grid so we never emit a grid-less directed call. The
     // mode plugin decides which tiers are gated (Capabilities::structured_identity).
@@ -6630,7 +6630,7 @@ fn set_skip_tx1(state: State<'_, SharedEngine>, enabled: bool) -> Result<(), Str
 /// (FT1/DX1 free-text chat). Atomically sets the area-appropriate tier + mode.
 #[tauri::command]
 fn set_area(state: State<'_, SharedEngine>, area: String) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_area(&area);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: set_area save failed: {e}");
@@ -6642,7 +6642,7 @@ fn set_area(state: State<'_, SharedEngine>, area: String) -> Result<AppSnapshot,
 /// transmits again on the next TX slot. No-op outside a QSO.
 #[tauri::command]
 fn qso_resend(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.qso_resend();
     Ok(eng.snapshot())
 }
@@ -6651,7 +6651,7 @@ fn qso_resend(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// `text`, directed to the current DX station when known. No-op outside a QSO.
 #[tauri::command]
 fn qso_freetext(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.qso_freetext(&text);
     Ok(eng.snapshot())
 }
@@ -6659,7 +6659,7 @@ fn qso_freetext(state: State<'_, SharedEngine>, text: String) -> Result<AppSnaps
 /// Operator "Log QSO": log the active QSO's contact now (inline cockpit button).
 #[tauri::command]
 fn log_current_qso(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.log_current_qso();
     Ok(eng.snapshot())
 }
@@ -6671,7 +6671,7 @@ fn confirm_pending_log(
     state: State<'_, SharedEngine>,
     record: LoggedQso,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.confirm_pending_log(record.into());
     Ok(eng.snapshot())
 }
@@ -6679,7 +6679,7 @@ fn confirm_pending_log(
 /// Discard a QSO held by the prompt-to-log popup without logging it.
 #[tauri::command]
 fn discard_pending_log(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.discard_pending_log();
     Ok(eng.snapshot())
 }
@@ -6690,7 +6690,7 @@ fn discard_pending_log(state: State<'_, SharedEngine>) -> Result<AppSnapshot, St
 fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnapshot, String> {
     let call = record.call.clone();
     let (snap, wav) = {
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         eng.log_qso(record.into());
         // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
         // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
@@ -6717,7 +6717,7 @@ fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnaps
 /// The full logbook as serializable contacts (for the UI log view).
 #[tauri::command]
 fn get_log(state: State<'_, SharedEngine>) -> Result<Vec<LoggedQso>, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     Ok(eng.get_log().into_iter().map(LoggedQso::from).collect())
 }
 
@@ -6730,7 +6730,7 @@ fn edit_qso(
     index: usize,
     record: LoggedQso,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     if !eng.update_qso(index, record.into()) {
         return Err("That contact no longer exists — reload the log and try again.".into());
     }
@@ -6750,7 +6750,7 @@ fn mark_qsl_sent(
 ) -> Result<AppSnapshot, String> {
     let via = tempo_core::logbook::QslVia::from_code(&via)
         .ok_or_else(|| format!("Unknown QSL-sent method '{via}' — use B, D, or E."))?;
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     if !eng.mark_qsl_sent(index, via) {
         return Err("That contact no longer exists — reload the log and try again.".into());
     }
@@ -6761,7 +6761,7 @@ fn mark_qsl_sent(
 /// the refreshed snapshot. Indices shift after a delete — the UI reloads the log.
 #[tauri::command]
 fn delete_qso(state: State<'_, SharedEngine>, index: usize) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     if !eng.delete_qso(index) {
         return Err("That contact no longer exists — reload the log and try again.".into());
     }
@@ -6773,7 +6773,7 @@ fn delete_qso(state: State<'_, SharedEngine>, index: usize) -> Result<AppSnapsho
 /// confirmation dialog. Returns the number of contacts removed (for the toast).
 #[tauri::command]
 fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     Ok(eng.clear_logbook())
 }
 
@@ -6783,7 +6783,7 @@ fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
 /// QRZ/ClubLog sync (which would flip `confirmed`) is a later increment.
 #[tauri::command]
 fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummary, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     let mut awards = propagation::Awards::new();
     // Tell the accumulator our own entity so "First DX" counts only foreign ones.
     awards.set_home_call(&eng.settings().mycall);
@@ -6813,7 +6813,7 @@ fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummar
 /// confirmations) is computed frontend-side from `get_log`. Pure/offline.
 #[tauri::command]
 fn get_log_stats(state: State<'_, SharedEngine>) -> Result<propagation::LogStats, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     let my_call = eng.settings().mycall.clone();
     let calls: Vec<String> = eng.get_log().into_iter().map(|q| q.call).collect();
     Ok(propagation::compute_log_stats(&calls, &my_call))
@@ -6829,7 +6829,7 @@ async fn get_journey(
     state: State<'_, SharedEngine>,
 ) -> Result<propagation::JourneySummary, String> {
     use propagation::model::{Band, ModeClass};
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     let s = eng.settings();
     let qsos: Vec<propagation::JourneyQso> = eng
         .get_log()
@@ -6905,7 +6905,7 @@ async fn get_journey(
 fn get_confirmation_diagnostics(
     state: State<'_, SharedEngine>,
 ) -> Result<DiagnosticsReportDto, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     let report = eng.confirmation_diagnostics(now_unix(), |call| {
         propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
     });
@@ -6978,9 +6978,10 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
     // waterfall stall (that was chased and ruled out on 2026-07-25) — but it is a needless
     // contention point on the app's busiest shared lock, and it grows with band activity.
     //
-    // A poisoned lock degrades to Open (no gate) + no state — never a wrongly-hidden spot.
+    // Poison recovers (engine_lock), so the gate always sees real state; the Option
+    // shape is kept for the chains below.
     let (class, roster_grids) = {
-        let eng = state.lock().ok();
+        let eng = Some(engine_lock(&state));
         let class = eng
             .as_ref()
             .map(|e| e.settings().license_class)
@@ -7069,7 +7070,7 @@ async fn get_need_alerts(
     spots: State<'_, SharedSpots>,
     ota_cache: State<'_, SharedOtaSpots>,
 ) -> Result<Vec<propagation::NeedAlert>, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     // Two-instance freshness: if the OTHER radio just logged/confirmed something in the shared
     // log, fold it in BEFORE computing needs — otherwise this (possibly monitoring) radio would
     // flag a DXCC/state/grid as needed that the other one already worked. Mtime-gated, so this is
@@ -7468,7 +7469,7 @@ async fn get_need_alerts(
 /// file's text; the UI reads the file so no fs/dialog plugin is needed.
 #[tauri::command]
 fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     let (added, skipped, total) = eng.import_adif(&text);
     Ok(ImportStats {
         added,
@@ -7496,7 +7497,7 @@ async fn sync_lotw_report(
             )
         },
         (|| {
-            let mut eng = state.lock().map_err(|e| e.to_string())?;
+            let mut eng = engine_lock(&state);
             Ok(eng.merge_lotw_report(&text).into())
         })(),
     )
@@ -7598,7 +7599,7 @@ struct CredStatus {
 #[tauri::command]
 fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStatus>, String> {
     let (lotw_user, eqsl_user, qrz_user, clublog_email, mycall, clublog_key, cloudlog_url) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.lotw_username.clone(),
@@ -7902,7 +7903,8 @@ enum UploadToggle {
 /// and a credential save mid-QSO must not kill the QSO. No-op when already in
 /// the requested state.
 fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: bool) {
-    if let Ok(mut eng) = state.lock() {
+    {
+        let mut eng = engine_lock(&state);
         let (connector, already) = {
             let s = eng.settings();
             match which {
@@ -8023,7 +8025,7 @@ fn download_lotw_report_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncR
     // Read username + cursor (non-secret) under a brief lock; the network fetch
     // below must NOT hold the engine lock (it can block for up to 60 s).
     let (username, owncall, since) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let s = eng.settings();
         (
             s.lotw_username.trim().to_string(),
@@ -8063,7 +8065,7 @@ fn download_lotw_report_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncR
     // high-water (re-lock: the fetch ran without the engine lock held). Capture the
     // own-echo lower bound (oldest in-flight upload) in the same lock, then release.
     let (mut result, own_start): (LotwSyncResult, Option<String>) = {
-        let mut eng = state.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&state);
         let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
         if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
             // Advance the cursor ONLY if (a) the download is structurally complete —
@@ -8111,7 +8113,7 @@ fn download_lotw_report_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncR
         };
         match own_body {
             Ok(b) if tempo_core::lotw::is_lotw_adif(&b) => {
-                let mut eng = state.lock().map_err(|e| e.to_string())?;
+                let mut eng = engine_lock(&state);
                 result.promoted = eng.merge_lotw_own_echo(&b, now_unix());
             }
             Ok(_) => conn_log(
@@ -8161,7 +8163,7 @@ fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
 /// so a big redundant re-upload isn't offered. Returns how many were marked.
 #[tauri::command]
 fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     Ok(eng.mark_lotw_uploaded_all())
 }
 
@@ -8183,7 +8185,7 @@ async fn upload_lotw_report_impl(
 ) -> Result<UploadReportDto, String> {
     // Brief lock: read config + build the batch + ADIF, then release before spawn.
     let (batch, adif, location, tqsl_path) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
         // A named Station Location is required UNLESS the operator signs from the ADIF
@@ -8269,7 +8271,7 @@ async fn upload_lotw_report_impl(
         }),
         Some(outcome) => {
             {
-                let mut eng = state.lock().map_err(|e| e.to_string())?;
+                let mut eng = engine_lock(&state);
                 eng.stamp_lotw_upload(&batch, outcome, now_unix(), detail.clone());
             }
             Ok(UploadReportDto {
@@ -8300,7 +8302,7 @@ fn download_eqsl_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult
 
 fn download_eqsl_report_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
     let (username, since) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let s = eng.settings();
         (
             s.eqsl_username.trim().to_string(),
@@ -8342,7 +8344,7 @@ fn download_eqsl_report_impl(state: State<'_, SharedEngine>) -> Result<LotwSyncR
     // complete — a truncated download must not skip unreceived records — AND (b) the
     // username is unchanged since this sync started (an in-flight change already
     // reset the cursor for the new account).
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     let summary: LotwSyncResult = eng.merge_eqsl_report(&body).into();
     if tempo_core::eqsl::is_complete_eqsl_body(&body)
         && eng.settings().eqsl_username.trim() == used_username.trim()
@@ -8412,7 +8414,7 @@ fn sync_qrz_since(
             .reason
             .unwrap_or_else(|| "QRZ rejected the FETCH — check your Logbook API key.".into()));
     }
-    let mut eng = engine.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&engine);
     let (added, summary) = eng.merge_qrz_report(&fetched.adif);
     let mut result: LotwSyncResult = summary.into();
     result.added = added;
@@ -8591,7 +8593,7 @@ async fn qrz_lookup(
         return Err("Enter a callsign to look up.".to_string());
     }
     let (qrz_username, hamqth_username) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let s = eng.settings();
         (
             s.qrz_username.trim().to_string(),
@@ -8690,7 +8692,7 @@ async fn qrz_push_qso(
 #[tauri::command]
 async fn n3fjp_test_connection(state: State<'_, SharedEngine>) -> Result<String, String> {
     let (host, port) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let st = eng.settings();
         (st.n3fjp_host.trim().to_string(), st.n3fjp_port)
     };
@@ -8760,7 +8762,7 @@ fn qrz_push_qso_impl(
             .reason
             .as_deref()
             .and_then(tempo_core::lotw_upload::sanitize_detail);
-        let mut eng = engine.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&engine);
         eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
     }
     Ok(push.into())
@@ -8881,7 +8883,7 @@ fn hrdlog_push_qso_impl(
     engine: &SharedEngine,
 ) -> Result<tempo_app::dto::HrdLogPushResultDto, String> {
     let callsign = {
-        let eng = engine.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&engine);
         eng.settings().mycall.trim().to_string()
     };
     if callsign.is_empty() {
@@ -8939,7 +8941,7 @@ fn clublog_push_qso_impl(
         );
     }
     let (email, callsign_setting, api_setting, mycall) = {
-        let eng = engine.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&engine);
         let s = eng.settings();
         (
             s.clublog_email.trim().to_string(),
@@ -8999,7 +9001,7 @@ fn clublog_push_qso_impl(
             .message
             .as_deref()
             .and_then(tempo_core::lotw_upload::sanitize_detail);
-        let mut eng = engine.lock().map_err(|e| e.to_string())?;
+        let mut eng = engine_lock(&engine);
         eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
     }
     Ok(push.into())
@@ -9032,7 +9034,7 @@ async fn eqsl_push_qso(
 
 fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<UploadReportDto, String> {
     let user = {
-        let eng = engine.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&engine);
         eng.settings().eqsl_username.trim().to_string()
     };
     if user.is_empty() {
@@ -9058,7 +9060,7 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
             detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
         }),
         Some(outcome) => {
-            let mut eng = engine.lock().map_err(|e| e.to_string())?;
+            let mut eng = engine_lock(&engine);
             eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
             Ok(UploadReportDto {
                 dispatched: 1,
@@ -9074,7 +9076,8 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
 /// Record an operator-facing upload note on the engine (UI toasts it on the
 /// next snapshot poll — `upload_tick` bumps).
 fn note_upload_shared(engine: &SharedEngine, msg: String, ok: bool) {
-    if let Ok(mut eng) = engine.lock() {
+    {
+        let mut eng = engine_lock(&engine);
         eng.note_upload(msg, ok);
     }
 }
@@ -9107,7 +9110,7 @@ fn n3fjp_mode(mode: &str) -> String {
 /// same `n3fjp_host`/`n3fjp_port` as the Field-Day push; N3FJP's EXCLUDEDUPES dedupes any overlap.
 fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), String> {
     let (host, port, mycall) = {
-        let eng = engine.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&engine);
         let s = eng.settings();
         (
             s.n3fjp_host.trim().to_string(),
@@ -9160,7 +9163,7 @@ fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String
 /// settings.json), read here at push time.
 fn cloudlog_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<String, String> {
     let (url, station_id) = {
-        let eng = engine.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&engine);
         let s = eng.settings();
         (
             s.cloudlog_url.trim().to_string(),
@@ -9424,7 +9427,7 @@ fn get_ota_spots(
     // Bands where MY signal is getting out right now (live PSKR receptions of
     // my call inside the last 15 min) — the "workable now" differentiator.
     let (mycall, park_worked): (String, Box<dyn Fn(&str) -> bool>) = {
-        let eng = state.lock().map_err(|e| e.to_string())?;
+        let eng = engine_lock(&state);
         let worked: std::collections::HashSet<String> = spots
             .iter()
             .filter(|sp| eng.park_worked(&sp.reference))
@@ -9468,7 +9471,7 @@ fn set_hunt_target(
     program: String,
     reference: String,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.set_hunt_target(&call, &program, &reference)?;
     Ok(eng.snapshot())
 }
@@ -9483,7 +9486,7 @@ fn fd_log_manual(
     section: String,
     mode: String,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     let logged = eng.fd_log_manual(&call, &class, &section, &mode)?;
     if !logged {
         return Err(format!("{call} is a dupe on this band/mode"));
@@ -9493,7 +9496,7 @@ fn fd_log_manual(
 
 #[tauri::command]
 fn clear_hunt_target(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.clear_hunt_target();
     Ok(eng.snapshot())
 }
@@ -9506,7 +9509,7 @@ fn set_activation(
     program: String,
     reference: String,
 ) -> Result<ActivationDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     let (program, reference) = eng.set_activation(&program, &reference)?;
     let qso_count = eng.activation_qso_count();
     Ok(ActivationDto {
@@ -9519,7 +9522,7 @@ fn set_activation(
 /// End the current activation (subsequent QSOs untagged).
 #[tauri::command]
 fn clear_activation(state: State<'_, SharedEngine>) -> Result<ActivationDto, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.clear_activation();
     Ok(ActivationDto {
         program: None,
@@ -9531,7 +9534,7 @@ fn clear_activation(state: State<'_, SharedEngine>) -> Result<ActivationDto, Str
 /// The current activation state (for the panel on load / after logging).
 #[tauri::command]
 fn get_activation(state: State<'_, SharedEngine>) -> Result<ActivationDto, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     let (program, reference) = match eng.activation() {
         Some((p, r)) => (Some(p), Some(r)),
         None => (None, None),
@@ -9658,7 +9661,8 @@ fn hunted_parks_cache_path() -> PathBuf {
 fn load_hunted_parks_cache(engine: &SharedEngine) {
     if let Ok(csv) = std::fs::read_to_string(hunted_parks_cache_path()) {
         let refs = tempo_core::pota::ParkIndex::parse_csv(&csv).references();
-        if let Ok(mut eng) = engine.lock() {
+        {
+            let mut eng = engine_lock(&engine);
             eng.set_hunted_parks_import(refs);
         }
     }
@@ -10131,7 +10135,7 @@ async fn lookup_park_live(reference: String) -> Result<ParkDto, String> {
 /// home and the selected peer as the roaming partner; disabling returns home.
 #[tauri::command]
 fn qsy_set_enabled(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.qsy_set_enabled(on);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist qsy enable: {e}");
@@ -10146,7 +10150,7 @@ fn qsy_configure(
     channels: Vec<String>,
     cadence: u64,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.qsy_configure(channels, cadence);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist qsy config: {e}");
@@ -10157,7 +10161,7 @@ fn qsy_configure(
 /// Manual override: force the initiator to announce a move on its next over.
 #[tauri::command]
 fn qsy_move_now(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.qsy_move_now();
     Ok(eng.snapshot())
 }
@@ -10165,7 +10169,7 @@ fn qsy_move_now(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// Manual override: hold on the current channel (`on=true`) or resume hopping.
 #[tauri::command]
 fn qsy_pause(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.qsy_pause(on);
     Ok(eng.snapshot())
 }
@@ -10173,7 +10177,7 @@ fn qsy_pause(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, St
 /// Manual override: stop coordinated QSY and return to the home channel.
 #[tauri::command]
 fn qsy_stop(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     eng.qsy_stop();
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist qsy stop: {e}");
@@ -10321,7 +10325,7 @@ fn install_block_reason(
 
 #[tauri::command]
 fn update_install_block(state: State<'_, SharedEngine>) -> Result<Option<String>, String> {
-    let eng = state.lock().map_err(|e| e.to_string())?;
+    let eng = engine_lock(&state);
     let snap = eng.snapshot();
     let (dxcall, running) = match snap.qso.as_ref() {
         Some(q) => (q.dxcall.clone(), q.running),
@@ -10438,7 +10442,7 @@ struct PotaStampResult {
 
 #[tauri::command]
 fn import_pota_log(state: State<'_, SharedEngine>, text: String) -> Result<PotaStampResult, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock(&state);
     let (stamped, already, unmatched) = eng.import_pota_log(&text);
     Ok(PotaStampResult {
         stamped,
@@ -10687,7 +10691,8 @@ pub fn run() {
     let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(settings)));
     // Re-seed the decoder's hash table from the logbook so <...> compound-call
     // tokens resolve right after launch (the Fortran table dies with the process).
-    if let Ok(eng) = engine.lock() {
+    {
+        let eng = engine_lock(&engine);
         eng.seed_hash_table();
     }
 
@@ -10723,7 +10728,8 @@ pub fn run() {
     // up here with the other network feeds rather than when the APRS view is entered.
     sync_aprs_is_feed(&engine);
     // Integrated rotator: launch the bundled rotctld when a model is configured.
-    if let Ok(eng) = engine.lock() {
+    {
+        let eng = engine_lock(&engine);
         sync_rotctld(eng.settings());
     }
     if region_enabled {
@@ -10736,7 +10742,8 @@ pub fn run() {
     }
     // Feed the live DXpedition layer the ClubLog key (most-wanted ranks). Pushed,
     // not pulled — keeps the propagation crate decoupled from settings IO.
-    if let Ok(eng) = engine.lock() {
+    {
+        let eng = engine_lock(&engine);
         propagation::live::dxped::set_clublog_key(&effective_clublog_key(
             &eng.settings().clublog_api_key,
         ));
@@ -10773,7 +10780,8 @@ pub fn run() {
     // Point the logbook at its ADIF file and load prior contacts (so worked-
     // before highlighting and the log view reflect previous sessions), and
     // restore the persisted signal source.
-    if let Ok(mut eng) = engine.lock() {
+    {
+        let mut eng = engine_lock(&engine);
         // Wire the DXCC entity resolver (cty.dat lives in the propagation crate)
         // so new-DXCC decode highlighting works; set it BEFORE loading the log so
         // the initial worked-entity index is populated.
@@ -10929,7 +10937,7 @@ pub fn run() {
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(300));
             let (on, hours, last) = {
-                let Ok(eng) = sync_engine.lock() else { continue };
+                let eng = engine_lock(&sync_engine);
                 let s = eng.settings();
                 (s.qrz_auto_sync, s.qrz_sync_hours.max(1), s.qrz_last_sync_unix)
             };
@@ -10943,7 +10951,8 @@ pub fn run() {
             // HTTP off the engine lock (the lock is taken inside, around the merge).
             match sync_qrz_since(&sync_engine, Some(last)) {
                 Ok(r) => {
-                    if let Ok(mut eng) = sync_engine.lock() {
+                    {
+                        let mut eng = engine_lock(&sync_engine);
                         let mut s = eng.settings().clone();
                         s.qrz_last_sync_unix = now;
                         eng.apply_settings(s);
@@ -11101,9 +11110,14 @@ pub fn run() {
                 }
             };
             eprintln!("tempo: {msg}");
-            let _ = eng_for_report
+            // `unwrap_or_else(into_inner)`, NOT `.map` on the Result: the one case
+            // this banner exists for — the loop died from a panic under the engine
+            // guard — is exactly the case where the lock is POISONED, and the old
+            // form silently skipped the write then.
+            eng_for_report
                 .lock()
-                .map(|mut eng| eng.set_audio_error(Some(msg)));
+                .unwrap_or_else(|e| e.into_inner())
+                .set_audio_error(Some(msg));
         });
     }
 
@@ -11125,15 +11139,11 @@ pub fn run() {
             // The running broker as (port, shutdown flag); None = not serving.
             let mut running: Option<(u16, std::sync::Arc<AtomicBool>)> = None;
             loop {
-                let want = match mgr_engine.lock() {
-                    Ok(e) => e
-                        .settings()
+                let want = {
+                    let e = engine_lock(&mgr_engine);
+                    e.settings()
                         .cat_broker
-                        .then_some(e.settings().cat_broker_port),
-                    Err(_) => {
-                        std::thread::sleep(std::time::Duration::from_millis(1000));
-                        continue;
-                    }
+                        .then_some(e.settings().cat_broker_port)
                 };
                 let have = running.as_ref().map(|(p, _)| *p);
                 if want != have {

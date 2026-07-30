@@ -138,6 +138,36 @@ use tempo_core::message::{same_call, Msg};
 /// and the FT1 IR-HARQ buffers), so nothing races the C decoder.
 pub type SharedSource = Arc<Mutex<Box<dyn SignalSource>>>;
 
+/// Lock a [`SharedSource`], RECOVERING from poison instead of propagating it —
+/// the same strategy as `tempo_fast_sys::modem_lock()` and the audio-device
+/// layer. The justification is STRONGER here than it was for the modem lock:
+/// this guard is held across the ENTIRE decode, and the modem wrappers assert
+/// freely — so one contained panic poisoned the lock and every later job then
+/// panicked at this acquisition (inside `catch_unwind`), re-creating the exact
+/// "deaf but looks alive" failure the containment was added to stop. Poison
+/// also reached `snapshot()` (the `source_label` read) UNDER the engine guard,
+/// taking the UI and the mode switch with it. A stale decode is caught by the
+/// CRC; a deaf receiver is caught by nothing.
+pub fn source_lock(s: &SharedSource) -> std::sync::MutexGuard<'_, Box<dyn SignalSource>> {
+    s.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Lock the shared [`Engine`] mutex, RECOVERING from poison instead of
+/// propagating it — ONE strategy at every site (the radio loop, the Tauri
+/// commands, the supervisor), mirroring `tempo_fast_sys::modem_lock()`.
+///
+/// Poison means "a thread panicked while holding the guard". Before this
+/// accessor, the ~50 `if let Ok` acquisitions silently no-opped on poison
+/// (radio commands quietly stopped being sent), the first `?`-style
+/// acquisition exited the radio-loop thread — WITH the transmitter still keyed,
+/// since the unkey deadline and the watchdog die with the loop — and the crash
+/// banner that reports the death could itself never be written. Recovery
+/// degrades a poisoned engine to "possibly-inconsistent state, loop and unkey
+/// keep running", which every one of those failure modes strictly dominates.
+pub fn engine_lock(m: &std::sync::Mutex<Engine>) -> std::sync::MutexGuard<'_, Engine> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
 /// [`Engine::ingest`] (Boundary), [`Engine::ingest_early`] (Early), and
@@ -373,7 +403,7 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
     // Hold the decoder lock across the ENTIRE decode: this is the single lock that
     // serializes the a7 table, the packjt77 hash table and the FT1 IR-HARQ buffers
     // against the engine thread's harq_reset / seed_hash_table / source swaps.
-    let mut src = source.lock().unwrap();
+    let mut src = source_lock(&source);
     // The decode itself. Run directly when the job carries no per-chain context
     // (the single-radio path, unchanged), or inside `DecoderCtx::scoped` when it
     // does — see the `match ctx` below.
@@ -431,7 +461,7 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
         // packjt77's hash table BETWEEN our restore and our save, and the save then captures
         // it into this chain's context. Not reachable today (nothing builds a second chain),
         // and pre-existing in shape, but it must be closed before two chains transmit.
-        Some(ctx) => ctx.lock().unwrap().scoped(decode),
+        Some(ctx) => ctx.lock().unwrap_or_else(|e| e.into_inner()).scoped(decode),
     };
     drop(src);
     DecodeResult {
@@ -2421,7 +2451,7 @@ impl Engine {
                 // inside is the load-bearing part: a decode already dispatched at the
                 // OLD period would otherwise land after the swap and be folded in
                 // with slot indices that no longer mean anything.
-                *self.source.lock().unwrap() = Box::new(NativeSource::from_kind(kind));
+                *source_lock(&self.source) = Box::new(NativeSource::from_kind(kind));
                 self.clear_decode_context();
             }
         }
@@ -4878,7 +4908,7 @@ impl Engine {
     /// IR-HARQ buffers). Every engine-thread reset goes through here; the decode
     /// path's own reset already runs under the lock in [`run_decode_job`].
     fn harq_reset_locked(&self) {
-        let _g = self.source.lock().unwrap();
+        let _g = source_lock(&self.source);
         tempo_fast::harq_reset();
     }
 
@@ -5239,7 +5269,7 @@ impl Engine {
                 // Swap the boxed decoder UNDER the lock (waits for any decode in
                 // flight) so the stable serialization mutex is preserved and no
                 // job can be reading the old mode as it's replaced.
-                *self.source.lock().unwrap() = Box::new(NativeSource::from_kind(kind));
+                *source_lock(&self.source) = Box::new(NativeSource::from_kind(kind));
             }
         }
         // WSJT-X-style: switching the mode moves the rig to the NEW mode's dial for the
@@ -5295,13 +5325,13 @@ impl Engine {
                 let mode_kind = self
                     .tier_mode_kind(self.tier())
                     .unwrap_or(modes::ModeKind::TempoFast);
-                *self.source.lock().unwrap() = Box::new(NativeSource::from_kind(mode_kind));
+                *source_lock(&self.source) = Box::new(NativeSource::from_kind(mode_kind));
             }
             SourceKind::Companion => {
                 let addr = &self.settings.companion_addr;
                 let sock = WsjtxUdpSource::bind(addr)
                     .map_err(|e| format!("Can't listen on {addr} for WSJT-X UDP: {e}"))?;
-                *self.source.lock().unwrap() = Box::new(sock);
+                *source_lock(&self.source) = Box::new(sock);
             }
         }
         self.source_kind = kind;
@@ -7653,7 +7683,7 @@ impl Engine {
         s.radio.hold_tx_freq = self.hold_tx_freq;
         s.radio.clock_offset_ms = self.station.clock_offset_ms;
         s.radio.source = self.source_kind;
-        s.radio.source_label = self.source.lock().unwrap().label();
+        s.radio.source_label = source_lock(&self.source).label();
         // Multi-radio switcher summaries (dual-radio). Left empty for a single-radio station (the
         // UI then renders no switcher). The active radio carries the live state we just filled into
         // `s.radio`; the others show their last-known tune (they're not connected in the active-only
@@ -8661,6 +8691,17 @@ impl Engine {
             // decoder whose buffer-length assert panics, killing the worker again.
             // The period is simply lost, which is what WSJT-X does with any decode
             // it cannot complete.
+            //
+            // But not SILENTLY lost: a stderr line is invisible in a shipped build,
+            // and a decoder that panics every slot reads as a quiet band. Surface it
+            // on the persistent error lane (shared with audio errors — a later
+            // successful device reopen may clear it, which is acceptable; the common
+            // case is that it stays up until the operator sees it).
+            self.audio_error = Some(format!(
+                "A {:?} decode crashed and was contained — receive continues. This \
+                 is a bug; please report it.",
+                result.pass
+            ));
             return DecodeApplied::Stale;
         }
         let DecodeResult {
@@ -8738,7 +8779,7 @@ impl Engine {
         // same table the worker's decode reads. Hold the decoder lock across the
         // whole seed so it can't race an in-flight decode (may briefly wait if one
         // is running; seeding is a one-shot startup task).
-        let _g = self.source.lock().unwrap();
+        let _g = source_lock(&self.source);
         // Newest first; cap the work — each encode is one FFI round-trip.
         for rec in self.station.get_log().into_iter().rev() {
             let call = rec.call.trim().to_uppercase();
@@ -17917,6 +17958,56 @@ mod tests {
         assert!(
             e.last_rx.is_none(),
             "a failed decode must not clobber the retained audio"
+        );
+        assert!(
+            e.snapshot().radio.audio_error.is_some(),
+            "a contained panic must reach the operator-visible error lane"
+        );
+
+        // The panic unwound while HOLDING the source guard, so the lock is now
+        // poisoned — and the poison must not outlive the panic. Before
+        // `source_lock()` recovered, every LATER job panicked at the acquisition
+        // (inside catch_unwind, one stderr line per slot), which is the same
+        // deaf-but-alive session the containment above was written to end.
+        assert!(
+            e.source.lock().is_err(),
+            "precondition: the contained panic really poisoned the source lock"
+        );
+        // The tier switch itself acquires the poisoned lock (it swaps the boxed
+        // source under it) — production code, not a test backdoor.
+        e.set_tier(Tier::Ft4);
+        let frame = vec![0.0f32; e.active_frame_samples()];
+        let job = e.build_decode_job(frame, 8, DecodePass::Boundary);
+        let result = run_decode_job(job);
+        assert!(
+            !result.failed,
+            "a healthy decode after a contained panic must run — the deaf-radio state is the bug"
+        );
+        // And the snapshot path (source_label read under the engine guard —
+        // §C3's trigger) survives too.
+        let _ = e.snapshot();
+    }
+
+    #[test]
+    fn engine_lock_recovers_a_poisoned_engine_mutex() {
+        // The tempo-fast-sys shape: poison the REAL mutex by panicking while
+        // holding its guard, then assert the accessor recovers. Poison here used
+        // to exit the radio-loop thread (with nothing left to drop PTT), no-op
+        // ~50 `if let Ok` sites, and swallow the crash-banner write in exactly
+        // the case it exists for.
+        let m = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN52", 0)));
+        let m2 = m.clone();
+        std::thread::spawn(move || {
+            let _g = m2.lock().unwrap();
+            panic!("poison the engine mutex for real");
+        })
+        .join()
+        .unwrap_err();
+        assert!(m.lock().is_err(), "precondition: the mutex is poisoned");
+        let snap = engine_lock(&m).snapshot();
+        assert_eq!(
+            snap.mycall, "W9XYZ",
+            "a poisoned engine degrades to usable state, not a dead loop"
         );
     }
 
