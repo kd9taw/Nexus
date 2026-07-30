@@ -597,10 +597,17 @@ impl StationCore {
         let Some(path) = self.log_path.clone() else {
             return;
         };
-        if let Err(e) = self.logbook.save(&path) {
-            eprintln!("tempo: {context} save failed: {e}");
+        match self.logbook.save(&path) {
+            // The mtime comes from save() itself (statted pre-rename), so a
+            // concurrent instance's rename can never be recorded as our write.
+            Ok(mtime) => self.last_log_mtime = mtime,
+            Err(e) => {
+                eprintln!("tempo: {context} save failed: {e}");
+                // Disk ≠ memory now: drop the gate so the next recovery
+                // re-reads instead of trusting a stale mtime.
+                self.last_log_mtime = None;
+            }
         }
-        self.last_log_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     }
 
     /// Two-instance freshness watcher: if the SHARED `log.adi`'s mtime moved since we last

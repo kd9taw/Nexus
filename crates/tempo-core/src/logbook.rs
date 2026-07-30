@@ -661,7 +661,11 @@ impl Logbook {
     /// rename, so a crash mid-write can't truncate the log). Needed after a
     /// [`merge_report`](Self::merge_report), which mutates existing records (unlike
     /// the append-only [`append`](Self::append)).
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+    /// Returns the persisted file's mtime (statted on the TMP, before the
+    /// rename — rename preserves it, and statting the final path AFTER the
+    /// rename races another instance's own rename: recording THEIR mtime as
+    /// ours would make the recovery gate skip their write).
+    pub fn save(&self, path: &Path) -> std::io::Result<Option<std::time::SystemTime>> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -671,7 +675,9 @@ impl Logbook {
         // the rename onto the final path stays atomic (last writer wins the whole file, intact).
         let tmp = path.with_extension(format!("adi.{}.tmp", std::process::id()));
         std::fs::write(&tmp, self.adif())?;
-        std::fs::rename(&tmp, path)
+        let mtime = std::fs::metadata(&tmp).and_then(|m| m.modified()).ok();
+        std::fs::rename(&tmp, path)?;
+        Ok(mtime)
     }
 
     /// Merge a confirmation/credit report (ADIF — e.g. a LoTW export) into the
