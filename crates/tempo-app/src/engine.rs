@@ -1194,7 +1194,9 @@ impl AprsArm {
 /// and a genuinely quiet band. All three showed an empty list and an empty map. These counters
 /// separate them — audio level proves the tap is fed, and seen-vs-decoded proves whether the
 /// demodulator is finding packets it cannot check.
-#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+// NOT `Copy`: carrying the radio's NAME means this owns a String. It is cloned once per cockpit
+// poll, which is nothing next to the packet list beside it.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AprsHealth {
     /// Armed-ness AND how it was armed — one field, so "is it running" and "may it ack" can never
@@ -1249,6 +1251,19 @@ pub struct AprsHealth {
     /// Near-full-scale samples in the drain that carried the most recent frame candidate.
     /// Non-zero means the burst is hitting the rails somewhere in the rig→app path.
     pub frame_clipped_samples: u32,
+    /// Name of the radio the decoder is listening to — the ACTIVE radio, since the APRS tap follows
+    /// it. Empty when the roster has no profile for it.
+    ///
+    /// ⚠️ Exists because of a REGRESSION that cost a field session. A merge changed which of two
+    /// 2 m-capable radios a band activation resolves to; the tap followed the new one, whose audio
+    /// was set up for a different mode, and APRS went silent with nothing on screen naming the
+    /// radio it was listening to. Wrong-radio silence is indistinguishable from a dead band unless
+    /// the app says which radio it is on.
+    pub radio_name: String,
+    /// How many enabled radios explicitly cover the band in use. `> 1` means the activation had a
+    /// real choice, so the operator needs told which way it went; `<= 1` means there was nothing to
+    /// choose and saying so would just be noise.
+    pub band_radio_count: u32,
 }
 
 /// Below this peak a recovered "frame" cannot be told from the deframer's flag-hunt locking onto
@@ -5887,7 +5902,15 @@ impl Engine {
     pub fn aprs_health(&self) -> AprsHealth {
         AprsHealth {
             arm: self.aprs_arm,
-            ..self.aprs_health
+            // Read live rather than stamped at arm time: a radio hand-off mid-session must move
+            // this, or the chip would name the radio the operator STARTED on.
+            radio_name: self
+                .settings
+                .active_profile()
+                .map(|p| p.name.clone())
+                .unwrap_or_default(),
+            band_radio_count: self.settings.radios_covering(&self.settings.band),
+            ..self.aprs_health.clone()
         }
     }
 
@@ -16611,6 +16634,65 @@ mod tests {
             e.aprs_health().frames_seen,
             0,
             "flag-matches in dither are not packets"
+        );
+    }
+
+    // ---- The chip must be able to NAME the radio it is listening to ----
+    //
+    // The 0.21.4 regression in one sentence: a merge changed which of two 2 m-capable radios an APRS
+    // activation resolves to, the tap followed the new one whose audio was set up for FT8, and the
+    // section went silent with nothing on screen naming the radio. Wrong-radio silence and a dead
+    // band look identical unless the app says which radio it is on.
+
+    #[test]
+    fn health_names_the_radio_the_decoder_is_listening_to() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let r1 = e.add_radio();
+        e.rename_radio(r1, "FT-991A");
+        e.set_radio_bands(r1, vec!["2m".into()]);
+        e.set_active_radio(r1);
+        e.set_aprs_arm(AprsArm::Explicit);
+        assert_eq!(e.aprs_health().radio_name, "FT-991A");
+    }
+
+    #[test]
+    fn the_named_radio_follows_a_handoff_mid_session() {
+        // Read live, not stamped at arm time — otherwise the chip names the radio the operator
+        // STARTED on, which is exactly the wrong answer after an automatic band hand-off.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ensure_radio_profiles();
+        e.rename_radio(0, "FTdx10");
+        let r1 = e.add_radio();
+        e.rename_radio(r1, "IC-9700");
+        e.set_active_radio(0);
+        e.set_aprs_arm(AprsArm::Explicit);
+        assert_eq!(e.aprs_health().radio_name, "FTdx10");
+        e.set_active_radio(r1);
+        assert_eq!(
+            e.aprs_health().radio_name,
+            "IC-9700",
+            "the name must track the active radio, not the one armed on"
+        );
+    }
+
+    #[test]
+    fn health_reports_whether_the_band_was_ambiguous() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ensure_radio_profiles();
+        e.set_radio_bands(0, vec!["2m".into()]);
+        e.set_frequency(144.390, "2m", "FM");
+        assert_eq!(
+            e.aprs_health().band_radio_count,
+            1,
+            "one radio covers 2 m — nothing to disambiguate, so the chip stays quiet"
+        );
+        let r1 = e.add_radio();
+        e.set_radio_bands(r1, vec!["2m".into()]);
+        e.set_frequency(144.390, "2m", "FM");
+        assert_eq!(
+            e.aprs_health().band_radio_count,
+            2,
+            "two radios cover 2 m — the operator needs told which one is listening"
         );
     }
 

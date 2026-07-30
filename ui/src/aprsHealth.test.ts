@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { aprsDecodeStatus, radioCoversMhz } from './components/AprsCockpit'
+import { aprsDecodeStatus, aprsRadioNote, radioCoversMhz } from './components/AprsCockpit'
 import type { AprsHealth } from './api'
 
 // WHY THIS FILE EXISTS (original): only frames that passed the AX.25 checksum ever reached the UI,
@@ -33,6 +33,8 @@ function health(over: Partial<AprsHealth> = {}): AprsHealth {
     framePeak: 0,
     maxFramePeak: 0,
     frameClippedSamples: 0,
+    radioName: 'FT-991A',
+    bandRadioCount: 1,
     ...over,
   }
 }
@@ -540,5 +542,46 @@ describe('an HF-only radio is told the truth instead of being made to look broke
     expect(radioCoversMhz([[144, 148]], 148)).toBe(true)
     expect(radioCoversMhz(undefined, 144.39)).toBe(null)
     expect(radioCoversMhz([], 144.39)).toBe(null)
+  })
+})
+
+// ⭐ FIFTH instance today of the same class: silence with nothing named. A merge changed which of
+// two 2 m-capable radios an APRS activation resolves to, the tap followed the new one whose audio
+// was configured for FT8, and the section went quiet with nothing on screen saying which radio it
+// was listening to. Wrong-radio silence and a dead band are indistinguishable without the name.
+//
+// Named ONLY when there is genuine ambiguity — a single capable radio has nothing to disambiguate,
+// and saying so would be noise on a calm cockpit.
+
+describe('the chip names its radio when more than one could be listening', () => {
+  it('names the radio when two radios cover the band', () => {
+    const n = aprsRadioNote(health({ radioName: 'FT-991A', bandRadioCount: 2 }))
+    expect(n).not.toBeNull()
+    expect(n!.label).toContain('FT-991A')
+  })
+
+  it('explains that routing decides it, and where to change that', () => {
+    const n = aprsRadioNote(health({ radioName: 'FT-991A', bandRadioCount: 3 }))
+    expect(n!.detail).toMatch(/3 of your radios/i)
+    expect(n!.detail).toMatch(/active radio/i)
+    expect(n!.detail).toMatch(/routing/i)
+    expect(n!.detail).toMatch(/Settings/i)
+  })
+
+  it('stays QUIET when only one radio covers the band', () => {
+    expect(aprsRadioNote(health({ radioName: 'IC-9700', bandRadioCount: 1 }))).toBeNull()
+  })
+
+  it('stays quiet on a single-radio station', () => {
+    expect(aprsRadioNote(health({ radioName: 'IC-9700', bandRadioCount: 0 }))).toBeNull()
+  })
+
+  it('stays quiet rather than showing an empty name', () => {
+    // A roster with no profile for the active radio must not render "on ".
+    expect(aprsRadioNote(health({ radioName: '', bandRadioCount: 2 }))).toBeNull()
+  })
+
+  it('is silent while the decoder is not armed — nothing is listening to name', () => {
+    expect(aprsRadioNote(health({ arm: 'off', radioName: 'FT-991A', bandRadioCount: 2 }))).toBeNull()
   })
 })

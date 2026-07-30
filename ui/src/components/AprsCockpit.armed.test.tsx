@@ -42,6 +42,8 @@ vi.mock('../api', () => ({
     framePeak: 0,
     maxFramePeak: 0,
     frameClippedSamples: 0,
+    radioName: 'IC-9700',
+    bandRadioCount: 1,
   })),
   getAprsIsStatus: vi.fn(async () => ({
     enabled: false,
@@ -74,6 +76,8 @@ function health(over: Partial<AprsHealth> = {}): AprsHealth {
     framePeak: 0,
     maxFramePeak: 0,
     frameClippedSamples: 0,
+    radioName: 'IC-9700',
+    bandRadioCount: 1,
     ...over,
   }
 }

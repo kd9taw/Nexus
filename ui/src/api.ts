@@ -1351,6 +1351,11 @@ export interface AprsHealth {
   maxFramePeak: number
   /** Near-full-scale samples in the drain that carried the last frame candidate. */
   frameClippedSamples: number
+  /** Name of the radio the decoder is listening to (the ACTIVE radio — the tap follows it). */
+  radioName: string
+  /** Enabled radios explicitly covering the band in use. >1 means the activation had a choice, and
+   * the operator cannot tell from the radio which way it went. */
+  bandRadioCount: number
 }
 
 /** Poll the APRS decoder's health beside the heard list. */

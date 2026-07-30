@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### APRS says which radio it is listening to
+
+If more than one of your radios covers the APRS band, the decode readout now names the one it is
+actually listening to — "on FT-991A" — and its tooltip explains that APRS follows the active radio
+and that routing rules decide which radio a band goes to.
+
+This is the missing piece behind the bug below. When the app picked the other radio, the only
+symptom was silence, and nothing on screen said which radio was being listened to — so a working
+station looked like a dead band. With the radio named, that is a glance instead of an afternoon.
+
+On a single-radio station, or when only one radio covers the band, nothing is shown: there was no
+choice to make and saying so would just be clutter.
 ### Stations can be kept on the APRS map forever
 
 Setting "Keep stations for" to 0 now means exactly that: no fade, no removal — every station
