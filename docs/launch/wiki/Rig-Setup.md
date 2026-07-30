@@ -60,7 +60,7 @@ keyer, if the **CW Beacon** (auto-repeat) is enabled in the radio's menu your ke
 macro repeats on the beacon interval instead of sending once. Disable the CW Beacon
 in the rig menu before sending macros. (Same on the **FT-991/991A** and similar Yaesu.)
 
-→ Full guide: <https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/rigs/yaesu.md>
+→ Full guide: <https://github.com/kd9taw/Nexus/blob/main/docs/rigs/yaesu.md>
 
 ---
 
@@ -80,7 +80,7 @@ satellite station.
 nothing" — leave the rig's CI-V address at its default and let Hamlib's default
 match it.
 
-→ Full guide: <https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/rigs/icom.md>
+→ Full guide: <https://github.com/kd9taw/Nexus/blob/main/docs/rigs/icom.md>
 
 ---
 
@@ -110,7 +110,7 @@ one operator but not another — a "can't reach the radio's CAT link" error — 
 this is 4532; a non-default value left over from a multi-radio setup is the usual
 cause. (Only change it deliberately when running two radios at once.)
 
-→ Full guide: <https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/rigs/flexradio.md>
+→ Full guide: <https://github.com/kd9taw/Nexus/blob/main/docs/rigs/flexradio.md>
 
 ---
 
@@ -129,7 +129,7 @@ cabling groups:
 **Field status:** supported via the Icom backend but **not yet bench-verified** —
 field reports genuinely valuable.
 
-→ Full guide: <https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/rigs/xiegu.md>
+→ Full guide: <https://github.com/kd9taw/Nexus/blob/main/docs/rigs/xiegu.md>
 
 ---
 
@@ -152,7 +152,7 @@ an az-only rotator).
 
 **Field status:** dummy-verified; control of real az/el hardware is pending.
 
-→ Full guide: <https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/rigs/rotators.md>
+→ Full guide: <https://github.com/kd9taw/Nexus/blob/main/docs/rigs/rotators.md>
 
 ---
 
@@ -174,7 +174,7 @@ picker also includes **Dummy** (model 1) for click-through testing and **FLRig**
 - [Install](Install) — download, verify, where data lives.
 - [FAQ](FAQ) — the common questions.
 - [Documentation](Documentation) — the full manual set on GitHub.
-- [Troubleshooting](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/troubleshooting.md)
+- [Troubleshooting](https://github.com/kd9taw/Nexus/blob/main/docs/troubleshooting.md)
   — CAT failures, drivers, port conflicts, audio.
 
 ---

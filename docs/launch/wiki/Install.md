@@ -1,19 +1,22 @@
 # Install & Verify
 
-Everything you need to install Nexus on Windows, verify the download, upgrade,
+Everything you need to install Nexus, verify the download, upgrade,
 uninstall, and know where your data lives. If you just want to get on the air,
 [Quick Start](Quick-Start) covers install in a few paragraphs; come here for the
 complete picture.
 
-[**⬇ Download the latest Windows installer**](https://sourceforge.net/projects/nexus-ham-radio/files/latest/download)
+[**⬇ Download the latest release**](https://github.com/kd9taw/Nexus/releases/latest)
 
 ---
 
 ## What you need
 
-- **Windows 10 or 11, 64-bit (x64).** Windows is the supported platform today.
-  The codebase is cross-platform Rust/Tauri and builds on Linux, but only the
-  Windows installer ships.
+- **Windows 10 or 11, 64-bit (x64)**, or **Linux** (a `.deb` and an AppImage), or
+  a **64-bit Raspberry Pi** (arm64 `.deb`, Pi 3/4/5). All three build and ship
+  every release. macOS does not ship yet.
+  On Linux, CAT uses the system Hamlib: the `.deb` pulls `libhamlib-utils` in
+  automatically, and AppImage users want `sudo apt install libhamlib-utils`.
+  On a slower Pi, Settings, Decode depth, Fast keeps FT8 and FT4 real-time.
 - **A radio with CAT + audio**, or a network rig (FlexRadio, remote `rigctld`).
   You can install and explore without a radio — the wizard and every panel open —
   but you need a rig connected to transmit.
@@ -65,7 +68,7 @@ which is exactly why the SHA-256 check above is worth doing.
 Click **More info**, then **Run anyway**.
 
 If you'd rather avoid the prompt entirely, you can
-[build from source](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/) instead.
+[build from source](https://github.com/kd9taw/Nexus) instead.
 
 **Where it installs:** Nexus installs **per-user** — no administrator rights, no
 system-wide changes. The program files land under your user profile

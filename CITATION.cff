@@ -1,0 +1,73 @@
+cff-version: 1.2.0
+title: "Nexus: an all-mode amateur radio operations center"
+message: >-
+  If you use Nexus, or the TempoFast or TempoDeep waveforms, in published work,
+  please cite it using the metadata below. If your work concerns the protocols
+  specifically rather than the application, prefer the protocol reference under
+  preferred-citation.
+type: software
+authors:
+  # Amateur radio callsign only, deliberately. The author is identified by
+  # callsign in every public surface of this project.
+  - name: KD9TAW
+    email: kd9taw@protonmail.com
+    website: "https://www.qrz.com/db/KD9TAW"
+repository-code: "https://github.com/kd9taw/Nexus"
+url: "https://hamradiotools.io"
+version: 0.21.5
+license: GPL-3.0-only
+keywords:
+  - amateur radio
+  - ham radio
+  - weak-signal
+  - digital modes
+  - FT8
+  - FT4
+  - APRS
+  - software-defined radio
+  - incremental redundancy
+  - hybrid ARQ
+  - continuous-phase modulation
+  - LDPC
+  - propagation
+abstract: >-
+  Nexus is a free, open-source amateur radio operations center for Windows, Linux
+  and Raspberry Pi, written in Rust behind a Tauri shell. It provides an
+  FT8/FT4 cockpit with operational parity to WSJT-X, transmit and receive for
+  Q65, FST4, FST4W, MSK144, JT65 and WSPR, along with RTTY, SSTV, APRS, CW and
+  SSB/FM phone operating, native rig control with RF panadapter streaming, a
+  native port of the ITU-R P.533 propagation model, an operator-anchored band
+  opening detector, and offline award computation with source-aware
+  confirmation tracking. Its digital modem is derived from the WSJT-X DSP
+  sources. Nexus additionally implements two original weak-signal waveforms,
+  TempoFast and TempoDeep, described in the preferred citation.
+preferred-citation:
+  type: manual
+  title: >-
+    The Tempo protocols: TempoFast and TempoDeep, coherent and non-coherent
+    weak-signal waveforms with incremental-redundancy hybrid ARQ for amateur
+    radio
+  authors:
+    - name: KD9TAW
+      email: kd9taw@protonmail.com
+  year: 2026
+  url: "https://github.com/kd9taw/Nexus/blob/main/docs/FT1-Protocol.md"
+  license: GPL-3.0-only
+  abstract: >-
+    TempoFast is a coherent 4-ary continuous-phase modulation (4-CPM, h=1/2,
+    BT=0.3) waveform on a four-second transmit and receive cycle, sharing the
+    WSJT-X 77-bit message payload and LDPC(174,91) forward error correction. It
+    is demodulated by iterative turbo equalization, in which a BCJR trellis
+    detector for the CPM phase memory exchanges soft information with the LDPC
+    decoder. Its distinguishing feature is incremental-redundancy hybrid ARQ:
+    retransmissions carry previously unsent parity from a punctured LDPC(348,91)
+    mother code and are joint-turbo-combined with the original frame, so a frame
+    that fails to decode alone is not discarded. The redundancy version is
+    signalled by Costas-array variant and therefore costs no additional bits. No
+    other amateur weak-signal text mode accumulates redundancy across
+    retransmissions. TempoDeep is a companion non-coherent 8-FSK tier on a
+    fifteen-second cycle carrying the same payload, intended for fading paths
+    that defeat coherent detection. Both waveforms have closed over-the-air
+    links, including a completed two-station contact on the 6 m band. Reported
+    sensitivity thresholds are simulation results from AWGN and Rayleigh fading
+    sweeps and are not on-air measurements.

@@ -14,7 +14,7 @@ live decodes, and one FT8 QSO in your log — in about 15 minutes.
 
 ## 1. Install and get past SmartScreen (~3 min)
 
-[**⬇ Download the Windows installer**](https://sourceforge.net/projects/nexus-ham-radio/files/latest/download)
+[**⬇ Download the latest release**](https://github.com/kd9taw/Nexus/releases/latest)
 — `Nexus_<version>_x64-setup.exe`, roughly 210 MB. It's a per-user install and
 needs no administrator rights; WebView2 and Hamlib are bundled, so there's
 nothing else to install.
@@ -130,7 +130,7 @@ You're on the air. When you want to go deeper:
 - [FAQ](FAQ) — the common questions.
 - [Documentation](Documentation) — the full manual set: section guides, protocols, interop.
 
-Stuck? The [troubleshooting guide](https://sourceforge.net/p/nexus-ham-radio/code/ci/main/tree/docs/troubleshooting.md)
+Stuck? The [troubleshooting guide](https://github.com/kd9taw/Nexus/blob/main/docs/troubleshooting.md)
 on GitHub covers CAT failures, drivers, port conflicts, and audio.
 
 ---
