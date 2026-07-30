@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Stations can be kept on the APRS map forever
+
+Setting "Keep stations for" to 0 now means exactly that: no fade, no removal — every station
+stays until the 2000-station ceiling. Added while chasing a field report of stations vanishing
+far too quickly; with removal off entirely, anything that still disappears proves the fault is
+somewhere else. It stays because some operators genuinely want an all-day picture.
+
 ### Fixed: APRS went silent on a three-radio station
 
 0.21.4 could send an APRS activation to the wrong radio. With three radios where two of them cover

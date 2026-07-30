@@ -5966,10 +5966,13 @@ impl Engine {
             return;
         }
         // Over the ceiling: drop anything already past its age window first, since those would not
-        // have been shown anyway.
-        let cutoff = h.at_unix - i64::from(self.station_ttl_min()) * 60;
-        self.aprs_stations
-            .retain(|_, st| st.last_heard_unix >= cutoff);
+        // have been shown anyway. (ttl 0 = keep-forever: skip straight to oldest-first eviction.)
+        let ttl = self.station_ttl_min();
+        if ttl > 0 {
+            let cutoff = h.at_unix - i64::from(ttl) * 60;
+            self.aprs_stations
+                .retain(|_, st| st.last_heard_unix >= cutoff);
+        }
         // Still over: evict the stations heard longest ago, which are the least useful to keep.
         while self.aprs_stations.len() > APRS_STATION_CAP {
             let Some(oldest) = self
@@ -5985,7 +5988,14 @@ impl Engine {
     }
 
     /// The configured station age window in minutes, clamped to something sane.
+    /// ZERO IS A SENTINEL: "keep stations forever" — no age filter, no age-based prune, no fade
+    /// (the cap alone bounds memory). Added as a field diagnostic that earned its keep as a
+    /// feature: with removal off, any station that still vanishes proves the fault is NOT the
+    /// age machinery.
     fn station_ttl_min(&self) -> u32 {
+        if self.settings.aprs_station_ttl_min == 0 {
+            return 0;
+        }
         self.settings.aprs_station_ttl_min.clamp(5, 24 * 60)
     }
 
@@ -6004,7 +6014,12 @@ impl Engine {
     /// the fade derived, so the two can never be configured into contradicting each other.
     pub fn aprs_stations(&self, now: i64) -> AprsStationsView {
         let ttl_min = self.station_ttl_min();
-        let cutoff = now - i64::from(ttl_min) * 60;
+        // ttl 0 = keep forever: no cutoff at all.
+        let cutoff = if ttl_min == 0 {
+            i64::MIN
+        } else {
+            now - i64::from(ttl_min) * 60
+        };
         let mut stations: Vec<AprsStation> = self
             .aprs_stations
             .values()
@@ -9863,6 +9878,20 @@ mod tests {
             rv: None,
             mode: None,
         }
+    }
+
+    #[test]
+    fn ttl_zero_keeps_every_station_forever() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.aprs_station_ttl_min = 0;
+        e.apply_settings(s);
+        e.push_aprs_heard(aprs_pkt("W0OLD", "!4903.50N/07201.75W-", 1000, AprsSource::Rf));
+        // A year later the station is still in the view, and ttl_min = 0 travels to the UI
+        // so the fade path knows to stand down too.
+        let v = e.aprs_stations(1000 + 365 * 24 * 3600);
+        assert_eq!(v.stations.len(), 1);
+        assert_eq!(v.ttl_min, 0);
     }
 
     #[test]

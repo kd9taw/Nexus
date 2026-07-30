@@ -4885,7 +4885,7 @@ export function SettingsPanel({
                   <input
                     className="settings-input"
                     type="number"
-                    min={5}
+                    min={0}
                     max={1440}
                     value={form.aprsStationTtlMin ?? 60}
                     onChange={(e) => updateNum('aprsStationTtlMin', Number(e.target.value))}
@@ -4894,7 +4894,8 @@ export function SettingsPanel({
                     How long a station stays on the map after its last packet. Stations start to fade
                     at a third of this. An hour by default: fixed stations often beacon only every
                     ten to thirty minutes, and a shorter window makes the slow ones blink off between
-                    their own beacons.
+                    their own beacons. 0 keeps every station forever (no fade, no removal — the
+                    2000-station ceiling still applies).
                   </span>
                 </label>
 
