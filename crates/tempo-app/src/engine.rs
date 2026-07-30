@@ -1868,6 +1868,11 @@ impl Engine {
         // at all until the operator acts.
         let mut settings = settings;
         settings.beacon = false;
+        // A settings.json persisted before band canonicalisation can still carry
+        // a channel TOKEN ("2m-fm") as the band — a QSO logged before the first
+        // QSY would inherit it. Same boundary rule as set_frequency: canonical
+        // in, always.
+        settings.band = crate::bandplan::canonical_band(&settings.band);
         let mut app = AppState::new(&settings.mycall, &settings.mygrid);
         app.set_radio(settings.dial_mhz, &settings.band, &settings.sideband);
         app.set_implicit_ack(settings.chat_implicit_ack);
@@ -2197,6 +2202,11 @@ impl Engine {
     /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place. The
     /// operating mode returns to Chat.
     pub fn apply_settings(&mut self, s: Settings) {
+        // Boundary rule (same as set_frequency / with_settings): the stored band
+        // is always the canonical award/ADIF identity, never a channel token —
+        // an old UI state or stale profile can hand one in through a save.
+        let mut s = s;
+        s.band = crate::bandplan::canonical_band(&s.band);
         // What the active tier resolves to BEFORE the save — the per-mode period /
         // submode fields live in `Settings`, so this can change under us. See the
         // decoder rebuild at the end of this function.
@@ -2635,6 +2645,12 @@ impl Engine {
     }
 
     pub fn set_frequency(&mut self, dial_mhz: f64, band: &str, mode: &str) {
+        // Canonicalise the band ONCE, at the boundary where it enters state: a
+        // band-plan CHANNEL token ("2m-fm", "6m-2") must never become the stored
+        // band — `settings.band` feeds `QsoRecord.band`, the ADIF file and the
+        // QRZ/eQSL uploads verbatim, and awards/needs/interop accept only the
+        // base label (a token earned no DXCC/VUCC/WAS slot and never confirmed).
+        let band = &crate::bandplan::canonical_band(band);
         // A fresh QSY request is a fresh attempt: drop any earlier refusal so a stale "the radio
         // refused 144.390" can't sit on screen next to a frequency that worked.
         self.rig_refused_dial_mhz = None;
@@ -15086,6 +15102,31 @@ mod tests {
             "flat mirror (active loop's Transport::from_settings) == the de-conflicted active profile \
              port (monitors' Transport::from_profile) — no divergence, so neither daemon collides"
         );
+    }
+
+    #[test]
+    fn a_channel_token_never_reaches_stored_band_state() {
+        // Selecting a suffixed band-plan channel used to store the TOKEN
+        // ("2m-fm", "6m-2") in settings.band, from where it reached
+        // QsoRecord.band, the ADIF file and the QRZ/eQSL uploads verbatim —
+        // earning no DXCC/VUCC/WAS slot and never confirming, while the Needed
+        // board (which accepts tokens) thought the slot was worked.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        for (dial, token, mode, want) in [
+            (146.58, "2m-fm", "FM", "2m"),
+            (50.323, "6m-2", "USB", "6m"),
+            (144.2, "2m-call", "USB", "2m"),
+            (7.08, "40m-dx", "USB", "40m"),
+            (3.845, "80m-eu", "LSB", "80m"),
+            (14.074, "20m", "USB", "20m"),
+        ] {
+            e.set_frequency(dial, token, mode);
+            assert_eq!(
+                e.settings().band,
+                want,
+                "{token}: stored band must be the award/ADIF identity"
+            );
+        }
     }
 
     #[test]

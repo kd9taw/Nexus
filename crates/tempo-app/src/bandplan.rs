@@ -51,6 +51,18 @@ fn ch(band: &str, group: &str, dial_mhz: f64, mode: &str, label: &str, note: &st
     }
 }
 
+/// The AWARD/ADIF band identity for a band-plan channel token. Channel ids may
+/// carry a suffix that distinguishes CHANNELS on one band ("2m-fm", "6m-2",
+/// "2m-call", "40m-dx", "80m-eu") — presentation ids, never band identities.
+/// The suffix must not reach stored state: `settings.band` feeds
+/// `QsoRecord.band`, the ADIF file and every upload verbatim, and the award/
+/// interop readers accept only the base label. THE one place the suffix is
+/// stripped — call this at the state boundary rather than hand-splitting.
+pub fn canonical_band(token: &str) -> String {
+    let t = token.trim();
+    t.split('-').next().unwrap_or(t).to_string()
+}
+
 /// The proposed Tempo band plan — verified US General-legal + CW-clear (judged on
 /// the emission ≈ dial + 1.5 kHz). Ordered low band → high.
 pub fn band_plan() -> Vec<BandChannel> {
@@ -379,6 +391,46 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn every_channel_token_canonicalises_to_a_plain_band_label() {
+        // Walk every token every plan ships (the Tempo plan plus each per-tier
+        // plan): the canonical form must carry no channel suffix, be non-empty,
+        // and — when the channel's dial maps to a band at all — agree with the
+        // dial-derived band. This is the census that keeps the presentation-id /
+        // band-identity split honest as channels are added.
+        let mut plans = vec![band_plan()];
+        for f in [
+            ft8_band_plan,
+            ft4_band_plan,
+            rtty_band_plan,
+            sstv_band_plan,
+            q65_band_plan,
+            msk144_band_plan,
+            fst4_band_plan,
+            fst4w_band_plan,
+            jt65_band_plan,
+            wspr_band_plan,
+        ] {
+            plans.push(f());
+        }
+        for c in plans.into_iter().flatten() {
+            let canon = canonical_band(&c.band);
+            assert!(!canon.is_empty(), "{}: empty canonical band", c.band);
+            assert!(
+                !canon.contains('-'),
+                "{}: canonical band must carry no channel suffix",
+                c.band
+            );
+            if let Some(by_dial) = band_for_dial(c.dial_mhz) {
+                assert_eq!(
+                    canon, by_dial,
+                    "{} @ {}: canonical band must agree with the dial's band",
+                    c.band, c.dial_mhz
+                );
+            }
+        }
+    }
 
     #[test]
     fn cw_activity_is_inside_the_band_and_off_the_edge() {

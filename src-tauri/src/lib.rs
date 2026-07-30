@@ -5712,9 +5712,9 @@ fn get_licensed_band_plan(
             .into_iter()
             .filter(|c| {
                 // Channel band ids may carry a suffix ("2m-call") — privilege-check
-                // the base band.
-                let base = c.band.split('-').next().unwrap_or(&c.band);
-                tempo_app::privileges::segment_start(class, base, priv_mode).is_some()
+                // the base band, via THE canonicaliser (one home, not a hand-split).
+                let base = tempo_app::bandplan::canonical_band(&c.band);
+                tempo_app::privileges::segment_start(class, &base, priv_mode).is_some()
             })
             .collect());
     }
