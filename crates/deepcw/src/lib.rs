@@ -168,7 +168,9 @@ pub struct DeepCw {
     model_path: PathBuf,
     pub meta: Metadata,
     /// The compiled plan, cached per frame count (all windows share one in practice).
-    plan: std::sync::Mutex<Option<(usize, TypedSimplePlan<TypedModel>)>>,
+    // tract 0.23: `into_runnable()` returns the plan Arc'd, and `run` takes
+    // `self: &Arc<Self>` — hold the Arc it hands us.
+    plan: std::sync::Mutex<Option<(usize, std::sync::Arc<TypedSimplePlan>)>>,
 }
 
 impl DeepCw {
@@ -240,14 +242,19 @@ impl DeepCw {
         let outputs = model
             .run(tvec!(Tensor::from(input).into()))
             .map_err(|e| format!("run: {e}"))?;
-        let view = outputs[0]
-            .to_array_view::<f32>()
-            .map_err(|e| format!("output view: {e}"))?;
-        let shape = view.shape().to_vec(); // [1, time, classes]
+        // tract 0.23: TValue derefs to Tensor; the array-view accessor moved to
+        // the TensorView layer, and the output is contiguous, so a flat slice is
+        // the direct read.
+        let out = &outputs[0];
+        let shape = out.shape().to_vec(); // [1, time, classes]
         if shape.len() != 3 || shape[0] != 1 {
             return Err(format!("unexpected output shape {shape:?}"));
         }
-        let flat: Vec<f32> = view.iter().copied().collect();
+        let flat: Vec<f32> = out
+            .view()
+            .as_slice::<f32>()
+            .map_err(|e| format!("output view: {e}"))?
+            .to_vec();
         Ok((shape[1], shape[2], flat))
     }
 }
