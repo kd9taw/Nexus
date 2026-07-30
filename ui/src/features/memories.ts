@@ -12,6 +12,7 @@
 // v1 → v2 migration is automatic and lossless on first load.
 
 import { useSyncExternalStore } from 'react'
+import { bearingDeg, gridToLatLon, haversineKm } from '../grid'
 import type { View } from './registry'
 
 // ---------------------------------------------------------------------------
@@ -85,6 +86,12 @@ export interface Memory {
   notes?: string
   callsign?: string
   grid?: string
+  /** Site latitude/longitude, when the source knew it (a repeater starred from
+   * the Program picker). Present so distance + bearing are RECOMPUTED from
+   * wherever the operator is now, never baked at save time — the 4-char `grid`
+   * above is ±35 km, too coarse to rank nearby machines by. */
+  lat?: number
+  lon?: number
   /** Provenance: 'user' | 'program' | 'curated'. A pack re-install reconciles only
    * 'curated' rows; editing a row's content in the Memories UI stamps it 'user' and
    * a pack never overwrites it again. NOTE: pack membership is carried by `groups`,
@@ -187,6 +194,12 @@ export function coerceMemory(raw: unknown): Memory | null {
   if (typeof o.notes === 'string' && o.notes) m.notes = o.notes
   if (typeof o.callsign === 'string' && o.callsign) m.callsign = o.callsign
   if (typeof o.grid === 'string' && o.grid) m.grid = o.grid
+  // Range-checked, NOT posNum: a US repeater's longitude is negative and the
+  // equator/prime meridian are 0 — positivity is the wrong test entirely.
+  const lat = num(o.lat)
+  if (lat !== undefined && lat >= -90 && lat <= 90) m.lat = lat
+  const lon = num(o.lon)
+  if (lon !== undefined && lon >= -180 && lon <= 180) m.lon = lon
   if (o.skip === true) m.skip = true
   const used = posNum(o.lastUsedUtc)
   if (used !== undefined) m.lastUsedUtc = used
@@ -376,6 +389,16 @@ export function memoryKey(m: Pick<Memory, 'rxMhz' | 'mode' | 'ctcssEncHz'>): str
   return `${m.rxMhz.toFixed(4)}|${m.mode.toUpperCase()}|${m.ctcssEncHz ?? 0}`
 }
 
+/** The memory in `bank` equivalent to `probe` under [`memoryKey`], if any. The
+ * shared lookup behind dedupe, "is this machine already starred?" and unstar. */
+export function findEquivalent(
+  bank: MemoriesBank,
+  probe: Pick<Memory, 'rxMhz' | 'mode' | 'ctcssEncHz'>,
+): Memory | undefined {
+  const key = memoryKey(probe)
+  return bank.memories.find((m) => memoryKey(m) === key)
+}
+
 export function addMemory(bank: MemoriesBank, input: Partial<Memory> & { rxMhz: number; mode: string }): MemoriesBank {
   const m = coerceMemory({ ...input, id: input.id ?? newMemoryId() })
   if (!m) return bank
@@ -390,8 +413,7 @@ export function addMemoryDeduped(
 ): { bank: MemoriesBank; added: boolean } {
   const probe = coerceMemory({ ...input, id: 'probe' })
   if (!probe) return { bank, added: false }
-  const key = memoryKey(probe)
-  if (bank.memories.some((m) => memoryKey(m) === key)) return { bank, added: false }
+  if (findEquivalent(bank, probe)) return { bank, added: false }
   return { bank: addMemory(bank, input), added: true }
 }
 
@@ -404,8 +426,7 @@ export function saveFavoriteFromDial(
 ): { bank: MemoriesBank; result: 'added' | 'starred' | 'exists' } {
   const probe = coerceMemory({ ...input, id: 'probe' })
   if (!probe) return { bank, result: 'exists' }
-  const key = memoryKey(probe)
-  const existing = bank.memories.find((m) => memoryKey(m) === key)
+  const existing = findEquivalent(bank, probe)
   if (existing) {
     if (existing.favorite) return { bank, result: 'exists' }
     return { bank: updateMemory(bank, existing.id, { favorite: true }), result: 'starred' }
@@ -548,6 +569,22 @@ export function hotkeyRecallTarget(
   if (!digit) return null
   const favorites = bank.memories.filter((m) => m.favorite)
   return favorites[Number(digit[1]) - 1] ?? null
+}
+
+/** How far and in what direction a memory's SITE is from the operator's grid —
+ * recomputed on every render, never stored (drive 200 miles for a POTA
+ * activation and the same starred machines are a different distance away).
+ * Returns raw km + degrees; the view owns miles/octant formatting. null when
+ * either end is unknown: most memories are frequencies, not places. */
+export function siteOffset(
+  m: Pick<Memory, 'lat' | 'lon'>,
+  myGrid: string,
+): { km: number; bearing: number } | null {
+  if (m.lat === undefined || m.lon === undefined) return null
+  const me = gridToLatLon(myGrid)
+  if (!me) return null
+  const there = { lat: m.lat, lon: m.lon }
+  return { km: haversineKm(me, there), bearing: bearingDeg(me, there) }
 }
 
 // ---------------------------------------------------------------------------

@@ -5006,6 +5006,30 @@ fn aprs_tune(state: State<'_, SharedEngine>, dial_mhz: f64) -> Result<AppSnapsho
     Ok(eng.snapshot())
 }
 
+/// Tune the rig to an FM repeater in ONE step: its output frequency on FM with the machine's exact
+/// shift / offset / CTCSS tone, auto-routed to the radio mapped for that band on FM (so 2 m FM
+/// repeater work lands on the FM rig, not the one that happens to own 2 m digital). Used by the
+/// Program section's per-repeater Tune and by a starred repeater in Memories. Persists + returns
+/// the snapshot. Tuning only — nothing here arms TX.
+///
+/// Errors (leaving the radio untouched) on an unknown shift, a frequency outside the band plan, or a
+/// radio that provably cannot receive it. The message is operator-facing.
+#[tauri::command]
+fn repeater_tune(
+    state: State<'_, SharedEngine>,
+    output_mhz: f64,
+    shift: String,
+    offset_hz: i64,
+    tone_hz: f32,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.repeater_tune(output_mhz, &shift, offset_hz, tone_hz)?;
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist frequency: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Queue RTTY text to transmit — an explicit operator send, the ONLY way RTTY TX
 /// starts. The engine validates every gate up front (TX armed, license privileges
 /// at the current dial, the RTTY section owning the rig, no tune carrier, no other
@@ -11255,6 +11279,7 @@ pub fn run() {
             aprs_send_beacon,
             aprs_send_message,
             aprs_tune,
+            repeater_tune,
             rtty_send,
             rtty_stop,
             rtty_clear,

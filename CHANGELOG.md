@@ -19,6 +19,38 @@ station looked like a dead band. With the radio named, that is a glance instead 
 
 On a single-radio station, or when only one radio covers the band, nothing is shown: there was no
 choice to make and saying so would just be clutter.
+
+### Star a repeater straight from the search results
+
+Program's repeater search has a star on every result row. Starring one saves it into Memories as a
+proper FM channel, with the machine's shift, offset and access tone, and puts it on the quick-recall
+strip in the Phone, Operate and CW cockpits — where one click, or Ctrl+1 through Ctrl+9, tunes it.
+Previously the only route from a search result to your favorites ran through the channel-list
+builder and a second trip into the Memories section to star each row by hand.
+
+Starring the same machine twice does not duplicate it: if that frequency, mode and tone are already
+saved, the star lights on the row you already have. The star toggles back off and leaves the channel
+in Memories, so unstarring only takes it off the cockpit strip.
+
+Starred repeaters also remember where the machine physically is, so Memories shows how far away and
+in what direction each one is. That is measured from your current grid every time it is displayed
+rather than stored, so the distances follow you when you operate portable.
+
+### Fixed: tuning a repeater could pick the wrong radio, and the wrong mode
+
+Program's per-repeater Tune button now tunes in a single step that knows it is FM.
+
+Two things were wrong before, both only visible on a multi-radio station or when you had been
+operating something other than voice. The tune announced no mode intent, so with a routing rule
+sending 2 m FM to one radio and 2 m digital to another, tuning a 2 m repeater while the app was in
+FT8 handed the frequency to the FT8 radio. And because the rig's mode follows whichever section you
+last operated, the same tune could leave the radio in a data mode, where a repeater is inaudible.
+
+The Tune button now names FM explicitly for both decisions, so the machine's frequency, shift, offset
+and tone all land together on the radio you mapped for FM. It does not move you out of Program or
+arm transmit; it puts the radio on the repeater so you can listen. Any later retune, section change,
+radio switch, or a turn of the VFO knob down to HF releases the FM hold, so FM never follows you
+somewhere it does not belong.
 ### Stations can be kept on the APRS map forever
 
 Setting "Keep stations for" to 0 now means exactly that: no fade, no removal — every station

@@ -4,7 +4,8 @@
 // auto-radius. The Channel/RepeaterRecord DTOs mirror the Rust serde camelCase
 // shapes exactly (see crates/propagation/src/{memchan,repeaters}.rs).
 
-import type { RepeaterRecord } from '../types'
+import type { ProgChannel, RepeaterRecord } from '../types'
+import type { Memory } from './memories'
 
 /** Per-radio channel-name display caps (the header "Max name" select). */
 export const NAME_CAPS = [
@@ -149,4 +150,69 @@ export function modeBadge(r: RepeaterRecord): string {
   if (r.dstar) return 'D-STAR'
   if (r.fusion) return 'YSF'
   return ''
+}
+
+/** A channel's FM repeater parameters for the rig path (tune-now, memories,
+ * repeater_tune): shift direction, offset magnitude override in Hz (the EXACT
+ * machine offset, so odd splits key the right input), and the CTCSS tone.
+ *
+ * `split` stores the ABSOLUTE TX frequency in `offsetMhz` (memchan.rs), so the
+ * direction and magnitude are derived from it rather than read off `duplex`. */
+export function rigRepeaterParams(c: ProgChannel): {
+  shift: 'simplex' | 'plus' | 'minus'
+  offsetHz: number
+  toneHz: number
+} {
+  const toneHz = c.toneMode === 'tone' || c.toneMode === 'tsql' ? c.rtoneHz : 0
+  if (c.duplex === 'simplex') return { shift: 'simplex', offsetHz: 0, toneHz }
+  if (c.duplex === 'split') {
+    const diff = c.offsetMhz - c.rxMhz
+    return {
+      shift: diff >= 0 ? 'plus' : 'minus',
+      offsetHz: Math.round(Math.abs(diff) * 1e6),
+      toneHz,
+    }
+  }
+  return { shift: c.duplex, offsetHz: Math.round(c.offsetMhz * 1e6), toneHz }
+}
+
+/** Name for a single starred machine: the way operators say it out loud — call
+ * plus the frequency nickname, "W9ABC 94". Unlike the channel-list builder there
+ * is no radio display cap to fit (Memories never truncates a name; caps apply at
+ * export), and the tail keeps a club's 2 m and 70 cm machines apart in the
+ * cockpit strip. Falls back to the record's own name when there's no callsign. */
+export function favoriteName(c: ProgChannel): string {
+  const call = (c.source?.callsign ?? '').split('/')[0]?.trim().toUpperCase() ?? ''
+  return call ? `${call} ${freqTail(c.rxMhz)}` : c.name
+}
+
+/** The Memory a programmable repeater channel becomes — ONE mapping shared by
+ * "★ this machine" and "save the whole list", so the two paths can never drift
+ * into disagreeing about what a repeater is.
+ *
+ * `site` carries the machine's coordinates when the caller still has the
+ * directory record (the picker rows do; a reloaded channel list does not, since
+ * radioprog.json persists channels only). Stored so distance and bearing are
+ * RECOMPUTED against wherever the operator is now — a baked-in mileage would be
+ * wrong the first time they operated portable. */
+export function repeaterMemory(
+  c: ProgChannel,
+  name: string,
+  site?: { lat: number; lon: number },
+): Partial<Memory> & { rxMhz: number; mode: string } {
+  const { shift, offsetHz, toneHz } = rigRepeaterParams(c)
+  return {
+    name,
+    rxMhz: c.rxMhz,
+    mode: 'FM',
+    kind: shift === 'simplex' && !toneHz ? 'simplex' : 'repeater',
+    offsetDir: shift,
+    offsetMhz: offsetHz ? offsetHz / 1e6 : undefined,
+    toneMode: toneHz ? 'tone' : 'none',
+    ctcssEncHz: toneHz || undefined,
+    callsign: c.source?.callsign || undefined,
+    lat: site?.lat,
+    lon: site?.lon,
+    source: 'program',
+  }
 }

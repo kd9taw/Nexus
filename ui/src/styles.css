@@ -15592,6 +15592,23 @@ html[data-panel='needed'] {
   color: var(--state-good);
   border-color: color-mix(in srgb, var(--state-good) 50%, transparent);
 }
+/* ★ a machine straight into Memories favorites — same affordance as the
+   Memories row star (.mv-star), so one star means one thing app-wide. */
+.rp-star {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 3px 5px;
+}
+.rp-star:hover {
+  color: var(--warn, #e6b800);
+}
+.rp-star.on {
+  color: var(--warn, #e6b800);
+}
 .rp-attribution {
   padding-top: 2px;
 }

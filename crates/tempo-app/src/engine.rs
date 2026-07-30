@@ -1038,6 +1038,18 @@ pub struct Engine {
     /// `set_frequency` (a normal QSY) or `set_operating_mode` — i.e. the moment the operator leaves
     /// APRS — so FM never follows them onto another band/mode.
     aprs_fm: bool,
+    /// The rig is parked on an FM CHANNEL — a repeater or FM simplex frequency (session-only, never
+    /// persisted). Set by [`Engine::repeater_tune`]; makes `rig_mode_effective` command FM and
+    /// `route_mode` answer Fm, for the same reason `aprs_fm` above exists: the Program section is a
+    /// workbench, not a Phone/Digital operating section, so a tune from it can't ride the Phone-FM
+    /// override and would otherwise inherit the rig mode of whichever section the operator last
+    /// operated — demodulating a repeater as packet-USB. UNLIKE `aprs_fm` it does NOT force simplex:
+    /// carrying the machine's shift and tone is the whole point.
+    ///
+    /// Cleared by every QSY, section change and radio switch, exactly like `aprs_fm`, and gated at
+    /// read time on the dial still being at/above 29 MHz — the same threshold `Settings::rig_mode`
+    /// applies to Phone-FM, so a knob-QSY down to HF can never leave FM forced.
+    fm_channel: bool,
     /// SSTV RX decoder armed (session-only runtime state, never persisted).
     sstv_armed: bool,
     /// Drain buffer for the SSTV decode thread (same pattern as `rtty_audio`).
@@ -2035,6 +2047,7 @@ impl Engine {
             aprs_tx_queue: VecDeque::new(),
             aprs_msg_seq: 0,
             aprs_fm: false,
+            fm_channel: false,
             sstv_armed: false,
             sstv_audio: Vec::new(),
             sstv_progress: None,
@@ -2485,6 +2498,7 @@ impl Engine {
         // The band-gate in `rig_mode_effective` already prevents an FM leak onto a non-2 m band;
         // this clears the flag outright so it never lingers pointed at a different radio.
         self.aprs_fm = false;
+        self.fm_channel = false;
         // Frequency coverage belongs to the RADIO, so it must not survive the switch. Dropping it to
         // "unknown" makes the window before the loop re-probes fail OPEN; keeping the old radio's
         // list would let an HF-only rig's ranges block a QSY on the VHF radio that just became
@@ -2644,8 +2658,10 @@ impl Engine {
             }
         }
         // A normal QSY leaves the APRS FM-simplex context (aprs_tune re-sets it right after its own
-        // set_frequency call), so FM never lingers onto the next band the operator tunes.
+        // set_frequency call), so FM never lingers onto the next band the operator tunes. Same for
+        // the FM-channel hold (repeater_tune re-sets it the same way).
         self.aprs_fm = false;
+        self.fm_channel = false;
         // Band change invalidates the decode context: answering a HISTORY row from
         // the old band would target a station that isn't here and derive parity
         // from the old band's slots. The heard-stations roster goes with it —
@@ -2936,8 +2952,10 @@ impl Engine {
     /// manual tune within a mode survives non-operating nav.
     pub fn set_operating_mode(&mut self, mode: &str, follow_freq: bool) {
         use crate::settings::OperatingMode;
-        // Entering a real operating section ends the APRS FM-simplex context.
+        // Entering a real operating section ends the APRS FM-simplex context, and the FM-channel
+        // hold with it — that section's own mode policy takes over from here.
         self.aprs_fm = false;
+        self.fm_channel = false;
         let om = match mode.to_ascii_lowercase().as_str() {
             "phone" => OperatingMode::Phone,
             "cw" => OperatingMode::Cw,
@@ -3127,6 +3145,13 @@ impl Engine {
         if self.aprs_fm && self.settings.band.eq_ignore_ascii_case("2m") {
             return "FM".to_string();
         }
+        // A repeater/FM-simplex channel parks the rig in FM the same way, from whatever section the
+        // operator tuned it out of. Dial-gated (not band-gated like APRS) because an FM channel can
+        // be on 10 m through 23 cm, and 29 MHz is the line below which FM isn't used — the same
+        // threshold `Settings::rig_mode` applies to Phone-FM, so the two can't disagree.
+        if self.fm_channel && self.settings.dial_mhz >= 29.0 {
+            return "FM".to_string();
+        }
         if self.settings.operating_mode == crate::settings::OperatingMode::Phone {
             // SSTV rides the Phone segment but transmits SOUNDCARD audio, so — exactly like
             // FT8 — it needs a DATA submode (PKTUSB/PKTLSB → Yaesu DATA / Icom D / Kenwood
@@ -3170,6 +3195,11 @@ impl Engine {
     pub fn route_mode(&self, band: &str, dial_mhz: f64) -> crate::settings::RouteMode {
         use crate::settings::{OperatingMode, RouteMode};
         if self.aprs_fm && band.eq_ignore_ascii_case("2m") {
+            return RouteMode::Fm;
+        }
+        // Mirrors the `fm_channel` arm of `rig_mode_effective` (see the invariant in this doc
+        // comment): a rig held on an FM channel routes on FM.
+        if self.fm_channel && dial_mhz >= 29.0 {
             return RouteMode::Fm;
         }
         match self.settings.operating_mode {
@@ -6191,6 +6221,67 @@ impl Engine {
         // the loop commands FM (via rig_mode_effective) with simplex plumbing (via fm_repeater_config).
         self.set_frequency(dial_mhz, "2m", "FM");
         self.aprs_fm = true;
+        self.immediate_retune = true;
+        Ok(())
+    }
+
+    /// Tune the rig to an FM repeater: QSY to its OUTPUT on FM, with the machine's exact shift,
+    /// offset magnitude and CTCSS tone, auto-routing to the radio mapped for that band on **FM**.
+    ///
+    /// One atomic step, and that is the point. The Program section's tune-now used to write the
+    /// four FM settings fields and then QSY in a second call, which left two defects: the QSY
+    /// routed on the mode class of the section being LEFT (a 2 m repeater tune started from
+    /// Operate went to the FT8 radio — the same bug [`Self::aprs_tune`] exists to prevent), and
+    /// between the two calls the rig could sit on the new output frequency still carrying the
+    /// PREVIOUS machine's shift and tone.
+    ///
+    /// `shift` is `"simplex" | "plus" | "minus"`; `offset_hz` is the exact magnitude (0 = the band
+    /// convention), so odd splits key the right input. `tone_hz` of 0 means no tone. An unknown
+    /// shift is REFUSED rather than silently degraded to simplex: the Hamlib formatter maps
+    /// anything it doesn't recognise to "no shift", which would transmit on the repeater's own
+    /// output frequency the first time the operator keyed up.
+    ///
+    /// ⚠️ CAPABILITY-GATED like [`Self::aprs_tune`], and for the same reason — commanding a radio
+    /// somewhere it cannot go has no upside, so the check comes before the QSY.
+    pub fn repeater_tune(
+        &mut self,
+        output_mhz: f64,
+        shift: &str,
+        offset_hz: i64,
+        tone_hz: f32,
+    ) -> Result<(), String> {
+        if !matches!(shift, "simplex" | "plus" | "minus") {
+            return Err(format!("Unknown repeater shift '{shift}'"));
+        }
+        let band = crate::bandplan::band_for_dial(output_mhz)
+            .ok_or_else(|| format!("{output_mhz:.4} MHz is outside the band plan"))?;
+        // Judge the radio that would actually be USED — see aprs_tune for why the ACTIVE radio's
+        // coverage is the wrong question when routing hands this QSY to a different rig.
+        let hands_off_to_another_radio = !self.settings.radio_pegged
+            && self
+                .settings
+                .route_radio(band, crate::settings::RouteMode::Fm)
+                .is_some();
+        if !hands_off_to_another_radio && self.rig_covers_mhz(output_mhz) == Some(false) {
+            return Err(format!(
+                "This radio doesn't cover {output_mhz:.4} MHz, so it can't work that repeater."
+            ));
+        }
+        // The FM plumbing lands BEFORE the QSY so the radio loop's first retune after it already
+        // carries this machine's shift and tone (fm_repeater_config reads these three fields).
+        self.settings.phone_mode = "fm".to_string();
+        self.settings.rptr_shift = shift.to_string();
+        self.settings.rptr_offset_override_hz = offset_hz;
+        self.settings.ctcss_tone_hz = tone_hz;
+        // Name the mode class EXPLICITLY for the routing step: the operator may be arriving from
+        // Program, Operate or CW, and `route_mode` would otherwise answer for the section being
+        // LEFT. Set only after the gates pass, so a refusal can't leave a stale intent behind.
+        self.route_intent = Some(crate::settings::RouteMode::Fm);
+        // set_frequency clears the FM-channel hold (a QSY normally leaves one), so — exactly like
+        // aprs_tune with aprs_fm — re-arm it after, and the loop then commands FM via
+        // rig_mode_effective with this machine's shift/tone via fm_repeater_config.
+        self.set_frequency(output_mhz, band, "FM");
+        self.fm_channel = true;
         self.immediate_retune = true;
         Ok(())
     }
@@ -15172,6 +15263,118 @@ mod tests {
         e.set_active_radio(0);
         e.set_frequency(144.200, "2m", "USB");
         assert_eq!(e.settings.active_radio, 1);
+    }
+
+    #[test]
+    fn repeater_tune_routes_on_fm_even_when_arriving_from_the_digital_section() {
+        // The defect `repeater_tune` exists to fix. The Program section's tune-now wrote the FM
+        // settings and then called `set_frequency`, which derives the mode class from live state —
+        // so starting from Operate, a 2 m repeater tune routed on Digital and landed on the FT8
+        // radio. Same trap as aprs_tune, same fix: name the class explicitly.
+        let (mut e, ic9700, ft991a) = three_radio_engine();
+        e.set_operating_mode("operate", false); // sitting in the FT8 cockpit
+        e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+        assert_eq!(
+            e.settings.active_radio, ft991a,
+            "the repeater tune routed to the FM radio, not the FT8 radio"
+        );
+        assert_ne!(e.settings.active_radio, ic9700);
+        assert!((e.settings.dial_mhz - 146.940).abs() < 1e-9);
+        assert_eq!(e.settings.band, "2m", "band derived from the frequency");
+        assert_eq!(e.rig_mode_effective(), "FM");
+        // The machine's own plumbing reached the radio loop's read point.
+        assert_eq!(
+            e.fm_repeater_config(),
+            ("minus".to_string(), 600_000, 103.5),
+            "shift / offset / tone all present with the QSY"
+        );
+    }
+
+    #[test]
+    fn repeater_tune_keys_an_odd_split_on_its_exact_offset() {
+        // A 2 m machine with a +1 MHz input: the band CONVENTION is 600 kHz, so anything that
+        // ignores the exact offset transmits 400 kHz off the repeater's input and the operator
+        // never gets in. This is what rptr_offset_override_hz is for.
+        let (mut e, _ic9700, _ft991a) = three_radio_engine();
+        e.repeater_tune(145.110, "plus", 1_000_000, 0.0).unwrap();
+        let (shift, offset_hz, tone) = e.fm_repeater_config();
+        assert_eq!(shift, "plus");
+        assert_eq!(
+            offset_hz, 1_000_000,
+            "the exact split, not the 600 kHz default"
+        );
+        assert_eq!(tone, 0.0, "a toneless machine gets no tone");
+
+        // A tone-less simplex channel is a legitimate repeater_tune target too (a calling freq).
+        // Only the SHIFT and the tone are asserted: with no override, `rptr_offset_hz` reports the
+        // band convention, and the offset register is don't-care under "R None".
+        e.repeater_tune(146.520, "simplex", 0, 0.0).unwrap();
+        let (shift, _offset_dont_care, tone) = e.fm_repeater_config();
+        assert_eq!(shift, "simplex");
+        assert_eq!(tone, 0.0);
+    }
+
+    #[test]
+    fn repeater_tune_commands_fm_from_a_digital_section_and_lets_go_cleanly() {
+        // Routing the QSY to the right radio is only half the job: the rig must also be told FM.
+        // The mode policy is keyed on the operating SECTION, so without the `fm_channel` hold a
+        // repeater tuned out of Operate was commanded PKTUSB — a repeater demodulated as packet.
+        let (mut e, _ic9700, _ft991a) = three_radio_engine();
+        e.set_operating_mode("operate", false);
+        e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "commanded FM, not the section's mode"
+        );
+        assert_eq!(
+            e.settings.operating_mode,
+            crate::settings::OperatingMode::Digital,
+            "listening to a repeater must NOT move the operator into the Phone section \
+             (set_operating_mode arms transmit — a tune may never do that)"
+        );
+
+        // …and it lets go. Every route out of the FM channel drops the hold, so FM can't linger.
+        e.set_frequency(14.074, "20m", "USB");
+        assert_ne!(e.rig_mode_effective(), "FM", "a later QSY escaped FM");
+
+        // A knob-QSY down to HF doesn't route through set_frequency at all — the dial gate is the
+        // backstop there (the aprs_fm band-gate lesson, restated for a multi-band hold).
+        e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+        e.observe_rig_freq(14_074_000);
+        assert_ne!(
+            e.rig_mode_effective(),
+            "FM",
+            "FM followed the operator down to 20 m on a knob QSY"
+        );
+    }
+
+    #[test]
+    fn repeater_tune_refuses_a_bad_request_and_leaves_the_radio_alone() {
+        let (mut e, _ic9700, _ft991a) = three_radio_engine();
+        let (dial, band) = (e.settings.dial_mhz, e.settings.band.clone());
+
+        // An unrecognised shift must be REFUSED, not degraded: rptr_shift_line maps anything it
+        // doesn't know to "no shift", which would key the repeater's own OUTPUT frequency.
+        assert!(e
+            .repeater_tune(146.940, "negative", 600_000, 103.5)
+            .is_err());
+        // Outside the band plan there is no band to hand the routing step.
+        assert!(e.repeater_tune(160.000, "minus", 600_000, 103.5).is_err());
+
+        assert!(
+            (e.settings.dial_mhz - dial).abs() < 1e-9,
+            "refusal moved the dial"
+        );
+        assert_eq!(e.settings.band, band);
+        assert_eq!(e.settings.active_radio, 0, "refusal switched radios");
+        // A refusal must not leave a one-shot FM intent armed to misroute the NEXT QSY.
+        e.set_operating_mode("operate", false);
+        e.set_frequency(144.174, "2m", "USB");
+        assert_eq!(
+            e.settings.active_radio, 1,
+            "the next 2 m digital QSY still routed on Digital"
+        );
     }
 
     #[test]

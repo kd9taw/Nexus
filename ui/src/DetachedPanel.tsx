@@ -389,6 +389,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
         <MemoriesView
           dialMhz={snap?.radio.dialMhz ?? 0}
           dialMode={snap?.radio.rigMode || snap?.radio.sideband || 'USB'}
+          myGrid={snap?.mygrid ?? ''}
           onRecall={recall}
         />
       </div>

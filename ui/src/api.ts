@@ -1433,6 +1433,20 @@ export async function aprsTune(dialMhz: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('aprs_tune', { dialMhz })
 }
 
+/** Tune to an FM repeater in ONE atomic step: its output frequency on FM carrying the machine's
+ * exact shift / offset (Hz, 0 = band convention) / CTCSS tone (0 = none), auto-routed to the radio
+ * mapped for that band on FM. Replaces the old write-settings-then-QSY pair, which routed on the
+ * mode class of the section being left and briefly left the rig on the new dial with the previous
+ * machine's tone. Tuning only — nothing here arms TX. */
+export async function repeaterTune(
+  outputMhz: number,
+  shift: 'simplex' | 'plus' | 'minus',
+  offsetHz: number,
+  toneHz: number,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('repeater_tune', { outputMhz, shift, offsetHz, toneHz })
+}
+
 /** Arm/disarm the RTTY RX decoder (session-only; RX decode, never TX). */
 export async function rttyArm(on: boolean): Promise<RttyState> {
   return invoke<RttyState>('rtty_arm', { on })
