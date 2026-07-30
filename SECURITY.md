@@ -14,10 +14,11 @@ this whole page before reporting; it sets honest expectations.
 | 0.1.x   | Yes (current series) |
 | < 0.1.0 | No                   |
 
-Nexus 0.1.x is the current series. Published Windows binaries are
-cross-compiled. The FT8/FT4 tier is in daily production use; the TempoFast/TempoDeep modem
-has been validated in **simulation only** — not yet on-air. There is no
-separate "stable" branch; fixes land on the 0.1.x line.
+Nexus 0.21.x is the current series. Published Windows binaries are
+cross-compiled. The FT8/FT4 tier is in daily production use. The TempoFast and
+TempoDeep modem has closed real links on the air, and its published threshold
+figures are still bench numbers. There is no separate "stable" branch; fixes land
+on the current line.
 
 ## Reporting a vulnerability
 

@@ -25,9 +25,9 @@ GridTracker, JTAlert and logger workflow survives either way.
 
 ### What is TempoFast, in one sentence?
 
-FT8's message set on a 4-second cycle with cellular-style retransmission combining
-— keyboard chat at conversation speed, still down in the weak-signal noise (open
-beta; simulation-validated).
+FT8's message set on a 4-second cycle with cellular-style retransmission combining.
+Keyboard chat at conversation speed, still down in the weak-signal noise. It works on
+the air; the published threshold figures are still from the bench.
 
 ### Is TempoFast more sensitive than FT8?
 
@@ -36,8 +36,9 @@ roughly **6 dB** of raw single-shot sensitivity against FT8 (about 2.5 dB agains
 FT4) for a nearly 4× faster cycle plus an IR-HARQ path that lets weak
 retransmissions combine instead of being wasted. FT8's ~−21 dB threshold is the
 most sensitive here; TempoFast's ~−15 dB sits about where FT4 does. Those numbers are
-**simulation-validated only.** If you want maximum reach in one shot, use FT8; if
-you want a conversation, use TempoFast. When the path is fading, use TempoDeep.
+**bench figures**, measured in AWGN and fading sweeps rather than on the air. If you
+want maximum reach in one shot, use FT8; if you want a conversation, use TempoFast.
+When the path is fading, use TempoDeep.
 
 ### What is TempoDeep?
 
@@ -48,11 +49,24 @@ decodable on NVIS, polar, and rough paths.
 
 ### Are the TempoFast/TempoDeep performance numbers proven?
 
-They are **simulation-validated** — AWGN and Rayleigh-fading bench sweeps,
-re-checked in the test suite and the Windows cross-build. They are **not on-air
-proven.** Decode-rate-versus-SNR on real bands is the project's #1 remaining gate,
-and it's what the open beta exists to establish. Every dB figure Nexus publishes
-is labeled "simulated" for exactly this reason.
+Two different questions live in there, and they have different answers.
+
+**Do the modes work on the air? Yes.** The first over-the-air TempoFast decode was
+on 2026-07-21, and the first two-station Tempo QSO (KD9TAW and N9UM on 6 m)
+completed on 2026-07-26. That retires the question every new waveform faces, which
+is whether it closes a real RF link at all.
+
+**Did the threshold numbers come from the air? No.** Every dB figure Nexus
+publishes for these tiers comes from AWGN and Rayleigh-fading bench sweeps,
+re-checked in the test suite and on the Windows cross-build, and it is labelled
+simulated for that reason. What is still owed is a proper characterisation of
+**decode rate against signal level on real paths**, with real propagation and real
+QRM in it. That is the open gate, and on-air reports are what close it.
+
+One thing worth knowing before you try: check the clock reading in the top bar at
+**both** ends. A few tenths of a second of UTC error is invisible on FT8 and used to
+be fatal to Tempo, and both stations need a build at 0.19.6 or newer for the
+transmit-offset fix.
 
 ### How do I help the beta?
 

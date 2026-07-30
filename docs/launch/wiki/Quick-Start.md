@@ -5,10 +5,11 @@ PC, a radio with a USB (or network) connection, and a working antenna. By the
 end you'll have Nexus installed, your station and rig set up, a cockpit full of
 live decodes, and one FT8 QSO in your log — in about 15 minutes.
 
-> **Open beta.** The FT8/FT4 core is built to WSJT-X's behavior and exercised on
-> the air daily — that's the production part of the app. The newer surfaces are
-> fresh from the bench, and the TempoFast/TempoDeep protocols are simulation-validated, not
-> yet on-air-proven. Field reports are what this beta is for.
+> **Beta.** The FT8/FT4 core is built to WSJT-X's behaviour and exercised on the air
+> daily, and that is the production part of the app. TempoFast and TempoDeep have
+> closed real links on the air, including a completed two-station QSO on 6 m, and
+> their published threshold figures are still bench numbers. Field reports are what
+> closes that gap.
 
 ---
 

@@ -24,7 +24,8 @@ Closes #
 ## Validation
 
 <!--
-Be explicit and honest. Tempo's waveforms are simulation-validated, NOT yet on-air.
+Be explicit and honest. Tempo's waveforms have closed real links on the air, and
+their published threshold figures are still bench numbers, so do not conflate the two.
 State which applies:
   - Simulation / loopback only (AWGN / fading sweeps, headless round-trips), OR
   - Bench / loopback hardware, OR

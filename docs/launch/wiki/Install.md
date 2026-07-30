@@ -32,10 +32,14 @@ Hamlib, and the DSP stack so a bare PC works with no internet.
 
 ## Download
 
-The installer is `Nexus_<version>_x64-setup.exe`. Get it from **SourceForge**:
+The Windows installer is `Nexus_<version>_x64-setup.exe`, alongside the Linux
+`.deb` and AppImage and the Raspberry Pi arm64 `.deb`.
 
-- Latest build: <https://sourceforge.net/projects/nexus-ham-radio/files/latest/download>
-- All files (including the SHA-256 for each release):
+- **GitHub Releases** is the primary source, and carries every platform plus the
+  SHA-256 sums: <https://github.com/kd9taw/Nexus/releases/latest>
+- **SourceForge** mirrors it: latest build at
+  <https://sourceforge.net/projects/nexus-ham-radio/files/latest/download>, and all
+  files with per-release SHA-256 at
   <https://sourceforge.net/projects/nexus-ham-radio/files/>
 
 ---
