@@ -29,7 +29,8 @@ const api = vi.hoisted(() => {
     'getCredentialsStatus', 'fetchLotwUsers', 'getLotwUsersStatus', 'fetchFccStates',
     'getFccStatesStatus', 'discoverFlex', 'civDiagnosticLog', 'civDiagnosticStatus',
     'allTxtLocation', 'revealAllTxt', 'appVersion', 'getSpectrumRow', 'setFrequency',
-    'getWatchlist', 'setWatchlist', 'openPanelWindow',
+    'getWatchlist', 'setWatchlist', 'openPanelWindow', 'getAssistanceJournal',
+    'setUnassistedMode',
     'setRoutingRules', 'setDefaultRadio', 'routePreview',
   ]
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}

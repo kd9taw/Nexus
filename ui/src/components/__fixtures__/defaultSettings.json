@@ -54,6 +54,7 @@
   "rttyShiftHz": 170,
   "rttyReverse": false,
   "aiCwEnabled": true,
+  "unassistedMode": false,
   "rigctldPort": 4532,
   "rotatorModel": 0,
   "rotatorPort": "",

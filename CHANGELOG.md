@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: Unassisted mode — one switch for a no-assistance contest entry
+
+Settings ▸ Contesting has a new **Unassisted entry** switch. It turns off the AI CW decoder, DX
+cluster / RBN spots, and the PSK Reporter needs feed together, in one action, and takes effect the
+moment you press it rather than at the next restart. Every change is written to a dated record
+beside your settings, so if you are ever asked what was running during an event you have an answer
+with timestamps on it.
+
+This matters because the shipped defaults put you in an assisted category without saying so. The
+AI CW decoder is on by default, and CQ WW rule VIII.2 counts "a CW decoder, DX cluster, DX
+spotting Web sites … local or remote call sign and frequency decoding technology (e.g., CW Skimmer
+or Reverse Beacon Network)" as QSO-finding assistance, which places an entry in Single Operator
+Assisted. ARRL calls it spotting assistance and names "PSKReporter, Telnet, DX spotting websites
+or bulletin board systems, automated multi-channel decoders"; Single Operator may not use it,
+Single Operator Unlimited may. A footer in the CW cockpit now states which of those sources are
+running, with the rule citations one click away.
+
+Two details worth knowing. Your own settings are never rewritten: the switch overrides them while
+it is on, so ending unassisted mode brings your decoder and feeds back exactly as you had them.
+And your own radio's decodes keep feeding the Needed board, as do your outbound PSK Reporter
+uploads, because ARRL says plainly that "Generating spotting information for use by other stations
+is not considered to be spotting assistance."
+
+Rules differ by contest and change between years. The note reports what CQ WW and ARRL currently
+publish and tells you to check the contest you are entering. It does not rule on your category.
+
+### Fixed: beacons and W1AW bulletins were offered as new countries
+
+14.100 MHz carries the international beacon network: eighteen beacons in eighteen different
+countries, each transmitting every three minutes, all day and all night. Anything watching that
+frequency therefore offered 4U1UN as an all-time-new country, then the Canadian beacon, then the
+Californian one, and around again forever. W1AW's code practice and bulletin frequencies did the
+same thing with a station that is broadcasting one-way and will never come back to your call.
+
+Beacons and bulletins are no longer scored as needs, no longer fire a Pounce alert, and no longer
+take a new-country colour. They are still shown, because hearing a beacon is real evidence that
+the band is open, and that is worth knowing. They now carry a **B** or **W** badge saying what they
+are.
+
+The suppression is by frequency, not by callsign, and that is deliberate: 4U1UN is the United
+Nations headquarters station as well as a beacon site, so blanking the callsign would have hidden
+a genuine new country. Heard on 14.100 it is the beacon; heard anywhere else it is the station, and
+it still counts. W1AW is suppressed only on its own published bulletin frequencies, so an ordinary
+contact on those frequencies, or W1AW itself operating elsewhere, still scores normally.
+
 ### Fixed: the Call Roster and Band Activity filters reset on every restart
 
 "Needed only" and "Hide worked" on the Operate Call Roster, and the Band Activity filter chip

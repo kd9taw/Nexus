@@ -57,14 +57,15 @@ import {
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 import { loadProfiles, saveProfile, deleteProfile, type Profile } from '../profiles'
-import { getConnectionLog, getCredentialsStatus } from '../api'
+import { getAssistanceJournal, getConnectionLog, getCredentialsStatus, setUnassistedMode } from '../api'
+import { AssistanceNote } from './AssistanceNote'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { allTxtLocation, revealAllTxt } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
-import type { ConnEvent, CredStatus } from '../types'
+import type { AssistanceEvent, ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
 import { LevelMeter, rxLevelDb } from './LevelMeter'
 import { WatchlistPanel } from './WatchlistPanel'
@@ -521,11 +522,15 @@ export function SettingsPanel({
     return () => window.clearTimeout(id)
   }, [status])
   const [connLog, setConnLog] = useState<ConnEvent[]>([])
+  // The assistance journal is the operator's EVIDENCE of what was running during an event, so
+  // it is shown next to the switch rather than hidden in a file. Same poll as the conn log.
+  const [assistLog, setAssistLog] = useState<AssistanceEvent[]>([])
   useEffect(() => {
     let live = true
     const load = () => {
       getCredentialsStatus().then((c) => live && setCreds(c)).catch(() => {})
       getConnectionLog().then((l) => live && setConnLog(l)).catch(() => {})
+      getAssistanceJournal().then((l) => live && setAssistLog(l ?? [])).catch(() => {})
     }
     load()
     const id = window.setInterval(load, 5_000)
@@ -6750,6 +6755,71 @@ export function SettingsPanel({
           </>
           )}
           {/* ---- Field Day ---- */}
+          {tab === 'contesting' && (
+            <fieldset className="settings-group">
+              <legend>Contest Category</legend>
+              {/* ONE switch for every QSO-finding assistance source. It takes effect IMMEDIATELY
+                  (its own command, not Save) because an operator flips it as an event starts, and
+                  a switch that needed a restart mid-contest would be useless. The form field is
+                  synced so a later Save cannot write the stale value back. */}
+              <label className="settings-field">
+                <span className="settings-label">Unassisted entry</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!!form.unassistedMode}
+                  className={`toggle${form.unassistedMode ? ' on' : ''}`}
+                  onClick={() => {
+                    const on = !form.unassistedMode
+                    updateBool('unassistedMode', on)
+                    setUnassistedMode(on)
+                      .then(() => getAssistanceJournal().then(setAssistLog))
+                      .catch(() => {})
+                  }}
+                  aria-label={`${form.unassistedMode ? 'End' : 'Declare'} an unassisted contest entry`}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">
+                  Turns off the AI CW decoder, DX cluster / RBN spots and the PSK Reporter needs
+                  feed together, and records the change with a timestamp. Takes effect at once.
+                  Your own settings for each of those are left alone and come back when you switch
+                  this off.
+                </span>
+              </label>
+              <AssistanceNote
+                unassisted={!!form.unassistedMode}
+                sinceUnix={assistLog[0]?.tsUnix ?? null}
+              />
+              {assistLog.length > 0 && (
+                <div className="assist-journal">
+                  <span className="settings-label">Assistance record</span>
+                  <ul className="assist-journal-list mono">
+                    {assistLog.slice(0, 8).map((e) => (
+                      <li key={`${e.tsUnix}-${e.note}`}>
+                        <span className="assist-journal-ts">
+                          {new Date(e.tsUnix * 1000).toISOString().slice(0, 16).replace('T', ' ')}Z
+                        </span>
+                        <span className={`assist-journal-state${e.unassisted ? ' unassisted' : ''}`}>
+                          {e.unassisted ? 'UNASSISTED' : 'assisted'}
+                        </span>
+                        <span className="assist-journal-note">
+                          {e.note}
+                          {': '}
+                          {e.sources.filter((x) => x.active).map((x) => x.name).join(', ') || 'nothing active'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <span className="settings-hint">
+                    Kept in <code>assistance_journal.json</code> beside your settings, so it
+                    survives restarts. Newest first.
+                  </span>
+                </div>
+              )}
+            </fieldset>
+          )}
+
           {tab === 'contesting' && (
           <fieldset className="settings-section">
             <legend>Field Day Setup</legend>

@@ -1199,6 +1199,18 @@ export async function setAiCw(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_ai_cw', { on })
 }
 
+/** Declare (or end) an UNASSISTED contest entry — one switch that suppresses every
+ *  QSO-finding assistance source (AI CW decoder, cluster/RBN, PSK Reporter needs) and
+ *  journals the change. The operator's own settings are overridden, never overwritten. */
+export async function setUnassistedMode(on: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_unassisted_mode', { on })
+}
+
+/** The assistance journal, newest first — what was running, and when. */
+export async function getAssistanceJournal(): Promise<import('./types').AssistanceEvent[]> {
+  return invoke('get_assistance_journal')
+}
+
 /** Clear the streaming CW decoder's accumulated transcript. */
 export async function cwClear(): Promise<void> {
   return invoke('cw_clear')

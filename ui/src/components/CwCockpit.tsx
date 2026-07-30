@@ -13,6 +13,7 @@ import { Splitter } from './Splitter'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { CW_PANEL_IDS, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
+import { AssistanceNote } from './AssistanceNote'
 import { LogEntry } from './LogEntry'
 import { SpotDialog } from './SpotDialog'
 import {
@@ -110,6 +111,9 @@ interface Props {
   /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
    *  Optional: without it every pane shows and there's no ⊞ menu. */
   panels?: PanelLayoutApi<CwPanelId>
+  /** Is an UNASSISTED contest entry declared (settings.unassistedMode)? Drives the footer that
+   *  states the contest-category implication of the assistance sources that are running. */
+  unassisted?: boolean
 }
 
 /** Display labels for the CW removable panels (the ⊞ Panels menu). */
@@ -188,6 +192,7 @@ export function CwCockpit({
   onRecallMemory,
   onOpenMemories,
   panels,
+  unassisted,
 }: Props) {
   const catOk = snap.radio.catOk === true
   // Wheel-to-tune over the CW scope, sharing the tuning strip's step selector.
@@ -1177,6 +1182,11 @@ export function CwCockpit({
         fieldDay={fieldDay}
         fdMode="CW"
       />
+      {/* Always present, deliberately quiet: a CW operator entering a contest needs to know
+          that the decoder and the spot feeds change their entry category, and the whole value
+          of this line is that nobody has to go looking for it. One collapsed line; the rule
+          citations are one click away in AssistanceNote. */}
+      <AssistanceNote compact unassisted={!!unassisted} />
       <SpotDialog
         open={spotOpen}
         onClose={() => setSpotOpen(false)}

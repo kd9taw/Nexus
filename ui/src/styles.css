@@ -9599,6 +9599,18 @@ select.settings-input {
 .spot-type-badge.type-dxped {
   background: var(--need-dxped);
 }
+/* A one-way beacon/bulletin is INFORMATION, not a need. Deliberately outlined and muted
+ * instead of filled with a --need-* colour, so it can never read as "worth working" beside
+ * the real need colours. `--text-dim` is defined in both themes. */
+.spot-type-badge.type-beacon {
+  background: transparent;
+  border: 1px solid var(--text-dim);
+  color: var(--text-dim);
+  width: auto;
+  min-width: 12px;
+  padding: 0 2px;
+  font-weight: 700;
+}
 /* The shared colour + type key. Compact, wraps, small — a reference row, not chrome. */
 .spot-legend {
   display: flex;
@@ -18121,4 +18133,117 @@ tr.sel .aprs-sym {
 }
 .aprs-rail .aprs-table tbody tr.sel td {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Assistance / Unassisted-entry note (AssistanceNote) — Settings ▸ Contesting and the CW
+ * cockpit footer. Deliberately quiet: it is a standing statement of fact, not an alert, so it
+ * must never compete with the operating surface it sits under. Only variables defined in BOTH
+ * themes are used (--text-dim / --text-faint / --border-soft / --bg-elev / --status-*).
+ * --------------------------------------------------------------------------------------------- */
+.assist-note {
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 6px var(--space-2);
+  background: var(--bg-elev);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.assist-note.compact {
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  background: transparent;
+  padding: var(--space-1) var(--space-2);
+  font-size: 11px;
+}
+.assist-note-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.assist-note-state {
+  flex: none;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--text-faint);
+  color: var(--text-faint);
+}
+/* An unassisted entry is the deliberate, verifiable state, so it gets the affirmative colour;
+ * "assisted" stays neutral because it is not a fault, just a category. */
+.assist-note.unassisted .assist-note-state {
+  border-color: var(--status-new-band);
+  color: var(--status-new-band);
+}
+.assist-note-line {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.assist-note-btn {
+  flex: none;
+}
+.assist-note-why {
+  margin-top: var(--space-1);
+}
+.assist-note-why > summary {
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.assist-note-why ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+}
+.assist-note-why li {
+  line-height: 1.45;
+}
+.assist-note-keep {
+  margin: 6px 0 0;
+  color: var(--text-faint);
+}
+/* The journaled record, newest first — the operator's evidence surface. */
+.assist-journal {
+  margin-top: var(--space-2);
+  display: grid;
+  gap: var(--space-1);
+}
+.assist-journal-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+  font-size: 11px;
+  max-height: 190px;
+  overflow-y: auto;
+}
+.assist-journal-list > li {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  color: var(--text-dim);
+}
+.assist-journal-ts {
+  flex: none;
+  color: var(--text-faint);
+}
+.assist-journal-state {
+  flex: none;
+  min-width: 74px;
+  color: var(--text-faint);
+}
+.assist-journal-state.unassisted {
+  color: var(--status-new-band);
+  font-weight: 700;
+}
+.assist-journal-note {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

@@ -372,8 +372,32 @@ pub struct Settings {
     /// AI CW decoder (DeepCW model): the PRIMARY CW decode — dramatically better
     /// low-SNR copy than the classic Goertzel decoder (which still supplies the WPM
     /// estimate underneath). On by default; the model ships with the app.
+    ///
+    /// ⚠️ Read this through [`Settings::ai_cw_active`], never directly, at any gate that
+    /// decides whether the decoder RUNS — `unassisted_mode` overrides it.
     #[serde(default = "default_true")]
     pub ai_cw_enabled: bool,
+    /// UNASSISTED MODE — the operator's declaration that this contest entry uses no
+    /// QSO-finding assistance. One switch, so there is exactly one thing to get right
+    /// before an event, and one thing to point at afterwards.
+    ///
+    /// While on it SUPPRESSES every assistance source at once: the DeepCW AI CW decoder,
+    /// DX cluster / RBN spot ingestion, and the PSK Reporter reception-report feed that
+    /// drives the Needed board. Each state change is journaled with a timestamp so the
+    /// operator can show what was running during the event.
+    ///
+    /// **It overrides, never overwrites.** `ai_cw_enabled` / `cluster_enabled` /
+    /// `pskreporter` keep the operator's own values untouched; the effective getters
+    /// below ([`Settings::ai_cw_active`] and friends) fold this flag in. Turning the
+    /// switch back off therefore restores the operator's setup exactly, with no saved
+    /// shadow copy to drift out of sync.
+    ///
+    /// Persisted so it survives a restart mid-contest, and — like [`Settings::fd_active`]
+    /// — set true ONLY by the operator's explicit toggle. Default false: assistance is a
+    /// normal, legal way to operate outside a contest, and silently changing what an
+    /// operator hears would be worse than the exposure this closes.
+    #[serde(default)]
+    pub unassisted_mode: bool,
     /// Local TCP port Tempo uses for rigctld (it spawns rigctld on this port).
     pub rigctld_port: u16,
     /// Antenna rotator, the INTEGRATED way: a Hamlib rotator model number
@@ -1728,6 +1752,9 @@ impl Default for Settings {
             rtty_shift_hz: default_rtty_shift_hz(), // 170 Hz — the HF standard
             rtty_reverse: false,
             ai_cw_enabled: true,
+            // Assistance is a normal, legal way to operate; only the operator's explicit
+            // toggle declares an unassisted entry. Never auto-enabled, never date-driven.
+            unassisted_mode: false,
             rigctld_port: 4532,
             rotator_model: 0,
             rotator_port: String::new(),
@@ -1884,6 +1911,47 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Is the DeepCW AI CW decoder EFFECTIVELY running? The operator's own
+    /// `ai_cw_enabled`, minus the [`Settings::unassisted_mode`] override.
+    ///
+    /// Every gate that decides whether the decoder runs must go through here rather than
+    /// reading `ai_cw_enabled`, or Unassisted mode becomes a switch that claims more than
+    /// it does. Turning the AI decoder off restores the classic Goertzel transcript, so
+    /// the operator still copies CW — just without the model's help.
+    pub fn ai_cw_active(&self) -> bool {
+        self.ai_cw_enabled && !self.unassisted_mode
+    }
+
+    /// Is DX cluster / RBN spot ingestion EFFECTIVELY on? Cluster and RBN spots are
+    /// callsign-and-frequency identification from other people's receivers — the textbook
+    /// QSO-finding assistance, named by both CQ WW and ARRL.
+    pub fn cluster_active(&self) -> bool {
+        self.cluster_enabled && !self.unassisted_mode
+    }
+
+    /// Is the PSK Reporter feed EFFECTIVELY available as need EVIDENCE (who can I work)?
+    ///
+    /// Only the INBOUND direction is assistance. ARRL's glossary names PSKReporter in
+    /// "Spotting/QSO Finding Assistance" but says plainly that "Generating spotting
+    /// information for use by other stations is not considered to be spotting assistance"
+    /// — so the operator's own OUTBOUND uploads (`pskreporter`) keep running in Unassisted
+    /// mode, and only the reception reports we consume to build the Needed board stop.
+    pub fn pskr_evidence_active(&self) -> bool {
+        !self.unassisted_mode
+    }
+
+    /// The assistance sources this build knows how to suppress, as
+    /// `(label, effectively_on)` — the single list the journal records and the UI reads,
+    /// so a new assistance source cannot be added to the app and forgotten by Unassisted
+    /// mode. Order is stable: it is display order and journal order.
+    pub fn assistance_sources(&self) -> [(&'static str, bool); 3] {
+        [
+            ("AI CW decoder", self.ai_cw_active()),
+            ("DX cluster / RBN", self.cluster_active()),
+            ("PSK Reporter needs", self.pskr_evidence_active()),
+        ]
+    }
+
     /// Build a RadioProfile mirroring the current flat rig/audio fields — the migration seed for a
     /// single-radio station's profile 0.
     fn radio_profile_from_flat(&self, id: u32) -> RadioProfile {
@@ -4218,5 +4286,102 @@ mod tests {
             "refuses the last radio"
         );
         assert_eq!(s.radios.len(), 1);
+    }
+
+    /// The whole point of Unassisted mode: ONE action must turn off EVERY assistance
+    /// source. This walks the source list rather than naming them, so adding an
+    /// assistance source to `assistance_sources` without wiring the override fails here.
+    #[test]
+    fn unassisted_mode_is_one_switch_that_silences_every_source() {
+        let mut s = Settings::default();
+        // A maximally-assisted station: everything the operator can turn on, on.
+        s.ai_cw_enabled = true;
+        s.cluster_enabled = true;
+        s.pskreporter = true;
+        assert!(
+            s.assistance_sources().iter().all(|(_, on)| *on),
+            "the fixture must start fully assisted: {:?}",
+            s.assistance_sources()
+        );
+
+        s.unassisted_mode = true; // the one action
+
+        for (label, on) in s.assistance_sources() {
+            assert!(
+                !on,
+                "{label} still active in Unassisted mode — the switch must silence every source"
+            );
+        }
+    }
+
+    /// It OVERRIDES, never OVERWRITES. The operator's own settings must survive untouched,
+    /// so switching back restores their setup exactly — no shadow copy to drift.
+    #[test]
+    fn unassisted_mode_leaves_the_operators_own_settings_alone() {
+        let mut s = Settings::default();
+        s.ai_cw_enabled = true;
+        s.cluster_enabled = true;
+        s.pskreporter = true;
+
+        s.unassisted_mode = true;
+        assert!(
+            s.ai_cw_enabled,
+            "the operator's own preference must not be rewritten"
+        );
+        assert!(s.cluster_enabled);
+        assert!(s.pskreporter);
+
+        s.unassisted_mode = false;
+        assert!(
+            s.assistance_sources().iter().all(|(_, on)| *on),
+            "switching back must restore the operator's setup exactly"
+        );
+    }
+
+    /// An operator who had a source off keeps it off after leaving Unassisted mode — the
+    /// switch must not turn anything ON on the way out.
+    #[test]
+    fn leaving_unassisted_mode_never_enables_something_the_operator_had_off() {
+        let mut s = Settings::default();
+        s.ai_cw_enabled = false;
+        s.cluster_enabled = false;
+        s.unassisted_mode = true;
+        s.unassisted_mode = false;
+        assert!(!s.ai_cw_active(), "AI CW was off before; it must stay off");
+        assert!(
+            !s.cluster_active(),
+            "cluster was off before; it must stay off"
+        );
+    }
+
+    /// Outbound PSK Reporter uploads are explicitly NOT assistance — ARRL's glossary says
+    /// "Generating spotting information for use by other stations is not considered to be
+    /// spotting assistance." Only the inbound evidence we consume stops.
+    #[test]
+    fn unassisted_mode_stops_inbound_pskr_evidence_not_outbound_uploads() {
+        let mut s = Settings::default();
+        s.pskreporter = true;
+        s.unassisted_mode = true;
+        assert!(
+            !s.pskr_evidence_active(),
+            "inbound reception reports are assistance"
+        );
+        assert!(
+            s.pskreporter,
+            "the outbound upload is explicitly not assistance and must keep running"
+        );
+    }
+
+    /// Default false, and nothing but the operator's toggle may set it — same doctrine as
+    /// `fd_active`. A default-on Unassisted mode would silently disable the decoder an
+    /// operator paid attention to.
+    #[test]
+    fn unassisted_mode_is_off_on_a_fresh_install() {
+        let s = Settings::default();
+        assert!(!s.unassisted_mode);
+        assert!(
+            s.ai_cw_active(),
+            "a fresh install keeps its shipped AI CW decoder"
+        );
     }
 }

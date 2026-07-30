@@ -7,8 +7,10 @@
 //!   held only for the brief window copy and the result push.
 //! - The model is AGPL-3.0 (© e04) and ships as an app resource, NOT in this repo; if
 //!   it's missing the panel says so and the thread naps — nothing else is affected.
-//! - Gated on `settings.ai_cw_enabled` + the CW operating mode: off = zero work
-//!   (the engine's ring stays empty too).
+//! - Gated on `Settings::ai_cw_active()` + the CW operating mode: off = zero work
+//!   (the engine's ring stays empty too). `ai_cw_active` is the operator's
+//!   `ai_cw_enabled` MINUS the Unassisted-mode override, so declaring an unassisted
+//!   contest entry runs no inference at all — read it, never the raw setting.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -61,9 +63,12 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
             return;
         }
         std::thread::sleep(IDLE_POLL);
-        // Gates: feature on + CW cockpit active (brief lock).
+        // Gates: feature EFFECTIVELY on (`ai_cw_active` folds in Unassisted mode, so an
+        // unassisted contest entry runs no inference at all) + CW cockpit active (brief lock).
         let on = match engine.lock() {
-            Ok(e) => e.settings().ai_cw_enabled && e.settings().operating_mode == OperatingMode::Cw,
+            Ok(e) => {
+                e.settings().ai_cw_active() && e.settings().operating_mode == OperatingMode::Cw
+            }
             Err(_) => false,
         };
         if !on {
