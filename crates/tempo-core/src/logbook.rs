@@ -990,6 +990,27 @@ fn adif_submode(mode: &str) -> Option<&'static str> {
     }
 }
 
+/// Submodes the PARSER promotes to the record's mode — the reverse of
+/// [`adif_submode`]'s cascade, plus the WSJT-X family submodes that are
+/// first-class modes here (WSJT-X writes FT4/Q65/FST4/FST4W as MODE=MFSK +
+/// SUBMODE). Returns the canonical in-app spelling.
+///
+/// Deliberately NOT every SUBMODE: Log4OM-style phone submodes (SSB+USB/LSB)
+/// must not rename phone rows — the import dedup key is the RAW mode + exact
+/// second, so a promotion there would duplicate every phone row on the next
+/// re-import of the same log.
+fn promoted_submode(sub: &str) -> Option<&'static str> {
+    match sub.trim().to_ascii_uppercase().as_str() {
+        "TEMPOFAST" => Some("TempoFast"),
+        "TEMPODEEP" => Some("TempoDeep"),
+        "FT4" => Some("FT4"),
+        "Q65" => Some("Q65"),
+        "FST4" => Some("FST4"),
+        "FST4W" => Some("FST4W"),
+        _ => None,
+    }
+}
+
 fn ota_fields(
     sig: &str,
     sig_info: &str,
@@ -1251,7 +1272,21 @@ fn record_from(f: &std::collections::HashMap<String, String>) -> Option<QsoRecor
             .filter(|s| !s.is_empty()),
         band: f.get("BAND").cloned().unwrap_or_default(),
         freq_mhz: f.get("FREQ").and_then(|s| s.parse().ok()).unwrap_or(0.0),
-        mode: f.get("MODE").cloned().unwrap_or_default(),
+        // The WRITER's identity cascade, mirrored: APP_TEMPO_MODE (the exact
+        // protocol, ours) → a promoted SUBMODE (see promoted_submode) → MODE.
+        // Reading MODE alone collapsed every Tempo QSO to bare "MFSK" on the
+        // next load, and the next full save wrote that collapse back to disk.
+        mode: f
+            .get("APP_TEMPO_MODE")
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+            .or_else(|| {
+                f.get("SUBMODE")
+                    .and_then(|s| promoted_submode(s))
+                    .map(str::to_string)
+            })
+            .or_else(|| f.get("MODE").cloned())
+            .unwrap_or_default(),
         // RST is a string (CW "599" / phone "59" / digital "-12") per ADIF.
         rst_sent: f
             .get("RST_SENT")
@@ -1517,6 +1552,50 @@ mod tests {
         );
         // Round-trip fidelity: our own log can still tell TempoFast from TempoDeep.
         assert!(adif.contains("APP_TEMPO_MODE"), "app field missing: {adif}");
+    }
+
+    #[test]
+    fn every_loggable_mode_round_trips_through_its_own_adif() {
+        // The old assertion here was write-side only — it checked the identity
+        // fields were EMITTED and never parsed the record back, which is exactly
+        // the half that was broken: every restart re-read a TempoFast QSO as
+        // bare "MFSK" and the next full save made that permanent on disk.
+        for mode in [
+            "FT8",
+            "FT4",
+            "TempoFast",
+            "TempoDeep",
+            "Q65",
+            "FST4",
+            "FST4W",
+            "WSPR",
+            "MSK144",
+            "JT65",
+            "CW",
+            "SSB",
+            "RTTY",
+            "SSTV",
+        ] {
+            let mut r = rec("W1AW", "20m", 1_753_500_000);
+            r.mode = mode.into();
+            let adif = adif_header() + &adif_record(&r);
+            let back = &parse_adif(&adif)[0];
+            assert_eq!(
+                back.mode, mode,
+                "mode identity must survive the app's own file"
+            );
+        }
+        // The WSJT-X shape for the family submodes (their FT4/Q65/FST4 ride
+        // MODE=MFSK + SUBMODE) resolves to the first-class mode on import.
+        let wsjtx = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345\
+                     <BAND:3>20m<MODE:4>MFSK<SUBMODE:3>FT4<EOR>";
+        assert_eq!(parse_adif(wsjtx)[0].mode, "FT4");
+        // A phone submode must NOT rename the row — the import dedup key is the
+        // RAW mode + exact second, so promoting SSB→USB would duplicate every
+        // phone row on the next re-import of the same log.
+        let ssb = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345\
+                   <BAND:3>20m<MODE:3>SSB<SUBMODE:3>USB<EOR>";
+        assert_eq!(parse_adif(ssb)[0].mode, "SSB");
     }
 
     #[test]
