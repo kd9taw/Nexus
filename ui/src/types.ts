@@ -1326,7 +1326,16 @@ export interface SpotRow {
   comment: string
   /** Operator may transmit at this freq+mode (license privileges; Open class ⇒ true). */
   licensed: boolean
+  /** Set when this spot is a ONE-WAY transmission and so not workable: an NCDXF/IARU beacon
+   * slot or a W1AW bulletin. Still displayed (an audible beacon is real propagation evidence)
+   * but badged, and never painted with a need colour. Score suppression happens in the
+   * backend (propagation::needalert::rank), so this is a display flag only. */
+  beacon?: BeaconKind | null
 }
+
+/** Kind of one-way transmission a spot's frequency identified — mirrors
+ *  `propagation::beacons::BeaconKind`. */
+export type BeaconKind = 'ncdxf' | 'w1aw'
 
 /** A QRZ.com callsign-lookup result. grid/state are subscriber-only and routinely
  *  null for free QRZ accounts. */
@@ -1389,6 +1398,24 @@ export interface ConnEvent {
   connector: string
   level: 'ok' | 'info' | 'error' | string
   message: string
+}
+
+/** One assistance source and whether it was EFFECTIVELY running at a journaled instant. */
+export interface AssistanceSourceState {
+  name: string
+  active: boolean
+}
+
+/** One journaled change in the operator's QSO-finding-assistance posture — the evidence a
+ *  contester can point at for what was running during an event. Each row is self-contained:
+ *  it names every source and its state, so it proves its own claim. */
+export interface AssistanceEvent {
+  tsUnix: number
+  /** Whether Unassisted mode was declared at this instant. */
+  unassisted: boolean
+  sources: AssistanceSourceState[]
+  /** What happened ('UNASSISTED entry declared by the operator', 'Nexus started', …). */
+  note: string
 }
 
 /** Whether a secret is stored for a connector (never the secret itself). */
@@ -1792,6 +1819,13 @@ export interface Settings {
    * true (never date/default). Drives all Field Day visibility (nav item, FD-detail tab) and
    * the backend operating mode. */
   fdActive: boolean
+  /** UNASSISTED MODE (persisted) — the operator's declaration that this contest entry uses no
+   * QSO-finding assistance. One switch: while on, the backend suppresses the AI CW decoder,
+   * DX cluster / RBN ingestion, and the PSK Reporter needs feed together, and journals each
+   * change. It OVERRIDES rather than overwrites — aiCwEnabled / clusterEnabled / pskreporter
+   * keep the operator's own values, so ending it restores their station exactly. Default false;
+   * only the operator's toggle sets it. */
+  unassistedMode?: boolean
   /** Amateur license class: 'technician' | 'general' | 'extra' | 'open' (no TX limits). */
   licenseClass: string
   /** Active operating mode ('digital' | 'phone' | 'cw') — set live via the section nav, but

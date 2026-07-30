@@ -2,6 +2,11 @@
 // time-share 5 HF bands on a fixed 3-minute schedule, so "which beacon is on which band
 // now" is computable from the UTC clock alone. The "heard?" half is set-membership over
 // the spots we already ingest. Drives the Connect `beacons` pane.
+//
+// The call + frequency lists here MIRROR `crates/propagation/src/beacons.rs`, which owns the
+// same ladder for the opposite purpose: keeping the beacons OUT of need scoring (18 beacons
+// in 18 DXCC entities on a 3-minute cycle otherwise reads as an endless supply of new ones).
+// The two lists must agree; the Rust side also carries the W1AW bulletin schedule.
 import type { MapSpot } from '../types'
 
 /** The 18 beacons in transmission order (index 0 starts the cycle on 20m). */

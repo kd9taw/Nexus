@@ -1,5 +1,5 @@
 import { NEED_CHIP } from '../features/needVisuals'
-import type { NeedTag } from '../types'
+import type { BeaconKind, NeedTag } from '../types'
 
 /** Single-letter activity-type badge (POTA park / SOTA summit / DXpedition) — the badge
  * glyph + colour class shared by the band strip and band map. */
@@ -7,6 +7,15 @@ export const TYPE_BADGE: Record<'Pota' | 'Sota' | 'Dxped', { ch: string; cls: st
   Pota: { ch: 'P', cls: 'type-pota', word: 'POTA' },
   Sota: { ch: 'S', cls: 'type-sota', word: 'SOTA' },
   Dxped: { ch: '✈', cls: 'type-dxped', word: 'DXpedition' },
+}
+
+/** Badge for a ONE-WAY transmission — an NCDXF/IARU beacon slot or a W1AW bulletin. These
+ * are shown (an audible beacon is genuine propagation evidence) but never scored as a need,
+ * so the badge is deliberately OUTLINED and muted rather than carrying a need colour: it
+ * must never read as "worth working". Mirrors `propagation::beacons::BeaconKind`. */
+export const BEACON_BADGE: Record<BeaconKind, { ch: string; cls: string; word: string }> = {
+  ncdxf: { ch: 'B', cls: 'type-beacon', word: 'NCDXF beacon — one-way, not workable' },
+  w1aw: { ch: 'W', cls: 'type-beacon', word: 'W1AW bulletin — one-way, not workable' },
 }
 
 // The need tiers worth explaining in a compact key (award-grade first). `Confirm` last —
@@ -63,6 +72,15 @@ export function SpotLegend() {
           ✈
         </span>
         DXped
+      </span>
+      <span
+        className="spot-legend-item"
+        title="One-way transmission (NCDXF/IARU beacon or W1AW bulletin) — real propagation evidence, but it never answers, so it is never scored as a need"
+      >
+        <span className="spot-type-badge type-beacon" aria-hidden>
+          B
+        </span>
+        Beacon
       </span>
     </div>
   )
