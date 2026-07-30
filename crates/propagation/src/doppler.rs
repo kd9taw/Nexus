@@ -166,6 +166,71 @@ pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
     }
 }
 
+/// When the engine is allowed to move the dial — the difference between
+/// working a bird by ear and running a slot-timed digital mode through one.
+///
+/// # Why these are not the same operating model
+///
+/// **Manual modes (SSB / CW / FM)** carry no timing contract. The operator is
+/// listening continuously, the far end drifts continuously, and steering the
+/// dial *during* a transmission is exactly what every satellite controller
+/// does — it is how your signal stays on the transponder for the length of an
+/// over. [`TxPolicy::Continuous`].
+///
+/// **Slot modes (FT8/FT4-family)** are the opposite case, and not because of a
+/// software guard — because of the waveform. An FT8 tone is ~6 Hz wide and the
+/// whole signal ~50 Hz; the decoder assumes a coherent carrier for the full
+/// 12.6 s transmission. Near TCA on a 435 MHz LEO downlink the Doppler RATE
+/// reaches roughly 100 Hz/s, so the physical shift alone smears a single over
+/// by well over a kilohertz — and if we ALSO step the dial underneath the
+/// waveform we are playing, we add our own discontinuities on top of it. The
+/// far end then decodes neither.
+///
+/// So for slot modes the engine goes quiet for the duration of a keyed over and
+/// re-corrects between them ([`TxPolicy::FreezeDuringOver`]). That is the most
+/// a fixed-waveform transmit path can honestly do: it removes OUR contribution
+/// to the smear, leaves the physical Doppler (which nothing at this layer can
+/// remove), and keeps every over internally coherent.
+///
+/// The practical consequence is worth stating plainly rather than hiding: FT
+/// modes work well through GEO birds (QO-100-class), where Doppler is small and
+/// slow, and remain marginal through fast LEO passes regardless of what the
+/// software does. That is a property of the mode, not of this implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxPolicy {
+    /// Steer continuously, including while keyed — SSB, CW, FM.
+    Continuous,
+    /// Hold the dial still for the length of a keyed over; correct between
+    /// overs — the slot-timed digital modes.
+    FreezeDuringOver,
+}
+
+impl TxPolicy {
+    /// The policy an operating mode implies. Digital (slot) modes freeze;
+    /// everything the operator keys by hand steers continuously.
+    pub fn for_slot_mode(is_slot_timed: bool) -> Self {
+        if is_slot_timed {
+            TxPolicy::FreezeDuringOver
+        } else {
+            TxPolicy::Continuous
+        }
+    }
+
+    /// May the engine move the dial right now?
+    ///
+    /// `keyed` is "a transmission is physically in flight". Note the asymmetry
+    /// with the TX-safety stamp: a Doppler step is an INTENDED, engine-authored,
+    /// in-passband move, not an operator QSY — the two must never be conflated,
+    /// which is why the engine reports its authority explicitly rather than
+    /// letting the dial value speak for itself.
+    pub fn may_steer(self, keyed: bool) -> bool {
+        match self {
+            TxPolicy::Continuous => true,
+            TxPolicy::FreezeDuringOver => !keyed,
+        }
+    }
+}
+
 /// Apply a fractional shift to a frequency, rounding to the nearest Hz.
 fn shift(hz: u64, beta: f64) -> u64 {
     let v = hz as f64 * (1.0 + beta);
@@ -327,6 +392,40 @@ mod tests {
         let r = tuning(&t, DopplerState::default(), 3.0);
         assert_eq!(r.uplink_hz, r.downlink_hz);
         assert!(r.downlink_shift_hz < 0);
+    }
+
+    #[test]
+    fn slot_modes_freeze_the_dial_while_keyed_manual_modes_do_not() {
+        // The two operating models, pinned. Steering under a fixed waveform
+        // adds our own discontinuities to a signal the far end must decode as
+        // one coherent carrier; steering under a voice/CW over is exactly how
+        // the signal stays on the transponder.
+        let slot = TxPolicy::for_slot_mode(true);
+        let manual = TxPolicy::for_slot_mode(false);
+        assert_eq!(slot, TxPolicy::FreezeDuringOver);
+        assert_eq!(manual, TxPolicy::Continuous);
+
+        assert!(slot.may_steer(false), "between overs the slot mode re-corrects");
+        assert!(!slot.may_steer(true), "never mid-over on a slot mode");
+        assert!(manual.may_steer(true), "SSB/CW/FM steer while keyed — by design");
+        assert!(manual.may_steer(false));
+    }
+
+    #[test]
+    fn a_frozen_over_still_lands_on_the_right_frequency_when_it_starts() {
+        // Freezing does not mean ignoring Doppler: the over is keyed at the
+        // correction in force at key-down, and the NEXT over gets a fresh one.
+        // (What it cannot fix is the physical drift during the over itself —
+        // that is the mode's problem, not ours.)
+        let t = rs44();
+        let s = DopplerState::default();
+        let at_key_down = tuning(&t, s, -4.0);
+        let next_over = tuning(&t, s, 4.0);
+        assert_ne!(
+            at_key_down.uplink_hz, next_over.uplink_hz,
+            "between overs the correction must actually change"
+        );
+        assert!(at_key_down.uplink_shift_hz < 0 && next_over.uplink_shift_hz > 0);
     }
 
     #[test]

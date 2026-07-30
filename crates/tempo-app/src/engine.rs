@@ -821,6 +821,11 @@ pub struct Engine {
     /// arming/QSY verbs so `commit_tx` refuses an over planned before them —
     /// see [`TxGateStamp`].
     tx_gate_gen: u64,
+    /// Set while a satellite pass OWNS the dial: `(satellite|transponder,
+    /// operator passband offset Hz)`. Its presence is what tells the TX gate to
+    /// judge tuning IDENTITY rather than the dial number — see [`TxGateStamp`].
+    /// `None` for all terrestrial operating, which is every existing path.
+    sat_dial_owner: Option<(String, i64)>,
     /// Desired rig SPLIT state: `Some(tx_dial_mhz)` = split on with that TX dial;
     /// `None` = simplex. Set by work_spot (pile-up "UP n" spots) and cleared by any
     /// plain QSY/work; the loop applies it via `split_dirty` (one-shot).
@@ -1937,9 +1942,31 @@ impl TxOwner {
 /// re-arm restores every value above, and the over planned before the stop must
 /// still refuse. `halt_tx` / `set_tx_enabled` / `set_tune` / `set_frequency` /
 /// `set_operating_mode` / `apply_settings` each bump it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct TxGateStamp {
-    dial_hz: u64,
+    /// The dial the gate was judged against — `None` while a satellite pass
+    /// OWNS the dial.
+    ///
+    /// ⭐ FT-MODE vs SATELLITE: OPPOSITE INTENTS, SAME FIELD.
+    /// On a fixed terrestrial frequency a dial move between plan and key means
+    /// the OPERATOR left (a QSY, a spot click, a band change): the planned over
+    /// describes somewhere they no longer are, so it must be refused — that is
+    /// what this stamp is for. During a satellite pass the dial moves
+    /// CONTINUOUSLY BY DESIGN, authored by our own Doppler engine, staying
+    /// inside one transponder passband. Refusing on that would refuse every
+    /// over of every pass.
+    ///
+    /// So when the pass owns the dial we stamp the *tuning identity* below
+    /// instead — satellite, transponder, and the operator's passband offset —
+    /// which changes exactly when the operator really did move (new bird, new
+    /// transponder, tuned across the passband) and not when Doppler stepped.
+    /// The privilege gate is NOT relaxed: `commit_tx` re-runs `tx_allowed()`
+    /// against the CURRENT corrected frequency, so the emission is still judged
+    /// where it will actually land.
+    dial_hz: Option<u64>,
+    /// Satellite tuning identity, `Some` only while a pass owns the dial:
+    /// (satellite + transponder, operator passband offset Hz).
+    sat_tuning: Option<(String, i64)>,
     /// The sideband folded to the one bit `tx_allowed()` reads.
     lsb: bool,
     tx_offset_hz: f32,
@@ -2074,6 +2101,7 @@ impl Engine {
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
             tx_gate_gen: 0,
+            sat_dial_owner: None,
             split_tx_mhz: None,
             split_dirty: false,
             rit_hz: 0,
@@ -5833,6 +5861,53 @@ impl Engine {
     /// Hold (or release) a steady tune carrier. While tuning, normal slot TX is
     /// suppressed (the radio loop plays a continuous f0 sine for ATU/amp tuning).
     /// Turning tuning on is an operator action and resets the watchdog count.
+    /// Hand the dial to a satellite pass, or take it back (`None`).
+    ///
+    /// While held, the TX gate judges tuning IDENTITY instead of the dial value
+    /// (see [`TxGateStamp`]), so the Doppler engine can steer continuously
+    /// without every over being refused as a stale plan — while an operator who
+    /// really does change bird, transponder or passband position still
+    /// invalidates the planned over, and the privilege gate still judges the
+    /// frequency the signal will actually land on.
+    pub fn set_sat_dial_owner(&mut self, owner: Option<(String, i64)>) {
+        if self.sat_dial_owner != owner {
+            // A change of ownership IS a state change: an over planned under
+            // the old regime must not key under the new one.
+            self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+            self.sat_dial_owner = owner;
+        }
+    }
+
+    /// Move the dial for DOPPLER — not a QSY, and deliberately not routed
+    /// through [`Self::set_frequency`].
+    ///
+    /// ⚠️ A Doppler correction fires every few seconds for the whole pass. It
+    /// is authored by us, stays inside one transponder passband, and means
+    /// nothing about the operator's intent — so it must NOT do any of what a
+    /// QSY does: no `halt_tx`, no cleared decode context or heard-stations
+    /// roster, no a7 AP-table reset, no cleared CW copy, and no TX-gate
+    /// generation bump. Running those on a 3-second tick would wipe the roster
+    /// continuously and abort every over.
+    ///
+    /// Refuses unless a pass actually owns the dial, so nothing else can use
+    /// this to move the radio behind the QSY bookkeeping's back.
+    pub fn steer_sat_dial(&mut self, dial_mhz: f64) {
+        if self.sat_dial_owner.is_none() || !dial_mhz.is_finite() || dial_mhz <= 0.0 {
+            return;
+        }
+        self.settings.dial_mhz = dial_mhz;
+        let band = self.settings.band.clone();
+        let sb = self.settings.sideband.clone();
+        self.app.set_radio(dial_mhz, &band, &sb);
+        // The loop must follow promptly — the correction is only useful now.
+        self.immediate_retune = true;
+    }
+
+    /// The satellite tuning identity currently owning the dial, if any.
+    pub fn sat_dial_owner(&self) -> Option<&(String, i64)> {
+        self.sat_dial_owner.as_ref()
+    }
+
     pub fn set_tune(&mut self, on: bool) {
         // A tune toggle invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
@@ -7464,8 +7539,12 @@ impl Engine {
     /// The current TX-gate inputs, stamped into every [`TxPlan`] and re-checked
     /// by [`Self::commit_tx`] — see [`TxGateStamp`] for why.
     fn tx_gate_stamp(&self) -> TxGateStamp {
+        // A pass owning the dial swaps the dial for the tuning identity — see
+        // TxGateStamp::dial_hz for why the two cases are opposites.
+        let sat_tuning = self.sat_dial_owner.clone();
         TxGateStamp {
-            dial_hz: self.settings.dial_hz(),
+            dial_hz: sat_tuning.is_none().then(|| self.settings.dial_hz()),
+            sat_tuning,
             lsb: self.settings.sideband.eq_ignore_ascii_case("LSB"),
             tx_offset_hz: self.tx_offset_hz,
             operating_mode: self.settings.operating_mode,
@@ -8678,6 +8757,15 @@ impl Engine {
             || plan.slot != current_slot
             || plan.stamp != self.tx_gate_stamp()
         {
+            self.app.set_transmitting(false);
+            return Vec::new();
+        }
+        // A satellite pass owns the dial, so the stamp above deliberately did
+        // NOT compare dial values (Doppler moves them by design). The privilege
+        // gate therefore has to be re-run HERE, against wherever the correction
+        // has since put us: identity being unchanged must never be read as
+        // permission for a frequency nobody re-checked.
+        if self.sat_dial_owner.is_some() && !self.tx_allowed() {
             self.app.set_transmitting(false);
             return Vec::new();
         }
@@ -17649,6 +17737,129 @@ mod tests {
         assert!(
             !e.snapshot().radio.transmitting,
             "the refusal must also clear the transmitting latch"
+        );
+    }
+
+    #[test]
+    fn a_satellite_pass_steers_the_dial_without_refusing_every_over() {
+        // FT-mode intent vs SATELLITE intent, pinned as opposites.
+        //
+        // Terrestrial: a dial move between plan and key means the operator
+        // LEFT, so the over is stale and must be refused (the case below).
+        // Satellite: the dial moves continuously BY DESIGN under our own
+        // Doppler engine while the operator sits on one transponder. Refusing
+        // there would refuse every over of every pass.
+        let mk = || {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(Tier::Ft8);
+            e.set_frequency(435.640, "70cm", "USB");
+            e.set_tx_enabled(true);
+            e.start_cq(None).unwrap();
+            let mut plan = None;
+            for slot in 0..4u64 {
+                if let Some(p) = e.plan_tx(slot) {
+                    plan = Some(p);
+                    break;
+                }
+            }
+            let plan = plan.expect("an armed CQ plans an over");
+            let wave = plan.waveform.build();
+            (e, plan, wave)
+        };
+
+        // (1) A pass owns the dial; Doppler steps it mid-plan. The over stands.
+        let (mut e, plan, wave) = mk();
+        e.set_sat_dial_owner(Some(("RS-44|linear".to_string(), 0)));
+        let (_, plan2, wave2) = {
+            // Re-plan under the pass so the stamp carries the tuning identity.
+            let mut e2 = Engine::new("KD9TAW", "EN52", 0);
+            e2.set_tier(Tier::Ft8);
+            e2.set_frequency(435.640, "70cm", "USB");
+            e2.set_sat_dial_owner(Some(("RS-44|linear".to_string(), 0)));
+            e2.set_tx_enabled(true);
+            e2.start_cq(None).unwrap();
+            let mut p = None;
+            for slot in 0..4u64 {
+                if let Some(x) = e2.plan_tx(slot) {
+                    p = Some(x);
+                    break;
+                }
+            }
+            let p = p.expect("plans under a pass");
+            let w = p.waveform.build();
+            (e2, p, w)
+        };
+        let mut e2 = Engine::new("KD9TAW", "EN52", 0);
+        e2.set_tier(Tier::Ft8);
+        e2.set_frequency(435.640, "70cm", "USB");
+        e2.set_sat_dial_owner(Some(("RS-44|linear".to_string(), 0)));
+        e2.set_tx_enabled(true);
+        e2.start_cq(None).unwrap();
+        let mut p = None;
+        for slot in 0..4u64 {
+            if let Some(x) = e2.plan_tx(slot) {
+                p = Some(x);
+                break;
+            }
+        }
+        let p = p.expect("plans under a pass");
+        let w = p.waveform.build();
+        // Doppler steers the dial 7 kHz — a normal correction mid-pass, via
+        // the steering verb (NOT set_frequency, which is a QSY).
+        e2.steer_sat_dial(435.647);
+        assert!(
+            (e2.settings().dial_mhz - 435.647).abs() < 1e-9,
+            "the steer must actually move the dial"
+        );
+        assert!(
+            !e2.commit_tx(&p, w, p.slot).is_empty(),
+            "a Doppler step must NOT refuse the over — that is the whole pass"
+        );
+        drop((e, plan, wave, plan2, wave2));
+
+        // (2) The operator tunes ACROSS the passband (offset changes): that IS
+        // a move, and the planned over must refuse.
+        let mut e3 = Engine::new("KD9TAW", "EN52", 0);
+        e3.set_tier(Tier::Ft8);
+        e3.set_frequency(435.640, "70cm", "USB");
+        e3.set_sat_dial_owner(Some(("RS-44|linear".to_string(), 0)));
+        e3.set_tx_enabled(true);
+        e3.start_cq(None).unwrap();
+        let mut p3 = None;
+        for slot in 0..4u64 {
+            if let Some(x) = e3.plan_tx(slot) {
+                p3 = Some(x);
+                break;
+            }
+        }
+        let p3 = p3.expect("plans under a pass");
+        let w3 = p3.waveform.build();
+        e3.set_sat_dial_owner(Some(("RS-44|linear".to_string(), 9_000)));
+        assert!(
+            e3.commit_tx(&p3, w3, p3.slot).is_empty(),
+            "tuning across the passband is an operator move — refuse"
+        );
+
+        // (3) Changing transponder likewise.
+        let mut e4 = Engine::new("KD9TAW", "EN52", 0);
+        e4.set_tier(Tier::Ft8);
+        e4.set_frequency(435.640, "70cm", "USB");
+        e4.set_sat_dial_owner(Some(("RS-44|linear".to_string(), 0)));
+        e4.set_tx_enabled(true);
+        e4.start_cq(None).unwrap();
+        let mut p4 = None;
+        for slot in 0..4u64 {
+            if let Some(x) = e4.plan_tx(slot) {
+                p4 = Some(x);
+                break;
+            }
+        }
+        let p4 = p4.expect("plans under a pass");
+        let w4 = p4.waveform.build();
+        e4.set_sat_dial_owner(Some(("SO-50|fm".to_string(), 0)));
+        assert!(
+            e4.commit_tx(&p4, w4, p4.slot).is_empty(),
+            "a different transponder is a different plan — refuse"
         );
     }
 
