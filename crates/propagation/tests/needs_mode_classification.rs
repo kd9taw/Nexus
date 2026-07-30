@@ -12,11 +12,20 @@
 //!   2. the NewMode headline named a BAND while the predicate behind it is
 //!      entity-wide, which is how a true "never on CW" need read as a false claim
 //!      about 30m to an operator who has worked that entity on 30m FT8.
+//!
+//! A full tag census over all 11,207 rows of that log also rules two suspects OUT,
+//! which is why nothing here tests them: `SUBMODE` appears in ZERO records (FT4 is
+//! stored as a bare `MODE=FT4`, so the MFSK+SUBMODE=FT4 collapse cannot be the
+//! mechanism for this operator), and `DXCC` appears in ZERO records — the entity
+//! travels only as the free-text `COUNTRY` string, which the backend ignores in favour
+//! of resolving the callsign through cty.dat. The 13 tags actually present are CALL,
+//! COUNTRY, BAND, FREQ, MODE, QSO_DATE, TIME_ON, GRIDSQUARE, NAME, RST_*, QTH, STATE,
+//! LOTW_QSL_RCVD (+ APP_* upload state).
 
 use propagation::{Band, LogNeeds, ModeClass, NeedKind, NeedTag, OperatorNeeds};
 
 /// The operator's actual Asiatic Russia 30m contacts, verbatim from their logbook —
-/// note `30M` and `30m` both occur, and every one is FT8.
+/// note `30M` and `30m` both occur, every one is FT8, and none carries a SUBMODE.
 const REAL_AR_30M: &[(&str, &str, &str, bool)] = &[
     ("R0SR", "30M", "FT8", true),
     ("RA9CUU", "30m", "FT8", true),
@@ -63,10 +72,12 @@ fn mixed_case_band_labels_credit_the_same_slot() {
     }
 }
 
-/// FT4 is spelled several ways by the loggers the operator imports from (`FT4`
-/// natively, `MFSK` when a submode-aware exporter collapses it). Every spelling is a
-/// digital contact and must satisfy the same mode slot — otherwise a re-import
-/// silently resurrects a "new mode" that was worked years ago.
+/// Every digital spelling a re-import can produce must satisfy the same mode slot,
+/// or a contact worked years ago comes back as a "new mode". This operator's log holds
+/// FT8/FT4/MFSK/MSK144/RTTY/PSK31/PKT as bare MODE values with no SUBMODE, but a LoTW
+/// or WSJT-X file re-imported later can spell FT4 as `MFSK` (the ADIF submode form) —
+/// note the importer drops SUBMODE, so `MFSK` is what would land in the record. It has
+/// to classify identically, which is what this pins.
 #[test]
 fn digital_submode_spellings_all_credit_the_digital_slot() {
     for spelling in [
