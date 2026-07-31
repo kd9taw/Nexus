@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.24.0] — 2026-07-31
 
 ### Added: satellite operating — full Doppler, and a rotator that behaves
 
@@ -111,7 +111,34 @@ What the rail and chooser show is what the engine actually holds: when a pass en
 the hold is released and the display follows.
 
 
-### Changed: SSTV pictures scale up to the screen — and the empty half-screen panes are gone
+### Fixed: Test CAT now root-causes the Icom "answers nothing" failure
+
+An IC-7610 (or IC-9700/7300/705) that never answers CAT — "isn't answering (got \"\")" in both
+normal and native CI-V mode — is almost never a broken radio. It is one of two setup traps, and
+Test CAT now tells you which one you are in:
+
+- **Wrong baud.** When the configured rate gets silence on a serial Icom, Test CAT now re-probes
+  the same COM port directly at every rate the rig's CI-V menu offers (19200 / 9600 / 4800 /
+  38400 / 57600 / 115200, read-only — it only ever asks for the dial frequency). If the rig answers at another rate, the
+  result says so and gives you both fixes: change Baud in Settings, or set the rig itself —
+  MENU » SET » Connectors » CI-V » "CI-V USB Baud Rate", with "CI-V USB Port" = "Unlink from
+  [REMOTE]". That last menu is the usual culprit: from the factory the USB CI-V port is linked to
+  the [REMOTE] jack and tops out at 19200, so the 115200 the native scope needs gets you nothing
+  at all, not even garbage.
+- **Wrong COM port.** The IC-7610 and IC-9700 present TWO COM ports and only one speaks CI-V.
+  If no rate answers, Test CAT now walks you through telling them apart (Device Manager: the
+  CP210x port marked "Enhanced" — Icom's driver calls it "Serial Port A (CI-V)"), and Detect /
+  the setup wizard / port Auto-test now label and prefer the CI-V side of the pair instead of
+  showing two identical "Icom IC-7610" rows. On the single-port models (IC-7300/705/905) the
+  silent-at-every-rate verdict instead checks that the chosen COM port is really the rig.
+
+Test CAT also now says **which backend it exercised** — native CI-V or Hamlib rigctld — in green
+and red results alike, including when the native daemon failed to start and CAT quietly fell back
+to Hamlib (previously that fallback was invisible, so you could spend an evening debugging the
+wrong one). And the result you read is the result of the probe you clicked: the button used to
+report a stale status whenever the rig rebuild took longer than its fixed wait.
+
+### Changed: the SSTV screen — a big crisp picture, and panes that take only what they need
 
 A decoding SSTV picture now grows to fit the window in exact whole steps of its native
 resolution (up to 6×), so a big monitor shows a big, still-crisp image instead of a postage
@@ -136,7 +163,7 @@ full height without squeezing anything. A long history scrolls inside the card r
 growing it.
 
 
-### Fixed: satellite Doppler was off by up to a second of orbital motion
+### Fixed: satellite predictions were off by a second of orbital motion
 
 Every satellite prediction — Doppler, pass times, look angles, the ground track — was computed
 from an element-set epoch rounded down to the nearest whole second. A TLE states its epoch to

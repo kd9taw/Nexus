@@ -4908,6 +4908,10 @@ struct DetectedRigDto {
     interface_shares_cat_port: Option<bool>,
     /// One plain sentence about this interface for the operator.
     interface_note: Option<String>,
+    /// Dual-UART rigs (IC-7610/9700): `true` = this is the CI-V/CAT side of the pair,
+    /// `false` = the second port that never answers CI-V, `null` = single-port/unknown.
+    /// Breaks the tie between two detect rows that otherwise both say "Icom IC-7610".
+    civ_side: Option<bool>,
 }
 
 /// Zero-config station setup: enumerate connected USB radios and resolve each to a
@@ -4952,6 +4956,7 @@ async fn detect_rigs() -> Vec<DetectedRigDto> {
                     interface_ptt_method: r.interface.map(|i| i.ptt_method.to_string()),
                     interface_shares_cat_port: r.interface.and_then(|i| i.shares_cat_port),
                     interface_note: r.interface.map(|i| i.note.to_string()),
+                    civ_side: r.civ_side,
                 }
             })
             .collect()
@@ -6180,27 +6185,112 @@ struct CatTestResult {
 }
 
 /// Test the rig/CAT connection now. Asks the radio loop to (re)open + probe the
-/// rig using the **current** settings, then reports the result. The UI saves
-/// settings first, so the loop reconfigures (launching rigctld for CAT) before
-/// this returns. Mirrors WSJT-X's "Test CAT": green + frequency, or a red error.
+/// rig using the **current** settings, waits for THAT probe's result to publish
+/// (generation counter — a daemon rebuild can take seconds, and the old fixed
+/// 1300 ms sleep handed back the PREVIOUS status), then reports it. The detail
+/// names the backend that was exercised (native CI-V vs Hamlib rigctld).
+///
+/// When the probe FAILS on a serial Icom — and the failed probe exercised the CAT
+/// channel itself, not just a dedicated PTT line — runs the read-only CI-V baud
+/// ladder on the configured port (`tempo_audio::baud_ladder`): the radio loop
+/// releases the port (hold/ack handshake), the same port is probed directly at the
+/// other common CI-V rates, and the verdict says exactly which side to fix — the
+/// IC-7610-class "zero bytes at 115200" is almost always the rig's factory
+/// "CI-V USB Port = Link to [REMOTE]" capping the port at ≤ 19200, or the wrong
+/// one of the rig's two COM ports. Mirrors WSJT-X's "Test CAT" otherwise.
 #[tauri::command]
 async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, String> {
     #[cfg(feature = "radio")]
     {
-        {
+        use std::time::{Duration, Instant};
+        let gen0 = {
             let mut eng = engine_lock(&state);
+            let g = eng.cat_probe_gen();
             eng.request_cat_reprobe();
+            g
+        };
+        // Wait for the requested probe to publish (rebuilds cost 700 ms bind + up to
+        // 2 × 2.5 s reads); on timeout fall through with whatever status is current.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+            if engine_lock(&state).cat_probe_gen() != gen0 {
+                break;
+            }
         }
-        // The radio loop polls at ~50 Hz; allow time for a rigctld spawn + probe.
-        std::thread::sleep(std::time::Duration::from_millis(1300));
-        let eng = engine_lock(&state);
-        let r = eng.snapshot().radio;
+        let (ok, mut detail, ladder) = {
+            let eng = engine_lock(&state);
+            let r = eng.snapshot().radio;
+            let s = eng.settings();
+            let is_network = s.rig_conn == "network" && !s.rig_addr.is_empty();
+            // The ladder applies only to a KNOWN Icom on a real serial port (it speaks
+            // raw CI-V) whose CAT channel is what the failed probe actually exercised —
+            // a dedicated-PTT-port failure must keep its own error, not a ladder verdict
+            // about the healthy CAT port. The gate itself lives, tested, in tempo-audio.
+            let ladder = tempo_audio::baud_ladder::ladder_applies(
+                is_network,
+                s.rig_model,
+                &s.serial_port,
+                &s.ptt_method,
+                &s.ptt_serial_port,
+            )
+            .map(|civ_addr| {
+                (
+                    s.serial_port.trim().to_string(),
+                    s.baud,
+                    civ_addr,
+                    tempo_audio::rigmodels::rig_model_name(s.rig_model)
+                        .unwrap_or("The rig")
+                        .to_string(),
+                    s.icom_native_cat,
+                    tempo_audio::baud_ladder::dual_com_ports(s.rig_model),
+                )
+            });
+            (r.cat_ok, r.cat_detail, ladder)
+        };
+        if ok == Some(false) {
+            if let Some((port, baud, civ_addr, model_name, native, dual_ports)) = ladder {
+                // Ask the loop to release the serial port (our own daemon holds it even
+                // when the rig is mute), wait for the ack, then probe. Always release —
+                // the loop rebuilds CAT at the configured settings either way, and the
+                // engine-side hold self-expires if this thread dies first.
+                engine_lock(&state).hold_cat_port();
+                let ack_by = Instant::now() + Duration::from_secs(3);
+                let mut released = false;
+                while Instant::now() < ack_by {
+                    std::thread::sleep(Duration::from_millis(50));
+                    if engine_lock(&state).cat_port_released() {
+                        released = true;
+                        break;
+                    }
+                }
+                if released {
+                    // Let the OS finish tearing the just-dropped COM port down (Windows
+                    // frees it asynchronously after the daemon exits).
+                    std::thread::sleep(Duration::from_millis(300));
+                    let report = tauri::async_runtime::spawn_blocking(move || {
+                        tempo_audio::baud_ladder::run(&port, baud, civ_addr)
+                    })
+                    .await;
+                    if let Ok(report) = report {
+                        detail = tempo_audio::baud_ladder::compose_ladder_message(
+                            &report,
+                            &model_name,
+                            civ_addr,
+                            native,
+                            dual_ports,
+                        );
+                    }
+                }
+                engine_lock(&state).release_cat_port();
+            }
+        }
         Ok(CatTestResult {
-            ok: r.cat_ok.unwrap_or(false),
-            detail: if r.cat_detail.is_empty() {
+            ok: ok.unwrap_or(false),
+            detail: if detail.is_empty() {
                 "No CAT status yet — set your rig + PTT method, Save, then test.".to_string()
             } else {
-                r.cat_detail
+                detail
             },
         })
     }

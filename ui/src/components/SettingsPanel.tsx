@@ -2563,6 +2563,13 @@ export function SettingsPanel({
                           </span>
                           <span className="rig-detect-meta">
                             {r.portName} · {r.chip}
+                            {/* Dual-UART Icoms (IC-7610/9700) show up as TWO rows that both
+                                say the rig's name — the A/B tag is the only tie-breaker. */}
+                            {r.civSide === true
+                              ? ' · CI-V port — use this one'
+                              : r.civSide === false
+                                ? ' · second port, not CI-V'
+                                : ''}
                             {r.suggestedAudio ? ` · ${r.suggestedAudio}` : ''}
                           </span>
                           {/* A recognised interface is a CABLE, not a radio. Say so plainly and
@@ -2777,6 +2784,15 @@ export function SettingsPanel({
                       {' '}
                       <strong>Xiegu:</strong> the radio makes two serial ports — CAT is on the{' '}
                       <strong>SERIAL-B</strong> one (often the higher COM number).
+                    </>
+                  )}
+                  {[3078, 3081].includes(form.rigModel) && (
+                    <>
+                      {' '}
+                      <strong>Icom:</strong> this radio makes two COM ports and only one speaks
+                      CI-V — in Device Manager it is the CP210x port marked{' '}
+                      <strong>Enhanced</strong> (Icom's driver: “Serial Port A (CI-V)”). The
+                      “Standard” / “Serial Port B” one never answers.
                     </>
                   )}
                 </span>

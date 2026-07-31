@@ -106,6 +106,9 @@ fn keys_on_the_cat_port(t: &Transport) -> bool {
 
 /// Start the CAT daemon for `t` on its rigctld port: the native CI-V daemon when opted
 /// in (falling back to rigctld if the port/serial open fails), else Hamlib's rigctld.
+/// The second field of the `Ok` tuple is the native daemon's start error when it fell
+/// back to rigctld — surfaced to the operator, so a "native selected" radio can never be
+/// silently tested through Hamlib without saying so.
 ///
 /// `ptt_line` is `Some` only for the shared-port keying case ([`keys_on_the_cat_port`]); it makes
 /// the spawned rigctld key the transmitter on the same port it opened for CAT.
@@ -114,20 +117,25 @@ fn spawn_cat_daemon(
     target: &str,
     network: bool,
     ptt_line: Option<SerialLine>,
-) -> std::io::Result<CatDaemon> {
+) -> std::io::Result<(CatDaemon, Option<String>)> {
     // ⚠️ The native CI-V daemon speaks Icom CI-V on the serial port itself and has NO keying
     // path — it cannot assert RTS. Taking it here would open the port, leave PTT unkeyed, and
     // present as a rig that tunes but never transmits. When keying rides the CAT port, Hamlib's
     // rigctld is the ONLY backend that can do both, so skip native entirely (the operator keeps
     // CAT and keying; they lose only the native panadapter, which is the correct trade and is
     // surfaced by the scope falling back rather than failing silently).
+    #[cfg_attr(not(feature = "serial"), allow(unused_mut))] // only mutated on the serial path
+    let mut native_fallback: Option<String> = None;
     #[cfg(feature = "serial")]
     if let Some(addr) = native_civ_addr(t).filter(|_| ptt_line.is_none()) {
         match crate::civ::broker::CivDaemon::start(&t.serial_port, t.baud, addr, t.rigctld_port) {
-            Ok(d) => return Ok(CatDaemon::Native(d)),
+            Ok(d) => return Ok((CatDaemon::Native(d), None)),
             Err(e) => {
                 // Fall through to rigctld — CAT keeps working, just without the scope.
+                // Recorded, not just printed: the probe detail must SAY the tested
+                // backend was the fallback, or the operator debugs the wrong daemon.
                 eprintln!("tempo-audio: native CI-V daemon failed ({e}); falling back to rigctld");
+                native_fallback = Some(e.to_string());
             }
         }
     }
@@ -141,7 +149,27 @@ fn spawn_cat_daemon(
         network,
         ptt_line,
     )
-    .map(CatDaemon::Spawned)
+    .map(|p| (CatDaemon::Spawned(p), native_fallback))
+}
+
+/// Which CAT backend is actually serving, for probe/status attribution — the operator
+/// must never have to guess whether "isn't answering" came from the native CI-V daemon
+/// or from Hamlib. `native_wanted` = the transport opted into native CI-V (and keying
+/// doesn't force rigctld); `daemon` = `Some(is_native)` for a daemon we own, `None` when
+/// we attached to a rigctld someone else launched.
+fn cat_backend_label(native_wanted: bool, daemon: Option<bool>) -> &'static str {
+    match daemon {
+        Some(true) => "native CI-V",
+        Some(false) if native_wanted => "Hamlib rigctld — the native CI-V daemon didn't start",
+        Some(false) => "Hamlib rigctld",
+        None => "a shared external rigctld",
+    }
+}
+
+/// Append the backend attribution to a probe/status detail line, success and failure
+/// alike (WSJT-X-style Test CAT says what it tested, not just how it went).
+fn with_backend(detail: String, label: &str) -> String {
+    format!("{detail} (via {label})")
 }
 
 /// A clear, model-aware "CAT is down" message for when the rig stops answering — the field-report
@@ -733,7 +761,7 @@ fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
     // keying transport, the background rig's daemon comes up WITHOUT --ptt-type, so a stray
     // keying command cannot reach a radio the operator is not focused on.
     match spawn_cat_daemon(t, target, network, None) {
-        Ok(mut proc) => {
+        Ok((mut proc, _native_fallback)) => {
             std::thread::sleep(Duration::from_millis(700));
             if !proc.is_alive() {
                 // Our daemon exited — it couldn't bind the port (a clash). Do NOT connect: whatever's
@@ -1390,6 +1418,10 @@ struct RadioLoop {
     /// tick so the handoff (not a fresh spawn racing the monitor's port) wins.
     handoff_deferred: bool,
     rigctld_proc: Option<CatDaemon>,
+    /// Test CAT's baud-ladder probe is holding the CAT serial port (`Engine::cat_port_hold`):
+    /// our daemon + control channel are dropped for the duration; the falling edge forces a
+    /// rebuild through the rig_differs branch.
+    cat_hold_active: bool,
     last_dial: u64,
     last_mode: String,
     /// The mode last commanded onto the SPLIT (TX) VFO, mirroring `last_mode` for
@@ -1680,6 +1712,7 @@ impl RadioLoop {
             tune_started_ms: None,
             applied,
             rigctld_proc,
+            cat_hold_active: false,
             last_dial: cfg.dial_hz,
             last_mode: cfg.mode.clone(),
             last_split_mode: None,
@@ -1754,6 +1787,19 @@ impl RadioLoop {
             decode_in_flight: false,
             dropped_decodes: 0,
         }
+    }
+
+    /// The backend attribution for the CURRENTLY-owned CAT channel, appended to probe and
+    /// health messages (see [`cat_backend_label`]). `t` is the transport the channel was
+    /// built for (`applied`, or `want` when they compare equal).
+    fn live_backend_label(&self, t: &Transport) -> &'static str {
+        let native_wanted = native_civ_addr(t).is_some() && !keys_on_the_cat_port(t);
+        cat_backend_label(
+            native_wanted,
+            self.rigctld_proc
+                .as_ref()
+                .map(|d| matches!(d, CatDaemon::Native(_))),
+        )
     }
 
     /// Start/stop the native RF panadapter worker to match the ACTIVE radio's capability
@@ -2161,7 +2207,7 @@ impl RadioLoop {
             // stay queued (consume-only-when-acting) and apply after the handoff lands.
             let can_retune =
                 self.tx_until_ms.is_none() && !self.tuning_keyed && !self.handoff_deferred;
-            let (want, dial, md, reprobe_req, force_retune, split_req, fm) = {
+            let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold) = {
                 let mut eng = engine_lock(engine);
                 // FM repeater config (shift, band-offset magnitude, CTCSS) — applied below
                 // only when the mode policy resolves to FM. Computed first (owned) so the
@@ -2186,18 +2232,52 @@ impl RadioLoop {
                         None
                     },
                     fm,
+                    eng.cat_port_hold(),
                 )
             };
             // Stash for the key-site latch (ensure_commanded) — the bindings above live in
             // this block's scope; the key-ups happen in narrower ones.
             self.cur_dial = dial;
             self.cur_md = md.clone();
+            // Falling edge of Test CAT's port hold → rebuild the CAT channel we dropped,
+            // through the rig_differs branch below (same teardown-then-reopen path).
+            let resume_after_hold = !cat_hold && self.cat_hold_active;
             if self.handoff_deferred {
                 // A radio switch is mid-flight but the handoff couldn't take the pool
                 // lock this tick — do NOT rebuild toward the new transport here, or we
                 // spawn a fresh daemon racing the monitor conn that still owns the port.
                 // The handoff retries next tick and clears this flag.
-            } else if want.rig_differs(&self.applied) {
+            } else if cat_hold {
+                // Test CAT's baud-ladder probe needs to open the CAT serial port ITSELF
+                // (serial ports are exclusive-open, and our daemon holds the port even when
+                // the rig is mute), so drop the daemon + control channel and ack. One-shot
+                // on entry; while held, no rebuild/reprobe runs. The unkey-first order
+                // mirrors the rig_differs teardown below — never drop a daemon under a
+                // possibly-keyed rig. The hold self-expires engine-side, so a crashed
+                // prober can't leave CAT down.
+                if !self.cat_hold_active {
+                    crate::civ::diag::note(
+                        "test-cat hold: releasing the CAT port for the baud-ladder probe",
+                    );
+                    backend.flush_output();
+                    let _ = rig.ptt(false);
+                    self.tx_until_ms = None;
+                    self.tuning_keyed = false;
+                    self.manual_ptt_applied = false;
+                    self.tune_started_ms = None;
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.halt_tx();
+                    }
+                    self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
+                    *rig = Rig::vox();
+                    self.rig_asserted = false;
+                    self.cat_hold_active = true;
+                    let mut eng = engine_lock(engine);
+                    eng.ack_cat_port_released();
+                }
+            } else if want.rig_differs(&self.applied) || resume_after_hold {
+                self.cat_hold_active = false;
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down. Dropping rigctld_proc and swapping *rig first would strand
                 // a keyed transmitter (or a tune carrier): the un-key command
@@ -2249,7 +2329,16 @@ impl RadioLoop {
                     eng.set_cat_status(ok, detail);
                 }
             } else if reprobe_req {
-                let (ok, detail) = reprobe(rig, &want);
+                let (ok, mut detail) = reprobe(rig, &want);
+                // Attribution only when the CAT channel itself was probed (the branches of
+                // `reprobe` that call probe_cat_or_explain) — a serial-PTT line test
+                // ("Serial RTS PTT on COM5") or a VOX result has no backend to name.
+                let probed_cat = (matches!(want.ptt_method.as_str(), "cat" | "vox")
+                    && want.rig_model != 0)
+                    || keys_on_the_cat_port(&want);
+                if ok.is_some() && probed_cat && rig.has_control() {
+                    detail = with_backend(detail, self.live_backend_label(&want));
+                }
                 self.cat_ok = ok;
                 {
                     let mut eng = engine_lock(engine);
@@ -3042,7 +3131,10 @@ impl RadioLoop {
                                 self.applied.baud,
                                 self.applied.rig_conn
                             ));
-                            let msg = cat_down_message(&self.applied, &e);
+                            let msg = with_backend(
+                                cat_down_message(&self.applied, &e),
+                                self.live_backend_label(&self.applied),
+                            );
                             {
                                 let mut eng = engine_lock(engine);
                                 // Clear the read-backs so a dead link doesn't freeze the
@@ -5683,7 +5775,7 @@ fn open_cat(
         (t.serial_port.as_str(), false)
     };
     match spawn_cat_daemon(t, rig_target, network, ptt_line) {
-        Ok(proc) => {
+        Ok((proc, native_fallback)) => {
             // Give the daemon a moment to bind its TCP port before connecting.
             std::thread::sleep(Duration::from_millis(700));
             let mut rig = Rig::with_control(Some(addr), ptt_mode);
@@ -5692,7 +5784,19 @@ fn open_cat(
                     || native_civ_addr(t).is_some()
                     || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
             ); // network chains + the native daemon + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
-            let probe = finish_cat_open(&mut rig, t);
+            let mut probe = finish_cat_open(&mut rig, t);
+            // Say WHICH backend this result came from — a native-CI-V radio silently
+            // falling back to rigctld otherwise reads as "native was tested and failed".
+            // Shared-port keying skips native BY DESIGN (rigctld must own keying), so it
+            // is plain "Hamlib rigctld" there, not a fallback.
+            let native_wanted = native_civ_addr(t).is_some() && ptt_line.is_none();
+            probe.detail = with_backend(
+                probe.detail,
+                cat_backend_label(native_wanted, Some(matches!(proc, CatDaemon::Native(_)))),
+            );
+            if let Some(e) = native_fallback {
+                probe.detail = format!("{} Native CI-V start error: {e}.", probe.detail);
+            }
             (rig, Some(proc), probe)
         }
         Err(e) => (
@@ -5826,6 +5930,28 @@ fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
 mod tests {
     use super::*;
     use crate::backend::MockBackend;
+
+    /// The IC-7610 zero-bytes saga, P1: Test CAT (and the CAT-down breaker) must SAY which
+    /// backend was actually exercised — a native-CI-V radio silently falling back to
+    /// rigctld otherwise reads as "native was tested and failed", and the operator debugs
+    /// the wrong daemon.
+    #[test]
+    fn backend_attribution_names_the_daemon_that_was_actually_tested() {
+        assert_eq!(cat_backend_label(true, Some(true)), "native CI-V");
+        assert_eq!(cat_backend_label(false, Some(false)), "Hamlib rigctld");
+        assert_eq!(
+            cat_backend_label(true, Some(false)),
+            "Hamlib rigctld — the native CI-V daemon didn't start"
+        );
+        assert_eq!(cat_backend_label(false, None), "a shared external rigctld");
+        assert_eq!(
+            with_backend(
+                "Connected — 14.074 MHz".to_string(),
+                cat_backend_label(true, Some(true))
+            ),
+            "Connected — 14.074 MHz (via native CI-V)"
+        );
+    }
 
     #[test]
     fn an_unanswerable_dsp_func_backs_off_instead_of_stalling_forever() {

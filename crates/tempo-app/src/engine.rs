@@ -1010,6 +1010,17 @@ pub struct Engine {
     /// Set by `test_cat` to ask the radio loop to re-probe the current rig and
     /// refresh `cat_status`; the loop clears it via [`Engine::take_cat_reprobe`].
     cat_reprobe: bool,
+    /// Monotone count of `set_cat_status` publishes. Lets `test_cat` wait for the probe
+    /// it REQUESTED to land instead of sleeping a fixed guess — a daemon rebuild can take
+    /// several seconds, and the fixed wait used to hand back the PREVIOUS status.
+    cat_probe_gen: u64,
+    /// While `Some(deadline)`, the radio loop must NOT own the CAT serial port: Test
+    /// CAT's baud-ladder probe needs to open it at other rates itself (serial ports are
+    /// exclusive-open). The deadline is a crash guard — if the prober never calls
+    /// [`Engine::release_cat_port`], the hold expires and the loop resumes on its own.
+    cat_port_hold_until: Option<std::time::Instant>,
+    /// Loop → prober ack: the daemon/control channel is dropped and the port is free.
+    cat_port_released: bool,
     /// Set by the radio loop when the sound card failed to open, so the UI can
     /// explain a blank waterfall instead of failing silently.
     audio_error: Option<String>,
@@ -2216,6 +2227,9 @@ impl Engine {
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
             cat_status: (None, String::new()),
+            cat_probe_gen: 0,
+            cat_port_hold_until: None,
+            cat_port_released: false,
             radio_live: std::collections::HashMap::new(),
             cat_reprobe: false,
             audio_error: None,
@@ -7791,6 +7805,7 @@ impl Engine {
     /// reads). `ok`: `None` = VOX/no CAT, `Some(true/false)` = CAT up/down.
     pub fn set_cat_status(&mut self, ok: Option<bool>, detail: String) {
         self.cat_status = (ok, detail);
+        self.cat_probe_gen = self.cat_probe_gen.wrapping_add(1);
     }
 
     /// Ask the radio loop to re-probe the current rig and refresh the CAT status
@@ -7802,6 +7817,43 @@ impl Engine {
     /// Consume a pending re-probe request (returns true once per request).
     pub fn take_cat_reprobe(&mut self) -> bool {
         std::mem::take(&mut self.cat_reprobe)
+    }
+
+    /// The CAT-status publish counter — `test_cat` snapshots it before requesting a
+    /// reprobe and polls until it moves, so it reports THAT probe's result.
+    pub fn cat_probe_gen(&self) -> u64 {
+        self.cat_probe_gen
+    }
+
+    /// Test CAT's baud-ladder probe: ask the radio loop to release the CAT serial port
+    /// (drop its daemon + control channel). The loop acks via
+    /// [`Self::ack_cat_port_released`]; the hold self-expires after 20 s so a prober
+    /// that dies can never leave CAT torn down.
+    pub fn hold_cat_port(&mut self) {
+        self.cat_port_hold_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(20));
+        self.cat_port_released = false;
+    }
+
+    /// Probe finished (or gave up): let the radio loop rebuild its CAT channel.
+    pub fn release_cat_port(&mut self) {
+        self.cat_port_hold_until = None;
+    }
+
+    /// Is a (non-expired) CAT-port hold in force? Read by the radio loop each tick.
+    pub fn cat_port_hold(&self) -> bool {
+        self.cat_port_hold_until
+            .is_some_and(|t| std::time::Instant::now() < t)
+    }
+
+    /// Loop-side ack: the daemon is dropped and the serial port is free to open.
+    pub fn ack_cat_port_released(&mut self) {
+        self.cat_port_released = true;
+    }
+
+    /// Has the radio loop acked the current hold? Polled by `test_cat` before probing.
+    pub fn cat_port_released(&self) -> bool {
+        self.cat_port_released
     }
 
     /// Set (or clear) the sound-card error surfaced to the UI.
@@ -10750,6 +10802,35 @@ mod tests {
             rv: None,
             mode: None,
         }
+    }
+
+    /// The Test-CAT deep-probe handshake (IC-7610 zero-bytes saga): the command holds the
+    /// CAT port, the radio loop acks the release, the command probes and releases. The gen
+    /// counter is what lets `test_cat` wait for ITS probe's publish instead of a fixed sleep.
+    #[test]
+    fn cat_port_hold_handshake_and_probe_generation() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(!e.cat_port_hold(), "no hold at rest");
+        let gen0 = e.cat_probe_gen();
+        e.set_cat_status(Some(false), "down".into());
+        assert_ne!(e.cat_probe_gen(), gen0, "every publish moves the counter");
+
+        e.hold_cat_port();
+        assert!(e.cat_port_hold());
+        assert!(!e.cat_port_released(), "a fresh hold clears any stale ack");
+        e.ack_cat_port_released(); // the loop dropped its daemon
+        assert!(e.cat_port_released());
+        e.release_cat_port();
+        assert!(!e.cat_port_hold(), "released → the loop rebuilds CAT");
+
+        // The crash guard: a hold that is never released expires on its own.
+        e.hold_cat_port();
+        e.cat_port_hold_until =
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
+        assert!(
+            !e.cat_port_hold(),
+            "an expired hold no longer binds the loop"
+        );
     }
 
     #[test]
