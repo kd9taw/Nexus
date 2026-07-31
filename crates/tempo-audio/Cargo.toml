@@ -50,3 +50,11 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
+
+[dev-dependencies]
+# TEST-ONLY, and only for `tests/rotctld_pass.rs`: that suite flies a REAL
+# satellite pass (real elements, real look angles) onto a real Hamlib rotctld,
+# because the tracking policy and the wire code are each well covered alone and
+# every interesting bug lives between them. In-workspace and test-scoped, so
+# the shipped dependency graph is unchanged.
+propagation = { path = "../propagation" }
