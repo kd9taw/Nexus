@@ -89,6 +89,10 @@ vi.mock('../api', () => ({
   lookupPark: vi.fn(async () => null),
   lookupParkLive: vi.fn(async () => null),
   qrzLookup: vi.fn(async () => resolved),
+  // LogEntry resolves the award identity from cty.dat (local, no network) rather than
+  // trusting the QRZ country spelling. vi.mock replaces the whole module, so this has
+  // to be listed or the lookup throws and the card never renders.
+  resolveEntity: vi.fn(async () => null),
   searchParks: vi.fn(async () => []),
   setCwPeerInfo: vi.fn(async () => {}),
   // PhoneCockpit
