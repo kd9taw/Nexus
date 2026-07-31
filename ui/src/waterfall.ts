@@ -225,6 +225,14 @@ export const WATERFALL_ZOOMS: { value: number; label: string }[] = [
   { value: 600, label: '600 Hz' },
 ]
 
+/** Coerce a persisted zoom span to the picker's own vocabulary. The `<select>` above is
+ * the only legitimate writer, so any other finite number (stale format, foreign surface,
+ * hand-edited store) falls back to Std (0) rather than rendering a span no option
+ * represents (the picker shows blank and the view is irreproducible from the UI). */
+export function coerceZoomSpan(v: number): number {
+  return WATERFALL_ZOOMS.some((z) => z.value === v) ? v : 0
+}
+
 /** Pickable waterfall palettes in menu order — `'auto'` rides the theme; the rest are
  * explicit (the perceptual set + the familiar WSJT-X/fldigi looks). */
 export const WATERFALL_PALETTES: { value: ColormapName | 'auto'; label: string }[] = [

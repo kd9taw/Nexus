@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 
 // Pane width bounds (px). Defaults match the original fixed grid columns.
@@ -54,25 +54,78 @@ function readNum(key: string, fallback: () => number): number {
  * `--right-rail-w` CSS custom properties on <html> (mirroring the theme hook).
  * The splitter drag writes the CSS var directly for 60 fps; `commit*` clamps +
  * persists + syncs React state once, on pointer-up.
+ *
+ * Pass the current UI `scale` (like useViewport) so the clamps re-run when the zoom
+ * changes — clampLeft/clampRight ceilings are defined against effWidth = innerWidth
+ * / zoom, so both a resize and a zoom change move them.
  */
-export function usePaneWidths() {
-  const [rightW, setRightW] = useState(() => readNum(KEY_RIGHT, defaultRight))
-  const [leftW, setLeftW] = useState(() => readNum(KEY_LEFT, defaultLeft))
+export function usePaneWidths(scale?: number) {
+  // The operator's PREFERRED widths as stored — never mutated by a re-clamp, so a rail
+  // sized for the big monitor comes back when the room does. Published state below is
+  // the CLAMPED view of it for THIS window box.
+  const prefRef = useRef<{ right: number; left: number } | null>(null)
+  if (prefRef.current === null) {
+    prefRef.current = {
+      right: readNum(KEY_RIGHT, defaultRight),
+      left: readNum(KEY_LEFT, defaultLeft),
+    }
+  }
+  const [rightW, setRightW] = useState(() => clampRight(prefRef.current!.right))
+  const [leftW, setLeftW] = useState(() => clampLeft(prefRef.current!.left))
 
+  // Publish ONLY. These effects used to also persist, which re-anchored whatever was
+  // published on every mount — a stale over-wide value never self-healed, and clamping
+  // here would clobber the big-monitor preference. Storage writes now happen solely in
+  // commit*/resetWidths (explicit operator actions).
   useEffect(() => {
     document.documentElement.style.setProperty('--right-rail-w', `${rightW}px`)
-    surfaceSet(KEY_RIGHT, String(rightW))
   }, [rightW])
   useEffect(() => {
     document.documentElement.style.setProperty('--left-rail-w', `${leftW}px`)
-    surfaceSet(KEY_LEFT, String(leftW))
   }, [leftW])
 
-  const commitRight = useCallback((px: number) => setRightW(clampRight(px)), [])
-  const commitLeft = useCallback((px: number) => setLeftW(clampLeft(px)), [])
+  // Re-clamp on resize and on zoom change. rAF-debounced, mirroring useViewport — and
+  // deferred a frame for the same reason: a just-changed --ui-zoom must be committed
+  // to <html> before effWidth() reads it.
+  useEffect(() => {
+    let raf = 0
+    const apply = () => {
+      setRightW(clampRight(prefRef.current!.right))
+      setLeftW(clampLeft(prefRef.current!.left))
+    }
+    const onResize = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(apply)
+    }
+    raf = requestAnimationFrame(apply)
+    window.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      cancelAnimationFrame(raf)
+    }
+  }, [scale])
+
+  const commitRight = useCallback((px: number) => {
+    const w = clampRight(px)
+    prefRef.current!.right = w
+    surfaceSet(KEY_RIGHT, String(w))
+    setRightW(w)
+  }, [])
+  const commitLeft = useCallback((px: number) => {
+    const w = clampLeft(px)
+    prefRef.current!.left = w
+    surfaceSet(KEY_LEFT, String(w))
+    setLeftW(w)
+  }, [])
   const resetWidths = useCallback(() => {
-    setRightW(defaultRight())
-    setLeftW(defaultLeft())
+    const r = defaultRight()
+    const l = defaultLeft()
+    prefRef.current!.right = r
+    prefRef.current!.left = l
+    surfaceSet(KEY_RIGHT, String(r))
+    surfaceSet(KEY_LEFT, String(l))
+    setRightW(r)
+    setLeftW(l)
   }, [])
 
   return { rightW, leftW, commitRight, commitLeft, resetWidths }

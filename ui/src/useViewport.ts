@@ -29,8 +29,8 @@ function currentZoom(): number {
 }
 
 /**
- * Keep `data-viewport` (and `--vh-eff`) on <html> in sync with the effective
- * viewport, live on resize (rAF-debounced). One listener for the whole app.
+ * Keep `data-viewport` (and `--vh-eff` / `--vw-eff`) on <html> in sync with the
+ * effective viewport, live on resize (rAF-debounced). One listener for the whole app.
  *
  * Pass the current UI `scale` so the size class is recomputed when the operator
  * changes zoom (the effective width shifts even though the window didn't resize).
@@ -45,6 +45,7 @@ export function useViewport(scale?: number): void {
       const d = document.documentElement
       d.setAttribute('data-viewport', classifyViewport(effW))
       d.style.setProperty('--vh-eff', `${effH}px`)
+      d.style.setProperty('--vw-eff', `${effW}px`)
       // Fill-to-bottom correction: measure the app shell's RENDERED height and fix
       // any shortfall with an explicit pixel height. `zoom` × percentage-height
       // semantics vary across engine versions (a static calc() left a dead band at

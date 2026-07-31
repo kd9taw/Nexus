@@ -39,6 +39,12 @@ vi.mock('./useFeatures', () => ({
   readEnabledModes: vi.fn(() => ({ cw: true, phone: true })),
 }))
 
+// Stub the waterfall strip — the branch under test is its WRAPPER (class list / Toasts
+// placement), not the canvas/spectrum plumbing.
+vi.mock('./components/Waterfall', () => ({
+  Waterfall: () => <canvas data-testid="wf" />,
+}))
+
 // Engine calls under test are selectPeer, workSpot, and setFrequency; the other mount-time
 // pollers just need to resolve to something harmless so the effects settle.
 vi.mock('./api', () => ({
@@ -83,6 +89,20 @@ describe('DetachedPanel selection forwarding', () => {
     render(<DetachedPanel panel="connect" />)
     fireEvent.click(screen.getByTestId('deselect'))
     expect(mockedSelectPeer).toHaveBeenCalledWith(null)
+  })
+})
+
+describe('DetachedPanel waterfall branch', () => {
+  // Regression: this was the ONE pop-out branch missing the `app` class — `zoom` lives
+  // on `.app` (styles.css), so the torn-off waterfall ignored the operator's UI scale
+  // entirely, and its toast viewport measured a --vh-eff computed for a zoom that never
+  // applied (a 430px toast cap in a 300px window).
+  it('wraps the torn-off waterfall in the zoomed .app tree, Toasts inside the same subtree', () => {
+    const { container } = render(<DetachedPanel panel="waterfall" />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).toBe('app detached detached-waterfall')
+    // Toasts sit INSIDE the zoomed tree, so they scale with the UI like every other branch.
+    expect(root.querySelector('.ui-toast-viewport')).not.toBeNull()
   })
 })
 
