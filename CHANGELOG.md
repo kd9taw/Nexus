@@ -5,6 +5,18 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **TX Off follows WSJT-X's Enable-Tx contract in the FT modes.** Turning TX Off lets a
+  transmission already in flight finish its over, and the next cycle simply doesn't start;
+  turning it back on before the next cycle transmits normally. Stop TX is unchanged — it
+  halts immediately, mid-over. Previously both controls cut the transmission on the spot.
+  Only the FT-style cycle gets to finish: in CW, RTTY, SSTV, the voice keyer and APRS,
+  TX Off still stops the over on the spot, and the cockpit Stop buttons now unkey even in
+  the last fraction of a second of an over instead of leaving the rig keyed to the tail.
+
 ## [0.24.0] — 2026-07-31
 
 ### Added: satellite operating — full Doppler, and a rotator that behaves

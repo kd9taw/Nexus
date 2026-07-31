@@ -1406,6 +1406,15 @@ struct RadioLoop {
     /// in the RX slots BETWEEN our transmissions get decoded while calling CQ.
     prev_slot_was_tx: bool,
     tx_until_ms: Option<f64>,
+    /// Deadline (same clock as `tx_until_ms`) of the SLOT over this loop last keyed —
+    /// the ONE over TX Off may not cut. Operator (2026-07-31): "TX Off should disable TX
+    /// for the next cycle, but allow any ongoing TX to complete." Set beside `tx_until_ms`
+    /// at the two slot keying sites (the boundary key and the snappy same-slot key); every
+    /// OTHER keyed source — voice keyer, APRS beacon, a CW/RTTY/SSTV over or its PTT tail —
+    /// leaves it in the past, so the TX-Off cut below still unkeys those exactly as before.
+    /// A future slot path that forgets to stamp it fails SAFE (TX Off cuts, the old
+    /// behavior), which is why the evidence lives here and not on `tx_enabled`.
+    slot_tx_until_ms: f64,
     tuning_keyed: bool,
     /// Was the operator in a DATA mode (FT8/PKTUSB → DATA-U) when this tune started? The Icom
     /// tune keys in DATA mode regardless; on release we restore THIS state, not a hardcoded OFF —
@@ -1696,6 +1705,7 @@ impl RadioLoop {
             last_slot: None,
             prev_slot_was_tx: false,
             tx_until_ms: None,
+            slot_tx_until_ms: 0.0,
             tuning_keyed: false,
             tune_was_data: false,
             tune_phase: 0.0,
@@ -2059,6 +2069,7 @@ impl RadioLoop {
         self.last_cw_wpm = 0;
         self.cw_busy_until = 0.0;
         self.rtty_busy_until = 0.0;
+        self.slot_tx_until_ms = 0.0; // the other radio's over is not ours to protect
         self.last_fm = None;
         self.manual_ptt_applied = false;
         self.last_rf_power = None;
@@ -3257,8 +3268,14 @@ impl RadioLoop {
                 if let Some((_, _, sk)) = self.serial_keyer.as_ref() {
                     sk.clear();
                 }
-                if soundcard {
-                    // Soundcard abort: dump the queued tone audio + unkey now.
+                if soundcard && now < self.cw_busy_until {
+                    // Soundcard abort: dump the queued tone audio + unkey now — but
+                    // ONLY when CW audio is actually keying (cw_busy_until running).
+                    // `soundcard` is the CONFIGURED keyer backend, not evidence of a
+                    // CW over: the disarm-abort `set_tx_enabled(false)` arms must
+                    // not cut an FT8 slot over that happens to be in flight
+                    // (operator 2026-07-31 — TX Off lets the over complete; Stop TX
+                    // cuts via the slot-TX abort instead).
                     backend.flush_output();
                     let _ = rig.ptt(false);
                     self.tx_until_ms = None;
@@ -3445,9 +3462,17 @@ impl RadioLoop {
                 if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                     k.clear();
                 }
-                backend.flush_output();
-                let _ = rig.ptt(false);
-                self.tx_until_ms = None;
+                // The shared-transmitter cut (flush + unkey + hold) fires only when
+                // an RTTY over is actually keying — rtty_busy_until is the in-flight
+                // evidence. The disarm-abort `set_tx_enabled(false)` arms must not
+                // cut an FT8 slot over riding the same PTT/ring (operator
+                // 2026-07-31 — TX Off lets the over complete; halt_tx cuts any over
+                // via the slot-TX abort regardless).
+                if now < self.rtty_busy_until {
+                    backend.flush_output();
+                    let _ = rig.ptt(false);
+                    self.tx_until_ms = None;
+                }
                 self.rtty_busy_until = 0.0; // a fresh send after Stop keys immediately
                 {
                     let mut eng = engine_lock(engine);
@@ -3770,11 +3795,18 @@ impl RadioLoop {
             };
             if abort {
                 // Stop TX mid-image (Stop button, halt_tx, TX disarm): drop the feed, dump
-                // any queued audio, and unkey immediately.
-                self.sstv_feed = None;
-                backend.flush_output();
-                let _ = rig.ptt(false);
-                self.tx_until_ms = None;
+                // any queued audio, and unkey immediately. The shared-transmitter cut is
+                // gated on an image actually being in flight (the feed lives until the
+                // audio has fully played out) — the disarm-abort `set_tx_enabled(false)`
+                // arms must not cut an FT8 slot over on the same PTT/ring (operator
+                // 2026-07-31 — TX Off lets the over complete; halt_tx cuts any over via
+                // the slot-TX abort regardless).
+                if self.sstv_feed.is_some() {
+                    self.sstv_feed = None;
+                    backend.flush_output();
+                    let _ = rig.ptt(false);
+                    self.tx_until_ms = None;
+                }
                 {
                     let mut eng = engine_lock(engine);
                     eng.set_sstv_sending(false);
@@ -3996,8 +4028,10 @@ impl RadioLoop {
         }
 
         // Deferred "Disable Tx after sending 73": only once the final over has
-        // fully played out (tx_until cleared) — disabling mid-over would trip
-        // the hard-stop path above and cut the 73 itself.
+        // fully played out (tx_until cleared). A mid-over disable no longer cuts
+        // the 73 (a SLOT over completes on a plain disarm), but the deferral stays:
+        // disarming also drops queues + stamps the disarm-aborts, and the ONE
+        // moment that is provably safe for all of that is TX-idle.
         if self.tx_until_ms.is_none() && eng.take_pending_tx_disable() {
             eng.set_tx_enabled(false);
         }
@@ -4064,6 +4098,7 @@ impl RadioLoop {
                 self.tuning_keyed = true;
                 self.tune_started_ms = Some(now);
                 self.tx_until_ms = None; // a tune supersedes any pending slot TX tail
+                self.slot_tx_until_ms = 0.0; // …so there is no slot over left to protect
             }
             let n = (tempo_fast::SAMPLE_RATE * (TUNE_CHUNK_MS / 1000.0)) as usize;
             let chunk = tune_carrier(
@@ -4092,12 +4127,44 @@ impl RadioLoop {
             self.prev_slot_was_tx = false;
         }
 
-        // Hard Stop TX: if transmit was disabled mid-over (the UI "Stop TX" button
-        // calls engine.halt_tx, or a logger sent HaltTx), cut the CURRENT
-        // transmission immediately — drop PTT and discard the queued TX audio
-        // rather than letting the slot's audio play out to its deadline.
-        if self.tx_until_ms.is_some() && !eng.tx_enabled() {
-            crate::civ::diag::note("hard-stop TX: tx_enabled went false mid-over → unkey");
+        // Hard Stop TX: cut the CURRENT transmission immediately — drop PTT and discard
+        // the queued TX audio rather than letting it play out to its deadline. TWO
+        // triggers, and the whole 2026-07-31 fix is the difference between them:
+        //
+        //  • the one-shot `slot_tx_abort` — `engine.halt_tx` (the UI "Stop TX" button, a
+        //    logger's UDP HaltTx, CAT-failure halts, a radio switch), a TX-watchdog trip,
+        //    a cockpit Stop button — cuts ANY over, including a slot over. Taken EVERY
+        //    tick, so a Stop TX pressed while idle is consumed here and can never stay
+        //    armed to phantom-kill a later over.
+        //
+        //  • TX disabled (a plain "TX Off") — cuts every over EXCEPT the slot over in
+        //    flight. This whole condition used to be just `!eng.tx_enabled()`, which made
+        //    TX Off and Stop TX the same control. Operator (2026-07-31): "TX Off in FT8
+        //    immediately halts TX as Stop TX is supposed to. TX Off should disable TX for
+        //    the next cycle, but allow any ongoing TX to complete." So the SLOT over is
+        //    now carved out — the latch being down is what refuses the next cycle
+        //    (plan_tx), and this over plays to its frame end and unkeys on the
+        //    `tx_until_ms` expiry above. Everything else the loop can key — the voice
+        //    keyer, an APRS beacon, a CW/RTTY/SSTV over or the 250 ms PTT tail after one —
+        //    still unkeys the instant TX goes off, exactly as it always did: those are
+        //    not cycles, and TX Off is the mute the operator reaches for.
+        let slot_tx_abort = eng.take_slot_tx_abort();
+        // No hold at all → no slot over left to protect. Every path that drops the hold
+        // EARLY (a tune superseding it, the cut below, a CAT/audio rebuild) leaves the
+        // deadline itself in the future, and a stale one would carve out the NEXT keyed
+        // source too; clearing it on the first idle tick keeps the carve-out to the over
+        // it was stamped for.
+        if self.tx_until_ms.is_none() {
+            self.slot_tx_until_ms = 0.0;
+        }
+        let slot_over_in_flight = now < self.slot_tx_until_ms;
+        let tx_off_cut = !eng.tx_enabled() && !slot_over_in_flight;
+        if self.tx_until_ms.is_some() && (slot_tx_abort || tx_off_cut) {
+            crate::civ::diag::note(if slot_tx_abort {
+                "hard-stop TX: slot-TX abort (Stop TX / halt / watchdog) → unkey"
+            } else {
+                "hard-stop TX: TX disabled mid-over (non-slot) → unkey"
+            });
             let _ = rig.ptt(false);
             backend.flush_output();
             self.tx_until_ms = None;
@@ -4291,6 +4358,8 @@ impl RadioLoop {
                         self.rx.clear(); // our just-started carrier must not be decoded
                         self.tx_until_ms =
                             Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
+                        // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).
+                        self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
                         self.last_slot = Some(slot_now); // slot handled; skip the boundary
                         self.prev_slot_was_tx = true;
                     }
@@ -4688,6 +4757,8 @@ impl RadioLoop {
         );
         if let Some(t) = action.tx_until_ms {
             self.tx_until_ms = Some(t);
+            // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).
+            self.slot_tx_until_ms = t;
             // The slot core just keyed (slot.rs) — publish TX intent immediately rather
             // than waiting for the next tick's scope-gate publish (~20 ms), so the broker's
             // disconnect fail-safe can't race the fresh key-up.
@@ -7687,6 +7758,267 @@ mod tests {
         assert!(!rig.keyed, "PTT dropped immediately on Stop TX");
         assert!(state.tx_until_ms.is_none(), "TX hold cleared");
         assert!(backend.flush_calls > 0, "queued TX audio was flushed");
+    }
+
+    #[test]
+    fn tx_off_mid_over_lets_the_over_play_to_frame_end() {
+        // Operator spec (2026-07-31): "TX Off in FT8 immediately halts TX as Stop TX
+        // is supposed to. TX Off should disable TX for the next cycle, but allow any
+        // ongoing TX to complete." The first sentence reports the bug (both controls
+        // killed the over); the second is the WSJT-X Enable-Tx contract this pins.
+        // Mid-over, TX Off (set_tx_enabled(false) — NOT halt_tx) must leave the over
+        // playing to its frame end: PTT held, queued audio intact, hold alive.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            // Soundcard CW keyer CONFIGURED (a setting, not a CW over in flight):
+            // the CW disarm-abort must not cut the slot over either.
+            e.set_cw_keyer("soundcard", 600.0);
+            e.set_tx_enabled(true);
+            e.set_tx_enabled(false); // operator hits TX Off mid-over
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let _ = rig.ptt(true); // mid-over
+        let mut state = loop_state();
+        state.tx_until_ms = Some(500.0); // the over's audio runs to 500 ms
+        state.slot_tx_until_ms = 500.0; // …and the SLOT path is what keyed it
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+
+        // Tick mid-over: nothing may cut the transmission.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            rig.keyed,
+            "TX Off must NOT drop PTT mid-over — the over completes"
+        );
+        assert_eq!(
+            state.tx_until_ms,
+            Some(500.0),
+            "the TX hold survives TX Off"
+        );
+        assert_eq!(
+            backend.flush_calls, 0,
+            "the queued over audio is NOT flushed"
+        );
+
+        // Past the frame end the normal expiry unkeys — and the latch stays down.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                1000.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(!rig.keyed, "the over ended at its own frame end");
+        assert!(state.tx_until_ms.is_none());
+        assert!(
+            !engine.lock().unwrap().tx_enabled(),
+            "the latch stays down — the next cycle does not arm"
+        );
+    }
+
+    #[test]
+    fn a_halt_while_idle_never_phantom_kills_a_later_over() {
+        // Stop TX during the RX half (nothing in flight): the abort must be consumed
+        // on the next tick — never left armed to kill the next over the operator
+        // deliberately starts a minute later.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().halt_tx(); // Stop TX while idle
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        // The operator re-arms and a fresh over keys.
+        engine.lock().unwrap().set_tx_enabled(true);
+        let _ = rig.ptt(true);
+        state.tx_until_ms = Some(9_999_999.0);
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                200.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            rig.keyed,
+            "a stale Stop TX must not phantom-abort the new over"
+        );
+        assert!(state.tx_until_ms.is_some(), "the new over's hold survives");
+    }
+
+    #[test]
+    fn tx_off_still_cuts_an_rtty_over_in_flight() {
+        // The disarm-abort contract for the MANUAL modes is unchanged: TX Off during
+        // an RTTY over aborts it (rtty_busy_until is the in-flight evidence). Only
+        // the FT slot over completes on TX Off — the operator spec is about cycles.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_tx_enabled(true);
+            e.set_tx_enabled(false); // disarm arms the RTTY one-shot abort
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let _ = rig.ptt(true); // mid-RTTY-over
+        let mut state = loop_state();
+        state.tx_until_ms = Some(9_999_999.0);
+        state.rtty_busy_until = 5_000.0; // the over is still keying at now=100
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(!rig.keyed, "TX Off aborts the RTTY over in flight");
+        assert!(state.tx_until_ms.is_none(), "TX hold cleared");
+        assert!(backend.flush_calls > 0, "queued AFSK audio was flushed");
+    }
+
+    #[test]
+    fn tx_off_cuts_an_over_the_slot_path_did_not_key() {
+        // The OTHER half of the operator's 2026-07-31 spec: only the SLOT (FT) over is
+        // allowed to finish. A voice-keyer message and an APRS beacon ride the same PTT
+        // + `tx_until_ms` hold with NO per-mode in-flight evidence of their own (there
+        // is no voice/APRS `busy_until`, and no APRS abort flag at all), so the only
+        // thing that ever cut them on TX Off was the loop's TX-disabled check. Losing
+        // that would turn TX Off into "mute in a few seconds" on Phone and APRS.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_tx_enabled(true);
+            e.set_tx_enabled(false); // TX Off while the message is playing out
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let _ = rig.ptt(true); // mid-message
+        let mut state = loop_state();
+        // The voice/APRS shape: a long hold and NOTHING else — no cw/rtty/sstv in-flight
+        // marker, and the slot path never keyed this over.
+        state.tx_until_ms = Some(9_999_999.0);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            !rig.keyed,
+            "TX Off must unkey a voice/APRS over — only the SLOT over is allowed to finish"
+        );
+        assert!(state.tx_until_ms.is_none(), "TX hold cleared");
+        assert!(
+            backend.flush_calls > 0,
+            "the queued message audio was flushed"
+        );
+    }
+
+    /// Drive one tick against a keyed rig whose one-shot over has finished its audio but
+    /// is still inside the 250 ms PTT tail (`tx_until_ms` holding, the mode's in-flight
+    /// marker already elapsed). Returns whether the rig ended the tick unkeyed.
+    fn tail_stop_unkeys(
+        arm: impl FnOnce(&mut Engine),
+        set_marker: impl FnOnce(&mut RadioLoop),
+    ) -> bool {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_tx_enabled(true); // TX stays ARMED — the cut must come from the Stop
+            arm(&mut e);
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let _ = rig.ptt(true);
+        let mut state = loop_state();
+        state.tx_until_ms = Some(9_999_999.0);
+        set_marker(&mut state);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        !rig.keyed && state.tx_until_ms.is_none()
+    }
+
+    #[test]
+    fn a_cockpit_stop_unkeys_during_the_ptt_tail() {
+        // Every one-shot mode holds PTT to `busy_until + TX_TAIL_MS` (250 ms), so a mode's
+        // in-flight evidence goes false a QUARTER SECOND before the transmitter actually
+        // drops. The cockpit Stop buttons must still unkey in that window — it is the
+        // operator's panic button, and a Stop that reads as a no-op is worse than useless.
+        assert!(
+            tail_stop_unkeys(|e| e.stop_cw(), |s| s.cw_busy_until = 50.0),
+            "CW Stop unkeys inside the PTT tail"
+        );
+        assert!(
+            tail_stop_unkeys(|e| e.rtty_stop(), |s| s.rtty_busy_until = 50.0),
+            "RTTY Stop unkeys inside the PTT tail"
+        );
+        assert!(
+            // SSTV's evidence is the feed, which is dropped the moment the last chunk is
+            // queued — so the whole tail is uncovered there.
+            tail_stop_unkeys(|e| e.sstv_stop(), |s| s.sstv_feed = None),
+            "SSTV Stop unkeys inside the PTT tail"
+        );
     }
 
     /// A Phone-armed engine on a legal 20 m phone frequency with an SSTV image queued.

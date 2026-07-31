@@ -662,6 +662,19 @@ pub struct Engine {
     /// Whether normal slot TX is enabled. False = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing. Also forced false by the watchdog.
     tx_enabled: bool,
+    /// One-shot "cut the shared TX hold NOW" — armed by [`Engine::halt_tx`] (Stop TX /
+    /// UDP HaltTx / CAT-failure halts), by every TX-watchdog trip, and by the cockpit
+    /// Stop buttons ([`Engine::stop_cw`] / [`Engine::rtty_stop`] / [`Engine::sstv_stop`],
+    /// whose own aborts stop short of the PTT tail); consumed by the radio loop, which
+    /// drops PTT and flushes the queued TX audio.
+    /// DELIBERATELY separate from `tx_enabled` going false. Operator (2026-07-31):
+    /// "TX Off in FT8 immediately halts TX as Stop TX is supposed to. TX Off should
+    /// disable TX for the next cycle, but allow any ongoing TX to complete." — the
+    /// first sentence reports the bug (the loop cut the over whenever `tx_enabled`
+    /// went false), the second is WSJT-X's Enable-Tx contract. So a plain disarm
+    /// lowers the latch (plan_tx refuses the NEXT over) WITHOUT arming this, and
+    /// the over in flight plays to its frame end. Mirrors `cw_abort`.
+    slot_tx_abort: bool,
     /// Skip Tx1 (WSJT-X parity): when answering a CQ, open the QSO with the report
     /// (Tx2) instead of the grid (Tx1). A SESSION flag — deliberately not persisted, so
     /// it resets to off every launch exactly like WSJT-X's control. Set by the UI via
@@ -2117,6 +2130,7 @@ impl Engine {
             // station / arming Monitor all set it true explicitly. (Fixes the reported
             // unsolicited call on open.)
             tx_enabled: false,
+            slot_tx_abort: false,
             skip_tx1: false,
             tuning: false,
             tx_watchdog: false,
@@ -3612,8 +3626,14 @@ impl Engine {
             // the key must always transmit (privilege permitting — tx_allowed still gates). FT8 is
             // unaffected: it never calls send_cw and keeps its Monitor/double-click keying gate.
             self.tx_enabled = true;
-            self.cw_abort = false; // a fresh send supersedes a pending one-shot abort
-                                   // TX echo: show the operator what actually went out (tokens resolved).
+            // A fresh send supersedes BOTH pending one-shot aborts: the CW abort, and the
+            // radio loop's mid-over cut. `send_cw` is the only self-re-arming transmit
+            // action, so it is the one path where a Stop TX the loop has not consumed yet
+            // (a tick can be seconds on slow serial) would land on the macro fired AFTER
+            // it — keyed, then flushed away a tick later.
+            self.cw_abort = false;
+            self.slot_tx_abort = false;
+            // TX echo: show the operator what actually went out (tokens resolved).
             self.cw_sent.push_back(expanded.clone());
             while self.cw_sent.len() > 50 {
                 self.cw_sent.pop_front();
@@ -3685,6 +3705,11 @@ impl Engine {
     pub fn stop_cw(&mut self) {
         self.cw_queue.clear();
         self.cw_abort = true;
+        // Also cut the shared TX hold. The CW abort's own unkey is gated on the word
+        // still keying (`cw_busy_until`), which runs out 250 ms — a whole TX_TAIL_MS —
+        // before PTT actually drops; Stop is the operator's panic button and may not be
+        // a no-op in that window. TX Off never routes here, so the slot over is untouched.
+        self.slot_tx_abort = true;
     }
 
     /// Pop the next queued CW WORD for the radio loop to key, or None if the queue is empty
@@ -5461,7 +5486,8 @@ impl Engine {
         // This was gated on `tier_is_rx_only`, which stopped covering the case that
         // matters once Q65/FST4/WSPR/FST4W gained transmitters — all four declare
         // `tx: true`, so none of them is rx-only and the halt never ran. The audio
-        // service only cuts an in-flight over when `tx_enabled` goes false, so PTT
+        // service only cuts an in-flight over on the one-shot slot-TX abort (which
+        // `halt_tx` below arms; a plain disarm lets the over finish), so PTT
         // stayed held to `tx_until_ms`, sized from the whole generated waveform.
         //
         // On FT8 that window was ~13 s of a 15 s slot and reads as "the over
@@ -5656,6 +5682,12 @@ impl Engine {
         // doesn't immediately re-arm on the next slot (WSJT-X "Halt Tx" also
         // unchecks Enable Tx). Drop any tune carrier and queued audio too.
         self.tx_enabled = false;
+        // Halt is the IMMEDIATE kill: arm the one-shot the radio loop consumes to
+        // cut a slot over in flight (drop PTT + flush). A plain TX-disable
+        // (`set_tx_enabled(false)`) deliberately does NOT arm this — operator
+        // (2026-07-31): "TX Off should disable TX for the next cycle, but allow
+        // any ongoing TX to complete."
+        self.slot_tx_abort = true;
         self.tuning = false;
         // Drop any LATCHED key intent too (manual PTT-lock / a broker client holding
         // T 1): Stop TX and a radio switch must release PTT, not merely mask it until
@@ -5696,7 +5728,10 @@ impl Engine {
     }
 
     /// Enable/disable normal slot TX. `false` = Monitor-off (transmit muted):
-    /// [`Engine::poll_tx`] returns nothing and any queued audio is dropped.
+    /// [`Engine::poll_tx`] returns nothing and queued frames are dropped — but an
+    /// over already in flight completes (operator spec 2026-07-31: "TX Off should
+    /// disable TX for the next cycle, but allow any ongoing TX to complete";
+    /// [`Engine::halt_tx`] is the immediate cut).
     /// `true` is an operator action: it clears a tripped watchdog and resets the
     /// continuous-TX count.
     /// Arm transmit for an operator-initiated broadcast / CQ: enable TX (which cancels
@@ -5859,6 +5894,13 @@ impl Engine {
             self.tx_watchdog = false;
             self.tx_watchdog_start = None;
         } else {
+            // A SLOT over already in flight is NOT cut here. Operator (2026-07-31):
+            // "TX Off should disable TX for the next cycle, but allow any ongoing
+            // TX to complete." — WSJT-X's Enable-Tx contract (de-latch finishes the
+            // over; Halt Tx is the immediate kill). The latch being down keeps the
+            // next cycle from arming (plan_tx's tx_enabled gate); only `halt_tx`
+            // arms `slot_tx_abort`, the loop's mid-over cut.
+            //
             // Muting transmit also drops anything queued — including CW. Without
             // clearing cw_queue + arming cw_abort, a macro fired while Monitor is
             // off (or a CQ still draining) survives and unexpectedly keys the rig
@@ -5877,7 +5919,11 @@ impl Engine {
             self.sstv_tx_progress = None;
             self.tx_queue.clear();
             self.broadcast_queue.clear();
-            self.app.set_transmitting(false);
+            // `transmitting` is deliberately NOT stamped false: the over in flight
+            // is still leaving the antenna, and `tx_owner()` must keep reporting
+            // Slot while it drains (no other keying source may grab the rig).
+            // plan_tx stamps it false at the next boundary, where the down latch
+            // refuses the over.
         }
     }
 
@@ -5897,6 +5943,16 @@ impl Engine {
     /// Whether normal slot TX is currently enabled.
     pub fn tx_enabled(&self) -> bool {
         self.tx_enabled
+    }
+
+    /// Take + reset the one-shot slot-TX abort (Stop TX / halt / a watchdog trip / a
+    /// cockpit Stop button).
+    /// The radio loop consumes this EVERY tick — cutting the over in flight if
+    /// there is one — so a Stop TX pressed while idle can never survive to
+    /// phantom-kill a later over. A plain TX-disable never arms it (the over
+    /// completes; see [`Engine::set_tx_enabled`]).
+    pub fn take_slot_tx_abort(&mut self) -> bool {
+        std::mem::take(&mut self.slot_tx_abort)
     }
 
     /// Consume the one-shot "key the current period now" request set by a directed
@@ -7204,6 +7260,7 @@ impl Engine {
     pub fn rtty_stop(&mut self) {
         self.rtty_queue.clear();
         self.rtty_abort = true;
+        self.slot_tx_abort = true; // and the PTT tail past rtty_busy_until (see stop_cw)
     }
 
     /// Pop the next queued RTTY MESSAGE for the radio loop to key, or `None` while
@@ -7236,6 +7293,10 @@ impl Engine {
                 self.tx_enabled = false;
                 self.rtty_queue.clear();
                 self.rtty_abort = true;
+                // Watchdog = hard kill: also cut any tail still riding tx_until_ms
+                // (the RTTY abort's cut is gated on rtty_busy_until, which has
+                // already passed when this poll runs).
+                self.slot_tx_abort = true;
                 return None;
             }
         }
@@ -7680,6 +7741,7 @@ impl Engine {
         self.sstv_abort = true;
         self.sstv_tx_mode = None;
         self.sstv_tx_progress = None;
+        self.slot_tx_abort = true; // and the PTT tail past the feed (see stop_cw)
     }
 
     /// Take + reset the one-shot SSTV abort flag (the loop drops the feed, flushes output
@@ -8904,6 +8966,10 @@ impl Engine {
                     if now.saturating_sub(start) >= limit_secs {
                         self.tx_watchdog = true;
                         self.tx_enabled = false;
+                        // A trip is a hard kill: the loop's mid-over cut is the
+                        // one-shot abort now (a plain disarm lets the over finish),
+                        // so every watchdog kill must arm it explicitly.
+                        self.slot_tx_abort = true;
                         // ⭐ RETURN, don't fall through. This used to disarm TX and then
                         // build and return the wave anyway, so the loop keyed the radio
                         // and cut it ~20 ms later on the next tick — a brief spurious
@@ -8933,6 +8999,7 @@ impl Engine {
                     if over_secs > limit_secs {
                         self.tx_watchdog = true;
                         self.tx_enabled = false;
+                        self.slot_tx_abort = true; // watchdog = hard kill (see above)
                         self.app.set_transmitting(false);
                         return None;
                     }
@@ -9104,6 +9171,7 @@ impl Engine {
                 if now.saturating_sub(start) >= limit_secs {
                     self.tx_watchdog = true;
                     self.tx_enabled = false;
+                    self.slot_tx_abort = true; // watchdog = hard kill (see plan_tx)
                     self.app.set_transmitting(false);
                     return Vec::new();
                 }
@@ -12224,6 +12292,86 @@ mod tests {
     }
 
     #[test]
+    fn tx_off_then_on_within_the_same_cycle_arms_the_next_over() {
+        // Operator spec (2026-07-31): "TX Off should disable TX for the next cycle,
+        // but allow any ongoing TX to complete." Re-enabling BEFORE that next cycle
+        // re-arms normally — the disable is a latch, not a sticky suppression.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_cycle_auto(false);
+        e.ingest_decodes_for_test(&[dec_snr("CQ K2DEF FN31", -5)], 1);
+        e.call_station("K2DEF");
+        assert!(!e.poll_tx(3).is_empty(), "baseline: the S&P call transmits");
+        e.set_tx_enabled(false); // TX Off mid-over…
+        e.set_tx_enabled(true); // …then TX On again before the next cycle
+        assert!(
+            !e.poll_tx(5).is_empty(),
+            "the next over arms after a same-cycle re-enable"
+        );
+    }
+
+    #[test]
+    fn tx_off_mid_over_counts_the_completed_over_as_sent() {
+        // Operator spec (2026-07-31): TX Off mid-over lets the over COMPLETE on the
+        // air. The auto-sequencer counted it when it was planned (after_tx at plan
+        // time) and must not rewind as if it was aborted — the peer heard it.
+        // Script mirrors the WSJT-X golden (ft8_ft4_tx_schedule_is_wsjtx_golden).
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_cycle_auto(false);
+        e.ingest_decodes_for_test(&[dec_snr("CQ K2DEF FN31", -5)], 1);
+        e.call_station("K2DEF");
+        assert!(!e.poll_tx(3).is_empty(), "the S&P call goes out");
+        e.set_tx_enabled(false); // TX Off while that over is still in flight
+        assert!(e.poll_tx(5).is_empty(), "the NEXT cycle does not arm");
+        // The peer heard the COMPLETED over and answers it with our report.
+        e.set_tx_enabled(true);
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF -10", -8)], 5);
+        let _ = e.poll_tx(7);
+        let mine: Vec<String> = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .map(|d| d.message.clone())
+            .collect();
+        assert_eq!(
+            mine.last().map(String::as_str),
+            Some("K2DEF W9XYZ R-08"),
+            "the QSO advanced to the R-report — the completed over counted as sent"
+        );
+    }
+
+    #[test]
+    fn tx_off_never_arms_the_slot_abort_but_halt_and_watchdog_do() {
+        // The ONE distinction of the 2026-07-31 operator spec, at the flag level:
+        // TX Off = de-latch (the loop's cut stays unarmed, the over completes);
+        // Stop TX and a watchdog trip = the immediate kill.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tx_enabled(true);
+        e.set_tx_enabled(false);
+        assert!(
+            !e.take_slot_tx_abort(),
+            "TX Off must not cut the over in flight"
+        );
+        e.halt_tx();
+        assert!(e.take_slot_tx_abort(), "Stop TX cuts the over NOW");
+        assert!(!e.take_slot_tx_abort(), "one-shot: consumed");
+        // A watchdog trip is a hard kill too — the loop's cut no longer keys off
+        // tx_enabled, so the trip must arm the abort itself.
+        let mut w = Engine::new("K2DEF", "FN31", 0);
+        w.call_station("W9XYZ");
+        w.settings.tx_watchdog_min = 1;
+        w.tx_watchdog_start = Some(0); // armed long ago → the next over trips
+        assert!(w.poll_tx(0).is_empty(), "the watchdog refuses the over");
+        assert!(w.tx_watchdog, "tripped");
+        assert!(
+            w.take_slot_tx_abort(),
+            "a trip cuts any in-flight audio immediately"
+        );
+    }
+
+    #[test]
     fn cw_send_re_arms_tx_after_a_halt() {
         // The reported CW-fidelity bug: after Stop TX, an F-key / typed CW send silently queued
         // but never keyed until a band/contact switch re-entered the mode. A deliberate CW send
@@ -12243,6 +12391,23 @@ mod tests {
             e.poll_cw_one().as_deref(),
             Some("TEST"),
             "the queued word now keys — the F-key took effect"
+        );
+    }
+
+    #[test]
+    fn a_cw_send_supersedes_a_pending_slot_tx_abort() {
+        // Same class as `cw_send_re_arms_tx_after_a_halt`, one flag over: `send_cw` is the
+        // only self-re-arming transmit action, so a Stop TX that has not yet been consumed
+        // by the radio loop (a tick can be SECONDS on slow serial) would otherwise be spent
+        // on the macro the operator fired afterwards — keyed, then flushed away.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.03, "40m", "CW");
+        e.halt_tx(); // operator hits Stop TX…
+        e.send_cw("TEST"); // …then an F-key, before the loop has ticked
+        assert!(
+            !e.take_slot_tx_abort(),
+            "the fresh CW send supersedes the pending halt — the macro must not be phantom-cut"
         );
     }
 

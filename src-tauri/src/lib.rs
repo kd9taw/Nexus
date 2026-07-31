@@ -5681,8 +5681,10 @@ fn b64_encode(data: &[u8]) -> String {
     out
 }
 
-/// Enable/disable normal slot transmit ("Monitor"). `false` mutes transmit and
-/// clears anything queued; `true` re-enables it and clears a tripped watchdog.
+/// Enable/disable normal slot transmit ("Monitor"). `false` lowers the latch:
+/// nothing new keys and queued frames drop, but an over already in flight
+/// completes (WSJT-X Enable-Tx; `halt_tx` is the immediate stop). `true`
+/// re-enables it and clears a tripped watchdog.
 #[tauri::command]
 fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
