@@ -5,6 +5,47 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added: satellite operating without the box — and passes that know their worth
+
+**No rotator? Tracking still works.** Arming a pass no longer needs a rotator: the pass clock, the
+sky dome and Doppler all run, and only the pointing is skipped — the handheld-antenna operator
+gets everything but the mast, including where to swing the antenna. The tracking badge, the
+readiness rail and the rotor strip say exactly which surfaces a track actually drives — rotor,
+dial, both, or neither — and a track driving neither says "pass timing only" instead of implying
+more. While a rotor-less pass holds the dial, an ownership chip appears in the cockpit header
+naming the bird, with a stop button that hands the dial straight back; stopping a live track
+always releases the dial.
+
+**The uplink's sideband is set with its frequency.** On an inverting bird you listen USB and
+transmit LSB. Nexus now puts the TX (split) VFO in the right sideband along with its frequency
+while a pass owns the uplink — commanded once per answer, only when the two legs genuinely differ,
+and only onto the satellite's own uplink: a terrestrial pile-up split worked while a transponder
+is held keeps its own sideband. Reach for the rig's mode knob yourself and Nexus stands down for
+the rest of the pass rather than fighting you. If the rig refuses the command, the status line
+says which sideband to set by hand — a wrong uplink sideband sounds exactly like nobody answering.
+The Doppler readout and the transponder chooser show what is actually being commanded, and say so
+plainly when nothing is.
+
+**Passes ranked by what they would earn you.** The schedule and the "Next up" strip now say what
+each pass is worth: the grids you have never worked via satellite and the entities you have never
+worked at all, wherever the pass's footprint crosses them — in the same need-chip language as the
+Needed board, with the sample squares on the pass timeline. "Needed" is a column you click to sort
+by; the default order stays soonest-first, and a bird SatNOGS reports dead still shows its dead
+tag here. Satellite VUCC is now its own card on the Awards screen — ARRL counts a satellite
+contact toward that category only — so the terrestrial VUCC card counts terrestrial grids, and a
+satellite QSO no longer silences a NEW GRID call-out for a band slot that is genuinely still open.
+
+**One click to work a pass.** ▶ Work this pass opens the bird, picks a workable transponder for
+you — never a beacon, never one reported dead, and never overriding a "None — leave the dial to
+me" you said for that bird — and arms the track. A readiness rail under the bird's name shows the
+whole chain (pass, rotor, transponder, Doppler), each gate fixable where you are standing. The
+transponder chooser is a card list beside the tuning instruments with dead entries folded behind
+one line, and the sky dome, timeline, chooser and passband strip sit together above the globe.
+What the rail and chooser show is what the engine actually holds: when a pass ends or is stopped,
+the hold is released and the display follows.
+
 ## [0.24.0] — 2026-07-31
 
 ### Added: satellite operating — full Doppler, and a rotator that behaves
@@ -72,43 +113,6 @@ view. Neither shows anything before the satellite is above your horizon.
 
 The Doppler readout shows both legs with their live frequency and correction, and both views carry
 a written description for screen readers.
-
-**No rotator? Tracking still works.** Arming a pass no longer needs a rotator: the pass clock, the
-sky dome and Doppler all run, and only the pointing is skipped — the handheld-antenna operator
-gets everything but the mast, including where to swing the antenna. The tracking badge, the
-readiness rail and the rotor strip say exactly which surfaces a track actually drives — rotor,
-dial, both, or neither — and a track driving neither says "pass timing only" instead of implying
-more. While a rotor-less pass holds the dial, an ownership chip appears in the cockpit header
-naming the bird, with a stop button that hands the dial straight back; stopping a live track
-always releases the dial.
-
-**The uplink's sideband is set with its frequency.** On an inverting bird you listen USB and
-transmit LSB. Nexus now puts the TX (split) VFO in the right sideband along with its frequency
-while a pass owns the uplink — commanded once per answer, only when the two legs genuinely differ,
-and only onto the satellite's own uplink: a terrestrial pile-up split worked while a transponder
-is held keeps its own sideband. Reach for the rig's mode knob yourself and Nexus stands down for
-the rest of the pass rather than fighting you. If the rig refuses the command, the status line
-says which sideband to set by hand — a wrong uplink sideband sounds exactly like nobody answering.
-The Doppler readout and the transponder chooser show what is actually being commanded, and say so
-plainly when nothing is.
-
-**Passes ranked by what they would earn you.** The schedule and the "Next up" strip now say what
-each pass is worth: the grids you have never worked via satellite and the entities you have never
-worked at all, wherever the pass's footprint crosses them — in the same need-chip language as the
-Needed board, with the sample squares on the pass timeline. "Needed" is a column you click to sort
-by; the default order stays soonest-first, and a bird SatNOGS reports dead still shows its dead
-tag here. Satellite VUCC is now its own card on the Awards screen — ARRL counts a satellite
-contact toward that category only — so the terrestrial VUCC card counts terrestrial grids, and a
-satellite QSO no longer silences a NEW GRID call-out for a band slot that is genuinely still open.
-
-**One click to work a pass.** ▶ Work this pass opens the bird, picks a workable transponder for
-you — never a beacon, never one reported dead, and never overriding a "None — leave the dial to
-me" you said for that bird — and arms the track. A readiness rail under the bird's name shows the
-whole chain (pass, rotor, transponder, Doppler), each gate fixable where you are standing. The
-transponder chooser is a card list beside the tuning instruments with dead entries folded behind
-one line, and the sky dome, timeline, chooser and passband strip sit together above the globe.
-What the rail and chooser show is what the engine actually holds: when a pass ends or is stopped,
-the hold is released and the display follows.
 
 
 ### Fixed: Test CAT now root-causes the Icom "answers nothing" failure
