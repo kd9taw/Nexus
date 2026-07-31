@@ -1296,6 +1296,8 @@ fn load_bandmap_window(slug: &str, inst: Instance) -> Option<BandmapWindow> {
         serde_json::from_str(&std::fs::read_to_string(bandmap_window_path(slug, inst)?).ok()?)
             .ok()?;
     // Reject a degenerate/blank record so a corrupt file falls back to the default size.
+    // LOWER bound only: the upper w/h cap and the x/y sanity check need the live monitor
+    // list, so they run at open time — see `sanitize_free_bandmap_rect`.
     (g.w >= 200.0 && g.h >= 200.0).then_some(g)
 }
 
@@ -1317,6 +1319,12 @@ fn capture_bandmap_window(window: &tauri::WebviewWindow) {
     let Some((slug, inst)) = bandmap_key(window) else {
         return;
     };
+    // A minimized window reports a bogus rect (Windows parks it near -32000,-32000), and
+    // closing while minimized — including the main-quit cascade close — used to persist
+    // exactly that. Skip the snapshot; the last good rect on disk stays.
+    if window.is_minimized().unwrap_or(false) {
+        return;
+    }
     let scale = window.scale_factor().unwrap_or(1.0);
     let (Ok(size), Ok(pos)) = (window.inner_size(), window.outer_position()) else {
         return;
@@ -1335,6 +1343,65 @@ fn capture_bandmap_window(window: &tauri::WebviewWindow) {
             dock,
         },
     );
+}
+
+/// True ⇔ a window whose top-left is at (`px`,`py`) leaves a grabbable sliver of itself
+/// on the work area (`wx`,`wy`,`ww`,`wh`). All arguments in the SAME monitor's physical
+/// px; `mg` is the reachability margin. The band is INFLATED by `mg` past the left/top
+/// edges (Windows' invisible resize borders park a screen-edge window's outer_position a
+/// few px off-screen — that must still restore in place) but DEFLATED by `mg` at the
+/// right/bottom: the window extends right/down from its top-left, so a top-left past
+/// those edges puts NOTHING of it on this monitor.
+fn rect_lands_on_work_area(px: f64, py: f64, wx: f64, wy: f64, ww: f64, wh: f64, mg: f64) -> bool {
+    px >= wx - mg && px <= wx + ww - mg && py >= wy - mg && py <= wy + wh - mg
+}
+
+/// Validate a FREE (un-docked) band map's saved rect against the monitors attached RIGHT
+/// NOW. Returns `(w, h, keep_position)`: `keep_position` is true only while the saved
+/// top-left still lands on SOME monitor's work area — the monitor it was on may have been
+/// unplugged since last session, and replaying its rect verbatim reopened the window
+/// fully off-screen with no in-app recovery (the only geometry command is dock left/right
+/// ON the window you can't reach). `w`/`h` come back capped to that monitor's work area
+/// (the primary's when the position is dropped) so a strip saved 1440 tall can't reopen
+/// overhanging a 768-tall laptop. Docked windows never come here — their post-build
+/// re-snap to the current work area is the stronger correction.
+///
+/// Coordinates: the rect is stored in LOGICAL px, but tao resolves a logical position by
+/// hit-testing it against EACH candidate monitor scaled by THAT monitor's dpi, first
+/// match wins, full monitor rect, primary-monitor CW_USEDEFAULT fallback
+/// (tao-0.35.3/src/platform_impl/windows/window.rs:1173-1203 — verified in the
+/// 2026-07-30 layout assessment, V6). Under mixed DPI one logical point therefore names
+/// a different physical point per monitor, so validate in PHYSICAL px per candidate —
+/// mirroring tao's own resolution — rather than trusting any single window's scale factor.
+fn sanitize_free_bandmap_rect(app: &tauri::AppHandle, g: &BandmapWindow) -> (f64, f64, bool) {
+    // Reachability margin in LOGICAL px (scaled per candidate before use).
+    const MARGIN: f64 = 32.0;
+    let monitors = app.available_monitors().unwrap_or_default();
+    let hit = monitors.iter().find(|m| {
+        let sf = m.scale_factor();
+        let wa = m.work_area();
+        rect_lands_on_work_area(
+            g.x * sf,
+            g.y * sf,
+            wa.position.x as f64,
+            wa.position.y as f64,
+            wa.size.width as f64,
+            wa.size.height as f64,
+            MARGIN * sf,
+        )
+    });
+    // Cap w/h (logical) at the landing monitor's work area — or the primary's, where a
+    // dropped-position window opens. If no monitor resolves at all (headless/API error),
+    // leave w/h as saved; `min_inner_size` still floors them at build.
+    let cap = hit.cloned().or_else(|| app.primary_monitor().ok().flatten());
+    let (mut w, mut h) = (g.w, g.h);
+    if let Some(m) = &cap {
+        let sf = m.scale_factor();
+        let wa = m.work_area();
+        w = w.min(wa.size.width as f64 / sf);
+        h = h.min(wa.size.height as f64 / sf);
+    }
+    (w, h, hit.is_some())
 }
 
 /// Snap a band-map window to the left/right edge of its monitor's WORK AREA (excludes the
@@ -6769,13 +6836,23 @@ async fn open_panel_window(
         None
     };
     // A docked window re-snaps to the CURRENT monitor work area AFTER build (so a resolution
-    // change since last session can't strand it off-screen); a free window replays its saved
-    // absolute position.
+    // change since last session can't strand it off-screen); a FREE window's rect is validated
+    // against the live monitor list below. (It used to be replayed verbatim — un-docking was
+    // what removed the only safety net, and a rect saved on a since-unplugged monitor reopened
+    // fully off-screen.)
     let docked_side = saved
         .as_ref()
         .map(|g| g.dock.clone())
         .filter(|d| d == "left" || d == "right");
-    let (w, h) = if let Some(g) = &saved {
+    // FREE rect: keep the position only while its top-left still lands on some monitor's work
+    // area, and cap w/h at that work area. Docked rects skip this — their re-snap is stronger.
+    let free = match (&saved, &docked_side) {
+        (Some(g), None) => Some(sanitize_free_bandmap_rect(&app, g)),
+        _ => None,
+    };
+    let (w, h) = if let Some((w, h, _)) = free {
+        (w, h)
+    } else if let Some(g) = &saved {
         (g.w, g.h)
     } else if slug == "operate" {
         (1140.0, 760.0)
@@ -6807,11 +6884,18 @@ async fn open_panel_window(
         if slug == "waterfall" { 180.0 } else { 360.0 },
     );
     if let Some(g) = &saved {
-        // Open at the saved position. For a FREE window that's the exact restore; for a DOCKED
-        // window it lands it on the RIGHT monitor (multi-monitor) before the re-snap below
-        // refines it to THAT monitor's work-area edge — and it's the fallback if the re-snap
-        // can't resolve a monitor.
-        builder = builder.position(g.x, g.y);
+        if matches!(free, Some((_, _, false))) {
+            // FREE window whose saved top-left no longer lands on any monitor (unplugged or
+            // rearranged since last session): drop the stale position and open centered on
+            // the current monitor instead of replaying a rect nothing displays.
+            builder = builder.center();
+        } else {
+            // Open at the saved position. For a FREE (validated) window that's the exact
+            // restore; for a DOCKED window it lands it on the RIGHT monitor (multi-monitor)
+            // before the re-snap below refines it to THAT monitor's work-area edge — and it's
+            // the fallback if the re-snap can't resolve a monitor.
+            builder = builder.position(g.x, g.y);
+        }
     }
     // Pop-outs are ordinary windows — the operator must be able to send them behind the
     // main UI (a tester couldn't hide the waterfall while it was pinned always-on-top). A
@@ -11939,7 +12023,8 @@ pub fn run() {
 mod tests {
     use super::{
         b64_decode, b64_encode, dxped_page_url, install_block_reason, is_complete_lotw_body,
-        iss_pass_from_tles, parse_sstv_mode, profile_dir_name, sanitize_profile,
+        iss_pass_from_tles, parse_sstv_mode, profile_dir_name, rect_lands_on_work_area,
+        sanitize_profile,
     };
 
     /// THE SELF-UPDATE SAFETY GATE. Installing restarts the app, and this app keys a
@@ -12004,6 +12089,50 @@ mod tests {
         assert_eq!(profile_dir_name(None), "tempo");
         assert_eq!(profile_dir_name(Some("radio-a")), "tempo-radio-a");
         assert_ne!(profile_dir_name(Some("radio-a")), profile_dir_name(None));
+    }
+
+    /// THE BAND-MAP STRANDING GUARD. A free-floating band map used to replay its saved
+    /// absolute rect with NO monitor check, so a rect saved on a since-unplugged second
+    /// monitor (x=3500, or y=-1080 for one stacked above) reopened the window fully
+    /// off-screen — unrecoverable in-app, because the only geometry command is dock
+    /// left/right ON the window you can't reach. This is the decision core the open path
+    /// runs per candidate monitor, in THAT monitor's physical px.
+    #[test]
+    fn a_rect_on_an_unplugged_monitor_is_rejected() {
+        // The one remaining monitor: 1920x1040 work area at the origin (40px taskbar).
+        let on = |px, py| rect_lands_on_work_area(px, py, 0.0, 0.0, 1920.0, 1040.0, 32.0);
+        // Saved on a second monitor to the right that's gone now.
+        assert!(!on(3500.0, 100.0));
+        // Saved on a monitor that was stacked ABOVE (negative y).
+        assert!(!on(100.0, -1080.0));
+        // A rect that was always on this monitor restores exactly.
+        assert!(on(100.0, 100.0));
+    }
+
+    #[test]
+    fn a_sliver_on_screen_counts_but_a_hidden_titlebar_does_not() {
+        let on = |px, py| rect_lands_on_work_area(px, py, 0.0, 0.0, 1920.0, 1040.0, 32.0);
+        // Windows' invisible resize borders park a screen-edge window's outer_position a
+        // few px PAST the edge — that must still restore in place.
+        assert!(on(-7.0, -7.0));
+        // Top-left within the margin of the right/bottom edge: a grabbable sliver remains.
+        assert!(on(1888.0, 1008.0));
+        // Top-left past the right/bottom margin: the window extends right/down from its
+        // top-left, so NOTHING of it is on this monitor. Reject.
+        assert!(!on(1889.0, 100.0));
+        assert!(!on(100.0, 1009.0));
+        // Too far past the left/top: the title bar itself is off-screen. Reject.
+        assert!(!on(-33.0, 100.0));
+        assert!(!on(100.0, -33.0));
+    }
+
+    #[test]
+    fn a_second_monitor_left_of_primary_still_restores() {
+        // Negative-origin work area (monitor arranged LEFT of the primary): the check is
+        // against each monitor's own rect, not "x >= 0".
+        let on = |px, py| rect_lands_on_work_area(px, py, -1920.0, 0.0, 1920.0, 1040.0, 32.0);
+        assert!(on(-1800.0, 100.0));
+        assert!(!on(100.0, 100.0)); // primary's territory — not THIS monitor's hit
     }
 
     // Well-known 2008 ISS element set (NORAD 25544) — the same vectors the

@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en" data-theme="dark" data-layout="right" data-viewport="md">
+<html lang="en" data-theme="dark" data-viewport="md">
   <head>
     <meta charset="UTF-8" />
-    <!-- Apply persisted theme / layout / scale / pane widths before first paint
+    <!-- Apply persisted theme / scale / pane widths before first paint
          so there's no reflow flash on launch. The React hooks keep them in sync. -->
     <script>
       (function () {
@@ -10,39 +10,73 @@
           var d = document.documentElement
           var t = localStorage.getItem('tempo-theme')
           if (t === 'light' || t === 'dark') d.setAttribute('data-theme', t)
-          var l = localStorage.getItem('tempo-layout')
-          if (l === 'right' || l === 'top') d.setAttribute('data-layout', l)
           var den = localStorage.getItem('nexus-density')
           if (den === 'guided' || den === 'standard' || den === 'dense') d.setAttribute('data-density', den)
           if (localStorage.getItem('nexus-motion') === 'reduce') d.setAttribute('data-motion', 'reduce')
           // First-paint zoom seed — keep in sync with useScale.ts (SCALE_STEPS,
           // NAT_W/NAT_H fit model, keys nexus-ui-scale-mode / nexus-ui-scale-cap):
-          // a pinned Manual scale applies directly; otherwise auto-fit to the
-          // window (min(w/1200, h/900), snapped DOWN to a step, capped, floor 65).
+          // a pinned Manual scale applies directly (capped in a pop-out, see below);
+          // otherwise auto-fit to the window (min(w/1200, h/900), snapped DOWN to a
+          // step, capped, floor 65).
           var STEPS = [65, 70, 75, 80, 85, 90, 100, 110, 125, 150, 175]
-          var mode = Number(localStorage.getItem('nexus-ui-scale-mode'))
+          // Per-surface mode key (mirror windowScope surfaceKey/surfaceGet, incl. the
+          // instance-token grammar): a pop-out (?panel=) may carry its own pin under
+          // 'nexus-ui-scale-mode.<panel>[.<instance>]'; fall back to the bare (main)
+          // key only when this surface never wrote one — otherwise a pop-out with a
+          // divergent pin first-painted at the main window's zoom, then jumped.
+          var q = new URLSearchParams(window.location.search)
+          var panel = q.get('panel')
+          var inst = q.get('instance')
+          var sfx = panel
+            ? '.' + panel + (inst && /^(w(0|[1-9][0-9]{0,2})|r(0|[1-9][0-9]{0,8}))$/.test(inst) ? '.' + inst : '')
+            : ''
+          var modeRaw = sfx ? localStorage.getItem('nexus-ui-scale-mode' + sfx) : null
+          if (modeRaw == null) modeRaw = localStorage.getItem('nexus-ui-scale-mode')
+          var mode = Number(modeRaw)
+          // This window's fit ceiling (fitScale at the max step, floor 65). Auto is
+          // bounded by it; so is a PIN in a pop-out (no scale UI there to recover
+          // with — mirrors capPinnedScale in src/useScale.ts). A main-window pin is
+          // an operator choice and applies verbatim.
+          var target = Math.min(window.innerWidth / 1200, window.innerHeight / 900) * 100
+          var fitCeil = 65
+          for (var i = 0; i < STEPS.length; i++) {
+            if (STEPS[i] <= target) fitCeil = STEPS[i]
+          }
           var z
           if (STEPS.indexOf(mode) !== -1) {
-            z = mode
+            z = panel && mode > fitCeil ? fitCeil : mode
           } else {
             var cap = Number(localStorage.getItem('nexus-ui-scale-cap'))
             if (STEPS.indexOf(cap) === -1) cap = 100
-            var target = Math.min(window.innerWidth / 1200, window.innerHeight / 900) * 100
-            z = 65
-            for (var i = 0; i < STEPS.length; i++) {
-              if (STEPS[i] <= cap && STEPS[i] <= target) z = STEPS[i]
-            }
+            z = Math.min(cap, fitCeil)
           }
           var zoom = z / 100
           d.style.setProperty('--ui-zoom', String(zoom))
+          // Effective (zoom-adjusted) viewport, seeded pre-paint so every
+          // var(--vh-eff/--vw-eff, …) consumer paints right on frame one. useViewport
+          // republishes live one rAF after mount — without this seed every pop-out
+          // painted its first frame 35% short at the 65% floor, then snapped.
+          var ew = window.innerWidth / (zoom || 1)
+          var eh = window.innerHeight / (zoom || 1)
+          d.style.setProperty('--vh-eff', eh + 'px')
+          d.style.setProperty('--vw-eff', ew + 'px')
           // Initial size class from EFFECTIVE width (mirror classifyViewport() in
           // src/useViewport.ts) so the first paint is already at the right breakpoint.
-          var ew = window.innerWidth / (zoom || 1)
           d.setAttribute('data-viewport', ew < 768 ? 'xs' : ew < 1100 ? 'sm' : ew < 1600 ? 'md' : ew < 2400 ? 'lg' : 'xl')
+          // Rail preseed, clamped with usePaneWidths' exact bounds (left ≥220 ≤40%
+          // effW, right ≥260 ≤60% effW): the stored px may come from a bigger monitor,
+          // and replaying it raw zeroed the center pane until React re-clamped.
+          // Nothing stored (a never-dragged install) seeds the hook's proportional
+          // default (0.18/0.22 · effW, same clamps) — skipping the seed left the :root
+          // 300/360px fallbacks up for the first paint, so EVERY launch jumped when
+          // React published the real default (~319px wider at 3440w). Storage itself
+          // stays untouched either way (writes happen only on operator commit/reset).
           var lw = Number(localStorage.getItem('tempo-left-rail-w'))
-          if (lw > 0) d.style.setProperty('--left-rail-w', lw + 'px')
+          if (!(lw > 0)) lw = Math.round(ew * 0.18)
+          d.style.setProperty('--left-rail-w', Math.max(220, Math.min(Math.round(ew * 0.4), lw)) + 'px')
           var rw = Number(localStorage.getItem('tempo-right-rail-w'))
-          if (rw > 0) d.style.setProperty('--right-rail-w', rw + 'px')
+          if (!(rw > 0)) rw = Math.round(ew * 0.22)
+          d.style.setProperty('--right-rail-w', Math.max(260, Math.min(Math.round(ew * 0.6), rw)) + 'px')
         } catch (e) {}
       })()
     </script>

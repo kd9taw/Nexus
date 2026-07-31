@@ -219,7 +219,8 @@ export default function App() {
   const [showWizard, setShowWizard] = useState<boolean>(
     () => features.firstRun && storageWritable() && !wizardSeen(),
   )
-  const { commitLeft, commitRight, resetWidths } = usePaneWidths()
+  // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
+  const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
   const layoutRef = useRef<HTMLElement>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
   // Two-radio launch picker: shown only when simultaneous-radios is on, ≥2 radios are configured,
@@ -1947,8 +1948,9 @@ export default function App() {
   )
 
   // Three-pane workspace: stations | center | waterfall, with drag splitters
-  // between each. CSS (keyed on `data-layout`) places the waterfall on the right
-  // (default) or as a full-width strip on top — same JSX, no remount.
+  // between each. The waterfall lives in the right rail at every width; the rail
+  // only narrows on the sm/xs collapse. (This used to claim a `data-layout`
+  // top-strip alternative — there was no writer and no CSS behind it.)
   const threePane = (center: JSX.Element, header?: JSX.Element) => (
     <main
       className={`layout${header ? ' has-tempo-header' : ''}`}
@@ -2246,6 +2248,7 @@ export default function App() {
         <>
           {threePane(
             <Conversation
+              key={activePeer ?? 'launchpad'} // remount per peer: open pinned to the newest message, never inherit the last peer's scroll offset
               conversation={activeConversation}
               peer={activePeer}
               radio={snap.radio}

@@ -273,6 +273,67 @@ moment of import, while the manual claimed a full round-trip. Every field now su
 and export verbatim, and the award-relevant ones (numeric DXCC entity, PROP_MODE/SAT_NAME,
 OPERATOR, STATION_CALLSIGN) are first-class. Upload bookkeeping also stopped re-reading the
 whole log file before every stamp, which matters on a multi-megabyte log.
+### Fixed: the Phone and CW screens no longer cut off the log form — the scrollbar is back
+
+At the default window size the Phone screen hid the entire LOG THIS QSO form below the bottom
+edge with no scrollbar and no way to reach it, while the Band Activity box sat mostly empty. The
+cause was a set of layout rules that promised "the view never scrolls" while a guaranteed-minimum
+region and the controls below it added up to more height than any window could hold — and the
+rule meant to let the page scroll had shipped in a form that could never take effect. The view
+scrolls again when it must, the empty box is gone (Band Activity takes the height its content
+needs), and spare room goes to the waterfall instead of to blank space. The same repair covers
+CW, RTTY and SSTV, and the CW decode text now fills its pane instead of six fixed lines floating
+in a tall empty panel.
+
+### Changed: Phone and CW arrange themselves to the window — wide screens get columns
+
+On a wide monitor the log form now takes its own column beside Band Activity and the voice keyer
+instead of stretching metre-wide input fields below them; very wide screens get three columns. On
+a narrow window everything stacks in a single scrolling column. Push-to-talk, the CW send bar and
+Stop TX live in a fixed dock at the bottom of the screen that can never scroll away or shrink,
+and switching column layouts can never interrupt a log entry you are typing or a voice-keyer
+message in flight. Panes you remove in the ⊞ Panels menu behave exactly as before.
+
+### Fixed: window sizes, splitter drags and UI-scale settings are checked before they are applied
+
+A pane width or splitter position saved on one monitor was replayed unchecked on another: a rail
+dragged wide on an ultrawide could reopen on a laptop with the centre workspace squeezed to
+nothing, a UI scale pinned for a big screen carried into small pop-out windows that have no
+control to undo it, and a band-map window left on a since-removed second monitor came back
+entirely off-screen. Every stored size, position and scale is now validated against the window
+and monitors actually present before it is used. The first paint also matches the final layout —
+no more one-frame flash of wrong sizes on launch.
+
+### Fixed: screens respond to the size they really are, and dialogs respect your UI scale
+
+The rules that adapt layouts to narrow windows measured the raw window width, which the app's own
+UI scaling makes wrong in both directions: the whole app flipped to a phone-style stack at the
+minimum window size where there was actually plenty of room, and an operator who raises the UI
+scale to read the screen never got the narrow layouts at all. All of it now keys on the effective
+size. Satellites, DXpeditions and APRS gain the narrow layouts they always declared but that were
+keyed to names that never matched anything. The setup wizard, dialogs and tooltips — which
+ignored the UI scale entirely and could render at half size for exactly the operator who had
+raised it — now follow it. The Logbook and radio-programming screens use more of an ultrawide
+monitor instead of a fixed centre column.
+
+### Fixed: live text panes no longer yank you back down while you read
+
+The CW transcript re-pinned itself to the newest text every half-tick, so scrolling back to
+re-read a callsign mid-copy was impossible; the SENT echo, RTTY stream, Field Day log and Tempo
+conversation did the same. All now follow only while you are at the bottom, the way Band Activity
+already did, and switching Tempo conversations opens at the newest message instead of wherever
+the previous conversation was scrolled. Logging a contact no longer makes the screen jump.
+
+### Fixed: opening Field Day bonuses no longer hides the Sections board
+
+The bonus checklist grew without limit and pushed the Sections board and the newest log rows out
+of a screen that could not scroll. It now scrolls within its own bounded area.
+
+### Fixed: the call resolution details are reachable again
+
+When a callsign resolves, the prior-contact history sits inside the log form — with the layout
+repairs above, it is on screen or a short scroll away instead of clipped below the window edge at
+every size, which is how it has behaved since the compact recall card arrived.
 
 ### Fixed: the Call Roster and Band Activity filters reset on every restart
 

@@ -143,8 +143,9 @@ export function VoiceKeyer({ txEnabled, keyed, fdExchange }: Props) {
 
   return (
     <div className="vk">
+      {/* No title of its own: the keyer renders inside a CockpitPaneFrame whose head
+          already says "Voice keyer" — the old <h2> here would double it. */}
       <div className="vk-head">
-        <h2>Voice keyer</h2>
         <span className="vk-hint">click or press F1–F6 to send · Esc stops</span>
         <span className="vk-spacer" />
         <button type="button" className="vk-stop" onClick={stop} title="Abort playback (Esc)">

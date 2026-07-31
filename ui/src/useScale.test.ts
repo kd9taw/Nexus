@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fitScale, pickInitialZoom, SCALE_STEPS } from './useScale'
+import { capPinnedScale, fitScale, pickInitialZoom, SCALE_STEPS } from './useScale'
 
 // Fit model: NAT_W=1200, NAT_H=900. Auto NEVER upscales (default cap 100), so 1080p
 // full-screen and anything bigger sit at 100%; only SMALLER windows scale down (gently)
@@ -83,6 +83,25 @@ describe('fitScale', () => {
   it('is a fixed point (no oscillation): feeding the result back does not move it', () => {
     const z = fitScale(1600, 900)
     expect(fitScale(1600, 900, 125, z)).toBe(z)
+  })
+})
+
+describe('capPinnedScale (per-surface pin policy)', () => {
+  it('main window: the pin is an operator choice — returned verbatim, any geometry', () => {
+    expect(capPinnedScale(175, true, 900, 600)).toBe(175)
+    expect(capPinnedScale(65, true, 3840, 2160)).toBe(65)
+  })
+
+  it('pop-out: caps the pin at the window fit ceiling (fitScale at the max step)', () => {
+    // Torn-off waterfall at min 380×180-ish: ceiling is the 65 floor.
+    expect(capPinnedScale(175, false, 900, 300)).toBe(65)
+    // Default operate pop-out 1140×760: fitScale(…, 175) = 80.
+    expect(capPinnedScale(175, false, 1140, 760)).toBe(80)
+  })
+
+  it('pop-out: a pin at or under the ceiling passes through', () => {
+    expect(capPinnedScale(70, false, 1140, 760)).toBe(70)
+    expect(capPinnedScale(80, false, 1140, 760)).toBe(80)
   })
 })
 

@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useRovingList } from '../useRovingList'
+import { usePinnedScroll } from '../usePinnedScroll'
 import type { DecodeRow, NeedAlert, Tier } from '../types'
 import { resolveDecodeNeeds, isAwardNeed } from '../features/decodeNeeds'
 import { NEED_VISUALS, type NeedCat } from '../features/needVisuals'
@@ -113,10 +114,6 @@ interface Props {
   history?: DecodeHistory
 }
 
-/** Stay auto-scrolled while within this many px of the bottom (scroll up
- * further than this to pause and read; scroll back down to resume). */
-const PIN_SLOP_PX = 40
-
 /** Shared empty set so the ignore checks stay allocation-free per render. */
 const NO_IGNORES: ReadonlySet<string> = new Set()
 
@@ -183,21 +180,19 @@ export function OperateDecodes({
   }
   const [sort, setSort] = useState<DecodeSort>('time')
 
-  // Bottom-pinned auto-scroll (WSJT-X flow). pinnedRef is the live value the
-  // layout effect reads; the mirrored state drives the "reviewing" hint.
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  const pinnedRef = useRef(true)
-  const [pinned, setPinned] = useState(true)
+  // Bottom-pinned auto-scroll (WSJT-X flow) — the shared discipline, extracted
+  // to usePinnedScroll (which keeps the every-render re-pin this pane's
+  // keep-alive host depends on). `pinned` drives the "▲ reviewing" hint.
+  const { ref: scrollRef, pinned, onScroll, repin } = usePinnedScroll<HTMLDivElement>()
 
   // Band/tier change wipes the pane BEFORE this poll's decodes are ingested
   // (effect order = declaration order).
   useEffect(() => {
     if (histRef.current.setScope(band, tier)) {
-      pinnedRef.current = true
-      setPinned(true)
+      repin()
       setTick((t) => t + 1)
     }
-  }, [band, tier])
+  }, [band, tier, repin])
 
   // Ingest this poll's decode list into the rolling history.
   useEffect(() => {
@@ -212,38 +207,21 @@ export function OperateDecodes({
     if (clearTick !== clearTickSeen.current) {
       clearTickSeen.current = clearTick
       histRef.current.erase()
-      pinnedRef.current = true
-      setPinned(true)
+      repin()
       setTick((t) => t + 1)
     }
-  }, [clearTick])
+  }, [clearTick, repin])
 
   const list = orderEntries(
     histRef.current.entries().filter((d) => passesFilter(d, filter, rxOffsetHz)),
     sort,
   )
 
-  // After every render: if pinned, snap to the bottom so the newest period is
-  // in view. While the operator has scrolled up, do nothing — no view yank.
-  useLayoutEffect(() => {
-    const el = scrollRef.current
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
-  })
-
-  const onScroll = () => {
-    const el = scrollRef.current
-    if (!el) return
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= PIN_SLOP_PX
-    pinnedRef.current = atBottom
-    if (atBottom !== pinned) setPinned(atBottom)
-  }
-
   // Wipe this pane (WSJT-X "Erase") and re-pin to the bottom.
   // Also calls onErase so the cockpit can mirror the gesture to loggers.
   const erase = () => {
     histRef.current.erase()
-    pinnedRef.current = true
-    setPinned(true)
+    repin()
     setTick((t) => t + 1)
     onErase?.()
   }

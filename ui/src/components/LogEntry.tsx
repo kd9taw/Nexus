@@ -528,7 +528,9 @@ export function LogEntry({ compactRecall,
     // contact immediately (rapid logging / a Field Day run), like WSJT-X/N1MM.
     // rAF so it lands after the cleared value re-renders. Only the mounted layout's
     // input (FD or standard) holds the ref, so this always hits the visible field.
-    requestAnimationFrame(() => callInputRef.current?.focus())
+    // preventScroll for the same reason as the click-to-work RST focus above:
+    // this focus readies the field, it must not snap the cockpit to the log.
+    requestAnimationFrame(() => callInputRef.current?.focus({ preventScroll: true }))
   }
 
   // FD exchange gate: class + section are MANDATORY exchange elements. Never substitute '?' for a

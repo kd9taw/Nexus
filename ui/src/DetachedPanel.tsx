@@ -277,9 +277,12 @@ export function DetachedPanel({ panel }: { panel: string }) {
 
   if (panel === 'waterfall') {
     // The FT8/digital waterfall, torn off — it self-fetches its spectrum; clicks tune
-    // the shared engine's RX/TX offsets exactly like the in-cockpit strip.
+    // the shared engine's RX/TX offsets exactly like the in-cockpit strip. `app` is
+    // load-bearing: zoom lives on `.app` (styles.css), and this was the ONE branch
+    // missing it — the window ignored the operator's UI scale while its Toasts measured
+    // a --vh-eff computed for a zoom that never applied.
     return (
-      <div className="detached detached-waterfall">
+      <div className="app detached detached-waterfall">
         <Waterfall
           transmitting={snap?.radio.transmitting ?? false}
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}

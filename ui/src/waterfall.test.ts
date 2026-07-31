@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, isSymmetricMode, scopeView, sidebandSign, zoomRange, WF_F_MIN, WF_F_MAX, WF_STD_HI } from './waterfall'
+import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, isSymmetricMode, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -88,6 +88,21 @@ describe('applyGainZero (manual contrast)', () => {
   it('never returns a degenerate window (ceil > floor)', () => {
     const r = applyGainZero(0.5, 0.5, 1, 1) // zero span + max gain
     expect(r.ceil).toBeGreaterThan(r.floor)
+  })
+})
+
+describe('coerceZoomSpan (persisted-zoom validation)', () => {
+  it('keeps every value the picker itself offers', () => {
+    for (const z of WATERFALL_ZOOMS) expect(coerceZoomSpan(z.value)).toBe(z.value)
+  })
+
+  it('falls back to Std (0) for any finite number outside the option set', () => {
+    // The <select> is the only legitimate writer; a stale/foreign/hand-edited span
+    // used to be kept and rendered a view no option matches (blank picker).
+    expect(coerceZoomSpan(9999)).toBe(0)
+    expect(coerceZoomSpan(250)).toBe(0)
+    expect(coerceZoomSpan(-2)).toBe(0)
+    expect(coerceZoomSpan(0.5)).toBe(0)
   })
 })
 

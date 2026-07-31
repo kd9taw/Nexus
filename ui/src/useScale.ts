@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { surfaceGet, surfaceSet } from './features/windowScope'
+import { surfaceGet, surfaceSet, surfaceId } from './features/windowScope'
 
 /** Global UI scale (percent). Applied as the `--ui-zoom` factor on <html>; CSS
  * `.app { zoom: var(--ui-zoom) }` scales the whole interface crisply. */
@@ -91,6 +91,29 @@ function readMode(): ScaleMode {
   return (SCALE_STEPS as number[]).includes(n) ? (n as Scale) : 'auto'
 }
 
+const MAX_STEP: Scale = SCALE_STEPS[SCALE_STEPS.length - 1]
+
+/**
+ * A pinned step as APPLIED on this surface. In the MAIN window a pin is an explicit
+ * operator choice — honoured verbatim, never silently overridden (Settings is always
+ * reachable there to change it). A NON-main surface (pop-out) has no scale UI, and its
+ * pin is usually INHERITED via windowScope's bare-key fallback — so a pin above what
+ * that window can even fit (a 175 pin in a 380×180-min waterfall window → 217×103 CSS
+ * px effective) leaves no in-window recovery path. Cap it at the window's own fit
+ * ceiling — the same `autoCeil = fitScale(w, h, MAX_STEP)` rule SettingsPanel uses to
+ * disable dead cap chips. The stored pin itself is never rewritten. Pure + testable.
+ */
+export function capPinnedScale(
+  pin: Scale,
+  mainSurface: boolean,
+  innerW: number,
+  innerH: number,
+): Scale {
+  if (mainSurface) return pin
+  const ceil = fitScale(innerW, innerH, MAX_STEP)
+  return pin <= ceil ? pin : ceil
+}
+
 function readCap(): Scale {
   try {
     const n = Number(localStorage.getItem(CAP_KEY))
@@ -117,7 +140,9 @@ export function useScale(): ScaleControl {
   const [mode, setModeState] = useState<ScaleMode>(readMode)
   const [cap, setCapState] = useState<Scale>(readCap)
   const [scale, setScaleState] = useState<Scale>(() =>
-    mode === 'auto' ? pickInitialZoom() : mode,
+    mode === 'auto'
+      ? pickInitialZoom()
+      : capPinnedScale(mode, surfaceId() === 'main', window.innerWidth, window.innerHeight),
   )
   // Latest applied scale, for hysteresis — read inside the resize handler without
   // making it an effect dependency (that would re-subscribe every fit).
@@ -134,8 +159,28 @@ export function useScale(): ScaleControl {
   // re-fires the listener. rAF-debounced, mirroring useViewport.
   useEffect(() => {
     if (mode !== 'auto') {
-      setScaleState(mode)
-      return
+      const applyPin = () =>
+        setScaleState(
+          capPinnedScale(mode, surfaceId() === 'main', window.innerWidth, window.innerHeight),
+        )
+      applyPin()
+      // A MAIN-window pin is verbatim (capPinnedScale is the identity there) — nothing
+      // to re-evaluate. A POP-OUT's cap depends on the window box, and sampling it only
+      // here re-created the very stranding the cap removes: a strip opened at its
+      // 380×180 minimum capped an inherited 175 pin to 65 and STAYED 65 after the
+      // operator maximized; opened large, a shrink kept the oversized pin. Re-run the
+      // cap on resize, rAF-debounced like the auto fit below (review 2026-07-31).
+      if (surfaceId() === 'main') return
+      let pinRaf = 0
+      const onPinResize = () => {
+        cancelAnimationFrame(pinRaf)
+        pinRaf = requestAnimationFrame(applyPin)
+      }
+      window.addEventListener('resize', onPinResize)
+      return () => {
+        window.removeEventListener('resize', onPinResize)
+        cancelAnimationFrame(pinRaf)
+      }
     }
     let raf = 0
     const apply = () => {

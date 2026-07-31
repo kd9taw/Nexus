@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
 import { exportLog, getSettings, setSettings, openPanelWindow } from '../api'
 import { fdNextEvent, fdHeaderSubtitle, type FdKind } from '../fdEvent'
+import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 
 // ---------------------------------------------------------------------------
@@ -557,7 +558,11 @@ export function FieldDayScoreboard({
 }
 
 export function FieldDayView({ fieldDay, onSetMode }: Props) {
-  const scrollRef = useRef<HTMLDivElement>(null)
+  // Log tail: bottom-pinned via the shared discipline. The old unconditional
+  // snap on every logged QSO undid a mid-run scroll-back (checking a call two
+  // contacts up) the moment the next contact landed. Pinned follows the run;
+  // scrolled-up checking is never yanked.
+  const logPin = usePinnedScroll<HTMLDivElement>()
   const running = fieldDay?.running ?? false
   const log = fieldDay?.log ?? []
   const [exportError, setExportError] = useState<string | null>(null)
@@ -578,12 +583,6 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
   // Worked-section set for the summary/dupe exports (the board derives its own
   // inside FieldDayScoreboard).
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
-
-  // keep the newest contact in view as the log grows
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [log.length])
 
   const toggleBonus = async (id: string) => {
     if (!settings) return
@@ -787,7 +786,7 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
           <span className="fd-col band">Band</span>
           <span className="fd-col mode">Mode</span>
         </div>
-        <div className="fd-log-scroll" ref={scrollRef}>
+        <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
           {rows.length === 0 && <p className="empty">No contacts logged yet.</p>}
           {rows.map((r, i) => (
             <div

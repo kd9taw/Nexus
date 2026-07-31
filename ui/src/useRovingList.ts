@@ -51,7 +51,20 @@ export function useRovingList(
 
   useEffect(() => {
     if (focusWanted.current && active >= 0) {
-      rows.current[active]?.focus()
+      const el = rows.current[active]
+      // preventScroll: a bare focus() makes the browser reveal the row by
+      // walking the WHOLE ancestor chain — panning overflow:hidden cockpit
+      // boxes that have no scrollbar and no wheel path back, so the cockpit
+      // stayed offset until a view switch remounted it. Focus silently, then
+      // reveal with block:'nearest'. NB scrollIntoView still visits EVERY
+      // scrollable ancestor (CSSOM View has no "stop at the first scroller");
+      // 'nearest' only minimizes each box's movement, so an ancestor already
+      // showing the row moves 0 — in practice only the row's own scroller
+      // scrolls. An ancestor that partially clips that scroller can still be
+      // panned: the residual edge of the old bug, not covered here. (jsdom has
+      // no scrollIntoView, hence the optional call.)
+      el?.focus({ preventScroll: true })
+      el?.scrollIntoView?.({ block: 'nearest' })
       focusWanted.current = false
     }
   }, [active])

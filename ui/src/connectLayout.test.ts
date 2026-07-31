@@ -21,8 +21,10 @@ describe('connect layout invariants', () => {
     expect(css).toMatch(/\.connect-map\s*\{[^}]*min-width:\s*0/)
   })
 
-  it('a pane body scopes the wide gauge grid to 2 columns (no horizontal clip)', () => {
-    expect(css).toMatch(/\.pane-body\s+\.swx-strip\s*\{[^}]*grid-template-columns:\s*repeat\(2/)
+  it('a CONNECT pane body scopes the wide gauge grid to 2 columns (no horizontal clip)', () => {
+    // .connect-scoped deliberately: the pane-frame family is shared with the cockpit
+    // pane grids, and this narrow-rail column-strip must not leak onto them.
+    expect(css).toMatch(/\.connect\s+\.pane-body\s+\.swx-strip\s*\{[^}]*grid-template-columns:\s*repeat\(2/)
   })
 
   it('a pane body declares a visible scrollbar affordance', () => {

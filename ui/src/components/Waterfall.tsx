@@ -9,6 +9,7 @@ import {
   normalize,
   resolveColormap,
   WATERFALL_ZOOMS,
+  coerceZoomSpan,
   zoomRange,
   MIN_SPAN,
   tuneTarget,
@@ -43,11 +44,13 @@ function loadKnob(key: string): number {
     return 0
   }
 }
-/** Load the persisted waterfall view; missing/blocked → 0 (the default 0–3 kHz "Std" view).
- * Any finite value is kept: -1 = Full (0–4 kHz), positive = an RX-centered zoom span. */
+/** Load the persisted waterfall view; missing/blocked/out-of-range → 0 (the default
+ * 0–3 kHz "Std" view). Only the picker's own option values are legitimate — "any finite
+ * value is kept" (the old rule) let a stale/foreign span render a view the zoom select
+ * cannot represent. */
 function loadZoom(): number {
   const v = parseFloat(surfaceGet(ZOOM_KEY) ?? '')
-  return Number.isFinite(v) ? v : 0
+  return Number.isFinite(v) ? coerceZoomSpan(v) : 0
 }
 
 interface Props {
