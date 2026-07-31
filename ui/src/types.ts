@@ -525,6 +525,27 @@ export interface SatTransponderHeld {
   /** Raw index into the getSatDetail list (dead entries included). */
   index: number | null
   description: string
+  /** Which radio the pick BOUND to and what it actually wrote. Null when no
+   * pick has been made. */
+  binding: SatBinding | null
+}
+
+/** Which rig a satellite pick routed to, and what the tune-on-pick actually
+ * wrote to it. The frequency fields are `null` for a leg that was NOT written —
+ * a line printing computed centres beside a radio that never moved is the exact
+ * dishonesty the readiness rail exists to kill. `note` says why. */
+export interface SatBinding {
+  radioId: number | null
+  radioName: string
+  /** The band the downlink lands in — the routing input, shown so the operator
+   * can see WHY this rig was chosen. */
+  band: string
+  /** The mode class routed on: true = FM (an FM bird follows the FM rule). */
+  fm: boolean
+  downlinkMhz: number | null
+  uplinkMhz: number | null
+  /** Why nothing (or one leg only) moved. Null = it all landed. */
+  note: string | null
 }
 
 /** Real-time solar wind (DSCOVR) — the leading geomagnetic indicator (leads Kp/A). */

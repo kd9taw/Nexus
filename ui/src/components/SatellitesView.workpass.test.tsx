@@ -281,7 +281,12 @@ describe('"Work this pass" runs the chain', () => {
 
   it('skips the auto-pick when the ENGINE already holds this bird', async () => {
     api.getSatTransponder.mockImplementation(() =>
-      Promise.resolve({ name: 'RS-44', index: 2, description: 'SSB/CW linear transponder' }),
+      Promise.resolve({
+        name: 'RS-44',
+        index: 2,
+        description: 'SSB/CW linear transponder',
+        binding: null,
+      }),
     )
     render(<SatellitesView />)
     fireEvent.click((await workButtons())[0])

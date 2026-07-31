@@ -46,6 +46,25 @@ one line, and the sky dome, timeline, chooser and passband strip sit together ab
 What the rail and chooser show is what the engine actually holds: when a pass ends or is stopped,
 the hold is released and the display follows.
 
+**Picking a transponder tunes the radio.** Choosing a bird — by hand or through ▶ Work this pass —
+puts the rig on that transponder's downlink there and then, with the uplink on the transmit VFO
+your mapping calls for. No waiting for AOS: the pass takes over from where the pick left the radio.
+The click is consent for the dial only, exactly as clicking a spot or a repeater favourite already
+is; every transmit gate is unchanged, and "None — leave the dial to me" still means the radio does
+not move. If Doppler is switched off, your mapping is None, or the rig cannot reach the band, the
+transponder is still held and the section tells you plainly that nothing was tuned.
+
+**The Satellites section says which radio it drives.** A dual-radio station no longer has to guess.
+Picking a transponder routes on band and mode class the same way a repeater tune does, so a
+VHF/UHF bird reaches the VHF/UHF rig even when you were sitting on HF, and an FM bird follows your
+FM routing rule while a linear bird follows your SSB one. A line under the held bird's name names
+the rig, the band and the class it routed on, and the frequencies it actually wrote — with a pin
+to hold the current radio when you want to override the routing.
+
+**No more FT8 frequencies under Satellites.** The band dropdown at the top of the window is fed the
+digital watering holes, which meant it offered 14.074 beside a bird on 435 MHz. Satellites now owns
+its own frequency surfaces, like Phone, CW, RTTY, SSTV and APRS already do.
+
 ## [0.24.0] — 2026-07-31
 
 ### Added: satellite operating — full Doppler, and a rotator that behaves

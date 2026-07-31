@@ -3650,7 +3650,17 @@ async fn set_sat_transponder(
         _ => 0,
     };
     let label = format!("{}|{}", name.trim(), tp.description);
-    engine_lock(&state).set_sat_transponder(Some((
+    // An FM bird (the SO-50/AO-91 majority) is FM-CLASS traffic and must follow
+    // the operator's FM routing rule, not their SSB one — that is the whole
+    // point of mode-class routing (one band, two rigs). Per-leg mode first: the
+    // single `mode` field cannot describe an inverting transponder's two legs.
+    let fm = tp
+        .downlink_mode
+        .as_deref()
+        .or(tp.mode.as_deref())
+        .is_some_and(|m| m.trim().to_ascii_uppercase().starts_with("FM"));
+    let mut eng = engine_lock(&state);
+    eng.set_sat_transponder(Some((
         label,
         index,
         tempo_core::doppler::Transponder {
@@ -3660,6 +3670,13 @@ async fn set_sat_transponder(
             half_width_hz: half,
         },
     )));
+    // TUNE ON PICK — the click IS the consent for the dial, exactly as it is for
+    // a spot, a repeater favourite or a band-map click. The hold is set FIRST so
+    // the tune reads the transponder it is tuning to; a refused tune (Doppler
+    // off, "None — leave the dial to me", a rig that can't reach the band) never
+    // disturbs the hold, and its reason is stored for the readiness rail. NO TX
+    // gate is involved: this moves the dial and the split RX state, nothing else.
+    eng.sat_tune_nominal(fm, (now_unix().max(0) as u64).saturating_mul(1_000));
     Ok(())
 }
 
@@ -4301,6 +4318,27 @@ struct SatTransponderHeldDto {
     name: String,
     index: Option<usize>,
     description: String,
+    /// Which radio this pick BOUND to and what the tune-on-pick actually wrote.
+    /// Rides the existing 2 s read-back rather than a second command: the rail
+    /// already polls this, and a binding without its hold means nothing.
+    binding: Option<SatBindingDto>,
+}
+
+/// The readiness rail's "which rig will move" line — see [`tempo_app::SatBinding`].
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SatBindingDto {
+    radio_id: Option<u32>,
+    radio_name: String,
+    band: String,
+    fm: bool,
+    /// `Some` only for a leg that was actually WRITTEN — a rail that printed the
+    /// computed centres regardless would show frequencies beside a radio that
+    /// never moved.
+    downlink_mhz: Option<f64>,
+    uplink_mhz: Option<f64>,
+    /// Why nothing (or one leg only) moved. `None` = it all landed.
+    note: Option<String>,
 }
 
 #[tauri::command]
@@ -4308,6 +4346,15 @@ fn get_sat_transponder(
     state: State<'_, SharedEngine>,
 ) -> Result<Option<SatTransponderHeldDto>, String> {
     let eng = engine_lock(&state);
+    let binding = eng.sat_binding().map(|b| SatBindingDto {
+        radio_id: b.radio_id,
+        radio_name: b.radio_name.clone(),
+        band: b.band.clone(),
+        fm: b.fm,
+        downlink_mhz: b.downlink_mhz,
+        uplink_mhz: b.uplink_mhz,
+        note: b.note.clone(),
+    });
     Ok(eng.sat_transponder_held().map(|(label, index)| {
         // The engine label is "BIRD|description" (see set_sat_transponder).
         let (name, description) = label
@@ -4318,6 +4365,7 @@ fn get_sat_transponder(
             name,
             index,
             description,
+            binding,
         }
     }))
 }

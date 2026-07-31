@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   NeedTag,
+  SatBinding,
   SatDetail,
   SatPass,
   SatPassEarn,
@@ -1048,6 +1049,77 @@ function TrackRail({
   )
 }
 
+/* ==================== which rig will move (the radio binding) ===============
+ * Operator field report: "I have my 9700 selected, but in the sat area, it's
+ * not selecting the radio." The section showed nothing about radios at all —
+ * and behind it, nothing in the satellite path ever ROUTED, so Doppler drove
+ * whichever rig happened to be active. A pick now routes on band+mode class
+ * exactly as a repeater tune does; this is the one line that says where it went.
+ *
+ * Reports what was DONE: the frequencies appear only for a leg that was
+ * actually written, and the honest reason takes their place when nothing moved.
+ * Ready-state by SHAPE (filled ● / hollow ○), the codebase idiom.
+ *
+ * The override is the app's OWN one — peg-lock, the same switch behind the
+ * TopBar RadioSwitcher's 🔒 — reachable where the operator is, written
+ * read-modify-write like the two Doppler switches on the rail below.
+ *
+ * Layout: content-height, never a grower (ui-layout §2), shares the rail's box. */
+function SatRadioBinding({
+  binding,
+  pegged,
+  onTogglePeg,
+}: {
+  binding: SatBinding
+  pegged: boolean
+  onTogglePeg: (on: boolean) => void
+}) {
+  const legs = [
+    binding.downlinkMhz != null ? `${binding.downlinkMhz.toFixed(3)} ↓` : null,
+    binding.uplinkMhz != null ? `${binding.uplinkMhz.toFixed(3)} ↑` : null,
+  ].filter((s) => s != null)
+  return (
+    <div className="sat-bind" data-testid="sat-radio-binding">
+      <div className="sat-rail-row">
+        {railDot(legs.length > 0)}
+        <span className="sat-rail-name">Radio</span>
+        <span className="sat-rail-state">
+          {/* An empty band = a refusal that returned BEFORE routing (band-plan
+              miss): no rig was resolved and no class chosen, so the reason
+              stands alone — never "this radio · · SSB" beside a rig that was
+              never picked. */}
+          {binding.band !== '' && (
+            <>
+              {binding.radioName || 'this radio'}
+              <span className="sat-bind-why">
+                {' '}
+                · {binding.band} · {binding.fm ? 'FM' : 'SSB'}
+              </span>
+            </>
+          )}
+          {legs.length > 0
+            ? ` — ${legs.join(' · ')} MHz`
+            : binding.band !== ''
+              ? ` — ${binding.note ?? ''}`
+              : (binding.note ?? '')}
+        </span>
+        <button
+          className={`sat-rail-fix${pegged ? ' on' : ''}`}
+          aria-pressed={pegged}
+          onClick={() => onTogglePeg(!pegged)}
+          title={
+            pegged
+              ? 'Peg-lock is ON — this bird stays on the active radio; band+mode routing will not hand it to another rig. Click to unlock.'
+              : 'Peg-lock is OFF — a pick routes to the radio that owns the band and mode class. Click to pin the active radio instead.'
+          }
+        >
+          {pegged ? '🔒 pinned' : '🔓 pin this radio'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function SatellitesView({ focusSat, onPopOut }: Props) {
   const [view, setView] = useState<SatView | null>(null)
   const [favs, setFavs] = useState<Set<string>>(() => satChasingSet())
@@ -1088,6 +1160,14 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const wantRailScroll = useRef(false)
   const [dopplerOn, setDopplerOn] = useState(false)
   const [vfoMap, setVfoMap] = useState<SatVfoMap>('off')
+  // Which rig the engine's held pick bound to, and what it actually wrote.
+  // ENGINE truth off the same read-back the hold uses — a binding drawn from
+  // the last local click would name a rig the engine no longer drives (the
+  // hold is released backend-side at LOS and on a live-track stop).
+  const [binding, setBinding] = useState<SatBinding | null>(null)
+  // Peg-lock mirror: the app-wide routing override, surfaced on the binding
+  // line because that is where the operator asks "why THAT radio?".
+  const [pegged, setPegged] = useState(false)
   const [nowTick, setNowTick] = useState(() => Date.now())
   const nowSecs = Math.floor(nowTick / 1000)
 
@@ -1199,6 +1279,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
       getSatTransponder()
         .then((h) => {
           if (!live || pickBusy.current) return
+          setBinding(h?.binding ?? null)
           setTuned((cur) => {
             if (h == null || h.index == null) return null
             if (cur && cur.name === h.name && cur.index === h.index) return cur // keep `auto`
@@ -1212,6 +1293,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             if (!live || settingsWriteBusy.current) return
             setDopplerOn(!!s.satDoppler)
             setVfoMap(s.satVfoMap ?? 'off')
+            setPegged(!!s.radioPegged)
           })
           .catch(() => {})
       }
@@ -1430,6 +1512,12 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
           else next.delete(name)
           return next
         })
+        // What the pick actually TUNED, read straight back: the tune happens
+        // backend-side inside set_sat_transponder, and waiting out the 2 s poll
+        // to learn whether the radio moved is exactly the uncertainty this line
+        // exists to remove. Clearing the pick clears the binding with it.
+        if (index == null) setBinding(null)
+        else getSatTransponder().then((h) => setBinding(h?.binding ?? null)).catch(() => {})
         // Re-read the two switches that decide whether this tunes anything —
         // Settings may have changed since this section mounted.
         getSettings()
@@ -1463,6 +1551,19 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
       .then((s: Settings) => setSettings({ ...s, satDoppler: true }))
       .then(() => setDopplerOn(true))
       .catch((e) => pushToast(`Doppler setting: ${e instanceof Error ? e.message : e}`, 'error'))
+      .finally(() => {
+        settingsWriteBusy.current = false
+      })
+  }
+  /** Peg-lock: the app-wide "don't auto-switch radios" override, written the
+   * same read-modify-write way as the two switches beside it. Pinning does not
+   * re-tune — it changes where the NEXT pick lands, and the line re-reads. */
+  const writePegged = (on: boolean) => {
+    settingsWriteBusy.current = true
+    getSettings()
+      .then((s: Settings) => setSettings({ ...s, radioPegged: on }))
+      .then(() => setPegged(on))
+      .catch((e) => pushToast(`Peg-lock: ${e instanceof Error ? e.message : e}`, 'error'))
       .finally(() => {
         settingsWriteBusy.current = false
       })
@@ -1793,6 +1894,15 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             {/* THE READINESS RAIL, directly under the bird's name: once a pass
                 is armed the chain is visible AS a chain, each gate fixable in
                 place. Content-height — never a grower. */}
+            {/* WHICH RIG WILL MOVE — at the rail's position, but not gated on a
+                track: a pick tunes the moment it is made, long before a pass is
+                armed, and "which radio?" is exactly the question then. Gated on
+                the HELD bird (the binding is engine-global, one hold at a time):
+                RS-44's rig and frequencies must never render under AO-91's
+                heading — the chooser's cross-bird warning covers that case. */}
+            {binding && tuned?.name === detail.name && (
+              <SatRadioBinding binding={binding} pegged={pegged} onTogglePeg={writePegged} />
+            )}
             {detailTrack && (
               <TrackRail
                 track={detailTrack}

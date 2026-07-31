@@ -2343,7 +2343,13 @@ export default function App() {
           effectiveView === 'chat' ||
           effectiveView === 'rtty' ||
           effectiveView === 'sstv' ||
-          effectiveView === 'aprs'
+          effectiveView === 'aprs' ||
+          // Satellites: the bird's own surfaces ARE the frequency authority here
+          // (transponder cards, passband strip, the binding line). Operator
+          // report: "my dropdowns for frequencies are still showing FT8
+          // frequencies under satellite" — the top control offered 14.074 next
+          // to a bird on 435 MHz.
+          effectiveView === 'sats'
         }
         hideDigitalChrome={
           effectiveView === 'phone' ||
@@ -2353,7 +2359,8 @@ export default function App() {
           // clock / DT readout are slot-sync furniture that means nothing here.
           effectiveView === 'rtty' ||
           effectiveView === 'sstv' ||
-          effectiveView === 'aprs'
+          effectiveView === 'aprs' ||
+          effectiveView === 'sats'
         }
         tier={tier}
         onTierChange={handleTier}

@@ -15000,7 +15000,11 @@ html[data-panel='needed'] {
 /* ---- The readiness rail (litigation ①): the arming chain AS a chain ------
    Four content-height rows — bullet (SHAPE carries ready-state), gate name,
    live state, and the row's own fix. Never a grower (ui-layout §2). */
-.sat-rail {
+/* `.sat-bind` (the radio-binding line) shares the rail's box verbatim: it sits
+   at the rail's position and reads as one instrument with it, whether or not a
+   track is armed. Same content-height contract — never a grower. */
+.sat-rail,
+.sat-bind {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -15009,6 +15013,11 @@ html[data-panel='needed'] {
   padding: var(--space-1) var(--space-2);
   margin-bottom: var(--space-1);
   font-size: var(--fs-micro);
+}
+/* The routing reason ("· 70cm · SSB") is context for the rig name, not a peer
+   of it — dimmed so the name a glance is looking for wins. */
+.sat-bind-why {
+  color: var(--text-dim);
 }
 .sat-rail-row {
   display: flex;
@@ -15047,6 +15056,15 @@ html[data-panel='needed'] {
   border-radius: 999px;
   padding: 1px var(--space-2);
   cursor: pointer;
+}
+/* Engaged (peg-lock held) — a STATE, not an offer. Same tinted treatment the
+   TopBar's own peg pill uses (`.radio-peg.on`), because it is the same switch.
+   Declared after the base rule it modifies: it also outranks it on specificity,
+   but source order should not be the thing standing between them. */
+.sat-rail-fix.on {
+  background: color-mix(in srgb, var(--state-ok) 18%, transparent);
+  border-color: color-mix(in srgb, var(--state-ok) 45%, transparent);
+  color: var(--state-ok);
 }
 .sat-rail-auto {
   color: var(--accent);
