@@ -3471,6 +3471,7 @@ async fn set_sat_transponder(
     let label = format!("{}|{}", name.trim(), tp.description);
     engine_lock(&state).set_sat_transponder(Some((
         label,
+        index,
         tempo_core::doppler::Transponder {
             uplink_centre_hz: tp.uplink_centre_hz().unwrap_or(0),
             downlink_centre_hz: down,
@@ -3583,10 +3584,49 @@ struct SatTrackDto {
     /// "armed" (waiting, no rotor commands until 5 min before AOS),
     /// "prepositioning" (parked on the AOS azimuth) or "tracking".
     state: String,
+    /// Where the ANTENNA was last COMMANDED — after flip, calibration trim and
+    /// the deadband.
     az_deg: f64,
     el_deg: f64,
+    /// Where the BIRD actually is, unrounded by rotator policy. The gap between
+    /// this and the commanded pair IS the tracking error — they legitimately
+    /// differ by a couple of degrees now that a deadband exists, and a UI
+    /// drawing them as one number would make correct behaviour look like a fault.
+    sat_az_deg: f64,
+    sat_el_deg: f64,
+    /// Slant range (km) and range-rate (km/s, positive receding) — `None`
+    /// before AOS, when there is nothing to measure.
+    range_km: Option<f64>,
+    range_rate_km_s: Option<f64>,
+    /// What Doppler has the radio tuned to, and by how much. `None` unless a
+    /// transponder is selected AND Doppler is enabled — never a fabricated
+    /// frequency (the plain dial is NOT the downlink under an uplink-only map).
+    downlink_hz: Option<u64>,
+    uplink_hz: Option<u64>,
+    downlink_shift_hz: Option<i64>,
+    uplink_shift_hz: Option<i64>,
+    /// The held transponder, so the picker shows what the ENGINE has rather
+    /// than what this browser session last clicked.
+    transponder: Option<String>,
+    transponder_index: Option<usize>,
+    /// True when the transponder mirrors the passband (uplink runs backwards).
+    inverting: bool,
     aos_unix: i64,
     los_unix: i64,
+}
+
+/// The fields a plain badge write has no data for. Doppler/range are filled in
+/// only by the tracking path, which is the one place that computes them —
+/// everywhere else they stay `None` rather than carrying a stale value forward.
+fn sat_track_unknowns() -> (
+    Option<f64>,
+    Option<f64>,
+    Option<u64>,
+    Option<u64>,
+    Option<i64>,
+    Option<i64>,
+) {
+    (None, None, None, None, None, None)
 }
 
 static SAT_TRACK_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -3646,6 +3686,17 @@ async fn start_sat_track(
         .to_string(),
         az_deg: pass.aos_az_deg,
         el_deg: 0.0,
+        sat_az_deg: 0.0,
+        sat_el_deg: 0.0,
+        range_km: None,
+        range_rate_km_s: None,
+        downlink_hz: None,
+        uplink_hz: None,
+        downlink_shift_hz: None,
+        uplink_shift_hz: None,
+        transponder: None,
+        transponder_index: None,
+        inverting: false,
         aos_unix: pass.aos_unix,
         los_unix: pass.los_unix,
     };
@@ -3689,6 +3740,17 @@ async fn start_sat_track(
                     state: "armed".to_string(),
                     az_deg: pass.aos_az_deg,
                     el_deg: 0.0,
+                    sat_az_deg: 0.0,
+                    sat_el_deg: 0.0,
+                    range_km: None,
+                    range_rate_km_s: None,
+                    downlink_hz: None,
+                    uplink_hz: None,
+                    downlink_shift_hz: None,
+                    uplink_shift_hz: None,
+                    transponder: None,
+                    transponder_index: None,
+                    inverting: false,
                     aos_unix: pass.aos_unix,
                     los_unix: pass.los_unix,
                 });
@@ -3703,14 +3765,23 @@ async fn start_sat_track(
                     None => break, // propagation diverged — stop honestly
                 }
             };
+            // The TRUE look angle, before rotator policy rewrites it below. The
+            // badge carries both: the gap between where the bird is and where
+            // the antenna was commanded IS the tracking error, and with a
+            // deadband in play they legitimately differ.
+            let (sat_az, sat_el) = (az, el);
             // DOPPLER. Only once the bird is actually up: correcting during the
             // armed/prepositioning phases would move the operator's dial before
             // there is anything to hear. Everything else — the rate limits, the
             // freeze-during-over policy, the VFO mapping, whether the operator
             // opted in at all — is decided inside `sat_doppler_tick`, so this
             // stays a loop rather than growing satellite policy.
+            let mut live_range: Option<f64> = None;
+            let mut live_rate: Option<f64> = None;
             if phase == "tracking" {
-                if let Some((_, rate)) = sat::range_rate(&tle, obs, t) {
+                if let Some((range, rate)) = sat::range_rate(&tle, obs, t) {
+                    live_range = Some(range);
+                    live_rate = Some(rate);
                     let keyed = {
                         let eng = engine_lock(&dop_engine);
                         eng.snapshot().radio.transmitting
@@ -3720,6 +3791,10 @@ async fn start_sat_track(
                     let _ = eng.sat_doppler_tick(rate, now_ms, keyed);
                 }
             }
+            // What the radio is ACTUALLY tuned to under Doppler, straight from
+            // the engine — never inferred from the dial, which is the uplink
+            // under an uplink-only mapping and ordinary split otherwise.
+            let dop = live_rate.and_then(|rate| engine_lock(&dop_engine).sat_tuning_now(rate));
             // Mechanical policy: flip over the top on a high pass (opt-in),
             // then apply the calibration trim. `az`/`el` from here on are what
             // the ROTATOR should be told, which is not always where the bird is.
@@ -3733,6 +3808,17 @@ async fn start_sat_track(
                     state: phase.to_string(),
                     az_deg: az,
                     el_deg: if azel_ok { el } else { 0.0 },
+                    sat_az_deg: sat_az,
+                    sat_el_deg: sat_el,
+                    range_km: live_range,
+                    range_rate_km_s: live_rate,
+                    downlink_hz: dop.as_ref().map(|d| d.downlink_hz),
+                    uplink_hz: dop.as_ref().map(|d| d.uplink_hz),
+                    downlink_shift_hz: dop.as_ref().map(|d| d.downlink_shift_hz),
+                    uplink_shift_hz: dop.as_ref().map(|d| d.uplink_shift_hz),
+                    transponder: dop.as_ref().map(|d| d.label.clone()),
+                    transponder_index: dop.as_ref().and_then(|d| d.index),
+                    inverting: dop.as_ref().is_some_and(|d| d.inverting),
                     aos_unix: pass.aos_unix,
                     los_unix: pass.los_unix,
                 });
@@ -3787,6 +3873,17 @@ async fn start_sat_track(
                     // Honesty: report what was COMMANDED. An az-only fallback
                     // never commands elevation, so it must not claim one.
                     el_deg: if azel_ok { el } else { 0.0 },
+                    sat_az_deg: sat_az,
+                    sat_el_deg: sat_el,
+                    range_km: live_range,
+                    range_rate_km_s: live_rate,
+                    downlink_hz: dop.as_ref().map(|d| d.downlink_hz),
+                    uplink_hz: dop.as_ref().map(|d| d.uplink_hz),
+                    downlink_shift_hz: dop.as_ref().map(|d| d.downlink_shift_hz),
+                    uplink_shift_hz: dop.as_ref().map(|d| d.uplink_shift_hz),
+                    transponder: dop.as_ref().map(|d| d.label.clone()),
+                    transponder_index: dop.as_ref().and_then(|d| d.index),
+                    inverting: dop.as_ref().is_some_and(|d| d.inverting),
                     aos_unix: pass.aos_unix,
                     los_unix: pass.los_unix,
                 });

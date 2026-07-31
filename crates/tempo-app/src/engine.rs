@@ -1935,12 +1935,27 @@ impl TxOwner {
     }
 }
 
+/// What Doppler has the radio on right now — the UI's read-back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SatTuningNow {
+    pub label: String,
+    pub index: Option<usize>,
+    pub inverting: bool,
+    pub downlink_hz: u64,
+    pub uplink_hz: u64,
+    pub downlink_shift_hz: i64,
+    pub uplink_shift_hz: i64,
+}
+
 /// The satellite tuning in force: which transponder, where the operator sits
 /// inside it, and what was last written to the radio (for the rate limit).
 #[derive(Debug, Clone)]
 struct SatTune {
     /// Stable identity for the TX gate — "SAT|transponder".
     label: String,
+    /// The row the operator picked, echoed back so the picker reflects the
+    /// ENGINE's state rather than what a browser session last clicked.
+    index: Option<usize>,
     transponder: tempo_core::doppler::Transponder,
     state: tempo_core::doppler::DopplerState,
     sent: tempo_core::doppler::SentTuning,
@@ -5915,11 +5930,15 @@ impl Engine {
     /// Select (or clear) the transponder being worked on the tracked bird.
     /// Clearing hands the dial back, so a pass that ends leaves the radio to
     /// the operator rather than silently holding it.
-    pub fn set_sat_transponder(&mut self, tp: Option<(String, tempo_core::doppler::Transponder)>) {
+    pub fn set_sat_transponder(
+        &mut self,
+        tp: Option<(String, usize, tempo_core::doppler::Transponder)>,
+    ) {
         match tp {
-            Some((label, t)) => {
+            Some((label, index, t)) => {
                 self.sat_tune = Some(SatTune {
                     label: label.clone(),
+                    index: Some(index),
                     transponder: t,
                     state: tempo_core::doppler::DopplerState::default(),
                     sent: tempo_core::doppler::SentTuning::default(),
@@ -6027,6 +6046,30 @@ impl Engine {
         self.app.set_radio(dial_mhz, &band, &sb);
         // The loop must follow promptly — the correction is only useful now.
         self.immediate_retune = true;
+    }
+
+    /// What Doppler currently has the radio on, for the UI — computed, never
+    /// inferred from the dial (under an uplink-only mapping the dial IS the
+    /// uplink, and `split_tx_mhz` is also ordinary pile-up split, so reading
+    /// either back would mislabel exactly the cases that matter).
+    ///
+    /// `None` unless a transponder is held AND the operator enabled Doppler
+    /// with a mapping — the UI then shows no frequencies rather than wrong ones.
+    pub fn sat_tuning_now(&self, range_rate_km_s: f64) -> Option<SatTuningNow> {
+        if !self.settings.sat_doppler || !self.settings.sat_vfo_map.active() {
+            return None;
+        }
+        let st = self.sat_tune.as_ref()?;
+        let t = tempo_core::doppler::tuning(&st.transponder, st.state, range_rate_km_s);
+        Some(SatTuningNow {
+            label: st.label.clone(),
+            index: st.index,
+            inverting: st.transponder.invert,
+            downlink_hz: t.downlink_hz,
+            uplink_hz: t.uplink_hz,
+            downlink_shift_hz: t.downlink_shift_hz,
+            uplink_shift_hz: t.uplink_shift_hz,
+        })
     }
 
     /// The satellite tuning identity currently owning the dial, if any.
@@ -17875,6 +17918,7 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_sat_transponder(Some((
             "RS-44|Linear Transponder".into(),
+            0,
             Transponder {
                 uplink_centre_hz: 145_965_000,
                 downlink_centre_hz: 435_640_000,
@@ -17902,6 +17946,7 @@ mod tests {
         let mut e3 = Engine::new("KD9TAW", "EN52", 0);
         e3.set_sat_transponder(Some((
             "SO-50|FM".into(),
+            0,
             Transponder::channel(145_850_000, 436_795_000),
         )));
         let mut given = qrec("N0CALL", "70cm");
@@ -17923,7 +17968,7 @@ mod tests {
             half_width_hz: 30_000,
         };
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.set_sat_transponder(Some(("RS-44|linear".into(), tp)));
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
         let dial_before = e.settings().dial_mhz;
 
         // Default settings: doppler off, mapping Off.
@@ -17936,7 +17981,7 @@ mod tests {
             s.sat_doppler = true;
             e.apply_settings(s);
         }
-        e.set_sat_transponder(Some(("RS-44|linear".into(), tp)));
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
         assert!(e.sat_doppler_tick(5.0, 2_000, false).is_none());
         assert_eq!(e.settings().dial_mhz, dial_before, "no mapping ⇒ no writes");
 
@@ -17947,7 +17992,7 @@ mod tests {
             s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
             e.apply_settings(s);
         }
-        e.set_sat_transponder(Some(("RS-44|linear".into(), tp)));
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
         let c = e
             .sat_doppler_tick(5.0, 3_000, false)
             .expect("the first correction always goes out");
@@ -17968,7 +18013,7 @@ mod tests {
             s.operating_mode = crate::settings::OperatingMode::Digital;
             e.apply_settings(s);
         }
-        e.set_sat_transponder(Some(("RS-44|linear".into(), tp)));
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
         assert!(
             e.sat_doppler_tick(6.0, 60_000, true).is_none(),
             "no dial steps under a slot-mode waveform in flight"
