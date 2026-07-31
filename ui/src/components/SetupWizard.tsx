@@ -393,7 +393,16 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
                 onClick={() => applyDetected(r)}
               >
                 <b>{r.suggestedModelName ?? r.product ?? 'Unknown radio'}</b> on {r.portName}
-                <span className="wizard-field-hint"> · {r.chip}</span>
+                <span className="wizard-field-hint">
+                  {' '}
+                  · {r.chip}
+                  {/* Dual-UART Icoms: two rows say the same rig — tag the CI-V side. */}
+                  {r.civSide === true
+                    ? ' · CI-V port — use this one'
+                    : r.civSide === false
+                      ? ' · second port, not CI-V'
+                      : ''}
+                </span>
               </button>
             ))}
             {flexNote && <span className="wizard-field-hint">{flexNote}</span>}

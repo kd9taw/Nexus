@@ -220,6 +220,28 @@ pub fn match_rig_model(product: &str, manufacturer: &str) -> Option<(u32, &'stat
     best.map(|(_, m, n)| (m, n))
 }
 
+/// Which side of an Icom-style dual-UART USB pair a port is, judged from its product /
+/// driver friendly name. The IC-7610/9700 built-in USB is a CP2105 dual UART: TWO COM
+/// ports, and only ONE speaks CI-V. Icom's Windows driver labels them "… Serial Port A
+/// (CI-V)" / "… Serial Port B"; the stock Silicon Labs driver labels them "Enhanced" /
+/// "Standard" COM port (Enhanced carries CI-V). Picking the wrong one opens cleanly and
+/// returns zero bytes forever — the exact signature of a dead rig.
+///
+/// `Some(true)` = the CI-V side; `Some(false)` = the second port that never answers
+/// CI-V; `None` = no signal either way (single-port rigs, generic bridges). Matches are
+/// deliberately conservative — a wrong `Some` here would steer the operator AWAY from
+/// the working port.
+pub fn civ_port_side(product: &str) -> Option<bool> {
+    let p = product.to_ascii_uppercase();
+    if p.contains("CI-V") || p.contains("ENHANCED") || p.contains("SERIAL PORT A") {
+        return Some(true);
+    }
+    if p.contains("STANDARD COM") || p.contains("SERIAL PORT B") {
+        return Some(false);
+    }
+    None
+}
+
 /// A recognised sound-card INTERFACE (Digirig, RigBlaster…) — a cable between the PC and a
 /// radio, NOT a radio. Deliberately carries no rig model: an interface can be wired to any
 /// radio, and claiming one would be a guess that silently mis-configures CAT.
@@ -322,6 +344,11 @@ pub struct DetectedRig {
     /// names itself and no rig token matches, while a native-USB radio names its model. When
     /// present the operator still picks the RIG — the cable does not imply one.
     pub interface: Option<KnownInterface>,
+    /// For dual-UART rigs (IC-7610/9700): which of the pair this is — `Some(true)` = the
+    /// CI-V/CAT side, `Some(false)` = the second port that never answers CI-V (see
+    /// [`civ_port_side`]). Lets the UI break the tie between two rows that otherwise both
+    /// say "Icom IC-7610".
+    pub civ_side: Option<bool>,
 }
 
 /// Join enumerated USB ports + audio device names into per-rig suggestions. Pure, so
@@ -354,6 +381,7 @@ pub fn detect_rigs(
                 suggested_audio: pair_audio(&p.product, audio_in),
                 suggested_audio_out: pair_audio(&p.product, audio_out),
                 interface: match_interface(p.vid, p.pid, &p.product, &p.manufacturer),
+                civ_side: civ_port_side(&p.product),
             }
         })
         .collect()
@@ -615,6 +643,45 @@ mod tests {
         assert!(got[0].driver.as_ref().is_some_and(|d| d.bundled)); // Linux ships CH340
         assert_eq!(got[0].suggested_audio, None);
         assert_eq!(got[0].suggested_audio_out, None);
+    }
+
+    /// The IC-7610 pair: both rows resolve to the same model, so the A/B discriminator in
+    /// the friendly name is the ONLY thing that breaks the operator's coin flip. It must
+    /// survive both driver namings — and stay `None` for everything else, because a wrong
+    /// `Some` steers the operator away from the working port.
+    #[test]
+    fn civ_side_is_read_from_the_dual_uart_friendly_names() {
+        // Icom's own driver naming.
+        assert_eq!(civ_port_side("IC-7610 Serial Port A (CI-V)"), Some(true));
+        assert_eq!(civ_port_side("IC-7610 Serial Port B"), Some(false));
+        // Stock Silicon Labs CP2105 naming.
+        assert_eq!(
+            civ_port_side("CP2105 Dual USB to UART Bridge: Enhanced COM Port"),
+            Some(true)
+        );
+        assert_eq!(
+            civ_port_side("CP2105 Dual USB to UART Bridge: Standard COM Port"),
+            Some(false)
+        );
+        // Single-port rigs and generic bridges carry no signal — no guess.
+        assert_eq!(civ_port_side("IC-705"), None);
+        assert_eq!(civ_port_side("CP2102 USB to UART Bridge Controller"), None);
+        assert_eq!(civ_port_side(""), None);
+    }
+
+    #[test]
+    fn detect_carries_the_civ_side_for_a_dual_port_icom() {
+        let ports = vec![
+            port("COM4", 0x10C4, "IC-7610 Serial Port B", "Icom Inc."),
+            port("COM3", 0x10C4, "IC-7610 Serial Port A (CI-V)", "Icom Inc."),
+        ];
+        let got = detect_rigs(&ports, &[], &[], HostOs::Windows);
+        assert_eq!(got.len(), 2);
+        // Both identify as the same rig — WITHOUT civ_side these rows are identical.
+        assert_eq!(got[0].suggested_model, Some(3078));
+        assert_eq!(got[1].suggested_model, Some(3078));
+        assert_eq!(got[0].civ_side, Some(false));
+        assert_eq!(got[1].civ_side, Some(true));
     }
 
     #[test]

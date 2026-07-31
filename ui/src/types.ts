@@ -647,6 +647,10 @@ export interface DetectedRig {
   interfaceSharesCatPort: boolean | null
   /** One plain sentence about this interface for the operator. */
   interfaceNote: string | null
+  /** Dual-UART rigs (IC-7610/9700): true = the CI-V/CAT side of the pair, false = the
+   * second port that never answers CI-V, null = single-port/unknown. Breaks the tie
+   * between two rows that otherwise both say "Icom IC-7610". */
+  civSide: boolean | null
 }
 
 /**
