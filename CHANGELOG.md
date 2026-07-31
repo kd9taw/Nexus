@@ -74,6 +74,29 @@ The Doppler readout shows both legs with their live frequency and correction, an
 a written description for screen readers.
 
 
+### Fixed: satellite Doppler was off by up to a second of orbital motion
+
+Every satellite prediction — Doppler, pass times, look angles, the ground track — was computed
+from an element-set epoch rounded down to the nearest whole second. A TLE states its epoch to
+sub-millisecond precision, and the fraction that was being discarded is effectively random from
+one element set to the next. A low-orbit satellite travels about 7.6 km in the second that was
+being thrown away.
+
+In practice that put the bird up to several kilometres from where it actually was, and moved the
+Doppler correction by up to about 75 Hz on 70 cm — enough to sit noticeably off a narrow CW or SSB
+signal on a fast pass, and over 1.5 kHz on a 10 GHz downlink. Pass rise and set times were off by
+up to a second for the same reason.
+
+The epoch is now kept at full precision. Nothing about how you operate changes; the numbers are
+simply right.
+
+This was found by a new test that checks predicted Doppler against carriers actually recorded off
+the air by volunteer ground stations, rather than against another copy of the same theory. The
+existing cross-check against an independent implementation had missed it, because its reference
+data had been generated with the same rounding and the two errors cancelled — which is exactly the
+blind spot that testing against real recorded signals exists to close. That reference has been
+regenerated correctly, and agreement on the quantity that reaches the radio improved by 40%.
+
 ### Fixed: the propagation advisor stops changing its mind on identical data
 
 On a quiet band with one or two spots — exactly when you lean on it — the advisor's "best

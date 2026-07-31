@@ -35,6 +35,7 @@ Cases are chosen for the terms they stress, not for tidiness -- see CASES.
 """
 
 import json
+from datetime import datetime, timezone
 import sys
 
 from skyfield.api import EarthSatellite, load, wgs84
@@ -143,11 +144,23 @@ def main() -> int:
 
         samples = []
         for dt in OFFSETS_S:
-            # Step in TT so the offset is exact seconds of elapsed time, then
-            # read the UTC stamp back for the fixture: the Rust side works in
-            # unix seconds, and letting Skyfield do the conversion keeps leap
-            # seconds out of our own arithmetic.
-            t = ts.tt_jd(sat.epoch.tt + dt / 86400.0)
+            # Evaluate at the instant this sample is LABELLED with, not at
+            # (true epoch + dt).
+            #
+            # ⭐ This used to step in TT from `sat.epoch.tt` while stamping the
+            # sample `epoch_unix + dt`, where `epoch_unix` had been truncated to
+            # a whole second. Those are different instants — by the fraction of a
+            # second thrown away, up to ~7.6 km of LEO motion. The fixture
+            # therefore described the sky a fraction of a second before the time
+            # it claimed, and sat.rs had the SAME truncation in its own epoch, so
+            # the two errors cancelled and this comparison looked excellent
+            # (worst range Δ 0.41 km) while both sides were wrong together.
+            #
+            # Real recorded carriers broke the tie: see tests/sat_doppler_real.rs.
+            # A reference must be independent of the thing it checks, which means
+            # it has to be right about its own timestamps.
+            stamp = epoch_unix + dt
+            t = ts.from_datetime(datetime.fromtimestamp(stamp, timezone.utc))
             diff = (sat - site).at(t)
             alt, az, dist = diff.altaz()
             # Range-rate is the radial component of the relative velocity: the

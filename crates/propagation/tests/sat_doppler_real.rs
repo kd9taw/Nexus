@@ -31,14 +31,34 @@
 //!
 //! # What this catches, measured rather than assumed
 //!
-//! Thresholds were set by injecting faults, not by picking round numbers. With
-//! a 150 Hz bound, a geocentric-instead-of-geodetic station latitude (worst 137
-//! Hz) and a missing Earth-rotation term in the topocentric velocity (worst 147
-//! Hz) both passed. They are caught by the tighter per-observation bound and,
-//! more reliably, by the bound on the MEAN across all eight — a systematic
-//! error lifts every observation at once, which is exactly what an average sees
-//! and a worst case does not. A Doppler sign flip lands at 4 500 Hz mean and a
-//! longitude sign flip at 2 790 Hz; those were never the hard cases.
+//! Thresholds come from deliberately breaking this crate's own predictor and
+//! measuring the cost — not from picking round numbers. Every row below was
+//! produced by injecting the fault into `sat::range_rate_at`'s inputs (or, for
+//! the `ω × r` row, into `sat.rs` itself) and re-running this fixture:
+//!
+//! | injected bug                          | mean Hz | worst Hz | gate catches |
+//! |---------------------------------------|---------|----------|--------------|
+//! | (correct)                             |    31.9 |     59.5 | — passes     |
+//! | Doppler sign flipped                  |  5611.8 |  12643.3 | both         |
+//! | station longitude sign flipped        |  2853.0 |   5991.2 | both         |
+//! | `ω × r` dropped (observer stationary) |    80.9 |    146.9 | both         |
+//! | geocentric instead of geodetic lat    |    64.3 |    137.6 | both         |
+//! | time base +3 s                        |    63.5 |    150.0 | both         |
+//! | Doppler scaled by 1.01                |    44.8 |     74.4 | MEAN only    |
+//! | time base +1 s                        |    40.0 |     88.9 | worst only   |
+//! | Doppler scaled by 1.005               |    36.2 |     55.9 | neither      |
+//! | time base +0.25 s                     |    33.5 |     66.7 | worst only   |
+//! | Doppler scaled by 1.002               |    32.9 |     56.1 | neither      |
+//! | station altitude ignored              |    31.9 |     59.5 | neither      |
+//!
+//! The two gates are complementary and both are needed. A 1 % Doppler scale
+//! error never breaks any single observation (worst 74.4) but shifts the mean
+//! clearly; a +1 s time base barely moves the mean (40.0) but pushes one
+//! observation to 88.9. A single gate at either level would miss one of them.
+//!
+//! Note what the table says about a per-observation bound alone: at the 150 Hz
+//! that "looks safe", the geodetic-latitude and dropped-`ω × r` bugs BOTH pass.
+//! That is why these numbers are tight and why they are written down.
 //!
 //! # What this does NOT catch, stated so nobody assumes otherwise
 //!
@@ -100,25 +120,38 @@ const C_M_S: f64 = 299_792_458.0;
 
 /// Per-observation residual bound, in Hz RMS.
 ///
-/// Our worst on this fixture is 80.1 Hz (OBJECT BT), so this is ~1.25×.
+/// Our worst on this fixture is 59.5 Hz (OBJECT BT), so this is ~1.26×.
 /// Deliberately NOT the 150 Hz that "looks safe": at 150, injected
-/// geocentric-instead-of-geodetic latitude (137 Hz) and a missing
-/// Earth-rotation term (147 Hz) both passed. The tight bound is affordable
+/// geocentric-instead-of-geodetic latitude (137.6 Hz) and a missing
+/// Earth-rotation term (146.9 Hz) both passed. The tight bound is affordable
 /// because the fixture is frozen — no network, fixed elements, fixed samples —
 /// so run-to-run variance is exactly zero and headroom only has to cover a
-/// deliberate code change.
-const MAX_RMS_HZ: f64 = 100.0;
+/// deliberate code change. Nothing legitimate should RAISE this number:
+/// modelling UT1−UTC, the one simplification left, would lower it.
+const MAX_RMS_HZ: f64 = 75.0;
 
 /// Bound on the MEAN residual across every observation, in Hz RMS.
 ///
-/// Our measured mean is 36.9 Hz, so this is ~1.22×. This is the sharp gate: a
-/// systematic geometry error raises all eight observations together, which an
-/// average detects long before any single one crosses its own limit.
+/// Our measured mean is 31.9 Hz, so this is ~1.25×. The two gates catch
+/// DIFFERENT things, and it is worth being precise about which:
 ///
-/// For reference, the same fixture measured against Skyfield gives 32.0 Hz.
-/// The ~5 Hz we give up is the UT1−UTC term we deliberately do not model —
-/// the same simplification `sat_golden.rs` quantifies from the other direction.
-const MAX_MEAN_RMS_HZ: f64 = 45.0;
+/// * This one catches WHOLE-GEOMETRY errors, which lift all eight observations
+///   at once — a geocentric-instead-of-geodetic station latitude reaches 64.3 Hz
+///   mean, a missing Earth-rotation term 80.9. An average sees those long before
+///   any single observation crosses its own limit.
+/// * It does NOT catch the truncated-epoch class: that bug's mean was 36.9 Hz,
+///   which passes here. `MAX_RMS_HZ` is what catches it, because the bug hit one
+///   observation (80.1 Hz) far harder than the set. Tightening this gate to ~35
+///   to cover that too would leave 1.1× headroom for no added coverage, so each
+///   gate is left doing what it is actually good at.
+///
+/// The same fixture measured against Skyfield gives 31.9 Hz — we now agree with
+/// it to 0.1 Hz on every observation, so essentially all of the residual left
+/// here is orbit-element error in the recordings themselves, not a difference of
+/// implementation. That was NOT true when this file was written: we were then at
+/// 36.9 Hz mean / 80.1 Hz worst, and running this test is what located the cause
+/// (a truncated TLE epoch in `sat.rs` — see `prepare()`).
+const MAX_MEAN_RMS_HZ: f64 = 40.0;
 
 fn load() -> Fixture {
     let path: PathBuf = [

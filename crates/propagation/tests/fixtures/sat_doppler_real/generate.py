@@ -144,6 +144,38 @@ WHAT WAS REJECTED, AND WHY (see REJECTED below for the record)
 * passes with a small total Doppler span -- they do not exercise the predictor
 * passes whose result moved when tracker parameters were varied -- ambiguous tracks
 
+WHAT THIS FIXTURE FOUND ON ITS FIRST RUN
+-----------------------------------------
+A real bug in `sat.rs`, which is the whole argument for measuring against the sky.
+
+`prepare()` read the element-set epoch with `.timestamp()` — whole seconds — discarding the
+fractional second a TLE actually carries (`26211.01342813` is sub-millisecond). The discarded
+fraction is effectively random per element set, and a LEO covers ~7.6 km in a second. Across
+these eight passes the resulting range error tracked the discarded fraction with r = 0.96, and
+the implied speed came out at 4.0-6.8 km/s: orbital velocity, which is the signature.
+
+Cost before the fix, per observation RMS (Hz):
+
+    STARS 14635786   13.8 -> 15.6      OBJECT J       38.9 -> 43.6
+    STARS 14645738   13.7 -> 24.2      ORIGAMISAT-2   35.5 -> 34.9
+    SEEDS            18.9 -> 20.5      GEOSAT         52.3 -> 56.1
+    CUTE-1.7         23.0 -> 20.3      OBJECT BT      59.4 -> 80.1
+                                       mean           31.9 -> 36.9
+    (Skyfield reference -> Nexus with the truncated epoch)
+
+After the fix Nexus reproduces the Skyfield column to 0.1 Hz on every observation.
+
+Why the existing model-versus-model test could not see it: `sat_golden.rs`'s generator stamped
+each sample with the SAME truncated epoch while evaluating Skyfield at the true one, so the two
+errors cancelled and that comparison reported 0.41 km worst range agreement while both sides were
+wrong together. Fixing sat.rs alone made sat_golden FAIL by 5.3 km, which is how the second bug
+surfaced. Both are fixed and its agreement improved (range-rate 0.0017 -> 0.0010 km/s).
+
+The transferable point: a reference implementation constrains you only where it does not share
+your mistakes, and a fixture generated alongside the code under test can quietly inherit them.
+Real recorded signals have no such loyalty. That is what this fixture is for, and it earned its
+keep the first time it ran.
+
 MEASURED RESULT AND SUGGESTED CI THRESHOLD
 ------------------------------------------
 Per-observation residual RMS under ONE fitted constant offset (Skyfield/SGP4 reference):
@@ -161,65 +193,40 @@ Per-observation residual RMS under ONE fitted constant offset (Skyfield/SGP4 ref
 
 FAULT INJECTION -- what this fixture actually catches
 -----------------------------------------------------
-Do not pick a threshold from the table above alone. These are the residuals produced by
-deliberately breaking the reference predictor in realistic ways:
+Do not pick a threshold from the passing numbers alone. The table below was produced by
+breaking the predictor under test (crates/propagation/src/sat.rs) in realistic ways and
+re-running this fixture. Measured through that Rust predictor, not through Skyfield:
 
-    injected bug                    mean    median   worst      caught?
-    (correct)                         32        29      59        --
-    Doppler sign flipped            4496      4496   12643      obvious
-    station longitude sign flip     2790      2390    5991      obvious
-    station velocity missing        <-- no Earth-rotation term in the topocentric velocity
-                                      81        70     147      yes, marginally
-    geocentric instead of geodetic
-      station latitude                64        53     137      yes, marginally
-    Doppler scaled by 1.01            45        51      75      marginal
-    Doppler scaled by 1.005           37        39      56      NO
-    time base off by +3 s             65        59     150      marginal
-    time base off by +1 s             40        30      89      NO
-    time base off by +0.25 s          33        28      67      NO
-    station altitude set to 0         32        29      59      NO -- literally no change
-    station altitude in feet          32        29      59      NO -- literally no change
+    injected bug                      mean Hz   worst Hz
+    (correct)                            31.9       59.5
+    Doppler sign flipped               5611.8    12643.3
+    station longitude sign flipped     2853.0     5991.2
+    omega x r dropped (observer fixed)   80.9      146.9
+    geocentric instead of geodetic lat   64.3      137.6
+    time base +3 s                       63.5      150.0
+    Doppler scaled by 1.01               44.8       74.4
+    time base +1 s                       40.0       88.9
+    Doppler scaled by 1.005              36.2       55.9
+    time base +0.25 s                    33.5       66.7
+    Doppler scaled by 1.002              32.9       56.1
+    station altitude ignored             31.9       59.5   <- literally no change
 
-    ==> RECOMMENDED GATE, two levels:
-    ==>   (a) every observation:   residual RMS <= 100 Hz   [worst measured 59.4 -> 1.7x]
-    ==>   (b) mean over all eight: residual RMS <=  45 Hz   [measured 32.0    -> 1.4x]
-    ==>
-    ==> (a) alone is robust but blunt -- it only catches gross errors. (b) is what
-    ==> actually catches the subtle geometry bugs, because a systematic error lifts
-    ==> every observation at once while the noise floor does not move.
+    ==> GATE, two levels, both needed:
+    ==>   (a) every observation:   residual RMS <= 75 Hz   [worst measured 59.5 -> 1.26x]
+    ==>   (b) mean over all eight: residual RMS <= 40 Hz   [measured      31.9 -> 1.25x]
 
-An earlier draft of this file suggested 150 Hz. That was wrong: at 150 Hz BOTH the
-geodetic-latitude bug and the missing-Earth-rotation bug pass. The numbers above are why
-the gate is 100/45 instead.
+They are complementary. A 1% Doppler scale error never breaks any single observation
+(worst 74.4) but moves the mean clearly; a +1 s time base barely moves the mean (40.0)
+but pushes one observation to 88.9. Either gate alone misses one of them.
 
-Headroom rationale: the fixture is fully deterministic -- committed samples, frozen TLEs,
-no network at test time -- so run-to-run variance is exactly zero. The only slack needed
-is for a correct implementation differing from Skyfield in frame handling (TEME->ECEF,
-polar motion) or SGP4 gravity constants, which is a few Hz to low tens of Hz. 1.4x is
-comfortable for that and still tight enough to be diagnostic.
+An earlier draft suggested 150 Hz. That was wrong: at 150 BOTH the geodetic-latitude and
+the dropped-omega-x-r bug pass. Tightness here is not fastidiousness -- it is the
+difference between a test that catches those two and one that does not.
 
-WHY EIGHT AND NOT MORE -- adding observations measurably HURTS
---------------------------------------------------------------
-The obvious way to "improve" this fixture is to admit more passes. It was tested, and it
-makes the test worse. Re-running the fault injection with two near-miss passes added
-(MARINA at station 4434 on 145.925 MHz -- a 5th station, a new band and the highest
-elevation seen at 64 deg -- plus ORIGAMISAT-2 at station 5024, a 6th station):
-
-                        8 observations        10 observations
-    correct        mean 31.9 worst  59.4   mean 37.5 worst  90.6
-    geocentric lat      64.3      137.4  (2.01x)   66.8      137.4  (1.78x)
-    no Earth rot        80.9      146.6  (2.53x)   77.3      146.6  (2.06x)
-    Doppler x1.01       44.9       74.5  (1.41x)   49.1       99.9  (1.31x)
-
-Separation degrades for every bug class. Both extra passes have residuals dominated by
-stale elements, so they raise the correct-case floor without raising the bug response --
-they add noise, not signal. Detection power here comes from passes whose residual is
-small, not from covering more stations.
-
-So: do NOT add observations to this fixture without re-running the fault injection above.
-If a new pass does not beat ~40 Hz RMS with a structured component under ~100 Hz, it will
-dilute the gate rather than strengthen it. Quality over quantity is not a slogan here, it
-is a measured result.
+Headroom rationale: the fixture is deterministic -- committed samples, frozen TLEs, no
+network at test time -- so run-to-run variance is exactly zero. 1.25x only has to cover a
+deliberate code change, and nothing legitimate should RAISE these numbers (modelling
+UT1-UTC, the one simplification left in sat.rs, would lower them).
 
 BLIND SPOTS -- be explicit about these when reading a green test
 ----------------------------------------------------------------

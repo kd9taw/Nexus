@@ -12,7 +12,10 @@
 //!   carried east at up to ~0.46 km/s, ~10 % of a LEO range-rate),
 //! * the `ω × r` term dropped when converting the satellite's TEME velocity to
 //!   an Earth-fixed one,
-//! * an off-by-one in the epoch, worth a few hundred metres of sub-point.
+//! * a truncated or off-by-one epoch — worth KILOMETRES, not metres: a LEO
+//!   covers 7.6 km in a second. Sub-second epoch precision was in fact being
+//!   discarded, by `sat.rs` AND by this fixture's generator, until real
+//!   recorded carriers broke the tie (see below).
 //!
 //! None of those throw. All of them put the operator on the wrong frequency.
 //!
@@ -40,21 +43,36 @@
 //!
 //! | quantity   | worst Δ      | in operator terms                          |
 //! |------------|--------------|--------------------------------------------|
-//! | range-rate | 0.0017 km/s  | 0.8 Hz on 2 m, 2.5 Hz on 70 cm, 61 Hz on QO-100 |
-//! | range      | 0.41 km      | display only                               |
-//! | elevation  | 0.011°       | 1/100 of a rotator step                    |
-//! | azimuth    | 0.016°       | 1/60 of a rotator step                     |
+//! | range-rate | 0.0010 km/s  | 0.5 Hz on 2 m, 1.5 Hz on 70 cm, 35 Hz on QO-100 |
+//! | range      | 0.23 km      | display only                               |
+//! | elevation  | 0.013°       | 1/100 of a rotator step                    |
+//! | azimuth    | 0.020°       | 1/50 of a rotator step                     |
 //!
 //! Residual disagreement is dominated by time scales: Skyfield models UT1−UTC
 //! (up to 0.9 s, ≈13 arcsec of Earth rotation) where Nexus uses UTC directly.
 //! That is a deliberate simplification and the table is what it costs.
 //!
-//! The QO-100 column is the one to watch. 61 Hz is nothing on a 2 m or 70 cm
+//! ⚠️ These figures were BETTER than the truth until 2026-07-31. This fixture's
+//! generator stamped each sample with the element-set epoch truncated to a whole
+//! second while evaluating Skyfield at the true fractional epoch, and `sat.rs`
+//! truncated its own epoch identically. The two errors cancelled, so this
+//! comparison reported excellent agreement while both sides were wrong together
+//! by up to 0.7 s of orbital motion. `sat_doppler_real.rs` — which compares
+//! against carriers recorded off the air, and so has no shared assumption to
+//! cancel against — is what exposed it. Both were fixed; the table above is the
+//! honest post-fix measurement, and range-rate agreement actually IMPROVED
+//! (0.0017 → 0.0010 km/s).
+//!
+//! The lesson is structural, not incidental: a reference implementation only
+//! constrains you where it does not share your mistakes. Keep at least one test
+//! whose ground truth is physical.
+//!
+//! The QO-100 column is the one to watch. 35 Hz is nothing on a 2 m or 70 cm
 //! SSB signal but it is real on a 10 GHz narrowband downlink, so a future
 //! geostationary-microwave mode would want the UT1 term rather than this
 //! approximation — it is a known, quantified limit rather than an unknown.
 //!
-//! Tolerances are set from those measured figures with ~3× headroom, not at
+//! Tolerances are set from those measured figures with ~5× headroom, not at
 //! round numbers, so a regression fails here long before it is audible.
 
 use std::path::PathBuf;
@@ -94,7 +112,7 @@ fn hz_at(rate_err_km_s: f64, mhz: f64) -> f64 {
 
 /// Range-rate — the one that reaches the air.
 ///
-/// Set from the MEASURED agreement (worst 0.0017 km/s) with ~3× headroom,
+/// Set from the MEASURED agreement (worst 0.0010 km/s) with ~5× headroom,
 /// rather than at a round number that would let a real regression through. At
 /// this bound the worst-case Doppler error is 2.4 Hz on 2 m, 7.3 Hz on 70 cm
 /// and 175 Hz on the QO-100 downlink — the first two are inaudible on SSB and
@@ -104,9 +122,9 @@ fn hz_at(rate_err_km_s: f64, mhz: f64) -> f64 {
 /// quantity, so both fail this by orders of magnitude.
 const TOL_RATE_KM_S: f64 = 0.005;
 /// Slant range feeds the display and the footprint, not the radio. Measured
-/// worst is 0.41 km.
+/// worst is 0.23 km.
 const TOL_RANGE_KM: f64 = 1.0;
-/// Elevation: a tenth of a rotator step (measured worst 0.011°).
+/// Elevation: a tenth of a rotator step (measured worst 0.013°).
 const TOL_EL_DEG: f64 = 0.1;
 /// Azimuth: the same, but only meaningful when the bird is up (see below).
 const TOL_AZ_DEG: f64 = 0.1;

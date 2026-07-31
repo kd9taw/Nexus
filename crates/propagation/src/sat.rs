@@ -343,7 +343,21 @@ pub fn norad_id(line1: &str) -> Option<u32> {
 
 /// Parse the TLE into propagator constants + its epoch as unix seconds. `None`
 /// on any parse/element error (the caller degrades to no-data).
-fn prepare(tle: &Tle) -> Option<(sgp4::Constants, i64)> {
+///
+/// ⭐ The epoch is FRACTIONAL and must stay that way. A TLE states its epoch as a
+/// fractional day-of-year with eight decimals (`26211.01342813`) — sub-millisecond
+/// resolution — and the fractional second is effectively arbitrary from one
+/// element set to the next. Truncating it to a whole second (`.timestamp()`)
+/// shifts the whole propagation by up to 1 s, and a LEO covers ~7.6 km in that
+/// second: kilometres of position error, and up to ~0.05 km/s of range-rate,
+/// which is ~75 Hz at 435 MHz and over 1.5 kHz on a 10 GHz downlink.
+///
+/// This was a real bug, found by `tests/sat_doppler_real.rs` comparing against
+/// recorded carriers — the error tracked the discarded fraction with r = 0.96.
+/// It is invisible to a model-versus-model check whose reference is fed the same
+/// truncated epoch, and invisible in review because the resulting Doppler curve
+/// still looks perfectly smooth.
+fn prepare(tle: &Tle) -> Option<(sgp4::Constants, f64)> {
     let elements = sgp4::Elements::from_tle(
         Some(tle.name.clone()),
         tle.line1.trim_end().as_bytes(),
@@ -351,14 +365,16 @@ fn prepare(tle: &Tle) -> Option<(sgp4::Constants, i64)> {
     )
     .ok()?;
     let constants = sgp4::Constants::from_elements(&elements).ok()?;
-    let epoch_unix = elements.datetime.and_utc().timestamp();
+    // Microseconds, then to seconds: exact in f64 for any plausible epoch
+    // (~1.8e15 µs today, well inside f64's 2^53 integer range).
+    let epoch_unix = elements.datetime.and_utc().timestamp_micros() as f64 / 1e6;
     Some((constants, epoch_unix))
 }
 
 /// Propagate to `unix` and rotate the TEME position into the Earth-fixed frame.
 /// `None` if the elements diverge at this time.
-fn sat_ecef(constants: &sgp4::Constants, epoch_unix: i64, unix: f64) -> Option<[f64; 3]> {
-    let minutes = (unix - epoch_unix as f64) / 60.0;
+fn sat_ecef(constants: &sgp4::Constants, epoch_unix: f64, unix: f64) -> Option<[f64; 3]> {
+    let minutes = (unix - epoch_unix) / 60.0;
     let prediction = constants.propagate(sgp4::MinutesSinceEpoch(minutes)).ok()?;
     let [x, y, z] = prediction.position;
     // TEME → ECEF: rotate about the pole by +GMST (R3(θ)). z is preserved.
@@ -377,10 +393,10 @@ const EARTH_ROT_RAD_S: f64 = 7.292_115_146_7e-5;
 /// result carries a spurious ~0.46 km/s tangential term at LEO altitudes.
 fn sat_ecef_with_velocity(
     constants: &sgp4::Constants,
-    epoch_unix: i64,
+    epoch_unix: f64,
     unix: f64,
 ) -> Option<([f64; 3], [f64; 3])> {
-    let minutes = (unix - epoch_unix as f64) / 60.0;
+    let minutes = (unix - epoch_unix) / 60.0;
     let prediction = constants.propagate(sgp4::MinutesSinceEpoch(minutes)).ok()?;
     let [x, y, z] = prediction.position;
     let [vx, vy, vz] = prediction.velocity;
