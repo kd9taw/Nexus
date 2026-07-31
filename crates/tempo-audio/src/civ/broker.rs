@@ -13,7 +13,7 @@
 
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -22,6 +22,28 @@ use super::engine::{CivEngine, CivError, CivHandle, Expect};
 use super::frame::Frame;
 use super::scope::ScopeSweep;
 use crate::rigctld_server::{serve_connection, RigBackend};
+
+/// Cross-band split state: on a dual-band Icom (IC-9700/910H) a cross-band
+/// pair is NOT `0F` split — `0F` is same-band A/B, and `25 01` writes the
+/// unselected VFO of the *current* band (the field-falsified parity-batch
+/// assumption). Cross-band is the rig's SATELLITE MODE (`16 5A`): Main =
+/// downlink/RX, Sub = uplink/TX, full duplex, TX always out Sub.
+struct SatSplit {
+    /// Split currently rides satellite mode (we engaged it via `S 1 Sub`).
+    engaged: bool,
+    /// `16 5A` capability: `Some(true)` = the rig answers the read (it has a
+    /// Sub band), `Some(false)` = NAK (an IC-7300 refuses honestly), `None` =
+    /// not probed yet. A probe TIMEOUT stays `None` — one busy moment must not
+    /// become a permanent "no".
+    cap: Option<bool>,
+    /// The tuning selection may be stranded on the SUB band: a Main-restore
+    /// write failed mid select-write-restore. While this stands, every
+    /// selection-dependent verb re-asserts Main first (and refuses when even
+    /// that fails) — without it the next `05` would land the downlink in the
+    /// Sub band, and satellite-mode TX exits Sub, so the rig would transmit
+    /// on the downlink frequency.
+    sel_stray: bool,
+}
 
 /// rigctld-protocol backend that translates every verb to CI-V through the engine.
 pub struct CivBackend {
@@ -34,6 +56,15 @@ pub struct CivBackend {
     /// broker's disconnect fail-safe unkey can skip while Nexus is on the air (its own Rig is a
     /// client here, and a transient reconnect must not steal the over). See `owner_transmitting`.
     tx_intent: Arc<AtomicBool>,
+    /// Satellite-mode split state — and the lock is LOAD-BEARING, not
+    /// decoration: the daemon serves one shared backend to a thread per TCP
+    /// connection, so without it a `f` poll (Nexus's own Rig, or WSJT-X) can
+    /// land between `07 D1` and `07 D0` inside a Sub-band write and read the
+    /// UPLINK as the dial — which `sat_observe_operator_tune` treats as "the
+    /// operator tuned away" and hands the pass back. Every selected-VFO verb
+    /// (freq/mode read + write) takes it; PTT deliberately does not (an unkey
+    /// must never queue behind a tuning sequence).
+    band: Mutex<SatSplit>,
 }
 
 impl CivBackend {
@@ -43,7 +74,159 @@ impl CivBackend {
             addr,
             split: AtomicBool::new(false),
             tx_intent,
+            band: Mutex::new(SatSplit {
+                engaged: false,
+                cap: None,
+                sel_stray: false,
+            }),
         }
+    }
+
+    /// The band/satellite-split lock. Poison-recovering: a panicked client
+    /// thread must never wedge every other connection's CAT.
+    fn band(&self) -> MutexGuard<'_, SatSplit> {
+        self.band
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Select a band/VFO by token (`Main`/`Sub`), acked. Callers hold the band lock.
+    fn select(&self, vfo: &str) -> bool {
+        commands::select_vfo(self.addr, vfo).is_some_and(|f| self.ack(f))
+    }
+
+    /// Re-assert the Main selection when a failed restore may have stranded
+    /// it on Sub ([`SatSplit::sel_stray`]). True = the selection is known to
+    /// be Main. On success the dial is re-read so the engine's state cache
+    /// drops any uplink a stray-period read folded in. Callers hold the band
+    /// lock.
+    fn ensure_main(&self, g: &mut SatSplit) -> bool {
+        if !g.sel_stray {
+            return true;
+        }
+        if !self.select("Main") {
+            return false;
+        }
+        g.sel_stray = false;
+        let _ = self.read(commands::read_freq(self.addr), 0x03, None);
+        true
+    }
+
+    /// Release a split that rides satellite mode (`16 5A 00`). On failure the
+    /// session state STANDS — the rig is still in satellite mode, and clearing
+    /// `engaged` anyway would let the next teardown fire `0F 00` at it (or
+    /// route an A/B split's TX dial into the Sub band).
+    fn release_sat_split(&self, g: &mut SatSplit) -> bool {
+        let ok = self.ack(commands::set_dsp_func(
+            self.addr,
+            commands::FUNC_SATMODE,
+            false,
+        ));
+        if ok {
+            g.engaged = false;
+            self.split.store(false, Ordering::Relaxed);
+        }
+        ok
+    }
+
+    /// Read `16 5A` (satellite mode) back from the rig.
+    fn read_satmode(&self) -> Result<Option<bool>, CivError> {
+        self.read(
+            commands::read_dsp_func(self.addr, commands::FUNC_SATMODE),
+            0x16,
+            Some(commands::FUNC_SATMODE),
+        )
+        .map(|f| commands::parse_dsp_func(&f, commands::FUNC_SATMODE))
+    }
+
+    /// Engage satellite mode as the cross-band split (`S 1 Sub`). Returns true
+    /// only when the rig's own `16 5A` read-back confirms it.
+    fn engage_sat_split(&self, g: &mut SatSplit) -> bool {
+        // Capability by READING, not by model string: an IC-910H answers, an
+        // IC-7300 NAKs honestly. Cached; a timeout retries next attempt.
+        let cap = match g.cap {
+            Some(c) => c,
+            None => match self.read_satmode() {
+                Ok(v) => {
+                    let c = v.is_some();
+                    g.cap = Some(c);
+                    c
+                }
+                Err(CivError::Nak) => {
+                    g.cap = Some(false);
+                    false
+                }
+                Err(_) => false, // busy/dead: fail THIS attempt, cache nothing
+            },
+        };
+        if !cap {
+            return false;
+        }
+        if g.engaged {
+            // Re-asserted every correction by the split one-shot — but the
+            // operator switching satellite mode OFF on the front panel is them
+            // taking the rig back. Never fight the knob: report it honestly
+            // instead of re-engaging over their choice.
+            return match self.read_satmode() {
+                Ok(Some(false)) => {
+                    g.engaged = false;
+                    self.split.store(false, Ordering::Relaxed);
+                    false
+                }
+                // On (or a busy/unparseable moment): the split stands.
+                _ => true,
+            };
+        }
+        // Engaging satellite mode swaps BOTH bands to the rig's stored
+        // satellite VFOs — the downlink the retune just wrote would be
+        // clobbered. Read the dial first, engage + verify, then put the
+        // downlink back on Main.
+        if !self.ensure_main(g) {
+            return false; // a stray selection would read SUB as "the dial"
+        }
+        let dial = self
+            .read(commands::read_freq(self.addr), 0x03, None)
+            .ok()
+            .and_then(|f| commands::parse_freq(&f));
+        let ok = self.ack(commands::set_dsp_func(
+            self.addr,
+            commands::FUNC_SATMODE,
+            true,
+        )) && self.read_satmode() == Ok(Some(true));
+        if !ok {
+            // The set may still have LANDED (an acked set whose verify reply
+            // was lost, or a timed-out set the rig acted on): without an undo
+            // the rig would sit in satellite mode on its stored satellite
+            // VFOs while the session believes nothing happened — and the
+            // eventual teardown would fire `0F 00`, stranding it there. Back
+            // the set out and put the dial back, best-effort, then fail
+            // honestly.
+            let _ = self.ack(commands::set_dsp_func(
+                self.addr,
+                commands::FUNC_SATMODE,
+                false,
+            ));
+            if let Some(hz) = dial {
+                let _ = self.ack(commands::set_freq(self.addr, hz));
+            }
+            return false;
+        }
+        if let Some(hz) = dial {
+            // Pin the selection to Main explicitly rather than trusting where
+            // the mode flip leaves it, then restore the downlink dial there.
+            // A refused pin marks the selection stray instead of writing
+            // blind — the write would land wherever the flip left things (the
+            // next verb's `ensure_main` repairs it, and the next Doppler
+            // correction rewrites the dial).
+            if self.select("Main") {
+                let _ = self.ack(commands::set_freq(self.addr, hz));
+            } else {
+                g.sel_stray = true;
+            }
+        }
+        g.engaged = true;
+        self.split.store(true, Ordering::Relaxed);
+        true
     }
 
     fn ack(&self, f: Frame) -> bool {
@@ -85,6 +268,13 @@ impl RigBackend for CivBackend {
     }
 
     fn freq_hz(&self) -> u64 {
+        let mut g = self.band(); // never read the dial mid Main/Sub sequence
+        if !self.ensure_main(&mut g) {
+            // The selection may be stranded on Sub (a failed restore): a read
+            // now would serve the UPLINK as the dial — and the state cache
+            // may hold it too. 0 = no honest reading, same as a dead engine.
+            return 0;
+        }
         match self.read(commands::read_freq(self.addr), 0x03, None) {
             Ok(f) => commands::parse_freq(&f)
                 .or(self.h.state().freq_hz)
@@ -98,10 +288,16 @@ impl RigBackend for CivBackend {
     }
 
     fn mode(&self) -> (String, u32) {
-        let reply = self
-            .read(commands::read_mode(self.addr), 0x04, None)
-            .ok()
-            .and_then(|f| commands::parse_mode(&f));
+        let mut g = self.band(); // the `04` read hits the SELECTED band
+        let reply = if self.ensure_main(&mut g) {
+            self.read(commands::read_mode(self.addr), 0x04, None)
+                .ok()
+                .and_then(|f| commands::parse_mode(&f))
+        } else {
+            // Selection possibly stranded on Sub: the read would serve the
+            // uplink's mode. Fall to the state cache like any failed read.
+            None
+        };
         let st = self.h.state();
         let (mode, _filter) = match reply {
             Some(m) => m,
@@ -125,14 +321,37 @@ impl RigBackend for CivBackend {
     }
 
     fn split(&self) -> bool {
+        if self.band().engaged {
+            // Report what the rig IS, not what we last commanded: the operator
+            // can leave satellite mode from the front panel, and the `s` verb
+            // must say so. Read failures (one busy moment) keep the last state.
+            return self.read_satmode().ok().flatten().unwrap_or(true);
+        }
         self.split.load(Ordering::Relaxed)
     }
 
+    fn vfo(&self) -> String {
+        // In satellite mode every sequence hands the selection back to Main —
+        // that is the printed truth beside the split state.
+        if self.band().engaged {
+            "Main".to_string()
+        } else {
+            "VFOA".to_string()
+        }
+    }
+
     fn set_freq(&self, hz: u64) -> bool {
-        self.ack(commands::set_freq(self.addr, hz))
+        let mut g = self.band(); // the `05` write hits the SELECTED band
+        // A write with the selection stranded on Sub would land the downlink
+        // in the uplink's band — re-assert Main first, refuse otherwise.
+        self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz))
     }
 
     fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
+        let mut g = self.band(); // the `06` write hits the SELECTED band
+        if !self.ensure_main(&mut g) {
+            return false; // same stray-selection refusal as `set_freq`
+        }
         // PKT*/DATA-* = base sideband + DATA mode on; every plain mode turns DATA off.
         let up = mode.to_ascii_uppercase();
         let (base, data) = match up.as_str() {
@@ -282,7 +501,29 @@ impl RigBackend for CivBackend {
         Some(self.ack(commands::stop_morse(self.addr)))
     }
 
-    fn set_split(&self, on: bool, _tx_vfo: &str) -> Option<bool> {
+    fn set_split(&self, on: bool, tx_vfo: &str) -> Option<bool> {
+        let mut g = self.band();
+        // TX on the SUB BAND = the rig's satellite mode, not `0F` (same-band
+        // A/B split, which cannot be cross-band on this family). Any other
+        // TX-VFO token keeps the shipped `0F` path byte-identical.
+        if on && tx_vfo.eq_ignore_ascii_case("sub") {
+            return Some(self.engage_sat_split(&mut g));
+        }
+        if g.engaged {
+            // Any other split request while the split rides satellite mode
+            // ends the session FIRST — leaving it is releasing satellite
+            // mode, and an A/B request (`S 1 VFOB`: WSJT-X Split-Operation
+            // mid-pass) must never fire `0F` at a rig still in it, or
+            // `set_split_freq` keeps routing the A/B TX dial into the Sub
+            // band and TX leaves on the downlink band. A refused release
+            // refuses the whole request.
+            if !self.release_sat_split(&mut g) {
+                return Some(false);
+            }
+            if !on {
+                return Some(true); // released — never 0F 00 at this rig
+            }
+        }
         let ok = self.ack(commands::set_split(self.addr, on));
         if ok {
             self.split.store(on, Ordering::Relaxed);
@@ -291,7 +532,65 @@ impl RigBackend for CivBackend {
     }
 
     fn set_split_freq(&self, hz: u64) -> Option<bool> {
-        Some(self.ack(commands::set_unselected_freq(self.addr, hz)))
+        let mut g = self.band();
+        if !self.ensure_main(&mut g) {
+            // `25 01` writes the unselected VFO of the CURRENT band — with a
+            // stray selection either path would write the wrong register.
+            return Some(false);
+        }
+        if !g.engaged {
+            return Some(self.ack(commands::set_unselected_freq(self.addr, hz)));
+        }
+        // Satellite mode: the TX dial lives in the SUB band. Select-write-
+        // verify-restore, atomic under the band lock. Success ONLY when the
+        // rig's own read-back returns the frequency we sent — per LAW, what
+        // was DONE, never what was computed.
+        let ok = self.select("Sub")
+            && self.ack(commands::set_freq(self.addr, hz))
+            && self
+                .read(commands::read_freq(self.addr), 0x03, None)
+                .ok()
+                .and_then(|f| commands::parse_freq(&f))
+                == Some(hz);
+        // ALWAYS hand the selection back to Main — even mid-failure — and
+        // re-read the dial so the engine's state cache holds MAIN's frequency
+        // again (the Sub read above folded the uplink into it; a later timeout
+        // fallback must never serve the uplink as the dial). A REFUSED
+        // restore is remembered, not shrugged off: the selection is stray
+        // until `ensure_main` repairs it, and the cache re-read is skipped
+        // (it would fold Sub's dial in a second time).
+        let restored = self.select("Main");
+        g.sel_stray = !restored;
+        if restored {
+            let _ = self.read(commands::read_freq(self.addr), 0x03, None);
+        }
+        Some(ok && restored)
+    }
+
+    fn set_split_mode(&self, mode: &str, _passband_hz: i32) -> Option<bool> {
+        let mut g = self.band();
+        if !g.engaged {
+            // A/B split has no native mode verb wired yet (`26 01` is a
+            // follow-up once verified against the manual) — `RPRT -11`, the
+            // honest "not implemented", exactly as before.
+            return None;
+        }
+        if !self.ensure_main(&mut g) {
+            return Some(false); // same stray-selection refusal as the freq
+        }
+        // The uplink sideband (`X`, the inverting-bird LSB): command it on the
+        // Sub band, selection restored, same discipline as the frequency —
+        // including the remembered stray selection on a refused restore.
+        let Some(m) = Mode::from_name(mode) else {
+            return Some(false);
+        };
+        let ok = self.select("Sub") && self.ack(commands::set_mode(self.addr, m, None));
+        let restored = self.select("Main");
+        g.sel_stray = !restored;
+        if restored {
+            let _ = self.read(commands::read_freq(self.addr), 0x03, None);
+        }
+        Some(ok && restored)
     }
 
     fn set_rit(&self, hz: i32) -> Option<bool> {
@@ -561,5 +860,297 @@ mod tests {
             &format!("127.0.0.1:{port}"),
             Duration::from_millis(800),
         ));
+    }
+
+    // ===== cross-band split = SATELLITE MODE, never 0F (the IC-9700 contract) =====
+    //
+    // Field-falsified assumption these pin: `0F 01` + `25 01` puts the uplink on
+    // "the Sub band". It does not — `0F` is same-band A/B split and `25 01`
+    // writes the unselected VFO of the CURRENT band. Cross-band on a 9700 is
+    // Main/Sub band operation: satellite mode ON, Main = downlink, uplink
+    // select-written into Sub, selection returned to Main.
+
+    use super::super::engine::tests_support::Regs;
+
+    fn daemon_with_regs() -> (CivDaemon, u16, Arc<std::sync::Mutex<Regs>>) {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port).unwrap();
+        (d, port, regs)
+    }
+
+    fn client(port: u16) -> (TcpStream, BufReader<TcpStream>) {
+        let c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let rd = BufReader::new(c.try_clone().unwrap());
+        (c, rd)
+    }
+
+    fn roundtrip(c: &mut TcpStream, rd: &mut BufReader<TcpStream>, cmd: &str) -> String {
+        c.write_all(cmd.as_bytes()).unwrap();
+        let mut line = String::new();
+        rd.read_line(&mut line).unwrap();
+        line
+    }
+
+    #[test]
+    fn a_sub_split_rides_satellite_mode_and_lands_the_uplink_in_the_sub_band() {
+        // THE field report, as a wire test: downlink 435.640 on Main, uplink
+        // 145.965 must land in the SUB band — with the selection handed back to
+        // Main so the dial, the scope and every `f` poll keep the downlink.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+
+        // The downlink leg (the ordinary retune) lands on Main.
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 435640000\n"), "RPRT 0\n");
+
+        // Split to Sub = satellite mode ON — and NOT `0F` (same-band split).
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert!(r.satmode, "satellite mode engaged (16 5A 01)");
+            assert!(!r.split, "0F split is same-band — must NOT be used");
+            assert!(
+                !r.log.iter().any(|(cmd, _)| *cmd == 0x0F),
+                "no 0F frame at all under the satellite-mode contract"
+            );
+            assert_eq!(
+                r.main_hz, 435_640_000,
+                "engaging satellite mode must not lose the downlink dial"
+            );
+        }
+
+        // The uplink: select-written into the SUB band, selection restored.
+        assert_eq!(roundtrip(&mut c, &mut rd, "I 145965000\n"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.sub_hz, 145_965_000, "the uplink is in the Sub band");
+            assert_eq!(r.main_hz, 435_640_000, "Main (the downlink) untouched");
+            assert!(!r.sel_sub, "selection handed back to Main");
+            assert_eq!(
+                r.unselected_hz, 0,
+                "25 01 (unselected VFO of the current band) must not be used"
+            );
+        }
+
+        // The uplink sideband (`X`, an inverting bird): Sub's mode, Main kept.
+        assert_eq!(roundtrip(&mut c, &mut rd, "X LSB 0\n"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.sub_mode, 0x00, "LSB commanded on the Sub band");
+            assert_eq!(r.main_mode, 0x01, "Main's mode untouched");
+            assert!(!r.sel_sub, "selection restored after the mode write");
+        }
+
+        // `s` reports what the rig IS: split on (the 16 5A read-back), Main.
+        c.write_all(b"s\n").unwrap();
+        let mut l1 = String::new();
+        let mut l2 = String::new();
+        rd.read_line(&mut l1).unwrap();
+        rd.read_line(&mut l2).unwrap();
+        assert_eq!(l1, "1\n");
+        assert_eq!(l2, "Main\n");
+
+        // And the dial reads back the DOWNLINK, not the uplink.
+        assert_eq!(roundtrip(&mut c, &mut rd, "f\n"), "435640000\n");
+
+        // Split off = satellite mode OFF — still no 0F.
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 0 Sub\n"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert!(!r.satmode, "satellite mode released (16 5A 00)");
+            assert!(!r.log.iter().any(|(cmd, _)| *cmd == 0x0F));
+        }
+    }
+
+    #[test]
+    fn a_rig_without_satellite_mode_refuses_a_sub_split_honestly() {
+        // An IC-7300 has no Sub band: `16 5A` NAKs. The answer must be an
+        // honest RPRT -1 — never a silent fall-back to same-band 0F split,
+        // which would transmit the "uplink" into the downlink's own band.
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let (radio, _push) = FakeRadio::new(0x94);
+        let regs = radio.regs();
+        regs.lock().unwrap().no_satmode = true;
+        let _d = CivDaemon::start_with_io(Box::new(radio), 0x94, port).unwrap();
+        let (mut c, mut rd) = client(port);
+
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT -1\n");
+        let r = regs.lock().unwrap();
+        assert!(!r.satmode);
+        assert!(!r.split, "no silent same-band split");
+        assert!(!r.log.iter().any(|(cmd, _)| *cmd == 0x0F));
+    }
+
+    #[test]
+    fn an_ab_split_while_satmode_is_engaged_releases_the_session_first() {
+        // WSJT-X Split-Operation=Rig fires `S 1 VFOB` + `I <shifted dial>` —
+        // and a digital over during a satellite pass is a designed-for
+        // scenario. Routing that `I` on the satmode session would clobber the
+        // uplink in the Sub band, and satmode TX always exits Sub, so the
+        // over would leave on the DOWNLINK band. The A/B request must end the
+        // session first: satellite mode released, THEN `0F 01`, and the split
+        // TX dial rides `25 01` per the A/B contract.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 435640000\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "I 145965000\n"), "RPRT 0\n");
+
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 VFOB\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "I 435641500\n"), "RPRT 0\n");
+        let r = regs.lock().unwrap();
+        assert!(!r.satmode, "the satmode session ended before the A/B split");
+        assert!(r.split, "0F 01 engaged for the A/B split");
+        let rel = r
+            .log
+            .iter()
+            .position(|(cmd, d)| *cmd == 0x16 && d == &[0x5A, 0x00]);
+        let ab = r.log.iter().position(|(cmd, d)| *cmd == 0x0F && d == &[0x01]);
+        assert!(
+            rel.unwrap() < ab.unwrap(),
+            "release precedes 0F — never 0F at a rig still in satellite mode"
+        );
+        assert_eq!(r.unselected_hz, 435_641_500, "the A/B TX dial rides 25 01");
+        assert_eq!(r.sub_hz, 145_965_000, "the Sub band is NOT clobbered");
+    }
+
+    #[test]
+    fn an_ab_split_that_cannot_release_satmode_refuses_without_0f() {
+        // If the rig will not leave satellite mode, the A/B split must be
+        // refused whole — firing `0F 01` anyway would route TX out the Sub
+        // band while the client believes it set up a same-band split.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT 0\n");
+        regs.lock().unwrap().nak_satmode_set = 1;
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 VFOB\n"), "RPRT -1\n");
+        let r = regs.lock().unwrap();
+        assert!(r.satmode, "the rig really is still in satellite mode");
+        assert!(
+            !r.log.iter().any(|(cmd, _)| *cmd == 0x0F),
+            "no 0F at a rig still in satellite mode"
+        );
+    }
+
+    #[test]
+    fn a_lost_verify_reply_never_strands_the_rig_in_satellite_mode() {
+        // One lost CI-V reply on the engage verify used to leave the rig IN
+        // satellite mode (on its stored satellite VFOs) while the session
+        // believed nothing happened — the later teardown then fired `0F 00`,
+        // stranding satmode behind a cleared split. An engage the verify
+        // cannot confirm is backed out and the dial restored.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 435640000\n"), "RPRT 0\n");
+        // Prime the capability cache with a clean engage/release round-trip
+        // so the dropped reply below hits the VERIFY read, not the probe.
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 0 Sub\n"), "RPRT 0\n");
+
+        regs.lock().unwrap().drop_satmode_reads = 1;
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT -1\n");
+        {
+            let r = regs.lock().unwrap();
+            assert!(!r.satmode, "the unconfirmed engage was backed out");
+            assert_eq!(r.main_hz, 435_640_000, "the downlink dial survived");
+        }
+        // And nothing is poisoned: the next attempt engages cleanly.
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT 0\n");
+        let r = regs.lock().unwrap();
+        assert!(r.satmode);
+        assert_eq!(r.main_hz, 435_640_000);
+    }
+
+    #[test]
+    fn a_failed_main_restore_is_reasserted_before_the_next_selected_verb() {
+        // A refused `07 D0` used to strand the selection on Sub for good:
+        // the next Doppler correction's `05` then wrote the DOWNLINK into
+        // the Sub band — and satmode TX exits Sub, so the rig would have
+        // transmitted on the downlink frequency. The stray selection is
+        // remembered and Main re-asserted before every selection-dependent
+        // verb.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 435640000\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT 0\n");
+
+        regs.lock().unwrap().nak_main_select = 1;
+        // The uplink write reports failure (its restore did not land)...
+        assert_eq!(roundtrip(&mut c, &mut rd, "I 145965000\n"), "RPRT -1\n");
+        assert!(
+            regs.lock().unwrap().sel_sub,
+            "the rig really is stuck on Sub"
+        );
+        // ...but the next dial poll and dial write re-assert Main first:
+        // the poll serves the DOWNLINK, and the correction lands on Main.
+        assert_eq!(roundtrip(&mut c, &mut rd, "f\n"), "435640000\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 435641000\n"), "RPRT 0\n");
+        let r = regs.lock().unwrap();
+        assert!(!r.sel_sub, "Main re-asserted");
+        assert_eq!(r.main_hz, 435_641_000, "the correction landed on Main");
+        assert_eq!(r.sub_hz, 145_965_000, "…never in the Sub band");
+    }
+
+    #[test]
+    fn ab_split_keeps_the_existing_bytes_exactly() {
+        // Every non-Sub split is the shipped path, byte for byte: `0F 01` then
+        // `25 01` — the 7300-family same-band pile-up split.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 VFOB\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "I 14235000\n"), "RPRT 0\n");
+        let r = regs.lock().unwrap();
+        assert!(r.split, "0F 01 (same-band split) as before");
+        assert!(!r.satmode, "satellite mode is not involved");
+        assert_eq!(r.unselected_hz, 14_235_000, "25 01 as before");
+        assert_eq!(r.sub_hz, 435_000_000, "the Sub band untouched");
+    }
+
+    #[test]
+    fn a_concurrent_dial_poll_never_reads_the_uplink_mid_sequence() {
+        // The daemon serves one shared backend to a thread per TCP connection —
+        // a WSJT-X `f` poll landing between `07 D1` and `07 D0` would return
+        // the UPLINK as the dial, which `sat_observe_operator_tune` reads as
+        // "the operator tuned away" (a silent pass-killer). The band lock must
+        // make the select-write-restore sequence atomic against every reader.
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let engine = CivEngine::start(Box::new(radio), 0xA2);
+        let backend = Arc::new(CivBackend::new(
+            engine.handle(),
+            0xA2,
+            Arc::new(AtomicBool::new(false)),
+        ));
+        assert!(backend.set_freq(435_640_000));
+        assert_eq!(backend.set_split(true, "Sub"), Some(true));
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let poller = {
+            let b = backend.clone();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                let mut seen_uplink = false;
+                while !stop.load(Ordering::Relaxed) {
+                    let hz = b.freq_hz();
+                    if hz == 145_965_000 {
+                        seen_uplink = true;
+                    }
+                }
+                seen_uplink
+            })
+        };
+        for _ in 0..10 {
+            assert_eq!(backend.set_split_freq(145_965_000), Some(true));
+        }
+        stop.store(true, Ordering::Relaxed);
+        let seen_uplink = poller.join().unwrap();
+        assert!(!seen_uplink, "a dial poll must never serve the uplink");
+        assert_eq!(backend.freq_hz(), 435_640_000);
     }
 }

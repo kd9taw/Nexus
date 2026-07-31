@@ -251,10 +251,18 @@ pub fn set_tone_func(radio: u8, on: bool) -> Frame {
     Frame::command(radio, 0x16, &[0x42, u8::from(on)])
 }
 
-/// DSP / audio ON-OFF function sub-commands under CI-V command `0x16` (Icom
-/// IC-7300/9700/7610/705 generation share this 16-family table): Noise Blanker, Noise
-/// Reduction, Auto Notch, speech Compressor, Monitor, VOX. The Hamlib func token maps to
-/// its sub-command byte here — one place, so both the getter and setter agree.
+/// Satellite mode (`16 5A`): Main = downlink/RX, Sub = uplink/TX, full duplex —
+/// the IC-9700/IC-910H cross-band contract. TX always leaves on Sub while it is
+/// on; a rig without a Sub band (IC-7300 family) NAKs the read, which is the
+/// capability probe.
+pub const FUNC_SATMODE: u8 = 0x5A;
+
+/// ON-OFF function sub-commands under CI-V command `0x16` (Icom
+/// IC-7300/9700/7610/705 generation share this 16-family table): the DSP/audio
+/// set — Noise Blanker, Noise Reduction, Auto Notch, speech Compressor,
+/// Monitor, VOX — plus satellite mode ([`FUNC_SATMODE`], the token Hamlib
+/// calls `SATMODE`). The Hamlib func token maps to its sub-command byte here —
+/// one place, so both the getter and setter agree.
 pub fn func_sub(token: &str) -> Option<u8> {
     Some(match token {
         "NB" => 0x22,   // Noise Blanker
@@ -263,6 +271,7 @@ pub fn func_sub(token: &str) -> Option<u8> {
         "COMP" => 0x44, // Speech Compressor
         "MON" => 0x45,  // Monitor
         "VOX" => 0x46,  // VOX
+        "SATMODE" => FUNC_SATMODE,
         _ => return None,
     })
 }
@@ -615,6 +624,13 @@ mod tests {
         assert_eq!(func_sub("COMP"), Some(0x44));
         assert_eq!(func_sub("VOX"), Some(0x46));
         assert_eq!(func_sub("NB"), Some(0x22));
+        // Satellite mode is Hamlib's RIG_FUNC_SATMODE token, so a Hamlib-served
+        // 9700 answers the identical `U SATMODE 1` line. Engage = 16 5A 01.
+        assert_eq!(func_sub("SATMODE"), Some(FUNC_SATMODE));
+        assert_eq!(
+            set_dsp_func(0xA2, FUNC_SATMODE, true).data,
+            vec![0x5A, 0x01]
+        );
         assert_eq!(func_sub("RIT"), None); // RIT is a separate register, not a 0x16 func
                                            // Set builds `16 <sub> <on>`.
         let on = set_dsp_func(0xA2, 0x44, true);

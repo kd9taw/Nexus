@@ -65,6 +65,42 @@ to hold the current radio when you want to override the routing.
 digital watering holes, which meant it offered 14.074 beside a bird on 435 MHz. Satellites now owns
 its own frequency surfaces, like Phone, CW, RTTY, SSTV and APRS already do.
 
+### Fixed: the pick reaches the radio — and the IC-9700's uplink goes where it can transmit
+
+**A dual-radio pick finds the satellite rig even with nothing configured.** Field report: on an
+FTdx10 + IC-9700 station, clicking a transponder moved nothing — no routing rule named the 9700
+for the band, neither rig listed bands, and the pick stopped at "this radio doesn't cover
+435 MHz" while the 9700 sat idle. When no rule or band list answers but the active rig is known
+unable to reach the downlink and exactly one other radio exists, the pick now hands the QSY to
+that radio. With several candidates and nothing naming one, the section refuses and says exactly
+what to configure instead of guessing which rig to move. A radio whose band list explicitly
+leaves the downlink's band out is never the fallback — that list is your word that the rig
+doesn't take the band, and the pick refuses rather than switching to it just to be turned down.
+
+**Cross-band uplink on the IC-9700 rides satellite mode.** The uplink used to be written as an
+A/B split — which on a dual-band rig lands in the *downlink's own band* and goes nowhere. Under a
+Main = downlink / Sub = uplink mapping, Nexus now engages the rig's satellite mode, writes the
+uplink (and its sideband, on an inverting bird) into the Sub band with a read-back check, and
+hands the tuning selection straight back to Main, so the dial, the scope and every poll keep the
+downlink. Releasing the split releases satellite mode; switch it off on the front panel yourself
+and Nexus reports that instead of re-engaging over you. A rig without a Sub band refuses the
+mapping honestly, Main = uplink / Sub = downlink is refused as undrivable (satellite mode always
+transmits on Sub), and A/B rigs keep the existing split behaviour byte for byte. An ordinary A/B
+split commanded while satellite mode is engaged — WSJT-X setting up split for a digital over
+mid-pass — releases satellite mode first, so its transmit dial can never land in the Sub band
+and go out on the downlink. And the sequence trusts nothing it cannot confirm: an engage whose
+confirming read-back is lost is backed out rather than left half-set, a hand-back to Main the
+rig refuses is remembered and re-asserted before the next tuning write or dial poll, and a rig
+that will not leave satellite mode is reported in the status line instead of being shown as
+simplex.
+
+**The radio line reports what the rig acknowledged, not what was computed.** The binding under the
+held bird used to print both frequencies the moment you clicked — including when nothing had been
+sent. Each leg now shows as still tuning ("435.640 ↓ …") until the radio actually accepts it, the
+dot fills only when every requested leg is confirmed on the wire, and a leg the rig refuses turns
+into the reason in plain words. A refused pick no longer flashes a green "Working …" toast — the
+toast tells the truth the read-back found.
+
 ## [0.24.0] — 2026-07-31
 
 ### Added: satellite operating — full Doppler, and a rotator that behaves

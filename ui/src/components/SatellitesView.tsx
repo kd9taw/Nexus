@@ -1066,9 +1066,13 @@ function TrackRail({
  * whichever rig happened to be active. A pick now routes on band+mode class
  * exactly as a repeater tune does; this is the one line that says where it went.
  *
- * Reports what was DONE: the frequencies appear only for a leg that was
- * actually written, and the honest reason takes their place when nothing moved.
- * Ready-state by SHAPE (filled ● / hollow ○), the codebase idiom.
+ * Reports what was DONE — and "done" means the RIG ACKNOWLEDGED it, not that
+ * the engine queued it: a confirmed leg prints plain, a leg still awaiting the
+ * radio loop's wire acknowledgment prints with a trailing "…" (the honest
+ * tuning-in-flight state the 2 s read-back resolves), and the honest reason
+ * takes their place when nothing moved. Ready-state by SHAPE (filled ● /
+ * hollow ○), the codebase idiom — filled only once every requested leg is
+ * confirmed on the wire.
  *
  * The override is the app's OWN one — peg-lock, the same switch behind the
  * TopBar RadioSwitcher's 🔒 — reachable where the operator is, written
@@ -1084,14 +1088,22 @@ function SatRadioBinding({
   pegged: boolean
   onTogglePeg: (on: boolean) => void
 }) {
+  const leg = (confirmed: number | null, pending: number | null, arrow: string) =>
+    confirmed != null
+      ? `${confirmed.toFixed(3)} ${arrow}`
+      : pending != null
+        ? `${pending.toFixed(3)} ${arrow} …`
+        : null
   const legs = [
-    binding.downlinkMhz != null ? `${binding.downlinkMhz.toFixed(3)} ↓` : null,
-    binding.uplinkMhz != null ? `${binding.uplinkMhz.toFixed(3)} ↑` : null,
+    leg(binding.downlinkMhz, binding.pendingDownlinkMhz, '↓'),
+    leg(binding.uplinkMhz, binding.pendingUplinkMhz, '↑'),
   ].filter((s) => s != null)
+  const confirmed = binding.downlinkMhz != null || binding.uplinkMhz != null
+  const pending = binding.pendingDownlinkMhz != null || binding.pendingUplinkMhz != null
   return (
     <div className="sat-bind" data-testid="sat-radio-binding">
       <div className="sat-rail-row">
-        {railDot(legs.length > 0)}
+        {railDot(confirmed && !pending)}
         <span className="sat-rail-name">Radio</span>
         <span className="sat-rail-state">
           {/* An empty band = a refusal that returned BEFORE routing (band-plan
@@ -1107,8 +1119,10 @@ function SatRadioBinding({
               </span>
             </>
           )}
+          {/* A note can accompany surviving legs (e.g. the split refused while
+              the dial landed) — print both rather than letting either win. */}
           {legs.length > 0
-            ? ` — ${legs.join(' · ')} MHz`
+            ? ` — ${legs.join(' · ')} MHz${binding.note ? ` — ${binding.note}` : ''}`
             : binding.band !== ''
               ? ` — ${binding.note ?? ''}`
               : (binding.note ?? '')}
@@ -1595,8 +1609,27 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         // backend-side inside set_sat_transponder, and waiting out the 2 s poll
         // to learn whether the radio moved is exactly the uncertainty this line
         // exists to remove. Clearing the pick clears the binding with it.
-        if (index == null) setBinding(null)
-        else getSatTransponder().then((h) => setBinding(h?.binding ?? null)).catch(() => {})
+        //
+        // The TOAST rides the same read-back: a pick the engine REFUSED (rig
+        // can't reach the band, mapping off, …) used to fire the green
+        // "Working …" toast anyway — the command returns Ok on every refusal,
+        // its honesty lives in the binding — so the field report's dead pick
+        // was announced as a success. The binding note is the toast now.
+        if (index == null) {
+          setBinding(null)
+          pushToast('Transponder cleared — the dial is yours', 'success', 4000)
+        } else {
+          const working = `Working ${name} ${label}${auto ? ' (picked for you — change below)' : ''}`
+          getSatTransponder()
+            .then((h) => {
+              const b = h?.binding ?? null
+              setBinding(b)
+              if (b?.note) pushToast(b.note, 'info', 6000)
+              else pushToast(working, 'success', 4000)
+            })
+            // Read-back unavailable: the pick itself succeeded, say that much.
+            .catch(() => pushToast(working, 'success', 4000))
+        }
         // Re-read the two switches that decide whether this tunes anything —
         // Settings may have changed since this section mounted.
         getSettings()
@@ -1605,13 +1638,6 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             setVfoMap(s.satVfoMap ?? 'off')
           })
           .catch(() => {})
-        pushToast(
-          index == null
-            ? 'Transponder cleared — the dial is yours'
-            : `Working ${name} ${label}${auto ? ' (picked for you — change below)' : ''}`,
-          'success',
-          4000,
-        )
       })
       .catch((e) => pushToast(`Transponder not selected: ${e instanceof Error ? e.message : e}`, 'error'))
       .finally(() => {

@@ -531,9 +531,12 @@ export interface SatTransponderHeld {
 }
 
 /** Which rig a satellite pick routed to, and what the tune-on-pick actually
- * wrote to it. The frequency fields are `null` for a leg that was NOT written —
- * a line printing computed centres beside a radio that never moved is the exact
- * dishonesty the readiness rail exists to kill. `note` says why. */
+ * wrote to it. The confirmed frequency fields fill in only when the RIG
+ * ACKNOWLEDGED the command on the wire (the radio loop's report) — until then
+ * the leg sits in `pending*` (the honest "tuning…" state the 2 s poll resolves)
+ * and a leg that never lands turns into a `note`. A line printing computed
+ * centres beside a radio that never moved is the exact dishonesty the
+ * readiness rail exists to kill — 0.24.2 shipped it. */
 export interface SatBinding {
   radioId: number | null
   radioName: string
@@ -542,8 +545,12 @@ export interface SatBinding {
   band: string
   /** The mode class routed on: true = FM (an FM bird follows the FM rule). */
   fm: boolean
+  /** Confirmed on the wire; null until the rig acknowledged (or refused). */
   downlinkMhz: number | null
   uplinkMhz: number | null
+  /** Requested but not yet acknowledged — rendered as a leg still tuning. */
+  pendingDownlinkMhz: number | null
+  pendingUplinkMhz: number | null
   /** Why nothing (or one leg only) moved. Null = it all landed. */
   note: string | null
 }

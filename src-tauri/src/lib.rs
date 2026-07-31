@@ -4332,11 +4332,16 @@ struct SatBindingDto {
     radio_name: String,
     band: String,
     fm: bool,
-    /// `Some` only for a leg that was actually WRITTEN — a rail that printed the
-    /// computed centres regardless would show frequencies beside a radio that
-    /// never moved.
+    /// `Some` only for a leg the RIG ACKNOWLEDGED on the wire (the radio loop's
+    /// report, not the engine's request) — a rail that printed the computed
+    /// centres regardless would show frequencies beside a radio that never
+    /// moved, which is exactly what 0.24.2 shipped.
     downlink_mhz: Option<f64>,
     uplink_mhz: Option<f64>,
+    /// Legs requested but not yet confirmed — the honest "tuning…" state the
+    /// 2 s poll resolves into a confirmed leg or a `note`.
+    pending_downlink_mhz: Option<f64>,
+    pending_uplink_mhz: Option<f64>,
     /// Why nothing (or one leg only) moved. `None` = it all landed.
     note: Option<String>,
 }
@@ -4353,6 +4358,8 @@ fn get_sat_transponder(
         fm: b.fm,
         downlink_mhz: b.downlink_mhz,
         uplink_mhz: b.uplink_mhz,
+        pending_downlink_mhz: b.pending_downlink_mhz,
+        pending_uplink_mhz: b.pending_uplink_mhz,
         note: b.note.clone(),
     });
     Ok(eng.sat_transponder_held().map(|(label, index)| {

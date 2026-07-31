@@ -89,6 +89,12 @@ pub trait RigBackend: Send + Sync {
     fn set_split_freq(&self, _hz: u64) -> Option<bool> {
         None
     }
+    /// Split TX VFO's mode + passband (`X <mode> <pb>`). The plain `M` verb only
+    /// ever reaches the RX VFO, so this is the one way to command "transmit LSB
+    /// while I listen USB" — the inverting-transponder uplink sideband.
+    fn set_split_mode(&self, _mode: &str, _passband_hz: i32) -> Option<bool> {
+        None
+    }
     /// RIT offset in Hz (`J <hz>`).
     fn set_rit(&self, _hz: i32) -> Option<bool> {
         None
@@ -210,8 +216,8 @@ pub enum Handled {
 /// client (WSJT-X) uses — get/set freq (`f`/`F`), mode (`m`/`M`), PTT (`t`/`T`),
 /// VFO (`v`/`V`), split (`s`), `\dump_state`, `\chk_vfo`, `\get_powerstat`, `q` —
 /// plus the extended verbs Nexus's own `Rig` client sends (levels `l`/`L`, funcs
-/// `u`/`U`, morse `b`/`\stop_morse`, split `S`/`I`, RIT/XIT `J`/`Z`, FM repeater
-/// `R`/`O`/`C`), which answer `RPRT -11` unless the backend implements them.
+/// `u`/`U`, morse `b`/`\stop_morse`, split `S`/`I`/`X`, RIT/XIT `J`/`Z`, FM
+/// repeater `R`/`O`/`C`), which answer `RPRT -11` unless the backend implements them.
 pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
     let line = line.trim();
     // `b` (send_morse) takes the REST OF THE LINE as text — CW messages contain spaces, so
@@ -305,6 +311,15 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                         .filter(|f| f.is_finite() && (0.0..=1e12).contains(f))
                         .map_or(Some(false), |f| backend.set_split_freq(f.round() as u64)),
                 ),
+                Some("X") => {
+                    let mode = p.next().unwrap_or("");
+                    let pbw = p.next().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+                    if mode.is_empty() {
+                        rprt(false)
+                    } else {
+                        rprt_ext(backend.set_split_mode(mode, pbw))
+                    }
+                }
                 Some("J") => rprt_ext(
                     p.next()
                         .and_then(|s| s.parse::<i32>().ok())

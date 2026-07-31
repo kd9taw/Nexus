@@ -375,6 +375,48 @@ pub(crate) mod tests_support {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    /// The fake rig's REGISTER FILE, shared out via [`FakeRadio::regs`] so a
+    /// test can assert what the wire ACTUALLY did after the radio has been
+    /// moved into the engine. Models the IC-9700's dual-band reality: Main and
+    /// Sub each hold a frequency and a mode; `07 D0/D1` moves the selection;
+    /// `03/05/04/06` act on the SELECTED band; and — deliberately — `25 01`
+    /// writes the unselected VFO *of the current band*, a register nothing else
+    /// reads, because that is exactly where the parity batch's uplink went.
+    #[derive(Debug)]
+    pub struct Regs {
+        pub main_hz: u64,
+        pub sub_hz: u64,
+        /// Selected band: false = Main, true = Sub (`07 D0`/`07 D1`).
+        pub sel_sub: bool,
+        /// Satellite mode (`16 5A`) — TX fixed on Sub, full duplex.
+        pub satmode: bool,
+        /// Same-band A/B split (`0F 01`) — cross-band on a 9700 is NOT this.
+        pub split: bool,
+        /// The unselected VFO of the CURRENT band (`25 01`). See above.
+        pub unselected_hz: u64,
+        /// CI-V mode bytes per band (`06` on the selected band).
+        pub main_mode: u8,
+        pub sub_mode: u8,
+        /// NAK `16 5A` like a single-band rig (IC-7300) — honest "no such mode".
+        pub no_satmode: bool,
+        /// Fault injection — NAK the next N Main selects (`07 D0`): the
+        /// failed-restore case, which strands the selection on Sub.
+        pub nak_main_select: u32,
+        /// Fault injection — NAK the next N `16 5A` SETs (a satmode change
+        /// the rig refuses to take).
+        pub nak_satmode_set: u32,
+        /// Fault injection — swallow the next N `16 5A` READ replies: a lost
+        /// CI-V reply (the request times out while the rig's state stands).
+        pub drop_satmode_reads: u32,
+        /// Every command frame received, as (cmd, data) — lets a test assert a
+        /// verb was NOT sent (e.g. "no `0F` under the satellite-mode contract").
+        pub log: Vec<(u8, Vec<u8>)>,
+    }
+
+    /// Pseudo-reply cmd meaning "say NOTHING" (a lost reply on the wire).
+    /// Deliberately not a real CI-V command byte.
+    const SILENT: u8 = 0xFF;
+
     /// An in-memory fake IC-9700: scripted replies keyed by (cmd, first data byte).
     /// Reads time out when nothing is queued, like a real serial port.
     pub struct FakeRadio {
@@ -382,8 +424,8 @@ pub(crate) mod tests_support {
         outgoing: VecDeque<u8>,
         /// Unsolicited bytes injected before the next read (transceive, scope).
         push_next: Arc<Mutex<Vec<u8>>>,
-        /// Frequency register the fake maintains (echoes set, answers read).
-        freq: u64,
+        /// The register file — see [`Regs`]; share it out with [`FakeRadio::regs`].
+        regs: Arc<Mutex<Regs>>,
         /// When true, drop every command silently (a dead radio).
         pub mute: bool,
         /// When true, every read/write fails hard (a yanked cable) — the engine
@@ -398,12 +440,30 @@ pub(crate) mod tests_support {
                     addr,
                     outgoing: VecDeque::new(),
                     push_next: push.clone(),
-                    freq: 145_000_000,
+                    regs: Arc::new(Mutex::new(Regs {
+                        main_hz: 145_000_000,
+                        sub_hz: 435_000_000,
+                        sel_sub: false,
+                        satmode: false,
+                        split: false,
+                        unselected_hz: 0,
+                        main_mode: 0x01, // USB
+                        sub_mode: 0x05,  // FM — the 9700's Sub-band default
+                        no_satmode: false,
+                        nak_main_select: 0,
+                        nak_satmode_set: 0,
+                        drop_satmode_reads: 0,
+                        log: Vec::new(),
+                    })),
                     mute: false,
                     dead: false,
                 },
                 push,
             )
+        }
+        /// Clone out the register handle BEFORE moving the radio into the engine.
+        pub fn regs(&self) -> Arc<Mutex<Regs>> {
+            self.regs.clone()
         }
         fn reply(&mut self, cmd: u8, data: &[u8]) {
             let f = Frame {
@@ -439,18 +499,98 @@ pub(crate) mod tests_support {
                 if self.mute {
                     continue;
                 }
-                match (f.cmd, f.data.first().copied()) {
-                    (0x03, _) => {
-                        let bcd = freq_to_bcd(self.freq).to_vec();
-                        self.reply(0x03, &bcd);
+                let action = {
+                    // Poison-tolerant: a test asserting under the regs lock may
+                    // panic; the engine thread must not cascade after it.
+                    let mut r = self
+                        .regs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    r.log.push((f.cmd, f.data.clone()));
+                    // Decide the reply under the register lock, emit after.
+                    match (f.cmd, f.data.first().copied()) {
+                        (0x03, _) => {
+                            let hz = if r.sel_sub { r.sub_hz } else { r.main_hz };
+                            Some((0x03, freq_to_bcd(hz).to_vec()))
+                        }
+                        (0x05, _) => {
+                            let hz = bcd_to_freq(&f.data);
+                            if r.sel_sub {
+                                r.sub_hz = hz;
+                            } else {
+                                r.main_hz = hz;
+                            }
+                            None // ack
+                        }
+                        (0x04, _) => {
+                            let m = if r.sel_sub { r.sub_mode } else { r.main_mode };
+                            Some((0x04, vec![m, 0x01]))
+                        }
+                        (0x06, _) => {
+                            let m = f.data[0];
+                            if r.sel_sub {
+                                r.sub_mode = m;
+                            } else {
+                                r.main_mode = m;
+                            }
+                            None
+                        }
+                        // [MAIN/SUB] band selection; the A/B forms just ack.
+                        (0x07, Some(0xD0)) => {
+                            if r.nak_main_select > 0 {
+                                r.nak_main_select -= 1;
+                                Some((0xFA, Vec::new()))
+                            } else {
+                                r.sel_sub = false;
+                                None
+                            }
+                        }
+                        (0x07, Some(0xD1)) => {
+                            r.sel_sub = true;
+                            None
+                        }
+                        (0x07, Some(0x00 | 0x01)) => None,
+                        // Same-band split / duplex — the 9700 accepts these.
+                        (0x0F, Some(v @ (0x00 | 0x01))) => {
+                            r.split = v != 0;
+                            None
+                        }
+                        (0x0F, _) => None, // duplex shift
+                        // The unselected VFO of the CURRENT band — write-only here.
+                        (0x25, Some(0x01)) if f.data.len() >= 6 => {
+                            r.unselected_hz = bcd_to_freq(&f.data[1..]);
+                            None
+                        }
+                        // Satellite mode: read (1-byte data) / set (2-byte data).
+                        (0x16, Some(0x5A)) if !r.no_satmode => match f.data.get(1) {
+                            Some(&v) => {
+                                if r.nak_satmode_set > 0 {
+                                    r.nak_satmode_set -= 1;
+                                    Some((0xFA, Vec::new()))
+                                } else {
+                                    r.satmode = v != 0;
+                                    None
+                                }
+                            }
+                            None => {
+                                if r.drop_satmode_reads > 0 {
+                                    r.drop_satmode_reads -= 1;
+                                    Some((SILENT, Vec::new()))
+                                } else {
+                                    Some((0x16, vec![0x5A, u8::from(r.satmode)]))
+                                }
+                            }
+                        },
+                        (0x15, Some(0x02)) => Some((0x15, vec![0x02, 0x01, 0x20])), // raw 120 = S9
+                        (0x27, _) => None, // scope enable/disable
+                        _ => Some((0xFA, Vec::new())), // NAK anything unknown
                     }
-                    (0x05, _) => {
-                        self.freq = bcd_to_freq(&f.data);
-                        self.ack();
-                    }
-                    (0x15, Some(0x02)) => self.reply(0x15, &[0x02, 0x01, 0x20]), // raw 120 = S9
-                    (0x27, _) => self.ack(),    // scope enable/disable
-                    _ => self.reply(0xFA, &[]), // NAK anything unknown
+                };
+                match action {
+                    None => self.ack(),
+                    Some((SILENT, _)) => {} // lost reply — the request times out
+                    Some((0xFA, _)) => self.reply(0xFA, &[]),
+                    Some((cmd, data)) => self.reply(cmd, &data),
                 }
             }
             Ok(buf.len())

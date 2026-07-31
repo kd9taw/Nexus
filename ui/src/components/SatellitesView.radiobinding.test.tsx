@@ -75,7 +75,7 @@ const settings = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
-/** The engine's read-back after a pick that landed on the IC-9700. */
+/** The engine's read-back after a pick the RIG CONFIRMED on the IC-9700. */
 const heldTuned = (): SatTransponderHeld => ({
   name: 'RS-44',
   index: 0,
@@ -87,6 +87,8 @@ const heldTuned = (): SatTransponderHeld => ({
     fm: false,
     downlinkMhz: 435.64,
     uplinkMhz: 145.965,
+    pendingDownlinkMhz: null,
+    pendingUplinkMhz: null,
     note: null,
   },
 })
@@ -126,6 +128,60 @@ describe('the radio binding line', () => {
     expect(bind.textContent).toMatch(/145\.965/)
   })
 
+  it('shows a leg the rig has not acknowledged yet as still tuning — hollow dot, trailing ellipsis', async () => {
+    // The sentinel rule, rendered: right after a pick the legs are REQUESTED,
+    // not done — the engine confirms each one only when the radio loop reports
+    // the rig's acknowledgment. 0.24.2 printed the computed centres with a
+    // filled dot while the 9700 never received a byte (the field report).
+    api.getSatTransponder.mockImplementation(() =>
+      Promise.resolve({
+        ...heldTuned(),
+        binding: {
+          radioId: 1,
+          radioName: 'IC-9700',
+          band: '70cm',
+          fm: false,
+          downlinkMhz: null,
+          uplinkMhz: null,
+          pendingDownlinkMhz: 435.64,
+          pendingUplinkMhz: 145.965,
+          note: null,
+        },
+      }),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const bind = await screen.findByTestId('sat-radio-binding')
+    // The frequencies show — marked in-flight, never claimed as landed.
+    expect(bind.textContent).toMatch(/435\.640 ↓ …/)
+    expect(bind.textContent).toMatch(/145\.965 ↑ …/)
+    expect(bind.querySelector('.sat-rail-dot.ok')).toBeNull()
+  })
+
+  it('fills the dot only once every requested leg is confirmed on the wire', async () => {
+    // Half-landed: the dial acked, the split still pending — still hollow.
+    api.getSatTransponder.mockImplementation(() =>
+      Promise.resolve({
+        ...heldTuned(),
+        binding: {
+          radioId: 1,
+          radioName: 'IC-9700',
+          band: '70cm',
+          fm: false,
+          downlinkMhz: 435.64,
+          uplinkMhz: null,
+          pendingDownlinkMhz: null,
+          pendingUplinkMhz: 145.965,
+          note: null,
+        },
+      }),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const bind = await screen.findByTestId('sat-radio-binding')
+    expect(bind.textContent).toMatch(/435\.640 ↓/)
+    expect(bind.textContent).toMatch(/145\.965 ↑ …/)
+    expect(bind.querySelector('.sat-rail-dot.ok')).toBeNull()
+  })
+
   it('prints the REASON instead of frequencies when nothing moved', async () => {
     // "None — leave the dial to me" keeps meaning exactly that. The hold still
     // stands; the radio does not move; the line says so rather than showing
@@ -140,6 +196,8 @@ describe('the radio binding line', () => {
           fm: false,
           downlinkMhz: null,
           uplinkMhz: null,
+          pendingDownlinkMhz: null,
+          pendingUplinkMhz: null,
           note: 'VFO mapping is None — the dial stays yours; nothing was tuned.',
         },
       }),
@@ -182,6 +240,8 @@ describe('the radio binding line', () => {
           fm: false,
           downlinkMhz: null,
           uplinkMhz: null,
+          pendingDownlinkMhz: null,
+          pendingUplinkMhz: null,
           note: '10450.0000 MHz is outside the band plan — the dial is yours.',
         },
       }),

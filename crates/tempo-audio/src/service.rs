@@ -1434,6 +1434,13 @@ struct RadioLoop {
     /// be read back, so re-asserting would silently fight an operator using the
     /// rig's own mode knob. `None` = we are not holding the TX VFO's mode.
     last_split_mode: Option<String>,
+    /// The applied split rides the SUB BAND (the engine answered "Sub" and the
+    /// rig took it — the IC-9700's satellite mode, engaged by the native
+    /// backend). Remembered so the TEARDOWN releases the same thing it
+    /// engaged: `set_split(false, "Sub")` leaves satellite mode, where the old
+    /// unconditional `"VFOA"` fired `0F 00` at a rig that was never in an A/B
+    /// split and left it in satellite mode forever.
+    split_on_sub: bool,
     /// Consecutive failed `set_mode` attempts for the current target mode. Bounds the
     /// retune retry so a rig that flatly rejects a mode (e.g. no DATA/PKT submode)
     /// gets a budget of tries (covers a rig/rigctld still settling) then we give up
@@ -1716,6 +1723,7 @@ impl RadioLoop {
             last_dial: cfg.dial_hz,
             last_mode: cfg.mode.clone(),
             last_split_mode: None,
+            split_on_sub: false,
             mode_fail_count: 0,
             mode_giveup: None,
             mode_saw_reject: false,
@@ -2017,6 +2025,14 @@ impl RadioLoop {
                 self.last_dial = dial;
                 self.dial_fail_count = 0;
                 self.dial_giveup = None;
+                // The rig ACKNOWLEDGED the dial — report it DONE so a pending
+                // satellite-binding leg can confirm (a no-op for every other
+                // QSY). Gated on a real control channel: a control-less Rig
+                // returns Ok without a byte on the wire, and "confirming" off
+                // that would be the computed-not-done lie all over again.
+                if rig.has_control() {
+                    engine_lock(engine).rig_dial_applied(dial);
+                }
                 None
             }
             Err(e) => {
@@ -2092,6 +2108,9 @@ impl RadioLoop {
         self.rx_ranges_probed = false;
         self.dial_giveup = None;
         self.dial_fail_count = 0;
+        // The new radio is not in OUR satellite-mode session; if the old one
+        // was, the operator gets it back as-is (hand back, never restore).
+        self.split_on_sub = false;
         self.smeter_supported = None;
         self.smeter_misses = 0;
         self.func_supported = [None; 5];
@@ -3184,89 +3203,157 @@ impl RadioLoop {
                     match req {
                         Some(tx_mhz) => {
                             let tx_hz = (tx_mhz * 1_000_000.0).round() as u64;
-                            let ok = rig.set_split(true, "VFOB").is_ok()
-                                && rig.set_split_freq(tx_hz).is_ok();
-                            retune_note = Some(if ok {
-                                format!("split ON — TX {tx_mhz:.4} MHz (VFO B)")
-                            } else {
-                                // The desired state must not outlive the rejection —
-                                // a SPLIT badge claiming a split the rig isn't
-                                // running would burn the operator mid-pile-up.
-                                {
-                                    let mut eng = engine_lock(engine);
-                                    eng.split_rejected();
+                            // Which VFO carries the TX dial — "VFOB" (the
+                            // shipped A/B split, every terrestrial pile-up and
+                            // every A/B-mapped rig, byte-identical) or "Sub"
+                            // (Main = downlink / Sub = uplink: the native CI-V
+                            // backend engages the rig's SATELLITE MODE and
+                            // select-writes the Sub band — an IC-9700 cannot
+                            // cross-band on A/B split). An Err is a mapping the
+                            // rig cannot run (Main = uplink; satellite mode
+                            // fixes TX on Sub): NOTHING is sent — silently
+                            // accepting it would transmit on the operator's
+                            // own downlink.
+                            //
+                            // A 9700 served by REAL Hamlib rigctld (not our
+                            // native daemon) gets `S 1 Sub` + `I` + `X` here;
+                            // Hamlib's satmode split handling is version-
+                            // dependent, and the reliable recipe there is
+                            // `U SATMODE 1`, then `V Main`/`F`/`M` and
+                            // `V Sub`/`F`/`M`, verified with `v`/`f` — wire it
+                            // if a Hamlib-driven 9700 station ever surfaces.
+                            match { engine_lock(engine).sat_split_tx_vfo(tx_hz) } {
+                                Err(reason) => {
+                                    // The mapping itself is undrivable: nothing
+                                    // was (or will be) sent, and the desired
+                                    // state must not outlive the refusal.
+                                    {
+                                        let mut eng = engine_lock(engine);
+                                        eng.split_rejected();
+                                    }
+                                    retune_note = Some(reason);
+                                    self.last_split_mode = None;
                                 }
-                                "rig rejected split — work the pile-up manually".to_string()
-                            });
-                            // The TX VFO's MODE, while a satellite pass holds it. On
-                            // a linear INVERTING transponder the sidebands swap —
-                            // listen USB, transmit LSB — and `M` only ever reaches
-                            // the RX VFO, so `X` here is the one place the uplink's
-                            // sideband can be commanded at all.
-                            //
-                            // Consulted per SPLIT, not per hold: this one-shot also
-                            // serves the terrestrial pile-up path ("UP 5"), and a
-                            // transponder hold legitimately outlives its pick (a
-                            // pre-AOS pick is the normal flow). The engine answers
-                            // only when `tx_hz` IS its own corrected uplink, so a
-                            // pile-up split worked while a bird is held can never
-                            // be put in the bird's swapped sideband.
-                            //
-                            // Written only when the ANSWER changes. The split VFO's
-                            // mode cannot be read back, so re-asserting it every
-                            // correction would silently overrule an operator who
-                            // reached for the rig's own mode knob — the same
-                            // don't-fight discipline the frequency side gets from
-                            // `sat_observe_operator_tune`. See `Engine::sat_tx_mode`.
-                            if ok {
-                                let want_md =
-                                    { engine_lock(engine).sat_tx_mode_for_split(tx_hz) };
-                                if want_md != self.last_split_mode {
-                                    match &want_md {
-                                        Some(md) => {
-                                            // ONE attempt per distinct answer, whether it
-                                            // lands or not. `ok` above already proves CAT
-                                            // answered this instant, so a refusal here is
-                                            // a backend with no `X` verb rather than a
-                                            // hiccup — and retrying it on every correction
-                                            // would spam the bus and the status line for
-                                            // the whole pass. A CHANGED answer (new bird,
-                                            // new transponder, operator sideband change)
-                                            // re-arms it. Same give-up-and-say-so shape as
-                                            // the RX side's `mode_giveup`.
-                                            //
-                                            // The failure is REPORTED, never assumed away:
-                                            // an uplink left in the wrong sideband sounds
-                                            // exactly like nobody answering, and the
-                                            // operator can fix it from the front panel in
-                                            // seconds once they know.
-                                            let sent =
-                                                rig.set_split_mode(md, passband_for(md)).is_ok();
-                                            retune_note = Some(if sent {
-                                                format!(
-                                                    "split ON — TX {tx_mhz:.4} MHz {md} (VFO B)"
-                                                )
-                                            } else {
-                                                format!(
-                                                    "rig would not set the TX mode — put VFO B in {md} by hand"
-                                                )
-                                            });
-                                            self.last_split_mode = want_md.clone();
+                                Ok(tx_vfo) => {
+                                    // The operator-facing TX-VFO name for notes.
+                                    let vfo_name =
+                                        if tx_vfo == "Sub" { "Sub" } else { "VFO B" };
+                                    let ok = rig.set_split(true, tx_vfo).is_ok()
+                                        && rig.set_split_freq(tx_hz).is_ok();
+                                    retune_note = Some(if ok {
+                                        self.split_on_sub = tx_vfo == "Sub";
+                                        // The rig ACKNOWLEDGED the split TX dial
+                                        // (the native Sub path additionally read
+                                        // it back) — report it DONE for the
+                                        // binding rail. Gated on a real control
+                                        // channel like the dial acknowledgment.
+                                        if rig.has_control() {
+                                            engine_lock(engine).rig_split_applied(tx_hz);
                                         }
-                                        // Nothing holds the TX mode any more (transponder
-                                        // released / LOS). We stop writing it and
-                                        // deliberately do NOT rewind the rig — exactly as
-                                        // releasing the transponder hands the dial back
-                                        // rather than restoring where it used to be.
-                                        None => self.last_split_mode = None,
+                                        format!("split ON — TX {tx_mhz:.4} MHz ({vfo_name})")
+                                    } else {
+                                        // The desired state must not outlive the rejection —
+                                        // a SPLIT badge claiming a split the rig isn't
+                                        // running would burn the operator mid-pile-up.
+                                        {
+                                            let mut eng = engine_lock(engine);
+                                            eng.split_rejected();
+                                        }
+                                        "rig rejected split — work the pile-up manually"
+                                            .to_string()
+                                    });
+                                    // The TX VFO's MODE, while a satellite pass holds it. On
+                                    // a linear INVERTING transponder the sidebands swap —
+                                    // listen USB, transmit LSB — and `M` only ever reaches
+                                    // the RX VFO, so `X` here is the one place the uplink's
+                                    // sideband can be commanded at all.
+                                    //
+                                    // Consulted per SPLIT, not per hold: this one-shot also
+                                    // serves the terrestrial pile-up path ("UP 5"), and a
+                                    // transponder hold legitimately outlives its pick (a
+                                    // pre-AOS pick is the normal flow). The engine answers
+                                    // only when `tx_hz` IS its own corrected uplink, so a
+                                    // pile-up split worked while a bird is held can never
+                                    // be put in the bird's swapped sideband.
+                                    //
+                                    // Written only when the ANSWER changes. The split VFO's
+                                    // mode cannot be read back, so re-asserting it every
+                                    // correction would silently overrule an operator who
+                                    // reached for the rig's own mode knob — the same
+                                    // don't-fight discipline the frequency side gets from
+                                    // `sat_observe_operator_tune`. See `Engine::sat_tx_mode`.
+                                    if ok {
+                                        let want_md =
+                                            { engine_lock(engine).sat_tx_mode_for_split(tx_hz) };
+                                        if want_md != self.last_split_mode {
+                                            match &want_md {
+                                                Some(md) => {
+                                                    // ONE attempt per distinct answer, whether it
+                                                    // lands or not. `ok` above already proves CAT
+                                                    // answered this instant, so a refusal here is
+                                                    // a backend with no `X` verb rather than a
+                                                    // hiccup — and retrying it on every correction
+                                                    // would spam the bus and the status line for
+                                                    // the whole pass. A CHANGED answer (new bird,
+                                                    // new transponder, operator sideband change)
+                                                    // re-arms it. Same give-up-and-say-so shape as
+                                                    // the RX side's `mode_giveup`.
+                                                    //
+                                                    // The failure is REPORTED, never assumed away:
+                                                    // an uplink left in the wrong sideband sounds
+                                                    // exactly like nobody answering, and the
+                                                    // operator can fix it from the front panel in
+                                                    // seconds once they know.
+                                                    let sent = rig
+                                                        .set_split_mode(md, passband_for(md))
+                                                        .is_ok();
+                                                    retune_note = Some(if sent {
+                                                        format!(
+                                                            "split ON — TX {tx_mhz:.4} MHz {md} ({vfo_name})"
+                                                        )
+                                                    } else {
+                                                        format!(
+                                                            "rig would not set the TX mode — put {vfo_name} in {md} by hand"
+                                                        )
+                                                    });
+                                                    self.last_split_mode = want_md.clone();
+                                                }
+                                                // Nothing holds the TX mode any more (transponder
+                                                // released / LOS). We stop writing it and
+                                                // deliberately do NOT rewind the rig — exactly as
+                                                // releasing the transponder hands the dial back
+                                                // rather than restoring where it used to be.
+                                                None => self.last_split_mode = None,
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                         None => {
                             // Back to simplex — TX returns to the main/RX VFO, which
-                            // carries its own mode again.
-                            let _ = rig.set_split(false, "VFOA");
+                            // carries its own mode again. A split that rode the SUB
+                            // BAND is released the same way it was engaged: the
+                            // backend leaves satellite mode (firing `0F 00` at a rig
+                            // in satellite mode would strand it there).
+                            let cleared = rig
+                                .set_split(false, if self.split_on_sub { "Sub" } else { "VFOA" })
+                                .is_ok();
+                            if self.split_on_sub && !cleared {
+                                // The rig would NOT leave satellite mode — it is
+                                // still in it, TX still exits the Sub band, and
+                                // pretending simplex would hide that. Keep the
+                                // session marked (so the next release goes through
+                                // the satmode path, never `0F`) and tell the
+                                // operator, who can clear it at the front panel.
+                                retune_note = Some(
+                                    "rig would not leave satellite mode — turn SATELLITE \
+                                     off on the rig"
+                                        .to_string(),
+                                );
+                            } else {
+                                self.split_on_sub = false;
+                            }
                             self.last_split_mode = None;
                         }
                     }
