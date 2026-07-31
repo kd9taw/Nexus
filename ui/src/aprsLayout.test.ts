@@ -80,9 +80,42 @@ describe('APRS layout invariants', () => {
     expect(wrap![1]).toMatch(/min-height:\s*0/)
   })
 
-  it('restacks on narrow via [data-viewport], never a zoom-blind @media', () => {
+  it('restacks on narrow via a LIVE [data-viewport] value, never a zoom-blind @media', () => {
     // UI zoom lives on the non-root `.app`, so a raw max-width query fires against the
     // UNZOOMED width and mis-fires at every zoom level.
-    expect(css).toMatch(/\[data-viewport='(narrow|phone)'\]\s*\.aprs-body/)
+    //
+    // An earlier version of this test asserted [data-viewport='narrow'|'phone'] — values
+    // classifyViewport (useViewport.ts) NEVER emits, so the guard was green precisely
+    // because the selector was dead and the stacking never happened. Assert the live
+    // 'xs' bucket, and fail on any vocabulary outside the emitted set.
+    expect(css).toMatch(/\[data-viewport='xs'\]\s*\.aprs-body/)
+    const LIVE = new Set(['xs', 'sm', 'md', 'lg', 'xl'])
+    const re = /\[data-viewport='([^']*)'\][^{,]*\.aprs-/g
+    let m: RegExpExecArray | null
+    const dead: string[] = []
+    while ((m = re.exec(css)) !== null) {
+      if (!LIVE.has(m[1])) dead.push(m[0])
+    }
+    expect(dead, `aprs rules keyed on data-viewport values that are never emitted:\n${dead.join('\n')}`).toEqual([])
+  })
+
+  it('the narrow stack gives the map its OWN row track, not the leftover fr', () => {
+    // Stacked there are two rows, but the base rule declares exactly ONE
+    // (`minmax(0,1fr)`), so the rail landed in an IMPLICIT `auto` track. Grid
+    // maximizes non-flexible tracks BEFORE it expands fr ones, so once the heard
+    // table outgrew the pane the rail's auto row took the whole height and the
+    // map's fr row collapsed to zero — the exact opposite of "map first", and the
+    // normal state after a few minutes of RX. The map also cannot take an `auto`
+    // row: without a definite height its canvas re-arms the growth loop the tests
+    // above exist for. So the xs stack states both tracks itself.
+    const xs = /\[data-viewport='xs'\]\s*\.aprs-body\s*\{([^}]*)\}/.exec(css)
+    expect(xs, "the [data-viewport='xs'] .aprs-body rule must exist").not.toBeNull()
+    const rows = /grid-template-rows:\s*([^;]+)/.exec(xs![1])
+    expect(rows, 'the xs stack must declare its own row tracks').not.toBeNull()
+    const tracks = rows![1].match(/minmax\(0,\s*[^)]+\)/g) ?? []
+    expect(
+      tracks.length,
+      `both rows must be shrinkable tracks (got: ${rows![1].trim()})`,
+    ).toBeGreaterThanOrEqual(2)
   })
 })

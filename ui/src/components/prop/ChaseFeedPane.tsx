@@ -7,7 +7,7 @@ import type { PaneContext } from '../connect/paneContext'
 import { NEED_CHIP } from '../connect/paneFormat'
 import { buildChaseFeed, type ChaseFeedItem } from '../../features/chaseFeed'
 
-/** Rarity gem, matching the decode-feed/Needed-board glyphs. */
+/** Rarity gem, matching the Needed-board glyphs. */
 function gem(i: ChaseFeedItem): { glyph: string; cls: string; title: string } | null {
   if (i.gridRarity === 'ultraRare')
     return { glyph: '◆◆', cls: 'ultra', title: 'Ultra-rare grid — open water' }

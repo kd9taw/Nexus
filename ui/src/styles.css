@@ -20,7 +20,6 @@
   --right-rail-w: 360px;
   --rail-min: 200px;
   --ui-zoom: 1;
-  --strip-h: clamp(150px, 22vh, 260px);
 
   /* --- Design tokens (Phase 0). See ui/DESIGN.md + ui/design/verify.mjs. --- */
   /* Spacing ladder. `--space-scale` lets narrow viewports tighten ALL spacing at
@@ -38,7 +37,7 @@
   --space-8: calc(40px * var(--space-scale));
   --space-9: calc(48px * var(--space-scale));
   /* Type scale — sans for prose; mono reserved for callsign/freq/grid/Z-time/SNR */
-  --fs-display: clamp(22px, 2.4vw, 30px);
+  --fs-display: clamp(22px, calc(0.024 * var(--vw-eff, 100vw)), 30px);
   --fs-title: 18px;
   --fs-body: 14px;
   --fs-label: 12px;
@@ -104,10 +103,11 @@
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
-/* Focus not obscured: keep a focused row clear of a sticky Now Bar / header. */
-[data-focus-scroll] :focus-visible {
-  scroll-margin-top: var(--now-bar-h);
-}
+/* Focus-not-obscured: a `[data-focus-scroll] :focus-visible { scroll-margin-top }`
+   rule lived here, but no component ever set the attribute — it was dead since
+   birth, and --now-bar-h was a fixed guess the wrapping Now Bar invalidates
+   anyway. Keeping focused rows clear of sticky headers still needs a REAL
+   mechanism (scroll-margin derived from measured header heights). */
 
 /* --- Loading affordances (reduced-motion aware via the rules above). --- */
 .skeleton {
@@ -217,7 +217,7 @@
   flex-direction: column;
   gap: var(--space-2);
   width: 340px;
-  max-width: calc(100vw - 2 * var(--space-4));
+  max-width: calc(var(--vw-eff, 100vw) - 2 * var(--space-4));
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1609,12 +1609,6 @@ button.nb-chip:hover {
   line-height: 1.35;
 }
 /* Per-path outlook panel (selected station) — the PathPredictor seam surfaced. */
-/* DecodeFeed (three-pane legacy feed) has NO UTC column — 6 children, so it
- * needs its own template; inheriting OperateDecodes' 7-column grid crushed the
- * message into the 42px freq slot and gave the work button the wide column. */
-.decode-feed .decode-row {
-  grid-template-columns: auto 52px 34px 38px minmax(0, 1fr) auto;
-}
 
 /* Settings ▸ Connections — credential presence + the rolling event log */
 .conn-status-grid {
@@ -2596,7 +2590,8 @@ button.nb-chip:hover {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: 38vh;
+  /* Effective viewport, not raw vh — raw is wrong by the zoom factor inside .app. */
+  max-height: calc(0.38 * var(--vh-eff, 100vh));
   overflow-y: auto;
 }
 .insight-row {
@@ -2733,7 +2728,9 @@ button.nb-chip:hover {
 }
 .roam-modal-body {
   position: relative;
-  width: min(720px, 92vw);
+  /* --vw-eff on the width guard too (the height below already was): a raw 92vw
+     let the 720px branch render wider than the window at pinned zoom. */
+  width: min(720px, calc(0.92 * var(--vw-eff, 100vw)));
   /* Zoom-corrected: this modal is NOT portaled, so it lives inside .app's zoom. A raw 86vh
      over-talls at 110/125% UI zoom and pushes the close button off the top. --vh-eff = innerHeight/zoom. */
   max-height: calc(0.86 * var(--vh-eff, 100vh));
@@ -3326,6 +3323,13 @@ body.resizing {
   height: 100%;
   max-width: 1100px;
   margin: 0 auto;
+}
+/* xl (effective width ≥ 2400): let the DATA surfaces — Logbook's 11-column table
+   and the Program workbench — use the room. Prose-shaped panels (Settings, POTA)
+   keep the 1100px measure above. */
+[data-viewport='xl'] .layout.single > .panel.log-view,
+[data-viewport='xl'] .layout.single > .panel.radioprog {
+  max-width: 1600px;
 }
 /* Connect must flex-FILL rather than block-scroll — its map needs a DEFINITE height
    (see .connect-shell). Targeted via :has() so Log/Settings keep their block+scroll.
@@ -5000,257 +5004,6 @@ select optgroup {
 }
 
 /* ===========================================================================
-   QSO panel (center, QSO mode)
-   =========================================================================== */
-.qso-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-.qso-status-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 14px var(--space-4);
-  border-radius: var(--radius);
-  font-size: 16px;
-  font-weight: 800;
-  border: 1px solid transparent;
-}
-.qso-status-banner.running {
-  color: var(--tx);
-  background: color-mix(in srgb, var(--tx) 12%, transparent);
-  border-color: color-mix(in srgb, var(--tx) 35%, transparent);
-}
-.qso-status-banner.sp {
-  color: var(--rx);
-  background: color-mix(in srgb, var(--rx) 12%, transparent);
-  border-color: color-mix(in srgb, var(--rx) 35%, transparent);
-}
-.qso-status-dot {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 22%, transparent);
-  flex: 0 0 auto;
-}
-.qso-status-banner.running .qso-status-dot {
-  animation: pulse 0.9s ease-in-out infinite;
-}
-
-.qso-readouts {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--space-3);
-  margin: 0;
-}
-.qso-readouts > div {
-  background: var(--bg-elev);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3) 14px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.qso-readouts dt {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-faint);
-}
-.qso-readouts dd {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text);
-}
-.qso-readouts dd.mono {
-  font-family: var(--font-mono);
-}
-
-.qso-work {
-  display: flex;
-  gap: var(--space-2);
-}
-.qso-work-call {
-  flex: 2;
-  min-width: 0;
-}
-.qso-work-grid {
-  flex: 1;
-  min-width: 0;
-}
-.qso-work input {
-  padding: var(--space-2) 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-elev-1);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  letter-spacing: 0.03em;
-}
-.qso-work input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.qso-work button {
-  flex: none;
-  padding: var(--space-2) 18px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--tx);
-  background: var(--tx);
-  color: #fff;
-  font-weight: 800;
-  font-size: 13px;
-  transition: var(--transition);
-}
-.qso-work button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.qso-now {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-elev-2);
-}
-.qso-now.stalled {
-  border-color: var(--state-bad, #e5484d);
-  background: color-mix(in srgb, var(--state-bad, #e5484d) 10%, var(--bg-elev-2));
-}
-.qso-now-label {
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-  white-space: nowrap;
-}
-.qso-now.stalled .qso-now-label {
-  color: var(--state-bad, #e5484d);
-}
-.qso-now-msg {
-  flex: 1;
-  min-width: 0;
-  font-weight: 700;
-  color: var(--tx);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.qso-resend {
-  flex: none;
-  padding: 5px var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-elev-1);
-  color: var(--text-dim);
-  font-weight: 700;
-  font-size: 12px;
-  transition: var(--transition);
-}
-.qso-resend:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--text);
-}
-.qso-resend:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.qso-freetext {
-  display: flex;
-  gap: var(--space-2);
-}
-.qso-freetext input {
-  flex: 1;
-  min-width: 0;
-  padding: var(--space-2) 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-elev-1);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  letter-spacing: 0.02em;
-}
-.qso-freetext input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.qso-freetext button {
-  flex: none;
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 800;
-  font-size: 13px;
-  transition: var(--transition);
-}
-.qso-freetext button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.qso-actions {
-  display: flex;
-  gap: 10px;
-}
-.qso-action-btn {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  min-height: 60px;
-  padding: var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-elev-2);
-  color: var(--text-dim);
-  font-size: 15px;
-  font-weight: 800;
-  transition: var(--transition);
-}
-.qso-action-btn small {
-  font-size: 10px;
-  font-weight: 600;
-  opacity: 0.8;
-}
-.qso-action-btn:hover {
-  border-color: var(--accent);
-  color: var(--text);
-}
-.qso-action-btn.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-}
-.qso-action-btn.primary.active {
-  background: var(--tx);
-  border-color: var(--tx);
-  color: #fff;
-}
-.qso-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-faint);
-  line-height: 1.5;
-}
-
-/* ===========================================================================
    Prompt-to-log confirm popup (WSJT-X "Prompt me to log QSO")
    =========================================================================== */
 .logconfirm-backdrop {
@@ -5264,7 +5017,7 @@ select optgroup {
   backdrop-filter: blur(2px);
 }
 .logconfirm {
-  width: min(420px, 92vw);
+  width: min(420px, calc(0.92 * var(--vw-eff, 100vw)));
   /* Zoom-corrected cap + internal scroll: uncapped under the centering backdrop, a short
      window pushed the head/actions symmetrically past both edges with nothing scrollable
      (same class as `.mv-packs`; --vh-eff because raw vh is zoom-blind). */
@@ -5367,7 +5120,7 @@ select optgroup {
 .purge-confirm {
   /* Renders on `class="logconfirm purge-confirm"` — the viewport cap + scroll come from
      `.logconfirm` above; only the width differs. */
-  width: min(480px, 94vw);
+  width: min(480px, calc(0.94 * var(--vw-eff, 100vw)));
 }
 .logconfirm-sub.danger {
   color: var(--state-weak);
@@ -6985,7 +6738,8 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-weight: 700;
 }
 .recall-log-list {
-  max-height: 38vh;
+  /* Effective viewport, not raw vh — raw is wrong by the zoom factor inside .app. */
+  max-height: calc(0.38 * var(--vh-eff, 100vh));
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -7154,12 +6908,6 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .phone-cockpit .vk-note {
   margin: 0 0 var(--space-1);
-}
-.ph-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
 }
 .ph-mode-badge {
   font-weight: 800;
@@ -7466,13 +7214,15 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 /* Phone bandscope: a horizontal real-time scope (panadapter trace + fast waterfall) with a
    rapid colored S-meter. Replaces the FT8 vertical waterfall in the Phone cockpit. */
-/* A WIDE, SHORT bandscope strip (~quarter screen, not a tall vertical block). vh-based
-   so it stays proportional at 125% OS scale instead of overflowing. Carries its own
+/* A WIDE, SHORT bandscope strip (~quarter screen, not a tall vertical block).
+   Sized against the EFFECTIVE viewport (--vh-eff = innerHeight/zoom): a raw 22vh
+   was proportional at 125% OS scale but wrong by the factor of the app's own UI
+   zoom — 86 device px (14% of the window) at the 900×600 minimum. Carries its own
    panel chrome because it intentionally drops the `.panel` class (that class triggers
    `.layout.single > .panel { height:100% }`, which is what made it full-height). */
 .ph-scope-panel {
   flex: 0 0 auto;
-  height: 22vh;
+  height: calc(0.22 * var(--vh-eff, 100vh));
   min-height: 120px;
   max-height: 220px;
   /* Per-cockpit resizable heights land below (.cw-cockpit/.phone-cockpit overrides). */
@@ -10157,118 +9907,164 @@ select.settings-input {
 [data-viewport='xs'] .layout[data-three-pane] {
   --left-rail-w: 240px;
   --rail-min: 190px;
-  --right-rail-w: clamp(280px, 30vw, 420px);
+  /* --vw-eff, never raw vw: under `.app { zoom }` a raw 30vw resolved against
+     the UNZOOMED window, so the rail's share of the screen GREW with the
+     operator's zoom (56% at pinned 175) — backwards. */
+  --right-rail-w: clamp(280px, calc(0.3 * var(--vw-eff, 100vw)), 420px);
 }
 [data-viewport='xs'] .layout[data-three-pane] {
   /* Narrowest desktop class: tighten further and lower the rail floor so the
-     center pane keeps usable width. The waterfall stays in its rail (never
-     hidden); the operator can move it to a top strip via the layout toggle. */
+     center pane keeps usable width. The waterfall stays in its rail and is never
+     hidden — the rail only narrows. (There is no top-strip alternative: the
+     `data-layout` attribute an older comment here promised had no writer and no
+     CSS, and was deleted with the rest of that dead vocabulary.) */
   --left-rail-w: 210px;
   --rail-min: 168px;
-  --right-rail-w: clamp(240px, 32vw, 360px);
+  --right-rail-w: clamp(240px, calc(0.32 * var(--vw-eff, 100vw)), 360px);
 }
+/* No xl (ultrawide) rail defaults belong here. A `:root[data-viewport='xl']` block
+   was tried and was dead on arrival: usePaneWidths publishes --left-rail-w /
+   --right-rail-w as INLINE vars on <html> on every mount, and index.html's preseed
+   writes them inline before first paint in EVERY window — the stored width, or the
+   hook's proportional default (0.18/0.22 · effective width) when nothing is stored.
+   Inline beats a stylesheet rule on the same element, and the [data-viewport]
+   attribute is set by those same code paths, so the rule could never apply. The
+   ultrawide default IS that proportional default; change it in usePaneWidths.ts (and
+   the preseed, in lockstep), never here. The sm/xs blocks above are live because they
+   declare on a DESCENDANT (.layout[data-three-pane]), which beats inheritance. */
 
-@media (max-width: 900px) {
-  .shell {
-    flex-direction: column;
-  }
-  .mode-nav {
-    width: 100%;
-    flex-direction: row;
-    justify-content: space-between;
-    padding: 6px var(--space-2);
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    overflow-x: auto;
-  }
-  .mode-nav-top,
-  .mode-nav-bottom {
-    flex-direction: row;
-    gap: 6px;
-    align-items: center;
-  }
-  .mode-nav-group {
-    /* Horizontal top bar at this breakpoint → re-row the Digital group inline. */
-    flex-direction: row;
-    align-items: center;
-    gap: var(--space-1);
-    padding: 3px 6px;
-  }
-  .mode-nav-group-label {
-    padding: 0 2px 0 0;
-  }
-  .mode-btn {
-    flex-direction: row;
-    gap: 6px;
-    padding: 6px var(--space-3);
-    min-height: var(--touch);
-    white-space: nowrap;
-  }
-  .mode-current {
-    border-top: none;
-    border-right: 1px solid var(--border-soft);
-    padding: 0 10px;
-  }
-  .layout {
-    grid-template-columns: 1fr;
-    grid-auto-rows: minmax(0, auto);
-    overflow-y: auto;
-  }
-  /* On phones, ignore the layout preset + resizing: stack everything in source
-     order, full width, and drop the splitters. */
-  .layout[data-three-pane] {
-    grid-template-columns: 1fr;
-    grid-template-rows: none;
-    grid-template-areas: none;
-    grid-auto-rows: minmax(0, auto);
-  }
-  .grid-stations,
-  .grid-center,
-  .grid-waterfall {
-    display: block;
-  }
-  .pane-splitter {
-    display: none;
-  }
-  .station-list {
-    max-height: 240px;
-  }
-  .conversation,
-  .qso-panel,
-  .fieldday {
-    min-height: 60vh;
-  }
-  .right-rail {
-    min-height: 420px;
-  }
-  .radio-readout {
-    margin-left: 0;
-  }
-  .freq-control.compact {
-    flex-wrap: wrap;
-    border-radius: var(--radius-sm);
-  }
-  .freq-control.full {
-    gap: 10px;
-  }
-  .topbar {
-    gap: var(--space-3);
-  }
-  .qso-readouts {
-    grid-template-columns: 1fr;
-  }
-  .log-row {
-    grid-template-columns: 0.6fr 1fr 0.5fr 2fr;
-  }
-  .toast-stack {
-    left: 12px;
-    right: 12px;
-    bottom: 12px;
-    max-width: none;
-  }
-  .log-export {
-    justify-content: flex-start;
-  }
+/* Whole-shell narrow collapse, keyed on EFFECTIVE width (sm/xs = effW < 1100),
+   not a raw @media. The old `@media (max-width: 900px)` measured the UNZOOMED
+   window: it flipped the entire app to this phone stack at exactly the 900-px
+   Tauri minimum (where the effective width is a comfortable 1385 — md) and at
+   half-screen snap, yet could NEVER fire for a pinned-zoom operator — the one
+   whose effective width genuinely is narrow. sm and xs are disjoint buckets
+   (xs < 768 ≤ sm < 1100), so both are listed everywhere "narrow" is meant. */
+[data-viewport='sm'] .shell,
+[data-viewport='xs'] .shell {
+  flex-direction: column;
+}
+[data-viewport='sm'] .mode-nav,
+[data-viewport='xs'] .mode-nav {
+  width: 100%;
+  flex-direction: row;
+  justify-content: space-between;
+  padding: 6px var(--space-2);
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+[data-viewport='sm'] .mode-nav-top,
+[data-viewport='sm'] .mode-nav-bottom,
+[data-viewport='xs'] .mode-nav-top,
+[data-viewport='xs'] .mode-nav-bottom {
+  flex-direction: row;
+  gap: 6px;
+  align-items: center;
+}
+[data-viewport='sm'] .mode-nav-group,
+[data-viewport='xs'] .mode-nav-group {
+  /* Horizontal top bar in the narrow collapse → re-row the Digital group inline. */
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px 6px;
+}
+[data-viewport='sm'] .mode-nav-group-label,
+[data-viewport='xs'] .mode-nav-group-label {
+  padding: 0 2px 0 0;
+}
+/* :where() so this keeps the OLD @media weight of (0,1,0). Bare
+   `[data-viewport='sm'] .mode-btn` is (0,2,0) and, later in the file, beat
+   `.mode-btn.sub` — which the media body always lost to — refattening every
+   Digital sub-mode button to a 44px touch target and a wider gap in exactly the
+   layout where width is scarcest. The sub variant must keep winning here. */
+:where([data-viewport='sm']) .mode-btn,
+:where([data-viewport='xs']) .mode-btn {
+  flex-direction: row;
+  gap: 6px;
+  padding: 6px var(--space-3);
+  min-height: var(--touch);
+  white-space: nowrap;
+}
+[data-viewport='sm'] .mode-current,
+[data-viewport='xs'] .mode-current {
+  border-top: none;
+  border-right: 1px solid var(--border-soft);
+  padding: 0 10px;
+}
+[data-viewport='sm'] .layout,
+[data-viewport='xs'] .layout {
+  grid-template-columns: 1fr;
+  grid-auto-rows: minmax(0, auto);
+  overflow-y: auto;
+}
+/* In the narrow collapse, ignore the layout preset + resizing: stack everything
+   in source order, full width, and drop the splitters.
+   This DOES apply to the Tempo-chat header variant: at (0,3,0) it ties
+   `.layout[data-three-pane].has-tempo-header` above and wins on order. The old
+   @media body was (0,2,0) and lost, so chat collapsed into a hybrid — the header
+   rule's 5-column areas over a single 1fr column. Keep this block after it. */
+[data-viewport='sm'] .layout[data-three-pane],
+[data-viewport='xs'] .layout[data-three-pane] {
+  grid-template-columns: 1fr;
+  grid-template-rows: none;
+  grid-template-areas: none;
+  grid-auto-rows: minmax(0, auto);
+}
+[data-viewport='sm'] .grid-stations,
+[data-viewport='sm'] .grid-center,
+[data-viewport='sm'] .grid-waterfall,
+[data-viewport='xs'] .grid-stations,
+[data-viewport='xs'] .grid-center,
+[data-viewport='xs'] .grid-waterfall {
+  display: block;
+}
+[data-viewport='sm'] .pane-splitter,
+[data-viewport='xs'] .pane-splitter {
+  display: none;
+}
+[data-viewport='sm'] .station-list,
+[data-viewport='xs'] .station-list {
+  max-height: 240px;
+}
+[data-viewport='sm'] .conversation,
+[data-viewport='sm'] .fieldday,
+[data-viewport='xs'] .conversation,
+[data-viewport='xs'] .fieldday {
+  /* 60% of the EFFECTIVE viewport: a raw 60vh under zoom 0.65 rendered at 39%
+     of the window, not 60. Benign as a floor because the collapsed .layout
+     above is the scroller. */
+  min-height: calc(0.6 * var(--vh-eff, 100vh));
+}
+[data-viewport='sm'] .right-rail,
+[data-viewport='xs'] .right-rail {
+  min-height: 420px;
+}
+[data-viewport='sm'] .radio-readout,
+[data-viewport='xs'] .radio-readout {
+  margin-left: 0;
+}
+[data-viewport='sm'] .freq-control.compact,
+[data-viewport='xs'] .freq-control.compact {
+  flex-wrap: wrap;
+  border-radius: var(--radius-sm);
+}
+[data-viewport='sm'] .freq-control.full,
+[data-viewport='xs'] .freq-control.full {
+  gap: 10px;
+}
+[data-viewport='sm'] .topbar,
+[data-viewport='xs'] .topbar {
+  gap: var(--space-3);
+}
+[data-viewport='sm'] .log-row,
+[data-viewport='xs'] .log-row {
+  grid-template-columns: 0.6fr 1fr 0.5fr 2fr;
+}
+[data-viewport='sm'] .log-export,
+[data-viewport='xs'] .log-export {
+  justify-content: flex-start;
 }
 
 /* ===========================================================================
@@ -10294,33 +10090,9 @@ select.settings-input {
 /* ===========================================================================
    Live decode feed (WSJT-X-style band activity)
    =========================================================================== */
-.decode-feed {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  /* Show more of the band activity. Grows with the window but never shrinks below the
-     old fixed height, so small screens are unaffected. */
-  max-height: clamp(240px, 38vh, 460px);
-  border-top: 1px solid var(--border-soft);
-  background: var(--bg-elev);
-}
-.decode-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-soft);
-}
-.decode-sub {
-  font-size: 10px;
-  color: var(--text-faint);
-}
-.decode-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-1) 0;
-}
+/* (.decode-head/.decode-sub/.decode-scroll lived here until DecodeFeed.tsx — their
+   only consumer — was deleted with the dead decode-feed pane. The rows below are
+   still live: OperateCockpit renders .decode-row, OperateDecodes .decode-msg.) */
 .decode-row {
   display: grid;
   /* tier · UTC · dB · DT · Freq · message · work */
@@ -10625,7 +10397,7 @@ select.settings-input {
   backdrop-filter: blur(3px);
 }
 .radio-picker {
-  width: min(520px, 92vw);
+  width: min(520px, calc(0.92 * var(--vw-eff, 100vw)));
   /* Zoom-corrected cap + internal scroll — under `place-items:center` an uncapped box
      overflows both edges unreachably on short/pinned-zoom windows (same class as
      `.logconfirm` / `.mv-packs`). */
@@ -10852,23 +10624,32 @@ select.settings-input {
   color: var(--text-faint);
 }
 
-@media (max-width: 900px) {
-  .logbook-row {
-    grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 0.7fr;
-  }
-  /* Narrow: keep Call, Country, Band, QSL, actions; hide Freq/Mode/Sent/Rcvd/Time/Park. */
-  .logbook-row .log-cell:nth-child(4),
-  .logbook-row .log-cell:nth-child(5),
-  .logbook-row .log-cell:nth-child(6),
-  .logbook-row .log-cell:nth-child(7),
-  .logbook-row .log-cell:nth-child(8),
-  .logbook-row .log-cell:nth-child(9) {
-    display: none;
-  }
-  /* keep edit/delete reachable on touch (no hover) */
-  .logbook-row .log-rowbtn {
-    opacity: 1;
-  }
+/* Narrow (EFFECTIVE width — the old raw @media hid six columns at the 900-px
+   Tauri minimum where all eleven fit, and never fired under pinned zoom where
+   they don't): keep Call, Country, Band, QSL, actions; hide
+   Freq/Mode/Sent/Rcvd/Time/Park. */
+[data-viewport='sm'] .logbook-row,
+[data-viewport='xs'] .logbook-row {
+  grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 0.7fr;
+}
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(4),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(5),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(6),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(7),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(8),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(9),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(4),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(5),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(6),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(7),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(8),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(9) {
+  display: none;
+}
+/* keep edit/delete reachable on touch (no hover) */
+[data-viewport='sm'] .logbook-row .log-rowbtn,
+[data-viewport='xs'] .logbook-row .log-rowbtn {
+  opacity: 1;
 }
 
 /* scrollbars */
@@ -11191,85 +10972,8 @@ select.settings-input {
 }
 
 /* ===========================================================================
-   Toasts (transient notifications)
-   =========================================================================== */
-.toast-stack {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  max-width: 380px;
-  pointer-events: none;
-}
-.toast {
-  pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elev-2);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow);
-  font-size: 13px;
-  animation: toast-in 160ms ease;
-}
-@keyframes toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-}
-.toast.error {
-  border-color: color-mix(in srgb, var(--state-weak) 55%, var(--border));
-  border-left: 3px solid var(--state-weak);
-}
-.toast.success {
-  border-color: color-mix(in srgb, var(--state-good) 55%, var(--border));
-  border-left: 3px solid var(--state-good);
-}
-.toast.info {
-  border-left: 3px solid var(--accent);
-}
-.toast-msg {
-  flex: 1;
-  color: var(--text);
-  line-height: 1.35;
-}
-.toast-close {
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 18px;
-  line-height: 1;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  flex: 0 0 auto;
-  transition: var(--transition);
-}
-.toast-close:hover {
-  background: var(--bg-elev);
-  color: var(--text);
-}
-
-/* ===========================================================================
    Band activity / broadcast feed
    =========================================================================== */
-.band-feed {
-  min-width: 0;
-}
-.band-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-3) 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
 .band-row {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -11331,14 +11035,14 @@ select.settings-input {
   color: #1a1000;
 }
 
-/* band feed cramps on very narrow screens — drop the tech column */
-@media (max-width: 900px) {
-  .band-row {
-    grid-template-columns: auto 1fr;
-  }
-  .band-tech {
-    display: none;
-  }
+/* band feed cramps on genuinely narrow (EFFECTIVE) widths — drop the tech column */
+[data-viewport='sm'] .band-row,
+[data-viewport='xs'] .band-row {
+  grid-template-columns: auto 1fr;
+}
+[data-viewport='sm'] .band-tech,
+[data-viewport='xs'] .band-tech {
+  display: none;
 }
 
 /* ---- composer capacity meter (frames/overs left in a message) ---- */
@@ -12118,12 +11822,18 @@ select.settings-input {
   overflow-y: auto;
   overflow-x: hidden;
 }
-@media (max-width: 900px) {
-  .cockpit-lower,
-  .cockpit-lower.roster {
-    grid-template-columns: 1fr;
-    grid-auto-rows: minmax(0, 1fr);
-  }
+/* Narrow (EFFECTIVE width): the old raw @media force-stacked Band Activity and
+   the roster at the Tauri minimum, where the effective width is md-comfortable. */
+[data-viewport='sm'] .cockpit-lower,
+[data-viewport='sm'] .cockpit-lower.roster,
+[data-viewport='xs'] .cockpit-lower,
+[data-viewport='xs'] .cockpit-lower.roster {
+  /* minmax(0,1fr), not the old media body's bare `1fr`: as an attribute selector
+     this now outranks `.cockpit-lower[data-cols='one']` (which the media body lost
+     to), and a bare 1fr carries a min-content floor — a wide child in the
+     panel-removed + narrow combination could force horizontal blow-out. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(0, 1fr);
 }
 
 /* Side column: compact QSO strip on top, Band Activity (the big scroller), then
@@ -12268,10 +11978,9 @@ select.settings-input {
   background: var(--state-good);
   border-color: var(--state-good);
 }
-@media (max-width: 900px) {
-  .tx-panel {
-    grid-template-columns: 1fr;
-  }
+[data-viewport='sm'] .tx-panel,
+[data-viewport='xs'] .tx-panel {
+  grid-template-columns: 1fr;
 }
 
 /* Compact Tx1–Tx6 machine for the Classic two-pane side rail: one column so the
@@ -14280,10 +13989,12 @@ html[data-panel='needed'] {
   gap: var(--space-3);
   align-items: start;
 }
-@media (max-width: 800px) {
-  .pota-body {
-    grid-template-columns: 1fr;
-  }
+/* Narrow (EFFECTIVE width) collapse. The old `@media (max-width: 800px)` was
+   unreachable — POTA exists only in the main window, whose minWidth is 900 —
+   so the two columns' 592-px hard floor had no escape under pinned zoom. */
+[data-viewport='sm'] .pota-body,
+[data-viewport='xs'] .pota-body {
+  grid-template-columns: 1fr;
 }
 .pota-active {
   display: flex;
@@ -14791,10 +14502,12 @@ html[data-panel='needed'] {
   color: var(--text-faint);
   font-size: var(--fs-body);
 }
-@media (max-width: 860px) {
-  .awards-body {
-    grid-template-columns: 1fr;
-  }
+/* Narrow (EFFECTIVE width) collapse. The old `@media (max-width: 860px)` was
+   unreachable (main-window minWidth 900) — the two 0-floor columns squeezed
+   into unreadable slivers under pinned zoom instead of ever stacking. */
+[data-viewport='sm'] .awards-body,
+[data-viewport='xs'] .awards-body {
+  grid-template-columns: 1fr;
 }
 .aw-chases,
 .aw-left {
@@ -15183,15 +14896,17 @@ html[data-panel='needed'] {
   padding: 3px var(--space-2);
   margin-bottom: var(--space-1);
 }
-/* Narrow layouts: the side column drops below the schedule. */
-[data-viewport='narrow'] .sats-view,
-[data-viewport='phone'] .sats-view {
+/* Narrow layouts: the side column drops below the schedule. Was keyed on
+   'narrow'/'phone' — values classifyViewport never emits — so this stacking was
+   dead since birth and the globe column held its 340-px floor at every width. */
+[data-viewport='sm'] .sats-view,
+[data-viewport='xs'] .sats-view {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto auto minmax(0, 1fr);
   overflow-y: auto;
 }
-[data-viewport='narrow'] .sats-side,
-[data-viewport='phone'] .sats-side {
+[data-viewport='sm'] .sats-side,
+[data-viewport='xs'] .sats-side {
   grid-column: 1;
   grid-row: auto;
 }
@@ -15558,11 +15273,13 @@ html[data-panel='needed'] {
   gap: var(--gap);
   padding: var(--space-2) 10px;
 }
-@media (max-width: 900px) {
-  .rp-body {
-    grid-template-columns: 1fr;
-    grid-auto-rows: minmax(0, auto);
-  }
+/* Narrow (EFFECTIVE width) stack. Rows are minmax(0, 1fr) — Operate's idiom —
+   because minmax(0, auto) froze track 2 at the Builder's max-content (~270px)
+   and starved the source column above it down to its overflow-less minimum. */
+[data-viewport='sm'] .rp-body,
+[data-viewport='xs'] .rp-body {
+  grid-template-columns: 1fr;
+  grid-auto-rows: minmax(0, 1fr);
 }
 .rp-source {
   min-width: 0;
@@ -15752,13 +15469,12 @@ html[data-panel='needed'] {
   border-left: 1px solid var(--border);
   padding-left: var(--gap);
 }
-@media (max-width: 900px) {
-  .rp-builder {
-    border-left: none;
-    border-top: 1px solid var(--border);
-    padding-left: 0;
-    padding-top: var(--space-2);
-  }
+[data-viewport='sm'] .rp-builder,
+[data-viewport='xs'] .rp-builder {
+  border-left: none;
+  border-top: 1px solid var(--border);
+  padding-left: 0;
+  padding-top: var(--space-2);
 }
 .rp-builder-head {
   display: flex;
@@ -16575,7 +16291,9 @@ html[data-panel='needed'] {
 }
 [data-viewport='xs'] .mv-side {
   flex: none;
-  max-height: 30vh;
+  /* Effective viewport: xs is reachable only via pop-out/pinned zoom, exactly
+     where a raw 30vh was off by the zoom factor. */
+  max-height: calc(0.3 * var(--vh-eff, 100vh));
 }
 
 /* ===========================================================================
@@ -16646,7 +16364,8 @@ html[data-panel='needed'] {
    skip every row. */
 .rtty-cockpit .waterfall-wrap {
   flex: 0 0 auto;
-  height: 22vh;
+  /* Effective viewport, matching .ph-scope-panel — raw 22vh was zoom-blind. */
+  height: calc(0.22 * var(--vh-eff, 100vh));
   min-height: 120px;
   max-height: 220px;
 }
@@ -17720,7 +17439,9 @@ tr.sel .aprs-sym {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  max-width: min(92vw, 60rem);
+  /* --vw-eff: a raw 92vw capped the banner at 60% of the window at auto-65 —
+     the smallest windows wrapped the loudest banner soonest. */
+  max-width: min(calc(0.92 * var(--vw-eff, 100vw)), 60rem);
   padding: var(--space-2) var(--space-3);
   border: 2px solid var(--need-entity, #ff5c7a);
   border-top: none;
@@ -17785,7 +17506,7 @@ tr.sel .aprs-sym {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  max-width: min(90vw, 40rem);
+  max-width: min(calc(0.9 * var(--vw-eff, 100vw)), 40rem);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border, #2a3340);
   border-radius: var(--radius);
@@ -18152,10 +17873,15 @@ tr.sel .aprs-sym {
 .dxm {
   overflow-x: auto;
 }
-[data-viewport='narrow'] .dxm-head,
-[data-viewport='narrow'] .dxm-week,
-[data-viewport='phone'] .dxm-head,
-[data-viewport='phone'] .dxm-week {
+/* This min-width is what ARMS the `.dxm { overflow-x: auto }` escape above:
+   the week rows are repeat(7, minmax(0, 1fr)) — a 0 floor never exceeds the
+   container, so without it the scroller never engages and the seven day
+   columns silently squash to slivers. It was keyed on 'narrow'/'phone'
+   (never emitted) and therefore dead since birth. */
+[data-viewport='sm'] .dxm-head,
+[data-viewport='sm'] .dxm-week,
+[data-viewport='xs'] .dxm-head,
+[data-viewport='xs'] .dxm-week {
   min-width: 460px;
 }
 
@@ -18240,15 +17966,25 @@ tr.sel .aprs-sym {
   overflow-x: auto;
   white-space: nowrap;
 }
-/* Narrow: stack, map first — it is the thing worth seeing on a small screen. */
-[data-viewport='narrow'] .aprs-body,
-[data-viewport='phone'] .aprs-body {
+/* Narrow: stack, map first — it is the thing worth seeing on a small screen.
+   Was keyed on 'narrow'/'phone' (values classifyViewport never emits), so the
+   stacking was dead since birth and the map column shrank toward zero instead. */
+[data-viewport='xs'] .aprs-body {
   grid-template-columns: minmax(0, 1fr);
+  /* Both rows stated here. The base rule declares ONE explicit row, so stacked the
+     rail fell into an IMPLICIT `auto` track — and grid maximizes non-flexible tracks
+     BEFORE expanding fr ones, so as soon as the heard table outgrew the pane (the
+     normal state after minutes of RX) the rail took the whole height and the map's
+     fr row collapsed to zero. The map cannot take an `auto` row either: without a
+     definite height its canvas re-arms the growth loop this section is full of
+     warnings about. Equal shrinkable halves; the rail scrolls itself. */
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
 }
-[data-viewport='narrow'] .aprs-map,
-[data-viewport='phone'] .aprs-map {
+[data-viewport='xs'] .aprs-map {
   order: -1;
-  min-height: 260px;
+  /* No min-height override: the row track above is the map's height, and the base
+     rule's `min(320px, 100%)` self-limits to it — a floor here would only be a way
+     to overflow the track and paint over the rail. */
 }
 .aprs-rail .aprs-table tbody tr {
   cursor: pointer;

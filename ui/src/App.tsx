@@ -1966,8 +1966,9 @@ export default function App() {
   )
 
   // Three-pane workspace: stations | center | waterfall, with drag splitters
-  // between each. CSS (keyed on `data-layout`) places the waterfall on the right
-  // (default) or as a full-width strip on top — same JSX, no remount.
+  // between each. The waterfall lives in the right rail at every width; the rail
+  // only narrows on the sm/xs collapse. (This used to claim a `data-layout`
+  // top-strip alternative — there was no writer and no CSS behind it.)
   const threePane = (center: JSX.Element, header?: JSX.Element) => (
     <main
       className={`layout${header ? ' has-tempo-header' : ''}`}
