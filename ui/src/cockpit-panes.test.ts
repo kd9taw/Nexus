@@ -305,11 +305,14 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
   // per-cockpit grower/floor mechanism the rebuild deletes. This closes that gap: in
   // styles.css, a rule ON .pane-frame may style paint/type, never growth or floors.
   //
-  // The ONE allowed exception is RTTY's shell-owned frame (`.rtty-cockpit > .pane-frame`):
-  // RTTY has no region — a single content pane — so the shell sizes the frame explicitly,
-  // with the shell's own deficit valve (cockpit-shells.test.ts) behind the 10em floor.
-  // The allowlist is exact-selector, so even a typo'd variant of it fails here.
-  const ALLOWED = new Set(['.rtty-cockpit > .pane-frame'])
+  // No exceptions. The former one (`.rtty-cockpit > .pane-frame { min-height: 10em }`)
+  // was discovered DEAD in the 2026-07-31 review round: CockpitPaneFrame stamps
+  // `min-height: 0` inline on fill frames, and an inline declaration outranks every
+  // sheet selector — the rule shipped as exactly the dead-fix class this file documents.
+  // The sanctioned floor channel for a region-less cockpit (RTTY / SSTV) is now the
+  // frame's own inline `min-height: var(--cockpit-fill-min, 0)`, with the knob set by
+  // the shell rule and fenced below.
+  const ALLOWED = new Set<string>([])
 
   /** Final flex-grow a block computes (longhand + shorthand, in-block order). */
   function blockGrow(body: string): number | null {
@@ -372,5 +375,27 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
       }
     }
     expect(offenders, `floored pane body:\n${offenders.join('\n')}`).toEqual([])
+  })
+
+  it('only the region-less shells may set --cockpit-fill-min (the inline floor knob)', () => {
+    // The knob inherits, so ANY ancestor rule could floor every fill frame below it —
+    // including frames inside a region's tier-2/3 `overflow: hidden`, where a floor is
+    // the clip mechanism reborn. Exact-selector allowlist: the two shells whose own
+    // `overflow-y: auto` deficit valve (cockpit-shells.test.ts) stands behind the floor.
+    const ALLOWED_KNOB = new Set(['.layout.single.rtty-cockpit', '.layout.single.sstv-view'])
+    const offenders = [
+      ...STYLES_RULES.filter(
+        (r) => /--cockpit-fill-min\s*:/.test(r.body) && !ALLOWED_KNOB.has(r.selector),
+      ).map((r) => `styles.css: ${r.selector}`),
+      ...RULES.filter((r) => /--cockpit-fill-min\s*:/.test(r.body)).map(
+        (r) => `cockpit-panes.css: ${r.selector}`,
+      ),
+    ]
+    expect(
+      offenders,
+      `--cockpit-fill-min set outside the region-less shells:\n${offenders.join('\n')}\n` +
+        'A frame floor under a clipping region ancestor is the documented clip bug; the ' +
+        'knob is legal only where the shell deficit valve scrolls behind it.',
+    ).toEqual([])
   })
 })
