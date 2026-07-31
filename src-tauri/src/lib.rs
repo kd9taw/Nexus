@@ -3638,6 +3638,38 @@ struct SatTrackDto {
     los_unix: i64,
 }
 
+/// Put one [`RotStep`] on the wire and report what the rotator actually did.
+///
+/// The az/el → azimuth-only fallback lives here rather than in the driver
+/// because it is an I/O outcome, not a policy: rotctld refuses `P az el` on a
+/// mount with no elevation axis, and the only way to find out is to try. The
+/// driver is told which happened and decides what it means.
+fn send_rot_step(addr: &str, step: tempo_core::rotator::RotStep) -> tempo_core::rotator::RotOutcome {
+    use tempo_core::rotator::{RotOutcome, RotStep};
+    match step {
+        RotStep::Hold => RotOutcome::AzOk, // never reaches the wire
+        RotStep::PointAzEl { az, el } => match tempo_audio::rotator::point_azel(addr, az, el) {
+            Ok(()) => RotOutcome::AzElOk,
+            // Elevation refused. If plain azimuth lands, this is an az-only
+            // rotator (or a transient the driver will re-probe for).
+            Err(_) => {
+                if tempo_audio::rotator::point(addr, az).is_ok() {
+                    RotOutcome::AzOnly
+                } else {
+                    RotOutcome::Failed
+                }
+            }
+        },
+        RotStep::PointAz { az } => {
+            if tempo_audio::rotator::point(addr, az).is_ok() {
+                RotOutcome::AzOk
+            } else {
+                RotOutcome::Failed
+            }
+        }
+    }
+}
+
 static SAT_TRACK_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SAT_TRACK: Mutex<Option<SatTrackDto>> = Mutex::new(None);
 
@@ -3723,17 +3755,10 @@ async fn start_sat_track(
     tauri::async_runtime::spawn_blocking(move || {
         use propagation::sat;
         use std::sync::atomic::Ordering;
-        let mut azel_ok = true; // az-only rotors: fall back, probe to recover
-        // What the rotator was last actually TOLD — the deadband compares
-        // against this, not against where the bird is.
-        let mut last_cmd: Option<(f64, f64)> = None;
-        // The same command expressed as the BORESIGHT angle it was aiming at —
-        // the frame the sky dome draws in. Kept alongside rather than derived,
-        // so the trim (and a flip, if one ever fires) never has to be undone by
-        // arithmetic that could drift out of step with `point_for`.
-        let mut last_aim: Option<(f64, f64)> = None;
-        let mut az_only_ticks = 0u32;
-        let mut misses = 0u32;
+        use tempo_core::rotator::{RotOutcome, RotStep};
+        // Deadband, calibration trim, the az-only fallback and its recovery
+        // probe, and the miss counter all live in the driver.
+        let mut driver = tempo_core::rotator::TrackDriver::new(rot_cfg);
         let update_badge = |dto: SatTrackDto| {
             if let Ok(mut g) = SAT_TRACK.lock() {
                 if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
@@ -3839,22 +3864,21 @@ async fn start_sat_track(
             // the engine — never inferred from the dial, which is the uplink
             // under an uplink-only mapping and ordinary split otherwise.
             let dop = live_rate.and_then(|rate| engine_lock(&dop_engine).sat_tuning_now(rate));
-            // Mechanical policy: flip over the top on a high pass (opt-in),
-            // then apply the calibration trim. `az`/`el` from here on are what
-            // the ROTATOR should be told, which is not always where the bird is.
-            let (az, el) = tempo_core::rotator::point_for(az, el, &rot_cfg);
-            // Deadband: skip a command the rotator would treat as noise, or the
-            // relays chatter for the whole pass. The badge still updates, so the
-            // operator sees tracking continue.
-            if !tempo_core::rotator::worth_moving((az, el), last_cmd, &rot_cfg) {
-                // The command was SUPPRESSED, so the antenna is still where it
-                // was last TOLD to go — `last_cmd`, not the fresh target.
-                // Reporting the target here would erase the deadband gap, which
-                // is exactly the tracking error the sky dome exists to show.
+            // The mechanical policy — flip, calibration trim, deadband, the
+            // az-only fallback and its recovery probe — lives in tempo-core so
+            // it can be exercised over a whole simulated pass without a mast.
+            // This loop is the I/O half: ask what to do, do it, report back.
+            let step = driver.step(sat_az, sat_el);
+            if step == RotStep::Hold {
+                // SUPPRESSED by the deadband, so the antenna is still where it
+                // was last told to go. The badge keeps the last aim rather than
+                // the fresh target: reporting the target would erase the gap,
+                // which is exactly the tracking error the sky dome exists to
+                // show.
                 update_badge(badge(
                     phase,
-                    last_aim,
-                    azel_ok,
+                    driver.last_aim(),
+                    driver.azel_ok(),
                     rep_sat,
                     live_range,
                     live_rate,
@@ -3868,68 +3892,27 @@ async fn start_sat_track(
             if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
                 return;
             }
-            let sent = if azel_ok {
-                match tempo_audio::rotator::point_azel(&addr, az, el) {
-                    Ok(()) => true,
-                    Err(_) => {
-                        // Az-only rotor (rotctld rejects el)? Try plain azimuth;
-                        // if that works, go az-only — but PROBE below, so a
-                        // transient error doesn't downgrade the whole pass.
-                        if tempo_audio::rotator::point(&addr, az).is_ok() {
-                            azel_ok = false;
-                            az_only_ticks = 0;
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                }
-            } else {
-                az_only_ticks += 1;
-                if az_only_ticks >= 20 {
-                    // ~60 s recovery probe: if az/el works again (the earlier
-                    // failure was transient comms, not an az-only rotor), resume.
-                    az_only_ticks = 0;
-                    match tempo_audio::rotator::point_azel(&addr, az, el) {
-                        Ok(()) => {
-                            azel_ok = true;
-                            true
-                        }
-                        Err(_) => tempo_audio::rotator::point(&addr, az).is_ok(),
-                    }
-                } else {
-                    tempo_audio::rotator::point(&addr, az).is_ok()
-                }
-            };
-            if sent {
-                misses = 0;
-                last_cmd = Some((az, el));
-                // The BORESIGHT angle we were aiming at when we last commanded.
-                // Reported to the UI instead of `last_cmd`, because `last_cmd`
-                // is in the CONTROLLER's frame — it carries the calibration
-                // trim, whose entire definition is "the controller's numbers
-                // are offset from where the boom actually points". A sky dome
-                // draws boresight, so on a station with a 4° trim the two
-                // frames differ by a permanent 4° and a correctly tracking
-                // rotator would render a constant pointing error. The gap that
-                // remains here is the real one: the deadband, plus the seconds
-                // since the last command.
-                last_aim = Some((sat_az, sat_el));
-                // Report what was COMMANDED. An az-only fallback never commands
-                // elevation, so `azel_ok` makes it report none at all — absent,
-                // not a 0 the UI would have to decode back into "az-only".
+            let outcome = send_rot_step(&addr, step);
+            driver.record(step, outcome, sat_az, sat_el);
+            if outcome != RotOutcome::Failed {
+                // Report the BORESIGHT aim the driver recorded, never the
+                // controller command: the latter carries the calibration trim,
+                // whose whole definition is that the controller's numbers are
+                // offset from where the boom points, so a sky dome drawn from
+                // it would show a permanent error on a correctly trimmed
+                // station. An az-only rotator reports no elevation at all —
+                // absent, not a 0 the UI would have to decode.
                 update_badge(badge(
                     phase,
-                    last_aim,
-                    azel_ok,
+                    driver.last_aim(),
+                    driver.azel_ok(),
                     rep_sat,
                     live_range,
                     live_rate,
                     dop.as_ref(),
                 ));
             } else {
-                misses += 1;
-                if misses >= 5 {
+                if driver.gave_up() {
                     break; // rotor stopped answering — clear the badge, don't lie
                 }
                 // The write failed, so nothing about the ANTENNA changed — but
@@ -3940,8 +3923,8 @@ async fn start_sat_track(
                 // are ~15 s of the operator wondering.
                 update_badge(badge(
                     phase,
-                    last_aim,
-                    azel_ok,
+                    driver.last_aim(),
+                    driver.azel_ok(),
                     rep_sat,
                     live_range,
                     live_rate,

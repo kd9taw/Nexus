@@ -2185,6 +2185,7 @@ dependencies = [
  "cpal",
  "deepcw",
  "hound",
+ "propagation",
  "serde_json",
  "serialport",
  "tempo-app",
