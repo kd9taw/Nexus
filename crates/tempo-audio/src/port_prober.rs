@@ -107,6 +107,17 @@ pub const COMMON_CAT_MODELS: &[(u32, &str, &[u32])] = &[
 /// doubt), or — when no model is configured yet — seed [`COMMON_CAT_MODELS`] so Auto-test isn't
 /// dead before setup. Candidates with no usable model (0) are dropped.
 pub fn candidates_from(ports: &[UsbPort], fallback_model: u32) -> Vec<Candidate> {
+    // Dual-UART Icoms (IC-7610/9700) enumerate as TWO ports that both resolve to the same
+    // model; only the one the driver marks "A (CI-V)" / "Enhanced" ever answers. Probe that
+    // one first and the known non-CI-V side last, so the right port isn't stuck waiting
+    // behind a full no-answer sweep of its dead twin. Stable sort — everything without a
+    // marking keeps the enumeration order.
+    let mut ports: Vec<&UsbPort> = ports.iter().collect();
+    ports.sort_by_key(|p| match crate::usbrig::civ_port_side(&p.product) {
+        Some(true) => 0,
+        None => 1,
+        Some(false) => 2,
+    });
     ports
         .iter()
         .flat_map(|p| match match_rig_model(&p.product, &p.manufacturer) {
@@ -289,6 +300,22 @@ mod tests {
             cands[0].model, 3073,
             "no model in the product → operator's configured model"
         );
+    }
+
+    /// An IC-7610's two ports both resolve to model 3078 — without the CI-V-side sort, an
+    /// unlucky enumeration order spends the whole baud sweep on the dead "Serial Port B"
+    /// twin before ever touching the real CI-V port.
+    #[test]
+    fn the_civ_marked_port_is_probed_before_its_dead_twin() {
+        let cands = candidates_from(
+            &[
+                usb("COM4", "IC-7610 Serial Port B", "Icom Inc."),
+                usb("COM3", "IC-7610 Serial Port A (CI-V)", "Icom Inc."),
+            ],
+            0,
+        );
+        assert_eq!(cands.first().map(|c| c.port_name.as_str()), Some("COM3"));
+        assert_eq!(cands.last().map(|c| c.port_name.as_str()), Some("COM4"));
     }
 
     #[test]

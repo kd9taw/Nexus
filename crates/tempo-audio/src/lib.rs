@@ -25,6 +25,11 @@
 #[cfg(feature = "device")]
 pub mod aprsrx;
 pub mod backend;
+/// Test-CAT baud-ladder diagnosis for Icom CI-V rigs — probes the SAME serial port at
+/// the other common CI-V rates when the configured probe got zero bytes, and composes
+/// the exact "fix the app / fix the rig menu" verdict. Pure logic unit-tested; the real
+/// probe rides the `serial` feature and runs only in the `test_cat` command context.
+pub mod baud_ladder;
 /// Stateful, anti-aliased capture-path resampler (device rate → 12 kHz). Pure
 /// DSP — no audio device — so it builds and unit-tests without the `device`
 /// feature; `device::CpalBackend` owns one per capture stream.
