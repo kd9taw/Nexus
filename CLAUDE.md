@@ -53,3 +53,28 @@ the invariants that are expensive to rediscover. Architecture map: [ARCHITECTURE
   `scripts/release-prep <version>` renames it and aligns all version manifests at release time.
 - CSS/UI: theme via CSS variables (`--state-*`, `--snr-*`); check a variable exists in *both*
   themes before using it.
+
+## UI layout contract (2026-07 overhaul — read before building any view or pane)
+
+The window-sizing bug class that plagued 0.4–0.21 is dead only while these rules hold. The spec
+is the header comment of `ui/src/cockpit-panes.css`; enforcement is `cockpit-panes.test.ts`,
+`cockpit-shells.test.ts`, `responsive-vocab.test.ts` (they **compute cascade winners** — never
+add a regex-presence CSS test, that is how dead fixes shipped twice).
+
+- A cockpit shell has four child kinds only: header, scope, ONE pane region, one TX dock.
+  Every operator-content block renders through `CockpitPaneFrame` with a **role**:
+  `fit="content"` for control strips (exactly content height — a strip cannot use surplus),
+  fill + `weight` for feeds and the log column. A pane never sizes itself; structural size
+  lives in `cockpit-panes.css` (flat selectors, fenced) and only there.
+- TX/safety controls (PTT, send, abort, macros) live in the dock and have **no id in any pane
+  vocabulary** — moving or hiding them must stay unrepresentable.
+- Responsive behavior: `[data-viewport='xs|sm|md|lg|xl']` + `--vh-eff`/`--vw-eff` only. Never a
+  size-based `@media`, never raw `vh/vw` inside `.app` (zoom-blind) — the portaled
+  `.ui-dialog`/`.ui-tooltip` are the one permanent exception (their content re-applies
+  `--ui-zoom`; their boxes measure the real window).
+- Anything persisted that encodes a size/position/scale is **clamped on load** against the
+  current window/monitors, not just at drag time.
+- Auto-following feeds use `usePinnedScroll` (never a bare `scrollTop = scrollHeight`);
+  programmatic `focus()` uses `preventScroll` + `scrollIntoView({block:'nearest'})`.
+- Flex/grid growers must point at content that can actually stretch; a container that clips
+  (`overflow:hidden`) may never have hard-floored descendants without an interposed scroller.
