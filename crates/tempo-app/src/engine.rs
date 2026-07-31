@@ -8438,6 +8438,9 @@ impl Engine {
                     message: d.message.clone(),
                     is_cq,
                     directed_to_me,
+                    // QSO-ending RR73/73, by parse type (token-positional — a DM73
+                    // grid or an RRR roger never counts). Feeds the CQ+73 chip.
+                    signoff: parsed.is_signoff(),
                     worked,
                     country: entity,
                     new_dxcc,
@@ -8475,6 +8478,9 @@ impl Engine {
                 message: tx.text.clone(),
                 is_cq: false,
                 directed_to_me: false,
+                // Own-TX rows never classify (same rule as is_cq): the chip is about
+                // what's happening on the band, not what we sent.
+                signoff: false,
                 worked: false,
                 country: None,
                 new_dxcc: false,
@@ -14891,6 +14897,32 @@ mod tests {
             r2.new_band && !r2.new_dxcc,
             "entity worked on 20m only → a new BAND-slot on 2m, not an all-time new one"
         );
+    }
+
+    /// Tester request (the CQ+73 chip): each decode row must say whether it IS a
+    /// QSO-ending signoff, classified by the parse — never a substring scan — so a
+    /// `DM73` grid or an `RRR` roger stays off while `RR73`/`73` light up.
+    #[test]
+    fn decode_rows_carry_the_signoff_flag_from_the_parse() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.ingest_decodes_for_test(
+            &[
+                dec_snr("W1AW W9XYZ RR73", -5),
+                dec_snr("W1AW W9XYZ 73", -7),
+                dec_snr("W1AW W9XYZ DM73", -9), // a grid that merely contains 73
+                dec_snr("CQ W1AW FN31", -3),
+                dec_snr("W1AW W9XYZ RRR", -11), // roger — a 73 is still coming
+            ],
+            0,
+        );
+        let rows = e.snapshot().recent_decodes;
+        let by = |m: &str| rows.iter().find(|r| r.message == m).unwrap();
+        assert!(by("W1AW W9XYZ RR73").signoff, "RR73 ends the QSO");
+        assert!(by("W1AW W9XYZ 73").signoff, "73 ends the QSO");
+        assert!(!by("W1AW W9XYZ DM73").signoff, "DM73 is a grid, not a signoff");
+        let cq = by("CQ W1AW FN31");
+        assert!(cq.is_cq && !cq.signoff, "a CQ is a CQ, not a signoff");
+        assert!(!by("W1AW W9XYZ RRR").signoff, "RRR's QSO isn't over yet");
     }
 
     /// Per-band keying is only correct if both sides spell a band the same way, and

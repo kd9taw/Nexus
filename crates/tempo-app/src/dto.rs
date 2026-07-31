@@ -108,6 +108,12 @@ pub struct DecodeRow {
     pub is_cq: bool,
     /// True if addressed to my callsign (someone calling me).
     pub directed_to_me: bool,
+    /// True if this is a QSO-ending signoff (`RR73` / `73`) — classified by the
+    /// parse (`Msg::is_signoff`), token-positional, so a `DM73` grid never counts.
+    /// Drives the Band Activity CQ+73 chip: a signoff means a frequency is about
+    /// to free up. `RRR` stays off (its QSO still has a 73 coming).
+    #[serde(default)]
+    pub signoff: bool,
     /// True if the sender is in the logbook (worked before).
     pub worked: bool,
     /// Sender's DXCC entity name (country), resolved from the callsign. `None`

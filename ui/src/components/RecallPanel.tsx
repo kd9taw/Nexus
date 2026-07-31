@@ -1,5 +1,6 @@
 import type { LoggedQso } from '../types'
 import type { CallHistory } from '../features/callHistory'
+import { openQrzPage } from '../api'
 import { distanceLabel, bearingLabel } from '../grid'
 
 interface Props {
@@ -78,28 +79,63 @@ export function RecallPanel({ call, band, name, qth, grid, country, image, myGri
   const needed = newEntity ? 'New DXCC!' : newBandSlot ? 'New band-slot' : newModeSlot ? 'New mode-slot' : null
   const prior = [...hist.qsos].sort((a, b) => b.whenUnix - a.whenUnix)
   const lastNote = prior.find((q) => (q.notes ?? '').trim())?.notes?.trim()
+  // The link rides on CS resolution (operator, 2026-07-31: open the call's QRZ page from the
+  // recall photo "to look at the page while you're working them"): once ANY identity content is
+  // in — name, place line, or photo — the avatar is a live QRZ button, photo or initials alike.
+  // Before that the card is still the "Tab or press QRZ" prompt, so the circle stays inert.
+  const resolved = Boolean(nm || where || image)
+
+  const avatarInner = (
+    <>
+      <span className="recall-avatar-initials" aria-hidden>
+        {initials(cu)}
+      </span>
+      {image && (
+        // CSP is null (tauri.conf.json) so the remote callbook image loads directly. Keyed by
+        // URL so a new call's photo starts fresh; on a broken/hotlink-blocked URL it hides
+        // itself, revealing the initials underneath.
+        <img
+          key={image}
+          className="recall-avatar-img"
+          src={image}
+          alt=""
+          loading="lazy"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none'
+          }}
+        />
+      )}
+    </>
+  )
 
   return (
     <div className="recall-card">
       <div className="recall-head">
-        <div className="recall-avatar" aria-hidden>
-          <span className="recall-avatar-initials">{initials(cu)}</span>
-          {image && (
-            // CSP is null (tauri.conf.json) so the remote callbook image loads directly. Keyed by
-            // URL so a new call's photo starts fresh; on a broken/hotlink-blocked URL it hides
-            // itself, revealing the initials underneath.
-            <img
-              key={image}
-              className="recall-avatar-img"
-              src={image}
-              alt=""
-              loading="lazy"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none'
-              }}
-            />
-          )}
-        </div>
+        {resolved ? (
+          // Same open_qrz_page path as the roster/logbook ↗ buttons: the Rust command derives
+          // and sanitizes https://www.qrz.com/db/<base call>, so nothing URL-shaped is built
+          // here. Errors are swallowed (fire-and-forget browser launch, AprsStationCard-style).
+          <button
+            type="button"
+            className="recall-avatar"
+            title={`Open ${cu} on QRZ (browser)`}
+            aria-label={`Open ${cu} on QRZ (browser)`}
+            // preventDefault on mousedown (the park-picker guard, above in LogEntry): the
+            // browser-default focus-on-mousedown must not yank the caret out of the log form
+            // mid-entry — the opened browser window takes over; nothing in-app moves or scrolls.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void openQrzPage(cu).catch(() => {})}
+          >
+            {avatarInner}
+            <span className="recall-avatar-qrz" aria-hidden>
+              ↗
+            </span>
+          </button>
+        ) : (
+          <div className="recall-avatar" aria-hidden>
+            {avatarInner}
+          </div>
+        )}
         <div className="recall-id">
           <div className="recall-name-row">
             <span className="recall-name">{nm || cu}</span>

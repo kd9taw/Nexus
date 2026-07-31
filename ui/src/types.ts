@@ -1030,6 +1030,9 @@ export interface DecodeRow {
   message: string
   isCq: boolean
   directedToMe: boolean
+  /** QSO-ending signoff (RR73/73), classified by the engine's message parse
+   * (token-positional — a DM73 grid never counts). Drives the CQ+73 chip. */
+  signoff?: boolean
   worked: boolean
   /** Sender's DXCC entity name (country), resolved from the callsign. */
   country?: string | null

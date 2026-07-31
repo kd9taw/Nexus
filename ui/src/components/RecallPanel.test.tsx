@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { RecallPanel } from './RecallPanel'
+import { openQrzPage } from '../api'
 import { distanceLabel, bearingLabel } from '../grid'
 import type { CallHistory } from '../features/callHistory'
 import type { LoggedQso } from '../types'
+
+vi.mock('../api', () => ({ openQrzPage: vi.fn(async () => {}) }))
 
 afterEach(cleanup)
 
@@ -162,6 +165,73 @@ describe('RecallPanel — the full card', () => {
   it('renders nothing until enough of a call is typed', () => {
     const { container } = render(<RecallPanel call="W1" band="20m" hist={hist()} />)
     expect(container.firstChild).toBeNull()
+  })
+})
+
+// ── The avatar as a QRZ.com link ───────────────────────────────────────────────────────────
+// FEATURE (operator, 2026-07-31): "Add a clickable link to the callsign's QRZ page (launch a
+// browser window) to the QRZ picture in CS resolution to let you look at the page while you're
+// working them." The circle avatar becomes a real <button> riding the existing open_qrz_page
+// command (the URL — https://www.qrz.com/db/<uppercased base call> — is that Rust command's
+// sanitized contract, same path as the roster/logbook ↗ buttons). Clickable with OR without a
+// photo; an UNRESOLVED call (no name/QTH/photo yet) keeps the plain inert avatar.
+describe('RecallPanel — the avatar opens the QRZ page', () => {
+  const PHOTO = 'https://cdn-xfer.qrz.com/x/w1abc/photo.jpg'
+
+  beforeEach(() => vi.mocked(openQrzPage).mockClear())
+
+  it('clicking the photo avatar opens QRZ for the resolved call (uppercased)', () => {
+    render(
+      <RecallPanel call="w1abc" band="20m" name="Alice" qth="Hartford, CT" image={PHOTO} hist={hist()} />,
+    )
+    const btn = screen.getByRole('button', { name: 'Open W1ABC on QRZ (browser)' })
+    expect(btn.getAttribute('title')).toBe('Open W1ABC on QRZ (browser)')
+    fireEvent.click(btn)
+    expect(openQrzPage).toHaveBeenCalledWith('W1ABC')
+  })
+
+  it('the initials avatar (callbook resolved but no photo) is equally clickable', () => {
+    const { container } = render(<RecallPanel call="W1ABC" band="20m" name="Alice" hist={hist()} />)
+    const btn = screen.getByRole('button', { name: 'Open W1ABC on QRZ (browser)' })
+    // The whole circle is the target — the initials render INSIDE the button.
+    expect(btn.querySelector('.recall-avatar-initials')).not.toBeNull()
+    expect(container.querySelector('.recall-avatar-img')).toBeNull()
+    fireEvent.click(btn)
+    expect(openQrzPage).toHaveBeenCalledWith('W1ABC')
+  })
+
+  it('renders no link at all while the call is unresolved', () => {
+    // No name / QTH / photo has arrived: the card is still the "Tab or press QRZ" prompt, so
+    // there is nothing resolved to look at — the avatar stays the plain inert circle.
+    const { container } = render(<RecallPanel call="W1ABC" band="20m" hist={hist()} />)
+    expect(screen.queryByRole('button')).toBeNull()
+    const avatar = container.querySelector('.recall-avatar')
+    expect(avatar, 'the initials avatar itself must survive').not.toBeNull()
+    expect(avatar!.tagName).toBe('DIV')
+    expect(openQrzPage).not.toHaveBeenCalled()
+  })
+
+  it('keyboard: a REAL focusable <button>, activatable without a mouse', () => {
+    render(<RecallPanel call="W1ABC" band="20m" name="Alice" image={PHOTO} hist={hist()} />)
+    const btn = screen.getByRole('button', { name: 'Open W1ABC on QRZ (browser)' })
+    // jsdom does not synthesize click from Enter/Space on native buttons, so the guarantee
+    // pinned here is structural: a genuine <button> (never a div+onClick), Tab-reachable —
+    // native semantics supply Enter/Space activation through the same click handler.
+    expect(btn.tagName).toBe('BUTTON')
+    expect(btn.getAttribute('type')).toBe('button')
+    btn.focus()
+    expect(document.activeElement).toBe(btn)
+    fireEvent.click(btn)
+    expect(openQrzPage).toHaveBeenCalledWith('W1ABC')
+  })
+
+  it('mousedown is default-prevented so a click cannot steal focus from the log form', () => {
+    render(<RecallPanel call="W1ABC" band="20m" name="Alice" image={PHOTO} hist={hist()} />)
+    const btn = screen.getByRole('button', { name: 'Open W1ABC on QRZ (browser)' })
+    // fireEvent returns false when preventDefault was called — the browser-default
+    // focus-on-mousedown never runs, so the caret stays in whatever field is mid-entry
+    // (the browser window the click opens takes over anyway; nothing in-app should move).
+    expect(fireEvent.mouseDown(btn)).toBe(false)
   })
 })
 

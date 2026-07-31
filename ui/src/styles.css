@@ -6689,6 +6689,37 @@ input.cw-pitch::-webkit-inner-spin-button {
   object-fit: cover;
   border-radius: 50%;
 }
+/* Resolved-call avatar doubles as the "open on QRZ.com" button (operator, 2026-07-31) — the
+ * whole circle is the target, photo or initials alike. The element swaps div→button in
+ * RecallPanel; .recall-avatar already carries the circle styling, so only the UA button
+ * padding needs zeroing (cursor comes from the global button rule). */
+button.recall-avatar {
+  padding: 0;
+}
+/* The ↗ external-link affordance (house glyph — roster/DXped site links): a bottom strip
+ * inside the circle, revealed on hover/keyboard focus. Opaque --bg so it reads over a photo
+ * in both themes; pointer-events off — it decorates the button, it isn't a second target. */
+.recall-avatar-qrz {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: block;
+  text-align: center;
+  padding: 1px 0 2px;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--bg);
+  opacity: 0;
+  transition: opacity 0.12s;
+  pointer-events: none;
+}
+button.recall-avatar:hover .recall-avatar-qrz,
+button.recall-avatar:focus-visible .recall-avatar-qrz {
+  opacity: 1;
+}
 .recall-id {
   flex: 1;
   min-width: 0;
@@ -13086,8 +13117,15 @@ html[data-panel='needed'] {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+/* Wraps because the chip row is the whole filter vocabulary, and `.cockpit-side` /
+   `.cockpit-panes` clip overflow-x rather than scroll it: as a nowrap flex item the group
+   is one atom whose min-content is the sum of every chip, so past the 260px minimum rail
+   the trailing chips are painted outside the clip and cannot be reached. Wrapping drops
+   that floor to the widest SINGLE chip, which any rail can hold. (.od-controls already
+   wraps — that only moves the group to its own line, it cannot break the group up.) */
 .od-filters {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-1);
 }
 .od-chip {

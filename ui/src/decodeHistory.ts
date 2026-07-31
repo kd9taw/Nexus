@@ -4,11 +4,11 @@ import type { DecodeRow, Tier } from './types'
 // Kept DOM-free so the WSJT-X-critical behaviors — chronological flow, the
 // Rx-Frequency pane filter, and the band/tier history wipe — are unit-testable.
 
-export type DecodeFilter = 'all' | 'cq' | 'me' | 'rx' | 'b4' | 'new'
+export type DecodeFilter = 'all' | 'cq' | 'cq73' | 'me' | 'rx' | 'b4' | 'new'
 /** The filter chips in bar order. A runtime list so the bar OperateDecodes renders and the
  *  validator that sanitizes the persisted chip (operateFilters.ts) cannot drift apart — a
  *  chip added here appears in both, instead of one being silently reset on restart. */
-export const DECODE_FILTERS: readonly DecodeFilter[] = ['all', 'cq', 'me', 'rx', 'b4', 'new']
+export const DECODE_FILTERS: readonly DecodeFilter[] = ['all', 'cq', 'cq73', 'me', 'rx', 'b4', 'new']
 export type DecodeSort = 'time' | 'snr' | 'freq' | 'dt'
 
 /** A decode plus the slot + wall-clock time it was first heard (history bookkeeping). */
@@ -70,6 +70,12 @@ export function passesFilter(d: DecodeRow, filter: DecodeFilter, rxOffsetHz: num
   switch (filter) {
     case 'cq':
       return d.isCq
+    case 'cq73':
+      // The CQ view plus RR73/73 signoffs (tester request): a signoff means that
+      // frequency is about to free up. Plain 'cq' above stays signoff-free so the
+      // chip existing operators use doesn't change under them. The flag is the
+      // engine's parse-typed classification (Msg::is_signoff), not a text match.
+      return d.isCq || Boolean(d.signoff)
     case 'me':
       return d.directedToMe
     case 'rx':

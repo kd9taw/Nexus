@@ -136,8 +136,8 @@ const MAX_NEED_ICONS = 3
  * Click model is stock WSJT-X: single-click SELECTS (populates DX Call/Grid,
  * no RF action), double-click WORKS the station, ctrl-double-click moves RX
  * onto the signal without transmitting, Alt-double-click toggles a session
- * ignore. On top of the stock flow: filter chips (All / CQ / To me / On RX /
- * B4 / New), sort, and a per-pane Erase (WSJT-X term).
+ * ignore. On top of the stock flow: filter chips (All / CQ / CQ+73 / To me /
+ * On RX / B4 / New), sort, and a per-pane Erase (WSJT-X term).
  */
 export function OperateDecodes({
   decodes,
@@ -471,6 +471,7 @@ export function OperateDecodes({
 const FILTER_LABEL: Record<DecodeFilter, string> = {
   all: 'All',
   cq: 'CQ',
+  cq73: 'CQ+73',
   me: 'To me',
   rx: 'On RX',
   b4: 'B4',
@@ -479,6 +480,7 @@ const FILTER_LABEL: Record<DecodeFilter, string> = {
 const FILTER_TITLE: Record<DecodeFilter, string> = {
   all: 'All decodes',
   cq: 'CQ calls only',
+  cq73: '73 and RR73 signoffs included — a free frequency is about to appear',
   me: 'Directed to my callsign',
   rx: 'On my RX frequency (±50 Hz), plus anything addressed to me — follow a QSO without clutter',
   b4: 'Worked before',

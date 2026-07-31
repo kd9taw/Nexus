@@ -74,6 +74,16 @@ describe('Band Activity chip initializes from storage', () => {
     mount() // a fresh component, as after a restart
     expect(pressed('CQ')).toBe('true')
   })
+
+  it('the CQ+73 chip (tester request) sits in the bar and persists like any other', () => {
+    mount()
+    fireEvent.click(chip('CQ+73'))
+    expect(loadDecodeFilter()).toBe('cq73')
+    cleanup()
+    mount()
+    expect(pressed('CQ+73')).toBe('true')
+    expect(pressed('CQ')).toBe('false') // its own state, not an alias of CQ
+  })
 })
 
 describe('the locked Rx Frequency pane cannot clobber the Band Activity chip', () => {
