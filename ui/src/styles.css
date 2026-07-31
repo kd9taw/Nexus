@@ -14985,6 +14985,25 @@ html[data-panel='needed'] {
 .sat-freqs tr.off td {
   opacity: 0.45;
 }
+/* Transponder picker: the INVERTING flag decides which way the uplink moves, so
+   it is a badge on the row rather than a tooltip nobody opens. */
+.sat-invert {
+  font-size: var(--fs-micro);
+  color: var(--alert-warning);
+  border: 1px solid var(--alert-warning);
+  border-radius: 999px;
+  padding: 0 5px;
+  margin-left: 5px;
+  letter-spacing: 0.03em;
+}
+.sat-tp-state {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  margin-top: var(--space-1);
+}
+.sat-tp-state.warn {
+  color: var(--alert-warning);
+}
 .sats-credit {
   font-size: var(--fs-micro);
   color: var(--text-dim);

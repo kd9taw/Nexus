@@ -204,6 +204,17 @@ export async function getSatTrackStatus(): Promise<import('./types').SatTrackSta
   return invoke<import('./types').SatTrackStatus | null>('sat_track_status')
 }
 
+/** Put the radio under Doppler control for one transponder on `name`; `null`
+ * clears the selection and hands the dial back to the operator.
+ *
+ * ⚠️ `index` counts the bird's ALIVE transmitters only, in the order
+ * `getSatDetail` returned them — the backend filters `alive` before indexing.
+ * Passing a raw array index selects the wrong transponder on any bird that
+ * lists a dead one first. */
+export async function setSatTransponder(name: string, index: number | null): Promise<void> {
+  return invoke('set_sat_transponder', { name, index })
+}
+
 export interface LotwUsersStatus {
   count: number
   fetchedAt: number

@@ -3441,10 +3441,23 @@ async fn set_sat_transponder(
     let tp = snap
         .transmitters
         .iter()
-        .filter(|t| t.norad == norad && t.alive)
+        // ⚠️ INDEX THE SAME LIST `get_sat_detail` RETURNS — norad only, dead
+        // entries included. This filter used to also drop `!alive`, so on any
+        // bird with a dead transmitter before a live one the UI's row index
+        // selected a DIFFERENT transponder: a different uplink, silently. Two
+        // layers agreeing on a hidden filter is not a contract; indexing the
+        // list the caller was actually shown is. A dead pick is refused here,
+        // by name, rather than shifting everything after it.
+        .filter(|t| t.norad == norad)
         .nth(index)
         .ok_or_else(|| format!("{name}: no transponder #{index}"))?
         .clone();
+    if !tp.alive {
+        return Err(format!(
+            "{}: that transponder is marked inactive — pick a live one",
+            tp.description
+        ));
+    }
 
     let down = tp
         .downlink_centre_hz()

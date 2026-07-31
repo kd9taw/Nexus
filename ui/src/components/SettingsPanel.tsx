@@ -177,6 +177,27 @@ const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; label: string }[
   { value: 'fakeit', label: 'Fake It' },
 ]
 
+/** Which VFO carries which leg of a satellite pass. Off first — it is the
+ * default and the only value that writes nothing to the radio. The labels name
+ * both legs because naming only one is how an operator ends up transmitting on
+ * the downlink. */
+const SAT_VFO_MAPS: { value: NonNullable<Settings['satVfoMap']>; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'downlink-only', label: 'Downlink only (receive)' },
+  { value: 'uplink-only', label: 'Uplink only (transmit)' },
+  { value: 'a-down-b-up', label: 'VFO A = downlink, VFO B = uplink' },
+  { value: 'a-up-b-down', label: 'VFO A = uplink, VFO B = downlink' },
+  { value: 'main-down-sub-up', label: 'Main = downlink, Sub = uplink (IC-9700 full duplex)' },
+  { value: 'main-up-sub-down', label: 'Main = uplink, Sub = downlink' },
+]
+
+/** What the rotator does when a pass ends. */
+const ROT_POST_PASS: { value: string; label: string }[] = [
+  { value: 'stop', label: 'Stop — leave the antenna where the pass ended' },
+  { value: 'park', label: 'Park — drive to the park position' },
+  { value: 'ready', label: 'Ready — drive to the ready position' },
+]
+
 /** One operator override of the working-frequency table. */
 type WorkingFrequency = NonNullable<Settings['workingFrequencies']>[number]
 
@@ -864,6 +885,11 @@ export function SettingsPanel({
   const setSplitMode = (m: NonNullable<Settings['splitMode']>) => {
     markDirty()
     setForm((prev) => (prev ? { ...prev, splitMode: m } : prev))
+  }
+
+  const setSatVfoMap = (m: NonNullable<Settings['satVfoMap']>) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, satVfoMap: m } : prev))
   }
 
   // --- working-frequency overrides (Frequencies tab) ---
@@ -3275,6 +3301,275 @@ export function SettingsPanel({
               separate install), and reads your rig&apos;s frequency to confirm CAT. For CAT, pick
               your <em>Rig Model</em> and <em>Serial Port</em>; serial RTS/DTR and VOX need no model.
             </p>
+          </fieldset>
+
+          {/* ---- Satellite Doppler + rotator manners (Phase 1 sat station) ---- */}
+          <fieldset className="settings-section">
+            <legend>Satellite Doppler</legend>
+            <p className="settings-note">
+              Corrects both legs of a pass: the downlink you listen on and the uplink you
+              transmit on. Nexus tunes only while auto-track is following a pass and you have
+              picked a transponder in the Satellites section.
+            </p>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">Doppler correction</span>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    checked={!!form.satDoppler}
+                    onChange={(e) => updateBool('satDoppler', e.target.checked)}
+                    aria-label="Enable satellite Doppler correction"
+                  />
+                  <span className="settings-hint">
+                    Retunes the radio through a pass so you stay on the station you are working.
+                    Off by default. With the VFO mapping below set to Off, nothing is tuned
+                    either way.
+                  </span>
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">VFO mapping</span>
+                <select
+                  className="settings-input"
+                  value={form.satVfoMap ?? 'off'}
+                  onChange={(e) => setSatVfoMap(e.target.value as NonNullable<Settings['satVfoMap']>)}
+                  aria-label="Satellite VFO mapping"
+                >
+                  {SAT_VFO_MAPS.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">
+                  Match this to how your radio is wired.{' '}
+                  <strong>A wrong mapping transmits on your own downlink</strong> — into the
+                  satellite&apos;s output passband, on top of everyone else working the bird.
+                  Off is the default and writes nothing to the radio.
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">Minimum shift (Hz)</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min="0"
+                  inputMode="numeric"
+                  value={form.satMinShiftHz ?? 20}
+                  onChange={(e) => {
+                    const n = Number(e.target.value)
+                    if (!Number.isNaN(n)) updateNum('satMinShiftHz', n)
+                  }}
+                  aria-label="Minimum Doppler shift before retuning (Hz)"
+                />
+                <span className="settings-hint">
+                  Corrections smaller than this are not sent. 20 Hz is inaudible on SSB and keeps
+                  the CAT link quiet. 0 sends every update.
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">Update interval (ms)</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min="0"
+                  inputMode="numeric"
+                  value={form.satUpdateMs ?? 1000}
+                  onChange={(e) => {
+                    const n = Number(e.target.value)
+                    if (!Number.isNaN(n)) updateNum('satUpdateMs', n)
+                  }}
+                  aria-label="Doppler update interval (milliseconds)"
+                />
+                <span className="settings-hint">
+                  Shortest gap between corrections. 1000 ms is what a low-orbit pass needs.
+                  Shorter fights your own tuning knob and saturates a serial CAT link.
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="settings-section">
+            <legend>Rotator</legend>
+            <p className="settings-note">
+              Pointing manners for the rotator picked under <strong>Rig Control</strong>. They
+              apply to satellite auto-track.
+            </p>
+            <div className="settings-grid">
+              <div className="settings-field">
+                <span className="settings-label">Park position (° az / el)</span>
+                <div className="settings-inline-pair">
+                  <input
+                    className="settings-input"
+                    type="number"
+                    inputMode="decimal"
+                    value={form.rotParkAz ?? 0}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isNaN(n)) updateNum('rotParkAz', n)
+                    }}
+                    aria-label="Park azimuth (degrees)"
+                  />
+                  <input
+                    className="settings-input"
+                    type="number"
+                    inputMode="decimal"
+                    value={form.rotParkEl ?? 0}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isNaN(n)) updateNum('rotParkEl', n)
+                    }}
+                    aria-label="Park elevation (degrees)"
+                  />
+                </div>
+                <span className="settings-hint">
+                  The stow position — wind-safe, or wherever your mast rests. Used only when
+                  After a pass is set to Park.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <span className="settings-label">Ready position (° az / el)</span>
+                <div className="settings-inline-pair">
+                  <input
+                    className="settings-input"
+                    type="number"
+                    inputMode="decimal"
+                    value={form.rotReadyAz ?? 0}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isNaN(n)) updateNum('rotReadyAz', n)
+                    }}
+                    aria-label="Ready azimuth (degrees)"
+                  />
+                  <input
+                    className="settings-input"
+                    type="number"
+                    inputMode="decimal"
+                    value={form.rotReadyEl ?? 0}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isNaN(n)) updateNum('rotReadyEl', n)
+                    }}
+                    aria-label="Ready elevation (degrees)"
+                  />
+                </div>
+                <span className="settings-hint">
+                  Where the antenna waits for the next pass. Used only when After a pass is set
+                  to Ready.
+                </span>
+              </div>
+
+              <label className="settings-field">
+                <span className="settings-label">After a pass</span>
+                <select
+                  className="settings-input"
+                  value={form.rotPostPass ?? 'stop'}
+                  onChange={(e) => update('rotPostPass', e.target.value)}
+                  aria-label="What the rotator does after a pass"
+                >
+                  {ROT_POST_PASS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">
+                  Stop is the default and moves nothing: the antenna stays pointed where the bird
+                  set. Park and Ready drive the rotator on their own at LOS, so set those
+                  positions above first.
+                </span>
+              </label>
+
+              <div className="settings-field">
+                <span className="settings-label">Tolerance (° az / el)</span>
+                <div className="settings-inline-pair">
+                  <input
+                    className="settings-input"
+                    type="number"
+                    min="0"
+                    inputMode="decimal"
+                    value={form.rotTolAzDeg ?? 2}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isNaN(n)) updateNum('rotTolAzDeg', n)
+                    }}
+                    aria-label="Azimuth tolerance (degrees)"
+                  />
+                  <input
+                    className="settings-input"
+                    type="number"
+                    min="0"
+                    inputMode="decimal"
+                    value={form.rotTolElDeg ?? 2}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isNaN(n)) updateNum('rotTolElDeg', n)
+                    }}
+                    aria-label="Elevation tolerance (degrees)"
+                  />
+                </div>
+                <span className="settings-hint">
+                  A new target closer than this is not commanded. Without a deadband the rotator
+                  hunts and the relays chatter for the whole pass. 2° is about a G-5500&apos;s own
+                  resolution.
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <span className="settings-label">Calibration trim (° az / el)</span>
+                <div className="settings-inline-pair">
+                  <input
+                    className="settings-input"
+                    type="number"
+                    inputMode="decimal"
+                    value={form.rotCalAzDeg ?? 0}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isNaN(n)) updateNum('rotCalAzDeg', n)
+                    }}
+                    aria-label="Azimuth calibration trim (degrees)"
+                  />
+                  <input
+                    className="settings-input"
+                    type="number"
+                    inputMode="decimal"
+                    value={form.rotCalElDeg ?? 0}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isNaN(n)) updateNum('rotCalElDeg', n)
+                    }}
+                    aria-label="Elevation calibration trim (degrees)"
+                  />
+                </div>
+                <span className="settings-hint">
+                  Added to every command. Use it when the controller reads one heading and the
+                  boom points at another.
+                </span>
+              </div>
+
+              <label className="settings-field">
+                <span className="settings-label">Allow flip</span>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    checked={!!form.rotAllowFlip}
+                    onChange={(e) => updateBool('rotAllowFlip', e.target.checked)}
+                    aria-label="Allow the rotator to flip past 90 degrees elevation"
+                  />
+                  <span className="settings-hint">
+                    Takes a high pass by turning azimuth 180° and running elevation past 90°,
+                    instead of swinging the mast around at the top of the pass. Off by default:{' '}
+                    <strong>many rotators cannot mechanically go past 90° elevation</strong>.
+                    Check your controller before turning this on.
+                  </span>
+                </span>
+              </label>
+            </div>
           </fieldset>
           </>
           )}

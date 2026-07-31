@@ -8,12 +8,22 @@
 // "Satellite Passes" pane stays as the compact glance view; this is the
 // planning surface. Rotor auto-track arms here when a rotor is configured.
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { NeedTag, SatDetail, SatPass, SatTrackStatus, SatView, Settings, Station } from '../types'
+import type {
+  NeedTag,
+  SatDetail,
+  SatPass,
+  SatTrackStatus,
+  SatVfoMap,
+  SatView,
+  Settings,
+  Station,
+} from '../types'
 import {
   getSatellites,
   getSatSchedule,
   getSatDetail,
   getSettings,
+  setSatTransponder,
   startSatTrack,
   stopSatTrack,
   getSatTrackStatus,
@@ -141,7 +151,24 @@ function PolarPlot({
   )
 }
 
-const fmtMHz = (hz: number | null) => (hz == null ? '—' : `${(hz / 1e6).toFixed(3)} MHz`)
+/** One leg of a transponder in MHz. A linear transponder is a BAND, so when
+ * SatNOGS gives both edges we show both — the centre alone hides where in the
+ * passband you can actually work. */
+const fmtLeg = (lowHz: number | null, highHz: number | null) => {
+  if (lowHz == null) return '—'
+  const low = (lowHz / 1e6).toFixed(3)
+  return highHz != null && highHz > lowHz ? `${low}–${(highHz / 1e6).toFixed(3)}` : low
+}
+
+/** Per-leg modes, compact ("USB↓/LSB↑"). An inverting transponder is USB down
+ * and LSB up; the single `mode` field cannot say that, so the legs win when
+ * SatNOGS has them. */
+const legModes = (t: SatDetail['transmitters'][number]) => {
+  const down = t.downlinkMode
+  const up = t.uplinkMode
+  if (down && up) return down === up ? down : `${down}↓/${up}↑`
+  return down ?? up ?? t.mode ?? '—'
+}
 
 export function SatellitesView({ focusSat, onPopOut }: Props) {
   const [view, setView] = useState<SatView | null>(null)
@@ -156,6 +183,13 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const [theme] = useTheme()
   const [track, setTrack] = useState<SatTrackStatus | null>(null)
   const [search, setSearch] = useState('')
+  // The transponder handed to the Doppler engine, and which bird it belongs to.
+  // NOTE: there is no backend read-back of the engine's current selection, so
+  // this is what the OPERATOR chose here — a pass that runs to LOS clears the
+  // hold backend-side and this keeps showing the last pick until they change it.
+  const [tuned, setTuned] = useState<{ name: string; index: number } | null>(null)
+  const [dopplerOn, setDopplerOn] = useState(false)
+  const [vfoMap, setVfoMap] = useState<SatVfoMap>('off')
   const [nowTick, setNowTick] = useState(() => Date.now())
   const nowSecs = Math.floor(nowTick / 1000)
 
@@ -234,6 +268,8 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         setRotorOn((s.rotatorModel ?? 0) > 0 || s.rotatorHost.trim() !== '')
         setGridSet(s.mygrid.trim().length >= 4) // passes need a real locator
         setMyGrid(s.mygrid)
+        setDopplerOn(!!s.satDoppler)
+        setVfoMap(s.satVfoMap ?? 'off')
       })
       .catch(() => {})
     return () => {
@@ -335,6 +371,23 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const noSelectCall = useCallback(() => {}, [])
   const selectSatInBox = useCallback((n: string) => setSelected(n), [])
 
+  // The wire index IS the row index: set_sat_transponder indexes the very list
+  // get_sat_detail returned (dead entries included) and refuses a dead pick by
+  // name. It briefly filtered `alive` on its side, which silently selected a
+  // different transponder — a different uplink — on any bird listing a dead
+  // transmitter first. Fixed at the backend rather than compensated here: two
+  // layers agreeing on a hidden filter is not a contract.
+  const tpRows = useMemo(
+    () => (detail?.transmitters ?? []).map((t, i) => ({ t, aliveIndex: t.alive ? i : null })),
+    [detail],
+  )
+  // Which of the SELECTED bird's transponders was handed to the engine; null =
+  // none of this bird's (a hold on another bird is called out under the table).
+  const heldIndex = tuned && detail && tuned.name === detail.name ? tuned.index : null
+  // Will a pick actually move the radio? Both switches are operator opt-ins and
+  // both default off, so saying nothing here would look like a dead control.
+  const dopplerLive = dopplerOn && vfoMap !== 'off'
+
   const armTrack = (name: string, aosUnix: number) => {
     startSatTrack(name, aosUnix)
       .then((t) => {
@@ -355,6 +408,31 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
     stopSatTrack()
       .then(() => setTrack(null))
       .catch(() => {})
+  }
+
+  /** Hand a transponder to the Doppler engine, or `null` to hand the dial back.
+   * `index` counts the bird's ALIVE transmitters — what the backend indexes.
+   * The selection is only shown once the call succeeds: a refused pick must not
+   * leave the operator believing the radio is under Doppler control. */
+  const pickTransponder = (name: string, index: number | null, label = '') => {
+    setSatTransponder(name, index)
+      .then(() => {
+        setTuned(index == null ? null : { name, index })
+        // Re-read the two switches that decide whether this tunes anything —
+        // Settings may have changed since this section mounted.
+        getSettings()
+          .then((s: Settings) => {
+            setDopplerOn(!!s.satDoppler)
+            setVfoMap(s.satVfoMap ?? 'off')
+          })
+          .catch(() => {})
+        pushToast(
+          index == null ? 'Transponder cleared — the dial is yours' : `Working ${name} ${label}`,
+          'success',
+          4000,
+        )
+      })
+      .catch((e) => pushToast(`Transponder not selected: ${e instanceof Error ? e.message : e}`, 'error'))
   }
 
   return (
@@ -568,19 +646,73 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               <>
                 <table className="sat-freqs">
                   <thead>
-                    <tr><th>Transponder</th><th>Up</th><th>Down</th><th>Mode</th></tr>
+                    <tr>
+                      <th>Work</th>
+                      <th>Transponder</th>
+                      <th>Down MHz</th>
+                      <th>Up MHz</th>
+                      <th>Mode</th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {detail.transmitters.map((t, i) => (
+                    <tr>
+                      <td>
+                        <input
+                          type="radio"
+                          name="sat-transponder"
+                          checked={heldIndex == null}
+                          onChange={() => pickTransponder(detail.name, null)}
+                          aria-label="Work no transponder — leave the dial to me"
+                        />
+                      </td>
+                      <td colSpan={4}>None — leave the dial to me</td>
+                    </tr>
+                    {tpRows.map(({ t, aliveIndex }, i) => (
                       <tr key={i} className={t.alive ? '' : 'off'}>
-                        <td title={t.description}>{t.alive ? '●' : '○'} {t.description}</td>
-                        <td>{fmtMHz(t.uplinkLowHz)}</td>
-                        <td>{fmtMHz(t.downlinkLowHz)}</td>
-                        <td>{t.mode ?? '—'}</td>
+                        <td>
+                          {aliveIndex != null && (
+                            <input
+                              type="radio"
+                              name="sat-transponder"
+                              checked={heldIndex === aliveIndex}
+                              onChange={() => pickTransponder(detail.name, aliveIndex, t.description)}
+                              aria-label={`Work ${t.description}`}
+                            />
+                          )}
+                        </td>
+                        <td title={t.description}>
+                          {t.alive ? '●' : '○'} {t.description}
+                          {t.invert && (
+                            <span
+                              className="sat-invert"
+                              title="Inverting linear transponder: tune the downlink UP and your uplink goes DOWN, and the sidebands swap (LSB up, USB down)."
+                            >
+                              INVERTING
+                            </span>
+                          )}
+                        </td>
+                        <td>{fmtLeg(t.downlinkLowHz, t.downlinkHighHz)}</td>
+                        <td>{fmtLeg(t.uplinkLowHz, t.uplinkHighHz)}</td>
+                        <td>{legModes(t)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                {heldIndex != null && (
+                  <div className={`sat-tp-state${dopplerLive ? '' : ' warn'}`}>
+                    {!dopplerOn
+                      ? 'Doppler is off, so nothing is being tuned. Turn it on in Settings ▸ Radio ▸ Satellite Doppler.'
+                      : vfoMap === 'off'
+                        ? 'VFO mapping is Off, so nothing is being tuned. Pick a mapping in Settings ▸ Radio ▸ Satellite Doppler.'
+                        : 'Doppler tunes this transponder while auto-track is following the pass.'}
+                  </div>
+                )}
+                {tuned && tuned.name !== detail.name && (
+                  <div className="sat-tp-state warn">
+                    Doppler holds a transponder on {tuned.name}. Picking one here takes the dial
+                    from it.
+                  </div>
+                )}
                 <div className="sats-credit">frequencies & status: SatNOGS DB (CC-BY-SA 4.0)</div>
               </>
             ) : (

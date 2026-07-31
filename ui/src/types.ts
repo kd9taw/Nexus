@@ -382,7 +382,33 @@ export interface SatTransmitter {
   mode: string | null
   uplinkLowHz: number | null
   downlinkLowHz: number | null
+  /** Linear INVERTING transponder: the uplink runs BACKWARDS relative to the
+   * downlink and the sidebands swap (LSB up / USB down). Per-transponder data,
+   * never a global setting — a station that gets it wrong lands on a different
+   * QSO. False when SatNOGS doesn't say (the safe reading). */
+  invert: boolean
+  /** Passband edges. A linear transponder is a BAND, not a frequency; null on a
+   * single-frequency transmitter. */
+  uplinkHighHz: number | null
+  downlinkHighHz: number | null
+  /** Per-leg modes — `mode` above cannot express USB-down / LSB-up. */
+  uplinkMode: string | null
+  downlinkMode: string | null
+  /** SatNOGS `type`: "Transmitter" (beacon, downlink only), "Transponder"
+   * (linear passband), "Transceiver" (FM repeater). */
+  kind: string | null
 }
+
+/** Which VFO carries the uplink and which the downlink during a pass
+ * (Settings.satVfoMap). "off" = Doppler never writes to the radio. */
+export type SatVfoMap =
+  | 'off'
+  | 'downlink-only'
+  | 'uplink-only'
+  | 'a-down-b-up'
+  | 'a-up-b-down'
+  | 'main-down-sub-up'
+  | 'main-up-sub-down'
 
 /** Per-bird detail (get_sat_detail): SatNOGS data + the current/next pass geometry. */
 export interface SatDetail {
@@ -1863,6 +1889,38 @@ export interface Settings {
   /** ADVANCED: external rotctld host:port override (wins over the integrated
    * spawn). Empty + model 0 = no rotator. */
   rotatorHost: string
+  /** Rotator pointing policy (see `tempo_core::rotator`). Park = the stow
+   * position, Ready = where it waits for the next pass; both degrees. */
+  rotParkAz?: number
+  rotParkEl?: number
+  rotReadyAz?: number
+  rotReadyEl?: number
+  /** What to do when a pass ends: "stop" (default — leave it where the pass
+   * finished) | "park" | "ready". Anything else is read as "stop". */
+  rotPostPass?: string
+  /** Deadband (degrees, az and el separately). Below this a new target is not
+   * commanded — without it the rotator hunts and the relays chatter. */
+  rotTolAzDeg?: number
+  rotTolElDeg?: number
+  /** Mechanical trim (degrees) added to every command: the difference between
+   * where the controller thinks it points and where the boom points. */
+  rotCalAzDeg?: number
+  rotCalElDeg?: number
+  /** May the rotator run past 90° elevation (flip)? Off by default — plenty of
+   * rotators physically cannot. */
+  rotAllowFlip?: boolean
+  /** SATELLITE DOPPLER master switch. Off by default: a station with no
+   * satellite interest never has its dial moved by a pass. */
+  satDoppler?: boolean
+  /** Which VFO carries which leg. A WRONG MAPPING TRANSMITS ON YOUR OWN
+   * DOWNLINK, so it is explicit and defaults to "off" (no radio writes). */
+  satVfoMap?: SatVfoMap
+  /** Minimum correction (Hz) worth sending to the radio; below it the dial is
+   * left alone. 0 = write every update. */
+  satMinShiftHz?: number
+  /** Minimum interval (ms) between corrections — the other half of the rate
+   * limit. The radio is a serial device, not a socket. */
+  satUpdateMs?: number
   /** Run the rigctld-compatible CAT broker so other apps share the radio. */
   catBroker: boolean
   /** TCP port the CAT broker listens on (Hamlib NET rigctl default 4532). */
