@@ -157,3 +157,27 @@ describe('SSTV: the band view re-arms its own floor', () => {
     ).toBe('min(220px,100%)')
   })
 })
+
+// ── The log form wraps DOWN, never overflows RIGHT ────────────────────────────────────
+// Inside the pane grid the log column can be as narrow as 24em; without wrap the .le-row
+// min-content (sum of intrinsic input widths) overflowed the pane sideways and half the
+// fields sat behind a horizontal scrollbar (operator report, 2026-07-31). Guard the two
+// declarations that make the form flow into the room the pane actually has.
+import { describe as describeLe, it as itLe, expect as expectLe } from 'vitest'
+import { readFileSync as readLe } from 'node:fs'
+describeLe('log-entry rows wrap instead of overflowing the pane', () => {
+  const css = readLe(new URL('./styles.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+  itLe('.le-row declares flex-wrap: wrap', () => {
+    // Anchored at a rule boundary: '.cw-cockpit .log-entry .le-row' also contains the
+    // substring and its block (a margin only) must not satisfy this guard.
+    const m = css.match(/(?:^|\})\s*\.le-row\s*\{[^}]*\}/)
+    expectLe(m, 'a .le-row block must exist').not.toBeNull()
+    expectLe(m![0]).toMatch(/flex-wrap:\s*wrap/)
+  })
+  itLe('.le-row inputs carry a wrap basis and a released min-width', () => {
+    const m = css.match(/\.le-row\s+\.settings-input\s*\{[^}]*\}/)
+    expectLe(m).not.toBeNull()
+    expectLe(m![0]).toMatch(/flex:\s*1\s+1\s+\d/)
+    expectLe(m![0]).toMatch(/min-width:\s*0/)
+  })
+})

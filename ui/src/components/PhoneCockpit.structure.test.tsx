@@ -235,10 +235,17 @@ describe('PhoneCockpit pane-grid shell', () => {
     expect(cols[1].querySelector('[data-pane="dspLevels"]')).not.toBeNull()
     expect(cols[2].querySelector('[data-pane="log"]')).not.toBeNull()
     expect(cols[2].querySelectorAll('.pane-frame').length).toBe(1)
-    // Prominence is a row-weight now (grid-row span), not a sole grower: the feed pane
+    // Panes are ROLE-typed now, not span-weighted: the strips (band activity's fixed-height
+    // strip, the keyer, DSP rows) sit at exactly content height so a chip row can never
+    // inflate to half a column of empty panel; the log pane FILLS its column so the recall
+    // history gets the room (fix round 2, 2026-07-31).
     // outweighs the strips, so equal rows cannot starve it (design3 §3 fr-share rule).
-    expect((document.querySelector('[data-pane="bandActivity"]') as HTMLElement).style.gridRow).toBe('span 3')
-    expect((document.querySelector('[data-pane="voiceKeyer"]') as HTMLElement).style.gridRow).toBe('span 2')
+    expect((document.querySelector('[data-pane="bandActivity"]') as HTMLElement).dataset.fit).toBe('content')
+    expect((document.querySelector('[data-pane="voiceKeyer"]') as HTMLElement).dataset.fit).toBe('content')
+    expect((document.querySelector('[data-pane="dsp"]') as HTMLElement).dataset.fit).toBe('content')
+    const phLog = document.querySelector('[data-pane="log"]') as HTMLElement
+    expect(phLog.dataset.fit).toBe('fill')
+    expect(phLog.style.flex).toContain('--cockpit-pane-flex')
   })
 
   // ── TIER FLIPS MUST NOT REMOUNT STATEFUL PANES (fix-round D1, 2026-07-31) ──────────

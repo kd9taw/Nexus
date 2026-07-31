@@ -24,7 +24,8 @@ export function CockpitPaneFrame({
   title,
   paneId,
   children,
-  rows,
+  fit,
+  weight,
   onPopOut,
   onRemove,
   actions,
@@ -35,14 +36,17 @@ export function CockpitPaneFrame({
    *  not a styling hook (see above). */
   paneId?: string
   children: ReactNode
-  /** Row WEIGHT in the column grid (grid-row span), default 1. This is how a cockpit says
-   *  "prominent": a transcript/feed pane spans more `minmax(0,1fr)` rows than a one-line
-   *  control strip, so equal-share rows stop starving the DECODE/Band-Activity feeds while
-   *  inflating a chip row to feed height (fix-round, 2026-07-31). It is a PLACEMENT input
-   *  to the region's grid — the grid still sizes the cell — not the pane sizing itself,
-   *  so contract rule 2 (no min-height/flex/overflow of a pane's own) holds. At the 1-col
-   *  tier rows are `auto`, where a span changes nothing. */
-  rows?: number
+  /** The pane's ROLE in its flex column. 'content' = a control strip (DSP chips, a rig
+   *  scope row): exactly content height, always — the first build's uniform 1fr rows made
+   *  every strip a grower, and a one-row chip strip inflated to half a column of empty
+   *  panel (operator, 2026-07-31). Omitted = FILL: the pane splits the column's remaining
+   *  height with its fill siblings by `weight`. Both are PLACEMENT inputs carried inline
+   *  from typed props — the column sizes the frame; a pane still cannot size itself, so
+   *  contract rule 2 (no min-height/flex/overflow of a pane's own) holds. At the 1-col
+   *  scrolling tier the region's --cockpit-pane-flex overrides fill to content-height. */
+  fit?: 'content'
+  /** Fill share among fill siblings, default 1 (CW gives DECODE 3). Ignored with fit. */
+  weight?: number
   /** Tear this pane off into its own window (open_panel_window). Omitted ⇒ no button. */
   onPopOut?: () => void
   /** Hide this pane (panelState 'removed'). Omitted ⇒ the pane cannot be removed — which
@@ -55,10 +59,15 @@ export function CockpitPaneFrame({
     <section
       className="pane-frame"
       data-pane={paneId}
+      data-fit={fit ?? 'fill'}
       aria-label={title}
       // Inline, not a class: a per-pane styling hook is what this component refuses to
       // have, and an inline placement cannot be outranked or forked in either sheet.
-      style={rows && rows > 1 ? { gridRow: `span ${rows}` } : undefined}
+      style={
+        fit === 'content'
+          ? { flex: '0 0 auto' }
+          : { flex: `var(--cockpit-pane-flex, ${weight ?? 1} 1 0)`, minHeight: 0 }
+      }
     >
       <header className="pane-head">
         <span className="pane-title">{title}</span>

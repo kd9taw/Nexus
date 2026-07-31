@@ -262,10 +262,15 @@ describe('CwCockpit pane-grid shell', () => {
     expect(cols[1].querySelector('[data-pane="copilot"]')).not.toBeNull()
     expect(cols[2].querySelector('[data-pane="log"]')).not.toBeNull()
     expect(cols[2].querySelectorAll('.pane-frame').length).toBe(1)
-    // Prominence is a row-weight (grid-row span): DECODE outweighs the control strips,
+    // Panes are ROLE-typed: DECODE is the fill feed (weight 3 — its text genuinely uses
+    // height); SENT and every control strip are content-fit so they can never hoard a
+    // column (fix round 2, 2026-07-31).
     // so equal minmax(0,1fr) rows cannot starve the transcript the operator reads.
-    expect((document.querySelector('[data-pane="decode"]') as HTMLElement).style.gridRow).toBe('span 3')
-    expect((document.querySelector('[data-pane="sent"]') as HTMLElement).style.gridRow).toBe('span 2')
+    const cwDecode = document.querySelector('[data-pane="decode"]') as HTMLElement
+    expect(cwDecode.dataset.fit).toBe('fill')
+    expect(cwDecode.style.flex).toContain('3 1 0')
+    expect((document.querySelector('[data-pane="sent"]') as HTMLElement).dataset.fit).toBe('content')
+    expect((document.querySelector('[data-pane="dsp"]') as HTMLElement).dataset.fit).toBe('content')
   })
 
   // ── TIER FLIPS MUST NOT REMOUNT THE LOG FORM (fix-round D1, 2026-07-31) ────────────

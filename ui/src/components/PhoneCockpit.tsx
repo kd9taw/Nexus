@@ -495,7 +495,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
   const bandPane =
     hasBandPane && onWorkSpot ? (
-      <CockpitPaneFrame title="Band activity" paneId="bandActivity" rows={3}>
+      <CockpitPaneFrame title="Band activity" paneId="bandActivity" fit="content">
         <BandStrip
           band={snap.radio.band}
           dialMhz={snap.radio.dialMhz}
@@ -524,7 +524,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // whose column assignment changes with the tier changes DOM parents, and React cannot
   // carry a fiber across that.
   const keyerPane = (
-    <CockpitPaneFrame title="Voice keyer" paneId="voiceKeyer" rows={2}>
+    <CockpitPaneFrame title="Voice keyer" paneId="voiceKeyer" fit="content">
       <VoiceKeyer txEnabled={snap.radio.txEnabled} keyed={keyed} fdExchange={fdExchange} />
     </CockpitPaneFrame>
   )
@@ -539,7 +539,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           changes the hardware sweep width, ref sets weak-signal visibility. Distinct from the
           view-zoom chips on the scope itself, which only zoom what's already streamed. */}
       {hasRigScopePane && civScope && (
-        <CockpitPaneFrame title="Rig scope controls" paneId="rigscope">
+        <CockpitPaneFrame title="Rig scope controls" paneId="rigscope" fit="content">
           <div className="ph-rigscope" role="group" aria-label="Rig scope control">
             <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
               Rig&nbsp;scope
@@ -576,7 +576,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
       {/* FlexRadio SmartSDR panadapter controls — command the Flex pan's real bandwidth + ref. */}
       {hasRigScopePane && flexScope && (
-        <CockpitPaneFrame title="Rig scope controls" paneId="rigscope">
+        <CockpitPaneFrame title="Rig scope controls" paneId="rigscope" fit="content">
           <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
             <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
               Flex&nbsp;pan
@@ -612,7 +612,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       )}
 
       {hasDspPane && (
-        <CockpitPaneFrame title="DSP functions" paneId="dsp">
+        <CockpitPaneFrame title="DSP functions" paneId="dsp" fit="content">
           <div className="ph-dsp" role="group" aria-label="Rig DSP functions">
             <span className="ph-dsp-label">DSP</span>
             {dspFuncs.map((f) => {
@@ -640,7 +640,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
       {/* RX DSP levels — NR level slider + AGC speed, each shown only when the rig reports it. */}
       {hasDspLevelsPane && (
-        <CockpitPaneFrame title="RX DSP levels" paneId="dspLevels">
+        <CockpitPaneFrame title="RX DSP levels" paneId="dspLevels" fit="content">
           <div className="ph-dsp-levels" role="group" aria-label="RX DSP levels">
             {snap.radio.nrLevel != null && (
               <label className="ph-dsplev" title="Noise-reduction depth — raise until the noise floor drops, back off if audio gets watery">

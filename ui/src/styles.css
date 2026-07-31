@@ -6345,12 +6345,23 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .le-row {
   display: flex;
+  /* WRAP, never overflow. Inside the pane grid the log column can be as narrow as 24em;
+     a nowrap row's min-content is the sum of its inputs' intrinsic widths (~600px+), so
+     the form overflowed the pane sideways and `.pane-body{overflow:auto}` grew a
+     horizontal scrollbar with half the fields off-screen (operator, 2026-07-31: "items
+     off screen to the right … plenty of room at the bottom"). Fields flow down instead —
+     the direction the pane actually has room in. */
+  flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
   margin-bottom: var(--space-2);
 }
 .le-row .settings-input {
-  flex: 1;
+  /* A real basis, not bare `flex:1` — with wrap, basis 0 items all cram onto one line at
+     any width; 9em is the narrowest a text field is worth having before it takes its own
+     line. min-width:0 releases the intrinsic floor that caused the sideways overflow. */
+  flex: 1 1 9em;
+  min-width: 0;
 }
 .le-rst {
   max-width: 80px;

@@ -632,7 +632,7 @@ export function CwCockpit({
   )
 
   const decodePane = hasDecodePane ? (
-    <CockpitPaneFrame title="Decode" paneId="decode" rows={3}>
+    <CockpitPaneFrame title="Decode" paneId="decode" weight={3}>
       <div
         className="cw-decode panel"
         title="Live CW decode — the AI (neural-net) decoder reads the whole 400–1200 Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder."
@@ -699,7 +699,7 @@ export function CwCockpit({
   ) : null
 
   const sentPane = hasSentPane ? (
-    <CockpitPaneFrame title="Sent" paneId="sent" rows={2}>
+    <CockpitPaneFrame title="Sent" paneId="sent" fit="content">
       <div
         className="cw-decode cw-sent-panel panel"
         title="What you've transmitted (F-key macros expanded to the real text)"
@@ -727,7 +727,7 @@ export function CwCockpit({
       {/* Rig scope controls (native Icom CI-V only) — command the RADIO's real panadapter:
           span sets the hardware sweep width, ref sets weak-signal visibility. Parity with Phone. */}
       {hasScopeCtlPane && civScope && (
-        <CockpitPaneFrame title="Rig scope controls" paneId="scopeCtl">
+        <CockpitPaneFrame title="Rig scope controls" paneId="scopeCtl" fit="content">
           <div className="ph-rigscope" role="group" aria-label="Rig scope control">
             <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
               Rig&nbsp;scope
@@ -764,7 +764,7 @@ export function CwCockpit({
 
       {/* FlexRadio SmartSDR panadapter controls — bandwidth + reference. Parity with Phone. */}
       {hasScopeCtlPane && flexScope && (
-        <CockpitPaneFrame title="Rig scope controls" paneId="scopeCtl">
+        <CockpitPaneFrame title="Rig scope controls" paneId="scopeCtl" fit="content">
           <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
             <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
               Flex&nbsp;pan
@@ -801,7 +801,7 @@ export function CwCockpit({
 
       {/* DSP toggles (NB/NR/Notch) — capability-gated; only funcs the rig reports render. */}
       {hasDspPane && (
-        <CockpitPaneFrame title="DSP toggles" paneId="dsp">
+        <CockpitPaneFrame title="DSP toggles" paneId="dsp" fit="content">
           <div className="ph-dsp" role="group" aria-label="Rig DSP functions">
             <span className="ph-dsp-label">DSP</span>
             {cwDspFuncs.map((f) => {
@@ -830,7 +830,7 @@ export function CwCockpit({
       {/* RX DSP levels — NR depth + AGC speed, each shown only when the rig reports it. Parity
           with the Phone cockpit; a CW op leans on AGC speed and NR depth heavily. */}
       {hasRxDspPane && (
-        <CockpitPaneFrame title="RX DSP levels" paneId="rxdsp">
+        <CockpitPaneFrame title="RX DSP levels" paneId="rxdsp" fit="content">
           <div className="ph-dsp-levels" role="group" aria-label="RX DSP levels">
             {snap.radio.nrLevel != null && (
               <label className="ph-dsplev" title="Noise-reduction depth — raise until the noise floor drops, back off if the tone gets watery">
@@ -874,7 +874,7 @@ export function CwCockpit({
 
       {/* CW spot band-activity strip; ⧉ pops the vertical band map into its own window. */}
       {hasBandPane && onWorkSpot && (
-        <CockpitPaneFrame title="Band activity" paneId="bandActivity" rows={2}>
+        <CockpitPaneFrame title="Band activity" paneId="bandActivity" fit="content">
           <BandStrip
             band={snap.radio.band}
             dialMhz={snap.radio.dialMhz}
@@ -893,7 +893,7 @@ export function CwCockpit({
           new hams (Guided: plain-English prompts + the next key highlighted) vs experienced
           ops (Expert: just the chips). Nothing here transmits — the operator always keys. */}
       {hasCopilotPane && (
-        <CockpitPaneFrame title="Copilot" paneId="copilot">
+        <CockpitPaneFrame title="Copilot" paneId="copilot" fit="content">
           <div className="cw-copilot panel expert">
             <div className="cw-copilot-chips">
               {guide.workedCall ? (

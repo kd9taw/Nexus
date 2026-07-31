@@ -19,16 +19,19 @@
    with the dock parked sticky at the bottom. Horizontal surplus has exactly one fate
    (another column). Nothing clips.
 
-   WHY COLUMNS ARE NESTED GRIDS AND NOT grid-template-areas. Areas were the first choice —
+   WHY COLUMNS ARE FLEX STACKS AND NOT grid-template-areas. Areas were the first choice —
    they keep panes as direct grid children. They lose to the ⊞ Panels menu: a hidden panel
    leaves its named area EMPTY, and a `minmax(0,1fr)` row with nothing in it is a band of
    dead space above the log form. That is the operator's "empty black box" complaint,
-   rebuilt. With a column as its own grid of IMPLICIT rows, rows exist only where a pane
-   exists: hide Band Activity and the Voice Keyer simply fills the column. An empty cell is
-   unrepresentable rather than guarded — the same standard as TX chrome having no pane id.
-   Cost: one wrapper element per column, and the row sizing has to reach a nested grid,
-   which it does through an inherited custom property (--cockpit-row) instead of a
-   descendant selector, so the flat-selector rule holds. */
+   rebuilt. A flex column has the same virtue as implicit rows (a hidden pane leaves
+   nothing behind) plus the one uniform rows could never express: PANES HAVE ROLES. The
+   first shipped build used `grid-auto-rows: minmax(0,1fr)` columns, which made every pane
+   a grower — a one-row DSP chip strip inflated to half the column, the strip-that-cannot-
+   stretch class (operator, 2026-07-31: "DSP functions takes a lot of real estate") this
+   rebuild exists to kill. Now a frame declares fit="content" (control strips: exactly
+   content height, always) or fills with a weight (feeds, the log column) — carried as an
+   inline flex from typed props on CockpitPaneFrame, a placement input like the old row
+   span, so the flat-selector rule holds and styles.css still cannot size a pane. */
 
 .cockpit-panes {
   /* flex-BASIS 0, deliberately, not `auto`: with an auto (content) basis the region's base
@@ -56,9 +59,6 @@
      "scrolls", never "clips"). data-cols='1' keeps this; 2 and 3 override it. */
   overflow-y: auto;
   overflow-x: hidden;
-  /* Row sizing every .cockpit-col inherits. A custom property crosses into the nested
-     grid without a descendant selector, which is what keeps this sheet flat. */
-  --cockpit-row: minmax(0, 1fr);
 }
 
 /* ONE COLUMN — the region is the scroller, and the operator gets back the single visible
@@ -74,7 +74,12 @@
      Chromium has been known to reserve the gutter on `overflow:hidden` boxes too — that
      would be a dead 15px stripe down the right of every 2/3-column cockpit. */
   scrollbar-gutter: stable;
-  --cockpit-row: auto;
+  /* The one tier where FILL panes must not fill: the region is content-height and scrolls,
+     so a `flex-basis: 0` grower here would collapse toward min-content instead of filling
+     anything. The frame's inline flex reads this var first — content-height for everyone,
+     and the transcript wrappers' own comfortable min-heights (the sanctioned styles.css
+     case) give the feeds their readable box. */
+  --cockpit-pane-flex: 0 0 auto;
 }
 
 /* TWO COLUMNS — the default window (1200×750 at the fitter's 80% ⇒ region ~1470) and the
@@ -105,11 +110,13 @@
   overflow: hidden;
 }
 
-/* One column of the region. Implicit rows only — see the header note. Both min-*:0 so a
-   column can always shrink to its share; its panes scroll inside .pane-body. */
+/* One column of the region: a flex stack of role-typed frames — see the header note.
+   fit="content" strips sit at exactly content height; fill panes split what remains by
+   weight. A hidden pane leaves nothing behind. Both min-*:0 so a column can always shrink
+   to its share; its panes scroll inside .pane-body. */
 .cockpit-col {
-  display: grid;
-  grid-auto-rows: var(--cockpit-row, minmax(0, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
   min-width: 0;
   min-height: 0;

@@ -252,7 +252,7 @@ describe('panes are sized by the grid, never by themselves', () => {
     expect(
       offenders,
       `manufactured floor:\n${offenders.join('\n')}\nA floor under a bounded ancestor is how ` +
-        'deficit becomes clipping. Growth is expressed as fr shares (and row spans) only; ' +
+        'deficit becomes clipping. Growth is expressed as fr shares (and fill weights) only; ' +
         'the region base floor is the single shell-valve exception.',
     ).toEqual([])
   })
@@ -353,7 +353,7 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
       offenders,
       `a pane frame sized from styles.css:\n${offenders.join('\n')}\nThe grid cell sizes the ` +
         'frame (design3 §5 rule 2). A grower/floor here is the per-cockpit sizing mechanism ' +
-        'that recurred five times — express prominence as a row span via CockpitPaneFrame ' +
+        'that recurred five times — express prominence as a fill weight via CockpitPaneFrame ' +
         '`rows`, or for a region-less cockpit add the exact selector to ALLOWED with its ' +
         'valve documented.',
     ).toEqual([])
