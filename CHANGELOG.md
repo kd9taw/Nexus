@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: satellite operating — full Doppler, and a rotator that behaves
+
+Nexus now works a satellite pass end to end. Your rotator, a standard computer interface, and
+Nexus — no separate tracking appliance.
+
+**Doppler on both legs, continuously.** Your downlink is corrected so you hear the bird where it
+actually is, and your uplink is corrected so the bird hears *you* where it is listening. Both,
+always: correcting only the downlink sounds right while your signal slides off the far end of the
+passband and nobody comes back to you.
+
+**Inverting transponders are handled properly.** On an RS-44 or AO-7 the passband is mirrored —
+tune up the band and your uplink goes down, and the sidebands swap. That comes from the satellite
+database per transponder, not from a checkbox you have to remember, so the common way to land on
+somebody else's QSO is closed by default.
+
+**Tune the downlink and the uplink follows.** Chase a station drifting through the passband the way
+you would on HF; your transmit frequency tracks them while Doppler moves the whole band underneath.
+
+**Digital modes are handled honestly.** For slot-timed modes like FT8 the dial is held still for the
+length of a transmission and re-corrected between overs, because stepping the frequency underneath a
+transmission in progress smears it. The physical Doppler on a fast low-orbit pass still applies and
+no software can remove it, so FT modes remain best suited to the high-orbit birds. SSB, CW and FM
+steer continuously, which is what you want.
+
+**Rotator control worth using.** Park and ready positions with a post-pass action, an optional flip
+above 90° elevation so a high pass goes over the top instead of spinning the mast at zenith, an
+az/el deadband so the rotator stops hunting for ten minutes straight, and calibration trim for the
+difference between where the controller thinks it points and where the boom actually points.
+
+Nothing moves until you say so: Doppler is off until enabled, the VFO mapping starts at "off" until
+you say which VFO carries which leg, flip is off, and the post-pass action leaves the antenna where
+the pass ended.
+
+**Satellite contacts count.** A QSO logged during a pass carries SAT_NAME and PROP_MODE, which is
+exactly what LoTW needs to credit it.
+
+
 ### Fixed: the propagation advisor stops changing its mind on identical data
 
 On a quiet band with one or two spots — exactly when you lean on it — the advisor's "best
