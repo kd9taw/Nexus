@@ -51,6 +51,24 @@
 //!   Hz, so a perfect predictor still lands at 15–60 Hz on this fixture.
 //! * Curation admitted passes where SGP4 with the given elements is accurate,
 //!   so a misconception shared with SGP4 itself would not show up.
+//!
+//! # Do not "improve" this by adding observations
+//!
+//! Eight is not a shortage, it is a measured optimum. Admitting two near-miss
+//! passes — including a fifth and sixth station, a third band, and the highest
+//! elevation in the whole survey — raises the correct-case floor (mean 31.9 →
+//! 37.5 Hz, worst 59.4 → 90.6 Hz) while the response to every injected bug
+//! stays flat. Separation degrades across the board: the geocentric-latitude
+//! bug from 2.01× to 1.78×, the missing Earth-rotation term from 2.53× to
+//! 2.06×. Both candidates are stale-element-dominated, so they add floor, not
+//! signal.
+//!
+//! Detection power here comes from passes whose residual is SMALL, not from
+//! covering more stations. A new pass must beat ~40 Hz RMS with its structured
+//! component under ~100 Hz, and the fault injection in
+//! `fixtures/sat_doppler_real/generate.py` must be re-run, before it earns a
+//! place. Padding the set would quietly weaken the gate while looking like
+//! broader coverage.
 
 use std::path::PathBuf;
 

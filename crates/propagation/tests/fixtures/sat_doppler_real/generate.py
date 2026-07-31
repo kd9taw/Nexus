@@ -198,6 +198,29 @@ is for a correct implementation differing from Skyfield in frame handling (TEME-
 polar motion) or SGP4 gravity constants, which is a few Hz to low tens of Hz. 1.4x is
 comfortable for that and still tight enough to be diagnostic.
 
+WHY EIGHT AND NOT MORE -- adding observations measurably HURTS
+--------------------------------------------------------------
+The obvious way to "improve" this fixture is to admit more passes. It was tested, and it
+makes the test worse. Re-running the fault injection with two near-miss passes added
+(MARINA at station 4434 on 145.925 MHz -- a 5th station, a new band and the highest
+elevation seen at 64 deg -- plus ORIGAMISAT-2 at station 5024, a 6th station):
+
+                        8 observations        10 observations
+    correct        mean 31.9 worst  59.4   mean 37.5 worst  90.6
+    geocentric lat      64.3      137.4  (2.01x)   66.8      137.4  (1.78x)
+    no Earth rot        80.9      146.6  (2.53x)   77.3      146.6  (2.06x)
+    Doppler x1.01       44.9       74.5  (1.41x)   49.1       99.9  (1.31x)
+
+Separation degrades for every bug class. Both extra passes have residuals dominated by
+stale elements, so they raise the correct-case floor without raising the bug response --
+they add noise, not signal. Detection power here comes from passes whose residual is
+small, not from covering more stations.
+
+So: do NOT add observations to this fixture without re-running the fault injection above.
+If a new pass does not beat ~40 Hz RMS with a structured component under ~100 Hz, it will
+dilute the gate rather than strengthen it. Quality over quantity is not a slogan here, it
+is a measured result.
+
 BLIND SPOTS -- be explicit about these when reading a green test
 ----------------------------------------------------------------
 * Station altitude is NOT tested at all. Altitudes here are 5-192 m, which changes range
@@ -311,6 +334,13 @@ REJECTED = [
                "prediction-based cleaning this fixture refuses to do."),
     (25544, "ALL ISS observations (30 in the survey). FM voice/APRS is intermittent, so the "
             "track is gappy and a tracker bug could masquerade as a predictor result."),
+    (14642992, "MARINA, station 4434, 145.925 MHz, 64 deg -- would have added a 5th "
+               "station, a third band and the highest elevation in the set, and it has the "
+               "cleanest spectrum measured (isolation 0.02). Rejected anyway: RMS 91 Hz, "
+               "structured 210 Hz, and a 7.0 s implied time shift collapses it to 23 Hz, so "
+               "it is stale elements. Adding it measurably weakens the gate (see above)."),
+    (14590936, "ORIGAMISAT-2 at station 5024 (would have been a 6th station). RMS 86 Hz, "
+               "structured 196 Hz. Same dilution problem."),
     (0, "540 of 1161 observations had no satnogs:wf-dat / satnogs:wf-plot tEXt chunks "
         "(older renderer) -- no way to calibrate the axes, so unusable."),
 ]
