@@ -821,6 +821,10 @@ pub struct Engine {
     /// arming/QSY verbs so `commit_tx` refuses an over planned before them —
     /// see [`TxGateStamp`].
     tx_gate_gen: u64,
+    /// The transponder the operator selected for the tracked bird, plus their
+    /// position inside its passband and what was last written to the radio.
+    /// `None` = no satellite tuning in force, which is every terrestrial path.
+    sat_tune: Option<SatTune>,
     /// Set while a satellite pass OWNS the dial: `(satellite|transponder,
     /// operator passband offset Hz)`. Its presence is what tells the TX gate to
     /// judge tuning IDENTITY rather than the dial number — see [`TxGateStamp`].
@@ -1931,6 +1935,17 @@ impl TxOwner {
     }
 }
 
+/// The satellite tuning in force: which transponder, where the operator sits
+/// inside it, and what was last written to the radio (for the rate limit).
+#[derive(Debug, Clone)]
+struct SatTune {
+    /// Stable identity for the TX gate — "SAT|transponder".
+    label: String,
+    transponder: tempo_core::doppler::Transponder,
+    state: tempo_core::doppler::DopplerState,
+    sent: tempo_core::doppler::SentTuning,
+}
+
 /// Every input the TX gate read when a plan was made. [`Engine::commit_tx`]
 /// refuses a plan whose stamp no longer matches: all of these are writable by
 /// Tauri commands on another thread while the radio loop has the engine RELEASED
@@ -2101,6 +2116,7 @@ impl Engine {
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
             tx_gate_gen: 0,
+            sat_tune: None,
             sat_dial_owner: None,
             split_tx_mhz: None,
             split_dirty: false,
@@ -5876,6 +5892,98 @@ impl Engine {
             self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
             self.sat_dial_owner = owner;
         }
+    }
+
+    /// Select (or clear) the transponder being worked on the tracked bird.
+    /// Clearing hands the dial back, so a pass that ends leaves the radio to
+    /// the operator rather than silently holding it.
+    pub fn set_sat_transponder(&mut self, tp: Option<(String, tempo_core::doppler::Transponder)>) {
+        match tp {
+            Some((label, t)) => {
+                self.sat_tune = Some(SatTune {
+                    label: label.clone(),
+                    transponder: t,
+                    state: tempo_core::doppler::DopplerState::default(),
+                    sent: tempo_core::doppler::SentTuning::default(),
+                });
+                self.set_sat_dial_owner(Some((label, 0)));
+            }
+            None => {
+                self.sat_tune = None;
+                self.set_sat_dial_owner(None);
+            }
+        }
+    }
+
+    /// Adopt the operator's manual downlink tuning into the passband offset, so
+    /// the uplink follows them (see `doppler::follow_downlink`). Called when the
+    /// operator turns the dial during a pass.
+    pub fn sat_follow_downlink(&mut self, tuned_hz: u64, range_rate_km_s: f64) {
+        let Some(st) = self.sat_tune.as_mut() else {
+            return;
+        };
+        st.state = tempo_core::doppler::follow_downlink(&st.transponder, tuned_hz, range_rate_km_s);
+        let (label, off) = (st.label.clone(), st.state.offset_hz);
+        // Moving across the passband IS an operator move: the identity changes,
+        // so an over planned at the old position refuses (see TxGateStamp).
+        self.set_sat_dial_owner(Some((label, off)));
+    }
+
+    /// One Doppler tick. Returns what was actually written to the radio, or
+    /// `None` when nothing was due — the rate limits, the freeze-during-over
+    /// policy and the operator's VFO mapping all decide here rather than at the
+    /// call site, so the loop stays a loop.
+    ///
+    /// `keyed` = a transmission is physically in flight.
+    pub fn sat_doppler_tick(
+        &mut self,
+        range_rate_km_s: f64,
+        now_ms: u64,
+        keyed: bool,
+    ) -> Option<tempo_core::doppler::Correction> {
+        use tempo_core::doppler as dop;
+        let map = self.settings.sat_vfo_map;
+        if !self.settings.sat_doppler || !map.active() {
+            return None;
+        }
+        let limits = dop::SteerLimits {
+            min_shift_hz: self.settings.sat_min_shift_hz,
+            min_interval_ms: self.settings.sat_update_ms,
+        };
+        let legs = dop::Legs {
+            downlink: map.drives_downlink(),
+            uplink: map.drives_uplink(),
+        };
+        // Slot-timed modes hold the dial still for the length of an over; the
+        // manual modes steer through it. See doppler::TxPolicy.
+        let policy = dop::TxPolicy::for_slot_mode(
+            self.settings.operating_mode == crate::settings::OperatingMode::Digital,
+        );
+        let st = self.sat_tune.as_ref()?;
+        let want = dop::tuning(&st.transponder, st.state, range_rate_km_s);
+        let c = dop::correction(want, st.sent, now_ms, limits, legs, policy.may_steer(keyed));
+        if c.is_empty() {
+            return None;
+        }
+        if let Some(hz) = c.downlink_hz {
+            self.steer_sat_dial(hz as f64 / 1_000_000.0);
+        }
+        if let Some(hz) = c.uplink_hz {
+            // The uplink rides the SPLIT TX dial — the same mechanism a
+            // cluster "work split" uses, so the radio loop applies it through
+            // the existing one-shot rather than a second parallel path.
+            self.split_tx_mhz = Some(hz as f64 / 1_000_000.0);
+            self.split_dirty = true;
+        }
+        if let Some(st) = self.sat_tune.as_mut() {
+            st.sent = dop::SentTuning {
+                downlink_hz: c.downlink_hz.unwrap_or(st.sent.downlink_hz),
+                uplink_hz: c.uplink_hz.unwrap_or(st.sent.uplink_hz),
+                at_ms: now_ms,
+                sent: true,
+            };
+        }
+        Some(c)
     }
 
     /// Move the dial for DOPPLER — not a QSY, and deliberately not routed
@@ -17738,6 +17846,78 @@ mod tests {
             !e.snapshot().radio.transmitting,
             "the refusal must also clear the transmitting latch"
         );
+    }
+
+    #[test]
+    fn doppler_never_touches_the_radio_until_the_operator_opts_in() {
+        // Two independent opt-ins, both off by default: a station with no
+        // satellite interest must never have its dial moved by a pass, and a
+        // wrong VFO mapping is the one that transmits on your own downlink.
+        use tempo_core::doppler::Transponder;
+        let tp = Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: true,
+            half_width_hz: 30_000,
+        };
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some(("RS-44|linear".into(), tp)));
+        let dial_before = e.settings().dial_mhz;
+
+        // Default settings: doppler off, mapping Off.
+        assert!(e.sat_doppler_tick(5.0, 1_000, false).is_none());
+        assert_eq!(e.settings().dial_mhz, dial_before, "dial untouched");
+
+        // Doppler on but no mapping chosen: still nothing.
+        {
+            let mut s = e.settings().clone();
+            s.sat_doppler = true;
+            e.apply_settings(s);
+        }
+        e.set_sat_transponder(Some(("RS-44|linear".into(), tp)));
+        assert!(e.sat_doppler_tick(5.0, 2_000, false).is_none());
+        assert_eq!(e.settings().dial_mhz, dial_before, "no mapping ⇒ no writes");
+
+        // Opted in properly: the first correction of the pass goes out.
+        {
+            let mut s = e.settings().clone();
+            s.sat_doppler = true;
+            s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
+            e.apply_settings(s);
+        }
+        e.set_sat_transponder(Some(("RS-44|linear".into(), tp)));
+        let c = e
+            .sat_doppler_tick(5.0, 3_000, false)
+            .expect("the first correction always goes out");
+        assert!(c.downlink_hz.is_some() && c.uplink_hz.is_some());
+        // Receding: hear low, transmit high.
+        assert!(c.downlink_hz.unwrap() < 435_640_000);
+        assert!(c.uplink_hz.unwrap() > 145_965_000);
+        // The dial moved, and WITHOUT the QSY side effects (a 3 s tick must not
+        // clear the roster or halt TX).
+        assert!((e.settings().dial_mhz - 435.640).abs() > 1e-6);
+
+        // Immediately after, the interval brake holds the next tick off.
+        assert!(e.sat_doppler_tick(5.1, 3_200, false).is_none());
+
+        // A slot-mode over in flight freezes the dial entirely.
+        {
+            let mut s = e.settings().clone();
+            s.operating_mode = crate::settings::OperatingMode::Digital;
+            e.apply_settings(s);
+        }
+        e.set_sat_transponder(Some(("RS-44|linear".into(), tp)));
+        assert!(
+            e.sat_doppler_tick(6.0, 60_000, true).is_none(),
+            "no dial steps under a slot-mode waveform in flight"
+        );
+        // …and it resumes between overs.
+        assert!(e.sat_doppler_tick(6.0, 61_000, false).is_some());
+
+        // Clearing the transponder hands the dial back to the operator.
+        e.set_sat_transponder(None);
+        assert!(e.sat_dial_owner().is_none());
+        assert!(e.sat_doppler_tick(6.0, 70_000, false).is_none());
     }
 
     #[test]
