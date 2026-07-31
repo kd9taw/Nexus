@@ -219,7 +219,8 @@ export default function App() {
   const [showWizard, setShowWizard] = useState<boolean>(
     () => features.firstRun && storageWritable() && !wizardSeen(),
   )
-  const { commitLeft, commitRight, resetWidths } = usePaneWidths()
+  // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
+  const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
   const layoutRef = useRef<HTMLElement>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
   // Two-radio launch picker: shown only when simultaneous-radios is on, ≥2 radios are configured,
@@ -2264,6 +2265,7 @@ export default function App() {
         <>
           {threePane(
             <Conversation
+              key={activePeer ?? 'launchpad'} // remount per peer: open pinned to the newest message, never inherit the last peer's scroll offset
               conversation={activeConversation}
               peer={activePeer}
               radio={snap.radio}

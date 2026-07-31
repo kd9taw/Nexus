@@ -129,10 +129,28 @@ export function AprsStationCard({
   const alt = altitudeFt(st.text)
 
   // Escape closes, and focus moves to the card on open so a keyboard operator is not left behind on
-  // the map canvas. Matches the app's dialog handling.
+  // the map canvas. Matches the app's dialog handling. The take is SILENT (preventScroll — no
+  // ancestor reveal walk over the map), and where focus came FROM is remembered so close can hand
+  // it back — the old code let it fall to <body>, restarting Tab at the top of the document after
+  // every card. Never record the card itself as the origin: this effect re-fires per station while
+  // the card is already open (clicking through the heard-stations table).
+  const restoreRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
-    cardRef.current?.focus()
+    const prev = document.activeElement
+    if (prev instanceof HTMLElement && !cardRef.current?.contains(prev)) {
+      restoreRef.current = prev
+    }
+    cardRef.current?.focus({ preventScroll: true })
   }, [st.call])
+  // Close restores focus to where it came from. All close paths (✕, Escape, a selection change)
+  // unmount the card, so the unmount cleanup covers every one; focusing a since-removed element
+  // is a harmless no-op.
+  useEffect(
+    () => () => {
+      restoreRef.current?.focus({ preventScroll: true })
+    },
+    [],
+  )
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {

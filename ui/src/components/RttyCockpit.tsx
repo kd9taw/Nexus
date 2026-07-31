@@ -23,6 +23,7 @@ import {
 } from '../api'
 import { bandLabelForMhz } from '../band'
 import { pushToast, withErrorToast } from '../toast'
+import { usePinnedScroll } from '../usePinnedScroll'
 
 interface Props {
   /** Live snapshot — may be absent while the app is still connecting; the shell
@@ -258,12 +259,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const backend = (rtty?.backend ?? 'afsk').toUpperCase()
 
   const text_rx = rtty?.text ?? ''
-  const streamRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    // Autoscroll: newest text stays in view (same behavior as the CW transcript).
-    const el = streamRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [text_rx])
+  // Stream transcript: bottom-pinned via the shared discipline. The old
+  // unconditional snap on every poll that changed the text made mid-QSO
+  // scroll-back impossible — the pane reset to the bottom before the operator
+  // could re-read a callsign. Pinned follows new copy; scrolled-up reads.
+  const streamPin = usePinnedScroll<HTMLDivElement>()
 
   return (
     <main className="layout single rtty-cockpit">
@@ -420,13 +420,16 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               void rttyClear()
                 .then(setRtty)
                 .catch(() => {})
+              // A wipe re-pins (same as Operate's Erase): the emptied pane must
+              // follow the next copy even if the operator had scrolled up.
+              streamPin.repin()
             }}
             title="Clear the decoded transcript"
           >
             Clear
           </button>
         </div>
-        <div className="cw-decode-text" ref={streamRef}>
+        <div className="cw-decode-text" ref={streamPin.ref} onScroll={streamPin.onScroll}>
           {text_rx ? (
             confidenceRuns(text_rx, rtty?.charConf ?? []).map((run, i) => (
               <span key={i} style={run.opacity < 1 ? { opacity: run.opacity } : undefined}>

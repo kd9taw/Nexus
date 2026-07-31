@@ -198,6 +198,13 @@ export function MemoriesView({
   const editRow = (id: string, patch: Partial<Memory>) =>
     commit((b) => updateMemory(b, id, { ...patch, source: 'user' }))
 
+  // Initial focus goes to the DIALOG CONTAINER, not the ✕: autoFocus on the close
+  // button meant the Enter that opened Starter packs immediately dismissed it.
+  const packsRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (showPacks) packsRef.current?.focus({ preventScroll: true })
+  }, [showPacks])
+
   // Escape closes the starter-packs dialog (it's also dismissable by backdrop click / ✕).
   useEffect(() => {
     if (!showPacks) return
@@ -621,6 +628,8 @@ export function MemoriesView({
             role="dialog"
             aria-modal="true"
             aria-labelledby="mv-packs-title"
+            tabIndex={-1}
+            ref={packsRef}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mv-packs-head">
@@ -630,7 +639,6 @@ export function MemoriesView({
                 className="mv-packs-close"
                 onClick={() => setShowPacks(false)}
                 aria-label="Close"
-                autoFocus
               >
                 ✕
               </button>

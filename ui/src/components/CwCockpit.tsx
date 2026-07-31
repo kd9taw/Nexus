@@ -46,6 +46,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
+import { usePinnedScroll } from '../usePinnedScroll'
 import { isRfScopeSource, sidebandSign } from '../waterfall'
 
 /** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit). */
@@ -306,7 +307,12 @@ export function CwCockpit({
   // Live single-signal CW decode of the receive audio at the marker pitch — poll the
   // engine ~1.4 Hz (the decode reads a multi-second ring, so faster adds no detail).
   const [decoded, setDecoded] = useState<{ text: string; wpm: number }>({ text: '', wpm: 0 })
-  const decodeRef = useRef<HTMLDivElement>(null)
+  // Decode transcript: bottom-pinned via the shared discipline. The old
+  // unconditional `scrollTop = scrollHeight` on every reveal tick (the 50 ms
+  // typewriter) made scroll-back physically impossible while copy was flowing —
+  // exactly when the operator wants to re-read a callsign that just scrolled
+  // off. Pinned follows the copy; scrolled-up reading is never yanked.
+  const decodePin = usePinnedScroll<HTMLDivElement>()
   // Cockpit root: the scope-height splitter measures + writes its CSS var here.
   const cockpitRef = useRef<HTMLElement>(null)
   // Panels (Phase 3): scope + keyer/macros/send/log stay pinned; the panes under the scope are
@@ -344,18 +350,11 @@ export function CwCockpit({
     return () => window.clearInterval(id)
   }, [decoded.text, revealLen])
   const revealedText = decoded.text.slice(0, revealLen)
-  // Keep the newest decoded text in view as the transcript grows.
-  useEffect(() => {
-    const el = decodeRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [revealedText])
   // TX echo — what we've actually transmitted (macros expanded), polled alongside the decode.
+  // Same pin discipline: during an F-key macro run the operator must be able to
+  // scroll back and verify what was actually keyed (the whole point of the echo).
   const [sent, setSent] = useState<string[]>([])
-  const sentRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const el = sentRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [sent])
+  const sentPin = usePinnedScroll<HTMLDivElement>()
   // A CW-keyer failure surfaced by the radio loop (e.g. the rig rejected CAT send_morse).
   const [keyerError, setKeyerError] = useState<string | null>(null)
   // --- CW copilot: decoded-call chips only (Expert). The Guided/Expert selector + its bar were
@@ -1078,6 +1077,11 @@ export function CwCockpit({
               void cwClear()
               setDecoded({ text: '', wpm: 0 })
               setSent([])
+              // A wipe re-pins both panes (same as Operate's Erase): an emptied
+              // transcript must follow the next copy even if the operator had
+              // scrolled up before clearing.
+              decodePin.repin()
+              sentPin.repin()
             }}
             title="Clear the decoded + sent transcript"
           >
@@ -1088,7 +1092,7 @@ export function CwCockpit({
             aria-hidden so a screen reader doesn't announce every keystroke; the
             hidden role=log mirror below receives whole batches instead (a log
             region announces only ADDITIONS). */}
-        <div className="cw-decode-text" ref={decodeRef} aria-hidden="true">
+        <div className="cw-decode-text" ref={decodePin.ref} onScroll={decodePin.onScroll} aria-hidden="true">
           {revealedText ? (
             revealedText
           ) : (
@@ -1111,7 +1115,7 @@ export function CwCockpit({
           <div className="cw-decode-head">
             <span className="cw-decode-label">SENT ▲</span>
           </div>
-          <div className="cw-decode-text" ref={sentRef}>
+          <div className="cw-decode-text" ref={sentPin.ref} onScroll={sentPin.onScroll}>
             {sent.map((line, i) => (
               <div key={i} className="cw-sent-line">
                 {line}
