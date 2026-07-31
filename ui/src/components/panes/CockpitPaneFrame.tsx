@@ -43,7 +43,15 @@ export function CockpitPaneFrame({
    *  height with its fill siblings by `weight`. Both are PLACEMENT inputs carried inline
    *  from typed props — the column sizes the frame; a pane still cannot size itself, so
    *  contract rule 2 (no min-height/flex/overflow of a pane's own) holds. At the 1-col
-   *  scrolling tier the region's --cockpit-pane-flex overrides fill to content-height. */
+   *  scrolling tier the region's --cockpit-pane-flex overrides fill to content-height.
+   *  The fill min-height consults --cockpit-fill-min (default 0): the REGION-LESS
+   *  cockpits (RTTY/SSTV — bare fill frames, no .cockpit-panes) set it on their shell
+   *  rule so the frame keeps a floor under the shell's scrolling deficit valve. A sheet
+   *  rule on .pane-frame cannot supply that floor — this inline declaration outranks
+   *  every selector (the point of inline placement), which is exactly how
+   *  `.rtty-cockpit > .pane-frame { min-height: 10em }` once shipped dead. The knob is
+   *  fenced to those two shell rules by cockpit-panes.test.ts: inherited into a
+   *  region's tier-2/3 `overflow: hidden` it would be the clip bug reborn. */
   fit?: 'content'
   /** Fill share among fill siblings, default 1 (CW gives DECODE 3). Ignored with fit. */
   weight?: number
@@ -66,7 +74,7 @@ export function CockpitPaneFrame({
       style={
         fit === 'content'
           ? { flex: '0 0 auto' }
-          : { flex: `var(--cockpit-pane-flex, ${weight ?? 1} 1 0)`, minHeight: 0 }
+          : { flex: `var(--cockpit-pane-flex, ${weight ?? 1} 1 0)`, minHeight: 'var(--cockpit-fill-min, 0)' }
       }
     >
       <header className="pane-head">

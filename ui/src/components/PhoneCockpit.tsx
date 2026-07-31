@@ -686,8 +686,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
   const logPane = (
     <CockpitPaneFrame title="Log" paneId="log">
+      {/* compactRecall died here (2026-07-31). It existed because the pre-overhaul cockpit had
+          no interposed scroller: the full recall card's height crushed the operating panes
+          directly. This pane is now a FILL pane whose .pane-body scrolls internally, so a tall
+          card scrolls inside the log column and can never squeeze the cockpit — the operator
+          gets the QRZ photo / bearing / history back while operating. */}
       <LogEntry
-        compactRecall
         snap={snap}
         mode={commandedMode === 'FM' ? 'FM' : 'SSB'}
         defaultRst="59"

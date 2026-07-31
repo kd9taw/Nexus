@@ -315,7 +315,12 @@ describe('the bespoke lower regions are gone, not just de-floored', () => {
   // So the guard is now a negative census rather than a threshold. A threshold guard
   // silently passes on a class nobody uses; this one fails the moment a per-cockpit region
   // wrapper is re-introduced — which is how every one of these floors got here.
-  for (const cls of ['ph-lower', 'cw-lower']) {
+  // `.sstv-lower` joined the census in the SSTV pane pass (census growers.md #10): its
+  // 50/50 `--pane-share` split gave each pane half the region whatever it held. SSTV's
+  // blocks now render through CockpitPaneFrame as direct shell children (RTTY's
+  // region-less shape — two content blocks cannot fill a multi-track template), so a
+  // reborn wrapper is the same private-region mechanism as the other two.
+  for (const cls of ['ph-lower', 'cw-lower', 'sstv-lower']) {
     it(`.${cls} no longer exists in the sheet`, () => {
       const hits = rulesOn(cls).map((r) => r.selector)
       expect(
@@ -335,6 +340,27 @@ describe('the bespoke lower regions are gone, not just de-floored', () => {
 // class) — so the guard moved rather than died: cockpit-panes.test.ts now scans styles.css
 // for growers/floors on `.pane-frame`/`.pane-body`, with RTTY's documented shell-owned
 // frame as the one exact-selector exception.)
+
+/** Last declaration of `prop` across unconditional rules with the exact selector (later
+ *  rule wins; same-spec). Declaration-split, so `min-width`/`max-width` never match a
+ *  `width` probe. `prop` is a plain property name ([a-z-] only) — no regex metachars. */
+function finalDecl(selector: string, prop: string): string | null {
+  let v: string | null = null
+  let at = -1
+  for (const r of RULES) {
+    if (r.media !== null || r.selector !== selector) continue
+    let last: string | null = null
+    for (const decl of r.body.split(';')) {
+      const m = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`).exec(decl)
+      if (m) last = m[1].replace(/\s+/g, ' ')
+    }
+    if (last !== null && r.order >= at) {
+      v = last
+      at = r.order
+    }
+  }
+  return v
+}
 
 /** Last max-height across the given exact selectors (later rule wins; same-spec). */
 function finalMaxHeight(selectors: string[]): string | null {
@@ -369,6 +395,88 @@ describe('bounded, zoom-corrected caps', () => {
     expect(v, '.mv-packs: no max-height declared').not.toBeNull()
     expect(v!, `.mv-packs max-height is \`${v}\``).toContain('var(--vh-eff')
   })
+})
+
+describe('the SSTV live canvas consumes the integer-step stamp', () => {
+  // The picture-upscale fix (census #9) is two halves: SstvView stamps `--sstv-img-w`
+  // as a whole multiple of the decode's native width (guarded live by
+  // SstvView.structure.test.tsx), and this sheet rule spends it. This computes the
+  // FINAL width across every rule on the selector, so a later rule silently replacing
+  // the consumer — the dead-fix mechanism this file documents — fails here, not on air.
+  // The selector is exercised by live renders in SstvView.test.tsx, so this is not a
+  // dead-selector presence check.
+  it('.sstv-live-canvas final width is min(100%, var(--sstv-img-w, 480px))', () => {
+    let v: string | null = null
+    let at = -1
+    for (const r of RULES) {
+      if (r.media !== null || r.selector !== '.sstv-live-canvas') continue
+      // Declaration-split (like blockOverflowY): a matchAll over the body would also
+      // hit the tail of `max-width`/`min-width`.
+      let last: string | null = null
+      for (const decl of r.body.split(';')) {
+        const m = /^\s*width\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+        if (m) last = m[1].replace(/\s+/g, ' ')
+      }
+      if (last !== null && r.order >= at) {
+        v = last
+        at = r.order
+      }
+    }
+    expect(v, '.sstv-live-canvas: no width declared at all').not.toBeNull()
+    expect(
+      v!,
+      `.sstv-live-canvas width is \`${v}\` — a fixed width re-caps the decode at a postage ` +
+        'stamp (census #9) and anything but min(100%, var(--sstv-img-w, …)) either drops the ' +
+        'integer-step stamp or loses the shrink-to-fit yield for stages smaller than 1×.',
+    ).toBe('min(100%, var(--sstv-img-w, 480px))')
+  })
+})
+
+describe('the SSTV stamp has a real percentage base and the shell has real floors', () => {
+  // Fix-round guards (review 2026-07-31). All computed FINAL values across the sheet —
+  // a later rule that silently re-breaks any of them fails here, not on air. Honest
+  // limit: these read the sheet, not a layout engine; the rendered-width proof for this
+  // round was measured in headless Chromium (fix evidence), and jsdom cannot repeat it.
+  it(".sstv-live final width is 100% — the base of the canvas's min(100%, stamp) clamp", () => {
+    // As a shrink-to-fit flex item the box's width was its own max-content, so min()
+    // ALWAYS took the 100% arm: the integer stamp was inert (every window rendered ~1×)
+    // and a long caption widened the box into a FRACTIONAL scale — the two outcomes the
+    // sstvScale ruling exists to forbid. Stretched, 100% is the same measured stage the
+    // stamp was computed against, so the integer arm can actually win.
+    expect(finalDecl('.sstv-live', 'width')).toBe('100%')
+  })
+
+  it('.sstv-canvas keeps an em floor (a basis-0 grower under deficit is a zero-height stage)', () => {
+    const v = finalDecl('.sstv-canvas', 'min-height')
+    expect(v, '.sstv-canvas: no min-height declared').not.toBeNull()
+    expect(
+      /^\d+(\.\d+)?em$/.test(v!),
+      `.sstv-canvas min-height is \`${v}\` — must be a positive em floor (px are ` +
+        'zoom-hostile). At 0 the composer strip (~246–438px, flex 0 0 auto) starves the ' +
+        'basis-0 stage to ZERO height, and the shell valve cannot scroll to a box with no ' +
+        'scroll extent. The floor is safe ONLY because the shell scrolls (guard above).',
+    ).toBe(true)
+  })
+
+  it('.sstv-tx-bar is sticky at bottom 0 (Stop must never leave the scrollport)', () => {
+    // The dock discipline (cockpit-panes.css .cockpit-txdock): with real pane floors the
+    // shell valve engages routinely, and a bar that scrolls away is a Stop the operator
+    // cannot reach mid-transmission — against the bar's own TX-LOCKED comment.
+    expect(finalDecl('.sstv-tx-bar', 'position')).toBe('sticky')
+    expect(finalDecl('.sstv-tx-bar', 'bottom')).toBe('0')
+  })
+
+  for (const shell of ['.layout.single.rtty-cockpit', '.layout.single.sstv-view']) {
+    it(`${shell} sets the fill-frame floor knob (--cockpit-fill-min, em units)`, () => {
+      // Region-less cockpits: the bare fill frame's inline `min-height:
+      // var(--cockpit-fill-min, 0)` is the ONLY floor channel a sheet cannot outrank —
+      // `.rtty-cockpit > .pane-frame { min-height: 10em }` shipped dead against the
+      // frame's inline `min-height: 0`. cockpit-panes.test.ts fences who may set it.
+      const v = finalDecl(shell, '--cockpit-fill-min')
+      expect(v, `${shell}: --cockpit-fill-min not set — its fill frame floors at 0`).not.toBeNull()
+      expect(/^\d+(\.\d+)?em$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
+    })
+  }
 })
 
 describe('the scope splitter drag is respected (winning flex-grow is 0)', () => {

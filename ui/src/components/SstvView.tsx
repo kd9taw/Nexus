@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvState } from '../types'
 import { Waterfall } from './Waterfall'
 import { CockpitHeader } from './CockpitHeader'
 import { FrequencyControl } from './FrequencyControl'
 import { PanelsMenu } from './PanelsMenu'
-import { SplitterSeam } from './SplitterSeam'
+import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { panelHost } from '../features/panelHost'
+import { sstvImageWidth } from '../sstvScale'
 import { SSTV_PANEL_IDS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
 import {
   getLicensedBandPlan,
@@ -218,15 +219,12 @@ function GalleryThumb({ entry }: { entry: SstvGalleryEntry }) {
  */
 export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, panels }: Props) {
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
-  // Transmit composer and the Gallery are removable + seam-resizable in the bounded lower region.
+  // Transmit composer and the Gallery are removable (⊞ menu). They render through
+  // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
+  // surplus height), the gallery fills — so the old seam/share machinery is meaningless
+  // here and was removed with the 50/50 `.sstv-lower` split (census #10).
   const host = panels ? panelHost(panels, { menu: SSTV_PANEL_IDS, side: [], main: 'gallery', labels: SSTV_PANEL_LABELS }) : null
   const shown = (id: SstvPanelId) => (host ? host.shown(id) : true)
-  const composeRef = useRef<HTMLElement>(null)
-  const galleryRef = useRef<HTMLElement>(null)
-  const shareStyle = (id: SstvPanelId): React.CSSProperties | undefined => {
-    const s = panels?.layout.share[id]
-    return s != null ? ({ '--pane-share': s } as React.CSSProperties) : undefined
-  }
   // Live decoder state — polled at 1 Hz while this is the visible view (the
   // backend keeps decoding while hidden; the first tick catches the display up).
   const [sstv, setSstv] = useState<SstvState | null>(null)
@@ -304,6 +302,48 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       /* undecodable base64 → keep the last frame */
     }
   }, [preview, pw, ph])
+
+  // THE PICTURE UPSCALE (census #9): measure the RX stage and show the decode at the
+  // largest INTEGER multiple of its native size that fits — never a fractional scale
+  // (integerScaleStep.ts has the ruling). The ResizeObserver is 0×0-guarded the same
+  // way as useRegionCols: a hidden keep-alive host or mid-layout pass keeps the last
+  // real measurement rather than collapsing the picture to 1×.
+  const stageRef = useRef<HTMLElement>(null)
+  const [stage, setStage] = useState({ w: 0, h: 0 })
+  useLayoutEffect(() => {
+    const el = stageRef.current
+    if (!el) return
+    let raf = 0
+    const measure = () => {
+      const w = el.clientWidth
+      const h = el.clientHeight
+      if (w >= 2 && h >= 2) setStage((s) => (s.w === w && s.h === h ? s : { w, h }))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(measure)
+    })
+    ro.observe(el)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [])
+  // Fixed chrome between the stage's client box and the picture: .sstv-live padding
+  // (2×space-3) + canvas border on the width; those plus the caption row and flex gap
+  // on the height. Overestimating only costs margin; underestimating would trip the
+  // CSS min(100%) yield and reintroduce the fractional blur the ruling forbids.
+  // sstvImageWidth returns a whole multiple of pw whenever ≥1× fits; a stage shorter
+  // than the native decode gets the fractional width that fits the HEIGHT (the axis
+  // the CSS min(100%) yield cannot cover — it clipped top and bottom before).
+  const STAGE_CHROME_W = 32
+  const STAGE_CHROME_H = 64
+  const imgW =
+    pw > 0 && ph > 0 && stage.w > 0
+      ? sstvImageWidth(pw, ph, stage.w - STAGE_CHROME_W, stage.h - STAGE_CHROME_H)
+      : null
 
   // Honest V1 caption: the two-pass core lands lines nearly all at once at
   // completion, so until they land we say "decoding <mode>…" — never a fake
@@ -543,10 +583,25 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         </CockpitHeader>
       )}
 
-      <section className="sstv-canvas" aria-label="SSTV image">
+      <section className="sstv-canvas" aria-label="SSTV image" ref={stageRef}>
         {inFlight ? (
           <div className="sstv-live">
-            {preview && <canvas ref={canvasRef} className="sstv-live-canvas" />}
+            {preview && (
+              <canvas
+                ref={canvasRef}
+                className="sstv-live-canvas"
+                // Integer-step width (never fractional — census #9) except the one
+                // sanctioned yield: a stage shorter than the native decode gets the
+                // width that fits its height (sstvImageWidth), and the CSS min(100%)
+                // still yields on the width axis. Unset until the first real
+                // measurement: the sheet's 480px (3×) default holds.
+                style={
+                  imgW != null
+                    ? ({ '--sstv-img-w': `${imgW}px` } as React.CSSProperties)
+                    : undefined
+                }
+              />
+            )}
             <div className="sstv-live-caption" role="status">
               {caption}
               {/* The one thing the spectrum would have shown that the picture
@@ -594,8 +649,92 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         )}
       </section>
 
-      {/* Pinned TX bar — transmit mode + Send + Stop + progress. TX-LOCKED: never a removable
-          panel, so Stop is ALWAYS reachable (paramount SSTV TX-safety). */}
+      {/* THE LOWER PANES — CockpitPaneFrame with ROLES, and deliberately NO
+          .cockpit-panes region (RTTY's precedent: with this few content blocks every
+          multi-column tier leaves a track empty — manufactured dead space). The old
+          `.sstv-lower` wrapper split the region 50/50 whatever the panes held (census
+          #10: ~440px dead per pane on an ultrawide with an empty gallery); now the
+          composer is a content-height strip and the gallery is the fill grower beside
+          the RX stage, with deficit flowing to the shell's own overflow-y:auto valve. */}
+      {shown('txcompose') && (
+        <CockpitPaneFrame title="Transmit" paneId="txcompose" fit="content">
+          {/* Unnamed section: the frame above is the landmark ("Transmit"); the wrapper
+              stays for its column layout, with `.pane-body > .panel` stripping the
+              card-in-card chrome. */}
+          <section className="sstv-compose panel">
+            <div
+              className={`sstv-tx-drop${packed ? ' loaded' : ''}`}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault()
+                const f = e.dataTransfer.files?.[0]
+                if (f) loadImage(f)
+              }}
+            >
+              <canvas
+                ref={txCanvasRef}
+                className={`sstv-tx-preview${packed ? '' : ' empty'}`}
+                role="img"
+                aria-label={packed ? `Transmit preview, ${packed.width}×${packed.height}` : 'No image chosen'}
+              />
+              {!packed && (
+                <div className="sstv-tx-drop-hint">
+                  Drop an image here, or choose one below. Cover-cropped to the mode size.
+                </div>
+              )}
+            </div>
+            <label className="sstv-tx-file">
+              <span>{imageName ? 'Change image…' : 'Choose image…'}</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) loadImage(f)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+            {imageName && txMode && (
+              <span className="sstv-tx-name" title={imageName}>
+                {imageName} → {txMode.width}×{txMode.height}
+              </span>
+            )}
+          </section>
+        </CockpitPaneFrame>
+      )}
+
+      {shown('gallery') && (
+        <CockpitPaneFrame title="Gallery" paneId="gallery">
+          <div className="sstv-gallery-grid">
+            {gallery.length === 0 ? (
+              <div className="sstv-gallery-empty">
+                Received images collect here — auto-saved with callsign (FSK ID), mode, frequency,
+                and time.
+              </div>
+            ) : (
+              gallery.map((g) => (
+                <figure key={g.path} className="sstv-thumb" title={g.path}>
+                  <GalleryThumb entry={g} />
+                  <figcaption className="sstv-thumb-caption">
+                    <span className="sstv-thumb-mode">{g.mode}</span>
+                    {g.fskId && <span className="sstv-thumb-call">{g.fskId}</span>}
+                    <span className="sstv-thumb-meta">
+                      {fmtUtc(g.finishedUtc)} · {g.freqMhz.toFixed(3)} MHz
+                    </span>
+                  </figcaption>
+                </figure>
+              ))
+            )}
+          </div>
+        </CockpitPaneFrame>
+      )}
+
+      {/* Pinned TX dock — transmit mode + Send + Stop + progress. TX-LOCKED: never a
+          removable panel, so Stop is ALWAYS reachable (paramount SSTV TX-safety). LAST
+          shell child on purpose (the .cockpit-txdock discipline): the bar is sticky at
+          the scrollport bottom, so when the shell's deficit valve scrolls, Send/Stop
+          stay parked — mid-column it scrolled off the TOP on the way to the gallery. */}
       <div className="sstv-tx-bar" aria-label="SSTV transmit controls">
         <label className="sstv-tx-mode">
           <span>Mode</span>
@@ -656,100 +795,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               <div className="sstv-tx-progress-fill" style={{ width: `${txProgressPct}%` }} />
             </div>
           </div>
-        )}
-      </div>
-
-      {/* Bounded lower region — the two removable, seam-resizable panels under the canvas. */}
-      <div className="sstv-lower">
-        {shown('txcompose') && (
-          <section
-            className="sstv-compose panel"
-            ref={composeRef}
-            style={shareStyle('txcompose')}
-            aria-label="Transmit an image"
-          >
-            <div className="sstv-tx-head">Transmit</div>
-            <div
-              className={`sstv-tx-drop${packed ? ' loaded' : ''}`}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault()
-                const f = e.dataTransfer.files?.[0]
-                if (f) loadImage(f)
-              }}
-            >
-              <canvas
-                ref={txCanvasRef}
-                className={`sstv-tx-preview${packed ? '' : ' empty'}`}
-                role="img"
-                aria-label={packed ? `Transmit preview, ${packed.width}×${packed.height}` : 'No image chosen'}
-              />
-              {!packed && (
-                <div className="sstv-tx-drop-hint">
-                  Drop an image here, or choose one below. Cover-cropped to the mode size.
-                </div>
-              )}
-            </div>
-            <label className="sstv-tx-file">
-              <span>{imageName ? 'Change image…' : 'Choose image…'}</span>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  if (f) loadImage(f)
-                  e.target.value = ''
-                }}
-              />
-            </label>
-            {imageName && txMode && (
-              <span className="sstv-tx-name" title={imageName}>
-                {imageName} → {txMode.width}×{txMode.height}
-              </span>
-            )}
-          </section>
-        )}
-
-        {shown('txcompose') && shown('gallery') && (
-          <SplitterSeam
-            above={composeRef}
-            below={galleryRef}
-            varName="--pane-share"
-            onCommit={(a, b) => panels?.setShares({ txcompose: a, gallery: b })}
-            label="Transmit / Gallery"
-          />
-        )}
-
-        {shown('gallery') && (
-          <section
-            className="sstv-gallery panel"
-            ref={galleryRef}
-            style={shareStyle('gallery')}
-            aria-label="Received images"
-          >
-            <div className="sstv-gallery-head">Gallery</div>
-            <div className="sstv-gallery-grid">
-              {gallery.length === 0 ? (
-                <div className="sstv-gallery-empty">
-                  Received images collect here — auto-saved with callsign (FSK ID), mode, frequency,
-                  and time.
-                </div>
-              ) : (
-                gallery.map((g) => (
-                  <figure key={g.path} className="sstv-thumb" title={g.path}>
-                    <GalleryThumb entry={g} />
-                    <figcaption className="sstv-thumb-caption">
-                      <span className="sstv-thumb-mode">{g.mode}</span>
-                      {g.fskId && <span className="sstv-thumb-call">{g.fskId}</span>}
-                      <span className="sstv-thumb-meta">
-                        {fmtUtc(g.finishedUtc)} · {g.freqMhz.toFixed(3)} MHz
-                      </span>
-                    </figcaption>
-                  </figure>
-                ))
-              )}
-            </div>
-          </section>
         )}
       </div>
     </main>
