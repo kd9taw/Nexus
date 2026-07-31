@@ -67,7 +67,7 @@ pub struct Pass {
 /// unparseable or the propagation diverges (decayed/invalid elements).
 pub fn subpoint(tle: &Tle, unix: i64) -> Option<(f64, f64, f64)> {
     let (constants, epoch_unix) = prepare(tle)?;
-    let ecef = sat_ecef(&constants, epoch_unix, unix)?;
+    let ecef = sat_ecef(&constants, epoch_unix, unix as f64)?;
     Some(ecef_to_geodetic(ecef))
 }
 
@@ -91,7 +91,7 @@ pub fn track(
     let mut out = Vec::with_capacity(((back_secs + ahead_secs) / step + 1) as usize);
     let mut t = unix - back_secs;
     while t <= unix + ahead_secs {
-        if let Some(ecef) = sat_ecef(&constants, epoch_unix, t) {
+        if let Some(ecef) = sat_ecef(&constants, epoch_unix, t as f64) {
             let (lat, lon, _alt) = ecef_to_geodetic(ecef);
             out.push((t, lat, lon));
         }
@@ -124,7 +124,7 @@ pub fn passes(tle: &Tle, observer: (f64, f64), from_unix: i64, hours: u32) -> Ve
 
     // Elevation/azimuth of the bird from the observer at a given instant.
     let look = |unix: i64| -> Option<(f64, f64)> {
-        let sat = sat_ecef(&constants, epoch_unix, unix)?;
+        let sat = sat_ecef(&constants, epoch_unix, unix as f64)?;
         Some(look_angles(sat, obs_ecef, obs_lat, obs_lon))
     };
 
@@ -208,7 +208,7 @@ pub fn look_at(tle: &Tle, observer: (f64, f64), unix: i64) -> Option<(f64, f64)>
     let (constants, epoch_unix) = prepare(tle)?;
     let (obs_lat_deg, obs_lon_deg) = observer;
     let obs_ecef = geodetic_to_ecef(obs_lat_deg, obs_lon_deg, 0.0);
-    let sat = sat_ecef(&constants, epoch_unix, unix)?;
+    let sat = sat_ecef(&constants, epoch_unix, unix as f64)?;
     let (el, az) = look_angles(
         sat,
         obs_ecef,
@@ -236,10 +236,26 @@ pub fn look_at(tle: &Tle, observer: (f64, f64), unix: i64) -> Option<(f64, f64)>
 /// (`v_ecef = R(θ)·v_teme − ω × r_ecef`), and the observer's Earth-fixed velocity
 /// is then identically zero.
 pub fn range_rate(tle: &Tle, observer: (f64, f64), unix: i64) -> Option<(f64, f64)> {
+    range_rate_at(tle, observer, unix as f64)
+}
+
+/// [`range_rate`] at a SUB-SECOND instant.
+///
+/// Whole seconds are fine for pointing a rotator — a mount's own resolution is
+/// a degree or two, and a satellite moves far less than that in a second. They
+/// are not fine for Doppler: the shift changes by up to ~100 Hz per second on
+/// a 70 cm LEO downlink around closest approach, so evaluating half a second
+/// off is tens of hertz of avoidable error in exactly the part of the pass
+/// where the correction matters most.
+///
+/// The two entry points share one implementation; this is the honest one to
+/// measure a predictor against, because otherwise the comparison is dominated
+/// by our own time quantisation rather than by the geometry under test.
+pub fn range_rate_at(tle: &Tle, observer: (f64, f64), unix_secs: f64) -> Option<(f64, f64)> {
     let (constants, epoch_unix) = prepare(tle)?;
     let (obs_lat_deg, obs_lon_deg) = observer;
     let obs = geodetic_to_ecef(obs_lat_deg, obs_lon_deg, 0.0);
-    let (sat, vel) = sat_ecef_with_velocity(&constants, epoch_unix, unix)?;
+    let (sat, vel) = sat_ecef_with_velocity(&constants, epoch_unix, unix_secs)?;
 
     let d = [sat[0] - obs[0], sat[1] - obs[1], sat[2] - obs[2]];
     let range = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
@@ -276,7 +292,7 @@ pub fn pass_track(
     let obs_lon = obs_lon_deg.to_radians();
     let step = step_secs.max(5) as i64;
     let sample = |t: i64| -> Option<(i64, f64, f64)> {
-        let sat = sat_ecef(&constants, epoch_unix, t)?;
+        let sat = sat_ecef(&constants, epoch_unix, t as f64)?;
         let (el, az) = look_angles(sat, obs_ecef, obs_lat, obs_lon);
         Some((t, az, el))
     };
@@ -341,8 +357,8 @@ fn prepare(tle: &Tle) -> Option<(sgp4::Constants, i64)> {
 
 /// Propagate to `unix` and rotate the TEME position into the Earth-fixed frame.
 /// `None` if the elements diverge at this time.
-fn sat_ecef(constants: &sgp4::Constants, epoch_unix: i64, unix: i64) -> Option<[f64; 3]> {
-    let minutes = (unix - epoch_unix) as f64 / 60.0;
+fn sat_ecef(constants: &sgp4::Constants, epoch_unix: i64, unix: f64) -> Option<[f64; 3]> {
+    let minutes = (unix - epoch_unix as f64) / 60.0;
     let prediction = constants.propagate(sgp4::MinutesSinceEpoch(minutes)).ok()?;
     let [x, y, z] = prediction.position;
     // TEME → ECEF: rotate about the pole by +GMST (R3(θ)). z is preserved.
@@ -362,9 +378,9 @@ const EARTH_ROT_RAD_S: f64 = 7.292_115_146_7e-5;
 fn sat_ecef_with_velocity(
     constants: &sgp4::Constants,
     epoch_unix: i64,
-    unix: i64,
+    unix: f64,
 ) -> Option<([f64; 3], [f64; 3])> {
-    let minutes = (unix - epoch_unix) as f64 / 60.0;
+    let minutes = (unix - epoch_unix as f64) / 60.0;
     let prediction = constants.propagate(sgp4::MinutesSinceEpoch(minutes)).ok()?;
     let [x, y, z] = prediction.position;
     let [vx, vy, vz] = prediction.velocity;
@@ -382,9 +398,9 @@ fn sat_ecef_with_velocity(
 }
 
 /// Greenwich Mean Sidereal Time (radians, 0..2π) at a UTC instant, IAU-1982.
-fn gmst_rad(unix: i64) -> f64 {
+fn gmst_rad(unix: f64) -> f64 {
     // Julian date (UT1 ≈ UTC) and centuries since J2000.0.
-    let jd = unix as f64 / 86_400.0 + 2_440_587.5;
+    let jd = unix / 86_400.0 + 2_440_587.5;
     let d = jd - 2_451_545.0;
     let t = d / 36_525.0;
     // Vallado eq. 3-47, degrees.

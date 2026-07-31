@@ -440,6 +440,8 @@ a courtesy to the operators and communities who provide them:
   transponders are active, for the Satellites feature. SatNOGS DB data is
   provided by the SatNOGS / Libre Space Foundation community under
   **CC BY-SA 4.0**. Data courtesy of the SatNOGS project and its contributors.
+  (SatNOGS material IS redistributed in one place — a test fixture, not shipped
+  in the app. See "SatNOGS Network observations" under *Test fixtures* below.)
 - **CelesTrak** (<https://celestrak.org>, T.S. Kelso) — amateur-satellite
   TLE / GP orbital elements.
 - **wspr.live** (the community mirror of wsprnet.org) — WSPR beacon reception
@@ -484,8 +486,34 @@ The bundled and linked components combine into the GPLv3 whole:
 Runtime data services (the "Runtime data services" section above) are **not
 bundled or linked** — the app merely queries them over the network — so their
 terms do not affect the license of the distributed binary; they are
-acknowledged as a courtesy. The single share-alike source, SatNOGS DB
-(CC BY-SA 4.0), is queried live and never redistributed.
+acknowledged as a courtesy. The one share-alike source that IS redistributed —
+SatNOGS Network observation data, CC BY-SA 4.0 — appears only in a test fixture
+that is not part of any shipped binary; see *Test fixtures* below.
+
+## Test fixtures
+
+Not shipped in any binary. Listed because they are redistributed in this
+repository and carry their own terms.
+
+### SatNOGS Network observations (Doppler validation)
+`crates/propagation/tests/fixtures/sat_doppler_real/observed.json` (140 KB)
+holds carrier-frequency-versus-time tracks measured during eight real satellite
+passes, recovered from the calibrated waterfall products of the **SatNOGS
+Network** (<https://network.satnogs.org>), a project of the **Libre Space
+Foundation**. SatNOGS Network data is licensed **CC BY-SA 4.0**
+(<https://creativecommons.org/licenses/by-sa/4.0/>).
+
+Creative Commons designates GPL-3.0 a **BY-SA Compatible License**, so adapted
+BY-SA 4.0 material may be redistributed under GPLv3 with attribution preserved,
+which is what this file does — the licence and attribution also travel inside
+the JSON itself, so they survive the file being copied out of this tree.
+
+Observed by SatNOGS ground stations **1696, 4803, 5049 and 5062** — our thanks
+to their operators and to the SatNOGS community, whose recordings let Nexus's
+Doppler prediction be checked against signals that actually arrived at an
+antenna rather than only against another implementation of the same theory.
+Regenerate with `crates/propagation/tests/fixtures/sat_doppler_real/generate.py`
+(requires network access; the committed fixture needs none).
 
 For the complete and authoritative GPL terms, see **`COPYING`**. For any
 component whose exact license is not stated above, consult the upstream
