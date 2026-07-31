@@ -7,6 +7,7 @@ import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { Splitter } from './Splitter'
@@ -46,6 +47,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
+import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { isRfScopeSource, sidebandSign } from '../waterfall'
 
@@ -595,6 +597,364 @@ export function CwCockpit({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // ── THE PANE REGION (2026-07-30 layout assessment, design3 §3) ───────────────────────
+  // Every operator-content block under the scope renders through a CockpitPaneFrame in ONE
+  // .cockpit-panes grid; the ⊞ Panels 'removed' gating is unchanged (shown()). TX chrome
+  // never enters the region — macros, the type-ahead send bar and the TX meters live in the
+  // pinned .cockpit-txdock and have no id in the pane vocabulary, so moving or hiding the
+  // things that key the rig is unrepresentable.
+  //
+  // Which panes CAN render right now — the exact conditions that gated them in the old
+  // `.cw-lower` JSX, hoisted because the region's column budget (maxCols) depends on them.
+  const cwDspFuncs = CW_DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
+  const hasDecodePane = shown('decode')
+  const hasSentPane = shown('sent') && sent.length > 0
+  const hasScopeCtlPane = shown('scopeCtl') && (civScope || flexScope)
+  const hasDspPane = shown('dsp') && cwDspFuncs.length > 0
+  const hasRxDspPane = shown('rxdsp') && (snap.radio.nrLevel != null || snap.radio.agc != null)
+  const hasBandPane = shown('bandActivity') && onWorkSpot != null
+  const hasCopilotPane = shown('copilot')
+  const mainPresent = hasDecodePane || hasSentPane
+  const auxPresent =
+    hasScopeCtlPane || hasDspPane || hasRxDspPane || hasBandPane || hasCopilotPane
+  // Three columns are decode+sent | aux | log, so the tier is only offered when BOTH the
+  // leading (transcript) column and the aux column have something to hold — otherwise a
+  // track would sit empty, the operator's "band of empty black" rebuilt. Same collapse
+  // panelHost ships as dataCols 'one'|'two' for Operate; it feeds maxCols and is NEVER
+  // stamped on the region (useRegionCols owns data-cols='1|2|3').
+  //
+  // And all the way to ONE when nothing but the log can render (every other CW pane is
+  // ⊞-removable): a 2-col template with an empty leading minmax(0,1fr) track is that
+  // same band of black at full height. At tier 1 rows are `auto`, so an empty column
+  // simply takes no space (fix-round, 2026-07-31).
+  const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(
+    mainPresent && auxPresent ? 3 : mainPresent || auxPresent ? 2 : 1,
+  )
+
+  const decodePane = hasDecodePane ? (
+    <CockpitPaneFrame title="Decode" paneId="decode" rows={3}>
+      <div
+        className="cw-decode panel"
+        title="Live CW decode — the AI (neural-net) decoder reads the whole 400–1200 Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder."
+      >
+        <div className="cw-decode-head">
+          <span className="cw-decode-label">DECODE</span>
+          <span className="cw-ai-beta">AI</span>
+          {decoded.wpm > 0 && <span className="cw-decode-wpm">{decoded.wpm} WPM</span>}
+          {/* Toggle is parked next to the label cluster on the LEFT and stays put — it must
+              render BEFORE the (optional) AI status, or the status's auto-margin would shove
+              the toggle to mid-row whenever the status text comes and goes. */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={snap.aiCw?.enabled ?? false}
+            className={`toggle${snap.aiCw?.enabled ? ' on' : ''}`}
+            onClick={() => void setAiCw(!(snap.aiCw?.enabled ?? false))}
+            title={
+              snap.aiCw?.enabled
+                ? 'AI decoder on — click for the classic pitch decoder'
+                : 'AI decoder off (classic pitch decoder) — click to turn AI on'
+            }
+          >
+            <span className="toggle-knob" />
+          </button>
+          {snap.aiCw?.enabled && snap.aiCw.status && (
+            <span className="cw-ai-status">{snap.aiCw.status}</span>
+          )}
+          <button
+            className="cw-decode-clear"
+            onClick={() => {
+              void cwClear()
+              setDecoded({ text: '', wpm: 0 })
+              setSent([])
+              // A wipe re-pins both panes (same as Operate's Erase): an emptied
+              // transcript must follow the next copy even if the operator had
+              // scrolled up before clearing.
+              decodePin.repin()
+              sentPin.repin()
+            }}
+            title="Clear the decoded + sent transcript"
+          >
+            Clear
+          </button>
+        </div>
+        {/* The visible transcript animates character-by-character (typewriter) —
+            aria-hidden so a screen reader doesn't announce every keystroke; the
+            hidden role=log mirror below receives whole batches instead (a log
+            region announces only ADDITIONS). */}
+        <div className="cw-decode-text" ref={decodePin.ref} onScroll={decodePin.onScroll} aria-hidden="true">
+          {revealedText ? (
+            revealedText
+          ) : (
+            <span className="cw-decode-idle">
+              {(snap.aiCw?.enabled && snap.aiCw.status) || 'listening…'}
+            </span>
+          )}
+        </div>
+        <div className="sr-only" role="log" aria-label="Decoded CW">
+          {decoded.text}
+        </div>
+      </div>
+    </CockpitPaneFrame>
+  ) : null
+
+  const sentPane = hasSentPane ? (
+    <CockpitPaneFrame title="Sent" paneId="sent" rows={2}>
+      <div
+        className="cw-decode cw-sent-panel panel"
+        title="What you've transmitted (F-key macros expanded to the real text)"
+      >
+        <div className="cw-decode-head">
+          <span className="cw-decode-label">SENT ▲</span>
+        </div>
+        <div className="cw-decode-text" ref={sentPin.ref} onScroll={sentPin.onScroll}>
+          {sent.map((line, i) => (
+            <div key={i} className="cw-sent-line">
+              {line}
+            </div>
+          ))}
+        </div>
+      </div>
+    </CockpitPaneFrame>
+  ) : null
+
+  /* Aux panes — the rig/DSP control strips plus the band + copilot boards. In the 3-column
+     tier they take the middle column; below that they append to the transcript column.
+     civScope and flexScope are mutually exclusive (one scope feed), so at most one
+     "scopeCtl" frame renders. */
+  const auxPanes = (
+    <>
+      {/* Rig scope controls (native Icom CI-V only) — command the RADIO's real panadapter:
+          span sets the hardware sweep width, ref sets weak-signal visibility. Parity with Phone. */}
+      {hasScopeCtlPane && civScope && (
+        <CockpitPaneFrame title="Rig scope controls" paneId="scopeCtl">
+          <div className="ph-rigscope" role="group" aria-label="Rig scope control">
+            <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
+              Rig&nbsp;scope
+            </span>
+            <div className="ph-span">
+              {RIG_SPANS.map((sp) => (
+                <button
+                  key={sp.label}
+                  type="button"
+                  className="theme-chip"
+                  title={`Set the radio's scope span to ${sp.label}`}
+                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                >
+                  {sp.label}
+                </button>
+              ))}
+            </div>
+            <label className="ph-rigscope-ref" title="Scope reference level — lower to lift weak signals out of the noise">
+              <span>Ref</span>
+              <input
+                type="range"
+                min={-200}
+                max={200}
+                step={5}
+                value={scopeRefTenths}
+                onChange={(e) => changeScopeRef(Number(e.target.value))}
+                aria-label="Scope reference level (dB)"
+              />
+              <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} dB</span>
+            </label>
+          </div>
+        </CockpitPaneFrame>
+      )}
+
+      {/* FlexRadio SmartSDR panadapter controls — bandwidth + reference. Parity with Phone. */}
+      {hasScopeCtlPane && flexScope && (
+        <CockpitPaneFrame title="Rig scope controls" paneId="scopeCtl">
+          <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
+            <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
+              Flex&nbsp;pan
+            </span>
+            <div className="ph-span">
+              {FLEX_SPANS.map((sp) => (
+                <button
+                  key={sp.label}
+                  type="button"
+                  className="theme-chip"
+                  title={`Set the Flex panadapter bandwidth to ${sp.label}`}
+                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                >
+                  {sp.label}
+                </button>
+              ))}
+            </div>
+            <label className="ph-rigscope-ref" title="Panadapter reference level (dBm) — lower to lift weak signals out of the noise">
+              <span>Ref</span>
+              <input
+                type="range"
+                min={-140}
+                max={-20}
+                step={5}
+                value={flexRefDbm}
+                onChange={(e) => changeFlexRef(Number(e.target.value))}
+                aria-label="Flex panadapter reference level (dBm)"
+              />
+              <span className="ph-power-val">{flexRefDbm} dBm</span>
+            </label>
+          </div>
+        </CockpitPaneFrame>
+      )}
+
+      {/* DSP toggles (NB/NR/Notch) — capability-gated; only funcs the rig reports render. */}
+      {hasDspPane && (
+        <CockpitPaneFrame title="DSP toggles" paneId="dsp">
+          <div className="ph-dsp" role="group" aria-label="Rig DSP functions">
+            <span className="ph-dsp-label">DSP</span>
+            {cwDspFuncs.map((f) => {
+              const on = snap.radio[f.key] === true
+              return (
+                <button
+                  key={f.key}
+                  type="button"
+                  className={`ph-dsp-btn${on ? ' on' : ''}`}
+                  aria-pressed={on}
+                  title={f.title}
+                  onClick={() =>
+                    void setRigFunc(f.key, !on)
+                      .then((s) => onSnap?.(s))
+                      .catch(() => pushToast(`Could not toggle ${f.label}`, 'error'))
+                  }
+                >
+                  {f.label}
+                </button>
+              )
+            })}
+          </div>
+        </CockpitPaneFrame>
+      )}
+
+      {/* RX DSP levels — NR depth + AGC speed, each shown only when the rig reports it. Parity
+          with the Phone cockpit; a CW op leans on AGC speed and NR depth heavily. */}
+      {hasRxDspPane && (
+        <CockpitPaneFrame title="RX DSP levels" paneId="rxdsp">
+          <div className="ph-dsp-levels" role="group" aria-label="RX DSP levels">
+            {snap.radio.nrLevel != null && (
+              <label className="ph-dsplev" title="Noise-reduction depth — raise until the noise floor drops, back off if the tone gets watery">
+                <span>NR</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={nr}
+                  onChange={(e) => changeNr(Number(e.target.value))}
+                  onPointerDown={() => {
+                    nrDragging.current = true
+                  }}
+                  onPointerUp={() => {
+                    nrDragging.current = false
+                  }}
+                  aria-label="Noise-reduction level"
+                />
+                <span className="ph-power-val">{nr}%</span>
+              </label>
+            )}
+            {snap.radio.agc != null && (
+              <div className="ph-agc" role="group" aria-label="AGC speed" title="AGC time constant — Fast for CW/pileups, Slow for steady copy">
+                <span className="ph-dsplev-lbl">AGC</span>
+                {(['fast', 'mid', 'slow'] as const).map((sp) => (
+                  <button
+                    key={sp}
+                    type="button"
+                    className={`theme-chip${agc === sp ? ' active' : ''}`}
+                    aria-pressed={agc === sp}
+                    onClick={() => changeAgc(sp)}
+                  >
+                    {sp === 'fast' ? 'Fast' : sp === 'mid' ? 'Mid' : 'Slow'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </CockpitPaneFrame>
+      )}
+
+      {/* CW spot band-activity strip; ⧉ pops the vertical band map into its own window. */}
+      {hasBandPane && onWorkSpot && (
+        <CockpitPaneFrame title="Band activity" paneId="bandActivity" rows={2}>
+          <BandStrip
+            band={snap.radio.band}
+            dialMhz={snap.radio.dialMhz}
+            txAllowed={snap.radio.txAllowed}
+            spots={spots ?? []}
+            spotMode="CW"
+            needByCall={needByCall}
+            typeByCall={typeByCall}
+            onWorkSpot={onWorkSpot}
+            onPopOut={() => void openPanelWindow('bandmapCw')}
+          />
+        </CockpitPaneFrame>
+      )}
+
+      {/* CW copilot — decoded-call chips + (Guided) the next-step prompt. Configurable for
+          new hams (Guided: plain-English prompts + the next key highlighted) vs experienced
+          ops (Expert: just the chips). Nothing here transmits — the operator always keys. */}
+      {hasCopilotPane && (
+        <CockpitPaneFrame title="Copilot" paneId="copilot">
+          <div className="cw-copilot panel expert">
+            <div className="cw-copilot-chips">
+              {guide.workedCall ? (
+                <span className="cw-copilot-label">Working</span>
+              ) : cand.length > 0 ? (
+                <span className="cw-copilot-label">Heard</span>
+              ) : (
+                <span className="cw-copilot-label dim">Decoded calls appear here…</span>
+              )}
+              {guide.workedCall && (
+                <span className="cw-chip worked" title="The station you're working — the F-keys + log use this">
+                  {guide.workedCall}
+                  {guide.rst ? ` · ${guide.rst}` : ''}
+                  {guide.name ? ` · ${guide.name}` : ''}
+                </span>
+              )}
+              {cand
+                .filter((c) => c.call !== guide.workedCall)
+                .map((c) => (
+                  <button
+                    key={c.call}
+                    type="button"
+                    className={`cw-chip${c.best ? ' best' : ''}`}
+                    onClick={() => workCall(c.call)}
+                    title={`Work ${c.call} — set it for the F-keys + log`}
+                  >
+                    {c.call}
+                  </button>
+                ))}
+            </div>
+          </div>
+        </CockpitPaneFrame>
+      )}
+    </>
+  )
+
+  const logPane = (
+    <CockpitPaneFrame title="Log" paneId="log">
+      <LogEntry
+        compactRecall
+        snap={snap}
+        mode="CW"
+        defaultRst="599"
+        onSpot={(call) => {
+          setSpotCall(call)
+          setSpotOpen(true)
+        }}
+        pendingWork={pendingWork}
+        onConsumeWork={onConsumeWork}
+        cwLive={{
+          call: guide.workedCall ?? cand.find((c) => c.best)?.call ?? null,
+          rst: guide.rst,
+          name: guide.name,
+          confirmed: guide.workedCall != null,
+        }}
+        fieldDay={fieldDay}
+        fdMode="CW"
+      />
+    </CockpitPaneFrame>
+  )
+
   return (
     <main className="layout single cw-cockpit" ref={cockpitRef}>
       <CockpitHeader
@@ -836,351 +1196,91 @@ export function CwCockpit({
         label="scope height"
       />
 
-      {/* Bounded lower region (Phase 3): the removable panes under the scope. The four content
-          panes (Band Activity / Copilot / Decode / Sent) seam-resize; the keyer/macros/send/log
-          below stay pinned + always reachable. */}
-      <div className="cw-lower">
-      {/* Rig scope controls (native Icom CI-V only) — command the RADIO's real panadapter:
-          span sets the hardware sweep width, ref sets weak-signal visibility. Parity with Phone. */}
-      {shown('scopeCtl') && civScope && (
-        <div className="ph-rigscope" role="group" aria-label="Rig scope control">
-          <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
-            Rig&nbsp;scope
-          </span>
-          <div className="ph-span">
-            {RIG_SPANS.map((sp) => (
-              <button
-                key={sp.label}
-                type="button"
-                className="theme-chip"
-                title={`Set the radio's scope span to ${sp.label}`}
-                onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
-              >
-                {sp.label}
-              </button>
-            ))}
-          </div>
-          <label className="ph-rigscope-ref" title="Scope reference level — lower to lift weak signals out of the noise">
-            <span>Ref</span>
-            <input
-              type="range"
-              min={-200}
-              max={200}
-              step={5}
-              value={scopeRefTenths}
-              onChange={(e) => changeScopeRef(Number(e.target.value))}
-              aria-label="Scope reference level (dB)"
-            />
-            <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} dB</span>
-          </label>
-        </div>
-      )}
+      {/* THE PANE REGION — one CockpitPaneFrame grid for every operator-content block.
+          useRegionCols OWNS data-cols (measured from the region itself, stamped
+          imperatively — never rendered here); the JSX renders exactly as many
+          .cockpit-col groups as the tier: at 1 the two-column grouping simply stacks and
+          the region is the scroller; at 2 it is transcripts+aux | log; at 3 DECODE takes
+          the leading (widest) track on its own, which is what "the decode is the primary
+          pane" means once growth is an fr share instead of a sole flex grower. Columns
+          are implicit-row grids, so a pane hidden from ⊞ Panels leaves no empty cell.
 
-      {/* FlexRadio SmartSDR panadapter controls — bandwidth + reference. Parity with Phone. */}
-      {shown('scopeCtl') && flexScope && (
-        <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
-          <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
-            Flex&nbsp;pan
-          </span>
-          <div className="ph-span">
-            {FLEX_SPANS.map((sp) => (
-              <button
-                key={sp.label}
-                type="button"
-                className="theme-chip"
-                title={`Set the Flex panadapter bandwidth to ${sp.label}`}
-                onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
-              >
-                {sp.label}
-              </button>
-            ))}
-          </div>
-          <label className="ph-rigscope-ref" title="Panadapter reference level (dBm) — lower to lift weak signals out of the noise">
-            <span>Ref</span>
-            <input
-              type="range"
-              min={-140}
-              max={-20}
-              step={5}
-              value={flexRefDbm}
-              onChange={(e) => changeFlexRef(Number(e.target.value))}
-              aria-label="Flex panadapter reference level (dBm)"
-            />
-            <span className="ph-power-val">{flexRefDbm} dBm</span>
-          </label>
-        </div>
-      )}
-
-      {/* DSP toggles (NB/NR/Notch) — capability-gated; only funcs the rig reports render. */}
-      {shown('dsp') && (() => {
-        const supported = CW_DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
-        if (supported.length === 0) return null
-        return (
-          <div className="ph-dsp" role="group" aria-label="Rig DSP functions">
-            <span className="ph-dsp-label">DSP</span>
-            {supported.map((f) => {
-              const on = snap.radio[f.key] === true
-              return (
-                <button
-                  key={f.key}
-                  type="button"
-                  className={`ph-dsp-btn${on ? ' on' : ''}`}
-                  aria-pressed={on}
-                  title={f.title}
-                  onClick={() =>
-                    void setRigFunc(f.key, !on)
-                      .then((s) => onSnap?.(s))
-                      .catch(() => pushToast(`Could not toggle ${f.label}`, 'error'))
-                  }
-                >
-                  {f.label}
-                </button>
-              )
-            })}
-          </div>
-        )
-      })()}
-
-      {/* Live transmit meters (SWR / ALC / Po / COMP) — self-gating: shown only while keyed,
-          and only the meters the rig reports. A CW op wants SWR + Po as they send. */}
-      {shown('txmeters') && <TxMeters radio={snap.radio} />}
-
-      {/* RX DSP levels — NR depth + AGC speed, each shown only when the rig reports it. Parity
-          with the Phone cockpit; a CW op leans on AGC speed and NR depth heavily. */}
-      {shown('rxdsp') && (snap.radio.nrLevel != null || snap.radio.agc != null) && (
-        <div className="ph-dsp-levels" role="group" aria-label="RX DSP levels">
-          {snap.radio.nrLevel != null && (
-            <label className="ph-dsplev" title="Noise-reduction depth — raise until the noise floor drops, back off if the tone gets watery">
-              <span>NR</span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={nr}
-                onChange={(e) => changeNr(Number(e.target.value))}
-                onPointerDown={() => {
-                  nrDragging.current = true
-                }}
-                onPointerUp={() => {
-                  nrDragging.current = false
-                }}
-                aria-label="Noise-reduction level"
-              />
-              <span className="ph-power-val">{nr}%</span>
-            </label>
-          )}
-          {snap.radio.agc != null && (
-            <div className="ph-agc" role="group" aria-label="AGC speed" title="AGC time constant — Fast for CW/pileups, Slow for steady copy">
-              <span className="ph-dsplev-lbl">AGC</span>
-              {(['fast', 'mid', 'slow'] as const).map((sp) => (
-                <button
-                  key={sp}
-                  type="button"
-                  className={`theme-chip${agc === sp ? ' active' : ''}`}
-                  aria-pressed={agc === sp}
-                  onClick={() => changeAgc(sp)}
-                >
-                  {sp === 'fast' ? 'Fast' : sp === 'mid' ? 'Mid' : 'Slow'}
-                </button>
-              ))}
+          The columns are KEYED so a tier flip reconciles them by identity: the log
+          column (and the transcript column) keep their fibers across 2↔3, because a
+          pane that lands under a different column div is UNMOUNTED by React — which
+          wiped every in-progress LogEntry field mid-QSO (fix-round D1, 2026-07-31;
+          guarded by CwCockpit.structure.test.tsx). Aux panes still change columns on a
+          2↔3 flip and do remount — their state (guide, candidates, slider values) lives
+          in this component, so the residual is cosmetic and accepted. */}
+      <div className="cockpit-panes" ref={panesRef}>
+        {cols === 3 ? (
+          <>
+            <div className="cockpit-col" key="main">
+              {decodePane}
+              {sentPane}
             </div>
-          )}
-        </div>
-      )}
-
-      {/* CW spot band-activity strip; ⧉ pops the vertical band map into its own window. */}
-      {shown('bandActivity') && onWorkSpot && (
-        <div className="cw-lower-pane panel">
-          <BandStrip
-            band={snap.radio.band}
-            dialMhz={snap.radio.dialMhz}
-            txAllowed={snap.radio.txAllowed}
-            spots={spots ?? []}
-            spotMode="CW"
-            needByCall={needByCall}
-            typeByCall={typeByCall}
-            onWorkSpot={onWorkSpot}
-            onPopOut={() => void openPanelWindow('bandmapCw')}
-          />
-        </div>
-      )}
-
-      {/* CW copilot — decoded-call chips + (Guided) the next-step prompt. Configurable for
-          new hams (Guided: plain-English prompts + the next key highlighted) vs experienced
-          ops (Expert: just the chips). Nothing here transmits — the operator always keys. */}
-      {shown('copilot') && (
-      <div className="cw-copilot panel expert">
-        <div className="cw-copilot-chips">
-          {guide.workedCall ? (
-            <span className="cw-copilot-label">Working</span>
-          ) : cand.length > 0 ? (
-            <span className="cw-copilot-label">Heard</span>
-          ) : (
-            <span className="cw-copilot-label dim">Decoded calls appear here…</span>
-          )}
-          {guide.workedCall && (
-            <span className="cw-chip worked" title="The station you're working — the F-keys + log use this">
-              {guide.workedCall}
-              {guide.rst ? ` · ${guide.rst}` : ''}
-              {guide.name ? ` · ${guide.name}` : ''}
-            </span>
-          )}
-          {cand
-            .filter((c) => c.call !== guide.workedCall)
-            .map((c) => (
-              <button
-                key={c.call}
-                type="button"
-                className={`cw-chip${c.best ? ' best' : ''}`}
-                onClick={() => workCall(c.call)}
-                title={`Work ${c.call} — set it for the F-keys + log`}
-              >
-                {c.call}
-              </button>
-            ))}
-        </div>
+            <div className="cockpit-col" key="aux">{auxPanes}</div>
+            <div className="cockpit-col" key="log">{logPane}</div>
+          </>
+        ) : (
+          <>
+            <div className="cockpit-col" key="main">
+              {decodePane}
+              {sentPane}
+              {auxPanes}
+            </div>
+            <div className="cockpit-col" key="log">{logPane}</div>
+          </>
+        )}
       </div>
-      )}
 
-      {shown('decode') && (
-      <div
-        className="cw-decode panel"
-        title="Live CW decode — the AI (neural-net) decoder reads the whole 400–1200 Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder."
-      >
-        <div className="cw-decode-head">
-          <span className="cw-decode-label">DECODE</span>
-          <span className="cw-ai-beta">AI</span>
-          {decoded.wpm > 0 && <span className="cw-decode-wpm">{decoded.wpm} WPM</span>}
-          {/* Toggle is parked next to the label cluster on the LEFT and stays put — it must
-              render BEFORE the (optional) AI status, or the status's auto-margin would shove
-              the toggle to mid-row whenever the status text comes and goes. */}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={snap.aiCw?.enabled ?? false}
-            className={`toggle${snap.aiCw?.enabled ? ' on' : ''}`}
-            onClick={() => void setAiCw(!(snap.aiCw?.enabled ?? false))}
-            title={
-              snap.aiCw?.enabled
-                ? 'AI decoder on — click for the classic pitch decoder'
-                : 'AI decoder off (classic pitch decoder) — click to turn AI on'
-            }
-          >
-            <span className="toggle-knob" />
-          </button>
-          {snap.aiCw?.enabled && snap.aiCw.status && (
-            <span className="cw-ai-status">{snap.aiCw.status}</span>
-          )}
-          <button
-            className="cw-decode-clear"
-            onClick={() => {
-              void cwClear()
-              setDecoded({ text: '', wpm: 0 })
-              setSent([])
-              // A wipe re-pins both panes (same as Operate's Erase): an emptied
-              // transcript must follow the next copy even if the operator had
-              // scrolled up before clearing.
-              decodePin.repin()
-              sentPin.repin()
+      {/* TX DOCK — the transmit chrome, pinned OUTSIDE the pane region so no pane layout,
+          stored or hand-edited, can move, hide or scroll it away. An F-key macro is a
+          ONE-CLICK transmit, so it obeys the same reachability rule as the send bar and
+          PTT: none of them has an id in the panel vocabulary. The TX meters keep their ⊞ id
+          (a readout, not a control) and render at the TOP of the dock — they mount only
+          while keyed, and growing the dock downward would shift the Send button under the
+          operator's pointer mid-QSO. */}
+      <div className="cockpit-txdock">
+        {/* Live transmit meters (SWR / ALC / Po / COMP) — self-gating: shown only while keyed,
+            and only the meters the rig reports. A CW op wants SWR + Po as they send. */}
+        {shown('txmeters') && <TxMeters radio={snap.radio} />}
+
+        <div className="cw-macros" role="group" aria-label="CW macros">
+          {macros.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              className="cw-macro"
+              onClick={() => send(m.text)}
+              title={previews[m.key] || m.text}
+            >
+              <span className="cw-macro-key">{m.key}</span>
+              <span className="cw-macro-label">{m.label || m.key}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="cw-send">
+          <input
+            className="settings-input cw-type"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                sendTyped()
+              }
             }}
-            title="Clear the decoded + sent transcript"
-          >
-            Clear
+            placeholder="Type CW to send… (Enter)"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button type="button" className="cw-send-btn" onClick={sendTyped} disabled={!text.trim()}>
+            Send
           </button>
         </div>
-        {/* The visible transcript animates character-by-character (typewriter) —
-            aria-hidden so a screen reader doesn't announce every keystroke; the
-            hidden role=log mirror below receives whole batches instead (a log
-            region announces only ADDITIONS). */}
-        <div className="cw-decode-text" ref={decodePin.ref} onScroll={decodePin.onScroll} aria-hidden="true">
-          {revealedText ? (
-            revealedText
-          ) : (
-            <span className="cw-decode-idle">
-              {(snap.aiCw?.enabled && snap.aiCw.status) || 'listening…'}
-            </span>
-          )}
-        </div>
-        <div className="sr-only" role="log" aria-label="Decoded CW">
-          {decoded.text}
-        </div>
       </div>
-      )}
-
-      {shown('sent') && sent.length > 0 && (
-        <div
-          className="cw-decode cw-sent-panel panel"
-          title="What you've transmitted (F-key macros expanded to the real text)"
-        >
-          <div className="cw-decode-head">
-            <span className="cw-decode-label">SENT ▲</span>
-          </div>
-          <div className="cw-decode-text" ref={sentPin.ref} onScroll={sentPin.onScroll}>
-            {sent.map((line, i) => (
-              <div key={i} className="cw-sent-line">
-                {line}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      </div>
-
-      <div className="cw-macros" role="group" aria-label="CW macros">
-        {macros.map((m) => (
-          <button
-            key={m.key}
-            type="button"
-            className="cw-macro"
-            onClick={() => send(m.text)}
-            title={previews[m.key] || m.text}
-          >
-            <span className="cw-macro-key">{m.key}</span>
-            <span className="cw-macro-label">{m.label || m.key}</span>
-          </button>
-        ))}
-      </div>
-
-      <div className="cw-send">
-        <input
-          className="settings-input cw-type"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              sendTyped()
-            }
-          }}
-          placeholder="Type CW to send… (Enter)"
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <button type="button" className="cw-send-btn" onClick={sendTyped} disabled={!text.trim()}>
-          Send
-        </button>
-      </div>
-
-      <LogEntry
-        compactRecall
-        snap={snap}
-        mode="CW"
-        defaultRst="599"
-        onSpot={(call) => {
-          setSpotCall(call)
-          setSpotOpen(true)
-        }}
-        pendingWork={pendingWork}
-        onConsumeWork={onConsumeWork}
-        cwLive={{
-          call: guide.workedCall ?? cand.find((c) => c.best)?.call ?? null,
-          rst: guide.rst,
-          name: guide.name,
-          confirmed: guide.workedCall != null,
-        }}
-        fieldDay={fieldDay}
-        fdMode="CW"
-      />
       <SpotDialog
         open={spotOpen}
         onClose={() => setSpotOpen(false)}

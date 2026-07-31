@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, RttyState } from '../types'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { RTTY_PANEL_IDS, type RttyPanelId, type PanelLayoutApi } from '../features/panelState'
@@ -354,7 +355,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
       )}
 
+      {/* THE ONE CONTENT PANE. RTTY adopts CockpitPaneFrame (per-pane scroll, the shipped
+          thin scrollbar) but deliberately NO .cockpit-panes region: with a single content
+          block every column template leaves a track empty, which is the dead space this
+          rebuild deletes rather than relocates. The frame is the shell's grower
+          (`.rtty-cockpit > .pane-frame`, styles.css) and the transcript scrolls inside it. */}
       {shown('stream') && (
+      <CockpitPaneFrame title="Decoded text" paneId="stream">
       <div
         className="cw-decode rtty-stream"
         title="Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)"
@@ -443,8 +450,14 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           )}
         </div>
       </div>
+      </CockpitPaneFrame>
       )}
 
+      {/* TX DOCK — the auto-sequencer row, the macros (each one a one-click transmit), Stop
+          and the compose bar, pinned OUTSIDE any pane so nothing can scroll them out of
+          reach. None of these has an id in the RTTY panel vocabulary ('stream' is the only
+          entry), so hiding or moving the controls that key the rig is unrepresentable. */}
+      <div className="cockpit-txdock">
       {auto && (
         <div className="cw-macros rtty-auto-row" role="group" aria-label="RTTY auto-sequencer">
           {seqState === 'idle' ? (
@@ -553,6 +566,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         <button type="button" className="cw-send-btn" onClick={sendTyped} disabled={!text.trim()}>
           Send
         </button>
+      </div>
       </div>
     </main>
   )

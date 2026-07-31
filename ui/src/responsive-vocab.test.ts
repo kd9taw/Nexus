@@ -31,7 +31,13 @@ import { fileURLToPath } from 'node:url'
 // Parser reused from cockpit-shells.test.ts (brace/comment-aware, @media-aware):
 // a regex over raw text would read prose comments as declarations.
 
-const raw = readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8')
+// BOTH sheets: cockpit-panes.css is a separate structural file (imported after
+// styles.css) and must obey the same vocabulary — a raw vh/vw or size @media there
+// would be exactly as zoom-blind, and until fix-round 2026-07-31 nothing scanned it.
+const raw =
+  readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8') +
+  '\n' +
+  readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8')
 const css = raw.replace(/\/\*[\s\S]*?\*\//g, '')
 
 interface Rule {

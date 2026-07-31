@@ -304,50 +304,37 @@ describe('cockpit shells are the deficit valve (winning overflow-y is auto)', ()
   }
 })
 
-describe('lower regions carry no manufactured floor', () => {
-  // 18em (= 252px at the 14px body font) guaranteed a band of empty black above an
-  // unreachable log form once the cockpit-level scroll those floors assumed was dead.
-  // Threshold equivalences: 10em/10rem = 140px at the 14px body font; 140px against the
-  // 900px fit-scale target height ≈ 15vh.
-  const LIMITS: Record<string, number> = { em: 10, rem: 10, px: 140, vh: 15 }
+describe('the bespoke lower regions are gone, not just de-floored', () => {
+  // This block used to allow `.ph-lower` / `.cw-lower` to exist and merely policed their
+  // 18em floors (= 252px at the 14px body font) — the floors that guaranteed a band of
+  // empty black above an unreachable log form once the cockpit-level scroll they assumed
+  // was dead. The pane-grid rebuild deleted BOTH wrappers outright: Phone and CW share
+  // `.cockpit-panes`, whose no-floor contract lives in cockpit-panes.test.ts, on a sheet
+  // where a floor cannot be written at all.
+  //
+  // So the guard is now a negative census rather than a threshold. A threshold guard
+  // silently passes on a class nobody uses; this one fails the moment a per-cockpit region
+  // wrapper is re-introduced — which is how every one of these floors got here.
   for (const cls of ['ph-lower', 'cw-lower']) {
-    it(`.${cls} has no min-height above 10em in any unit`, () => {
-      const offenders: string[] = []
-      for (const r of rulesOn(cls)) {
-        const re = /min-height\s*:\s*([\d.]+)(px|em|rem|vh)/g
-        let m: RegExpExecArray | null
-        while ((m = re.exec(r.body)) !== null) {
-          if (parseFloat(m[1]) > LIMITS[m[2]]) offenders.push(`${r.selector} { min-height: ${m[1]}${m[2]} }`)
-        }
-      }
-      expect(offenders, `floor reintroduced:\n${offenders.join('\n')}`).toEqual([])
+    it(`.${cls} no longer exists in the sheet`, () => {
+      const hits = rulesOn(cls).map((r) => r.selector)
+      expect(
+        hits,
+        `\`.${cls}\` is back:\n${hits.join('\n')}\nA cockpit's lower region is the shared ` +
+          '`.cockpit-panes` grid (cockpit-panes.css). A private wrapper is where the ' +
+          'per-cockpit growers, floors and overflow flips came from the last five times.',
+      ).toEqual([])
     })
   }
 })
 
-describe('band pane is content-height, not a grower', () => {
-  it('.ph-band-pane winning flex-grow is 0 (a grower around a fixed-height strip = empty black box)', () => {
-    let win: { grow: number; selector: string; spec: number; order: number } | null = null
-    for (const r of rulesOn('ph-band-pane')) {
-      if (r.media !== null) continue
-      const g = blockGrow(r.body)
-      if (g === null) continue
-      const spec = specificity(r.selector)
-      if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) {
-        win = { grow: g, selector: r.selector, spec, order: r.order }
-      }
-    }
-    // No declared grow at all is also fine (initial flex-grow is 0).
-    if (win) {
-      expect(
-        win.grow,
-        `\`${win.selector}\` gives .ph-band-pane flex-grow ${win.grow} — its BandStrip content ` +
-          'cannot stretch, so surplus renders as the "empty black box". Surplus is the ' +
-          "operator's to give to the scope via its Splitter.",
-      ).toBe(0)
-    }
-  })
-})
+// (The '.ph-band-pane is not a grower' guard lived here. The pane-grid rebuild deleted
+// the class: Band Activity now renders through a CockpitPaneFrame inside .cockpit-panes.
+// The hazard it watched for is NOT unrepresentable — styles.css can still size a pane
+// through the shared chrome (`.phone-cockpit .pane-frame { flex: 1 1 0 }` names no fenced
+// class) — so the guard moved rather than died: cockpit-panes.test.ts now scans styles.css
+// for growers/floors on `.pane-frame`/`.pane-body`, with RTTY's documented shell-owned
+// frame as the one exact-selector exception.)
 
 /** Last max-height across the given exact selectors (later rule wins; same-spec). */
 function finalMaxHeight(selectors: string[]): string | null {
@@ -403,6 +390,60 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
         `\`${win!.selector}\` gives the ${shell} scope flex-grow ${win!.value} — as the column's ` +
           'grower its height no longer follows the flex-basis the Splitter drives, so the drag ' +
           'and the persisted % are inert. Keep grow 0; pick the surplus sink deliberately.',
+      ).toBe(0)
+    })
+  }
+})
+
+describe('the dock rows that key the rig cannot shrink (winning flex-shrink is 0)', () => {
+  // The TX dock itself is `flex: 0 0 auto` (cockpit-panes.css, guarded there) — but that
+  // is ONE rule in ANOTHER file, and the rebuild briefly shipped the rows beneath it as
+  // default `flex: 0 1 auto` shrink victims on the strength of it. These compute the
+  // winner for each row that keys the rig, so loosening either layer alone fails a test
+  // (fix-round D4, 2026-07-31). Chains include .cockpit-txdock as the parent; its own
+  // sizing rules live in the other sheet, which this scan deliberately cannot see.
+
+  /** Final flex-shrink a block computes (longhand + shorthand, in-block order). */
+  function blockShrink(body: string): number | null {
+    let shrink: number | null = null
+    for (const decl of body.split(';')) {
+      let m = /^\s*flex-shrink\s*:\s*([\d.]+)/.exec(decl)
+      if (m) {
+        shrink = parseFloat(m[1])
+        continue
+      }
+      m = /^\s*flex\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+      if (!m) continue
+      const v = m[1]
+      if (v === 'none' || v === 'initial') shrink = v === 'none' ? 0 : 1
+      else if (v === 'auto') shrink = 1
+      else {
+        const parts = v.split(/\s+/)
+        // flex: <grow> [<shrink>? <basis>?] — a second NUMBER is the shrink; one value
+        // or <grow> <basis> leaves shrink at its shorthand default of 1.
+        shrink = parts.length >= 2 && /^[\d.]+$/.test(parts[1]) ? parseFloat(parts[1]) : 1
+      }
+    }
+    return shrink
+  }
+
+  const ROWS: Array<[string, string, string[]]> = [
+    ['phone-cockpit', 'ph-ptt-row', ['ph-ptt-row']],
+    ['cw-cockpit', 'cw-macros', ['cw-macros']],
+    ['cw-cockpit', 'cw-send', ['cw-send']],
+    ['rtty-cockpit', 'cw-macros (macro row)', ['cw-macros']],
+    ['rtty-cockpit', 'cw-macros.rtty-auto-row (auto-sequencer)', ['cw-macros', 'rtty-auto-row']],
+    ['rtty-cockpit', 'cw-send (compose bar)', ['cw-send']],
+  ]
+  for (const [shell, name, rowClasses] of ROWS) {
+    it(`.${shell} dock ${name} resolves flex-shrink 0`, () => {
+      const chain = [...shellChain(shell), new Set(['cockpit-txdock']), new Set(rowClasses)]
+      const win = winningValue(chain, blockShrink)
+      expect(win, `${name} in .${shell}: no rule declares flex at all — the pin is gone`).not.toBeNull()
+      expect(
+        win!.value,
+        `\`${win!.selector}\` leaves ${name} shrinkable (flex-shrink ${win!.value}) — under ` +
+          'deficit the control that keys the rig squeezes before anything scrolls.',
       ).toBe(0)
     })
   }

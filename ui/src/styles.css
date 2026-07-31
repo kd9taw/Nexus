@@ -1558,23 +1558,27 @@ button.nb-chip:hover {
   background: transparent;
   padding: 0;
 }
-/* Rescoped from .connect-side — keep the narrow-rail band/gauge fits in a pane body. */
-.pane-body .swx-strip {
+/* Rescoped from .connect-side — keep the narrow-rail band/gauge fits in a pane body.
+   Scoped to .connect, NOT bare `.pane-body`: the pane-frame family is shared with the
+   cockpit pane grids now, and these are ~250px-RAIL adaptations (columns stripped,
+   direction/people hidden). A cockpit pane that ever hosts BandAdvisor/SpaceWx would
+   have been silently column-stripped by the global spelling (fix-round D7, 2026-07-31). */
+.connect .pane-body .swx-strip {
   grid-template-columns: repeat(2, 1fr);
 }
-.pane-body .ba-row {
+.connect .pane-body .ba-row {
   grid-template-columns: 40px 1fr 78px;
 }
-.pane-body .ba-dir,
-.pane-body .ba-people {
+.connect .pane-body .ba-dir,
+.connect .pane-body .ba-people {
   display: none;
 }
-.pane-body .ba-reason {
+.connect .pane-body .ba-reason {
   grid-column: 1 / -1;
   font-size: var(--fs-micro);
   color: var(--text-faint);
 }
-.pane-body .ba-rows {
+.connect .pane-body .ba-rows {
   max-height: 100%; /* the pane body is the scroller now; no fixed 44vh cap */
   overflow-y: auto;
 }
@@ -1593,6 +1597,13 @@ button.nb-chip:hover {
     'right1'
     'right2'
     'strip';
+  /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolls — the shell rule on
+     .layout.single, .connect-shell and .connect itself all clip or declare no overflow,
+     and every row is a .pane-frame that clips. So at xs, where the globe keeps a 280px
+     floor and five auto rows stack beneath it, the rail panes and the bottom strip were
+     painted past the clip line with no path to them at all. Only this tier: the md/lg
+     grid is a bounded two-rail layout that must not gain a scrollbar. */
+  overflow-y: auto;
 }
 [data-viewport='xs'] .connect-strip {
   grid-template-columns: 1fr;
@@ -2872,6 +2883,13 @@ button.nb-chip:hover {
 .log-actions {
   display: inline-flex;
   gap: var(--space-2);
+  /* Ten buttons, each floored at `min-height: var(--touch)`, add up to ~1424 px of
+     min-content against a panel hard-capped at 1100 px — so at EVERY window size they were
+     squeezing to min-content and wrapping their labels to 2–3 lines, costing 60–90 px of an
+     un-shrinkable `.panel-header` that sits above the log's scroller. Wrapping the ROW is
+     the cheap honest fix: the buttons keep their touch size and the header grows a second
+     line only when it truly needs one. */
+  flex-wrap: wrap;
 }
 
 /* ---- DARK (shack) — default ---- */
@@ -5712,52 +5730,22 @@ select optgroup {
   overflow-y: auto;
   min-height: 0;
 }
-/* Lower region: the removable panes under the scope; the content panes carry the `panel`
-   class, the thin control strips sit at content height. It KEEPS `flex: 1 1 auto` — unlike
-   Phone's band strip, CW decode TEXT genuinely uses surplus height — but the 18em floor is
-   gone: its premise (deficit "scrolls at the cockpit level") was dead while the shell was
-   `overflow:hidden`, so the floor just pushed the log strip off the clipped bottom. The
-   shell is the deficit valve now (see `.layout.single.cw-cockpit`); no floor needed. */
-.cw-lower {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  /* Scroll (don't clip): turning on DSP inserts the levels pane and pushes the band-activity
-     strip down — overflow:hidden was clipping it out of view ("band activity covered up"). */
-  overflow-y: auto;
-}
-.cw-lower > * {
-  /* Every child sits at content height and never shrinks below its content, so nothing gets
-     crushed/clipped ("band activity covered up when decode is on"); a real vertical deficit flows
-     to `.cw-lower { overflow-y:auto }` and scrolls instead. Covers the DSP / RX-level control rows
-     (.ph-*) too, not just the .panel panes. Only DECODE grows (rule below). */
-  flex: 0 0 auto;
-  min-height: 0;
-}
-.cw-lower > .panel {
-  /* the removable content panes scroll internally if their own content overflows */
-  overflow: auto;
-}
-/* DECODE is the sole grower and the primary area: it fills the lower region and floors large so it
-   stays the dominant pane. The seam-resize sliders were removed (little value in CW), so there is
-   no per-pane --pane-share any more — decode simply grows. */
-.cw-lower > .cw-decode.panel {
-  flex: 1 1 0;
-  min-height: 8em;
-}
-/* SENT echo: content height, capped + scrolls internally — it must not steal DECODE's grow. */
-.cw-lower > .cw-decode.cw-sent-panel.panel {
-  flex: 0 0 auto;
-  max-height: 9em;
-}
-/* CW: keep the pinned log strip compact so the DECODE (the primary content) keeps the vertical
+/* (The `.cw-lower` family — the region wrapper, its `flex: 0 0 auto` children rule, the
+   `.panel` scroll rule, DECODE's sole-grower rule and the SENT echo's 9em cap — was
+   DELETED by the pane-grid rebuild, along with the class itself. CW's lower region is now
+   the shared `.cockpit-panes` grid: structural rules live in cockpit-panes.css ONLY, every
+   content block renders through a CockpitPaneFrame, and "DECODE is the primary pane" is
+   expressed as the widest COLUMN at the 3-column tier instead of the column's one flex
+   grower. Content styling for what is INSIDE those panes (.cw-decode, .cw-copilot, .ph-*)
+   stays in this file — see the framed-transcript block near `.cw-decode`.) */
+/* CW: keep the log strip compact so the DECODE (the primary content) keeps the vertical
    real estate (operator: "log qso is big… decode still squished"). No fields are hidden — this
-   only tightens the padding between the log rows, freeing height that flows to the decode pane. */
-.cw-cockpit > .log-entry {
+   only tightens the padding between the log rows. Descendant, not child: the log renders
+   inside its pane frame now, not as a direct child of the cockpit. */
+.cw-cockpit .log-entry {
   padding: var(--space-2) var(--space-3);
 }
-.cw-cockpit > .log-entry .le-row {
+.cw-cockpit .log-entry .le-row {
   margin-bottom: var(--space-1);
 }
 /* The header must NEVER be the item this column squeezes. It is the one child whose
@@ -5939,6 +5927,44 @@ input.cw-pitch::-webkit-inner-spin-button {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+/* ── A TRANSCRIPT INSIDE A CockpitPaneFrame ───────────────────────────────────────────
+   CW's DECODE and SENT and RTTY's stream all render inside a `.pane-body` since the
+   pane-grid rebuild. Two things have to be said, here and nowhere else:
+
+   1. FILL. `.pane-body` is a block box, so a block child is CONTENT height — and
+      `.cw-decode-text { flex: 1 1 0; min-height: 0 }` inside a content-height flex column
+      resolves to ZERO (an invisible transcript, not a short one). `height: 100%` resolves
+      against the body's definite height at the bounded tiers. Where the body is
+      auto-height — the 1-column scrolling tier, whose rows are content-sized — `height:
+      100%` computes to `auto` and the min-height is what gives the transcript a readable
+      box instead of nothing.
+   2. THE FLOOR IS SAFE HERE, AND ONLY HERE. `.pane-body` is `overflow: auto`, so a cell
+      shorter than 6em becomes that pane's own scrollbar. This is the permitted case in
+      design3 §3 ("comfortable fixed heights … floors are only fatal under
+      overflow:hidden"), not a return of the 18em floors that hid the log form. */
+.pane-body > .cw-decode {
+  height: 100%;
+  min-height: 6em;
+  /* It was a gapped sibling in a flex column; the frame owns the gap now, and a bottom
+     margin under `height: 100%` overflows the body by exactly that margin. */
+  margin-bottom: 0;
+}
+.pane-body > .cw-copilot {
+  margin-bottom: 0;
+}
+/* RTTY's stream carries no `panel` class, so `.pane-body > .panel`'s card-flatten misses
+   it and it renders as a bordered box inside a bordered frame. */
+.pane-body > .rtty-stream {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+/* …and that same flatten DOES catch CW's SENT echo (it is a `.panel`), taking its accent
+   stripe with it. The stripe is what makes "these are YOUR transmissions" readable at a
+   glance, so put it back. */
+.pane-body > .cw-sent-panel {
+  border-left: 3px solid var(--accent, #4ea1ff);
+}
 .cw-decode-head {
   display: flex;
   align-items: baseline;
@@ -5979,11 +6005,13 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 /* A multi-line, auto-scrolling transcript — decoded Morse persists here (it no longer
    vanishes as the audio window slides); older text scrolls up, newest stays in view.
-   Fills its pane, RTTY-style: `.cw-decode` is a flex column, and in the CW cockpit the
-   DECODE panel is the sole grower (`.cw-lower > .cw-decode.panel { flex:1 1 0 }`) — but
-   this rule's old `height: 6.5em` kept the transcript itself a fixed strip, so the grown
-   pane just wrapped ~5 lines in dead space. Same class of bug RTTY already fixed at
-   `.rtty-stream .cw-decode-text`; the SENT echo opts back out below. */
+   Fills its pane, RTTY-style: `.cw-decode` is a flex column that fills its frame body
+   (`.pane-body > .cw-decode`, above) and this is the item that takes the height — the
+   rule's old `height: 6.5em` kept the transcript a fixed strip, so a taller pane just
+   wrapped ~5 lines in dead space. Same class of bug RTTY already fixed at
+   `.rtty-stream .cw-decode-text`. (Before the pane-grid rebuild the height came from
+   `.cw-lower > .cw-decode.panel { flex: 1 1 0 }`, the lower region's sole grower; the
+   grid cell is the sizing authority now.) */
 .cw-decode-text {
   font-family: var(--font-mono);
   font-size: 14px;
@@ -6013,13 +6041,10 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-sent-panel .cw-decode-label {
   color: var(--accent, #4ea1ff);
 }
-.cw-sent-panel .cw-decode-text {
-  /* The SENT echo stays a FIXED 4em internal scroller by design (its panel is
-     `flex: 0 0 auto`). The base transcript is a flex-fill now, whose `flex-basis: 0`
-     would silently override this `height` — pin `flex: 0 0 auto` so 4em stays real. */
-  flex: 0 0 auto;
-  height: 4em;
-}
+/* (`.cw-sent-panel .cw-decode-text { flex: 0 0 auto; height: 4em }` deleted. The 4em strip
+   existed so the echo could not steal DECODE's grow when both were flex children of one
+   `.cw-lower` column. In the pane grid they are separate CELLS — nothing can be stolen —
+   so the echo simply inherits the base transcript's fill-and-scroll and uses its own pane.) */
 .cw-sent-line {
   color: var(--text);
 }
@@ -6131,6 +6156,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: var(--space-1);
+  /* One-click transmits: never a shrink victim, independent of the dock's own pin
+     (cockpit-panes.css). Replaces the deleted `.rtty-cockpit > .cw-macros` pin, whose
+     child combinator no longer matches now that the rows live inside the dock —
+     fix-round D4, 2026-07-31; guarded in cockpit-shells.test.ts. */
+  flex: 0 0 auto;
 }
 .cw-macro {
   display: flex;
@@ -6163,6 +6193,8 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-send {
   display: flex;
   gap: var(--space-2);
+  /* Same reachability pin as .cw-macros above — this row keys the rig. */
+  flex: 0 0 auto;
 }
 .cw-type {
   flex: 1;
@@ -6804,92 +6836,27 @@ input.cw-pitch::-webkit-inner-spin-button {
   overflow-y: auto;
   min-height: 0;
 }
-/* Lower region: the removable panes under the scope (rig scope / DSP / Band Activity), each
-   at content height. The 18em floor that lived here was THE manufactured empty band: its
-   premise — "anything that does not fit scrolls at the cockpit level" — was dead (the shell
-   was `overflow:hidden`, see the valve comment above), so the floor could only clip the log
-   form below it while holding ~130px of empty black open above (operator screenshots,
-   2026-07-30). With the shell now the real valve, no floor is needed: the region is exactly
-   its content, the shell scrolls on genuine deficit, and nothing below can crush these panes
-   because nothing here shrinks (children pin `flex: 0 0 auto`). */
-.ph-lower {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-/* Every child sits at CONTENT height and never shrinks below it, so nothing gets crushed or
-   clipped; a real vertical deficit flows to the cockpit shell's `overflow-y:auto` and scrolls.
-   Byte-for-byte the treatment `.cw-lower > *` got — Phone had only `flex-shrink:0`, which leaves
-   flex-basis at `auto` and still let panes lose height to a grower. Operator report 2026-07-25:
-   the Band Activity spot lines were being lost the same way CW's were. */
-.ph-lower > * {
-  flex: 0 0 auto;
-  min-height: 0;
-}
-/* the removable content panes scroll internally if their own content overflows */
-.ph-lower > .panel {
-  overflow: auto;
-}
-/* Band Activity sits at CONTENT height like its siblings (the grower rule it had is gone —
-   see the `.ph-band-pane` rule below for why growing was the "empty black box").
-   `--pane-share` is deliberately GONE. The seam-resize sliders were removed from CW in 0.17.11
-   ("sliders have little value here") but Phone kept the variable, so a stale share left over from
-   a dragged seam still skewed this pane's grow factor with no slider left to correct it. Phone
-   never had visible seams — the machinery was dead weight that could only misbehave. */
-/* Each pane under the scope is its OWN window, visibly.
-   First attempt used `--border-soft` on an undefined `--bg-raised`; that border is #1b2433 on a
-   dark panel — invisible in practice, so DSP / NB / NR and Band Activity still read as one merged
-   section (operator, 2026-07-25: "seems to be attached to the band activity in a whole section").
-   Use the app's real `.panel` surface instead of inventing a weaker one: same background and
-   radius the rest of Nexus uses for a window, with a border that is actually visible against it. */
-.ph-lower > .ph-dsp,
-.ph-lower > .ph-dsp-levels,
-.ph-band-pane {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-2);
-}
-.ph-lower > .ph-dsp {
-  /* the frame supplies the spacing now */
+/* (The `.ph-lower` / `.ph-band-pane` region family lived here until the pane-grid
+   rebuild. Phone's lower region is now the shared `.cockpit-panes` grid — structural
+   rules in cockpit-panes.css ONLY — and every content block renders through a
+   CockpitPaneFrame, whose shipped `.pane-frame` chrome supplies the per-pane window
+   surface, the real head title (which replaced the `.ph-band-pane::before`
+   pseudo-title) and the internal scroll. Content styling for what's INSIDE those panes
+   (.ph-dsp, .ph-rigscope, .vk, …) stays below.) */
+.pane-body > .ph-dsp {
+  /* The pane frame supplies the spacing; the base `.ph-dsp` margin would double it inside
+     a `.pane-body`. Keyed on the FRAME rather than a cockpit: Phone and CW both render
+     this strip through CockpitPaneFrame now, and any future one gets it for free. */
   margin: 0;
 }
-/* Band Activity is the primary pane down here — give it a title so it reads as its own window
-   rather than an unlabelled area that happens to sit below the DSP controls. */
-.ph-band-pane::before {
-  content: 'Band activity';
-  display: block;
-  font-size: var(--fs-label);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--text-dim);
-  padding-bottom: var(--space-1);
-  margin-bottom: var(--space-1);
-  border-bottom: 1px solid var(--border-soft);
-}
-.ph-band-pane {
-  /* Content height, NOT a grower. This was `flex: 1 1 0; min-height: 6em` — but the
-     BandStrip inside is a fixed-height strip that cannot stretch, so every px of grow
-     rendered as empty black below it (the operator's "empty black box"). Vertical
-     surplus is the operator's to give to the scope via its Splitter (the pane that
-     shows more signal with height). NB with basis `auto` + shrink 0 this box is always
-     exactly content height, so the `overflow:auto` below cannot engage today — it is
-     armed for a future height cap, not a claim that anything scrolls here now. */
-  flex: 0 0 auto;
-  overflow: auto;
-}
-/* The PTT row never shrinks/clips — push-to-talk stays reachable no matter the window.
-   It IS trimmed though: PTT and the voice keyer were taking vertical space that Band Activity
-   needed (operator, 2026-07-25: "if we need more space, make the voice keyer and push to talk
-   sections smaller"). Trimmed, not shrunk to nothing — PTT stays a comfortable hold-target,
+/* The PTT row now lives inside the pinned `.cockpit-txdock` (cockpit-panes.css): the
+   dock is flex 0 0 auto + sticky bottom, and the row keeps its OWN `flex: 0 0 auto`
+   belt on the base `.ph-ptt-row` rule above (fix-round D4 — reachability must not hang
+   on one rule in another file). The trim stays: PTT and the voice keyer were taking
+   vertical space the panes needed (operator, 2026-07-25: "if we need more space, make
+   the voice keyer and push to talk sections smaller") — trimmed, not shrunk to nothing,
    because a fiddly transmit control is a worse problem than a short spot list. */
-/* (A bare `.phone-cockpit { overflow-y:auto }` block lived here — it was DEAD code:
-   (0,1,0) loses to `.layout.single.phone-cockpit` (0,3,0), so its "scroll here" comment
-   described behavior that never happened. The live valve is on the triple-class shell
-   rule above; see the comment there.) */
 .phone-cockpit .ph-ptt-row {
-  flex: 0 0 auto;
   gap: var(--space-3);
 }
 .phone-cockpit .ph-ptt {
@@ -7497,6 +7464,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   align-items: center;
   gap: var(--space-4);
   flex-wrap: wrap;
+  /* Belt to the dock's braces: the row that keys the rig must never be a shrink victim,
+     even if the dock's own `flex: 0 0 auto` (cockpit-panes.css) is ever loosened. The
+     pin was deleted in the pane rebuild on "the dock protects it" — one rule in another
+     file is not an invariant (fix-round D4, 2026-07-31; guarded in cockpit-shells.test.ts). */
+  flex: 0 0 auto;
 }
 .ph-ptt {
   /* A prominent hold-target, but NOT a full-width bar — natural width so the row's
@@ -7564,7 +7536,8 @@ input.cw-pitch::-webkit-inner-spin-button {
 
 /* ---- Phone voice keyer (F-key WAV messages) ------------------------------- */
 .vk {
-  margin-top: 14px;
+  /* (margin-top is gone: the keyer sits in a CockpitPaneFrame now, and the grid gap owns
+     the spacing between panes. The h2 went with it — the frame head carries the title.) */
   padding: var(--space-3) 14px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -7575,11 +7548,15 @@ input.cw-pitch::-webkit-inner-spin-button {
   align-items: baseline;
   gap: 10px;
   margin-bottom: 10px;
-}
-.vk-head h2 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 800;
+  /* The keyer renders inside a scrolling .pane-body now, and this row carries ■ Stop —
+     a TX ABORT. Sticky keeps the abort visible however far the operator scrolls the
+     slot grid; the opaque background stops the scrolled slots bleeding through it
+     (fix-round D2, 2026-07-31). Content styling, so it lives here, not in the
+     structural sheet. */
+  position: sticky;
+  top: calc(-1 * var(--space-2)); /* cancel the pane-body padding so it parks flush */
+  z-index: 1;
+  background: var(--panel);
 }
 .vk-hint {
   font-size: var(--fs-micro);
@@ -8030,6 +8007,15 @@ input.cw-pitch::-webkit-inner-spin-button {
   gap: 2px;
   padding: var(--space-2) var(--space-3) var(--space-3);
   background: var(--bg-elev);
+  /* Fifteen bonus rows inside a `flex: 0 0 auto` section, inside `.panel { overflow:hidden }`
+     with no panel-level scroller: expanding Bonuses at 1200×750 added ~290 px of
+     un-shrinkable height, drove the ONLY shrinkable sibling (the Sections board) to zero —
+     the club-loved board turned into a blank strip — and took the residual off the bottom of
+     the log with no scrollbar anywhere in the chain. Cap the list against the effective
+     viewport (raw vh is blind to `.app { zoom }`) and let it own its own overflow: the
+     growth now stops here instead of travelling to the siblings. */
+  max-height: calc(0.3 * var(--vh-eff, 100vh));
+  overflow-y: auto;
 }
 .fd-bonus-row {
   display: flex;
@@ -15164,13 +15150,14 @@ html[data-panel='needed'] {
 .cw-cockpit .ph-scope-panel {
   /* GROW 0 — the drag must BE the height. A previous repair made the scope a grower
      (`flex: 1 1 <basis>`) so surplus would "show more signal", but a grower's resolved
-     height no longer follows its basis — here it split surplus 1:1 with `.cw-lower` and
-     the seam tracked the pointer at half rate; in Phone (sole grower) the Splitter's
+     height no longer follows its basis — here it split surplus 1:1 with the lower region
+     and the seam tracked the pointer at half rate; in Phone (sole grower) the Splitter's
      --ph-scope-h was fully inert at every geometry (review 2026-07-31). This is the
      COMPLETE Operate pattern, not just its clamps: `.cockpit-waterfall { flex: 0 1
      var(--cockpit-wf-h, 22%) }` keeps grow 0 and lets the decode scroller take the
-     surplus — here `.cw-lower { flex: 1 1 auto }` is that sink (decode text genuinely
-     uses height). Shrink 1 down to an 8em always-visible floor (the scope must never be
+     surplus — here `.cockpit-panes { flex: 1 1 0 }` (cockpit-panes.css) is that sink, and
+     its basis 0 is what keeps the dragged scope height honest. Shrink 1 down to an 8em
+     always-visible floor (the scope must never be
      hideable) and the 45% zoom-corrected cap (raw vh is zoom-blind) keep a stale
      persisted % structurally harmless. The % basis resolves against the flex container.
      Guarded by cockpit-shells.test.ts (winning flex-grow must compute to 0). */
@@ -16390,15 +16377,22 @@ html[data-panel='needed'] {
   padding: 2px 10px;
   margin-left: var(--space-2);
 }
-/* RTTY decoded stream — reuses the CW transcript panel. RTTY (unlike CW/SSTV) has no bounded
-   `-lower` wrapper: the stream + macros + send are bare children of the overflow:hidden cockpit
-   column with NO grower, so a tall display left a void below the Send bar and a short/zoomed one
-   crushed the macro row (RTTY 'Stop') + Send bar off the bottom with nothing to scroll. Make the
-   stream the grower that scrolls INTERNALLY and pin the strips — the whole view stays put and
-   Stop/Send stay reachable (mirrors `.cw-lower`/`.sstv-lower`). */
-.rtty-cockpit > .cw-decode.rtty-stream {
+/* RTTY decoded stream — reuses the CW transcript panel, now inside a CockpitPaneFrame.
+   RTTY (unlike CW/SSTV) has no bounded `-lower` wrapper: the stream + macros + send were bare
+   children of the cockpit column with NO grower, so a tall display left a void below the Send
+   bar and a short/zoomed one crushed the macro row (RTTY 'Stop') + Send bar off the bottom
+   with nothing to scroll. The frame is that grower and it scrolls INTERNALLY; the strips are
+   pinned by `.cockpit-txdock` (cockpit-panes.css) rather than by a rule here.
+
+   Why this cockpit sizes its frame at all, when the pane-grid contract says a pane declares
+   no size: there is no grid to size it. RTTY has exactly ONE content pane, and a region would
+   have to pick a column tier — every one of which leaves a track (or the space under a
+   content-height row) empty. So the SHELL owns this frame's height, explicitly, in one place.
+   The 10em floor is the frame's head + the 6em transcript floor; a shorter window flows to
+   the shell's own `overflow-y: auto` valve, never to a clip. */
+.rtty-cockpit > .pane-frame {
   flex: 1 1 0;
-  min-height: 6em;
+  min-height: 10em;
 }
 .rtty-stream .cw-decode-text {
   /* was height:14em — let it fill the pane and scroll internally (it already has overflow-y:auto). */
@@ -16406,10 +16400,11 @@ html[data-panel='needed'] {
   min-height: 0;
   height: auto;
 }
-.rtty-cockpit > .cw-macros,
-.rtty-cockpit > .cw-send {
-  flex: 0 0 auto;
-}
+/* (`.rtty-cockpit > .cw-macros` / `> .cw-send { flex: 0 0 auto }` deleted with the pane
+   rebuild — the child combinator stopped matching once the rows moved inside the pinned
+   `.cockpit-txdock`. The pins themselves came BACK on the base `.cw-macros` / `.cw-send`
+   rules (fix-round D4): the dock's own `flex: 0 0 auto` protects the rows today, but the
+   rows that key the rig carry their own belt, guarded in cockpit-shells.test.ts.) */
 .rtty-macros .cw-macro:disabled {
   opacity: 0.4;
 }
@@ -17891,7 +17886,15 @@ tr.sel .aprs-sym {
 .sstv-band {
   width: 100%;
   height: 100%;
-  min-height: 220px;
+  /* SELF-DISARMING FLOOR. `.sstv-canvas` is `flex: 1.1 1 0; min-height: 0` and its own
+     comment names px floors on flex children as "the documented vertical-clip bug" — this
+     child then re-introduced exactly one. Worse than usual, because the canvas is a ROW
+     flex container: `align-items: center` is the block axis there, so once the stage
+     computes below 220 px the band overflowed SYMMETRICALLY (top and bottom) and the
+     caption — the last child — vanished first, with no scrollbar in the chain (the SSTV
+     shell is `overflow: hidden`). `min(220px, 100%)` is the idiom that keeps the
+     comfortable size when there is room and yields the moment there is not. */
+  min-height: min(220px, 100%);
   display: flex;
   flex-direction: column;
   overflow: hidden;
