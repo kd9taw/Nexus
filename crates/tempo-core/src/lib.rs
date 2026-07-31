@@ -11,8 +11,6 @@
 //! [`channel::VirtualAir`]. A real `cpal` audio backend slots in behind the same
 //! frame-in/frame-out boundary later (see task #10).
 
-pub mod rotator;
-pub mod doppler;
 pub mod aprs;
 pub mod beacon;
 pub mod channel;
@@ -21,6 +19,7 @@ pub mod cw;
 pub mod cw_decode;
 pub mod cw_parse;
 pub mod diagnostics;
+pub mod doppler;
 pub mod eqsl;
 pub mod fd_rules;
 pub mod fieldday;
@@ -37,6 +36,7 @@ pub mod qso;
 pub mod qsy;
 pub mod reconcile;
 pub mod roster;
+pub mod rotator;
 pub mod rtty;
 pub mod spectrum;
 pub mod store;

@@ -1304,7 +1304,11 @@ fn parse_adif_time(t: &str) -> Option<(u32, u32, u32)> {
     let two = |a: usize| t.get(a..a + 2).and_then(|x| x.parse::<u32>().ok());
     match t.len() {
         4 => Some((two(0)?, two(2)?, 0)),
-        n if n >= 6 => Some((two(0).unwrap_or(0), two(2).unwrap_or(0), two(4).unwrap_or(0))),
+        n if n >= 6 => Some((
+            two(0).unwrap_or(0),
+            two(2).unwrap_or(0),
+            two(4).unwrap_or(0),
+        )),
         _ => None,
     }
 }
@@ -1318,10 +1322,7 @@ fn take_yes(f: &mut std::collections::HashMap<String, String>, k: &str) -> bool 
 
 /// Consume an `APP_TEMPO_UL_*` upload stamp: "{outcome}|{when}|{detail}" —
 /// splitn(3) so a detail containing '|' survives intact.
-fn take_upload(
-    f: &mut std::collections::HashMap<String, String>,
-    k: &str,
-) -> Option<UploadStatus> {
+fn take_upload(f: &mut std::collections::HashMap<String, String>, k: &str) -> Option<UploadStatus> {
     let v = f.remove(k)?;
     let mut it = v.splitn(3, '|');
     let outcome = UploadOutcome::from_code(it.next()?)?;
@@ -1555,8 +1556,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
         // reads as time-unknown. The false-negative (a genuine midnight QSO from
         // a source with no off-times) shows up honestly in the excluded count
         // and is one edit away from uploading.
-        time_known: time_on.is_some()
-            && !((h, mi, s) == (0, 0, 0) && time_off_unix.is_none()),
+        time_known: time_on.is_some() && !((h, mi, s) == (0, 0, 0) && time_off_unix.is_none()),
         time_off_unix,
         confirmed,
         award_confirmed,
@@ -1892,7 +1892,10 @@ mod tests {
         // and the writer emits QSO_DATE with NO fabricated TIME_ON.
         let dateonly = "<CALL:4>K1JT<QSO_DATE:8>20260701<BAND:3>20m<MODE:3>FT8<EOR>";
         let r = &parse_adif(dateonly)[0];
-        assert!(!r.time_known, "no TIME_ON → time unknown, not midnight-as-fact");
+        assert!(
+            !r.time_known,
+            "no TIME_ON → time unknown, not midnight-as-fact"
+        );
         assert_eq!(r.when_unix % 86_400, 0, "date keeps its midnight anchor");
         let out = adif_record(r);
         assert!(

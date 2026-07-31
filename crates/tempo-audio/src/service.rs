@@ -2906,7 +2906,8 @@ impl RadioLoop {
                         // Apply any pending DSP-func toggle from the UI promptly — the dial read
                         // proved the link is alive. Drain under the lock, RELEASE it, then do the
                         // set_func TCP round-trip so the UI thread never blocks on the socket.
-                        let func_reqs = Some(engine_lock(engine)).map(|mut e| e.take_func_requests());
+                        let func_reqs =
+                            Some(engine_lock(engine)).map(|mut e| e.take_func_requests());
                         if let Some(reqs) = func_reqs {
                             let mut changed = false;
                             for i in 0..RIG_FUNCS.len() {
@@ -2927,13 +2928,18 @@ impl RadioLoop {
                         // Apply pending RIT/XIT/VFO clarifier requests (CAT-panel controls). Drain
                         // under the lock, RELEASE it, then do the CAT round-trip. Write-only +
                         // optimistic — the snapshot already mirrors the commanded value.
-                        if let Some(hz) = Some(engine_lock(engine)).and_then(|mut e| e.take_rit_apply()) {
+                        if let Some(hz) =
+                            Some(engine_lock(engine)).and_then(|mut e| e.take_rit_apply())
+                        {
                             let _ = rig.set_rit(hz);
                         }
-                        if let Some(hz) = Some(engine_lock(engine)).and_then(|mut e| e.take_xit_apply()) {
+                        if let Some(hz) =
+                            Some(engine_lock(engine)).and_then(|mut e| e.take_xit_apply())
+                        {
                             let _ = rig.set_xit(hz);
                         }
-                        if let Some(vfo_b) = Some(engine_lock(engine)).and_then(|mut e| e.take_vfo_apply())
+                        if let Some(vfo_b) =
+                            Some(engine_lock(engine)).and_then(|mut e| e.take_vfo_apply())
                         {
                             let _ = rig.set_vfo(if vfo_b { "VFOB" } else { "VFOA" });
                         }
@@ -3619,13 +3625,11 @@ impl RadioLoop {
                             // Don't spin re-trying every 20 ms: clear the engine flag (so the
                             // REC badge stops lying) and surface why via the audio-error chip.
                             Err(e) => {
-                                {
-                                    let mut eng = engine_lock(engine);
-                                    eng.stop_qso_recording();
-                                    eng.set_audio_error(Some(format!(
-                                        "Could not start QSO recording: {e}"
-                                    )));
-                                }
+                                let mut eng = engine_lock(engine);
+                                eng.stop_qso_recording();
+                                eng.set_audio_error(Some(format!(
+                                    "Could not start QSO recording: {e}"
+                                )));
                             }
                         }
                     }
@@ -4446,8 +4450,7 @@ impl RadioLoop {
                                 // starts — the boundary tick's `now` would leave
                                 // the tail short by the whole build time.
                                 let now = now_unix_ms() - self.clock_offset_ms as f64;
-                                let waves =
-                                    eng.commit_tx(&plan, wave, self.clock.slot_index(now));
+                                let waves = eng.commit_tx(&plan, wave, self.clock.slot_index(now));
                                 (Some(waves), now)
                             }
                             // Planned to nothing: hand the empty result straight

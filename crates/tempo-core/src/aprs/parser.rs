@@ -226,7 +226,11 @@ pub fn parse(info: &[u8]) -> AprsInfo {
     let dti = dti_byte as char;
     // DTI is one byte; a non-ASCII first byte is "no DTI" — the whole field stays the body.
     // Everything downstream takes raw bytes and decodes only its free-text tail (see [`lossy`]).
-    let body: &[u8] = if dti_byte.is_ascii() { &info[1..] } else { info };
+    let body: &[u8] = if dti_byte.is_ascii() {
+        &info[1..]
+    } else {
+        info
+    };
 
     let parsed = match dti {
         '!' => Position::parse(body, false, false).map(AprsInfo::Position),

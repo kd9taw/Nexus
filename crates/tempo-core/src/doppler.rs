@@ -346,8 +346,7 @@ pub fn correction(
     Correction {
         downlink_hz: (legs.downlink && worth(want.downlink_hz, last.downlink_hz))
             .then_some(want.downlink_hz),
-        uplink_hz: (legs.uplink && worth(want.uplink_hz, last.uplink_hz))
-            .then_some(want.uplink_hz),
+        uplink_hz: (legs.uplink && worth(want.uplink_hz, last.uplink_hz)).then_some(want.uplink_hz),
     }
 }
 
@@ -439,7 +438,10 @@ mod tests {
         let t = rs44();
         let up_the_band = DopplerState { offset_hz: 10_000 };
         let a = tuning(&t, up_the_band, 0.0);
-        assert_eq!(a.downlink_hz, 435_650_000, "downlink follows the operator up");
+        assert_eq!(
+            a.downlink_hz, 435_650_000,
+            "downlink follows the operator up"
+        );
         assert_eq!(a.uplink_hz, 145_955_000, "inverting ⇒ uplink goes DOWN");
 
         // A NON-inverting transponder moves both the same way.
@@ -469,7 +471,7 @@ mod tests {
         // and their uplink must still be pointed at the same station.
         let t = rs44();
         let early_rate = -6.0; // approaching
-        // What the operator hears the station on, early in the pass:
+                               // What the operator hears the station on, early in the pass:
         let heard_at = tuning(&t, DopplerState { offset_hz: 8_000 }, early_rate).downlink_hz;
         // They tune the dial there manually; the engine adopts it.
         let state = follow_downlink(&t, heard_at, early_rate);
@@ -544,9 +546,15 @@ mod tests {
         assert_eq!(slot, TxPolicy::FreezeDuringOver);
         assert_eq!(manual, TxPolicy::Continuous);
 
-        assert!(slot.may_steer(false), "between overs the slot mode re-corrects");
+        assert!(
+            slot.may_steer(false),
+            "between overs the slot mode re-corrects"
+        );
         assert!(!slot.may_steer(true), "never mid-over on a slot mode");
-        assert!(manual.may_steer(true), "SSB/CW/FM steer while keyed — by design");
+        assert!(
+            manual.may_steer(true),
+            "SSB/CW/FM steer while keyed — by design"
+        );
         assert!(manual.may_steer(false));
     }
 
@@ -615,7 +623,10 @@ mod tests {
             BOTH,
             TxPolicy::FreezeDuringOver.may_steer(true),
         );
-        assert!(c.is_empty(), "no writes while a slot-mode over is in flight");
+        assert!(
+            c.is_empty(),
+            "no writes while a slot-mode over is in flight"
+        );
     }
 
     #[test]
@@ -623,9 +634,19 @@ mod tests {
         // Receive-only satellite listening must not write an uplink anywhere.
         let t = rs44();
         let want = tuning(&t, DopplerState::default(), 5.0);
-        let c = correction(want, SentTuning::default(), 0, lim(20, 1_000), DOWN_ONLY, true);
+        let c = correction(
+            want,
+            SentTuning::default(),
+            0,
+            lim(20, 1_000),
+            DOWN_ONLY,
+            true,
+        );
         assert!(c.downlink_hz.is_some());
-        assert_eq!(c.uplink_hz, None, "downlink-only must never key a frequency");
+        assert_eq!(
+            c.uplink_hz, None,
+            "downlink-only must never key a frequency"
+        );
     }
 
     #[test]
@@ -689,10 +710,17 @@ mod tests {
         );
         let s = follow_downlink_in_band(&t, heard_centre, rate)
             .expect("the dial the operator actually hears the centre at is in band");
-        assert!(s.offset_hz.abs() <= 20, "recovers ~centre, got {}", s.offset_hz);
+        assert!(
+            s.offset_hz.abs() <= 20,
+            "recovers ~centre, got {}",
+            s.offset_hz
+        );
 
         // The same raw number WITHOUT undoing Doppler would be off by the shift.
         let naive = heard_centre as i64 - t.downlink_centre_hz as i64;
-        assert!(naive.abs() > 5_000, "guard: the naive answer really is wrong");
+        assert!(
+            naive.abs() > 5_000,
+            "guard: the naive answer really is wrong"
+        );
     }
 }

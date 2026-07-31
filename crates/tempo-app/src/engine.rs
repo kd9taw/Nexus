@@ -18162,7 +18162,10 @@ mod tests {
         e.sat_doppler_tick(rate, 1_000, false);
 
         // The operator tunes UP 5 kHz to chase somebody.
-        assert!(e.sat_observe_operator_tune(435_645_000), "in-band knob move is adopted");
+        assert!(
+            e.sat_observe_operator_tune(435_645_000),
+            "in-band knob move is adopted"
+        );
         let now = e
             .sat_tuning_now(rate)
             .expect("Doppler is on and a transponder is held");

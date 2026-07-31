@@ -502,8 +502,8 @@ mod tests {
         // invisible in review. Pin it against the range actually changing.
         let tle = iss();
         let obs = (0.0, 0.0); // equator/prime meridian: the observer-rotation term is largest here
-        // Walk a full orbit in 30 s steps; at every sample the sign of ṙ must
-        // agree with the direction the measured range is moving.
+                              // Walk a full orbit in 30 s steps; at every sample the sign of ṙ must
+                              // agree with the direction the measured range is moving.
         let mut checked_receding = 0;
         let mut checked_approaching = 0;
         for k in 0..180 {
@@ -514,9 +514,9 @@ mod tests {
                 continue;
             };
             let measured = (r1 - r0) / 2.0; // km/s by finite difference
-            // Only judge samples where the motion is unambiguous (away from the
-            // turning point at TCA, where the finite difference is dominated by
-            // curvature rather than by the rate itself).
+                                            // Only judge samples where the motion is unambiguous (away from the
+                                            // turning point at TCA, where the finite difference is dominated by
+                                            // curvature rather than by the rate itself).
             if measured.abs() < 0.5 {
                 continue;
             }
@@ -558,7 +558,10 @@ mod tests {
                 continue;
             };
             assert!(range > 300.0 && range < 45_000.0, "range {range} km at {t}");
-            assert!(rate.abs() < 8.0, "range-rate {rate} km/s at {t} is unphysical");
+            assert!(
+                rate.abs() < 8.0,
+                "range-rate {rate} km/s at {t} is unphysical"
+            );
             // The look_at path must agree that this is the same geometry.
             assert!(look_at(&tle, obs, t).is_some());
             saw += 1;

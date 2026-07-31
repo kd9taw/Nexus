@@ -169,10 +169,7 @@ pub fn parse_transmitters(json: &str) -> Vec<Transmitter> {
             // Absent/garbage `invert` reads as NON-inverting: that is the safe
             // default (the FM/beacon majority), and a wrongly-inverted uplink
             // transmits somewhere the operator never intended.
-            invert: item
-                .get("invert")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            invert: item.get("invert").and_then(Value::as_bool).unwrap_or(false),
             uplink_high_hz: item.get("uplink_high").and_then(Value::as_u64),
             downlink_high_hz: item.get("downlink_high").and_then(Value::as_u64),
             uplink_mode: item
@@ -333,7 +330,10 @@ mod tests {
 
         let fm = &x[1];
         assert!(!fm.invert);
-        assert!(!fm.is_linear(), "an FM repeater is a channel, not a passband");
+        assert!(
+            !fm.is_linear(),
+            "an FM repeater is a channel, not a passband"
+        );
         // A single-frequency channel: centre IS the frequency.
         assert_eq!(fm.downlink_centre_hz(), Some(437_800_000));
         assert_eq!(fm.uplink_centre_hz(), Some(145_990_000));

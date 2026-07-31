@@ -125,7 +125,10 @@ mod tests {
         // Without this the relays chatter for the whole pass — audible in the
         // shack and hard on the controller.
         let cfg = RotatorConfig::default(); // 2° az/el
-        assert!(worth_moving((100.0, 30.0), None, &cfg), "first point always goes");
+        assert!(
+            worth_moving((100.0, 30.0), None, &cfg),
+            "first point always goes"
+        );
         assert!(!worth_moving((100.5, 30.5), Some((100.0, 30.0)), &cfg));
         assert!(worth_moving((103.0, 30.0), Some((100.0, 30.0)), &cfg));
         assert!(worth_moving((100.0, 33.0), Some((100.0, 30.0)), &cfg));
@@ -149,7 +152,10 @@ mod tests {
         // a rotator that cannot flip must not be commanded past its stop.
         let (az, el) = point_for(100.0, 100.0, &cfg);
         assert_eq!(az, 100.0);
-        assert!(el > 90.0, "no flip ⇒ elevation is passed through, az untouched");
+        assert!(
+            el > 90.0,
+            "no flip ⇒ elevation is passed through, az untouched"
+        );
 
         cfg.allow_flip = true;
         let (az, el) = point_for(100.0, 100.0, &cfg);

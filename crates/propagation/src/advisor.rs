@@ -607,14 +607,9 @@ mod tests {
         // canonical Region order must give the same answer on every build.
         use std::collections::{HashMap, HashSet};
         let mk = || {
-            let mut by_region: HashMap<Region, (HashSet<String>, HashSet<String>)> =
-                HashMap::new();
+            let mut by_region: HashMap<Region, (HashSet<String>, HashSet<String>)> = HashMap::new();
             for r in [Region::Europe, Region::SouthAmerica, Region::Africa] {
-                by_region
-                    .entry(r)
-                    .or_default()
-                    .0
-                    .insert("K1JT".to_string());
+                by_region.entry(r).or_default().0.insert("K1JT".to_string());
             }
             by_region
         };
