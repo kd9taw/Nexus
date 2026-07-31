@@ -227,6 +227,13 @@
   overflow-y: auto;
   z-index: 80;
 }
+/* While the update banner is up it sits in the same bottom-right corner at z 8000 and
+   totally covers the NEWEST toast (z 80, column-appended) — including its `Work →` button.
+   Lift the whole toast stack above the banner's ~60px + a gap for that window; both live
+   inside `.app`, so :has() sees the banner directly. */
+.app:has(.update-banner) .ui-toast-viewport {
+  bottom: calc(var(--space-4) + 72px);
+}
 .ui-toast {
   display: flex;
   align-items: flex-start;
@@ -1122,8 +1129,16 @@ button.nb-chip:hover {
   border-color: var(--accent);
 }
 /* Annual DX marathon card. */
-.jy-marathon {
+.panel.jy-marathon {
   display: flex;
+  /* Explicit ROW, and it must OUTRANK `.panel { flex-direction: column }` — the element
+     carries both classes. A bare `.jy-marathon` (0,1,0) sits EARLIER in the sheet than
+     `.panel` (0,1,0), so its `row` lost on source order and shipped dead: the card
+     still stacked vertically under a comment asserting row (review 2026-07-31 — the
+     same dead-fix class the shell valve had). `.jy-hero` happens to sit AFTER `.panel`
+     and wins on order; this card can't, so pin it with specificity instead. Guarded by
+     cockpit-shells.test.ts (computed winner must be row, for both cards). */
+  flex-direction: row;
   align-items: baseline;
   gap: var(--space-3);
   flex-wrap: wrap;
@@ -1340,11 +1355,17 @@ button.nb-chip:hover {
   gap: var(--space-3);
   padding: var(--space-3);
   grid-template-columns: var(--cn-rail, 300px) minmax(0, 1fr) var(--cn-rail, 300px);
-  /* Strip row capped at 30% of the EFFECTIVE (zoom-corrected) viewport height (not bare
-     `auto`, and not raw `30vh` which ignores the app's `zoom` and over-tall the strip):
-     a tall pane reassigned into the strip scrolls inside its own body instead of stealing
-     height from the globe's 1fr rows. --vh-eff is published by useViewport. */
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, calc(0.3 * var(--vh-eff, 100vh)));
+  /* Strip row: CONTENT-sized, with the 30%-of-effective-viewport ceiling on the PANES
+     (`.connect-strip > .pane-frame` below), NOT on the track. Two dead spellings of a
+     track cap shipped here — `minmax(0, X)` and then `minmax(auto, X)`: grid
+     maximize-tracks (css-grid §11.6) grows ANY fixed-max track to its growth limit
+     BEFORE the fr rows expand, and the min sizing function plays no part in that step —
+     so both were a "cap" that always paid out, holding the full X open and stealing it
+     from the globe's 1fr rows on every tall window (review 2026-07-31, verified in
+     Chrome: minmax(0,300px) and minmax(auto,300px) both render 300px). An `auto` track
+     is exactly as tall as its tallest (max-height-capped) pane; a tall pane reassigned
+     into the strip scrolls inside its own .pane-body. */
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
   grid-template-areas:
     'left1  center right1'
     'left2  center right2'
@@ -1462,6 +1483,14 @@ button.nb-chip:hover {
   grid-template-columns: repeat(3, 1fr);
   gap: var(--space-3);
   min-width: 0;
+}
+/* The strip's real cap (see the `.connect` grid-template-rows comment): max-height on a
+   BOX genuinely bounds it, unlike a track max, so the auto strip row sizes to its
+   tallest pane and never past 30% of the zoom-corrected viewport — a taller pane
+   scrolls inside its own `.pane-body { overflow:auto }`. --vh-eff via useViewport;
+   raw 30vh is zoom-blind. */
+.connect-strip > .pane-frame {
+  max-height: calc(0.3 * var(--vh-eff, 100vh));
 }
 
 /* Slot wrapper — reuses the retired .connect-side glass so panes float over the globe. */
@@ -3302,6 +3331,16 @@ body.resizing {
    (see .connect-shell). Targeted via :has() so Log/Settings keep their block+scroll.
    Same fix the detached window already applies. */
 .layout.single:has(> .connect-shell) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* Memories must flex-FILL too — under block+scroll `.memories-view { flex:1; min-height:0 }`
+   is inert, `.mv-scroll` never becomes the scroller, and the table's sticky header anchors
+   to a scrollport that never moves (it only worked in the detached window, whose
+   `.app.detached` is already a definite-height flex column). Same :has() escape as
+   `.connect-shell` above. */
+.layout.single:has(> .memories-view) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -5226,6 +5265,11 @@ select optgroup {
 }
 .logconfirm {
   width: min(420px, 92vw);
+  /* Zoom-corrected cap + internal scroll: uncapped under the centering backdrop, a short
+     window pushed the head/actions symmetrically past both edges with nothing scrollable
+     (same class as `.mv-packs`; --vh-eff because raw vh is zoom-blind). */
+  max-height: calc(0.9 * var(--vh-eff, 100vh));
+  overflow-y: auto;
   padding: var(--space-5);
   border-radius: var(--radius-md, 12px);
   border: 1px solid var(--border);
@@ -5321,6 +5365,8 @@ select optgroup {
   border-color: var(--state-weak);
 }
 .purge-confirm {
+  /* Renders on `class="logconfirm purge-confirm"` — the viewport cap + scroll come from
+     `.logconfirm` above; only the width differs. */
   width: min(480px, 94vw);
 }
 .logconfirm-sub.danger {
@@ -5505,6 +5551,11 @@ select optgroup {
 /* Hero: level + XP + next milestone. */
 .jy-hero {
   display: flex;
+  /* Explicit ROW: the element also carries `.panel`, whose `flex-direction: column`
+     otherwise survives this rule (it declares no direction) — turning `.jy-level`'s
+     `flex-basis: 260px` into a 260px-tall empty band and `align-items:center` into
+     horizontal squeeze. */
+  flex-direction: row;
   align-items: center;
   gap: var(--space-4);
   /* A slim strip, not a billboard: at high levels with no next-milestone the
@@ -5898,21 +5949,24 @@ select optgroup {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  /* With `.cw-lower` floored, a short window overflows the COCKPIT — scroll here rather than
-     letting the flex column crush its children (mirrors `.phone-cockpit`). */
+  /* THE DEFICIT VALVE (mirrors `.layout.single.phone-cockpit` — see the full story there).
+     This block used to carry BOTH eras' intents: `overflow-y:auto` ("scroll rather than
+     crush") followed by the Phase-3 `overflow:hidden` ("the view never scrolls") — and the
+     later SHORTHAND won by in-block declaration order, so the scroll comment was a lie and
+     a short window clipped the log strip unreachably. One declaration now, one truth: the
+     shell scrolls ONLY on genuine deficit. Guarded by cockpit-shells.test.ts (which checks
+     same-block shorthand resets for exactly this trap). */
   overflow-y: auto;
-  /* Bounded (Phase 3): scope pinned, keyer/macros/send/log pinned; the lower region holds the
-     removable + seam-resizable content panes and scrolls inside them — the view never scrolls. */
-  overflow: hidden;
   min-height: 0;
 }
-/* Bounded lower region: the removable panes under the scope. The four content panes carry the
-   `panel` class → share-driven flex + seam-resizable; the thin control strips sit at content height. */
-/* Floored like `.ph-lower`: the decode + band activity get a guaranteed minimum that the log
-   form and recall line below cannot take. CW has the same pressure Phone did. */
+/* Lower region: the removable panes under the scope; the content panes carry the `panel`
+   class, the thin control strips sit at content height. It KEEPS `flex: 1 1 auto` — unlike
+   Phone's band strip, CW decode TEXT genuinely uses surplus height — but the 18em floor is
+   gone: its premise (deficit "scrolls at the cockpit level") was dead while the shell was
+   `overflow:hidden`, so the floor just pushed the log strip off the clipped bottom. The
+   shell is the deficit valve now (see `.layout.single.cw-cockpit`); no floor needed. */
 .cw-lower {
   flex: 1 1 auto;
-  min-height: 18em;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -6171,7 +6225,12 @@ input.cw-pitch::-webkit-inner-spin-button {
   cursor: pointer;
 }
 /* A multi-line, auto-scrolling transcript — decoded Morse persists here (it no longer
-   vanishes as the audio window slides); older text scrolls up, newest stays in view. */
+   vanishes as the audio window slides); older text scrolls up, newest stays in view.
+   Fills its pane, RTTY-style: `.cw-decode` is a flex column, and in the CW cockpit the
+   DECODE panel is the sole grower (`.cw-lower > .cw-decode.panel { flex:1 1 0 }`) — but
+   this rule's old `height: 6.5em` kept the transcript itself a fixed strip, so the grown
+   pane just wrapped ~5 lines in dead space. Same class of bug RTTY already fixed at
+   `.rtty-stream .cw-decode-text`; the SENT echo opts back out below. */
 .cw-decode-text {
   font-family: var(--font-mono);
   font-size: 14px;
@@ -6179,7 +6238,9 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  height: 6.5em;
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
   overflow-y: auto;
 }
 .cw-decode-idle {
@@ -6200,6 +6261,10 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--accent, #4ea1ff);
 }
 .cw-sent-panel .cw-decode-text {
+  /* The SENT echo stays a FIXED 4em internal scroller by design (its panel is
+     `flex: 0 0 auto`). The base transcript is a flex-fill now, whose `flex-basis: 0`
+     would silently override this `height` — pin `flex: 0 0 auto` so 4em stays real. */
+  flex: 0 0 auto;
   height: 4em;
 }
 .cw-sent-line {
@@ -6970,31 +7035,37 @@ input.cw-pitch::-webkit-inner-spin-button {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  /* Bounded (Phase 3): scope pinned, TX chrome pinned, the lower region fills + scrolls
-     inside Band Activity — the whole view never scrolls. */
-  overflow: hidden;
+  /* THE DEFICIT VALVE. The Phase-3 "whole view never scrolls" doctrine put
+     `overflow:hidden` here; combined with the `.ph-lower` floor it CLIPPED the log form,
+     recall and part of the voice keyer unreachably on every window the fit-scaler can
+     produce (operator screenshots, 2026-07-30 — the cockpit's minimum is ~1240-1300px
+     against a 900px fit target). A bare `.phone-cockpit { overflow-y:auto }` fix was
+     added below but silently LOST the cascade to this rule ((0,1,0) vs (0,3,0)) — the
+     recurrence engine: both behaviors were asserted, the hidden one won. The shell is
+     now the valve: it scrolls ONLY when content genuinely exceeds the window; when it
+     fits, no scrollbar appears and window surplus rests below the pinned tail, where
+     the scope's Splitter can claim it (the scope must stay grow 0 or the drag dies —
+     see `.phone-cockpit .ph-scope-panel`).
+     Guarded by cockpit-shells.test.ts, which computes the cascade winner. */
+  overflow-y: auto;
   min-height: 0;
 }
-/* Bounded lower region: the removable panes under the scope. Band Activity fills; the thin
-   control strips (rig scope / DSP) sit at content height above it. */
-/* THE FLOOR. The panes you operate from — DSP, the RX levels, Band Activity — get a guaranteed
-   minimum height that nothing below can take. Anything that does not fit (the log form, the
-   recall line) scrolls at the cockpit level instead of crushing this region.
-   Operator, 2026-07-25: the region collapsed the moment the recall card appeared under "Log this
-   QSO". Capping that one card would have fixed this instance; a floor fixes the RULE, so the
-   next thing added below cannot do it again. Same discipline as `.cw-lower`. */
+/* Lower region: the removable panes under the scope (rig scope / DSP / Band Activity), each
+   at content height. The 18em floor that lived here was THE manufactured empty band: its
+   premise — "anything that does not fit scrolls at the cockpit level" — was dead (the shell
+   was `overflow:hidden`, see the valve comment above), so the floor could only clip the log
+   form below it while holding ~130px of empty black open above (operator screenshots,
+   2026-07-30). With the shell now the real valve, no floor is needed: the region is exactly
+   its content, the shell scrolls on genuine deficit, and nothing below can crush these panes
+   because nothing here shrinks (children pin `flex: 0 0 auto`). */
 .ph-lower {
-  flex: 1 1 auto;
-  min-height: 18em;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  /* Scroll (don't clip) — same fix as `.cw-lower`: overflow:hidden was cutting the stacked
-     control panes + the Band Activity spot lines off the bottom with no way to reach them. */
-  overflow-y: auto;
 }
 /* Every child sits at CONTENT height and never shrinks below it, so nothing gets crushed or
-   clipped; a real vertical deficit flows to `.ph-lower { overflow-y:auto }` and scrolls instead.
+   clipped; a real vertical deficit flows to the cockpit shell's `overflow-y:auto` and scrolls.
    Byte-for-byte the treatment `.cw-lower > *` got — Phone had only `flex-shrink:0`, which leaves
    flex-basis at `auto` and still let panes lose height to a grower. Operator report 2026-07-25:
    the Band Activity spot lines were being lost the same way CW's were. */
@@ -7006,8 +7077,8 @@ input.cw-pitch::-webkit-inner-spin-button {
 .ph-lower > .panel {
   overflow: auto;
 }
-/* Band Activity is the SOLE grower and the primary area: it fills the lower region and floors
-   large so it stays dominant.
+/* Band Activity sits at CONTENT height like its siblings (the grower rule it had is gone —
+   see the `.ph-band-pane` rule below for why growing was the "empty black box").
    `--pane-share` is deliberately GONE. The seam-resize sliders were removed from CW in 0.17.11
    ("sliders have little value here") but Phone kept the variable, so a stale share left over from
    a dragged seam still skewed this pane's grow factor with no slider left to correct it. Phone
@@ -7044,8 +7115,14 @@ input.cw-pitch::-webkit-inner-spin-button {
   border-bottom: 1px solid var(--border-soft);
 }
 .ph-band-pane {
-  flex: 1 1 0;
-  min-height: 6em;
+  /* Content height, NOT a grower. This was `flex: 1 1 0; min-height: 6em` — but the
+     BandStrip inside is a fixed-height strip that cannot stretch, so every px of grow
+     rendered as empty black below it (the operator's "empty black box"). Vertical
+     surplus is the operator's to give to the scope via its Splitter (the pane that
+     shows more signal with height). NB with basis `auto` + shrink 0 this box is always
+     exactly content height, so the `overflow:auto` below cannot engage today — it is
+     armed for a future height cap, not a claim that anything scrolls here now. */
+  flex: 0 0 auto;
   overflow: auto;
 }
 /* The PTT row never shrinks/clips — push-to-talk stays reachable no matter the window.
@@ -7053,11 +7130,10 @@ input.cw-pitch::-webkit-inner-spin-button {
    needed (operator, 2026-07-25: "if we need more space, make the voice keyer and push to talk
    sections smaller"). Trimmed, not shrunk to nothing — PTT stays a comfortable hold-target,
    because a fiddly transmit control is a worse problem than a short spot list. */
-.phone-cockpit {
-  /* With `.ph-lower` floored, a short window overflows the COCKPIT — scroll here rather than
-     letting the flex column crush its children. */
-  overflow-y: auto;
-}
+/* (A bare `.phone-cockpit { overflow-y:auto }` block lived here — it was DEAD code:
+   (0,1,0) loses to `.layout.single.phone-cockpit` (0,3,0), so its "scroll here" comment
+   described behavior that never happened. The live valve is on the triple-class shell
+   rule above; see the comment there.) */
 .phone-cockpit .ph-ptt-row {
   flex: 0 0 auto;
   gap: var(--space-3);
@@ -10550,6 +10626,11 @@ select.settings-input {
 }
 .radio-picker {
   width: min(520px, 92vw);
+  /* Zoom-corrected cap + internal scroll — under `place-items:center` an uncapped box
+     overflows both edges unreachably on short/pinned-zoom windows (same class as
+     `.logconfirm` / `.mv-packs`). */
+  max-height: calc(0.9 * var(--vh-eff, 100vh));
+  overflow-y: auto;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -12753,6 +12834,18 @@ html[data-panel='needed'] {
   color: var(--text-faint);
   text-align: center;
 }
+/* Center the empty state in the scroller (`.np-grid` is flex:1 → definite height) instead
+   of pinning a one-liner to the top of a full-height bordered box — the `.mv-empty`
+   treatment. :has() flips to a flex column only while the empty child is present, so
+   populated rows keep the plain block scroller. Scoped to `.np-grid`: AprsCockpit reuses
+   `.np-empty` under a different, content-height parent that cannot center CSS-only. */
+.np-grid:has(> .np-empty) {
+  display: flex;
+  flex-direction: column;
+}
+.np-grid > .np-empty {
+  margin: auto;
+}
 
 /* ── NeededPanel: filter bar + evidence line ───────────────────────────────── */
 /* Filter toggle button (funnel icon) in the panel header. */
@@ -13025,6 +13118,14 @@ html[data-panel='needed'] {
   color: var(--text-faint);
   font-size: 0.85rem;
   text-align: center;
+}
+/* Center in the roster scroller when empty — same `.mv-empty` treatment as `.np-grid`. */
+.or-grid:has(> .or-empty) {
+  display: flex;
+  flex-direction: column;
+}
+.or-grid > .or-empty {
+  margin: auto;
 }
 
 /* TX/RX status strip — the at-a-glance "is it working" line under the cockpit
@@ -15307,7 +15408,10 @@ html[data-panel='needed'] {
 .detached-waterfall {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* Zoom-corrected: the pop-out branch carries `.app` (zoom applies there), so raw 100vh
+     would overshoot the window by the zoom factor and clip the bottom of the waterfall.
+     --vh-eff = innerHeight/zoom; the fallback covers a first paint before useViewport runs. */
+  height: var(--vh-eff, 100vh);
   padding: var(--space-2);
 }
 .detached-waterfall > :first-child {
@@ -15343,21 +15447,34 @@ html[data-panel='needed'] {
 /* Per-cockpit scope heights: scoped vars so dragging one cockpit's scope never
    resizes the other (they share .ph-scope-panel). The splitter clamps 100–420 px. */
 .cw-cockpit .ph-scope-panel {
-  /* Pinned scope (Phase 3): exactly the operator-dragged --cw-scope-h; the bounded lower region
-     takes the rest. No px floor (px floors on flex children are the documented vertical-clip bug). */
-  flex: 0 0 var(--cw-scope-h, 22vh);
+  /* GROW 0 — the drag must BE the height. A previous repair made the scope a grower
+     (`flex: 1 1 <basis>`) so surplus would "show more signal", but a grower's resolved
+     height no longer follows its basis — here it split surplus 1:1 with `.cw-lower` and
+     the seam tracked the pointer at half rate; in Phone (sole grower) the Splitter's
+     --ph-scope-h was fully inert at every geometry (review 2026-07-31). This is the
+     COMPLETE Operate pattern, not just its clamps: `.cockpit-waterfall { flex: 0 1
+     var(--cockpit-wf-h, 22%) }` keeps grow 0 and lets the decode scroller take the
+     surplus — here `.cw-lower { flex: 1 1 auto }` is that sink (decode text genuinely
+     uses height). Shrink 1 down to an 8em always-visible floor (the scope must never be
+     hideable) and the 45% zoom-corrected cap (raw vh is zoom-blind) keep a stale
+     persisted % structurally harmless. The % basis resolves against the flex container.
+     Guarded by cockpit-shells.test.ts (winning flex-grow must compute to 0). */
+  flex: 0 1 var(--cw-scope-h, 22%);
   height: auto;
-  min-height: 0;
-  max-height: none;
+  min-height: 8em;
+  max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
 .phone-cockpit .ph-scope-panel {
-  /* Pinned scope (Phase 3): its height is exactly the operator-dragged --ph-scope-h (the
-     Splitter sets it); the bounded lower region takes the rest. No px floor (px floors on
-     flex children are the documented vertical-clip bug). */
-  flex: 0 0 var(--ph-scope-h, 22vh);
+  /* GROW 0 — same repair as the CW twin above, one difference in where surplus rests:
+     Phone's other children are all pinned chrome (no scroller wants height), so on a
+     tall window the spare height sits BELOW the log strip instead of silently inflating
+     the scope. That band is real estate the drag now actually controls — pull the seam
+     down and the scope keeps it (as the sole grower this control did nothing at all:
+     rendered height was basis-independent, measured identical at 12/30/52/90%). */
+  flex: 0 1 var(--ph-scope-h, 22%);
   height: auto;
-  min-height: 0;
-  max-height: none;
+  min-height: 8em;
+  max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
 /* Horizontal (height-dragging) splitter variant of the workspace .pane-splitter. */
 .pane-splitter.horizontal {
@@ -15549,6 +15666,18 @@ html[data-panel='needed'] {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
+}
+/* Center the "fetch repeaters" / "no repeaters" hint in both Program scrollers when empty
+   (the `.mv-empty` treatment) — `.aw-empty` is otherwise a top-pinned <p> in a tall box.
+   Awards/POTA reuse `.aw-empty` inside content-height panels on a block-scrolled page,
+   where a CSS-only center is not possible — those keep the plain top anchor. */
+.rp-results:has(> .aw-empty) {
+  display: flex;
+  flex-direction: column;
+}
+.rp-results > .aw-empty,
+.rp-chan-rows > .aw-empty {
+  margin: auto;
 }
 .rp-row {
   display: grid;
@@ -16319,7 +16448,10 @@ html[data-panel='needed'] {
 }
 .mv-packs {
   width: min(560px, 100%);
-  max-height: 86vh;
+  /* Zoom-corrected: this modal is NOT portaled, so it lives inside .app's zoom. A raw 86vh
+     over-talls at 110/125% UI zoom and puts the head + close button above the window top,
+     unreachable (they are inside the scroller). Same fix as `.roam-modal-body`. */
+  max-height: calc(0.86 * var(--vh-eff, 100vh));
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
@@ -16475,9 +16607,11 @@ html[data-panel='needed'] {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  /* Bounded (Phase 3): the RX canvas + TX bar are pinned; the lower region holds the two
-     resizable panels and scrolls INSIDE them — the whole view never scrolls. */
-  overflow: hidden;
+  /* THE DEFICIT VALVE (same repair as `.layout.single.phone-cockpit` — full story there).
+     The Phase-3 `overflow:hidden` assumed the lower panes absorb any deficit; when they
+     bottomed out, the tail (Send bar / gallery) clipped with no way to reach it. These
+     cockpits' content usually fits, so the scrollbar appears only on genuine deficit. */
+  overflow-y: auto;
   min-height: 0;
 }
 /* Pinned TX bar — mode/Send/Stop/progress. Never a panel; Stop always reachable. */
