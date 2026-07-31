@@ -3409,6 +3409,65 @@ fn iss_pass_from_tles(
         })
 }
 
+/// Select the transponder to work on the tracked bird — the one call that puts
+/// the radio under Doppler control, and the one that hands it back.
+///
+/// The SatNOGS record is translated here rather than in the engine because this
+/// is the layer that owns the satellite database (tempo-app deliberately has no
+/// `propagation` dependency). A transponder with no usable downlink is REFUSED
+/// rather than silently centred on zero.
+///
+/// `index` is the position in the list `get_sat_detail` returned; `None` clears
+/// the selection and returns the dial to the operator.
+#[tauri::command]
+async fn set_sat_transponder(
+    state: State<'_, SharedEngine>,
+    name: String,
+    index: Option<usize>,
+) -> Result<(), String> {
+    let Some(index) = index else {
+        engine_lock(&state).set_sat_transponder(None);
+        return Ok(());
+    };
+    let tles = load_tles().await?;
+    let norad = tles
+        .iter()
+        .find(|t| t.name.eq_ignore_ascii_case(name.trim()))
+        .and_then(|t| propagation::sat::norad_id(&t.line1))
+        .ok_or_else(|| format!("{name}: not in the TLE set"))?;
+
+    let snap = satnogs_snapshot(vec![norad])
+        .ok_or_else(|| "satellite data not fetched yet — open the bird's detail first".to_string())?;
+    let tp = snap
+        .transmitters
+        .iter()
+        .filter(|t| t.norad == norad && t.alive)
+        .nth(index)
+        .ok_or_else(|| format!("{name}: no transponder #{index}"))?
+        .clone();
+
+    let down = tp
+        .downlink_centre_hz()
+        .ok_or_else(|| format!("{}: no downlink frequency to tune", tp.description))?;
+    // Half-width from the passband when there is one; a channel gets 0, which
+    // pins the operator's offset (nothing to tune inside an FM repeater).
+    let half = match (tp.downlink_low_hz, tp.downlink_high_hz) {
+        (Some(lo), Some(hi)) if hi > lo => (hi - lo) / 2,
+        _ => 0,
+    };
+    let label = format!("{}|{}", name.trim(), tp.description);
+    engine_lock(&state).set_sat_transponder(Some((
+        label,
+        tempo_core::doppler::Transponder {
+            uplink_centre_hz: tp.uplink_centre_hz().unwrap_or(0),
+            downlink_centre_hz: down,
+            invert: tp.invert,
+            half_width_hz: half,
+        },
+    )));
+    Ok(())
+}
+
 /// Per-bird detail for the Satellites section: SatNOGS status + transponders
 /// (absent fields when we've never fetched — offline honesty) and the
 /// current/next pass with its az/el sky track for the polar plot.
@@ -3533,10 +3592,10 @@ async fn start_sat_track(
     name: String,
     aos_unix: Option<i64>,
 ) -> Result<Option<SatTrackDto>, String> {
-    let (mygrid, addr) = {
+    let (mygrid, addr, rot_cfg) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
-        (st.mygrid.clone(), effective_rotator_addr(st))
+        (st.mygrid.clone(), effective_rotator_addr(st), st.rotator_config())
     };
     let Some(addr) = addr else {
         return Ok(None);
@@ -3560,6 +3619,8 @@ async fn start_sat_track(
         return Ok(None);
     };
     let gen = SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    // The pass drives Doppler as well as the rotor, so the loop needs the engine.
+    let dop_engine: SharedEngine = (*state).clone();
     let initial = SatTrackDto {
         name: tle.name.clone(),
         state: if now < pass.aos_unix - 300 {
@@ -3587,6 +3648,9 @@ async fn start_sat_track(
         use propagation::sat;
         use std::sync::atomic::Ordering;
         let mut azel_ok = true; // az-only rotors: fall back, probe to recover
+        // What the rotator was last actually TOLD — the deadband compares
+        // against this, not against where the bird is.
+        let mut last_cmd: Option<(f64, f64)> = None;
         let mut az_only_ticks = 0u32;
         let mut misses = 0u32;
         let update_badge = |dto: SatTrackDto| {
@@ -3626,6 +3690,42 @@ async fn start_sat_track(
                     None => break, // propagation diverged — stop honestly
                 }
             };
+            // DOPPLER. Only once the bird is actually up: correcting during the
+            // armed/prepositioning phases would move the operator's dial before
+            // there is anything to hear. Everything else — the rate limits, the
+            // freeze-during-over policy, the VFO mapping, whether the operator
+            // opted in at all — is decided inside `sat_doppler_tick`, so this
+            // stays a loop rather than growing satellite policy.
+            if phase == "tracking" {
+                if let Some((_, rate)) = sat::range_rate(&tle, obs, t) {
+                    let keyed = {
+                        let eng = engine_lock(&dop_engine);
+                        eng.snapshot().radio.transmitting
+                    };
+                    let now_ms = (t as u64).saturating_mul(1_000);
+                    let mut eng = engine_lock(&dop_engine);
+                    let _ = eng.sat_doppler_tick(rate, now_ms, keyed);
+                }
+            }
+            // Mechanical policy: flip over the top on a high pass (opt-in),
+            // then apply the calibration trim. `az`/`el` from here on are what
+            // the ROTATOR should be told, which is not always where the bird is.
+            let (az, el) = tempo_core::rotator::point_for(az, el, &rot_cfg);
+            // Deadband: skip a command the rotator would treat as noise, or the
+            // relays chatter for the whole pass. The badge still updates, so the
+            // operator sees tracking continue.
+            if !tempo_core::rotator::worth_moving((az, el), last_cmd, &rot_cfg) {
+                update_badge(SatTrackDto {
+                    name: tle.name.clone(),
+                    state: phase.to_string(),
+                    az_deg: az,
+                    el_deg: if azel_ok { el } else { 0.0 },
+                    aos_unix: pass.aos_unix,
+                    los_unix: pass.los_unix,
+                });
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                continue;
+            }
             // Stop pressed while we computed? Re-check right before the wire
             // write — narrows the one-command-after-halt window to microseconds.
             if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
@@ -3666,6 +3766,7 @@ async fn start_sat_track(
             };
             if sent {
                 misses = 0;
+                last_cmd = Some((az, el));
                 update_badge(SatTrackDto {
                     name: tle.name.clone(),
                     state: phase.to_string(),
@@ -3687,6 +3788,23 @@ async fn start_sat_track(
         // LOS / rotor lost: halt the rotor and clear the badge if still ours
         // (gen check INSIDE the lock — a newer track's badge must survive).
         let _ = tempo_audio::rotator::stop(&addr);
+        // Post-pass: park or go to ready ONLY if the operator asked for it —
+        // the default leaves the mast exactly where the pass finished, because
+        // moving a mast nobody asked to move is the one unrecoverable
+        // surprise here. Guarded by the generation: a newer track already owns
+        // the rotor and must not have its pointing yanked to a park position.
+        if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
+            if let Some((paz, pel)) = tempo_core::rotator::post_pass_target(&rot_cfg) {
+                let (paz, pel) = tempo_core::rotator::point_for(paz, pel, &rot_cfg);
+                if tempo_audio::rotator::point_azel(&addr, paz, pel).is_err() {
+                    let _ = tempo_audio::rotator::point(&addr, paz);
+                }
+            }
+        }
+        // The pass no longer owns the dial: hand the radio back to the operator
+        // rather than holding it under a Doppler correction for a bird that has
+        // set (also clears the TX gate's satellite tuning identity).
+        engine_lock(&dop_engine).set_sat_transponder(None);
         if let Ok(mut g) = SAT_TRACK.lock() {
             if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
                 *g = None;
@@ -11298,6 +11416,7 @@ pub fn run() {
             get_sat_schedule,
             get_iss_pass,
             get_sat_detail,
+            set_sat_transponder,
             start_sat_track,
             stop_sat_track,
             sat_track_status,

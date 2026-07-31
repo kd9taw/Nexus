@@ -58,6 +58,32 @@ pub enum SatVfoMap {
     MainUpSubDown,
 }
 
+impl Settings {
+    /// The rotator policy these settings describe — one place that turns the
+    /// flat persisted fields into the pointing rules.
+    pub fn rotator_config(&self) -> tempo_core::rotator::RotatorConfig {
+        use tempo_core::rotator::{PostPass, RotatorConfig};
+        RotatorConfig {
+            park_az: self.rot_park_az,
+            park_el: self.rot_park_el,
+            ready_az: self.rot_ready_az,
+            ready_el: self.rot_ready_el,
+            post_pass: match self.rot_post_pass.trim().to_ascii_lowercase().as_str() {
+                "park" => PostPass::Park,
+                "ready" => PostPass::Ready,
+                // Anything unknown (including a value from a newer build)
+                // degrades to leaving the mast alone — never to moving it.
+                _ => PostPass::Stop,
+            },
+            tol_az_deg: self.rot_tol_az_deg,
+            tol_el_deg: self.rot_tol_el_deg,
+            cal_az_deg: self.rot_cal_az_deg,
+            cal_el_deg: self.rot_cal_el_deg,
+            allow_flip: self.rot_allow_flip,
+        }
+    }
+}
+
 impl SatVfoMap {
     /// Does this mapping drive the radio at all?
     pub fn active(self) -> bool {
@@ -458,6 +484,31 @@ pub struct Settings {
     /// (for operators who already run their own). Non-empty wins over the
     /// integrated model/port spawn. Empty + model 0 = no rotator.
     pub rotator_host: String,
+    /// Rotator manners and positions — see `tempo_core::rotator`. Defaults are
+    /// the conservative ones: no flip (many rotators physically cannot), and
+    /// post-pass STOP (never move a mast the operator didn't ask to move).
+    #[serde(default)]
+    pub rot_park_az: f64,
+    #[serde(default)]
+    pub rot_park_el: f64,
+    #[serde(default)]
+    pub rot_ready_az: f64,
+    #[serde(default)]
+    pub rot_ready_el: f64,
+    /// "stop" | "park" | "ready".
+    #[serde(default)]
+    pub rot_post_pass: String,
+    #[serde(default = "default_rot_tol_deg")]
+    pub rot_tol_az_deg: f64,
+    #[serde(default = "default_rot_tol_deg")]
+    pub rot_tol_el_deg: f64,
+    #[serde(default)]
+    pub rot_cal_az_deg: f64,
+    #[serde(default)]
+    pub rot_cal_el_deg: f64,
+    #[serde(default)]
+    pub rot_allow_flip: bool,
+
     /// SATELLITE DOPPLER — master switch. Off by default: a station with no
     /// satellite interest must never have its dial moved by a pass.
     #[serde(default)]
@@ -1103,6 +1154,12 @@ fn default_tune_timeout() -> u32 {
 
 fn default_directed_max_calls() -> Option<u32> {
     Some(8)
+}
+
+/// A G-5500's own resolution is about this; below it a command is noise rather
+/// than motion, and the relays chatter for the whole pass.
+fn default_rot_tol_deg() -> f64 {
+    2.0
 }
 
 /// Doppler below this is not worth a CAT write: ~10 Hz is inaudible on SSB at
@@ -1836,6 +1893,16 @@ impl Default for Settings {
             rotator_host: String::new(),
             // Satellite Doppler is OFF and unmapped by default: a station
             // with no satellite interest must never have its dial moved.
+            rot_park_az: 0.0,
+            rot_park_el: 0.0,
+            rot_ready_az: 0.0,
+            rot_ready_el: 0.0,
+            rot_post_pass: String::new(),
+            rot_tol_az_deg: default_rot_tol_deg(),
+            rot_tol_el_deg: default_rot_tol_deg(),
+            rot_cal_az_deg: 0.0,
+            rot_cal_el_deg: 0.0,
+            rot_allow_flip: false,
             sat_doppler: false,
             sat_vfo_map: SatVfoMap::Off,
             sat_min_shift_hz: default_sat_min_shift_hz(),

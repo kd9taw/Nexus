@@ -4456,6 +4456,24 @@ impl Engine {
     /// Manually add a contact to the logbook (the UI "Log QSO" button). Adds in
     /// memory and appends to the ADIF file if a log path is set.
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
+        // SATELLITE STAMP. A contact made while a pass owns the radio is a
+        // satellite QSO, and LoTW will not credit one without BOTH fields — so
+        // they are stamped here, at the single funnel every log path goes
+        // through, rather than at each caller. Never overwrites what a caller
+        // (or an import) already supplied.
+        if let Some(st) = &self.sat_tune {
+            if rec.prop_mode.is_none() {
+                rec.prop_mode = Some("SAT".to_string());
+            }
+            if rec.sat_name.is_none() {
+                // The label is "SAT|transponder" — the satellite half is the
+                // name LoTW matches on.
+                let name = st.label.split('|').next().unwrap_or_default().trim();
+                if !name.is_empty() {
+                    rec.sat_name = Some(name.to_string());
+                }
+            }
+        }
         // Duplicate-contact guard — the LAST line of defense against logging the same
         // QSO twice. The per-Station `qso_logged` latch only blocks a re-log within ONE
         // Station, and `call_station_ctx` resets it on every invocation, so one contact
@@ -17846,6 +17864,50 @@ mod tests {
             !e.snapshot().radio.transmitting,
             "the refusal must also clear the transmitting latch"
         );
+    }
+
+    #[test]
+    fn a_qso_made_during_a_pass_is_stamped_for_lotw_satellite_credit() {
+        // LoTW credits a satellite contact only with BOTH fields present; the
+        // stamp lives at the log funnel so every path (auto, cockpit, manual)
+        // gets it, and never overwrites what a caller already supplied.
+        use tempo_core::doppler::Transponder;
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some((
+            "RS-44|Linear Transponder".into(),
+            Transponder {
+                uplink_centre_hz: 145_965_000,
+                downlink_centre_hz: 435_640_000,
+                invert: true,
+                half_width_hz: 30_000,
+            },
+        )));
+        e.log_qso(qrec("W1AW", "70cm"));
+        let r = &e.get_log()[0];
+        assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(
+            r.sat_name.as_deref(),
+            Some("RS-44"),
+            "the satellite half of the label, not the transponder"
+        );
+
+        // A terrestrial contact with no pass in force is untouched.
+        let mut e2 = Engine::new("KD9TAW", "EN52", 0);
+        e2.log_qso(qrec("K1ABC", "20m"));
+        let r2 = &e2.get_log()[0];
+        assert_eq!(r2.prop_mode, None);
+        assert_eq!(r2.sat_name, None);
+
+        // An explicit value from the caller/import wins over the stamp.
+        let mut e3 = Engine::new("KD9TAW", "EN52", 0);
+        e3.set_sat_transponder(Some((
+            "SO-50|FM".into(),
+            Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut given = qrec("N0CALL", "70cm");
+        given.sat_name = Some("AO-91".into());
+        e3.log_qso(given);
+        assert_eq!(e3.get_log()[0].sat_name.as_deref(), Some("AO-91"));
     }
 
     #[test]
