@@ -830,6 +830,13 @@ pub struct Engine {
     /// judge tuning IDENTITY rather than the dial number — see [`TxGateStamp`].
     /// `None` for all terrestrial operating, which is every existing path.
     sat_dial_owner: Option<(String, i64)>,
+    /// Range-rate (km/s) from the most recent Doppler tick. The knob-follow path
+    /// runs on the operator's timing, not the track loop's, and needs the rate
+    /// in force at that instant to undo the Doppler they are hearing. `None`
+    /// until a pass has ticked at least once — and a follow declines rather
+    /// than assuming zero, which would mis-site the offset by the whole shift
+    /// (tens of kHz on 70 cm at AOS, the worst possible moment to guess).
+    sat_last_rate: Option<f64>,
     /// Desired rig SPLIT state: `Some(tx_dial_mhz)` = split on with that TX dial;
     /// `None` = simplex. Set by work_spot (pile-up "UP n" spots) and cleared by any
     /// plain QSY/work; the loop applies it via `split_dirty` (one-shot).
@@ -2145,6 +2152,7 @@ impl Engine {
             tx_gate_gen: 0,
             sat_tune: None,
             sat_dial_owner: None,
+            sat_last_rate: None,
             split_tx_mhz: None,
             split_dirty: false,
             rit_hz: 0,
@@ -2940,6 +2948,25 @@ impl Engine {
     /// sideband to the rig-mode policy (the radio loop still owns what it commands).
     pub fn observe_rig_freq(&mut self, hz: u64) {
         let mhz = hz as f64 / 1_000_000.0;
+        // A knob move DURING A PASS, inside the transponder, is not a QSY — it
+        // is the operator chasing a station across the passband, and the uplink
+        // has to follow them (mirrored, if the transponder inverts). Adopt it
+        // and return: none of the QSY bookkeeping below applies, exactly as it
+        // does not apply to our own Doppler writes (see `steer_sat_dial`).
+        //
+        // Out-of-band knob moves fall through and are treated as the ordinary
+        // QSY they are, so leaving a pass still works normally.
+        //
+        // Returning early also SPARES THE SPLIT, which matters: the fall-through
+        // clears it, and on a satellite the split TX dial *is* the corrected
+        // uplink. Dropping it because the operator nudged the receiver would put
+        // them back on simplex — transmitting on their own downlink.
+        if self.sat_observe_operator_tune(hz) {
+            self.settings.dial_mhz = mhz;
+            let (band, sb) = (self.settings.band.clone(), self.settings.sideband.clone());
+            self.app.set_radio(mhz, &band, &sb);
+            return;
+        }
         // A knob QSY returns the rig to simplex, exactly like an app-commanded retune
         // (set_frequency): otherwise a manual split's TX VFO would be left on the OLD dial —
         // transmitting off-frequency — and the SPLIT badge would lie about the offset.
@@ -5978,6 +6005,46 @@ impl Engine {
         self.set_sat_dial_owner(Some((label, off)));
     }
 
+    /// The operator turned the VFO knob during a pass — adopt it as their
+    /// position in the passband, so the uplink follows them.
+    ///
+    /// This is the input half of operator-follow, and the reason the engine
+    /// carries an OFFSET rather than a frequency: chasing a station drifting
+    /// across the transponder is the whole gesture of working a linear bird,
+    /// and it only works if the uplink moves with you (mirrored, on an
+    /// inverting transponder).
+    ///
+    /// Returns true when the tuning was adopted. Declines — leaving the tuning
+    /// untouched — when no pass owns the dial, when the range-rate for this
+    /// instant is not known yet, or when the dial is outside the passband,
+    /// which means the operator left the transponder rather than tuned within
+    /// it. Declining is the safe direction: the alternative is dragging
+    /// somebody's uplink to a passband edge because they QSY'd to 20 m.
+    pub fn sat_observe_operator_tune(&mut self, tuned_hz: u64) -> bool {
+        let (Some(st), Some(rate)) = (self.sat_tune.as_ref(), self.sat_last_rate) else {
+            return false;
+        };
+        // Our OWN Doppler write, observed coming back off the rig, is not an
+        // operator move. Re-adopting it would be very nearly a no-op — the
+        // offset round-trips to within a hertz — but "very nearly" compounds
+        // once per correction for a whole pass, and it would also mean every
+        // Doppler tick bumped the TX-gate identity.
+        if st.sent.sent && tuned_hz == st.sent.downlink_hz {
+            return false;
+        }
+        let Some(state) =
+            tempo_core::doppler::follow_downlink_in_band(&st.transponder, tuned_hz, rate)
+        else {
+            return false;
+        };
+        let label = st.label.clone();
+        if let Some(st) = self.sat_tune.as_mut() {
+            st.state = state;
+        }
+        self.set_sat_dial_owner(Some((label, state.offset_hz)));
+        true
+    }
+
     /// One Doppler tick. Returns what was actually written to the radio, or
     /// `None` when nothing was due — the rate limits, the freeze-during-over
     /// policy and the operator's VFO mapping all decide here rather than at the
@@ -5991,6 +6058,10 @@ impl Engine {
         keyed: bool,
     ) -> Option<tempo_core::doppler::Correction> {
         use tempo_core::doppler as dop;
+        // Recorded BEFORE the opt-in checks below: the knob-follow path needs
+        // the range-rate in force right now to undo the Doppler the operator is
+        // hearing, and it needs it whether or not we are steering the dial.
+        self.sat_last_rate = Some(range_rate_km_s);
         let map = self.settings.sat_vfo_map;
         if !self.settings.sat_doppler || !map.active() {
             return None;
@@ -6081,7 +6152,15 @@ impl Engine {
             uplink_hz: t.uplink_hz,
             downlink_shift_hz: t.downlink_shift_hz,
             uplink_shift_hz: t.uplink_shift_hz,
-            offset_hz: st.state.offset_hz,
+            // CLAMPED, because `tuning` above clamps before computing the
+            // frequencies. Reporting the raw stored offset would let a cursor
+            // drawn at it sit outside the passband it is drawn on, disagreeing
+            // with the very frequencies printed beside it. Nothing can store an
+            // out-of-range offset today; this makes that not matter.
+            offset_hz: tempo_core::doppler::clamp_offset(
+                st.state.offset_hz,
+                st.transponder.half_width_hz,
+            ),
             half_width_hz: st.transponder.half_width_hz,
         })
     }
@@ -18039,6 +18118,92 @@ mod tests {
         e.set_sat_transponder(None);
         assert!(e.sat_dial_owner().is_none());
         assert!(e.sat_doppler_tick(6.0, 70_000, false).is_none());
+    }
+
+    #[test]
+    fn the_operators_knob_moves_them_across_the_passband_and_the_uplink_follows() {
+        // Operator-follow is the whole gesture of working a linear bird: you
+        // chase a station drifting through the passband with the RX knob and
+        // your uplink has to move with you — mirrored, on an inverting
+        // transponder. The engine carries an OFFSET rather than a frequency
+        // precisely so this survives Doppler sliding the band underneath.
+        //
+        // This test exists because the follow entry point shipped with no
+        // caller: the offset was structurally pinned at 0 for every pass of
+        // every bird, so "the uplink follows you" was true of the arithmetic
+        // and false of the application.
+        let tp = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: true,
+            half_width_hz: 30_000,
+        };
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(435.640, "70cm", "USB");
+        {
+            let mut s = e.settings().clone();
+            s.sat_doppler = true;
+            s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
+            e.apply_settings(s);
+        }
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+
+        // Before any tick there is no range-rate, so a knob move is DECLINED
+        // rather than sited with an assumed zero — at AOS the shift is tens of
+        // kHz and guessing would put the operator across the passband.
+        assert!(
+            !e.sat_observe_operator_tune(435_645_000),
+            "no range-rate yet ⇒ decline, never assume zero Doppler"
+        );
+
+        // A pass tick supplies the rate. Overhead-ish, so the shift is small
+        // and the arithmetic below stays readable.
+        let rate = 0.0;
+        e.sat_doppler_tick(rate, 1_000, false);
+
+        // The operator tunes UP 5 kHz to chase somebody.
+        assert!(e.sat_observe_operator_tune(435_645_000), "in-band knob move is adopted");
+        let now = e
+            .sat_tuning_now(rate)
+            .expect("Doppler is on and a transponder is held");
+        assert_eq!(now.offset_hz, 5_000, "the offset IS where they tuned");
+        // INVERTING: up 5 kHz on the downlink is DOWN 5 kHz on the uplink.
+        assert_eq!(
+            now.uplink_hz, 145_960_000,
+            "an inverting transponder mirrors the operator's move"
+        );
+        assert_eq!(now.downlink_hz, 435_645_000);
+
+        // The TX gate identity moved with them: an over planned at the old spot
+        // in the passband is no longer the same tuning.
+        assert_eq!(
+            e.sat_dial_owner().map(|o| o.1),
+            Some(5_000),
+            "crossing the passband is an operator move, so the identity changes"
+        );
+
+        // A knob move OUT of the passband is the operator leaving, not tuning.
+        // It must not be clamped to a passband edge (which would drag the
+        // uplink there and leave them transmitting into someone else's QSO).
+        assert!(
+            !e.sat_observe_operator_tune(14_074_000),
+            "a QSY to 20 m is not a passband offset"
+        );
+        assert_eq!(
+            e.sat_tuning_now(rate).unwrap().offset_hz,
+            5_000,
+            "the declined move left the tuning untouched"
+        );
+
+        // Our OWN Doppler write, seen coming back off the rig, is not an
+        // operator move — otherwise every correction would bump the TX-gate
+        // identity and nudge the offset for the whole pass.
+        let sent = e.sat_tuning_now(rate).unwrap().downlink_hz;
+        e.sat_doppler_tick(rate, 20_000, false);
+        assert!(
+            !e.sat_observe_operator_tune(sent),
+            "the dial we just wrote is ours, not theirs"
+        );
     }
 
     #[test]

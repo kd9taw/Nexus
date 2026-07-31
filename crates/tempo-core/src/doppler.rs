@@ -140,14 +140,46 @@ pub fn follow_downlink(
     if t.half_width_hz == 0 {
         return DopplerState::default();
     }
-    let beta = (range_rate_km_s * 1000.0) / C_M_S;
-    // Undo the Doppler the operator was hearing to recover the bird-frame
-    // frequency, then express it as an offset from centre.
-    let bird_frame = shift(tuned_downlink_hz, beta); // inverse of the -beta applied above
-    let offset = bird_frame as i64 - t.downlink_centre_hz as i64;
     DopplerState {
-        offset_hz: clamp_offset(offset, t.half_width_hz),
+        offset_hz: clamp_offset(
+            raw_offset_for(t, tuned_downlink_hz, range_rate_km_s),
+            t.half_width_hz,
+        ),
     }
+}
+
+/// The same adoption, but it REFUSES a dial that is not inside the passband.
+///
+/// The difference matters at the one call site that watches the operator's VFO
+/// knob. [`follow_downlink`] clamps, which is right when a caller has already
+/// decided the operator is tuning *within* the transponder — but a knob QSY to
+/// another band is also "a new dial", and clamping that would slam the offset
+/// to a passband edge and drag the uplink with it. A satellite passband is a
+/// few tens of kHz wide; anything outside it is the operator leaving, not
+/// tuning, and the honest answer is to decline rather than to guess.
+///
+/// `None` for a channel (an FM bird has nothing to tune inside) or an
+/// out-of-band dial.
+pub fn follow_downlink_in_band(
+    t: &Transponder,
+    tuned_downlink_hz: u64,
+    range_rate_km_s: f64,
+) -> Option<DopplerState> {
+    if t.half_width_hz == 0 {
+        return None;
+    }
+    let offset = raw_offset_for(t, tuned_downlink_hz, range_rate_km_s);
+    (offset.unsigned_abs() <= t.half_width_hz).then_some(DopplerState { offset_hz: offset })
+}
+
+/// Undo the Doppler the operator was hearing to recover the bird-frame
+/// frequency, then express it as an offset from the passband centre. Unclamped
+/// on purpose — the callers above differ precisely in what they do when it
+/// falls outside.
+fn raw_offset_for(t: &Transponder, tuned_downlink_hz: u64, range_rate_km_s: f64) -> i64 {
+    let beta = (range_rate_km_s * 1000.0) / C_M_S;
+    let bird_frame = shift(tuned_downlink_hz, beta); // inverse of the -beta in `tuning`
+    bird_frame as i64 - t.downlink_centre_hz as i64
 }
 
 /// The sideband pair for a transponder, given the downlink mode the satellite
@@ -336,7 +368,11 @@ fn add_offset(centre: u64, offset: i64) -> u64 {
     }
 }
 
-fn clamp_offset(offset: i64, half_width_hz: u64) -> i64 {
+/// Hold an offset inside the passband. Public because anything REPORTING the
+/// operator's position has to clamp it exactly as [`tuning`] does, or a display
+/// drawn from the reported offset can disagree with the frequencies computed
+/// from the clamped one.
+pub fn clamp_offset(offset: i64, half_width_hz: u64) -> i64 {
     let lim = half_width_hz as i64;
     offset.clamp(-lim, lim)
 }
@@ -600,5 +636,63 @@ mod tests {
         assert_eq!(r.uplink_hz, 145_965_000);
         assert_eq!(r.downlink_shift_hz, 0);
         assert_eq!(r.uplink_shift_hz, 0);
+    }
+
+    #[test]
+    fn follow_in_band_declines_a_dial_that_left_the_transponder() {
+        // The knob-watching call site cannot tell "tuning across the passband"
+        // from "QSY to 20 m" — both are just a new dial. Clamping the second
+        // one would slam the offset to a passband edge and drag the uplink
+        // there, so the in-band variant declines instead of guessing.
+        let t = rs44(); // 435.640 MHz centre, ±half_width
+        let half = t.half_width_hz as i64;
+
+        // Dead centre, no Doppler: offset 0, adopted.
+        let s = follow_downlink_in_band(&t, t.downlink_centre_hz, 0.0).expect("centre is in band");
+        assert_eq!(s.offset_hz, 0);
+
+        // Just inside the top edge: adopted, and NOT clamped — the exact offset
+        // is what the passband strip draws a cursor at.
+        let inside = t.downlink_centre_hz + (half as u64) - 500;
+        let s = follow_downlink_in_band(&t, inside, 0.0).expect("inside the edge is in band");
+        assert_eq!(s.offset_hz, half - 500);
+
+        // A whole band away: declined, not clamped to the edge.
+        assert!(
+            follow_downlink_in_band(&t, 14_074_000, 0.0).is_none(),
+            "a knob QSY to 20 m must not be adopted as a passband offset"
+        );
+        // …where the clamping variant would have pinned it to an edge, which is
+        // exactly the behaviour the knob path must not have.
+        assert_eq!(follow_downlink(&t, 14_074_000, 0.0).offset_hz, -half);
+
+        // A channel (FM bird) has nothing to tune inside.
+        let fm = Transponder {
+            half_width_hz: 0,
+            ..t
+        };
+        assert!(follow_downlink_in_band(&fm, fm.downlink_centre_hz, 0.0).is_none());
+    }
+
+    #[test]
+    fn follow_in_band_measures_against_the_dopplered_passband() {
+        // The operator tunes the dial they HEAR, which Doppler has moved. The
+        // in-band test must undo that shift first, or a perfectly ordinary
+        // in-passband tune reads as out-of-band near AOS, when the shift is
+        // biggest and chasing a station matters most.
+        let t = rs44();
+        let rate = -7.0; // approaching hard: ~+10 kHz on 70 cm
+        let heard_centre = tuning(&t, DopplerState { offset_hz: 0 }, rate).downlink_hz;
+        assert!(
+            heard_centre > t.downlink_centre_hz + 5_000,
+            "the test needs a shift big enough to matter"
+        );
+        let s = follow_downlink_in_band(&t, heard_centre, rate)
+            .expect("the dial the operator actually hears the centre at is in band");
+        assert!(s.offset_hz.abs() <= 20, "recovers ~centre, got {}", s.offset_hz);
+
+        // The same raw number WITHOUT undoing Doppler would be off by the shift.
+        let naive = heard_centre as i64 - t.downlink_centre_hz as i64;
+        assert!(naive.abs() > 5_000, "guard: the naive answer really is wrong");
     }
 }

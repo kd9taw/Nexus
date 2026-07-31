@@ -3628,9 +3628,10 @@ struct SatTrackDto {
     /// Where the operator sits inside the passband, signed from its centre, and
     /// how wide that passband is either side. The shared coordinate the two
     /// legs live on: under inversion the uplink sits at the NEGATED offset, so
-    /// tuning up the band walks the uplink down it. `half_width_hz` is 0 when
-    /// the transponder's width is unknown — nothing may draw a passband it
-    /// cannot size. Both `None` unless Doppler is actually tuning.
+    /// tuning up the band walks the uplink down it. `half_width_hz` is 0 for a
+    /// CHANNEL — an FM bird or a beacon, which has no passband to sit inside —
+    /// and nothing may draw a passband of zero width. Both `None` unless
+    /// Doppler is actually tuning.
     offset_hz: Option<i64>,
     half_width_hz: Option<u64>,
     aos_unix: i64,
@@ -3726,6 +3727,11 @@ async fn start_sat_track(
         // What the rotator was last actually TOLD — the deadband compares
         // against this, not against where the bird is.
         let mut last_cmd: Option<(f64, f64)> = None;
+        // The same command expressed as the BORESIGHT angle it was aiming at —
+        // the frame the sky dome draws in. Kept alongside rather than derived,
+        // so the trim (and a flip, if one ever fires) never has to be undone by
+        // arithmetic that could drift out of step with `point_for`.
+        let mut last_aim: Option<(f64, f64)> = None;
         let mut az_only_ticks = 0u32;
         let mut misses = 0u32;
         let update_badge = |dto: SatTrackDto| {
@@ -3847,7 +3853,7 @@ async fn start_sat_track(
                 // is exactly the tracking error the sky dome exists to show.
                 update_badge(badge(
                     phase,
-                    last_cmd,
+                    last_aim,
                     azel_ok,
                     rep_sat,
                     live_range,
@@ -3898,12 +3904,23 @@ async fn start_sat_track(
             if sent {
                 misses = 0;
                 last_cmd = Some((az, el));
+                // The BORESIGHT angle we were aiming at when we last commanded.
+                // Reported to the UI instead of `last_cmd`, because `last_cmd`
+                // is in the CONTROLLER's frame — it carries the calibration
+                // trim, whose entire definition is "the controller's numbers
+                // are offset from where the boom actually points". A sky dome
+                // draws boresight, so on a station with a 4° trim the two
+                // frames differ by a permanent 4° and a correctly tracking
+                // rotator would render a constant pointing error. The gap that
+                // remains here is the real one: the deadband, plus the seconds
+                // since the last command.
+                last_aim = Some((sat_az, sat_el));
                 // Report what was COMMANDED. An az-only fallback never commands
                 // elevation, so `azel_ok` makes it report none at all — absent,
                 // not a 0 the UI would have to decode back into "az-only".
                 update_badge(badge(
                     phase,
-                    last_cmd,
+                    last_aim,
                     azel_ok,
                     rep_sat,
                     live_range,
@@ -3915,6 +3932,21 @@ async fn start_sat_track(
                 if misses >= 5 {
                     break; // rotor stopped answering — clear the badge, don't lie
                 }
+                // The write failed, so nothing about the ANTENNA changed — but
+                // the pass did. Keep publishing (last aim unchanged, position
+                // and Doppler current) rather than leaving a frozen badge: a
+                // display that stops updating is indistinguishable from one
+                // that has nothing to say, and the four ticks before we give up
+                // are ~15 s of the operator wondering.
+                update_badge(badge(
+                    phase,
+                    last_aim,
+                    azel_ok,
+                    rep_sat,
+                    live_range,
+                    live_rate,
+                    dop.as_ref(),
+                ));
             }
             std::thread::sleep(std::time::Duration::from_secs(3));
         }
