@@ -81,8 +81,53 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
     }
   }, [active])
 
-  // No rotor configured at all → nothing to show (most stations).
-  if (az == null && !configured) return null
+  // Does the live sat track own the RADIO DIAL? Read from the DTO's `mode` —
+  // the engine's own per-tick answer (a pass-only track drives nothing and
+  // must claim nothing). This is the app-wide ownership marker: a frequency
+  // moving by itself with no visible owner is a trust failure, and the
+  // rotor-less station is exactly the one with no other strip to say so.
+  const dopplerOwnsDial =
+    satTrack != null && (satTrack.mode === 'rotor+doppler' || satTrack.mode === 'doppler-only')
+
+  // No rotor configured at all → nothing to show (most stations) — UNLESS a
+  // rotor-less Doppler track holds the dial, which must never be invisible.
+  if (az == null && !configured) {
+    if (!dopplerOwnsDial || satTrack == null) return null
+    const steering = satTrack.downlinkHz != null || satTrack.uplinkHz != null
+    return (
+      <span
+        role="group"
+        aria-label="Satellite Doppler owns the dial"
+        title={`Satellite Doppler is ${steering ? 'steering the radio dial' : 'armed to take the radio dial at AOS'} for ${satTrack.name} (${satTrack.state}) — ■ stops the track and hands the dial back`}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}
+      >
+        <span
+          style={{ fontSize: '0.65em', letterSpacing: '0.08em', opacity: 0.55, fontWeight: 600 }}
+          aria-hidden
+        >
+          SAT
+        </span>
+        <span className="mono" style={{ fontSize: '0.9em', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          ⟳ {satTrack.name} · {steering ? 'Doppler holds the dial' : 'dial at AOS'}
+        </span>
+        <button
+          type="button"
+          style={chipStyle}
+          aria-label="Stop the satellite track"
+          onClick={() => {
+            stopSatTrack()
+              .then(() => setSatTrack(null))
+              .catch((e) =>
+                pushToast(`Track stop: ${e instanceof Error ? e.message : e}`, 'error'),
+              )
+          }}
+          title="Stop the satellite track NOW — Doppler releases the dial"
+        >
+          ■
+        </button>
+      </span>
+    )
+  }
   // Configured but silent → an honest dim placeholder, never a fake readout.
   if (az == null) {
     return (
@@ -141,9 +186,10 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
         <span
           className="mono"
           style={{ fontSize: '0.75em', opacity: 0.8, whiteSpace: 'nowrap' }}
-          title={`Auto-tracking ${satTrack.name} (${satTrack.state}) — the Satellites section owns the rotor until LOS`}
+          title={`Auto-tracking ${satTrack.name} (${satTrack.state}) — the Satellites section owns the rotor until LOS${dopplerOwnsDial ? '; Doppler owns the radio dial too' : ''}`}
         >
           ⟳ {satTrack.name}
+          {dopplerOwnsDial ? ' +dial' : ''}
         </span>
       )}
       {targetCall && onPointAt && (

@@ -3,12 +3,13 @@
 // The transponder picker in the Satellites detail pane. What is pinned here is the wiring that
 // decides WHERE THE RADIO TRANSMITS:
 //
-//  - `set_sat_transponder` indexes the bird's ALIVE transmitters. The table shows dead ones too
-//    (SatNOGS reports them, and an operator wants to see what used to be there), so a row's wire
-//    index is its position among the alive rows. Sending the row number instead selects a
-//    different transponder — a different uplink — and it looks fine on screen.
+//  - `set_sat_transponder` takes the RAW index into the list `get_sat_detail` returned — dead
+//    entries INCLUDED (the backend indexes that very list and refuses dead picks by name). The
+//    chooser collapses dead entries behind "show N inactive", but the wire index never shifts:
+//    an alive-relative index would select a different transponder — a different uplink — and
+//    look fine on screen.
 //  - INVERTING is per-transponder data and decides which way the uplink moves. It has to be
-//    visible on the row, not buried in a tooltip.
+//    visible on the card, not buried in a tooltip.
 //  - Nothing is selected until the operator picks, and a refused call never shows as selected.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
@@ -18,9 +19,12 @@ import type { SatDetail } from '../types'
 const api = vi.hoisted(() => ({
   getSatellites: vi.fn(() => Promise.resolve(null)),
   getSatSchedule: vi.fn(() => Promise.resolve([])),
+  getSatPassNeeds: vi.fn(() => Promise.resolve([])),
   getSatDetail: vi.fn(),
   getSettings: vi.fn(),
+  setSettings: vi.fn(() => Promise.resolve({} as never)),
   setSatTransponder: vi.fn(() => Promise.resolve()),
+  getSatTransponder: vi.fn((): Promise<import('../types').SatTransponderHeld | null> => Promise.resolve(null)),
   startSatTrack: vi.fn(() => Promise.resolve(null)),
   stopSatTrack: vi.fn(() => Promise.resolve()),
   getSatTrackStatus: vi.fn(() => Promise.resolve(null)),
@@ -119,9 +123,16 @@ describe('picking a transponder', () => {
     await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2))
   })
 
-  it('will not offer a transmitter SatNOGS reports dead', async () => {
+  it('collapses dead transmitters behind "show N inactive" and never offers them', async () => {
     render(<SatellitesView focusSat="RS-44" />)
-    await screen.findByText(/Retired FM repeater/)
+    await screen.findByTestId('sat-tp-list')
+    // Collapsed by default: the dead entry is not in the DOM, the count is.
+    expect(screen.queryByText(/Retired FM repeater/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /show 1 inactive/ }))
+    // Expanded: shown for the record, marked dead, and NEVER a pickable radio.
+    const card = (await screen.findByText(/Retired FM repeater/)).closest('.sat-tp-card')
+    expect(card?.className).toMatch(/off/)
+    expect(card?.textContent).toMatch(/reported dead/)
     expect(screen.queryByLabelText('Work Retired FM repeater')).toBeNull()
   })
 
@@ -151,7 +162,7 @@ describe('what the row tells the operator', () => {
     render(<SatellitesView focusSat="RS-44" />)
     const marks = await screen.findAllByText('INVERTING')
     expect(marks).toHaveLength(1)
-    expect(marks[0].closest('tr')?.textContent).toMatch(/SSB\/CW linear transponder/)
+    expect(marks[0].closest('.sat-tp-card')?.textContent).toMatch(/SSB\/CW linear transponder/)
   })
 
   it('shows the passband, not just its low edge', async () => {
@@ -160,9 +171,9 @@ describe('what the row tells the operator', () => {
     expect(await screen.findByText('435.640–435.670')).toBeTruthy()
     expect(await screen.findByText('145.965–145.995')).toBeTruthy()
     // A beacon has no uplink and says so, rather than showing a made-up frequency.
-    const beaconRow = (await screen.findByText(/CW beacon/)).closest('tr')
-    expect(beaconRow?.textContent).toMatch(/435\.605/)
-    expect(beaconRow?.textContent).toMatch(/—/)
+    const beaconCard = (await screen.findByText(/CW beacon/)).closest('.sat-tp-card')
+    expect(beaconCard?.textContent).toMatch(/435\.605/)
+    expect(beaconCard?.textContent).toMatch(/—/)
   })
 
   it('says plainly when a pick will not tune anything', async () => {

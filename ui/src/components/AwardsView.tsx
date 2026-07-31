@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud, Grid3x3 } from 'lucide-react'
+import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud, Grid3x3, Satellite } from 'lucide-react'
 import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, QsoDiagnosis, UploadReport, LoggedQso } from '../types'
 import {
   getAwards,
@@ -20,7 +20,9 @@ const CHALLENGE_AWARD = 1000
 const WAZ_ZONES = 40
 /** US states for the Worked All States (WAS) award. */
 const WAS_STATES = 50
-/** Grid squares for VUCC (6m/2m — the headline VHF grid award). */
+/** Grid squares for VUCC (6m/2m — the headline VHF grid award). The Satellite
+ * VUCC category needs the same 100; ARRL counts a satellite contact toward it
+ * ONLY, so the terrestrial and satellite tallies are separate cards. */
 const VUCC_GRIDS = 100
 /** Island groups for basic IOTA (Islands On The Air). */
 const IOTA_ISLANDS = 100
@@ -489,7 +491,33 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
             {aw.vucc.confirmed >= VUCC_GRIDS
               ? 'VUCC ✓'
               : `${VUCC_GRIDS - aw.vucc.confirmed} grids to go`}{' '}
-            · {aw.vucc.worked} worked (all bands)
+            · {aw.vucc.worked} worked (terrestrial, all bands)
+          </span>
+        </div>
+
+        {/* Satellite VUCC — its own ARRL category, and the ONLY place a
+            satellite QSO's grid counts (the terrestrial card above excludes
+            them), so the bucket must be visible or those contacts vanish
+            from the awards surface entirely. */}
+        <div className={`aw-card${aw.vucc.satConfirmed >= VUCC_GRIDS ? ' aw-card-elite' : ''}`}>
+          <span className="aw-k">
+            <Satellite size={13} aria-hidden="true" /> Sat VUCC
+          </span>
+          <span className="aw-v">
+            {aw.vucc.satConfirmed}
+            <span className="aw-of"> / {VUCC_GRIDS}</span>
+          </span>
+          <div className="aw-bar">
+            <div
+              className="aw-fill good"
+              style={{ width: `${Math.min(100, (aw.vucc.satConfirmed / VUCC_GRIDS) * 100)}%` }}
+            />
+          </div>
+          <span className="aw-note">
+            {aw.vucc.satConfirmed >= VUCC_GRIDS
+              ? 'Satellite VUCC ✓'
+              : `${VUCC_GRIDS - aw.vucc.satConfirmed} grids to go`}{' '}
+            · {aw.vucc.satWorked} worked (via satellite, any band)
           </span>
         </div>
 

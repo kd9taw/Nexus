@@ -372,6 +372,22 @@ export interface SatPass {
    * when the weekly cache has this bird; absent on the map's SatView passes
    * and whenever the cache is empty (offline) — never guessed. */
   status?: string | null
+  /** What this pass could EARN (needed grids/entities reachable through the
+   * footprint). Stamped ONLY by get_sat_pass_needs; absent everywhere else. */
+  earn?: SatPassEarn | null
+}
+
+/** One pass's earn summary (spec §3 needs-aware ranking). Counts are complete;
+ * the sample lists are capped at 8 (sorted). */
+export interface SatPassEarn {
+  /** Reachable 4-char grids not yet worked via satellite (Satellite-VUCC slots). */
+  newGrids: number
+  gridSample: string[]
+  /** Reachable current-DXCC entities never worked at all (ATNO candidates). */
+  newEntities: number
+  entitySample: string[]
+  /** Sort key, not a quantity: an ATNO outranks any number of grids. */
+  score: number
 }
 
 /** One SatNOGS DB transmitter/transponder entry (data CC-BY-SA 4.0). */
@@ -427,12 +443,30 @@ export interface SatDetail {
   passTrack: [number, number, number][]
 }
 
-/** Live rotor auto-track state (sat_track_status); null = not tracking. */
+/** Live pass auto-track state (sat_track_status); null = not tracking. */
 export interface SatTrackStatus {
   name: string
   /** armed = waiting (no rotor commands until 5 min before AOS);
-   * prepositioning = slewing to the AOS azimuth; tracking = following. */
+   * prepositioning = slewing to the AOS azimuth; tracking = following.
+   * A rotor-less track never reports 'prepositioning' — there is nothing to
+   * slew, so it stays 'armed' until AOS. */
   state: 'armed' | 'prepositioning' | 'tracking'
+  /** Which steering surfaces this track is allowed to drive. The rotor half
+   * is fixed at arm time; the Doppler half follows the live consents
+   * (Settings ▸ satDoppler + a VFO mapping ≠ off + a HELD transponder —
+   * without one the tick tunes nothing, and the label must not claim a dial
+   * the operator kept), so a mid-pass toggle or a transponder release moves
+   * the label exactly when it moves the behaviour. 'pass-only' = neither
+   * surface: pass state/geometry only — legal, useful for timing, and the UI
+   * should say exactly that rather than implying the radio or mast is driven. */
+  mode: 'rotor+doppler' | 'rotor-only' | 'doppler-only' | 'pass-only'
+  /** The sideband the engine will command the TX (split) VFO into while this
+   * pass owns the uplink (the inverting-bird swap), or null when nothing is
+   * commanded. THE display source for the TX-sideband claim — never re-derive
+   * it from the SatNOGS record (the record and the command disagree exactly
+   * where it matters: CW/data downlinks, downlink-only mappings, an operator
+   * mode take-back). */
+  txMode?: string | null
   /** Where the ANTENNA was last actually COMMANDED — after the flip, the
    * calibration trim and the deadband. NOT a read-back: it is what the rotator
    * was told. Null until a command has genuinely been sent (the armed phase
@@ -479,6 +513,18 @@ export interface SatTrackStatus {
   halfWidthHz: number | null
   aosUnix: number
   losUnix: number
+}
+
+/** The transponder the ENGINE holds right now (get_sat_transponder) — the
+ * read-back for setSatTransponder. The hold is released backend-side at LOS
+ * and on a live-track stop, so a UI trusting only its own last click shows a
+ * hold that no longer exists; poll this instead. */
+export interface SatTransponderHeld {
+  /** The bird the hold belongs to. */
+  name: string
+  /** Raw index into the getSatDetail list (dead entries included). */
+  index: number | null
+  description: string
 }
 
 /** Real-time solar wind (DSCOVR) — the leading geomagnetic indicator (leads Kp/A). */
@@ -1519,10 +1565,15 @@ export interface WasProgress {
 /** VUCC (grid-square) progress — distinct Maidenhead grids worked / confirmed,
  * overall and per band (VUCC proper = 100 grids on 6m/2m). */
 export interface VuccProgress {
+  /** Terrestrial counts — satellite QSOs live in satWorked/satConfirmed only. */
   worked: number
   confirmed: number
   /** Per-band grid-square counts, 160m → 2m. */
   bands: BandAward[]
+  /** Satellite VUCC — grids worked/confirmed via satellite (PROP_MODE=SAT),
+   * band-independent (ARRL counts sat QSOs toward this category only). */
+  satWorked: number
+  satConfirmed: number
 }
 
 /** IOTA (Islands On The Air) progress — distinct island groups worked / confirmed

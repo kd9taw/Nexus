@@ -27,9 +27,12 @@ import type { SatDetail, SatTrackStatus } from '../types'
 const api = vi.hoisted(() => ({
   getSatellites: vi.fn(() => Promise.resolve(null)),
   getSatSchedule: vi.fn(() => Promise.resolve([])),
+  getSatPassNeeds: vi.fn(() => Promise.resolve([])),
   getSatDetail: vi.fn(),
   getSettings: vi.fn(),
+  setSettings: vi.fn(() => Promise.resolve({} as never)),
   setSatTransponder: vi.fn(() => Promise.resolve()),
+  getSatTransponder: vi.fn((): Promise<import('../types').SatTransponderHeld | null> => Promise.resolve(null)),
   startSatTrack: vi.fn(() => Promise.resolve(null)),
   stopSatTrack: vi.fn(() => Promise.resolve()),
   // Typed: several cases below hand back a full status, and an inferred
@@ -82,6 +85,7 @@ const detail = (over: Partial<SatDetail> = {}): SatDetail => ({
 const status = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   name: 'RS-44',
   state: 'tracking',
+  mode: 'rotor+doppler',
   azDeg: 141,
   elDeg: 46,
   aosAzDeg: 100,

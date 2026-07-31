@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { SAT_VFO_MAPS } from '../features/satVfo'
 import type {
   AudioDevices,
   BandChannel,
@@ -177,19 +178,8 @@ const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; label: string }[
   { value: 'fakeit', label: 'Fake It' },
 ]
 
-/** Which VFO carries which leg of a satellite pass. Off first — it is the
- * default and the only value that writes nothing to the radio. The labels name
- * both legs because naming only one is how an operator ends up transmitting on
- * the downlink. */
-const SAT_VFO_MAPS: { value: NonNullable<Settings['satVfoMap']>; label: string }[] = [
-  { value: 'off', label: 'Off' },
-  { value: 'downlink-only', label: 'Downlink only (receive)' },
-  { value: 'uplink-only', label: 'Uplink only (transmit)' },
-  { value: 'a-down-b-up', label: 'VFO A = downlink, VFO B = uplink' },
-  { value: 'a-up-b-down', label: 'VFO A = uplink, VFO B = downlink' },
-  { value: 'main-down-sub-up', label: 'Main = downlink, Sub = uplink (IC-9700 full duplex)' },
-  { value: 'main-up-sub-down', label: 'Main = uplink, Sub = downlink' },
-]
+// SAT_VFO_MAPS moved to features/satVfo.ts — the Satellites readiness rail
+// mirrors this setting live, and the two surfaces must share ONE label list.
 
 /** What the rotator does when a pass ends. */
 const ROT_POST_PASS: { value: string; label: string }[] = [

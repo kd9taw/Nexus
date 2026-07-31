@@ -14603,13 +14603,18 @@ html[data-panel='needed'] {
   color: var(--text-dim);
   margin: 0 0 var(--space-1) 0;
 }
+/* "Next up" rows: no longer one big button — a row hosting the mini pass-arc,
+   the open-detail button (the why-line + earn chips) and the primary
+   "Work this pass" action. Content-height rows; the column is not a grower. */
 .sats-best-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   text-align: left;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: var(--space-1) var(--space-2);
-  cursor: pointer;
   font-size: var(--fs-body);
   color: var(--text);
 }
@@ -14621,6 +14626,58 @@ html[data-panel='needed'] {
 }
 .sats-best-row b {
   margin-right: 6px;
+}
+.sats-best-open {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: var(--fs-body);
+  color: var(--text);
+}
+.sat-arcmini {
+  flex: 0 0 auto;
+}
+.sat-arcmini-rim {
+  fill: none;
+  stroke: var(--border);
+}
+.sat-arcmini-arc {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.sat-arcmini-aos {
+  fill: var(--text-dim);
+}
+/* The primary chain-runner. Accent-tinted so it reads as THE action; the
+   compact table variant reuses .sat-track. */
+.sat-work {
+  flex: 0 0 auto;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 3px var(--space-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sat-work:hover {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+/* Earn chips (Phase 2) — the need-chip vocabulary, inline after the why-line
+   and in the Needed column. */
+.sat-earn {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin-left: var(--space-1);
+  vertical-align: middle;
 }
 .sats-sched {
   grid-column: 1;
@@ -14721,6 +14778,13 @@ html[data-panel='needed'] {
   color: var(--band-marginal);
   border: 1px solid var(--band-marginal);
 }
+/* Stale orbital elements: an amber chip in the header, not a dim parenthetical
+   (burying `tledate` is the appliance's own failure mode). */
+.sat-chip.stale {
+  color: var(--band-marginal);
+  border: 1px solid var(--band-marginal);
+  font-family: var(--font-mono);
+}
 .sats-side {
   grid-row: 2 / -1;
   grid-column: 2;
@@ -14761,8 +14825,13 @@ html[data-panel='needed'] {
   margin-bottom: var(--space-1);
 }
 .sat-dome {
+  /* PROMOTED (2026-07-31 litigation): the dome renders only for the bird the
+     operator clicked into, so it is the hero whenever it renders — the old
+     240px cap made it a thumbnail for the entire planning phase, the exact
+     opposite of sat-visual-design §3.1. Height-capped in --vh-eff (raw vh is
+     wrong inside .app's zoom), and the cap yields to the column width. */
   width: 100%;
-  max-width: 240px;
+  max-width: min(100%, calc(0.55 * var(--vh-eff, 100vh)));
   display: block;
   margin: 0 auto;
 }
@@ -14915,6 +14984,82 @@ html[data-panel='needed'] {
   color: var(--band-open);
   font-weight: 600;
 }
+/* Phase 2's needed-grid lane on the timeline: chips + the sample grids. */
+.sat-tl-earn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  margin-top: 2px;
+  font-size: var(--fs-micro);
+}
+.sat-tl-earn-grids {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+/* ---- The readiness rail (litigation ①): the arming chain AS a chain ------
+   Four content-height rows — bullet (SHAPE carries ready-state), gate name,
+   live state, and the row's own fix. Never a grower (ui-layout §2). */
+.sat-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-1);
+  font-size: var(--fs-micro);
+}
+.sat-rail-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  /* The VFO select may not fit beside the state text in the narrowest column
+     (340px, zoomed) — wrap rather than overflow the clipped detail card. */
+  flex-wrap: wrap;
+}
+.sat-rail-dot {
+  color: var(--text-dim);
+  flex: 0 0 auto;
+}
+.sat-rail-dot.ok {
+  color: var(--band-open);
+}
+.sat-rail-name {
+  flex: 0 0 auto;
+  width: 6.5em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.sat-rail-state {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+}
+.sat-rail-fix {
+  flex: 0 0 auto;
+  font-size: var(--fs-micro);
+  background: none;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+  cursor: pointer;
+}
+.sat-rail-auto {
+  color: var(--accent);
+}
+.sat-rail-vfo {
+  flex: 0 0 auto;
+  max-width: 14em;
+  font-size: var(--fs-micro);
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
 /* ---- Doppler readout: what the radio is ACTUALLY tuned to ---------------- */
 .sat-doppler {
   border: 1px solid var(--border);
@@ -14964,24 +15109,93 @@ html[data-panel='needed'] {
 .sat-dop-shift {
   color: var(--accent);
 }
-.sat-freqs {
-  width: 100%;
-  border-collapse: collapse;
+/* The TX-leg sideband marker (uplink row): the inverting swap, visible. */
+.sat-dop-txmode {
+  color: var(--tx);
+  font-weight: 700;
+}
+/* The transponder chooser as a CARD LIST (2026-07-31 litigation #8): the most
+   consequential control in the section, beside the tuning instruments and
+   above the globe. Dead entries collapse behind "show N inactive". Cards are
+   content-height; the .sats-side scroller owns overflow. */
+.sat-tp-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+.sat-tp-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-1) var(--space-2);
   font-size: var(--fs-micro);
-  font-family: var(--font-mono);
+  cursor: pointer;
 }
-.sat-freqs th {
-  text-align: left;
-  color: var(--text-dim);
-  font-weight: 500;
-  padding: 2px var(--space-1);
+.sat-tp-card.held {
+  border-color: var(--accent);
 }
-.sat-freqs td {
-  padding: 2px var(--space-1);
-  border-top: 1px solid var(--border);
-}
-.sat-freqs tr.off td {
+.sat-tp-card.off {
   opacity: 0.45;
+  cursor: default;
+}
+.sat-tp-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sat-tp-desc {
+  color: var(--text);
+}
+.sat-tp-kind {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 5px;
+  margin-left: 5px;
+}
+.sat-tp-legs {
+  display: flex;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  flex-wrap: wrap;
+}
+.sat-tp-leg b {
+  font-weight: 600;
+  color: var(--text);
+}
+.sat-tp-auto {
+  color: var(--accent);
+}
+.sat-tp-deadmark {
+  color: var(--text-dim);
+}
+.sat-tp-more {
+  align-self: flex-start;
+  font-size: var(--fs-micro);
+  background: none;
+  color: var(--text-dim);
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+  cursor: pointer;
+}
+.sat-tp-more:hover {
+  color: var(--text);
+}
+/* Task 4: what the TX (split) VFO's sideband will be set to — display only. */
+.sat-tp-txmode {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  margin-top: var(--space-1);
+}
+.sat-tp-txmode b {
+  color: var(--tx);
 }
 /* Transponder picker: the INVERTING flag decides which way the uplink moves, so
    it is a badge on the row rather than a tooltip nobody opens. */

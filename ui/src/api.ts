@@ -172,6 +172,16 @@ export async function getSatSchedule(names: string[], hours: number): Promise<im
   return invoke<import('./types').SatPass[]>('get_sat_schedule', { names, hours })
 }
 
+/** The needs-aware pass ranking: getSatSchedule's rows (SatNOGS status
+ * included) with each pass's `earn` summary stamped (needed grids/entities
+ * reachable through the footprint + `score` sort key). AOS-sorted like the
+ * schedule; computed on demand in a backend blocking task — the Satellites
+ * section fetches it on its slow (5 min) schedule poll, which is the intended
+ * cadence: keep it off fast per-second loops. */
+export async function getSatPassNeeds(names: string[], hours: number): Promise<import('./types').SatPass[]> {
+  return invoke<import('./types').SatPass[]>('get_sat_pass_needs', { names, hours })
+}
+
 /** The ISS's current-or-next pass over the QTH (keyed on NORAD 25544), or null
  * when the grid is unset, no ISS elements are loaded, or no pass falls in the
  * next ~3 h. Drives the SSTV auto-arm opt-in. */
@@ -207,12 +217,28 @@ export async function getSatTrackStatus(): Promise<import('./types').SatTrackSta
 /** Put the radio under Doppler control for one transponder on `name`; `null`
  * clears the selection and hands the dial back to the operator.
  *
- * ⚠️ `index` counts the bird's ALIVE transmitters only, in the order
- * `getSatDetail` returned them — the backend filters `alive` before indexing.
- * Passing a raw array index selects the wrong transponder on any bird that
- * lists a dead one first. */
+ * `index` is a raw index into the list `getSatDetail` returned — every
+ * transmitter for that bird, dead ones included. Pass the row index as-is.
+ *
+ * ⚠️ It did NOT always mean that: the backend used to drop `!alive` entries
+ * before indexing, so on any bird listing a dead transmitter first the UI's
+ * row index selected a different transponder — a different uplink, silently.
+ * Two layers agreeing on a hidden filter is not a contract; the backend now
+ * indexes the list the caller was actually shown and REFUSES a dead pick by
+ * name instead of shifting everything after it. Do not re-introduce a filter
+ * on either side. */
 export async function setSatTransponder(name: string, index: number | null): Promise<void> {
   return invoke('set_sat_transponder', { name, index })
+}
+
+/** The transponder the ENGINE holds right now (bird + the raw index into the
+ * getSatDetail list), or null when the dial is the operator's. Poll this for
+ * read-back rather than trusting the last local click: the hold is released
+ * backend-side at LOS and on a live-track stop, and a stale mirror keeps a
+ * green Transponder gate — and skips the next "Work this pass" re-pick — for
+ * a hold the engine no longer has. */
+export async function getSatTransponder(): Promise<import('./types').SatTransponderHeld | null> {
+  return invoke<import('./types').SatTransponderHeld | null>('get_sat_transponder')
 }
 
 export interface LotwUsersStatus {
