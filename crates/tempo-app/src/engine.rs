@@ -1945,6 +1945,18 @@ pub struct SatTuningNow {
     pub uplink_hz: u64,
     pub downlink_shift_hz: i64,
     pub uplink_shift_hz: i64,
+    /// Where the operator sits INSIDE the passband, signed from its centre.
+    /// This is the coordinate both legs share: on an inverting transponder the
+    /// uplink sits at `-offset_hz` while the downlink sits at `+offset_hz`,
+    /// which is the whole of what "inverting" means and the one thing a
+    /// text readout cannot show. Reported straight from the engine's own state
+    /// so nothing has to reconstruct it by subtracting Doppler back out of the
+    /// dial frequencies.
+    pub offset_hz: i64,
+    /// Half the passband width — the extent of the axis the offset lives on.
+    /// Zero for a transponder whose width we do not know, and a strip must not
+    /// draw a passband it cannot size.
+    pub half_width_hz: u64,
 }
 
 /// The satellite tuning in force: which transponder, where the operator sits
@@ -6069,6 +6081,8 @@ impl Engine {
             uplink_hz: t.uplink_hz,
             downlink_shift_hz: t.downlink_shift_hz,
             uplink_shift_hz: t.uplink_shift_hz,
+            offset_hz: st.state.offset_hz,
+            half_width_hz: st.transponder.half_width_hz,
         })
     }
 

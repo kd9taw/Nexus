@@ -43,6 +43,27 @@ the pass ended.
 **Satellite contacts count.** A QSO logged during a pass carries SAT_NAME and PROP_MODE, which is
 exactly what LoTW needs to credit it.
 
+**You can see the pass, not just read it.** The sky dome is now the main view while a pass is
+running — a proper polar plot with labelled elevation rings and the track weighted so the high,
+workable part of the pass reads first. The satellite moves along it as the pass runs.
+
+Beside the satellite, Nexus draws where your *antenna* was actually pointed, and states the gap
+between the two as a single angle. Every other display prints satellite position and antenna
+position as two rows of numbers and leaves you to do the subtraction, which matters because a
+deadband means the two legitimately differ by a degree or two — knowing that is normal is the
+difference between trusting the rotator and chasing a fault that is not there. If your rotator is
+azimuth-only, Nexus draws an azimuth line and says in words that no elevation was sent, rather than
+drawing an antenna lying on the horizon. Before the pass, when auto-track is deliberately keeping
+its hands off your rotator, it draws nothing at all and tells you the azimuth the bird will rise at.
+
+**The 3-D globe becomes the pass view.** When a pass is tracked the globe frames your station and
+the satellite together, draws the orbit behind and ahead, the footprint, and a line of sight from
+your antenna to the bird — the range figure, drawn. The flat map stays the "where is everything"
+view. Neither shows anything before the satellite is above your horizon.
+
+The Doppler readout shows both legs with their live frequency and correction, and both views carry
+a written description for screen readers.
+
 
 ### Fixed: the propagation advisor stops changing its mind on identical data
 

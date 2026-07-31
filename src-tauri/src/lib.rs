@@ -3625,6 +3625,14 @@ struct SatTrackDto {
     transponder_index: Option<usize>,
     /// True when the transponder mirrors the passband (uplink runs backwards).
     inverting: bool,
+    /// Where the operator sits inside the passband, signed from its centre, and
+    /// how wide that passband is either side. The shared coordinate the two
+    /// legs live on: under inversion the uplink sits at the NEGATED offset, so
+    /// tuning up the band walks the uplink down it. `half_width_hz` is 0 when
+    /// the transponder's width is unknown — nothing may draw a passband it
+    /// cannot size. Both `None` unless Doppler is actually tuning.
+    offset_hz: Option<i64>,
+    half_width_hz: Option<u64>,
     aos_unix: i64,
     los_unix: i64,
 }
@@ -3698,6 +3706,8 @@ async fn start_sat_track(
         transponder: None,
         transponder_index: None,
         inverting: false,
+        offset_hz: None,
+        half_width_hz: None,
         aos_unix: pass.aos_unix,
         los_unix: pass.los_unix,
     };
@@ -3758,6 +3768,8 @@ async fn start_sat_track(
             transponder: dop.map(|d| d.label.clone()),
             transponder_index: dop.and_then(|d| d.index),
             inverting: dop.is_some_and(|d| d.inverting),
+            offset_hz: dop.map(|d| d.offset_hz),
+            half_width_hz: dop.map(|d| d.half_width_hz),
             aos_unix: pass.aos_unix,
             los_unix: pass.los_unix,
         };
