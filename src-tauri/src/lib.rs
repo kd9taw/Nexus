@@ -3584,16 +3584,30 @@ struct SatTrackDto {
     /// "armed" (waiting, no rotor commands until 5 min before AOS),
     /// "prepositioning" (parked on the AOS azimuth) or "tracking".
     state: String,
-    /// Where the ANTENNA was last COMMANDED — after flip, calibration trim and
-    /// the deadband.
-    az_deg: f64,
-    el_deg: f64,
+    /// Where the ANTENNA was last actually COMMANDED — after flip, calibration
+    /// trim and the deadband. `None` until a command has genuinely been sent:
+    /// the armed phase deliberately drives nothing, and reporting the AOS
+    /// azimuth there would claim a command we withheld on purpose. `el_deg`
+    /// stays `None` for the whole pass on an az-only rotator, which is never
+    /// told an elevation — so no UI has to infer az-only from a sentinel 0.
+    ///
+    /// Inside the deadband these hold the LAST SENT pair, not the freshly
+    /// computed target. That distinction is the whole point: the gap to
+    /// `sat_*_deg` below is the tracking error, and reporting the unsent target
+    /// would collapse it to zero and hide exactly what the operator wants to see.
+    az_deg: Option<f64>,
+    el_deg: Option<f64>,
+    /// Where the bird RISES. Known from the pass itself, so it is honest during
+    /// the armed phase — under its own name, rather than masquerading as a
+    /// commanded azimuth.
+    aos_az_deg: f64,
     /// Where the BIRD actually is, unrounded by rotator policy. The gap between
     /// this and the commanded pair IS the tracking error — they legitimately
     /// differ by a couple of degrees now that a deadband exists, and a UI
     /// drawing them as one number would make correct behaviour look like a fault.
-    sat_az_deg: f64,
-    sat_el_deg: f64,
+    /// `None` until AOS: below the horizon there is no look angle to report.
+    sat_az_deg: Option<f64>,
+    sat_el_deg: Option<f64>,
     /// Slant range (km) and range-rate (km/s, positive receding) — `None`
     /// before AOS, when there is nothing to measure.
     range_km: Option<f64>,
@@ -3613,20 +3627,6 @@ struct SatTrackDto {
     inverting: bool,
     aos_unix: i64,
     los_unix: i64,
-}
-
-/// The fields a plain badge write has no data for. Doppler/range are filled in
-/// only by the tracking path, which is the one place that computes them —
-/// everywhere else they stay `None` rather than carrying a stale value forward.
-fn sat_track_unknowns() -> (
-    Option<f64>,
-    Option<f64>,
-    Option<u64>,
-    Option<u64>,
-    Option<i64>,
-    Option<i64>,
-) {
-    (None, None, None, None, None, None)
 }
 
 static SAT_TRACK_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -3684,10 +3684,11 @@ async fn start_sat_track(
             "tracking"
         }
         .to_string(),
-        az_deg: pass.aos_az_deg,
-        el_deg: 0.0,
-        sat_az_deg: 0.0,
-        sat_el_deg: 0.0,
+        az_deg: None,
+        el_deg: None,
+        aos_az_deg: pass.aos_az_deg,
+        sat_az_deg: None,
+        sat_el_deg: None,
         range_km: None,
         range_rate_km_s: None,
         downlink_hz: None,
@@ -3724,6 +3725,42 @@ async fn start_sat_track(
                 }
             }
         };
+        // ONE place that assembles the badge. The call sites below differ only
+        // in what has actually been COMMANDED and whether the bird is up yet;
+        // while they were three hand-copied literals the deadband branch drifted
+        // into reporting the target it had just suppressed, which silently
+        // zeroed the very tracking error the sky dome exists to show.
+        //
+        // `cmd` is the last pair genuinely SENT, `el_sent` is false on an
+        // az-only rotator (elevation is then reported as absent, never 0), and
+        // `sat` is the look angle only once there is one — below the horizon
+        // there isn't.
+        let badge = |state: &str,
+                     cmd: Option<(f64, f64)>,
+                     el_sent: bool,
+                     sat: Option<(f64, f64)>,
+                     range: Option<f64>,
+                     rate: Option<f64>,
+                     dop: Option<&tempo_app::engine::SatTuningNow>| SatTrackDto {
+            name: tle.name.clone(),
+            state: state.to_string(),
+            az_deg: cmd.map(|c| c.0),
+            el_deg: cmd.and_then(|c| el_sent.then_some(c.1)),
+            aos_az_deg: pass.aos_az_deg,
+            sat_az_deg: sat.map(|s| s.0),
+            sat_el_deg: sat.map(|s| s.1),
+            range_km: range,
+            range_rate_km_s: rate,
+            downlink_hz: dop.map(|d| d.downlink_hz),
+            uplink_hz: dop.map(|d| d.uplink_hz),
+            downlink_shift_hz: dop.map(|d| d.downlink_shift_hz),
+            uplink_shift_hz: dop.map(|d| d.uplink_shift_hz),
+            transponder: dop.map(|d| d.label.clone()),
+            transponder_index: dop.and_then(|d| d.index),
+            inverting: dop.is_some_and(|d| d.inverting),
+            aos_unix: pass.aos_unix,
+            los_unix: pass.los_unix,
+        };
         loop {
             if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
                 return; // replaced or stopped — the newer owner drives the rotor
@@ -3735,25 +3772,10 @@ async fn start_sat_track(
             // Far from AOS: ARMED — hold fire entirely (the operator keeps the
             // rotor for HF until 5 min before the bird rises).
             if t < pass.aos_unix - 300 {
-                update_badge(SatTrackDto {
-                    name: tle.name.clone(),
-                    state: "armed".to_string(),
-                    az_deg: pass.aos_az_deg,
-                    el_deg: 0.0,
-                    sat_az_deg: 0.0,
-                    sat_el_deg: 0.0,
-                    range_km: None,
-                    range_rate_km_s: None,
-                    downlink_hz: None,
-                    uplink_hz: None,
-                    downlink_shift_hz: None,
-                    uplink_shift_hz: None,
-                    transponder: None,
-                    transponder_index: None,
-                    inverting: false,
-                    aos_unix: pass.aos_unix,
-                    los_unix: pass.los_unix,
-                });
+                // Armed sends NOTHING to the rotor, so there is no commanded
+                // position and no look angle — only the rise azimuth the badge
+                // carries under its own name.
+                update_badge(badge("armed", None, false, None, None, None, None));
                 std::thread::sleep(std::time::Duration::from_secs(3));
                 continue;
             }
@@ -3770,6 +3792,10 @@ async fn start_sat_track(
             // the antenna was commanded IS the tracking error, and with a
             // deadband in play they legitimately differ.
             let (sat_az, sat_el) = (az, el);
+            // Only once the bird is UP is that pair a real look angle. While
+            // prepositioning it is the AOS azimuth pinned at the horizon —
+            // where the antenna is waiting, not where the satellite is.
+            let rep_sat = (phase == "tracking").then_some((sat_az, sat_el));
             // DOPPLER. Only once the bird is actually up: correcting during the
             // armed/prepositioning phases would move the operator's dial before
             // there is anything to hear. Everything else — the rate limits, the
@@ -3803,25 +3829,19 @@ async fn start_sat_track(
             // relays chatter for the whole pass. The badge still updates, so the
             // operator sees tracking continue.
             if !tempo_core::rotator::worth_moving((az, el), last_cmd, &rot_cfg) {
-                update_badge(SatTrackDto {
-                    name: tle.name.clone(),
-                    state: phase.to_string(),
-                    az_deg: az,
-                    el_deg: if azel_ok { el } else { 0.0 },
-                    sat_az_deg: sat_az,
-                    sat_el_deg: sat_el,
-                    range_km: live_range,
-                    range_rate_km_s: live_rate,
-                    downlink_hz: dop.as_ref().map(|d| d.downlink_hz),
-                    uplink_hz: dop.as_ref().map(|d| d.uplink_hz),
-                    downlink_shift_hz: dop.as_ref().map(|d| d.downlink_shift_hz),
-                    uplink_shift_hz: dop.as_ref().map(|d| d.uplink_shift_hz),
-                    transponder: dop.as_ref().map(|d| d.label.clone()),
-                    transponder_index: dop.as_ref().and_then(|d| d.index),
-                    inverting: dop.as_ref().is_some_and(|d| d.inverting),
-                    aos_unix: pass.aos_unix,
-                    los_unix: pass.los_unix,
-                });
+                // The command was SUPPRESSED, so the antenna is still where it
+                // was last TOLD to go — `last_cmd`, not the fresh target.
+                // Reporting the target here would erase the deadband gap, which
+                // is exactly the tracking error the sky dome exists to show.
+                update_badge(badge(
+                    phase,
+                    last_cmd,
+                    azel_ok,
+                    rep_sat,
+                    live_range,
+                    live_rate,
+                    dop.as_ref(),
+                ));
                 std::thread::sleep(std::time::Duration::from_secs(3));
                 continue;
             }
@@ -3866,27 +3886,18 @@ async fn start_sat_track(
             if sent {
                 misses = 0;
                 last_cmd = Some((az, el));
-                update_badge(SatTrackDto {
-                    name: tle.name.clone(),
-                    state: phase.to_string(),
-                    az_deg: az,
-                    // Honesty: report what was COMMANDED. An az-only fallback
-                    // never commands elevation, so it must not claim one.
-                    el_deg: if azel_ok { el } else { 0.0 },
-                    sat_az_deg: sat_az,
-                    sat_el_deg: sat_el,
-                    range_km: live_range,
-                    range_rate_km_s: live_rate,
-                    downlink_hz: dop.as_ref().map(|d| d.downlink_hz),
-                    uplink_hz: dop.as_ref().map(|d| d.uplink_hz),
-                    downlink_shift_hz: dop.as_ref().map(|d| d.downlink_shift_hz),
-                    uplink_shift_hz: dop.as_ref().map(|d| d.uplink_shift_hz),
-                    transponder: dop.as_ref().map(|d| d.label.clone()),
-                    transponder_index: dop.as_ref().and_then(|d| d.index),
-                    inverting: dop.as_ref().is_some_and(|d| d.inverting),
-                    aos_unix: pass.aos_unix,
-                    los_unix: pass.los_unix,
-                });
+                // Report what was COMMANDED. An az-only fallback never commands
+                // elevation, so `azel_ok` makes it report none at all — absent,
+                // not a 0 the UI would have to decode back into "az-only".
+                update_badge(badge(
+                    phase,
+                    last_cmd,
+                    azel_ok,
+                    rep_sat,
+                    live_range,
+                    live_rate,
+                    dop.as_ref(),
+                ));
             } else {
                 misses += 1;
                 if misses >= 5 {

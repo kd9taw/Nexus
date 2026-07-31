@@ -3,10 +3,11 @@
 // Look4Sat): a favorites set drives everything (declutter + prediction focus),
 // a ranked "your best passes" strip answers the when/which question in one
 // line, the 48 h schedule carries countdowns + ⏰ pass alarms, and the detail
-// zone shows the pass on a polar plot with SatNOGS frequencies/status
-// (community-measured truth — absent when offline, never guessed). The Connect
-// "Satellite Passes" pane stays as the compact glance view; this is the
-// planning surface. Rotor auto-track arms here when a rotor is configured.
+// zone shows the pass on the SKY DOME (hero when a pass is live) with SatNOGS
+// frequencies/status (community-measured truth — absent when offline, never
+// guessed). The Connect "Satellite Passes" pane stays as the compact glance
+// view; this is the planning surface. Rotor auto-track arms here when a rotor
+// is configured.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type {
   NeedTag,
@@ -30,6 +31,7 @@ import {
 } from '../api'
 import { satChasingSet, toggleSatChasing } from '../features/satChase'
 import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAlarm'
+import { heatPulse } from '../features/pulse'
 import { pushToast } from '../toast'
 import { MapView } from './MapView'
 import { useTheme } from '../useTheme'
@@ -84,70 +86,412 @@ function whyLine(p: SatPass, nowSecs: number): string {
   return `${hhmm(p.aosUnix)} ${countdown(p, nowSecs)} — ${el}° ${quality}, ${dur} min, ${wind8(p.aosAzDeg)}→${wind8(p.losAzDeg)}${status}`
 }
 
-/** Polar plot: N-up az/el sky chart of the pass (the Look4Sat/Gpredict idiom).
- * el 90° = center, 0° = rim; concentric rings at 0/30/60. Pure SVG, no canvas. */
-function PolarPlot({
-  track,
-  nowSecs,
-  rotor,
-}: {
-  track: [number, number, number][]
-  nowSecs: number
-  rotor: SatTrackStatus | null
-}) {
-  const R = 88
-  const C = 100
-  const pt = (az: number, el: number): [number, number] => {
-    const r = (R * (90 - Math.max(0, el))) / 90
-    const a = (az * Math.PI) / 180
-    return [C + r * Math.sin(a), C - r * Math.cos(a)]
-  }
-  const path = track
-    .map(([, az, el], i) => {
-      const [x, y] = pt(az, el)
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(' ')
-  // Bird's live sky position: interpolate the track at now (only mid-pass).
-  let live: [number, number] | null = null
-  if (track.length > 1 && nowSecs >= track[0][0] && nowSecs <= track[track.length - 1][0]) {
-    for (let i = 1; i < track.length; i++) {
-      if (nowSecs <= track[i][0]) {
-        const [t0, az0, el0] = track[i - 1]
-        const [t1, az1, el1] = track[i]
-        const f = (nowSecs - t0) / Math.max(1, t1 - t0)
-        let dAz = az1 - az0
-        if (dAz > 180) dAz -= 360
-        if (dAz < -180) dAz += 360
-        live = pt(az0 + f * dAz, el0 + f * (el1 - el0))
-        break
-      }
+/* ======================= the sky dome (hero instrument) =====================
+ * The one view every satellite operator reads instinctively. SVG on purpose:
+ * crisp at any size, themeable from CSS variables, and every mark can carry a
+ * <title> — a canvas instrument would be a black box to a screen reader.
+ * Geometry is N-up az/el: el 90° = centre, el 0° = rim, exactly as Gpredict /
+ * Look4Sat draw it. */
+
+/** Rim radius and centre in viewBox units; the 24 u margin holds the compass
+ * letters and ring labels. */
+const DOME_R = 100
+const DOME_C = 124
+
+/** N-up az/el → SVG point. */
+function skyPt(azDeg: number, elDeg: number): [number, number] {
+  const r = (DOME_R * (90 - Math.min(90, Math.max(0, elDeg)))) / 90
+  const a = (azDeg * Math.PI) / 180
+  return [DOME_C + r * Math.sin(a), DOME_C - r * Math.cos(a)]
+}
+
+/** Ring radius for an elevation (0 = rim). */
+const ringR = (elDeg: number) => (DOME_R * (90 - elDeg)) / 90
+
+interface LookAngle {
+  az: number
+  el: number
+}
+
+/** Where the bird is at `tSecs` by interpolating the computed pass track;
+ * null outside the track. Azimuth interpolates the SHORT way, so a pass that
+ * crosses north doesn't sweep backwards through 358°. */
+function trackAt(track: [number, number, number][], tSecs: number): LookAngle | null {
+  if (track.length < 2) return null
+  if (tSecs < track[0][0] || tSecs > track[track.length - 1][0]) return null
+  for (let i = 1; i < track.length; i++) {
+    if (tSecs <= track[i][0]) {
+      const [t0, az0, el0] = track[i - 1]
+      const [t1, az1, el1] = track[i]
+      const f = (tSecs - t0) / Math.max(1, t1 - t0)
+      let dAz = az1 - az0
+      if (dAz > 180) dAz -= 360
+      if (dAz < -180) dAz += 360
+      return { az: (az0 + f * dAz + 360) % 360, el: el0 + f * (el1 - el0) }
     }
   }
-  const rotorPt = rotor ? pt(rotor.azDeg, rotor.elDeg) : null
-  const aos = track.length > 0 ? pt(track[0][1], track[0][2]) : null
+  return null
+}
+
+/** True angular separation between two look angles, in degrees. This is the
+ * number a beam cares about; "az off by 6°, el off by 1°" is not the same
+ * thing (6° of azimuth error at el 80° is barely a degree of sky). */
+function pointingError(a: LookAngle, b: LookAngle): number {
+  const rad = Math.PI / 180
+  const c =
+    Math.sin(a.el * rad) * Math.sin(b.el * rad) +
+    Math.cos(a.el * rad) * Math.cos(b.el * rad) * Math.cos((a.az - b.az) * rad)
+  return Math.acos(Math.min(1, Math.max(-1, c))) / rad
+}
+
+/** What the rotator ghost is allowed to claim. The backend reports the
+ * commanded pair as absent rather than zero, so this reads the answer instead
+ * of inferring it — a UI cannot tell a real "commanded el 0" (prepositioning on
+ * the horizon) from "no elevation was ever sent" (an az-only rotor) by looking
+ * at the number.
+ *  - `none`   — nothing has been commanded: the loop deliberately drives
+ *               nothing while armed, and holds fire until 5 min before AOS.
+ *  - `az-only`— the rotator took azimuth but refused elevation; we know the
+ *               commanded azimuth and genuinely do not know an elevation.
+ *  - `full`   — az AND el were commanded; draw both and the error to the bird. */
+type GhostKind = 'none' | 'az-only' | 'full'
+function ghostKind(t: SatTrackStatus | null): GhostKind {
+  if (t == null || t.azDeg == null) return 'none'
+  return t.elDeg == null ? 'az-only' : 'full'
+}
+
+/** Triangle marker path (up = rising/AOS, down = setting/LOS). Shape, not
+ * colour, carries the distinction — it survives greyscale and colourblindness. */
+function triPath(x: number, y: number, r: number, up: boolean): string {
+  const h = up ? -r : r
+  return `M${(x).toFixed(1)},${(y + h).toFixed(1)} L${(x + r * 0.95).toFixed(1)},${(y - h * 0.8).toFixed(1)} L${(x - r * 0.95).toFixed(1)},${(y - h * 0.8).toFixed(1)} Z`
+}
+
+const deg = (v: number) => `${Math.round(v)}°`
+
+function SkyDome({
+  name,
+  pass,
+  track,
+  rotor,
+  nowSecs,
+}: {
+  name: string
+  pass: SatPass
+  /** (unix, az, el) samples across the pass. */
+  track: [number, number, number][]
+  /** Auto-track status for THIS bird (already filtered), or null. */
+  rotor: SatTrackStatus | null
+  nowSecs: number
+}) {
+  const live = nowSecs >= pass.aosUnix && nowSecs <= pass.losUnix
+  // MOTION MEANS THE PASS IS LIVE. One clock: the shared pulse module is fed
+  // LIVE wall time (features/pulse.ts — the frozen-sine bug was a pulse driven
+  // off a slow tick, which parks the sine on an arbitrary value), and the 1 s
+  // tick that forces the redraw exists ONLY while a pass is in progress and the
+  // tab is visible. Nothing here animates for decoration.
+  const [beatMs, setBeatMs] = useState(() => Date.now())
+  useEffect(() => {
+    if (!live) return
+    const id = window.setInterval(() => {
+      if (!document.hidden) setBeatMs(Date.now())
+    }, 1_000)
+    return () => window.clearInterval(id)
+  }, [live])
+
+  // Where the bird is. While the tracker is actually following the pass we take
+  // the backend's own look angle: it is computed in the same tick as the
+  // commanded pair below, so the gap the dome draws is the REAL tracking error
+  // and not an artefact of interpolating a 30 s track sample.
+  const bird: LookAngle | null =
+    rotor != null && rotor.satAzDeg != null && rotor.satElDeg != null
+      ? { az: rotor.satAzDeg, el: rotor.satElDeg }
+      : trackAt(track, live ? beatMs / 1000 : nowSecs)
+
+  const ghost = ghostKind(rotor)
+  // The COMMANDED pair, absent until one was genuinely sent. Held as locals so
+  // "we have this number" is checked once, where it is decided.
+  const cmdAz = rotor?.azDeg ?? null
+  const cmdEl = rotor?.elDeg ?? null
+  const birdPt = bird ? skyPt(bird.az, bird.el) : null
+  const ghostPt = cmdAz != null && cmdEl != null ? skyPt(cmdAz, cmdEl) : null
+  const ghostRim = cmdAz != null && ghost === 'az-only' ? skyPt(cmdAz, 0) : null
+  const aosPt = skyPt(pass.aosAzDeg, 0)
+  const losPt = skyPt(pass.losAzDeg, 0)
+  const errDeg =
+    bird && cmdAz != null && cmdEl != null ? pointingError(bird, { az: cmdAz, el: cmdEl }) : null
+
+  // Track drawn segment-by-segment so stroke weight + opacity can ramp with
+  // elevation: the high, workable part of the pass reads first at a glance.
+  // One hue (--accent) rather than an invented colour scale — it stays legible
+  // in both themes and in greyscale, and it never collides with the app's
+  // semantic palette (green = open, amber = marginal).
+  const segs = useMemo(
+    () =>
+      track.slice(1).map(([, az1, el1], i) => {
+        const [, az0, el0] = track[i]
+        const [x0, y0] = skyPt(az0, el0)
+        const [x1, y1] = skyPt(az1, el1)
+        const f = Math.min(1, Math.max(0, (el0 + el1) / 2 / 90))
+        return (
+          <line
+            key={i}
+            x1={x0.toFixed(1)}
+            y1={y0.toFixed(1)}
+            x2={x1.toFixed(1)}
+            y2={y1.toFixed(1)}
+            className="sat-dome-track"
+            strokeWidth={(1.3 + 2.5 * f).toFixed(2)}
+            strokeOpacity={(0.5 + 0.5 * f).toFixed(2)}
+          />
+        )
+      }),
+    [track],
+  )
+
+  // The breath: 0.4–1.0 on a ~2.8 s period, from the shared clock.
+  const breath = live ? heatPulse(beatMs) : 1
+
+  const ghostText =
+    rotor == null
+      ? null
+      : cmdAz == null
+        ? 'armed — no rotor command sent yet'
+        : cmdEl == null
+          ? `az ${deg(cmdAz)} · elevation not commanded (az-only rotator)`
+          : `az ${deg(cmdAz)} el ${deg(cmdEl)}${errDeg != null ? ` · Δ ${errDeg.toFixed(1)}°` : ''}`
+
+  const label = bird
+    ? `Sky dome for ${name}, north up. Satellite at azimuth ${Math.round(bird.az)} degrees, elevation ${Math.round(bird.el)} degrees.`
+    : `Sky dome for ${name}, north up. Pass track from azimuth ${Math.round(pass.aosAzDeg)} to ${Math.round(pass.losAzDeg)} degrees, maximum elevation ${Math.round(pass.maxElDeg)} degrees.`
+
   return (
-    <svg viewBox="0 0 200 200" className="sat-polar" role="img" aria-label="Pass sky track">
-      {[0, 30, 60].map((el) => (
-        <circle key={el} cx={C} cy={C} r={(R * (90 - el)) / 90} className="sat-polar-ring" />
-      ))}
-      <line x1={C} y1={C - R} x2={C} y2={C + R} className="sat-polar-ring" />
-      <line x1={C - R} y1={C} x2={C + R} y2={C} className="sat-polar-ring" />
-      <text x={C} y={C - R - 4} className="sat-polar-label" textAnchor="middle">N</text>
-      <text x={C + R + 7} y={C + 3} className="sat-polar-label" textAnchor="middle">E</text>
-      <text x={C} y={C + R + 11} className="sat-polar-label" textAnchor="middle">S</text>
-      <text x={C - R - 7} y={C + 3} className="sat-polar-label" textAnchor="middle">W</text>
-      {path && <path d={path} className="sat-polar-track" />}
-      {aos && <circle cx={aos[0]} cy={aos[1]} r={3} className="sat-polar-aos" />}
-      {live && <circle cx={live[0]} cy={live[1]} r={4.5} className="sat-polar-live" />}
-      {rotorPt && (
-        <g className="sat-polar-rotor">
-          <title>Commanded rotor az/el (not measured position)</title>
-          <line x1={C} y1={C} x2={rotorPt[0]} y2={rotorPt[1]} />
-          <circle cx={rotorPt[0]} cy={rotorPt[1]} r={3} />
-        </g>
-      )}
-    </svg>
+    <div className={`sat-sky${live ? ' live' : ''}`}>
+      <svg viewBox={`0 0 ${DOME_C * 2} ${DOME_C * 2}`} className="sat-dome" role="img" aria-label={label}>
+        <circle cx={DOME_C} cy={DOME_C} r={DOME_R} className="sat-dome-face" />
+        {[30, 60].map((el) => (
+          <circle key={el} cx={DOME_C} cy={DOME_C} r={ringR(el)} className="sat-dome-ring" />
+        ))}
+        <line x1={DOME_C} y1={DOME_C - DOME_R} x2={DOME_C} y2={DOME_C + DOME_R} className="sat-dome-ring" />
+        <line x1={DOME_C - DOME_R} y1={DOME_C} x2={DOME_C + DOME_R} y2={DOME_C} className="sat-dome-ring" />
+        {/* The horizon last of the rings, and heavier: it is the line the bird
+            rises through, and everything outside it is unworkable. */}
+        <circle cx={DOME_C} cy={DOME_C} r={DOME_R} className="sat-dome-horizon" />
+        {[30, 60].map((el) => (
+          <text key={el} x={DOME_C + 5} y={DOME_C - ringR(el) + 11} className="sat-dome-ringlabel">
+            {el}°
+          </text>
+        ))}
+        <text x={DOME_C} y={DOME_C - DOME_R - 6} className="sat-dome-compass" textAnchor="middle">N</text>
+        <text x={DOME_C + DOME_R + 10} y={DOME_C + 4} className="sat-dome-compass" textAnchor="middle">E</text>
+        <text x={DOME_C} y={DOME_C + DOME_R + 14} className="sat-dome-compass" textAnchor="middle">S</text>
+        <text x={DOME_C - DOME_R - 10} y={DOME_C + 4} className="sat-dome-compass" textAnchor="middle">W</text>
+        {segs}
+        <path d={triPath(aosPt[0], aosPt[1], 5, true)} className="sat-dome-aos">
+          <title>AOS — rises at {deg(pass.aosAzDeg)} ({wind8(pass.aosAzDeg)}) {hhmm(pass.aosUnix)}</title>
+        </path>
+        <path d={triPath(losPt[0], losPt[1], 5, false)} className="sat-dome-los">
+          <title>LOS — sets at {deg(pass.losAzDeg)} ({wind8(pass.losAzDeg)}) {hhmm(pass.losUnix)}</title>
+        </path>
+        {/* THE ROTATOR GHOST. A second marker at what the antenna was told, not
+            where it is: the gap to the bird IS the tracking error, and drawing
+            it is what stops a legitimate deadband from looking like a fault. */}
+        {ghostPt && (
+          <g className="sat-dome-ghost" data-testid="sat-ghost">
+            <title>Antenna: commanded az/el (not a rotator read-back)</title>
+            {birdPt && (
+              <line x1={ghostPt[0]} y1={ghostPt[1]} x2={birdPt[0]} y2={birdPt[1]} className="sat-dome-err" />
+            )}
+            <circle cx={ghostPt[0]} cy={ghostPt[1]} r={7} className="sat-dome-ghost-ring" />
+            <circle cx={ghostPt[0]} cy={ghostPt[1]} r={1.8} className="sat-dome-ghost-hub" />
+          </g>
+        )}
+        {/* Az-only rotator: we know the azimuth it was told and NOTHING about
+            an elevation it was never sent. A spoke along that azimuth says
+            exactly that — a ghost dot would invent an elevation. */}
+        {ghostRim && cmdAz != null && (
+          <g className="sat-dome-ghost az-only" data-testid="sat-ghost-az">
+            <title>Antenna: azimuth {deg(cmdAz)} commanded — az-only rotator, no elevation sent</title>
+            <line x1={DOME_C} y1={DOME_C} x2={ghostRim[0]} y2={ghostRim[1]} className="sat-dome-azspoke" />
+          </g>
+        )}
+        {birdPt && bird && (
+          <g className="sat-dome-bird" data-testid="sat-bird">
+            <title>{name} — az {deg(bird.az)} el {deg(bird.el)}</title>
+            {live && (
+              <circle
+                cx={birdPt[0]}
+                cy={birdPt[1]}
+                r={(5.5 + 5 * breath).toFixed(1)}
+                className="sat-dome-bird-halo"
+                opacity={(0.32 * breath).toFixed(2)}
+              />
+            )}
+            <circle cx={birdPt[0]} cy={birdPt[1]} r={5} />
+          </g>
+        )}
+      </svg>
+      {/* The text equivalent. An SVG instrument is invisible to a screen
+          reader, and these are the numbers an operator reads off the dome
+          anyway — so it is shown, not hidden. Absent values are absent rows. */}
+      <dl className="sat-dome-readout">
+        {bird && (
+          <div>
+            <dt>Satellite</dt>
+            <dd>
+              az {deg(bird.az)} el {deg(bird.el)}
+            </dd>
+          </div>
+        )}
+        {rotor?.rangeKm != null && (
+          <div>
+            <dt>Range</dt>
+            <dd>
+              {Math.round(rotor.rangeKm)} km
+              {rotor.rangeRateKmS != null &&
+                ` · ${rotor.rangeRateKmS >= 0 ? '+' : ''}${rotor.rangeRateKmS.toFixed(2)} km/s ${
+                  rotor.rangeRateKmS < 0 ? 'closing' : 'opening'
+                }`}
+            </dd>
+          </div>
+        )}
+        {ghostText && (
+          <div>
+            <dt title="What the rotator was COMMANDED — not a read-back. Δ is the true angular gap to the bird.">
+              Antenna
+            </dt>
+            <dd className={ghost === 'az-only' ? 'partial' : undefined}>{ghostText}</dd>
+          </div>
+        )}
+        <div>
+          <dt>Rise / set</dt>
+          <dd>
+            ▲ {deg(pass.aosAzDeg)} {wind8(pass.aosAzDeg)} · ▼ {deg(pass.losAzDeg)} {wind8(pass.losAzDeg)}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  )
+}
+
+/** AOS · TCA · LOS on one rail, with the live position marked. Replaces the
+ * flat "next pass …" line for the bird being watched: a pass is an interval,
+ * and where you are IN it is the question the numbers don't answer at a
+ * glance. TCA comes from the computed track (the sample with the highest
+ * elevation) — omitted, not guessed, when there is no track. */
+function PassTimeline({
+  pass,
+  tcaUnix,
+  nowSecs,
+}: {
+  pass: SatPass
+  tcaUnix: number | null
+  nowSecs: number
+}) {
+  const span = Math.max(1, pass.losUnix - pass.aosUnix)
+  const pct = (t: number) => `${Math.min(100, Math.max(0, ((t - pass.aosUnix) / span) * 100)).toFixed(1)}%`
+  const live = nowSecs >= pass.aosUnix && nowSecs <= pass.losUnix
+  const minsLeft = Math.max(0, Math.round((pass.losUnix - nowSecs) / 60))
+  return (
+    <div className={`sat-timeline${live ? ' live' : ''}`}>
+      <div className="sat-tl-rail" aria-hidden="true">
+        {live && <div className="sat-tl-done" style={{ width: pct(nowSecs) }} />}
+        {tcaUnix != null && <div className="sat-tl-tca" style={{ left: pct(tcaUnix) }} />}
+        {live && <div className="sat-tl-now" style={{ left: pct(nowSecs) }} />}
+      </div>
+      <div className="sat-tl-labels">
+        <span>AOS {hhmm(pass.aosUnix)}</span>
+        <span className="sat-tl-tca-label">
+          {tcaUnix != null ? `TCA ${hhmm(tcaUnix)} · ` : ''}max {Math.round(pass.maxElDeg)}°
+        </span>
+        <span>LOS {hhmm(pass.losUnix)}</span>
+      </div>
+      <div className="sat-tl-state">
+        {live ? `IN PASS — ${minsLeft} min to LOS` : `next pass ${countdown(pass, nowSecs)}`}
+      </div>
+    </div>
+  )
+}
+
+/** Hz → MHz at 10 Hz resolution (what an SSB operator needs to see move). */
+const fmtMHz = (hz: number) => `${(hz / 1e6).toFixed(5)} MHz`
+/** Signed Doppler correction, kHz once it is big enough to matter. */
+const fmtShift = (hz: number) => {
+  const a = Math.abs(hz)
+  const sign = hz < 0 ? '-' : '+'
+  return a >= 1000 ? `${sign}${(a / 1000).toFixed(2)} kHz` : `${sign}${Math.round(a)} Hz`
+}
+
+/** What Doppler has the radio tuned to, per leg, straight from the engine.
+ *
+ * HONESTY: every frequency here is nullable and null means "we are not tuning
+ * that leg". No zeros, no placeholder dashes — an absent row, plus one line
+ * saying WHY when there is nothing at all (the reasons are all things this
+ * component actually knows: the two opt-in switches, whether a transponder is
+ * held, and whether the pass has started). */
+function DopplerReadout({
+  rotor,
+  dopplerOn,
+  vfoMap,
+  held,
+}: {
+  rotor: SatTrackStatus
+  dopplerOn: boolean
+  vfoMap: SatVfoMap
+  held: boolean
+}) {
+  const any = rotor.downlinkHz != null || rotor.uplinkHz != null
+  if (!any) {
+    const why = !dopplerOn
+      ? 'Doppler is off — nothing is being tuned (Settings ▸ Radio ▸ Satellite Doppler).'
+      : vfoMap === 'off'
+        ? 'VFO mapping is Off — Doppler is not writing to the radio.'
+        : !held
+          ? 'No transponder selected — pick one below to put the dial under Doppler.'
+          : rotor.state !== 'tracking'
+            ? 'Doppler corrects from AOS — nothing to correct until the bird is up.'
+            : 'Doppler has not reported a tuning for this pass yet.'
+    return <div className="sat-doppler none">{why}</div>
+  }
+  return (
+    <div className="sat-doppler">
+      <div className="sat-dop-head">
+        <span className="sat-dop-title">Doppler</span>
+        {rotor.transponder && <span className="sat-dop-tp">{rotor.transponder}</span>}
+        {rotor.inverting && (
+          <span
+            className="sat-invert"
+            title="Inverting linear transponder: tune the downlink UP and your uplink goes DOWN, and the sidebands swap (LSB up, USB down)."
+          >
+            INVERTING
+          </span>
+        )}
+      </div>
+      <dl className="sat-dop-legs">
+        {rotor.downlinkHz != null && (
+          <div>
+            <dt>↓ Downlink</dt>
+            <dd>
+              {fmtMHz(rotor.downlinkHz)}
+              {rotor.downlinkShiftHz != null && (
+                <span className="sat-dop-shift"> {fmtShift(rotor.downlinkShiftHz)}</span>
+              )}
+            </dd>
+          </div>
+        )}
+        {rotor.uplinkHz != null && (
+          <div>
+            <dt>↑ Uplink</dt>
+            <dd>
+              {fmtMHz(rotor.uplinkHz)}
+              {rotor.uplinkShiftHz != null && (
+                <span className="sat-dop-shift"> {fmtShift(rotor.uplinkShiftHz)}</span>
+              )}
+            </dd>
+          </div>
+        )}
+      </dl>
+    </div>
   )
 }
 
@@ -199,6 +543,8 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   }, [focusSat])
 
   // Countdown re-render cadence. 10 s keeps "in N min" honest without churn.
+  // (The sky dome runs its own 1 s tick while a pass is live — a 1 s tick here
+  // would re-render the whole 48 h schedule for a marker that moved 2 px.)
   useEffect(() => {
     const id = window.setInterval(() => setNowTick(Date.now()), 10_000)
     return () => window.clearInterval(id)
@@ -388,6 +734,19 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   // both default off, so saying nothing here would look like a dead control.
   const dopplerLive = dopplerOn && vfoMap !== 'off'
 
+  // Auto-track status, but only when it belongs to the bird on screen — a badge
+  // for a different bird must never decorate this one's sky dome.
+  const detailTrack = track != null && detail != null && track.name === detail.name ? track : null
+  // TCA from the computed track (highest-elevation sample). No track, no tick —
+  // the pass midpoint would be a guess dressed as a measurement.
+  const tcaUnix = useMemo(() => {
+    const t = detail?.passTrack ?? []
+    if (t.length === 0) return null
+    let bestSample = t[0]
+    for (const s of t) if (s[2] > bestSample[2]) bestSample = s
+    return bestSample[0]
+  }, [detail])
+
   const armTrack = (name: string, aosUnix: number) => {
     startSatTrack(name, aosUnix)
       .then((t) => {
@@ -446,10 +805,21 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         {track && (
           <span
             className="sats-tracking-badge"
-            title="Auto-track is driving the rotor — angles shown are what was COMMANDED (rotctld read-back lives on the rotor strip/pane)"
+            title={
+              track.azDeg == null
+                ? 'Armed — the rotor has NOT been commanded yet; auto-track takes it 5 min before AOS'
+                : 'Auto-track is driving the rotor — angles shown are what was COMMANDED (rotctld read-back lives on the rotor strip/pane)'
+            }
           >
-            ⟳ {track.state === 'armed' ? 'armed' : 'tracking'} {track.name} · cmd az{' '}
-            {Math.round(track.azDeg)}° el {Math.max(0, Math.round(track.elDeg))}°
+            {/* Armed means no command has been sent, so there is no commanded
+                angle to print. The rise azimuth answers the question the
+                operator actually has ("where do I look?") without dressing it
+                up as a command we withheld on purpose. An az-only rotor is
+                never sent an elevation either, and must not print one. */}
+            ⟳ {track.azDeg == null ? 'armed' : 'tracking'} {track.name} ·{' '}
+            {track.azDeg == null
+              ? `rises az ${Math.round(track.aosAzDeg)}°`
+              : `cmd az ${Math.round(track.azDeg)}° ${track.elDeg == null ? '(az only)' : `el ${Math.round(track.elDeg)}°`}`}
             <button onClick={disarmTrack} title="Stop auto-tracking (rotor halts)">■ stop</button>
           </span>
         )}
@@ -605,6 +975,32 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               {detail.norad != null && <span className="sat-norad"> · NORAD {detail.norad}</span>}
               {detail.status && <span className={`sat-chip ${detail.status === 'alive' ? 'alive' : 'dead'}`}>{detail.status}</span>}
             </h2>
+            {/* THE PASS, FIRST. The sky dome is the instrument an operator reads
+                during a pass, so it sits above the globe and grows to the full
+                column while the bird is up; the globe stays the "where is it
+                over the earth" view underneath. */}
+            {detail.pass ? (
+              <>
+                <SkyDome
+                  name={detail.name}
+                  pass={detail.pass}
+                  track={detail.passTrack}
+                  rotor={detailTrack}
+                  nowSecs={nowSecs}
+                />
+                <PassTimeline pass={detail.pass} tcaUnix={tcaUnix} nowSecs={nowSecs} />
+                {detailTrack && (
+                  <DopplerReadout
+                    rotor={detailTrack}
+                    dopplerOn={dopplerOn}
+                    vfoMap={vfoMap}
+                    held={heldIndex != null || detailTrack.transponder != null}
+                  />
+                )}
+              </>
+            ) : (
+              <div className="sat-passline">no pass over you in the next 24 h</div>
+            )}
             <div
               /* Square-ish and growing with the column rather than pinned at
                  260px: a globe is only readable at size, and this is the one
@@ -631,17 +1027,6 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                 onSelectSat={selectSatInBox}
               />
             </div>
-            {detail.pass ? (
-              <>
-                <div className="sat-passline">
-                  {detail.pass.aosUnix <= nowSecs ? 'IN PASS' : `next pass ${hhmm(detail.pass.aosUnix)} ${countdown(detail.pass, nowSecs)}`}
-                  {' · '}max {Math.round(detail.pass.maxElDeg)}° · LOS {hhmm(detail.pass.losUnix)}
-                </div>
-                <PolarPlot track={detail.passTrack} nowSecs={nowSecs} rotor={track?.name === detail.name ? track : null} />
-              </>
-            ) : (
-              <div className="sat-passline">no pass over you in the next 24 h</div>
-            )}
             {detail.transmitters.length > 0 ? (
               <>
                 <table className="sat-freqs">

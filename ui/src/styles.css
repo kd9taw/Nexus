@@ -14931,40 +14931,224 @@ html[data-panel='needed'] {
   color: var(--text);
   margin-bottom: var(--space-1);
 }
-.sat-polar {
-  width: 100%;
-  max-width: 220px;
-  display: block;
-  margin: 0 auto var(--space-1);
+/* ---- The sky dome (SatellitesView) --------------------------------------
+   The promoted polar plot: the instrument an operator reads DURING a pass, so
+   it grows to the full detail column while the bird is up and stays a compact
+   diagram otherwise. Colour is theme variables only, and it carries meaning:
+     --accent        the pass track
+     --band-open     the bird (it is up)
+     --band-marginal the rotator ghost + the error it makes visible
+     --text-dim      horizon, rings, AOS/LOS reference marks
+   Elevation is encoded as stroke WEIGHT + opacity on the one track hue rather
+   than an invented colour ramp: the high part of the pass reads first, it
+   survives greyscale and colourblindness, and nothing collides with the app's
+   semantic palette. */
+.sat-sky {
+  margin-bottom: var(--space-1);
 }
-.sat-polar-ring {
+.sat-dome {
+  width: 100%;
+  max-width: 240px;
+  display: block;
+  margin: 0 auto;
+}
+.sat-sky.live .sat-dome {
+  max-width: 100%;
+}
+.sat-dome-face {
+  fill: var(--bg-elev);
+}
+.sat-dome-ring {
   fill: none;
   stroke: var(--border);
   stroke-width: 0.75;
 }
-.sat-polar-label {
+/* The horizon is the line the bird rises through; everything outside it is
+   unworkable, so it outweighs the elevation rings. */
+.sat-dome-horizon {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.75;
+}
+.sat-dome-ringlabel,
+.sat-dome-compass {
   fill: var(--text-dim);
-  font-size: 8px;
   font-family: var(--font-mono);
 }
-.sat-polar-track {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.5;
+.sat-dome-ringlabel {
+  font-size: 9px;
 }
-.sat-polar-aos {
+.sat-dome-compass {
+  font-size: 11px;
+}
+.sat-dome-track {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+.sat-dome-aos {
+  fill: var(--text-dim);
+}
+.sat-dome-los {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.4;
+}
+.sat-dome-bird circle {
   fill: var(--band-open);
 }
-.sat-polar-live {
-  fill: #5eead4;
-}
-.sat-polar-rotor line {
-  stroke: var(--band-marginal);
+.sat-dome-bird > circle:last-of-type {
+  stroke: var(--bg);
   stroke-width: 1;
-  stroke-dasharray: 3 3;
 }
-.sat-polar-rotor circle {
+/* Rotator ghost: what the antenna was TOLD. Hollow ring, never the same mark
+   as the bird — the gap between the two is the tracking error. */
+.sat-dome-ghost-ring {
+  fill: none;
+  stroke: var(--band-marginal);
+  stroke-width: 1.75;
+}
+.sat-dome-ghost-hub {
   fill: var(--band-marginal);
+}
+.sat-dome-err {
+  stroke: var(--band-marginal);
+  stroke-width: 1.25;
+  stroke-dasharray: 3 2.5;
+}
+.sat-dome-azspoke {
+  stroke: var(--band-marginal);
+  stroke-width: 1.25;
+  stroke-dasharray: 2 3;
+  opacity: 0.85;
+}
+/* The dome's text equivalent — read by a screen reader, and the same numbers
+   a sighted operator wants off the instrument. */
+.sat-dome-readout {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1px var(--space-2);
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-micro);
+}
+.sat-dome-readout > div {
+  display: contents;
+}
+.sat-dome-readout dt {
+  color: var(--text-dim);
+}
+.sat-dome-readout dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.sat-dome-readout dd.partial {
+  color: var(--alert-warning);
+}
+/* ---- Pass timeline: AOS · TCA · LOS with the live position --------------- */
+.sat-timeline {
+  margin: var(--space-2) 0;
+}
+.sat-tl-rail {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+}
+.sat-tl-done {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--accent);
+  opacity: 0.35;
+  border-radius: 999px;
+}
+.sat-tl-tca {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-dim);
+}
+.sat-tl-now {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: var(--band-open);
+}
+.sat-tl-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-1);
+  margin-top: 3px;
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+.sat-tl-tca-label {
+  color: var(--text);
+}
+.sat-tl-state {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.sat-timeline.live .sat-tl-state {
+  color: var(--band-open);
+  font-weight: 600;
+}
+/* ---- Doppler readout: what the radio is ACTUALLY tuned to ---------------- */
+.sat-doppler {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.sat-doppler.none {
+  border-style: dashed;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+}
+.sat-dop-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.sat-dop-title {
+  font-size: var(--fs-label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.sat-dop-tp {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.sat-dop-legs {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1px var(--space-2);
+  margin: 3px 0 0;
+  font-size: var(--fs-micro);
+}
+.sat-dop-legs > div {
+  display: contents;
+}
+.sat-dop-legs dt {
+  color: var(--text-dim);
+}
+.sat-dop-legs dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.sat-dop-shift {
+  color: var(--accent);
 }
 .sat-freqs {
   width: 100%;
@@ -18083,4 +18267,41 @@ tr.sel .aprs-sym {
 }
 .aprs-rail .aprs-table tbody tr.sel td {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* ── Globe 3-D: tracked-pass readout (satellite pass mode, 2026-07-30) ────────
+   Appended at the end of the file on purpose: styles.css is being edited
+   concurrently and this block touches nothing above it.
+
+   The globe's pass scene is a WebGL drawing, which a screen reader cannot see —
+   this is its text equivalent, and it names the bird for everyone else. Top
+   centre is the free corner (layers top-left, spin top-right, insight rail
+   right, legends bottom). Existing theme variables only, so both themes are
+   already covered. */
+.globe3d-pass {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: min(60%, 420px);
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Never intercept a globe drag — the scene under it IS the interface. */
+  pointer-events: none;
+}
+.globe3d-pass b {
+  color: var(--text);
 }

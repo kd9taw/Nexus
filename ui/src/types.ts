@@ -433,8 +433,40 @@ export interface SatTrackStatus {
   /** armed = waiting (no rotor commands until 5 min before AOS);
    * prepositioning = slewing to the AOS azimuth; tracking = following. */
   state: 'armed' | 'prepositioning' | 'tracking'
-  azDeg: number
-  elDeg: number
+  /** Where the ANTENNA was last actually COMMANDED — after the flip, the
+   * calibration trim and the deadband. NOT a read-back: it is what the rotator
+   * was told. Null until a command has genuinely been sent (the armed phase
+   * drives nothing), and `elDeg` is null for the whole pass on an az-only
+   * rotator, which is never told an elevation — so nothing has to infer
+   * az-only from a sentinel value. Inside the deadband these are the LAST SENT
+   * pair, which is what makes the gap below a real tracking error. */
+  azDeg: number | null
+  elDeg: number | null
+  /** Where the bird RISES — from the pass, not a command. Honest during the
+   * armed phase, under its own name. */
+  aosAzDeg: number
+  /** Where the BIRD is, unrounded by rotator policy. The gap between this and
+   * the commanded pair IS the tracking error — with a deadband in play the two
+   * legitimately differ by a couple of degrees. Null until AOS: below the
+   * horizon there is no look angle. */
+  satAzDeg: number | null
+  satElDeg: number | null
+  /** Slant range (km) and range-rate (km/s, positive receding); null before
+   * AOS, when there is nothing to measure. */
+  rangeKm: number | null
+  rangeRateKmS: number | null
+  /** What Doppler has the radio tuned to, and by how much (Hz). All null
+   * unless a transponder is held AND Doppler is enabled — never a fabricated
+   * frequency (the plain dial is NOT the downlink under an uplink-only map). */
+  downlinkHz: number | null
+  uplinkHz: number | null
+  downlinkShiftHz: number | null
+  uplinkShiftHz: number | null
+  /** The transponder the ENGINE holds, not what this browser last clicked. */
+  transponder: string | null
+  transponderIndex: number | null
+  /** True when the held transponder mirrors the passband (uplink runs backwards). */
+  inverting: boolean
   aosUnix: number
   losUnix: number
 }

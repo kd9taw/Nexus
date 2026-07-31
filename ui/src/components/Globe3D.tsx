@@ -5,6 +5,9 @@
 // station) and renders it on a real textured sphere with a dark night-earth mood, a
 // subsolar day/night terminator, band-colored spots, selected/heard-me great-circle arcs,
 // a QTH ping, a starfield, and bloom. Phase A of the 3-D plan (look + foundation).
+// On a tracked satellite pass it ALSO becomes the "this pass" view (satellite visual
+// design §3.3): the orbit arc ahead/behind, the bird's footprint, and a line-of-sight
+// ray from the QTH to the bird — the 2-D map stays the "everything at once" view.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { heatPulse, sectorPulse } from '../features/pulse'
 import { workedGridSet } from '../coverage'
@@ -24,7 +27,7 @@ import {
   rangeRing,
   sectorRing,
 } from '../mapGeo'
-import { getAurora, getPca, getSatellites, getLog } from '../api'
+import { getAurora, getPca, getSatellites, getSatTrackStatus, getLog } from '../api'
 import cqzonesUrl from '../data/cqzones.geojson?url'
 import { spotTooltip } from '../propViz'
 import { MapInsightRail } from './prop/MapInsightRail'
@@ -36,6 +39,7 @@ import type {
   AuroraPoint,
   PcaView,
   SatView,
+  SatTrackStatus,
   Station,
 } from '../types'
 
@@ -75,6 +79,50 @@ function satPosAt(track: [number, number, number][], tSec: number): { lat: numbe
   }
   const last = track[track.length - 1]
   return { lat: last[1], lon: last[2] }
+}
+
+/**
+ * The tracked pass's palette. Teal is the 2-D map's CHASED-bird colour (2D↔3D
+ * parity — one bird must not change colour between the two surfaces). The sight
+ * line is deliberately the only WARM, SOLID, off-surface line the globe draws:
+ * every hue here is already spoken for (the band palette runs the whole wheel),
+ * so shape and value are what separate it from the orbit, not hue alone.
+ */
+const PASS_TRACK = '#5eead4'
+const PASS_LOS = '#ffe9c4'
+/** Camera height for pass framing: a bird anywhere above the QTH's horizon is at
+ * most ~25° of arc away, and both ends fit comfortably at this altitude. */
+const PASS_ALT = 1.5
+
+/**
+ * Where the bird IS, from the tracker's own look angle + slant range: its
+ * sub-point, its altitude, and the ground distance from the QTH.
+ *
+ * Plane geometry in the QTH's local vertical — the sight line's radial component
+ * is `range·sin(el)` (on top of the Earth's radius) and its horizontal component
+ * `range·cos(el)`, so the Earth-centred angle out to the sub-point is the atan2
+ * of the two. Deriving the whole scene from the SAME numbers the rotor is
+ * following is what keeps it honest: no second propagation of our own to drift
+ * away from the tracker.
+ */
+export function birdFromLook(
+  qth: { lat: number; lon: number },
+  azDeg: number,
+  elDeg: number,
+  rangeKm: number,
+): { lat: number; lon: number; altKm: number; groundKm: number } {
+  const el = (elDeg * Math.PI) / 180
+  const radial = EARTH_KM + rangeKm * Math.sin(el)
+  const horiz = rangeKm * Math.cos(el)
+  const groundKm = Math.atan2(horiz, radial) * EARTH_KM
+  const sub = destinationPoint(qth, azDeg, groundKm)
+  return { lat: sub.lat, lon: sub.lon, altKm: Math.hypot(radial, horiz) - EARTH_KM, groundKm }
+}
+
+/** Seconds → "m:ss", floored at zero (a pass never counts past LOS). */
+function mmss(secs: number): string {
+  const s = Math.max(0, Math.floor(secs))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
 type RGB = [number, number, number]
@@ -321,6 +369,7 @@ export default function Globe3D({
     openings: true,
     grid: false,
     sats: false,
+    pass: true, // the tracked-pass scene; nothing is drawn unless a pass is live
     rings: true,
     cqzones: false,
     coverage: false,
@@ -710,9 +759,61 @@ export default function Globe3D({
     }
   }, [ready, pulseTick])
 
-  // Self-fetch satellites while the layer is on (~30 s, like the 2-D map).
+  // ── Pass mode ───────────────────────────────────────────────────────────────
+  // Self-POLLED rather than taken as a prop: this component's parents are owned
+  // elsewhere, and self-fetching is already the pattern here (aurora, PCA,
+  // satellites). 2 s matches the Satellites section and the rotor strip; the
+  // backend's track loop ticks every 3 s, so nothing is missed — and nothing is
+  // invented between ticks, which is why the bird's position is never
+  // interpolated: it moves when the tracker says it moved.
+  const [pass, setPass] = useState<SatTrackStatus | null>(null)
+  const passRef = useRef<SatTrackStatus | null>(null)
   useEffect(() => {
-    if (!show.sats) {
+    if (!show.pass) {
+      passRef.current = null
+      setPass(null)
+      return
+    }
+    let live = true
+    const poll = () =>
+      getSatTrackStatus()
+        .then((t) => {
+          if (!live) return
+          passRef.current = t
+          setPass(t)
+        })
+        .catch(() => {})
+    poll()
+    const id = setInterval(poll, 2_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [show.pass])
+
+  // The pass the globe DRAWS: the scene lights up at AOS and goes dark at LOS.
+  // Before then there is no look angle and no measured range — the bird is
+  // below the horizon, and the backend says so by reporting them ABSENT rather
+  // than zero, so there is nothing here to guess at. ("armed" is also
+  // deliberately hands-off: the operator still owns the rotor and the bird can
+  // be hours out.) Narrowed once here rather than re-checked at each use.
+  const livePass = useMemo(() => {
+    if (!pass) return null
+    const { satAzDeg, satElDeg, rangeKm } = pass
+    if (satAzDeg == null || satElDeg == null || rangeKm == null) return null
+    return { ...pass, satAzDeg, satElDeg, rangeKm }
+  }, [pass])
+  // Both stable ACROSS polls (a pass never changes bird or AOS mid-flight), so
+  // the effects keyed on them don't rebuild every 2 s.
+  const passBirdKey = livePass ? livePass.name.trim().toUpperCase() : null
+  const passKey = livePass ? `${livePass.name}|${livePass.aosUnix}` : null
+
+  // Self-fetch satellites while the layer is on — or while a pass is tracked,
+  // which needs the tracked bird's ground track for its orbit arc (~30 s, like
+  // the 2-D map).
+  const needSats = show.sats || passBirdKey != null
+  useEffect(() => {
+    if (!needSats) {
       setSats(null)
       return
     }
@@ -727,7 +828,7 @@ export default function Globe3D({
       live = false
       clearInterval(id)
     }
-  }, [show.sats])
+  }, [needSats])
 
   // Build the satellite scene: a REAL 3-D orbit per bird (the ground track lifted to its
   // orbital altitude), a footprint ring on the surface, and a live marker. This is the
@@ -747,6 +848,11 @@ export default function Globe3D({
     const group = new THREE.Group()
     const markers: Record<string, THREE.Object3D> = {}
     for (const bird of sats.birds) {
+      // The tracked bird belongs to the pass scene below, which draws its own
+      // arc, footprint and marker. Drawing it here too would put two identical
+      // lines at exactly the same radius — the coplanar-surface flicker this
+      // file has already been bitten by twice (see SECTOR_ALT_STEP).
+      if (passBirdKey && bird.name.trim().toUpperCase() === passBirdKey) continue
       const alt = bird.altKm / EARTH_KM
       // Orbit line: the ground track lifted to orbital altitude.
       const pts = bird.track.map(([, la, lo]) => {
@@ -787,7 +893,7 @@ export default function Globe3D({
     g.scene().add(group)
     satGroupRef.current = group
     satMarkersRef.current = markers
-  }, [ready, sats, show.sats])
+  }, [ready, sats, show.sats, passBirdKey])
 
   // Animate the sat markers along their tracks each second (real-time motion between polls).
   useEffect(() => {
@@ -807,6 +913,160 @@ export default function Globe3D({
     }, 1000)
     return () => clearInterval(id)
   }, [show.sats, sats])
+
+  // THE PASS SCENE: orbit arc ahead/behind, footprint, sight line, bird.
+  // Rebuilt on each status poll — that rebuild IS the motion, and it is the only
+  // motion: nothing here breathes on a clock of its own (the shared pulse in
+  // features/pulse.ts exists precisely because a decorative pulse on the wrong
+  // clock froze once already). Everything this adds it also disposes —
+  // geometry AND material, including the label's canvas texture.
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready || !qth || !livePass) return
+    const vec = (la: number, lo: number, alt: number) => {
+      const c = g.getCoords(la, lo, alt)
+      return new THREE.Vector3(c.x, c.y, c.z)
+    }
+    const b = birdFromLook(qth, livePass.satAzDeg, livePass.satElDeg, livePass.rangeKm)
+    const satAlt = b.altKm / EARTH_KM
+    const satVec = vec(b.lat, b.lon, satAlt)
+    const qthVec = vec(qth.lat, qth.lon, 0.002)
+    const group = new THREE.Group()
+
+    // 1. THE ORBIT ARC, behind and ahead — the same per-minute ground track the
+    //    satellite layer lifts to orbital altitude, split at now: solid behind,
+    //    dashed ahead, so the direction of travel reads. (The 2-D map draws the
+    //    trail solid and the projection dashed; the two surfaces must agree.)
+    const bird = sats?.birds.find((x) => x.name.trim().toUpperCase() === passBirdKey)
+    if (bird) {
+      const trackAlt = bird.altKm / EARTH_KM
+      const nowSec = Date.now() / 1000
+      const behind = bird.track
+        .filter(([t]) => t <= nowSec)
+        .map(([, la, lo]) => vec(la, lo, trackAlt))
+      behind.push(satVec) // the trail ends AT the bird, not at the last sample
+      const ahead = [
+        satVec,
+        ...bird.track.filter(([t]) => t > nowSec).map(([, la, lo]) => vec(la, lo, trackAlt)),
+      ]
+      if (behind.length > 1) {
+        group.add(
+          new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints(behind),
+            new THREE.LineBasicMaterial({ color: PASS_TRACK, transparent: true, opacity: 0.35 }),
+          ),
+        )
+      }
+      if (ahead.length > 1) {
+        const line = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(ahead),
+          new THREE.LineDashedMaterial({
+            color: PASS_TRACK,
+            transparent: true,
+            opacity: 0.9,
+            dashSize: 1.8,
+            gapSize: 1.2,
+          }),
+        )
+        line.computeLineDistances() // dashes are measured in world units, not vertices
+        group.add(line)
+      }
+    }
+
+    // 2. THE FOOTPRINT — the bird's radio horizon on the surface, the same ring
+    //    the satellite layer draws, at its live sub-point. Its own radius (0.003)
+    //    because the range rings sit at 0.002 and two rings at one radius is the
+    //    coplanar flicker again.
+    const fpKm = bird?.footprintKm ?? EARTH_KM * Math.acos(EARTH_KM / (EARTH_KM + b.altKm))
+    const fp: THREE.Vector3[] = []
+    for (let brg = 0; brg <= 360; brg += 6) {
+      const d = destinationPoint({ lat: b.lat, lon: b.lon }, brg, fpKm)
+      fp.push(vec(d.lat, d.lon, 0.003))
+    }
+    group.add(
+      new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(fp),
+        new THREE.LineBasicMaterial({ color: PASS_TRACK, transparent: true, opacity: 0.45 }),
+      ),
+    )
+
+    // 3. THE SIGHT LINE — QTH → bird, straight through the sky. This is the
+    //    range number drawn: it stretches as the bird sets and shortens toward
+    //    TCA. A 1 px line disappears over a busy sphere, so a slim additive beam
+    //    (narrow at the antenna, wider at the bird) carries it; both are warm and
+    //    solid against the orbit's cool dashed teal, and it is the only line on
+    //    the globe that leaves the surface.
+    group.add(
+      new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([qthVec, satVec]),
+        new THREE.LineBasicMaterial({ color: PASS_LOS, transparent: true, opacity: 0.95 }),
+      ),
+    )
+    const dir = new THREE.Vector3().subVectors(satVec, qthVec)
+    const beam = new THREE.Mesh(
+      // Cylinders are built along +Y: radiusTop is the BIRD end, radiusBottom the
+      // antenna end, and the quaternion below swings that axis onto the ray.
+      new THREE.CylinderGeometry(0.9, 0.22, dir.length(), 6, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: PASS_LOS,
+        transparent: true,
+        opacity: 0.16,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      }),
+    )
+    beam.position.copy(qthVec).addScaledVector(dir, 0.5)
+    beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize())
+    group.add(beam)
+
+    // 4. THE BIRD, at satAzDeg/satElDeg — where it IS, never where the antenna
+    //    was commanded.
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(2, 12, 12),
+      new THREE.MeshBasicMaterial({ color: '#eaffff' }),
+    )
+    marker.position.copy(satVec)
+    group.add(marker)
+    const label = textSprite(livePass.name, PASS_TRACK)
+    label.position.copy(vec(b.lat, b.lon, satAlt + 0.03))
+    group.add(label)
+
+    g.scene().add(group)
+    return () => {
+      g.scene().remove(group)
+      group.traverse((o) => {
+        const obj = o as unknown as {
+          isSprite?: boolean
+          geometry?: THREE.BufferGeometry
+          material?: THREE.Material & { map?: THREE.Texture | null }
+        }
+        // Sprites SHARE one module-level geometry inside three.js — disposing it
+        // would break every other sprite on the globe (the opening labels). Only
+        // the material and its canvas texture are ours to free.
+        if (!obj.isSprite) obj.geometry?.dispose?.()
+        obj.material?.map?.dispose?.()
+        obj.material?.dispose?.()
+      })
+    }
+  }, [ready, qth, livePass, passBirdKey, sats])
+
+  // Frame the QTH and the bird together when a pass STARTS (or the tracked bird
+  // changes): aim the camera at the great-circle midpoint, once. Keyed on the
+  // PASS, not on the position — re-aiming every poll would fight the operator,
+  // who is free to spin and zoom for the rest of the pass.
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready || !qth || !passKey) return
+    const p = passRef.current
+    if (!p) return
+    const { satAzDeg, satElDeg, rangeKm } = p
+    if (satAzDeg == null || satElDeg == null || rangeKm == null) return
+    const b = birdFromLook(qth, satAzDeg, satElDeg, rangeKm)
+    // Half the ground arc along the same bearing IS the great-circle midpoint.
+    const mid = destinationPoint(qth, satAzDeg, b.groundKm / 2)
+    g.pointOfView({ lat: mid.lat, lng: mid.lon, altitude: PASS_ALT }, 900)
+  }, [ready, qth, passKey])
 
   // CQ-zone boundaries (self-fetch the bundled GeoJSON while the layer is on).
   useEffect(() => {
@@ -1043,6 +1303,7 @@ export default function Globe3D({
               ['pca', 'Polar cap (PCA)'],
               ['greyline', 'Greyline'],
               ['sats', 'Satellites'],
+              ['pass', 'Tracked pass'],
               ['rings', 'Range rings'],
               ['cqzones', 'CQ zones'],
               ['coverage', 'My coverage'],
@@ -1071,6 +1332,28 @@ export default function Globe3D({
           onBandClick={onBandClick}
           activeBand={activeBand}
         />
+      )}
+      {/* The pass in WORDS. The scene above is WebGL, which a screen reader
+          cannot see (this app has a standing a11y commitment), and it also
+          answers "what am I looking at" for everyone else. The bird's own az/el
+          — never the commanded antenna pair — and no range at all rather than a
+          zero when there is none. Re-rendered by the 2 s status poll itself, so
+          the countdown needs no clock of its own.
+
+          Deliberately NOT a live region: every number here changes on the 2 s
+          poll, so announcing them would talk over the operator continuously.
+          The text is in the DOM to be read on demand — which is what makes the
+          WebGL scene accessible — not to interrupt. (The sky dome's own text
+          equivalent follows the same rule.) */}
+      {livePass && (
+        <div className="globe3d-pass" role="group" aria-label={`Tracked pass: ${livePass.name}`}>
+          <b>{livePass.name}</b>
+          <span>
+            El {Math.round(livePass.satElDeg)}° · Az {Math.round(livePass.satAzDeg)}°
+          </span>
+          <span>{Math.round(livePass.rangeKm).toLocaleString()} km</span>
+          <span>LOS in {mmss(livePass.losUnix - Date.now() / 1000)}</span>
+        </div>
       )}
       {/* The same legends the 2-D map shows (shared component) — the globe was
           rendering the data with no key to read it by (2D↔3D parity). */}
