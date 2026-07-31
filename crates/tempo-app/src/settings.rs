@@ -27,6 +27,75 @@ pub enum OperatingMode {
     Rtty,
 }
 
+/// Which VFO carries the uplink and which the downlink during a satellite pass.
+///
+/// ⚠️ **A WRONG MAPPING TRANSMITS ON YOUR OWN DOWNLINK.** That is why this is an
+/// explicit, operator-visible enumeration rather than something inferred from
+/// band edges: operators wire full-duplex stations differently, and the failure
+/// mode is transmitting into the satellite's output passband — the single
+/// rudest thing you can do on a linear bird.
+///
+/// The default is [`SatVfoMap::Off`]: no mapping means no Doppler writes to the
+/// radio at all. A station must OPT IN to having its VFOs driven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SatVfoMap {
+    /// Doppler does not touch the radio (default — fail safe).
+    #[default]
+    Off,
+    /// Half-duplex, receive only: one VFO, corrected for the downlink. The
+    /// operator transmits nothing, or keys manually with no uplink correction.
+    DownlinkOnly,
+    /// Half-duplex, transmit only: one VFO, corrected for the uplink.
+    UplinkOnly,
+    /// VFO A = downlink, VFO B = uplink.
+    ADownBUp,
+    /// VFO A = uplink, VFO B = downlink.
+    AUpBDown,
+    /// Main = downlink, Sub = uplink — the natural IC-9700 full-duplex layout.
+    MainDownSubUp,
+    /// Main = uplink, Sub = downlink.
+    MainUpSubDown,
+}
+
+impl SatVfoMap {
+    /// Does this mapping drive the radio at all?
+    pub fn active(self) -> bool {
+        !matches!(self, SatVfoMap::Off)
+    }
+
+    /// Is the uplink under Doppler control in this mapping? (False for
+    /// downlink-only, where we must never write a transmit frequency.)
+    pub fn drives_uplink(self) -> bool {
+        matches!(
+            self,
+            SatVfoMap::UplinkOnly
+                | SatVfoMap::ADownBUp
+                | SatVfoMap::AUpBDown
+                | SatVfoMap::MainDownSubUp
+                | SatVfoMap::MainUpSubDown
+        )
+    }
+
+    /// Is the downlink under Doppler control?
+    pub fn drives_downlink(self) -> bool {
+        matches!(
+            self,
+            SatVfoMap::DownlinkOnly
+                | SatVfoMap::ADownBUp
+                | SatVfoMap::AUpBDown
+                | SatVfoMap::MainDownSubUp
+                | SatVfoMap::MainUpSubDown
+        )
+    }
+
+    /// True when the pair rides Main/Sub rather than VFO A/B — the IC-9700's
+    /// real full-duplex mode, which our native CI-V engine can drive directly.
+    pub fn is_main_sub(self) -> bool {
+        matches!(self, SatVfoMap::MainDownSubUp | SatVfoMap::MainUpSubDown)
+    }
+}
+
 /// The operator's amateur license class — drives the transmit-privilege lockout + the
 /// "jump to the start of my licensed segment" band dropdown. The US classes carry FCC
 /// Part 97 (Region 2) sub-band privileges; **Open** = no transmit restrictions (for
@@ -389,6 +458,25 @@ pub struct Settings {
     /// (for operators who already run their own). Non-empty wins over the
     /// integrated model/port spawn. Empty + model 0 = no rotator.
     pub rotator_host: String,
+    /// SATELLITE DOPPLER — master switch. Off by default: a station with no
+    /// satellite interest must never have its dial moved by a pass.
+    #[serde(default)]
+    pub sat_doppler: bool,
+    /// Which VFO carries which leg. **This is the setting that can transmit on
+    /// your own downlink if it is wrong**, so it is explicit, enumerated and
+    /// operator-visible rather than inferred — see [`SatVfoMap`].
+    #[serde(default)]
+    pub sat_vfo_map: SatVfoMap,
+    /// Minimum correction (Hz) worth sending to the radio. Below this the dial
+    /// is left alone: continuous CI-V writes fight the operator's knob and
+    /// saturate the bus for a shift nobody can hear. 0 = send every update.
+    #[serde(default = "default_sat_min_shift_hz")]
+    pub sat_min_shift_hz: u32,
+    /// Minimum interval (ms) between corrections — the other half of the rate
+    /// limit. The radio is a serial device, not a socket.
+    #[serde(default = "default_sat_update_ms")]
+    pub sat_update_ms: u32,
+
     /// Run the rigctld-compatible CAT **broker** so other apps (WSJT-X / N1MM /
     /// loggers) share the radio THROUGH Nexus, on `cat_broker_port`. Off by default.
     pub cat_broker: bool,
@@ -1015,6 +1103,19 @@ fn default_tune_timeout() -> u32 {
 
 fn default_directed_max_calls() -> Option<u32> {
     Some(8)
+}
+
+/// Doppler below this is not worth a CAT write: ~10 Hz is inaudible on SSB at
+/// 435 MHz and well inside the tuning step most radios use.
+fn default_sat_min_shift_hz() -> u32 {
+    20
+}
+
+/// One correction per second is what a satellite pass actually needs — the
+/// shift changes by tens of hertz per second at LEO, and a serial CI-V bus has
+/// other work to do (meters, PTT, mode).
+fn default_sat_update_ms() -> u32 {
+    1_000
 }
 
 fn default_rotator_baud() -> u32 {
@@ -1733,6 +1834,12 @@ impl Default for Settings {
             rotator_port: String::new(),
             rotator_baud: default_rotator_baud(),
             rotator_host: String::new(),
+            // Satellite Doppler is OFF and unmapped by default: a station
+            // with no satellite interest must never have its dial moved.
+            sat_doppler: false,
+            sat_vfo_map: SatVfoMap::Off,
+            sat_min_shift_hz: default_sat_min_shift_hz(),
+            sat_update_ms: default_sat_update_ms(),
             cat_broker: false,
             cat_broker_port: 4532,
             flex_radio_ip: String::new(),

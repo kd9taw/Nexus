@@ -231,6 +231,94 @@ impl TxPolicy {
     }
 }
 
+/// What was last actually SENT to the radio, so the next correction can decide
+/// whether it is worth sending at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SentTuning {
+    pub downlink_hz: u64,
+    pub uplink_hz: u64,
+    /// Monotonic ms of the last write (any clock, caller-supplied).
+    pub at_ms: u64,
+    /// False until the first write, so the pass always begins with one.
+    pub sent: bool,
+}
+
+/// A rate-limit decision: what to write now, or nothing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Correction {
+    pub downlink_hz: Option<u64>,
+    pub uplink_hz: Option<u64>,
+}
+
+impl Correction {
+    pub fn is_empty(&self) -> bool {
+        self.downlink_hz.is_none() && self.uplink_hz.is_none()
+    }
+}
+
+/// The operator's two brakes on how often the radio is written to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SteerLimits {
+    /// Corrections smaller than this are not worth a CAT write.
+    pub min_shift_hz: u32,
+    /// Minimum gap between writes (ms).
+    pub min_interval_ms: u32,
+}
+
+/// Which legs the operator's VFO mapping actually puts under Doppler control.
+/// A receive-only mapping must never yield a transmit frequency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Legs {
+    pub downlink: bool,
+    pub uplink: bool,
+}
+
+/// Should we write to the radio right now, and what?
+///
+/// Two independent brakes, both operator-set, because a satellite pass is the
+/// one time an app is tempted to spam a serial bus:
+///
+/// - **`min_shift_hz`** — a correction smaller than this is inaudible and not
+///   worth a CAT write. At 435 MHz, 20 Hz is well inside the tuning step most
+///   radios use, and writing it anyway just fights the operator's knob.
+/// - **`min_interval_ms`** — the radio is a serial device sharing a bus with
+///   meters, mode and PTT. One write a second tracks a LEO pass fine.
+///
+/// The FIRST correction of a pass always goes out (`sent = false`), or the
+/// radio would sit on an uncorrected frequency until the shift happened to grow
+/// past the threshold.
+///
+/// `steer` is [`TxPolicy::may_steer`] — a frozen over returns nothing at all,
+/// so a slot-mode transmission is never stepped underneath.
+pub fn correction(
+    want: Tuning,
+    last: SentTuning,
+    now_ms: u64,
+    limits: SteerLimits,
+    legs: Legs,
+    steer: bool,
+) -> Correction {
+    let none = Correction {
+        downlink_hz: None,
+        uplink_hz: None,
+    };
+    if !steer {
+        return none;
+    }
+    if last.sent && now_ms.saturating_sub(last.at_ms) < u64::from(limits.min_interval_ms) {
+        return none;
+    }
+    let worth = |want: u64, was: u64| -> bool {
+        !last.sent || want.abs_diff(was) >= u64::from(limits.min_shift_hz)
+    };
+    Correction {
+        downlink_hz: (legs.downlink && worth(want.downlink_hz, last.downlink_hz))
+            .then_some(want.downlink_hz),
+        uplink_hz: (legs.uplink && worth(want.uplink_hz, last.uplink_hz))
+            .then_some(want.uplink_hz),
+    }
+}
+
 /// Apply a fractional shift to a frequency, rounding to the nearest Hz.
 fn shift(hz: u64, beta: f64) -> u64 {
     let v = hz as f64 * (1.0 + beta);
@@ -256,6 +344,21 @@ fn clamp_offset(offset: i64, half_width_hz: u64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const BOTH: Legs = Legs {
+        downlink: true,
+        uplink: true,
+    };
+    const DOWN_ONLY: Legs = Legs {
+        downlink: true,
+        uplink: false,
+    };
+    fn lim(min_shift_hz: u32, min_interval_ms: u32) -> SteerLimits {
+        SteerLimits {
+            min_shift_hz,
+            min_interval_ms,
+        }
+    }
 
     /// RS-44-class linear inverting transponder (real-world shape).
     fn rs44() -> Transponder {
@@ -426,6 +529,67 @@ mod tests {
             "between overs the correction must actually change"
         );
         assert!(at_key_down.uplink_shift_hz < 0 && next_over.uplink_shift_hz > 0);
+    }
+
+    #[test]
+    fn the_first_correction_of_a_pass_always_goes_out() {
+        // Otherwise the radio sits on an uncorrected frequency until the shift
+        // happens to grow past the threshold — at AOS that is the whole point.
+        let t = rs44();
+        let want = tuning(&t, DopplerState::default(), 0.5); // tiny shift
+        let c = correction(want, SentTuning::default(), 0, lim(500, 1_000), BOTH, true);
+        assert_eq!(c.downlink_hz, Some(want.downlink_hz));
+        assert_eq!(c.uplink_hz, Some(want.uplink_hz));
+    }
+
+    #[test]
+    fn rate_limits_hold_off_both_by_size_and_by_clock() {
+        let t = rs44();
+        let want = tuning(&t, DopplerState::default(), 5.0);
+        let last = SentTuning {
+            downlink_hz: want.downlink_hz - 5, // 5 Hz stale: not worth a write
+            uplink_hz: want.uplink_hz - 5,
+            at_ms: 10_000,
+            sent: true,
+        };
+        // Too small AND too soon.
+        assert!(correction(want, last, 10_200, lim(20, 1_000), BOTH, true).is_empty());
+        // Interval satisfied, but the change is still under the threshold.
+        assert!(correction(want, last, 12_000, lim(20, 1_000), BOTH, true).is_empty());
+        // A real change, interval satisfied → both legs go.
+        let moved = SentTuning {
+            downlink_hz: want.downlink_hz - 900,
+            uplink_hz: want.uplink_hz - 900,
+            ..last
+        };
+        let c = correction(want, moved, 12_000, lim(20, 1_000), BOTH, true);
+        assert!(c.downlink_hz.is_some() && c.uplink_hz.is_some());
+    }
+
+    #[test]
+    fn a_frozen_over_writes_nothing_at_all() {
+        // Slot mode, keyed: the dial must not move under the waveform.
+        let t = rs44();
+        let want = tuning(&t, DopplerState::default(), 5.0);
+        let c = correction(
+            want,
+            SentTuning::default(),
+            0,
+            lim(20, 1_000),
+            BOTH,
+            TxPolicy::FreezeDuringOver.may_steer(true),
+        );
+        assert!(c.is_empty(), "no writes while a slot-mode over is in flight");
+    }
+
+    #[test]
+    fn a_downlink_only_mapping_never_produces_a_transmit_frequency() {
+        // Receive-only satellite listening must not write an uplink anywhere.
+        let t = rs44();
+        let want = tuning(&t, DopplerState::default(), 5.0);
+        let c = correction(want, SentTuning::default(), 0, lim(20, 1_000), DOWN_ONLY, true);
+        assert!(c.downlink_hz.is_some());
+        assert_eq!(c.uplink_hz, None, "downlink-only must never key a frequency");
     }
 
     #[test]
