@@ -331,8 +331,13 @@ function SkyDome({
   // The breath: 0.4–1.0 on a ~2.8 s period, from the shared clock.
   const breath = live ? heatPulse(beatMs) : 1
 
+  // The Antenna row exists only when this track HAS a rotor half — the DTO
+  // `mode` is the engine's own answer. A doppler-only/pass-only track will
+  // never command a rotor: "armed — no rotor command sent yet" there promised
+  // an antenna event that cannot come (the rail's Rotor row already carries
+  // the "no rotor in this track" story). Absent is absent, never a claim.
   const ghostText =
-    rotor == null
+    rotor == null || (rotor.mode !== 'rotor+doppler' && rotor.mode !== 'rotor-only')
       ? null
       : cmdAz == null
         ? 'armed — no rotor command sent yet'
@@ -898,10 +903,15 @@ const kindWord = (k: string | null) =>
  *
  * Layout: content-height (fit) inside .sats-detail — the .sats-side scroller
  * owns overflow; the rail is never a grower. */
-function railDot(ok: boolean) {
+/** ● ready · ○ not ready (fixable) · — absent (nothing to be ready ABOUT).
+ * ○ promises "this gate can be passed"; a station with no rotator can never
+ * pass the Rotor gate and never needs to, and a hollow circle there reads as
+ * permanently broken. Absence gets an absent mark — the sentinel lesson,
+ * applied to a glyph. */
+function railDot(ok: boolean, absent = false) {
   return (
     <span className={`sat-rail-dot${ok ? ' ok' : ''}`} aria-hidden>
-      {ok ? '●' : '○'}
+      {absent ? '—' : ok ? '●' : '○'}
     </span>
   )
 }
@@ -981,7 +991,7 @@ function TrackRail({
         </button>
       </div>
       <div className="sat-rail-row">
-        {railDot(rotorInTrack)}
+        {railDot(rotorInTrack, !rotorInTrack && !rotorOn)}
         <span className="sat-rail-name">Rotor</span>
         <span className="sat-rail-state">{rotorText}</span>
       </div>
@@ -1156,6 +1166,16 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const [showDead, setShowDead] = useState(false)
   const railRef = useRef<HTMLDivElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
+  // The previous poll's track, for the LOS-handback notice: the backend
+  // releases the hold and the track at LOS, and before this the rail, binding
+  // line and header badge simply vanished on the next 2 s poll — the one
+  // ownership change in the section with zero notification. Nulled on a manual
+  // stop (the operator did that; there is nothing to announce).
+  const lastTrack = useRef<SatTrackStatus | null>(null)
+  // Post-pass rotor policy mirror (read with the settings the poll already
+  // fetches): at LOS the mast may be about to move on its own — park/ready —
+  // and the handback notice must say so.
+  const rotPostPassRef = useRef('stop')
   // "Work this pass" wants the rail scrolled into view once it exists.
   const wantRailScroll = useRef(false)
   const [dopplerOn, setDopplerOn] = useState(false)
@@ -1274,8 +1294,47 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   // header badge saying Doppler was live).
   useEffect(() => {
     let live = true
+    // The 2 s tick can lap a slow answer, and a lapped answer applied late
+    // re-seeds `lastTrack` with a dead pass as "live" — the next null poll
+    // would announce the SAME handback twice. Answers carry their issue
+    // number; a straggler that lost the race is dropped, never applied.
+    let issued = 0
+    let applied = 0
     const load = () => {
-      getSatTrackStatus().then((t) => live && setTrack(t)).catch(() => {})
+      const seq = ++issued
+      getSatTrackStatus()
+        .then((t) => {
+          if (!live || seq < applied) return
+          applied = seq
+          const prev = lastTrack.current
+          lastTrack.current = t
+          // LOS HANDBACK (the release happened backend-side — this reports
+          // what was DONE, it acts on nothing): a live track that vanishes
+          // just past its LOS ended by running out of pass, not by a click.
+          // A manual stop nulls the ref before this comparison can fire, and
+          // an armed track dropped before AOS has a future losUnix.
+          if (prev != null && t == null) {
+            const now = Math.floor(Date.now() / 1000)
+            if (now >= prev.losUnix && now - prev.losUnix < 300) {
+              const rotorHalf = prev.mode === 'rotor+doppler' || prev.mode === 'rotor-only'
+              pushToast(
+                `${prev.name} pass complete — LOS.` +
+                  (prev.transponder != null ? ' Dial handed back.' : '') +
+                  // Only when the mast is about to move ON ITS OWN — the
+                  // "stop" policy leaves it where the pass finished, and a
+                  // stationary rotor needs no announcement.
+                  (rotorHalf && rotPostPassRef.current === 'park' ? ' Rotor parking.' : '') +
+                  (rotorHalf && rotPostPassRef.current === 'ready'
+                    ? ' Rotor moving to the ready position.'
+                    : ''),
+                'info',
+                6000,
+              )
+            }
+          }
+          setTrack(t)
+        })
+        .catch(() => {})
       getSatTransponder()
         .then((h) => {
           if (!live || pickBusy.current) return
@@ -1294,6 +1353,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             setDopplerOn(!!s.satDoppler)
             setVfoMap(s.satVfoMap ?? 'off')
             setPegged(!!s.radioPegged)
+            rotPostPassRef.current = s.rotPostPass ?? 'stop'
           })
           .catch(() => {})
       }
@@ -1434,6 +1494,23 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
     )
     return row?.earn ?? null
   }, [schedule, detail])
+  // HORIZON MISMATCH FALLBACK: get_sat_detail's pass window is 24 h; the
+  // schedule sees SCHEDULE_HOURS (48 h). A clicked 24–48 h row lands here with
+  // detail.pass null, and "no pass over you in the next 24 h" directly under a
+  // row promising that exact pass reads as a contradiction. Until the two
+  // horizons share one backend constant, the passline cites the schedule's own
+  // AOS — known data, never a guess — and makes no 24 h claim beside it:
+  // detail refreshes a minute behind the schedule, so at the window boundary
+  // that claim briefly argues with its own countdown. (Favorites only; other
+  // birds fall back to the plain line, which is then simply true.)
+  const nextBeyond = useMemo(() => {
+    if (detail == null || detail.pass != null) return null
+    return (
+      schedule
+        .filter((p) => p.name === detail.name && p.aosUnix > nowSecs)
+        .sort((a, b) => a.aosUnix - b.aosUnix)[0] ?? null
+    )
+  }, [schedule, detail, nowSecs])
   // The held transponder RECORD — engine truth first (the DTO index is what
   // the engine holds; the local pick covers the pre-arm window).
   const heldT =
@@ -1483,6 +1560,8 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const disarmTrack = () => {
     stopSatTrack()
       .then(() => {
+        // The operator stopped this track — there is no handback to announce.
+        lastTrack.current = null
         setTrack(null)
         // Stopping a live track hands the dial back backend-side (the stop
         // command releases the transponder hold) — mirror it now rather than
@@ -1648,7 +1727,10 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             className="sat-chip stale"
             title={`Orbital elements are ${view.tleAgeDays.toFixed(1)} days old — pass times and Doppler drift with element age. They refresh automatically (12 h cadence) when the network allows; there is no manual refresh.`}
           >
-            TLE {Math.round(view.tleAgeDays)} d — STALE
+            {/* Unit spelled out: the chip voice is uppercase, and "9 d" would
+                render as the wrong unit "9 D". Always plural — stale starts
+                past 14 days. */}
+            TLE {Math.round(view.tleAgeDays)} days — STALE
           </span>
         )}
         {track && (
@@ -1723,7 +1805,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         </div>
       ) : favs.size === 0 ? (
         <div className="sats-empty">
-          No favorites yet — star birds in the list on the right; the schedule, best-pass
+          No favorites yet — star birds in the Birds list; the schedule, best-pass
           picks, and alarms all run off your ★ set (the S.A.T. workflow).
         </div>
       ) : upcoming.length === 0 ? (
@@ -1870,7 +1952,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                             }}
                             title={workTitle}
                           >
-                            ▶ work
+                            ▶ Work
                           </button>
                         )}
                       </td>
@@ -1956,6 +2038,11 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                   </>
                 )}
               </>
+            ) : nextBeyond ? (
+              <div className="sat-passline">
+                next pass over you rises {hhmm(nextBeyond.aosUnix)} (
+                {countdown(nextBeyond, nowSecs)})
+              </div>
             ) : (
               <div className="sat-passline">no pass over you in the next 24 h</div>
             )}
@@ -2141,19 +2228,13 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                  the passband strip and the transponder picker — physically
                  separating the two controls used together). Square-ish and
                  growing with the column rather than pinned at 260px: a globe
-                 is only readable at size. Cap in --vh-eff, not raw vh: this
-                 renders INSIDE .app's zoom:var(--ui-zoom), where raw viewport
-                 units are wrong by the zoom factor. */
+                 is only readable at size. Sizing lives in styles.css
+                 (.sat-globe-box) with the rest of the section — an inline
+                 style block is invisible to every cascade-computing guard,
+                 and capping HEIGHT alone let the box go 2:1 wide at 3440px
+                 (the width cap there keeps it genuinely square). */
               data-testid="sat-globe-box"
-              style={{
-                width: '100%',
-                aspectRatio: '1 / 1',
-                maxHeight: 'calc(0.52 * var(--vh-eff, 100vh))',
-                minHeight: 260,
-                borderRadius: 8,
-                overflow: 'hidden',
-                border: '1px solid var(--border)',
-              }}
+              className="sat-globe-box"
             >
               <MapView
                 embedded={{ focusSat: detail.name }}

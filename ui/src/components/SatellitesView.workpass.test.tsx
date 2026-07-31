@@ -21,6 +21,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
+import { pushToast } from '../toast'
 import type { SatDetail, SatPass, SatTrackStatus } from '../types'
 
 const api = vi.hoisted(() => ({
@@ -440,4 +441,99 @@ describe('the readiness rail', () => {
     fireEvent.click(stop!)
     await waitFor(() => expect(api.stopSatTrack).toHaveBeenCalled())
   })
+})
+
+describe('the Rotor gate for a rotor-less station', () => {
+  // ○ is "configured but not in this track — re-arm can fix it". A station
+  // with NO rotator can never pass that gate and never needs to: rendering ○
+  // there made the chain read permanently broken for the largest satellite
+  // population. Absence gets an absent mark, not a failed gate (the sentinel
+  // lesson, applied to a glyph).
+  it('renders an absent mark, not a failed gate, when no rotator is configured', async () => {
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(trackStatus({ mode: 'pass-only' })),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const rail = await screen.findByTestId('sat-rail')
+    const rotorRow = Array.from(rail.querySelectorAll('.sat-rail-row')).find((r) =>
+      /no rotator configured/.test(r.textContent ?? ''),
+    )
+    expect(rotorRow).toBeTruthy()
+    expect(rotorRow?.querySelector('.sat-rail-dot')?.textContent).toBe('—')
+  })
+
+  it('keeps the hollow not-ready circle when a rotator exists but is not in this track', async () => {
+    api.getSettings.mockImplementation(() => Promise.resolve(mkSettings({ rotatorModel: 2 })))
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(trackStatus({ mode: 'doppler-only' })),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const rail = await screen.findByTestId('sat-rail')
+    const rotorRow = Array.from(rail.querySelectorAll('.sat-rail-row')).find((r) =>
+      /re-arm to take the rotor/.test(r.textContent ?? ''),
+    )
+    expect(rotorRow).toBeTruthy()
+    expect(rotorRow?.querySelector('.sat-rail-dot')?.textContent).toBe('○')
+  })
+})
+
+describe('the LOS handback', () => {
+  // The backend releases the transponder hold at LOS; before this toast the
+  // rail, binding line and header badge simply vanished on the next poll —
+  // the one ownership change in the section with zero notification.
+  it('says the pass ended and the dial came back when the track vanishes at LOS', async () => {
+    const ended = trackStatus({
+      state: 'tracking',
+      mode: 'doppler-only',
+      transponder: 'SSB/CW linear transponder',
+      aosUnix: NOW - 700,
+      losUnix: NOW - 5,
+    })
+    api.getSatTrackStatus.mockImplementationOnce(() => Promise.resolve(ended))
+    render(<SatellitesView focusSat="RS-44" />)
+    await waitFor(
+      () =>
+        expect(vi.mocked(pushToast)).toHaveBeenCalledWith(
+          expect.stringMatching(/RS-44 pass complete — LOS\. Dial handed back\./),
+          'info',
+          6000,
+        ),
+      { timeout: 4000 },
+    )
+  })
+
+  // The 2 s tick can lap a slow answer. If the lapped (stale) answer is
+  // applied when it finally lands, it re-seeds the previous-track ref with the
+  // dead pass as "live" — and the NEXT null poll announces the same handback a
+  // second time. Stale in-flight answers must be dropped, not applied.
+  it('announces the handback once when a stale in-flight answer lands after it', async () => {
+    vi.mocked(pushToast).mockClear()
+    const ended = trackStatus({
+      state: 'tracking',
+      mode: 'doppler-only',
+      transponder: 'SSB/CW linear transponder',
+      aosUnix: NOW - 700,
+      losUnix: NOW - 5,
+    })
+    const pending: Array<(t: SatTrackStatus | null) => void> = []
+    api.getSatTrackStatus.mockImplementation(
+      () => new Promise<SatTrackStatus | null>((res) => pending.push(res)),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    // Poll 1 answers live promptly; poll 2 stalls in flight.
+    await waitFor(() => expect(pending.length).toBeGreaterThanOrEqual(1))
+    pending[0](ended)
+    // Poll 3 overtakes it with the truth: the track is gone — one toast.
+    await waitFor(() => expect(pending.length).toBeGreaterThanOrEqual(3), { timeout: 6000 })
+    pending[2](null)
+    await waitFor(() => expect(vi.mocked(pushToast)).toHaveBeenCalledTimes(1))
+    // The lapped poll-2 answer finally lands, carrying the dead pass as live.
+    pending[1](ended)
+    // Poll 4 sees null again — a second "pass complete" would be a false claim.
+    await waitFor(() => expect(pending.length).toBeGreaterThanOrEqual(4), { timeout: 6000 })
+    pending[3](null)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(vi.mocked(pushToast)).toHaveBeenCalledTimes(1)
+    // Real timers ride the component's own 2 s poll cadence: four ticks.
+  }, 15000)
 })

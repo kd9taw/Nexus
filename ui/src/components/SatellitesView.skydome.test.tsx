@@ -20,14 +20,16 @@
 //  - An SVG instrument is invisible to a screen reader, so the dome carries a DOM text
 //    equivalent (az/el/range) and a role="img" label.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
-import type { SatDetail, SatTrackStatus } from '../types'
+import type { SatDetail, SatPass, SatTrackStatus } from '../types'
 
 const api = vi.hoisted(() => ({
-  getSatellites: vi.fn(() => Promise.resolve(null)),
+  // Typed: the stale-chip case below hands back a real SatView, and an
+  // inferred `Promise<null>` would reject it at compile time.
+  getSatellites: vi.fn((): Promise<import('../types').SatView | null> => Promise.resolve(null)),
   getSatSchedule: vi.fn(() => Promise.resolve([])),
-  getSatPassNeeds: vi.fn(() => Promise.resolve([])),
+  getSatPassNeeds: vi.fn((): Promise<SatPass[]> => Promise.resolve([])),
   getSatDetail: vi.fn(),
   getSettings: vi.fn(),
   setSettings: vi.fn(() => Promise.resolve({} as never)),
@@ -118,7 +120,8 @@ const settings = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   localStorage.clear()
-  api.getSatellites.mockClear()
+  api.getSatellites.mockReset()
+  api.getSatellites.mockImplementation(() => Promise.resolve(null))
   api.getSatDetail.mockReset()
   api.getSatDetail.mockImplementation(() => Promise.resolve(detail()))
   api.getSettings.mockReset()
@@ -412,5 +415,97 @@ describe('the Doppler readout', () => {
     const { container } = render(<SatellitesView focusSat="RS-44" />)
     await dome()
     expect(container.querySelector('.sat-doppler')).toBeNull()
+  })
+})
+
+describe('rotor-less honesty — the Antenna row', () => {
+  it('never promises a rotor command on a track with no rotor half', async () => {
+    // A doppler-only track will NEVER command a rotor — the DTO `mode` is the
+    // engine's own answer. "armed — no rotor command sent yet" there promises
+    // an antenna event that cannot come; the row must be ABSENT (the rail's
+    // Rotor row already carries the "no rotor in this track" story).
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(status({ mode: 'doppler-only', azDeg: null, elDeg: null })),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    await screen.findByTestId('sat-bird')
+    const text = (await sky()).textContent ?? ''
+    expect(text).toMatch(/Satellite/) // the bird's own readout still renders
+    expect(text).not.toMatch(/Antenna/)
+    expect(text).not.toMatch(/no rotor command/)
+  })
+
+  it('keeps the armed promise when the track really does hold the rotor', async () => {
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(status({ state: 'armed', azDeg: null, elDeg: null })),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    await dome()
+    expect((await sky()).textContent).toMatch(/no rotor command sent yet/)
+  })
+})
+
+describe('the passline beyond the detail window', () => {
+  // get_sat_detail's pass window is 24 h; the schedule sees 48 h. A clicked
+  // 24–48 h row used to render "no pass over you in the next 24 h" directly
+  // under the row promising that exact pass — the pane must cite the schedule's
+  // own AOS instead of contradicting it. (Root fix — one shared constant — is
+  // backend; this pins the honest fallback.)
+  const beyondRow: SatPass = {
+    name: 'RS-44',
+    aosUnix: NOW + 30 * 3600,
+    losUnix: NOW + 30 * 3600 + 600,
+    maxElDeg: 44,
+    aosAzDeg: 100,
+    losAzDeg: 260,
+    status: 'alive',
+  }
+
+  it('cites the 48 h schedule AOS instead of contradicting the row that opened it', async () => {
+    localStorage.setItem('nexus.sats.chasing', JSON.stringify(['RS-44']))
+    api.getSatPassNeeds.mockImplementation(() => Promise.resolve([beyondRow]))
+    api.getSatDetail.mockImplementation(() =>
+      Promise.resolve(detail({ pass: null, passTrack: [] })),
+    )
+    const { container } = render(<SatellitesView focusSat="RS-44" />)
+    await waitFor(() => {
+      const line = container.querySelector('.sat-passline')
+      expect(line?.textContent).toMatch(/next pass over you rises/)
+      expect(line?.textContent).toMatch(/in 30\.\d h/)
+      // …and it makes no 24 h claim beside that countdown: detail refreshes a
+      // minute behind the schedule, and a pass drifting across the window
+      // boundary must not render a sentence that argues with its own numbers
+      // ("no pass in the next 24 h — next rises … (in 23.9 h)").
+      expect(line?.textContent).not.toMatch(/next 24 h/)
+    })
+  })
+
+  it('keeps the plain no-pass line when the schedule knows nothing either', async () => {
+    api.getSatDetail.mockImplementation(() =>
+      Promise.resolve(detail({ pass: null, passTrack: [] })),
+    )
+    const { container } = render(<SatellitesView focusSat="RS-44" />)
+    await waitFor(() => {
+      const line = container.querySelector('.sat-passline')
+      expect(line?.textContent).toMatch(/no pass over you in the next 24 h/)
+      expect(line?.textContent).not.toMatch(/rises/)
+    })
+  })
+})
+
+describe('the stale-TLE chip', () => {
+  // The chip family speaks uppercase (one CSS voice: INVERTING, ALIVE, STALE).
+  // A single-letter unit does not survive that voice — "21 d" rendered "21 D"
+  // is a wrong unit, not a style — so the markup spells the unit out and the
+  // transform has nothing to mis-case.
+  it('spells the age unit so the uppercase chip voice cannot re-case it', async () => {
+    api.getSatellites.mockImplementation(() =>
+      Promise.resolve({ tleAgeDays: 21, birds: [], passes: [] }),
+    )
+    const { container } = render(<SatellitesView />)
+    await waitFor(() => {
+      const chip = container.querySelector('.sat-chip.stale')
+      expect(chip?.textContent).toContain('TLE 21 days')
+    })
   })
 })

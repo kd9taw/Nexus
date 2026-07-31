@@ -3094,7 +3094,7 @@ button.nb-chip:hover {
   color: #96660a;
 }
 [data-theme='light'] .sat-star.on {
-  color: #96600a;
+  color: #9d6500; /* the chase-star gold ink (.wn-chase.active), same idiom */
 }
 
 /* Stock WSJT-X decode highlight swatches (Settings ▸ Colors), per theme. The
@@ -14549,6 +14549,9 @@ html[data-panel='needed'] {
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
+  /* At the pop-out's 420px minimum the h1 + sub + live tracking badge cannot
+     share one line — wrap, never clip (baseline alignment tolerates it). */
+  flex-wrap: wrap;
 }
 .sats-head h1 {
   font-size: var(--fs-title);
@@ -14584,7 +14587,7 @@ html[data-panel='needed'] {
   font-size: var(--fs-body);
   padding: var(--space-3);
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   align-self: start;
 }
 .sats-best {
@@ -14613,10 +14616,11 @@ html[data-panel='needed'] {
   text-align: left;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-2);
   font-size: var(--fs-body);
   color: var(--text);
+  transition: border-color var(--transition);
 }
 .sats-best-row:hover {
   border-color: var(--accent);
@@ -14626,6 +14630,9 @@ html[data-panel='needed'] {
 }
 .sats-best-row b {
   margin-right: 6px;
+  /* The designator class (styles.css:39 — mono for callsign/freq/grid): the
+     same bird was sans here and mono 100px below in the schedule. */
+  font-family: var(--font-mono);
 }
 .sats-best-open {
   flex: 1;
@@ -14710,6 +14717,10 @@ html[data-panel='needed'] {
 .sats-sched tr.sel td {
   background: var(--bg-elev);
 }
+/* A clickable row answers the pointer (`td` scopes it to body rows). */
+.sats-sched tr:hover td {
+  background: var(--bg-elev);
+}
 .sats-sched tr.live .sat-count {
   color: var(--band-open);
   font-weight: 700;
@@ -14728,9 +14739,12 @@ html[data-panel='needed'] {
   color: var(--text-dim);
   opacity: 0.45;
   padding: 0 2px;
+  transition: var(--transition); /* the ★/⏰ state flip eases, as app toggles do */
 }
 .sat-star.on {
-  color: #f2c14e;
+  /* The app's ONE chase gold (.wn-chase.active) — a second, slightly-off gold
+     here read as a different idiom. Light theme overrides to the chase ink. */
+  color: #f5a524;
   opacity: 1;
 }
 .sat-bell {
@@ -14739,6 +14753,7 @@ html[data-panel='needed'] {
   cursor: pointer;
   opacity: 0.4;
   padding: 0 2px;
+  transition: var(--transition);
 }
 .sat-bell.on {
   opacity: 1;
@@ -14769,6 +14784,9 @@ html[data-panel='needed'] {
   border-radius: 999px;
   padding: 0 6px;
   margin-left: 6px;
+  /* One chip voice: the family (INVERTING, TLE-STALE) is uppercase; lowercase
+     `alive`/`dead` beside them read as a different species. */
+  text-transform: uppercase;
 }
 .sat-chip.alive {
   color: var(--band-open);
@@ -14796,7 +14814,7 @@ html[data-panel='needed'] {
 }
 .sats-detail {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: var(--space-2);
 }
 .sat-norad {
@@ -14836,7 +14854,12 @@ html[data-panel='needed'] {
   margin: 0 auto;
 }
 .sat-sky.live .sat-dome {
-  max-width: 100%;
+  /* Live promotes the hero — but never past the viewport. The SVG is square,
+     so an uncapped max-width renders height = column width: at 3440×1440 the
+     detail column is ~1560px and the dome scrolled clean off the screen at
+     the exact moment it mattered (ui-layout §5.1). 0.7·--vh-eff is louder
+     than the planning view's 0.55 and always fits. */
+  max-width: min(100%, calc(0.7 * var(--vh-eff, 100vh)));
 }
 .sat-dome-face {
   fill: var(--bg-elev);
@@ -14877,6 +14900,11 @@ html[data-panel='needed'] {
   stroke-width: 1.4;
 }
 .sat-dome-bird circle {
+  fill: var(--band-open);
+}
+/* Explicit, not only via the descendant rule above: the live-pulse halo must
+   not silently vanish if that selector is ever tightened. */
+.sat-dome-bird-halo {
   fill: var(--band-open);
 }
 .sat-dome-bird > circle:last-of-type {
@@ -15009,7 +15037,7 @@ html[data-panel='needed'] {
   flex-direction: column;
   gap: 2px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-2);
   margin-bottom: var(--space-1);
   font-size: var(--fs-micro);
@@ -15037,7 +15065,9 @@ html[data-panel='needed'] {
 }
 .sat-rail-name {
   flex: 0 0 auto;
-  width: 6.5em;
+  /* Must hold the longest gate name: TRANSPONDER at --fs-micro + 0.05em
+     tracking runs ~7.1em — 6.5em crowded it into the state text. */
+  width: 7.5em;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-dim);
@@ -15056,6 +15086,7 @@ html[data-panel='needed'] {
   border-radius: 999px;
   padding: 1px var(--space-2);
   cursor: pointer;
+  transition: var(--transition); /* .radio-peg carries this — same switch */
 }
 /* Engaged (peg-lock held) — a STATE, not an offer. Same tinted treatment the
    TopBar's own peg pill uses (`.radio-peg.on`), because it is the same switch.
@@ -15147,10 +15178,11 @@ html[data-panel='needed'] {
   align-items: flex-start;
   gap: var(--space-1);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-2);
   font-size: var(--fs-micro);
   cursor: pointer;
+  transition: border-color var(--transition);
 }
 .sat-tp-card.held {
   border-color: var(--accent);
@@ -15158,6 +15190,20 @@ html[data-panel='needed'] {
 .sat-tp-card.off {
   opacity: 0.45;
   cursor: default;
+}
+/* The most consequential control in the section answers the pointer the same
+   way the Next-up rows do (dead cards excluded — nothing to pick there). */
+.sat-tp-card:not(.off):hover {
+  border-color: var(--accent);
+}
+/* The card IS the control; the native ring on the 13px radio inside it is not
+   where the eye is. Card-shaped focus, the .aprs-card precedent. */
+.sat-tp-card:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.sat-tp-card input:focus-visible {
+  outline: none;
 }
 .sat-tp-main {
   display: flex;
@@ -15173,8 +15219,8 @@ html[data-panel='needed'] {
   color: var(--text-dim);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 0 5px;
-  margin-left: 5px;
+  padding: 0 6px; /* the .sat-chip metrics — one outline-chip species */
+  margin-left: 6px;
 }
 .sat-tp-legs {
   display: flex;
@@ -15222,8 +15268,8 @@ html[data-panel='needed'] {
   color: var(--alert-warning);
   border: 1px solid var(--alert-warning);
   border-radius: 999px;
-  padding: 0 5px;
-  margin-left: 5px;
+  padding: 0 6px; /* the .sat-chip metrics — one outline-chip species */
+  margin-left: 6px;
   letter-spacing: 0.03em;
 }
 .sat-tp-state {
@@ -15239,10 +15285,32 @@ html[data-panel='needed'] {
   color: var(--text-dim);
   margin-top: var(--space-1);
 }
+/* The demoted globe under the chooser. Moved here from an inline style block
+   (7 structural declarations in a `style` prop are invisible to every
+   cascade-computing guard). Genuinely square: the old height-only cap let the
+   box go ~2:1 wide at 3440×1440 and the globe letterboxed inside it — capping
+   the WIDTH in --vh-eff keeps width = height at every size. Raw vh only as
+   the var() fallback (zoomed context). */
+.sat-globe-box {
+  width: min(100%, calc(0.52 * var(--vh-eff, 100vh)));
+  aspect-ratio: 1 / 1;
+  min-height: 260px;
+  margin-inline: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
 .sats-favmgr ul {
   list-style: none;
   margin: 0;
   padding: 0;
+  /* The cap this rule always needed: without one the <ul>'s height is its
+     content height and the overflow-y below is a dead scroll rule (the
+     overhaul's named enemy) — a 100+ bird catalog made the whole side column
+     a ~3000px scroller with the search box stranded at the bottom of it.
+     Capped, the list scrolls inside its own section and the Birds search
+     stays reachable. --vh-eff, never raw vh (zoomed context). */
+  max-height: calc(0.45 * var(--vh-eff, 100vh));
   overflow-y: auto;
 }
 .sats-favmgr li {
