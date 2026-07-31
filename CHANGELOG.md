@@ -23,7 +23,16 @@ database per transponder, not from a checkbox you have to remember, so the commo
 somebody else's QSO is closed by default.
 
 **Tune the downlink and the uplink follows.** Chase a station drifting through the passband the way
-you would on HF; your transmit frequency tracks them while Doppler moves the whole band underneath.
+you would on HF — turn the VFO knob and your transmit frequency tracks them, mirrored if the
+transponder inverts, while Doppler moves the whole band underneath. Tuning outside the passband is
+treated as what it is, leaving the transponder, so a QSY away from the pass never drags your uplink
+to a passband edge.
+
+**You can see where you are in the passband.** A strip shows the transponder as a band with your
+position marked on both legs at once. On an inverting transponder the two markers sit on opposite
+sides of centre and move in opposite directions as you tune — which is the clearest way to learn the
+one rule that catches everybody out, and no other display draws it. Birds with no passband to tune
+inside, like the FM repeater satellites, say so instead of drawing an axis that does not exist.
 
 **Digital modes are handled honestly.** For slot-timed modes like FT8 the dial is held still for the
 length of a transmission and re-corrected between overs, because stepping the frequency underneath a
