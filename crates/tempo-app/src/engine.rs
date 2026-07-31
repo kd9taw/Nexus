@@ -10740,7 +10740,10 @@ mod tests {
         e.hold_cat_port();
         e.cat_port_hold_until =
             Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
-        assert!(!e.cat_port_hold(), "an expired hold no longer binds the loop");
+        assert!(
+            !e.cat_port_hold(),
+            "an expired hold no longer binds the loop"
+        );
     }
 
     #[test]

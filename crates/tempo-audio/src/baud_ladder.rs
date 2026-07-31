@@ -257,7 +257,11 @@ pub fn compose_ladder_message(
              software (WSJT-X, flrig, RS-BA1) and test again."
         );
     }
-    let noise = if r.outcomes.iter().any(|(_, o)| matches!(o, BaudProbe::Noise)) {
+    let noise = if r
+        .outcomes
+        .iter()
+        .any(|(_, o)| matches!(o, BaudProbe::Noise))
+    {
         " The port did carry bytes at one rate, but not valid CI-V — that usually means a \
          different device is on this COM port."
     } else {
@@ -405,8 +409,14 @@ mod tests {
         // Shared-port keying (dedicated port empty, or equal ignoring case): rigctld owns
         // the CAT port and the reprobe DID probe it → ladder applies.
         assert_eq!(ladder_applies(false, 3078, "COM4", "rts", ""), Some(0x98));
-        assert_eq!(ladder_applies(false, 3078, "COM4", "dtr", "com4"), Some(0x98));
-        assert_eq!(ladder_applies(false, 3078, "COM4", "rts", " COM4 "), Some(0x98));
+        assert_eq!(
+            ladder_applies(false, 3078, "COM4", "dtr", "com4"),
+            Some(0x98)
+        );
+        assert_eq!(
+            ladder_applies(false, 3078, "COM4", "rts", " COM4 "),
+            Some(0x98)
+        );
     }
 
     #[test]
@@ -581,7 +591,10 @@ mod tests {
         );
         let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true);
         assert!(m.contains("Icom IC-7610"), "{m}");
-        assert!(m.contains("115200") && m.contains("4800"), "list rates: {m}");
+        assert!(
+            m.contains("115200") && m.contains("4800"),
+            "list rates: {m}"
+        );
         assert!(m.contains("TWO COM ports"), "{m}");
         // How to tell them apart on Windows (Enhanced = CI-V side, Standard = never).
         assert!(m.contains("Enhanced"), "{m}");
@@ -615,7 +628,10 @@ mod tests {
         assert!(!m.contains("Enhanced"), "{m}");
         assert!(!m.contains("other COM port"), "{m}");
         assert!(m.contains("single COM port"), "{m}");
-        assert!(m.contains("unplug"), "identity check via the unplug test: {m}");
+        assert!(
+            m.contains("unplug"),
+            "identity check via the unplug test: {m}"
+        );
         assert!(m.contains("CI-V Address"), "{m}");
         assert!(m.contains("94h"), "must name the 7300's address: {m}");
         assert!(m.contains("driver"), "{m}");

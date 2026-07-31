@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.24.0] — 2026-07-31
 
 ### Added: satellite operating — full Doppler, and a rotator that behaves
 
@@ -101,6 +101,8 @@ to Hamlib (previously that fallback was invisible, so you could spend an evening
 wrong one). And the result you read is the result of the probe you clicked: the button used to
 report a stale status whenever the rig rebuild took longer than its fixed wait.
 
+### Changed: the SSTV screen — a big crisp picture, and panes that take only what they need
+
 A decoding SSTV picture now grows to fit the window in exact whole steps of its native
 resolution (up to 6×), so a big monitor shows a big, still-crisp image instead of a postage
 stamp surrounded by dead space — and it steps down cleanly on small windows instead of
@@ -124,7 +126,7 @@ full height without squeezing anything. A long history scrolls inside the card r
 growing it.
 
 
-### Fixed: satellite Doppler was off by up to a second of orbital motion
+### Fixed: satellite predictions were off by a second of orbital motion
 
 Every satellite prediction — Doppler, pass times, look angles, the ground track — was computed
 from an element-set epoch rounded down to the nearest whole second. A TLE states its epoch to
