@@ -70,10 +70,6 @@ function utcPartsToUnix(date: string, time: string): number | null {
 }
 
 interface Props {
-  /** Show the recall card as ONE LINE instead of the full card. Set by the operating cockpits,
-   * where the card's height was squeezing the panes you operate from the moment you typed a
-   * call. The Logbook keeps the full card. */
-  compactRecall?: boolean
   snap: AppSnapshot
   /** ADIF mode logged ('CW' / 'SSB'). */
   mode: string
@@ -122,7 +118,7 @@ interface Props {
  *
  * When fieldDay is null/undefined, behaviour is the standard logbook path.
  */
-export function LogEntry({ compactRecall,
+export function LogEntry({
   snap,
   mode,
   defaultRst,
@@ -1059,7 +1055,6 @@ export function LogEntry({ compactRecall,
         newEntity={newEntity}
         newBandSlot={newBandSlot}
         newModeSlot={newModeSlot}
-        compact={compactRecall}
       />
     </div>
   )

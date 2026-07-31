@@ -74,6 +74,31 @@ The Doppler readout shows both legs with their live frequency and correction, an
 a written description for screen readers.
 
 
+### Changed: SSTV pictures scale up to the screen — and the empty half-screen panes are gone
+
+A decoding SSTV picture now grows to fit the window in exact whole steps of its native
+resolution (up to 6×), so a big monitor shows a big, still-crisp image instead of a postage
+stamp surrounded by dead space — and it steps down cleanly on small windows instead of
+spilling out of its area. Below the picture, the Transmit box now takes only the height it
+needs and the Gallery gets everything left over; the old layout gave each exactly half the
+space whatever they held, which left a fresh install staring at a large empty Gallery band.
+Both panes carry the same title-bar frame as the other screens, and the ⊞ Panels menu hides
+them exactly as before. On a window too short for all of it, the screen scrolls: the picture
+area and the Gallery keep a usable minimum instead of vanishing, and the Send/Stop bar sits
+below the panes and stays parked at the bottom edge — Stop is reachable at any scroll
+position. RTTY's decoded-text pane keeps its minimum height on short windows the same way.
+
+### Changed: the full caller card is back while operating — QRZ photo, bearing and all
+
+Resolving a call in the Phone or CW log strip once again shows the full recall card: the QRZ
+profile photo, name, QTH, country, the distance and beam heading from your own grid, your most
+recent note on the station, and the real list of previous contacts (date, band, mode, reports).
+The card had been cut to a single line in 0.18.0 because it could push the operating controls
+off screen; the new pane layout scrolls the log column internally, so the card can take its
+full height without squeezing anything. A long history scrolls inside the card rather than
+growing it.
+
+
 ### Fixed: satellite Doppler was off by up to a second of orbital motion
 
 Every satellite prediction — Doppler, pass times, look angles, the ground track — was computed

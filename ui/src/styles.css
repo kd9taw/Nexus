@@ -6781,8 +6781,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-weight: 700;
 }
 .recall-log-list {
-  /* Effective viewport, not raw vh — raw is wrong by the zoom factor inside .app. */
-  max-height: calc(0.38 * var(--vh-eff, 100vh));
+  /* Bounded internal scroller (~9 rows), a sanctioned bounded log widget. Since the pane
+     grid, the card renders inside the log pane's .pane-body — the REAL scroller — so the
+     old 0.38·--vh-eff cap re-created a second viewport-sized grower nested inside it and
+     the two fought over the same surplus. A fixed em ceiling scrolls the tail instead. */
+  max-height: 12em;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -16475,10 +16478,30 @@ html[data-panel='needed'] {
      cockpits' content usually fits, so the scrollbar appears only on genuine deficit. */
   overflow-y: auto;
   min-height: 0;
+  /* THE FILL-FRAME FLOOR (region-less cockpits only). These two shells have no
+     .cockpit-panes region — their CockpitPaneFrames are bare shell children whose
+     inline fill flex is `1 1 0` with `min-height: var(--cockpit-fill-min, 0)`. This
+     knob is that floor: RTTY's stream / SSTV's gallery keep their head plus a readable
+     band of content, and deficit past it flows to the `overflow-y: auto` valve above.
+     A SHEET rule on `.pane-frame` cannot supply the floor — the frame's inline
+     min-height outranks every selector, which is how the previous spelling
+     (`.rtty-cockpit > .pane-frame { min-height: 10em }`) shipped dead. Fenced:
+     cockpit-panes.test.ts fails any other rule that sets this — inherited under a
+     region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn. */
+  --cockpit-fill-min: 10em;
 }
-/* Pinned TX bar — mode/Send/Stop/progress. Never a panel; Stop always reachable. */
+/* Pinned TX dock — mode/Send/Stop/progress. Never a panel; Stop always reachable.
+   Sticky is the .cockpit-txdock discipline (cockpit-panes.css): with the composer strip
+   and the stage/gallery floors, the shell's deficit valve engages routinely on short
+   windows, and a bar that scrolls away is a Stop the operator cannot reach
+   mid-transmission. The bar is the shell's LAST child (SstvView.structure.test.tsx) so
+   bottom-sticky parks it in the scrollport at every scroll position. --bg-elev is an
+   opaque hex in both themes — a sticky surface must not let content ghost through. */
 .sstv-tx-bar {
   flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -16488,20 +16511,13 @@ html[data-panel='needed'] {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
-/* Bounded lower region: the two removable, seam-resizable panels (compose / gallery). */
-.sstv-lower {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  overflow: hidden;
-}
-.sstv-lower > .panel {
-  flex: var(--pane-share, 1) 1 0;
-  min-height: 0;
-  overflow: auto; /* scroll inside the pane, never the whole view */
-}
+/* (The `.sstv-lower` bounded region + its `--pane-share` panels are GONE — census #10:
+   the 50/50 split gave each pane half the region whatever it held, ~440px dead per pane
+   on an ultrawide with an empty gallery. The compose/gallery blocks now render through
+   CockpitPaneFrame as direct shell children — composer fit="content", gallery fill —
+   sized by the frame's own inline role flex, which this sheet cannot and must not
+   restyle (cockpit-panes.test.ts fences .pane-frame growth). Deficit flows to the
+   shell's `overflow-y: auto` valve above.) */
 /* RTTY waterfall: a fixed-height stage (mirrors the CW/Phone .ph-scope-panel) so
    the canvas has real device pixels to draw into. A flex:1 stage collapses to 0
    in this scrolling cockpit column, and Waterfall's hidden-canvas guard would then
@@ -16541,16 +16557,18 @@ html[data-panel='needed'] {
    with nothing to scroll. The frame is that grower and it scrolls INTERNALLY; the strips are
    pinned by `.cockpit-txdock` (cockpit-panes.css) rather than by a rule here.
 
-   Why this cockpit sizes its frame at all, when the pane-grid contract says a pane declares
+   Why this cockpit floors its frame at all, when the pane-grid contract says a pane declares
    no size: there is no grid to size it. RTTY has exactly ONE content pane, and a region would
    have to pick a column tier — every one of which leaves a track (or the space under a
-   content-height row) empty. So the SHELL owns this frame's height, explicitly, in one place.
-   The 10em floor is the frame's head + the 6em transcript floor; a shorter window flows to
-   the shell's own `overflow-y: auto` valve, never to a clip. */
-.rtty-cockpit > .pane-frame {
-  flex: 1 1 0;
-  min-height: 10em;
-}
+   content-height row) empty. So the SHELL owns the floor — via `--cockpit-fill-min` on the
+   shared `.layout.single.rtty-cockpit, .layout.single.sstv-view` rule above, which the
+   frame's own inline `min-height` consults. (The original spelling here,
+   `.rtty-cockpit > .pane-frame { flex: 1 1 0; min-height: 10em }`, was DEAD ON ARRIVAL:
+   CockpitPaneFrame stamps its fill flex and min-height INLINE, and an inline declaration
+   outranks any sheet selector. The flex half was a no-op too — no region means no
+   `--cockpit-pane-flex`, so the inline fallback is already `1 1 0`.) 10em ≈ the frame head
+   + the 6em transcript floor; a shorter window flows to the shell's own `overflow-y: auto`
+   valve, never to a clip. */
 .rtty-stream .cw-decode-text {
   /* was height:14em — let it fill the pane and scroll internally (it already has overflow-y:auto). */
   flex: 1 1 0;
@@ -16645,10 +16663,17 @@ html[data-panel='needed'] {
 }
 /* SSTV live image canvas — the in-flight decode area. */
 .sstv-canvas {
-  /* The RX image is the pinned "scope" at the top — a flex share of the bounded view, no px
-     floor (px floors on flex children are the documented vertical-clip bug). */
+  /* The RX image is the pinned "scope" at the top — a flex share of the view. The floor
+     is EM (px floors are zoom-hostile; px floors under a CLIPPING ancestor are the
+     documented vertical-clip bug) and safe ONLY because the shell above is the deficit
+     valve (`overflow-y: auto`, guarded in cockpit-shells.test.ts): past the floor,
+     deficit becomes the shell scrollbar, never a clip. At the previous `min-height: 0`
+     this basis-0 grower resolved to ZERO height whenever the TX composer strip
+     (~246–438px, flex 0 0 auto) put the column in deficit — and a box with no scroll
+     extent is one the valve cannot even scroll to. 16em ≈ the .sstv-band comfortable
+     height (220px) + its caption at the 14px body font. */
   flex: 1.1 1 0;
-  min-height: 0;
+  min-height: 16em;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -16674,10 +16699,34 @@ html[data-panel='needed'] {
   gap: var(--space-2);
   padding: var(--space-3);
   min-width: 0;
+  /* Full stage width, deliberately: this box is the percentage BASE of the canvas's
+     `min(100%, --sstv-img-w)` clamp below. As a shrink-to-fit flex item its width was
+     its own max-content, so the min() ALWAYS took the 100% arm — the integer stamp was
+     inert (every window rendered ~1×) and a long caption widened the box into a
+     FRACTIONAL scale that resized mid-decode as the caption changed (review
+     2026-07-31, measured in Chromium). Stretched, 100% is the same measured stage the
+     stamp was computed against, so the integer arm can actually win. */
+  width: 100%;
 }
 .sstv-live-canvas {
   image-rendering: pixelated;
-  width: min(100%, 480px);
+  /* INTEGER-STEP UPSCALE (census #9). SstvView measures the stage and stamps
+     `--sstv-img-w` as a WHOLE multiple of the decode's native width (sstvScale.ts has
+     the ruling: fractional scales smear a pixelated bitmap — blur is worse than
+     margin). 480px (the old fixed 3× of the ≤160px preview) is only the pre-measure
+     fallback. The one sanctioned fractional case — a stage smaller than the native
+     decode — yields per axis: this min(100%) covers the width (its base is .sstv-live,
+     stretched to the stage above), and sstvImageWidth stamps the height-fitting width
+     when even 1× is too tall, because `height: auto` follows the ratio into the
+     stage's overflow:hidden and cannot yield on its own. */
+  width: min(100%, var(--sstv-img-w, 480px));
+  /* content-box, deliberately, against the global border-box reset: the stamped width
+     must be the BITMAP's box, or the 1px borders eat 2px of it and the realized scale
+     is (k·native − 2)/native — fractional by exactly the amount the integer ruling
+     forbids (measured: 478/160 = 2.9875, a periodic pixel-row beat under
+     image-rendering: pixelated; the old fixed 480px had the same flaw). The 2px the
+     borders add outside the width are covered by sstvScale's chrome overestimate. */
+  box-sizing: content-box;
   height: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -16688,20 +16737,8 @@ html[data-panel='needed'] {
   font-weight: 700;
   color: var(--text-dim);
 }
-/* Gallery of received images (newest first). */
-.sstv-gallery {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-}
-.sstv-gallery-head {
-  font-size: var(--fs-label);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--text-faint);
-  margin-bottom: var(--space-2);
-}
+/* Gallery of received images (newest first) — the grid sits directly in its
+   CockpitPaneFrame body (the frame supplies the card chrome + the "Gallery" head). */
 .sstv-gallery-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -16764,8 +16801,10 @@ html[data-panel='needed'] {
 }
 /* --- Transmit panel: intake + live preview + mode picker + Send/Stop/progress.
    Nothing here keys the rig until Send (the backend enforces this too). --- */
-/* The Transmit composer panel (image intake/preview + file picker + name). Renamed from
-   .sstv-tx now that the TX keying controls moved to the pinned .sstv-tx-bar. */
+/* The Transmit composer (image intake/preview + file picker + name). Renamed from
+   .sstv-tx now that the TX keying controls moved to the pinned .sstv-tx-bar. Lives in a
+   CockpitPaneFrame body as a `.panel` (the `.pane-body > .panel` flattener strips this
+   card chrome there, keeping the column layout; the frame head replaced .sstv-tx-head). */
 .sstv-compose {
   background: var(--bg-elev);
   border: 1px solid var(--border);
@@ -16774,12 +16813,6 @@ html[data-panel='needed'] {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-}
-.sstv-tx-head {
-  font-size: var(--fs-label);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--text-faint);
 }
 /* Drop zone doubles as the live cover-crop preview stage. */
 .sstv-tx-drop {
@@ -17686,55 +17719,9 @@ tr.sel .aprs-sym {
 }
 .update-close:hover { opacity: 1; }
 
-/* The one-line recall (operating cockpits). The full card lives in the Logbook; here it must
-   cost a single row no matter what the callbook returns, so it can never push the operating
-   panes off screen. */
-/* Compact recall = the one-line header PLUS a bounded history. The whole point of compact is
-   that it cannot shove the cockpit around, so the container never grows: the history scrolls
-   inside a fixed ceiling instead of pushing the log form down the screen. */
-.recall-compact {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.recall-line {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
-  padding: var(--space-1) 0;
-  font-size: var(--fs-label);
-  white-space: nowrap;
-  overflow: hidden;
-}
-/* ~4 rows visible, the rest scrolls. Deep enough to answer "when did I last work them, and on
-   what?" at a glance; shallow enough that a station worked 40 times cannot take the pane. */
-.recall-line-log {
-  max-height: 5.5em;
-  overflow-y: auto;
-  min-width: 0;
-  border-top: 1px solid var(--border-soft, #1b2433);
-  margin-top: 2px;
-  padding-top: 2px;
-}
-.recall-line-row {
-  display: flex;
-  gap: var(--space-2);
-  align-items: baseline;
-  font-size: var(--fs-micro);
-  color: var(--text-dim);
-  white-space: nowrap;
-}
-.recall-line-row .recall-log-bm {
-  color: var(--text-faint);
-}
-.recall-line-call { font-weight: 800; letter-spacing: 0.03em; }
-.recall-line-hist { color: var(--text-dim); }
-.recall-line-name {
-  color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* The one-line compact recall (0.18.0's height-crush mitigation) lived here until 2026-07-31:
+   the pane grid made the cockpit log pane's .pane-body the scroller, the full card came back,
+   and compact lost its last caller. RecallPanel.test.tsx holds the negative census. */
 
 /* ── DXpedition month grid + chase digest (2026-07-29) ──────────────────────
    The calendar's landing view. Deliberately QUIET: the old view carried

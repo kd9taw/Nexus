@@ -34,10 +34,14 @@ describe('CockpitPaneFrame', () => {
     )
     const frame = screen.getByLabelText('Log')
     expect(frame.className).toBe('pane-frame') // no caller class ever joins it
-    // The ONLY inline style is the role-derived flex (fill by default, honoring the
-    // 1-col tier's --cockpit-pane-flex override) — there is no prop that could put
-    // anything else here, so "size yourself" is still not expressible.
-    expect(frame.getAttribute('style')).toBe('flex: var(--cockpit-pane-flex, 1 1 0); min-height: 0px;')
+    // The ONLY inline styles are the role-derived flex (fill by default, honoring the
+    // 1-col tier's --cockpit-pane-flex override) and the min-height consult of the
+    // shell-owned --cockpit-fill-min knob (region-less cockpits; fenced in
+    // cockpit-panes.test.ts). Both are placement, neither is caller-suppliable, so
+    // "size yourself" is still not expressible.
+    expect(frame.getAttribute('style')).toBe(
+      'flex: var(--cockpit-pane-flex, 1 1 0); min-height: var(--cockpit-fill-min, 0);',
+    )
     expect(frame.dataset.fit).toBe('fill')
   })
 
