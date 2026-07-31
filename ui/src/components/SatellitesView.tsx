@@ -530,11 +530,13 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             <div
               /* Square-ish and growing with the column rather than pinned at
                  260px: a globe is only readable at size, and this is the one
-                 the operator opens to read a single pass. */
+                 the operator opens to read a single pass. Cap in --vh-eff, not
+                 raw vh: this renders INSIDE .app's zoom:var(--ui-zoom), where
+                 raw viewport units are wrong by the zoom factor. */
               style={{
                 width: '100%',
                 aspectRatio: '1 / 1',
-                maxHeight: '52vh',
+                maxHeight: 'calc(0.52 * var(--vh-eff, 100vh))',
                 minHeight: 260,
                 borderRadius: 8,
                 overflow: 'hidden',

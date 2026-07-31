@@ -21,17 +21,23 @@ export function Menu({ trigger, items }: MenuProps) {
       <RM.Trigger asChild>{trigger}</RM.Trigger>
       <RM.Portal>
         <RM.Content className="ui-menu" sideOffset={4} align="end" collisionPadding={8}>
-          {items.map((it, i) => (
-            <RM.Item
-              key={i}
-              className="ui-menu-item"
-              disabled={it.disabled}
-              onSelect={it.onSelect}
-            >
-              {it.icon && <span className="ui-menu-icon">{it.icon}</span>}
-              {it.label}
-            </RM.Item>
-          ))}
+          {/* Same portal-zoom re-application as Dialog/Tooltip (see Tooltip.tsx for
+              why an inner wrapper is positioning-safe): the portal escapes `.app`'s
+              zoom:var(--ui-zoom), so content must re-apply it. Item roving focus is
+              context-based, so the extra div does not break keyboard navigation. */}
+          <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
+            {items.map((it, i) => (
+              <RM.Item
+                key={i}
+                className="ui-menu-item"
+                disabled={it.disabled}
+                onSelect={it.onSelect}
+              >
+                {it.icon && <span className="ui-menu-icon">{it.icon}</span>}
+                {it.label}
+              </RM.Item>
+            ))}
+          </div>
         </RM.Content>
       </RM.Portal>
     </RM.Root>

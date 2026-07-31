@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en" data-theme="dark" data-layout="right" data-viewport="md">
+<html lang="en" data-theme="dark" data-viewport="md">
   <head>
     <meta charset="UTF-8" />
-    <!-- Apply persisted theme / layout / scale / pane widths before first paint
+    <!-- Apply persisted theme / scale / pane widths before first paint
          so there's no reflow flash on launch. The React hooks keep them in sync. -->
     <script>
       (function () {
@@ -10,8 +10,6 @@
           var d = document.documentElement
           var t = localStorage.getItem('tempo-theme')
           if (t === 'light' || t === 'dark') d.setAttribute('data-theme', t)
-          var l = localStorage.getItem('tempo-layout')
-          if (l === 'right' || l === 'top') d.setAttribute('data-layout', l)
           var den = localStorage.getItem('nexus-density')
           if (den === 'guided' || den === 'standard' || den === 'dense') d.setAttribute('data-density', den)
           if (localStorage.getItem('nexus-motion') === 'reduce') d.setAttribute('data-motion', 'reduce')
