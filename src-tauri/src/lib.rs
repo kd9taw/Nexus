@@ -1846,13 +1846,14 @@ async fn get_propagation(
         let mut needs = propagation::LogNeeds::new();
         for q in eng.get_log() {
             // A "needs confirmation" must be award-grade (LoTW/paper), not eQSL.
-            needs.add(
+            needs.add_qso(
                 &q.call,
                 &q.band,
                 &q.mode,
                 q.grid.as_deref(),
                 q.state.as_deref(),
                 q.award_confirmed,
+                qso_is_sat(q.prop_mode.as_deref()),
             );
         }
         // The operator's OWN decoded roster on the current band → "I heard X"
@@ -3033,6 +3034,11 @@ struct SatPassDto {
     /// rows (from the weekly cache); absent on the map view + when offline.
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<String>,
+    /// What this pass could EARN the operator (needed grids/entities reachable
+    /// through the footprint — spec §3). Stamped ONLY by `get_sat_pass_needs`,
+    /// which computes it on demand; absent on every other pass surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    earn: Option<propagation::SatPassEarn>,
 }
 
 /// Current amateur-satellite picture: sub-satellite points for the Celestrak
@@ -3157,6 +3163,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                                 aos_az_deg: p.aos_az_deg,
                                 los_az_deg: p.los_az_deg,
                                 status: None,
+                                earn: None,
                             });
                         }
                     }
@@ -3413,6 +3420,112 @@ async fn get_sat_schedule(
                     aos_az_deg: p.aos_az_deg,
                     los_az_deg: p.los_az_deg,
                     status: status.clone(),
+                    earn: None,
+                });
+            }
+        }
+        passes.sort_by_key(|p| p.aos_unix);
+        passes
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// The needs-aware pass ranking (spec §3): [`get_sat_schedule`]'s rows for the
+/// named birds with each pass's EARN summary stamped — the needed grids
+/// (Satellite-VUCC slots) and never-worked entities reachable through the
+/// bird's footprint during that pass, plus a ready-made sort key. Needs come
+/// from the one [`propagation::LogNeeds`] engine over the logbook; geometry
+/// from the same TLE cache the schedule uses. Rows stay AOS-sorted (the UI
+/// owns presentation; `earn.score` ranks). Computed ON DEMAND here in a
+/// blocking task — the passes × footprint-grid sweep never runs in the
+/// RadioLoop or any snapshot path.
+#[tauri::command]
+async fn get_sat_pass_needs(
+    state: State<'_, SharedEngine>,
+    names: Vec<String>,
+    hours: u32,
+) -> Result<Vec<SatPassDto>, String> {
+    const STALE_DAYS: f64 = 30.0;
+    let hours = hours.clamp(1, 72);
+    let (mygrid, needs) = {
+        let mut eng = engine_lock(&state);
+        // Two-instance freshness: fold the other radio's fresh QSOs in before
+        // computing needs (mtime-gated stat — cheap when unchanged).
+        eng.sync_shared_log_if_changed();
+        let mut needs = propagation::LogNeeds::new();
+        for q in eng.get_log() {
+            needs.add_qso(
+                &q.call,
+                &q.band,
+                &q.mode,
+                q.grid.as_deref(),
+                q.state.as_deref(),
+                q.award_confirmed,
+                qso_is_sat(q.prop_mode.as_deref()),
+            );
+        }
+        (eng.settings().mygrid.clone(), needs)
+    };
+    let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
+        return Ok(Vec::new());
+    };
+    let tles = load_tles().await?;
+    if tles.is_empty() {
+        return Ok(Vec::new());
+    }
+    let wanted: std::collections::HashSet<String> =
+        names.iter().map(|n| n.trim().to_uppercase()).collect();
+    let now = now_unix();
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        use propagation::sat;
+        let sat_needs = propagation::SatNeeds {
+            worked_sat_grids: needs.worked_grids_sat(),
+            worked_entities: needs.worked_entity_names(),
+        };
+        let mine: Vec<&sat::Tle> = tles
+            .iter()
+            .filter(|t| wanted.contains(&t.name.to_uppercase()))
+            .filter(|t| sat::tle_age_days(&t.line1, now).is_some_and(|a| a <= STALE_DAYS))
+            .collect();
+        // SatNOGS status rides these rows exactly as on get_sat_schedule —
+        // the Satellites section fetches its ONLY schedule through this
+        // command, and dropping the field here let a DEAD bird rank in "Next
+        // up" with no dead pill anywhere on the planning surface (passScore's
+        // alive/dead terms, the schedule status chips, the whyLine honesty
+        // text and the Status sort all key on it).
+        let norads: Vec<u32> = mine
+            .iter()
+            .filter_map(|t| sat::norad_id(&t.line1))
+            .collect();
+        let status_by_norad: std::collections::HashMap<u32, String> = satnogs_snapshot(norads)
+            .map(|sn| {
+                sn.statuses
+                    .into_iter()
+                    .map(|st| (st.norad, st.status))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut passes = Vec::new();
+        for t in mine {
+            let status = sat::norad_id(&t.line1).and_then(|n| status_by_norad.get(&n).cloned());
+            // Same 6 h backscan as the schedule so an in-progress pass keeps
+            // its real AOS (and both surfaces agree on row identity).
+            for p in sat::passes(t, obs, now - 21_600, hours + 6) {
+                if p.los_unix <= now {
+                    continue;
+                }
+                let earn = propagation::pass_earn(t, p.aos_unix, p.los_unix, &sat_needs);
+                passes.push(SatPassDto {
+                    name: t.name.clone(),
+                    aos_unix: p.aos_unix,
+                    los_unix: p.los_unix,
+                    max_el_deg: p.max_el_deg,
+                    aos_az_deg: p.aos_az_deg,
+                    los_az_deg: p.los_az_deg,
+                    status: status.clone(),
+                    earn: Some(earn),
                 });
             }
         }
@@ -3473,6 +3586,7 @@ fn iss_pass_from_tles(
             aos_az_deg: p.aos_az_deg,
             los_az_deg: p.los_az_deg,
             status: None,
+            earn: None,
         })
 }
 
@@ -3617,6 +3731,7 @@ async fn get_sat_detail(
                                 aos_az_deg: p.aos_az_deg,
                                 los_az_deg: p.los_az_deg,
                                 status: status.clone(),
+                                earn: None,
                             }),
                             track,
                         )
@@ -3641,16 +3756,36 @@ async fn get_sat_detail(
     Ok(out)
 }
 
-/// Live rotor auto-track state. Generation-owned like the WSPR feed: starting a
+/// Live pass auto-track state. Generation-owned like the WSPR feed: starting a
 /// new track (or stopping) bumps the generation and the old loop exits on its
-/// next tick — one loop owns the rotor at a time.
+/// next tick — one loop owns the rotor (when there is one) at a time.
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SatTrackDto {
     name: String,
     /// "armed" (waiting, no rotor commands until 5 min before AOS),
-    /// "prepositioning" (parked on the AOS azimuth) or "tracking".
+    /// "prepositioning" (parked on the AOS azimuth) or "tracking". A
+    /// rotor-less track never reports "prepositioning" — there is nothing to
+    /// slew, so it stays "armed" until AOS.
     state: String,
+    /// Which steering surfaces this track is allowed to drive —
+    /// "rotor+doppler", "rotor-only", "doppler-only" or "pass-only" (see
+    /// `tempo_app::settings::sat_track_mode`). The rotor half is fixed at arm
+    /// time; the Doppler half follows the live consents (satDoppler + VFO
+    /// mapping + a HELD transponder — without one the tick tunes nothing, and
+    /// the label must not claim a dial the operator kept), so a mid-pass
+    /// Settings toggle or transponder release moves the label exactly when it
+    /// moves the behaviour. A LABEL for the UI's honesty, never a gate — the
+    /// refusals live where they always did.
+    mode: String,
+    /// The sideband the engine will command the TX (split) VFO into while
+    /// this pass owns the uplink (`Engine::sat_tx_mode` — the inverting-bird
+    /// swap), or `None` when nothing is commanded: legs share a mode, a
+    /// mapping that does not drive the uplink, Doppler off, or the operator
+    /// took the mode back. The UI displays THIS, never a second derivation
+    /// from the SatNOGS record — two derivations of one command is how a
+    /// display claims a write the radio never gets.
+    tx_mode: Option<String>,
     /// Where the ANTENNA was last actually COMMANDED — after flip, calibration
     /// trim and the deadband. `None` until a command has genuinely been sent:
     /// the armed phase deliberately drives nothing, and reporting the AOS
@@ -3740,12 +3875,18 @@ fn send_rot_step(addr: &str, step: tempo_core::rotator::RotStep) -> tempo_core::
 static SAT_TRACK_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SAT_TRACK: Mutex<Option<SatTrackDto>> = Mutex::new(None);
 
-/// Arm rotor auto-track for a bird's pass. Far from AOS the loop is merely
-/// "armed" (no rotor commands); from 5 min out it slews to the AOS azimuth
-/// (the S.A.T. behavior — on target before the bird rises), then follows
-/// az/el every 3 s until LOS, then stops the rotor. `aos_unix` picks WHICH
-/// pass (±3 min tolerance — the schedule row the operator clicked); omitted =
-/// the current/next one. `None` = no rotor configured, no grid, or no matching
+/// Arm auto-track for a bird's pass. With a rotator: far from AOS the loop is
+/// merely "armed" (no rotor commands); from 5 min out it slews to the AOS
+/// azimuth (the S.A.T. behavior — on target before the bird rises), then
+/// follows az/el every 3 s until LOS, then stops the rotor. WITHOUT a rotator
+/// the same loop runs with the pointing half skipped — pass state, geometry
+/// and the Doppler tick are all still live (the Arrow-antenna operator's
+/// mode); the DTO's `mode` says which shape this arm actually is. Every
+/// consent gate is unchanged: arming is still per pass, and the radio is
+/// still only touched when satDoppler is on with a VFO mapping (both checked
+/// inside `sat_doppler_tick`, every tick). `aos_unix` picks WHICH pass
+/// (±3 min tolerance — the schedule row the operator clicked); omitted =
+/// the current/next one. `None` = no grid, unknown bird, or no matching
 /// pass in the next 48 h — the UI says so plainly.
 #[tauri::command]
 async fn start_sat_track(
@@ -3753,13 +3894,18 @@ async fn start_sat_track(
     name: String,
     aos_unix: Option<i64>,
 ) -> Result<Option<SatTrackDto>, String> {
-    let (mygrid, addr, rot_cfg) = {
+    let (mygrid, addr, rot_cfg, sat_doppler, sat_vfo_map, sat_held, sat_tx_mode0) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
-        (st.mygrid.clone(), effective_rotator_addr(st), st.rotator_config())
-    };
-    let Some(addr) = addr else {
-        return Ok(None);
+        (
+            st.mygrid.clone(),
+            effective_rotator_addr(st),
+            st.rotator_config(),
+            st.sat_doppler,
+            st.sat_vfo_map,
+            eng.sat_transponder_held().is_some(),
+            eng.sat_tx_mode(),
+        )
     };
     let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(None);
@@ -3784,14 +3930,18 @@ async fn start_sat_track(
     let dop_engine: SharedEngine = (*state).clone();
     let initial = SatTrackDto {
         name: tle.name.clone(),
-        state: if now < pass.aos_unix - 300 {
-            "armed"
-        } else if now < pass.aos_unix {
+        state: if now >= pass.aos_unix {
+            "tracking"
+        } else if addr.is_some() && now >= pass.aos_unix - 300 {
             "prepositioning"
         } else {
-            "tracking"
+            // Rotor-less has nothing to slew: armed runs all the way to AOS.
+            "armed"
         }
         .to_string(),
+        mode: tempo_app::settings::sat_track_mode(addr.is_some(), sat_doppler, sat_vfo_map, sat_held)
+            .to_string(),
+        tx_mode: sat_tx_mode0,
         az_deg: None,
         el_deg: None,
         aos_az_deg: pass.aos_az_deg,
@@ -3842,8 +3992,11 @@ async fn start_sat_track(
         // `cmd` is the last pair genuinely SENT, `el_sent` is false on an
         // az-only rotator (elevation is then reported as absent, never 0), and
         // `sat` is the look angle only once there is one — below the horizon
-        // there isn't.
-        let badge = |state: &str,
+        // there isn't. `mode` is the per-tick honesty label (the Doppler half
+        // of it follows the live settings).
+        let badge = |mode: &str,
+                     tx_mode: Option<String>,
+                     state: &str,
                      cmd: Option<(f64, f64)>,
                      el_sent: bool,
                      sat: Option<(f64, f64)>,
@@ -3852,6 +4005,8 @@ async fn start_sat_track(
                      dop: Option<&tempo_app::engine::SatTuningNow>| SatTrackDto {
             name: tle.name.clone(),
             state: state.to_string(),
+            mode: mode.to_string(),
+            tx_mode,
             az_deg: cmd.map(|c| c.0),
             el_deg: cmd.and_then(|c| el_sent.then_some(c.1)),
             aos_az_deg: pass.aos_az_deg,
@@ -3879,13 +4034,50 @@ async fn start_sat_track(
             if t > pass.los_unix {
                 break;
             }
+            // The per-tick honesty label (+ the declared TX-leg sideband).
+            // The rotor half was fixed at arm time; the Doppler half re-reads
+            // the SAME consents `sat_doppler_tick` needs — settings pair plus
+            // a held transponder — so a mid-pass Settings toggle or a
+            // transponder release moves the label exactly when it moves the
+            // behaviour.
+            let (mode, tx_mode) = {
+                let eng = engine_lock(&dop_engine);
+                let st = eng.settings();
+                (
+                    tempo_app::settings::sat_track_mode(
+                        addr.is_some(),
+                        st.sat_doppler,
+                        st.sat_vfo_map,
+                        eng.sat_transponder_held().is_some(),
+                    ),
+                    eng.sat_tx_mode(),
+                )
+            };
             // Far from AOS: ARMED — hold fire entirely (the operator keeps the
-            // rotor for HF until 5 min before the bird rises).
-            if t < pass.aos_unix - 300 {
+            // rotor for HF until 5 min before the bird rises). Rotor-less has
+            // no slew to stage, so armed runs all the way to AOS and the
+            // prepositioning phase below is never entered — the badge must not
+            // claim a slew that cannot be sent.
+            let hold_until = if addr.is_some() {
+                pass.aos_unix - 300
+            } else {
+                pass.aos_unix
+            };
+            if t < hold_until {
                 // Armed sends NOTHING to the rotor, so there is no commanded
                 // position and no look angle — only the rise azimuth the badge
                 // carries under its own name.
-                update_badge(badge("armed", None, false, None, None, None, None));
+                update_badge(badge(
+                    mode,
+                    tx_mode.clone(),
+                    "armed",
+                    None,
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                ));
                 std::thread::sleep(std::time::Duration::from_secs(3));
                 continue;
             }
@@ -3931,6 +4123,27 @@ async fn start_sat_track(
             // the engine — never inferred from the dial, which is the uplink
             // under an uplink-only mapping and ordinary split otherwise.
             let dop = live_rate.and_then(|rate| engine_lock(&dop_engine).sat_tuning_now(rate));
+            // ROTOR-LESS: the pass clock, geometry and the Doppler tick above
+            // are the entire job — there is no antenna to command, so the
+            // driver/wire half is skipped rather than faked. `cmd` stays None
+            // for the whole pass (nothing was ever commanded; the badge must
+            // not invent a pointing), while the true look angle still tells
+            // the operator where to swing the handheld antenna.
+            let Some(addr) = addr.as_deref() else {
+                update_badge(badge(
+                    mode,
+                    tx_mode.clone(),
+                    phase,
+                    None,
+                    false,
+                    rep_sat,
+                    live_range,
+                    live_rate,
+                    dop.as_ref(),
+                ));
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                continue;
+            };
             // The mechanical policy — flip, calibration trim, deadband, the
             // az-only fallback and its recovery probe — lives in tempo-core so
             // it can be exercised over a whole simulated pass without a mast.
@@ -3943,6 +4156,8 @@ async fn start_sat_track(
                 // which is exactly the tracking error the sky dome exists to
                 // show.
                 update_badge(badge(
+                    mode,
+                    tx_mode.clone(),
                     phase,
                     driver.last_aim(),
                     driver.azel_ok(),
@@ -3959,7 +4174,7 @@ async fn start_sat_track(
             if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
                 return;
             }
-            let outcome = send_rot_step(&addr, step);
+            let outcome = send_rot_step(addr, step);
             driver.record(step, outcome, sat_az, sat_el);
             if outcome != RotOutcome::Failed {
                 // Report the BORESIGHT aim the driver recorded, never the
@@ -3970,6 +4185,8 @@ async fn start_sat_track(
                 // station. An az-only rotator reports no elevation at all —
                 // absent, not a 0 the UI would have to decode.
                 update_badge(badge(
+                    mode,
+                    tx_mode.clone(),
                     phase,
                     driver.last_aim(),
                     driver.azel_ok(),
@@ -3989,6 +4206,8 @@ async fn start_sat_track(
                 // that has nothing to say, and the four ticks before we give up
                 // are ~15 s of the operator wondering.
                 update_badge(badge(
+                    mode,
+                    tx_mode.clone(),
                     phase,
                     driver.last_aim(),
                     driver.azel_ok(),
@@ -4000,19 +4219,23 @@ async fn start_sat_track(
             }
             std::thread::sleep(std::time::Duration::from_secs(3));
         }
-        // LOS / rotor lost: halt the rotor and clear the badge if still ours
-        // (gen check INSIDE the lock — a newer track's badge must survive).
-        let _ = tempo_audio::rotator::stop(&addr);
-        // Post-pass: park or go to ready ONLY if the operator asked for it —
-        // the default leaves the mast exactly where the pass finished, because
-        // moving a mast nobody asked to move is the one unrecoverable
-        // surprise here. Guarded by the generation: a newer track already owns
-        // the rotor and must not have its pointing yanked to a park position.
-        if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
-            if let Some((paz, pel)) = tempo_core::rotator::post_pass_target(&rot_cfg) {
-                let (paz, pel) = tempo_core::rotator::point_for(paz, pel, &rot_cfg);
-                if tempo_audio::rotator::point_azel(&addr, paz, pel).is_err() {
-                    let _ = tempo_audio::rotator::point(&addr, paz);
+        // LOS / rotor lost: halt the rotor (when this track owns one) and
+        // clear the badge if still ours (gen check INSIDE the lock — a newer
+        // track's badge must survive). A rotor-less track has no mast to halt
+        // or park; only the dial handback below applies.
+        if let Some(addr) = addr.as_deref() {
+            let _ = tempo_audio::rotator::stop(addr);
+            // Post-pass: park or go to ready ONLY if the operator asked for it —
+            // the default leaves the mast exactly where the pass finished, because
+            // moving a mast nobody asked to move is the one unrecoverable
+            // surprise here. Guarded by the generation: a newer track already owns
+            // the rotor and must not have its pointing yanked to a park position.
+            if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
+                if let Some((paz, pel)) = tempo_core::rotator::post_pass_target(&rot_cfg) {
+                    let (paz, pel) = tempo_core::rotator::point_for(paz, pel, &rot_cfg);
+                    if tempo_audio::rotator::point_azel(addr, paz, pel).is_err() {
+                        let _ = tempo_audio::rotator::point(addr, paz);
+                    }
                 }
             }
         }
@@ -4033,11 +4256,22 @@ async fn start_sat_track(
 #[tauri::command]
 async fn stop_sat_track(state: State<'_, SharedEngine>) -> Result<(), String> {
     SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    if let Ok(mut g) = SAT_TRACK.lock() {
-        *g = None;
-    }
+    // Was a track actually LIVE? (The badge is the live marker.) Stopping one
+    // is also the dial handback: the loop's own LOS handback never runs on
+    // this path (its generation check `return`s before it), and every stop
+    // button promises "the dial is handed back". An IDLE stop — RotorStrip's
+    // belt-and-braces halt before a bare rotor stop — must instead leave a
+    // pre-pass transponder pick alone: releasing a hold the operator staged
+    // for a later pass would be doing more than was asked.
+    let was_live = SAT_TRACK
+        .lock()
+        .map(|mut g| g.take().is_some())
+        .unwrap_or(false);
     let addr = {
-        let eng = engine_lock(&state);
+        let mut eng = engine_lock(&state);
+        if was_live {
+            eng.set_sat_transponder(None);
+        }
         effective_rotator_addr(eng.settings())
     };
     if let Some(addr) = addr {
@@ -4051,6 +4285,41 @@ async fn stop_sat_track(state: State<'_, SharedEngine>) -> Result<(), String> {
 #[tauri::command]
 fn sat_track_status() -> Result<Option<SatTrackDto>, String> {
     Ok(SAT_TRACK.lock().map_err(|e| e.to_string())?.clone())
+}
+
+/// The transponder the ENGINE holds right now — read-back for
+/// [`set_sat_transponder`]. `name` is the bird, `index` the raw row into the
+/// list `get_sat_detail` returned. `None` = the dial is the operator's.
+///
+/// Exists because the hold is released backend-side (LOS handback, live-track
+/// stop) and a UI trusting only its own last click keeps showing — and acting
+/// on — a hold the engine no longer has: the readiness rail stays green while
+/// "Work this pass" skips the re-pick and arms a pass that tunes nothing.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SatTransponderHeldDto {
+    name: String,
+    index: Option<usize>,
+    description: String,
+}
+
+#[tauri::command]
+fn get_sat_transponder(
+    state: State<'_, SharedEngine>,
+) -> Result<Option<SatTransponderHeldDto>, String> {
+    let eng = engine_lock(&state);
+    Ok(eng.sat_transponder_held().map(|(label, index)| {
+        // The engine label is "BIRD|description" (see set_sat_transponder).
+        let (name, description) = label
+            .split_once('|')
+            .map(|(n, d)| (n.to_string(), d.to_string()))
+            .unwrap_or_else(|| (label.to_string(), String::new()));
+        SatTransponderHeldDto {
+            name,
+            index,
+            description,
+        }
+    }))
 }
 
 /// Real-time KC2G ionosonde MUF/foF2 station fixes for the Connect map's MUF
@@ -7146,6 +7415,14 @@ fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
     Ok(eng.clear_logbook())
 }
 
+/// Whether a logged QSO was made through a satellite (`PROP_MODE=SAT`, the ADIF
+/// value the tracked-pass stamping writes) — the flag the award/needs folds
+/// state per record so satellite grid credit lands in the Satellite-VUCC
+/// buckets, never the per-band ones.
+fn qso_is_sat(prop_mode: Option<&str>) -> bool {
+    prop_mode.is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
+}
+
 /// DXCC-first award progress from the logbook (cty.dat-resolved): entities +
 /// entity×band "Challenge" slots worked/confirmed, the per-band breakdown, and
 /// the worked-but-unconfirmed "new one" chase. Pure/offline — online LoTW/eQSL/
@@ -7161,7 +7438,7 @@ fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummar
         // whether ARRL has granted DXCC-family credit (DXCC / DXCC_BAND /
         // DXCC_MODE / … — real LoTW exports use the granular codes).
         let credited = q.credit_granted.iter().any(|c| c.starts_with("DXCC"));
-        awards.add_with_credit(
+        awards.add_qso(
             &q.call,
             &q.band,
             &q.mode,
@@ -7170,6 +7447,7 @@ fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummar
             q.state.as_deref(),
             q.grid.as_deref(),
             q.ota.iota.as_deref(),
+            qso_is_sat(q.prop_mode.as_deref()),
         );
     }
     Ok(awards.summary())
@@ -7447,13 +7725,14 @@ async fn get_need_alerts(
     eng.sync_shared_log_if_changed();
     let mut needs = propagation::LogNeeds::new();
     for q in eng.get_log() {
-        needs.add(
+        needs.add_qso(
             &q.call,
             &q.band,
             &q.mode,
             q.grid.as_deref(),
             q.state.as_deref(),
             q.award_confirmed,
+            qso_is_sat(q.prop_mode.as_deref()),
         );
     }
     let snap = eng.snapshot();
@@ -11646,9 +11925,11 @@ pub fn run() {
             stop_rotator,
             discover_flex,
             get_sat_schedule,
+            get_sat_pass_needs,
             get_iss_pass,
             get_sat_detail,
             set_sat_transponder,
+            get_sat_transponder,
             start_sat_track,
             stop_sat_track,
             sat_track_status,

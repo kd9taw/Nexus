@@ -76,13 +76,14 @@ fn snapshot_needs(engine: &Arc<Mutex<Engine>>) -> Option<(propagation::LogNeeds,
     eng.sync_shared_log_if_changed();
     let mut needs = propagation::LogNeeds::new();
     for q in eng.get_log() {
-        needs.add(
+        needs.add_qso(
             &q.call,
             &q.band,
             &q.mode,
             q.grid.as_deref(),
             q.state.as_deref(),
             q.award_confirmed,
+            crate::qso_is_sat(q.prop_mode.as_deref()),
         );
     }
     let wanted = eng.settings().wanted_calls.clone();

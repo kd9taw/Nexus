@@ -208,6 +208,20 @@ pub fn current_dxcc_entities() -> usize {
     resolver().entities.iter().filter(|e| e.is_dxcc).count()
 }
 
+/// Every **current ARRL DXCC entity** with its representative (cty.dat) location —
+/// for geometric "which entities can this satellite footprint reach" queries
+/// ([`crate::satneeds`]). WAE/CQ-only entities are excluded, matching
+/// [`current_dxcc_entities`]. The location is the entity's single cty.dat point:
+/// good for "the footprint covers this entity", approximate for continent-scale
+/// entities whose edges extend far from it.
+pub fn dxcc_entity_locations() -> impl Iterator<Item = (&'static str, f64, f64)> {
+    resolver()
+        .entities
+        .iter()
+        .filter(|e| e.is_dxcc)
+        .map(|e| (e.name.as_str(), e.lat, e.lon))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

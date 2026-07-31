@@ -164,6 +164,14 @@ pub struct LogNeeds {
     confirmed_zones: HashSet<(u8, Band)>,
     confirmed_grids: HashSet<(String, Band)>,
     confirmed_states: HashSet<(String, Band)>,
+    /// Grids worked / confirmed VIA SATELLITE (`PROP_MODE=SAT`), band-independent
+    /// — the Satellite-VUCC slot set the pass-earn ranking ([`crate::satneeds`])
+    /// consults. Kept apart from the per-band `worked_grids`: ARRL counts a
+    /// satellite contact toward Satellite VUCC only, so it must not suppress a
+    /// terrestrial per-band NewGrid need (and, band-independent, a 70cm sat QSO
+    /// counts here even though 70cm has no [`Band`] variant).
+    worked_grids_sat: HashSet<String>,
+    confirmed_grids_sat: HashSet<String>,
 }
 
 impl LogNeeds {
@@ -174,7 +182,9 @@ impl LogNeeds {
     /// Fold one logged contact in. Resolves the entity via [`crate::dxcc`]
     /// (cty.dat) so it matches the DXpedition side; unresolved calls are skipped
     /// (rare with the full country file). `band` is an ADIF band label ("20m"),
-    /// `mode` an ADIF MODE string.
+    /// `mode` an ADIF MODE string. Terrestrial only — a caller folding real log
+    /// records uses [`add_qso`](Self::add_qso), which also takes the satellite
+    /// flag.
     pub fn add(
         &mut self,
         call: &str,
@@ -184,6 +194,26 @@ impl LogNeeds {
         state: Option<&str>,
         confirmed: bool,
     ) {
+        self.add_qso(call, band, mode, grid, state, confirmed, false)
+    }
+
+    /// The full fold: [`add`](Self::add) plus `sat` — whether the contact was
+    /// made through a satellite (`PROP_MODE=SAT`). Production log folds go
+    /// through here so satellite credit is stated, not defaulted. A satellite
+    /// contact's grid credits the satellite sets only (see the field docs); the
+    /// entity/zone/state slots are folded as today — the per-award satellite
+    /// exclusions beyond grids (satellite DXCC, WAZ's satellite ban) are a
+    /// deliberate non-goal here.
+    pub fn add_qso(
+        &mut self,
+        call: &str,
+        band: &str,
+        mode: &str,
+        grid: Option<&str>,
+        state: Option<&str>,
+        confirmed: bool,
+        sat: bool,
+    ) {
         // The band this contact credits. EVERY need below is a per-band slot, so a
         // contact whose band label doesn't resolve credits none of them — the same
         // rule the awards engine applies ("a band label that doesn't parse counts
@@ -191,10 +221,19 @@ impl LogNeeds {
         // slots and the DXCC slot can never disagree about what band this was.
         let worked_on = Band::from_band_token(band).or_else(|| Band::from_mhz(parse_mhz(band)));
         // A worked grid is independent of call resolution / DXCC — track it first.
-        if let (Some(g), Some(b)) = (grid.and_then(crate::needalert::grid4), worked_on) {
-            self.worked_grids.insert((g.clone(), b));
-            if confirmed {
-                self.confirmed_grids.insert((g, b));
+        // Satellite grids go to the band-independent satellite sets INSTEAD of the
+        // per-band slots (Satellite VUCC is its own award).
+        if let Some(g) = grid.and_then(crate::needalert::grid4) {
+            if sat {
+                self.worked_grids_sat.insert(g.clone());
+                if confirmed {
+                    self.confirmed_grids_sat.insert(g);
+                }
+            } else if let Some(b) = worked_on {
+                self.worked_grids.insert((g.clone(), b));
+                if confirmed {
+                    self.confirmed_grids.insert((g, b));
+                }
             }
         }
         let Some(info) = dxcc::resolve(call) else {
@@ -244,6 +283,22 @@ impl LogNeeds {
     /// Number of distinct worked entities (for diagnostics / UI).
     pub fn worked_entities(&self) -> usize {
         self.worked_entity.len()
+    }
+
+    /// The distinct DXCC entities worked, by name (any band, any propagation) —
+    /// the ATNO filter the satellite pass-earn ranking borrows.
+    pub fn worked_entity_names(&self) -> &HashSet<String> {
+        &self.worked_entity
+    }
+
+    /// Grids worked via satellite, band-independent (the Satellite-VUCC slots held).
+    pub fn worked_grids_sat(&self) -> &HashSet<String> {
+        &self.worked_grids_sat
+    }
+
+    /// Grids CONFIRMED via satellite (the Satellite-VUCC confirmations held).
+    pub fn confirmed_grids_sat(&self) -> &HashSet<String> {
+        &self.confirmed_grids_sat
     }
 
     /// CQ zones the operator has worked, per band (need-aware spotting's "new zone").
@@ -676,6 +731,35 @@ mod tests {
             dash.workable_now.is_empty(),
             "WAE op never becomes a workable/ATNO card"
         );
+    }
+
+    #[test]
+    fn logneeds_routes_satellite_grids_to_the_sat_sets() {
+        let mut n = LogNeeds::new();
+        // A satellite QSO (PROP_MODE=SAT): the grid is a Satellite-VUCC slot,
+        // NOT a per-band one — ARRL counts satellite contacts toward Satellite
+        // VUCC only, so a sat QSO must not suppress a genuine terrestrial
+        // per-band NewGrid need. Band-independent: the 70cm one (no Band
+        // variant) still counts.
+        n.add_qso("K1ABC", "2m", "FM", Some("FN31"), None, true, true);
+        n.add_qso("W2DEF", "70cm", "SSB", Some("FN20"), None, false, true);
+        assert!(n.worked_grids_sat().contains("FN31"));
+        assert!(n.worked_grids_sat().contains("FN20"));
+        assert!(n.confirmed_grids_sat().contains("FN31"));
+        assert!(!n.confirmed_grids_sat().contains("FN20"));
+        assert!(
+            !n.worked_grids()
+                .contains(&("FN31".to_string(), Band::B2)),
+            "sat grid must not fill the terrestrial 2m VUCC slot"
+        );
+        // The entity is still WORKED (ATNO is any-means): satellite Japan is
+        // not a new one anymore.
+        n.add_qso("JA1ABC", "2m", "FM", Some("PM95"), None, false, true);
+        assert!(n.worked_entity_names().contains("Japan"));
+        // A terrestrial QSO keeps today's behavior untouched.
+        n.add_qso("W3GHI", "2m", "FT8", Some("FN42"), None, false, false);
+        assert!(n.worked_grids().contains(&("FN42".to_string(), Band::B2)));
+        assert!(!n.worked_grids_sat().contains("FN42"));
     }
 
     #[test]

@@ -837,6 +837,11 @@ pub struct Engine {
     /// than assuming zero, which would mis-site the offset by the whole shift
     /// (tens of kHz on 70 cm at AOS, the worst possible moment to guess).
     sat_last_rate: Option<f64>,
+    /// The operator took the MODE back during a pass (they picked a sideband by
+    /// hand). While set, [`Engine::sat_tx_mode`] says nothing at all: we never
+    /// re-assert a sideband over the top of a choice the operator just made.
+    /// Re-armed by a fresh transponder pick, which is fresh consent.
+    sat_mode_released: bool,
     /// Desired rig SPLIT state: `Some(tx_dial_mhz)` = split on with that TX dial;
     /// `None` = simplex. Set by work_spot (pile-up "UP n" spots) and cleared by any
     /// plain QSY/work; the loop applies it via `split_dirty` (one-shot).
@@ -2153,6 +2158,7 @@ impl Engine {
             sat_tune: None,
             sat_dial_owner: None,
             sat_last_rate: None,
+            sat_mode_released: false,
             split_tx_mhz: None,
             split_dirty: false,
             rit_hz: 0,
@@ -3385,6 +3391,14 @@ impl Engine {
         self.sideband_override = mode
             .map(|m| m.trim().to_ascii_uppercase())
             .filter(|m| matches!(m.as_str(), "USB" | "LSB" | "FM"));
+        // Reaching for the mode by hand WHILE a pass owns the dial is the
+        // operator taking it back: stop having an opinion about the uplink's
+        // sideband for the rest of the pass rather than re-asserting a swap
+        // over the top of their choice (see `sat_tx_mode`). A pick made with no
+        // pass in force is ordinary terrestrial operating and claims nothing.
+        if self.sideband_override.is_some() && self.sat_dial_owner.is_some() {
+            self.sat_mode_released = true;
+        }
         self.immediate_retune = true;
     }
 
@@ -5983,26 +5997,99 @@ impl Engine {
                     sent: tempo_core::doppler::SentTuning::default(),
                 });
                 self.set_sat_dial_owner(Some((label, 0)));
+                // Picking a transponder is the operator asking for this bird's
+                // tuning, which re-arms the uplink sideband after any earlier
+                // stand-down (see `sat_tx_mode`).
+                self.sat_mode_released = false;
             }
             None => {
                 self.sat_tune = None;
                 self.set_sat_dial_owner(None);
+                self.sat_mode_released = false;
             }
         }
     }
 
-    /// Adopt the operator's manual downlink tuning into the passband offset, so
-    /// the uplink follows them (see `doppler::follow_downlink`). Called when the
-    /// operator turns the dial during a pass.
-    pub fn sat_follow_downlink(&mut self, tuned_hz: u64, range_rate_km_s: f64) {
-        let Some(st) = self.sat_tune.as_mut() else {
-            return;
-        };
-        st.state = tempo_core::doppler::follow_downlink(&st.transponder, tuned_hz, range_rate_km_s);
-        let (label, off) = (st.label.clone(), st.state.offset_hz);
-        // Moving across the passband IS an operator move: the identity changes,
-        // so an over planned at the old position refuses (see TxGateStamp).
-        self.set_sat_dial_owner(Some((label, off)));
+    /// The mode the UPLINK leg must be commanded into while a satellite pass
+    /// owns the dial — `None` when there is nothing to say.
+    ///
+    /// On a linear INVERTING transponder the passband is mirrored and so are
+    /// the sidebands: USB down, LSB up. [`Engine::sat_doppler_tick`] already
+    /// mirrors the FREQUENCIES; this is the other half of the same fact, and
+    /// the half an operator actually hears — a correct uplink frequency in the
+    /// wrong sideband is silence at the far end.
+    ///
+    /// Deliberately DECLARATIVE, not a command: it states what the transmit leg
+    /// should be, and the radio loop writes it only when the answer CHANGES
+    /// (the same discipline as `last_dial`/`last_mode`). Re-asserting it every
+    /// cycle would fight an operator reaching for the rig's own mode knob, and
+    /// we cannot read the split VFO's mode back to tell the difference.
+    ///
+    /// `Some` only when every one of these holds, because each is a way of NOT
+    /// owning the transmit VFO:
+    ///
+    /// - a transponder is held, and it HAS an uplink (a beacon has none);
+    /// - the operator opted the radio in — `sat_doppler` plus a mapping that
+    ///   [`crate::settings::SatVfoMap::drives_uplink`]. That opt-in is what put
+    ///   a split TX frequency on the rig at all; a mode command onto a VFO we
+    ///   never tuned would be moving a radio nobody handed us;
+    /// - the operator has not taken the mode back
+    ///   ([`Engine::request_sideband_override`]);
+    /// - and the two legs actually DIFFER. An FM bird is FM both ways and a
+    ///   non-inverting linear is the same sideband both ways: there is nothing
+    ///   to command, and a CAT write that changes nothing can only lose.
+    ///
+    /// Nothing is "restored" when the pass ends — the answer simply becomes
+    /// `None` and the loop stops writing, which is exactly what releasing the
+    /// transponder already does with the dial (hand it back, don't rewind it).
+    pub fn sat_tx_mode(&self) -> Option<String> {
+        if self.sat_mode_released || !self.settings.sat_doppler {
+            return None;
+        }
+        if !self.settings.sat_vfo_map.drives_uplink() {
+            return None;
+        }
+        let st = self.sat_tune.as_ref()?;
+        if st.transponder.uplink_centre_hz == 0 {
+            return None; // a beacon: there is no transmit leg to put in a mode
+        }
+        // The DOWNLINK mode is whatever the loop is commanding for the dial —
+        // read from the one write-side canon rather than a second guess at it,
+        // so the two legs can never be derived from different beliefs.
+        let down = self.rig_mode_effective();
+        let up = tempo_core::doppler::uplink_mode_for(&down, st.transponder.invert);
+        (!up.eq_ignore_ascii_case(&down)).then_some(up)
+    }
+
+    /// [`Engine::sat_tx_mode`], answered only for the split apply that carries
+    /// the SATELLITE's own corrected uplink. `tx_hz` is the split TX dial the
+    /// radio loop is about to program; the answer is `None` unless it equals
+    /// the uplink the last Doppler correction actually sent.
+    ///
+    /// The gate exists because a transponder hold outlives the moment it was
+    /// picked (a pre-AOS pick, deliberately) and the split one-shot serves TWO
+    /// producers: [`Engine::sat_doppler_tick`] and the terrestrial pile-up
+    /// path (`work_spot_split`, "UP 5"). A pile-up split applied while a
+    /// transponder happens to be held must NOT inherit the bird's sideband
+    /// swap — commanding LSB onto a 20 m USB pile-up's TX VFO would be an
+    /// on-air wrong-sideband transmission authored by us, on a frequency the
+    /// satellite engine has no claim to.
+    pub fn sat_tx_mode_for_split(&self, tx_hz: u64) -> Option<String> {
+        let st = self.sat_tune.as_ref()?;
+        if !(st.sent.sent && st.sent.uplink_hz == tx_hz) {
+            return None;
+        }
+        self.sat_tx_mode()
+    }
+
+    /// The transponder hold, for UI read-back: the "BIRD|description" label
+    /// plus the raw SatNOGS row index. `None` when the dial is the operator's.
+    /// The UI polls this rather than trusting its last click — the hold is
+    /// released backend-side at LOS and on a live-track stop, and a stale
+    /// local mirror would show a green Transponder gate (and skip the next
+    /// "Work this pass" auto-pick) for a hold the engine no longer has.
+    pub fn sat_transponder_held(&self) -> Option<(&str, Option<usize>)> {
+        self.sat_tune.as_ref().map(|st| (st.label.as_str(), st.index))
     }
 
     /// The operator turned the VFO knob during a pass — adopt it as their
@@ -13633,6 +13720,36 @@ mod tests {
         );
     }
 
+    /// A SATELLITE QSO's grid must not mute the terrestrial per-band NEW GRID decode badge.
+    /// ARRL counts a satellite contact toward Satellite VUCC only, so a 2m-sat-only FN31 is
+    /// still a genuinely open 2m slot — the highlight index folding every record's grid in
+    /// without consulting PROP_MODE suppressed exactly the need the badge exists to show
+    /// (the same rule LogNeeds::add_qso already applies on the awards side).
+    #[test]
+    fn a_satellite_qso_grid_does_not_suppress_the_terrestrial_per_band_need() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+
+        let mut sat = e.qso_record("W9XYZ".into(), Some("EN37".into()), None);
+        sat.grid = Some("EN37".into());
+        sat.band = "2m".into();
+        sat.prop_mode = Some("SAT".into());
+        e.log_qso(sat);
+        assert!(
+            !e.station.grid_worked_on("EN37", "2m"),
+            "a satellite contact credits Satellite VUCC only — the 2m NEW GRID badge must stay live"
+        );
+
+        // The same grid worked TERRESTRIALLY on that band does mute the badge.
+        let mut terr = e.qso_record("K9AAA".into(), Some("EN37".into()), None);
+        terr.grid = Some("EN37".into());
+        terr.band = "2m".into();
+        e.log_qso(terr);
+        assert!(
+            e.station.grid_worked_on("EN37", "2m"),
+            "a terrestrial contact still enters the per-band index"
+        );
+    }
+
     /// The honest limit, pinned deliberately. There is no callsign→grid index the way FCC gives
     /// callsign→state, so a station whose grid we have NEVER seen still logs blank — and still
     /// reports NewGrid, which is correct: we cannot credit a grid we do not know. If this test
@@ -18207,6 +18324,227 @@ mod tests {
             !e.sat_observe_operator_tune(sent),
             "the dial we just wrote is ours, not theirs"
         );
+    }
+
+    /// The transponder shapes used by the uplink-sideband tests below.
+    fn sat_mode_engine(invert: bool, uplink_hz: u64) -> (Engine, tempo_core::doppler::Transponder) {
+        let tp = tempo_core::doppler::Transponder {
+            uplink_centre_hz: uplink_hz,
+            downlink_centre_hz: 435_640_000,
+            invert,
+            half_width_hz: 30_000,
+        };
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(435.640, "70cm", "USB");
+        {
+            let mut s = e.settings().clone();
+            s.operating_mode = crate::settings::OperatingMode::Phone;
+            s.sat_doppler = true;
+            s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
+            e.apply_settings(s);
+        }
+        (e, tp)
+    }
+
+    #[test]
+    fn an_inverting_bird_transmits_in_the_opposite_sideband() {
+        // The single most-missed detail in satellite operating. The FREQUENCIES
+        // were already mirrored; the SIDEBAND is the other half of the same
+        // fact, and the half an operator actually hears — a correct uplink
+        // frequency in the wrong sideband is silence at the far end.
+        //
+        // This test exists because `doppler::uplink_mode_for` shipped correct,
+        // tested and with ZERO call sites: the swap was true of the arithmetic
+        // and never reached a radio.
+        let (mut e, tp) = sat_mode_engine(true, 145_965_000);
+        assert_eq!(e.rig_mode_effective(), "USB", "precondition: USB downlink");
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "no transponder held ⇒ nothing to say about the transmit leg"
+        );
+
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("LSB"),
+            "inverting ⇒ USB down, LSB up"
+        );
+        // The RECEIVE leg is untouched: the swap belongs to the transmit VFO,
+        // and commanding it on the dial would deafen the operator.
+        assert_eq!(e.rig_mode_effective(), "USB");
+
+        // A NON-inverting linear bird is the same sideband both ways, so there
+        // is nothing to command — and a CAT write that changes nothing can only
+        // lose (it fights a front-panel change and burns a slot on the bus).
+        let mut straight = tp;
+        straight.invert = false;
+        e.set_sat_transponder(Some(("FO-29|linear".into(), 0, straight)));
+        assert_eq!(e.sat_tx_mode(), None, "non-inverting ⇒ same mode both legs");
+
+        // Releasing the transponder (transponder cleared, or LOS) says nothing
+        // further — exactly like the dial, which is handed back rather than
+        // restored to a remembered value.
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+        assert!(e.sat_tx_mode().is_some());
+        e.set_sat_transponder(None);
+        assert_eq!(e.sat_tx_mode(), None, "released ⇒ silent, never a restore");
+    }
+
+    #[test]
+    fn the_uplink_sideband_needs_the_same_opt_ins_the_frequency_does() {
+        // Every one of these is a way of NOT owning the transmit VFO. A mode
+        // command onto a VFO we never tuned is moving a radio nobody handed us.
+        let (mut e, tp) = sat_mode_engine(true, 145_965_000);
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+        assert!(e.sat_tx_mode().is_some(), "precondition");
+
+        // Doppler off: the operator never opted the radio in.
+        {
+            let mut s = e.settings().clone();
+            s.sat_doppler = false;
+            e.apply_settings(s);
+        }
+        assert_eq!(e.sat_tx_mode(), None, "Doppler off ⇒ we drive nothing");
+
+        // Receive-only mapping: we must never touch a transmit VFO at all.
+        {
+            let mut s = e.settings().clone();
+            s.sat_doppler = true;
+            s.sat_vfo_map = crate::settings::SatVfoMap::DownlinkOnly;
+            e.apply_settings(s);
+        }
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "a downlink-only mapping never commands a transmit mode"
+        );
+
+        // A beacon has no uplink to be in any mode.
+        {
+            let mut s = e.settings().clone();
+            s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
+            e.apply_settings(s);
+        }
+        let beacon = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 0,
+            ..tp
+        };
+        e.set_sat_transponder(Some(("AO-7|beacon".into(), 0, beacon)));
+        assert_eq!(e.sat_tx_mode(), None, "a beacon has no transmit leg");
+    }
+
+    #[test]
+    fn the_operators_own_mode_pick_stands_the_uplink_sideband_down() {
+        // Never fight the operator. If they reach for the mode themselves while
+        // a pass owns the dial, that is them taking it back — we stop having an
+        // opinion for the rest of the pass rather than re-asserting a swap over
+        // the top of their choice. Mirrors the knob discipline on the frequency
+        // side (`sat_observe_operator_tune` adopts, it does not overrule).
+        let (mut e, tp) = sat_mode_engine(true, 145_965_000);
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("LSB"), "precondition");
+
+        e.request_sideband_override(Some("LSB"));
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "the operator picked a mode by hand — stand down"
+        );
+
+        // Clearing the override back to AUTO is not a new claim on the mode,
+        // but it is not consent either: only a fresh transponder pick re-arms
+        // us, because that is the operator asking for this bird's tuning again.
+        e.request_sideband_override(None);
+        assert_eq!(e.sat_tx_mode(), None, "AUTO is not fresh consent");
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("LSB"),
+            "picking the transponder again IS fresh consent"
+        );
+
+        // …and an override set with NO pass in force must not poison the next
+        // pass: the release is about a mode taken from us, not about the picker
+        // having ever been used.
+        e.set_sat_transponder(None);
+        e.request_sideband_override(Some("USB"));
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("LSB"),
+            "a terrestrial mode pick before the pass is not a claim on the uplink"
+        );
+    }
+
+    #[test]
+    fn a_terrestrial_pileup_split_never_inherits_the_satellite_sideband_swap() {
+        // The failure this pins: the operator picks RS-44's inverting
+        // transponder minutes before AOS (the auto-pick does it for them),
+        // then, waiting, clicks a 20 m phone spot "UP 5". The pile-up's split
+        // apply and the satellite's uplink correction ride the SAME one-shot,
+        // so the radio loop must be able to tell whose split it is holding —
+        // consulting `sat_tx_mode` unconditionally put the pile-up's TX VFO
+        // in LSB against a USB pile-up.
+        let (mut e, tp) = sat_mode_engine(true, 145_965_000);
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("LSB"),
+            "precondition: the hold itself answers"
+        );
+
+        // A pile-up split TX dial (14.230 "UP 5"): not the satellite's uplink.
+        assert_eq!(
+            e.sat_tx_mode_for_split(14_235_000),
+            None,
+            "a split that is not the sat's own corrected uplink says nothing"
+        );
+        // Even the exact uplink CENTRE is not ours until a Doppler tick sent it.
+        assert_eq!(
+            e.sat_tx_mode_for_split(145_965_000),
+            None,
+            "no correction sent yet ⇒ no split is the satellite's"
+        );
+
+        // Once a correction fires, the split carrying THAT uplink does answer.
+        let c = e
+            .sat_doppler_tick(-3.0, 10_000, false)
+            .expect("first tick sends a correction");
+        let up = c.uplink_hz.expect("the mapping drives the uplink");
+        assert_eq!(e.sat_tx_mode_for_split(up).as_deref(), Some("LSB"));
+        assert_eq!(
+            e.sat_tx_mode_for_split(up + 10),
+            None,
+            "only the exact sent uplink is the satellite's split"
+        );
+    }
+
+    #[test]
+    fn an_fm_bird_is_the_same_mode_both_ways_so_nothing_is_commanded() {
+        // FM repeaters (the AO-91/SO-50 majority) are FM up and FM down. There
+        // is no sideband to mirror, so there is nothing to say — and saying it
+        // anyway would be a CAT write per pass that can only go wrong.
+        let (mut e, tp) = sat_mode_engine(false, 145_990_000);
+        {
+            let mut s = e.settings().clone();
+            s.phone_mode = "fm".to_string();
+            e.apply_settings(s);
+        }
+        assert_eq!(e.rig_mode_effective(), "FM", "precondition: FM downlink");
+
+        let fm = tempo_core::doppler::Transponder {
+            half_width_hz: 0, // a channel: nothing to tune inside
+            ..tp
+        };
+        e.set_sat_transponder(Some(("AO-91|FM".into(), 0, fm)));
+        assert_eq!(e.sat_tx_mode(), None, "FM both legs ⇒ untouched");
+
+        // Even if a record claimed inversion, FM has no sideband to swap: the
+        // answer is still "nothing to command", never a guess.
+        let fm_inv = tempo_core::doppler::Transponder { invert: true, ..fm };
+        e.set_sat_transponder(Some(("AO-91|FM".into(), 0, fm_inv)));
+        assert_eq!(e.sat_tx_mode(), None, "FM has no sideband to mirror");
     }
 
     #[test]

@@ -122,6 +122,43 @@ impl SatVfoMap {
     }
 }
 
+/// Which steering surfaces a satellite track loop is actually allowed to
+/// drive — the honesty label `sat_track_status` puts on the wire so the UI
+/// never has to infer "is Doppler live?" from which fields happen to be null.
+///
+/// The rotor half is decided at arm time (the loop captures its rotator
+/// address once); the Doppler half needs ALL THREE consents the tick itself
+/// needs — `sat_doppler` on, a VFO mapping other than [`SatVfoMap::Off`], AND
+/// a held transponder (without one `Engine::sat_doppler_tick` no-ops every
+/// tick: there is nothing to tune). The settings pair tracks a mid-pass
+/// toggle exactly as the behaviour does; the transponder half means an
+/// operator who picked "None — leave the dial to me" is never told Doppler
+/// owns a dial the engine will not touch. Four values:
+///
+/// - `"rotor+doppler"` — both surfaces consented (the full appliance role)
+/// - `"rotor-only"`    — pointing only; Doppler prereqs missing, dial untouched
+/// - `"doppler-only"`  — no rotator (handheld/fixed antenna); Doppler consented
+/// - `"pass-only"`     — neither: pass state and geometry only, which is legal
+///   and useful for timing — the label says so instead of pretending more
+///
+/// This is a LABEL, never a gate: the actual refusals live in
+/// `sat_doppler_tick` (radio) and the loop's rotor branch (mast). Pure so the
+/// whole table is testable outside the shell.
+pub fn sat_track_mode(
+    has_rotor: bool,
+    sat_doppler: bool,
+    map: SatVfoMap,
+    has_transponder: bool,
+) -> &'static str {
+    let doppler = sat_doppler && map.active() && has_transponder;
+    match (has_rotor, doppler) {
+        (true, true) => "rotor+doppler",
+        (true, false) => "rotor-only",
+        (false, true) => "doppler-only",
+        (false, false) => "pass-only",
+    }
+}
+
 /// The operator's amateur license class — drives the transmit-privilege lockout + the
 /// "jump to the start of my licensed segment" band dropdown. The US classes carry FCC
 /// Part 97 (Region 2) sub-band privileges; **Open** = no transmit restrictions (for
@@ -4370,6 +4407,35 @@ mod tests {
             validate_radio_ports(&s.radios, None).is_ok(),
             "still pairwise-distinct after repair"
         );
+    }
+
+    /// The track loop's honesty label: which steering surfaces the loop is
+    /// actually allowed to drive. The Doppler half must be exactly the consents
+    /// `sat_doppler_tick` needs to touch the radio (satDoppler on AND a VFO
+    /// mapping AND a held transponder) — if this table and that gate ever
+    /// disagree, the status lies about whether the radio can be touched.
+    #[test]
+    fn sat_track_mode_reports_the_drivable_surfaces() {
+        use SatVfoMap::*;
+        // Both halves live: the full appliance replacement.
+        assert_eq!(sat_track_mode(true, true, ADownBUp, true), "rotor+doppler");
+        // No rotor, Doppler consented: the Arrow-antenna operator's mode.
+        assert_eq!(sat_track_mode(false, true, DownlinkOnly, true), "doppler-only");
+        // Rotor only — Doppler switched off entirely…
+        assert_eq!(sat_track_mode(true, false, MainDownSubUp, true), "rotor-only");
+        // …or ON but with no VFO mapping: Off means "never write to the
+        // radio", so the mode must NOT claim Doppler is driving anything.
+        assert_eq!(sat_track_mode(true, true, Off, true), "rotor-only");
+        // Neither surface consented: pass state/geometry only — legal and
+        // useful for timing, and the label says exactly that.
+        assert_eq!(sat_track_mode(false, false, MainUpSubDown, true), "pass-only");
+        assert_eq!(sat_track_mode(false, true, Off, true), "pass-only");
+        // The THIRD consent: no held transponder means the tick tunes nothing
+        // (`sat_tune` is None ⇒ every tick no-ops), so the label must not
+        // claim the dial — an operator who picked "None — leave the dial to
+        // me" was being told "SAT ⟳ · dial at AOS" by the app-wide chip.
+        assert_eq!(sat_track_mode(false, true, ADownBUp, false), "pass-only");
+        assert_eq!(sat_track_mode(true, true, ADownBUp, false), "rotor-only");
     }
 
     #[test]

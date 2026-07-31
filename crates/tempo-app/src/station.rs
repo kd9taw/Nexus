@@ -436,9 +436,20 @@ impl StationCore {
             }
             let band = band_key(&r.band);
             if let Some(g) = &r.grid {
+                // A SATELLITE contact (PROP_MODE=SAT) earns Satellite-VUCC credit
+                // only (the ARRL rule), so its grid must NOT enter the per-band
+                // terrestrial index — a 2m sat-only FN31 muting the 2m NEW GRID
+                // decode badge would hide a slot that is genuinely still open.
+                // Mirrors the same exclusion in propagation's LogNeeds::add_qso.
+                let sat = r
+                    .prop_mode
+                    .as_deref()
+                    .is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"));
                 // Index at 4-char granularity so a 6-char logged grid matches a 4-char decode.
-                if let Some(g4) = Self::grid4(g) {
-                    self.worked_grids.insert((g4, band.clone()));
+                if !sat {
+                    if let Some(g4) = Self::grid4(g) {
+                        self.worked_grids.insert((g4, band.clone()));
+                    }
                 }
             }
             if let Some(resolve) = &self.dxcc_resolve {

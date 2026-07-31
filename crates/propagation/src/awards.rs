@@ -166,11 +166,21 @@ fn valid_grid4(grid: &str) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct VuccProgress {
-    /// Distinct grid squares worked / confirmed across all bands.
+    /// Distinct grid squares worked / confirmed across all bands (terrestrial —
+    /// satellite contacts live in `sat_worked`/`sat_confirmed`, never here).
     pub worked: usize,
     pub confirmed: usize,
     /// Per-band grid-square counts, in canonical 160m → 2m order.
     pub bands: Vec<BandAward>,
+    /// Distinct grid squares worked / confirmed VIA SATELLITE (`PROP_MODE=SAT`)
+    /// — the ARRL **Satellite VUCC** category. ARRL counts satellite contacts
+    /// toward this award only (never the per-band grid awards), and the bucket
+    /// is band-independent, so a 70cm sat QSO counts even though 70cm has no
+    /// per-band slot.
+    #[serde(default)]
+    pub sat_worked: usize,
+    #[serde(default)]
+    pub sat_confirmed: usize,
 }
 
 /// IOTA (Islands On The Air) progress — distinct island-group references worked /
@@ -277,6 +287,11 @@ pub struct Awards {
     /// VUCC — distinct Maidenhead grid squares (4-char field) worked / confirmed per band.
     worked_grid_band: HashSet<(String, Band)>,
     confirmed_grid_band: HashSet<(String, Band)>,
+    /// Satellite VUCC — grids worked / confirmed via satellite (`PROP_MODE=SAT`),
+    /// band-independent. Disjoint from the per-band sets by construction (see
+    /// [`add_qso`](Self::add_qso)).
+    worked_grid_sat: HashSet<String>,
+    confirmed_grid_sat: HashSet<String>,
     /// IOTA — distinct island-group references ("NA-001") worked / confirmed.
     worked_iota: HashSet<String>,
     confirmed_iota: HashSet<String>,
@@ -309,7 +324,9 @@ impl Awards {
     /// As [`add`](Self::add), plus `credited` — whether ARRL has **granted** DXCC
     /// credit for this QSO (its `credit_granted` contains a `DXCC` code) — and the
     /// contact's US `state` (ADIF STATE) for WAS. Drives the "confirmed vs
-    /// officially credited" gap and the Worked-All-States tier.
+    /// officially credited" gap and the Worked-All-States tier. Terrestrial only —
+    /// a caller folding real log records uses [`add_qso`](Self::add_qso), which
+    /// also takes the satellite flag.
     #[allow(clippy::too_many_arguments)]
     pub fn add_with_credit(
         &mut self,
@@ -322,16 +339,47 @@ impl Awards {
         grid: Option<&str>,
         iota: Option<&str>,
     ) {
+        self.add_qso(call, band, mode, confirmed, credited, state, grid, iota, false)
+    }
+
+    /// The full fold: [`add_with_credit`](Self::add_with_credit) plus `sat` —
+    /// whether the contact was made through a satellite (`PROP_MODE=SAT`).
+    /// Production log folds go through here so satellite credit is stated, not
+    /// defaulted.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_qso(
+        &mut self,
+        call: &str,
+        band: &str,
+        mode: &str,
+        confirmed: bool,
+        credited: bool,
+        state: Option<&str>,
+        grid: Option<&str>,
+        iota: Option<&str>,
+        sat: bool,
+    ) {
         self.qsos += 1;
         if confirmed {
             self.confirmed_qsos += 1;
         }
-        // VUCC — grid squares per band, independent of DXCC (a grid is a grid, on any
-        // entity or band). Requires a valid 4-char locator + a parseable band.
-        if let (Some(g), Some(b)) = (grid.and_then(valid_grid4), Band::from_label(band)) {
-            self.worked_grid_band.insert((g.clone(), b));
-            if confirmed {
-                self.confirmed_grid_band.insert((g, b));
+        // VUCC — grid squares, independent of DXCC (a grid is a grid, on any
+        // entity). A SATELLITE contact's grid credits Satellite VUCC only —
+        // ARRL excludes satellite QSOs from the per-band grid awards — and the
+        // satellite bucket is band-independent, so it counts even when the band
+        // label has no per-band slot (70cm). Terrestrial grids keep the
+        // per-band slots (valid 4-char locator + parseable band).
+        if let Some(g) = grid.and_then(valid_grid4) {
+            if sat {
+                self.worked_grid_sat.insert(g.clone());
+                if confirmed {
+                    self.confirmed_grid_sat.insert(g);
+                }
+            } else if let Some(b) = Band::from_label(band) {
+                self.worked_grid_band.insert((g.clone(), b));
+                if confirmed {
+                    self.confirmed_grid_band.insert((g, b));
+                }
             }
         }
         // IOTA — island groups (independent of DXCC/band). The ref is validated at parse
@@ -535,6 +583,8 @@ impl Awards {
                     })
                 })
                 .collect(),
+            sat_worked: self.worked_grid_sat.len(),
+            sat_confirmed: self.confirmed_grid_sat.len(),
         };
         let iota = IotaProgress {
             worked: self.worked_iota.len(),
@@ -931,6 +981,64 @@ mod tests {
         );
         let two = s.vucc.bands.iter().find(|b| b.band == "2m").unwrap();
         assert_eq!(two.worked, 1, "2m: FN31 only");
+    }
+
+    #[test]
+    fn satellite_qsos_feed_satellite_vucc_only() {
+        let mut a = Awards::new();
+        // Satellite QSOs (PROP_MODE=SAT): grids count toward Satellite VUCC —
+        // even on 70cm, which has no per-band bucket at all — and NOT toward
+        // the per-band awards (ARRL counts satellite contacts toward the
+        // Satellite VUCC only).
+        a.add_qso(
+            "K1ABC",
+            "2m",
+            "FM",
+            true,
+            false,
+            None,
+            Some("FN31"),
+            None,
+            true,
+        );
+        a.add_qso(
+            "W2DEF",
+            "70cm",
+            "SSB",
+            false,
+            false,
+            None,
+            Some("FN20"),
+            None,
+            true,
+        );
+        // A terrestrial 2m QSO keeps the per-band slot.
+        a.add_qso(
+            "W3GHI",
+            "2m",
+            "FT8",
+            false,
+            false,
+            None,
+            Some("FN42"),
+            None,
+            false,
+        );
+        let s = a.summary();
+        assert_eq!(
+            (s.vucc.sat_worked, s.vucc.sat_confirmed),
+            (2, 1),
+            "FN31 (confirmed) + FN20 via satellite — the 70cm one included"
+        );
+        let two = s.vucc.bands.iter().find(|b| b.band == "2m").unwrap();
+        assert_eq!(
+            two.worked, 1,
+            "2m per-band VUCC holds only the terrestrial FN42; sat QSOs excluded"
+        );
+        assert_eq!(
+            s.vucc.worked, 1,
+            "the terrestrial overall count doesn't absorb satellite grids"
+        );
     }
 
     #[test]

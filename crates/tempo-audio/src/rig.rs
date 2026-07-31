@@ -84,6 +84,13 @@ pub fn split_line(on: bool, tx_vfo: &str) -> String {
 pub fn split_freq_line(hz: u64) -> String {
     format!("I {hz}\n")
 }
+/// rigctld `X` — the split (TX) VFO's MODE + passband. The plain `M` verb only
+/// ever reaches the RX VFO, so this is the one way to say "transmit in LSB while
+/// I listen in USB" — which is precisely what a linear INVERTING satellite
+/// transponder needs (see `tempo_core::doppler::uplink_mode_for`).
+pub fn split_mode_line(mode: &str, passband_hz: i32) -> String {
+    format!("X {mode} {passband_hz}\n")
+}
 /// rigctld `V` — select the active VFO (e.g. `VFOA`, `VFOB`, `Main`, `Sub`).
 pub fn vfo_line(vfo: &str) -> String {
     format!("V {vfo}\n")
@@ -807,6 +814,17 @@ impl Rig {
     pub fn set_split_freq(&mut self, hz: u64) -> std::io::Result<()> {
         self.cat(&split_freq_line(hz))
     }
+    /// Set the split (TX) VFO's mode + passband — the transmit-side twin of
+    /// [`Self::set_mode`], which only ever reaches the RX VFO. A BLANK mode is a
+    /// no-op for the same reason it is there: the caller is choosing to obey the
+    /// radio. Rig rejections surface as `Err` (many backends do not implement
+    /// `X` at all), so the caller can say so rather than assume it landed.
+    pub fn set_split_mode(&mut self, mode: &str, passband_hz: i32) -> std::io::Result<()> {
+        if mode.trim().is_empty() {
+            return Ok(());
+        }
+        self.cat(&split_mode_line(mode, passband_hz))
+    }
     /// Select the active VFO (e.g. "VFOA"/"VFOB").
     pub fn set_vfo(&mut self, vfo: &str) -> std::io::Result<()> {
         self.cat(&vfo_line(vfo))
@@ -954,6 +972,10 @@ mod tests {
         assert_eq!(split_line(true, "VFOB"), "S 1 VFOB\n");
         assert_eq!(split_line(false, "VFOA"), "S 0 VFOA\n");
         assert_eq!(split_freq_line(14_205_000), "I 14205000\n");
+        // `X` is the ONLY verb that reaches the TX VFO's mode — `M` is RX-side.
+        // An inverting satellite transponder is exactly the case that needs it:
+        // listen USB, transmit LSB, on one radio.
+        assert_eq!(split_mode_line("LSB", -1), "X LSB -1\n");
         assert_eq!(vfo_line("VFOA"), "V VFOA\n");
         assert_eq!(func_line("RIT", true), "U RIT 1\n");
         assert_eq!(func_line("XIT", false), "U XIT 0\n");
@@ -1161,6 +1183,45 @@ mod tests {
         assert_eq!(
             *log.lock().unwrap(),
             vec!["F 7074000", "M USB 0", "T 1", "T 0"]
+        );
+    }
+
+    #[test]
+    fn the_split_vfo_gets_its_own_mode_so_an_inverting_bird_can_transmit_lsb() {
+        // `M` only ever reaches the RX VFO. A linear INVERTING satellite
+        // transponder needs USB down and LSB up ON ONE RADIO, so the TX VFO's
+        // mode has to be commanded separately — rigctld `X`.
+        let (addr, log) = mock_rigctld(ok_reply(435_640_000));
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_split(true, "VFOB").unwrap();
+        rig.set_split_freq(145_965_000).unwrap();
+        rig.set_split_mode("LSB", -1).unwrap();
+        // A BLANK mode is the caller choosing to obey the radio — no command.
+        rig.set_split_mode("  ", -1).unwrap();
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["S 1 VFOB", "I 145965000", "X LSB -1"]
+        );
+    }
+
+    #[test]
+    fn a_backend_without_split_mode_support_reports_it_instead_of_faking_success() {
+        // Plenty of Hamlib backends answer `X` with RPRT -11 (not implemented).
+        // Swallowing that would leave the uplink in the wrong sideband while the
+        // app believed it had set it — on the air, indistinguishable from nobody
+        // answering. The caller must be able to SAY so.
+        let (addr, _log) = mock_rigctld(|line: &str| {
+            if line.starts_with('X') {
+                "RPRT -11\n".to_string()
+            } else {
+                "RPRT 0\n".to_string()
+            }
+        });
+        let mut rig = Rig::rigctld(&addr);
+        assert!(rig.set_split(true, "VFOB").is_ok());
+        assert!(
+            rig.set_split_mode("LSB", -1).is_err(),
+            "a refused split-mode must surface, never a silent success"
         );
     }
 
