@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, RttyState } from '../types'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { RTTY_PANEL_IDS, type RttyPanelId, type PanelLayoutApi } from '../features/panelState'
@@ -23,6 +24,7 @@ import {
 } from '../api'
 import { bandLabelForMhz } from '../band'
 import { pushToast, withErrorToast } from '../toast'
+import { usePinnedScroll } from '../usePinnedScroll'
 
 interface Props {
   /** Live snapshot — may be absent while the app is still connecting; the shell
@@ -258,12 +260,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const backend = (rtty?.backend ?? 'afsk').toUpperCase()
 
   const text_rx = rtty?.text ?? ''
-  const streamRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    // Autoscroll: newest text stays in view (same behavior as the CW transcript).
-    const el = streamRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [text_rx])
+  // Stream transcript: bottom-pinned via the shared discipline. The old
+  // unconditional snap on every poll that changed the text made mid-QSO
+  // scroll-back impossible — the pane reset to the bottom before the operator
+  // could re-read a callsign. Pinned follows new copy; scrolled-up reads.
+  const streamPin = usePinnedScroll<HTMLDivElement>()
 
   return (
     <main className="layout single rtty-cockpit">
@@ -354,7 +355,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
       )}
 
+      {/* THE ONE CONTENT PANE. RTTY adopts CockpitPaneFrame (per-pane scroll, the shipped
+          thin scrollbar) but deliberately NO .cockpit-panes region: with a single content
+          block every column template leaves a track empty, which is the dead space this
+          rebuild deletes rather than relocates. The frame is the shell's grower
+          (`.rtty-cockpit > .pane-frame`, styles.css) and the transcript scrolls inside it. */}
       {shown('stream') && (
+      <CockpitPaneFrame title="Decoded text" paneId="stream">
       <div
         className="cw-decode rtty-stream"
         title="Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)"
@@ -420,13 +427,16 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               void rttyClear()
                 .then(setRtty)
                 .catch(() => {})
+              // A wipe re-pins (same as Operate's Erase): the emptied pane must
+              // follow the next copy even if the operator had scrolled up.
+              streamPin.repin()
             }}
             title="Clear the decoded transcript"
           >
             Clear
           </button>
         </div>
-        <div className="cw-decode-text" ref={streamRef}>
+        <div className="cw-decode-text" ref={streamPin.ref} onScroll={streamPin.onScroll}>
           {text_rx ? (
             confidenceRuns(text_rx, rtty?.charConf ?? []).map((run, i) => (
               <span key={i} style={run.opacity < 1 ? { opacity: run.opacity } : undefined}>
@@ -440,8 +450,14 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           )}
         </div>
       </div>
+      </CockpitPaneFrame>
       )}
 
+      {/* TX DOCK — the auto-sequencer row, the macros (each one a one-click transmit), Stop
+          and the compose bar, pinned OUTSIDE any pane so nothing can scroll them out of
+          reach. None of these has an id in the RTTY panel vocabulary ('stream' is the only
+          entry), so hiding or moving the controls that key the rig is unrepresentable. */}
+      <div className="cockpit-txdock">
       {auto && (
         <div className="cw-macros rtty-auto-row" role="group" aria-label="RTTY auto-sequencer">
           {seqState === 'idle' ? (
@@ -550,6 +566,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         <button type="button" className="cw-send-btn" onClick={sendTyped} disabled={!text.trim()}>
           Send
         </button>
+      </div>
       </div>
     </main>
   )

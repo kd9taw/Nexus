@@ -63,7 +63,8 @@ export function panelStorageKey(view: string, instance?: string): string {
 /**
  * A valid record from any input. Unknown panel ids and unknown state strings are
  * dropped, a junk blob coerces to the stock layout, and a share that isn't a finite
- * positive number is discarded. Mirrors coercePlacement's "missing → safe default".
+ * positive number is discarded — one that is gets CLAMPED into the writers' own range.
+ * Mirrors coercePlacement's "missing → safe default".
  */
 export function coercePanelLayout<P extends string>(
   spec: PanelVocabulary<P>,
@@ -83,7 +84,13 @@ export function coercePanelLayout<P extends string>(
     const src = obj.share as Record<string, unknown>
     for (const id of spec.panelIds) {
       const v = src[id]
-      if (typeof v === 'number' && Number.isFinite(v) && v > 0) out.share[id] = v
+      // Clamp into [MIN_SHARE, 2 − MIN_SHARE] — the exact range the writers enforce
+      // (setShare/setShares floor, seamShares two-pane cap). Load used to accept any
+      // v > 0, so a hand-edited/foreign 1e-9 collapsed a pane to ~0 height on the one
+      // path the setters cannot guard.
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+        out.share[id] = Math.min(2 - MIN_SHARE, Math.max(MIN_SHARE, v))
+      }
     }
   }
   return out

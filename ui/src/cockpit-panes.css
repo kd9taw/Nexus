@@ -1,0 +1,151 @@
+/* COCKPIT PANE GRID — the structural sheet (2026-07-30 layout assessment, design3).
+   Imported from main.tsx AFTER styles.css.
+
+   WHY THIS IS ITS OWN FILE. Every cockpit-sizing fix of the last five weeks died the same
+   way: a second rule in the 19k-line sheet outranked it. `.phone-cockpit{overflow-y:auto}`
+   lost (0,1,0) vs (0,3,0); CW's twin lost to an `overflow:hidden` shorthand three lines
+   later in its OWN block. Both shipped dead. So the rule for this file is mechanical:
+   every selector is ONE class, optionally qualified by [data-cols]. Uniform specificity
+   means no structural rule can outrank another, and cockpit-panes.test.ts fails the build
+   if a selector here gains a descendant, a combinator or a second class — or if styles.css
+   so much as names one of these classes. Content styling (colors, type, the insides of a
+   pane) stays in styles.css; SIZE lives here and only here.
+
+   THE MODEL. A cockpit shell has four child kinds — header chrome, the scope, ONE pane
+   region, and the TX dock. The region is a grid of columns; each column is itself a grid
+   of pane frames. Vertical deficit has exactly two legal fates, in order: a scrollbar
+   inside the pane that overflowed, and — past the region's own floor — the shell's
+   deficit valve (the Batch-1 `overflow-y: auto` shells), which scrolls the whole column
+   with the dock parked sticky at the bottom. Horizontal surplus has exactly one fate
+   (another column). Nothing clips.
+
+   WHY COLUMNS ARE FLEX STACKS AND NOT grid-template-areas. Areas were the first choice —
+   they keep panes as direct grid children. They lose to the ⊞ Panels menu: a hidden panel
+   leaves its named area EMPTY, and a `minmax(0,1fr)` row with nothing in it is a band of
+   dead space above the log form. That is the operator's "empty black box" complaint,
+   rebuilt. A flex column has the same virtue as implicit rows (a hidden pane leaves
+   nothing behind) plus the one uniform rows could never express: PANES HAVE ROLES. The
+   first shipped build used `grid-auto-rows: minmax(0,1fr)` columns, which made every pane
+   a grower — a one-row DSP chip strip inflated to half the column, the strip-that-cannot-
+   stretch class (operator, 2026-07-31: "DSP functions takes a lot of real estate") this
+   rebuild exists to kill. Now a frame declares fit="content" (control strips: exactly
+   content height, always) or fills with a weight (feeds, the log column) — carried as an
+   inline flex from typed props on CockpitPaneFrame, a placement input like the old row
+   span, so the flat-selector rule holds and styles.css still cannot size a pane. */
+
+.cockpit-panes {
+  /* flex-BASIS 0, deliberately, not `auto`: with an auto (content) basis the region's base
+     size is its full content height, so the column is over-full in normal operation and
+     the browser shrinks the region AND the scope together, in proportion to their bases —
+     which silently eats the height the operator dragged the scope splitter to. Basis 0
+     makes the region "whatever is left over", so the scope keeps its dragged basis until
+     there is genuinely nothing left. */
+  flex: 1 1 0;
+  /* An 18em FLOOR, not 0 — deliberately, and only because the shell above it scrolls.
+     Without it the region is the shell column's ONLY unfloored shrinkable child (header
+     is shrink 0, scope has an 8em floor, dock is 0 0 auto), so a big scope drag plus a
+     wrapped header crushed every pane toward its title bar and Batch 1's deficit valve
+     could never fire — the region absorbed the whole deficit at overflow:hidden. With
+     the floor, deficit past this point overflows the shell, whose `overflow-y: auto`
+     valve (guarded by cockpit-shells.test.ts) turns it into the scrollbar + the sticky
+     dock. A floor under a SCROLLING ancestor is the documented safe case; the 18em
+     floors this rebuild deleted sat under a CLIPPING one. */
+  min-height: 18em;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-3);
+  /* Safe fallback for a region that somehow has no tier stamped yet (useRegionCols owns
+     the attribute and stamps before first paint, but the failure direction must still be
+     "scrolls", never "clips"). data-cols='1' keeps this; 2 and 3 override it. */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ONE COLUMN — the region is the scroller, and the operator gets back the single visible
+   scrollbar they have been asking for since 0.17.11. Panes stack at content height (rows
+   `auto`): a pane too tall for the window scrolls the region, it does not clip, and a
+   short pane is not inflated to a tall sibling's height the way an `fr` row would be in an
+   indefinite-height container. */
+.cockpit-panes[data-cols='1'] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: auto;
+  /* Only on the tier that actually scrolls: the gutter keeps the layout from jumping
+     sideways as content crosses the overflow threshold. Kept OFF the bounded tiers, where
+     Chromium has been known to reserve the gutter on `overflow:hidden` boxes too — that
+     would be a dead 15px stripe down the right of every 2/3-column cockpit. */
+  scrollbar-gutter: stable;
+  /* The one tier where FILL panes must not fill: the region is content-height and scrolls,
+     so a `flex-basis: 0` grower here would collapse toward min-content instead of filling
+     anything. The frame's inline flex reads this var first — content-height for everyone,
+     and the transcript wrappers' own comfortable min-heights (the sanctioned styles.css
+     case) give the feeds their readable box. */
+  --cockpit-pane-flex: 0 0 auto;
+}
+
+/* TWO COLUMNS — the default window (1200×750 at the fitter's 80% ⇒ region ~1470) and the
+   1366×768 laptop land here on purpose: same tier, same layout, one thing to reason about.
+   The log column is capped at 44em so a wide window never stretches the call/report inputs
+   across the screen, and floored at 24em so the form never gets squeezed below usable.
+
+   THE CAP IS min(44em, 40%), NOT A BARE 44em. css-grid §11.6 (maximize tracks) pays a
+   fixed-max track to its full growth limit BEFORE the fr track sees any free space — the
+   mechanism already Chrome-verified on the Connect strip ("a cap that always paid out",
+   cockpit-shells.test.ts). A bare 44em therefore made the log a CONSTANT 616px at every
+   reachable width, and at region 1080–1244 the "wide" feed column came out NARROWER than
+   the log form. Bounding the payout at 40% keeps the feed at ~60% of the region at every
+   2-col width; above region ~1540 the 44em arm takes over and the cap behaves as designed. */
+.cockpit-panes[data-cols='2'] {
+  grid-template-columns: minmax(0, 1fr) minmax(24em, min(44em, 40%));
+  grid-auto-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+/* THREE COLUMNS — ultrawide/fullscreen. The primary feed column gets 1.6fr so "prominent"
+   means genuinely prominent; the aux column takes the rig/DSP panes; the log column keeps
+   the SAME 44em cap, which is what ends the 3300px-wide text field. (Same min() spelling
+   as tier 2 for one vocabulary; at region ≥1700 the 40% arm never binds — 44em wins.) */
+.cockpit-panes[data-cols='3'] {
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(24em, min(44em, 40%));
+  grid-auto-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+/* One column of the region: a flex stack of role-typed frames — see the header note.
+   fit="content" strips sit at exactly content height; fill panes split what remains by
+   weight. A hidden pane leaves nothing behind. Both min-*:0 so a column can always shrink
+   to its share; its panes scroll inside .pane-body. */
+.cockpit-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* TX DOCK — PTT / send / abort, and nothing else. `flex: 0 0 auto` is load-bearing: the
+   dock is neither a grower (it must not absorb spare height) nor a shrink victim (the
+   controls must stay hit-able at their full size). `position: sticky` is the belt to that
+   braces — if the shell's own deficit valve ever engages, the dock stays parked at the
+   bottom of the scrollport instead of scrolling out of reach. It is pinned OUTSIDE the
+   pane region, so no pane layout, stored or hand-edited, can move or hide it. */
+.cockpit-txdock {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+/* Action cluster in a pane head (pop-out / remove / pane-supplied buttons). The head is
+   `justify-content: space-between`, so grouping the buttons keeps them together at the
+   right edge instead of spreading across the title row. */
+.cockpit-pane-acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}

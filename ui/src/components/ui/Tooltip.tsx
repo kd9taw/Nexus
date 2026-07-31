@@ -23,7 +23,15 @@ export function Tooltip({ content, children, side = 'right' }: TooltipProps) {
       <RT.Trigger asChild>{children}</RT.Trigger>
       <RT.Portal>
         <RT.Content className="ui-tooltip" side={side} sideOffset={6} collisionPadding={8}>
-          {content}
+          {/* Portaled to document.body, outside `.app`'s zoom:var(--ui-zoom), so the
+              content rendered at 1/zoom of the app. Re-applying the zoom on an inner
+              wrapper is positioning-safe: Floating UI places the OUTER popper element
+              from getBoundingClientRect (visual px) of both anchor and floating box;
+              the wrapper's zoom changes the box's layout size, which gBCR reports
+              faithfully, so flip/collision math still holds. The arrow stays OUTSIDE
+              the wrapper — Radix positions it absolutely against the popper box, and
+              an ancestor zoom would mis-scale those offsets. */}
+          <div style={{ zoom: 'var(--ui-zoom, 1)' }}>{content}</div>
           <RT.Arrow className="ui-tooltip-arrow" />
         </RT.Content>
       </RT.Portal>

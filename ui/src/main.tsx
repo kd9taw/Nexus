@@ -4,6 +4,11 @@ import App from './App'
 import { DetachedPanel } from './DetachedPanel'
 import { OPERATE_PANELS, redockStalePopouts } from './features/panelState'
 import './styles.css'
+// AFTER styles.css, deliberately: the cockpit pane grid's structural rules are all flat
+// single-class selectors, so an equal-specificity tie with anything in styles.css must
+// resolve in the structural sheet's favour (source order breaks the tie). See the header
+// of cockpit-panes.css; cockpit-panes.test.ts guards both the order and the isolation.
+import './cockpit-panes.css'
 
 // A torn-off window (created by open_panel_window) loads the app at `?panel=<name>`
 // and renders just that panel for multi-monitor use.

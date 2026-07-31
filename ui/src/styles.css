@@ -20,7 +20,6 @@
   --right-rail-w: 360px;
   --rail-min: 200px;
   --ui-zoom: 1;
-  --strip-h: clamp(150px, 22vh, 260px);
 
   /* --- Design tokens (Phase 0). See ui/DESIGN.md + ui/design/verify.mjs. --- */
   /* Spacing ladder. `--space-scale` lets narrow viewports tighten ALL spacing at
@@ -38,7 +37,7 @@
   --space-8: calc(40px * var(--space-scale));
   --space-9: calc(48px * var(--space-scale));
   /* Type scale — sans for prose; mono reserved for callsign/freq/grid/Z-time/SNR */
-  --fs-display: clamp(22px, 2.4vw, 30px);
+  --fs-display: clamp(22px, calc(0.024 * var(--vw-eff, 100vw)), 30px);
   --fs-title: 18px;
   --fs-body: 14px;
   --fs-label: 12px;
@@ -104,10 +103,11 @@
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
-/* Focus not obscured: keep a focused row clear of a sticky Now Bar / header. */
-[data-focus-scroll] :focus-visible {
-  scroll-margin-top: var(--now-bar-h);
-}
+/* Focus-not-obscured: a `[data-focus-scroll] :focus-visible { scroll-margin-top }`
+   rule lived here, but no component ever set the attribute — it was dead since
+   birth, and --now-bar-h was a fixed guess the wrapping Now Bar invalidates
+   anyway. Keeping focused rows clear of sticky headers still needs a REAL
+   mechanism (scroll-margin derived from measured header heights). */
 
 /* --- Loading affordances (reduced-motion aware via the rules above). --- */
 .skeleton {
@@ -217,7 +217,7 @@
   flex-direction: column;
   gap: var(--space-2);
   width: 340px;
-  max-width: calc(100vw - 2 * var(--space-4));
+  max-width: calc(var(--vw-eff, 100vw) - 2 * var(--space-4));
   margin: 0;
   padding: 0;
   list-style: none;
@@ -226,6 +226,13 @@
   max-height: calc(var(--vh-eff, 100vh) - 2 * var(--space-4));
   overflow-y: auto;
   z-index: 80;
+}
+/* While the update banner is up it sits in the same bottom-right corner at z 8000 and
+   totally covers the NEWEST toast (z 80, column-appended) — including its `Work →` button.
+   Lift the whole toast stack above the banner's ~60px + a gap for that window; both live
+   inside `.app`, so :has() sees the banner directly. */
+.app:has(.update-banner) .ui-toast-viewport {
+  bottom: calc(var(--space-4) + 72px);
 }
 .ui-toast {
   display: flex;
@@ -1122,8 +1129,16 @@ button.nb-chip:hover {
   border-color: var(--accent);
 }
 /* Annual DX marathon card. */
-.jy-marathon {
+.panel.jy-marathon {
   display: flex;
+  /* Explicit ROW, and it must OUTRANK `.panel { flex-direction: column }` — the element
+     carries both classes. A bare `.jy-marathon` (0,1,0) sits EARLIER in the sheet than
+     `.panel` (0,1,0), so its `row` lost on source order and shipped dead: the card
+     still stacked vertically under a comment asserting row (review 2026-07-31 — the
+     same dead-fix class the shell valve had). `.jy-hero` happens to sit AFTER `.panel`
+     and wins on order; this card can't, so pin it with specificity instead. Guarded by
+     cockpit-shells.test.ts (computed winner must be row, for both cards). */
+  flex-direction: row;
   align-items: baseline;
   gap: var(--space-3);
   flex-wrap: wrap;
@@ -1340,11 +1355,17 @@ button.nb-chip:hover {
   gap: var(--space-3);
   padding: var(--space-3);
   grid-template-columns: var(--cn-rail, 300px) minmax(0, 1fr) var(--cn-rail, 300px);
-  /* Strip row capped at 30% of the EFFECTIVE (zoom-corrected) viewport height (not bare
-     `auto`, and not raw `30vh` which ignores the app's `zoom` and over-tall the strip):
-     a tall pane reassigned into the strip scrolls inside its own body instead of stealing
-     height from the globe's 1fr rows. --vh-eff is published by useViewport. */
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, calc(0.3 * var(--vh-eff, 100vh)));
+  /* Strip row: CONTENT-sized, with the 30%-of-effective-viewport ceiling on the PANES
+     (`.connect-strip > .pane-frame` below), NOT on the track. Two dead spellings of a
+     track cap shipped here — `minmax(0, X)` and then `minmax(auto, X)`: grid
+     maximize-tracks (css-grid §11.6) grows ANY fixed-max track to its growth limit
+     BEFORE the fr rows expand, and the min sizing function plays no part in that step —
+     so both were a "cap" that always paid out, holding the full X open and stealing it
+     from the globe's 1fr rows on every tall window (review 2026-07-31, verified in
+     Chrome: minmax(0,300px) and minmax(auto,300px) both render 300px). An `auto` track
+     is exactly as tall as its tallest (max-height-capped) pane; a tall pane reassigned
+     into the strip scrolls inside its own .pane-body. */
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
   grid-template-areas:
     'left1  center right1'
     'left2  center right2'
@@ -1463,6 +1484,14 @@ button.nb-chip:hover {
   gap: var(--space-3);
   min-width: 0;
 }
+/* The strip's real cap (see the `.connect` grid-template-rows comment): max-height on a
+   BOX genuinely bounds it, unlike a track max, so the auto strip row sizes to its
+   tallest pane and never past 30% of the zoom-corrected viewport — a taller pane
+   scrolls inside its own `.pane-body { overflow:auto }`. --vh-eff via useViewport;
+   raw 30vh is zoom-blind. */
+.connect-strip > .pane-frame {
+  max-height: calc(0.3 * var(--vh-eff, 100vh));
+}
 
 /* Slot wrapper — reuses the retired .connect-side glass so panes float over the globe. */
 .pane-frame {
@@ -1529,23 +1558,27 @@ button.nb-chip:hover {
   background: transparent;
   padding: 0;
 }
-/* Rescoped from .connect-side — keep the narrow-rail band/gauge fits in a pane body. */
-.pane-body .swx-strip {
+/* Rescoped from .connect-side — keep the narrow-rail band/gauge fits in a pane body.
+   Scoped to .connect, NOT bare `.pane-body`: the pane-frame family is shared with the
+   cockpit pane grids now, and these are ~250px-RAIL adaptations (columns stripped,
+   direction/people hidden). A cockpit pane that ever hosts BandAdvisor/SpaceWx would
+   have been silently column-stripped by the global spelling (fix-round D7, 2026-07-31). */
+.connect .pane-body .swx-strip {
   grid-template-columns: repeat(2, 1fr);
 }
-.pane-body .ba-row {
+.connect .pane-body .ba-row {
   grid-template-columns: 40px 1fr 78px;
 }
-.pane-body .ba-dir,
-.pane-body .ba-people {
+.connect .pane-body .ba-dir,
+.connect .pane-body .ba-people {
   display: none;
 }
-.pane-body .ba-reason {
+.connect .pane-body .ba-reason {
   grid-column: 1 / -1;
   font-size: var(--fs-micro);
   color: var(--text-faint);
 }
-.pane-body .ba-rows {
+.connect .pane-body .ba-rows {
   max-height: 100%; /* the pane body is the scroller now; no fixed 44vh cap */
   overflow-y: auto;
 }
@@ -1564,6 +1597,13 @@ button.nb-chip:hover {
     'right1'
     'right2'
     'strip';
+  /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolls — the shell rule on
+     .layout.single, .connect-shell and .connect itself all clip or declare no overflow,
+     and every row is a .pane-frame that clips. So at xs, where the globe keeps a 280px
+     floor and five auto rows stack beneath it, the rail panes and the bottom strip were
+     painted past the clip line with no path to them at all. Only this tier: the md/lg
+     grid is a bounded two-rail layout that must not gain a scrollbar. */
+  overflow-y: auto;
 }
 [data-viewport='xs'] .connect-strip {
   grid-template-columns: 1fr;
@@ -1580,12 +1620,6 @@ button.nb-chip:hover {
   line-height: 1.35;
 }
 /* Per-path outlook panel (selected station) — the PathPredictor seam surfaced. */
-/* DecodeFeed (three-pane legacy feed) has NO UTC column — 6 children, so it
- * needs its own template; inheriting OperateDecodes' 7-column grid crushed the
- * message into the 42px freq slot and gave the work button the wide column. */
-.decode-feed .decode-row {
-  grid-template-columns: auto 52px 34px 38px minmax(0, 1fr) auto;
-}
 
 /* Settings ▸ Connections — credential presence + the rolling event log */
 .conn-status-grid {
@@ -2567,7 +2601,8 @@ button.nb-chip:hover {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: 38vh;
+  /* Effective viewport, not raw vh — raw is wrong by the zoom factor inside .app. */
+  max-height: calc(0.38 * var(--vh-eff, 100vh));
   overflow-y: auto;
 }
 .insight-row {
@@ -2704,7 +2739,9 @@ button.nb-chip:hover {
 }
 .roam-modal-body {
   position: relative;
-  width: min(720px, 92vw);
+  /* --vw-eff on the width guard too (the height below already was): a raw 92vw
+     let the 720px branch render wider than the window at pinned zoom. */
+  width: min(720px, calc(0.92 * var(--vw-eff, 100vw)));
   /* Zoom-corrected: this modal is NOT portaled, so it lives inside .app's zoom. A raw 86vh
      over-talls at 110/125% UI zoom and pushes the close button off the top. --vh-eff = innerHeight/zoom. */
   max-height: calc(0.86 * var(--vh-eff, 100vh));
@@ -2846,6 +2883,13 @@ button.nb-chip:hover {
 .log-actions {
   display: inline-flex;
   gap: var(--space-2);
+  /* Ten buttons, each floored at `min-height: var(--touch)`, add up to ~1424 px of
+     min-content against a panel hard-capped at 1100 px — so at EVERY window size they were
+     squeezing to min-content and wrapping their labels to 2–3 lines, costing 60–90 px of an
+     un-shrinkable `.panel-header` that sits above the log's scroller. Wrapping the ROW is
+     the cheap honest fix: the buttons keep their touch size and the header grows a second
+     line only when it truly needs one. */
+  flex-wrap: wrap;
 }
 
 /* ---- DARK (shack) — default ---- */
@@ -3298,10 +3342,27 @@ body.resizing {
   max-width: 1100px;
   margin: 0 auto;
 }
+/* xl (effective width ≥ 2400): let the DATA surfaces — Logbook's 11-column table
+   and the Program workbench — use the room. Prose-shaped panels (Settings, POTA)
+   keep the 1100px measure above. */
+[data-viewport='xl'] .layout.single > .panel.log-view,
+[data-viewport='xl'] .layout.single > .panel.radioprog {
+  max-width: 1600px;
+}
 /* Connect must flex-FILL rather than block-scroll — its map needs a DEFINITE height
    (see .connect-shell). Targeted via :has() so Log/Settings keep their block+scroll.
    Same fix the detached window already applies. */
 .layout.single:has(> .connect-shell) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* Memories must flex-FILL too — under block+scroll `.memories-view { flex:1; min-height:0 }`
+   is inert, `.mv-scroll` never becomes the scroller, and the table's sticky header anchors
+   to a scrollport that never moves (it only worked in the detached window, whose
+   `.app.detached` is already a definite-height flex column). Same :has() escape as
+   `.connect-shell` above. */
+.layout.single:has(> .memories-view) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -4961,257 +5022,6 @@ select optgroup {
 }
 
 /* ===========================================================================
-   QSO panel (center, QSO mode)
-   =========================================================================== */
-.qso-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-.qso-status-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 14px var(--space-4);
-  border-radius: var(--radius);
-  font-size: 16px;
-  font-weight: 800;
-  border: 1px solid transparent;
-}
-.qso-status-banner.running {
-  color: var(--tx);
-  background: color-mix(in srgb, var(--tx) 12%, transparent);
-  border-color: color-mix(in srgb, var(--tx) 35%, transparent);
-}
-.qso-status-banner.sp {
-  color: var(--rx);
-  background: color-mix(in srgb, var(--rx) 12%, transparent);
-  border-color: color-mix(in srgb, var(--rx) 35%, transparent);
-}
-.qso-status-dot {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 22%, transparent);
-  flex: 0 0 auto;
-}
-.qso-status-banner.running .qso-status-dot {
-  animation: pulse 0.9s ease-in-out infinite;
-}
-
-.qso-readouts {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--space-3);
-  margin: 0;
-}
-.qso-readouts > div {
-  background: var(--bg-elev);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3) 14px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.qso-readouts dt {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-faint);
-}
-.qso-readouts dd {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text);
-}
-.qso-readouts dd.mono {
-  font-family: var(--font-mono);
-}
-
-.qso-work {
-  display: flex;
-  gap: var(--space-2);
-}
-.qso-work-call {
-  flex: 2;
-  min-width: 0;
-}
-.qso-work-grid {
-  flex: 1;
-  min-width: 0;
-}
-.qso-work input {
-  padding: var(--space-2) 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-elev-1);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  letter-spacing: 0.03em;
-}
-.qso-work input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.qso-work button {
-  flex: none;
-  padding: var(--space-2) 18px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--tx);
-  background: var(--tx);
-  color: #fff;
-  font-weight: 800;
-  font-size: 13px;
-  transition: var(--transition);
-}
-.qso-work button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.qso-now {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-elev-2);
-}
-.qso-now.stalled {
-  border-color: var(--state-bad, #e5484d);
-  background: color-mix(in srgb, var(--state-bad, #e5484d) 10%, var(--bg-elev-2));
-}
-.qso-now-label {
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-  white-space: nowrap;
-}
-.qso-now.stalled .qso-now-label {
-  color: var(--state-bad, #e5484d);
-}
-.qso-now-msg {
-  flex: 1;
-  min-width: 0;
-  font-weight: 700;
-  color: var(--tx);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.qso-resend {
-  flex: none;
-  padding: 5px var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-elev-1);
-  color: var(--text-dim);
-  font-weight: 700;
-  font-size: 12px;
-  transition: var(--transition);
-}
-.qso-resend:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--text);
-}
-.qso-resend:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.qso-freetext {
-  display: flex;
-  gap: var(--space-2);
-}
-.qso-freetext input {
-  flex: 1;
-  min-width: 0;
-  padding: var(--space-2) 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-elev-1);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  letter-spacing: 0.02em;
-}
-.qso-freetext input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.qso-freetext button {
-  flex: none;
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 800;
-  font-size: 13px;
-  transition: var(--transition);
-}
-.qso-freetext button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.qso-actions {
-  display: flex;
-  gap: 10px;
-}
-.qso-action-btn {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  min-height: 60px;
-  padding: var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-elev-2);
-  color: var(--text-dim);
-  font-size: 15px;
-  font-weight: 800;
-  transition: var(--transition);
-}
-.qso-action-btn small {
-  font-size: 10px;
-  font-weight: 600;
-  opacity: 0.8;
-}
-.qso-action-btn:hover {
-  border-color: var(--accent);
-  color: var(--text);
-}
-.qso-action-btn.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-}
-.qso-action-btn.primary.active {
-  background: var(--tx);
-  border-color: var(--tx);
-  color: #fff;
-}
-.qso-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-faint);
-  line-height: 1.5;
-}
-
-/* ===========================================================================
    Prompt-to-log confirm popup (WSJT-X "Prompt me to log QSO")
    =========================================================================== */
 .logconfirm-backdrop {
@@ -5225,7 +5035,12 @@ select optgroup {
   backdrop-filter: blur(2px);
 }
 .logconfirm {
-  width: min(420px, 92vw);
+  width: min(420px, calc(0.92 * var(--vw-eff, 100vw)));
+  /* Zoom-corrected cap + internal scroll: uncapped under the centering backdrop, a short
+     window pushed the head/actions symmetrically past both edges with nothing scrollable
+     (same class as `.mv-packs`; --vh-eff because raw vh is zoom-blind). */
+  max-height: calc(0.9 * var(--vh-eff, 100vh));
+  overflow-y: auto;
   padding: var(--space-5);
   border-radius: var(--radius-md, 12px);
   border: 1px solid var(--border);
@@ -5321,7 +5136,9 @@ select optgroup {
   border-color: var(--state-weak);
 }
 .purge-confirm {
-  width: min(480px, 94vw);
+  /* Renders on `class="logconfirm purge-confirm"` — the viewport cap + scroll come from
+     `.logconfirm` above; only the width differs. */
+  width: min(480px, calc(0.94 * var(--vw-eff, 100vw)));
 }
 .logconfirm-sub.danger {
   color: var(--state-weak);
@@ -5505,6 +5322,11 @@ select optgroup {
 /* Hero: level + XP + next milestone. */
 .jy-hero {
   display: flex;
+  /* Explicit ROW: the element also carries `.panel`, whose `flex-direction: column`
+     otherwise survives this rule (it declares no direction) — turning `.jy-level`'s
+     `flex-basis: 260px` into a 260px-tall empty band and `align-items:center` into
+     horizontal squeeze. */
+  flex-direction: row;
   align-items: center;
   gap: var(--space-4);
   /* A slim strip, not a billboard: at high levels with no next-milestone the
@@ -5898,59 +5720,32 @@ select optgroup {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  /* With `.cw-lower` floored, a short window overflows the COCKPIT — scroll here rather than
-     letting the flex column crush its children (mirrors `.phone-cockpit`). */
+  /* THE DEFICIT VALVE (mirrors `.layout.single.phone-cockpit` — see the full story there).
+     This block used to carry BOTH eras' intents: `overflow-y:auto` ("scroll rather than
+     crush") followed by the Phase-3 `overflow:hidden` ("the view never scrolls") — and the
+     later SHORTHAND won by in-block declaration order, so the scroll comment was a lie and
+     a short window clipped the log strip unreachably. One declaration now, one truth: the
+     shell scrolls ONLY on genuine deficit. Guarded by cockpit-shells.test.ts (which checks
+     same-block shorthand resets for exactly this trap). */
   overflow-y: auto;
-  /* Bounded (Phase 3): scope pinned, keyer/macros/send/log pinned; the lower region holds the
-     removable + seam-resizable content panes and scrolls inside them — the view never scrolls. */
-  overflow: hidden;
   min-height: 0;
 }
-/* Bounded lower region: the removable panes under the scope. The four content panes carry the
-   `panel` class → share-driven flex + seam-resizable; the thin control strips sit at content height. */
-/* Floored like `.ph-lower`: the decode + band activity get a guaranteed minimum that the log
-   form and recall line below cannot take. CW has the same pressure Phone did. */
-.cw-lower {
-  flex: 1 1 auto;
-  min-height: 18em;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  /* Scroll (don't clip): turning on DSP inserts the levels pane and pushes the band-activity
-     strip down — overflow:hidden was clipping it out of view ("band activity covered up"). */
-  overflow-y: auto;
-}
-.cw-lower > * {
-  /* Every child sits at content height and never shrinks below its content, so nothing gets
-     crushed/clipped ("band activity covered up when decode is on"); a real vertical deficit flows
-     to `.cw-lower { overflow-y:auto }` and scrolls instead. Covers the DSP / RX-level control rows
-     (.ph-*) too, not just the .panel panes. Only DECODE grows (rule below). */
-  flex: 0 0 auto;
-  min-height: 0;
-}
-.cw-lower > .panel {
-  /* the removable content panes scroll internally if their own content overflows */
-  overflow: auto;
-}
-/* DECODE is the sole grower and the primary area: it fills the lower region and floors large so it
-   stays the dominant pane. The seam-resize sliders were removed (little value in CW), so there is
-   no per-pane --pane-share any more — decode simply grows. */
-.cw-lower > .cw-decode.panel {
-  flex: 1 1 0;
-  min-height: 8em;
-}
-/* SENT echo: content height, capped + scrolls internally — it must not steal DECODE's grow. */
-.cw-lower > .cw-decode.cw-sent-panel.panel {
-  flex: 0 0 auto;
-  max-height: 9em;
-}
-/* CW: keep the pinned log strip compact so the DECODE (the primary content) keeps the vertical
+/* (The `.cw-lower` family — the region wrapper, its `flex: 0 0 auto` children rule, the
+   `.panel` scroll rule, DECODE's sole-grower rule and the SENT echo's 9em cap — was
+   DELETED by the pane-grid rebuild, along with the class itself. CW's lower region is now
+   the shared `.cockpit-panes` grid: structural rules live in cockpit-panes.css ONLY, every
+   content block renders through a CockpitPaneFrame, and "DECODE is the primary pane" is
+   expressed as the widest COLUMN at the 3-column tier instead of the column's one flex
+   grower. Content styling for what is INSIDE those panes (.cw-decode, .cw-copilot, .ph-*)
+   stays in this file — see the framed-transcript block near `.cw-decode`.) */
+/* CW: keep the log strip compact so the DECODE (the primary content) keeps the vertical
    real estate (operator: "log qso is big… decode still squished"). No fields are hidden — this
-   only tightens the padding between the log rows, freeing height that flows to the decode pane. */
-.cw-cockpit > .log-entry {
+   only tightens the padding between the log rows. Descendant, not child: the log renders
+   inside its pane frame now, not as a direct child of the cockpit. */
+.cw-cockpit .log-entry {
   padding: var(--space-2) var(--space-3);
 }
-.cw-cockpit > .log-entry .le-row {
+.cw-cockpit .log-entry .le-row {
   margin-bottom: var(--space-1);
 }
 /* The header must NEVER be the item this column squeezes. It is the one child whose
@@ -6132,6 +5927,44 @@ input.cw-pitch::-webkit-inner-spin-button {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+/* ── A TRANSCRIPT INSIDE A CockpitPaneFrame ───────────────────────────────────────────
+   CW's DECODE and SENT and RTTY's stream all render inside a `.pane-body` since the
+   pane-grid rebuild. Two things have to be said, here and nowhere else:
+
+   1. FILL. `.pane-body` is a block box, so a block child is CONTENT height — and
+      `.cw-decode-text { flex: 1 1 0; min-height: 0 }` inside a content-height flex column
+      resolves to ZERO (an invisible transcript, not a short one). `height: 100%` resolves
+      against the body's definite height at the bounded tiers. Where the body is
+      auto-height — the 1-column scrolling tier, whose rows are content-sized — `height:
+      100%` computes to `auto` and the min-height is what gives the transcript a readable
+      box instead of nothing.
+   2. THE FLOOR IS SAFE HERE, AND ONLY HERE. `.pane-body` is `overflow: auto`, so a cell
+      shorter than 6em becomes that pane's own scrollbar. This is the permitted case in
+      design3 §3 ("comfortable fixed heights … floors are only fatal under
+      overflow:hidden"), not a return of the 18em floors that hid the log form. */
+.pane-body > .cw-decode {
+  height: 100%;
+  min-height: 6em;
+  /* It was a gapped sibling in a flex column; the frame owns the gap now, and a bottom
+     margin under `height: 100%` overflows the body by exactly that margin. */
+  margin-bottom: 0;
+}
+.pane-body > .cw-copilot {
+  margin-bottom: 0;
+}
+/* RTTY's stream carries no `panel` class, so `.pane-body > .panel`'s card-flatten misses
+   it and it renders as a bordered box inside a bordered frame. */
+.pane-body > .rtty-stream {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+/* …and that same flatten DOES catch CW's SENT echo (it is a `.panel`), taking its accent
+   stripe with it. The stripe is what makes "these are YOUR transmissions" readable at a
+   glance, so put it back. */
+.pane-body > .cw-sent-panel {
+  border-left: 3px solid var(--accent, #4ea1ff);
+}
 .cw-decode-head {
   display: flex;
   align-items: baseline;
@@ -6171,7 +6004,14 @@ input.cw-pitch::-webkit-inner-spin-button {
   cursor: pointer;
 }
 /* A multi-line, auto-scrolling transcript — decoded Morse persists here (it no longer
-   vanishes as the audio window slides); older text scrolls up, newest stays in view. */
+   vanishes as the audio window slides); older text scrolls up, newest stays in view.
+   Fills its pane, RTTY-style: `.cw-decode` is a flex column that fills its frame body
+   (`.pane-body > .cw-decode`, above) and this is the item that takes the height — the
+   rule's old `height: 6.5em` kept the transcript a fixed strip, so a taller pane just
+   wrapped ~5 lines in dead space. Same class of bug RTTY already fixed at
+   `.rtty-stream .cw-decode-text`. (Before the pane-grid rebuild the height came from
+   `.cw-lower > .cw-decode.panel { flex: 1 1 0 }`, the lower region's sole grower; the
+   grid cell is the sizing authority now.) */
 .cw-decode-text {
   font-family: var(--font-mono);
   font-size: 14px;
@@ -6179,7 +6019,9 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  height: 6.5em;
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
   overflow-y: auto;
 }
 .cw-decode-idle {
@@ -6199,9 +6041,10 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-sent-panel .cw-decode-label {
   color: var(--accent, #4ea1ff);
 }
-.cw-sent-panel .cw-decode-text {
-  height: 4em;
-}
+/* (`.cw-sent-panel .cw-decode-text { flex: 0 0 auto; height: 4em }` deleted. The 4em strip
+   existed so the echo could not steal DECODE's grow when both were flex children of one
+   `.cw-lower` column. In the pane grid they are separate CELLS — nothing can be stolen —
+   so the echo simply inherits the base transcript's fill-and-scroll and uses its own pane.) */
 .cw-sent-line {
   color: var(--text);
 }
@@ -6313,6 +6156,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: var(--space-1);
+  /* One-click transmits: never a shrink victim, independent of the dock's own pin
+     (cockpit-panes.css). Replaces the deleted `.rtty-cockpit > .cw-macros` pin, whose
+     child combinator no longer matches now that the rows live inside the dock —
+     fix-round D4, 2026-07-31; guarded in cockpit-shells.test.ts. */
+  flex: 0 0 auto;
 }
 .cw-macro {
   display: flex;
@@ -6345,6 +6193,8 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-send {
   display: flex;
   gap: var(--space-2);
+  /* Same reachability pin as .cw-macros above — this row keys the rig. */
+  flex: 0 0 auto;
 }
 .cw-type {
   flex: 1;
@@ -6495,12 +6345,23 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .le-row {
   display: flex;
+  /* WRAP, never overflow. Inside the pane grid the log column can be as narrow as 24em;
+     a nowrap row's min-content is the sum of its inputs' intrinsic widths (~600px+), so
+     the form overflowed the pane sideways and `.pane-body{overflow:auto}` grew a
+     horizontal scrollbar with half the fields off-screen (operator, 2026-07-31: "items
+     off screen to the right … plenty of room at the bottom"). Fields flow down instead —
+     the direction the pane actually has room in. */
+  flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
   margin-bottom: var(--space-2);
 }
 .le-row .settings-input {
-  flex: 1;
+  /* A real basis, not bare `flex:1` — with wrap, basis 0 items all cram onto one line at
+     any width; 9em is the narrowest a text field is worth having before it takes its own
+     line. min-width:0 releases the intrinsic floor that caused the sideways overflow. */
+  flex: 1 1 9em;
+  min-width: 0;
 }
 .le-rst {
   max-width: 80px;
@@ -6920,7 +6781,8 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-weight: 700;
 }
 .recall-log-list {
-  max-height: 38vh;
+  /* Effective viewport, not raw vh — raw is wrong by the zoom factor inside .app. */
+  max-height: calc(0.38 * var(--vh-eff, 100vh));
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -6970,96 +6832,42 @@ input.cw-pitch::-webkit-inner-spin-button {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  /* Bounded (Phase 3): scope pinned, TX chrome pinned, the lower region fills + scrolls
-     inside Band Activity — the whole view never scrolls. */
-  overflow: hidden;
-  min-height: 0;
-}
-/* Bounded lower region: the removable panes under the scope. Band Activity fills; the thin
-   control strips (rig scope / DSP) sit at content height above it. */
-/* THE FLOOR. The panes you operate from — DSP, the RX levels, Band Activity — get a guaranteed
-   minimum height that nothing below can take. Anything that does not fit (the log form, the
-   recall line) scrolls at the cockpit level instead of crushing this region.
-   Operator, 2026-07-25: the region collapsed the moment the recall card appeared under "Log this
-   QSO". Capping that one card would have fixed this instance; a floor fixes the RULE, so the
-   next thing added below cannot do it again. Same discipline as `.cw-lower`. */
-.ph-lower {
-  flex: 1 1 auto;
-  min-height: 18em;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  /* Scroll (don't clip) — same fix as `.cw-lower`: overflow:hidden was cutting the stacked
-     control panes + the Band Activity spot lines off the bottom with no way to reach them. */
+  /* THE DEFICIT VALVE. The Phase-3 "whole view never scrolls" doctrine put
+     `overflow:hidden` here; combined with the `.ph-lower` floor it CLIPPED the log form,
+     recall and part of the voice keyer unreachably on every window the fit-scaler can
+     produce (operator screenshots, 2026-07-30 — the cockpit's minimum is ~1240-1300px
+     against a 900px fit target). A bare `.phone-cockpit { overflow-y:auto }` fix was
+     added below but silently LOST the cascade to this rule ((0,1,0) vs (0,3,0)) — the
+     recurrence engine: both behaviors were asserted, the hidden one won. The shell is
+     now the valve: it scrolls ONLY when content genuinely exceeds the window; when it
+     fits, no scrollbar appears and window surplus rests below the pinned tail, where
+     the scope's Splitter can claim it (the scope must stay grow 0 or the drag dies —
+     see `.phone-cockpit .ph-scope-panel`).
+     Guarded by cockpit-shells.test.ts, which computes the cascade winner. */
   overflow-y: auto;
-}
-/* Every child sits at CONTENT height and never shrinks below it, so nothing gets crushed or
-   clipped; a real vertical deficit flows to `.ph-lower { overflow-y:auto }` and scrolls instead.
-   Byte-for-byte the treatment `.cw-lower > *` got — Phone had only `flex-shrink:0`, which leaves
-   flex-basis at `auto` and still let panes lose height to a grower. Operator report 2026-07-25:
-   the Band Activity spot lines were being lost the same way CW's were. */
-.ph-lower > * {
-  flex: 0 0 auto;
   min-height: 0;
 }
-/* the removable content panes scroll internally if their own content overflows */
-.ph-lower > .panel {
-  overflow: auto;
-}
-/* Band Activity is the SOLE grower and the primary area: it fills the lower region and floors
-   large so it stays dominant.
-   `--pane-share` is deliberately GONE. The seam-resize sliders were removed from CW in 0.17.11
-   ("sliders have little value here") but Phone kept the variable, so a stale share left over from
-   a dragged seam still skewed this pane's grow factor with no slider left to correct it. Phone
-   never had visible seams — the machinery was dead weight that could only misbehave. */
-/* Each pane under the scope is its OWN window, visibly.
-   First attempt used `--border-soft` on an undefined `--bg-raised`; that border is #1b2433 on a
-   dark panel — invisible in practice, so DSP / NB / NR and Band Activity still read as one merged
-   section (operator, 2026-07-25: "seems to be attached to the band activity in a whole section").
-   Use the app's real `.panel` surface instead of inventing a weaker one: same background and
-   radius the rest of Nexus uses for a window, with a border that is actually visible against it. */
-.ph-lower > .ph-dsp,
-.ph-lower > .ph-dsp-levels,
-.ph-band-pane {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-2);
-}
-.ph-lower > .ph-dsp {
-  /* the frame supplies the spacing now */
+/* (The `.ph-lower` / `.ph-band-pane` region family lived here until the pane-grid
+   rebuild. Phone's lower region is now the shared `.cockpit-panes` grid — structural
+   rules in cockpit-panes.css ONLY — and every content block renders through a
+   CockpitPaneFrame, whose shipped `.pane-frame` chrome supplies the per-pane window
+   surface, the real head title (which replaced the `.ph-band-pane::before`
+   pseudo-title) and the internal scroll. Content styling for what's INSIDE those panes
+   (.ph-dsp, .ph-rigscope, .vk, …) stays below.) */
+.pane-body > .ph-dsp {
+  /* The pane frame supplies the spacing; the base `.ph-dsp` margin would double it inside
+     a `.pane-body`. Keyed on the FRAME rather than a cockpit: Phone and CW both render
+     this strip through CockpitPaneFrame now, and any future one gets it for free. */
   margin: 0;
 }
-/* Band Activity is the primary pane down here — give it a title so it reads as its own window
-   rather than an unlabelled area that happens to sit below the DSP controls. */
-.ph-band-pane::before {
-  content: 'Band activity';
-  display: block;
-  font-size: var(--fs-label);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--text-dim);
-  padding-bottom: var(--space-1);
-  margin-bottom: var(--space-1);
-  border-bottom: 1px solid var(--border-soft);
-}
-.ph-band-pane {
-  flex: 1 1 0;
-  min-height: 6em;
-  overflow: auto;
-}
-/* The PTT row never shrinks/clips — push-to-talk stays reachable no matter the window.
-   It IS trimmed though: PTT and the voice keyer were taking vertical space that Band Activity
-   needed (operator, 2026-07-25: "if we need more space, make the voice keyer and push to talk
-   sections smaller"). Trimmed, not shrunk to nothing — PTT stays a comfortable hold-target,
+/* The PTT row now lives inside the pinned `.cockpit-txdock` (cockpit-panes.css): the
+   dock is flex 0 0 auto + sticky bottom, and the row keeps its OWN `flex: 0 0 auto`
+   belt on the base `.ph-ptt-row` rule above (fix-round D4 — reachability must not hang
+   on one rule in another file). The trim stays: PTT and the voice keyer were taking
+   vertical space the panes needed (operator, 2026-07-25: "if we need more space, make
+   the voice keyer and push to talk sections smaller") — trimmed, not shrunk to nothing,
    because a fiddly transmit control is a worse problem than a short spot list. */
-.phone-cockpit {
-  /* With `.ph-lower` floored, a short window overflows the COCKPIT — scroll here rather than
-     letting the flex column crush its children. */
-  overflow-y: auto;
-}
 .phone-cockpit .ph-ptt-row {
-  flex: 0 0 auto;
   gap: var(--space-3);
 }
 .phone-cockpit .ph-ptt {
@@ -7078,12 +6886,6 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .phone-cockpit .vk-note {
   margin: 0 0 var(--space-1);
-}
-.ph-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
 }
 .ph-mode-badge {
   font-weight: 800;
@@ -7390,13 +7192,15 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 /* Phone bandscope: a horizontal real-time scope (panadapter trace + fast waterfall) with a
    rapid colored S-meter. Replaces the FT8 vertical waterfall in the Phone cockpit. */
-/* A WIDE, SHORT bandscope strip (~quarter screen, not a tall vertical block). vh-based
-   so it stays proportional at 125% OS scale instead of overflowing. Carries its own
+/* A WIDE, SHORT bandscope strip (~quarter screen, not a tall vertical block).
+   Sized against the EFFECTIVE viewport (--vh-eff = innerHeight/zoom): a raw 22vh
+   was proportional at 125% OS scale but wrong by the factor of the app's own UI
+   zoom — 86 device px (14% of the window) at the 900×600 minimum. Carries its own
    panel chrome because it intentionally drops the `.panel` class (that class triggers
    `.layout.single > .panel { height:100% }`, which is what made it full-height). */
 .ph-scope-panel {
   flex: 0 0 auto;
-  height: 22vh;
+  height: calc(0.22 * var(--vh-eff, 100vh));
   min-height: 120px;
   max-height: 220px;
   /* Per-cockpit resizable heights land below (.cw-cockpit/.phone-cockpit overrides). */
@@ -7671,6 +7475,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   align-items: center;
   gap: var(--space-4);
   flex-wrap: wrap;
+  /* Belt to the dock's braces: the row that keys the rig must never be a shrink victim,
+     even if the dock's own `flex: 0 0 auto` (cockpit-panes.css) is ever loosened. The
+     pin was deleted in the pane rebuild on "the dock protects it" — one rule in another
+     file is not an invariant (fix-round D4, 2026-07-31; guarded in cockpit-shells.test.ts). */
+  flex: 0 0 auto;
 }
 .ph-ptt {
   /* A prominent hold-target, but NOT a full-width bar — natural width so the row's
@@ -7738,7 +7547,8 @@ input.cw-pitch::-webkit-inner-spin-button {
 
 /* ---- Phone voice keyer (F-key WAV messages) ------------------------------- */
 .vk {
-  margin-top: 14px;
+  /* (margin-top is gone: the keyer sits in a CockpitPaneFrame now, and the grid gap owns
+     the spacing between panes. The h2 went with it — the frame head carries the title.) */
   padding: var(--space-3) 14px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -7749,11 +7559,15 @@ input.cw-pitch::-webkit-inner-spin-button {
   align-items: baseline;
   gap: 10px;
   margin-bottom: 10px;
-}
-.vk-head h2 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 800;
+  /* The keyer renders inside a scrolling .pane-body now, and this row carries ■ Stop —
+     a TX ABORT. Sticky keeps the abort visible however far the operator scrolls the
+     slot grid; the opaque background stops the scrolled slots bleeding through it
+     (fix-round D2, 2026-07-31). Content styling, so it lives here, not in the
+     structural sheet. */
+  position: sticky;
+  top: calc(-1 * var(--space-2)); /* cancel the pane-body padding so it parks flush */
+  z-index: 1;
+  background: var(--panel);
 }
 .vk-hint {
   font-size: var(--fs-micro);
@@ -8204,6 +8018,15 @@ input.cw-pitch::-webkit-inner-spin-button {
   gap: 2px;
   padding: var(--space-2) var(--space-3) var(--space-3);
   background: var(--bg-elev);
+  /* Fifteen bonus rows inside a `flex: 0 0 auto` section, inside `.panel { overflow:hidden }`
+     with no panel-level scroller: expanding Bonuses at 1200×750 added ~290 px of
+     un-shrinkable height, drove the ONLY shrinkable sibling (the Sections board) to zero —
+     the club-loved board turned into a blank strip — and took the residual off the bottom of
+     the log with no scrollbar anywhere in the chain. Cap the list against the effective
+     viewport (raw vh is blind to `.app { zoom }`) and let it own its own overflow: the
+     growth now stops here instead of travelling to the siblings. */
+  max-height: calc(0.3 * var(--vh-eff, 100vh));
+  overflow-y: auto;
 }
 .fd-bonus-row {
   display: flex;
@@ -10081,118 +9904,164 @@ select.settings-input {
 [data-viewport='xs'] .layout[data-three-pane] {
   --left-rail-w: 240px;
   --rail-min: 190px;
-  --right-rail-w: clamp(280px, 30vw, 420px);
+  /* --vw-eff, never raw vw: under `.app { zoom }` a raw 30vw resolved against
+     the UNZOOMED window, so the rail's share of the screen GREW with the
+     operator's zoom (56% at pinned 175) — backwards. */
+  --right-rail-w: clamp(280px, calc(0.3 * var(--vw-eff, 100vw)), 420px);
 }
 [data-viewport='xs'] .layout[data-three-pane] {
   /* Narrowest desktop class: tighten further and lower the rail floor so the
-     center pane keeps usable width. The waterfall stays in its rail (never
-     hidden); the operator can move it to a top strip via the layout toggle. */
+     center pane keeps usable width. The waterfall stays in its rail and is never
+     hidden — the rail only narrows. (There is no top-strip alternative: the
+     `data-layout` attribute an older comment here promised had no writer and no
+     CSS, and was deleted with the rest of that dead vocabulary.) */
   --left-rail-w: 210px;
   --rail-min: 168px;
-  --right-rail-w: clamp(240px, 32vw, 360px);
+  --right-rail-w: clamp(240px, calc(0.32 * var(--vw-eff, 100vw)), 360px);
 }
+/* No xl (ultrawide) rail defaults belong here. A `:root[data-viewport='xl']` block
+   was tried and was dead on arrival: usePaneWidths publishes --left-rail-w /
+   --right-rail-w as INLINE vars on <html> on every mount, and index.html's preseed
+   writes them inline before first paint in EVERY window — the stored width, or the
+   hook's proportional default (0.18/0.22 · effective width) when nothing is stored.
+   Inline beats a stylesheet rule on the same element, and the [data-viewport]
+   attribute is set by those same code paths, so the rule could never apply. The
+   ultrawide default IS that proportional default; change it in usePaneWidths.ts (and
+   the preseed, in lockstep), never here. The sm/xs blocks above are live because they
+   declare on a DESCENDANT (.layout[data-three-pane]), which beats inheritance. */
 
-@media (max-width: 900px) {
-  .shell {
-    flex-direction: column;
-  }
-  .mode-nav {
-    width: 100%;
-    flex-direction: row;
-    justify-content: space-between;
-    padding: 6px var(--space-2);
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    overflow-x: auto;
-  }
-  .mode-nav-top,
-  .mode-nav-bottom {
-    flex-direction: row;
-    gap: 6px;
-    align-items: center;
-  }
-  .mode-nav-group {
-    /* Horizontal top bar at this breakpoint → re-row the Digital group inline. */
-    flex-direction: row;
-    align-items: center;
-    gap: var(--space-1);
-    padding: 3px 6px;
-  }
-  .mode-nav-group-label {
-    padding: 0 2px 0 0;
-  }
-  .mode-btn {
-    flex-direction: row;
-    gap: 6px;
-    padding: 6px var(--space-3);
-    min-height: var(--touch);
-    white-space: nowrap;
-  }
-  .mode-current {
-    border-top: none;
-    border-right: 1px solid var(--border-soft);
-    padding: 0 10px;
-  }
-  .layout {
-    grid-template-columns: 1fr;
-    grid-auto-rows: minmax(0, auto);
-    overflow-y: auto;
-  }
-  /* On phones, ignore the layout preset + resizing: stack everything in source
-     order, full width, and drop the splitters. */
-  .layout[data-three-pane] {
-    grid-template-columns: 1fr;
-    grid-template-rows: none;
-    grid-template-areas: none;
-    grid-auto-rows: minmax(0, auto);
-  }
-  .grid-stations,
-  .grid-center,
-  .grid-waterfall {
-    display: block;
-  }
-  .pane-splitter {
-    display: none;
-  }
-  .station-list {
-    max-height: 240px;
-  }
-  .conversation,
-  .qso-panel,
-  .fieldday {
-    min-height: 60vh;
-  }
-  .right-rail {
-    min-height: 420px;
-  }
-  .radio-readout {
-    margin-left: 0;
-  }
-  .freq-control.compact {
-    flex-wrap: wrap;
-    border-radius: var(--radius-sm);
-  }
-  .freq-control.full {
-    gap: 10px;
-  }
-  .topbar {
-    gap: var(--space-3);
-  }
-  .qso-readouts {
-    grid-template-columns: 1fr;
-  }
-  .log-row {
-    grid-template-columns: 0.6fr 1fr 0.5fr 2fr;
-  }
-  .toast-stack {
-    left: 12px;
-    right: 12px;
-    bottom: 12px;
-    max-width: none;
-  }
-  .log-export {
-    justify-content: flex-start;
-  }
+/* Whole-shell narrow collapse, keyed on EFFECTIVE width (sm/xs = effW < 1100),
+   not a raw @media. The old `@media (max-width: 900px)` measured the UNZOOMED
+   window: it flipped the entire app to this phone stack at exactly the 900-px
+   Tauri minimum (where the effective width is a comfortable 1385 — md) and at
+   half-screen snap, yet could NEVER fire for a pinned-zoom operator — the one
+   whose effective width genuinely is narrow. sm and xs are disjoint buckets
+   (xs < 768 ≤ sm < 1100), so both are listed everywhere "narrow" is meant. */
+[data-viewport='sm'] .shell,
+[data-viewport='xs'] .shell {
+  flex-direction: column;
+}
+[data-viewport='sm'] .mode-nav,
+[data-viewport='xs'] .mode-nav {
+  width: 100%;
+  flex-direction: row;
+  justify-content: space-between;
+  padding: 6px var(--space-2);
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+[data-viewport='sm'] .mode-nav-top,
+[data-viewport='sm'] .mode-nav-bottom,
+[data-viewport='xs'] .mode-nav-top,
+[data-viewport='xs'] .mode-nav-bottom {
+  flex-direction: row;
+  gap: 6px;
+  align-items: center;
+}
+[data-viewport='sm'] .mode-nav-group,
+[data-viewport='xs'] .mode-nav-group {
+  /* Horizontal top bar in the narrow collapse → re-row the Digital group inline. */
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px 6px;
+}
+[data-viewport='sm'] .mode-nav-group-label,
+[data-viewport='xs'] .mode-nav-group-label {
+  padding: 0 2px 0 0;
+}
+/* :where() so this keeps the OLD @media weight of (0,1,0). Bare
+   `[data-viewport='sm'] .mode-btn` is (0,2,0) and, later in the file, beat
+   `.mode-btn.sub` — which the media body always lost to — refattening every
+   Digital sub-mode button to a 44px touch target and a wider gap in exactly the
+   layout where width is scarcest. The sub variant must keep winning here. */
+:where([data-viewport='sm']) .mode-btn,
+:where([data-viewport='xs']) .mode-btn {
+  flex-direction: row;
+  gap: 6px;
+  padding: 6px var(--space-3);
+  min-height: var(--touch);
+  white-space: nowrap;
+}
+[data-viewport='sm'] .mode-current,
+[data-viewport='xs'] .mode-current {
+  border-top: none;
+  border-right: 1px solid var(--border-soft);
+  padding: 0 10px;
+}
+[data-viewport='sm'] .layout,
+[data-viewport='xs'] .layout {
+  grid-template-columns: 1fr;
+  grid-auto-rows: minmax(0, auto);
+  overflow-y: auto;
+}
+/* In the narrow collapse, ignore the layout preset + resizing: stack everything
+   in source order, full width, and drop the splitters.
+   This DOES apply to the Tempo-chat header variant: at (0,3,0) it ties
+   `.layout[data-three-pane].has-tempo-header` above and wins on order. The old
+   @media body was (0,2,0) and lost, so chat collapsed into a hybrid — the header
+   rule's 5-column areas over a single 1fr column. Keep this block after it. */
+[data-viewport='sm'] .layout[data-three-pane],
+[data-viewport='xs'] .layout[data-three-pane] {
+  grid-template-columns: 1fr;
+  grid-template-rows: none;
+  grid-template-areas: none;
+  grid-auto-rows: minmax(0, auto);
+}
+[data-viewport='sm'] .grid-stations,
+[data-viewport='sm'] .grid-center,
+[data-viewport='sm'] .grid-waterfall,
+[data-viewport='xs'] .grid-stations,
+[data-viewport='xs'] .grid-center,
+[data-viewport='xs'] .grid-waterfall {
+  display: block;
+}
+[data-viewport='sm'] .pane-splitter,
+[data-viewport='xs'] .pane-splitter {
+  display: none;
+}
+[data-viewport='sm'] .station-list,
+[data-viewport='xs'] .station-list {
+  max-height: 240px;
+}
+[data-viewport='sm'] .conversation,
+[data-viewport='sm'] .fieldday,
+[data-viewport='xs'] .conversation,
+[data-viewport='xs'] .fieldday {
+  /* 60% of the EFFECTIVE viewport: a raw 60vh under zoom 0.65 rendered at 39%
+     of the window, not 60. Benign as a floor because the collapsed .layout
+     above is the scroller. */
+  min-height: calc(0.6 * var(--vh-eff, 100vh));
+}
+[data-viewport='sm'] .right-rail,
+[data-viewport='xs'] .right-rail {
+  min-height: 420px;
+}
+[data-viewport='sm'] .radio-readout,
+[data-viewport='xs'] .radio-readout {
+  margin-left: 0;
+}
+[data-viewport='sm'] .freq-control.compact,
+[data-viewport='xs'] .freq-control.compact {
+  flex-wrap: wrap;
+  border-radius: var(--radius-sm);
+}
+[data-viewport='sm'] .freq-control.full,
+[data-viewport='xs'] .freq-control.full {
+  gap: 10px;
+}
+[data-viewport='sm'] .topbar,
+[data-viewport='xs'] .topbar {
+  gap: var(--space-3);
+}
+[data-viewport='sm'] .log-row,
+[data-viewport='xs'] .log-row {
+  grid-template-columns: 0.6fr 1fr 0.5fr 2fr;
+}
+[data-viewport='sm'] .log-export,
+[data-viewport='xs'] .log-export {
+  justify-content: flex-start;
 }
 
 /* ===========================================================================
@@ -10218,33 +10087,9 @@ select.settings-input {
 /* ===========================================================================
    Live decode feed (WSJT-X-style band activity)
    =========================================================================== */
-.decode-feed {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  /* Show more of the band activity. Grows with the window but never shrinks below the
-     old fixed height, so small screens are unaffected. */
-  max-height: clamp(240px, 38vh, 460px);
-  border-top: 1px solid var(--border-soft);
-  background: var(--bg-elev);
-}
-.decode-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-soft);
-}
-.decode-sub {
-  font-size: 10px;
-  color: var(--text-faint);
-}
-.decode-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-1) 0;
-}
+/* (.decode-head/.decode-sub/.decode-scroll lived here until DecodeFeed.tsx — their
+   only consumer — was deleted with the dead decode-feed pane. The rows below are
+   still live: OperateCockpit renders .decode-row, OperateDecodes .decode-msg.) */
 .decode-row {
   display: grid;
   /* tier · UTC · dB · DT · Freq · message · work */
@@ -10549,7 +10394,12 @@ select.settings-input {
   backdrop-filter: blur(3px);
 }
 .radio-picker {
-  width: min(520px, 92vw);
+  width: min(520px, calc(0.92 * var(--vw-eff, 100vw)));
+  /* Zoom-corrected cap + internal scroll — under `place-items:center` an uncapped box
+     overflows both edges unreachably on short/pinned-zoom windows (same class as
+     `.logconfirm` / `.mv-packs`). */
+  max-height: calc(0.9 * var(--vh-eff, 100vh));
+  overflow-y: auto;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -10771,23 +10621,32 @@ select.settings-input {
   color: var(--text-faint);
 }
 
-@media (max-width: 900px) {
-  .logbook-row {
-    grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 0.7fr;
-  }
-  /* Narrow: keep Call, Country, Band, QSL, actions; hide Freq/Mode/Sent/Rcvd/Time/Park. */
-  .logbook-row .log-cell:nth-child(4),
-  .logbook-row .log-cell:nth-child(5),
-  .logbook-row .log-cell:nth-child(6),
-  .logbook-row .log-cell:nth-child(7),
-  .logbook-row .log-cell:nth-child(8),
-  .logbook-row .log-cell:nth-child(9) {
-    display: none;
-  }
-  /* keep edit/delete reachable on touch (no hover) */
-  .logbook-row .log-rowbtn {
-    opacity: 1;
-  }
+/* Narrow (EFFECTIVE width — the old raw @media hid six columns at the 900-px
+   Tauri minimum where all eleven fit, and never fired under pinned zoom where
+   they don't): keep Call, Country, Band, QSL, actions; hide
+   Freq/Mode/Sent/Rcvd/Time/Park. */
+[data-viewport='sm'] .logbook-row,
+[data-viewport='xs'] .logbook-row {
+  grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 0.7fr;
+}
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(4),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(5),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(6),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(7),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(8),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(9),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(4),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(5),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(6),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(7),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(8),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(9) {
+  display: none;
+}
+/* keep edit/delete reachable on touch (no hover) */
+[data-viewport='sm'] .logbook-row .log-rowbtn,
+[data-viewport='xs'] .logbook-row .log-rowbtn {
+  opacity: 1;
 }
 
 /* scrollbars */
@@ -11110,85 +10969,8 @@ select.settings-input {
 }
 
 /* ===========================================================================
-   Toasts (transient notifications)
-   =========================================================================== */
-.toast-stack {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  max-width: 380px;
-  pointer-events: none;
-}
-.toast {
-  pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elev-2);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow);
-  font-size: 13px;
-  animation: toast-in 160ms ease;
-}
-@keyframes toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-}
-.toast.error {
-  border-color: color-mix(in srgb, var(--state-weak) 55%, var(--border));
-  border-left: 3px solid var(--state-weak);
-}
-.toast.success {
-  border-color: color-mix(in srgb, var(--state-good) 55%, var(--border));
-  border-left: 3px solid var(--state-good);
-}
-.toast.info {
-  border-left: 3px solid var(--accent);
-}
-.toast-msg {
-  flex: 1;
-  color: var(--text);
-  line-height: 1.35;
-}
-.toast-close {
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 18px;
-  line-height: 1;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  flex: 0 0 auto;
-  transition: var(--transition);
-}
-.toast-close:hover {
-  background: var(--bg-elev);
-  color: var(--text);
-}
-
-/* ===========================================================================
    Band activity / broadcast feed
    =========================================================================== */
-.band-feed {
-  min-width: 0;
-}
-.band-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-3) 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
 .band-row {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -11250,14 +11032,14 @@ select.settings-input {
   color: #1a1000;
 }
 
-/* band feed cramps on very narrow screens — drop the tech column */
-@media (max-width: 900px) {
-  .band-row {
-    grid-template-columns: auto 1fr;
-  }
-  .band-tech {
-    display: none;
-  }
+/* band feed cramps on genuinely narrow (EFFECTIVE) widths — drop the tech column */
+[data-viewport='sm'] .band-row,
+[data-viewport='xs'] .band-row {
+  grid-template-columns: auto 1fr;
+}
+[data-viewport='sm'] .band-tech,
+[data-viewport='xs'] .band-tech {
+  display: none;
 }
 
 /* ---- composer capacity meter (frames/overs left in a message) ---- */
@@ -12037,12 +11819,18 @@ select.settings-input {
   overflow-y: auto;
   overflow-x: hidden;
 }
-@media (max-width: 900px) {
-  .cockpit-lower,
-  .cockpit-lower.roster {
-    grid-template-columns: 1fr;
-    grid-auto-rows: minmax(0, 1fr);
-  }
+/* Narrow (EFFECTIVE width): the old raw @media force-stacked Band Activity and
+   the roster at the Tauri minimum, where the effective width is md-comfortable. */
+[data-viewport='sm'] .cockpit-lower,
+[data-viewport='sm'] .cockpit-lower.roster,
+[data-viewport='xs'] .cockpit-lower,
+[data-viewport='xs'] .cockpit-lower.roster {
+  /* minmax(0,1fr), not the old media body's bare `1fr`: as an attribute selector
+     this now outranks `.cockpit-lower[data-cols='one']` (which the media body lost
+     to), and a bare 1fr carries a min-content floor — a wide child in the
+     panel-removed + narrow combination could force horizontal blow-out. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(0, 1fr);
 }
 
 /* Side column: compact QSO strip on top, Band Activity (the big scroller), then
@@ -12187,10 +11975,9 @@ select.settings-input {
   background: var(--state-good);
   border-color: var(--state-good);
 }
-@media (max-width: 900px) {
-  .tx-panel {
-    grid-template-columns: 1fr;
-  }
+[data-viewport='sm'] .tx-panel,
+[data-viewport='xs'] .tx-panel {
+  grid-template-columns: 1fr;
 }
 
 /* Compact Tx1–Tx6 machine for the Classic two-pane side rail: one column so the
@@ -12753,6 +12540,18 @@ html[data-panel='needed'] {
   color: var(--text-faint);
   text-align: center;
 }
+/* Center the empty state in the scroller (`.np-grid` is flex:1 → definite height) instead
+   of pinning a one-liner to the top of a full-height bordered box — the `.mv-empty`
+   treatment. :has() flips to a flex column only while the empty child is present, so
+   populated rows keep the plain block scroller. Scoped to `.np-grid`: AprsCockpit reuses
+   `.np-empty` under a different, content-height parent that cannot center CSS-only. */
+.np-grid:has(> .np-empty) {
+  display: flex;
+  flex-direction: column;
+}
+.np-grid > .np-empty {
+  margin: auto;
+}
 
 /* ── NeededPanel: filter bar + evidence line ───────────────────────────────── */
 /* Filter toggle button (funnel icon) in the panel header. */
@@ -13025,6 +12824,14 @@ html[data-panel='needed'] {
   color: var(--text-faint);
   font-size: 0.85rem;
   text-align: center;
+}
+/* Center in the roster scroller when empty — same `.mv-empty` treatment as `.np-grid`. */
+.or-grid:has(> .or-empty) {
+  display: flex;
+  flex-direction: column;
+}
+.or-grid > .or-empty {
+  margin: auto;
 }
 
 /* TX/RX status strip — the at-a-glance "is it working" line under the cockpit
@@ -14179,10 +13986,12 @@ html[data-panel='needed'] {
   gap: var(--space-3);
   align-items: start;
 }
-@media (max-width: 800px) {
-  .pota-body {
-    grid-template-columns: 1fr;
-  }
+/* Narrow (EFFECTIVE width) collapse. The old `@media (max-width: 800px)` was
+   unreachable — POTA exists only in the main window, whose minWidth is 900 —
+   so the two columns' 592-px hard floor had no escape under pinned zoom. */
+[data-viewport='sm'] .pota-body,
+[data-viewport='xs'] .pota-body {
+  grid-template-columns: 1fr;
 }
 .pota-active {
   display: flex;
@@ -14690,10 +14499,12 @@ html[data-panel='needed'] {
   color: var(--text-faint);
   font-size: var(--fs-body);
 }
-@media (max-width: 860px) {
-  .awards-body {
-    grid-template-columns: 1fr;
-  }
+/* Narrow (EFFECTIVE width) collapse. The old `@media (max-width: 860px)` was
+   unreachable (main-window minWidth 900) — the two 0-floor columns squeezed
+   into unreadable slivers under pinned zoom instead of ever stacking. */
+[data-viewport='sm'] .awards-body,
+[data-viewport='xs'] .awards-body {
+  grid-template-columns: 1fr;
 }
 .aw-chases,
 .aw-left {
@@ -15082,15 +14893,17 @@ html[data-panel='needed'] {
   padding: 3px var(--space-2);
   margin-bottom: var(--space-1);
 }
-/* Narrow layouts: the side column drops below the schedule. */
-[data-viewport='narrow'] .sats-view,
-[data-viewport='phone'] .sats-view {
+/* Narrow layouts: the side column drops below the schedule. Was keyed on
+   'narrow'/'phone' — values classifyViewport never emits — so this stacking was
+   dead since birth and the globe column held its 340-px floor at every width. */
+[data-viewport='sm'] .sats-view,
+[data-viewport='xs'] .sats-view {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto auto minmax(0, 1fr);
   overflow-y: auto;
 }
-[data-viewport='narrow'] .sats-side,
-[data-viewport='phone'] .sats-side {
+[data-viewport='sm'] .sats-side,
+[data-viewport='xs'] .sats-side {
   grid-column: 1;
   grid-row: auto;
 }
@@ -15307,7 +15120,10 @@ html[data-panel='needed'] {
 .detached-waterfall {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* Zoom-corrected: the pop-out branch carries `.app` (zoom applies there), so raw 100vh
+     would overshoot the window by the zoom factor and clip the bottom of the waterfall.
+     --vh-eff = innerHeight/zoom; the fallback covers a first paint before useViewport runs. */
+  height: var(--vh-eff, 100vh);
   padding: var(--space-2);
 }
 .detached-waterfall > :first-child {
@@ -15343,21 +15159,35 @@ html[data-panel='needed'] {
 /* Per-cockpit scope heights: scoped vars so dragging one cockpit's scope never
    resizes the other (they share .ph-scope-panel). The splitter clamps 100–420 px. */
 .cw-cockpit .ph-scope-panel {
-  /* Pinned scope (Phase 3): exactly the operator-dragged --cw-scope-h; the bounded lower region
-     takes the rest. No px floor (px floors on flex children are the documented vertical-clip bug). */
-  flex: 0 0 var(--cw-scope-h, 22vh);
+  /* GROW 0 — the drag must BE the height. A previous repair made the scope a grower
+     (`flex: 1 1 <basis>`) so surplus would "show more signal", but a grower's resolved
+     height no longer follows its basis — here it split surplus 1:1 with the lower region
+     and the seam tracked the pointer at half rate; in Phone (sole grower) the Splitter's
+     --ph-scope-h was fully inert at every geometry (review 2026-07-31). This is the
+     COMPLETE Operate pattern, not just its clamps: `.cockpit-waterfall { flex: 0 1
+     var(--cockpit-wf-h, 22%) }` keeps grow 0 and lets the decode scroller take the
+     surplus — here `.cockpit-panes { flex: 1 1 0 }` (cockpit-panes.css) is that sink, and
+     its basis 0 is what keeps the dragged scope height honest. Shrink 1 down to an 8em
+     always-visible floor (the scope must never be
+     hideable) and the 45% zoom-corrected cap (raw vh is zoom-blind) keep a stale
+     persisted % structurally harmless. The % basis resolves against the flex container.
+     Guarded by cockpit-shells.test.ts (winning flex-grow must compute to 0). */
+  flex: 0 1 var(--cw-scope-h, 22%);
   height: auto;
-  min-height: 0;
-  max-height: none;
+  min-height: 8em;
+  max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
 .phone-cockpit .ph-scope-panel {
-  /* Pinned scope (Phase 3): its height is exactly the operator-dragged --ph-scope-h (the
-     Splitter sets it); the bounded lower region takes the rest. No px floor (px floors on
-     flex children are the documented vertical-clip bug). */
-  flex: 0 0 var(--ph-scope-h, 22vh);
+  /* GROW 0 — same repair as the CW twin above, one difference in where surplus rests:
+     Phone's other children are all pinned chrome (no scroller wants height), so on a
+     tall window the spare height sits BELOW the log strip instead of silently inflating
+     the scope. That band is real estate the drag now actually controls — pull the seam
+     down and the scope keeps it (as the sole grower this control did nothing at all:
+     rendered height was basis-independent, measured identical at 12/30/52/90%). */
+  flex: 0 1 var(--ph-scope-h, 22%);
   height: auto;
-  min-height: 0;
-  max-height: none;
+  min-height: 8em;
+  max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
 /* Horizontal (height-dragging) splitter variant of the workspace .pane-splitter. */
 .pane-splitter.horizontal {
@@ -15441,11 +15271,13 @@ html[data-panel='needed'] {
   gap: var(--gap);
   padding: var(--space-2) 10px;
 }
-@media (max-width: 900px) {
-  .rp-body {
-    grid-template-columns: 1fr;
-    grid-auto-rows: minmax(0, auto);
-  }
+/* Narrow (EFFECTIVE width) stack. Rows are minmax(0, 1fr) — Operate's idiom —
+   because minmax(0, auto) froze track 2 at the Builder's max-content (~270px)
+   and starved the source column above it down to its overflow-less minimum. */
+[data-viewport='sm'] .rp-body,
+[data-viewport='xs'] .rp-body {
+  grid-template-columns: 1fr;
+  grid-auto-rows: minmax(0, 1fr);
 }
 .rp-source {
   min-width: 0;
@@ -15550,6 +15382,18 @@ html[data-panel='needed'] {
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
 }
+/* Center the "fetch repeaters" / "no repeaters" hint in both Program scrollers when empty
+   (the `.mv-empty` treatment) — `.aw-empty` is otherwise a top-pinned <p> in a tall box.
+   Awards/POTA reuse `.aw-empty` inside content-height panels on a block-scrolled page,
+   where a CSS-only center is not possible — those keep the plain top anchor. */
+.rp-results:has(> .aw-empty) {
+  display: flex;
+  flex-direction: column;
+}
+.rp-results > .aw-empty,
+.rp-chan-rows > .aw-empty {
+  margin: auto;
+}
 .rp-row {
   display: grid;
   grid-template-columns: minmax(72px, 1fr) 76px 56px 52px minmax(64px, 0.9fr) auto auto;
@@ -15623,13 +15467,12 @@ html[data-panel='needed'] {
   border-left: 1px solid var(--border);
   padding-left: var(--gap);
 }
-@media (max-width: 900px) {
-  .rp-builder {
-    border-left: none;
-    border-top: 1px solid var(--border);
-    padding-left: 0;
-    padding-top: var(--space-2);
-  }
+[data-viewport='sm'] .rp-builder,
+[data-viewport='xs'] .rp-builder {
+  border-left: none;
+  border-top: 1px solid var(--border);
+  padding-left: 0;
+  padding-top: var(--space-2);
 }
 .rp-builder-head {
   display: flex;
@@ -16319,7 +16162,10 @@ html[data-panel='needed'] {
 }
 .mv-packs {
   width: min(560px, 100%);
-  max-height: 86vh;
+  /* Zoom-corrected: this modal is NOT portaled, so it lives inside .app's zoom. A raw 86vh
+     over-talls at 110/125% UI zoom and puts the head + close button above the window top,
+     unreachable (they are inside the scroller). Same fix as `.roam-modal-body`. */
+  max-height: calc(0.86 * var(--vh-eff, 100vh));
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
@@ -16443,7 +16289,9 @@ html[data-panel='needed'] {
 }
 [data-viewport='xs'] .mv-side {
   flex: none;
-  max-height: 30vh;
+  /* Effective viewport: xs is reachable only via pop-out/pinned zoom, exactly
+     where a raw 30vh was off by the zoom factor. */
+  max-height: calc(0.3 * var(--vh-eff, 100vh));
 }
 
 /* ===========================================================================
@@ -16475,9 +16323,11 @@ html[data-panel='needed'] {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  /* Bounded (Phase 3): the RX canvas + TX bar are pinned; the lower region holds the two
-     resizable panels and scrolls INSIDE them — the whole view never scrolls. */
-  overflow: hidden;
+  /* THE DEFICIT VALVE (same repair as `.layout.single.phone-cockpit` — full story there).
+     The Phase-3 `overflow:hidden` assumed the lower panes absorb any deficit; when they
+     bottomed out, the tail (Send bar / gallery) clipped with no way to reach it. These
+     cockpits' content usually fits, so the scrollbar appears only on genuine deficit. */
+  overflow-y: auto;
   min-height: 0;
 }
 /* Pinned TX bar — mode/Send/Stop/progress. Never a panel; Stop always reachable. */
@@ -16512,7 +16362,8 @@ html[data-panel='needed'] {
    skip every row. */
 .rtty-cockpit .waterfall-wrap {
   flex: 0 0 auto;
-  height: 22vh;
+  /* Effective viewport, matching .ph-scope-panel — raw 22vh was zoom-blind. */
+  height: calc(0.22 * var(--vh-eff, 100vh));
   min-height: 120px;
   max-height: 220px;
 }
@@ -16537,15 +16388,22 @@ html[data-panel='needed'] {
   padding: 2px 10px;
   margin-left: var(--space-2);
 }
-/* RTTY decoded stream — reuses the CW transcript panel. RTTY (unlike CW/SSTV) has no bounded
-   `-lower` wrapper: the stream + macros + send are bare children of the overflow:hidden cockpit
-   column with NO grower, so a tall display left a void below the Send bar and a short/zoomed one
-   crushed the macro row (RTTY 'Stop') + Send bar off the bottom with nothing to scroll. Make the
-   stream the grower that scrolls INTERNALLY and pin the strips — the whole view stays put and
-   Stop/Send stay reachable (mirrors `.cw-lower`/`.sstv-lower`). */
-.rtty-cockpit > .cw-decode.rtty-stream {
+/* RTTY decoded stream — reuses the CW transcript panel, now inside a CockpitPaneFrame.
+   RTTY (unlike CW/SSTV) has no bounded `-lower` wrapper: the stream + macros + send were bare
+   children of the cockpit column with NO grower, so a tall display left a void below the Send
+   bar and a short/zoomed one crushed the macro row (RTTY 'Stop') + Send bar off the bottom
+   with nothing to scroll. The frame is that grower and it scrolls INTERNALLY; the strips are
+   pinned by `.cockpit-txdock` (cockpit-panes.css) rather than by a rule here.
+
+   Why this cockpit sizes its frame at all, when the pane-grid contract says a pane declares
+   no size: there is no grid to size it. RTTY has exactly ONE content pane, and a region would
+   have to pick a column tier — every one of which leaves a track (or the space under a
+   content-height row) empty. So the SHELL owns this frame's height, explicitly, in one place.
+   The 10em floor is the frame's head + the 6em transcript floor; a shorter window flows to
+   the shell's own `overflow-y: auto` valve, never to a clip. */
+.rtty-cockpit > .pane-frame {
   flex: 1 1 0;
-  min-height: 6em;
+  min-height: 10em;
 }
 .rtty-stream .cw-decode-text {
   /* was height:14em — let it fill the pane and scroll internally (it already has overflow-y:auto). */
@@ -16553,10 +16411,11 @@ html[data-panel='needed'] {
   min-height: 0;
   height: auto;
 }
-.rtty-cockpit > .cw-macros,
-.rtty-cockpit > .cw-send {
-  flex: 0 0 auto;
-}
+/* (`.rtty-cockpit > .cw-macros` / `> .cw-send { flex: 0 0 auto }` deleted with the pane
+   rebuild — the child combinator stopped matching once the rows moved inside the pinned
+   `.cockpit-txdock`. The pins themselves came BACK on the base `.cw-macros` / `.cw-send`
+   rules (fix-round D4): the dock's own `flex: 0 0 auto` protects the rows today, but the
+   rows that key the rig carry their own belt, guarded in cockpit-shells.test.ts.) */
 .rtty-macros .cw-macro:disabled {
   opacity: 0.4;
 }
@@ -17586,7 +17445,9 @@ tr.sel .aprs-sym {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  max-width: min(92vw, 60rem);
+  /* --vw-eff: a raw 92vw capped the banner at 60% of the window at auto-65 —
+     the smallest windows wrapped the loudest banner soonest. */
+  max-width: min(calc(0.92 * var(--vw-eff, 100vw)), 60rem);
   padding: var(--space-2) var(--space-3);
   border: 2px solid var(--need-entity, #ff5c7a);
   border-top: none;
@@ -17651,7 +17512,7 @@ tr.sel .aprs-sym {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  max-width: min(90vw, 40rem);
+  max-width: min(calc(0.9 * var(--vw-eff, 100vw)), 40rem);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border, #2a3340);
   border-radius: var(--radius);
@@ -18018,10 +17879,15 @@ tr.sel .aprs-sym {
 .dxm {
   overflow-x: auto;
 }
-[data-viewport='narrow'] .dxm-head,
-[data-viewport='narrow'] .dxm-week,
-[data-viewport='phone'] .dxm-head,
-[data-viewport='phone'] .dxm-week {
+/* This min-width is what ARMS the `.dxm { overflow-x: auto }` escape above:
+   the week rows are repeat(7, minmax(0, 1fr)) — a 0 floor never exceeds the
+   container, so without it the scroller never engages and the seven day
+   columns silently squash to slivers. It was keyed on 'narrow'/'phone'
+   (never emitted) and therefore dead since birth. */
+[data-viewport='sm'] .dxm-head,
+[data-viewport='sm'] .dxm-week,
+[data-viewport='xs'] .dxm-head,
+[data-viewport='xs'] .dxm-week {
   min-width: 460px;
 }
 
@@ -18031,7 +17897,15 @@ tr.sel .aprs-sym {
 .sstv-band {
   width: 100%;
   height: 100%;
-  min-height: 220px;
+  /* SELF-DISARMING FLOOR. `.sstv-canvas` is `flex: 1.1 1 0; min-height: 0` and its own
+     comment names px floors on flex children as "the documented vertical-clip bug" — this
+     child then re-introduced exactly one. Worse than usual, because the canvas is a ROW
+     flex container: `align-items: center` is the block axis there, so once the stage
+     computes below 220 px the band overflowed SYMMETRICALLY (top and bottom) and the
+     caption — the last child — vanished first, with no scrollbar in the chain (the SSTV
+     shell is `overflow: hidden`). `min(220px, 100%)` is the idiom that keeps the
+     comfortable size when there is room and yields the moment there is not. */
+  min-height: min(220px, 100%);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -18106,15 +17980,25 @@ tr.sel .aprs-sym {
   overflow-x: auto;
   white-space: nowrap;
 }
-/* Narrow: stack, map first — it is the thing worth seeing on a small screen. */
-[data-viewport='narrow'] .aprs-body,
-[data-viewport='phone'] .aprs-body {
+/* Narrow: stack, map first — it is the thing worth seeing on a small screen.
+   Was keyed on 'narrow'/'phone' (values classifyViewport never emits), so the
+   stacking was dead since birth and the map column shrank toward zero instead. */
+[data-viewport='xs'] .aprs-body {
   grid-template-columns: minmax(0, 1fr);
+  /* Both rows stated here. The base rule declares ONE explicit row, so stacked the
+     rail fell into an IMPLICIT `auto` track — and grid maximizes non-flexible tracks
+     BEFORE expanding fr ones, so as soon as the heard table outgrew the pane (the
+     normal state after minutes of RX) the rail took the whole height and the map's
+     fr row collapsed to zero. The map cannot take an `auto` row either: without a
+     definite height its canvas re-arms the growth loop this section is full of
+     warnings about. Equal shrinkable halves; the rail scrolls itself. */
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
 }
-[data-viewport='narrow'] .aprs-map,
-[data-viewport='phone'] .aprs-map {
+[data-viewport='xs'] .aprs-map {
   order: -1;
-  min-height: 260px;
+  /* No min-height override: the row track above is the map's height, and the base
+     rule's `min(320px, 100%)` self-limits to it — a floor here would only be a way
+     to overflow the track and paint over the rail. */
 }
 .aprs-rail .aprs-table tbody tr {
   cursor: pointer;

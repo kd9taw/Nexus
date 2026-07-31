@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react'
 import type {
   ChatMessage,
   Conversation as Conv,
@@ -9,6 +8,7 @@ import type {
 } from '../types'
 import { MessageBubble, type DeliveryStage } from './MessageBubble'
 import { Composer } from './Composer'
+import { usePinnedScroll } from '../usePinnedScroll'
 
 interface Props {
   conversation: Conv | null
@@ -93,7 +93,17 @@ export function Conversation({
   onToggleRoam,
   onRoamSettings,
 }: Props) {
-  const scrollRef = useRef<HTMLDivElement>(null)
+  // Bottom-pinned via the shared discipline — this pane is a CHAT CLIENT
+  // (Trillian ruling): pinned-at-bottom follows new messages; an operator
+  // scrolled up reading history is NEVER yanked. The old snap was keyed on
+  // message COUNT alone, which both yanked the reader on every inbound and
+  // never re-ran on a peer switch — switching to a same-length conversation
+  // opened it parked at the previous peer's offset. App now remounts this
+  // component per peer (key=) so each conversation opens pinned to its newest
+  // message. The pin is instant even though .message-scroll carries
+  // `scroll-behavior: smooth` — the hook overrides it (a wheel gesture cancels
+  // a smooth pin mid-animation).
+  const pin = usePinnedScroll<HTMLDivElement>()
 
   // Winter-Field-Day-only FD chrome. Tempo (TempoFast chat) is a first-class Field Day
   // contact surface for WFD only (operator: TempoFast is relevant to Winter FD, not
@@ -108,11 +118,6 @@ export function Conversation({
   // that does not exist yet — onCallCq sends a generic CQ and there is no command
   // to run/complete an FD exchange with a chat peer. This surface is chrome +
   // exchange-chip only until that command lands; do NOT fabricate the API here.
-
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [conversation?.messages.length])
 
   // No peer selected → the Call CQ launchpad: call CQ (a broadcast) to be heard
   // on the band without first picking a station, plus the editable band macros.
@@ -253,7 +258,7 @@ export function Conversation({
         )}
       </div>
 
-      <div className="message-scroll" ref={scrollRef}>
+      <div className="message-scroll" ref={pin.ref} onScroll={pin.onScroll}>
         {messages.length === 0 && (
           <p className="empty">No messages yet — say hello.</p>
         )}

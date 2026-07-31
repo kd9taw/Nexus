@@ -69,6 +69,20 @@ describe('coercePanelLayout', () => {
     // for a TX control that has no panel entry.
     expect('stopTx' in l.state).toBe(false)
   })
+
+  it('clamps a loaded share into [MIN_SHARE, 2 − MIN_SHARE] — the range the writers enforce', () => {
+    // setShare/setShares floor at MIN_SHARE and seamShares caps at 2 − MIN_SHARE, but
+    // load accepted any v > 0 — so a hand-edited/foreign 1e-9 collapsed a pane to ~0
+    // height on the one path the setters cannot guard.
+    const l = coercePanelLayout(OPERATE_PANELS, {
+      v: 1,
+      state: {},
+      share: { waterfall: 1e-9, bandActivity: 50, callRoster: 1.2 },
+    })
+    expect(l.share.waterfall).toBe(MIN_SHARE)
+    expect(l.share.bandActivity).toBe(2 - MIN_SHARE)
+    expect(l.share.callRoster).toBe(1.2)
+  })
 })
 
 describe('persistence', () => {
