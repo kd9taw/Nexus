@@ -96,6 +96,8 @@ const status = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   transponder: null,
   transponderIndex: null,
   inverting: false,
+  offsetHz: null,
+  halfWidthHz: null,
   aosUnix: AOS,
   losUnix: LOS,
   ...over,
@@ -290,6 +292,25 @@ describe('the rotator ghost', () => {
     render(<SatellitesView focusSat="RS-44" />)
     const badge = await screen.findByTitle(/has NOT been commanded yet/)
     expect(badge.textContent).toMatch(/armed RS-44/)
+    expect(badge.textContent).toMatch(/rises az 100°/)
+    expect(badge.textContent).not.toMatch(/cmd az/)
+  })
+
+  it('the PHASE word comes from the phase, not from whether a command exists', async () => {
+    // Arming a pass that is ALREADY under way reports "tracking" before the
+    // loop has commanded anything — and a rotor that stops answering mid-pass
+    // keeps its phase while the command goes stale. Both are states where a
+    // badge reading the phase off `azDeg` would announce "armed" while the
+    // toast beside it says the pass is running: two contradictory claims on
+    // screen, one of them false.
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(status({ state: 'tracking', azDeg: null, elDeg: null })),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const badge = await screen.findByTitle(/has NOT been commanded yet/)
+    expect(badge.textContent).toMatch(/tracking RS-44/)
+    expect(badge.textContent).not.toMatch(/armed/)
+    // …and it still refuses to print a command that was never sent.
     expect(badge.textContent).toMatch(/rises az 100°/)
     expect(badge.textContent).not.toMatch(/cmd az/)
   })

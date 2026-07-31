@@ -18305,3 +18305,134 @@ tr.sel .aprs-sym {
 .globe3d-pass b {
   color: var(--text);
 }
+
+/* ── Transponder passband strip (SatellitesView, 2026-07-30) ─────────────────
+   Appended at the end of the file on purpose: styles.css is being edited
+   concurrently and this block touches nothing above it. Existing theme
+   variables only, so both themes are already covered.
+
+   The instrument is one axis (offset from the passband centre) shared by two
+   rows. Weight is deliberate and inverted from the usual instinct:
+     --bg-elev-2 / --border   the passband TRACK — a large block, so recessive
+     --rx                     the downlink cursor  ↓ (small, so saturated)
+     --tx                     the uplink cursor    ↑ (small, so saturated)
+     --text-dim               the solid centre hairline and the axis
+   Colour is never alone: the legs are on separate rows, each row carries a
+   text label, and each mark carries a direction glyph AND a pointer that aims
+   down (downlink) or up (uplink) — the light theme's --tx/--rx pair is only
+   ΔE 6.1 apart under deuteranopia and would be unreadable without them.
+
+   .sat-pb sets its own background so .sat-pb-gap can stroke the marks in the
+   EXACT surface colour behind them: that is the ≥2 px gap between the cursor
+   and the track fill, in place of a border drawn around the mark. Change one
+   and change the other. */
+.sat-pb {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.sat-pb-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.sat-pb-title {
+  font-size: var(--fs-label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.sat-pb-mode {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+/* Inverting is the surprising state, and it carries the same warning ink as
+   the INVERTING badge on the transponder row. */
+.sat-pb-mode.inv {
+  color: var(--alert-warning);
+}
+/* height:auto + the viewBox ratio: the box grows to include the axis label
+   band. A fixed height clips the labels and nests a scrollbar in the card. */
+.sat-pb-plot {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 3px;
+}
+.sat-pb-track {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 0.75;
+}
+/* Solid, never dashed — dashing reads as a threshold, and 0 kHz is not one. */
+.sat-pb-centre {
+  stroke: var(--text-dim);
+  stroke-width: 1;
+}
+.sat-pb-label {
+  fill: var(--text);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+.sat-pb-shift {
+  fill: var(--accent);
+}
+.sat-pb-gap {
+  fill: var(--bg-elev);
+  stroke: var(--bg-elev);
+  stroke-width: 4;
+  stroke-linejoin: round;
+}
+.sat-pb-mark.rx {
+  fill: var(--rx);
+}
+.sat-pb-mark.tx {
+  fill: var(--tx);
+}
+/* ~24 px of hover target for a 4 px mark (fill must be a colour, not `none`,
+   or it takes no pointer events). */
+.sat-pb-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+.sat-pb-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.sat-pb-ticklabel {
+  fill: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+.sat-pb-axistitle {
+  fill: var(--text-faint);
+  font-size: 8.5px;
+}
+.sat-pb-nowidth {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+/* The text equivalent — same shape as the sky dome's readout. */
+.sat-pb-readout {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1px var(--space-2);
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-micro);
+}
+.sat-pb-readout > div {
+  display: contents;
+}
+.sat-pb-readout dt {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.sat-pb-readout dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--text);
+}

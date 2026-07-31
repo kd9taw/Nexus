@@ -495,6 +495,258 @@ function DopplerReadout({
   )
 }
 
+/* ==================== the transponder passband strip ========================
+ * ONE axis, shared by both legs: offset from the passband CENTRE, in kHz.
+ * The legs sit on different bands (145 MHz up, 435 MHz down), so plotting them
+ * against absolute frequency would be a two-scale chart whose alignment is
+ * arbitrary — it would invent a relationship. The offset is the coordinate
+ * they genuinely share, and the one an inverting transponder mirrors.
+ *
+ * The lesson IS the geometry: the downlink sits at +offset and the uplink at
+ * −offset while the transponder inverts, so tuning up the band walks the two
+ * marks apart in opposite directions. Nothing animates to explain that.
+ *
+ * Doppler lives in the NUMBERS, never in the marks. Correction moves the DIAL
+ * so the operator's place inside the passband stays where they put it —
+ * sliding the band would animate a thing that is not moving.
+ *
+ * Colour: --rx on the downlink mark, --tx on the uplink, the transmit/receive
+ * tokens every operator already reads. In the LIGHT theme that pair separates
+ * by only ΔE 6.1 under deuteranopia, which is good enough ONLY because three
+ * secondary encodings carry the same distinction: the legs are on separate
+ * rows, each row carries a text label, and each carries a direction glyph
+ * (↓ downlink / ↑ uplink) in both the label text and the SHAPE of its mark.
+ * Drop any one of the three and this instrument stops working for a red-green
+ * colourblind operator — SatellitesView.passband.test.tsx pins all three.
+ */
+
+/** Plot box in viewBox units. The height INCLUDES the axis label band: a box
+ * sized to the marks alone puts a nested scrollbar inside the card. */
+const PB_W = 320
+const PB_H = 102
+const PB_PAD = 8
+const PB_CX = PB_W / 2
+/** Half the drawable width: the axis runs −halfWidth … +halfWidth. */
+const PB_SPAN = PB_CX - PB_PAD
+const PB_TRACK_H = 10
+/** Where the axis sits under both rows. */
+const PB_AXIS_Y = 76
+
+/** viewBox x for a signed offset. Clamped for DRAWING only — a mark may never
+ * leave the instrument, and every number printed beside it stays true. */
+const pbX = (hz: number, half: number) =>
+  PB_CX + (Math.max(-half, Math.min(half, hz)) / half) * PB_SPAN
+
+/** kHz with trailing zeros dropped ("12.5", "5", "3.25"). */
+const pbKHz = (hz: number) => `${+(hz / 1000).toFixed(2)}`
+
+/** The cursor mark, drawn around x = 0 so the lane can translate it into
+ * place: a stem through the track plus a pointer aimed at it from outside.
+ * SHAPE carries the leg as well as colour does — it survives greyscale and the
+ * light theme's marginal red/green separation. */
+function pbMark(down: boolean, trackY: number) {
+  const y0 = trackY - 1.5
+  const y1 = trackY + PB_TRACK_H + 1.5
+  const apex = down ? y0 : y1
+  const base = down ? y0 - 4.5 : y1 + 4.5
+  return (
+    <>
+      <path d={`M-4,${base} L4,${base} L0,${apex} Z`} />
+      <rect x={-2} y={y0} width={4} height={y1 - y0} rx={2} />
+    </>
+  )
+}
+
+/** One leg's row: the recessive passband track, the direct label (glyph, leg,
+ * live dial frequency, signed Doppler shift) and the saturated cursor. */
+function PassbandLane({
+  down,
+  freqHz,
+  shiftHz,
+  offsetHz,
+  halfHz,
+}: {
+  /** Downlink lane (on top — what you hear) or uplink (below — what you send). */
+  down: boolean
+  /** The live dial frequency, or null when that leg is not being tuned. */
+  freqHz: number | null
+  shiftHz: number | null
+  /** THIS leg's true signed offset from the passband centre — already negated
+   * for the uplink when the transponder inverts. */
+  offsetHz: number
+  halfHz: number
+}) {
+  const labelY = down ? 8 : 42
+  const trackY = down ? 19 : 53
+  const glyph = down ? '↓' : '↑'
+  const name = down ? 'Downlink' : 'Uplink'
+  const x = pbX(offsetHz, halfHz)
+  // Outside the passband the mark parks on the edge; the tooltip says so
+  // rather than letting the picture quietly disagree with the numbers.
+  const clamped = Math.abs(offsetHz) > halfHz
+  const mark = pbMark(down, trackY)
+  return (
+    <g>
+      <rect
+        className="sat-pb-track"
+        x={PB_PAD}
+        y={trackY}
+        width={PB_W - 2 * PB_PAD}
+        height={PB_TRACK_H}
+        rx={4}
+      />
+      {/* 0 kHz, SOLID — a dashed line reads as a threshold and centre is not
+          one. Drawn per ROW rather than as one line down the whole strip: a
+          full-height line runs straight through the row labels (it landed in
+          the space between "+770" and "Hz"). The two segments are collinear
+          and the lower one runs into the axis tick, so they still read as the
+          one shared centre. Painted after the track and before the mark, so
+          the mark's gap knocks it out where the cursor sits. */}
+      <line
+        className="sat-pb-centre"
+        x1={PB_CX}
+        y1={down ? trackY - 8 : trackY - 6}
+        x2={PB_CX}
+        y2={down ? trackY + PB_TRACK_H + 4 : PB_AXIS_Y}
+      />
+      {/* The row label IS the legend — glyph, leg, dial frequency, shift. */}
+      <text className="sat-pb-label" x={PB_PAD} y={labelY}>
+        {glyph} {name}
+        {freqHz != null && <tspan> {fmtMHz(freqHz)}</tspan>}
+        {shiftHz != null && <tspan className="sat-pb-shift"> {fmtShift(shiftHz)}</tspan>}
+      </text>
+      <g transform={`translate(${x.toFixed(2)},0)`} data-testid={down ? 'sat-pb-down' : 'sat-pb-up'}>
+        {/* A gap of surface colour under the mark instead of a border around
+            it: the same outline, stroked in the card's own background. */}
+        <g className="sat-pb-gap">{mark}</g>
+        <g className={`sat-pb-mark ${down ? 'rx' : 'tx'}`}>{mark}</g>
+        {/* ~24 px of hit target for a 4 px mark — 26 viewBox units, because the
+            narrowest the sidebar column ever gets (340 px) draws this box at
+            about 0.95 units to the pixel. */}
+        <rect className="sat-pb-hit" x={-13} y={down ? 2 : 40} width={26} height={32}>
+          <title>
+            {`${glyph} ${name}${freqHz != null ? ` — ${freqHz} Hz` : ''} — offset ${fmtShift(
+              offsetHz,
+            )} from passband centre${
+              clamped ? ' (outside the passband — the mark is parked on the edge)' : ''
+            }`}
+          </title>
+        </rect>
+      </g>
+    </g>
+  )
+}
+
+/** Where the operator sits inside the transponder, both legs on one axis.
+ *
+ * HONESTY: no `offsetHz` means Doppler is not tuning anything, and the readout
+ * above already explains why — this renders nothing rather than saying it
+ * twice. No `halfWidthHz` means the passband width is genuinely unknown (many
+ * SatNOGS transmitter records carry none): one line saying so and no axis,
+ * because an axis you cannot size is a made-up one. */
+function PassbandStrip({ rotor }: { rotor: SatTrackStatus }) {
+  const offset = rotor.offsetHz
+  if (offset == null) return null
+  const half = rotor.halfWidthHz ?? 0
+  // Under inversion the uplink genuinely sits at the negated offset. That is
+  // not a drawing trick — it is where the signal comes out.
+  const upOffset = rotor.inverting ? -offset : offset
+  const legs = [
+    { down: true, freq: rotor.downlinkHz, shift: rotor.downlinkShiftHz, off: offset },
+    { down: false, freq: rotor.uplinkHz, shift: rotor.uplinkShiftHz, off: upOffset },
+  ]
+  /** Exact numbers for the text equivalent: Hz, unrounded, absent when absent. */
+  const legText = (freq: number | null, shift: number | null, off: number) =>
+    [
+      freq != null ? `${freq} Hz` : null,
+      shift != null ? `Doppler ${fmtShift(shift)}` : null,
+      `offset ${fmtShift(off)}`,
+    ]
+      .filter((part) => part != null)
+      .join(' · ')
+  const label =
+    `Transponder passband, ${rotor.inverting ? 'inverting' : 'non-inverting'}, ` +
+    `±${pbKHz(half)} kHz either side of centre. ` +
+    `Downlink ${fmtShift(offset)} from centre, uplink ${fmtShift(upOffset)} from centre.`
+  return (
+    <div className="sat-pb" data-testid="sat-passband">
+      <div className="sat-pb-head">
+        <span className="sat-pb-title">Passband</span>
+        {/* The mirror is drawn, but it is also said in words — a picture is a
+            poor place to learn a rule nobody has told you. */}
+        <span className={`sat-pb-mode${rotor.inverting ? ' inv' : ''}`}>
+          {rotor.inverting
+            ? 'inverting — tune up, transmit down'
+            : 'non-inverting — both legs move the same way'}
+        </span>
+      </div>
+      {half > 0 ? (
+        <svg viewBox={`0 0 ${PB_W} ${PB_H}`} className="sat-pb-plot" role="img" aria-label={label}>
+          {legs.map((l) => (
+            <PassbandLane
+              key={l.down ? 'down' : 'up'}
+              down={l.down}
+              freqHz={l.freq}
+              shiftHz={l.shift}
+              offsetHz={l.off}
+              halfHz={half}
+            />
+          ))}
+          <line className="sat-pb-axis" x1={PB_PAD} y1={PB_AXIS_Y} x2={PB_W - PB_PAD} y2={PB_AXIS_Y} />
+          {[PB_PAD, PB_CX, PB_W - PB_PAD].map((x) => (
+            <line className="sat-pb-axis" key={x} x1={x} y1={PB_AXIS_Y} x2={x} y2={PB_AXIS_Y + 3} />
+          ))}
+          {/* End labels are anchored INWARD, so the axis extent cannot spill
+              out of the box at any rendered width. */}
+          <text className="sat-pb-ticklabel" x={PB_PAD} y={88}>
+            −{pbKHz(half)}
+          </text>
+          <text className="sat-pb-ticklabel" x={PB_CX} y={88} textAnchor="middle">
+            0 kHz
+          </text>
+          <text className="sat-pb-ticklabel" x={PB_W - PB_PAD} y={88} textAnchor="end">
+            +{pbKHz(half)}
+          </text>
+          <text className="sat-pb-axistitle" x={PB_CX} y={99} textAnchor="middle">
+            kHz from passband centre
+          </text>
+        </svg>
+      ) : (
+        <div className="sat-pb-nowidth">
+          {/* Zero width has TWO causes and the UI cannot tell them apart, so it
+              must not name one: an FM repeater or beacon genuinely has no
+              passband to tune inside (SO-50 and the rest of the easy birds are
+              all like this), and a linear transponder whose SatNOGS record
+              carries no upper edge looks identical here. Blaming the database
+              for a channel would be wrong for the satellites most people
+              work. */}
+          No passband to tune inside — this is a single channel, or SatNOGS carries no width for it.
+          There is no axis to draw; the offsets below are still exact.
+        </div>
+      )}
+      {/* The text equivalent, the same way the sky dome carries one: an SVG
+          instrument is invisible to a screen reader, and these are the exact
+          numbers behind the marks. Deliberately NOT an aria-live region — they
+          change on every poll, and announcing them would talk over the operator
+          for the whole pass. It is here to be read on demand. */}
+      <dl className="sat-pb-readout">
+        {legs.map((l) => (
+          <div key={l.down ? 'down' : 'up'}>
+            <dt>{l.down ? '↓ Downlink' : '↑ Uplink'}</dt>
+            <dd>{legText(l.freq, l.shift, l.off)}</dd>
+          </div>
+        ))}
+        {half > 0 && (
+          <div>
+            <dt>Passband</dt>
+            <dd>±{pbKHz(half)} kHz from centre</dd>
+          </div>
+        )}
+      </dl>
+    </div>
+  )
+}
+
 /** One leg of a transponder in MHz. A linear transponder is a BAND, so when
  * SatNOGS gives both edges we show both — the centre alone hides where in the
  * passband you can actually work. */
@@ -807,16 +1059,25 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             className="sats-tracking-badge"
             title={
               track.azDeg == null
-                ? 'Armed — the rotor has NOT been commanded yet; auto-track takes it 5 min before AOS'
+                ? 'The rotor has NOT been commanded yet — auto-track takes it 5 min before AOS'
                 : 'Auto-track is driving the rotor — angles shown are what was COMMANDED (rotctld read-back lives on the rotor strip/pane)'
             }
           >
-            {/* Armed means no command has been sent, so there is no commanded
-                angle to print. The rise azimuth answers the question the
-                operator actually has ("where do I look?") without dressing it
+            {/* TWO SEPARATE FACTS, and they must be read from two separate
+                fields. The PHASE comes from `state`, which the backend derives
+                from the clock and always knows. Whether a command has been SENT
+                comes from `azDeg` being present. Deriving the phase word from
+                the angle instead conflates them — and they genuinely come
+                apart: arming a pass that is already under way reports
+                "tracking" with nothing commanded yet, and a rotor that stops
+                answering mid-pass keeps its phase while the command goes
+                stale. Printing "armed" in either case would be flatly wrong.
+
+                With no command to show, the rise azimuth answers the question
+                the operator actually has — where to look — without dressing it
                 up as a command we withheld on purpose. An az-only rotor is
                 never sent an elevation either, and must not print one. */}
-            ⟳ {track.azDeg == null ? 'armed' : 'tracking'} {track.name} ·{' '}
+            ⟳ {track.state === 'armed' ? 'armed' : 'tracking'} {track.name} ·{' '}
             {track.azDeg == null
               ? `rises az ${Math.round(track.aosAzDeg)}°`
               : `cmd az ${Math.round(track.azDeg)}° ${track.elDeg == null ? '(az only)' : `el ${Math.round(track.elDeg)}°`}`}
@@ -990,12 +1251,18 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                 />
                 <PassTimeline pass={detail.pass} tcaUnix={tcaUnix} nowSecs={nowSecs} />
                 {detailTrack && (
-                  <DopplerReadout
-                    rotor={detailTrack}
-                    dopplerOn={dopplerOn}
-                    vfoMap={vfoMap}
-                    held={heldIndex != null || detailTrack.transponder != null}
-                  />
+                  <>
+                    <DopplerReadout
+                      rotor={detailTrack}
+                      dopplerOn={dopplerOn}
+                      vfoMap={vfoMap}
+                      held={heldIndex != null || detailTrack.transponder != null}
+                    />
+                    {/* The strip goes under the readout: the readout says what
+                        the radio is tuned to, the strip says where that puts
+                        the operator inside the passband. */}
+                    <PassbandStrip rotor={detailTrack} />
+                  </>
                 )}
               </>
             ) : (

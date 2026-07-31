@@ -467,6 +467,16 @@ export interface SatTrackStatus {
   transponderIndex: number | null
   /** True when the held transponder mirrors the passband (uplink runs backwards). */
   inverting: boolean
+  /** Where the operator sits INSIDE the passband, signed from its centre (Hz),
+   * and how wide that passband is either side. This is the coordinate the two
+   * legs genuinely share — they are on different bands, so absolute frequency
+   * is not one — and it is the whole of what `inverting` means: the uplink
+   * sits at the NEGATED offset, so tuning up the band walks the uplink down
+   * it. `halfWidthHz` is 0 for a CHANNEL — an FM bird or a beacon, which has no
+   * passband to sit inside — and nothing may draw a passband of zero width.
+   * Both null unless Doppler is actually tuning. */
+  offsetHz: number | null
+  halfWidthHz: number | null
   aosUnix: number
   losUnix: number
 }
