@@ -15832,7 +15832,10 @@ mod tests {
         let by = |m: &str| rows.iter().find(|r| r.message == m).unwrap();
         assert!(by("W1AW W9XYZ RR73").signoff, "RR73 ends the QSO");
         assert!(by("W1AW W9XYZ 73").signoff, "73 ends the QSO");
-        assert!(!by("W1AW W9XYZ DM73").signoff, "DM73 is a grid, not a signoff");
+        assert!(
+            !by("W1AW W9XYZ DM73").signoff,
+            "DM73 is a grid, not a signoff"
+        );
         let cq = by("CQ W1AW FN31");
         assert!(cq.is_cq && !cq.signoff, "a CQ is a CQ, not a signoff");
         assert!(!by("W1AW W9XYZ RRR").signoff, "RRR's QSO isn't over yet");
