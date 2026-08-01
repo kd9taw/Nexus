@@ -46,6 +46,7 @@ import { NEED_CHIP } from '../features/needVisuals'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { satChasingSet, toggleSatChasing } from '../features/satChase'
 import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAlarm'
+import { tleRefreshMessage } from '../features/tleMessages'
 import { heatPulse } from '../features/pulse'
 import { pushToast } from '../toast'
 import { MapView } from './MapView'
@@ -1648,23 +1649,28 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
 
   /** The manual element refresh (phase 2) — the stale chip, the rail's
    * Elements fix and the arm-confirm's Refresh all run THIS. Awaits the
-   * backend's one attempt (mirror-first; the Celestrak floor and 403 stop are
-   * not operator-waivable) and re-pulls the view so the chip clears the
-   * moment fresh elements land. Always resolves — failures are toasted, so a
-   * caller chaining on it never needs its own catch. */
+   * backend's one attempt (mirror-first, escalating to Celestrak in the same
+   * flight when the mirror can't deliver; the Celestrak floor and 403 stop
+   * are not operator-waivable). A failed attempt RESOLVES with the typed
+   * failure in the status — `tleRefreshMessage` composes the one
+   * operator-voiced toast either way — and only a landed attempt re-pulls
+   * the view so the chip clears the moment fresh elements land. Always
+   * resolves — a caller chaining on it never needs its own catch. */
   const refreshTles = () => {
     setTleRefreshing(true)
     return fetchTlesNow()
-      .then((s) =>
-        Promise.resolve(
-          pushToast(`Orbital elements refreshed — ${s.count} birds (${s.source})`, 'success', 5000),
-        )
-          .then(() => getSatellites())
+      .then((s) => {
+        const m = tleRefreshMessage(s)
+        pushToast(m.text, m.kind, m.kind === 'success' ? 5000 : 8000)
+        if (s.lastError != null) return
+        return getSatellites()
           .then((v) => setView(v))
-          .catch(() => {}),
-      )
+          .catch(() => {})
+      })
       .catch((e) =>
-        pushToast(`Element refresh failed: ${e instanceof Error ? e.message : e}`, 'error'),
+        // Only "couldn't attempt at all" rejects (a refresh already in
+        // flight) — already operator words.
+        pushToast(`${e instanceof Error ? e.message : e}`, 'error'),
       )
       .finally(() => setTleRefreshing(false))
   }

@@ -3086,8 +3086,40 @@ static TLE_CT_LAST_TRY: std::sync::atomic::AtomicI64 = std::sync::atomic::Atomic
 static TLE_FAILS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// Celestrak 403/404 hard stop: no direct attempts before this unix stamp.
 static TLE_BLOCKED_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-/// The last refresh failure, operator-readable (phase 3 surfaces it in the UI).
-static TLE_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+/// The last refresh failure: its KIND (the UI composer's branch key) + the
+/// RAW text (tooltip/debugging material — never the headline; the UI must
+/// not string-match HTTP codes out of prose).
+static TLE_LAST_ERROR: Mutex<Option<(TleFailKind, String)>> = Mutex::new(None);
+
+/// Which WAY the last refresh failed — typed, because the operator-voiced
+/// copy branches on it: a pre-launch 404 mirror over current elements is
+/// calm, the Celestrak hard stop is its own established message, and only
+/// the rest reads as a plain failure.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TleFailKind {
+    /// The mirror FETCH failed (unreachable / 404 pre-launch) and no
+    /// Celestrak escalation landed this flight. A payload the mirror
+    /// delivered but the validator refused is `Failed`, never this — it
+    /// must not read pre-launch-calm, and it deliberately does not
+    /// escalate (a mirror that ANSWERED gets its next regen as the fix).
+    MirrorUnreachable,
+    /// Celestrak's 403/404 "stop asking" — the 24 h hard stop is set.
+    CelestrakBlocked,
+    /// Everything else: a refused set, Celestrak network trouble, both legs
+    /// down — a real failure with nothing pre-launch-normal about it.
+    Failed,
+}
+
+impl TleFailKind {
+    /// The wire token `TleStatus.lastErrorKind` carries.
+    fn wire(self) -> &'static str {
+        match self {
+            TleFailKind::MirrorUnreachable => "mirrorUnreachable",
+            TleFailKind::CelestrakBlocked => "celestrakBlocked",
+            TleFailKind::Failed => "failed",
+        }
+    }
+}
 /// Computed PASS-LIST cache (the expensive 24 h scan). Subpoints are NEVER
 /// cached — a LEO ground track moves ~4°/min, so positions are recomputed on
 /// every call (one cheap sgp4 eval per bird) while the pass scan reuses this.
@@ -3631,24 +3663,72 @@ impl Drop for TleFlightGuard {
     }
 }
 
+/// ONE Celestrak attempt (the narrow fallback leg): stamps the 2 h floor,
+/// fetches, validates, installs — and turns a 403/404 into the 24 h hard
+/// stop. Shared by the scheduled Celestrak target and the manual same-flight
+/// escalation; the caller owns the flight guard and the failure bookkeeping.
+fn tle_celestrak_leg(prev_count: usize, manual: bool) -> Result<(), (TleFailKind, String)> {
+    use propagation::live::tle::{self, TleFetchError};
+    use std::sync::atomic::Ordering;
+    TLE_CT_LAST_TRY.store(now_unix(), Ordering::SeqCst);
+    if !manual {
+        // De-synchronize the fallback fleet (we're already off the
+        // caller's thread, so sleeping here blocks no one).
+        std::thread::sleep(std::time::Duration::from_secs(subsec_jitter(120)));
+    }
+    match tle::fetch_tles() {
+        Ok(t) => match tle::validate_tles(&t, prev_count, now_unix()) {
+            Ok(clean) => {
+                tles_install(clean, "celestrak", None, None);
+                Ok(())
+            }
+            Err(e) => Err((
+                TleFailKind::Failed,
+                format!("Celestrak TLE set refused: {e}"),
+            )),
+        },
+        Err(TleFetchError::Blocked(code)) => {
+            // Celestrak said stop (per-cycle caps / per-IP limits).
+            // 24 h hard stop, no retry — retrying is how IPs get
+            // firewalled. The reason stays operator-readable.
+            TLE_BLOCKED_UNTIL.store(now_unix() + 24 * 3600, Ordering::SeqCst);
+            Err((
+                TleFailKind::CelestrakBlocked,
+                format!(
+                    "Celestrak refused (HTTP {code}) — direct fetches stopped for 24 h; the mirror keeps retrying"
+                ),
+            ))
+        }
+        Err(e) => Err((
+            TleFailKind::Failed,
+            format!("Celestrak TLE fetch failed: {e}"),
+        )),
+    }
+}
+
 /// ONE refresh attempt against `target`, run to completion (blocking I/O —
 /// call off the async runtime). Owns the outcome bookkeeping — install/touch
-/// on success, fail count + operator-readable `TLE_LAST_ERROR` + the
-/// Celestrak 24 h hard stop on failure — and releases the single-flight flag
-/// on the way out (RAII, so a panic can't leave it stuck). Returns the
-/// failure message so the operator's manual refresh can surface it directly;
-/// the background kick drops it (the same text is already in
-/// `TLE_LAST_ERROR`).
+/// on success, fail count + the kind-typed `TLE_LAST_ERROR` + the Celestrak
+/// 24 h hard stop on failure — and releases the single-flight flag on the
+/// way out (RAII, so a panic can't leave it stuck). Both callers read the
+/// outcome from status afterwards, so nothing is returned.
+///
+/// MANUAL ESCALATION: a manual flight whose mirror FETCH fails (unreachable,
+/// the pre-launch 404 — not a refused payload: a mirror that answered gets
+/// its next 6 h regen as the fix) goes to Celestrak in the SAME flight when
+/// [`tle_manual_escalation`] allows — the 2 h floor and the 403/404 hard
+/// stop still hold (etiquette isn't operator-waivable), but the >24 h-cache
+/// eligibility is waived: an explicit click is explicit intent.
 fn tle_refresh_flight(
     target: propagation::live::tle::TleFetchTarget,
     prev_count: usize,
     etag: Option<String>,
     manual: bool,
-) -> Result<(), String> {
-    use propagation::live::tle::{self, TleFetchError, TleFetchTarget, TleMirrorFetch};
+) {
+    use propagation::live::tle::{self, TleFetchTarget, TleMirrorFetch};
     use std::sync::atomic::Ordering;
     let _flight = TleFlightGuard;
-    let outcome: Result<(), String> = match target {
+    let outcome: Result<(), (TleFailKind, String)> = match target {
         TleFetchTarget::Mirror => match tle::fetch_tles_mirror(etag.as_deref()) {
             Ok(TleMirrorFetch::NotModified) => {
                 tles_touch_fetched_at();
@@ -3663,45 +3743,36 @@ fn tle_refresh_flight(
                     tles_install(clean, "mirror", generated, etag);
                     Ok(())
                 }
-                Err(e) => Err(format!("mirror TLE set refused: {e}")),
+                Err(e) => Err((TleFailKind::Failed, format!("mirror TLE set refused: {e}"))),
             },
-            Err(e) => Err(format!("TLE mirror fetch failed: {e}")),
-        },
-        TleFetchTarget::Celestrak => {
-            TLE_CT_LAST_TRY.store(now_unix(), Ordering::SeqCst);
-            if !manual {
-                // De-synchronize the fallback fleet (we're already off the
-                // caller's thread, so sleeping here blocks no one).
-                std::thread::sleep(std::time::Duration::from_secs(subsec_jitter(120)));
-            }
-            match tle::fetch_tles() {
-                Ok(t) => match tle::validate_tles(&t, prev_count, now_unix()) {
-                    Ok(clean) => {
-                        tles_install(clean, "celestrak", None, None);
-                        Ok(())
+            Err(e) => {
+                let mirror_raw = format!("TLE mirror fetch failed: {e}");
+                if manual
+                    && tle::tle_manual_escalation(
+                        TLE_CT_LAST_TRY.load(Ordering::SeqCst),
+                        TLE_BLOCKED_UNTIL.load(Ordering::SeqCst),
+                        now_unix(),
+                    )
+                {
+                    match tle_celestrak_leg(prev_count, manual) {
+                        Ok(()) => Ok(()),
+                        // Both legs down (or blocked): the raw keeps BOTH
+                        // stories; the kind keeps the actionable one.
+                        Err((kind, ct_raw)) => Err((kind, format!("{mirror_raw}; {ct_raw}"))),
                     }
-                    Err(e) => Err(format!("Celestrak TLE set refused: {e}")),
-                },
-                Err(TleFetchError::Blocked(code)) => {
-                    // Celestrak said stop (per-cycle caps / per-IP limits).
-                    // 24 h hard stop, no retry — retrying is how IPs get
-                    // firewalled. The reason stays operator-readable.
-                    TLE_BLOCKED_UNTIL.store(now_unix() + 24 * 3600, Ordering::SeqCst);
-                    Err(format!(
-                        "Celestrak refused (HTTP {code}) — direct fetches stopped for 24 h; the mirror keeps retrying"
-                    ))
+                } else {
+                    Err((TleFailKind::MirrorUnreachable, mirror_raw))
                 }
-                Err(e) => Err(format!("Celestrak TLE fetch failed: {e}")),
             }
-        }
+        },
+        TleFetchTarget::Celestrak => tle_celestrak_leg(prev_count, manual),
     };
-    if let Err(msg) = &outcome {
+    if let Err((kind, raw)) = outcome {
         TLE_FAILS.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut g) = TLE_LAST_ERROR.lock() {
-            *g = Some(msg.clone());
+            *g = Some((kind, raw));
         }
     }
-    outcome
 }
 
 /// Start a background TLE refresh if one is DUE — [`tle_fetch_target`] owns
@@ -3735,7 +3806,7 @@ fn maybe_kick_tle_refresh(manual: bool) {
     }
     TLE_LAST_TRY.store(now, Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
-        let _ = tle_refresh_flight(target, prev_count, etag, manual);
+        tle_refresh_flight(target, prev_count, etag, manual);
     });
 }
 
@@ -3771,9 +3842,16 @@ struct TleStatus {
     element_age_days: Option<f64>,
     /// Celestrak 403/404 hard stop's end (unix); 0 = not blocked.
     blocked_until: i64,
-    /// The last refresh failure, operator-readable; absent = last attempt landed.
+    /// The last refresh failure, RAW ("HTTP 404", a refused-set reason) —
+    /// tooltip/debugging material; the UI composes the operator-voiced
+    /// headline from `last_error_kind` + the currency fields, never from
+    /// this text. Absent = last attempt landed.
     #[serde(skip_serializing_if = "Option::is_none")]
     last_error: Option<String>,
+    /// Which WAY it failed — "mirrorUnreachable" | "celestrakBlocked" |
+    /// "failed" — the UI composer's branch key. Present iff `last_error` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error_kind: Option<&'static str>,
 }
 
 /// Assemble [`TleStatus`] from the in-memory snapshot + refresh statics.
@@ -3799,6 +3877,7 @@ fn tle_status() -> TleStatus {
         .filter(|a| *a <= TLE_ACT_STALE_DAYS)
         .collect();
     let blocked_until = TLE_BLOCKED_UNTIL.load(Ordering::SeqCst);
+    let last = TLE_LAST_ERROR.lock().ok().and_then(|g| g.clone());
     TleStatus {
         count: merged.len(),
         usable_count: usable.len(),
@@ -3807,7 +3886,8 @@ fn tle_status() -> TleStatus {
         imported_count,
         element_age_days: usable.iter().copied().reduce(f64::max),
         blocked_until: if blocked_until > now { blocked_until } else { 0 },
-        last_error: TLE_LAST_ERROR.lock().ok().and_then(|g| g.clone()),
+        last_error: last.as_ref().map(|(_, raw)| raw.clone()),
+        last_error_kind: last.map(|(kind, _)| kind.wire()),
     }
 }
 
@@ -3826,6 +3906,12 @@ fn get_tle_status() -> TleStatus {
 /// single-flight, the Celestrak 2 h floor, or the 403/404 hard stop
 /// (etiquette isn't operator-waivable — the mirror leg is always available
 /// to a manual refresh, so the button always has something honest to try).
+/// A mirror that cannot deliver escalates to Celestrak in the SAME flight
+/// when the floor + block allow (see [`tle_refresh_flight`]). Resolves with
+/// the post-attempt status whether the attempt landed or failed — the typed
+/// failure rides `lastErrorKind`/`lastError` and the UI composes ONE
+/// operator-voiced result from it; `Err` is reserved for "couldn't attempt
+/// at all" (a refresh already in flight, a poisoned cache).
 #[tauri::command]
 async fn fetch_tles_now() -> Result<TleStatus, String> {
     use std::sync::atomic::Ordering;
@@ -3850,9 +3936,13 @@ async fn fetch_tles_now() -> Result<TleStatus, String> {
         return Err("an element refresh is already running — it will land shortly".into());
     }
     TLE_LAST_TRY.store(now, Ordering::SeqCst);
+    // The attempt's failure (if any) is IN the returned status — kind + raw
+    // — so the UI composes one operator-voiced result from one source of
+    // truth instead of parsing a rejected string. Only the spawn itself can
+    // Err from here on.
     tauri::async_runtime::spawn_blocking(move || tle_refresh_flight(target, prev_count, etag, true))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string())?;
     Ok(tle_status())
 }
 

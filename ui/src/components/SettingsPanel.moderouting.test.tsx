@@ -276,6 +276,55 @@ describe('band+mode routing rules editor', () => {
     })
   })
 
+  it('the mode dropdown offers Satellite and writes the DESIGNATION, not a mode class', async () => {
+    // The operator's request: "Can we add designation in the rules in the settings for
+    // satellites?" — Satellite joins the rule editor's dropdown, stored as `context`, with the
+    // mode cleared: a satellite rule is matched by transponder picks (above the mode rules),
+    // never by terrestrial tunes.
+    renderPanel()
+    await openRadioTab()
+    fireEvent.change(await screen.findByLabelText('Rule 1 mode'), {
+      target: { value: 'satellite' },
+    })
+    await waitFor(() => expect(api.get('setRoutingRules')).toHaveBeenCalled())
+    const [rules] = api.get('setRoutingRules').mock.calls[0] as [
+      { bands: string[]; mode: string | null; context?: string | null; radio: number }[],
+    ]
+    expect(rules[0]).toEqual({ bands: ['2m', '70cm'], mode: null, context: 'satellite', radio: 2 })
+    // The neighboring plain rule is untouched — no context key invented onto it.
+    expect(rules[1]).toEqual({ bands: ['2m', '70cm'], mode: 'digital', radio: 1 })
+  })
+
+  it('a satellite-designated rule renders as Satellite; switching back clears the designation', async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({
+        ...threeRadioSettings(),
+        routingRules: [
+          { bands: [], mode: null, context: 'satellite', radio: 1 },
+          { bands: ['2m', '70cm'], mode: 'fm', radio: 2 },
+        ],
+      } as never),
+    )
+    renderPanel()
+    await openRadioTab()
+    const sel = (await screen.findByLabelText('Rule 1 mode')) as HTMLSelectElement
+    expect(sel.value).toBe('satellite')
+    // A rule stored BEFORE the field existed renders exactly as it always did.
+    expect(((await screen.findByLabelText('Rule 2 mode')) as HTMLSelectElement).value).toBe('fm')
+    const hints = [...document.querySelectorAll('.routing-rule > .settings-hint')].map(
+      (n) => n.textContent,
+    )
+    expect(hints[0]).toBe('Any band · Satellite → IC-9700')
+    expect(hints[1]).toBe('2m, 70cm · FM & APRS → FT-991A')
+
+    fireEvent.change(sel, { target: { value: 'fm' } })
+    await waitFor(() => expect(api.get('setRoutingRules')).toHaveBeenCalled())
+    const [rules] = api.get('setRoutingRules').mock.calls[0] as [
+      { bands: string[]; mode: string | null; context?: string | null; radio: number }[],
+    ]
+    expect(rules[0]).toEqual({ bands: [], mode: 'fm', context: null, radio: 1 })
+  })
+
   it('a single-radio station is never shown the rules editor', async () => {
     api.get('getSettings').mockImplementation(() =>
       Promise.resolve({

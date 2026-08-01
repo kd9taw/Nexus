@@ -393,6 +393,17 @@ pub fn tle_fetch_target(
     })
 }
 
+/// Same-flight Celestrak escalation for a MANUAL refresh whose mirror leg
+/// just failed (404 / network — the fetch itself, not a refused payload).
+/// [`tle_fetch_target`] starts a manual attempt at the mirror; when that leg
+/// dies mid-flight, an explicit click is explicit intent — the >24 h-cache
+/// eligibility (and the `fails > 0` prerequisite: the failure is THIS
+/// flight's own) are waived. Celestrak etiquette is not: the 2 h floor and
+/// the 403/404 hard stop hold, manual or not.
+pub fn tle_manual_escalation(ct_last_try: i64, blocked_until: i64, now: i64) -> bool {
+    now >= blocked_until && now - ct_last_try >= 2 * 3600
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -662,6 +673,39 @@ BROKEN BIRD\r\n\
                 want,
                 "row {i}"
             );
+        }
+    }
+
+    // --- tle_manual_escalation -----------------------------------------------
+
+    #[test]
+    fn manual_escalation_table() {
+        const H: i64 = 3600;
+        let now = 1_785_542_400;
+        // (ct_last_try, blocked_until) → may a manual flight whose mirror leg
+        // just failed go to Celestrak in the SAME flight?
+        let table: [(i64, i64, bool); 6] = [
+            // Floor + block clear: escalate. Note there is NO cache-age or
+            // fails input at all — the >24 h eligibility and the fails>0
+            // prerequisite are exactly what a manual click waives (the
+            // pre-launch mirror 404s with a fresh cache, and "come back
+            // tomorrow" is no answer to an explicit click).
+            (0, 0, true),
+            // Celestrak asked 1 h 59 m ago: inside its 2 h floor — never,
+            // manual included (their update cycle; re-asking inside one
+            // cycle is what draws 403s).
+            (now - 2 * H + 60, 0, false),
+            // Exactly 2 h since the last ask: the floor is met.
+            (now - 2 * H, 0, true),
+            // The 403/404 hard stop is live: never.
+            (0, now + 20 * H, false),
+            // The block expires exactly now: clear.
+            (0, now, true),
+            // Floor met but still blocked: the block alone refuses.
+            (now - 3 * H, now + H, false),
+        ];
+        for (i, (ct, blocked, want)) in table.into_iter().enumerate() {
+            assert_eq!(tle_manual_escalation(ct, blocked, now), want, "row {i}");
         }
     }
 

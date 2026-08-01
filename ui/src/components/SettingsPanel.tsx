@@ -62,6 +62,7 @@ import { getConnectionLog, getCredentialsStatus } from '../api'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
 import { fetchTlesNow, getTleStatus, importTles, type TleStatus } from '../api'
+import { tleRefreshMessage } from '../features/tleMessages'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { allTxtLocation, revealAllTxt } from '../api'
@@ -2256,13 +2257,24 @@ export function SettingsPanel({
                   <div className="routing-rule" key={i}>
                     <div className="routing-rule-head">
                       <span className="routing-rule-n">{i + 1}.</span>
+                      {/* 'satellite' is a CONTEXT designation, not a sixth mode class: it rides
+                          the same dropdown (that is where the operator looks for it) but is
+                          stored as `context` with the mode cleared. A satellite rule is matched
+                          only by transponder picks, at a tier above the mode rules. */}
                       <select
                         className="settings-input"
-                        value={rule.mode ?? ''}
+                        value={rule.context === 'satellite' ? 'satellite' : (rule.mode ?? '')}
                         onChange={(e) =>
-                          handlePatchRule(i, {
-                            mode: e.target.value === '' ? null : (e.target.value as RouteMode),
-                          })
+                          handlePatchRule(
+                            i,
+                            e.target.value === 'satellite'
+                              ? { mode: null, context: 'satellite' }
+                              : {
+                                  mode:
+                                    e.target.value === '' ? null : (e.target.value as RouteMode),
+                                  context: null,
+                                },
+                          )
                         }
                         aria-label={`Rule ${i + 1} mode`}
                       >
@@ -2272,6 +2284,12 @@ export function SettingsPanel({
                             {label}
                           </option>
                         ))}
+                        <option
+                          value="satellite"
+                          title="Satellite passes only: picking a transponder checks Satellite rules before the mode rules, so the FM & APRS rule can keep terrestrial packet while satellites go to the sat rig. Terrestrial tunes never match this rule."
+                        >
+                          Satellite
+                        </option>
                       </select>
                       <span className="routing-rule-arrow">→</span>
                       <select
@@ -2334,7 +2352,11 @@ export function SettingsPanel({
                     <span className="settings-hint">
                       {rule.bands.length === 0 ? 'Any band' : rule.bands.join(', ')}
                       {' · '}
-                      {rule.mode ? ROUTE_MODE_LABEL[rule.mode] : 'any mode'}
+                      {rule.context === 'satellite'
+                        ? 'Satellite'
+                        : rule.mode
+                          ? ROUTE_MODE_LABEL[rule.mode]
+                          : 'any mode'}
                       {' → '}
                       {form.radios?.find((r) => r.id === rule.radio)?.name ?? `Radio ${rule.radio}`}
                     </span>
@@ -3425,18 +3447,17 @@ export function SettingsPanel({
                     setTleFetching(true)
                     fetchTlesNow()
                       .then((st) => {
+                        // A failed ATTEMPT resolves too — the composer turns
+                        // the typed outcome into the one operator-voiced
+                        // result (raw error stays tooltip material).
                         setTleStatus(st)
-                        pushToast(
-                          `Orbital elements updated — ${st.count} birds (${st.source})`,
-                          'success',
-                          5000,
-                        )
+                        const m = tleRefreshMessage(st)
+                        pushToast(m.text, m.kind, m.kind === 'success' ? 5000 : 8000)
                       })
                       .catch((e) =>
-                        pushToast(
-                          `Element update failed: ${e instanceof Error ? e.message : e}`,
-                          'error',
-                        ),
+                        // Only "couldn't attempt at all" rejects (a refresh
+                        // already in flight) — already operator words.
+                        pushToast(`${e instanceof Error ? e.message : e}`, 'error'),
                       )
                       .finally(() => setTleFetching(false))
                   }}
@@ -3499,7 +3520,12 @@ export function SettingsPanel({
                 data); import a file for an offline shack or a just-launched bird.
               </span>
               {tleStatus?.lastError && (
-                <span className="settings-hint">Last refresh: {tleStatus.lastError}</span>
+                // Operator words in the line, the raw error in the tooltip —
+                // during the pre-launch window the mirror 404s by design,
+                // and "HTTP 404" is not a thing to hand an operator.
+                <span className="settings-hint" title={tleRefreshMessage(tleStatus).raw}>
+                  Last refresh: {tleRefreshMessage(tleStatus).text}
+                </span>
               )}
             </div>
           </fieldset>

@@ -1458,13 +1458,27 @@ impl RouteMode {
     }
 }
 
+/// The non-mode CONTEXT a [`RoutingRule`] can be designated for instead of a mode class.
+/// Serialized lowercase — the token the Settings rule editor's dropdown writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RouteContext {
+    /// Satellite-originated tunes only (a transponder pick), matched at a tier ABOVE the mode
+    /// rules by [`Settings::route_radio_satellite`] and INVISIBLE to every terrestrial tune.
+    /// Exists because mode class alone cannot say it: a packet bird is honestly FM-class
+    /// traffic, so it follows the operator's terrestrial "FM & APRS → FT-991A" rule — correct
+    /// by the rules, wrong for satellites, which belong on the sat rig (the IC-9700).
+    Satellite,
+}
+
 /// One band+mode → radio routing rule. Evaluated FIRST-MATCH-WINS in `Settings::routing_rules`
 /// order, so a specific rule placed above a broad one wins.
 ///
 /// Both selectors are "empty = any", which is how a rule stays readable: `bands: []` means every
 /// band, `mode: None` means every mode class. `{bands: ["2m"], mode: Some(Fm)} -> 991A` is the
 /// operator's APRS/repeater rule; `{bands: [], mode: Some(Digital)} -> 9700` would be "all digital
-/// on the 9700" regardless of band.
+/// on the 9700" regardless of band. A rule may instead carry a `context` DESIGNATION (Satellite),
+/// which moves it out of the mode tiers entirely — see [`Settings::route_radio_satellite`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RoutingRule {
@@ -1472,6 +1486,17 @@ pub struct RoutingRule {
     pub bands: Vec<String>,
     /// Mode class this rule covers. `None` = any mode class.
     pub mode: Option<RouteMode>,
+    /// `Some(Satellite)` designates this rule for satellite work: consulted only for
+    /// satellite-originated tunes, above the mode rules, and never by a terrestrial tune.
+    /// `None` — every rule stored before the field existed — is a plain mode rule, unchanged.
+    ///
+    /// ⚠️ The reverse load has no guard: a build predating this field drops it silently (the
+    /// old struct has no `deny_unknown_fields`) and reads the rule as a plain mode rule — the
+    /// recommended empty-selector shape becomes an any-band, any-mode catch-all, and a re-save
+    /// there erases the designation for good. Nothing written HERE can intercept an old
+    /// deserializer; the changelog carries the operator caution (delete Satellite rules before
+    /// rolling back).
+    pub context: Option<RouteContext>,
     /// The `RadioProfile::id` to hand off to.
     pub radio: u32,
 }
@@ -2227,12 +2252,16 @@ impl Settings {
     ///
     /// A rule/default naming a missing or DISABLED radio is skipped rather than obeyed (an
     /// unplugged rig must never become the handoff target). Peg-lock is honored by the caller.
+    ///
+    /// Satellite-DESIGNATED rules are invisible here — a terrestrial tune never matches them.
+    /// A satellite-originated tune goes through [`Self::route_radio_satellite`], which checks
+    /// them first and then falls through to exactly this decision.
     pub fn route_radio(&self, band: &str, mode: RouteMode) -> Option<u32> {
         let usable = |id: u32| self.radios.iter().any(|p| p.id == id && p.enabled);
         if let Some(rule) = self
             .routing_rules
             .iter()
-            .find(|r| r.matches(band, mode) && usable(r.radio))
+            .find(|r| r.context.is_none() && r.matches(band, mode) && usable(r.radio))
         {
             // A matched rule is authoritative — INCLUDING "the rule points at the radio we are
             // already on", which resolves to None (stay put) rather than falling through to a
@@ -2243,6 +2272,27 @@ impl Settings {
             self.default_radio
                 .filter(|id| usable(*id) && *id != self.active_radio)
         })
+    }
+
+    /// [`Self::route_radio`] for a SATELLITE-originated tune (a transponder pick): identical,
+    /// plus one tier ABOVE the mode rules — the rules designated [`RouteContext::Satellite`],
+    /// first-match-wins among themselves. List position never lets a mode rule outrank a
+    /// satellite rule here: the designation is the operator saying "satellite work goes HERE",
+    /// which must beat their terrestrial FM & APRS rule for a packet bird. With no satellite
+    /// rule the tune falls through to exactly the terrestrial decision, so a station that
+    /// never writes the designation is unchanged.
+    pub fn route_radio_satellite(&self, band: &str, mode: RouteMode) -> Option<u32> {
+        let usable = |id: u32| self.radios.iter().any(|p| p.id == id && p.enabled);
+        if let Some(rule) = self.routing_rules.iter().find(|r| {
+            r.context == Some(RouteContext::Satellite) && r.matches(band, mode) && usable(r.radio)
+        }) {
+            // Authoritative exactly like the mode tier — INCLUDING "the rule names the radio
+            // we are already on", which is STAY PUT, never a fall-through to a LOWER tier
+            // here. (One seam up, the engine's unreachable-rig last resort cannot tell this
+            // stay-put `None` from "no answer" — see `sat_tune_nominal`.)
+            return (rule.radio != self.active_radio).then_some(rule.radio);
+        }
+        self.route_radio(band, mode)
     }
 
     /// Drop routing state that points at a radio which no longer EXISTS, so a removed radio can
@@ -3009,11 +3059,13 @@ mod tests {
             RoutingRule {
                 bands: vec!["2m".into(), "70cm".into()],
                 mode: Some(RouteMode::Fm),
+                context: None,
                 radio: ft991a,
             },
             RoutingRule {
                 bands: vec!["2m".into(), "70cm".into()],
                 mode: Some(RouteMode::Digital),
+                context: None,
                 radio: ic9700,
             },
         ];
@@ -3103,6 +3155,7 @@ mod tests {
             RoutingRule {
                 bands: Vec::new(), // any band
                 mode: None,        // any mode
+                context: None,
                 radio: ft991a,
             },
         );
@@ -3186,6 +3239,79 @@ mod tests {
     }
 
     #[test]
+    fn a_satellite_designation_outranks_the_mode_rules_for_satellite_tunes() {
+        // The operator's request, verbatim: "Can we add designation in the rules in the settings
+        // for satellites?" Their packet birds route through the FM & APRS rule to the FT-991A —
+        // right by the rules, wrong for satellites: the IC-9700 is the sat rig.
+        let mut s = three_radio_shack();
+        let (ic9700, ft991a) = (1, 2);
+        // The designation, appended LAST: a tier is not a row, so list position must not let
+        // the FM & APRS rule above outrank it.
+        s.routing_rules.push(RoutingRule {
+            bands: Vec::new(),
+            mode: None,
+            context: Some(RouteContext::Satellite),
+            radio: ic9700,
+        });
+        assert_eq!(
+            s.route_radio_satellite("2m", RouteMode::Fm),
+            Some(ic9700),
+            "a packet bird beats the FM & APRS rule sitting above the designation"
+        );
+        assert_eq!(
+            s.route_radio_satellite("70cm", RouteMode::Ssb),
+            Some(ic9700),
+            "a linear bird follows the same designation"
+        );
+        // Terrestrial tunes must NEVER match the satellite rule — 2 m APRS stays the 991A's.
+        assert_eq!(s.route_radio("2m", RouteMode::Fm), Some(ft991a));
+        // A satellite rule naming the radio we are already on is authoritative: stay put,
+        // never fall through to a mode tier that would move us off it.
+        s.active_radio = ic9700;
+        assert_eq!(s.route_radio_satellite("2m", RouteMode::Fm), None);
+    }
+
+    #[test]
+    fn without_a_satellite_rule_a_satellite_tune_routes_exactly_as_today() {
+        // Pinned: a station that never writes the designation is byte-for-byte on today's
+        // behavior — the packet bird follows the FM & APRS rule to the FT-991A.
+        let s = three_radio_shack();
+        let (ic9700, ft991a) = (1, 2);
+        assert_eq!(s.route_radio_satellite("2m", RouteMode::Fm), Some(ft991a));
+        assert_eq!(s.route_radio_satellite("2m", RouteMode::Digital), Some(ic9700));
+        for m in [RouteMode::Ssb, RouteMode::Cw] {
+            assert_eq!(s.route_radio_satellite("20m", m), s.route_radio("20m", m));
+        }
+    }
+
+    #[test]
+    fn a_satellite_rule_is_scoped_by_its_bands_and_skipped_when_its_radio_is_disabled() {
+        let mut s = three_radio_shack();
+        let (ic9700, ft991a) = (1, 2);
+        s.routing_rules.push(RoutingRule {
+            bands: vec!["70cm".into()],
+            mode: None,
+            context: Some(RouteContext::Satellite),
+            radio: ic9700,
+        });
+        // Band selectors still apply inside the satellite tier: only a 70 cm bird is claimed;
+        // a 2 m bird falls through to the mode rules.
+        assert_eq!(s.route_radio_satellite("2m", RouteMode::Fm), Some(ft991a));
+        assert_eq!(s.route_radio_satellite("70cm", RouteMode::Fm), Some(ic9700));
+        // An unplugged sat rig must never become the handoff target — same rule as every tier.
+        s.radios
+            .iter_mut()
+            .find(|p| p.id == ic9700)
+            .unwrap()
+            .enabled = false;
+        assert_eq!(
+            s.route_radio_satellite("70cm", RouteMode::Fm),
+            Some(ft991a),
+            "falls through to the FM rule when the designated radio is disabled"
+        );
+    }
+
+    #[test]
     fn removing_a_radio_drops_the_rules_that_pointed_at_it() {
         let mut s = three_radio_shack();
         let ft991a = 2;
@@ -3230,6 +3356,19 @@ mod tests {
         let any: RoutingRule = serde_json::from_str("{\"bands\":[\"2m\"],\"radio\":1}").unwrap();
         assert_eq!(any.mode, None, "an omitted mode means ANY mode");
         assert!(any.matches("2m", RouteMode::Cw) && any.matches("2m", RouteMode::Fm));
+        // The context designation: a rule stored BEFORE the field existed carries no key and
+        // must load as a plain terrestrial rule — and the designated form must round-trip on
+        // the exact token the UI's dropdown writes.
+        assert_eq!(any.context, None, "an omitted context means TERRESTRIAL, as before");
+        assert_eq!(
+            serde_json::to_string(&RouteContext::Satellite).unwrap(),
+            "\"satellite\""
+        );
+        let sat: RoutingRule =
+            serde_json::from_str("{\"bands\":[],\"context\":\"satellite\",\"radio\":1}").unwrap();
+        assert_eq!(sat.context, Some(RouteContext::Satellite));
+        let rt: RoutingRule = serde_json::from_str(&serde_json::to_string(&sat).unwrap()).unwrap();
+        assert_eq!(rt, sat, "the designation survives a round-trip");
         // An OLDER settings.json has neither key — it must load with no rules (today's behavior),
         // not fail.
         let old: Settings = serde_json::from_str("{\"mycall\":\"KD9TAW\"}").unwrap();

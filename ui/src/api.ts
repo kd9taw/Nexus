@@ -294,8 +294,14 @@ export interface TleStatus {
   elementAgeDays?: number | null
   /** Celestrak 403/404 hard stop's end (unix); 0 = not blocked. */
   blockedUntil: number
-  /** The last refresh failure, operator-readable; absent = last attempt landed. */
+  /** The last refresh failure, RAW ("HTTP 404", a refused-set reason) —
+   * tooltip/debugging material; the operator-voiced headline is composed by
+   * `tleRefreshMessage` from `lastErrorKind` + the currency fields, never
+   * from this text. Absent = last attempt landed. */
   lastError?: string | null
+  /** Which WAY it failed — "mirrorUnreachable" | "celestrakBlocked" |
+   * "failed" — the composer's branch key. Present iff `lastError` is. */
+  lastErrorKind?: string | null
 }
 
 /** Element-currency status (never blocks on the network). Polling this also
@@ -308,8 +314,11 @@ export async function getTleStatus(): Promise<TleStatus> {
 /** The manual "refresh elements" action: run one refresh attempt NOW and wait
  * for it. Bypasses the TTL and failure backoff, but never the single-flight,
  * the Celestrak 2 h floor, or the 403/404 hard stop (etiquette is not
- * operator-waivable — the mirror leg is always available). Rejects with the
- * operator-readable reason when the attempt did not land. */
+ * operator-waivable); a mirror that cannot deliver escalates to Celestrak in
+ * the same flight when the floor + block allow. Resolves with the
+ * post-attempt status whether the attempt landed or failed — compose the
+ * result via `tleRefreshMessage`; rejects only when no attempt could run
+ * (one already in flight). */
 export async function fetchTlesNow(): Promise<TleStatus> {
   return invoke<TleStatus>('fetch_tles_now')
 }

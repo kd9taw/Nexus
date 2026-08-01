@@ -2375,6 +2375,11 @@ export interface Settings {
  * makes "2 m FT8 to one rig, 2 m FM to another" expressible. Mirrors the Rust `RouteMode`. */
 export type RouteMode = 'digital' | 'fm' | 'ssb' | 'cw' | 'rtty'
 
+/** Non-mode context a routing rule can be DESIGNATED for instead of a mode class: satellite work.
+ * A satellite rule is matched only by satellite-originated tunes (a transponder pick), at a tier
+ * above the mode rules; terrestrial tunes never match it. Mirrors the Rust `RouteContext`. */
+export type RouteContext = 'satellite'
+
 /** One band+mode → radio routing rule. Both selectors are "empty = any": `bands: []` matches every
  * band, `mode: null` every mode class. Mirrors the Rust `RoutingRule`. */
 export interface RoutingRule {
@@ -2382,6 +2387,9 @@ export interface RoutingRule {
   bands: string[]
   /** Mode class this rule covers. `null` = any mode class. */
   mode: RouteMode | null
+  /** `'satellite'` designates this rule for satellite passes; absent/null = a plain mode rule
+   * (every rule stored before the field existed). */
+  context?: RouteContext | null
   /** The `RadioProfile.id` to route to. */
   radio: number
 }

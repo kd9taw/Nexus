@@ -61,6 +61,16 @@ FM routing rule while a linear bird follows your SSB one. A line under the held 
 the rig, the band and the class it routed on, and the frequencies it actually wrote — with a pin
 to hold the current radio when you want to override the routing.
 
+**A routing rule can now say "Satellite".** Asked for from the field: mode-class routing sends a
+packet bird through your FM & APRS rule — right by the rules, wrong for the shack where APRS
+lives on one rig and the satellite antennas on another. The rule editor's mode dropdown gains
+**Satellite**: a rule so designated is checked before the mode rules, but only when a satellite
+tune is asking — picking a transponder finds it, a terrestrial FM, APRS or FT8 tune never does.
+Without a Satellite rule nothing changes: satellite picks keep routing on band and mode class
+exactly as before. One caution: builds before this one don't know the designation and read a
+Satellite rule as a plain terrestrial rule — with no band or mode set, one that catches every
+tune — so if you ever roll back, delete the Satellite rule first.
+
 **No more FT8 frequencies under Satellites.** The band dropdown at the top of the window is fed the
 digital watering holes, which meant it offered 14.074 beside a bird on 435 MHz. Satellites now owns
 its own frequency surfaces, like Phone, CW, RTTY, SSTV and APRS already do.
@@ -70,8 +80,15 @@ background from the project's mirror of CelesTrak's amateur list, held in one sh
 snapshot: no more re-fetch on every launch, nothing ever waits on the network, and CelesTrak
 itself is asked directly only as a narrow, rate-respecting fallback. The stale badge is now a
 refresh button, and Settings gains an Orbital elements block with **Update now** and **Import
-from file** — the path for offline shacks and brand-new launches. Element age is enforced where
-it matters: past 14 days arming a pass asks first; past 30 days the detail pane, tracking and the
+from file** — the path for offline shacks and brand-new launches. Update now means now: if the
+mirror can't deliver when you press it, the same attempt goes straight to CelesTrak instead of
+telling you to come back tomorrow — still honoring CelesTrak's update cycle, and never after
+CelesTrak has said stop. And the answer speaks operator, not protocol: a fetch that fell through
+to CelesTrak says so with the bird count, an unreachable mirror over current elements says your
+elements are fine (the mirror goes live with the next site release), and a real failure says
+what failed and what to do next — no more "HTTP 404" as the answer to a button press, with the
+raw error riding the tooltip for troubleshooting. Element age is enforced where it matters: past
+14 days arming a pass asks first; past 30 days the detail pane, tracking and the
 SSTV auto-arm refuse plainly, naming the bird and the age, instead of pointing the antenna with a
 fiction. A pass keeps the elements it armed with (their age shown on the readiness rail), a bad
 or empty download never replaces a good cache, and a CelesTrak rename no longer orphans your

@@ -770,15 +770,19 @@ pub struct Engine {
     /// override an APRS tune would route on the mode class of the section the operator is LEAVING.
     /// Taken by the routing step; the normal path derives the class from [`Engine::route_mode`].
     route_intent: Option<crate::settings::RouteMode>,
-    /// One-shot override for the radio the NEXT `set_frequency` hands off to — the TARGET
-    /// twin of `route_intent`, for a caller that already resolved the routing decision
-    /// (including a tier `route_radio` itself cannot see). Only [`Engine::sat_tune_nominal`]
-    /// sets it: its coverage fallback can name a rig the rule/coverage/default tiers do not,
-    /// and letting `set_frequency` recompute would at best duplicate the decision and at
-    /// worst disagree with it (the `default_radio` tier flips with `active_radio`, so a
-    /// pre-switched fallback would bounce straight back). Consumed unconditionally; applied
-    /// only when peg-lock is off, exactly like the computed answer it replaces.
-    route_target: Option<u32>,
+    /// One-shot override for the NEXT `set_frequency`'s WHOLE routing decision — the TARGET
+    /// twin of `route_intent`, for a caller that already resolved it (including tiers
+    /// `route_radio` itself cannot see). Only [`Engine::sat_tune_nominal`] sets it: its
+    /// satellite-designation tier and coverage fallback can answer where the
+    /// rule/coverage/default tiers do not, and letting `set_frequency` recompute would at
+    /// best duplicate the decision and at worst disagree with it (the `default_radio` tier
+    /// flips with `active_radio`, so a pre-switched fallback would bounce straight back).
+    /// The inner Option is the decision itself, INCLUDING `None` = "stay put, decided" — a
+    /// satellite rule naming the active radio must not be re-litigated by the terrestrial
+    /// tiers, which cannot see the rule and would bounce the QSY through the operator's
+    /// FM & APRS rule. Consumed unconditionally; applied only when peg-lock is off, exactly
+    /// like the computed answer it replaces.
+    route_target: Option<Option<u32>>,
     /// Rolling received-decode history (slot, row) across the last several T/R
     /// cycles — NOT just the last slot. This is what makes a roster/late click on
     /// a caller resolve to the RIGHT QSO step: `last_decodes` is replaced on every
@@ -2963,10 +2967,14 @@ impl Engine {
             .unwrap_or_else(|| self.route_mode(band, dial_mhz));
         // Taken unconditionally (a peg-locked QSY must still clear the one-shot), applied
         // under the same peg-lock rule as the computed answer. A present target IS the
-        // routing decision — recomputing beside it is how two answers learn to disagree.
+        // routing decision — including "stay put" — because recomputing beside it is how two
+        // answers learn to disagree: the satellite tier is invisible to the terrestrial
+        // resolver, so a recompute would re-route a satellite QSY on the mode rules.
         let route_target = self.route_target.take();
         if !self.settings.radio_pegged {
-            if let Some(id) = route_target.or_else(|| self.settings.route_radio(band, route_mode)) {
+            if let Some(id) =
+                route_target.unwrap_or_else(|| self.settings.route_radio(band, route_mode))
+            {
                 self.set_active_radio(id);
             }
         }
@@ -6279,20 +6287,28 @@ impl Engine {
         } else {
             crate::settings::RouteMode::Ssb
         };
-        // The radio this bird BELONGS to. Rules / band coverage / default first
-        // (`route_radio`), then the satellite path's own last tier: when none
-        // of them answer but the ACTIVE rig is KNOWN unable to reach the
+        // The radio this bird BELONGS to. The operator's Satellite-DESIGNATED
+        // rules first — "satellite work goes HERE", above the mode rules,
+        // because a packet bird is honestly FM-class traffic and would
+        // otherwise follow the terrestrial FM & APRS rule to the APRS rig —
+        // then rules / band coverage / default (`route_radio_satellite` falls
+        // through to all three), then the satellite path's own last tier: when
+        // none of them answer but the ACTIVE rig is KNOWN unable to reach the
         // downlink and exactly one other enabled radio exists, that radio is
         // the only possible destination — hand the QSY to it (the field-report
         // station: a fresh dual-radio add has no rule and two catch-all band
         // lists, so every routing tier answers None while the HF rig refuses
-        // 435 MHz and the IC-9700 sits idle). The decision made HERE is handed
-        // to `set_frequency` verbatim via `route_target` — peg-lock pins the
-        // active radio, so a pegged station's binding must name the rig it
-        // pegged, not the rig a rule would have chosen.
+        // 435 MHz and the IC-9700 sits idle). One conflation lives in that
+        // seam: a rule resolving to "stay put" is ALSO None, so a Satellite
+        // rule naming the active rig does not silence the fallback — if that
+        // rig's own band list refuses the downlink, the QSY still hands off.
+        // Accepted: the designated rig cannot reach the bird. The decision
+        // made HERE is handed to `set_frequency` verbatim via `route_target`
+        // — peg-lock pins the active radio, so a pegged station's binding
+        // must name the rig it pegged, not the rig a rule would have chosen.
         let routed = self
             .settings
-            .route_radio(band, route_mode)
+            .route_radio_satellite(band, route_mode)
             .or_else(|| self.sat_fallback_radio(down_mhz, band));
         let bound = if self.settings.radio_pegged {
             self.settings.active_radio
@@ -6382,10 +6398,11 @@ impl Engine {
             // section being LEFT. Set only after the gates pass, so a refusal
             // can never leave a stale intent behind for the next QSY to pick up.
             self.route_intent = Some(route_mode);
-            // The routing DECISION was made above (including the coverage
-            // fallback, a tier `route_radio` cannot see) — hand it to
-            // `set_frequency` verbatim instead of letting it recompute.
-            self.route_target = routed;
+            // The routing DECISION was made above (including the satellite
+            // tier and the coverage fallback, tiers `route_radio` cannot see)
+            // — hand it to `set_frequency` WHOLE, stay-put included, instead
+            // of letting it recompute on the terrestrial tiers.
+            self.route_target = Some(routed);
             // The bird's OWN mode class decides what the rig is put in — the
             // same one map that chose the routing class, so the two cannot
             // disagree. "USB" is the satellite convention on VHF/UHF (and what
@@ -6499,8 +6516,9 @@ impl Engine {
         binding
     }
 
-    /// The satellite path's LAST routing tier, consulted only when
-    /// `route_radio`'s three tiers all answered `None`: the rig a downlink
+    /// The satellite path's LAST routing tier, consulted whenever the rule
+    /// tiers hand back `None` — both "no tier answered" and a matched rule's
+    /// "stay put" land here, indistinguishably: the rig a downlink
     /// should land on when the ACTIVE radio is KNOWN unable to reach it and
     /// exactly one other enabled radio exists — the only possible destination,
     /// so handing off is fact, not preference. (The field-report station: a
@@ -16825,11 +16843,13 @@ mod tests {
             crate::settings::RoutingRule {
                 bands: vec!["2m".into(), "70cm".into()],
                 mode: Some(crate::settings::RouteMode::Fm),
+                context: None,
                 radio: ft991a,
             },
             crate::settings::RoutingRule {
                 bands: vec!["2m".into(), "70cm".into()],
                 mode: Some(crate::settings::RouteMode::Digital),
+                context: None,
                 radio: ic9700,
             },
         ]);
@@ -19250,6 +19270,7 @@ mod tests {
             crate::settings::RoutingRule {
                 bands: vec!["2m".into(), "70cm".into()],
                 mode: Some(crate::settings::RouteMode::Ssb),
+                context: None,
                 radio: ic9700,
             },
         );
@@ -19762,11 +19783,13 @@ mod tests {
             crate::settings::RoutingRule {
                 bands: vec!["2m".into(), "70cm".into()],
                 mode: Some(crate::settings::RouteMode::Fm),
+                context: None,
                 radio: ic9700,
             },
             crate::settings::RoutingRule {
                 bands: vec![],
                 mode: Some(crate::settings::RouteMode::Digital),
+                context: None,
                 radio: ic9700,
             },
         ]);
@@ -19892,6 +19915,90 @@ mod tests {
                 e.settings.dial_mhz
             );
         }
+    }
+
+    /// Arm the two consents `sat_tune_nominal` checks before it will move anything. Routing
+    /// rules survive `apply_settings` (the live-verb fields are taken and restored), so callers
+    /// set rules FIRST via `set_routing_rules`, then arm.
+    fn sat_ready(e: &mut Engine) {
+        let mut s = e.settings().clone();
+        s.sat_doppler = true;
+        s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
+        e.apply_settings(s);
+    }
+
+    /// The operator's shack plus their requested Satellite designation: the FM & APRS →
+    /// FT-991A rule stays, and one satellite rule sends every bird to the IC-9700.
+    fn satellite_designated_station() -> (Engine, u32, u32) {
+        let (mut e, ic9700, ft991a) = three_radio_engine();
+        let mut rules = e.settings().routing_rules.clone();
+        rules.push(crate::settings::RoutingRule {
+            bands: Vec::new(),
+            mode: None,
+            context: Some(crate::settings::RouteContext::Satellite),
+            radio: ic9700,
+        });
+        e.set_routing_rules(rules);
+        sat_ready(&mut e);
+        (e, ic9700, ft991a)
+    }
+
+    #[test]
+    fn a_packet_bird_follows_the_satellite_designation_over_the_aprs_rule() {
+        // The operator's request verbatim: "Can we add designation in the rules in the settings
+        // for satellites?" After the mode-class fix, packet birds route through their
+        // FM & APRS → FT-991A rule — correct by the rules, wrong for satellites: the 9700 is
+        // the sat rig, on the sat antennas.
+        let (mut e, ic9700, ft991a) = satellite_designated_station();
+        assert_eq!(e.settings.active_radio, 0, "precondition: HF rig active");
+
+        let fm = tempo_core::doppler::mode_is_fm("AFSK");
+        assert!(fm, "precondition: the mode map reads AFSK as an FM bird");
+        e.set_sat_transponder(Some(("ISS|Mode V APRS".into(), 0, aprs_bird())));
+        let b = e.sat_tune_nominal(fm, 1_000_000);
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "the satellite designation outranks the FM & APRS rule"
+        );
+        assert_eq!(b.radio_id, Some(ic9700));
+        assert_ne!(b.radio_id, Some(ft991a));
+
+        // And the designation never leaks terrestrial: plain APRS still lands on the 991A.
+        e.aprs_tune(144.390).expect("aprs_tune succeeds here");
+        assert_eq!(
+            e.settings.active_radio, ft991a,
+            "terrestrial APRS keeps following the FM & APRS rule"
+        );
+    }
+
+    #[test]
+    fn without_a_satellite_rule_a_packet_bird_keeps_todays_routing() {
+        // Pinned: the fall-through. A station that never writes the designation routes the
+        // packet bird through the FM & APRS rule to the FT-991A, exactly as 0.24.5 does.
+        let (mut e, _ic9700, ft991a) = three_radio_engine();
+        sat_ready(&mut e);
+        e.set_sat_transponder(Some(("ISS|Mode V APRS".into(), 0, aprs_bird())));
+        let b = e.sat_tune_nominal(true, 1_000_000);
+        assert_eq!(e.settings.active_radio, ft991a);
+        assert_eq!(b.radio_id, Some(ft991a));
+    }
+
+    #[test]
+    fn a_satellite_rule_naming_the_active_radio_stays_put() {
+        // The stay-put half of "a matched rule is authoritative", across the engine seam: the
+        // pick's decision (stay on the 9700) must reach `set_frequency` WHOLE — recomputing
+        // there on the terrestrial tiers would bounce the QSY to the FT-991A through the very
+        // FM & APRS rule the designation exists to outrank.
+        let (mut e, ic9700, _ft991a) = satellite_designated_station();
+        e.set_active_radio(ic9700);
+
+        e.set_sat_transponder(Some(("ISS|Mode V APRS".into(), 0, aprs_bird())));
+        let b = e.sat_tune_nominal(true, 1_000_000);
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "already on the designated rig: the pick must not move the QSY off it"
+        );
+        assert_eq!(b.radio_id, Some(ic9700));
     }
 
     #[test]
