@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import { SstvView } from './SstvView'
 import * as api from '../api'
-import type { AppSnapshot, SstvState } from '../types'
+import type { AppSnapshot, SstvHealth, SstvState } from '../types'
 
 // The idle band view mounts the real Waterfall, which needs `window.matchMedia`
 // and a working canvas 2D context — jsdom provides neither. These tests are about
@@ -13,6 +13,7 @@ vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
   sstvArm: vi.fn(),
+  sstvAutoArm: vi.fn(),
   getLicensedBandPlan: vi.fn(),
   sstvSend: vi.fn(),
   sstvStop: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock('../toast', () => ({
 
 const getSstvState = api.getSstvState as ReturnType<typeof vi.fn>
 const sstvArm = api.sstvArm as ReturnType<typeof vi.fn>
+const sstvAutoArm = api.sstvAutoArm as ReturnType<typeof vi.fn>
 const getLicensedBandPlan = api.getLicensedBandPlan as ReturnType<typeof vi.fn>
 const sstvSend = api.sstvSend as ReturnType<typeof vi.fn>
 const sstvStop = api.sstvStop as ReturnType<typeof vi.fn>
@@ -51,6 +53,20 @@ const snap = {
   },
 } as unknown as AppSnapshot
 
+const NO_HEALTH: SstvHealth = {
+  armed: false,
+  audioPeak: 0,
+  lastAudioUnix: null,
+  drains: 0,
+  visSeen: 0,
+  lastVisUnix: null,
+  unknownVis: 0,
+  lastUnknownVisCode: null,
+  lastUnknownVisUnix: null,
+  images: 0,
+  lastImageUnix: null,
+}
+
 const IDLE: SstvState = {
   armed: false,
   mode: null,
@@ -61,6 +77,7 @@ const IDLE: SstvState = {
   previewHeight: 0,
   hedrShiftHz: 0,
   gallery: [],
+  health: NO_HEALTH,
   sending: false,
   txMode: null,
   txProgress: 0,
@@ -71,6 +88,9 @@ const IDLE: SstvState = {
 beforeEach(() => {
   getSstvState.mockReset().mockResolvedValue(IDLE)
   sstvArm.mockReset().mockResolvedValue({ ...IDLE, armed: true })
+  // Opening the view starts the receiver; the default here keeps the tests that are
+  // NOT about arming on the pre-existing disarmed shape.
+  sstvAutoArm.mockReset().mockResolvedValue(IDLE)
   getLicensedBandPlan.mockReset().mockResolvedValue([])
   sstvSend.mockReset().mockResolvedValue({ ...IDLE, sending: true, txMode: 'Scottie 1' })
   sstvStop.mockReset().mockResolvedValue(IDLE)
@@ -81,7 +101,10 @@ afterEach(cleanup)
 describe('SstvView RX wiring', () => {
   it('renders without a snapshot (canvas empty-state + gallery, no header)', async () => {
     render(<SstvView snap={null} />)
-    expect(screen.getByText('Tune 14.230 / 145.800 — images decode here')).toBeTruthy()
+    // The idle caption says what the RECEIVER is doing. With no state polled yet it
+    // reads as stopped — never the old fixed "Tune 14.230 / 145.800" hint, which said
+    // the same thing whether the app was deaf, stopped, or fine.
+    expect(screen.getByText(/receiver is stopped/i)).toBeTruthy()
     expect(screen.getByText('Gallery')).toBeTruthy()
     // No snapshot → no CockpitHeader (it needs live radio state).
     expect(document.querySelector('.cockpit-header')).toBeNull()
@@ -97,7 +120,6 @@ describe('SstvView RX wiring', () => {
     fireEvent.click(arm)
     expect(sstvArm).toHaveBeenCalledWith(true)
     await screen.findByText('Armed')
-    expect(screen.getByText('Armed — waiting for a VIS header…')).toBeTruthy()
     // Slant trim is decoder-automatic; the manual control stays disabled.
     const slant = screen.getByLabelText(
       'SSTV slant trim (disabled — decoder not wired yet)',
@@ -130,7 +152,7 @@ describe('SstvView RX wiring', () => {
     render(<SstvView snap={snap} />)
     // Two-pass core: mode + total show immediately, lines land at completion —
     // never a fake progress count.
-    await screen.findByText('decoding Scottie 1…')
+    await screen.findByText(/decoding Scottie 1…/)
     expect(screen.getByText('SSTV · Scottie 1')).toBeTruthy()
   })
 

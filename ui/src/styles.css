@@ -18576,6 +18576,25 @@ tr.sel .aprs-sym {
   color: var(--text-dim);
   font-size: var(--fs-label);
   padding: var(--space-1) 0;
+  /* A sentence, not a label: the fault cases carry real advice and must wrap
+     rather than clip on a narrow window. */
+  max-width: 64ch;
+  margin: 0 auto;
+  text-wrap: pretty;
+}
+/* The states worth a glance. A stopped receiver and an unsupported mode are things
+   the operator can act on; hearing audio with no header — and the moment just after
+   arming, before anything has been reported — is normal and stays dim. */
+.sstv-band-caption.rx-off,
+.sstv-band-caption.rx-nocapture {
+  color: var(--state-weak);
+}
+.sstv-band-caption.rx-unsupported,
+.sstv-band-caption.rx-silent {
+  color: var(--text);
+}
+.sstv-band-caption.rx-decoded {
+  color: var(--state-good);
 }
 
 /* ── APRS: rail + map (2026-07-29) ──────────────────────────────────────────

@@ -1173,6 +1173,13 @@ pub struct Engine {
     sat_fm: bool,
     /// SSTV RX decoder armed (session-only runtime state, never persisted).
     sstv_armed: bool,
+    /// The operator explicitly STOPPED the SSTV receiver this session, so opening
+    /// the view must not restart it behind them. Same decision-memory as
+    /// `aprs_auto_arm_declined`.
+    sstv_auto_arm_declined: bool,
+    /// What the SSTV decode thread is actually hearing — the evidence the view
+    /// states instead of one hint that meant four different things.
+    sstv_health: SstvHealth,
     /// Drain buffer for the SSTV decode thread (same pattern as `rtty_audio`).
     sstv_audio: Vec<f32>,
     /// In-flight SSTV decode progress (mode, lines, downscaled preview), pushed
@@ -1771,6 +1778,66 @@ pub(crate) const SSTV_GALLERY_CAP: usize = 200;
 /// refused before keying — defense-in-depth above the per-send TX-watchdog budget.
 const SSTV_MAX_TX_SECS: f64 = 330.0;
 
+/// What the SSTV RX decoder is actually HEARING — the readout that tells a
+/// picture-less screen apart from a picture-less band.
+///
+/// ⭐ THE BUG THIS EXISTS FOR (field report, FTdx10 on 14.230 / 14.236): "I hear
+/// a signal but the SSTV is not decoding." Nothing but a finished image ever
+/// reached the UI, so FOUR completely different situations rendered the same
+/// screen — the receiver never armed, the capture device delivering nothing, a
+/// live-but-silent input, and a strong signal whose VIS header never matched (a
+/// mid-transmission join, or a mode this build cannot decode). The first is a
+/// one-click fix and the last is not a fault at all; both looked like a dead
+/// band. These counters separate them, and they are the same three questions
+/// [`AprsHealth`] answers: is the tap fed, is there level, and is the
+/// demodulator finding anything.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SstvHealth {
+    /// Whether the decoder is running at all.
+    pub armed: bool,
+    /// Peak |sample| of the last drain that actually CARRIED audio.
+    ///
+    /// Deliberately not "the last drain": the decode thread polls every 100 ms
+    /// while the radio loop that feeds the tap can take far longer per iteration
+    /// (it issues blocking CAT). Empty drains are normal and frequent, and
+    /// letting one zero this would flap the readout to "no audio" on a healthy
+    /// channel. Same reasoning as [`AprsHealth::audio_peak`].
+    pub audio_peak: f32,
+    /// Unix seconds audio last ARRIVED at the tap, at any level.
+    ///
+    /// ⚠️ Distinct from [`SstvHealth::audio_peak`] and never to be merged with
+    /// it: a squelched or muted codec streams a continuous run of digital zeros,
+    /// so samples keep arriving while the level is zero. Nothing arriving at all
+    /// is a broken capture path; arriving-but-silent is a wrong input level.
+    pub last_audio_unix: Option<i64>,
+    /// Drains the decode thread has reported since arming, carrying audio or not.
+    /// Exists so "we have never heard audio" can be told from "we have not looked
+    /// yet" — arming resets this health and the view re-reads it immediately.
+    pub drains: u64,
+    /// VIS headers detected for a mode this build can decode, since arming. One
+    /// per image started.
+    pub vis_seen: u64,
+    /// Unix seconds of the most recent such header.
+    pub last_vis_unix: Option<i64>,
+    /// VIS headers that parsed and passed parity but map to no mode this build
+    /// decodes, since arming.
+    ///
+    /// ⚠️ This used to be an `eprintln!` in the decode thread and nothing else —
+    /// invisible in a packaged build. A station sending Wraase SC2-180 or
+    /// Martin 3 was therefore indistinguishable from a dead band, which is the
+    /// single most misleading way SSTV can fail.
+    pub unknown_vis: u64,
+    /// The 7-bit code of the most recent unknown header, so the view can name it.
+    pub last_unknown_vis_code: Option<u8>,
+    /// Unix seconds of the most recent unknown header.
+    pub last_unknown_vis_unix: Option<i64>,
+    /// Images completed since arming.
+    pub images: u64,
+    /// Unix seconds of the most recent completed image.
+    pub last_image_unix: Option<i64>,
+}
+
 /// Live progress of an in-flight SSTV decode, pushed by the decode thread and
 /// read by the `get_sstv_state` poll.
 #[derive(Debug, Clone, PartialEq)]
@@ -2360,6 +2427,8 @@ impl Engine {
             fm_channel: false,
             sat_fm: false,
             sstv_armed: false,
+            sstv_auto_arm_declined: false,
+            sstv_health: SstvHealth::default(),
             sstv_audio: Vec::new(),
             sstv_progress: None,
             sstv_tx: None,
@@ -8312,19 +8381,127 @@ impl Engine {
     // --- SSTV RX (armed decoder on the same tap; decode + image persistence run
     // in the tempo-audio `sstvrx` thread). RX ONLY. ---
 
-    /// Arm/disarm the SSTV RX decoder. Session-only. Disarming drops the audio
-    /// tap and any in-flight decode progress; the gallery is untouched.
+    /// Arm/disarm the SSTV RX decoder by an EXPLICIT operator act. Session-only.
+    /// Disarming drops the audio tap and any in-flight decode progress; the
+    /// gallery is untouched.
     pub fn set_sstv_armed(&mut self, on: bool) {
-        if !on {
+        if on {
+            // ⚠️ An explicit Arm is the operator's LATEST decision, so it retires an earlier
+            // Stop. Without this the refusal outlives the act that caused it: stop, arm
+            // again, then let anything disarm automatically, and every later entry to the
+            // view silently refuses to start the receiver — the field bug, one step removed.
+            self.sstv_auto_arm_declined = false;
+        } else {
             self.sstv_audio.clear();
             self.sstv_progress = None;
+            // An operator who stopped the receiver has made a decision. Remember it for the
+            // rest of the session so re-entering the view cannot restart it behind them.
+            self.sstv_auto_arm_declined = true;
         }
+        // Health counts what THIS listening session has heard, so arming starts it over —
+        // a stale "no audio" from a previous session reads as a live fault.
+        self.sstv_health = SstvHealth {
+            armed: on,
+            ..Default::default()
+        };
         self.sstv_armed = on;
+    }
+
+    /// Stop the receiver as part of an AUTOMATIC sequence — the ISS pass unwind at LOS
+    /// (`issAutoArm.ts`), which disarms whatever it armed. Session-only, RX only.
+    ///
+    /// ⚠️ THIS EXISTS SO AN AUTOMATIC STOP IS NOT MISTAKEN FOR THE OPERATOR'S. Routing
+    /// it through [`Engine::set_sstv_armed`] would latch `sstv_auto_arm_declined`, and
+    /// from the first ISS LOS onward every entry to the SSTV view would refuse to start
+    /// the receiver — re-creating, one pass later, the exact bug
+    /// [`Engine::sstv_auto_arm`] exists to fix. The operator never pressed anything, so
+    /// there is no decision to remember.
+    pub fn sstv_auto_disarm(&mut self) {
+        self.sstv_audio.clear();
+        self.sstv_progress = None;
+        self.sstv_health = SstvHealth::default();
+        self.sstv_armed = false;
+    }
+
+    /// Start the receiver because the operator OPENED the SSTV view. Returns
+    /// whether this call armed it.
+    ///
+    /// ⭐ THE FIX FOR THE FIELD BUG. Arming was manual, session-only and default-off,
+    /// so the ordinary way to use SSTV — open the view, tune 14.230, wait for a
+    /// picture — decoded nothing, and every surface on the screen said the same thing
+    /// it says on a dead band. There is exactly one reason to be on this screen with a
+    /// receiver: to receive. So entering the view starts it, exactly as entering the
+    /// APRS view starts that decoder ([`Engine::aprs_auto_arm`]).
+    ///
+    /// RX ONLY — there is no SSTV analogue of the APRS auto-ack, so this cannot key
+    /// anything: `sstv_tx` is written by [`Engine::sstv_send`] and nothing else. Only
+    /// ever an upgrade from disarmed, and it refuses outright once the operator has
+    /// explicitly stopped the receiver this session. The policy lives here rather than
+    /// in the view so it survives a remount and is testable without a webview.
+    pub fn sstv_auto_arm(&mut self) -> bool {
+        if self.sstv_armed || self.sstv_auto_arm_declined {
+            return false;
+        }
+        self.sstv_health = SstvHealth {
+            armed: true,
+            ..Default::default()
+        };
+        self.sstv_armed = true;
+        true
     }
 
     /// Whether the SSTV RX decoder is armed (read by the decode thread's gate).
     pub fn sstv_armed(&self) -> bool {
         self.sstv_armed
+    }
+
+    /// Record what the SSTV decode thread just heard: how many samples the drain
+    /// carried and their peak, how many VIS headers resolved to a decodable mode,
+    /// the code of any header that did NOT, and how many images completed. Called
+    /// on every drain while armed — including drains that carry nothing, which is
+    /// the whole point: an armed decoder being handed no audio is the "the app is
+    /// deaf" case, and it is invisible if only productive drains are reported.
+    ///
+    /// `samples == 0` records only that this drain was empty; it must NOT overwrite
+    /// the level, or the ordinary case of the decode thread out-polling the radio
+    /// loop reads as a dead input.
+    pub fn note_sstv_rx(
+        &mut self,
+        samples: usize,
+        audio_peak: f32,
+        vis_seen: usize,
+        unknown_vis: Option<u8>,
+        images: usize,
+        at_unix: i64,
+    ) {
+        self.sstv_health.armed = self.sstv_armed;
+        self.sstv_health.drains += 1;
+        if samples > 0 {
+            self.sstv_health.audio_peak = audio_peak;
+            self.sstv_health.last_audio_unix = Some(at_unix);
+        }
+        if vis_seen > 0 {
+            self.sstv_health.vis_seen += vis_seen as u64;
+            self.sstv_health.last_vis_unix = Some(at_unix);
+        }
+        if let Some(code) = unknown_vis {
+            self.sstv_health.unknown_vis += 1;
+            self.sstv_health.last_unknown_vis_code = Some(code);
+            self.sstv_health.last_unknown_vis_unix = Some(at_unix);
+        }
+        if images > 0 {
+            self.sstv_health.images += images as u64;
+            self.sstv_health.last_image_unix = Some(at_unix);
+        }
+    }
+
+    /// Snapshot of SSTV RX health for the view's poll.
+    pub fn sstv_health(&self) -> SstvHealth {
+        SstvHealth {
+            // Read live rather than stamped: the arm can change between drains.
+            armed: self.sstv_armed,
+            ..self.sstv_health.clone()
+        }
     }
 
     /// Drain the armed SSTV audio tap (12 kHz mono since the last take).
@@ -12060,6 +12237,38 @@ mod tests {
         assert_eq!(e.sstv_gallery().len(), 1);
     }
 
+    /// ⭐ AN AUTOMATIC STOP IS NOT AN OPERATOR'S DECISION. The ISS auto-arm disarms
+    /// SSTV at LOS; if that goes through `set_sstv_armed(false)` it latches the
+    /// "operator declined" memory, and from the first pass onward every entry to the
+    /// SSTV view refuses to start the receiver — the field bug again, one pass later,
+    /// for anyone who turned the ISS opt-in on.
+    #[test]
+    fn an_automatic_disarm_does_not_veto_the_next_view_entry() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(e.sstv_auto_arm(), "opening the view arms");
+        e.sstv_auto_disarm(); // ISS LOS
+        assert!(!e.sstv_armed(), "and the automatic unwind stops it");
+        assert!(
+            e.sstv_auto_arm(),
+            "re-opening the view must still start the receiver"
+        );
+    }
+
+    /// An explicit Arm is the operator's latest word, so it retires an earlier Stop.
+    /// Otherwise the session-long refusal outlives the act that caused it.
+    #[test]
+    fn an_explicit_arm_retires_an_earlier_stop() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_sstv_armed(false); // operator stops it
+        assert!(!e.sstv_auto_arm(), "the stop is remembered");
+        e.set_sstv_armed(true); // …and then changes their mind
+        e.sstv_auto_disarm(); // ISS LOS, later in the session
+        assert!(
+            e.sstv_auto_arm(),
+            "the view starts the receiver again — the stop was superseded"
+        );
+    }
+
     /// A Phone-armed engine on a legal 20 m phone frequency — the precondition for
     /// an SSTV send. Extra class + 14.290 USB clears `tx_allowed` for the whole SSB
     /// passband; entering Phone arms TX (arming keys nothing by itself).
@@ -12276,11 +12485,23 @@ mod tests {
         // Fresh engine: nothing queued.
         assert!(e.poll_sstv_tx().is_none());
         assert!(!e.sstv_sending());
-        // Arming RX queues no TX.
+        // Arming RX queues no TX — by every entry point, including the two the view
+        // reaches without the operator pressing anything.
         e.set_sstv_armed(true);
         assert!(
             e.poll_sstv_tx().is_none(),
             "arming RX never queues a TX image"
+        );
+        e.sstv_auto_disarm();
+        assert!(e.sstv_auto_arm(), "opening the view arms RX");
+        assert!(
+            e.poll_sstv_tx().is_none() && !e.sstv_sending(),
+            "opening the view keys nothing"
+        );
+        e.sstv_auto_disarm();
+        assert!(
+            e.poll_sstv_tx().is_none() && !e.sstv_sending(),
+            "and the automatic unwind keys nothing either"
         );
         // Selecting Phone (which arms TX) still keys nothing — no image is queued.
         e.set_license_class("extra");

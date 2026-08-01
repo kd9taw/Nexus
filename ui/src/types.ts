@@ -1100,8 +1100,40 @@ export interface SstvGalleryEntry {
   fskId?: string | null
 }
 
-/** Live SSTV RX state: armed flag, in-flight decode progress + preview, and
- * the saved-image gallery (oldest first). RX decode only. */
+/** What the SSTV receiver is actually HEARING — the readout that tells a
+ * picture-less screen apart from a picture-less band.
+ *
+ * Exists because of a field report ("I hear a signal but the SSTV is not
+ * decoding"): only a finished image ever reached the UI, so a receiver nobody
+ * armed, a dead capture device, a silent input and an unsupported mode all
+ * rendered the same idle screen. Counters are cumulative SINCE ARMING; the
+ * `last*Unix` stamps carry their age so the view never states a stale fact in
+ * the present tense. Mirrors `AprsHealth`. */
+export interface SstvHealth {
+  armed: boolean
+  /** Peak |sample| of the last drain that CARRIED samples (silence included —
+   * that is a level of zero, not an absence of audio). */
+  audioPeak: number
+  /** Unix seconds audio last ARRIVED, at any level. Null = never. */
+  lastAudioUnix: number | null
+  /** Drains the decode thread has reported since arming, carrying audio or not —
+   * so "never heard audio" is distinguishable from "has not looked yet". */
+  drains: number
+  /** VIS headers resolved to a decodable mode since arming (one per image started). */
+  visSeen: number
+  lastVisUnix: number | null
+  /** VIS headers that parsed cleanly but map to no mode this build decodes. */
+  unknownVis: number
+  /** The 7-bit code of the most recent such header, so the view can name it. */
+  lastUnknownVisCode: number | null
+  lastUnknownVisUnix: number | null
+  /** Images completed since arming. */
+  images: number
+  lastImageUnix: number | null
+}
+
+/** Live SSTV RX state: armed flag, in-flight decode progress + preview, receiver
+ * health, and the saved-image gallery (oldest first). RX decode only. */
 export interface SstvState {
   armed: boolean
   /** Mode label while an image is in flight, else null. */
@@ -1119,6 +1151,8 @@ export interface SstvState {
    * picture cannot. 0 when idle. */
   hedrShiftHz: number
   gallery: SstvGalleryEntry[]
+  /** What the receiver is hearing — level, VIS headers, unsupported modes. */
+  health: SstvHealth
   /** An image is queued or streaming to the rig (the cockpit's TX indicator). */
   sending: boolean
   /** Mode label of the image being (or last) transmitted, else null. */

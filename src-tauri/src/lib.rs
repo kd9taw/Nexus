@@ -7087,6 +7087,10 @@ struct SstvStateDto {
     hedr_shift_hz: f64,
     /// Saved images, oldest first (persisted in the sstv-gallery folder).
     gallery: Vec<tempo_app::dto::SstvGalleryEntry>,
+    /// What the receiver is actually hearing — level, VIS headers, unsupported
+    /// modes. Rides this poll rather than a second command: the view already
+    /// asks for state at 1 Hz and this is a handful of counters.
+    health: tempo_app::engine::SstvHealth,
     // ----- TX side (an operator-initiated image transmission) -----
     /// An image is queued or streaming to the rig (the cockpit's TX indicator).
     sending: bool,
@@ -7121,6 +7125,7 @@ fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
         preview_height: p.map_or(0, |p| p.preview_h),
         hedr_shift_hz: p.map_or(0.0, |p| p.hedr_shift_hz),
         gallery: eng.sstv_gallery().to_vec(),
+        health: eng.sstv_health(),
         sending: eng.sstv_sending(),
         tx_mode: eng.sstv_tx_mode().map(str::to_string),
         tx_progress,
@@ -7129,12 +7134,37 @@ fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
     }
 }
 
-/// Arm/disarm the SSTV RX decoder (session-only, like `rtty_arm`). Returns the
-/// fresh state.
+/// Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only, like
+/// `rtty_arm`). Returns the fresh state. Stopping it here is remembered for the
+/// session — `sstv_auto_arm` will not restart it behind the operator.
 #[tauri::command(async)]
 fn sstv_arm(state: State<'_, SharedEngine>, on: bool) -> Result<SstvStateDto, String> {
     let mut eng = engine_lock(&state);
     eng.set_sstv_armed(on);
+    Ok(sstv_state_dto(&eng))
+}
+
+/// Start the SSTV receiver because the operator OPENED the SSTV view. RX only —
+/// this cannot key anything. Returns whether this call armed it; see
+/// [`tempo_app::engine::Engine::sstv_auto_arm`] for the policy (only ever an
+/// upgrade from off, and refused after an explicit stop).
+#[tauri::command(async)]
+fn sstv_auto_arm(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.sstv_auto_arm();
+    Ok(sstv_state_dto(&eng))
+}
+
+/// Stop the SSTV receiver as part of an AUTOMATIC sequence — the ISS pass unwind at
+/// LOS, which disarms what it armed. RX only.
+///
+/// ⚠️ NOT `sstv_arm(false)`: that is an operator STOP and is remembered for the
+/// session, so using it here would leave every later entry to the SSTV view refusing
+/// to start the receiver. See [`tempo_app::engine::Engine::sstv_auto_disarm`].
+#[tauri::command(async)]
+fn sstv_auto_disarm(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.sstv_auto_disarm();
     Ok(sstv_state_dto(&eng))
 }
 
@@ -13477,6 +13507,8 @@ pub fn run() {
             rtty_auto_answer,
             rtty_auto_abort,
             sstv_arm,
+            sstv_auto_arm,
+            sstv_auto_disarm,
             get_sstv_state,
             sstv_send,
             sstv_stop,

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: SSTV receives pictures without being told to, and says what it is hearing
+
+You could hear a picture coming in on the speaker, watch it march up the waterfall, and
+still get nothing — no image, no progress, no explanation. Opening the SSTV screen now
+starts the receiver. Until now it had to be armed by hand every session, and until it
+was, the decoder was handed no audio at all, so the ordinary way to use SSTV (open the
+screen, tune 14.230, wait) decoded nothing. The waterfall and the decoder are fed by two
+different paths, which is why a live waterfall never proved the decoder was being fed —
+and why the failure was invisible. Stopping the receiver yourself is still respected: it
+stays stopped for the rest of the session, and nothing here can transmit.
+
+The line under the waterfall now states what the receiver actually hears rather than
+one fixed hint. It tells apart a stopped receiver, a capture device delivering nothing,
+an input that is alive but silent, a picture in progress, and — new — a station sending
+in a mode Nexus cannot decode, which previously looked exactly like a dead band because
+it was only ever written to a console log. Hearing the signal on the speaker says
+nothing about what the app is capturing, and the screen now says so instead of leaving
+you to guess.
+
+**More SSTV frequencies, and the right one.** The band list gained 160, 17, 12 and 6 m,
+the European 40 m calling frequency, and the 20 m overflow channels 14.233 and 14.236 —
+the last of which is where the original report came from, and which existed nowhere in
+the app. The on-screen hint now names the calling frequency for the band you are on
+instead of reciting 14.230 and 145.800 whatever you are tuned to. While a picture is
+coming in, the caption says how long that mode takes on the air, so a 110-second
+Scottie 1 no longer looks like a hang.
+
+Three more things that came out of reviewing the fix. An ISS pass ending no longer
+leaves SSTV switched off for the rest of the session — the automatic disarm at loss of
+signal was indistinguishable from you pressing Stop, so anyone using the ISS auto-arm
+option would have lost SSTV decoding from their first pass of the day onward. The new
+status line no longer blames your sound card in the second before the decoder has
+reported anything; until it has heard something it says so plainly. And 28.680 is no
+longer described as Technician-accessible: US Technicians have 10 m images only on
+28.300–28.500.
+
 ### Fixed: the map stopped throwing away its canvas every second
 
 On a wide display Nexus's memory use oscillated by ~20 MB once a second — visible in

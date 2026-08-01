@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvState } from '../types'
+import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvHealth, SstvState } from '../types'
 import { Waterfall } from './Waterfall'
 import { CockpitHeader } from './CockpitHeader'
 import { FrequencyControl } from './FrequencyControl'
@@ -13,6 +13,7 @@ import {
   getSstvState,
   setOperatingMode,
   sstvArm,
+  sstvAutoArm,
   sstvSend,
   sstvStop,
 } from '../api'
@@ -167,6 +168,162 @@ function drawBmp(canvas: HTMLCanvasElement | null, buf: ArrayBuffer): void {
   canvas.getContext('2d')?.putImageData(img, 0, 0)
 }
 
+// ---------------------------------------------------------------------------
+// ⭐ WHAT THE RECEIVER IS HEARING.
+//
+// THE BUG THIS EXISTS FOR (field report, FTdx10 on 14.236 then 14.230): "I hear a
+// signal but the SSTV is not decoding." The idle screen said one thing —
+// "Tune 14.230 / 145.800 — images decode here" — whether the receiver was never
+// started, the capture device was delivering nothing, the input was live but
+// silent, or a strong signal was arriving in a mode this build cannot decode. Four
+// completely different situations, three of them fixable in seconds once named,
+// all rendered identically. Worse, that hint named two frequencies while the
+// operator was sitting on a third.
+//
+// Same ladder discipline as `aprsDecodeStatus`: most-actionable first, present
+// tense only where a recent fact backs it, and never a claim the counters cannot
+// support.
+// ---------------------------------------------------------------------------
+
+/** How the SSTV receiver is doing — drives the caption's tone as well as its text. */
+export type SstvRxState =
+  | 'off'
+  | 'starting'
+  | 'nocapture'
+  | 'silent'
+  | 'listening'
+  | 'unsupported'
+  | 'decoded'
+
+/** Audio has to have arrived within this long for the tap to count as fed. The
+ * radio loop feeds it on its own cadence and can stall on blocking CAT, so this is
+ * generous — it is looking for a dead capture device, not a slow one.
+ *
+ * Twice `aprsDecodeStatus`'s window on purpose: SSTV shares the radio loop's tap
+ * with the FT decoders, whose per-iteration work is far heavier than APRS's. */
+const AUDIO_STALE_SEC = 10
+/** Wait for a few drains before crying "no input": arming resets the health and the
+ * view re-reads it immediately, so `lastAudioUnix` is legitimately null for a moment.
+ * 20 drains is ~2 s at the decode thread's 100 ms poll — long enough that a slow
+ * first fill cannot flash an alarm, short enough to name a real fault straight away. */
+const MIN_DRAINS_BEFORE_CAPTURE_FAULT = 20
+/** Below this peak the input is delivering samples but nothing audible. */
+const SILENT_PEAK = 0.002
+/** An unsupported-mode burst is news for this long; after that it is history. */
+const UNKNOWN_VIS_RECENT_SEC = 300
+
+/** "3 min" / "45 s" — the age of a stamped fact. */
+function ageLabel(unix: number, nowSec: number): string {
+  const s = Math.max(0, nowSec - unix)
+  if (s < 90) return `${s} s`
+  if (s < 5400) return `${Math.round(s / 60)} min`
+  return `${Math.round(s / 3600)} h`
+}
+
+/** The SSTV calling channel for the band the radio is on, from the built-in plan —
+ * never a hardcoded pair. Prefers the channel nearest the current dial, so an
+ * operator on 20 m is told about 14.236 rather than 14.230 when that is where they
+ * are. Null when the plan carries nothing for this band. */
+export function sstvChannelForDial(plan: BandChannel[], dialMhz?: number): BandChannel | null {
+  if (dialMhz == null || !Number.isFinite(dialMhz)) return null
+  const band = bandLabelForMhz(dialMhz)
+  if (!band) return null
+  const onBand = plan.filter((c) => c.band === band || c.band.startsWith(`${band}-`))
+  if (onBand.length === 0) return null
+  return onBand.reduce((best, c) =>
+    Math.abs(c.dialMhz - dialMhz) < Math.abs(best.dialMhz - dialMhz) ? c : best,
+  )
+}
+
+/** Turn receiver health into what the operator should be told while no picture is
+ * coming in. `channel` is the SSTV calling frequency for the band they are on. */
+export function sstvDecodeStatus(
+  health: SstvHealth | null | undefined,
+  nowSec: number,
+  channel: BandChannel | null,
+): { state: SstvRxState; text: string } {
+  // Where to point the radio — appended wherever it helps, and derived from the
+  // band plan rather than frozen into a sentence.
+  const where = channel
+    ? ` Images on this band appear at ${channel.dialMhz.toFixed(3)} ${channel.mode}.`
+    : ''
+  if (!health || !health.armed) {
+    return {
+      state: 'off',
+      text: `The receiver is stopped — nothing is being decoded. Press Arm to start it.${where}`,
+    }
+  }
+  // NOTHING ARRIVING — the only genuine capture fault, and held apart from a zero
+  // LEVEL below because the two have opposite fixes. What you hear on the speaker
+  // says nothing about what the app is capturing, which is exactly the trap the
+  // field report fell into.
+  const noArrivals = health.lastAudioUnix == null || nowSec - health.lastAudioUnix > AUDIO_STALE_SEC
+  if (noArrivals && health.drains >= MIN_DRAINS_BEFORE_CAPTURE_FAULT) {
+    return {
+      state: 'nocapture',
+      text:
+        'Listening, but no audio is reaching the decoder at all — the capture device is not ' +
+        'delivering anything. Check that Settings → Audio input is the radio; hearing the ' +
+        'signal on the speaker does not mean the app is capturing it.',
+    }
+  }
+  // ⚠️ NO READING YET — and it must not be dressed up as one. Arming resets the
+  // health and the view re-reads it in the same breath, so for the first couple of
+  // seconds nothing has been reported at all: no drains, no stamp, a peak of zero.
+  // Without this rung that fell through to `silent`, whose text accuses the operator
+  // of having the wrong sound card — shown on EVERY entry to the view, before the
+  // decode thread had drained even once, and shown permanently in the one case where
+  // it never drains (a decoder that fails to construct). Absence of evidence is its
+  // own state; saying so costs nothing and blames nobody.
+  if (health.lastAudioUnix == null) {
+    return {
+      state: 'starting',
+      text: `Receiver started — no audio has reached the decoder yet.${where}`,
+    }
+  }
+  // ⭐ AN UNSUPPORTED MODE OUTRANKS EVERYTHING BELOW. A clean header arrived and was
+  // thrown away — the single most misleading way SSTV can fail, because the screen
+  // is identical to a dead band. This used to be a console line nobody could see.
+  if (
+    health.unknownVis > 0 &&
+    health.lastUnknownVisUnix != null &&
+    nowSec - health.lastUnknownVisUnix <= UNKNOWN_VIS_RECENT_SEC
+  ) {
+    const code = health.lastUnknownVisCode
+    return {
+      state: 'unsupported',
+      text:
+        `Heard an SSTV header ${ageLabel(health.lastUnknownVisUnix, nowSec)} ago in a mode this ` +
+        `build cannot decode${code != null ? ` (VIS 0x${code.toString(16).toUpperCase()})` : ''}. ` +
+        'The signal and the audio path are fine — Scottie, Martin, Robot and PD images all decode.',
+    }
+  }
+  // A decode LATCHES: a completed picture is a durable fact about the whole chain,
+  // unlike a claim about what the band is doing right now.
+  if (health.images > 0 && health.lastImageUnix != null) {
+    return {
+      state: 'decoded',
+      text: `${health.images} image${health.images === 1 ? '' : 's'} decoded since arming, last one ${ageLabel(health.lastImageUnix, nowSec)} ago. Listening for the next header.`,
+    }
+  }
+  // ARRIVING BUT SILENT — a routing or level problem, not a band problem.
+  if (health.audioPeak < SILENT_PEAK) {
+    return {
+      state: 'silent',
+      text:
+        'Audio is arriving but it is silent. If you can hear the signal on the speaker, the app ' +
+        'is on a different input — check Settings → Audio input, and RX Gain if the level is ' +
+        `just low.${where}`,
+    }
+  }
+  // THE HEALTHY IDLE STATE. It says the audio is being heard, which is the one thing
+  // the old hint could never say.
+  return {
+    state: 'listening',
+    text: `Hearing audio, no SSTV header yet — a picture decodes automatically when one starts.${where}`,
+  }
+}
+
 /** "2026-07-17 15:30Z" from the gallery's ISO stamp (raw string if unexpected). */
 function fmtUtc(iso: string): string {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso)
@@ -228,6 +385,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // Live decoder state — polled at 1 Hz while this is the visible view (the
   // backend keeps decoding while hidden; the first tick catches the display up).
   const [sstv, setSstv] = useState<SstvState | null>(null)
+  // A poll that cannot be reached is NOT an idle receiver. Swallowing the rejection
+  // left `sstv` null, which renders exactly like "not armed, nothing heard" — the UI
+  // stating a belief it had no evidence for, on the one screen the operator turns to
+  // when nothing is happening.
+  const [pollError, setPollError] = useState(false)
+  // Ticks the age clock in the status line (the counters are cumulative; their
+  // stamps are what make the sentence honest).
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
   // Live snapshot ref so the Send handler reads the CURRENT dial/privileges (same
   // pattern as the CW/RTTY cockpits).
   const snapRef = useRef(snap)
@@ -236,11 +401,17 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     if (!active) return
     let alive = true
     const tick = () => {
+      setNow(Math.floor(Date.now() / 1000))
       getSstvState()
         .then((s) => {
-          if (alive) setSstv(s)
+          if (alive) {
+            setSstv(s)
+            setPollError(false)
+          }
         })
-        .catch(() => {})
+        .catch(() => {
+          if (alive) setPollError(true)
+        })
     }
     tick()
     const id = window.setInterval(tick, 1000)
@@ -250,6 +421,33 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     }
   }, [active])
 
+  // ⭐ START THE RECEIVER ON ENTERING THE VIEW, so SSTV does not open on a screen
+  // that will never decode anything. Rising edge of `active`, not mount — this view
+  // is kept alive across navigation (App renders it hidden), so it mounts once per
+  // session.
+  //
+  // ⚠️ RX ONLY, and the ENGINE is what guarantees that: `sstv_auto_arm` only ever
+  // upgrades from off and refuses once the operator has explicitly stopped the
+  // receiver this session. Nothing on the SSTV TX path is reachable from it —
+  // `sstv_tx` is written by `sstv_send` alone. The policy lives in the engine rather
+  // than in a ref here so a remount cannot lose it.
+  const autoArmed = useRef(false)
+  useEffect(() => {
+    if (!active) {
+      autoArmed.current = false
+      return
+    }
+    if (autoArmed.current) return
+    autoArmed.current = true
+    // Re-READ rather than trusting this call's own return: the 1 Hz poll is running
+    // beside it, and the reply to a command issued at entry must never overwrite a
+    // fresher snapshot (the same shape as the APRS cockpit's auto-arm).
+    void sstvAutoArm()
+      .then(() => getSstvState())
+      .then(setSstv)
+      .catch(() => {})
+  }, [active])
+
   const armed = sstv?.armed === true
   const toggleArm = () => {
     void sstvArm(!armed)
@@ -257,8 +455,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       .catch(() => pushToast('Could not switch the SSTV receiver', 'error'))
   }
 
-  // Licensed SSTV calling frequencies (built-in band plan — 14.230, the ISS
-  // 145.800 FM downlink, …), same source as the CW/Phone band pickers.
+  // Licensed SSTV calling frequencies (built-in band plan — 14.230, the 20 m
+  // overflow channels, the ISS 145.800 FM downlink, …), same source as the CW/Phone
+  // band pickers. Feeds BOTH the band picker and the idle caption: the caption used
+  // to hardcode two frequencies while this list, already in hand, held a dozen.
   const [plan, setPlan] = useState<BandChannel[]>([])
   useEffect(() => {
     void getLicensedBandPlan('sstv').then(setPlan).catch(() => {})
@@ -348,13 +548,56 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // Honest V1 caption: the two-pass core lands lines nearly all at once at
   // completion, so until they land we say "decoding <mode>…" — never a fake
   // progress count. VIS-detected mode + total show immediately.
+  //
+  // ⚠️ AND IT SAYS HOW LONG THAT TAKES. `find_sync` needs the whole image buffered
+  // before any line can be placed (decoder.rs `FINDSYNC_AUDIO_HEADROOM`), so a
+  // Scottie 1 preview is a black rectangle for ~110 s and then the picture appears
+  // all at once. Without the airtime beside it that reads as a hang — the operator's
+  // words were "not working or decoding as the image comes in".
   const inFlight = sstv?.mode != null
+  const txSecs = sstv?.mode ? SSTV_TX_MODES.find((m) => m.name === sstv.mode)?.seconds : undefined
   const caption =
     inFlight && sstv
-      ? (sstv.linesDone > 0
-          ? `${sstv.mode} — ${sstv.linesDone}/${sstv.linesTotal} lines`
-          : `decoding ${sstv.mode}…`)
+      ? sstv.linesDone > 0
+        ? `${sstv.mode} — ${sstv.linesDone}/${sstv.linesTotal} lines`
+        : txSecs != null
+          ? `decoding ${sstv.mode}… the picture lands when the transmission ends (≈${fmtClock(txSecs)})`
+          : `decoding ${sstv.mode}…`
       : ''
+
+  // What the receiver is hearing while no picture is coming in — the four states the
+  // old one-line hint collapsed into one.
+  const sstvChannel = sstvChannelForDial(plan, snap?.radio.dialMhz)
+  const rx = pollError
+    ? {
+        state: 'off' as SstvRxState,
+        text: 'Cannot read the receiver state — the app is not answering. The decoder may still be running.',
+      }
+    : sstvDecodeStatus(sstv?.health, now, sstvChannel)
+
+  // ⚠️ SPEAK THE CHANGE, DON'T LIVE-REGION THE SENTENCE. The caption restates the
+  // age of the last picture every second, so `role="status"` on it made a screen
+  // reader re-announce the same paragraph ~90 times after one image. What is news is
+  // the TRANSITION — the receiver going deaf, or a header arriving in a mode we
+  // cannot decode — so announce that once, through the same bus the TX path uses.
+  // The first reading per entry is skipped: it is the state the operator just walked
+  // into, not a change, and the caption is right there.
+  const spokenRx = useRef<SstvRxState | null>(null)
+  useEffect(() => {
+    if (!active) {
+      spokenRx.current = null
+      return
+    }
+    // ⚠️ Before the first poll answers there is no reading — and `sstvDecodeStatus`
+    // renders that as `off`, which is also a real state. Seeding from it would make
+    // the ordinary "not asked yet → hearing audio" settle read as a change and speak
+    // on every entry to the view.
+    if (sstv == null && !pollError) return
+    if (spokenRx.current === rx.state) return
+    const first = spokenRx.current === null
+    spokenRx.current = rx.state
+    if (!first) announce(rx.text)
+  }, [active, sstv, pollError, rx.state, rx.text])
 
   // Gallery arrives oldest-first; show newest first.
   const gallery = sstv?.gallery && sstv.gallery.length > 0 ? [...sstv.gallery].reverse() : []
@@ -639,12 +882,19 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             />
             {/* The guidance stays on screen. A waterfall shows you the band but
                 does not tell you WHERE to point the radio, and this view is often
-                the first place a new operator lands. */}
-            <div className="sstv-band-caption">
-              {armed
-                ? 'Armed — waiting for a VIS header…'
-                : 'Tune 14.230 / 145.800 — images decode here'}
-            </div>
+                the first place a new operator lands.
+
+                ⭐ AND IT SAYS WHETHER THE APP IS HEARING ANYTHING. This line used to
+                be one of two fixed strings, so "the receiver was never started",
+                "the capture device is dead", "the input is silent" and "that mode
+                cannot be decoded" all looked the same — which is how an operator
+                with a strong signal on the waterfall spent two sessions unable to
+                tell what was wrong. `sstvDecodeStatus` has the ladder.
+
+                ⚠️ NOT a live region — it rewrites the age of the last picture once a
+                second, and aria-live would read the whole paragraph out again every
+                time. State CHANGES are announced instead (see `spokenRx` above). */}
+            <div className={`sstv-band-caption rx-${rx.state}`}>{rx.text}</div>
           </div>
         )}
       </section>

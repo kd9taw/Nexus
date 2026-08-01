@@ -157,12 +157,27 @@ pub fn rtty_band_plan() -> Vec<BandChannel> {
 /// PD120 on 145.800 FM). Phone-segment dials, phone sideband conventions.
 pub fn sstv_band_plan() -> Vec<BandChannel> {
     vec![
+        ch("160m", "HF", 1.890, "LSB", "160 m · SSTV", "the conventional 160 m image frequency — rare, and a winter-night band"),
         ch("80m", "HF", 3.845, "LSB", "80 m · SSTV (US)", "NA SSTV calling frequency"),
         ch("80m-eu", "HF", 3.730, "LSB", "80 m · SSTV (EU)", "EU SSTV calling (IARU R1 image centre 3.735) — below US General phone; Extra-class or DX"),
-        ch("40m", "HF", 7.171, "LSB", "40 m · SSTV", "US SSTV calling; EU runs 7.165"),
-        ch("20m", "HF", 14.230, "USB", "20 m · SSTV", "THE worldwide SSTV calling frequency (alt 14.233 when busy)"),
+        ch("40m", "HF", 7.171, "LSB", "40 m · SSTV (US)", "US SSTV calling frequency"),
+        ch("40m-eu", "HF", 7.165, "LSB", "40 m · SSTV (EU)", "EU/IARU R1 SSTV calling"),
+        ch("20m", "HF", 14.230, "USB", "20 m · SSTV", "THE worldwide SSTV calling frequency — where images actually appear"),
+        // ⚠️ THE OVERFLOW FREQUENCIES ARE CHANNELS, NOT PROSE. 14.233 and 14.236 were
+        // named only inside 14.230's note, so an operator working the overflow (the field
+        // report came from 14.236) found their own frequency nowhere in the app. If a
+        // watering hole is real enough to sit on, it is real enough to be pickable.
+        ch("20m-alt", "HF", 14.233, "USB", "20 m · SSTV (alt)", "the first overflow when 14.230 is busy"),
+        ch("20m-alt2", "HF", 14.236, "USB", "20 m · SSTV (alt 2)", "the second overflow — commonly used during contests and nets"),
+        ch("17m", "HF", 18.160, "USB", "17 m · SSTV", "the conventional 17 m image frequency"),
         ch("15m", "HF", 21.340, "USB", "15 m · SSTV", "worldwide 15 m SSTV calling"),
-        ch("10m", "HF", 28.680, "USB", "10 m · SSTV", "worldwide 10 m SSTV calling"),
+        ch("12m", "HF", 24.975, "USB", "12 m · SSTV", "the conventional 12 m image frequency"),
+        // ⚠️ NOT a Technician frequency. US Technicians hold 10 m phone/image only
+        // 28.300–28.500, so 28.680 is General and above — the privilege filter is
+        // per-BAND, and a Tech is shown this channel. Saying otherwise on screen
+        // would be the app itself giving wrong licensing advice.
+        ch("10m", "HF", 28.680, "USB", "10 m · SSTV", "worldwide 10 m SSTV calling (General and above — Technicians have 10 m image only 28.300–28.500)"),
+        ch("6m", "VHF", 50.680, "USB", "6 m · SSTV", "the 6 m image frequency; activity follows sporadic-E openings"),
         ch("2m", "VHF", 145.800, "FM", "2 m · ISS downlink", "ARISS events transmit PD120 images here — the SSTV event of the year, FM"),
         ch("2m-call", "VHF", 144.500, "FM", "2 m · SSTV calling", "terrestrial VHF SSTV calling (regional conventions vary — check locally)"),
     ]
@@ -550,6 +565,31 @@ mod tests {
         assert!((s80eu.dial_mhz - 3.730).abs() < 1e-9, "80m EU SSTV = 3.730");
         assert_eq!(s80.mode, "LSB");
         assert_eq!(s80eu.mode, "LSB");
+        // ⚠️ The 20 m OVERFLOW frequencies are pickable channels, not a note. A field
+        // report came from 14.236 — an operator on a real watering hole that existed
+        // nowhere in the app, so nothing on screen could name where they were.
+        for mhz in [14.233_f64, 14.236] {
+            assert!(
+                sstv.iter().any(|c| (c.dial_mhz - mhz).abs() < 1e-9),
+                "20m SSTV overflow {mhz} must be its own channel"
+            );
+        }
+        // 40 m splits US/EU exactly like 80 m does.
+        assert!(
+            sstv.iter()
+                .any(|c| c.band == "40m-eu" && (c.dial_mhz - 7.165).abs() < 1e-9),
+            "40m EU SSTV at 7.165"
+        );
+        // Every HF band an operator might be sitting on has an SSTV channel, so the
+        // view can always name the frequency for the band they are on.
+        for band in [
+            "160m", "80m", "40m", "20m", "17m", "15m", "12m", "10m", "6m", "2m",
+        ] {
+            assert!(
+                sstv.iter().any(|c| c.band.starts_with(band)),
+                "{band} needs an SSTV calling frequency"
+            );
+        }
     }
 }
 
