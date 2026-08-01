@@ -90,6 +90,7 @@ import {
   getDxpedWindows,
   getSatSchedule,
   getIssPass,
+  getTleStatus,
   sstvArm,
   setSettings as apiSetSettings,
   setSidebandOverride,
@@ -120,6 +121,7 @@ import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { tickIssAutoArm } from './features/issAutoArm'
+import { satElementsLane } from './features/satLane'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult } from './types'
@@ -530,7 +532,13 @@ export default function App() {
               .then((issPass) =>
                 tickIssAutoArm(issPass, snapRef.current?.radio, true, issDeps, Date.now() / 1000),
               )
-              .catch(() => {})
+              // Rejection is a ROUTINE state (elements past 30 d make
+              // get_iss_pass refuse) — it must still tick with no pass, or an
+              // arm in flight when the refusal begins never unwinds and the
+              // rig strands on 145.800 with SSTV armed (review catch).
+              .catch(() =>
+                tickIssAutoArm(null, snapRef.current?.radio, true, issDeps, Date.now() / 1000),
+              )
           } else {
             tickIssAutoArm(null, snapRef.current?.radio, false, issDeps, Date.now() / 1000)
           }
@@ -570,6 +578,28 @@ export default function App() {
         .catch(() => {})
     load()
     const id = setInterval(load, 30_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [])
+  // Element currency in the Now-Bar `sat` lane (beside `prop` above). The
+  // decision itself — the Celestrak hard stop vs an all-rotten cache vs the
+  // 14 d stale line, and when each deserves the operator's attention — is the
+  // pure satElementsLane (features/satLane.ts). Polling get_tle_status also
+  // kicks a due background refresh, so currency self-heals app-wide, not only
+  // while a satellite surface is open.
+  useEffect(() => {
+    let live = true
+    const load = () =>
+      getTleStatus()
+        .then((s) => {
+          if (!live) return
+          setStatus('sat', satElementsLane(s, Date.now() / 1000))
+        })
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 60_000)
     return () => {
       live = false
       clearInterval(id)

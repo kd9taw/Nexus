@@ -51,6 +51,8 @@ const track = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   inverting: true,
   offsetHz: 3200,
   halfWidthHz: 12_500,
+  elementAgeDays: 1.2,
+  elementEpochUnix: 1_785_442_400,
   aosUnix: NOW - 300,
   losUnix: NOW + 300,
   ...over,

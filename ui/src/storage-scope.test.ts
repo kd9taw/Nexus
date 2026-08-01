@@ -81,6 +81,7 @@ const SHARED = [
   'nexus.program.recents.v1',
   'nexus.sats.alarms',
   'nexus.sats.chasing',
+  'nexus.sats.chasingNorad',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',
   'nexus.waterfall.palette',

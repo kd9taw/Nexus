@@ -156,6 +156,8 @@ const liveStatus = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   inverting: true,
   offsetHz: 3200,
   halfWidthHz: 12_500,
+  elementAgeDays: 1.2,
+  elementEpochUnix: 1_785_442_400,
   aosUnix: AOS,
   losUnix: LOS,
   ...over,
@@ -327,6 +329,8 @@ describe('the favorites-list search still narrows (guard for the aside rework)',
     api.getSatellites.mockImplementation(() =>
       Promise.resolve({
         tleAgeDays: 1,
+        tleFetchedAt: 1_785_542_400,
+        tleSource: 'mirror',
         birds: [
           { name: 'RS-44', lat: 0, lon: 0, altKm: 500, footprintKm: 2000, track: [] },
           { name: 'AO-91', lat: 0, lon: 0, altKm: 500, footprintKm: 2000, track: [] },

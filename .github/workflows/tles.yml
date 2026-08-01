@@ -1,0 +1,69 @@
+# Six-hourly regeneration of the amateur-satellite TLE mirror that Nexus
+# installs refresh from (see scripts/gen-tles.mjs for the why + the sanity
+# gates). CI is the ONE consumer that touches Celestrak — once per run — so
+# every install doesn't have to be; the result publishes as a rolling GitHub
+# Release asset (`tles`, tles.json + tles.txt), no secrets beyond the built-in
+# GITHUB_TOKEN. hamradiotools.io/nexus/tles.* 302s to the release assets via
+# Cloudflare dashboard redirect rules (matching the fcc-states ones — an
+# operator dashboard action, not in-repo). A failed sanity gate publishes
+# NOTHING: the Release keeps serving the last good set, which clients
+# re-validate on their side anyway.
+name: Amateur TLE mirror
+
+on:
+  schedule:
+    # Every 6 h at :17 — off the hour, plus the in-job random sleep below, so
+    # this fetch never joins the top-of-hour herd Celestrak sees.
+    - cron: '17 */6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # publish the rolling Release asset
+
+concurrency:
+  group: tles
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Jitter (scheduled runs only — a cron fleet must not hit Celestrak in sync)
+        if: github.event_name == 'schedule'
+        run: sleep $((RANDOM % 600))
+
+      - name: Fetch the previous manifest (the count-ratchet gate's baseline)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download tles --pattern tles.json --output prev-tles.json \
+            || echo "no previous release — the first run gates on the fixed floor only"
+
+      - name: Generate + gate (fetches Celestrak once; ANY gate failure publishes nothing)
+        env:
+          TLES_PREV: prev-tles.json
+        run: |
+          mkdir -p out
+          node scripts/gen-tles.mjs out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tles
+          path: out/*
+          retention-days: 14
+
+      - name: Publish to the rolling `tles` Release (automatic source, no secrets)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view tles >/dev/null 2>&1 \
+            || gh release create tles \
+                 --title "Amateur satellite TLE mirror" \
+                 --notes "Auto-generated every 6 h from the Celestrak amateur group (data courtesy of CelesTrak, Dr. T.S. Kelso). Nexus installs refresh from this mirror instead of each fetching Celestrak directly." \
+                 --latest=false
+          gh release upload tles out/tles.json out/tles.txt --clobber

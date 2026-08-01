@@ -348,8 +348,16 @@ export interface PcaView {
 export interface SatView {
   /** Age of the oldest element set (days) — badge stale when > 14. */
   tleAgeDays: number
+  /** When the serving element snapshot was FETCHED (unix; 0 = never/legacy)
+   * and where it came from ("mirror" | "celestrak" | "import" | "legacy") —
+   * pipe health, a different fact from tleAgeDays' physics quality. */
+  tleFetchedAt: number
+  tleSource: string
   birds: {
     name: string
+    /** NORAD catalog number — the stable identity recorded beside a ★'d name
+     * (upstream renames change names, never catalog numbers). */
+    norad?: number | null
     lat: number
     lon: number
     altKm: number
@@ -363,6 +371,9 @@ export interface SatView {
 }
 export interface SatPass {
   name: string
+  /** NORAD catalog number — the stable identity recorded beside a ★'d name
+   * (upstream renames change names, never catalog numbers). */
+  norad?: number | null
   aosUnix: number
   losUnix: number
   maxElDeg: number
@@ -437,6 +448,10 @@ export interface SatDetail {
   transmitters: SatTransmitter[]
   /** When the SatNOGS snapshot was fetched (unix secs); null = never. */
   dataFetchedAt: number | null
+  /** Age (days) of THIS bird's element set — the >14 d arm-confirm's input.
+   * Absent when the bird has no elements; never >30 (that case is refused
+   * wholesale — the command errors naming the age). */
+  elementAgeDays?: number | null
   /** The pass in progress, or the next one over the operator (24 h); null = none/no grid. */
   pass: SatPass | null
   /** (unix, az°, el°) samples across `pass` for the polar plot; empty without a pass. */
@@ -511,6 +526,12 @@ export interface SatTrackStatus {
    * Both null unless Doppler is actually tuning. */
   offsetHz: number | null
   halfWidthHz: number | null
+  /** Age (days, at ARM time) and epoch (unix) of the element set this track
+   * FROZE — the per-pass freeze is kept (one set drives the whole pass) and
+   * this makes the frozen set's age visible (the rail's Elements row).
+   * Arming past 30 d is refused outright, so these never describe a rotten set. */
+  elementAgeDays: number
+  elementEpochUnix: number
   aosUnix: number
   losUnix: number
 }

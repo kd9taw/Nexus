@@ -65,6 +65,18 @@ to hold the current radio when you want to override the routing.
 digital watering holes, which meant it offered 14.074 beside a bird on 435 MHz. Satellites now owns
 its own frequency surfaces, like Phone, CW, RTTY, SSTV and APRS already do.
 
+**Orbital elements stay current — and say so when they can't.** Elements now refresh in the
+background from the project's mirror of CelesTrak's amateur list, held in one shared on-disk
+snapshot: no more re-fetch on every launch, nothing ever waits on the network, and CelesTrak
+itself is asked directly only as a narrow, rate-respecting fallback. The stale badge is now a
+refresh button, and Settings gains an Orbital elements block with **Update now** and **Import
+from file** — the path for offline shacks and brand-new launches. Element age is enforced where
+it matters: past 14 days arming a pass asks first; past 30 days the detail pane, tracking and the
+SSTV auto-arm refuse plainly, naming the bird and the age, instead of pointing the antenna with a
+fiction. A pass keeps the elements it armed with (their age shown on the readiness rail), a bad
+or empty download never replaces a good cache, and a CelesTrak rename no longer orphans your
+starred birds, alarms or schedule — Nexus remembers the catalog number behind each name.
+
 ### Fixed: the pick reaches the radio — and the IC-9700's uplink goes where it can transmit
 
 **A dual-radio pick finds the satellite rig even with nothing configured.** Field report: on an

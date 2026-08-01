@@ -93,6 +93,8 @@ const status = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   inverting: true,
   offsetHz: 3200,
   halfWidthHz: 12_500,
+  elementAgeDays: 1.2,
+  elementEpochUnix: 1_785_442_400,
   aosUnix: AOS,
   losUnix: LOS,
   ...over,

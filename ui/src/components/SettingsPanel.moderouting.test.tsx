@@ -27,7 +27,7 @@ const api = vi.hoisted(() => {
     'removeRadio', 'renameRadio', 'setActiveRadio', 'setRadioBands', 'updateRadioProfile', 'testCat',
     'probeCatPorts', 'qrzTestConnection', 'syncQrz', 'n3fjpTestConnection', 'getConnectionLog',
     'getCredentialsStatus', 'fetchLotwUsers', 'getLotwUsersStatus', 'fetchFccStates',
-    'getFccStatesStatus', 'discoverFlex', 'civDiagnosticLog', 'civDiagnosticStatus',
+    'getFccStatesStatus', 'getTleStatus', 'fetchTlesNow', 'importTles', 'discoverFlex', 'civDiagnosticLog', 'civDiagnosticStatus',
     'allTxtLocation', 'revealAllTxt', 'appVersion', 'getSpectrumRow', 'setFrequency',
     'getWatchlist', 'setWatchlist', 'openPanelWindow',
     'setRoutingRules', 'setDefaultRadio', 'routePreview',

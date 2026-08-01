@@ -61,6 +61,7 @@ import { loadProfiles, mergeProfile, saveProfile, deleteProfile, type Profile } 
 import { getConnectionLog, getCredentialsStatus } from '../api'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
+import { fetchTlesNow, getTleStatus, importTles, type TleStatus } from '../api'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { allTxtLocation, revealAllTxt } from '../api'
@@ -507,6 +508,17 @@ export function SettingsPanel({
   useEffect(() => {
     getFccStatesStatus()
       .then(setFccStates)
+      .catch(() => {})
+  }, [])
+  // Orbital elements (TLE snapshot) — the satellite currency pipeline's
+  // operator surface: status + manual refresh + the file-import escape hatch.
+  const [tleStatus, setTleStatus] = useState<TleStatus | null>(null)
+  const [tleFetching, setTleFetching] = useState(false)
+  const [tleImporting, setTleImporting] = useState(false)
+  const tleFileRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    getTleStatus()
+      .then(setTleStatus)
       .catch(() => {})
   }, [])
   // "Saved" must not linger forever (it read as a stale artifact) — fade it out.
@@ -3396,6 +3408,99 @@ export function SettingsPanel({
                   Shorter fights your own tuning knob and saturates a serial CAT link.
                 </span>
               </label>
+            </div>
+          </fieldset>
+
+          {/* ---- Orbital elements (the TLE currency pipeline's operator surface;
+                  cloned from the FCC callsign→state fieldset) ---- */}
+          <fieldset className="settings-section">
+            <legend>Orbital elements</legend>
+            <div className="settings-field">
+              <div className="lotw-users-row">
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={tleFetching}
+                  onClick={() => {
+                    setTleFetching(true)
+                    fetchTlesNow()
+                      .then((st) => {
+                        setTleStatus(st)
+                        pushToast(
+                          `Orbital elements updated — ${st.count} birds (${st.source})`,
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((e) =>
+                        pushToast(
+                          `Element update failed: ${e instanceof Error ? e.message : e}`,
+                          'error',
+                        ),
+                      )
+                      .finally(() => setTleFetching(false))
+                  }}
+                >
+                  {tleFetching ? 'Updating…' : 'Update now'}
+                </button>
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={tleImporting}
+                  onClick={() => tleFileRef.current?.click()}
+                  title="Import a downloaded element file (Celestrak TLE, AMSAT keps, a new launch's SupGP set) — the offline-shack escape hatch. Imports persist across refreshes; the newest epoch per satellite wins."
+                >
+                  {tleImporting ? 'Importing…' : 'Import from file'}
+                </button>
+                <input
+                  ref={tleFileRef}
+                  type="file"
+                  accept=".txt,.tle,text/plain"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    e.target.value = ''
+                    if (!f) return
+                    setTleImporting(true)
+                    f.text()
+                      .then((text) => importTles(text))
+                      .then((st) => {
+                        setTleStatus(st)
+                        pushToast(
+                          `Elements imported — ${st.importedCount} imported, ${st.count} total`,
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((err) =>
+                        pushToast(
+                          `Element import failed: ${err instanceof Error ? err.message : err}`,
+                          'error',
+                        ),
+                      )
+                      .finally(() => setTleImporting(false))
+                  }}
+                />
+                <span className="settings-hint">
+                  {tleStatus && tleStatus.count > 0
+                    ? `${tleStatus.count} birds · ${
+                        tleStatus.fetchedAt > 0
+                          ? `fetched ${new Date(tleStatus.fetchedAt * 1000).toISOString().slice(0, 10)}`
+                          : 'never fetched'
+                      } · ${tleStatus.source}${
+                        tleStatus.importedCount > 0 ? ` · ${tleStatus.importedCount} imported` : ''
+                      }`
+                    : 'Not loaded yet — fetched on first launch, then refreshed every 6 h.'}
+                </span>
+              </div>
+              <span className="settings-hint">
+                Keplerian elements (TLEs) for the amateur satellites — pass times, pointing and
+                Doppler all come from them. Refreshed every 6 h from hamradiotools.io (CelesTrak
+                data); import a file for an offline shack or a just-launched bird.
+              </span>
+              {tleStatus?.lastError && (
+                <span className="settings-hint">Last refresh: {tleStatus.lastError}</span>
+              )}
             </div>
           </fieldset>
 

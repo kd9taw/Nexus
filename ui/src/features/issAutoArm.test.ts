@@ -97,6 +97,20 @@ describe('tickIssAutoArm', () => {
     expect(d.setFrequency).toHaveBeenCalledWith(14.074, '20m', 'USB')
   })
 
+  it('unwinds when the pass is no longer reported while enabled (the 30 d refusal path)', () => {
+    const d = deps()
+    const now = 1_900_000_000
+    tickIssAutoArm(pass(now - 60), OFF_FREQ, true, d, now) // arm mid-pass
+    d.setFrequency.mockClear()
+    d.sstvArm.mockClear()
+    // getIssPass now REJECTS (elements crossed the 30 d refusal mid-pass);
+    // App.tsx routes the rejection to a null-pass tick. Still enabled, so the
+    // LOS unwind must run — otherwise the rig strands on 145.800, SSTV armed.
+    tickIssAutoArm(null, ON_CHANNEL, true, d, now + 30)
+    expect(d.sstvArm).toHaveBeenCalledWith(false)
+    expect(d.setFrequency).toHaveBeenCalledWith(14.074, '20m', 'USB')
+  })
+
   it('a disabled tick with nothing armed is a no-op', () => {
     const d = deps()
     tickIssAutoArm(pass(1_900_000_000), ON_CHANNEL, false, d, 1_900_000_000)

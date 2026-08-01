@@ -517,7 +517,9 @@ export function MapView({
   const [sats, setSats] = useState<SatView | null>(null)
   // Satellite hitboxes, captured at draw time (positions interpolate every tick,
   // so hit-testing must read what was actually drawn, not recompute).
-  const placedSatsRef = useRef<Array<{ name: string; x: number; y: number; chased: boolean }>>([])
+  const placedSatsRef = useRef<
+    Array<{ name: string; norad?: number | null; x: number; y: number; chased: boolean }>
+  >([])
   const placedAprsRef = useRef<Array<{ call: string; x: number; y: number }>>([])
   // Sat single-click navigation is DELAYED one double-click window: the first
   // click of a dbl-click-to-★ would otherwise unmount this map before the
@@ -1346,7 +1348,7 @@ export function MapView({
           ctx.stroke()
         }
         ctx.fillText(b.name, p[0] + 9 * sc, p[1])
-        placedSatsRef.current.push({ name: b.name, x: p[0], y: p[1], chased: isChased })
+        placedSatsRef.current.push({ name: b.name, norad: b.norad, x: p[0], y: p[1], chased: isChased })
       }
       ctx.globalAlpha = 1
     }
@@ -2027,7 +2029,7 @@ export function MapView({
     | { kind: 'station'; d: number; s: Station; ll: LatLon }
     | { kind: 'dxped'; d: number; card: WorkableCard }
     | { kind: 'spot'; d: number; sp: MapSpot }
-    | { kind: 'sat'; d: number; name: string; chased: boolean }
+    | { kind: 'sat'; d: number; name: string; norad?: number | null; chased: boolean }
     | { kind: 'aprs'; d: number; name: string }
     | { kind: 'muf'; d: number; muf: number }
   const hitTest = (mx: number, my: number): MapHit | null => {
@@ -2068,9 +2070,9 @@ export function MapView({
     if (layers.sats.visible) {
       // Sat icons span ~10 px with panels — 12 px target, same generosity as dots.
       let best: MapHit | null = null
-      for (const { name, x, y, chased } of placedSatsRef.current) {
+      for (const { name, norad, x, y, chased } of placedSatsRef.current) {
         const d = Math.hypot(x - mx, y - my)
-        if (d < 12 && (!best || d < best.d)) best = { kind: 'sat', d, name, chased }
+        if (d < 12 && (!best || d < best.d)) best = { kind: 'sat', d, name, norad, chased }
       }
       if (best) return best
     }
@@ -2288,7 +2290,7 @@ export function MapView({
       // NOT in the embedded detail globe: the Satellites section's own ★/⏰
       // controls sit beside it and hold their own state — a silent toggle here
       // would desync them (and disarm alarms with no UI trace).
-      if (!embedded) toggleSatChasing(hit.name)
+      if (!embedded) toggleSatChasing(hit.name, hit.norad)
       return
     }
     if (!onWorkSpot) return

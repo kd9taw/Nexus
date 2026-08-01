@@ -312,14 +312,14 @@ pub fn pass_track(
     out
 }
 
-/// Age (days) of a TLE from its epoch field on line 1, relative to `now_unix`.
-/// `None` if line 1 is too short or the epoch columns don't parse. The honesty
-/// gate uses this: stale elements (>14 d) get a badge, very stale (>30 d) are
-/// treated as no-data (SGP4 accuracy decays hard past a couple of weeks).
-///
-/// The epoch is TLE columns 19–32: a two-digit year (57–99 ⇒ 19xx, 00–56 ⇒
-/// 20xx, the conventional window) and a fractional day-of-year.
-pub fn tle_age_days(line1: &str, now_unix: i64) -> Option<f64> {
+/// The epoch of a TLE (unix seconds, fractional) from line 1's columns 19–32:
+/// a two-digit year (57–99 ⇒ 19xx, 00–56 ⇒ 20xx, the conventional window) and
+/// a fractional day-of-year. `None` if the line is too short or the columns
+/// don't parse. The one epoch parser the age/currency surfaces share — pinned
+/// against [`prepare`]'s sgp4-derived epoch by test (they must agree to <1 ms
+/// on a real corpus, or two parts of the app would claim two different ages
+/// for the same bird).
+pub fn tle_epoch_unix(line1: &str) -> Option<f64> {
     let l = line1.trim_end();
     let yy: i64 = l.get(18..20)?.trim().parse().ok()?;
     let doy: f64 = l.get(20..32)?.trim().parse().ok()?;
@@ -328,8 +328,15 @@ pub fn tle_age_days(line1: &str, now_unix: i64) -> Option<f64> {
     }
     let year = if yy < 57 { 2000 + yy } else { 1900 + yy };
     // Day-of-year 1.0 is Jan 1 00:00 UTC, so seconds-into-year = (doy − 1)·86400.
-    let epoch_unix = days_from_civil(year, 1, 1) as f64 * 86_400.0 + (doy - 1.0) * 86_400.0;
-    Some((now_unix as f64 - epoch_unix) / 86_400.0)
+    Some(days_from_civil(year, 1, 1) as f64 * 86_400.0 + (doy - 1.0) * 86_400.0)
+}
+
+/// Age (days) of a TLE from its epoch field on line 1, relative to `now_unix`.
+/// `None` if line 1 is too short or the epoch columns don't parse. The honesty
+/// gate uses this: stale elements (>14 d) get a badge, very stale (>30 d) are
+/// treated as no-data (SGP4 accuracy decays hard past a couple of weeks).
+pub fn tle_age_days(line1: &str, now_unix: i64) -> Option<f64> {
+    Some((now_unix as f64 - tle_epoch_unix(line1)?) / 86_400.0)
 }
 
 /// The NORAD catalog number from TLE line 1 (columns 3–7, i.e. `&line1[2..7]`
@@ -337,6 +344,14 @@ pub fn tle_age_days(line1: &str, now_unix: i64) -> Option<f64> {
 /// This keys a bird's elements to its SatNOGS transmitter/status record.
 pub fn norad_id(line1: &str) -> Option<u32> {
     line1.get(2..7)?.trim().parse().ok()
+}
+
+/// Whether sgp4 can actually build a propagator from these lines — the
+/// TLE-validation gate's "will this bird compute" check (parse + constants
+/// only, no propagation). A bird failing this would render as silent no-data
+/// everywhere downstream, so the validator drops it up front, by name.
+pub fn sgp4_constructible(tle: &Tle) -> bool {
+    prepare(tle).is_some()
 }
 
 // --- internals ---------------------------------------------------------------
@@ -700,6 +715,36 @@ mod tests {
             age97 > 4000.0,
             "1997 epoch age {age97} should be ~10+ years"
         );
+    }
+
+    #[test]
+    fn tle_epoch_unix_agrees_with_the_sgp4_epoch_across_a_real_corpus() {
+        // TWO epoch parsers exist: this module's column parser (tle_epoch_unix,
+        // which every age/currency surface uses) and sgp4's own datetime inside
+        // prepare() (which the propagation runs on). They are PINNED together
+        // here across the committed live corpus (97 birds, 2026-07-31): a
+        // drift of even 1 s between them means the app claims one age while
+        // propagating another — and a LEO covers ~7.6 km/s.
+        let corpus = include_str!("../tests/fixtures/celestrak-amateur-2026-08-01.tle");
+        let lines: Vec<&str> = corpus.lines().map(str::trim_end).collect();
+        let mut checked = 0;
+        for w in lines.chunks(3) {
+            let [name, l1, l2] = w else { continue };
+            let tle = Tle {
+                name: name.trim().to_string(),
+                line1: l1.to_string(),
+                line2: l2.to_string(),
+            };
+            let (_, sgp4_epoch) = prepare(&tle).expect("corpus bird constructs");
+            let col_epoch = tle_epoch_unix(l1).expect("corpus epoch parses");
+            assert!(
+                (col_epoch - sgp4_epoch).abs() < 1e-3,
+                "{}: column epoch {col_epoch} vs sgp4 epoch {sgp4_epoch}",
+                tle.name
+            );
+            checked += 1;
+        }
+        assert!(checked >= 90, "the corpus is ~97 birds, checked {checked}");
     }
 
     #[test]

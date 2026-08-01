@@ -14803,6 +14803,23 @@ html[data-panel='needed'] {
   border: 1px solid var(--band-marginal);
   font-family: var(--font-mono);
 }
+/* The stale chip is a BUTTON now (it IS the manual refresh) — strip the UA
+   button chrome so it stays the same chip species as its span siblings. */
+button.sat-chip {
+  background: none;
+  cursor: pointer;
+}
+button.sat-chip:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+/* The >14 d arm-confirm's three-way choice (Refresh / Arm anyway / Cancel). */
+.sat-armconfirm-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+}
 .sats-side {
   grid-row: 2 / -1;
   grid-column: 2;

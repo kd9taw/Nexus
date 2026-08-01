@@ -79,7 +79,7 @@ export function SatPassesPane() {
                 type="button"
                 className={`wn-chase${isChased ? ' active' : ''}`}
                 onClick={() => {
-                  toggleSatChasing(p.name)
+                  toggleSatChasing(p.name, p.norad)
                   setChased(satChasingSet())
                 }}
                 title={isChased ? 'Chasing — sorts first, footprint ring on the map. Click to stop.' : 'Chase this bird — sort its passes first + draw its footprint on the map'}

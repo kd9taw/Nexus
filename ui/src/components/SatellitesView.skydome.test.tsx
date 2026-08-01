@@ -104,6 +104,8 @@ const status = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   inverting: false,
   offsetHz: null,
   halfWidthHz: null,
+  elementAgeDays: 1.2,
+  elementEpochUnix: 1_785_442_400,
   aosUnix: AOS,
   losUnix: LOS,
   ...over,
@@ -500,7 +502,7 @@ describe('the stale-TLE chip', () => {
   // transform has nothing to mis-case.
   it('spells the age unit so the uppercase chip voice cannot re-case it', async () => {
     api.getSatellites.mockImplementation(() =>
-      Promise.resolve({ tleAgeDays: 21, birds: [], passes: [] }),
+      Promise.resolve({ tleAgeDays: 21, tleFetchedAt: 1_785_542_400, tleSource: 'mirror', birds: [], passes: [] }),
     )
     const { container } = render(<SatellitesView />)
     await waitFor(() => {

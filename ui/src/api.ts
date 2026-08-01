@@ -276,6 +276,52 @@ export async function fetchFccStates(): Promise<FccStatesStatus> {
   return invoke<FccStatesStatus>('fetch_fcc_states')
 }
 
+/** Orbital-element (TLE) currency status — Settings "Orbital elements" fieldset
+ * + the Now-Bar `sat` lane. */
+export interface TleStatus {
+  /** Merged (group + imported) element-set count. */
+  count: number
+  /** …of which pass the per-bird 30 d usability gate. */
+  usableCount: number
+  /** Unix stamp of the last successful fetch/304; 0 = never. */
+  fetchedAt: number
+  /** "mirror" | "celestrak" | "import" | "legacy" | "none". */
+  source: string
+  /** Operator file-imports riding the snapshot (persist across refreshes). */
+  importedCount: number
+  /** Age (days) of the oldest USABLE (≤30 d) set — the Satellites badge scalar.
+   * Absent when no set is usable. */
+  elementAgeDays?: number | null
+  /** Celestrak 403/404 hard stop's end (unix); 0 = not blocked. */
+  blockedUntil: number
+  /** The last refresh failure, operator-readable; absent = last attempt landed. */
+  lastError?: string | null
+}
+
+/** Element-currency status (never blocks on the network). Polling this also
+ * kicks a due background refresh — the App's Now-Bar poll is what keeps
+ * elements current while no satellite surface is open. */
+export async function getTleStatus(): Promise<TleStatus> {
+  return invoke<TleStatus>('get_tle_status')
+}
+
+/** The manual "refresh elements" action: run one refresh attempt NOW and wait
+ * for it. Bypasses the TTL and failure backoff, but never the single-flight,
+ * the Celestrak 2 h floor, or the 403/404 hard stop (etiquette is not
+ * operator-waivable — the mirror leg is always available). Rejects with the
+ * operator-readable reason when the attempt did not land. */
+export async function fetchTlesNow(): Promise<TleStatus> {
+  return invoke<TleStatus>('fetch_tles_now')
+}
+
+/** Import operator-supplied elements (a downloaded Celestrak file, AMSAT keps,
+ * a new launch's SupGP set) from 2LE/3LE text. Per-bird integrity only — no
+ * count/freshness ratchet; imports persist across refreshes and merge over the
+ * fetched group by NORAD, newest epoch winning. */
+export async function importTles(text: string): Promise<TleStatus> {
+  return invoke<TleStatus>('import_tles', { text })
+}
+
 /** The 60 s X-ray fast lane — the freshest GOES long-band flux, so a flare's
  * onset reaches the map + alert in ~1 min instead of the 5-min prop cadence. */
 export async function getXrayNow(): Promise<import('./types').XrayNow> {

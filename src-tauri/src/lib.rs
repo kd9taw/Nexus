@@ -1649,16 +1649,23 @@ fn conversations_path() -> PathBuf {
         .join("conversations.json")
 }
 
-/// Atomically write the conversation JSON: create the dir if missing (fresh
-/// profile), write a temp file, then rename — so a crash mid-write can't truncate
-/// the history (mirrors `Logbook::save`). Returns whether it succeeded.
-fn write_conversations_atomic(text: &str) -> bool {
-    let path = conversations_path();
+/// Atomically install JSON at `path`: create the dir if missing, write a
+/// PER-PROCESS temp beside it, then rename — so a crash mid-write can't
+/// truncate the file (mirrors `Logbook::save`), and two instances sharing a
+/// dir (shared_data_dir) can neither read a half-written copy nor clobber each
+/// other's temp (the `fcc_download_if_newer` PID-keyed idiom). Returns whether
+/// it succeeded.
+fn write_json_atomic(path: &std::path::Path, text: &str) -> bool {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &path).is_ok()
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_ok()
+}
+
+/// Atomically write the conversation JSON (see [`write_json_atomic`]).
+fn write_conversations_atomic(text: &str) -> bool {
+    write_json_atomic(&conversations_path(), text)
 }
 
 /// Export + atomically persist the engine's conversation threads. Used for the
@@ -2973,9 +2980,10 @@ async fn fetch_fcc_states() -> Result<FccStatesStatus, String> {
     Ok(fcc_status())
 }
 
-/// Where fetched TLEs persist (beside settings.json): day-scale orbital elements,
-/// so surviving a restart matters more than freshness-to-the-minute.
-fn tles_path() -> PathBuf {
+/// The LEGACY per-profile TLE cache (a bare `Vec<Tle>` array, pre-snapshot
+/// builds) — read once at startup for migration onto the shared path, never
+/// written again.
+fn legacy_tles_path() -> PathBuf {
     settings_path()
         .parent()
         .map(|p| p.to_path_buf())
@@ -2983,10 +2991,103 @@ fn tles_path() -> PathBuf {
         .join("tles.json")
 }
 
-/// Celestrak amateur TLE cache: (fetched-at, elements). 12 h TTL per the spec —
-/// Celestrak asks consumers to cache; TLEs are day-scale data.
-static TLE_CACHE: Mutex<Option<(std::time::Instant, Vec<propagation::sat::Tle>)>> =
-    Mutex::new(None);
+/// Where the TLE snapshot persists: the SHARED data dir, so a two-radio shack's
+/// two processes read and refresh ONE cache instead of each fetching its own.
+/// Each process loads it once (memory-first) and writes whole-file; group
+/// elements are last-writer-wins (both fetch the same group), and every writer
+/// re-absorbs the disk copy's `imported`/`aliases` first ([`tle_absorb_foreign`])
+/// so one instance's refresh can't discard the other's operator imports.
+/// Day-scale orbital elements — surviving a restart matters more than
+/// freshness-to-the-minute.
+fn shared_tles_path() -> PathBuf {
+    shared_data_dir().join("tles.json")
+}
+
+/// The persisted TLE snapshot: elements plus the WALL-CLOCK provenance that
+/// makes currency decisions survive a restart (the old cache was a bare array
+/// with a process-`Instant` TTL, so every launch re-fetched and suspends were
+/// invisible). `imported` (operator file-imports, phase 2) and `aliases`
+/// (rename survival, phase 4) ride the same file so the schema doesn't churn
+/// per phase.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TleSnapshot {
+    schema: u32,
+    /// Unix stamp of the last successful fetch or 304 — 0 = unknown (legacy),
+    /// which reads as due-for-refresh, never as fresh.
+    fetched_at: i64,
+    /// Where the elements came from: "mirror" | "celestrak" | "legacy" |
+    /// "import" (+ "bundled" if the seed-snapshot phase ships).
+    source: String,
+    /// The mirror manifest's own generation stamp (absent on direct fetches).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    generated: Option<String>,
+    /// The mirror's ETag — the next refresh's If-None-Match (a 304 ≈ 300 bytes
+    /// instead of 16 KB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    etag: Option<String>,
+    count: usize,
+    elements: Vec<propagation::sat::Tle>,
+    /// Operator file-imports, merged over `elements` by NORAD (newest epoch
+    /// wins) and persisted across refreshes (phase 2 fills it).
+    #[serde(default)]
+    imported: Vec<propagation::sat::Tle>,
+    /// Additive name → NORAD alias map (rename survival, phase 4).
+    #[serde(default)]
+    aliases: std::collections::HashMap<String, u32>,
+}
+
+/// What `tles.json` may hold on disk: the snapshot, or the bare array a
+/// pre-snapshot build wrote. Untagged — serde tries the object shape first —
+/// so an existing cache is NEVER discarded for being old-shaped.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum TleSnapshotOnDisk {
+    Snapshot(TleSnapshot),
+    Legacy(Vec<propagation::sat::Tle>),
+}
+
+/// Load a snapshot (either on-disk shape) from `path`. A legacy bare array
+/// becomes `{fetchedAt: 0, source: "legacy"}`; an EMPTY legacy array is no
+/// data at all (`None`) — it must not masquerade as a cache. Unreadable or
+/// torn files are `None` (the atomic writer makes torn finals unreachable,
+/// but a decade of shipped builds is a long time).
+fn load_tle_snapshot_from(path: &std::path::Path) -> Option<TleSnapshot> {
+    let text = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<TleSnapshotOnDisk>(&text).ok()? {
+        TleSnapshotOnDisk::Snapshot(s) => Some(s),
+        TleSnapshotOnDisk::Legacy(v) if !v.is_empty() => Some(TleSnapshot {
+            schema: 1,
+            fetched_at: 0,
+            source: "legacy".into(),
+            generated: None,
+            etag: None,
+            count: v.len(),
+            elements: v,
+            imported: Vec::new(),
+            aliases: Default::default(),
+        }),
+        TleSnapshotOnDisk::Legacy(_) => None,
+    }
+}
+
+/// In-memory TLE snapshot (the disk file's twin) + the refresh-discipline
+/// statics, per the SatNOGS idiom: single-flight, WALL-CLOCK attempt stamps,
+/// failure backoff, and the Celestrak hard stop. The timing rules themselves
+/// live in the pure [`propagation::live::tle::tle_fetch_target`].
+static TLES: Mutex<Option<TleSnapshot>> = Mutex::new(None);
+static TLE_FETCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Last refresh ATTEMPT on either leg (unix) — the failure backoff's anchor.
+static TLE_LAST_TRY: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// Last CELESTRAK attempt (unix) — its own 2 h floor (their update cycle;
+/// re-asking inside one cycle is what draws 403s).
+static TLE_CT_LAST_TRY: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// Consecutive refresh failures — exponential backoff (30 min × 2ⁿ⁻¹, cap 6 h).
+static TLE_FAILS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Celestrak 403/404 hard stop: no direct attempts before this unix stamp.
+static TLE_BLOCKED_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// The last refresh failure, operator-readable (phase 3 surfaces it in the UI).
+static TLE_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 /// Computed PASS-LIST cache (the expensive 24 h scan). Subpoints are NEVER
 /// cached — a LEO ground track moves ~4°/min, so positions are recomputed on
 /// every call (one cheap sgp4 eval per bird) while the pass scan reuses this.
@@ -2997,6 +3098,10 @@ static SAT_PASSES: Mutex<Option<(std::time::Instant, String, Vec<SatPassDto>)>> 
 #[serde(rename_all = "camelCase")]
 struct SatBird {
     name: String,
+    /// NORAD catalog number — the STABLE identity the UI records beside a
+    /// ★'d name (upstream renames change names, never catalog numbers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    norad: Option<u32>,
     lat: f64,
     lon: f64,
     alt_km: f64,
@@ -3015,6 +3120,11 @@ struct SatBird {
 struct SatView {
     /// Age of the OLDEST element set in days — the UI badges > 14 d as stale.
     tle_age_days: f64,
+    /// When the serving snapshot was FETCHED (unix; 0 = never/legacy) and
+    /// where it came from ("mirror" | "celestrak" | "import" | "legacy") —
+    /// pipe health, a different fact from `tle_age_days`' physics quality.
+    tle_fetched_at: i64,
+    tle_source: String,
     birds: Vec<SatBird>,
     /// Next-24 h passes over the QTH, all birds (empty when the grid is unset).
     /// Sorted by AOS. Geometry only — no transponder/workability claim.
@@ -3025,6 +3135,10 @@ struct SatView {
 #[serde(rename_all = "camelCase")]
 struct SatPassDto {
     name: String,
+    /// NORAD catalog number — the STABLE identity the UI records beside a
+    /// ★'d name (upstream renames change names, never catalog numbers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    norad: Option<u32>,
     aos_unix: i64,
     los_unix: i64,
     max_el_deg: f64,
@@ -3041,8 +3155,6 @@ struct SatPassDto {
     earn: Option<propagation::SatPassEarn>,
 }
 
-/// Current amateur-satellite picture: sub-satellite points for the Celestrak
-/// amateur group + next-24 h passes over the operator's grid. TLEs cached 12 h
 /// Post the operator's own DX spot to the human DX cluster. Formats a canonical
 /// `DX <freq_khz> <call> <comment>` line and queues it for the connected human
 /// node(s) to send. Gated on a node being connected NOW — a spot must not buffer
@@ -3090,8 +3202,11 @@ async fn get_contests() -> Result<Vec<propagation::live::contests::ContestEvent>
     .map_err(|e| e.to_string())?
 }
 
-/// (+ persisted beside settings, so a restart serves instantly and offline
-/// starts stay honest). Subpoints are recomputed EVERY call (LEO tracks move
+/// Current amateur-satellite picture: sub-satellite points for the Celestrak
+/// amateur group + next-24 h passes over the operator's grid. Elements come
+/// from the shared TLE snapshot (`tle_snapshot` — never blocks on the network,
+/// persisted in the shared data dir, so a restart serves instantly and
+/// offline starts stay honest). Subpoints are recomputed EVERY call (LEO tracks move
 /// ~4°/min); only the 24 h pass scan caches (10 min). Staleness is per bird:
 /// elements >30 days drop that bird alone (SGP4 accuracy is gone); `None` only
 /// when no usable elements exist at all — the UI draws nothing.
@@ -3111,10 +3226,11 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
             (*k == key && when.elapsed().as_secs() < VIEW_TTL_SECS).then(|| v.clone())
         })
     };
-    let tles = load_tles().await?;
+    let tles = tle_snapshot();
     if tles.is_empty() {
         return Ok(None); // never had elements — honest no-data
     }
+    let (tle_fetched_at, tle_source) = tle_provenance();
     let observer = propagation::geo::maidenhead_to_latlon(mygrid.trim());
     let need_passes = cached_passes.is_none();
     let out = tauri::async_runtime::spawn_blocking(move || {
@@ -3144,8 +3260,10 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                 // 10 min of trail + 25 min of projection at 1-min steps — one
                 // TLE parse per bird (the batch fn), ~ms for the whole flock.
                 let track = sat::track(t, now, 600, 1_500, 60);
+                let norad = sat::norad_id(&t.line1);
                 birds.push(SatBird {
                     name: t.name.clone(),
+                    norad,
                     lat,
                     lon,
                     alt_km,
@@ -3157,6 +3275,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                         for p in sat::passes(t, obs, now, 24) {
                             computed_passes.push(SatPassDto {
                                 name: t.name.clone(),
+                                norad,
                                 aos_unix: p.aos_unix,
                                 los_unix: p.los_unix,
                                 max_el_deg: p.max_el_deg,
@@ -3180,6 +3299,8 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
         Some((
             SatView {
                 tle_age_days,
+                tle_fetched_at,
+                tle_source,
                 birds,
                 passes: passes.clone(),
             },
@@ -3202,60 +3323,667 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
     })
 }
 
-/// Elements for every sat command: fresh cache → network (persisting on
-/// success) → stale cache → disk. Empty = we truly never had elements — the
-/// callers render honest no-data, never a guess.
-async fn load_tles() -> Result<Vec<propagation::sat::Tle>, String> {
-    const TLE_TTL_SECS: u64 = 12 * 3600;
-    let cached = {
-        let g = TLE_CACHE.lock().map_err(|e| e.to_string())?;
-        g.as_ref()
-            .and_then(|(when, t)| (when.elapsed().as_secs() < TLE_TTL_SECS).then(|| t.clone()))
+/// Load the persisted snapshot into memory (idempotent, memory-first): the
+/// shared path first, else the legacy per-profile cache — which is then
+/// migrated ONCE onto the shared path so every instance sees it. The migration
+/// write only happens when no shared file loads: a legacy copy must never
+/// clobber a good shared cache.
+fn tles_load_from_disk() {
+    if TLES.lock().is_ok_and(|g| g.is_some()) {
+        return;
+    }
+    let (snap, migrate) = match load_tle_snapshot_from(&shared_tles_path()) {
+        Some(s) => (Some(s), false),
+        None => (load_tle_snapshot_from(&legacy_tles_path()), true),
     };
-    Ok(match cached {
-        Some(t) => t,
-        None => {
-            match tauri::async_runtime::spawn_blocking(propagation::live::tle::fetch_tles)
-                .await
-                .map_err(|e| e.to_string())?
-            {
-                Ok(t) if !t.is_empty() => {
-                    if let Ok(mut g) = TLE_CACHE.lock() {
-                        *g = Some((std::time::Instant::now(), t.clone()));
-                    }
-                    if let Ok(json) = serde_json::to_string(&t) {
-                        let _ = std::fs::write(tles_path(), json);
-                    }
-                    t
-                }
-                _ => {
-                    // Fetch failed — serve the stale cache, else the persisted set.
-                    let stale = TLE_CACHE
-                        .lock()
-                        .ok()
-                        .and_then(|g| g.as_ref().map(|(_, t)| t.clone()));
-                    match stale {
-                        Some(t) => t,
-                        None => {
-                            let disk: Option<Vec<propagation::sat::Tle>> =
-                                std::fs::read_to_string(tles_path())
-                                    .ok()
-                                    .and_then(|s| serde_json::from_str(&s).ok());
-                            match disk {
-                                Some(t) if !t.is_empty() => {
-                                    if let Ok(mut g) = TLE_CACHE.lock() {
-                                        *g = Some((std::time::Instant::now(), t.clone()));
-                                    }
-                                    t
-                                }
-                                _ => Vec::new(),
-                            }
-                        }
-                    }
+    let Some(snap) = snap else { return };
+    if migrate {
+        if let Ok(json) = serde_json::to_string(&snap) {
+            let _ = write_json_atomic(&shared_tles_path(), &json);
+        }
+    }
+    if let Ok(mut g) = TLES.lock() {
+        // First loader wins — a racing thread loaded the same file anyway.
+        g.get_or_insert(snap);
+    }
+}
+
+/// `elements` + `imported` merged by NORAD, newest epoch winning — the one
+/// element list every consumer sees (an operator import of a new launch beats
+/// the group file until the group catches up, and vice versa).
+fn tle_merged_elements(s: &TleSnapshot) -> Vec<propagation::sat::Tle> {
+    if s.imported.is_empty() {
+        return s.elements.clone();
+    }
+    let now = now_unix();
+    let age = |t: &propagation::sat::Tle| {
+        propagation::sat::tle_age_days(&t.line1, now).unwrap_or(f64::INFINITY)
+    };
+    let mut out = s.elements.clone();
+    let mut idx: std::collections::HashMap<u32, usize> = out
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| propagation::sat::norad_id(&t.line1).map(|n| (n, i)))
+        .collect();
+    for t in &s.imported {
+        let Some(n) = propagation::sat::norad_id(&t.line1) else {
+            continue;
+        };
+        match idx.get(&n) {
+            Some(&i) => {
+                if age(t) < age(&out[i]) {
+                    out[i] = t.clone();
                 }
             }
+            None => {
+                idx.insert(n, out.len());
+                out.push(t.clone());
+            }
         }
+    }
+    out
+}
+
+/// Fold `elements`' names into the ADDITIVE alias map (UPPERCASE name →
+/// NORAD; phase 4 rename survival). Entries are never removed: the operator's
+/// ★s, ⏰ alarms and saved keys are name strings, and after an upstream rename
+/// the OLD name keeping its NORAD is the whole point. A name that moves to a
+/// different catalog number reads as its newest meaning (insert overwrites).
+fn tle_extend_aliases(
+    aliases: &mut std::collections::HashMap<String, u32>,
+    elements: &[propagation::sat::Tle],
+) {
+    for t in elements {
+        if let Some(n) = propagation::sat::norad_id(&t.line1) {
+            let name = t.name.trim().to_uppercase();
+            if !name.is_empty() {
+                aliases.insert(name, n);
+            }
+        }
+    }
+}
+
+/// Record every name the snapshot currently serves into its alias map —
+/// called BEFORE anything replaces elements (install, import merge), so a
+/// name about to vanish keeps resolving to its bird.
+fn tle_record_aliases(snap: &mut TleSnapshot) {
+    let TleSnapshot {
+        aliases,
+        elements,
+        imported,
+        ..
+    } = snap;
+    tle_extend_aliases(aliases, elements);
+    tle_extend_aliases(aliases, imported);
+}
+
+/// Resolve an operator-facing bird name against the merged element list,
+/// SURVIVING upstream renames: exact (case-insensitive) name match first,
+/// then the snapshot's additive alias map — the NORAD this name meant when we
+/// last served it. Every by-name lookup (detail, track, transponder pick,
+/// schedule) resolves through here, which is why the UI's stored name keys
+/// never need migrating.
+fn resolve_bird<'a>(
+    tles: &'a [propagation::sat::Tle],
+    aliases: &std::collections::HashMap<String, u32>,
+    name: &str,
+) -> Option<&'a propagation::sat::Tle> {
+    let key = name.trim().to_uppercase();
+    if let Some(t) = tles.iter().find(|t| t.name.to_uppercase() == key) {
+        return Some(t);
+    }
+    let norad = aliases.get(&key).copied()?;
+    tles.iter()
+        .find(|t| propagation::sat::norad_id(&t.line1) == Some(norad))
+}
+
+/// The schedule commands' bird selection: every requested ★ name resolved
+/// (rename-surviving), each bird once. Direct matches claim their bird first,
+/// so an operator with BOTH the old and the current name starred gets one row
+/// set, under the current name. An alias-resolved bird's rows carry the NAME
+/// THE OPERATOR ASKED WITH: the ★ set, the ⏰ alarm map and the fired-pass
+/// dedupe all key on that string, and rows only exist for requested names —
+/// echoing the request is what keeps them alive.
+fn resolve_birds<'a>(
+    tles: &'a [propagation::sat::Tle],
+    aliases: &std::collections::HashMap<String, u32>,
+    names: &[String],
+) -> Vec<(String, &'a propagation::sat::Tle)> {
+    let mut out: Vec<(String, &propagation::sat::Tle)> = Vec::new();
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for alias_pass in [false, true] {
+        for n in names {
+            let key = n.trim().to_uppercase();
+            let direct = tles.iter().find(|t| t.name.to_uppercase() == key);
+            let (label, t) = match (direct, alias_pass) {
+                (Some(t), false) => (t.name.clone(), t),
+                (None, true) => match resolve_bird(tles, aliases, n) {
+                    Some(t) => (n.trim().to_string(), t),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            if taken.insert(t.name.to_uppercase()) {
+                out.push((label, t));
+            }
+        }
+    }
+    out
+}
+
+/// The serving snapshot's alias map (a clone — dozens of entries at most).
+fn tle_aliases() -> std::collections::HashMap<String, u32> {
+    TLES.lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|s| s.aliases.clone()))
+        .unwrap_or_default()
+}
+
+/// Best-available elements NOW — memory → disk → empty — kicking a due
+/// background refresh. NEVER blocks on the network: the old `load_tles().await`
+/// held every sat command (and the UI surfaces polling them at 30–60 s)
+/// hostage to a 20 s fetch timeout whenever the shack was offline. Empty = we
+/// truly never had elements; the callers render honest no-data, never a guess.
+fn tle_snapshot() -> Vec<propagation::sat::Tle> {
+    tles_load_from_disk();
+    maybe_kick_tle_refresh(false);
+    TLES.lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(tle_merged_elements))
+        .unwrap_or_default()
+}
+
+/// A cheap 0..`max` jitter (seconds) off the subsecond clock — enough to
+/// de-synchronize a fleet of installs without a rand dependency.
+fn subsec_jitter(max: u64) -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_nanos()))
+        .unwrap_or(0)
+        % max
+}
+
+/// Fold what ANOTHER INSTANCE wrote to the shared file into `snap` before we
+/// overwrite it. Two processes share ONE `tles.json`, but each reads it once
+/// (memory-first) and writes its own snapshot whole-file — without this
+/// re-merge, instance B's next refresh write would silently discard an import
+/// instance A landed on disk (operator-entered data; review catch).
+/// Elements/`fetched_at` stay last-writer-wins by design — both instances
+/// fetch the same group, so the loser is equivalent — but `imported` merges
+/// NORAD-keyed newest-epoch and `aliases` additively (a name collision keeps
+/// our fresher in-memory entry). The remaining read→write race window is
+/// milliseconds; the pre-fix loss window was the whole process lifetime.
+fn tle_absorb_foreign(snap: &mut TleSnapshot, disk: TleSnapshot, now: i64) {
+    tle_merge_imports(snap, disk.imported, now);
+    for (name, norad) in disk.aliases {
+        snap.aliases.entry(name).or_insert(norad);
+    }
+}
+
+/// A mirror 304: the published set hasn't changed — bump the freshness stamp
+/// (memory + disk) and reset the failure bookkeeping. Nothing else moves.
+fn tles_touch_fetched_at() {
+    use std::sync::atomic::Ordering;
+    TLE_FAILS.store(0, Ordering::SeqCst);
+    if let Ok(mut g) = TLE_LAST_ERROR.lock() {
+        *g = None;
+    }
+    // Fresh disk read BEFORE the lock (no I/O under the mutex): another
+    // instance may have landed imports here since our memory-first load.
+    let disk = load_tle_snapshot_from(&shared_tles_path());
+    let snap = TLES.lock().ok().and_then(|mut g| {
+        g.as_mut().map(|s| {
+            s.fetched_at = now_unix();
+            if let Some(d) = disk {
+                tle_absorb_foreign(s, d, now_unix());
+            }
+            s.clone()
+        })
+    });
+    if let Some(s) = snap {
+        if let Ok(json) = serde_json::to_string(&s) {
+            let _ = write_json_atomic(&shared_tles_path(), &json);
+        }
+    }
+}
+
+/// Install a VALIDATED element set as the new snapshot (memory + atomic disk
+/// write), carrying the operator's `imported` list and the alias map across
+/// refreshes. Only validated data reaches here — the empty/invalid cases died
+/// in `validate_tles` — so a bad fetch can never overwrite a good cache.
+fn tles_install(
+    elements: Vec<propagation::sat::Tle>,
+    source: &str,
+    generated: Option<String>,
+    etag: Option<String>,
+) {
+    use std::sync::atomic::Ordering;
+    TLE_FAILS.store(0, Ordering::SeqCst);
+    if let Ok(mut g) = TLE_LAST_ERROR.lock() {
+        *g = None;
+    }
+    // Fresh disk read BEFORE the lock (no I/O under the mutex): another
+    // instance may have landed imports here since our memory-first load.
+    let disk = load_tle_snapshot_from(&shared_tles_path());
+    let snap = match TLES.lock() {
+        Ok(mut g) => {
+            // Rename survival (phase 4): record the OUTGOING set's names
+            // before this install replaces them, then the incoming names —
+            // a bird renamed upstream keeps its old name resolving.
+            let (imported, mut aliases) = match g.as_mut() {
+                Some(prev) => {
+                    tle_record_aliases(prev);
+                    (prev.imported.clone(), prev.aliases.clone())
+                }
+                None => Default::default(),
+            };
+            tle_extend_aliases(&mut aliases, &elements);
+            let mut s = TleSnapshot {
+                schema: 1,
+                fetched_at: now_unix(),
+                source: source.to_string(),
+                generated,
+                etag,
+                count: elements.len(),
+                elements,
+                imported,
+                aliases,
+            };
+            if let Some(d) = disk {
+                tle_absorb_foreign(&mut s, d, now_unix());
+            }
+            *g = Some(s.clone());
+            s
+        }
+        Err(_) => return,
+    };
+    if let Ok(json) = serde_json::to_string(&snap) {
+        let _ = write_json_atomic(&shared_tles_path(), &json);
+    }
+}
+
+/// The refresh decision's inputs from the in-memory snapshot: cache age
+/// (`None` = no cache or no wall-clock stamp), the bird count the validation
+/// ratchet compares against, and the mirror ETag. `None` only on a poisoned
+/// lock (nothing sane to decide with).
+fn tle_refresh_inputs(now: i64) -> Option<(Option<i64>, usize, Option<String>)> {
+    match TLES.lock() {
+        Ok(g) => Some(match g.as_ref() {
+            Some(s) if s.fetched_at > 0 => {
+                (Some(now - s.fetched_at), s.elements.len(), s.etag.clone())
+            }
+            Some(s) => (None, s.elements.len(), None),
+            None => (None, 0, None),
+        }),
+        Err(_) => None,
+    }
+}
+
+/// Releases the TLE single-flight flag on drop — PANIC-PROOF. The flag is
+/// set by the kick paths before a flight spawns; clearing it with a tail
+/// `store(false)` would be skipped by a panic anywhere in the flight, leaving
+/// background AND manual refresh answering "already running" until restart,
+/// silently (review catch: low likelihood, high blast radius).
+struct TleFlightGuard;
+impl Drop for TleFlightGuard {
+    fn drop(&mut self) {
+        TLE_FETCHING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// ONE refresh attempt against `target`, run to completion (blocking I/O —
+/// call off the async runtime). Owns the outcome bookkeeping — install/touch
+/// on success, fail count + operator-readable `TLE_LAST_ERROR` + the
+/// Celestrak 24 h hard stop on failure — and releases the single-flight flag
+/// on the way out (RAII, so a panic can't leave it stuck). Returns the
+/// failure message so the operator's manual refresh can surface it directly;
+/// the background kick drops it (the same text is already in
+/// `TLE_LAST_ERROR`).
+fn tle_refresh_flight(
+    target: propagation::live::tle::TleFetchTarget,
+    prev_count: usize,
+    etag: Option<String>,
+    manual: bool,
+) -> Result<(), String> {
+    use propagation::live::tle::{self, TleFetchError, TleFetchTarget, TleMirrorFetch};
+    use std::sync::atomic::Ordering;
+    let _flight = TleFlightGuard;
+    let outcome: Result<(), String> = match target {
+        TleFetchTarget::Mirror => match tle::fetch_tles_mirror(etag.as_deref()) {
+            Ok(TleMirrorFetch::NotModified) => {
+                tles_touch_fetched_at();
+                Ok(())
+            }
+            Ok(TleMirrorFetch::Fresh {
+                elements,
+                generated,
+                etag,
+            }) => match tle::validate_tles(&elements, prev_count, now_unix()) {
+                Ok(clean) => {
+                    tles_install(clean, "mirror", generated, etag);
+                    Ok(())
+                }
+                Err(e) => Err(format!("mirror TLE set refused: {e}")),
+            },
+            Err(e) => Err(format!("TLE mirror fetch failed: {e}")),
+        },
+        TleFetchTarget::Celestrak => {
+            TLE_CT_LAST_TRY.store(now_unix(), Ordering::SeqCst);
+            if !manual {
+                // De-synchronize the fallback fleet (we're already off the
+                // caller's thread, so sleeping here blocks no one).
+                std::thread::sleep(std::time::Duration::from_secs(subsec_jitter(120)));
+            }
+            match tle::fetch_tles() {
+                Ok(t) => match tle::validate_tles(&t, prev_count, now_unix()) {
+                    Ok(clean) => {
+                        tles_install(clean, "celestrak", None, None);
+                        Ok(())
+                    }
+                    Err(e) => Err(format!("Celestrak TLE set refused: {e}")),
+                },
+                Err(TleFetchError::Blocked(code)) => {
+                    // Celestrak said stop (per-cycle caps / per-IP limits).
+                    // 24 h hard stop, no retry — retrying is how IPs get
+                    // firewalled. The reason stays operator-readable.
+                    TLE_BLOCKED_UNTIL.store(now_unix() + 24 * 3600, Ordering::SeqCst);
+                    Err(format!(
+                        "Celestrak refused (HTTP {code}) — direct fetches stopped for 24 h; the mirror keeps retrying"
+                    ))
+                }
+                Err(e) => Err(format!("Celestrak TLE fetch failed: {e}")),
+            }
+        }
+    };
+    if let Err(msg) = &outcome {
+        TLE_FAILS.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut g) = TLE_LAST_ERROR.lock() {
+            *g = Some(msg.clone());
+        }
+    }
+    outcome
+}
+
+/// Start a background TLE refresh if one is DUE — [`tle_fetch_target`] owns
+/// every timing rule (TTL, backoff, the Celestrak floor and hard stop); this
+/// shell supplies state and obeys. Single-flight; the caller never waits. A
+/// failed leg only moves the failure bookkeeping; each attempt runs ONE leg —
+/// mirror-first, with Celestrak reached only via the decision function's
+/// narrow escalation on a later attempt — so no code path can double-fetch.
+/// (The operator's synchronous refresh is [`fetch_tles_now`]; both run the
+/// same [`tle_refresh_flight`].)
+fn maybe_kick_tle_refresh(manual: bool) {
+    use propagation::live::tle;
+    use std::sync::atomic::Ordering;
+    let now = now_unix();
+    let Some((age, prev_count, etag)) = tle_refresh_inputs(now) else {
+        return;
+    };
+    let Some(target) = tle::tle_fetch_target(
+        age,
+        TLE_LAST_TRY.load(Ordering::SeqCst),
+        TLE_CT_LAST_TRY.load(Ordering::SeqCst),
+        TLE_FAILS.load(Ordering::SeqCst),
+        TLE_BLOCKED_UNTIL.load(Ordering::SeqCst),
+        now,
+        manual,
+    ) else {
+        return;
+    };
+    if TLE_FETCHING.swap(true, Ordering::SeqCst) {
+        return; // single-flight — one attempt in the air, ever
+    }
+    TLE_LAST_TRY.store(now, Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = tle_refresh_flight(target, prev_count, etag, manual);
+    });
+}
+
+/// Where the serving snapshot came from, for the wire: `(fetchedAt, source)`.
+/// `(0, "none")` when we have never had elements at all — pipe health is a
+/// different fact from element age (physics quality), and both are shown.
+fn tle_provenance() -> (i64, String) {
+    TLES.lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|s| (s.fetched_at, s.source.clone())))
+        .unwrap_or((0, "none".into()))
+}
+
+/// Element-currency status for the Settings "Orbital elements" fieldset and
+/// the Now-Bar `sat` lane — everything the operator needs to judge (and fix)
+/// the pipeline, none of it guessed.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TleStatus {
+    /// Merged (group + imported) element-set count — what the app can draw on.
+    count: usize,
+    /// …of which pass the per-bird 30 d usability gate.
+    usable_count: usize,
+    /// Unix stamp of the last successful fetch/304; 0 = never (or legacy).
+    fetched_at: i64,
+    /// "mirror" | "celestrak" | "import" | "legacy" | "none".
+    source: String,
+    /// Operator file-imports riding the snapshot (persist across refreshes).
+    imported_count: usize,
+    /// Age (days) of the oldest USABLE (≤30 d) element set — the same scalar
+    /// the Satellites badge shows. Absent when no set is usable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    element_age_days: Option<f64>,
+    /// Celestrak 403/404 hard stop's end (unix); 0 = not blocked.
+    blocked_until: i64,
+    /// The last refresh failure, operator-readable; absent = last attempt landed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
+}
+
+/// Assemble [`TleStatus`] from the in-memory snapshot + refresh statics.
+/// Cheap (one parse pass over ~100 birds); callers ensure the disk load ran.
+fn tle_status() -> TleStatus {
+    use std::sync::atomic::Ordering;
+    let now = now_unix();
+    let (merged, fetched_at, source, imported_count) = match TLES.lock() {
+        Ok(g) => match g.as_ref() {
+            Some(s) => (
+                tle_merged_elements(s),
+                s.fetched_at,
+                s.source.clone(),
+                s.imported.len(),
+            ),
+            None => (Vec::new(), 0, "none".into(), 0),
+        },
+        Err(_) => (Vec::new(), 0, "none".into(), 0),
+    };
+    let usable: Vec<f64> = merged
+        .iter()
+        .filter_map(|t| propagation::sat::tle_age_days(&t.line1, now))
+        .filter(|a| *a <= TLE_ACT_STALE_DAYS)
+        .collect();
+    let blocked_until = TLE_BLOCKED_UNTIL.load(Ordering::SeqCst);
+    TleStatus {
+        count: merged.len(),
+        usable_count: usable.len(),
+        fetched_at,
+        source,
+        imported_count,
+        element_age_days: usable.iter().copied().reduce(f64::max),
+        blocked_until: if blocked_until > now { blocked_until } else { 0 },
+        last_error: TLE_LAST_ERROR.lock().ok().and_then(|g| g.clone()),
+    }
+}
+
+/// Element-currency status (non-blocking: memory → disk). Polling this also
+/// kicks a due background refresh — the App's Now-Bar poll is what keeps
+/// elements current while no satellite surface is open.
+#[tauri::command]
+fn get_tle_status() -> TleStatus {
+    tles_load_from_disk();
+    maybe_kick_tle_refresh(false);
+    tle_status()
+}
+
+/// The operator's "Update now" button: run one refresh attempt NOW and wait
+/// for it. Manual bypasses the TTL and the failure backoff, but NEVER the
+/// single-flight, the Celestrak 2 h floor, or the 403/404 hard stop
+/// (etiquette isn't operator-waivable — the mirror leg is always available
+/// to a manual refresh, so the button always has something honest to try).
+#[tauri::command]
+async fn fetch_tles_now() -> Result<TleStatus, String> {
+    use std::sync::atomic::Ordering;
+    tles_load_from_disk();
+    let now = now_unix();
+    let (age, prev_count, etag) =
+        tle_refresh_inputs(now).ok_or_else(|| "element cache unavailable".to_string())?;
+    let Some(target) = propagation::live::tle::tle_fetch_target(
+        age,
+        TLE_LAST_TRY.load(Ordering::SeqCst),
+        TLE_CT_LAST_TRY.load(Ordering::SeqCst),
+        TLE_FAILS.load(Ordering::SeqCst),
+        TLE_BLOCKED_UNTIL.load(Ordering::SeqCst),
+        now,
+        true,
+    ) else {
+        // The decision function owns policy; manual always gets a target
+        // today, but if it ever says "not now" the honest answer is status.
+        return Ok(tle_status());
+    };
+    if TLE_FETCHING.swap(true, Ordering::SeqCst) {
+        return Err("an element refresh is already running — it will land shortly".into());
+    }
+    TLE_LAST_TRY.store(now, Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(move || tle_refresh_flight(target, prev_count, etag, true))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(tle_status())
+}
+
+/// Pure half of the import: merge `new` element sets into `snap.imported`,
+/// NORAD-keyed with the newest epoch winning — re-importing an updated keps
+/// file replaces its older entries instead of doubling them. (The merge of
+/// `imported` OVER the fetched group happens at read time in
+/// [`tle_merged_elements`]; imports persist across refreshes because
+/// [`tles_install`] carries the list forward.)
+fn tle_merge_imports(snap: &mut TleSnapshot, new: Vec<propagation::sat::Tle>, now: i64) {
+    let age = |t: &propagation::sat::Tle| {
+        propagation::sat::tle_age_days(&t.line1, now).unwrap_or(f64::INFINITY)
+    };
+    for t in new {
+        let Some(n) = propagation::sat::norad_id(&t.line1) else {
+            continue;
+        };
+        match snap
+            .imported
+            .iter()
+            .position(|e| propagation::sat::norad_id(&e.line1) == Some(n))
+        {
+            Some(i) => {
+                if age(&t) < age(&snap.imported[i]) {
+                    snap.imported[i] = t;
+                }
+            }
+            None => snap.imported.push(t),
+        }
+    }
+}
+
+/// Merge validated imports into the live snapshot (memory + atomic disk
+/// write). An import with NO existing snapshot creates an import-only one —
+/// the offline-shack path: `source: "import"`, `fetchedAt: 0` (the GROUP was
+/// never fetched, so the background refresh stays due the moment a network
+/// appears — an import must never silence the mirror).
+fn tles_import(new: Vec<propagation::sat::Tle>) {
+    // Fresh disk read BEFORE the lock (no I/O under the mutex): another
+    // instance may have landed imports here since our memory-first load.
+    let disk = load_tle_snapshot_from(&shared_tles_path());
+    let snap = match TLES.lock() {
+        Ok(mut g) => {
+            let s = g.get_or_insert_with(|| TleSnapshot {
+                schema: 1,
+                fetched_at: 0,
+                source: "import".into(),
+                generated: None,
+                etag: None,
+                count: 0,
+                elements: Vec::new(),
+                imported: Vec::new(),
+                aliases: Default::default(),
+            });
+            // Rename survival (phase 4): a rename can arrive by file too —
+            // record the names present before the merge replaces any, and the
+            // merged result's names after.
+            tle_record_aliases(s);
+            tle_merge_imports(s, new, now_unix());
+            if let Some(d) = disk {
+                tle_absorb_foreign(s, d, now_unix());
+            }
+            tle_record_aliases(s);
+            s.clone()
+        }
+        Err(_) => return,
+    };
+    if let Ok(json) = serde_json::to_string(&snap) {
+        let _ = write_json_atomic(&shared_tles_path(), &json);
+    }
+}
+
+/// Import operator-supplied elements: a downloaded Celestrak file, AMSAT keps,
+/// or a just-launched bird's SupGP set — the escape hatch for offline shacks
+/// and endpoint rot. Parses 2LE/3LE text; per-bird integrity ONLY (no count
+/// ratchet — one new launch is one bird; no freshness gate — the per-bird
+/// 30 d gate at USE stays the honesty line). Imports persist across refreshes
+/// and merge over the group by NORAD, newest epoch winning.
+#[tauri::command]
+async fn import_tles(text: String) -> Result<TleStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        use propagation::live::tle;
+        let parsed = tle::parse_tles(&text);
+        if parsed.is_empty() {
+            return Err(
+                "no element sets found — expected 2-line or 3-line (name + 2 lines) TLEs".into(),
+            );
+        }
+        let now = now_unix();
+        let kept: Vec<propagation::sat::Tle> = parsed
+            .iter()
+            .filter(|t| tle::tle_bird_ok(t, now))
+            .cloned()
+            .collect();
+        if kept.is_empty() {
+            return Err(format!(
+                "{} element set(s) parsed, none passed integrity checks (69-char lines, mod-10 checksums, sgp4)",
+                parsed.len()
+            ));
+        }
+        tles_load_from_disk();
+        tles_import(kept);
+        Ok(())
     })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(tle_status())
+}
+
+/// Hard element-age ceiling on ACTING surfaces — rotor pointing, Doppler
+/// tuning, the SSTV auto-arm: past 30 days SGP4 accuracy is gone and a track
+/// would drive the antenna and dial off a fiction. (The 14 d STALE line is
+/// the warn+confirm threshold; this is the refusal.)
+const TLE_ACT_STALE_DAYS: f64 = 30.0;
+
+/// Gate an acting surface on `tle`'s element age. `Ok((age_days,
+/// epoch_unix))` when usable; `Err` NAMING the bird and the age when past the
+/// 30 d ceiling — a refusal the operator can act on beats a silent wrong
+/// pointing.
+fn tle_act_gate(tle: &propagation::sat::Tle, now: i64) -> Result<(f64, i64), String> {
+    let epoch = propagation::sat::tle_epoch_unix(&tle.line1)
+        .ok_or_else(|| format!("{}: element epoch is unreadable", tle.name))?;
+    let age = (now as f64 - epoch) / 86_400.0;
+    if age > TLE_ACT_STALE_DAYS {
+        return Err(format!(
+            "{}: orbital elements are {} days old — too stale to point or tune by (limit 30). Refresh elements or import a fresh set.",
+            tle.name,
+            age.round() as i64
+        ));
+    }
+    Ok((age, epoch.round() as i64))
 }
 
 /// Where the SatNOGS snapshot persists (beside settings.json). Week-scale data:
@@ -3374,24 +4102,24 @@ async fn get_sat_schedule(
     let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(Vec::new());
     };
-    let tles = load_tles().await?;
+    let tles = tle_snapshot();
     if tles.is_empty() {
         return Ok(Vec::new());
     }
-    let wanted: std::collections::HashSet<String> =
-        names.iter().map(|n| n.trim().to_uppercase()).collect();
+    let aliases = tle_aliases();
     let now = now_unix();
     let out = tauri::async_runtime::spawn_blocking(move || {
         use propagation::sat;
-        let mine: Vec<&sat::Tle> = tles
-            .iter()
-            .filter(|t| wanted.contains(&t.name.to_uppercase()))
-            .filter(|t| sat::tle_age_days(&t.line1, now).is_some_and(|a| a <= STALE_DAYS))
+        // ★ names resolved rename-survivingly (each bird once, alias-resolved
+        // rows keyed to the name the operator asked with — see resolve_birds).
+        let mine: Vec<(String, &sat::Tle)> = resolve_birds(&tles, &aliases, &names)
+            .into_iter()
+            .filter(|(_, t)| sat::tle_age_days(&t.line1, now).is_some_and(|a| a <= STALE_DAYS))
             .collect();
         // Status lookup by NORAD id (name-mapping-proof), from the weekly cache.
         let norads: Vec<u32> = mine
             .iter()
-            .filter_map(|t| sat::norad_id(&t.line1))
+            .filter_map(|(_, t)| sat::norad_id(&t.line1))
             .collect();
         let status_by_norad: std::collections::HashMap<u32, String> = satnogs_snapshot(norads)
             .map(|sn| {
@@ -3402,8 +4130,9 @@ async fn get_sat_schedule(
             })
             .unwrap_or_default();
         let mut passes = Vec::new();
-        for t in mine {
-            let status = sat::norad_id(&t.line1).and_then(|n| status_by_norad.get(&n).cloned());
+        for (label, t) in mine {
+            let norad = sat::norad_id(&t.line1);
+            let status = norad.and_then(|n| status_by_norad.get(&n).cloned());
             // Scan from 6 h back so a pass ALREADY in progress keeps its real
             // AOS — MEO birds (IO-117-style) fly multi-hour passes, and a short
             // backscan fabricated a window-edge AOS + understated max el. The
@@ -3413,7 +4142,8 @@ async fn get_sat_schedule(
                     continue;
                 }
                 passes.push(SatPassDto {
-                    name: t.name.clone(),
+                    name: label.clone(),
+                    norad,
                     aos_unix: p.aos_unix,
                     los_unix: p.los_unix,
                     max_el_deg: p.max_el_deg,
@@ -3471,12 +4201,11 @@ async fn get_sat_pass_needs(
     let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(Vec::new());
     };
-    let tles = load_tles().await?;
+    let tles = tle_snapshot();
     if tles.is_empty() {
         return Ok(Vec::new());
     }
-    let wanted: std::collections::HashSet<String> =
-        names.iter().map(|n| n.trim().to_uppercase()).collect();
+    let aliases = tle_aliases();
     let now = now_unix();
     let out = tauri::async_runtime::spawn_blocking(move || {
         use propagation::sat;
@@ -3484,10 +4213,11 @@ async fn get_sat_pass_needs(
             worked_sat_grids: needs.worked_grids_sat(),
             worked_entities: needs.worked_entity_names(),
         };
-        let mine: Vec<&sat::Tle> = tles
-            .iter()
-            .filter(|t| wanted.contains(&t.name.to_uppercase()))
-            .filter(|t| sat::tle_age_days(&t.line1, now).is_some_and(|a| a <= STALE_DAYS))
+        // ★ names resolved rename-survivingly, exactly as on get_sat_schedule
+        // (both surfaces must agree on row identity).
+        let mine: Vec<(String, &sat::Tle)> = resolve_birds(&tles, &aliases, &names)
+            .into_iter()
+            .filter(|(_, t)| sat::tle_age_days(&t.line1, now).is_some_and(|a| a <= STALE_DAYS))
             .collect();
         // SatNOGS status rides these rows exactly as on get_sat_schedule —
         // the Satellites section fetches its ONLY schedule through this
@@ -3497,7 +4227,7 @@ async fn get_sat_pass_needs(
         // text and the Status sort all key on it).
         let norads: Vec<u32> = mine
             .iter()
-            .filter_map(|t| sat::norad_id(&t.line1))
+            .filter_map(|(_, t)| sat::norad_id(&t.line1))
             .collect();
         let status_by_norad: std::collections::HashMap<u32, String> = satnogs_snapshot(norads)
             .map(|sn| {
@@ -3508,8 +4238,9 @@ async fn get_sat_pass_needs(
             })
             .unwrap_or_default();
         let mut passes = Vec::new();
-        for t in mine {
-            let status = sat::norad_id(&t.line1).and_then(|n| status_by_norad.get(&n).cloned());
+        for (label, t) in mine {
+            let norad = sat::norad_id(&t.line1);
+            let status = norad.and_then(|n| status_by_norad.get(&n).cloned());
             // Same 6 h backscan as the schedule so an in-progress pass keeps
             // its real AOS (and both surfaces agree on row identity).
             for p in sat::passes(t, obs, now - 21_600, hours + 6) {
@@ -3518,7 +4249,8 @@ async fn get_sat_pass_needs(
                 }
                 let earn = propagation::pass_earn(t, p.aos_unix, p.los_unix, &sat_needs);
                 passes.push(SatPassDto {
-                    name: t.name.clone(),
+                    name: label.clone(),
+                    norad,
                     aos_unix: p.aos_unix,
                     los_unix: p.los_unix,
                     max_el_deg: p.max_el_deg,
@@ -3542,8 +4274,10 @@ async fn get_sat_pass_needs(
 /// SSTV auto-arm opt-in can never tune the rig off a mis-mapped bird. Requires a
 /// resolvable grid; scans from 30 min back (a pass already in progress keeps its
 /// real AOS) over a 3 h horizon and returns the first pass still above the
-/// horizon. Geometry only — no transponder claim (the ISS SSTV downlink is
-/// event-scheduled; the operator opts in per the auto-arm setting).
+/// horizon. Elements past the 30 d acting ceiling are REFUSED by name+age
+/// (`Err`) — the auto-arm must not tune the rig off rotten elements. Geometry
+/// only — no transponder claim (the ISS SSTV downlink is event-scheduled; the
+/// operator opts in per the auto-arm setting).
 #[tauri::command]
 async fn get_iss_pass(state: State<'_, SharedEngine>) -> Result<Option<SatPassDto>, String> {
     let mygrid = {
@@ -3553,33 +4287,40 @@ async fn get_iss_pass(state: State<'_, SharedEngine>) -> Result<Option<SatPassDt
     let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(None);
     };
-    let tles = load_tles().await?;
+    let tles = tle_snapshot();
     if tles.is_empty() {
         return Ok(None);
     }
     let now = now_unix();
     tauri::async_runtime::spawn_blocking(move || iss_pass_from_tles(&tles, obs, now))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
 }
 
 /// The ISS (NORAD 25544) pass that's up now or rises next, from `tles` over
 /// `obs`, at `now` (unix s). Filters by catalog number so a renamed element set
 /// still matches; 30 min backscan + 3 h horizon; first pass whose LOS is in the
-/// future. `None` when the ISS isn't in the set / has no usable elements / has
-/// no pass in the window. Pure — [`get_iss_pass`] wraps it; the tests drive it.
+/// future. `Ok(None)` when the ISS isn't in the set or has no pass in the
+/// window; `Err` (naming the age) when its elements are past the 30 d acting
+/// ceiling — the SSTV auto-arm must NOT tune the rig off rotten elements, and
+/// a silent `None` would hide why. Pure — [`get_iss_pass`] wraps it; the
+/// tests drive it.
 fn iss_pass_from_tles(
     tles: &[propagation::sat::Tle],
     obs: (f64, f64),
     now: i64,
-) -> Option<SatPassDto> {
+) -> Result<Option<SatPassDto>, String> {
     use propagation::sat;
-    let tle = tles.iter().find(|t| sat::norad_id(&t.line1) == Some(25544))?;
-    sat::passes(tle, obs, now - 1800, 3)
+    let Some(tle) = tles.iter().find(|t| sat::norad_id(&t.line1) == Some(25544)) else {
+        return Ok(None);
+    };
+    tle_act_gate(tle, now)?;
+    Ok(sat::passes(tle, obs, now - 1800, 3)
         .into_iter()
         .find(|p| p.los_unix > now)
         .map(|p| SatPassDto {
             name: tle.name.clone(),
+            norad: Some(25544),
             aos_unix: p.aos_unix,
             los_unix: p.los_unix,
             max_el_deg: p.max_el_deg,
@@ -3587,7 +4328,7 @@ fn iss_pass_from_tles(
             los_az_deg: p.los_az_deg,
             status: None,
             earn: None,
-        })
+        }))
 }
 
 /// Select the transponder to work on the tracked bird — the one call that puts
@@ -3610,10 +4351,9 @@ async fn set_sat_transponder(
         engine_lock(&state).set_sat_transponder(None);
         return Ok(());
     };
-    let tles = load_tles().await?;
-    let norad = tles
-        .iter()
-        .find(|t| t.name.eq_ignore_ascii_case(name.trim()))
+    let tles = tle_snapshot();
+    // Rename-surviving lookup: a ★'d old name still finds its bird (phase 4).
+    let norad = resolve_bird(&tles, &tle_aliases(), &name)
         .and_then(|t| propagation::sat::norad_id(&t.line1))
         .ok_or_else(|| format!("{name}: not in the TLE set"))?;
 
@@ -3691,6 +4431,11 @@ struct SatDetailDto {
     status: Option<String>,
     transmitters: Vec<propagation::live::satnogs::Transmitter>,
     data_fetched_at: Option<i64>,
+    /// Age (days) of THIS bird's element set — the >14 d arm-confirm's input.
+    /// Absent when the bird has no elements (nothing to age). Never >30 d:
+    /// that case is refused wholesale (`Err`) before a DTO exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    element_age_days: Option<f64>,
     pass: Option<SatPassDto>,
     pass_track: Vec<(i64, f64, f64)>,
 }
@@ -3705,12 +4450,22 @@ async fn get_sat_detail(
         eng.settings().mygrid.clone()
     };
     let obs = propagation::geo::maidenhead_to_latlon(mygrid.trim());
-    let tles = load_tles().await?;
+    let tles = tle_snapshot();
+    let aliases = tle_aliases();
     let now = now_unix();
-    let out = tauri::async_runtime::spawn_blocking(move || {
+    let out = tauri::async_runtime::spawn_blocking(move || -> Result<SatDetailDto, String> {
         use propagation::sat;
-        let key = name.trim().to_uppercase();
-        let tle = tles.iter().find(|t| t.name.to_uppercase() == key);
+        // Rename-surviving lookup (phase 4); the DTO echoes the REQUESTED
+        // name — it is the string every UI key for this bird carries.
+        let tle = resolve_bird(&tles, &aliases, &name);
+        // The 30 d acting ceiling, by name+age: a detail pane whose pass
+        // prediction and "Work this pass" chain run on rotten elements is a
+        // lie with a UI on it. (≤14 d is clean; 14–30 d arms only past the
+        // operator's confirm — the UI reads `element_age_days`.)
+        let element_age_days = match tle {
+            Some(t) => Some(tle_act_gate(t, now)?.0),
+            None => None,
+        };
         let norad = tle.and_then(|t| sat::norad_id(&t.line1));
         let snap = satnogs_snapshot(norad.into_iter().collect());
         let status = norad.and_then(|n| {
@@ -3741,7 +4496,11 @@ async fn get_sat_detail(
                         let track = sat::pass_track(t, o, p.aos_unix, p.los_unix, 30);
                         (
                             Some(SatPassDto {
-                                name: t.name.clone(),
+                                // The REQUESTED name, like the whole DTO: the
+                                // work-pass chain and the schedule's track-row
+                                // match key on this string.
+                                name: name.clone(),
+                                norad,
                                 aos_unix: p.aos_unix,
                                 los_unix: p.los_unix,
                                 max_el_deg: p.max_el_deg,
@@ -3758,19 +4517,20 @@ async fn get_sat_detail(
             }
             _ => (None, Vec::new()),
         };
-        SatDetailDto {
+        Ok(SatDetailDto {
             name,
             norad,
             status,
             transmitters,
             data_fetched_at: snap.map(|sn| sn.fetched_at),
+            element_age_days,
             pass,
             pass_track,
-        }
+        })
     })
     .await
     .map_err(|e| e.to_string())?;
-    Ok(out)
+    out
 }
 
 /// Live pass auto-track state. Generation-owned like the WSPR feed: starting a
@@ -3853,6 +4613,15 @@ struct SatTrackDto {
     /// Doppler is actually tuning.
     offset_hz: Option<i64>,
     half_width_hz: Option<u64>,
+    /// Age (days, at ARM time) and epoch (unix) of the element set this track
+    /// FROZE: the per-pass freeze is kept (one set drives the whole ~10 min
+    /// pass — elements must not change under a live rotor), and this makes the
+    /// frozen set's age VISIBLE instead of silent. The rail's Elements row
+    /// reads the age; the epoch lets any surface recompute a live age without
+    /// a second parser. Arming past 30 d is refused outright, so these never
+    /// describe a rotten set.
+    element_age_days: f64,
+    element_epoch_unix: i64,
     aos_unix: i64,
     los_unix: i64,
 }
@@ -3927,12 +4696,20 @@ async fn start_sat_track(
     let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(None);
     };
-    let tles = load_tles().await?;
-    let key = name.trim().to_uppercase();
+    let tles = tle_snapshot();
     let now = now_unix();
-    let Some(tle) = tles.iter().find(|t| t.name.to_uppercase() == key).cloned() else {
+    // Rename-surviving lookup (phase 4). The DTO echoes the REQUESTED name
+    // throughout the pass: the schedule's track-row match and the detail-pane
+    // association both compare against the string the operator's UI holds.
+    let Some(tle) = resolve_bird(&tles, &tle_aliases(), &name).cloned() else {
         return Ok(None);
     };
+    let name = name.trim().to_string();
+    // The 30 d acting ceiling: arming would drive the rotor and dial off a
+    // fiction. Refused BY NAME AND AGE (never a silent None — the operator
+    // must know why, and what to do). Past the gate, the age+epoch are frozen
+    // into the DTO alongside the TLE itself (the per-pass freeze, now visible).
+    let (element_age_days, element_epoch_unix) = tle_act_gate(&tle, now)?;
     // 6 h backscan (true AOS for mid-pass MEO birds) + 48 h forward horizon
     // (any schedule row is armable).
     let Some(pass) = propagation::sat::passes(&tle, obs, now - 21_600, 54)
@@ -3946,7 +4723,7 @@ async fn start_sat_track(
     // The pass drives Doppler as well as the rotor, so the loop needs the engine.
     let dop_engine: SharedEngine = (*state).clone();
     let initial = SatTrackDto {
-        name: tle.name.clone(),
+        name: name.clone(),
         state: if now >= pass.aos_unix {
             "tracking"
         } else if addr.is_some() && now >= pass.aos_unix - 300 {
@@ -3975,6 +4752,8 @@ async fn start_sat_track(
         inverting: false,
         offset_hz: None,
         half_width_hz: None,
+        element_age_days,
+        element_epoch_unix,
         aos_unix: pass.aos_unix,
         los_unix: pass.los_unix,
     };
@@ -4020,7 +4799,7 @@ async fn start_sat_track(
                      range: Option<f64>,
                      rate: Option<f64>,
                      dop: Option<&tempo_app::engine::SatTuningNow>| SatTrackDto {
-            name: tle.name.clone(),
+            name: name.clone(),
             state: state.to_string(),
             mode: mode.to_string(),
             tx_mode,
@@ -4040,6 +4819,9 @@ async fn start_sat_track(
             inverting: dop.is_some_and(|d| d.inverting),
             offset_hz: dop.map(|d| d.offset_hz),
             half_width_hz: dop.map(|d| d.half_width_hz),
+            // Frozen at arm — the whole pass runs on that one element set.
+            element_age_days,
+            element_epoch_unix,
             aos_unix: pass.aos_unix,
             los_unix: pass.los_unix,
         };
@@ -11630,6 +12412,16 @@ pub fn run() {
                 });
             }
         }
+        // Orbital elements: load the persisted shared TLE snapshot (so the
+        // satellite surfaces serve from disk at first paint), then refresh
+        // IF DUE after 0–120 s of jitter so a fleet of installs doesn't
+        // synchronize on the mirror. This kills the every-launch fetch: five
+        // relaunches on a <6 h cache now cost zero network attempts.
+        tles_load_from_disk();
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(subsec_jitter(120)));
+            maybe_kick_tle_refresh(false);
+        });
         // LoTW-user marks: restore the persisted ARRL activity list (if the
         // operator ever fetched it) and wire the recency-windowed resolver.
         if let Ok(csv) = std::fs::read_to_string(lotw_users_path()) {
@@ -12275,6 +13067,9 @@ pub fn run() {
             fetch_lotw_users,
             get_fcc_states_status,
             fetch_fcc_states,
+            get_tle_status,
+            fetch_tles_now,
+            import_tles,
             get_kc2g_muf,
             get_space_wx_scales,
             get_xray_now,
@@ -12449,9 +13244,96 @@ pub fn run() {
 mod tests {
     use super::{
         b64_decode, b64_encode, dxped_page_url, install_block_reason, is_complete_lotw_body,
-        iss_pass_from_tles, parse_sstv_mode, profile_dir_name, rect_lands_on_work_area,
-        sanitize_profile,
+        iss_pass_from_tles, load_tle_snapshot_from, parse_sstv_mode, profile_dir_name,
+        rect_lands_on_work_area, resolve_bird, resolve_birds, sanitize_profile, tle_absorb_foreign,
+        tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
+        tle_record_aliases, write_json_atomic, TleFlightGuard, TleSnapshot, TLE_FETCHING,
     };
+
+    /// A scratch file path unique to this test process (std-only — no tempfile
+    /// dependency), cleaned up by the caller.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("nexus-test-{}-{name}", std::process::id()))
+    }
+
+    const TLE_JSON_BIRD: &str = r#"{"name":"ISS (ZARYA)","line1":"1 25544U 98067A   08264.51782528 -.00002182  00000-0 -11606-4 0  2927","line2":"2 25544  51.6416 247.4627 0006703 130.5360 325.0288 15.72125391563537"}"#;
+
+    /// THE BACK-COMPAT CONTRACT: a pre-snapshot build's `tles.json` is a bare
+    /// array. It must load as `{fetchedAt: 0, source: "legacy"}` — an existing
+    /// cache is NEVER discarded for being old-shaped — while an EMPTY legacy
+    /// array is no data at all, so nothing can mistake it for a cache.
+    #[test]
+    fn a_legacy_bare_tle_array_loads_as_a_snapshot() {
+        let path = scratch("legacy-tles.json");
+        std::fs::write(&path, format!("[{TLE_JSON_BIRD}]")).unwrap();
+        let s = load_tle_snapshot_from(&path).expect("legacy array must load");
+        assert_eq!(s.fetched_at, 0, "unknown provenance must read as due, never fresh");
+        assert_eq!(s.source, "legacy");
+        assert_eq!(s.elements.len(), 1);
+        assert!(s.elements[0].line1.starts_with("1 25544U"));
+        std::fs::write(&path, "[]").unwrap();
+        assert!(
+            load_tle_snapshot_from(&path).is_none(),
+            "an empty legacy array is not a cache"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A written snapshot round-trips through its own serde (camelCase keys on
+    /// the wire), and the untagged loader picks the snapshot shape.
+    #[test]
+    fn a_tle_snapshot_round_trips() {
+        let path = scratch("snap-tles.json");
+        let snap = TleSnapshot {
+            schema: 1,
+            fetched_at: 1_785_542_400,
+            source: "mirror".into(),
+            generated: Some("2026-08-01T00:00:00Z".into()),
+            etag: Some("\"abc\"".into()),
+            count: 1,
+            elements: serde_json::from_str(&format!("[{TLE_JSON_BIRD}]")).unwrap(),
+            imported: Vec::new(),
+            aliases: Default::default(),
+        };
+        let json = serde_json::to_string(&snap).unwrap();
+        assert!(json.contains("\"fetchedAt\""), "wire keys are camelCase: {json}");
+        assert!(write_json_atomic(&path, &json));
+        let back = load_tle_snapshot_from(&path).expect("snapshot must load");
+        assert_eq!(back.fetched_at, snap.fetched_at);
+        assert_eq!(back.source, "mirror");
+        assert_eq!(back.etag.as_deref(), Some("\"abc\""));
+        assert_eq!(back.elements, snap.elements);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// TORN-FILE RECOVERY: a truncated `tles.json` loads as `None` (no panic,
+    /// no fabricated cache), and a subsequent atomic write fully replaces it —
+    /// with the PID-keyed temp cleaned away by the rename.
+    #[test]
+    fn a_torn_tle_file_recovers_via_the_atomic_writer() {
+        let path = scratch("torn-tles.json");
+        let snap = TleSnapshot {
+            schema: 1,
+            fetched_at: 42,
+            source: "celestrak".into(),
+            generated: None,
+            etag: None,
+            count: 1,
+            elements: serde_json::from_str(&format!("[{TLE_JSON_BIRD}]")).unwrap(),
+            imported: Vec::new(),
+            aliases: Default::default(),
+        };
+        let json = serde_json::to_string(&snap).unwrap();
+        // A crash mid-write under a NON-atomic writer: half the JSON.
+        std::fs::write(&path, &json[..json.len() / 2]).unwrap();
+        assert!(load_tle_snapshot_from(&path).is_none(), "torn file must not load");
+        // The atomic writer replaces it wholesale and leaves no temp behind.
+        assert!(write_json_atomic(&path, &json));
+        assert_eq!(load_tle_snapshot_from(&path).map(|s| s.fetched_at), Some(42));
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        assert!(!tmp.exists(), "the rename must consume the temp file");
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// THE SELF-UPDATE SAFETY GATE. Installing restarts the app, and this app keys a
     /// transmitter — a restart at the wrong instant can strand PTT, abandon a QSO mid-sequence
@@ -12587,9 +13469,12 @@ mod tests {
             line1: "1 43017U 17073E   08264.51782528  .00000000  00000-0  00000-0 0  0000".into(),
             line2: "2 43017  97.7000 000.0000 0000000 000.0000 000.0000 14.80000000000000".into(),
         };
-        assert!(iss_pass_from_tles(&[ao91], EN52, ISS_EPOCH_UNIX).is_none());
-        // No elements at all → None (the no-TLE path get_iss_pass short-circuits).
-        assert!(iss_pass_from_tles(&[], EN52, ISS_EPOCH_UNIX).is_none());
+        assert!(matches!(
+            iss_pass_from_tles(&[ao91], EN52, ISS_EPOCH_UNIX),
+            Ok(None)
+        ));
+        // No elements at all → Ok(None) (the no-TLE path get_iss_pass short-circuits).
+        assert!(matches!(iss_pass_from_tles(&[], EN52, ISS_EPOCH_UNIX), Ok(None)));
     }
 
     #[test]
@@ -12601,10 +13486,261 @@ mod tests {
             .next()
             .expect("at least one ISS pass in 24 h");
         let now = first.aos_unix + 60;
-        let got = iss_pass_from_tles(&[iss_tle()], EN52, now).expect("ISS pass found mid-pass");
+        let got = iss_pass_from_tles(&[iss_tle()], EN52, now)
+            .expect("fresh elements pass the gate")
+            .expect("ISS pass found mid-pass");
         assert_eq!(got.name, ISS_NAME);
         assert!(got.los_unix > now, "the reported pass is still above the horizon");
         assert!(got.status.is_none(), "geometry only — no status stamped");
+    }
+
+    /// THE PHASE-3 REFUSAL: elements past the 30 d acting ceiling must not
+    /// feed the SSTV auto-arm — and the refusal NAMES the bird and the age,
+    /// because "does nothing, silently" was exactly the pre-overhaul defect.
+    #[test]
+    fn iss_pass_refuses_rotten_elements_naming_the_age() {
+        let now = ISS_EPOCH_UNIX + 40 * 86_400; // a 40-day-old element set
+        let err = match iss_pass_from_tles(&[iss_tle()], EN52, now) {
+            Err(e) => e,
+            Ok(_) => panic!("rotten elements must be refused, not served"),
+        };
+        assert!(err.contains("40 days old"), "the age is named: {err}");
+        assert!(err.contains(ISS_NAME), "the bird is named: {err}");
+    }
+
+    /// The 30 d acting gate itself: usable ages pass THROUGH (with the epoch,
+    /// for the DTO's frozen provenance); a rotten set is refused by name+age.
+    /// 14 d is deliberately NOT this gate's business — it is the UI's
+    /// warn+confirm line, one number with two consequences.
+    #[test]
+    fn tle_act_gate_passes_15_days_and_refuses_40() {
+        let day = 86_400i64;
+        let (age, epoch) = tle_act_gate(&iss_tle(), ISS_EPOCH_UNIX + 15 * day)
+            .expect("15 d is confirm territory, not a refusal");
+        assert!((age - 15.0).abs() < 0.01, "age {age}");
+        assert!((epoch - ISS_EPOCH_UNIX).abs() <= 1, "epoch {epoch}");
+        let err = tle_act_gate(&iss_tle(), ISS_EPOCH_UNIX + 40 * day).unwrap_err();
+        assert!(err.contains("40 days old") && err.contains(ISS_NAME), "{err}");
+    }
+
+    /// A synthetic bird with a chosen NORAD + epoch (yy/doy columns) — enough
+    /// for norad_id + tle_age_days, which is all the import merge reads.
+    fn bird(norad: u32, yy: u32, doy: f64) -> propagation::sat::Tle {
+        propagation::sat::Tle {
+            name: format!("BIRD-{norad}"),
+            line1: format!(
+                "1 {norad:05}U 98067A   {yy:02}{doy:012.8} -.00002182  00000-0 -11606-4 0  2927"
+            ),
+            line2: format!(
+                "2 {norad:05}  51.6416 247.4627 0006703 130.5360 325.0288 15.72125391563537"
+            ),
+        }
+    }
+
+    fn snap_with(elements: Vec<propagation::sat::Tle>) -> TleSnapshot {
+        TleSnapshot {
+            schema: 1,
+            fetched_at: 1_785_542_400,
+            source: "mirror".into(),
+            generated: None,
+            etag: None,
+            count: elements.len(),
+            elements,
+            imported: Vec::new(),
+            aliases: Default::default(),
+        }
+    }
+
+    /// `bird` with an operator-facing name — the rename-survival tests care
+    /// about the name/NORAD pairing, not the synthetic default name.
+    fn named_bird(name: &str, norad: u32, yy: u32, doy: f64) -> propagation::sat::Tle {
+        propagation::sat::Tle {
+            name: name.into(),
+            ..bird(norad, yy, doy)
+        }
+    }
+
+    /// PHASE-4 RENAME SURVIVAL (the plan's gate): Celestrak renames a bird;
+    /// the ★, the ⏰ alarm and the schedule row are all keyed on the OLD name
+    /// string. Alias accumulation + the resolvers must keep that name finding
+    /// the same catalog number — with no key migration anywhere.
+    #[test]
+    fn a_renamed_bird_keeps_its_star_alarm_and_schedule_row() {
+        // The served snapshot knew bird 43017 as "AO-91"…
+        let mut aliases = std::collections::HashMap::new();
+        let old = named_bird("AO-91", 43_017, 26, 100.0);
+        tle_extend_aliases(&mut aliases, std::slice::from_ref(&old));
+        // …then a refresh delivers it renamed. The new set's names are
+        // recorded too; the old entry stays (additive, never dropped).
+        let tles = vec![named_bird("FOX-1B", 43_017, 26, 200.0), iss_tle()];
+        tle_extend_aliases(&mut aliases, &tles);
+        assert_eq!(aliases.get("AO-91").copied(), Some(43_017));
+        assert_eq!(aliases.get("FOX-1B").copied(), Some(43_017));
+        // detail / track / transponder: the ★'d old name still finds the bird.
+        let hit = resolve_bird(&tles, &aliases, "AO-91").expect("old name must still resolve");
+        assert_eq!(hit.name, "FOX-1B");
+        // The schedule: the row comes back UNDER THE REQUESTED NAME, so the
+        // ⏰ alarm map and fired-pass keys (both keyed on it) still match.
+        let rows = resolve_birds(&tles, &aliases, &["AO-91".into()]);
+        assert_eq!(rows.len(), 1, "the schedule row survives the rename");
+        assert_eq!(rows[0].0, "AO-91");
+        assert_eq!(propagation::sat::norad_id(&rows[0].1.line1), Some(43_017));
+        // Old AND new name both ★'d: one bird, one row set, current name.
+        let rows = resolve_birds(&tles, &aliases, &["AO-91".into(), "FOX-1B".into()]);
+        assert_eq!(rows.len(), 1, "one bird must never produce two row sets");
+        assert_eq!(rows[0].0, "FOX-1B");
+        // A name nothing ever served resolves to nothing — no fabricated bird.
+        assert!(resolve_bird(&tles, &aliases, "NO-SUCH-BIRD").is_none());
+    }
+
+    /// The install-side half of rename survival: recording a snapshot's names
+    /// is ADDITIVE across refreshes — replacing the element set never drops
+    /// the names the old set carried.
+    #[test]
+    fn recording_aliases_is_additive_across_installs() {
+        let mut snap = snap_with(vec![named_bird("AO-91", 43_017, 26, 100.0)]);
+        tle_record_aliases(&mut snap);
+        assert_eq!(snap.aliases.get("AO-91").copied(), Some(43_017));
+        // The rename lands; the outgoing recording already happened, and the
+        // new set's recording must keep the old entry.
+        snap.elements = vec![named_bird("FOX-1B", 43_017, 26, 200.0)];
+        tle_record_aliases(&mut snap);
+        assert_eq!(
+            snap.aliases.get("AO-91").copied(),
+            Some(43_017),
+            "old name dropped — the ★/alarm keyed on it would orphan"
+        );
+        assert_eq!(snap.aliases.get("FOX-1B").copied(), Some(43_017));
+        // Imported birds' names are recorded too (a rename can arrive by file).
+        snap.imported = vec![named_bird("NEW-LAUNCH", 99_999, 26, 210.0)];
+        tle_record_aliases(&mut snap);
+        assert_eq!(snap.aliases.get("NEW-LAUNCH").copied(), Some(99_999));
+    }
+
+    /// THE IMPORT MERGE: imports are NORAD-keyed, newest epoch wins — both
+    /// inside the `imported` list (re-importing an updated keps file replaces,
+    /// never doubles) and against the fetched group at read time (a fresher
+    /// import of a new launch beats the group until the group catches up, and
+    /// vice versa).
+    #[test]
+    fn imports_merge_by_norad_newest_epoch() {
+        // now = mid-2026 so every synthetic epoch below is in the past.
+        let now = 1_785_542_400i64;
+        // Group: bird 11111 with a 2026-day-100 epoch; the ISS.
+        let mut snap = snap_with(vec![bird(11_111, 26, 100.0), iss_tle()]);
+        // Import a NEW launch (99999) + a FRESHER 11111 (day 200).
+        tle_merge_imports(
+            &mut snap,
+            vec![bird(99_999, 26, 150.0), bird(11_111, 26, 200.0)],
+            now,
+        );
+        assert_eq!(snap.imported.len(), 2);
+        // Re-import 99999 with a newer epoch: REPLACES its old entry…
+        tle_merge_imports(&mut snap, vec![bird(99_999, 26, 180.0)], now);
+        assert_eq!(snap.imported.len(), 2, "replaced, not doubled");
+        let n99 = snap
+            .imported
+            .iter()
+            .find(|t| propagation::sat::norad_id(&t.line1) == Some(99_999))
+            .unwrap();
+        assert!(n99.line1.contains("26180."), "newest epoch kept: {}", n99.line1);
+        // …and an OLDER re-import of 11111 is ignored.
+        tle_merge_imports(&mut snap, vec![bird(11_111, 26, 120.0)], now);
+        let n11 = snap
+            .imported
+            .iter()
+            .find(|t| propagation::sat::norad_id(&t.line1) == Some(11_111))
+            .unwrap();
+        assert!(n11.line1.contains("26200."), "older import ignored: {}", n11.line1);
+        // The MERGED view: 3 birds (group 2 + the new launch), with the
+        // imported 11111 (day 200) beating the group's day-100 copy.
+        let merged = tle_merged_elements(&snap);
+        assert_eq!(merged.len(), 3);
+        let m11 = merged
+            .iter()
+            .find(|t| propagation::sat::norad_id(&t.line1) == Some(11_111))
+            .unwrap();
+        assert!(m11.line1.contains("26200."), "import beats older group: {}", m11.line1);
+        // A group refresh catching up PAST the import (day 300) wins back —
+        // and the import list itself persisted untouched across it.
+        snap.elements = vec![bird(11_111, 26, 300.0), iss_tle()];
+        let merged = tle_merged_elements(&snap);
+        let m11 = merged
+            .iter()
+            .find(|t| propagation::sat::norad_id(&t.line1) == Some(11_111))
+            .unwrap();
+        assert!(m11.line1.contains("26300."), "fresher group wins: {}", m11.line1);
+        assert_eq!(snap.imported.len(), 2, "imports persist across refreshes");
+    }
+
+    /// TWO-INSTANCE SHACK: instance A lands a file import on the shared cache;
+    /// instance B — whose memory-first load predates it — refreshes and writes
+    /// ITS snapshot whole-file. B's write path must re-absorb A's `imported`
+    /// + aliases from a fresh disk read, or the import is silently gone for
+    /// everyone once both restart. Elements stay last-writer-wins (both
+    /// instances fetch the same group — the loser is equivalent).
+    #[test]
+    fn another_instances_imports_survive_our_snapshot_write() {
+        let now = 1_785_542_400i64;
+        let path = scratch("shared-tles.json");
+        // Instance A's disk state: the group + an operator import of a new
+        // launch (aliases recorded, as every writer does) + an OLDER copy of
+        // a bird B has also imported.
+        let mut a = snap_with(vec![bird(11_111, 26, 100.0)]);
+        a.imported = vec![
+            named_bird("NEW-LAUNCH", 99_999, 26, 150.0),
+            bird(55_555, 26, 100.0),
+        ];
+        tle_record_aliases(&mut a);
+        assert!(write_json_atomic(&path, &serde_json::to_string(&a).unwrap()));
+        // Instance B's in-memory snapshot: a fresher group refresh, no
+        // knowledge of A's import — plus its OWN fresher import of 55555.
+        let mut b = snap_with(vec![bird(11_111, 26, 200.0)]);
+        b.imported = vec![bird(55_555, 26, 180.0)];
+        let disk = load_tle_snapshot_from(&path).expect("A's write must load");
+        tle_absorb_foreign(&mut b, disk, now);
+        // A's import + its alias survived into what B will write…
+        assert!(
+            b.imported
+                .iter()
+                .any(|t| propagation::sat::norad_id(&t.line1) == Some(99_999)),
+            "instance A's import was discarded by B's write"
+        );
+        assert_eq!(b.aliases.get("NEW-LAUNCH").copied(), Some(99_999));
+        // …the shared bird kept B's FRESHER copy (newest epoch, either way)…
+        let n55 = b
+            .imported
+            .iter()
+            .find(|t| propagation::sat::norad_id(&t.line1) == Some(55_555))
+            .unwrap();
+        assert!(
+            n55.line1.contains("26180."),
+            "an older disk copy must not clobber a fresher import: {}",
+            n55.line1
+        );
+        // …and elements stayed OURS — absorb never merges the group.
+        assert!(b.elements[0].line1.contains("26200."), "elements are last-writer-wins");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A panic anywhere in a refresh flight must RELEASE the single-flight
+    /// flag: it is cleared by an RAII drop guard, not a tail store a panic
+    /// would skip — a stuck flag silently kills every future refresh
+    /// (background and manual both answer "already running") until restart.
+    /// No other test touches `TLE_FETCHING`, so the global is race-free here.
+    #[test]
+    fn a_panicking_flight_releases_the_single_flight_flag() {
+        use std::sync::atomic::Ordering;
+        TLE_FETCHING.store(true, Ordering::SeqCst);
+        let boom = std::panic::catch_unwind(|| {
+            let _flight = TleFlightGuard;
+            panic!("mid-flight panic");
+        });
+        assert!(boom.is_err(), "the panic must actually happen");
+        assert!(
+            !TLE_FETCHING.load(Ordering::SeqCst),
+            "flag stuck true — every future refresh dead until restart"
+        );
     }
 
     // A full report ends with the documented `<APP_LoTW_EOF>` trailer.

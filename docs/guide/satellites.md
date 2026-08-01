@@ -67,6 +67,35 @@ its own.
   automatically and driven in azimuth alone); test it with the Dummy model
   before you trust it on real hardware.
 
+### How current are the elements?
+
+Every prediction runs on orbital elements (TLEs), and elements decay: a fresh
+set predicts a pass to the second, an old one drifts — and pointing and
+Doppler drift with it. Nexus keeps the elements current for you and tells you
+plainly when it can't:
+
+- **Where they come from.** Elements refresh in the background a few times a
+  day from the project's mirror of CelesTrak's amateur list (data courtesy of
+  Dr. T.S. Kelso); the mirror exists so a fleet of installs never hammers the
+  source. The Satellites section and Settings ▸ Orbital elements show the age,
+  fetch time and source. **Update now** forces a refresh; **Import from file**
+  loads a downloaded TLE/keps file — the path for offline shacks and
+  brand-new launches the group file doesn't carry yet.
+- **Past 14 days** the age is badged stale, and arming a pass asks first —
+  refresh right there, or arm anyway with your eyes open.
+- **Past 30 days** SGP4 accuracy is genuinely gone, so anything that would
+  move the radio or rotator refuses — naming the bird and the age — rather
+  than drive the antenna off a fiction.
+- **A pass runs on the elements it armed with** (a pass is minutes long; a
+  mid-pass swap would jump the antenna). The readiness rail shows the age of
+  the frozen set.
+- **Renames don't orphan your stars.** CelesTrak occasionally renames a bird;
+  your ★s, alarms and schedule keep working because Nexus remembers the
+  catalog number behind each name.
+- A bad or empty download never replaces a good cache, and nothing waits on
+  the network — Nexus serves the best elements it has and refreshes behind
+  you.
+
 ## Related guides
 
 - [Connect — map + propagation](connect.md) (Satellite Passes pane, live map layer)

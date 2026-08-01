@@ -13,8 +13,8 @@
 //  - "Work this pass" is ONE control that runs the chain: select the bird, auto-pick a
 //    workable transponder (never a beacon; never overriding the operator's explicit
 //    "None"), arm the pass. The click is the consent — nothing arms without it.
-//  - The readiness rail renders the chain AS a chain: four rows, each gate's absence
-//    visible and fixable in place. The two Settings switches (satDoppler, satVfoMap)
+//  - The readiness rail renders the chain AS a chain: five rows (Elements joined in
+//    the currency overhaul), each gate's absence visible and fixable in place. The two Settings switches (satDoppler, satVfoMap)
 //    get live mirrors here — writes go read-modify-write through getSettings →
 //    setSettings so no other setting is clobbered. The rail never flips a fail-safe
 //    default by itself.
@@ -135,6 +135,8 @@ const trackStatus = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   inverting: false,
   offsetHz: null,
   halfWidthHz: null,
+  elementAgeDays: 1.2,
+  elementEpochUnix: 1_785_442_400,
   aosUnix: NOW + 720,
   losUnix: NOW + 1500,
   ...over,
@@ -351,7 +353,7 @@ describe('"Work this pass" runs the chain', () => {
 })
 
 describe('the readiness rail', () => {
-  it('renders the four gates with honest not-ready states and shape-carried bullets', async () => {
+  it('renders the five gates with honest not-ready states and shape-carried bullets', async () => {
     api.getSatTrackStatus.mockImplementation(() =>
       Promise.resolve(trackStatus({ mode: 'pass-only' })),
     )
@@ -366,10 +368,13 @@ describe('the readiness rail', () => {
     expect(text).toMatch(/none — the dial stays yours/)
     expect(text).toMatch(/Doppler/)
     expect(text).toMatch(/off — nothing is being tuned/)
-    // Shape, not colour: filled ● for ready, hollow ○ for not — 4 rows, 1 ready.
+    expect(text).toMatch(/Elements/)
+    expect(text).toMatch(/1\.2 d old — current/)
+    // Shape, not colour: filled ● for ready, hollow ○ for not — 5 rows,
+    // 2 ready (Pass + the fresh frozen Elements set).
     const dots = rail.querySelectorAll('.sat-rail-dot')
-    expect(dots.length).toBe(4)
-    expect(rail.querySelectorAll('.sat-rail-dot.ok').length).toBe(1)
+    expect(dots.length).toBe(5)
+    expect(rail.querySelectorAll('.sat-rail-dot.ok').length).toBe(2)
   })
 
   it('is absent when no track is armed for this bird', async () => {

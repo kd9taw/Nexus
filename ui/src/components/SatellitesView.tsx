@@ -40,6 +40,7 @@ import {
   startSatTrack,
   stopSatTrack,
   getSatTrackStatus,
+  fetchTlesNow,
 } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
 import { SAT_VFO_MAPS, satVfoLabel } from '../features/satVfo'
@@ -48,6 +49,7 @@ import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAla
 import { heatPulse } from '../features/pulse'
 import { pushToast } from '../toast'
 import { MapView } from './MapView'
+import { Dialog } from './ui/Dialog'
 import { useTheme } from '../useTheme'
 
 interface Props {
@@ -890,10 +892,13 @@ const kindWord = (k: string | null) =>
         : null
 
 /* ======================= the readiness rail (top-5 ①) =======================
- * The arming chain rendered AS a chain: four gates, always four rows, each
+ * The arming chain rendered AS a chain: five gates, always five rows, each
  * not-ready row carrying its own fix instead of prose pointing at another
  * section. Filled ● / hollow ○ carries ready-state by SHAPE (the codebase
- * idiom — it survives greyscale and colourblindness).
+ * idiom — it survives greyscale and colourblindness). The fifth row —
+ * Elements — is the physics everything above runs on: the age of the set this
+ * track FROZE at arm (per-pass freeze, now visible), hollow past the 14 d
+ * stale line with a refresh fix.
  *
  * The two Settings switches (satDoppler, satVfoMap) are MIRRORED here live —
  * Settings ▸ Radio stays canonical, writes go read-modify-write through
@@ -930,6 +935,7 @@ function TrackRail({
   onDopplerOn,
   onVfoMap,
   onGoToPicker,
+  onRefreshElements,
   scrollRef,
 }: {
   /** The live track for THIS bird (already name-filtered by the caller). */
@@ -952,6 +958,8 @@ function TrackRail({
   onDopplerOn: () => void
   onVfoMap: (v: SatVfoMap) => void
   onGoToPicker: () => void
+  /** The Elements row's fix — the same manual refresh the stale chip fires. */
+  onRefreshElements: () => void
   scrollRef: React.RefObject<HTMLDivElement>
 }) {
   // The rotor half of the track is fixed at arm time (DTO `mode`); the Doppler
@@ -1054,6 +1062,29 @@ function TrackRail({
             </option>
           ))}
         </select>
+      </div>
+      {/* ELEMENTS — the physics the four gates above run on. The DTO's age is
+          FROZEN at arm (the per-pass freeze: one element set drives the whole
+          pass), so the fix refreshes the CACHE for the next arm and says so —
+          it must not claim it can move this track. Ready at ≤14 d: the one
+          STALE number, worn as a gate. */}
+      <div className="sat-rail-row">
+        {railDot(track.elementAgeDays <= 14)}
+        <span className="sat-rail-name">Elements</span>
+        <span className="sat-rail-state">
+          {track.elementAgeDays <= 14
+            ? `${track.elementAgeDays.toFixed(1)} d old — current`
+            : `${Math.round(track.elementAgeDays)} days old — pointing and Doppler drift`}
+        </span>
+        {track.elementAgeDays > 14 && (
+          <button
+            className="sat-rail-fix"
+            onClick={onRefreshElements}
+            title="Fetch fresh orbital elements now. This armed pass keeps its frozen set — re-arm to track with the fresh one."
+          >
+            refresh
+          </button>
+        )}
       </div>
     </div>
   )
@@ -1194,6 +1225,18 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const wantRailScroll = useRef(false)
   const [dopplerOn, setDopplerOn] = useState(false)
   const [vfoMap, setVfoMap] = useState<SatVfoMap>('off')
+  // A manual element refresh (chip / rail fix / arm-confirm) is in flight —
+  // the affordances disable rather than queue a second one behind the
+  // backend's single-flight refusal.
+  const [tleRefreshing, setTleRefreshing] = useState(false)
+  // The >14 d arm confirm: `pass` re-runs the chain after a refresh, `proceed`
+  // is the held tail of the work-pass chain ("Arm anyway"). Null = no confirm
+  // pending.
+  const [armConfirm, setArmConfirm] = useState<{
+    pass: SatPass
+    ageDays: number
+    proceed: () => void
+  } | null>(null)
   // Which rig the engine's held pick bound to, and what it actually wrote.
   // ENGINE truth off the same read-back the hold uses — a binding drawn from
   // the last local click would name a rig the engine no longer drives (the
@@ -1380,8 +1423,10 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
     }
   }, [])
 
-  const onToggleFav = (name: string) => {
-    toggleSatChasing(name)
+  // `norad` (when the caller's row knows it) keeps the name→NORAD record
+  // current — the UI half of rename survival (satChase.ts, phase 4).
+  const onToggleFav = (name: string, norad?: number | null) => {
+    toggleSatChasing(name, norad)
     setFavs(satChasingSet())
   }
   const onToggleAlarm = (name: string) => {
@@ -1585,6 +1630,29 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
       .catch(() => {})
   }
 
+  /** The manual element refresh (phase 2) — the stale chip, the rail's
+   * Elements fix and the arm-confirm's Refresh all run THIS. Awaits the
+   * backend's one attempt (mirror-first; the Celestrak floor and 403 stop are
+   * not operator-waivable) and re-pulls the view so the chip clears the
+   * moment fresh elements land. Always resolves — failures are toasted, so a
+   * caller chaining on it never needs its own catch. */
+  const refreshTles = () => {
+    setTleRefreshing(true)
+    return fetchTlesNow()
+      .then((s) =>
+        Promise.resolve(
+          pushToast(`Orbital elements refreshed — ${s.count} birds (${s.source})`, 'success', 5000),
+        )
+          .then(() => getSatellites())
+          .then((v) => setView(v))
+          .catch(() => {}),
+      )
+      .catch((e) =>
+        pushToast(`Element refresh failed: ${e instanceof Error ? e.message : e}`, 'error'),
+      )
+      .finally(() => setTleRefreshing(false))
+  }
+
   /** Hand a transponder to the Doppler engine, or `null` to hand the dial back.
    * `index` is the RAW index into the list `get_sat_detail` returned (dead
    * entries included) — what the backend indexes. The selection is only shown
@@ -1707,20 +1775,40 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
     ])
       .then(([d, held]) => {
         setDetail(d) // seed the pane now; the selected-effect keeps it fresh
-        const alreadyHeld = held != null && held.name === d.name
-        if (alreadyHeld || dialOptOut.has(d.name)) return
-        const alive = d.transmitters.map((t, i) => ({ t, i })).filter((x) => x.t.alive)
-        const workable = alive.filter(
-          (x) => x.t.kind === 'Transponder' || x.t.kind === 'Transceiver',
-        )
-        const pick = workable[0] ?? null
-        // Land the pick BEFORE the arm: the arm's initial DTO — and the
-        // consent toast built from it — must describe the pass as it will
-        // actually run (its `mode` label needs the held transponder).
-        if (pick) return pickTransponder(d.name, pick.i, pick.t.description, true)
+        // The chain's tail (auto-pick → arm), deferrable: past the 14 d STALE
+        // line it waits on the operator's confirm instead of running.
+        const proceed = () =>
+          Promise.resolve()
+            .then(() => {
+              const alreadyHeld = held != null && held.name === d.name
+              if (alreadyHeld || dialOptOut.has(d.name)) return
+              const alive = d.transmitters.map((t, i) => ({ t, i })).filter((x) => x.t.alive)
+              const workable = alive.filter(
+                (x) => x.t.kind === 'Transponder' || x.t.kind === 'Transceiver',
+              )
+              const pick = workable[0] ?? null
+              // Land the pick BEFORE the arm: the arm's initial DTO — and the
+              // consent toast built from it — must describe the pass as it will
+              // actually run (its `mode` label needs the held transponder).
+              if (pick) return pickTransponder(d.name, pick.i, pick.t.description, true)
+            })
+            .catch(() => {})
+            .then(() => armTrack(p.name, p.aosUnix))
+        // ARMING PAST 14 d ASKS FIRST (the one STALE number, its second
+        // consequence): pointing and Doppler drift with element age, and the
+        // operator chooses Refresh / Arm anyway / Cancel. ≤14 d arms exactly
+        // as before — the click is the consent either way.
+        if (d.elementAgeDays != null && d.elementAgeDays > 14) {
+          setArmConfirm({ pass: p, ageDays: d.elementAgeDays, proceed })
+          return
+        }
+        return proceed()
       })
-      .catch(() => {})
-      .then(() => armTrack(p.name, p.aosUnix))
+      // Detail unavailable (SatNOGS offline — or the 30 d refusal): still ask
+      // the backend to arm. Its own gate answers with the named reason, which
+      // the armTrack toast surfaces — never a silent dead button. (This is
+      // the pre-confirm fall-through, kept.)
+      .catch(() => armTrack(p.name, p.aosUnix))
   }
   // The rail scroll: once the armed track's rail exists, bring it into view
   // (nearest — never yank the whole column). jsdom has no scrollIntoView.
@@ -1746,18 +1834,23 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         </span>
         {/* Stale elements stop being a dim parenthetical (the appliance's own
             failure mode — it buries `tledate`): an amber chip the eye lands
-            on. No "refresh now" — no manual-refresh command exists; the 12 h
-            TTL refetch is the only honest story to tell. */}
+            on — and the chip IS the manual refresh now (fetch_tles_now,
+            phase 2). The old "there is no manual refresh" tooltip line is
+            dead because the claim is. */}
         {view && tleStale && (
-          <span
+          <button
+            type="button"
             className="sat-chip stale"
-            title={`Orbital elements are ${view.tleAgeDays.toFixed(1)} days old — pass times and Doppler drift with element age. They refresh automatically (12 h cadence) when the network allows; there is no manual refresh.`}
+            disabled={tleRefreshing}
+            onClick={() => void refreshTles()}
+            title={`Orbital elements are ${view.tleAgeDays.toFixed(1)} days old — pass times and Doppler drift with element age. Click to refresh now; they also refresh automatically every 6 h when the network allows.`}
           >
             {/* Unit spelled out: the chip voice is uppercase, and "9 d" would
                 render as the wrong unit "9 D". Always plural — stale starts
                 past 14 days. */}
-            TLE {Math.round(view.tleAgeDays)} days — STALE
-          </span>
+            TLE {Math.round(view.tleAgeDays)} days — STALE{' '}
+            {tleRefreshing ? '· refreshing…' : '· refresh'}
+          </button>
         )}
         {track && (
           <span
@@ -1909,7 +2002,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                           className={`sat-star${favs.has(p.name.toUpperCase()) ? ' on' : ''}`}
                           onClick={(e) => {
                             e.stopPropagation()
-                            onToggleFav(p.name)
+                            onToggleFav(p.name, p.norad)
                           }}
                           title="Unstar removes the bird from this schedule and disarms its alarm"
                         >
@@ -2026,6 +2119,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                 onDopplerOn={writeDopplerOn}
                 onVfoMap={writeVfoMap}
                 onGoToPicker={() => pickerRef.current?.scrollIntoView?.({ block: 'nearest' })}
+                onRefreshElements={() => void refreshTles()}
                 scrollRef={railRef}
               />
             )}
@@ -2292,7 +2386,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               <li key={n} className={selected === n ? 'sel' : ''}>
                 <button
                   className={`sat-star${favs.has(n.toUpperCase()) ? ' on' : ''}`}
-                  onClick={() => onToggleFav(n)}
+                  onClick={() => onToggleFav(n, view?.birds.find((b) => b.name === n)?.norad)}
                   title="★ favorites drive the schedule, the map emphasis, and alarms"
                 >
                   ★
@@ -2304,6 +2398,59 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
           </ul>
         </section>
       </aside>
+
+      {/* THE >14 d ARM CONFIRM (phase 3): the STALE threshold's second
+          consequence. Three honest exits — Refresh (fetch fresh elements,
+          then re-run the whole work-pass chain against them), Arm anyway
+          (the held chain tail runs as clicked), Cancel (nothing arms).
+          Portaled ui/Dialog — the one sanctioned modal primitive. */}
+      <Dialog
+        open={armConfirm != null}
+        onOpenChange={(o) => {
+          if (!o) setArmConfirm(null)
+        }}
+        title="Stale orbital elements"
+        description={
+          armConfirm
+            ? `${armConfirm.pass.name}: elements are ${Math.round(armConfirm.ageDays)} days old — pointing and Doppler will be off.`
+            : ''
+        }
+      >
+        <div className="sat-armconfirm-actions">
+          <button
+            type="button"
+            className="settings-save"
+            disabled={tleRefreshing}
+            onClick={() => {
+              const c = armConfirm
+              setArmConfirm(null)
+              if (c == null) return
+              // Refresh, then re-run the chain from the top: the fresh set
+              // re-fetches detail (fresh age — no second confirm) and the
+              // arm matches the same schedule row (±3 min tolerance covers
+              // the refreshed elements nudging AOS by seconds). If the
+              // refresh fails, its toast says why and the confirm simply
+              // reappears on the next work click — never a silent arm.
+              void refreshTles().then(() => workPass(c.pass))
+            }}
+          >
+            {tleRefreshing ? 'Refreshing…' : 'Refresh elements'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const c = armConfirm
+              setArmConfirm(null)
+              c?.proceed()
+            }}
+          >
+            Arm anyway
+          </button>
+          <button type="button" onClick={() => setArmConfirm(null)}>
+            Cancel
+          </button>
+        </div>
+      </Dialog>
     </div>
   )
 }
