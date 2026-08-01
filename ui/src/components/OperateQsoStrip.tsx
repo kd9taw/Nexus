@@ -131,7 +131,7 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
                 noTx
                   ? noTxWhy
                   : radio.txEnabled
-                  ? 'Transmit ENABLED — your queued message will go out. Click to disable transmit (receive keeps decoding either way).'
+                  ? 'Transmit ENABLED — your queued message will go out. Click to disable: an FT over already in flight finishes, then TX stays off (Stop TX is the immediate halt). Receive keeps decoding either way.'
                   : 'Transmit DISABLED — receive keeps decoding. Click to enable transmit (WSJT-X "Enable Tx").'
               }
             >
@@ -151,7 +151,7 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
               type="button"
               className="op-btn stop"
               onClick={() => onHaltTx?.()}
-              title="Stop transmitting immediately"
+              title="Stop transmitting immediately — cuts even an over already in flight"
             >
               Stop TX
             </button>

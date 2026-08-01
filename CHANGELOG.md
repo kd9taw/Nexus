@@ -211,6 +211,15 @@ bug report, and a button back to a known-good section — while the navigation r
 stay alive around it. Pop-out windows carry the same net. And the section the app reopens on
 is checked against what this build can actually render before it is restored, so a saved id
 from an older or newer version can never wedge startup into a dead screen.
+### Fixed
+
+- **TX Off follows WSJT-X's Enable-Tx contract in the FT modes.** Turning TX Off lets a
+  transmission already in flight finish its over, and the next cycle simply doesn't start;
+  turning it back on before the next cycle transmits normally. Stop TX is unchanged — it
+  halts immediately, mid-over. Previously both controls cut the transmission on the spot.
+  Only the FT-style cycle gets to finish: in CW, RTTY, SSTV, the voice keyer and APRS,
+  TX Off still stops the over on the spot, and the cockpit Stop buttons now unkey even in
+  the last fraction of a second of an over instead of leaving the rig keyed to the tail.
 
 ## [0.24.0] — 2026-07-31
 
