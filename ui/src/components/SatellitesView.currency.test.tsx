@@ -60,6 +60,7 @@ const satView = (tleAgeDays: number): SatView => ({
   tleSource: 'mirror',
   birds: [],
   passes: [],
+  excluded: [],
 })
 
 const passRow = (over: Partial<SatPass> = {}): SatPass => ({

@@ -1,21 +1,32 @@
-# Six-hourly regeneration of the amateur-satellite TLE mirror that Nexus
-# installs refresh from (see scripts/gen-tles.mjs for the why + the sanity
-# gates). CI is the ONE consumer that touches Celestrak — once per run — so
-# every install doesn't have to be; the result publishes as a rolling GitHub
-# Release asset (`tles`, tles.json + tles.txt), no secrets beyond the built-in
-# GITHUB_TOKEN. hamradiotools.io/nexus/tles.* 302s to the release assets via
-# Cloudflare dashboard redirect rules (matching the fcc-states ones — an
-# operator dashboard action, not in-repo). A failed sanity gate publishes
-# NOTHING: the Release keeps serving the last good set, which clients
-# re-validate on their side anyway.
+# Six-hourly regeneration of the amateur-satellite CATALOG mirror that Nexus
+# installs refresh from (see scripts/gen-tles.mjs for the why, the sources and
+# the sanity gates). CI is the ONE consumer that touches Celestrak and SatNOGS
+# — five sequential requests per run, paced — so every install doesn't have
+# to be; the result publishes as a rolling GitHub Release asset (`tles`,
+# tles.json + tles.txt), no secrets beyond the built-in GITHUB_TOKEN.
+# hamradiotools.io/nexus/tles.* 302s to the release assets via Cloudflare
+# dashboard redirect rules (matching the fcc-states ones — an operator
+# dashboard action, not in-repo). A failed sanity gate publishes NOTHING: the
+# Release keeps serving the last good set, which clients re-validate on their
+# side anyway.
 name: Amateur TLE mirror
 
 on:
   schedule:
     # Every 6 h at :17 — off the hour, plus the in-job random sleep below, so
-    # this fetch never joins the top-of-hour herd Celestrak sees.
+    # this fetch never joins the top-of-hour herd Celestrak sees. Well inside
+    # their 2 h update cycle rule: each group is downloaded once per run.
     - cron: '17 */6 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      ratchet_override:
+        description: >-
+          Waive the count ratchet for THIS run. For the one step change the
+          ratchet is right to refuse (the 97-bird group → ~370-bird union
+          cutover), never as a way to live without it. The run logs the
+          baseline it waived.
+        type: boolean
+        default: false
 
 permissions:
   contents: write # publish the rolling Release asset
@@ -33,6 +44,9 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Gate the generator itself (pure derivation + every sanity gate, on fixtures)
+        run: node --test scripts/gen-tles.test.mjs
+
       - name: Jitter (scheduled runs only — a cron fleet must not hit Celestrak in sync)
         if: github.event_name == 'schedule'
         run: sleep $((RANDOM % 600))
@@ -44,9 +58,13 @@ jobs:
           gh release download tles --pattern tles.json --output prev-tles.json \
             || echo "no previous release — the first run gates on the fixed floor only"
 
-      - name: Generate + gate (fetches Celestrak once; ANY gate failure publishes nothing)
+      - name: Generate + gate (five sequential fetches; ANY gate failure publishes nothing)
         env:
           TLES_PREV: prev-tles.json
+          # Dispatch-only, and only when the operator asks for it: the schedule
+          # can never set this, so an unattended run can never wave a shrink
+          # through.
+          TLES_RATCHET_OVERRIDE: ${{ github.event.inputs.ratchet_override == 'true' && '1' || '0' }}
         run: |
           mkdir -p out
           node scripts/gen-tles.mjs out
@@ -63,7 +81,7 @@ jobs:
         run: |
           gh release view tles >/dev/null 2>&1 \
             || gh release create tles \
-                 --title "Amateur satellite TLE mirror" \
-                 --notes "Auto-generated every 6 h from the Celestrak amateur group (data courtesy of CelesTrak, Dr. T.S. Kelso). Nexus installs refresh from this mirror instead of each fetching Celestrak directly." \
+                 --title "Amateur satellite catalog + TLE mirror" \
+                 --notes "Auto-generated every 6 h: the amateur satellite population derived from the SatNOGS DB (CC BY-SA 4.0, (c) SatNOGS / Libre Space Foundation contributors), with orbital elements assembled from the Celestrak amateur and satnogs groups (data courtesy of CelesTrak, Dr. T.S. Kelso) and the SatNOGS TLE API. Nexus installs refresh from this mirror instead of each fetching upstream directly. As an adaptation of BY-SA material these assets are published under CC BY-SA 4.0; the same statement travels inside tles.json's own \`attribution\` field, which is the authoritative one (these notes are written once, at creation)." \
                  --latest=false
           gh release upload tles out/tles.json out/tles.txt --clobber

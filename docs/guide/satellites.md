@@ -62,10 +62,46 @@ its own.
 
 - Passes are computed for your grid — **set your Maidenhead locator** first or
   the predictions can't run.
+- The bird list is **not everything in orbit** — it is the amateur population:
+  satellites with an amateur transmitter on record. Around 430 birds are
+  listed and around 367 of those carry current orbital elements.
 - Rotor auto-track drives an **az/el** rotator through Hamlib `rotctld`
   (elevation is followed through the pass; an azimuth-only rotator is detected
   automatically and driven in azimuth alone); test it with the Dummy model
   before you trust it on real hardware.
+
+### Where does the bird list come from, and what does a bird's status mean?
+
+The list is **derived, not copied**. It starts from the
+[SatNOGS database](https://db.satnogs.org) — the community record of which
+satellites carry which transmitters — and keeps every satellite with an
+amateur transmitter: one SatNOGS labels *Amateur*, or one transmitting in an
+ITU amateur-satellite allocation (the band test is what keeps SO-50, whose
+transmitters are all filed as "Unknown"). Orbital elements for those birds are
+then assembled from three sources, freshest epoch winning: CelesTrak's
+`amateur` group, CelesTrak's `satnogs` group, and the SatNOGS element service.
+That last one matters — it is the only source for a bird still catalogued
+under a placeholder number, and for birds CelesTrak has no elements for at all.
+
+The list is rebuilt every six hours by the project's mirror, so **a bird going
+on or offline reaches you within six hours of SatNOGS recording it** — no app
+update needed. Each bird's status rides with it:
+
+- **alive** — in orbit, with something amateur transmitting. These are the
+  birds that carry elements and appear on the map, in the schedule and in the
+  pass list.
+- **alive but silent** — in orbit, but the catalog lists no working amateur
+  transmitter any more. The pass geometry would still be real; there is
+  nothing to work on it.
+- **dead** — reported silent.
+- **re-entered** — gone. Kept in the list for six months after re-entry, so a
+  favorite that stops working has a row that says why, then dropped.
+- **pre-launch** — on record but not yet deployed. Nothing to work yet.
+
+Only *alive* birds carry elements, so a bird in any other state shows in the
+list with its status and "no elements" rather than a position. **Your ★ stays
+put either way** — a bird that dies never vanishes out from under its star,
+and search reaches the whole catalog so you can always find it to unstar it.
 
 ### How current are the elements?
 
@@ -75,12 +111,16 @@ Doppler drift with it. Nexus keeps the elements current for you and tells you
 plainly when it can't:
 
 - **Where they come from.** Elements refresh in the background a few times a
-  day from the project's mirror of CelesTrak's amateur list (data courtesy of
-  Dr. T.S. Kelso); the mirror exists so a fleet of installs never hammers the
-  source. The Satellites section and Settings ▸ Orbital elements show the age,
-  fetch time and source. **Update now** forces a refresh; **Import from file**
-  loads a downloaded TLE/keps file — the path for offline shacks and
-  brand-new launches the group file doesn't carry yet.
+  day from the project's mirror described above (CelesTrak data courtesy of
+  Dr. T.S. Kelso; population and status data from SatNOGS / Libre Space
+  Foundation, CC BY-SA 4.0); the mirror exists so a fleet of installs never
+  hammers the sources. If the mirror itself is unreachable for a day, Nexus
+  falls back to fetching CelesTrak's amateur group directly — a shorter list
+  of 97, with every other bird keeping its row marked "no elements" until the
+  mirror is back. The Satellites section and Settings ▸ Orbital elements show
+  the age, fetch time and source. **Update now** forces a refresh; **Import
+  from file** loads a downloaded TLE/keps file — the path for offline shacks
+  and brand-new launches no source carries yet.
 - **Past 14 days** the age is badged stale, and arming a pass asks first —
   refresh right there, or arm anyway with your eyes open.
 - **Past 30 days** SGP4 accuracy is genuinely gone, so anything that would

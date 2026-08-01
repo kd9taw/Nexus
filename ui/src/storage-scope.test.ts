@@ -83,6 +83,10 @@ const SHARED = [
   'nexus.sats.alarms',
   'nexus.sats.chasing',
   'nexus.sats.chasingNorad',
+  // The one-time seed marker. SHARED for the same reason the ★ set it seeded
+  // is: per-surface, a second window would find "never seeded" and star ten
+  // birds on top of whatever the operator had settled on.
+  'nexus.sats.seeded',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',
   'nexus.waterfall.palette',
@@ -99,6 +103,10 @@ const DEDUPE = [
   'nexus-journey-seen',
   'nexus.dxped.alarms.fired',
   'nexus.sats.alarms.fired',
+  // "The seed notice was read." Per-surface, the notice would reappear in
+  // every pop-out and again after every window open — an announcement about a
+  // one-time event, made repeatedly.
+  'nexus.sats.seedAck',
   'nexus.update.dismissedVersion',
   'tempo-achievements-seen',
 ]

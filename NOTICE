@@ -432,18 +432,20 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
 ## Runtime data services (courtesy)
 
 When the relevant features are enabled, Nexus queries the external services
-below at runtime. **None of their data is redistributed with the app**, and
-each is used under its own terms of service. These acknowledgments are given as
-a courtesy to the operators and communities who provide them:
+below at runtime. Except where a service is named below as redistributed,
+**none of their data is redistributed with the app**, and each is used under
+its own terms of service. These acknowledgments are given as a courtesy to the
+operators and communities who provide them:
 
 - **SatNOGS DB** (<https://db.satnogs.org>) — which amateur satellites and
   transponders are active, for the Satellites feature. SatNOGS DB data is
   provided by the SatNOGS / Libre Space Foundation community under
   **CC BY-SA 4.0**. Data courtesy of the SatNOGS project and its contributors.
-  (SatNOGS material IS redistributed in one place — a test fixture, not shipped
-  in the app. See "SatNOGS Network observations" under *Test fixtures* below.)
+  **SatNOGS material IS redistributed**, in three places — see *Redistributed
+  SatNOGS material* below.
 - **CelesTrak** (<https://celestrak.org>, T.S. Kelso) — amateur-satellite
-  TLE / GP orbital elements.
+  TLE / GP orbital elements. Redistributed as part of the satellite catalog
+  mirror described below.
 - **wspr.live** (the community mirror of wsprnet.org) — WSPR beacon reception
   evidence for the "getting out" check; free non-commercial terms. Data
   courtesy of wspr.live / wsprnet.org contributors.
@@ -486,9 +488,52 @@ The bundled and linked components combine into the GPLv3 whole:
 Runtime data services (the "Runtime data services" section above) are **not
 bundled or linked** — the app merely queries them over the network — so their
 terms do not affect the license of the distributed binary; they are
-acknowledged as a courtesy. The one share-alike source that IS redistributed —
-SatNOGS Network observation data, CC BY-SA 4.0 — appears only in a test fixture
-that is not part of any shipped binary; see *Test fixtures* below.
+acknowledged as a courtesy. The one share-alike source that IS redistributed is
+SatNOGS data, CC BY-SA 4.0. None of it is part of any shipped binary: it lives
+in test fixtures and in a data file the project publishes and every install
+downloads at runtime; see *Redistributed SatNOGS material* below.
+
+## Redistributed SatNOGS material
+
+SatNOGS data (**CC BY-SA 4.0**, <https://creativecommons.org/licenses/by-sa/4.0/>,
+© the SatNOGS / Libre Space Foundation community) is redistributed by this
+project in three places. None is compiled into a binary; the licence and its
+attribution travel inside each artifact so that they survive it being copied
+out of this tree. Creative Commons designates GPL-3.0 a **BY-SA Compatible
+License**, so adapted BY-SA 4.0 material may be redistributed under GPLv3 with
+attribution preserved.
+
+### 1. The amateur satellite catalog + TLE mirror (published, downloaded by every install)
+
+`scripts/gen-tles.mjs` runs in CI every six hours and publishes `tles.json` /
+`tles.txt` as a GitHub Release asset that <https://hamradiotools.io/nexus/> 302s
+to, and that every Nexus install refreshes from and caches to disk. Its content
+is derived from:
+
+- the **SatNOGS DB** (<https://db.satnogs.org>) — the satellite population,
+  names, statuses and transmitter records, **CC BY-SA 4.0**;
+- the **SatNOGS TLE API** — orbital elements, same terms; and
+- **CelesTrak** (<https://celestrak.org>, Dr. T.S. Kelso) — orbital elements
+  from the `amateur` and `satnogs` GP groups, used under CelesTrak's terms.
+
+Because the population and status data are BY-SA, the published catalog is an
+adaptation of BY-SA material and is offered under **CC BY-SA 4.0**. The
+manifest carries that statement in its own `attribution` field, and the
+Release notes carry it too. Our thanks to the SatNOGS community, whose
+curation is what makes a list of *amateur* satellites possible at all — no
+element source alone can say which birds carry a working amateur transmitter.
+
+### 2. Mirror-generator test fixtures
+
+`scripts/fixtures/tles/satnogs-satellites.json`,
+`satnogs-transmitters.json` and `satnogs-tle.json` are small hand-picked
+excerpts of the SatNOGS DB and TLE APIs (plus a few synthetic records), kept so
+the generator's derivation and sanity gates are tested without touching the
+network. **CC BY-SA 4.0**, as above.
+
+### 3. SatNOGS Network observations (Doppler validation)
+
+See *Test fixtures* below.
 
 ## Test fixtures
 
@@ -506,7 +551,9 @@ Foundation**. SatNOGS Network data is licensed **CC BY-SA 4.0**
 Creative Commons designates GPL-3.0 a **BY-SA Compatible License**, so adapted
 BY-SA 4.0 material may be redistributed under GPLv3 with attribution preserved,
 which is what this file does — the licence and attribution also travel inside
-the JSON itself, so they survive the file being copied out of this tree.
+the JSON itself, so they survive the file being copied out of this tree. (The
+same rule is applied to the two other redistributed SatNOGS artifacts; see
+*Redistributed SatNOGS material* above.)
 
 Observed by SatNOGS ground stations **1696, 4803, 5049 and 5062** — our thanks
 to their operators and to the SatNOGS community, whose recordings let Nexus's

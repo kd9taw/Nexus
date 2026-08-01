@@ -106,6 +106,47 @@ carries its designation ("ISS", "RS-44") beside its satellite icon, and map labe
 overprint each other in a cluster shuffle apart so both names stay readable. Stars recognized by
 catalog number too, so an upstream rename never drops a bird from your filtered sky.
 
+**The bird list is the birds that are actually up there — and it says when one stops being one.**
+Nexus used to show one Celestrak list of 97 objects, and measured against AMSAT's live reports
+roughly 60 of those had not been heard in a month, while eight birds heard on the air that same
+day were missing from it entirely (IO-86, Foresail-1p, SAKHACUBE, QMR-KWT 2, Ten-Koh 2, Marina and
+two more). The list is now built the other way round: start from the satellites the SatNOGS
+database says carry an amateur transmitter, then go and find current orbital elements for the ones
+that are actually workable — from the two Celestrak groups and the SatNOGS element service
+together. That is **430 birds listed and 367 with live elements**, against 97 before: 274 of them
+are birds the old Celestrak group never carried at all. Birds catalogued under a placeholder
+number until Space Command assigns a real one (normal for the first months after launch) now
+appear under one entry instead of two or none.
+
+Every bird carries its status with it, so the Birds list, the map and the globe can show what only
+the Satellites schedule could show before — and a bird that stops being workable keeps its row and
+says why: **dead**, **re-entered**, **pre-launch**, or **alive but silent** when nothing amateur is
+transmitting on it any more. A starred bird that dies no longer disappears out from under your ★;
+it stays in the list, wearing the reason, until you take the star off yourself. Birds nobody holds
+current elements for are reported the same way — no elements at all, elements too old to trust, or
+an orbit decayed past the point where a position can be computed. The Connect Passes pane names
+those birds under the passes, and searching the Birds list reaches the whole catalog, elements or
+not, so a bird you unstar is always a bird you can find again. A bird that re-entered more than
+six months ago drops off: by then it is history, not a catalog.
+
+**And your first ★ birds are set for you — once.** A fresh install used to open Satellites on an
+empty schedule beside a list of hundreds of birds, with nothing to say which are worth chasing.
+Nexus now stars the ten most workable active birds over your grid the first time it can: alive,
+carrying a live amateur transmitter, with current elements, and flying real passes over you —
+ranked by how many of those passes you get and how high they climb. A line at the top of the
+section says it happened and disappears when you dismiss it, and every star it set is one you turn
+off where you are standing. It happens once. Clear the whole set and you get an empty sky, not the
+same ten back next launch; a station that already has favourites is never seeded over, and neither
+is one that deliberately cleared theirs — including one that cleared them on an older version.
+With no grid square set, or before the bird catalog has landed, nothing is starred at all: a guess
+is worse than waiting.
+
+The mirror that feeds all this refreshes every six hours and refuses to publish at all if any of
+its sanity checks fail, so a bad upstream day leaves your last good list in place rather than
+replacing it with a short one. If the mirror itself is unreachable for a day, Nexus falls back to
+fetching Celestrak's amateur group directly — a shorter list, and every bird it does not carry
+keeps its row, marked as having no current elements.
+
 ### Fixed: the pick reaches the radio — and the IC-9700's uplink goes where it can transmit
 
 **A dual-radio pick finds the satellite rig even with nothing configured.** Field report: on an

@@ -10,6 +10,10 @@
 //    also read (nexus.sats.favOnly — surface-scoped, satChase.ts).
 //  - Stars with no upcoming passes → an honest empty line, chip still
 //    reachable (the escape hatch to All must never disappear).
+//  - STATUS HONESTY: a ★ bird that went dead/re-entered is marked on its row,
+//    and one the view could not place at all gets a named line instead of
+//    disappearing — Connect is where the operator plans, and a bird silently
+//    missing from it reads as "no pass", not as "no elements".
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import type { SatView } from '../../types'
@@ -38,6 +42,7 @@ const view: SatView = {
   tleSource: 'mirror',
   birds: [],
   passes: [pass('RS-44', 44909, 600), pass('AO-7', 7530, 1200)],
+  excluded: [],
 }
 
 const chip = () => screen.getByRole('button', { name: 'Filter to ★ birds' })
@@ -96,5 +101,49 @@ describe('SatPassesPane ★/All filter', () => {
     expect(await screen.findByText(/No passes for your ★ birds/)).toBeTruthy()
     expect(chip()).toBeTruthy()
     expect(screen.queryByText('RS-44')).toBeNull()
+  })
+})
+
+describe('SatPassesPane status honesty', () => {
+  it("marks a pass whose bird SatNOGS calls dead — the row is not silently normal", async () => {
+    api.getSatellites.mockResolvedValue({
+      ...view,
+      passes: [{ ...pass('AO-85', 40967, 600), status: 'dead' }, pass('RS-44', 44909, 1200)],
+    })
+    render(<SatPassesPane />)
+    expect(await screen.findByText('AO-85')).toBeTruthy()
+    expect(screen.getByText('dead')).toBeTruthy()
+    // The working bird stays unmarked — the chip must mean something.
+    expect(screen.queryAllByText('alive')).toEqual([])
+  })
+
+  it('names a ★ bird the view could not place, instead of dropping it', async () => {
+    toggleSatChasing('AO-85', 40967)
+    api.getSatellites.mockResolvedValue({
+      ...view,
+      excluded: [
+        { name: 'AO-85', norad: 40967, status: 'alive', reason: 'noElements' },
+        // Not starred: the operator's pane must not grow by the whole catalog.
+        { name: 'PACSAT', norad: 20439, status: 'alive', reason: 'noElements' },
+      ],
+    })
+    render(<SatPassesPane />)
+    expect(await screen.findByText(/AO-85/)).toBeTruthy()
+    expect(screen.getByText(/no elements/)).toBeTruthy()
+    expect(screen.queryByText(/PACSAT/)).toBeNull()
+  })
+
+  it('renders for a ★ bird that has ONLY an exclusion — never falls back to nothing', async () => {
+    // No passes at all in the window. The pane used to return null here, so
+    // PaneFrame showed the Basic line and the missing bird was invisible.
+    toggleSatChasing('AO-85', 40967)
+    api.getSatellites.mockResolvedValue({
+      ...view,
+      passes: [],
+      excluded: [{ name: 'AO-85', norad: 40967, status: 'alive', reason: 'staleElements' }],
+    })
+    const { container } = render(<SatPassesPane />)
+    await waitFor(() => expect(container.querySelector('.sat-pane')).toBeTruthy())
+    expect(screen.getByText(/stale elements/)).toBeTruthy()
   })
 })

@@ -336,6 +336,7 @@ describe('the favorites-list search still narrows (guard for the aside rework)',
           { name: 'AO-91', lat: 0, lon: 0, altKm: 500, footprintKm: 2000, track: [] },
         ],
         passes: [],
+        excluded: [],
       }),
     )
     const { container } = render(<SatellitesView />)

@@ -365,9 +365,41 @@ export interface SatView {
     /** Ground track ±now ([unix, lat, lon] per minute): past = trail, future =
      * projection; the map interpolates along it for real-time motion. */
     track: [number, number, number][]
+    /** SatNOGS status ('alive' | 'dead' | 're-entered' | 'future') from the
+     * mirror's amateur catalog. Absent when the serving snapshot predates the
+     * catalog or came from the Celestrak fallback leg — never guessed. */
+    status?: string | null
+    /** The catalog says this bird carries at least one LIVE amateur
+     * transmitter. Only meaningful beside a `status`: absent/undefined means
+     * the catalog was never asked, `false` means it answered "nothing left to
+     * work". Seeding requires it true; the Birds list marks alive-but-false
+     * birds silent (satHealth.ts). */
+    amateur?: boolean
   }[]
   /** Sorted by AOS; geometry only — no transponder/workability claim. */
   passes: SatPass[]
+  /** Amateur birds with NO row in `birds`, each with its reason. Existence is
+   * elements-driven, so a bird nothing carries current elements for used to
+   * vanish silently; these are the ones a surface should be able to name
+   * ("no current elements") rather than quietly omit. Empty before the
+   * catalog lands. */
+  excluded: SatExcluded[]
+}
+
+/** A known amateur bird the current view cannot place, and why. */
+export interface SatExcluded {
+  name: string
+  norad: number
+  /** SatNOGS status when the catalog knows the bird. */
+  status?: string | null
+  /** Does the catalog still list a LIVE amateur transmitter? Absent when the
+   * catalog does not know this bird — which must read as NOT ASKED, never as
+   * "no transmitters" (satHealth.ts believes only an explicit `false`). */
+  amateur?: boolean | null
+  /** noElements — no source had elements at all. staleElements — past the
+   * 30 d ceiling where SGP4 accuracy is gone. noPosition — current elements
+   * that sgp4 still refused (a decaying orbit does this). */
+  reason: 'noElements' | 'staleElements' | 'noPosition'
 }
 export interface SatPass {
   name: string
@@ -379,9 +411,10 @@ export interface SatPass {
   maxElDeg: number
   aosAzDeg: number
   losAzDeg: number
-  /** SatNOGS operational status, stamped on Satellites-section schedule rows
-   * when the weekly cache has this bird; absent on the map's SatView passes
-   * and whenever the cache is empty (offline) — never guessed. */
+  /** SatNOGS operational status. On schedule rows the live weekly cache
+   * answers first and the mirror's amateur catalog seeds the birds it has no
+   * answer for; SatView passes carry the catalog's. Absent when neither knows
+   * the bird — never guessed. */
   status?: string | null
   /** What this pass could EARN (needed grids/entities reachable through the
    * footprint). Stamped ONLY by get_sat_pass_needs; absent everywhere else. */

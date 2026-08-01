@@ -405,12 +405,16 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   behind Nexus's primary CW decoder, shipped as an app resource (`resources/deepcw/`) with its full
   AGPL-3.0 license text bundled in the installer; its corresponding source is the upstream
   repository (see **[NOTICE](NOTICE)**).
-- **[SatNOGS](https://network.satnogs.org)** / the **Libre Space Foundation** (CC BY-SA 4.0) — the
-  open network of volunteer ground stations. Nexus's satellite Doppler prediction is checked against
-  carrier tracks recovered from eight real recorded passes on their network, so it is validated
-  against signals that actually arrived at an antenna and not only against another implementation of
-  the same theory. Thanks to stations 1696, 4803, 5049 and 5062 and their operators. The tracks live
-  in a test fixture and are not shipped in the app (see **[NOTICE](NOTICE)**).
+- **[SatNOGS](https://satnogs.org)** / the **Libre Space Foundation** (CC BY-SA 4.0) — the open
+  satellite database and network of volunteer ground stations. Nexus's amateur-satellite list is
+  *derived from* the SatNOGS DB: which birds are in orbit, what they are transmitting, and whether
+  they are still alive — the curation no orbital-element source can provide. That derived catalog is
+  published by this project every six hours and downloaded by every install, under **CC BY-SA 4.0**
+  with attribution carried inside the file. Their Doppler data serves a second purpose: Nexus's
+  Doppler prediction is checked against carrier tracks recovered from eight real recorded passes on
+  their network, so it is validated against signals that actually arrived at an antenna and not only
+  against another implementation of the same theory. Thanks to stations 1696, 4803, 5049 and 5062
+  and their operators (see **[NOTICE](NOTICE)** for what is redistributed where).
 - **[Hamlib](https://hamlib.github.io/)** — bundled `rigctld` for CAT control (GPL/LGPL).
 - **[FFTW](https://www.fftw.org/)** (GPL), **[Tauri](https://tauri.app/)**, React,
   [cpal](https://github.com/RustAudio/cpal), Natural Earth basemap (public domain),

@@ -1152,6 +1152,16 @@ button.nb-chip:hover {
   color: var(--text-dim);
   font-size: var(--fs-micro);
 }
+/* ★ birds the view could not place, named under the pass list. Content-height
+   and capped at four rows in the component — this pane is a fixed-content
+   strip, never a grower. */
+.sat-missing {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
 /* Logbook needs-confirmation filter chip. */
 .log-filter-chip {
   font-size: var(--fs-label);
@@ -14694,6 +14704,32 @@ html[data-panel='needed'] {
   font-size: var(--fs-micro);
   padding: 0;
 }
+/* The one-time seeding notice. A HEADER child, not a grid child: .sats-view's
+   rows are `auto auto minmax(0,1fr)` and an extra column-1 item would push
+   .sats-sched out of the grower row (the schedule would stop scrolling and
+   the aside would stretch). flex-basis:100% takes its own line inside the
+   already-wrapping header at every width, so it costs the header one line and
+   the grid nothing. */
+.sats-seed-notice {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+}
+.sats-seed-notice button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--fs-micro);
+  padding: 0 2px;
+}
 .sats-empty {
   grid-column: 1;
   color: var(--text-dim);
@@ -14897,6 +14933,12 @@ html[data-panel='needed'] {
   border-radius: 999px;
   padding: 0 6px;
   margin-left: 6px;
+  /* A pill never breaks mid-label. The chip lives in flex rows now (the Birds
+     list, the Connect pass rows) as well as table cells, and "STALE ELEMENTS"
+     wrapping inside its own border reads as a rendering fault. No rule later
+     in this sheet sets white-space on .sat-chip, so this is the winner
+     everywhere it applies. */
+  white-space: nowrap;
   /* One chip voice: the family (INVERTING, TLE-STALE) is uppercase; lowercase
      `alive`/`dead` beside them read as a different species. */
   text-transform: uppercase;

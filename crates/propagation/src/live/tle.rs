@@ -6,7 +6,10 @@
 //! - **Mirror** (primary): `hamradiotools.io/nexus/tles.json`, a rolling
 //!   GitHub-Release asset regenerated every 6 h by `.github/workflows/tles.yml`
 //!   running `scripts/gen-tles.mjs`. Served WITH cache validators, so a refresh
-//!   is a conditional GET — an unchanged set costs a ~300-byte 304.
+//!   is a conditional GET — an unchanged set costs a ~300-byte 304. Since
+//!   schema 2 it carries a [`SatCatalogEntry`] list beside the elements: the
+//!   derived amateur POPULATION with each bird's status, including the birds
+//!   no element source could cover.
 //! - **Celestrak direct** ([`fetch_tles`], the narrow fallback):
 //!   `gp.php?GROUP=amateur&FORMAT=tle`. Celestrak serves NO cache validators,
 //!   updates on a 2 h cycle, and 403s consumers that re-download inside one
@@ -146,6 +149,54 @@ pub fn fetch_tles() -> Result<Vec<Tle>, TleFetchError> {
     Ok(tles)
 }
 
+/// One bird in the mirror's amateur CATALOG (`tles.json` schema 2) — who it
+/// is and whether it is still worth chasing, INDEPENDENT of whether anyone
+/// could find current elements for it.
+///
+/// The catalog exists because existence used to be elements-only: a bird
+/// SatNOGS knows about but no element source carries simply did not appear,
+/// with no row, no warning and no way for the UI to say "no current
+/// elements". It is also the status SEED — the live per-bird status path is
+/// still the SatNOGS join in the shell, but that only knows the birds it has
+/// been asked about, and it cannot answer at all for a bird SatNOGS files
+/// under a placeholder catalog number.
+///
+/// Absent on a legacy (schema 1) manifest and on the Celestrak fallback leg,
+/// where it stays empty and nothing is stamped — exactly the pre-catalog
+/// behavior.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SatCatalogEntry {
+    /// The catalog number the ELEMENT LINE carries (the publisher resolves
+    /// SatNOGS placeholder ids to their `norad_follow_id` first) — the key
+    /// every client surface already identifies a bird by.
+    pub norad: u32,
+    pub name: String,
+    /// The SatNOGS `status` verbatim (`alive` | `dead` | `re-entered` |
+    /// `future`), kept as the source string for the same reason
+    /// [`crate::live::satnogs::SatStatus`] does: an unseen value degrades to a
+    /// label instead of being dropped. NOT always `alive`: the catalog lists
+    /// the birds an operator may ask about, which includes the ones that just
+    /// stopped being workable.
+    pub status: String,
+    /// The bird carries at least one LIVE amateur transmitter. `false` is a
+    /// real answer, not a placeholder — an alive-in-orbit bird whose every
+    /// amateur transmitter has gone quiet (AO-85) is listed with `false`,
+    /// which is the one fact no pass elevation can ever show.
+    #[serde(default)]
+    pub amateur: bool,
+    /// A decay date is on record upstream.
+    #[serde(default)]
+    pub decayed: bool,
+    /// Which mirror leg supplied this bird's elements — `None` when the
+    /// publisher had none to give: either no source carried any (the whole
+    /// point of the catalog — a bird known, alive, amateur and unfindable) or
+    /// the bird is outside the ACTIVE tier, where elements would be a fiction
+    /// on a decayed orbit and a distraction on a mute one. Either way the UI
+    /// must be able to say so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src: Option<String>,
+}
+
 /// A conditional mirror-fetch outcome: the published set changed (new elements
 /// + the ETag to send next time), or the server said 304 (bump the freshness
 /// stamp, keep what you have).
@@ -153,21 +204,26 @@ pub enum TleMirrorFetch {
     NotModified,
     Fresh {
         elements: Vec<Tle>,
+        catalog: Vec<SatCatalogEntry>,
         generated: Option<String>,
         etag: Option<String>,
     },
 }
 
 /// The mirror manifest (`tles.json`, written by `scripts/gen-tles.mjs`) — the
-/// manifest IS the payload at ~16 KB. Only the fields the client consumes are
-/// deserialized here; `schema`/`count`/`medianEpochAgeDays` are the publisher's
-/// own bookkeeping and the client re-derives everything it gates on.
+/// manifest IS the payload. Only the fields the client consumes are
+/// deserialized here; `schema`/`count`/`sources`/`medianEpochAgeDays` are the
+/// publisher's own bookkeeping and the client re-derives everything it gates
+/// on. Unknown fields are ignored and every field defaults, so a schema-1
+/// manifest (no `catalog`) and a schema-2 one both load.
 #[derive(serde::Deserialize)]
 struct MirrorManifest {
     #[serde(default)]
     generated: Option<String>,
     #[serde(default)]
     elements: Vec<Tle>,
+    #[serde(default)]
+    catalog: Vec<SatCatalogEntry>,
 }
 
 /// Fetch the mirror's element set with the previous fetch's ETag (the
@@ -207,6 +263,7 @@ pub fn fetch_tles_mirror(etag: Option<&str>) -> Result<TleMirrorFetch, TleFetchE
     }
     Ok(TleMirrorFetch::Fresh {
         elements: manifest.elements,
+        catalog: manifest.catalog,
         generated: manifest.generated,
         etag,
     })
@@ -340,6 +397,35 @@ pub fn validate_tles(
 pub enum TleFetchTarget {
     Mirror,
     Celestrak,
+}
+
+/// [`validate_tles`]' ratchet baseline for ONE leg: the held bird count, but
+/// only when the incoming set is drawn the same way as the held one.
+///
+/// The two legs publish DIFFERENT POPULATIONS. The mirror's union is the whole
+/// amateur catalog (~370 birds with elements); Celestrak's `GROUP=amateur` is
+/// 97 of them. Ratcheting the fallback against a mirror-sized cache sets a
+/// floor of `max(40, 0.6 × 367) = 220` that a complete, healthy `GROUP=amateur`
+/// response can never clear — so the day the mirror goes down, which is the
+/// only day this leg ever runs, the fallback refuses too and the elements sit
+/// frozen until they age past the 30 d ceiling and the sky goes blank. A
+/// ratchet is only meaningful against a set drawn from the same source; across
+/// sources it is comparing two different questions. `0` = the fixed floor of
+/// 40 alone, which is the honest gate for "we have nothing comparable".
+pub fn tle_ratchet_count(
+    prev_source: Option<&str>,
+    prev_count: usize,
+    target: TleFetchTarget,
+) -> usize {
+    let same_leg = matches!(
+        (prev_source, target),
+        (Some("mirror"), TleFetchTarget::Mirror) | (Some("celestrak"), TleFetchTarget::Celestrak)
+    );
+    if same_leg {
+        prev_count
+    } else {
+        0
+    }
 }
 
 /// The pure when/where decision for a background TLE refresh — every timing
@@ -526,6 +612,39 @@ BROKEN BIRD\r\n\
     }
 
     #[test]
+    fn the_celestrak_leg_is_never_ratcheted_against_the_mirror_population() {
+        // THE cross-leg trap: a complete, healthy GROUP=amateur response is
+        // ~97 birds, and the mirror union it would be replacing is ~370. Held
+        // as one number, the fallback leg refuses its own good data forever —
+        // and it only ever runs when the mirror is already down.
+        let group = parse_tles(LIVE);
+        assert!(
+            validate_tles(&group, 367, LIVE_NOW).is_err(),
+            "the raw count ratchet does refuse it — that is the bug"
+        );
+        let ratchet = tle_ratchet_count(Some("mirror"), 367, TleFetchTarget::Celestrak);
+        assert_eq!(ratchet, 0, "a mirror cache says nothing about a group fetch");
+        assert_eq!(
+            validate_tles(&group, ratchet, LIVE_NOW).unwrap().len(),
+            group.len()
+        );
+        // …and the ratchet still bites WITHIN a leg, which is its whole job.
+        let same = tle_ratchet_count(Some("celestrak"), 97, TleFetchTarget::Celestrak);
+        assert_eq!(same, 97);
+        assert!(validate_tles(&group[..50], same, LIVE_NOW).is_err());
+        assert_eq!(
+            tle_ratchet_count(Some("mirror"), 367, TleFetchTarget::Mirror),
+            367
+        );
+        // A legacy/imported/bundled cache is not a leg's own population.
+        assert_eq!(
+            tle_ratchet_count(Some("legacy"), 97, TleFetchTarget::Celestrak),
+            0
+        );
+        assert_eq!(tle_ratchet_count(None, 0, TleFetchTarget::Mirror), 0);
+    }
+
+    #[test]
     fn validate_rejects_a_dropped_canary() {
         let tles: Vec<Tle> = parse_tles(LIVE)
             .into_iter()
@@ -598,6 +717,99 @@ BROKEN BIRD\r\n\
         // Age it by 30 d: the median gate itself refuses.
         let err = validate_tles(&tles, 0, LIVE_NOW + 30 * 86_400).unwrap_err();
         assert!(err.contains("median"), "got {err:?}");
+    }
+
+    // --- the mirror manifest -------------------------------------------------
+
+    #[test]
+    fn manifest_carries_the_status_catalog() {
+        // A schema-2 manifest, field for field as scripts/gen-tles.mjs writes
+        // it (including the publisher-only keys the client must ignore).
+        let json = r#"{
+          "schema":2,"generated":"2026-08-01T18:00:00.000Z",
+          "source":"satnogs amateur population × celestrak amateur+satnogs groups + satnogs tle",
+          "attribution":{"license":"CC-BY-SA-4.0","text":"SatNOGS DB, CC BY-SA 4.0; CelesTrak"},
+          "count":1,"catalogCount":4,"medianEpochAgeDays":0.56,
+          "sources":{"celestrak-amateur":1},
+          "elements":[{"name":"ISS (ZARYA)",
+            "line1":"1 25544U 98067A   26212.89378683  .00008757  00000+0  16519-3 0  9996",
+            "line2":"2 25544  51.6315  78.8506 0007211 358.5886   1.5081 15.49290909578688"}],
+          "catalog":[
+            {"norad":25544,"name":"ISS (ZARYA)","status":"alive","amateur":true,"decayed":false,
+             "src":"celestrak-amateur"},
+            {"norad":40320,"name":"FO-82","status":"alive","amateur":true,"decayed":false},
+            {"norad":40967,"name":"FOX-1A","status":"alive","amateur":false,"decayed":false},
+            {"norad":50988,"name":"TEVEL-1","status":"re-entered","amateur":true,"decayed":true}]
+        }"#;
+        let m: MirrorManifest = serde_json::from_str(json).expect("schema 2 parses");
+        assert_eq!(m.elements.len(), 1);
+        assert_eq!(m.generated.as_deref(), Some("2026-08-01T18:00:00.000Z"));
+        assert_eq!(m.catalog.len(), 4);
+        assert_eq!(
+            m.catalog[0],
+            SatCatalogEntry {
+                norad: 25544,
+                name: "ISS (ZARYA)".into(),
+                status: "alive".into(),
+                amateur: true,
+                decayed: false,
+                src: Some("celestrak-amateur".into()),
+            }
+        );
+        // THE bird the catalog exists for: known, alive, amateur — and no
+        // element source could cover it. It must arrive as a real entry, not
+        // as an absence.
+        assert_eq!(m.catalog[1].norad, 40320);
+        assert_eq!(m.catalog[1].src, None);
+        assert!(m.catalog[1].amateur);
+        // …and the two shapes that carry the OTHER half of the catalog's job:
+        // a bird still in orbit with nothing amateur transmitting on it, and
+        // one that has left. Both arrive without elements, and neither
+        // `amateur:false` nor a non-alive status may be read as "no data".
+        assert_eq!(m.catalog[2].name, "FOX-1A");
+        assert!(!m.catalog[2].amateur, "alive, and silent — a real answer");
+        assert_eq!(m.catalog[3].status, "re-entered");
+        assert!(m.catalog[3].decayed);
+        assert_eq!(m.catalog[3].src, None);
+    }
+
+    #[test]
+    fn a_schema_1_manifest_still_loads_with_an_empty_catalog() {
+        // Every shipped mirror payload before schema 2, and the shape a
+        // rollback would serve: elements only. It must behave exactly as it
+        // always did — no catalog, nothing stamped, no refusal.
+        let json = r#"{"schema":1,"generated":"2026-07-31T00:00:00.000Z","source":"celestrak amateur group",
+          "count":1,"medianEpochAgeDays":0.3,
+          "elements":[{"name":"ISS (ZARYA)",
+            "line1":"1 25544U 98067A   26212.89378683  .00008757  00000+0  16519-3 0  9996",
+            "line2":"2 25544  51.6315  78.8506 0007211 358.5886   1.5081 15.49290909578688"}]}"#;
+        let m: MirrorManifest = serde_json::from_str(json).expect("schema 1 still parses");
+        assert_eq!(m.elements.len(), 1);
+        assert!(m.catalog.is_empty(), "no catalog is empty, never an error");
+    }
+
+    #[test]
+    fn a_catalog_entry_round_trips_and_tolerates_a_thinner_publisher() {
+        let entry = SatCatalogEntry {
+            norad: 27607,
+            name: "SAUDISAT 1C (SO-50)".into(),
+            status: "alive".into(),
+            amateur: true,
+            decayed: false,
+            src: Some("celestrak-amateur".into()),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SatCatalogEntry>(&json).unwrap(),
+            entry
+        );
+        assert!(!json.contains("null"), "an absent src is absent, not null");
+        // Only norad/name/status are required; the flags default.
+        let thin: SatCatalogEntry =
+            serde_json::from_str(r#"{"norad":7530,"name":"AO-7","status":"alive"}"#).unwrap();
+        assert!(!thin.amateur);
+        assert!(!thin.decayed);
+        assert_eq!(thin.src, None);
     }
 
     // --- tle_fetch_target ----------------------------------------------------

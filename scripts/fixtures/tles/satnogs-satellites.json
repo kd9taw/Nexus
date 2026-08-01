@@ -1,0 +1,209 @@
+[
+ {
+  "sat_id": "FIXT25544",
+  "norad_cat_id": 25544,
+  "norad_follow_id": null,
+  "name": "ISS",
+  "names": "ZARYA",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT27607",
+  "norad_cat_id": 27607,
+  "norad_follow_id": null,
+  "name": "SO-50",
+  "names": "SAUDISAT 1C",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT44909",
+  "norad_cat_id": 44909,
+  "norad_follow_id": null,
+  "name": "RS-44",
+  "names": "DOSAAF-85",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT43017",
+  "norad_cat_id": 43017,
+  "norad_follow_id": null,
+  "name": "AO-91",
+  "names": "FOX-1B",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT7530",
+  "norad_cat_id": 7530,
+  "norad_follow_id": null,
+  "name": "AO-7",
+  "names": "OSCAR 7",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT43678",
+  "norad_cat_id": 43678,
+  "norad_follow_id": null,
+  "name": "PO-101",
+  "names": "DIWATA-2",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT39444",
+  "norad_cat_id": 39444,
+  "norad_follow_id": null,
+  "name": "AO-73",
+  "names": "FUNCUBE-1",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT14129",
+  "norad_cat_id": 14129,
+  "norad_follow_id": null,
+  "name": "AO-10",
+  "names": "PHASE 3B",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT98293",
+  "norad_cat_id": 98293,
+  "norad_follow_id": 69920,
+  "name": "Marina",
+  "names": "OM9MAR",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT98515",
+  "norad_cat_id": 98515,
+  "norad_follow_id": null,
+  "name": "T.MicroSat-1",
+  "names": "",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT40931",
+  "norad_cat_id": 40931,
+  "norad_follow_id": null,
+  "name": "LAPAN-A2",
+  "names": "IO-86",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT66778",
+  "norad_cat_id": 66778,
+  "norad_follow_id": null,
+  "name": "Foresail-1p",
+  "names": "",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT61999",
+  "norad_cat_id": 61999,
+  "norad_follow_id": null,
+  "name": "QUIET BIRD",
+  "names": "",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT25338",
+  "norad_cat_id": 25338,
+  "norad_follow_id": null,
+  "name": "NOAA 15",
+  "names": "",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT53106",
+  "norad_cat_id": 53106,
+  "norad_follow_id": null,
+  "name": "GREENCUBE",
+  "names": "",
+  "status": "dead",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT40967",
+  "norad_cat_id": 40967,
+  "norad_follow_id": null,
+  "name": "AO-85",
+  "names": "",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT50988",
+  "norad_cat_id": 50988,
+  "norad_follow_id": null,
+  "name": "TEVEL-1",
+  "names": "",
+  "status": "re-entered",
+  "decayed": "2026-03-01T00:00:00Z",
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT50987",
+  "norad_cat_id": 50987,
+  "norad_follow_id": null,
+  "name": "TEVEL-0",
+  "names": "",
+  "status": "re-entered",
+  "decayed": "2019-06-01T00:00:00Z",
+  "launched": "2018-01-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT50989",
+  "norad_cat_id": 50989,
+  "norad_follow_id": null,
+  "name": "TEVEL-2",
+  "names": "",
+  "status": "re-entered",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z",
+  "updated": "2026-06-01T00:00:00Z"
+ },
+ {
+  "sat_id": "FIXT98777",
+  "norad_cat_id": 98777,
+  "norad_follow_id": null,
+  "name": "PRELAUNCH-1",
+  "names": "",
+  "status": "future",
+  "decayed": null,
+  "launched": null
+ },
+ {
+  "sat_id": "NULLN",
+  "norad_cat_id": null,
+  "name": "NO NORAD",
+  "status": "alive"
+ }
+]
