@@ -61,11 +61,21 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
     const w = canvas.clientWidth
     const h = canvas.clientHeight
     if (w <= 0 || h <= 0) return
-    canvas.width = w * dpr
-    canvas.height = h * dpr
+    // Resize only on a real size change (Waterfall.tsx:335 is the reference): this
+    // effect re-runs on every 120 ms spectrum poll, and an unguarded assignment
+    // discarded the backing store ~8x a second for nothing.
+    const devW = Math.round(w * dpr)
+    const devH = Math.round(h * dpr)
+    if (canvas.width !== devW || canvas.height !== devH) {
+      canvas.width = devW
+      canvas.height = devH
+    }
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    ctx.scale(dpr, dpr)
+    // setTransform, NOT scale(): scale() is CUMULATIVE, and the resize above used to
+    // reset the matrix on every draw. With the resize guarded, a cumulative scale
+    // would compound dpr every frame and the trace would march off-canvas.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     const styles = getComputedStyle(canvas)
     const accent = styles.getPropertyValue('--accent').trim() || '#4ea1ff'
     const dim = styles.getPropertyValue('--text-dim').trim() || '#888'

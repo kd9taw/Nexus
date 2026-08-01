@@ -908,8 +908,23 @@ export function MapView({
     const { w, h } = size
     if (!canvas || w === 0 || h === 0 || !me) return
     const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.round(w * dpr)
-    canvas.height = Math.round(h * dpr)
+    // RESIZE ONLY ON A REAL SIZE CHANGE. Assigning canvas.width/height DISCARDS the
+    // backing store and allocates a fresh one even when the value is identical — and
+    // this effect's deps carry `pulseTick` (1 s) and `aprsTick` (2 s), so the
+    // unguarded form threw away a full-window bitmap every second: ~20 MB at
+    // 3440x1440, which an operator watched as a 145->168 MB sawtooth in Task Manager
+    // (2026-08-01). The pattern is Waterfall.tsx:335 and this file's own offscreen
+    // canvases (:1467, :1576) — the main canvas simply never got it.
+    // Load-bearing: setTransform + clearRect below stay UNCONDITIONAL. The resize was
+    // implicitly resetting the transform and clearing the pixels; with it gone, both
+    // must happen explicitly on every draw, and clearRect is what the redraw actually
+    // needed all along.
+    const devW = Math.round(w * dpr)
+    const devH = Math.round(h * dpr)
+    if (canvas.width !== devW || canvas.height !== devH) {
+      canvas.width = devW
+      canvas.height = devH
+    }
     const ctx = canvas.getContext('2d')!
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
@@ -1918,8 +1933,16 @@ export function MapView({
     const { w, h } = size
     if (!fx || !me || w === 0 || h === 0 || !flarePulsing || !xrayEff) return
     const dpr = window.devicePixelRatio || 1
-    fx.width = Math.round(w * dpr)
-    fx.height = Math.round(h * dpr)
+    // Same guard as the main canvas above: a full-window bitmap (~20 MB at 3440x1440)
+    // was thrown away on every view change (each drag/zoom commit re-runs this effect).
+    // Safe to skip the reallocation here because the rAF loop below clearRect()s every
+    // frame — nothing relies on the resize to blank the overlay.
+    const devW = Math.round(w * dpr)
+    const devH = Math.round(h * dpr)
+    if (fx.width !== devW || fx.height !== devH) {
+      fx.width = devW
+      fx.height = devH
+    }
     const fctx = fx.getContext('2d')
     if (!fctx) return
     fctx.setTransform(dpr, 0, 0, dpr, 0, 0)

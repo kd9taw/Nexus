@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: the map stopped throwing away its canvas every second
+
+On a wide display Nexus's memory use oscillated by ~20 MB once a second — visible in
+Task Manager as a steady sawtooth. The map's draw pass reassigned the canvas size on
+every run, and assigning that size discards the whole image buffer and allocates a
+fresh one even when nothing about the size changed. Since the draw pass runs on a
+one-second pulse whenever an animated layer is showing (band openings and the heat
+layer are on by default), a full-window buffer — about 20 MB at 3440x1440 — was
+thrown away and rebuilt every tick. Nothing leaked; the memory was reclaimed each
+time. But it was work for no result, and on a slower machine that kind of churn is
+felt as stutter rather than seen in a graph.
+
+The map now resizes its canvas only when the size genuinely changes, matching what
+the waterfall has always done. The flare overlay got the same treatment (it was
+rebuilding a full-window buffer on every zoom and drag), as did the small spectrum
+display in Connect and Settings, which was doing it eight times a second. A test now
+fails the build if any drawing surface goes back to resizing on every frame.
+
 ### Added: satellite operating without the box — and passes that know their worth
 
 **No rotator? Tracking still works.** Arming a pass no longer needs a rotator: the pass clock, the
