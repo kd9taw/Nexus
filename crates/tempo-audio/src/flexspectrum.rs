@@ -313,9 +313,12 @@ impl FlexSpectrum {
                     match pkt.packet_class {
                         Some(FFT_PACKET_CLASS) => {
                             // Filter to our pan's stream once it's known (accept all until then).
-                            if let (Some(want), Some(got)) =
-                                (*stream_id.lock().unwrap(), pkt.stream_id)
-                            {
+                            // Read the id into a local FIRST: a guard built in an `if let`
+                            // scrutinee lives through the whole body, and this body goes on to
+                            // lock `center` and `span_hz` — an ordering hazard with no reason
+                            // to exist, since only the value is wanted.
+                            let want_id = *stream_id.lock().unwrap();
+                            if let (Some(want), Some(got)) = (want_id, pkt.stream_id) {
                                 if want != got {
                                     continue;
                                 }

@@ -23,6 +23,21 @@ rust-version = "1.77"
 # NOT pulled into ../Cargo.toml. Do not add members here.
 [workspace]
 
+# The class guard, spelled out because this crate is its OWN workspace and
+# cannot inherit the root's `[workspace.lints]` — the exact reason src-tauri is
+# missed by `cargo clippy --workspace`. It carries every Tauri command, so it is
+# the crate where a match-scrutinee guard re-lock hangs the whole app. Rationale
+# in full at `[workspace.lints.clippy]` in ../Cargo.toml.
+#
+# `deny`, not `warn`, and ONLY here: the root's `warn` is promoted to an error by
+# the `-D warnings` on every workspace clippy step, but src-tauri's CI step
+# deliberately carries no `-D warnings` (it has ~37 pre-existing lints — see the
+# comment on that step in ci.yml). A `warn` here would therefore be warning #38
+# in a step that exits 0, i.e. no gate at all in the one crate that matters most.
+# Deny makes it a hard error without touching the pre-existing backlog.
+[lints.clippy]
+significant_drop_in_scrutinee = "deny"
+
 [[bin]]
 name = "Nexus"
 path = "src/main.rs"

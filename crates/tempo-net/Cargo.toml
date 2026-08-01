@@ -7,6 +7,9 @@ license.workspace = true
 authors.workspace = true
 description = "WSJT-X-compatible UDP network output + PSK Reporter spotting so third-party ham apps (JTAlert, GridTracker, N1MM, loggers) interoperate with Nexus. Pure Rust."
 
+[lints]
+workspace = true
+
 [dependencies]
 # Flex discovery must SHARE UDP 4992 with a co-hosted SmartSDR (both sides set
 # SO_REUSEADDR); std exposes no socket options, socket2 is already in the tree

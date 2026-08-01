@@ -191,6 +191,49 @@ because the rig conversation now runs unlocked, a split the operator requests du
 safe: a rejection names the dial it was rejecting and resolves only that request, so a fresh
 "UP 5" click in that window still applies on the next cycle instead of being silently dropped.
 
+### Fixed: RTTY no longer freezes the window when the copy gets rough
+
+**Field report: "getting some application hangs on RTTY."** The decoded-text pane fades each
+character by how confidently the demodulator copied it. That confidence is a continuous
+measurement, so on clean copy the whole transcript was one solid block — but as conditions
+degraded it crossed the fade thresholds constantly, and the pane ended up drawing the transcript
+one character at a time: up to four thousand separate pieces, redrawn twice a second, forever,
+because the transcript keeps scrolling. Bench-testing on a strong signal could never show it; a
+noisy band or an armed decoder listening to empty air brought it on, which is why it came and
+went. The pane now draws at most a couple of hundred pieces no matter how bad the copy is — the
+same "cap the feed" rule the decode history already follows. Every decoded character still
+prints, and the fade is still scored character by character for any transcript under that
+ceiling, which is every transcript you can actually read. Only when the copy is breaking up
+badly enough to blow the ceiling does the fade get scored over short stretches instead of single
+characters; from that point a brief marginal burst can be averaged in with the good copy around
+it and shown solid. That is a deliberate trade, and it is only ever charged on copy already too
+broken to trust.
+
+**A stalled radio can no longer stop the window from responding.** Nexus talks to the rig over
+a serial link that can take up to 2.5 seconds to answer, and while it waits it holds the lock
+that the rest of the app needs to read anything. Those reads were running on the same thread
+Windows uses to paint and respond to clicks, so a slow or wedged rig could park the window long
+enough for Windows to declare it "not responding" — with nothing in any log, since nothing had
+actually crashed. Those reads now run off the painting thread: a slow rig costs a late reading,
+not a dead window. The long jobs got stronger treatment — a LoTW, eQSL or QRZ sync can sit on the
+network for a minute, and those now run on a pool set aside for waiting, so a slow QSL server
+can't hold up the rest of the app either. A build-time check keeps it that way; it is keyed on
+which commands can reach the shared radio state, so a new one can't slip through by reaching for
+it in a different way.
+
+**One misbehaving companion app can no longer freeze the radio loop.** A logger that jams the
+WSJT-X control port with stop-transmit commands was previously handled all in one pass, each one
+costing a full round trip to the rig — with the app-wide lock held the whole time. Nexus now
+handles a bounded batch per cycle; the rest waits for the next cycle a few milliseconds later,
+so nothing is dropped.
+
+**And the class of bug behind the recent satellite-picker hang is now caught at build time.**
+That freeze came from a Rust pattern where a lock is accidentally kept open longer than it
+looks — invisible in review, with no symptom until the app is already frozen. The build now
+rejects the pattern in the command layer where it does the damage, and flags it everywhere else.
+Two spots in the FlexRadio streaming code that matched it were rewritten (both harmless today,
+neither harmless to leave).
+
 ### Fixed: the Openings Log square works — and a broken screen can no longer black out the app
 
 **Turning on the Openings Log square blacked out the whole app (0.24.6 tester build).** Field

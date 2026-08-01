@@ -640,7 +640,10 @@ mod tests {
         assert!(iss.is_simplex());
         for rate in [-7.5, -3.0, 0.0, 3.0, 7.5] {
             let r = tuning(&iss, DopplerState::default(), rate);
-            assert_eq!(r.downlink_hz, 145_825_000, "receive dial parks, rate {rate}");
+            assert_eq!(
+                r.downlink_hz, 145_825_000,
+                "receive dial parks, rate {rate}"
+            );
             assert_eq!(r.uplink_hz, r.downlink_hz, "one dial carries both legs");
             assert_eq!(r.downlink_shift_hz, 0);
             assert_eq!(r.uplink_shift_hz, 0, "and nothing is claimed as shifted");

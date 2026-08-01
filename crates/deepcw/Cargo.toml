@@ -9,6 +9,9 @@ against the e04/deepcw-engine model + an SNR ladder comparing it to the existing
 decoder. The MODEL itself (model.onnx, AGPL-3.0-only, (c) e04) is NOT committed — point
 DEEPCW_DIR at a checkout of https://github.com/e04/deepcw-engine ."""
 
+[lints]
+workspace = true
+
 [dependencies]
 tempo-core = { path = "../tempo-core" }
 microfft = "0.6"

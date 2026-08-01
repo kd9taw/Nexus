@@ -7,6 +7,9 @@ license.workspace = true
 authors.workspace = true
 description = "Propagation & opening intelligence: 6m/VHF opening detection (ported from weak-signal-sleuth), adaptive band recommendations, and DXpedition tracking. Pure logic over pluggable spot/space-weather sources."
 
+[lints]
+workspace = true
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 # Used by the pure POTA/SOTA spot parsers (always available so they're unit-testable

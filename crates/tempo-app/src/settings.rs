@@ -3278,7 +3278,10 @@ mod tests {
         let s = three_radio_shack();
         let (ic9700, ft991a) = (1, 2);
         assert_eq!(s.route_radio_satellite("2m", RouteMode::Fm), Some(ft991a));
-        assert_eq!(s.route_radio_satellite("2m", RouteMode::Digital), Some(ic9700));
+        assert_eq!(
+            s.route_radio_satellite("2m", RouteMode::Digital),
+            Some(ic9700)
+        );
         for m in [RouteMode::Ssb, RouteMode::Cw] {
             assert_eq!(s.route_radio_satellite("20m", m), s.route_radio("20m", m));
         }
@@ -3359,7 +3362,10 @@ mod tests {
         // The context designation: a rule stored BEFORE the field existed carries no key and
         // must load as a plain terrestrial rule — and the designated form must round-trip on
         // the exact token the UI's dropdown writes.
-        assert_eq!(any.context, None, "an omitted context means TERRESTRIAL, as before");
+        assert_eq!(
+            any.context, None,
+            "an omitted context means TERRESTRIAL, as before"
+        );
         assert_eq!(
             serde_json::to_string(&RouteContext::Satellite).unwrap(),
             "\"satellite\""

@@ -7,6 +7,9 @@ license.workspace = true
 authors.workspace = true
 description = "Nexus UI-facing application logic: wraps tempo-core into serializable DTOs and command methods, decoupled from Tauri/audio so it builds and unit-tests headless"
 
+[lints]
+workspace = true
+
 [dependencies]
 tempo-core = { path = "../tempo-core" }
 modes = { path = "../modes" }
