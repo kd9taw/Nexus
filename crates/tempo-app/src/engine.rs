@@ -3446,19 +3446,24 @@ impl Engine {
         self.split_tx_mhz
     }
 
-    /// The rig REJECTED the split command — drop the desired state so the SPLIT
-    /// badge never claims a split the rig isn't running (the operator works the
-    /// pile-up manually; the CAT note says so).
-    pub fn split_rejected(&mut self) {
+    /// The rig REJECTED the split command at `tx_mhz` — drop the desired state
+    /// so the SPLIT badge never claims a split the rig isn't running (the
+    /// operator works the pile-up manually; the CAT note says so).
+    ///
+    /// Takes the REFUSED dial instead of reading the live one: the loop reports
+    /// this after CAT round-trips made with the engine UNLOCKED (the 0.24.3
+    /// hang fix), and the operator may have requested a NEW split in that gap.
+    /// Matching on the argument — the same shape as [`Self::set_rig_refused_dial`]
+    /// and [`Self::rig_split_applied`] — makes a stale rejection resolve only
+    /// its own request, never eat the fresh one.
+    pub fn split_rejected(&mut self, tx_mhz: f64) {
         // If the rejected split was a transponder pick's pending uplink, its
         // "tuning…" state just resolved: refused. The CAT status carries the
         // specific reason; the rail must at least stop implying it will land.
-        let tx = self.split_tx_mhz;
         if let Some(b) = self.sat_binding.as_mut() {
-            let matches = b
-                .pending_uplink_mhz
-                .is_some_and(|p| tx.is_some_and(|t| (t - p).abs() < 1e-9));
-            if matches {
+            if b.pending_uplink_mhz
+                .is_some_and(|p| (tx_mhz - p).abs() < 1e-9)
+            {
                 b.pending_uplink_mhz = None;
                 b.note = Some(
                     "The rig refused the split — the uplink was not written (see the CAT status)."
@@ -3466,8 +3471,13 @@ impl Engine {
                 );
             }
         }
-        self.split_tx_mhz = None;
-        self.split_dirty = false;
+        // Clear the badge only while the desired state IS the refused request.
+        // A dirty flag or a different dial means a request from the round-trip
+        // gap is still awaiting its own apply — it must survive to the next
+        // tick (`split_dirty` alone covers a re-request of the same dial).
+        if !self.split_dirty && self.split_tx_mhz.is_some_and(|t| (t - tx_mhz).abs() < 1e-9) {
+            self.split_tx_mhz = None;
+        }
     }
 
     /// Set (`Some(tx_mhz)`) or clear (`None`) the DESIRED split TX dial from the operator/UI;
@@ -19240,8 +19250,12 @@ mod tests {
         // Same for the split: re-pick, then the rig rejects the split apply.
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         e.sat_tune_nominal(false, 2_000_000);
-        assert!(e.sat_binding().unwrap().pending_uplink_mhz.is_some());
-        e.split_rejected();
+        let up = e
+            .sat_binding()
+            .unwrap()
+            .pending_uplink_mhz
+            .expect("the pick queued an uplink");
+        e.split_rejected(up);
         let b = e.sat_binding().unwrap();
         assert_eq!(b.pending_uplink_mhz, None);
         assert_eq!(b.uplink_mhz, None);
@@ -19255,6 +19269,44 @@ mod tests {
         let b = e.sat_binding().unwrap();
         assert!(b.pending_downlink_mhz.is_some(), "still awaiting its own ack");
         assert_eq!(b.downlink_mhz, None);
+    }
+
+    #[test]
+    fn a_stale_split_rejection_never_eats_a_fresh_request() {
+        // The loop reports a rejection AFTER its CAT round-trips, which run
+        // with the engine UNLOCKED (the 0.24.3 hang fix) — so the operator can
+        // request a NEW split in that gap. Like `set_rig_refused_dial` /
+        // `rig_split_applied`, the rejection names its own dial and must
+        // resolve only its OWN request, never the fresh one.
+        let (mut e, _, _) = sat_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(false, 2_000_000);
+        let consumed = e
+            .take_split_request()
+            .expect("the pick queued a split")
+            .expect("a set, not simplex");
+
+        // Mid-round-trip: the operator clicks an "UP 5" pile-up spot.
+        e.request_split(Some(14.240));
+
+        // The pick's round-trip fails; the loop rejects the CONSUMED request.
+        e.split_rejected(consumed);
+
+        // The pick's leg resolved honestly — the rail stops saying "tuning…" —
+        let b = e.sat_binding().unwrap();
+        assert_eq!(b.pending_uplink_mhz, None, "the refused leg resolved");
+        assert!(b.note.is_some(), "…with the reason on the rail");
+        // — and the fresh request SURVIVES: still desired, applied next tick.
+        assert_eq!(
+            e.split_tx_mhz(),
+            Some(14.240),
+            "the fresh split is not the rejected one"
+        );
+        assert_eq!(
+            e.take_split_request(),
+            Some(Some(14.240)),
+            "the loop still applies the fresh request"
+        );
     }
 
     #[test]

@@ -3222,14 +3222,30 @@ impl RadioLoop {
                             // `U SATMODE 1`, then `V Main`/`F`/`M` and
                             // `V Sub`/`F`/`M`, verified with `v`/`f` — wire it
                             // if a Hamlib-driven 9700 station ever surfaces.
-                            match { engine_lock(engine).sat_split_tx_vfo(tx_hz) } {
+                            //
+                            // ⚠️ A `let`, NEVER a `match` scrutinee: under
+                            // edition 2021 a scrutinee temporary lives to the
+                            // END of the match, so `match { engine_lock(…) … }`
+                            // held the engine guard through both arms — and
+                            // every arm re-locks it (`split_rejected`,
+                            // `rig_split_applied`, `sat_tx_mode_for_split`).
+                            // `std::sync::Mutex` is not reentrant: the loop
+                            // thread deadlocked on itself HOLDING the engine
+                            // mutex, every Tauri command queued behind it, and
+                            // Windows killed the frozen window (the 0.24.3
+                            // sat-pick hang). The `let` ends the guard at the
+                            // `;`, which also keeps the engine lock off the CAT
+                            // round-trips below — the loop's own
+                            // lock-scoped-then-I/O discipline.
+                            let tx_vfo = { engine_lock(engine).sat_split_tx_vfo(tx_hz) };
+                            match tx_vfo {
                                 Err(reason) => {
                                     // The mapping itself is undrivable: nothing
                                     // was (or will be) sent, and the desired
                                     // state must not outlive the refusal.
                                     {
                                         let mut eng = engine_lock(engine);
-                                        eng.split_rejected();
+                                        eng.split_rejected(tx_mhz);
                                     }
                                     retune_note = Some(reason);
                                     self.last_split_mode = None;
@@ -3257,7 +3273,7 @@ impl RadioLoop {
                                         // running would burn the operator mid-pile-up.
                                         {
                                             let mut eng = engine_lock(engine);
-                                            eng.split_rejected();
+                                            eng.split_rejected(tx_mhz);
                                         }
                                         "rig rejected split — work the pile-up manually"
                                             .to_string()
@@ -8395,6 +8411,213 @@ mod tests {
             reopened.get(),
             "a rig-affecting Settings change triggers reopen_rig"
         );
+    }
+
+    // ---- the 0.24.3 sat-pick hang: engine-mutex self-deadlock in the split apply ----
+    //
+    // Field report (IC-9700 on the native CI-V daemon, Windows Event 1002
+    // Application Hang, 100 %-reproducible): Satellites → pick a bird → click a
+    // transponder froze the whole window. Root cause: the split-apply's
+    // per-mapping branch took the engine lock in a `match` SCRUTINEE — under
+    // edition 2021 that temporary lives to the END of the match, so the arms'
+    // re-locks (`rig_split_applied` / `split_rejected` /
+    // `sat_tx_mode_for_split`) deadlocked the loop thread on itself while it
+    // HELD the engine mutex, and every Tauri command queued behind it forever.
+    // These tests run the real pick through one `RadioLoop::step` against the
+    // native daemon under a watchdog: pre-fix the step never returns (the
+    // watchdog fails the test in bounded time); post-fix it returns in
+    // milliseconds AND the 9700 satellite tune actually lands on the wire.
+
+    use crate::civ::broker::CivDaemon;
+    use crate::civ::engine::tests_support::{FakeRadio, Regs};
+
+    /// The native CI-V daemon over a fake IC-9700, plus a Rig whose CAT control
+    /// channel points at it. A REAL control channel is load-bearing here:
+    /// `Rig::vox()` answers every verb `Ok` without a byte on the wire and
+    /// fails `has_control()`, which skips the `rig_split_applied` re-lock —
+    /// exactly the shape that let the deadlock ship untested.
+    fn civ_daemon_rig(mute: bool) -> (CivDaemon, Rig, Arc<Mutex<Regs>>) {
+        // Race-free enough for tests: bind :0 to learn a free port, drop, rebind.
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let (mut radio, _push) = FakeRadio::new(0xA2);
+        radio.mute = mute;
+        let regs = radio.regs();
+        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port).unwrap();
+        (d, Rig::rigctld(&format!("127.0.0.1:{port}")), regs)
+    }
+
+    /// An engine that has just performed THE pick: RS-44 held, Doppler on,
+    /// Main = downlink / Sub = uplink — `sat_tune_nominal` arms the same
+    /// one-shots (`take_immediate_retune` + `take_split_request`) the Tauri
+    /// `set_sat_transponder` command arms, so the step under test consumes the
+    /// field-reproduced state, not a synthetic one.
+    fn sat_pick_engine() -> Arc<Mutex<Engine>> {
+        let tp = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: true,
+            half_width_hz: 30_000,
+        };
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.sat_doppler = true;
+            s.sat_vfo_map = tempo_app::settings::SatVfoMap::MainDownSubUp;
+            eng.apply_settings(s);
+            eng.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+            eng.sat_tune_nominal(false, 1_000_000);
+        }
+        engine
+    }
+
+    /// One `RadioLoop::step` on its own thread, gated by a watchdog. A
+    /// deadlocked step cannot fail an assertion — it never returns — so the
+    /// only way to demonstrate the wedge in bounded time is to time out
+    /// waiting for it. On timeout the wedged thread is deliberately leaked
+    /// (it holds the engine mutex forever; joining it would hang the suite).
+    fn step_with_watchdog(engine: &Arc<Mutex<Engine>>, rig: Rig, watchdog: Duration) {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let eng = Arc::clone(engine);
+        std::thread::Builder::new()
+            .name("sat-pick-step".into())
+            .spawn(move || {
+                let mut rig = rig;
+                let mut backend = MockBackend::new();
+                let mut state = loop_state();
+                let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+                let mut station = StationSinks::new();
+                let res = state.step(
+                    &eng,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    0.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                );
+                let _ = done_tx.send(res);
+            })
+            .unwrap();
+        match done_rx.recv_timeout(watchdog) {
+            Ok(res) => res.unwrap(),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+                "RadioLoop::step wedged applying the split — the engine-mutex \
+                 self-deadlock of the 0.24.3 sat-pick hang (a lock taken in a match \
+                 scrutinee outlives the arms under edition 2021)"
+            ),
+            // A panicking step also drops `done_tx` — name that for what it is,
+            // or the next person hunts a deadlock that isn't there.
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!(
+                "the step thread PANICKED (its own message is above) — a step bug, \
+                 not the sat-pick wedge"
+            ),
+        }
+    }
+
+    #[test]
+    fn sat_pick_split_apply_never_wedges_the_loop_and_lands_the_uplink() {
+        let (_d, rig, regs) = civ_daemon_rig(false);
+        let engine = sat_pick_engine();
+
+        step_with_watchdog(&engine, rig, Duration::from_secs(10));
+
+        // Liveness alone is not the feature — the pick must also have LANDED:
+        // satellite mode engaged, downlink on Main, uplink select-written into
+        // the Sub band, selection handed back to Main.
+        {
+            let r = regs.lock().unwrap();
+            assert!(r.satmode, "satellite mode engaged (16 5A 01)");
+            assert_eq!(r.main_hz, 435_640_000, "downlink on Main");
+            assert_eq!(r.sub_hz, 145_965_000, "uplink in the Sub band");
+            assert!(!r.sel_sub, "selection handed back to Main");
+        }
+        // And the binding rail reports what was DONE, from the wire acks the
+        // loop itself delivered (`rig_dial_applied` / `rig_split_applied`).
+        let eng = engine.lock().unwrap();
+        let b = eng.sat_binding().expect("the pick left a binding");
+        assert_eq!(
+            b.downlink_mhz.map(|m| (m * 1e6).round() as u64),
+            Some(435_640_000),
+            "downlink confirmed by the rig's ack"
+        );
+        assert_eq!(
+            b.uplink_mhz.map(|m| (m * 1e6).round() as u64),
+            Some(145_965_000),
+            "uplink confirmed by the rig's ack"
+        );
+    }
+
+    #[test]
+    fn terrestrial_up_split_apply_stays_live_and_rides_vfob() {
+        // The same one-shot serves every pile-up "UP n" spot — pre-fix those
+        // wedged identically (the scrutinee guard covered both arms), so the
+        // A/B leg gets its own liveness pin.
+        let (_d, rig, regs) = civ_daemon_rig(false);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().request_split(Some(14.235));
+
+        step_with_watchdog(&engine, rig, Duration::from_secs(10));
+
+        let r = regs.lock().unwrap();
+        assert!(r.split, "0F 01 — the shipped A/B split");
+        assert!(!r.satmode, "no satellite mode on a terrestrial split");
+        assert_eq!(r.unselected_hz, 14_235_000, "the TX dial rides 25 01");
+    }
+
+    #[test]
+    fn sat_pick_split_apply_survives_every_satmode_fault_without_wedging() {
+        // The broker pins each fault's WIRE outcome; this pins the LOOP's
+        // liveness through them — a refused or half-landed split must produce
+        // a note, never a wedge. The generous watchdog covers the silent-rig
+        // case, where every verb burns a client read deadline before failing.
+        /// (name, register fault, mute) — mute is the whole-rig fault, so it
+        /// has no register knob.
+        type Fault = (&'static str, fn(&mut Regs), bool);
+        let faults: [Fault; 4] = [
+            ("nak_main_select", |r| r.nak_main_select = 1, false),
+            ("nak_satmode_set", |r| r.nak_satmode_set = 1, false),
+            ("drop_satmode_reads", |r| r.drop_satmode_reads = 1, false),
+            ("silent rig", |_| {}, true),
+        ];
+        for (name, inject, mute) in faults {
+            let (_d, rig, regs) = civ_daemon_rig(mute);
+            inject(&mut regs.lock().unwrap());
+            let engine = sat_pick_engine();
+            step_with_watchdog(&engine, rig, Duration::from_secs(30));
+            // Anchor: the step must have REACHED the split apply, or this test
+            // is green while exercising nothing. A responsive-but-faulted rig
+            // shows the attempt on the wire (`16 5A` — the satellite-mode
+            // session's engage/verify); a mute rig logs nothing (FakeRadio
+            // drops frames pre-log), so there the anchor is the engine-side
+            // outcome: every verb timed out, so the apply REJECTED the split
+            // and cleared the desired state. Skipping the apply would leave
+            // `split_tx_mhz` holding the consumed request instead.
+            if mute {
+                assert!(
+                    engine.lock().unwrap().split_tx_mhz().is_none(),
+                    "the apply never ran — the consumed split was neither \
+                     applied nor rejected ({name})"
+                );
+            } else {
+                assert!(
+                    regs.lock()
+                        .unwrap()
+                        .log
+                        .iter()
+                        .any(|(cmd, data)| *cmd == 0x16 && data.first() == Some(&0x5A)),
+                    "no 16 5A frame on the wire — the split apply never ran ({name})"
+                );
+            }
+            // The loop released the engine mutex — the app stays interactive.
+            assert!(
+                engine.try_lock().is_ok(),
+                "engine mutex still held after the step ({name})"
+            );
+        }
     }
 
     // ---- voice-mic recording source (the pure predicate is tested in backend.rs) ----

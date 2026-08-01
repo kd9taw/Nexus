@@ -113,6 +113,18 @@ dot fills only when every requested leg is confirmed on the wire, and a leg the 
 into the reason in plain words. A refused pick no longer flashes a green "Working …" toast — the
 toast tells the truth the read-back found.
 
+**Clicking a transponder no longer freezes the app (0.24.3 tester build).** Field report: on the
+IC-9700 under the native CI-V daemon, picking a bird and clicking a transponder frequency froze
+the whole window until Windows killed it, every time. The radio loop deadlocked on itself while
+applying the uplink split — it took the engine's own lock a second time while still holding it —
+and every part of the UI then queued behind that lock forever. The same wedge caught terrestrial
+pile-up splits ("UP 5" spots) and every mid-pass Doppler correction. The apply now releases the
+lock before talking to the rig, and a liveness test drives the real pick against a simulated
+9700 under a watchdog so this class of freeze fails the build instead of the operator. And
+because the rig conversation now runs unlocked, a split the operator requests during it is
+safe: a rejection names the dial it was rejecting and resolves only that request, so a fresh
+"UP 5" click in that window still applies on the next cycle instead of being silently dropped.
+
 ## [0.24.0] — 2026-07-31
 
 ### Added: satellite operating — full Doppler, and a rotator that behaves
