@@ -18,13 +18,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, cleanup } from '@testing-library/react'
 import { SstvView } from './SstvView'
 import * as api from '../api'
-import type { AppSnapshot, SstvState } from '../types'
+import type { AppSnapshot, SstvHealth, SstvState } from '../types'
 import type { PanelLayoutApi, SstvPanelId } from '../features/panelState'
 
 vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
   sstvArm: vi.fn(),
+  sstvAutoArm: vi.fn(),
   getLicensedBandPlan: vi.fn(async () => []),
   sstvSend: vi.fn(),
   sstvStop: vi.fn(),
@@ -50,6 +51,20 @@ const snap = {
   },
 } as unknown as AppSnapshot
 
+const NO_HEALTH: SstvHealth = {
+  armed: false,
+  audioPeak: 0,
+  lastAudioUnix: null,
+  drains: 0,
+  visSeen: 0,
+  lastVisUnix: null,
+  unknownVis: 0,
+  lastUnknownVisCode: null,
+  lastUnknownVisUnix: null,
+  images: 0,
+  lastImageUnix: null,
+}
+
 const IDLE: SstvState = {
   armed: false,
   mode: null,
@@ -60,6 +75,7 @@ const IDLE: SstvState = {
   previewHeight: 0,
   hedrShiftHz: 0,
   gallery: [],
+  health: NO_HEALTH,
   sending: false,
   txMode: null,
   txProgress: 0,
@@ -92,6 +108,9 @@ async function renderView(props: Partial<Parameters<typeof SstvView>[0]> = {}) {
 
 beforeEach(() => {
   getSstvState.mockReset().mockResolvedValue(IDLE)
+  // Entering the view starts the receiver (`sstv_auto_arm`). These cases are about
+  // the shell's structure, so it just resolves to the same state.
+  ;(api.sstvAutoArm as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(IDLE)
 })
 afterEach(cleanup)
 

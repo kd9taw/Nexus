@@ -1606,9 +1606,32 @@ export async function rttyAutoAbort(): Promise<RttyState> {
   return invoke<RttyState>('rtty_auto_abort')
 }
 
-/** Arm/disarm the SSTV RX decoder (session-only; RX decode, never TX). */
+/** Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only; RX
+ * decode, never TX). Stopping it here is remembered for the session — opening the
+ * view again will not restart it behind the operator. */
 export async function sstvArm(on: boolean): Promise<SstvState> {
   return invoke<SstvState>('sstv_arm', { on })
+}
+
+/** Start the SSTV receiver because the operator OPENED the SSTV view.
+ *
+ * ⭐ Without this, the ordinary way to use SSTV — open the view, tune 14.230, wait
+ * for a picture — decoded nothing, because arming was manual, default-off and lost
+ * on every restart. RX only: this cannot key anything. Only ever an upgrade from
+ * off, and refused after an explicit Stop (the policy lives in the engine so it
+ * survives a remount). */
+export async function sstvAutoArm(): Promise<SstvState> {
+  return invoke<SstvState>('sstv_auto_arm')
+}
+
+/** Stop the SSTV receiver as part of an AUTOMATIC sequence — the ISS pass unwind at
+ * LOS, which disarms what it armed.
+ *
+ * ⚠️ NEVER `sstvArm(false)` for that: an explicit Stop is remembered for the session,
+ * so an automatic one would leave every later entry to the SSTV view refusing to
+ * start the receiver — the decoding bug again, one ISS pass later. */
+export async function sstvAutoDisarm(): Promise<SstvState> {
+  return invoke<SstvState>('sstv_auto_disarm')
 }
 
 /** Live SSTV RX state: in-flight progress + preview + the saved-image gallery

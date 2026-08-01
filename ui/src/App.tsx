@@ -94,6 +94,7 @@ import {
   getIssPass,
   getTleStatus,
   sstvArm,
+  sstvAutoDisarm,
   setSettings as apiSetSettings,
   setSidebandOverride,
   testCat,
@@ -522,7 +523,7 @@ export default function App() {
           // the decoder, at LOS restore the dial. Only fetch the pass when the
           // opt-in is ON (no IPC otherwise); when OFF we still tick so an arm in
           // flight unwinds — the disabled path ignores the pass.
-          const issDeps = { setFrequency: handleSetFrequency, sstvArm }
+          const issDeps = { setFrequency: handleSetFrequency, sstvArm, sstvAutoDisarm }
           if (settingsRef.current?.issSstvAutoArm === true) {
             getIssPass()
               .then((issPass) =>

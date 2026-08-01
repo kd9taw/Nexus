@@ -24,7 +24,7 @@ const OFF_FREQ: IssRadio = { dialMhz: 14.074, band: '20m', sideband: 'USB' }
 const ON_CHANNEL: IssRadio = { dialMhz: 145.8, band: '2m', sideband: 'FM' }
 
 function deps() {
-  return { setFrequency: vi.fn(), sstvArm: vi.fn() }
+  return { setFrequency: vi.fn(), sstvArm: vi.fn(), sstvAutoDisarm: vi.fn() }
 }
 
 beforeEach(() => {
@@ -52,6 +52,7 @@ describe('tickIssAutoArm', () => {
     tickIssAutoArm(p, OFF_FREQ, true, d, now)
     d.setFrequency.mockClear()
     d.sstvArm.mockClear()
+    d.sstvAutoDisarm.mockClear()
     // 30 s later, still in the same pass, rig now on-channel — must NOT re-arm.
     tickIssAutoArm(p, ON_CHANNEL, true, d, now + 30)
     expect(d.setFrequency).not.toHaveBeenCalled()
@@ -65,9 +66,10 @@ describe('tickIssAutoArm', () => {
     tickIssAutoArm(p, OFF_FREQ, true, d, now) // arm; savedDial = OFF_FREQ
     d.setFrequency.mockClear()
     d.sstvArm.mockClear()
+    d.sstvAutoDisarm.mockClear()
     // Pass ended; the rig is still parked on 145.800 FM → restore is safe.
     tickIssAutoArm(p, ON_CHANNEL, true, d, p.losUnix + 60)
-    expect(d.sstvArm).toHaveBeenCalledWith(false)
+    expect(d.sstvAutoDisarm).toHaveBeenCalledTimes(1)
     expect(d.setFrequency).toHaveBeenCalledTimes(1)
     expect(d.setFrequency).toHaveBeenCalledWith(14.074, '20m', 'USB')
   })
@@ -79,9 +81,10 @@ describe('tickIssAutoArm', () => {
     tickIssAutoArm(p, OFF_FREQ, true, d, now) // arm
     d.setFrequency.mockClear()
     d.sstvArm.mockClear()
+    d.sstvAutoDisarm.mockClear()
     // At LOS the operator has since tuned to 40 m — disarm, but DON'T yank them back.
     tickIssAutoArm(p, OFF_FREQ, true, d, p.losUnix + 60)
-    expect(d.sstvArm).toHaveBeenCalledWith(false)
+    expect(d.sstvAutoDisarm).toHaveBeenCalledTimes(1)
     expect(d.setFrequency).not.toHaveBeenCalled()
   })
 
@@ -91,9 +94,10 @@ describe('tickIssAutoArm', () => {
     tickIssAutoArm(pass(now - 60), OFF_FREQ, true, d, now) // arm while enabled
     d.setFrequency.mockClear()
     d.sstvArm.mockClear()
+    d.sstvAutoDisarm.mockClear()
     // Opt-in turned off mid-pass; the disabled tick ignores the pass and unwinds.
     tickIssAutoArm(null, ON_CHANNEL, false, d, now + 30)
-    expect(d.sstvArm).toHaveBeenCalledWith(false)
+    expect(d.sstvAutoDisarm).toHaveBeenCalledTimes(1)
     expect(d.setFrequency).toHaveBeenCalledWith(14.074, '20m', 'USB')
   })
 
@@ -103,12 +107,37 @@ describe('tickIssAutoArm', () => {
     tickIssAutoArm(pass(now - 60), OFF_FREQ, true, d, now) // arm mid-pass
     d.setFrequency.mockClear()
     d.sstvArm.mockClear()
+    d.sstvAutoDisarm.mockClear()
     // getIssPass now REJECTS (elements crossed the 30 d refusal mid-pass);
     // App.tsx routes the rejection to a null-pass tick. Still enabled, so the
     // LOS unwind must run — otherwise the rig strands on 145.800, SSTV armed.
     tickIssAutoArm(null, ON_CHANNEL, true, d, now + 30)
-    expect(d.sstvArm).toHaveBeenCalledWith(false)
+    expect(d.sstvAutoDisarm).toHaveBeenCalledTimes(1)
     expect(d.setFrequency).toHaveBeenCalledWith(14.074, '20m', 'USB')
+  })
+
+  // ⭐ THE UNWIND MUST NOT LOOK LIKE AN OPERATOR STOP. `sstvArm(false)` is an
+  // explicit stop and the engine remembers it for the whole session: every later
+  // entry to the SSTV view would then refuse to start the receiver, so the first
+  // ISS pass of the day would silently kill SSTV decoding until a restart — the
+  // very bug the view's auto-arm exists to fix. Asserted on BOTH unwind paths
+  // (LOS, and the opt-in going off mid-pass) because they share one helper.
+  it('⭐ never disarms as if the operator had pressed Stop', () => {
+    const now = 1_900_000_000
+    for (const unwindTick of [
+      (d: ReturnType<typeof deps>, p: SatPass) =>
+        tickIssAutoArm(p, ON_CHANNEL, true, d, p.losUnix + 60), // LOS
+      (d: ReturnType<typeof deps>) => tickIssAutoArm(null, ON_CHANNEL, false, d, now + 30), // opt-in off
+    ]) {
+      resetIssAutoArm()
+      const d = deps()
+      const p = pass(now - 60)
+      tickIssAutoArm(p, OFF_FREQ, true, d, now)
+      d.sstvArm.mockClear()
+      unwindTick(d, p)
+      expect(d.sstvAutoDisarm).toHaveBeenCalledTimes(1)
+      expect(d.sstvArm).not.toHaveBeenCalled()
+    }
   })
 
   it('a disabled tick with nothing armed is a no-op', () => {
@@ -116,6 +145,7 @@ describe('tickIssAutoArm', () => {
     tickIssAutoArm(pass(1_900_000_000), ON_CHANNEL, false, d, 1_900_000_000)
     expect(d.setFrequency).not.toHaveBeenCalled()
     expect(d.sstvArm).not.toHaveBeenCalled()
+    expect(d.sstvAutoDisarm).not.toHaveBeenCalled()
     expect(toasts).not.toHaveBeenCalled()
   })
 })

@@ -28,10 +28,18 @@ export interface IssRadio {
   sideband: string
 }
 
-/** The two rig actions the tick performs, injected so tests can observe them. */
+/** The rig actions the tick performs, injected so tests can observe them. */
 export interface IssArmDeps {
   setFrequency: (dialMhz: number, band: string, mode: string) => void
+  /** Start the SSTV receiver for the pass. Explicit, because the operator opted in. */
   sstvArm: (on: boolean) => unknown
+  /** Stop it again at the end of the pass.
+   *
+   * ⚠️ MUST NOT be `sstvArm(false)`. That is an operator STOP, and the engine
+   * remembers it for the session: the first LOS would then leave every later entry
+   * to the SSTV view refusing to start the receiver — silently reinstating the
+   * "SSTV never decodes anything" bug for anyone who turned this opt-in on. */
+  sstvAutoDisarm: () => unknown
 }
 
 // Session state. Only ever touch the rig for a pass WE armed.
@@ -55,16 +63,18 @@ function onIssChannel(radio: IssRadio | undefined): boolean {
   return onIssDial(radio) && !!radio && radio.sideband.toUpperCase() === ISS_MODE
 }
 
-/** Fire-and-forget the arm/disarm (it may return a promise); swallow failures so
+/** Fire-and-forget a receiver call (it may return a promise); swallow failures so
  * a decoder hiccup never rejects the poll tick. */
-function armSstv(deps: IssArmDeps, on: boolean): void {
-  void Promise.resolve(deps.sstvArm(on)).catch(() => {})
+function fireAndForget(call: () => unknown): void {
+  void Promise.resolve(call()).catch(() => {})
 }
 
 /** Undo an auto-arm: disarm SSTV, and restore the saved dial ONLY if we're still
  * on the ISS channel (never fight a manual QSY). Clears the session state. */
 function unwind(radio: IssRadio | undefined, deps: IssArmDeps, reason: string): void {
-  armSstv(deps, false)
+  // The AUTOMATIC stop — see `IssArmDeps.sstvAutoDisarm`. Nobody pressed anything, so
+  // there is no operator decision for the engine to remember.
+  fireAndForget(() => deps.sstvAutoDisarm())
   const restore = savedDial
   if (restore && onIssChannel(radio)) {
     deps.setFrequency(restore.dialMhz, restore.band, restore.sideband)
@@ -112,7 +122,7 @@ export function tickIssAutoArm(
       ? { dialMhz: radio.dialMhz, band: radio.band, sideband: radio.sideband }
       : null
     deps.setFrequency(ISS_DIAL_MHZ, ISS_BAND, ISS_MODE)
-    armSstv(deps, true)
+    fireAndForget(() => deps.sstvArm(true))
     weArmedIt = true
     // Finite (not persistent) so the banner can't linger past LOS reading "armed"
     // after we've disarmed — the live SSTV section shows the armed state itself.
