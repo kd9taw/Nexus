@@ -37,7 +37,16 @@ import { getAurora, getDeclination, getPca, getSatellites, getLog, getLogStats }
 // CQ-zone boundaries (HB9HIL hamradio-zones-geojson, MIT — see NOTICE): bundled
 // as a raw asset and fetched lazily so the 2.7 MB never loads until toggled on.
 import cqzonesUrl from '../data/cqzones.geojson?url'
-import { satChasingSet, toggleSatChasing } from '../features/satChase'
+import {
+  filterSatsToChased,
+  isSatChased,
+  satChaseKeys,
+  satFavOnly,
+  setSatFavOnly,
+  toggleSatChasing,
+  SAT_CHASE_EVENT,
+} from '../features/satChase'
+import { decollideLabels } from '../features/mapLabels'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { gridToLatLon, haversineKm, bearingDeg, magneticDeg, type LatLon } from '../grid'
 import { heatBoost, sectorPulse } from '../features/pulse'
@@ -451,6 +460,20 @@ export function MapView({
   // pulse tick above is gated on layers the APRS embed never enables, and `nowMs` is a 60 s clock,
   // so without this the canvas can hold a stale picture (or a cleared one) for a whole minute.
   const [aprsTick, setAprsTick] = useState(0)
+  // ★/All chip state + star-set revision, synced by SAT_CHASE_EVENT so a flip
+  // on ANY surface (this Layers panel, the Passes pane, the Satellites section)
+  // repaints the sky and the chip immediately — the draw itself still reads
+  // storage (the one source of truth); these only trigger the rerender.
+  const [satFav, setSatFav] = useState(() => satFavOnly())
+  const [satChaseRev, setSatChaseRev] = useState(0)
+  useEffect(() => {
+    const onChange = () => {
+      setSatFav(satFavOnly())
+      setSatChaseRev((r) => r + 1)
+    }
+    window.addEventListener(SAT_CHASE_EVENT, onChange)
+    return () => window.removeEventListener(SAT_CHASE_EVENT, onChange)
+  }, [])
   const hasOpening = (prop?.openings?.length ?? 0) > 0
   // Flare PREVIEW: release builds have no devtools, so the operator needs an
   // in-app way to SEE the layer on a quiet sun. The Layers-panel button
@@ -549,6 +572,19 @@ export function MapView({
       clearInterval(id)
     }
   }, [satsOn])
+  // Birds the ★ filter hides when it hides EVERYTHING: stars exist but none
+  // matched (a starred bird aged past the backend's 30-day element cutoff, or
+  // left the group file). filterSatsToChased is honest about zero stars (shows
+  // all), so without this count the map would render a silently blank sky with
+  // no explanation anywhere. > 0 renders the hint below.
+  const satAllHidden = useMemo(() => {
+    if (embedded || !satsOn || !satFav || !sats || sats.birds.length === 0) return 0
+    const keys = satChaseKeys()
+    if (keys.names.size === 0) return 0 // zero stars = filter inert, sky full
+    return filterSatsToChased(sats.birds, keys).length === 0 ? sats.birds.length : 0
+    // satChaseRev: star toggles land in storage, not props — the rev is the rerender.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedded, satsOn, satFav, sats, satChaseRev])
   // Embedded detail globe: swing the sphere to the focus bird's current subpoint
   // ONCE per focus change (a ref remembers which bird we centered on) so later
   // drag-to-spin isn't fought; re-centers only when embedded.focusSat changes.
@@ -1237,7 +1273,13 @@ export function MapView({
     // where it's going. Chased birds add their footprint ring. Null = nothing.
     placedSatsRef.current = [] // cleared every draw so a hidden layer has no ghost hitboxes
     if (layers.sats.visible && sats) {
-      const chasedSet = satChasingSet()
+      const chaseKeys = satChaseKeys()
+      // ★-only filter (the Passes-pane chip; one surface-scoped key shared with
+      // the globe). Read per draw — the ~1 s sat tick then picks up stars and
+      // chip flips without a poll. The EMBEDDED detail globe is exempt: it must
+      // show the clicked bird starred or not (and solos it below anyway).
+      const shownBirds =
+        !embedded && satFavOnly() ? filterSatsToChased(sats.birds, chaseKeys) : sats.birds
       const nowSecs = Date.now() / 1000
       // Lerp helper along a track — lon wraps through ±180 correctly.
       const posAt = (track: [number, number, number][], t: number): LatLon | null => {
@@ -1297,9 +1339,13 @@ export function MapView({
       // satellite layer is unchanged — there, seeing every bird at once is the
       // whole point of turning the layer on.
       const soloSat = focusSat ? focusSat.toUpperCase() : null
-      for (const b of sats.birds) {
+      // Name labels are de-collided AFTER the loop (two clustered birds would
+      // otherwise overprint each other's designation), so the loop only
+      // collects their anchors + measured widths here.
+      const satLabels: { text: string; x: number; w: number; y: number }[] = []
+      for (const b of shownBirds) {
         if (soloSat && b.name.toUpperCase() !== soloSat) continue
-        const isChased = chasedSet.has(b.name.toUpperCase())
+        const isChased = isSatChased(b.name, b.norad, chaseKeys)
         const live = posAt(b.track, nowSecs) ?? { lat: b.lat, lon: b.lon }
         const p = project(proj, live)
         const color = isChased ? '#5eead4' : 'rgba(148, 163, 184, 0.95)'
@@ -1347,8 +1393,23 @@ export function MapView({
           ctx.arc(p[0], p[1], 11 * sc, 0, Math.PI * 2)
           ctx.stroke()
         }
-        ctx.fillText(b.name, p[0] + 9 * sc, p[1])
+        satLabels.push({
+          text: b.name,
+          x: p[0] + 9 * sc,
+          w: ctx.measureText(b.name).width,
+          y: p[1],
+        })
         placedSatsRef.current.push({ name: b.name, norad: b.norad, x: p[0], y: p[1], chased: isChased })
+      }
+      // Designation labels, de-collided (band-map push-down/compress-up adapted
+      // to 2-D — mapLabels.ts) and in explicit label ink: the old inline
+      // fillText inherited whatever fillStyle the previous layer left behind.
+      if (satLabels.length > 0) {
+        const rowH = 12 // 10 px mono line + breathing room
+        const ys = decollideLabels(satLabels, rowH, rowH / 2, h - rowH / 2)
+        ctx.globalAlpha = layers.sats.opacity
+        ctx.fillStyle = cssVar('--text') || '#e2e8f0'
+        satLabels.forEach((l, i) => ctx.fillText(l.text, l.x, ys[i]))
       }
       ctx.globalAlpha = 1
     }
@@ -1841,7 +1902,7 @@ export function MapView({
     // theme is a draw dependency so colors refresh on theme switch (the cssVar
     // memo is emptied at the top of this effect).
     void theme
-  }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick])
+  }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -2281,7 +2342,10 @@ export function MapView({
     const hit = hitTest(mx, my)
     if (hit?.kind === 'sat') {
       // Double-click a bird = toggle ★ favorite (the sat analog of the
-      // double-click-to-work idiom). The 1 s sat tick repaints the star state.
+      // double-click-to-work idiom). In ★-only view an unstar HIDES the bird
+      // on the repaint — deliberate, it just left the tracked set — and the
+      // Layers-panel ★/All chip on this same surface is the road back (flip
+      // to All, double-click to re-star, flip back).
       // Cancel the pending single-click navigation — this was a ★ gesture.
       if (satNavTimer.current != null) {
         window.clearTimeout(satNavTimer.current)
@@ -2443,6 +2507,12 @@ export function MapView({
               colored by what you still need.
             </div>
           )}
+          {satAllHidden > 0 && (
+            <div className="map-empty-hint sats">
+              None of your ★ birds are in the current elements — the ★ filter is
+              hiding all {satAllHidden} satellites (Layers ▸ Satellites ▸ All).
+            </div>
+          )}
           {!embedded && <MapLegend />}
           {layers.muf.visible && <MufLegend />}
           {flarePulsing && xrayEff != null && (
@@ -2495,6 +2565,27 @@ export function MapView({
                   title="Simulate an X2 flare on the map for 60 s — visual preview only (no alerts). The layer otherwise draws nothing until a real M-class flare."
                 >
                   {flarePreview ? '■ stop' : '☀ preview'}
+                </button>
+              )}
+              {k === 'sats' && layers.sats.visible && (
+                // The ★/All chip, ON the surface it filters. The Passes pane
+                // carries the same chip, but that pane may not be placed in the
+                // layout at all — a persisted default-ON filter with no control
+                // in sight would silently thin the sky. Also the road back after
+                // a double-click unstar hides a bird in ★-only view.
+                <button
+                  type="button"
+                  className={`sat-fav-toggle${satFav ? ' on' : ''}`}
+                  aria-label="Filter satellites to ★ birds"
+                  aria-pressed={satFav}
+                  title={
+                    satFav
+                      ? 'Showing your ★ birds (Passes pane + globe follow) — click to show all satellites'
+                      : 'Showing all satellites — click to show only your ★ birds (Passes pane + globe follow)'
+                  }
+                  onClick={() => setSatFavOnly(!satFav)}
+                >
+                  {satFav ? '★' : 'All'}
                 </button>
               )}
               {k === 'coverage' && (

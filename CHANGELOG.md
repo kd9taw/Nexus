@@ -94,6 +94,18 @@ fiction. A pass keeps the elements it armed with (their age shown on the readine
 or empty download never replaces a good cache, and a CelesTrak rename no longer orphans your
 starred birds, alarms or schedule — Nexus remembers the catalog number behind each name.
 
+**Connect's satellite layer follows your stars.** Turning on satellites in Connect now shows the
+birds you have starred in the Satellites section — on the 2-D map, the 3-D globe and the Passes
+pane alike — instead of the whole amateur catalog. A small ★/All chip flips between your birds
+and everything — on the Passes pane and beside Satellites in the map and globe Layers panels —
+one choice all three surfaces share and apply the moment you flip it, and with no stars set
+the full sky still shows so a fresh install is never empty. If every starred bird has dropped
+out of the current elements, the map and globe say so rather than drawing a silently blank
+sky. Every bird on the map and globe now
+carries its designation ("ISS", "RS-44") beside its satellite icon, and map labels that would
+overprint each other in a cluster shuffle apart so both names stay readable. Stars recognized by
+catalog number too, so an upstream rename never drops a bird from your filtered sky.
+
 ### Fixed: the pick reaches the radio — and the IC-9700's uplink goes where it can transmit
 
 **A dual-radio pick finds the satellite rig even with nothing configured.** Field report: on an

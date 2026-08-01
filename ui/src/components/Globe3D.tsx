@@ -8,8 +8,16 @@
 // On a tracked satellite pass it ALSO becomes the "this pass" view (satellite visual
 // design §3.3): the orbit arc ahead/behind, the bird's footprint, and a line-of-sight
 // ray from the QTH to the bird — the 2-D map stays the "everything at once" view.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { heatPulse, sectorPulse } from '../features/pulse'
+import {
+  filterSatsToChased,
+  isSatChased,
+  satChaseKeys,
+  satFavOnly,
+  setSatFavOnly,
+  SAT_CHASE_EVENT,
+} from '../features/satChase'
 import { workedGridSet } from '../coverage'
 import * as THREE from 'three'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
@@ -340,6 +348,8 @@ export default function Globe3D({
   const openingLabelsRef = useRef<THREE.Sprite[]>([])
   const satGroupRef = useRef<THREE.Group | null>(null)
   const satMarkersRef = useRef<Record<string, THREE.Object3D>>({})
+  // Name-designation sprites, one per drawn bird — moved with their markers.
+  const satLabelsRef = useRef<Record<string, THREE.Sprite>>({})
   const bloomRef = useRef<UnrealBloomPass | null>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   // Spot hover tooltip (mirrors the 2-D map's .map-hover) — text + wrap-relative position.
@@ -353,6 +363,20 @@ export default function Globe3D({
   const [auroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
   const [pca, setPca] = useState<PcaView | null>(null)
   const [sats, setSats] = useState<SatView | null>(null)
+  // ★/All chip state + star-set revision, synced by SAT_CHASE_EVENT. Without
+  // these in the sat-scene deps the chip's flip reached the 3-D sky only on
+  // the next 30 s poll — the pane beside it had already changed (the "one
+  // choice, three surfaces" promise held in storage but not on screen).
+  const [satFav, setSatFav] = useState(() => satFavOnly())
+  const [satChaseRev, setSatChaseRev] = useState(0)
+  useEffect(() => {
+    const onChange = () => {
+      setSatFav(satFavOnly())
+      setSatChaseRev((r) => r + 1)
+    }
+    window.addEventListener(SAT_CHASE_EVENT, onChange)
+    return () => window.removeEventListener(SAT_CHASE_EVENT, onChange)
+  }, [])
   const [cqzones, setCqzones] = useState<[number, number][][]>([]) // each zone → boundary lines
   const [workedGrids, setWorkedGrids] = useState<{ lat: number; lon: number }[]>([])
   // Toggleable 3-D layers. Default-on mirrors the 2-D map (aurora off by default).
@@ -835,19 +859,17 @@ export default function Globe3D({
   // 3-D-native payoff — 2-D could only show a flat ground track.
   useEffect(() => {
     const g = globeRef.current
-    if (!g || !ready) return
-    if (satGroupRef.current) {
-      g.scene().remove(satGroupRef.current)
-      satGroupRef.current.traverse((o) => {
-        ;(o as THREE.Mesh).geometry?.dispose?.()
-      })
-      satGroupRef.current = null
-      satMarkersRef.current = {}
-    }
-    if (!show.sats || !sats) return
+    if (!g || !ready || !show.sats || !sats) return
+    // ★-only filter — the Passes-pane chip's choice, ONE surface-scoped key
+    // shared with the 2-D map (zero stars = filter inert, all birds show).
+    // satFav/satChaseRev in the deps make a chip flip or star toggle rebuild
+    // NOW, not on the next 30 s poll.
+    const chaseKeys = satChaseKeys()
+    const shownBirds = satFav ? filterSatsToChased(sats.birds, chaseKeys) : sats.birds
     const group = new THREE.Group()
     const markers: Record<string, THREE.Object3D> = {}
-    for (const bird of sats.birds) {
+    const labels: Record<string, THREE.Sprite> = {}
+    for (const bird of shownBirds) {
       // The tracked bird belongs to the pass scene below, which draws its own
       // arc, footprint and marker. Drawing it here too would put two identical
       // lines at exactly the same radius — the coplanar-surface flicker this
@@ -889,11 +911,47 @@ export default function Globe3D({
       marker.position.set(c.x, c.y, c.z)
       markers[bird.name] = marker
       group.add(marker)
+      // Designation label riding just above the marker — the pass label's
+      // sprite idiom (textSprite + alt offset); teal = chased. (The 2-D map's
+      // labels are uniform --text ink — only the MARKERS share the teal/slate
+      // chased coding across surfaces.)
+      const label = textSprite(
+        bird.name,
+        isSatChased(bird.name, bird.norad, chaseKeys) ? '#5eead4' : 'rgba(203, 213, 225, 0.95)',
+      )
+      const lc = g.getCoords(bird.lat, bird.lon, alt + 0.03)
+      label.position.set(lc.x, lc.y, lc.z)
+      labels[bird.name] = label
+      group.add(label)
     }
     g.scene().add(group)
     satGroupRef.current = group
     satMarkersRef.current = markers
-  }, [ready, sats, show.sats, passBirdKey])
+    satLabelsRef.current = labels
+    // Cleanup-return, the pass-scene idiom above: dispose-at-next-run leaked
+    // the LAST group on unmount (every 3-D→2-D toggle stranded N 256×48 canvas
+    // textures), and its sprite-only material branch leaked the two line
+    // materials + marker material per bird on every 30 s rebuild.
+    return () => {
+      g.scene().remove(group)
+      group.traverse((o) => {
+        const obj = o as unknown as {
+          isSprite?: boolean
+          geometry?: THREE.BufferGeometry
+          material?: THREE.Material & { map?: THREE.Texture | null }
+        }
+        // Sprites SHARE one module-level geometry inside three.js — disposing it
+        // would break every other sprite on the globe (the opening labels). Only
+        // the material and its canvas texture are ours to free.
+        if (!obj.isSprite) obj.geometry?.dispose?.()
+        obj.material?.map?.dispose?.()
+        obj.material?.dispose?.()
+      })
+      satGroupRef.current = null
+      satMarkersRef.current = {}
+      satLabelsRef.current = {}
+    }
+  }, [ready, sats, show.sats, passBirdKey, satFav, satChaseRev])
 
   // Animate the sat markers along their tracks each second (real-time motion between polls).
   useEffect(() => {
@@ -903,12 +961,18 @@ export default function Globe3D({
       if (!g) return
       const now = Date.now() / 1000
       for (const bird of sats.birds) {
+        // Filtered-out birds (★-only view) simply have no marker to move.
         const marker = satMarkersRef.current[bird.name]
         if (!marker) continue
         const pos = satPosAt(bird.track, now)
         if (!pos) continue
         const c = g.getCoords(pos.lat, pos.lon, bird.altKm / EARTH_KM)
         marker.position.set(c.x, c.y, c.z)
+        const label = satLabelsRef.current[bird.name]
+        if (label) {
+          const lc = g.getCoords(pos.lat, pos.lon, bird.altKm / EARTH_KM + 0.03)
+          label.position.set(lc.x, lc.y, lc.z)
+        }
       }
     }, 1000)
     return () => clearInterval(id)
@@ -1266,6 +1330,18 @@ export default function Globe3D({
     return [(e.clientX - rect.left) * sx, (e.clientY - rect.top) * sy]
   }
 
+  // Stars exist but NONE matched (starred bird aged past the 30-day element
+  // cutoff or left the group file) → the ★ filter hides every bird. Say so —
+  // the 2-D map renders the same hint; a silently blank sky reads as broken.
+  const satAllHidden = useMemo(() => {
+    if (!show.sats || !satFav || !sats || sats.birds.length === 0) return 0
+    const keys = satChaseKeys()
+    if (keys.names.size === 0) return 0 // zero stars = filter inert, sky full
+    return filterSatsToChased(sats.birds, keys).length === 0 ? sats.birds.length : 0
+    // satChaseRev: star toggles land in storage, not props — the rev is the rerender.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [show.sats, satFav, sats, satChaseRev])
+
   if (!ok) {
     return (
       <div className="globe3d-fallback">
@@ -1312,15 +1388,42 @@ export default function Globe3D({
               ['lights', 'City lights'],
             ] as const
           ).map(([k, label]) => (
-            <label key={k}>
-              <input
-                type="checkbox"
-                checked={show[k]}
-                onChange={(e) => setShow((s) => ({ ...s, [k]: e.target.checked }))}
-              />
-              {label}
-            </label>
+            <Fragment key={k}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={show[k]}
+                  onChange={(e) => setShow((s) => ({ ...s, [k]: e.target.checked }))}
+                />
+                {label}
+              </label>
+              {k === 'sats' && show.sats && (
+                // The ★/All chip on the 3-D surface too — same reachability
+                // argument as the 2-D Layers panel (the Passes pane that also
+                // carries it may not be placed in the layout at all).
+                <button
+                  type="button"
+                  className={`sat-fav-toggle${satFav ? ' on' : ''}`}
+                  aria-label="Filter satellites to ★ birds"
+                  aria-pressed={satFav}
+                  title={
+                    satFav
+                      ? 'Showing your ★ birds (Passes pane + 2-D map follow) — click to show all satellites'
+                      : 'Showing all satellites — click to show only your ★ birds (Passes pane + 2-D map follow)'
+                  }
+                  onClick={() => setSatFavOnly(!satFav)}
+                >
+                  {satFav ? '★' : 'All'}
+                </button>
+              )}
+            </Fragment>
           ))}
+        </div>
+      )}
+      {satAllHidden > 0 && (
+        <div className="map-empty-hint sats">
+          None of your ★ birds are in the current elements — the ★ filter is
+          hiding all {satAllHidden} satellites (Layers ▸ Satellites ▸ All).
         </div>
       )}
       {/* The same on-map insight rail (openings / band advisor / MUF) the 2-D map shows —

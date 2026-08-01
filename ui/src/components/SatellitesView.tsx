@@ -44,7 +44,7 @@ import {
 } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
 import { SAT_VFO_MAPS } from '../features/satVfo'
-import { satChasingSet, toggleSatChasing } from '../features/satChase'
+import { isSatChased, satChaseKeys, satChasingSet, toggleSatChasing } from '../features/satChase'
 import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAlarm'
 import { tleRefreshMessage } from '../features/tleMessages'
 import { heatPulse } from '../features/pulse'
@@ -1297,6 +1297,13 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   // hours, backscan) with Phase 2 `earn` stamped on each; computed on demand
   // backend-side, so this poll is the only thing that pays for it.
   const favKey = useMemo(() => [...favs].sort().join(','), [favs])
+  // Star DISPLAY matches NORAD-first like every Connect surface (isSatChased) —
+  // after an upstream rename the star lives under the old name, and a name-only
+  // `favs.has()` here showed ☆ while Connect showed ★ for the same bird. The
+  // schedule fetch above stays name-driven (favKey — the backend contract).
+  // Recomputed off favKey: every toggle mutates the name set, so the memo can
+  // never hold a stale NORAD record.
+  const chaseKeys = useMemo(() => satChaseKeys(), [favKey])
   useEffect(() => {
     let live = true
     const names = favKey === '' ? [] : favKey.split(',')
@@ -2021,7 +2028,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                     >
                       <td>
                         <button
-                          className={`sat-star${favs.has(p.name.toUpperCase()) ? ' on' : ''}`}
+                          className={`sat-star${isSatChased(p.name, p.norad, chaseKeys) ? ' on' : ''}`}
                           onClick={(e) => {
                             e.stopPropagation()
                             onToggleFav(p.name, p.norad)
@@ -2408,18 +2415,21 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             spellCheck={false}
           />
           <ul>
-            {allBirds.map((n) => (
-              <li key={n} className={selected === n ? 'sel' : ''}>
-                <button
-                  className={`sat-star${favs.has(n.toUpperCase()) ? ' on' : ''}`}
-                  onClick={() => onToggleFav(n, view?.birds.find((b) => b.name === n)?.norad)}
-                  title="★ favorites drive the schedule, the map emphasis, and alarms"
-                >
-                  ★
-                </button>
-                <button className="sat-pick" onClick={() => setSelected(n)}>{n}</button>
-              </li>
-            ))}
+            {allBirds.map((n) => {
+              const norad = view?.birds.find((b) => b.name === n)?.norad
+              return (
+                <li key={n} className={selected === n ? 'sel' : ''}>
+                  <button
+                    className={`sat-star${isSatChased(n, norad, chaseKeys) ? ' on' : ''}`}
+                    onClick={() => onToggleFav(n, norad)}
+                    title="★ favorites drive the schedule, the map emphasis, and alarms"
+                  >
+                    ★
+                  </button>
+                  <button className="sat-pick" onClick={() => setSelected(n)}>{n}</button>
+                </li>
+              )
+            })}
             {view == null && <li className="sats-empty">no elements yet — first fetch needs the network once</li>}
           </ul>
         </section>

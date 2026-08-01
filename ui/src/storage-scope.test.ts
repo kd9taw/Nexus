@@ -42,6 +42,7 @@ export const PER_SURFACE = [
   'nexus.ota.sortKey',
   'nexus.phonescope.dss',
   'nexus.roster.filters',
+  'nexus.sats.favOnly',
   'nexus.spotlegend',
   'nexus.split.cw.scope',
   'nexus.split.operate.waterfall',

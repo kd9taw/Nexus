@@ -1078,6 +1078,45 @@ button.nb-chip:hover {
   line-height: 1.2;
 }
 /* Satellite Passes pane. */
+/* ★/All filter chip — the choice is shared with the map + globe satellite
+ * layers (ONE surface-scoped key; satChase.ts). Chrome mirrors the band strip's
+ * legend toggle; theme-safe via vars only. */
+.sat-filterbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 var(--space-1);
+}
+.sat-fav-toggle {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.sat-fav-toggle.on,
+.sat-fav-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* The same chip when it sits in a Layers panel (2-D map + 3-D globe): spaced
+   like the flare-preview button, and in the globe's flex column indented under
+   its Satellites row instead of stretching to a full-width bar. */
+.map-layer .sat-fav-toggle {
+  margin: 2px 0 var(--space-1);
+}
+.globe3d-layers .sat-fav-toggle {
+  align-self: flex-start;
+  margin: 1px 0 2px var(--space-5);
+}
+/* Honest empty state when the ★ filter leaves no upcoming passes. */
+.sat-fav-empty {
+  margin: 0;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
 .sat-stale {
   margin: 0 0 var(--space-1);
   font-size: var(--fs-micro);
@@ -2829,6 +2868,13 @@ button.nb-chip:hover {
   font-size: 12px;
   color: var(--text-dim);
   pointer-events: none;
+}
+/* The all-★-birds-hidden notice (2-D map + 3-D globe) sits BELOW the
+   no-stations hint's slot so two honest empties never overprint (fresh
+   install with the satellite layer on). */
+.map-empty-hint.sats {
+  top: 56px;
+  z-index: 3;
 }
 .map-legend-sep {
   width: 1px;
