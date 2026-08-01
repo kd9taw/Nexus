@@ -3236,6 +3236,73 @@ h2 {
 .operate-host[hidden] {
   display: none;
 }
+/* ── Crash panel (ErrorBoundary fallback) ────────────────────────────────────
+   Replaces the crashed view inside `.shell` (rail still to its left), or the whole
+   window when the ROOT boundary catches. Both parents are covered without a media
+   query: `flex: 1` fills the shell row, and in the block context of #root the
+   height:100% + box-sizing fill the window instead. OPAQUE background — this is
+   the surface standing in for a dead subtree; a translucent one would show the
+   corpse. Scrolls internally so a long component stack can never push the escape
+   button out of reach (the deficit-valve rule). */
+.view-crash {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--text);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.view-crash-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--danger, #e5484d);
+}
+.view-crash-hint {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+/* The report payload: monospace, selectable, wrapped (a component stack has no
+   spaces to break on, so `anywhere` — otherwise it forces a horizontal scrollbar
+   on the whole panel). */
+.view-crash-detail {
+  margin: 0;
+  align-self: stretch;
+  max-height: 40em;
+  overflow: auto;
+  padding: var(--space-3);
+  background: var(--panel);
+  border: 1px solid var(--danger, #e5484d);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.view-crash-back {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  font-weight: 600;
+  min-height: 34px;
+  transition: var(--transition);
+}
+.view-crash-back:hover {
+  filter: brightness(1.08);
+}
 
 .layout {
   flex: 1;

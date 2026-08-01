@@ -161,6 +161,27 @@ because the rig conversation now runs unlocked, a split the operator requests du
 safe: a rejection names the dial it was rejecting and resolves only that request, so a fresh
 "UP 5" click in that window still applies on the next cycle instead of being silently dropped.
 
+### Fixed: the Openings Log square works — and a broken screen can no longer black out the app
+
+**Turning on the Openings Log square blacked out the whole app (0.24.6 tester build).** Field
+report: assigning "Openings Log" to a Connect slot turned the entire window black — rail, top
+bar, everything — and the black screen came back on every launch, because both the slot
+assignment and the openings journal itself outlive the session (the journal even outlives a
+wiped browser profile). The pane paints in two steps — an empty first paint while the log
+loads, then the real render — and its sort state was declared on the wrong side of the
+"nothing yet" exit, so the two paints disagreed about the component's shape and React tore
+down the entire window. The sort state now sits above that exit, the pane renders whatever the
+journal holds — including rows written by older builds with fields missing — and a build-time
+sweep now fails on this pattern anywhere in the UI, so the class is closed, not just this
+instance.
+
+**A broken screen can no longer black out the app.** A section that crashes while drawing now
+shows an error panel in its place — what crashed, the technical details ready to copy into a
+bug report, and a button back to a known-good section — while the navigation rail and top bar
+stay alive around it. Pop-out windows carry the same net. And the section the app reopens on
+is checked against what this build can actually render before it is restored, so a saved id
+from an older or newer version can never wedge startup into a dead screen.
+
 ## [0.24.0] — 2026-07-31
 
 ### Added: satellite operating — full Doppler, and a rotator that behaves

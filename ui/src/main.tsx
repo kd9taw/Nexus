@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { DetachedPanel } from './DetachedPanel'
 import { OPERATE_PANELS, redockStalePopouts } from './features/panelState'
 import './styles.css'
@@ -31,6 +32,24 @@ if (!panel) {
   }
 }
 
+// Outermost net. App carries its own boundary around the workspace (so a view crash
+// leaves the rail usable), but a throw ABOVE `.shell` — the top bar, the Now Bar, App's
+// own render — would still take the root down to a bare black window with no way out,
+// which is exactly the 0.24.6 field report. A pop-out is a separate React root and gets
+// nothing from the main window's boundary, so it needs its own. Recovery here is a
+// window reload: at this level there is no navigation left to fall back to.
+const reload = { label: 'Reload window', onClick: () => window.location.reload() }
+
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>{panel ? <DetachedPanel panel={panel} /> : <App />}</StrictMode>,
+  <StrictMode>
+    {panel ? (
+      <ErrorBoundary label={`The ${panel} window`} action={reload}>
+        <DetachedPanel panel={panel} />
+      </ErrorBoundary>
+    ) : (
+      <ErrorBoundary label="Nexus" action={reload}>
+        <App />
+      </ErrorBoundary>
+    )}
+  </StrictMode>,
 )
