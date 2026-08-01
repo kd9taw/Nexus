@@ -409,8 +409,9 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   satellite database and network of volunteer ground stations. Nexus's amateur-satellite list is
   *derived from* the SatNOGS DB: which birds are in orbit, what they are transmitting, and whether
   they are still alive — the curation no orbital-element source can provide. That derived catalog is
-  published by this project every six hours and downloaded by every install, under **CC BY-SA 4.0**
-  with attribution carried inside the file. Their Doppler data serves a second purpose: Nexus's
+  published by this project every six hours and downloaded by every install, and a snapshot of it
+  ships inside the installer so a new install has the full bird list before its first fetch — under
+  **CC BY-SA 4.0** with attribution carried inside the file. Their Doppler data serves a second purpose: Nexus's
   Doppler prediction is checked against carrier tracks recovered from eight real recorded passes on
   their network, so it is validated against signals that actually arrived at an antenna and not only
   against another implementation of the same theory. Thanks to stations 1696, 4803, 5049 and 5062

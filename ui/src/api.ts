@@ -285,7 +285,9 @@ export interface TleStatus {
   usableCount: number
   /** Unix stamp of the last successful fetch/304; 0 = never. */
   fetchedAt: number
-  /** "mirror" | "celestrak" | "import" | "legacy" | "none". */
+  /** "mirror" | "celestrak" | "import" | "legacy" | "bundled" | "none".
+   * "bundled" = the seed snapshot shipped in the installer, serving before
+   * this install has ever reached the mirror (its `fetchedAt` is 0). */
   source: string
   /** Operator file-imports riding the snapshot (persist across refreshes). */
   importedCount: number

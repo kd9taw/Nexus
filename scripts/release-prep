@@ -9,6 +9,10 @@
 #   ui/package.json             via `npm version` (keeps package-lock.json in sync)
 # and stamps CHANGELOG.md: `## [Unreleased]` → `## [X.Y.Z] — YYYY-MM-DD`.
 #
+# It also re-cuts the bundled TLE seed snapshot (the installer's offline
+# satellite catalog) — best-effort, see step 4 — because that is a committed
+# snapshot with no other moment that reliably refreshes it.
+#
 # It does NOT tag, push, build, or touch the website's version.json — those are
 # maintainer-gated release steps; the checklist it prints names them.
 
@@ -44,7 +48,40 @@ else
   echo "warn: no '## [Unreleased]' section in CHANGELOG.md — write the release notes by hand." >&2
 fi
 
-# 4. Verify alignment or die.
+# 4. The bundled TLE seed snapshot — src-tauri/resources/tles/tles.json, the
+# installer's offline satellite catalog (the mirror payload verbatim). It is a
+# SNAPSHOT, so it goes stale silently, and cutting a release is the one moment
+# we reliably know to re-cut it.
+#
+# Best-effort ON PURPOSE: the generator needs the network (SatNOGS + CelesTrak)
+# and runs its own sanity gates, and a version bump must not fail because a feed
+# was down. An old seed is a WARNING, never an error — the per-bird 30 d gate at
+# point of USE is the honesty line, every install refreshes from the mirror, and
+# a hard age check here would turn into a spurious red months from now.
+SEED=src-tauri/resources/tles/tles.json
+seed_report() {  # prints the seed's shape; exit 3 = older than the warn line
+  node -e '
+    const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))
+    const days = (Date.now() - Date.parse(m.generated)) / 86400000
+    console.log(`${m.count} elements / ${m.catalogCount} catalog rows, generated ${m.generated} (${days.toFixed(1)} d old)`)
+    process.exit(days > 30 ? 3 : 0)
+  ' "$1"
+}
+SEED_TMP=$(mktemp -d)
+if TLES_PREV="$SEED" node scripts/gen-tles.mjs "$SEED_TMP" 2>"$SEED_TMP/gen.log"; then
+  mv "$SEED_TMP/tles.json" "$SEED"   # tles.txt is a mirror-only convenience
+else
+  echo "warn: TLE seed NOT regenerated — shipping the committed snapshot. Last lines:" >&2
+  tail -3 "$SEED_TMP/gen.log" >&2 || true
+fi
+rm -rf "$SEED_TMP"
+if SEED_OUT=$(seed_report "$SEED"); then
+  echo "TLE seed: $SEED_OUT"
+else
+  echo "warn: the bundled TLE seed is stale or unreadable${SEED_OUT:+ ($SEED_OUT)} — re-run scripts/gen-tles.mjs before publishing." >&2
+fi
+
+# 5. Verify alignment or die.
 A=$(grep -om1 'version = "[^"]*"' src-tauri/Cargo.toml | grep -o '[0-9][^"]*')
 B=$(grep -om1 '"version": *"[^"]*"' src-tauri/tauri.conf.json | grep -o '[0-9][^"]*')
 C=$(node -p "require('./ui/package.json').version" 2>/dev/null || grep -om1 '"version": *"[^"]*"' ui/package.json | grep -o '[0-9][^"]*')

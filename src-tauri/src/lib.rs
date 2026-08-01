@@ -3146,7 +3146,8 @@ struct TleSnapshot {
     /// which reads as due-for-refresh, never as fresh.
     fetched_at: i64,
     /// Where the elements came from: "mirror" | "celestrak" | "legacy" |
-    /// "import" (+ "bundled" if the seed-snapshot phase ships).
+    /// "import" | "bundled" (the seed snapshot shipped in the installer —
+    /// always with `fetched_at: 0`, so it reads as due-for-refresh).
     source: String,
     /// The mirror manifest's own generation stamp (absent on direct fetches).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3638,11 +3639,103 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
     })
 }
 
+/// The app's cross-platform RESOURCE dir, captured once at setup — the only
+/// place an `AppHandle` exists, and the only way to find bundled files on
+/// every platform (next to the exe on Windows, `usr/lib/<app>/resources` on a
+/// Linux .deb/AppImage, inside the .app on macOS). Deriving it from
+/// `current_exe()` alone is what made the DeepCW model invisible on Linux
+/// while it shipped in the bundle.
+static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// The bundled TLE seed snapshot — `resources/tles/tles.json`, the mirror
+/// payload verbatim. Resource dir first (the packaged app), then the
+/// exe-adjacent copy, then the path relative to the crate root, which is where
+/// a `tauri dev` run and `cargo test` both stand. `None` = no seed reachable,
+/// which is simply the pre-seed behavior, never an error.
+fn tle_seed_path() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(res) = RESOURCE_DIR.get() {
+        candidates.push(res.join("resources").join("tles").join("tles.json"));
+        candidates.push(res.join("tles").join("tles.json"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(d) = exe.parent() {
+            candidates.push(d.join("resources").join("tles").join("tles.json"));
+        }
+    }
+    candidates.push(PathBuf::from("resources/tles/tles.json"));
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Read + parse the bundled seed, keeping only birds that pass the per-bird
+/// integrity check — the SAME gate an operator file import passes, and for the
+/// same reason: a seed is legitimately days or weeks old (a snapshot cut at
+/// release time), so the set-freshness gates in `validate_tles` would refuse
+/// it on principle, while the per-bird 30 d ceiling at USE stays the honesty
+/// line. `None` when there is nothing usable to seed with.
+fn tle_seed(now: i64) -> Option<propagation::live::tle::MirrorManifest> {
+    let text = std::fs::read_to_string(tle_seed_path()?).ok()?;
+    let mut seed = propagation::live::tle::parse_mirror_manifest(&text).ok()?;
+    seed.elements
+        .retain(|t| propagation::live::tle::tle_bird_ok(t, now));
+    (!seed.elements.is_empty() || !seed.catalog.is_empty()).then_some(seed)
+}
+
+/// Apply the bundled seed as a FLOOR under `cache` — never a ceiling. This is
+/// the whole load rule in one place:
+///
+/// - **No cache** (a fresh install, or an offline one that has never reached
+///   the mirror): the seed BECOMES the snapshot, with `fetched_at: 0`. The
+///   zero is deliberate — it reads as due-for-refresh everywhere, so the app
+///   still fetches at its first opportunity and a bundled snapshot can never
+///   silence the refresh discipline.
+/// - **A cache exists**: its `fetched_at` / `source` / `etag` are NOT touched
+///   (they describe a real fetch; the seed did not happen over the network).
+///   The catalog is adopted only when the cache has none — the 0.24.x upgrade
+///   case, where an install holds 97 catalog-less Celestrak elements and every
+///   status surface is dark. Elements merge NORAD-keyed with the newest epoch
+///   winning ([`tle_merge_newest_epoch`], the same semantics operator imports
+///   use), so the seed can add birds the cache lacks but can never replace a
+///   fresher element set with its own older one.
+fn tle_seed_floor(
+    cache: Option<TleSnapshot>,
+    seed: propagation::live::tle::MirrorManifest,
+    now: i64,
+) -> TleSnapshot {
+    let Some(mut snap) = cache else {
+        return TleSnapshot {
+            schema: 1,
+            fetched_at: 0,
+            source: "bundled".into(),
+            generated: seed.generated,
+            etag: None,
+            count: seed.elements.len(),
+            elements: seed.elements,
+            catalog: seed.catalog,
+            imported: Vec::new(),
+            aliases: Default::default(),
+        };
+    };
+    if snap.catalog.is_empty() {
+        snap.catalog = seed.catalog;
+    }
+    tle_merge_newest_epoch(&mut snap.elements, seed.elements, now);
+    snap.count = snap.elements.len();
+    snap
+}
+
 /// Load the persisted snapshot into memory (idempotent, memory-first): the
 /// shared path first, else the legacy per-profile cache — which is then
 /// migrated ONCE onto the shared path so every instance sees it. The migration
 /// write only happens when no shared file loads: a legacy copy must never
 /// clobber a good shared cache.
+///
+/// The bundled seed goes UNDER whatever loaded (including nothing) — see
+/// [`tle_seed_floor`]. Loading it writes nothing: nothing was fetched, so
+/// there is no provenance to persist, and no reason to touch a file two
+/// instances share. (The next real write — a refresh, a 304, an import —
+/// persists the seeded snapshot as a side effect, which is harmless: the
+/// elements are real, and `fetchedAt` still says when they were FETCHED.)
 fn tles_load_from_disk() {
     if TLES.lock().is_ok_and(|g| g.is_some()) {
         return;
@@ -3651,12 +3744,17 @@ fn tles_load_from_disk() {
         Some(s) => (Some(s), false),
         None => (load_tle_snapshot_from(&legacy_tles_path()), true),
     };
-    let Some(snap) = snap else { return };
     if migrate {
-        if let Ok(json) = serde_json::to_string(&snap) {
+        if let Some(json) = snap.as_ref().and_then(|s| serde_json::to_string(s).ok()) {
             let _ = write_json_atomic(&shared_tles_path(), &json);
         }
     }
+    let now = now_unix();
+    let snap = match tle_seed(now) {
+        Some(seed) => Some(tle_seed_floor(snap, seed, now)),
+        None => snap,
+    };
+    let Some(snap) = snap else { return };
     if let Ok(mut g) = TLES.lock() {
         // First loader wins — a racing thread loaded the same file anyway.
         g.get_or_insert(snap);
@@ -4167,7 +4265,9 @@ struct TleStatus {
     usable_count: usize,
     /// Unix stamp of the last successful fetch/304; 0 = never (or legacy).
     fetched_at: i64,
-    /// "mirror" | "celestrak" | "import" | "legacy" | "none".
+    /// "mirror" | "celestrak" | "import" | "legacy" | "bundled" | "none".
+    /// "bundled" = the installer's seed snapshot, serving before this install
+    /// has ever reached the mirror (its `fetchedAt` is 0 — never fetched).
     source: String,
     /// Operator file-imports riding the snapshot (persist across refreshes).
     imported_count: usize,
@@ -4283,13 +4383,17 @@ async fn fetch_tles_now() -> Result<TleStatus, String> {
     Ok(tle_status())
 }
 
-/// Pure half of the import: merge `new` element sets into `snap.imported`,
-/// NORAD-keyed with the newest epoch winning — re-importing an updated keps
-/// file replaces its older entries instead of doubling them. (The merge of
-/// `imported` OVER the fetched group happens at read time in
-/// [`tle_merged_elements`]; imports persist across refreshes because
-/// [`tles_install`] carries the list forward.)
-fn tle_merge_imports(snap: &mut TleSnapshot, new: Vec<propagation::sat::Tle>, now: i64) {
+/// Merge `new` element sets into `into`, NORAD-keyed with the newest epoch
+/// winning: a bird already present is REPLACED only by a fresher set, and one
+/// that isn't is appended. The one place this rule lives — operator imports
+/// and the bundled seed ([`tle_seed_floor`]) both merge exactly this way, and
+/// two implementations of "newest epoch wins" would be two chances to get the
+/// comparison backwards.
+fn tle_merge_newest_epoch(
+    into: &mut Vec<propagation::sat::Tle>,
+    new: Vec<propagation::sat::Tle>,
+    now: i64,
+) {
     let age = |t: &propagation::sat::Tle| {
         propagation::sat::tle_age_days(&t.line1, now).unwrap_or(f64::INFINITY)
     };
@@ -4297,19 +4401,28 @@ fn tle_merge_imports(snap: &mut TleSnapshot, new: Vec<propagation::sat::Tle>, no
         let Some(n) = propagation::sat::norad_id(&t.line1) else {
             continue;
         };
-        match snap
-            .imported
+        match into
             .iter()
             .position(|e| propagation::sat::norad_id(&e.line1) == Some(n))
         {
             Some(i) => {
-                if age(&t) < age(&snap.imported[i]) {
-                    snap.imported[i] = t;
+                if age(&t) < age(&into[i]) {
+                    into[i] = t;
                 }
             }
-            None => snap.imported.push(t),
+            None => into.push(t),
         }
     }
+}
+
+/// Pure half of the import: merge `new` element sets into `snap.imported`,
+/// NORAD-keyed with the newest epoch winning — re-importing an updated keps
+/// file replaces its older entries instead of doubling them. (The merge of
+/// `imported` OVER the fetched group happens at read time in
+/// [`tle_merged_elements`]; imports persist across refreshes because
+/// [`tles_install`] carries the list forward.)
+fn tle_merge_imports(snap: &mut TleSnapshot, new: Vec<propagation::sat::Tle>, now: i64) {
+    tle_merge_newest_epoch(&mut snap.imported, new, now);
 }
 
 /// Merge validated imports into the live snapshot (memory + atomic disk
@@ -13697,6 +13810,12 @@ pub fn run() {
             // while the `main` window (declared hidden) loads behind it; then reveal main and
             // close the splash. A plain thread timer — no dependency on the frontend being ready.
             use tauri::Manager;
+            // Capture the bundled-resource dir FIRST: it is the only handle-derived path
+            // the TLE seed loader can use, and the first satellite/Now-Bar poll may arrive
+            // the moment setup returns. See RESOURCE_DIR / `tle_seed_path`.
+            if let Ok(res) = app.path().resource_dir() {
+                let _ = RESOURCE_DIR.set(res);
+            }
             // Enforce the minimum window size at runtime too. The tauri.conf `minWidth`/
             // `minHeight` are set (both — Tauri no-ops minWidth alone), but re-applying here
             // in DPI-aware logical px is belt-and-suspenders across platforms. 900x600 is the
@@ -13859,8 +13978,9 @@ mod tests {
         load_tle_snapshot_from, parse_sstv_mode, profile_dir_name, rect_lands_on_work_area,
         resolve_bird, resolve_birds, sanitize_profile, sat_excluded, tle_absorb_foreign,
         tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
-        tle_record_aliases, write_json_atomic, AssistanceEvent, AssistanceSourceState,
-        SatBird, TLE_FETCHING, TleFlightGuard, TleSnapshot
+        tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path, write_json_atomic,
+        AssistanceEvent, AssistanceSourceState, SatBird, TLE_FETCHING, TleFlightGuard,
+        TleSnapshot
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -14538,6 +14658,243 @@ mod tests {
         let loaded = load_tle_snapshot_from(&path).expect("round-trip");
         assert_eq!(loaded.catalog, with.catalog);
         let _ = std::fs::remove_file(&path);
+    }
+
+    // --- the bundled seed snapshot -------------------------------------------
+
+    /// The COMMITTED seed, byte for byte as it ships. `include_str!` rather
+    /// than the runtime path so the bytes under test are the bytes in the
+    /// installer, with no resolution in between.
+    const SEED: &str = include_str!("../resources/tles/tles.json");
+    /// The licence the seed's population and status data carry.
+    const SEED_LICENSE: &str = "CC-BY-SA-4.0";
+    /// `tle_bird_ok` reads an epoch's PARSEABILITY, never its magnitude (the
+    /// 30 d ceiling is applied at USE), so any fixed "now" exercises the same
+    /// gates — and a fixed one keeps the test from rotting.
+    const SEED_NOW: i64 = 1_785_542_400; // 2026-08-01T00:00:00Z
+
+    fn seed_manifest() -> propagation::live::tle::MirrorManifest {
+        propagation::live::tle::parse_mirror_manifest(SEED).expect("the committed seed parses")
+    }
+
+    /// THE ARTIFACT: the seed is the mirror payload verbatim, so it must parse
+    /// through the mirror's own parser, carry the catalog that makes bundling
+    /// it worth doing, and hold nothing a fetched set would have been refused
+    /// for per-bird.
+    #[test]
+    fn the_committed_seed_is_a_clean_mirror_payload() {
+        let seed = seed_manifest();
+        // The catalog is the point: without it every honesty surface (dead /
+        // re-entered / pre-launch / alive-but-silent, "no current elements")
+        // is dark, which is exactly the state a 97-bird Celestrak fallback
+        // leaves an install in. A floor, not an exact count — the seed is
+        // regenerated every release.
+        assert!(
+            seed.catalog.len() >= 300,
+            "seed catalog is {} rows — the bundled snapshot exists to carry the POPULATION",
+            seed.catalog.len()
+        );
+        assert!(
+            seed.elements.len() >= 300,
+            "seed carries only {} element sets",
+            seed.elements.len()
+        );
+        assert!(seed.generated.is_some(), "a seed with no generation stamp");
+        // Every bird passes the per-bird integrity gate — a corrupt line in a
+        // committed artifact would be silently dropped at load, so assert it
+        // here where it is visible.
+        for t in &seed.elements {
+            assert!(
+                propagation::live::tle::tle_bird_ok(t, SEED_NOW),
+                "seed bird {} ({}) fails the integrity gate",
+                t.name,
+                t.line1
+            );
+        }
+        // The canary every element set is checked for.
+        assert!(
+            seed.elements
+                .iter()
+                .any(|t| propagation::sat::norad_id(&t.line1) == Some(25_544)),
+            "no ISS in the seed"
+        );
+    }
+
+    /// THE LICENCE RIDES THE FILE. The population and statuses are SatNOGS
+    /// data, CC BY-SA 4.0, and this copy is redistributed inside every
+    /// installer — the most direct redistribution the project does. NOTICE
+    /// ("Redistributed SatNOGS material" §2) states that the seed is not
+    /// compiled into the executable precisely so the licence and credit
+    /// survive the file being copied out of the installer, which is only true
+    /// while the payload's own `attribution` object is there. `MirrorManifest`
+    /// deliberately ignores that field (the client gates on nothing in it), so
+    /// nothing else in this build would ever notice it going missing.
+    #[test]
+    fn the_committed_seed_carries_its_licence_and_credit() {
+        let raw: serde_json::Value = serde_json::from_str(SEED).expect("the seed is JSON");
+        let attr = &raw["attribution"];
+        assert_eq!(attr["license"].as_str(), Some(SEED_LICENSE));
+        let text = attr["text"].as_str().unwrap_or_default();
+        for credit in [
+            "SatNOGS DB",
+            "Libre Space Foundation",
+            "CelesTrak",
+            "T.S. Kelso",
+        ] {
+            assert!(
+                text.contains(credit),
+                "the bundled seed no longer credits {credit}: {text:?}"
+            );
+        }
+    }
+
+    /// The seed must be REACHABLE, not just committed: a bundled artifact the
+    /// loader cannot find is the DeepCW-on-Linux bug again, and it fails
+    /// silently. This exercises the crate-root-relative candidate — the one a
+    /// `tauri dev` run and `cargo test` both stand on.
+    #[test]
+    fn the_seed_resolves_and_loads_at_runtime() {
+        assert!(
+            tle_seed_path().is_some(),
+            "no seed found from {:?} — resources/tles/tles.json must ship",
+            std::env::current_dir()
+        );
+        let seed = tle_seed(SEED_NOW).expect("the seed must load");
+        assert!(seed.catalog.len() >= 300);
+        assert!(seed.elements.len() >= 300);
+    }
+
+    /// A FRESH INSTALL with no cache: the seed becomes the snapshot — and
+    /// `fetchedAt` stays 0 so it reads as due-for-refresh everywhere. That
+    /// zero is the whole safety property: a seed that stamped "now" would
+    /// suppress the first 6 h of refresh on every new install and, worse,
+    /// look current while it aged.
+    #[test]
+    fn a_fresh_install_serves_the_seed_and_stays_due_for_refresh() {
+        let seed = seed_manifest();
+        let (n_el, n_cat) = (seed.elements.len(), seed.catalog.len());
+        let snap = tle_seed_floor(None, seed, SEED_NOW);
+        assert_eq!(snap.source, "bundled");
+        assert_eq!(snap.fetched_at, 0, "a bundled snapshot was never fetched");
+        assert_eq!(snap.elements.len(), n_el);
+        assert_eq!(snap.catalog.len(), n_cat);
+        assert_eq!(snap.count, n_el);
+        assert!(snap.etag.is_none(), "there is no ETag for a file we shipped");
+        assert!(snap.imported.is_empty());
+        // …and the refresh decision agrees: no stamp = no cache age = fetch
+        // at the first opportunity, and the ratchet treats a bundled set as
+        // no baseline for either leg's population.
+        use propagation::live::tle::{tle_fetch_target, tle_ratchet_count, TleFetchTarget};
+        assert_eq!(
+            tle_fetch_target(None, 0, 0, 0, 0, SEED_NOW, false),
+            Some(TleFetchTarget::Mirror)
+        );
+        assert_eq!(
+            tle_ratchet_count(Some("bundled"), n_el, TleFetchTarget::Celestrak),
+            0
+        );
+    }
+
+    /// THE UPGRADE CASE the seed exists for: an install on 0.24.x holds a
+    /// 97-bird, catalog-LESS Celestrak cache, so every status surface is dark.
+    /// The seed must hand it the whole population — without touching one byte
+    /// of the cache's own provenance.
+    #[test]
+    fn a_catalog_less_cache_adopts_the_seed_catalog_and_keeps_its_own_provenance() {
+        let mut cache = snap_with(vec![bird(11_111, 26, 213.0)]);
+        cache.source = "celestrak".into();
+        cache.fetched_at = SEED_NOW - 3600;
+        cache.etag = Some("\"abc\"".into());
+        cache.generated = Some("2026-07-30T00:00:00.000Z".into());
+        let (was_fetched, was_source, was_etag, was_generated) = (
+            cache.fetched_at,
+            cache.source.clone(),
+            cache.etag.clone(),
+            cache.generated.clone(),
+        );
+
+        let seed = seed_manifest();
+        let n_cat = seed.catalog.len();
+        let snap = tle_seed_floor(Some(cache), seed, SEED_NOW);
+
+        assert_eq!(snap.catalog.len(), n_cat, "the dark statuses must light up");
+        assert!(
+            snap.elements.len() > 300,
+            "the seed's birds must join the cache's, not replace them"
+        );
+        assert!(
+            snap.elements
+                .iter()
+                .any(|t| propagation::sat::norad_id(&t.line1) == Some(11_111)),
+            "the cache's own bird was dropped"
+        );
+        assert_eq!(snap.count, snap.elements.len());
+        // THE mistake that would silently disable refresh discipline: the
+        // seed must never restamp a real fetch.
+        assert_eq!(snap.fetched_at, was_fetched, "the seed restamped fetchedAt");
+        assert_eq!(snap.source, was_source, "the seed rewrote the provenance");
+        assert_eq!(snap.etag, was_etag, "the seed cleared the conditional-GET ETag");
+        assert_eq!(snap.generated, was_generated);
+    }
+
+    /// The seed is a FLOOR, never a ceiling: a cache that already holds
+    /// fresher elements keeps them per bird, and a cache that already has a
+    /// catalog keeps that too (the seed's is by definition older).
+    #[test]
+    fn the_seed_never_downgrades_what_the_cache_already_has() {
+        // A cache whose ISS elements are NEWER than the seed's, plus a bird
+        // the seed does not carry at all, plus its own (one-row) catalog.
+        let iss_fresh = named_bird("ISS (ZARYA)", 25_544, 27, 200.0);
+        let mut cache = snap_with(vec![iss_fresh.clone(), bird(77_777, 26, 213.0)]);
+        cache.catalog = vec![catalog_entry(25_544, "re-entered")];
+
+        let snap = tle_seed_floor(Some(cache), seed_manifest(), SEED_NOW);
+
+        let iss = snap
+            .elements
+            .iter()
+            .find(|t| propagation::sat::norad_id(&t.line1) == Some(25_544))
+            .expect("ISS");
+        assert_eq!(
+            iss.line1, iss_fresh.line1,
+            "an OLDER seed element replaced a fresher cached one"
+        );
+        assert!(
+            snap.elements
+                .iter()
+                .any(|t| propagation::sat::norad_id(&t.line1) == Some(77_777)),
+            "a bird the seed does not know was dropped"
+        );
+        assert_eq!(snap.catalog.len(), 1, "the seed overwrote a live catalog");
+        assert_eq!(snap.catalog[0].status, "re-entered");
+        // No bird is drawn twice by the merge.
+        let mut norads: Vec<u32> = snap
+            .elements
+            .iter()
+            .filter_map(|t| propagation::sat::norad_id(&t.line1))
+            .collect();
+        let n = norads.len();
+        norads.sort_unstable();
+        norads.dedup();
+        assert_eq!(norads.len(), n, "the seed merge doubled a bird");
+    }
+
+    /// The other direction: where the SEED is fresher than the cache, the
+    /// seed's element set wins — the merge is newest-epoch, not
+    /// cache-always-wins (an install that has been offline for weeks would
+    /// otherwise keep serving elements older than the ones in its own
+    /// installer).
+    #[test]
+    fn a_fresher_seed_bird_replaces_a_stale_cached_one() {
+        let stale = named_bird("ISS (ZARYA)", 25_544, 25, 1.0); // 2025 day 1
+        let cache = snap_with(vec![stale.clone()]);
+        let snap = tle_seed_floor(Some(cache), seed_manifest(), SEED_NOW);
+        let iss = snap
+            .elements
+            .iter()
+            .find(|t| propagation::sat::norad_id(&t.line1) == Some(25_544))
+            .expect("ISS");
+        assert_ne!(iss.line1, stale.line1, "a year-old cached bird was kept");
     }
 
     /// A bird LEAVING the amateur population must keep a row that says why.

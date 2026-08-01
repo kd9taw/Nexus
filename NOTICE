@@ -441,11 +441,12 @@ operators and communities who provide them:
   transponders are active, for the Satellites feature. SatNOGS DB data is
   provided by the SatNOGS / Libre Space Foundation community under
   **CC BY-SA 4.0**. Data courtesy of the SatNOGS project and its contributors.
-  **SatNOGS material IS redistributed**, in three places — see *Redistributed
+  **SatNOGS material IS redistributed**, in four places — see *Redistributed
   SatNOGS material* below.
 - **CelesTrak** (<https://celestrak.org>, T.S. Kelso) — amateur-satellite
   TLE / GP orbital elements. Redistributed as part of the satellite catalog
-  mirror described below.
+  mirror described below, and in the seed snapshot of it that the installer
+  bundles.
 - **wspr.live** (the community mirror of wsprnet.org) — WSPR beacon reception
   evidence for the "getting out" check; free non-commercial terms. Data
   courtesy of wspr.live / wsprnet.org contributors.
@@ -490,14 +491,16 @@ bundled or linked** — the app merely queries them over the network — so thei
 terms do not affect the license of the distributed binary; they are
 acknowledged as a courtesy. The one share-alike source that IS redistributed is
 SatNOGS data, CC BY-SA 4.0. None of it is part of any shipped binary: it lives
-in test fixtures and in a data file the project publishes and every install
-downloads at runtime; see *Redistributed SatNOGS material* below.
+in test fixtures, in a data file the project publishes and every install
+downloads at runtime, and — since the seed snapshot — as a standalone copy of
+that same data file inside the installer, carrying its own attribution; see
+*Redistributed SatNOGS material* below.
 
 ## Redistributed SatNOGS material
 
 SatNOGS data (**CC BY-SA 4.0**, <https://creativecommons.org/licenses/by-sa/4.0/>,
 © the SatNOGS / Libre Space Foundation community) is redistributed by this
-project in three places. None is compiled into a binary; the licence and its
+project in four places. None is compiled into a binary; the licence and its
 attribution travel inside each artifact so that they survive it being copied
 out of this tree. Creative Commons designates GPL-3.0 a **BY-SA Compatible
 License**, so adapted BY-SA 4.0 material may be redistributed under GPLv3 with
@@ -523,7 +526,38 @@ Release notes carry it too. Our thanks to the SatNOGS community, whose
 curation is what makes a list of *amateur* satellites possible at all — no
 element source alone can say which birds carry a working amateur transmitter.
 
-### 2. Mirror-generator test fixtures
+### 2. The bundled seed snapshot (committed here, shipped inside the installer)
+
+`src-tauri/resources/tles/tles.json` is that same manifest, committed into this
+tree and bundled into every installer as an app resource (`resources/tles/`).
+It is there so a fresh install has the amateur satellite catalog on first
+launch — complete, and with no network — instead of a near-empty list until its
+first successful fetch; the app then refreshes from the published mirror
+exactly as it always has. `scripts/release-prep` re-runs the generator and
+re-cuts this file at release time, so a shipped snapshot is as current as the
+release that carries it.
+
+Being the same payload, it is an adaptation of the same three sources:
+
+- the **SatNOGS DB** (<https://db.satnogs.org>) — the satellite population,
+  names, statuses and transmitter records, **CC BY-SA 4.0**;
+- the **SatNOGS TLE API** — orbital elements, same terms; and
+- **CelesTrak** (<https://celestrak.org>, Dr. T.S. Kelso) — orbital elements
+  from the `amateur` and `satnogs` GP groups, used under CelesTrak's terms.
+
+Of the four, this is the copy that reaches an operator most directly: every
+installer carries one. It is therefore the clearest case for this section's
+rule — it is **not** compiled into the executable, and that is deliberate. It
+ships as a standalone JSON file carrying its own `attribution` object, written
+by `scripts/gen-tles.mjs`: `"license": "CC-BY-SA-4.0"` plus a `"text"` that
+credits the SatNOGS DB and its contributors, CelesTrak and Dr. T.S. Kelso, and
+the SatNOGS TLE API, and states that the derived catalog is offered under
+CC BY-SA 4.0. That field is present in the committed file and in every
+regeneration of it, so the licence and the credit travel with the data if the
+file is ever copied out of the installer. The adapted catalog is offered under
+**CC BY-SA 4.0**, as above.
+
+### 3. Mirror-generator test fixtures
 
 `scripts/fixtures/tles/satnogs-satellites.json`,
 `satnogs-transmitters.json` and `satnogs-tle.json` are small hand-picked
@@ -531,7 +565,7 @@ excerpts of the SatNOGS DB and TLE APIs (plus a few synthetic records), kept so
 the generator's derivation and sanity gates are tested without touching the
 network. **CC BY-SA 4.0**, as above.
 
-### 3. SatNOGS Network observations (Doppler validation)
+### 4. SatNOGS Network observations (Doppler validation)
 
 See *Test fixtures* below.
 

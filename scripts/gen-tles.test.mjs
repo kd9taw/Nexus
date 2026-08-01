@@ -271,6 +271,24 @@ test('the manifest reports per-source provenance and counts', () => {
   assert.equal(summed, manifest.count)
 })
 
+test('the licence and its credit travel INSIDE every payload', () => {
+  // NOT decoration: the population and statuses are BY-SA, and this payload
+  // is redistributed twice — as the published mirror asset, and as the seed
+  // snapshot bundled in every installer (NOTICE, "Redistributed SatNOGS
+  // material" §1 and §2). Both entries state that the licence survives the
+  // file being copied out of its artifact, which is only true while this
+  // field is written. Drop it and the obligation quietly goes unmet in a
+  // shipped installer.
+  const { manifest } = build()
+  assert.equal(manifest.attribution.license, 'CC-BY-SA-4.0')
+  for (const credit of ['SatNOGS DB', 'Libre Space Foundation', 'CelesTrak', 'T.S. Kelso']) {
+    assert.ok(
+      manifest.attribution.text.includes(credit),
+      `attribution text no longer credits ${credit}`,
+    )
+  }
+})
+
 test('per-bird status fields ride the catalog', () => {
   const { manifest } = build()
   const iss = manifest.catalog.find((b) => b.norad === 25544)

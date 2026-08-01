@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: the satellite catalog ships with the app
+
+A new install used to start with nothing and go looking for orbital elements. If the
+element mirror could not be reached, the fallback fetch brought back CelesTrak's
+`amateur` group — 97 objects, no status information — so the Satellites screen listed a
+fraction of the birds and could not say a word about any of them: nothing marked dead,
+re-entered or not yet launched, nothing marked alive but silent, no row explaining a
+bird it holds no elements for, and a starred bird that stopped working simply vanished
+from the list with the star still set.
+
+The installer now carries a snapshot of the full catalog — 430 birds, 367 of them with
+elements — so the Satellites screen is complete from the first launch, with no network
+at all. The snapshot is a floor, never a ceiling: it fills in what your copy is missing
+and never replaces newer elements with its own, never overwrites the statuses you
+already have, and never counts as a fetch, so Nexus still refreshes from the mirror at
+the first opportunity exactly as before. Upgrading from an earlier version keeps
+everything already cached and gains the catalog beside it. Elements from the snapshot
+age like any other: past 30 days they stop being used, because SGP4 accuracy is gone by
+then and a position would be a guess.
+
+Satellite population, names and status are derived from the SatNOGS DB (CC BY-SA 4.0);
+orbital elements are courtesy of CelesTrak and the SatNOGS TLE API.
+
 ### Fixed: SSTV receives pictures without being told to, and says what it is hearing
 
 You could hear a picture coming in on the speaker, watch it march up the waterfall, and

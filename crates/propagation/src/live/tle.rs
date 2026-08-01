@@ -17,6 +17,13 @@
 //!   never inside Celestrak's own 2 h floor, and a 403/404 hard-stops it for
 //!   24 h ([`TleFetchError::Blocked`]).
 //!
+//! A third source is not a fetch at all: the installer BUNDLES the mirror
+//! payload verbatim as a seed snapshot, so a fresh install has the whole
+//! population before its first network call (and while the mirror endpoint is
+//! still unpublished). It is the same manifest shape read through the same
+//! [`parse_mirror_manifest`]; the shell applies it as a floor under whatever
+//! cache it has ([`MirrorManifest`]).
+//!
 //! [`validate_tles`] is the gate every FETCHED set passes before it may
 //! replace a good cache (mirrored on the publishing side by
 //! `scripts/gen-tles.mjs`); operator FILE IMPORTS pass only the per-bird
@@ -216,14 +223,28 @@ pub enum TleMirrorFetch {
 /// publisher's own bookkeeping and the client re-derives everything it gates
 /// on. Unknown fields are ignored and every field defaults, so a schema-1
 /// manifest (no `catalog`) and a schema-2 one both load.
-#[derive(serde::Deserialize)]
-struct MirrorManifest {
+///
+/// Public because the SAME payload arrives two ways: over the wire from the
+/// mirror, and as the seed snapshot bundled in the installer (the shell reads
+/// it through [`parse_mirror_manifest`]). One shape, one parser — a second
+/// deserializer for the bundled copy is exactly how the two would drift.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct MirrorManifest {
     #[serde(default)]
-    generated: Option<String>,
+    pub generated: Option<String>,
     #[serde(default)]
-    elements: Vec<Tle>,
+    pub elements: Vec<Tle>,
     #[serde(default)]
-    catalog: Vec<SatCatalogEntry>,
+    pub catalog: Vec<SatCatalogEntry>,
+}
+
+/// Parse a mirror manifest from TEXT — the one entry point both the network
+/// leg and the bundled seed go through. Pure: no gate is applied here (an
+/// empty `elements` parses fine); the FETCH leg refuses an empty payload as
+/// [`TleFetchError::Empty`] and the seed leg applies the per-bird
+/// [`tle_bird_ok`] check, which are different questions.
+pub fn parse_mirror_manifest(json: &str) -> Result<MirrorManifest, serde_json::Error> {
+    serde_json::from_str(json)
 }
 
 /// Fetch the mirror's element set with the previous fetch's ETag (the
@@ -255,9 +276,11 @@ pub fn fetch_tles_mirror(etag: Option<&str>) -> Result<TleMirrorFetch, TleFetchE
         .get(reqwest::header::ETAG)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    let manifest: MirrorManifest = resp
-        .json()
+    let body = resp
+        .text()
         .map_err(|e| TleFetchError::Network(e.to_string()))?;
+    let manifest =
+        parse_mirror_manifest(&body).map_err(|e| TleFetchError::Network(e.to_string()))?;
     if manifest.elements.is_empty() {
         return Err(TleFetchError::Empty);
     }
@@ -744,7 +767,7 @@ BROKEN BIRD\r\n\
             {"norad":40967,"name":"FOX-1A","status":"alive","amateur":false,"decayed":false},
             {"norad":50988,"name":"TEVEL-1","status":"re-entered","amateur":true,"decayed":true}]
         }"#;
-        let m: MirrorManifest = serde_json::from_str(json).expect("schema 2 parses");
+        let m = parse_mirror_manifest(json).expect("schema 2 parses");
         assert_eq!(m.elements.len(), 1);
         assert_eq!(m.generated.as_deref(), Some("2026-08-01T18:00:00.000Z"));
         assert_eq!(m.catalog.len(), 4);
@@ -786,7 +809,7 @@ BROKEN BIRD\r\n\
           "elements":[{"name":"ISS (ZARYA)",
             "line1":"1 25544U 98067A   26212.89378683  .00008757  00000+0  16519-3 0  9996",
             "line2":"2 25544  51.6315  78.8506 0007211 358.5886   1.5081 15.49290909578688"}]}"#;
-        let m: MirrorManifest = serde_json::from_str(json).expect("schema 1 still parses");
+        let m = parse_mirror_manifest(json).expect("schema 1 still parses");
         assert_eq!(m.elements.len(), 1);
         assert!(m.catalog.is_empty(), "no catalog is empty, never an error");
     }

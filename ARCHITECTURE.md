@@ -65,5 +65,9 @@ audit gate for decoder re-entrancy.
 | On-air | maintainer with real rig | TX behavior, timing, interop — not automatable here |
 
 Release mechanics: `scripts/release-prep <version>` aligns the three version manifests
-(`src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `ui/package.json`) and stamps the
-CHANGELOG; tagging and publishing are maintainer-gated (see CLAUDE.md).
+(`src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `ui/package.json`), stamps the
+CHANGELOG, and re-cuts the bundled TLE seed snapshot
+(`src-tauri/resources/tles/tles.json` — the installer's offline satellite catalog, a
+committed snapshot with no other moment that refreshes it; best-effort, a stale seed
+warns and never fails the bump). Tagging and publishing are maintainer-gated (see
+CLAUDE.md).

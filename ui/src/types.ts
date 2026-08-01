@@ -348,8 +348,9 @@ export interface PcaView {
 export interface SatView {
   /** Age of the oldest element set (days) — badge stale when > 14. */
   tleAgeDays: number
-  /** When the serving element snapshot was FETCHED (unix; 0 = never/legacy)
-   * and where it came from ("mirror" | "celestrak" | "import" | "legacy") —
+  /** When the serving element snapshot was FETCHED (unix; 0 = never/legacy/
+   * bundled) and where it came from ("mirror" | "celestrak" | "import" |
+   * "legacy" | "bundled" — the installer's seed snapshot) —
    * pipe health, a different fact from tleAgeDays' physics quality. */
   tleFetchedAt: number
   tleSource: string

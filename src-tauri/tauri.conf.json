@@ -66,6 +66,7 @@
     "resources": {
       "resources/hamlib/*": "resources/hamlib/",
       "resources/deepcw/*": "resources/deepcw/",
+      "resources/tles/*": "resources/tles/",
       "../COPYING": "COPYING",
       "../NOTICE": "NOTICE"
     },
