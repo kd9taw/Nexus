@@ -442,6 +442,17 @@ pub fn score_slots(
 pub fn rank(spots: &[Heard], needs: &dyn OperatorNeeds, slots: &AwardSlots) -> Vec<NeedAlert> {
     let mut scored: Vec<NeedAlert> = spots
         .iter()
+        // Beacons and bulletins are ONE-WAY transmissions: audible, genuine propagation
+        // evidence, but never workable — so they are never a need. This gate lives here,
+        // not in a caller, because `rank` is the one layer that sees both the callsign and
+        // the frequency, and every evidence source (own decodes, PSK Reporter, cluster/RBN)
+        // plus the Pounce trigger all pass through it. Suppressing SCORING only: the spot
+        // still reaches the firehose and the band map, badged (see `crate::beacons`).
+        .filter(|s| match s.freq_mhz {
+            Some(f) => crate::beacons::classify(&s.call, f).is_none(),
+            // No frequency (band-level reception geometry) → nothing to match, score it.
+            None => true,
+        })
         .filter_map(|s| {
             // score() owns the award logic + mode class; attach the exact frequency
             // (when this Heard carried one) so click-to-work can QSY to the spot.
@@ -1520,6 +1531,84 @@ mod tests {
         assert_eq!(ranked.len(), 2, "duplicate (call,band) collapsed");
         assert_eq!(ranked[0].call, "3Y0J"); // highest priority first
         assert!(ranked[0].priority >= ranked[1].priority);
+    }
+
+    /// REGRESSION: the NCDXF/IARU beacon ladder must never be scored as a need.
+    ///
+    /// Eighteen beacons in eighteen DXCC entities share 14.100 on a three-minute cycle, so
+    /// before this suppression ANY evidence source pointed at that frequency offered 4U1UN
+    /// as an all-time-new entity, then VE8AT, then W6WX, forever. A beacon is a one-way
+    /// transmission: it can never be worked, so it is never a need.
+    ///
+    /// Pinned through `rank` rather than `score_slots` deliberately — `score_slots` is
+    /// frequency-agnostic award logic and cannot see a frequency, so `rank` is the only
+    /// layer that can make this call, and it is the layer every evidence source and the
+    /// Pounce trigger both go through.
+    #[test]
+    fn the_beacon_ladder_never_scores_a_need() {
+        let n = LogNeeds::new(); // an empty log: every entity is an ATNO
+        let z = HashSet::new();
+        let g = HashSet::new();
+        let s = HashSet::new();
+
+        // Every beacon, on every IBP band, must produce nothing.
+        for call in crate::beacons::NCDXF_CALLS {
+            for mhz in crate::beacons::NCDXF_MHZ {
+                let spot = heard_from_freq(call, mhz, "CW").expect("an IBP frequency is on a band");
+                let ranked = rank(&[spot], &n, &slots(&z, &g, &s));
+                assert!(
+                    ranked.is_empty(),
+                    "{call} on {mhz} scored {:?} — a beacon is not a contact",
+                    ranked.first().map(|a| &a.tags)
+                );
+            }
+        }
+    }
+
+    /// The other half of the beacon rule, and the one that keeps it honest: 4U1UN is the
+    /// United Nations HQ station as well as an IBP beacon site. Suppressing the CALLSIGN
+    /// would hide a genuine all-time-new entity, so only the FREQUENCY is suppressed.
+    #[test]
+    fn a_beacon_callsign_off_a_beacon_frequency_still_scores() {
+        let n = LogNeeds::new();
+        let (z, g, s) = (HashSet::new(), HashSet::new(), HashSet::new());
+        let spot = heard_from_freq("4U1UN", 14.025, "CW").unwrap();
+        let ranked = rank(&[spot], &n, &slots(&z, &g, &s));
+        assert_eq!(ranked.len(), 1, "the real UN station is a workable ATNO");
+        assert!(
+            ranked[0].tags.contains(&NeedTag::NewEntity),
+            "expected an ATNO, got {:?}",
+            ranked[0].tags
+        );
+    }
+
+    /// W1AW code practice and bulletins are one-way broadcasts too — a W1AW row on the
+    /// board is a QSY into a station that will never answer. Suppressed on its published
+    /// bulletin frequencies only, and only for W1AW itself: the voice frequencies sit in
+    /// busy phone segments where real stations operate.
+    #[test]
+    fn w1aw_bulletins_never_score_but_the_frequencies_stay_open() {
+        let n = LogNeeds::new();
+        let (z, g, s) = (HashSet::new(), HashSet::new(), HashSet::new());
+
+        let bulletin = heard_from_freq("W1AW", 14.0475, "CW").unwrap();
+        assert!(
+            rank(&[bulletin], &n, &slots(&z, &g, &s)).is_empty(),
+            "a W1AW bulletin is not a contact"
+        );
+
+        // Another station on the same frequency is an ordinary need (14.0475 is also the
+        // 40 m-adjacent digital neighbourhood — real stations live near these).
+        let real = heard_from_freq("DL1ABC", 14.0475, "CW").unwrap();
+        assert_eq!(
+            rank(&[real], &n, &slots(&z, &g, &s)).len(),
+            1,
+            "only W1AW itself is the bulletin — never the frequency alone"
+        );
+
+        // And W1AW away from its bulletin frequencies is a normal contact.
+        let portable = heard_from_freq("W1AW", 14.025, "CW").unwrap();
+        assert_eq!(rank(&[portable], &n, &slots(&z, &g, &s)).len(), 1);
     }
 
     #[test]

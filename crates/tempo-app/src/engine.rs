@@ -6982,8 +6982,9 @@ impl Engine {
             self.cw_audio.drain(0..drop);
         }
         // The AI CW decoder's longer ring (15 s — the model's window) fills only while
-        // the feature is on, so everyone else pays nothing.
-        if self.settings.ai_cw_enabled {
+        // the feature is on, so everyone else pays nothing. `ai_cw_active` (not the raw
+        // setting) so Unassisted mode also stops the ring filling.
+        if self.settings.ai_cw_active() {
             self.ai_cw_audio.extend_from_slice(samples);
             self.ai_cw_fed += samples.len() as u64;
             if self.ai_cw_audio.len() > AI_CW_WINDOW {
@@ -7043,13 +7044,16 @@ impl Engine {
     /// stitched transcript is the text. The classic streaming Goertzel decoder still runs
     /// quietly underneath — it supplies the WPM estimate (the model doesn't measure speed)
     /// and the transcript fallback when the AI is off or its model is missing.
+    ///
+    /// `ai_cw_active` folds in Unassisted mode, so an unassisted entry falls through to the
+    /// Goertzel transcript here: the operator keeps copying CW, without the model's help.
     pub fn cw_decode(&self) -> tempo_core::cw_decode::CwDecode {
-        let ai_live = self.settings.ai_cw_enabled
+        let ai_live = self.settings.ai_cw_active()
             && (!self.ai_cw_text.is_empty() || self.ai_cw_status.is_empty());
         tempo_core::cw_decode::CwDecode {
             text: if ai_live && !self.ai_cw_text.is_empty() {
                 self.ai_cw_text.clone()
-            } else if self.settings.ai_cw_enabled {
+            } else if self.settings.ai_cw_active() {
                 String::new() // AI on but warming up / no copy yet — show idle, not stale Goertzel
             } else {
                 self.cw_stream.transcript().to_string()
@@ -7089,6 +7093,25 @@ impl Engine {
     pub fn set_ai_cw_enabled(&mut self, on: bool) {
         self.settings.ai_cw_enabled = on;
         if !on {
+            self.ai_cw_text.clear();
+            self.ai_cw_status.clear();
+            self.ai_cw_fed = 0;
+        }
+    }
+
+    /// Declare (or end) an UNASSISTED contest entry — the one switch that suppresses every
+    /// QSO-finding assistance source (see [`crate::settings::Settings::unassisted_mode`]).
+    ///
+    /// Note what this does NOT do: it never touches `ai_cw_enabled` and never touches the
+    /// cluster settings. Those stay exactly as the operator left them and are overridden while
+    /// this is on, so ending Unassisted mode restores their station with nothing to restore.
+    ///
+    /// Declaring an unassisted entry drops any AI transcript already on screen — leaving the
+    /// model's copy visible after the model has been switched off would be stale text
+    /// presented as live decode.
+    pub fn set_unassisted_mode(&mut self, on: bool) {
+        self.settings.unassisted_mode = on;
+        if on {
             self.ai_cw_text.clear();
             self.ai_cw_status.clear();
             self.ai_cw_fed = 0;

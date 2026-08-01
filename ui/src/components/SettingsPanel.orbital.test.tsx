@@ -35,6 +35,7 @@ const api = vi.hoisted(() => {
     'getFccStatesStatus', 'getTleStatus', 'fetchTlesNow', 'importTles', 'discoverFlex',
     'civDiagnosticLog', 'civDiagnosticStatus', 'allTxtLocation', 'revealAllTxt', 'appVersion',
     'getSpectrumRow', 'setFrequency', 'getWatchlist', 'setWatchlist', 'openPanelWindow',
+    'getAssistanceJournal', 'setUnassistedMode',
   ]
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
   const get = (name: string) => {

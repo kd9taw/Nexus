@@ -89,6 +89,21 @@ type SharedWxHistory = Arc<Mutex<propagation::SpaceWxHistory>>;
 /// this stop flag exists only so `cluster::run`'s signature is satisfied.
 static CLUSTER_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Mirror of `settings.unassisted_mode` for the cluster/RBN socket threads.
+///
+/// Those threads parse spots on their own thread and must not take the engine lock once per
+/// packet, so the flag is mirrored here and kept in step by [`set_unassisted_mode`] and by
+/// every settings save/load. The feed callbacks read it to DROP each inbound spot at the door,
+/// which is the strong guarantee the switch needs: in Unassisted mode a cluster spot never
+/// enters the buffer at all, so nothing downstream — Needed board, band map, spot firehose,
+/// Pounce — can surface one, and no socket teardown has to race the operator.
+static UNASSISTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Is the operator running an UNASSISTED entry right now? See [`UNASSISTED`].
+fn unassisted() -> bool {
+    UNASSISTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Handoff to the Pounce detector, set once at startup. The cluster feed callbacks `offer()` each
 /// inbound spot here; that call NEVER blocks (a full queue drops), because the caller is the
 /// thread reading the cluster socket. All the expensive work — the worked-sets snapshot, the
@@ -273,7 +288,8 @@ fn is_real_call(call: &str) -> bool {
 /// a per-host latch ([`HUMAN_NODES_STARTED`]) so a node added in Settings connects on the next
 /// save with no restart, and an RBN endpoint that sneaks into the list is skipped (no
 /// double-connect). No-op per feed unless `mycall` is a [`is_real_call`]; the caller owns the
-/// `cluster_enabled` gate. All push into the one shared `spots` buffer the need-matcher reads.
+/// `Settings::cluster_active` gate (which folds in Unassisted mode). All push into the one
+/// shared `spots` buffer the need-matcher reads.
 fn start_cluster_feeds(
     spots: &SharedSpots,
     cluster_hosts: &[String],
@@ -328,6 +344,14 @@ fn start_cluster_feed(
             &host,
             &call,
             |sp| {
+                // UNASSISTED mode: drop the spot at the door, before the health stamp, the
+                // buffer and Pounce. Checked here rather than only at the start gate so a
+                // mid-event flip takes effect on the very next packet without waiting for a
+                // socket teardown. The feed intentionally stays connected and simply
+                // discards — reconnecting later is what would cost the operator spots.
+                if unassisted() {
+                    return;
+                }
                 hp.cluster_last
                     .store(now_unix(), std::sync::atomic::Ordering::Relaxed);
                 if let Ok(mut b) = buf.lock() {
@@ -595,6 +619,10 @@ fn start_human_cluster_feed(spots: &SharedSpots, host: &str, mycall: &str, healt
             &host,
             &call,
             |sp| {
+                // UNASSISTED mode: drop at the door — see the RBN callback above.
+                if unassisted() {
+                    return;
+                }
                 let ts = now_unix();
                 hp.cluster_last
                     .store(ts, std::sync::atomic::Ordering::Relaxed);
@@ -1499,6 +1527,107 @@ fn census_path() -> PathBuf {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
         .join("grid_census.json")
+}
+
+// ---------------------------------------------------------------------------------------------
+// The assistance journal — what QSO-finding assistance was running, and when
+// ---------------------------------------------------------------------------------------------
+
+/// One assistance source and whether it was EFFECTIVELY running at the journaled instant.
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssistanceSourceState {
+    name: String,
+    active: bool,
+}
+
+/// One journaled change in the operator's assistance posture.
+///
+/// The point of this record is EVIDENCE: a contester who enters unassisted may be asked what
+/// was running, and "I turned it off, honest" is not an answer. Each row is self-contained —
+/// it names every source and its state at that moment, so a row proves its own claim without
+/// the reader having to know which sources this build had.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssistanceEvent {
+    ts_unix: i64,
+    /// Whether Unassisted mode was declared at this instant.
+    unassisted: bool,
+    /// Every assistance source and whether it was effectively running.
+    sources: Vec<AssistanceSourceState>,
+    /// What happened ("UNASSISTED entry declared by the operator", "Nexus started", …).
+    note: String,
+}
+
+/// Persistent assistance journal, oldest first on disk. Sibling of settings.json, so it
+/// follows the active radio profile like every other journal beside it.
+const ASSISTANCE_JOURNAL_CAP: usize = 500;
+static ASSISTANCE_JOURNAL: Mutex<Vec<AssistanceEvent>> = Mutex::new(Vec::new());
+
+fn assistance_journal_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("assistance_journal.json")
+}
+
+/// Has the assistance posture actually MOVED since the newest journaled row? The whole
+/// decision behind `journal_assistance`'s dedupe, split out so it can be tested without
+/// touching the config directory. An empty log always counts as changed (the first row is
+/// always worth writing).
+fn assistance_posture_changed(
+    log: &[AssistanceEvent],
+    unassisted: bool,
+    sources: &[AssistanceSourceState],
+) -> bool {
+    !log.last()
+        .is_some_and(|p| p.unassisted == unassisted && p.sources == sources)
+}
+
+/// Record the CURRENT assistance posture. Atomic tmp+rename, best-effort — a failed write
+/// never disturbs the running app (same posture as the openings log below).
+///
+/// Unless `force`, a row identical in STATE to the newest one is skipped: `set_settings` runs
+/// on every save and would otherwise bury the two rows that matter under hundreds of
+/// duplicates. `force` is for the events that are facts in themselves even when the state did
+/// not move — the operator's own toggle, and app start (so a restart mid-contest leaves no gap
+/// where the record is silent about what was running).
+fn journal_assistance(settings: &tempo_app::settings::Settings, note: &str, force: bool) {
+    let sources: Vec<AssistanceSourceState> = settings
+        .assistance_sources()
+        .iter()
+        .map(|(name, active)| AssistanceSourceState {
+            name: (*name).to_string(),
+            active: *active,
+        })
+        .collect();
+    let mut log = ASSISTANCE_JOURNAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !force && !assistance_posture_changed(&log, settings.unassisted_mode, &sources) {
+        return;
+    }
+    log.push(AssistanceEvent {
+        ts_unix: now_unix(),
+        unassisted: settings.unassisted_mode,
+        sources,
+        note: note.to_string(),
+    });
+    if log.len() > ASSISTANCE_JOURNAL_CAP {
+        let excess = log.len() - ASSISTANCE_JOURNAL_CAP;
+        log.drain(..excess);
+    }
+    if let Ok(text) = serde_json::to_string(&*log) {
+        let path = assistance_journal_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
 }
 
 /// Persistent openings log — completed opening episodes (6m/2m tropo/Es/aurora …),
@@ -5458,7 +5587,16 @@ fn set_settings(
     // Integrated rotator daemon follows the settings (spawn/respawn/kill).
     sync_rotctld(&settings);
     // Capture the feed config before `settings` moves into the engine.
-    let cluster_enabled = settings.cluster_enabled;
+    // `cluster_active()`, not the raw setting: Unassisted mode must also stop the
+    // cluster/RBN feeds from STARTING, not just discard what they deliver.
+    let cluster_active = settings.cluster_active();
+    // Keep the feed threads' mirror in step with whatever was just saved, and record the
+    // posture. `force: false` — Save runs constantly, so only real changes are journaled.
+    UNASSISTED.store(
+        settings.unassisted_mode,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    journal_assistance(&settings, "settings saved", false);
     let cluster_hosts = settings.cluster_hosts.clone();
     let mycall = settings.mycall.clone();
     let mygrid = settings.mygrid.clone();
@@ -5544,7 +5682,7 @@ fn set_settings(
         return Ok(snap);
     }
 
-    if cluster_enabled {
+    if cluster_active {
         start_cluster_feeds(spots.inner(), &cluster_hosts, &mycall, health.inner());
     }
     // Reconnects only when the server, filter, callsign or uplink actually changed — the login
@@ -5626,18 +5764,20 @@ fn restart_live_feeds(
         }
         PSKR_STARTED.store(false, SeqCst);
         PSKR_REGION_STARTED.store(false, SeqCst);
-        let (cluster_enabled, cluster_hosts, mycall, mygrid, opening_regional) = {
+        let (cluster_active, cluster_hosts, mycall, mygrid, opening_regional) = {
             let eng = engine_lock(&engine);
             let st = eng.settings();
             (
-                st.cluster_enabled,
+                // `cluster_active` folds in Unassisted mode: a re-arm during an
+                // unassisted entry must not bring the cluster back up.
+                st.cluster_active(),
                 st.cluster_hosts.clone(),
                 st.mycall.clone(),
                 st.mygrid.clone(),
                 st.opening_regional,
             )
         };
-        if cluster_enabled {
+        if cluster_active {
             start_cluster_feeds(&spots, &cluster_hosts, &mycall, &health);
         }
         start_pskr_feed(&live_paths, &mycall, &health);
@@ -6302,7 +6442,60 @@ fn set_ai_cw(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, St
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist ai-cw toggle: {e}");
     }
+    // The AI decoder is one of the assistance sources, so its state belongs in the record.
+    journal_assistance(eng.settings(), "AI CW decoder toggled", false);
     Ok(eng.snapshot())
+}
+
+/// Declare (or end) an UNASSISTED contest entry — the single switch that suppresses every
+/// QSO-finding assistance source at once, and journals the change.
+///
+/// Deliberately does NOT rewrite the operator's own `ai_cw_enabled` / `cluster_enabled` /
+/// `pskreporter` settings; those are overridden while this is on and restored the moment it
+/// goes off (see `Settings::unassisted_mode`).
+///
+/// Turning it ON also DRAINS the spot buffer, so spots that arrived before the switch cannot
+/// keep scoring — the read gates would hide them anyway, but an operator who has declared an
+/// unassisted entry should not be carrying a pile of cluster spots in memory.
+/// `(async)` per the UI-thread hang guard: this takes the engine mutex, which the radio loop
+/// holds across blocking CAT I/O, so a bare `#[tauri::command]` would park the Windows message
+/// pump behind a stalled rig (see `no_engine_locking_command_runs_on_the_ui_thread`).
+#[tauri::command(async)]
+fn set_unassisted_mode(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    on: bool,
+) -> Result<AppSnapshot, String> {
+    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    eng.set_unassisted_mode(on);
+    // Mirror to the atomic the socket threads read BEFORE anything else observes the change,
+    // so no packet slips through between the setting and the gate.
+    UNASSISTED.store(on, std::sync::atomic::Ordering::Relaxed);
+    if on {
+        // Same reset the callsign-rename drain uses (`restart_live_feeds`) — the buffer is
+        // built with `default()` at startup, so this is an exact re-init, not a cap change.
+        if let Ok(mut b) = spots.lock() {
+            *b = tempo_net::cluster::SpotBuffer::default();
+        }
+    }
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist unassisted-mode toggle: {e}");
+    }
+    let note = if on {
+        "UNASSISTED entry declared by the operator"
+    } else {
+        "Unassisted mode ended by the operator"
+    };
+    journal_assistance(eng.settings(), note, true);
+    conn_log("Unassisted", "info", note);
+    Ok(eng.snapshot())
+}
+
+/// The assistance journal, newest first — the operator's evidence of what was running.
+#[tauri::command]
+fn get_assistance_journal() -> Vec<AssistanceEvent> {
+    let log = ASSISTANCE_JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
+    log.iter().rev().cloned().collect()
 }
 
 /// Clear the streaming CW decoder's accumulated transcript (the cockpit's Clear button).
@@ -8629,6 +8822,12 @@ struct SpotRow {
     /// panel's "my privileges" filter — computed here so the legal band data has ONE
     /// source of truth (the same tables as the TX lockout).
     licensed: bool,
+    /// Set when this spot is a ONE-WAY transmission — an NCDXF/IARU beacon slot or a W1AW
+    /// bulletin — and therefore not workable. The row is still shown (an audible beacon is
+    /// real propagation evidence); the UI badges it and never paints a need colour on it.
+    /// The matching score suppression lives in `propagation::needalert::rank`, so this field
+    /// is a DISPLAY concern only. `None` for an ordinary spot.
+    beacon: Option<propagation::beacons::BeaconKind>,
 }
 
 /// Raw spot firehose for the Spots panel — every recent spot (CW/Phone/Digital, all
@@ -8637,6 +8836,13 @@ struct SpotRow {
 #[tauri::command(async)]
 fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) -> Vec<SpotRow> {
     use tempo_app::settings::{LicenseClass, OperatingMode};
+    // UNASSISTED mode: no spot may be DISPLAYED either. Ingestion is already gated at the
+    // feed callbacks, so the buffer should be empty — this is the belt-and-braces read gate,
+    // so the guarantee never depends on a buffer clear having succeeded, and any spot
+    // received before the switch flipped is invisible immediately.
+    if unassisted() {
+        return Vec::new();
+    }
     let now = now_unix();
     let recent = match spots.lock() {
         Ok(buf) => buf.recent_within(
@@ -8724,6 +8930,7 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
                 age_secs,
                 comment: cs.comment.clone(),
                 licensed,
+                beacon: propagation::beacons::classify(&cs.dx_call, freq),
             }
         })
         .collect();
@@ -8813,16 +9020,27 @@ async fn get_need_alerts(
     //      likely work it even if you aren't hearing it yet.
     let now = now_unix() as i64;
     let me_ll = propagation::geo::maidenhead_to_latlon(snap.mygrid.trim());
-    if let Ok(buf) = live_paths.lock() {
-        let recent = buf.recent(now, 900);
-        if let Some(me) = me_ll {
-            heard.extend(propagation::heard_near_me(&recent, me));
+    // UNASSISTED mode drops both PSK Reporter evidence arms. ARRL's glossary names
+    // "PSKReporter" in Spotting/QSO Finding Assistance, so an unassisted entry cannot use
+    // other people's reception reports to find stations. The operator's own OUTBOUND uploads
+    // keep running: the same glossary says "Generating spotting information for use by other
+    // stations is not considered to be spotting assistance."
+    //
+    // Own-radio decodes (assembled above) are NOT assistance under either ruleset — they are
+    // the operator's own receiver — so they stay, and remain the whole Needed board in an
+    // unassisted entry.
+    if !unassisted() {
+        if let Ok(buf) = live_paths.lock() {
+            let recent = buf.recent(now, 900);
+            if let Some(me) = me_ll {
+                heard.extend(propagation::heard_near_me(&recent, me));
+            }
+            heard.extend(propagation::workable_by_getting_out(&recent, &snap.mycall));
         }
-        heard.extend(propagation::workable_by_getting_out(&recent, &snap.mycall));
-    }
-    if let Some(me) = me_ll {
-        if let Ok(buf) = region_paths.0.lock() {
-            heard.extend(propagation::heard_near_me(&buf.recent(now, 900), me));
+        if let Some(me) = me_ll {
+            if let Ok(buf) = region_paths.0.lock() {
+                heard.extend(propagation::heard_near_me(&buf.recent(now, 900), me));
+            }
         }
     }
     // Privilege-gate the DIGITAL evidence paths (own decodes + PSKR near-region / getting-out)
@@ -8853,7 +9071,12 @@ async fn get_need_alerts(
     // rows unless those features are on, so a digital board gains only HF digital. Both the
     // PSKR paths (gated just above) and these cluster spots (gated per-spot below) honor
     // tx_allowed, so a restricted class never sees an un-workable row.
-    if let Ok(buf) = spots.lock() {
+    //
+    // UNASSISTED mode skips this whole arm: cluster and RBN spots are callsign-and-frequency
+    // identification from other people's receivers, which is the assistance both CQ WW and
+    // ARRL name first. Ingestion is already gated at the feed callbacks, so this is the
+    // read-side guarantee (see `get_all_spots`).
+    if let Some(buf) = spots.lock().ok().filter(|_| !unassisted()) {
         let recent = buf.recent_within(
             std::time::Instant::now(),
             std::time::Duration::from_secs(900),
@@ -12378,7 +12601,15 @@ pub fn run() {
     // below (best-effort — a failed UDP bind falls back to native).
     let persisted_source = settings.source;
     // Cluster/RBN feed config (captured before `settings` moves into the engine).
-    let cluster_enabled = settings.cluster_enabled;
+    // `cluster_active()` folds in Unassisted mode, so an unassisted entry connects nothing.
+    let cluster_active = settings.cluster_active();
+    // Mirror the persisted flag to the atomic the feed callbacks read BEFORE any feed can be
+    // spawned, so the "atomic always agrees with settings" invariant holds from the earliest
+    // possible moment rather than depending on startup ordering.
+    UNASSISTED.store(
+        settings.unassisted_mode,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let cluster_hosts = settings.cluster_hosts.clone();
     let cluster_call = settings.mycall.clone();
     let region_grid = settings.mygrid.clone();
@@ -12423,7 +12654,7 @@ pub fn run() {
         propagation::REGION_SPOT_CAP,
     ))));
     let health: SharedHealth = Arc::new(FeedHealthState::default());
-    if cluster_enabled {
+    if cluster_active {
         start_cluster_feeds(&spots, &cluster_hosts, &cluster_call, &health);
     }
     start_pskr_feed(&live_paths, &cluster_call, &health);
@@ -12515,6 +12746,16 @@ pub fn run() {
                 *OPENINGS_LOG.lock().unwrap_or_else(|e| e.into_inner()) = eps;
             }
         }
+        // Assistance journal: restore the record, then stamp the launch. Stamping
+        // unconditionally (force) is deliberate — a restart mid-contest must leave no window
+        // the record is silent about what was running. (The atomic was mirrored earlier, before
+        // any feed could spawn.)
+        if let Ok(text) = std::fs::read_to_string(assistance_journal_path()) {
+            if let Ok(rows) = serde_json::from_str::<Vec<AssistanceEvent>>(&text) {
+                *ASSISTANCE_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) = rows;
+            }
+        }
+        journal_assistance(eng.settings(), "Nexus started", true);
         eng.set_grid_rarity_resolver(propagation::gridrarity::effective_tier_u8);
         // FCC callsign→state index: load the cached copy into the resolver, then auto-refresh in
         // the background when it's missing or > 7 days old (the FCC file refreshes weekly). The
@@ -12995,6 +13236,7 @@ pub fn run() {
             read_rotator,
             cw_decode,
             set_ai_cw,
+            set_unassisted_mode,
             cw_clear,
             preview_cw,
             cw_skim,
@@ -13033,6 +13275,7 @@ pub fn run() {
             work_spot,
             get_connection_log,
             get_openings_log,
+            get_assistance_journal,
             get_credentials_status,
             send_cw,
             set_cw_peer_info,
@@ -13364,11 +13607,12 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        b64_decode, b64_encode, dxped_page_url, install_block_reason, is_complete_lotw_body,
-        iss_pass_from_tles, load_tle_snapshot_from, parse_sstv_mode, profile_dir_name,
-        rect_lands_on_work_area, resolve_bird, resolve_birds, sanitize_profile, tle_absorb_foreign,
-        tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
-        tle_record_aliases, write_json_atomic, TleFlightGuard, TleSnapshot, TLE_FETCHING,
+        assistance_posture_changed, b64_decode, b64_encode, dxped_page_url, install_block_reason,
+        is_complete_lotw_body, iss_pass_from_tles, load_tle_snapshot_from, parse_sstv_mode,
+        profile_dir_name, rect_lands_on_work_area, resolve_bird, resolve_birds, sanitize_profile,
+        tle_absorb_foreign, tle_act_gate, tle_extend_aliases, tle_merge_imports,
+        tle_merged_elements, tle_record_aliases, write_json_atomic, AssistanceEvent,
+        AssistanceSourceState, TleFlightGuard, TleSnapshot, TLE_FETCHING,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -13542,6 +13786,48 @@ mod tests {
         let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
         assert!(!tmp.exists(), "the rename must consume the temp file");
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The source list exactly as `Settings::assistance_sources` produces it.
+    fn posture(ai: bool, cluster: bool, pskr: bool) -> Vec<AssistanceSourceState> {
+        [
+            ("AI CW decoder", ai),
+            ("DX cluster / RBN", cluster),
+            ("PSK Reporter needs", pskr),
+        ]
+        .into_iter()
+        .map(|(name, active)| AssistanceSourceState {
+            name: name.into(),
+            active,
+        })
+        .collect()
+    }
+
+    /// The assistance journal is EVIDENCE, and evidence that buries its own signal is useless:
+    /// `set_settings` runs on every Save, so an unfiltered append would put hundreds of
+    /// identical rows between the operator and the two rows that matter.
+    #[test]
+    fn the_assistance_journal_records_changes_not_every_save() {
+        let assisted = posture(true, true, true);
+        let silent = posture(false, false, false);
+
+        // First row always writes — an empty record has nothing to compare against.
+        assert!(assistance_posture_changed(&[], false, &assisted));
+
+        let log = vec![AssistanceEvent {
+            ts_unix: 1000,
+            unassisted: false,
+            sources: assisted.clone(),
+            note: "Nexus started".into(),
+        }];
+        // A Save that changed nothing must not append.
+        assert!(!assistance_posture_changed(&log, false, &assisted));
+        // Declaring an unassisted entry must.
+        assert!(assistance_posture_changed(&log, true, &silent));
+        // So must ONE source changing while the unassisted flag stays put (e.g. the operator
+        // turning the AI decoder off by hand) — otherwise the record would claim the decoder
+        // was running when it was not.
+        assert!(assistance_posture_changed(&log, false, &posture(false, true, true)));
     }
 
     /// THE SELF-UPDATE SAFETY GATE. Installing restarts the app, and this app keys a

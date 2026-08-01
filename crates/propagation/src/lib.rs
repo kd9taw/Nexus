@@ -18,6 +18,7 @@
 pub mod achievements;
 pub mod advisor;
 pub mod awards;
+pub mod beacons;
 pub mod chirp;
 pub mod dxcc;
 pub mod dxped;

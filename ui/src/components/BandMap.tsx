@@ -3,7 +3,7 @@ import type { SpotRow, NeedTag } from '../types'
 import { bandRangeForLabel } from '../band'
 import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
-import { SpotLegend, TYPE_BADGE } from './SpotLegend'
+import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
 
 /** Fallback track height (px) before the real one is measured — the track flex-fills its window. */
 const TRACK_H = 460
@@ -265,7 +265,12 @@ export function BandMap({
         )}
         {rows.map(({ s, freqY, labelY }, i) => {
           const cu = s.call.toUpperCase()
-          const need = needByCall?.get(cu) ?? null
+          // A beacon/bulletin row never carries a need colour. `needByCall` is keyed by CALL,
+          // so without this a call that is BOTH a beacon site and a real station (4U1UN is
+          // the IBP beacon and the UN HQ station) would paint its beacon row with the colour
+          // earned by its real one. The backend already refuses to score the beacon itself.
+          const beacon = s.beacon ? BEACON_BADGE[s.beacon] : null
+          const need = beacon ? null : (needByCall?.get(cu) ?? null)
           const chip = need ? NEED_CHIP[need] : null
           const type = typeByCall?.get(cu)
           const badge = type ? TYPE_BADGE[type] : null
@@ -275,6 +280,7 @@ export function BandMap({
             s.call,
             `${s.freqMhz.toFixed(3)} MHz`,
             ageLabel(s.ageSecs),
+            beacon?.word,
             chip?.label,
             badge?.word,
             s.spotter && `de ${s.spotter}`,
@@ -294,6 +300,7 @@ export function BandMap({
                 title={`${detail} — click to work`}
                 onClick={() => onWorkSpot(s)}
               >
+                {beacon && <span className={`spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>}
                 {badge && <span className={`spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
                 <span className="bandmap-call mono">{s.call}</span>
               </button>

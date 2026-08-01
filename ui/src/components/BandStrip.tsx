@@ -3,7 +3,7 @@ import type { SpotRow, NeedTag } from '../types'
 import { bandRangeForLabel, cwRangeForLabel } from '../band'
 import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
-import { SpotLegend, TYPE_BADGE } from './SpotLegend'
+import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
 
 interface Props {
   /** Current operating band label (e.g. "20m"). */
@@ -138,14 +138,19 @@ export function BandStrip({
           // Fade older spots so density + freshness read at a glance (fresh ≈ opaque, ~30 min → faint).
           const opacity = s.ageSecs < 0 ? 0.9 : Math.max(0.35, 1 - s.ageSecs / 1800)
           const cu = s.call.toUpperCase()
+          // A one-way beacon/bulletin row never takes a need colour — see the note in BandMap:
+          // needByCall is keyed by call, so a call that is both a beacon site and a real
+          // station would otherwise colour its beacon row too.
+          const beacon = s.beacon ? BEACON_BADGE[s.beacon] : null
           // Colour the tick by need tier (why it's worth working) — parity with the band map.
-          const need = needByCall?.get(cu)
+          const need = beacon ? undefined : needByCall?.get(cu)
           const needCls = need ? ` is-need need-${NEED_CHIP[need].cls}` : ''
           // Flag the activity type (POTA/SOTA/DXped) independent of the colour.
           const type = typeByCall?.get(cu)
           const badge = type ? TYPE_BADGE[type] : null
           const detail = [
             s.call,
+            beacon?.word,
             need && NEED_CHIP[need].label,
             badge?.word,
             `${s.freqMhz.toFixed(3)} MHz`,
@@ -164,6 +169,9 @@ export function BandStrip({
               title={`${detail} — click to work`}
               onClick={() => onWorkSpot(s)}
             >
+              {beacon && (
+                <span className={`bandstrip-type spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>
+              )}
               {badge && <span className={`bandstrip-type spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
               <span className={`bandstrip-tick${needCls}`} />
               <span className="bandstrip-spot-call mono">{s.call}</span>

@@ -261,7 +261,10 @@ describe('CwCockpit pane-grid shell', () => {
     expect(cols[1].querySelector('[data-pane="bandActivity"]')).not.toBeNull()
     expect(cols[1].querySelector('[data-pane="copilot"]')).not.toBeNull()
     expect(cols[2].querySelector('[data-pane="log"]')).not.toBeNull()
-    expect(cols[2].querySelectorAll('.pane-frame').length).toBe(1)
+    // The log column is the log form plus the always-present contest-category footer, and
+    // nothing else — an exact census, so a stray pane landing here still fails.
+    expect(cols[2].querySelector('[data-pane="assist"]')).not.toBeNull()
+    expect(cols[2].querySelectorAll('.pane-frame').length).toBe(2)
     // Panes are ROLE-typed: DECODE is the fill feed (weight 3 — its text genuinely uses
     // height); SENT and every control strip are content-fit so they can never hoard a
     // column (fix round 2, 2026-07-31).
@@ -271,6 +274,30 @@ describe('CwCockpit pane-grid shell', () => {
     expect(cwDecode.style.flex).toContain('3 1 0')
     expect((document.querySelector('[data-pane="sent"]') as HTMLElement).dataset.fit).toBe('content')
     expect((document.querySelector('[data-pane="dsp"]') as HTMLElement).dataset.fit).toBe('content')
+  })
+
+  // ── THE CONTEST-CATEGORY FOOTER IS ALWAYS PRESENT (feat/unassisted, merged 2026-08-01) ──
+  // The whole value of this line is that an operator entering a contest does not have to go
+  // looking for it, so it must survive the ⊞ menu. The pre-overhaul branch got that by making
+  // it a bare shell child, which the census above now forbids; the sanctioned equivalent is a
+  // frame with no id in CW_PANEL_IDS and no onRemove (CockpitPaneFrame's `onRemove` doc).
+  it('the contest-category note renders through a frame in the region and cannot be ⊞-removed', async () => {
+    // Every removable CW pane hidden — the note must still be there.
+    await renderCockpit({
+      panels: fakePanels(['decode', 'sent', 'copilot', 'bandActivity', 'dsp', 'rxdsp']),
+    })
+    const pane = document.querySelector('[data-pane="assist"]')
+    expect(pane, 'the contest-category note vanished when every pane was removed').not.toBeNull()
+    expect(pane!.classList.contains('pane-frame')).toBe(true)
+    expect(pane!.closest('.cockpit-panes'), 'the note renders outside the region').not.toBeNull()
+    // A one-line status strip cannot use surplus height — content-fit, never a grower.
+    expect((pane as HTMLElement).dataset.fit).toBe('content')
+    // It carries no hide button, which is what "no id in the vocabulary" means structurally.
+    expect(pane!.querySelector('.cockpit-popout')).toBeNull()
+    // And it is the note, not an empty titled box.
+    expect(pane!.querySelector('.assist-note')).not.toBeNull()
+    // It is NOT TX chrome, so it must not have drifted into the pinned dock.
+    expect(pane!.closest('.cockpit-txdock')).toBeNull()
   })
 
   // ── TIER FLIPS MUST NOT REMOUNT THE LOG FORM (fix-round D1, 2026-07-31) ────────────
