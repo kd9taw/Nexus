@@ -3252,8 +3252,7 @@ impl RadioLoop {
                                 }
                                 Ok(tx_vfo) => {
                                     // The operator-facing TX-VFO name for notes.
-                                    let vfo_name =
-                                        if tx_vfo == "Sub" { "Sub" } else { "VFO B" };
+                                    let vfo_name = if tx_vfo == "Sub" { "Sub" } else { "VFO B" };
                                     let ok = rig.set_split(true, tx_vfo).is_ok()
                                         && rig.set_split_freq(tx_hz).is_ok();
                                     retune_note = Some(if ok {
@@ -3275,8 +3274,7 @@ impl RadioLoop {
                                             let mut eng = engine_lock(engine);
                                             eng.split_rejected(tx_mhz);
                                         }
-                                        "rig rejected split — work the pile-up manually"
-                                            .to_string()
+                                        "rig rejected split — work the pile-up manually".to_string()
                                     });
                                     // The TX VFO's MODE, while a satellite pass holds it. On
                                     // a linear INVERTING transponder the sidebands swap —

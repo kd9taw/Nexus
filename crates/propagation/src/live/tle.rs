@@ -32,8 +32,7 @@ use crate::sat::{self, Tle};
 
 const TLE_URL: &str = "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle";
 const MIRROR_URL: &str = "https://hamradiotools.io/nexus/tles.json";
-const UA: &str =
-    "nexus-propagation/0.1 (+https://hamradiotools.io; ham radio satellite tracking)";
+const UA: &str = "nexus-propagation/0.1 (+https://hamradiotools.io; ham radio satellite tracking)";
 
 /// Refresh TTL against the MIRROR: 6 h ≈ 4 conditional GETs (mostly 304s) per
 /// install per day. The Celestrak leg has its own, stricter timing below.
@@ -261,7 +260,11 @@ pub fn tle_bird_ok(t: &Tle, now_unix: i64) -> bool {
 /// 0.85×, because a legitimate regroup the mirror already vetted must still
 /// install here. Freshness gates are median-shaped, NEVER max: AO-10 is
 /// legitimately old and must not condemn a fresh set.
-pub fn validate_tles(candidate: &[Tle], prev_count: usize, now_unix: i64) -> Result<Vec<Tle>, String> {
+pub fn validate_tles(
+    candidate: &[Tle],
+    prev_count: usize,
+    now_unix: i64,
+) -> Result<Vec<Tle>, String> {
     if candidate.is_empty() {
         return Err("no elements parsed".into());
     }
@@ -318,7 +321,9 @@ pub fn validate_tles(candidate: &[Tle], prev_count: usize, now_unix: i64) -> Res
     ages.sort_by(|a, b| a.total_cmp(b));
     let median = ages[ages.len() / 2];
     if median > 7.0 {
-        return Err(format!("median epoch age {median:.1} d (> 7 d) — a stale set"));
+        return Err(format!(
+            "median epoch age {median:.1} d (> 7 d) — a stale set"
+        ));
     }
     let under3 = ages.iter().filter(|a| **a < 3.0).count();
     if under3 * 2 < ages.len() {
@@ -592,7 +597,15 @@ BROKEN BIRD\r\n\
         const H: i64 = 3600;
         let now = 1_785_542_400;
         // (age, last_try, ct_last_try, fails, blocked_until, manual) → expected
-        let table: [(Option<i64>, i64, i64, u32, i64, bool, Option<TleFetchTarget>); 12] = [
+        let table: [(
+            Option<i64>,
+            i64,
+            i64,
+            u32,
+            i64,
+            bool,
+            Option<TleFetchTarget>,
+        ); 12] = [
             // Fresh cache (< 6 h TTL): nothing to do.
             (Some(3 * H), 0, 0, 0, 0, false, None),
             // No cache at all: the mirror, immediately.
@@ -614,10 +627,34 @@ BROKEN BIRD\r\n\
             (Some(25 * H), now - 2000, now - H, 1, 0, false, Some(Mirror)),
             // Same, but the 403 hard stop is live: never Celestrak — manual
             // included; the mirror keeps retrying.
-            (Some(25 * H), now - 2000, 0, 1, now + 20 * H, false, Some(Mirror)),
-            (Some(25 * H), now - 2000, 0, 1, now + 20 * H, true, Some(Mirror)),
+            (
+                Some(25 * H),
+                now - 2000,
+                0,
+                1,
+                now + 20 * H,
+                false,
+                Some(Mirror),
+            ),
+            (
+                Some(25 * H),
+                now - 2000,
+                0,
+                1,
+                now + 20 * H,
+                true,
+                Some(Mirror),
+            ),
             // Deep backoff caps at the 6 h TTL: 10 fails, last try 6 h+ ago.
-            (Some(48 * H), now - 6 * H - 1, now - 3 * H, 10, 0, false, Some(Celestrak)),
+            (
+                Some(48 * H),
+                now - 6 * H - 1,
+                now - 3 * H,
+                10,
+                0,
+                false,
+                Some(Celestrak),
+            ),
         ];
         for (i, (age, lt, ct, fails, blocked, manual, want)) in table.into_iter().enumerate() {
             assert_eq!(

@@ -204,6 +204,9 @@ impl LogNeeds {
     /// entity/zone/state slots are folded as today — the per-award satellite
     /// exclusions beyond grids (satellite DXCC, WAZ's satellite ban) are a
     /// deliberate non-goal here.
+    // Eight positional facts of one QSO. A params struct would rename, not reduce,
+    // them — every caller is a log fold that already holds all eight by name.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_qso(
         &mut self,
         call: &str,
@@ -748,8 +751,7 @@ mod tests {
         assert!(n.confirmed_grids_sat().contains("FN31"));
         assert!(!n.confirmed_grids_sat().contains("FN20"));
         assert!(
-            !n.worked_grids()
-                .contains(&("FN31".to_string(), Band::B2)),
+            !n.worked_grids().contains(&("FN31".to_string(), Band::B2)),
             "sat grid must not fill the terrestrial 2m VUCC slot"
         );
         // The entity is still WORKED (ATNO is any-means): satellite Japan is

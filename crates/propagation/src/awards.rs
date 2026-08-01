@@ -339,7 +339,9 @@ impl Awards {
         grid: Option<&str>,
         iota: Option<&str>,
     ) {
-        self.add_qso(call, band, mode, confirmed, credited, state, grid, iota, false)
+        self.add_qso(
+            call, band, mode, confirmed, credited, state, grid, iota, false,
+        )
     }
 
     /// The full fold: [`add_with_credit`](Self::add_with_credit) plus `sat` —

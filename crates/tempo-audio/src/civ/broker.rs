@@ -350,8 +350,8 @@ impl RigBackend for CivBackend {
 
     fn set_freq(&self, hz: u64) -> bool {
         let mut g = self.band(); // the `05` write hits the SELECTED band
-        // A write with the selection stranded on Sub would land the downlink
-        // in the uplink's band — re-assert Main first, refuse otherwise.
+                                 // A write with the selection stranded on Sub would land the downlink
+                                 // in the uplink's band — re-assert Main first, refuse otherwise.
         self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz))
     }
 
@@ -1019,7 +1019,10 @@ mod tests {
             .log
             .iter()
             .position(|(cmd, d)| *cmd == 0x16 && d == &[0x5A, 0x00]);
-        let ab = r.log.iter().position(|(cmd, d)| *cmd == 0x0F && d == &[0x01]);
+        let ab = r
+            .log
+            .iter()
+            .position(|(cmd, d)| *cmd == 0x0F && d == &[0x01]);
         assert!(
             rel.unwrap() < ab.unwrap(),
             "release precedes 0F — never 0F at a rig still in satellite mode"

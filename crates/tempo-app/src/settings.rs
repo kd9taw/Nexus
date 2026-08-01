@@ -4420,15 +4420,24 @@ mod tests {
         // Both halves live: the full appliance replacement.
         assert_eq!(sat_track_mode(true, true, ADownBUp, true), "rotor+doppler");
         // No rotor, Doppler consented: the Arrow-antenna operator's mode.
-        assert_eq!(sat_track_mode(false, true, DownlinkOnly, true), "doppler-only");
+        assert_eq!(
+            sat_track_mode(false, true, DownlinkOnly, true),
+            "doppler-only"
+        );
         // Rotor only — Doppler switched off entirely…
-        assert_eq!(sat_track_mode(true, false, MainDownSubUp, true), "rotor-only");
+        assert_eq!(
+            sat_track_mode(true, false, MainDownSubUp, true),
+            "rotor-only"
+        );
         // …or ON but with no VFO mapping: Off means "never write to the
         // radio", so the mode must NOT claim Doppler is driving anything.
         assert_eq!(sat_track_mode(true, true, Off, true), "rotor-only");
         // Neither surface consented: pass state/geometry only — legal and
         // useful for timing, and the label says exactly that.
-        assert_eq!(sat_track_mode(false, false, MainUpSubDown, true), "pass-only");
+        assert_eq!(
+            sat_track_mode(false, false, MainUpSubDown, true),
+            "pass-only"
+        );
         assert_eq!(sat_track_mode(false, true, Off, true), "pass-only");
         // The THIRD consent: no held transponder means the tick tunes nothing
         // (`sat_tune` is None ⇒ every tick no-ops), so the label must not

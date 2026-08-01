@@ -582,7 +582,7 @@ pub(crate) mod tests_support {
                             }
                         },
                         (0x15, Some(0x02)) => Some((0x15, vec![0x02, 0x01, 0x20])), // raw 120 = S9
-                        (0x27, _) => None, // scope enable/disable
+                        (0x27, _) => None,             // scope enable/disable
                         _ => Some((0xFA, Vec::new())), // NAK anything unknown
                     }
                 };

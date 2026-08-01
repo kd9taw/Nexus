@@ -2942,9 +2942,7 @@ impl Engine {
         // routing decision — recomputing beside it is how two answers learn to disagree.
         let route_target = self.route_target.take();
         if !self.settings.radio_pegged {
-            if let Some(id) =
-                route_target.or_else(|| self.settings.route_radio(band, route_mode))
-            {
+            if let Some(id) = route_target.or_else(|| self.settings.route_radio(band, route_mode)) {
                 self.set_active_radio(id);
             }
         }
@@ -4092,7 +4090,9 @@ impl Engine {
         // binding's "tuning…" state just resolved: refused. Say so on the rail
         // rather than leaving a leg pending forever beside a rig that said no.
         if let (Some(refused), Some(b)) = (mhz, self.sat_binding.as_mut()) {
-            if b.pending_downlink_mhz.is_some_and(|m| (m - refused).abs() < 1e-6) {
+            if b.pending_downlink_mhz
+                .is_some_and(|m| (m - refused).abs() < 1e-6)
+            {
                 b.pending_downlink_mhz = None;
                 b.note = Some(format!(
                     "The radio refused {refused:.4} MHz — the downlink was not tuned."
@@ -6268,9 +6268,8 @@ impl Engine {
         }
         let map = self.settings.sat_vfo_map;
         if !map.active() {
-            binding.note = Some(
-                "VFO mapping is None — the dial stays yours; nothing was tuned.".to_string(),
-            );
+            binding.note =
+                Some("VFO mapping is None — the dial stays yours; nothing was tuned.".to_string());
             self.sat_binding = Some(binding.clone());
             return binding;
         }
@@ -6466,7 +6465,9 @@ impl Engine {
     /// QSYs and in-pass Doppler steps fall through untouched.
     pub fn rig_dial_applied(&mut self, hz: u64) {
         if let Some(b) = self.sat_binding.as_mut() {
-            if b.pending_downlink_mhz.is_some_and(|m| (m * 1e6).round() as u64 == hz) {
+            if b.pending_downlink_mhz
+                .is_some_and(|m| (m * 1e6).round() as u64 == hz)
+            {
                 b.downlink_mhz = b.pending_downlink_mhz.take();
             }
         }
@@ -6476,7 +6477,9 @@ impl Engine {
     /// the split TX dial at `tx_hz`.
     pub fn rig_split_applied(&mut self, tx_hz: u64) {
         if let Some(b) = self.sat_binding.as_mut() {
-            if b.pending_uplink_mhz.is_some_and(|m| (m * 1e6).round() as u64 == tx_hz) {
+            if b.pending_uplink_mhz
+                .is_some_and(|m| (m * 1e6).round() as u64 == tx_hz)
+            {
                 b.uplink_mhz = b.pending_uplink_mhz.take();
             }
         }
@@ -6597,7 +6600,9 @@ impl Engine {
     /// local mirror would show a green Transponder gate (and skip the next
     /// "Work this pass" auto-pick) for a hold the engine no longer has.
     pub fn sat_transponder_held(&self) -> Option<(&str, Option<usize>)> {
-        self.sat_tune.as_ref().map(|st| (st.label.as_str(), st.index))
+        self.sat_tune
+            .as_ref()
+            .map(|st| (st.label.as_str(), st.index))
     }
 
     /// The operator turned the VFO knob during a pass — adopt it as their
@@ -19267,7 +19272,10 @@ mod tests {
         e.sat_tune_nominal(false, 3_000_000);
         e.rig_dial_applied(14_074_000);
         let b = e.sat_binding().unwrap();
-        assert!(b.pending_downlink_mhz.is_some(), "still awaiting its own ack");
+        assert!(
+            b.pending_downlink_mhz.is_some(),
+            "still awaiting its own ack"
+        );
         assert_eq!(b.downlink_mhz, None);
     }
 
@@ -19340,7 +19348,10 @@ mod tests {
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         e.sat_tune_nominal(false, 3_000_000);
         let err = e.sat_split_tx_vfo(145_965_000).unwrap_err();
-        assert!(err.contains("Sub"), "the refusal explains the contract: {err}");
+        assert!(
+            err.contains("Sub"),
+            "the refusal explains the contract: {err}"
+        );
         // …while a pile-up split under the same mapping still rides VFOB.
         assert_eq!(e.sat_split_tx_vfo(14_235_000), Ok("VFOB"));
     }

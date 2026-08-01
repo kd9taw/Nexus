@@ -90,11 +90,7 @@ pub struct SatPassEarn {
 /// window, as 4-char grid squares + the current-DXCC entities whose centroid
 /// falls inside. Pure geometry — no needs filtering yet (that is
 /// [`pass_earn`]'s job), so tests can pin containment invariants directly.
-fn reachable(
-    tle: &Tle,
-    aos_unix: i64,
-    los_unix: i64,
-) -> (HashSet<String>, BTreeSet<&'static str>) {
+fn reachable(tle: &Tle, aos_unix: i64, los_unix: i64) -> (HashSet<String>, BTreeSet<&'static str>) {
     let mut grids: HashSet<String> = HashSet::new();
     let mut entities: BTreeSet<&'static str> = BTreeSet::new();
     let dur = (los_unix - aos_unix).max(0);
@@ -264,10 +260,7 @@ mod tests {
             grids.len()
         );
         // A mid-US footprint reaches the US centroid too.
-        assert!(
-            entities.contains("United States"),
-            "entities: {entities:?}"
-        );
+        assert!(entities.contains("United States"), "entities: {entities:?}");
         // Sanity: a LEO footprint sweep is hundreds-to-thousands of squares,
         // not a handful and not the whole planet.
         assert!(
