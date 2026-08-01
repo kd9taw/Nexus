@@ -64,6 +64,14 @@ pub struct CivBackend {
     /// operator tuned away" and hands the pass back. Every selected-VFO verb
     /// (freq/mode read + write) takes it; PTT deliberately does not (an unkey
     /// must never queue behind a tuning sequence).
+    ///
+    /// LOCK ORDER: engine mutex → this band mutex, never the reverse. Today
+    /// that holds structurally — the broker has no reference to `Engine`, so
+    /// no band→engine edge can exist and the graph is acyclic. Keep it that
+    /// way: handing the broker (or anything that runs under this lock)
+    /// something engine-shaped would let a band-holder block on the engine
+    /// mutex while an engine-holder blocks on a CAT verb queued behind this
+    /// lock — the cross-thread cousin of the 0.24.3 sat-pick hang.
     band: Mutex<SatSplit>,
 }
 
