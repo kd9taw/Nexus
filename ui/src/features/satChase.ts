@@ -37,6 +37,21 @@ export function satChasingSet(): Set<string> {
   }
 }
 
+/** Has this station EVER had a favorites list? Only [`toggleSatChasing`]
+ * writes the key, so its mere PRESENCE — even holding `[]` — is an operator
+ * who starred something and then cleared it. That is the only durable proof
+ * an UPGRADING operator can have: the name→NORAD map ships with the seed
+ * itself, so it is empty on every install that predates it, and reading the
+ * map alone would re-star ten birds for every operator who had deliberately
+ * emptied theirs. Blocked storage reads as "no record". */
+export function satChasingEverSet(): boolean {
+  try {
+    return localStorage.getItem(KEY) != null
+  } catch {
+    return false
+  }
+}
+
 /** Recorded NAME → NORAD for starred birds — the UI half of rename survival
  * (phase 4). ADDITIVE, never a key: the chase set above stays name-keyed (a
  * re-key would span alarms, fired keys, dial opt-outs and five command

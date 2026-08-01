@@ -3157,6 +3157,20 @@ struct TleSnapshot {
     etag: Option<String>,
     count: usize,
     elements: Vec<propagation::sat::Tle>,
+    /// The mirror's amateur CATALOG (schema-2 manifests): every bird SatNOGS
+    /// gives an amateur transmitter, with its status — INCLUDING the ones no
+    /// element source could cover, and the ones that are no longer workable
+    /// (dead, re-entered, pre-launch, or alive with every transmitter gone
+    /// quiet). Existence used to be elements-only, so those birds simply did
+    /// not appear; this is what lets a surface say "no current elements", or
+    /// "this one died", instead of shortening the list in silence.
+    ///
+    /// Empty on a legacy cache and after a CELESTRAK-leg refresh (that leg
+    /// has no catalog to offer) — in which case nothing is stamped, exactly
+    /// as before. It is deliberately NOT rebuilt from `elements`: a catalog
+    /// entry is an upstream assertion, not an inference.
+    #[serde(default)]
+    catalog: Vec<propagation::live::tle::SatCatalogEntry>,
     /// Operator file-imports, merged over `elements` by NORAD (newest epoch
     /// wins) and persisted across refreshes (phase 2 fills it).
     #[serde(default)]
@@ -3193,6 +3207,7 @@ fn load_tle_snapshot_from(path: &std::path::Path) -> Option<TleSnapshot> {
             etag: None,
             count: v.len(),
             elements: v,
+            catalog: Vec::new(),
             imported: Vec::new(),
             aliases: Default::default(),
         }),
@@ -3273,6 +3288,128 @@ struct SatBird {
     /// dashed projection — and the UI interpolates along them so the icon
     /// MOVES in real time between polls.
     track: Vec<(i64, f64, f64)>,
+    /// SatNOGS operational status (`alive` | `dead` | `re-entered` |
+    /// `future`) from the mirror's catalog. Absent when the serving snapshot
+    /// predates the catalog or came from the Celestrak leg — the map and the
+    /// Birds list were status-BLIND before this field existed, so a
+    /// re-entered bird was indistinguishable from a live one in the very
+    /// list the operator stars from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    /// The catalog says this bird carries at least one LIVE amateur
+    /// transmitter. `status` alone cannot answer "is there anything to work
+    /// here" — a bird can be perfectly alive in orbit with every amateur
+    /// transmitter dead, and no pass elevation will ever show that.
+    ///
+    /// Only a claim WITH a `status` beside it: an unknown bird comes back
+    /// `(None, false)` from [`catalog_marks`], so the UI reads the status's
+    /// absence as "never asked" and the `false` as nothing at all. Serialized
+    /// unconditionally for that reason — a skipped key would make "not asked"
+    /// and "asked, answered no" the same wire value.
+    amateur: bool,
+}
+
+/// The two catalog marks a bird's row carries: SatNOGS's status verbatim and
+/// whether the mirror's amateur catalog still lists a live amateur
+/// transmitter for it. `(None, false)` when there is no entry to ask — see
+/// [`SatBird::amateur`] for why the pairing, not the `false`, is the contract.
+fn catalog_marks(
+    catalog: &std::collections::HashMap<u32, propagation::live::tle::SatCatalogEntry>,
+    norad: Option<u32>,
+) -> (Option<String>, bool) {
+    match norad.and_then(|n| catalog.get(&n)) {
+        Some(c) => (Some(c.status.clone()), c.amateur),
+        None => (None, false),
+    }
+}
+
+/// A bird the amateur catalog knows about that has NO row in this view, and
+/// why. Existence used to be elements-only: a bird nothing carried current
+/// elements for simply vanished — no row, no warning, no log line. Reporting
+/// it is the honesty line, so a surface can say "no current elements"
+/// instead of quietly shortening the list.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SatExcludedDto {
+    name: String,
+    norad: u32,
+    /// SatNOGS status when the catalog knows the bird (absent when its only
+    /// trace is a stale element set).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    /// Whether the catalog still lists a LIVE amateur transmitter — the fact
+    /// that separates "we cannot place it" from "there is nothing to work on
+    /// it". `None` = the catalog does not know this bird, which a surface must
+    /// read as NOT ASKED and never as "no transmitters" (see [`SatBird`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    amateur: Option<bool>,
+    /// `noElements` — no source had elements for it at all. `staleElements` —
+    /// we have some, but past the 30 d ceiling where SGP4 accuracy is gone,
+    /// so a position would be a guess. `noPosition` — current elements that
+    /// sgp4 still refused (a decaying orbit does this).
+    reason: &'static str,
+}
+
+/// Elements older than this are not used: SGP4 accuracy is genuinely gone, so
+/// a position would be a guess dressed as a measurement. Applied PER BIRD.
+const SAT_STALE_DAYS: f64 = 30.0;
+
+/// Every bird with no row in the view, and why — the honesty list, sorted by
+/// name. Two sources, because a bird can be missing for two different reasons:
+/// elements we hold but could not use (they have a name to show), then catalog
+/// birds we hold nothing at all for.
+///
+/// The second loop is deliberately UNFILTERED. It used to require
+/// `c.amateur`, which deleted precisely the birds this list exists for: when a
+/// bird dies, re-enters or loses its last live transmitter the mirror stops
+/// publishing elements for it AND the flag goes false, so gating the row on
+/// the flag left it with no row anywhere — not in `birds`, not here — and a ★
+/// the operator could no longer even see to switch off. The catalog IS the
+/// amateur population; being in it is the only membership test needed.
+fn sat_excluded(
+    tles: &[propagation::sat::Tle],
+    drawn: &std::collections::HashSet<u32>,
+    catalog: &std::collections::HashMap<u32, propagation::live::tle::SatCatalogEntry>,
+    now: i64,
+) -> Vec<SatExcludedDto> {
+    use propagation::sat;
+    let mut excluded: Vec<SatExcludedDto> = Vec::new();
+    for t in tles {
+        let Some(n) = sat::norad_id(&t.line1) else {
+            continue;
+        };
+        if drawn.contains(&n) {
+            continue;
+        }
+        excluded.push(SatExcludedDto {
+            name: t.name.clone(),
+            norad: n,
+            status: catalog.get(&n).map(|c| c.status.clone()),
+            amateur: catalog.get(&n).map(|c| c.amateur),
+            // Report what actually happened, never the likeliest guess:
+            // current elements that sgp4 still refused (a decaying orbit
+            // does this) is a different fact from elements gone stale.
+            reason: match sat::tle_age_days(&t.line1, now) {
+                Some(a) if a <= SAT_STALE_DAYS => "noPosition",
+                _ => "staleElements",
+            },
+        });
+    }
+    let held: std::collections::HashSet<u32> =
+        tles.iter().filter_map(|t| sat::norad_id(&t.line1)).collect();
+    for c in catalog.values() {
+        if !held.contains(&c.norad) {
+            excluded.push(SatExcludedDto {
+                name: c.name.clone(),
+                norad: c.norad,
+                status: Some(c.status.clone()),
+                amateur: Some(c.amateur),
+                reason: "noElements",
+            });
+        }
+    }
+    excluded.sort_by(|a, b| a.name.cmp(&b.name));
+    excluded
 }
 
 /// The satellites view: positions NOW + upcoming passes over the operator's QTH.
@@ -3290,6 +3427,9 @@ struct SatView {
     /// Next-24 h passes over the QTH, all birds (empty when the grid is unset).
     /// Sorted by AOS. Geometry only — no transponder/workability claim.
     passes: Vec<SatPassDto>,
+    /// Amateur birds with no row above, each with its reason — see
+    /// [`SatExcludedDto`]. Empty before the catalog lands.
+    excluded: Vec<SatExcludedDto>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -3374,7 +3514,6 @@ async fn get_contests() -> Result<Vec<propagation::live::contests::ContestEvent>
 #[tauri::command]
 async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView>, String> {
     const VIEW_TTL_SECS: u64 = 600;
-    const STALE_DAYS: f64 = 30.0;
     let mygrid = {
         let eng = engine_lock(&state);
         eng.settings().mygrid.clone()
@@ -3392,6 +3531,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
         return Ok(None); // never had elements — honest no-data
     }
     let (tle_fetched_at, tle_source) = tle_provenance();
+    let catalog = tle_catalog();
     let observer = propagation::geo::maidenhead_to_latlon(mygrid.trim());
     let need_passes = cached_passes.is_none();
     let out = tauri::async_runtime::spawn_blocking(move || {
@@ -3402,7 +3542,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
         // majority (review catch: the old max-age gate killed the whole view).
         let fresh: Vec<&propagation::sat::Tle> = tles
             .iter()
-            .filter(|t| sat::tle_age_days(&t.line1, now).is_some_and(|a| a <= STALE_DAYS))
+            .filter(|t| sat::tle_age_days(&t.line1, now).is_some_and(|a| a <= SAT_STALE_DAYS))
             .collect();
         if fresh.is_empty() {
             return None; // every element set is decayed — honest no-data
@@ -3415,6 +3555,9 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
             .fold(0.0f64, f64::max);
         let mut birds = Vec::new();
         let mut computed_passes = Vec::new();
+        // Which birds actually got a row — the rest are reported below rather
+        // than silently dropped.
+        let mut drawn: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for t in &fresh {
             if let Some((lat, lon, alt_km)) = sat::subpoint(t, now) {
                 let footprint_km = RE_KM * (RE_KM / (RE_KM + alt_km)).acos();
@@ -3422,6 +3565,10 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                 // TLE parse per bird (the batch fn), ~ms for the whole flock.
                 let track = sat::track(t, now, 600, 1_500, 60);
                 let norad = sat::norad_id(&t.line1);
+                let (status, amateur) = catalog_marks(&catalog, norad);
+                if let Some(n) = norad {
+                    drawn.insert(n);
+                }
                 birds.push(SatBird {
                     name: t.name.clone(),
                     norad,
@@ -3430,6 +3577,8 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                     alt_km,
                     footprint_km,
                     track,
+                    status: status.clone(),
+                    amateur,
                 });
                 if need_passes {
                     if let Some(obs) = observer {
@@ -3442,7 +3591,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                                 max_el_deg: p.max_el_deg,
                                 aos_az_deg: p.aos_az_deg,
                                 los_az_deg: p.los_az_deg,
-                                status: None,
+                                status: status.clone(),
                                 earn: None,
                             });
                         }
@@ -3457,6 +3606,10 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                 computed_passes
             }
         };
+        // Every bird that did NOT get a row, with why. Elements we hold but
+        // that aged past the 30 d ceiling first (they have a name to show),
+        // then catalog birds nothing carried elements for at all.
+        let excluded = sat_excluded(&tles, &drawn, &catalog, now);
         Some((
             SatView {
                 tle_age_days,
@@ -3464,6 +3617,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                 tle_source,
                 birds,
                 passes: passes.clone(),
+                excluded,
             },
             passes,
             need_passes,
@@ -3632,6 +3786,20 @@ fn resolve_birds<'a>(
     out
 }
 
+/// The serving snapshot's amateur catalog, NORAD-keyed. Empty when the cache
+/// predates schema 2 or came from the Celestrak leg — callers then stamp
+/// nothing, which is exactly the pre-catalog behavior.
+fn tle_catalog() -> std::collections::HashMap<u32, propagation::live::tle::SatCatalogEntry> {
+    tles_load_from_disk();
+    TLES.lock()
+        .ok()
+        .and_then(|g| {
+            g.as_ref()
+                .map(|s| s.catalog.iter().map(|c| (c.norad, c.clone())).collect())
+        })
+        .unwrap_or_default()
+}
+
 /// The serving snapshot's alias map (a clone — dozens of entries at most).
 fn tle_aliases() -> std::collections::HashMap<String, u32> {
     TLES.lock()
@@ -3679,6 +3847,13 @@ fn tle_absorb_foreign(snap: &mut TleSnapshot, disk: TleSnapshot, now: i64) {
     for (name, norad) in disk.aliases {
         snap.aliases.entry(name).or_insert(norad);
     }
+    // The catalog is last-writer-wins like `elements` (both instances fetch
+    // the same mirror), EXCEPT that an empty one never wins: a Celestrak-leg
+    // refresh carries no catalog, and losing every bird's status because the
+    // fallback leg ran is not a trade the operator would make.
+    if snap.catalog.is_empty() {
+        snap.catalog = disk.catalog;
+    }
 }
 
 /// A mirror 304: the published set hasn't changed — bump the freshness stamp
@@ -3712,11 +3887,17 @@ fn tles_touch_fetched_at() {
 /// write), carrying the operator's `imported` list and the alias map across
 /// refreshes. Only validated data reaches here — the empty/invalid cases died
 /// in `validate_tles` — so a bad fetch can never overwrite a good cache.
+///
+/// `catalog` is `None` for a leg that has no catalog to offer (Celestrak),
+/// and the previous one is KEPT: statuses change on a scale of weeks, so a
+/// six-hour-old catalog stamped on fresher elements is right, while dropping
+/// it because the fallback leg ran would blank every status pill.
 fn tles_install(
     elements: Vec<propagation::sat::Tle>,
     source: &str,
     generated: Option<String>,
     etag: Option<String>,
+    catalog: Option<Vec<propagation::live::tle::SatCatalogEntry>>,
 ) {
     use std::sync::atomic::Ordering;
     TLE_FAILS.store(0, Ordering::SeqCst);
@@ -3731,10 +3912,14 @@ fn tles_install(
             // Rename survival (phase 4): record the OUTGOING set's names
             // before this install replaces them, then the incoming names —
             // a bird renamed upstream keeps its old name resolving.
-            let (imported, mut aliases) = match g.as_mut() {
+            let (imported, mut aliases, prev_catalog) = match g.as_mut() {
                 Some(prev) => {
                     tle_record_aliases(prev);
-                    (prev.imported.clone(), prev.aliases.clone())
+                    (
+                        prev.imported.clone(),
+                        prev.aliases.clone(),
+                        prev.catalog.clone(),
+                    )
                 }
                 None => Default::default(),
             };
@@ -3747,6 +3932,7 @@ fn tles_install(
                 etag,
                 count: elements.len(),
                 elements,
+                catalog: catalog.unwrap_or(prev_catalog),
                 imported,
                 aliases,
             };
@@ -3764,17 +3950,24 @@ fn tles_install(
 }
 
 /// The refresh decision's inputs from the in-memory snapshot: cache age
-/// (`None` = no cache or no wall-clock stamp), the bird count the validation
-/// ratchet compares against, and the mirror ETag. `None` only on a poisoned
-/// lock (nothing sane to decide with).
-fn tle_refresh_inputs(now: i64) -> Option<(Option<i64>, usize, Option<String>)> {
+/// (`None` = no cache or no wall-clock stamp), the held bird count, the mirror
+/// ETag, and WHICH LEG drew the held set. `None` only on a poisoned lock
+/// (nothing sane to decide with).
+///
+/// The source rides along because the count alone is not a ratchet baseline:
+/// [`propagation::live::tle::tle_ratchet_count`] only compares a leg against
+/// its own previous population.
+fn tle_refresh_inputs(now: i64) -> Option<(Option<i64>, usize, Option<String>, String)> {
     match TLES.lock() {
         Ok(g) => Some(match g.as_ref() {
-            Some(s) if s.fetched_at > 0 => {
-                (Some(now - s.fetched_at), s.elements.len(), s.etag.clone())
-            }
-            Some(s) => (None, s.elements.len(), None),
-            None => (None, 0, None),
+            Some(s) if s.fetched_at > 0 => (
+                Some(now - s.fetched_at),
+                s.elements.len(),
+                s.etag.clone(),
+                s.source.clone(),
+            ),
+            Some(s) => (None, s.elements.len(), None, s.source.clone()),
+            None => (None, 0, None, String::new()),
         }),
         Err(_) => None,
     }
@@ -3796,7 +3989,11 @@ impl Drop for TleFlightGuard {
 /// fetches, validates, installs — and turns a 403/404 into the 24 h hard
 /// stop. Shared by the scheduled Celestrak target and the manual same-flight
 /// escalation; the caller owns the flight guard and the failure bookkeeping.
-fn tle_celestrak_leg(prev_count: usize, manual: bool) -> Result<(), (TleFailKind, String)> {
+///
+/// `ratchet` is this LEG's baseline, not the held count — see
+/// [`propagation::live::tle::tle_ratchet_count`]: a 97-bird group response is
+/// not a shrink of a 370-bird mirror union, it is a different question.
+fn tle_celestrak_leg(ratchet: usize, manual: bool) -> Result<(), (TleFailKind, String)> {
     use propagation::live::tle::{self, TleFetchError};
     use std::sync::atomic::Ordering;
     TLE_CT_LAST_TRY.store(now_unix(), Ordering::SeqCst);
@@ -3806,9 +4003,10 @@ fn tle_celestrak_leg(prev_count: usize, manual: bool) -> Result<(), (TleFailKind
         std::thread::sleep(std::time::Duration::from_secs(subsec_jitter(120)));
     }
     match tle::fetch_tles() {
-        Ok(t) => match tle::validate_tles(&t, prev_count, now_unix()) {
+        Ok(t) => match tle::validate_tles(&t, ratchet, now_unix()) {
             Ok(clean) => {
-                tles_install(clean, "celestrak", None, None);
+                // No catalog on this leg — the previous one is kept.
+                tles_install(clean, "celestrak", None, None, None);
                 Ok(())
             }
             Err(e) => Err((
@@ -3851,12 +4049,16 @@ fn tle_celestrak_leg(prev_count: usize, manual: bool) -> Result<(), (TleFailKind
 fn tle_refresh_flight(
     target: propagation::live::tle::TleFetchTarget,
     prev_count: usize,
+    prev_source: String,
     etag: Option<String>,
     manual: bool,
 ) {
     use propagation::live::tle::{self, TleFetchTarget, TleMirrorFetch};
     use std::sync::atomic::Ordering;
     let _flight = TleFlightGuard;
+    // Per LEG, never the raw held count: the two legs publish different
+    // populations, and one ratcheted against the other refuses good data.
+    let ratchet = |t| tle::tle_ratchet_count(Some(prev_source.as_str()), prev_count, t);
     let outcome: Result<(), (TleFailKind, String)> = match target {
         TleFetchTarget::Mirror => match tle::fetch_tles_mirror(etag.as_deref()) {
             Ok(TleMirrorFetch::NotModified) => {
@@ -3865,11 +4067,15 @@ fn tle_refresh_flight(
             }
             Ok(TleMirrorFetch::Fresh {
                 elements,
+                catalog,
                 generated,
                 etag,
-            }) => match tle::validate_tles(&elements, prev_count, now_unix()) {
+            }) => match tle::validate_tles(&elements, ratchet(TleFetchTarget::Mirror), now_unix()) {
                 Ok(clean) => {
-                    tles_install(clean, "mirror", generated, etag);
+                    // A schema-1 mirror (or a rollback) sends no catalog:
+                    // keep the one we have rather than blanking every status.
+                    let catalog = (!catalog.is_empty()).then_some(catalog);
+                    tles_install(clean, "mirror", generated, etag, catalog);
                     Ok(())
                 }
                 Err(e) => Err((TleFailKind::Failed, format!("mirror TLE set refused: {e}"))),
@@ -3883,7 +4089,7 @@ fn tle_refresh_flight(
                         now_unix(),
                     )
                 {
-                    match tle_celestrak_leg(prev_count, manual) {
+                    match tle_celestrak_leg(ratchet(TleFetchTarget::Celestrak), manual) {
                         Ok(()) => Ok(()),
                         // Both legs down (or blocked): the raw keeps BOTH
                         // stories; the kind keeps the actionable one.
@@ -3894,7 +4100,7 @@ fn tle_refresh_flight(
                 }
             }
         },
-        TleFetchTarget::Celestrak => tle_celestrak_leg(prev_count, manual),
+        TleFetchTarget::Celestrak => tle_celestrak_leg(ratchet(TleFetchTarget::Celestrak), manual),
     };
     if let Err((kind, raw)) = outcome {
         TLE_FAILS.fetch_add(1, Ordering::SeqCst);
@@ -3916,7 +4122,7 @@ fn maybe_kick_tle_refresh(manual: bool) {
     use propagation::live::tle;
     use std::sync::atomic::Ordering;
     let now = now_unix();
-    let Some((age, prev_count, etag)) = tle_refresh_inputs(now) else {
+    let Some((age, prev_count, etag, prev_source)) = tle_refresh_inputs(now) else {
         return;
     };
     let Some(target) = tle::tle_fetch_target(
@@ -3935,7 +4141,7 @@ fn maybe_kick_tle_refresh(manual: bool) {
     }
     TLE_LAST_TRY.store(now, Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
-        tle_refresh_flight(target, prev_count, etag, manual);
+        tle_refresh_flight(target, prev_count, prev_source, etag, manual);
     });
 }
 
@@ -4046,7 +4252,7 @@ async fn fetch_tles_now() -> Result<TleStatus, String> {
     use std::sync::atomic::Ordering;
     tles_load_from_disk();
     let now = now_unix();
-    let (age, prev_count, etag) =
+    let (age, prev_count, etag, prev_source) =
         tle_refresh_inputs(now).ok_or_else(|| "element cache unavailable".to_string())?;
     let Some(target) = propagation::live::tle::tle_fetch_target(
         age,
@@ -4069,7 +4275,9 @@ async fn fetch_tles_now() -> Result<TleStatus, String> {
     // — so the UI composes one operator-voiced result from one source of
     // truth instead of parsing a rejected string. Only the spawn itself can
     // Err from here on.
-    tauri::async_runtime::spawn_blocking(move || tle_refresh_flight(target, prev_count, etag, true))
+    tauri::async_runtime::spawn_blocking(move || {
+        tle_refresh_flight(target, prev_count, prev_source, etag, true)
+    })
         .await
         .map_err(|e| e.to_string())?;
     Ok(tle_status())
@@ -4123,6 +4331,7 @@ fn tles_import(new: Vec<propagation::sat::Tle>) {
                 etag: None,
                 count: 0,
                 elements: Vec::new(),
+                catalog: Vec::new(),
                 imported: Vec::new(),
                 aliases: Default::default(),
             });
@@ -4326,6 +4535,7 @@ async fn get_sat_schedule(
         return Ok(Vec::new());
     }
     let aliases = tle_aliases();
+    let catalog = tle_catalog();
     let now = now_unix();
     let out = tauri::async_runtime::spawn_blocking(move || {
         use propagation::sat;
@@ -4340,14 +4550,16 @@ async fn get_sat_schedule(
             .iter()
             .filter_map(|(_, t)| sat::norad_id(&t.line1))
             .collect();
-        let status_by_norad: std::collections::HashMap<u32, String> = satnogs_snapshot(norads)
-            .map(|sn| {
-                sn.statuses
-                    .into_iter()
-                    .map(|st| (st.norad, st.status))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // The LIVE per-bird status path; the mirror catalog seeds the birds
+        // it has no answer for (never fetched, or filed upstream under a
+        // placeholder catalog number the join can't match).
+        let mut status_by_norad: std::collections::HashMap<u32, String> = catalog
+            .iter()
+            .map(|(n, c)| (*n, c.status.clone()))
+            .collect();
+        if let Some(sn) = satnogs_snapshot(norads) {
+            status_by_norad.extend(sn.statuses.into_iter().map(|st| (st.norad, st.status)));
+        }
         let mut passes = Vec::new();
         for (label, t) in mine {
             let norad = sat::norad_id(&t.line1);
@@ -4425,6 +4637,7 @@ async fn get_sat_pass_needs(
         return Ok(Vec::new());
     }
     let aliases = tle_aliases();
+    let catalog = tle_catalog();
     let now = now_unix();
     let out = tauri::async_runtime::spawn_blocking(move || {
         use propagation::sat;
@@ -4448,14 +4661,16 @@ async fn get_sat_pass_needs(
             .iter()
             .filter_map(|(_, t)| sat::norad_id(&t.line1))
             .collect();
-        let status_by_norad: std::collections::HashMap<u32, String> = satnogs_snapshot(norads)
-            .map(|sn| {
-                sn.statuses
-                    .into_iter()
-                    .map(|st| (st.norad, st.status))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // The LIVE per-bird status path; the mirror catalog seeds the birds
+        // it has no answer for (never fetched, or filed upstream under a
+        // placeholder catalog number the join can't match).
+        let mut status_by_norad: std::collections::HashMap<u32, String> = catalog
+            .iter()
+            .map(|(n, c)| (*n, c.status.clone()))
+            .collect();
+        if let Some(sn) = satnogs_snapshot(norads) {
+            status_by_norad.extend(sn.statuses.into_iter().map(|st| (st.norad, st.status)));
+        }
         let mut passes = Vec::new();
         for (label, t) in mine {
             let norad = sat::norad_id(&t.line1);
@@ -13607,12 +13822,13 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        assistance_posture_changed, b64_decode, b64_encode, dxped_page_url, install_block_reason,
-        is_complete_lotw_body, iss_pass_from_tles, load_tle_snapshot_from, parse_sstv_mode,
-        profile_dir_name, rect_lands_on_work_area, resolve_bird, resolve_birds, sanitize_profile,
-        tle_absorb_foreign, tle_act_gate, tle_extend_aliases, tle_merge_imports,
-        tle_merged_elements, tle_record_aliases, write_json_atomic, AssistanceEvent,
-        AssistanceSourceState, TleFlightGuard, TleSnapshot, TLE_FETCHING,
+       assistance_posture_changed, b64_decode, b64_encode, catalog_marks, dxped_page_url,
+        install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
+        load_tle_snapshot_from, parse_sstv_mode, profile_dir_name, rect_lands_on_work_area,
+        resolve_bird, resolve_birds, sanitize_profile, sat_excluded, tle_absorb_foreign,
+        tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
+        tle_record_aliases, write_json_atomic, AssistanceEvent, AssistanceSourceState,
+        SatBird, TLE_FETCHING, TleFlightGuard, TleSnapshot
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -13745,6 +13961,7 @@ mod tests {
             etag: Some("\"abc\"".into()),
             count: 1,
             elements: serde_json::from_str(&format!("[{TLE_JSON_BIRD}]")).unwrap(),
+            catalog: Vec::new(),
             imported: Vec::new(),
             aliases: Default::default(),
         };
@@ -13773,6 +13990,7 @@ mod tests {
             etag: None,
             count: 1,
             elements: serde_json::from_str(&format!("[{TLE_JSON_BIRD}]")).unwrap(),
+            catalog: Vec::new(),
             imported: Vec::new(),
             aliases: Default::default(),
         };
@@ -14041,8 +14259,20 @@ mod tests {
             etag: None,
             count: elements.len(),
             elements,
+            catalog: Vec::new(),
             imported: Vec::new(),
             aliases: Default::default(),
+        }
+    }
+
+    fn catalog_entry(norad: u32, status: &str) -> propagation::live::tle::SatCatalogEntry {
+        propagation::live::tle::SatCatalogEntry {
+            norad,
+            name: format!("BIRD {norad}"),
+            status: status.into(),
+            amateur: true,
+            decayed: false,
+            src: Some("celestrak-amateur".into()),
         }
     }
 
@@ -14216,6 +14446,167 @@ mod tests {
         // …and elements stayed OURS — absorb never merges the group.
         assert!(b.elements[0].line1.contains("26200."), "elements are last-writer-wins");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_catalog_less_snapshot_never_blanks_the_statuses_on_disk() {
+        // The Celestrak fallback leg installs elements with NO catalog. If
+        // that snapshot's write won outright, one fallback refresh would strip
+        // every bird's status from the shared cache — statuses that only the
+        // mirror can supply, and only every 6 h.
+        let now = 1_785_542_400i64;
+        let path = scratch("shared-tles-catalog.json");
+        let mut a = snap_with(vec![bird(11_111, 26, 100.0)]);
+        a.catalog = vec![catalog_entry(11_111, "alive"), catalog_entry(25_544, "alive")];
+        assert!(write_json_atomic(&path, &serde_json::to_string(&a).unwrap()));
+
+        let mut b = snap_with(vec![bird(11_111, 26, 200.0)]); // catalog-less
+        let disk = load_tle_snapshot_from(&path).expect("A's write must load");
+        tle_absorb_foreign(&mut b, disk, now);
+        assert_eq!(b.catalog.len(), 2, "the disk catalog must survive");
+
+        // A snapshot that HAS a catalog keeps its own — both instances refresh
+        // from the same mirror, so the loser is equivalent, and the newer read
+        // is the one that saw a status change.
+        let mut c = snap_with(vec![bird(11_111, 26, 300.0)]);
+        c.catalog = vec![catalog_entry(11_111, "re-entered")];
+        let disk = load_tle_snapshot_from(&path).expect("still there");
+        tle_absorb_foreign(&mut c, disk, now);
+        assert_eq!(c.catalog.len(), 1);
+        assert_eq!(c.catalog[0].status, "re-entered");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_pre_catalog_cache_on_disk_loads_unchanged() {
+        // Every cache written by a shipped build: the snapshot shape with no
+        // `catalog` key at all, and the bare legacy array before that. Both
+        // must load exactly as they always did — an empty catalog, nothing
+        // stamped, no refusal.
+        let path = scratch("legacy-tles-catalog.json");
+        let snap = snap_with(vec![bird(25_544, 26, 200.0)]);
+        let mut json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&snap).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("catalog");
+        assert!(write_json_atomic(&path, &json.to_string()));
+        let loaded = load_tle_snapshot_from(&path).expect("a schema-1 cache still loads");
+        assert_eq!(loaded.elements.len(), 1);
+        assert!(loaded.catalog.is_empty());
+
+        let bare = serde_json::to_string(&vec![bird(25_544, 26, 200.0)]).unwrap();
+        assert!(write_json_atomic(&path, &bare));
+        let loaded = load_tle_snapshot_from(&path).expect("the bare legacy array still loads");
+        assert_eq!(loaded.source, "legacy");
+        assert!(loaded.catalog.is_empty());
+
+        // And a catalog-bearing snapshot round-trips through the same writer.
+        let mut with = snap_with(vec![bird(25_544, 26, 200.0)]);
+        with.catalog = vec![catalog_entry(25_544, "alive")];
+        assert!(write_json_atomic(&path, &serde_json::to_string(&with).unwrap()));
+        let loaded = load_tle_snapshot_from(&path).expect("round-trip");
+        assert_eq!(loaded.catalog, with.catalog);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A bird LEAVING the amateur population must keep a row that says why.
+    /// This is the one-way door the catalog exists to hold open: when a bird
+    /// dies, re-enters or loses its last live transmitter, the mirror stops
+    /// publishing elements for it — so it has no `birds` row — and the
+    /// excluded list used to require `amateur`, the very flag that had just
+    /// gone false. The bird then existed nowhere: no row to read, no reason,
+    /// and a ★ the operator could not even see to switch off.
+    #[test]
+    fn a_bird_that_stops_being_workable_keeps_a_row_that_says_why() {
+        let now = 1_785_542_400i64; // 2026-08-01T00:00:00Z (day 213)
+        // Two held element sets: one drawn on the map, one aged past 30 d.
+        let held = vec![bird(25_544, 26, 213.0), bird(43_017, 26, 150.0)];
+        let drawn: std::collections::HashSet<u32> = [25_544].into_iter().collect();
+        let mut catalog = std::collections::HashMap::new();
+        catalog.insert(25_544, catalog_entry(25_544, "alive"));
+        catalog.insert(43_017, catalog_entry(43_017, "alive"));
+        // …and three the mirror LISTS but publishes no elements for.
+        for (norad, status, amateur) in [
+            (53_106, "dead", true),      // silent orbit, transmitter record lags
+            (40_967, "alive", false),    // in orbit, every transmitter gone quiet
+            (50_988, "re-entered", true), // gone
+        ] {
+            let mut c = catalog_entry(norad, status);
+            c.src = None;
+            c.amateur = amateur;
+            catalog.insert(norad, c);
+        }
+
+        let out = sat_excluded(&held, &drawn, &catalog, now);
+        let row = |n: u32| out.iter().find(|e| e.norad == n).expect("a row for every one");
+        assert_eq!(out.len(), 4, "everything unplaceable is reported, nothing else");
+        assert!(!out.iter().any(|e| e.norad == 25_544), "a drawn bird is not excluded");
+        assert_eq!(row(43_017).reason, "staleElements");
+        assert_eq!(row(53_106).reason, "noElements");
+        assert_eq!(row(53_106).status.as_deref(), Some("dead"));
+        assert_eq!(row(50_988).status.as_deref(), Some("re-entered"));
+        // THE regression: an alive-but-silent bird is exactly the case the
+        // old `if c.amateur` filter deleted.
+        assert_eq!(row(40_967).status.as_deref(), Some("alive"));
+        assert_eq!(row(40_967).amateur, Some(false), "and it says WHY it is gone");
+        // The catalog's answer rides to the UI; a bird the catalog does not
+        // know stays silent about it (absent = never asked, never "no").
+        let json = serde_json::to_value(row(40_967)).unwrap();
+        assert_eq!(json["amateur"], serde_json::json!(false));
+        let unknown = sat_excluded(&held, &drawn, &Default::default(), now);
+        assert_eq!(unknown.len(), 1);
+        assert_eq!(unknown[0].amateur, None);
+        assert!(serde_json::to_value(&unknown[0]).unwrap().get("amateur").is_none());
+    }
+
+    /// The two CATALOG marks a bird's row carries. `status` alone could not
+    /// answer "is there anything to work here": a bird can be perfectly alive
+    /// in orbit with every amateur transmitter dead, which is exactly the
+    /// case a pass elevation can never show. The pairing is the contract —
+    /// `amateur` is only a claim when a `status` rides beside it, so an
+    /// unknown bird must come back `(None, false)` and never a bare `false`
+    /// the UI could read as "the catalog says it is silent".
+    #[test]
+    fn the_amateur_mark_rides_beside_the_status_and_is_never_claimed_unasked() {
+        let mut cat = std::collections::HashMap::new();
+        cat.insert(43_017, catalog_entry(43_017, "alive"));
+        let mut quiet = catalog_entry(27_607, "alive");
+        quiet.amateur = false; // in orbit, nothing left transmitting
+        cat.insert(27_607, quiet);
+        cat.insert(40_967, catalog_entry(40_967, "re-entered"));
+
+        assert_eq!(
+            catalog_marks(&cat, Some(43_017)),
+            (Some("alive".to_string()), true)
+        );
+        assert_eq!(
+            catalog_marks(&cat, Some(27_607)),
+            (Some("alive".to_string()), false),
+            "an alive bird with no live amateur transmitter must say so"
+        );
+        assert_eq!(
+            catalog_marks(&cat, Some(40_967)),
+            (Some("re-entered".to_string()), true)
+        );
+        // Never asked: no catalog entry, and no NORAD to ask with.
+        assert_eq!(catalog_marks(&cat, Some(99_999)), (None, false));
+        assert_eq!(catalog_marks(&cat, None), (None, false));
+
+        // And the field reaches the UI camelCase, always present — the UI's
+        // "was the catalog asked?" test is the STATUS, never the absence of
+        // this key.
+        let json = serde_json::to_value(SatBird {
+            name: "SO-50".into(),
+            norad: Some(27_607),
+            lat: 0.0,
+            lon: 0.0,
+            alt_km: 500.0,
+            footprint_km: 2000.0,
+            track: Vec::new(),
+            status: Some("alive".into()),
+            amateur: false,
+        })
+        .unwrap();
+        assert_eq!(json.get("amateur").and_then(|v| v.as_bool()), Some(false));
     }
 
     /// A panic anywhere in a refresh flight must RELEASE the single-flight

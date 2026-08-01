@@ -21,6 +21,7 @@ import type {
   NeedTag,
   SatBinding,
   SatDetail,
+  SatExcluded,
   SatPass,
   SatPassEarn,
   SatTrackStatus,
@@ -45,6 +46,14 @@ import {
 import { NEED_CHIP } from '../features/needVisuals'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { isSatChased, satChaseKeys, satChasingSet, toggleSatChasing } from '../features/satChase'
+import { satBirdHealth, satExcludedHealth } from '../features/satHealth'
+import {
+  ackSatSeedNotice,
+  satSeedNoticeOpen,
+  satSeedRecord,
+  seedSatFavorites,
+  type SatSeedRecord,
+} from '../features/satSeed'
 import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAlarm'
 import { tleRefreshMessage } from '../features/tleMessages'
 import { heatPulse } from '../features/pulse'
@@ -1264,6 +1273,12 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const [pegged, setPegged] = useState(false)
   const [nowTick, setNowTick] = useState(() => Date.now())
   const nowSecs = Math.floor(nowTick / 1000)
+  // The one-time seed's notice: open from the moment the seed runs until the
+  // operator dismisses it (persisted — a notice that vanished on restart
+  // would leave them wondering where the stars came from).
+  const [seedNotice, setSeedNotice] = useState<SatSeedRecord | null>(() =>
+    satSeedNoticeOpen() ? satSeedRecord() : null,
+  )
 
   // Map click hand-off: follow later clicks too, not just the mount value.
   useEffect(() => {
@@ -1447,6 +1462,23 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
     }
   }, [])
 
+  // ONE-TIME FAVORITES SEEDING. A first-run operator lands on an empty
+  // schedule and a 300-bird list with no way to know which of them are worth
+  // starring; this stars the most-workable ACTIVE birds over their grid, once,
+  // and then never again (satSeed.ts owns every guard — the marker, the
+  // already-starred operator, the operator who deliberately cleared their
+  // set). Idempotent, so running it on every snapshot needs no gate here.
+  //
+  // `gridSet` is optimistic until Settings loads, which is safe on its own
+  // terms: seeding also requires a workable PASS, and passes only exist once
+  // the backend resolved an observer from the grid. Both must hold.
+  useEffect(() => {
+    const rec = seedSatFavorites(view, gridSet)
+    if (rec == null) return
+    setFavs(satChasingSet())
+    setSeedNotice(rec)
+  }, [view, gridSet])
+
   // `norad` (when the caller's row knows it) keeps the name→NORAD record
   // current — the UI half of rename survival (satChase.ts, phase 4).
   const onToggleFav = (name: string, norad?: number | null) => {
@@ -1521,11 +1553,50 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
     [upcoming, nowSecs],
   )
 
+  // The Birds list rows. Two sources, because existence used to be
+  // elements-only: a bird nothing carries current elements for has no `birds`
+  // row, so a ★ bird that lost its elements simply VANISHED from the list the
+  // operator stars from — no row, no reason, no way to unstar it.
+  //
+  // Unplaceable birds are therefore listed when they are STARRED (the
+  // operator asked about that one) or when a SEARCH names them. Never all of
+  // them: the catalog knows ~280, and a default list five times its real
+  // length is its own dishonesty. The search clause is what keeps the star a
+  // two-way door — without it, unstarring an element-less bird deleted the
+  // only row that could ever star it again.
   const allBirds = useMemo(() => {
-    const names = (view?.birds ?? []).map((b) => b.name).sort()
     const q = search.trim().toUpperCase()
-    return q === '' ? names : names.filter((n) => n.toUpperCase().includes(q))
-  }, [view, search])
+    const rows = (view?.birds ?? [])
+      .filter((b) => q === '' || b.name.toUpperCase().includes(q))
+      .map((b) => ({
+        name: b.name,
+        norad: b.norad ?? null,
+        status: b.status ?? null,
+        amateur: b.amateur,
+        reason: null as SatExcluded['reason'] | null,
+      }))
+    for (const e of view?.excluded ?? []) {
+      const wanted =
+        q === ''
+          ? isSatChased(e.name, e.norad, chaseKeys)
+          : e.name.toUpperCase().includes(q)
+      if (!wanted) continue
+      rows.push({
+        name: e.name,
+        norad: e.norad,
+        status: e.status ?? null,
+        // The catalog's transmitter answer when it has one — a bird whose
+        // last amateur transmitter went quiet is why it has no elements, and
+        // the row should say that, not just "no elements". `undefined` where
+        // the catalog does not know the bird is "not asked", which satHealth
+        // must never read as "no transmitters".
+        amateur: e.amateur ?? undefined,
+        reason: e.reason,
+      })
+    }
+    rows.sort((a, b) => a.name.localeCompare(b.name))
+    return rows
+  }, [view, search, chaseKeys])
 
   const tleStale = view != null && view.tleAgeDays > 14
 
@@ -1943,6 +2014,33 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         )}
         {onPopOut && (
           <button className="pane-popout" onClick={onPopOut} title="Open in its own window">⧉</button>
+        )}
+        {/* THE SEED NOTICE. The app starred birds on the operator's behalf, so
+            it says so — a silent mutation of their ★ set would be the app
+            having an opinion it never admitted to. Lives INSIDE the header
+            (flex-basis:100%, its own line) rather than as a new grid child:
+            .sats-view's rows are `auto auto minmax(0,1fr)` and an extra
+            column-1 item would push the schedule out of the grower row. */}
+        {seedNotice && (
+          <div className="sats-seed-notice">
+            <span>
+              Starred {seedNotice.names.length} active birds to get you started — change
+              them any time with the ★ beside any bird.
+            </span>
+            <button
+              type="button"
+              // The glyph is not a name a screen reader can use, and this is
+              // the notice's only control.
+              aria-label="Dismiss the starred-birds notice"
+              title="Dismiss — your ★ birds stay exactly as they are"
+              onClick={() => {
+                ackSatSeedNotice()
+                setSeedNotice(null)
+              }}
+            >
+              ✕
+            </button>
+          </div>
         )}
       </header>
 
@@ -2415,18 +2513,37 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             spellCheck={false}
           />
           <ul>
-            {allBirds.map((n) => {
-              const norad = view?.birds.find((b) => b.name === n)?.norad
+            {allBirds.map((b) => {
+              // What the CATALOG said (dead / re-entered / alive-but-silent),
+              // and — for a ★ bird with no row of its own — why it could not
+              // be placed. Both can be true at once; both are shown.
+              const health = satBirdHealth(b.status, b.amateur)
+              const gap = b.reason == null ? null : satExcludedHealth(b.reason)
               return (
-                <li key={n} className={selected === n ? 'sel' : ''}>
+                <li
+                  key={`${b.norad ?? ''}-${b.name}`}
+                  className={selected === b.name ? 'sel' : ''}
+                >
                   <button
-                    className={`sat-star${isSatChased(n, norad, chaseKeys) ? ' on' : ''}`}
-                    onClick={() => onToggleFav(n, norad)}
+                    className={`sat-star${isSatChased(b.name, b.norad, chaseKeys) ? ' on' : ''}`}
+                    onClick={() => onToggleFav(b.name, b.norad)}
                     title="★ favorites drive the schedule, the map emphasis, and alarms"
                   >
                     ★
                   </button>
-                  <button className="sat-pick" onClick={() => setSelected(n)}>{n}</button>
+                  <button className="sat-pick" onClick={() => setSelected(b.name)}>
+                    {b.name}
+                  </button>
+                  {health && (
+                    <span className={`sat-chip ${health.tone}`} title={health.title}>
+                      {health.label}
+                    </span>
+                  )}
+                  {gap && (
+                    <span className={`sat-chip ${gap.tone}`} title={gap.title}>
+                      {gap.label}
+                    </span>
+                  )}
                 </li>
               )
             })}

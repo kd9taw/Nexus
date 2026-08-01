@@ -502,7 +502,7 @@ describe('the stale-TLE chip', () => {
   // transform has nothing to mis-case.
   it('spells the age unit so the uppercase chip voice cannot re-case it', async () => {
     api.getSatellites.mockImplementation(() =>
-      Promise.resolve({ tleAgeDays: 21, tleFetchedAt: 1_785_542_400, tleSource: 'mirror', birds: [], passes: [] }),
+      Promise.resolve({ tleAgeDays: 21, tleFetchedAt: 1_785_542_400, tleSource: 'mirror', birds: [], passes: [], excluded: [] }),
     )
     const { container } = render(<SatellitesView />)
     await waitFor(() => {

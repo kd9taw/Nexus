@@ -7,10 +7,14 @@
 // Honesty: null data (no/stale elements) → the pane renders nothing and
 // PaneFrame falls back to the Basic line; elements older than 14 days carry a
 // stale badge. Geometry only — a pass says the bird is above your horizon, not
-// that its transponder is on.
+// that its transponder is on — so a bird SatNOGS calls dead is MARKED on its
+// row, and a ★ bird the view could not place at all is NAMED under the list
+// rather than dropped (an absent bird reads as "no pass this window", which is
+// a different and much more encouraging claim than "no current elements").
 import { useEffect, useState } from 'react'
 import type { SatView } from '../../types'
 import { getSatellites } from '../../api'
+import { satBirdHealth, satExcludedHealth } from '../../features/satHealth'
 import {
   filterSatsToChased,
   isSatChased,
@@ -84,7 +88,13 @@ export function SatPassesPane() {
   if (!sats) return null // PaneFrame falls back to the honest Basic line
   const now = Date.now() / 1000
   const upcoming = sats.passes.filter((p) => p.losUnix > now)
-  if (upcoming.length === 0) return null
+  // ★ birds the view could not place at all. STARRED ONLY: the catalog knows
+  // hundreds of unplaceable birds and none of them are this operator's
+  // problem until they star one.
+  const missing = (sats.excluded ?? []).filter((e) => isSatChased(e.name, e.norad, keys))
+  // A ★ bird with nothing but an exclusion is exactly the case that used to
+  // disappear — the pane returned null and PaneFrame showed the Basic line.
+  if (upcoming.length === 0 && missing.length === 0) return null
 
   // ★/All chip — the choice is shared with the map + globe satellite layers
   // (one surface-scoped key; see satFavOnly). Zero stars = the filter is inert.
@@ -130,6 +140,9 @@ export function SatPassesPane() {
       <ul className="sat-list">
         {rows.slice(0, 14).map((p) => {
           const isChased = isSatChased(p.name, p.norad, keys)
+          // Schedule rows carry a status but no transmitter answer, so this
+          // can report dead/re-entered and never "silent" (satHealth.ts).
+          const health = satBirdHealth(p.status)
           return (
             <li key={`${p.name}-${p.aosUnix}`} className={`sat-row${isChased ? ' chased' : ''}`}>
               <button
@@ -145,6 +158,11 @@ export function SatPassesPane() {
                 {isChased ? '★' : '☆'}
               </button>
               <span className="sat-name">{p.name}</span>
+              {health && (
+                <span className={`sat-chip ${health.tone}`} title={health.title}>
+                  {health.label}
+                </span>
+              )}
               <span className="sat-when">{timeLabel(p.aosUnix, now)}</span>
               <span
                 className="sat-el"
@@ -162,6 +180,18 @@ export function SatPassesPane() {
           )
         })}
       </ul>
+      )}
+      {missing.length > 0 && (
+        <ul className="sat-missing">
+          {missing.slice(0, 4).map((e) => {
+            const h = satExcludedHealth(e.reason)
+            return (
+              <li key={e.norad} title={h.title}>
+                ★ {e.name} — {h.label}
+              </li>
+            )
+          })}
+        </ul>
       )}
     </section>
   )

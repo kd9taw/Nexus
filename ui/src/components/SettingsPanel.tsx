@@ -3526,8 +3526,9 @@ export function SettingsPanel({
               </div>
               <span className="settings-hint">
                 Keplerian elements (TLEs) for the amateur satellites — pass times, pointing and
-                Doppler all come from them. Refreshed every 6 h from hamradiotools.io (CelesTrak
-                data); import a file for an offline shack or a just-launched bird.
+                Doppler all come from them. Refreshed every 6 h from hamradiotools.io: the bird
+                list comes from the SatNOGS database (CC BY-SA 4.0), the elements from CelesTrak
+                and SatNOGS. Import a file for an offline shack or a just-launched bird.
               </span>
               {tleStatus?.lastError && (
                 // Operator words in the line, the raw error in the tooltip —

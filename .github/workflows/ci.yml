@@ -197,6 +197,13 @@ jobs:
       - name: No demo/mock data guard
         run: bash scripts/check-no-demo.sh
 
+      # The TLE-mirror generator runs unattended in its own workflow and
+      # publishes to every install, so its derivation and its sanity gates are
+      # tested HERE, on committed fixtures, where a regression blocks a merge
+      # rather than shipping a shortened bird list six hours later.
+      - name: Test the TLE mirror generator
+        run: node --test scripts/gen-tles.test.mjs
+
   # Job 3 — MSRV: the workspace must compile on the pinned minimum toolchain
   # (Cargo.toml [workspace.package] rust-version = "1.91"). Build-only check,
   # incl. the propagation `live` feature (the heaviest dep set).
