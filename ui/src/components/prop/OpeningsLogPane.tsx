@@ -58,10 +58,14 @@ export function OpeningsLogPane() {
     }
   }, [])
 
-  if (episodes.length === 0) return null // PaneFrame falls back to the Basic hint
-
   // Sortable (sortable-everywhere, 2026-07-21): the operator hunts the biggest /
   // longest / busiest opening. Default stays newest-first.
+  //
+  // ⚠️ Hooks live ABOVE the no-episodes bail-out, unconditionally (rules of hooks).
+  // These two once sat below it: the first render (fetch pending) saw 3 hooks, the
+  // render after get_openings_log resolved saw 5, and React unmounted the entire
+  // main-window root — the 0.24.6 "black screen that survives restart" field crash
+  // (guarded by hooks-placement.test.ts + OpeningsLogPane.test.tsx).
   type OpSortKey = 'band' | 'mode' | 'when' | 'dur' | 'dx' | 'stns'
   const [opSort, setOpSort] = useState<{ key: OpSortKey; asc: boolean }>({ key: 'when', asc: false })
   const shown = useMemo(() => {
@@ -90,6 +94,9 @@ export function OpeningsLogPane() {
     })
     return rows
   }, [episodes, filter, opSort])
+
+  if (episodes.length === 0) return null // PaneFrame falls back to the Basic hint
+
   const opTh = (label: string, key: OpSortKey) => (
     <button
       type="button"

@@ -43,6 +43,7 @@ import { doubleBeep, processDecodes, txEarcon } from './alerts'
 import { openingToastSpec } from './openingAlert'
 import { announce } from './announce'
 import { Announcer } from './components/Announcer'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { loadWatchlist, type WatchFilter } from './watchlist'
 import { useTheme } from './useTheme'
 import { useScale } from './useScale'
@@ -55,6 +56,7 @@ import { useJourneyUnlocks } from './useJourneyUnlocks'
 import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
+import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
@@ -263,30 +265,25 @@ export default function App() {
   // Roam settings panel (inside the Tempo cockpit) open/closed.
   const [roamOpen, setRoamOpen] = useState(false)
   const [view, setView] = useState<View>(() => {
-    const h = typeof window !== 'undefined' ? window.location.hash.slice(1) : ''
-    const sectionIds = sectionFeatures().map((f) => f.id) as string[]
-    // Honor a deeplink only if it's an enabled section; otherwise open at the
-    // active profile's landing view.
-    if (sectionIds.includes(h) && features.enabled[h as FeatureId] !== false) {
-      return h as View
-    }
-    // Merged sections — honor old deeplinks.
-    if (h === 'propagation' || h === 'map') return 'connect'
-    // Reopen where the operator left off (SF ticket #3). Same shape as `nexus.operateLayout`
-    // below. Re-validated against the CURRENT enabled sections, so a section that was since
-    // disabled (or removed in an update) falls back to the profile landing instead of opening
-    // a dead view. Ranks below a deeplink — an explicit hash is a stronger intent.
+    // Deeplink > legacy merged-section deeplink > persisted view > profile landing —
+    // the precedence and the clamp live in resolveBootView (pure, test-pinned): a
+    // deeplink or restored view is honored only if it is an enabled section of THIS
+    // build, so an id removed in an update falls back to the landing instead of
+    // opening a dead view (SF ticket #3; re-pinned after the 0.24.6 black screen).
     //
     // SAFETY: restoring the VIEW must not command the radio. That is guaranteed by the mount
     // guard on the rig-mode effect below — without it, restoring to CW/Phone/RTTY would both
     // reconfigure the rig and ARM TRANSMIT at launch (engine.rs set_operating_mode arms TX for
     // the manual modes). Do not remove that guard.
     // PER-SURFACE: "reopen where I left off" describes THIS window.
-    const last = surfaceGet('nexus.view')
-    if (last && sectionIds.includes(last) && features.enabled[last as FeatureId] !== false) {
-      return last as View
-    }
-    return features.landing
+    const h = typeof window !== 'undefined' ? window.location.hash.slice(1) : ''
+    return resolveBootView(
+      h,
+      surfaceGet('nexus.view'),
+      sectionFeatures().map((f) => f.id),
+      (id) => features.enabled[id as FeatureId] !== false,
+      features.landing,
+    )
   })
   // Bird handed off from a map satellite click — the Satellites section opens on it.
   const [satFocus, setSatFocus] = useState<string | null>(null)
@@ -393,13 +390,12 @@ export default function App() {
   // sidebar (they never retune the radio). Default FT8/FT4 (the 80% case).
   const [area, setArea] = useState<'dx' | 'msg'>(() => {
     try {
-      const v = localStorage.getItem('nexus.workspace')
-      if (v === 'dx' || v === 'msg') return v
-      // Migrate the retired 'connect' area to FT8/FT4 (Connect is now a global view).
+      // coerceArea (test-pinned) also migrates the retired 'connect' area to
+      // FT8/FT4 (Connect is now a global view).
+      return coerceArea(localStorage.getItem('nexus.workspace'))
     } catch {
-      /* unreadable — fall through */
+      return 'dx' /* unreadable storage */
     }
-    return 'dx'
   })
   // Sync the engine to the persisted mode once on load (atomic tier+mode).
   const areaSyncedRef = useRef(false)
@@ -1827,6 +1823,10 @@ export default function App() {
   // the master is off) → operate.
   const fallbackView: View = isViewEnabled(features.landing) ? features.landing : 'operate'
   const effectiveView: View = isViewEnabled(view) ? view : fallbackView
+  // Where the crash panel's escape button goes. The landing view normally — unless the
+  // landing view is the one that just crashed (a vhf profile lands on Connect), in which
+  // case Operate: it is a core section, so it can never be the disabled one.
+  const crashEscape: View = fallbackView === effectiveView ? 'operate' : fallbackView
 
   // ── Eyes-free operating (a11y Phase A) — hooks BEFORE the `!snap` return ──
   // Per-view window title + a polite "now on X" announcement (navigation is
@@ -2452,98 +2452,118 @@ export default function App() {
           tier={tier}
           onDigitalMode={handleDigitalMode}
         />
-        {/* Operate cockpit lives here PERMANENTLY (mounted once, hidden when you're
-            on another section) so the waterfall + Band Activity keep decoding and
-            accumulating in the background — navigate away and back and your decodes
-            are exactly where you left them, plus everything heard while away. The
-            host is display:contents when shown (so the inner <main> flexes exactly
-            as before) and display:none when hidden. */}
-        <div className="operate-host" hidden={effectiveView !== 'operate'}>
-          <OperateCockpit
-            companionAddr={settings?.companionAddr}
-            snap={snap}
-            theme={theme}
-            tier={tier}
-            onTierChange={handleTier}
-            bandPlan={bandPlan}
-            onSetFrequency={handleSetFrequency}
-            onSourceChange={handleSourceChange}
-            onTune={handleTune}
-            onCall={handleCall}
-            onSetTxLevel={handleSetTxLevel}
-            onSetMode={handleSetMode}
-            onSetTxEven={handleSetTxEven}
-            onSetTxCycleAuto={handleSetTxCycleAuto}
-            onResend={handleQsoResend}
-            onFreetext={handleQsoFreetext}
-            onLog={handleLogCurrent}
-            onOverrideTx={handleOverrideTx}
-            onHaltTx={handleHaltTx}
-            onSetTxEnabled={handleSetTxEnabled}
-            onSetTune={handleSetTune}
-            onSetHoldTxFreq={handleSetHoldTxFreq}
-            dxClearTick={dxClearTick}
-            onSnap={setSnap}
-            onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
-            onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
-            preferRrr={settings?.preferRrr ?? false}
-            qsoMacros={macros.qso}
-            roster={operateStationsPanel}
-            needByCall={needByCall}
-            needAlertsByCall={needAlertsByCall}
-            selectedCall={activePeer}
-            onSelect={handleSelect}
-            layoutMode={operateLayout}
-            onLayoutMode={handleOperateLayout}
-            panels={operatePanels}
-            onPopOut={() => void openPanelWindow('operate')}
-            active={effectiveView === 'operate'}
-          />
-        </div>
-        {/* RTTY + SSTV keep-alive hosts (same pattern as .operate-host): the decoded
-            RTTY stream and the always-armed SSTV VIS receiver keep accumulating in
-            the backend while the operator is on another section; `active` gates only
-            each view's display poll (the OperateCockpit pattern). Gated on the
-            feature toggle so a disabled section mounts nothing. */}
-        {isViewEnabled('rtty') && (
-          <div className="rtty-host" hidden={effectiveView !== 'rtty'}>
-            <RttyCockpit
-              snap={snap}
-              onSnap={setSnap}
-              active={effectiveView === 'rtty'}
-              onSetFrequency={handleSetFrequency}
-              onSetTxEnabled={handleSetTxEnabled}
-              theme={theme}
-              panels={rttyPanels}
-            />
-          </div>
-        )}
-        {isViewEnabled('sstv') && (
-          <div className="sstv-host" hidden={effectiveView !== 'sstv'}>
-            <SstvView
+        {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
+            A render throw in a view used to unmount the ENTIRE root (0.24.6 field
+            incident: a rules-of-hooks bug in a Connect pane → a black window, rail
+            included, re-armed on every launch because the persisted view was
+            restored straight back into it). Scoped here, a crash costs the view and
+            nothing else: the rail, top bar, Now Bar and toasts keep rendering, so
+            the operator can always navigate out. The keep-alive hosts are INSIDE it
+            too — an Operate/RTTY/SSTV/APRS crash is exactly as fatal, and there is
+            no useful "black screen but the decodes survived". `resetKey` (not a
+            React `key`) clears the fallback on navigation without remounting those
+            hosts every section change — see the ErrorBoundary header. */}
+        <ErrorBoundary
+          label={featureById(effectiveView)?.label ?? 'This section'}
+          resetKey={effectiveView}
+          action={{
+            label: crashEscape === effectiveView ? 'Try again' : `Back to ${featureById(crashEscape)?.label ?? 'Operate'}`,
+            onClick: () => handleView(crashEscape),
+          }}
+        >
+          {/* Operate cockpit lives here PERMANENTLY (mounted once, hidden when you're
+              on another section) so the waterfall + Band Activity keep decoding and
+              accumulating in the background — navigate away and back and your decodes
+              are exactly where you left them, plus everything heard while away. The
+              host is display:contents when shown (so the inner <main> flexes exactly
+              as before) and display:none when hidden. */}
+          <div className="operate-host" hidden={effectiveView !== 'operate'}>
+            <OperateCockpit
+              companionAddr={settings?.companionAddr}
               snap={snap}
               theme={theme}
-              onSnap={setSnap}
-              active={effectiveView === 'sstv'}
+              tier={tier}
+              onTierChange={handleTier}
+              bandPlan={bandPlan}
               onSetFrequency={handleSetFrequency}
+              onSourceChange={handleSourceChange}
+              onTune={handleTune}
+              onCall={handleCall}
+              onSetTxLevel={handleSetTxLevel}
+              onSetMode={handleSetMode}
+              onSetTxEven={handleSetTxEven}
+              onSetTxCycleAuto={handleSetTxCycleAuto}
+              onResend={handleQsoResend}
+              onFreetext={handleQsoFreetext}
+              onLog={handleLogCurrent}
+              onOverrideTx={handleOverrideTx}
+              onHaltTx={handleHaltTx}
               onSetTxEnabled={handleSetTxEnabled}
-              panels={sstvPanels}
+              onSetTune={handleSetTune}
+              onSetHoldTxFreq={handleSetHoldTxFreq}
+              dxClearTick={dxClearTick}
+              onSnap={setSnap}
+              onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
+              onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+              preferRrr={settings?.preferRrr ?? false}
+              qsoMacros={macros.qso}
+              roster={operateStationsPanel}
+              needByCall={needByCall}
+              needAlertsByCall={needAlertsByCall}
+              selectedCall={activePeer}
+              onSelect={handleSelect}
+              layoutMode={operateLayout}
+              onLayoutMode={handleOperateLayout}
+              panels={operatePanels}
+              onPopOut={() => void openPanelWindow('operate')}
+              active={effectiveView === 'operate'}
             />
           </div>
-        )}
-        {isViewEnabled('aprs') && (
-          <div className="aprs-host" hidden={effectiveView !== 'aprs'}>
-            <AprsCockpit
-              theme={theme}
-              myGrid={snap.mygrid}
-              active={effectiveView === 'aprs'}
-              onTune={handleAprsTune}
-              radio={snap.radio}
-              onSetTxEnabled={handleSetTxEnabled}
-            />
-          </div>
-        )}
-        {workspace}
+          {/* RTTY + SSTV keep-alive hosts (same pattern as .operate-host): the decoded
+              RTTY stream and the always-armed SSTV VIS receiver keep accumulating in
+              the backend while the operator is on another section; `active` gates only
+              each view's display poll (the OperateCockpit pattern). Gated on the
+              feature toggle so a disabled section mounts nothing. */}
+          {isViewEnabled('rtty') && (
+            <div className="rtty-host" hidden={effectiveView !== 'rtty'}>
+              <RttyCockpit
+                snap={snap}
+                onSnap={setSnap}
+                active={effectiveView === 'rtty'}
+                onSetFrequency={handleSetFrequency}
+                onSetTxEnabled={handleSetTxEnabled}
+                theme={theme}
+                panels={rttyPanels}
+              />
+            </div>
+          )}
+          {isViewEnabled('sstv') && (
+            <div className="sstv-host" hidden={effectiveView !== 'sstv'}>
+              <SstvView
+                snap={snap}
+                theme={theme}
+                onSnap={setSnap}
+                active={effectiveView === 'sstv'}
+                onSetFrequency={handleSetFrequency}
+                onSetTxEnabled={handleSetTxEnabled}
+                panels={sstvPanels}
+              />
+            </div>
+          )}
+          {isViewEnabled('aprs') && (
+            <div className="aprs-host" hidden={effectiveView !== 'aprs'}>
+              <AprsCockpit
+                theme={theme}
+                myGrid={snap.mygrid}
+                active={effectiveView === 'aprs'}
+                onTune={handleAprsTune}
+                radio={snap.radio}
+                onSetTxEnabled={handleSetTxEnabled}
+              />
+            </div>
+          )}
+          {workspace}
+        </ErrorBoundary>
       </div>
 
       <Toasts />
