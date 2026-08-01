@@ -89,6 +89,25 @@ what to configure instead of guessing which rig to move. A radio whose band list
 leaves the downlink's band out is never the fallback — that list is your word that the rig
 doesn't take the band, and the pick refuses rather than switching to it just to be turned down.
 
+**A packet bird is FM to the radio — and routes like it.** Field report: on the same station,
+picking the ISS APRS digipeater (145.825 up *and* down) selected the HF rig and called the bird
+SSB. The mode class behind routing recognised only the literal names "FM"/"FMN", so every packet
+mode SatNOGS uses — AFSK, FSK, GMSK and the rest of the family — fell through to the SSB class:
+the FM routing rule never matched, and USB would have been commanded on an FM channel. One
+mode-name map now classifies the whole packet family as FM everywhere the class is consulted —
+routing, the commanded rig mode, and the uplink's sideband — so the digipeater reaches the
+VHF/UHF rig, in FM. Linear birds (the RS-44 class) behave exactly as before, and a mode name the
+map has never seen still reads SSB, as it always did.
+
+**A simplex bird rides one dial.** 145.825 up and down is one channel, not a cross-band pair: the
+pick no longer writes a split for it, nothing engages the rig's satellite mode, and mid-pass
+Doppler holds the dial on the published frequency — the two legs' corrections are equal and
+opposite, so steering the one dial to either leg lands the other twice as far off, outside an FM
+passband. Parking on the channel is what every 145.825 operator does by hand, and now the tracker
+does the same. The radio line shows the one frequency once, and the Doppler row says the two legs
+share the dial instead of printing the VFO mapping twice. Cross-band FM channels (SO-50's
+145.850 ↑ / 436.795 ↓) keep both dials steered as before.
+
 **Cross-band uplink on the IC-9700 rides satellite mode.** The uplink used to be written as an
 A/B split — which on a dual-band rig lands in the *downlink's own band* and goes nowhere. Under a
 Main = downlink / Sub = uplink mapping, Nexus now engages the rig's satellite mode, writes the

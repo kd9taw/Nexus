@@ -43,7 +43,7 @@ import {
   fetchTlesNow,
 } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
-import { SAT_VFO_MAPS, satVfoLabel } from '../features/satVfo'
+import { SAT_VFO_MAPS } from '../features/satVfo'
 import { satChasingSet, toggleSatChasing } from '../features/satChase'
 import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAlarm'
 import { heatPulse } from '../features/pulse'
@@ -928,6 +928,7 @@ function TrackRail({
   vfoMap,
   heldDesc,
   heldInverting,
+  simplex,
   autoPicked,
   canPick,
   nowSecs,
@@ -947,6 +948,12 @@ function TrackRail({
   /** The held transponder's description (engine truth first), or null. */
   heldDesc: string | null
   heldInverting: boolean
+  /** The held transponder is a SIMPLEX channel (uplink == downlink, the 145.825
+   * APRS class) — one dial carries both legs, which is what the Doppler row has
+   * to say instead of leaving the operator to wonder where their uplink went.
+   * From the ENGINE's binding, never re-derived here: two copies of a rule that
+   * decides where the radio transmits is a wrong-uplink generator. */
+  simplex: boolean
   /** The hold came from "Work this pass", not a hand pick — disclosed. */
   autoPicked: boolean
   /** The bird has a transponder chooser to go to (it renders only when the
@@ -1033,9 +1040,18 @@ function TrackRail({
       <div className="sat-rail-row">
         {railDot(dopplerLive)}
         <span className="sat-rail-name">Doppler</span>
+        {/* The MAPPING is deliberately not named here. The select at the end of
+            this row is both the live value and the control for it, so spelling
+            it out in the state text printed the same sentence twice on one line
+            ("on — VFO A = uplink, VFO B = downlink", then the identical option).
+            What the text owns is what the select cannot say: whether Doppler is
+            driving anything at all, and the one transponder shape where both
+            legs share a single dial. */}
         <span className="sat-rail-state">
           {dopplerLive
-            ? `on — ${satVfoLabel(vfoMap)}`
+            ? simplex
+              ? 'on — one channel: both legs ride the same dial'
+              : 'on'
             : !dopplerOn
               ? 'off — nothing is being tuned'
               : 'VFO map is Off — Doppler writes nothing to the radio'}
@@ -2112,6 +2128,10 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                 vfoMap={vfoMap}
                 heldDesc={detailTrack.transponder ?? heldT?.description ?? null}
                 heldInverting={detailTrack.inverting || !!heldT?.invert}
+                // Gated on the hold being THIS bird, exactly like the binding
+                // line above: the engine's binding is global (one hold at a
+                // time), and RS-44's shape must never describe AO-91's row.
+                simplex={!!(binding?.simplex && tuned?.name === detail.name)}
                 autoPicked={!!(tuned?.auto && tuned.name === detail.name)}
                 canPick={detail.transmitters.length > 0}
                 nowSecs={nowSecs}

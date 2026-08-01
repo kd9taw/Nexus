@@ -91,6 +91,23 @@ impl Transmitter {
         )
     }
 
+    /// True when the RADIO must be in FM to work this transmitter — the FM/AFSK
+    /// repeater and packet birds (SO-50, AO-91, the ISS APRS digipeater), as
+    /// opposed to the linear/SSB majority.
+    ///
+    /// Per-leg mode FIRST for the same reason [`Transmitter::uplink_mode`]
+    /// exists: the single `mode` field cannot describe an inverting
+    /// transponder's two legs, and it is the DOWNLINK the rig demodulates. The
+    /// mode-name table itself lives in [`tempo_core::doppler::mode_is_fm`] —
+    /// one map, shared with the routing class and the commanded rig mode, so
+    /// the three cannot disagree about the same bird.
+    pub fn is_fm(&self) -> bool {
+        self.downlink_mode
+            .as_deref()
+            .or(self.mode.as_deref())
+            .is_some_and(tempo_core::doppler::mode_is_fm)
+    }
+
     /// Centre of the downlink passband (or the single downlink frequency).
     pub fn downlink_centre_hz(&self) -> Option<u64> {
         centre(self.downlink_low_hz, self.downlink_high_hz)
@@ -337,6 +354,50 @@ mod tests {
         // A single-frequency channel: centre IS the frequency.
         assert_eq!(fm.downlink_centre_hz(), Some(437_800_000));
         assert_eq!(fm.uplink_centre_hz(), Some(145_990_000));
+    }
+
+    #[test]
+    fn the_iss_aprs_transceiver_is_an_fm_bird_on_one_channel() {
+        // THE field-report record, straight out of the fixture above:
+        //   {"description":"Mode V APRS","type":"Transceiver",
+        //    "uplink_low":145825000,"downlink_low":145825000,"mode":"AFSK"}
+        // Two facts decide how it must be worked, and the pick path got both
+        // wrong: it is FM (a 2 m packet signal demodulated as SSB is garbled
+        // audio — the same correctness gate the terrestrial APRS tune already
+        // carries), and it is SIMPLEX (one dial, no split, no satellite mode).
+        //
+        // Note there is no "APRS" MODE in the SatNOGS vocabulary — APRS lives
+        // in the description, and the mode is AFSK. A fix keying on the string
+        // "APRS" would miss every packet bird.
+        let x = parse_transmitters(XMIT_FIXTURE);
+        let iss = &x[1];
+        assert_eq!(iss.description, "Mode V APRS");
+        assert_eq!(iss.mode.as_deref(), Some("AFSK"));
+        assert!(iss.is_fm(), "AFSK is FM to a radio");
+        assert_eq!(iss.uplink_centre_hz(), iss.downlink_centre_hz());
+        assert!(!iss.is_linear(), "a channel, not a passband");
+
+        // The linear pin, byte-identical: RS-44 stays SSB-class, and its two
+        // legs stay a cross-band pair.
+        let lin = &parse_transmitters(
+            r#"[{"norad_cat_id":44909,"description":"Linear Transponder","alive":true,
+                 "type":"Transponder","invert":true,
+                 "uplink_low":145935000,"uplink_high":145995000,"uplink_mode":"LSB",
+                 "downlink_low":435610000,"downlink_high":435670000,"downlink_mode":"USB"}]"#,
+        )[0];
+        assert!(!lin.is_fm(), "a linear transponder is worked on SSB");
+        assert_ne!(lin.uplink_centre_hz(), lin.downlink_centre_hz());
+
+        // Per-LEG mode wins over the single `mode` field: an inverting bird
+        // reports USB down / LSB up, and the downlink is what the rig hears.
+        let mixed = &parse_transmitters(
+            r#"[{"norad_cat_id":1,"description":"x","alive":true,"mode":"FM",
+                 "downlink_mode":"USB","downlink_low":435000000}]"#,
+        )[0];
+        assert!(!mixed.is_fm(), "the downlink leg decides what the rig hears");
+
+        // An uncharacterised transmitter (mode null) is not claimed as FM.
+        assert!(!x[2].is_fm());
     }
 
     #[test]

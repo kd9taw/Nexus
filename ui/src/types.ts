@@ -566,6 +566,11 @@ export interface SatBinding {
   band: string
   /** The mode class routed on: true = FM (an FM bird follows the FM rule). */
   fm: boolean
+  /** Uplink and downlink are the SAME frequency — the 145.825 ISS/APRS
+   * digipeater class. One dial carries both legs: no split is written, nothing
+   * engages the rig's cross-band satellite mode, and this line shows ONE
+   * frequency rather than the same number twice. */
+  simplex: boolean
   /** Confirmed on the wire; null until the rig acknowledged (or refused). */
   downlinkMhz: number | null
   uplinkMhz: number | null

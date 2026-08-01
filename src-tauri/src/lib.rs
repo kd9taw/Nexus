@@ -4390,15 +4390,17 @@ async fn set_sat_transponder(
         _ => 0,
     };
     let label = format!("{}|{}", name.trim(), tp.description);
-    // An FM bird (the SO-50/AO-91 majority) is FM-CLASS traffic and must follow
-    // the operator's FM routing rule, not their SSB one — that is the whole
-    // point of mode-class routing (one band, two rigs). Per-leg mode first: the
-    // single `mode` field cannot describe an inverting transponder's two legs.
-    let fm = tp
-        .downlink_mode
-        .as_deref()
-        .or(tp.mode.as_deref())
-        .is_some_and(|m| m.trim().to_ascii_uppercase().starts_with("FM"));
+    // An FM bird (the SO-50/AO-91 repeaters and the 145.825 packet digipeaters)
+    // is FM-CLASS traffic and must follow the operator's FM routing rule, not
+    // their SSB one — that is the whole point of mode-class routing (one band,
+    // two rigs) — and the rig belongs in FM, not USB.
+    //
+    // The classification is `Transmitter::is_fm` (per-leg mode first, over the
+    // one mode-name map in `tempo_core::doppler::mode_is_fm`). It used to be
+    // `mode.starts_with("FM")` inline, which matches exactly two names in the
+    // 58-entry SatNOGS vocabulary — so every packet bird (AFSK/FSK/GMSK/…, the
+    // ISS APRS digipeater among them) fell through to the SSB class.
+    let fm = tp.is_fm();
     let mut eng = engine_lock(&state);
     eng.set_sat_transponder(Some((
         label,
@@ -5114,6 +5116,10 @@ struct SatBindingDto {
     radio_name: String,
     band: String,
     fm: bool,
+    /// Uplink and downlink are the SAME frequency (the 145.825 APRS-digipeater
+    /// class): one dial carries both legs, so no split is written and the rail
+    /// shows one frequency instead of the same number twice.
+    simplex: bool,
     /// `Some` only for a leg the RIG ACKNOWLEDGED on the wire (the radio loop's
     /// report, not the engine's request) — a rail that printed the computed
     /// centres regardless would show frequencies beside a radio that never
@@ -5138,6 +5144,7 @@ fn get_sat_transponder(
         radio_name: b.radio_name.clone(),
         band: b.band.clone(),
         fm: b.fm,
+        simplex: b.simplex,
         downlink_mhz: b.downlink_mhz,
         uplink_mhz: b.uplink_mhz,
         pending_downlink_mhz: b.pending_downlink_mhz,

@@ -1137,6 +1137,23 @@ pub struct Engine {
     /// read time on the dial still being at/above 29 MHz — the same threshold `Settings::rig_mode`
     /// applies to Phone-FM, so a knob-QSY down to HF can never leave FM forced.
     fm_channel: bool,
+    /// The held transponder is an FM BIRD, so the rig belongs in FM (session-only,
+    /// never persisted). Set by [`Engine::sat_tune_nominal`] on the leg it actually
+    /// writes; makes `rig_mode_effective` command FM and `route_mode` answer Fm,
+    /// for the reason the terrestrial APRS tune already carries — a 2 m packet or
+    /// FM-repeater signal demodulated as USB is garbled audio, and the Satellites
+    /// section is not a Phone/Digital operating section, so it cannot ride the
+    /// Phone-FM override.
+    ///
+    /// Forces SIMPLEX plumbing like `aprs_fm`, and that is the load-bearing half:
+    /// a satellite has NO repeater shift (an FM bird's uplink is its own dial or
+    /// the split), so inheriting the operator's last machine's shift and tone
+    /// would transmit off-frequency.
+    ///
+    /// Cleared by every QSY, section change and radio switch, exactly like the two
+    /// flags above, and read behind the same 29 MHz gate — so it can never leave
+    /// FM forced after the operator has gone elsewhere.
+    sat_fm: bool,
     /// SSTV RX decoder armed (session-only runtime state, never persisted).
     sstv_armed: bool,
     /// Drain buffer for the SSTV decode thread (same pattern as `rtty_audio`).
@@ -2020,6 +2037,11 @@ pub struct SatBinding {
     pub band: String,
     /// The mode class routed on: `true` = FM (an FM bird follows the FM rule).
     pub fm: bool,
+    /// This transponder is a SIMPLEX channel — uplink and downlink are the same
+    /// frequency (the 145.825 ISS/APRS-digipeater class). One dial carries both
+    /// legs: no split is written, nothing engages the rig's satellite mode, and
+    /// the rail shows ONE frequency rather than the same number twice.
+    pub simplex: bool,
     /// Nominal downlink the RIG ACKNOWLEDGED on the wire (MHz). `Some` only
     /// after the radio loop reported the dial command accepted
     /// ([`Engine::rig_dial_applied`]) — never at request time. The pick itself
@@ -2318,6 +2340,7 @@ impl Engine {
             aprs_msg_seq: 0,
             aprs_fm: false,
             fm_channel: false,
+            sat_fm: false,
             sstv_armed: false,
             sstv_audio: Vec::new(),
             sstv_progress: None,
@@ -2778,6 +2801,7 @@ impl Engine {
         // this clears the flag outright so it never lingers pointed at a different radio.
         self.aprs_fm = false;
         self.fm_channel = false;
+        self.sat_fm = false;
         // Frequency coverage belongs to the RADIO, so it must not survive the switch. Dropping it to
         // "unknown" makes the window before the loop re-probes fail OPEN; keeping the old radio's
         // list would let an HF-only rig's ranges block a QSY on the VHF radio that just became
@@ -2948,9 +2972,11 @@ impl Engine {
         }
         // A normal QSY leaves the APRS FM-simplex context (aprs_tune re-sets it right after its own
         // set_frequency call), so FM never lingers onto the next band the operator tunes. Same for
-        // the FM-channel hold (repeater_tune re-sets it the same way).
+        // the FM-channel hold (repeater_tune re-sets it the same way) and the satellite FM-bird
+        // hold (sat_tune_nominal, likewise).
         self.aprs_fm = false;
         self.fm_channel = false;
+        self.sat_fm = false;
         // Band change invalidates the decode context: answering a HISTORY row from
         // the old band would target a station that isn't here and derive parity
         // from the old band's slots. The heard-stations roster goes with it —
@@ -3289,9 +3315,10 @@ impl Engine {
     pub fn set_operating_mode(&mut self, mode: &str, follow_freq: bool) {
         use crate::settings::OperatingMode;
         // Entering a real operating section ends the APRS FM-simplex context, and the FM-channel
-        // hold with it — that section's own mode policy takes over from here.
+        // and satellite FM-bird holds with it — that section's own mode policy takes over here.
         self.aprs_fm = false;
         self.fm_channel = false;
+        self.sat_fm = false;
         let om = match mode.to_ascii_lowercase().as_str() {
             "phone" => OperatingMode::Phone,
             "cw" => OperatingMode::Cw,
@@ -3524,6 +3551,14 @@ impl Engine {
         if self.fm_channel && self.settings.dial_mhz >= 29.0 {
             return "FM".to_string();
         }
+        // An FM BIRD parks the rig in FM for the same reason APRS does: SO-50 and
+        // the 145.825 packet digipeaters are FM channels, and a packet or FM-voice
+        // downlink demodulated as USB is garbled audio. Same 29 MHz gate as the
+        // FM-channel arm above, and every satellite downlink clears it — the gate
+        // is there so a knob-QSY down to HF can never leave FM forced.
+        if self.sat_fm && self.settings.dial_mhz >= 29.0 {
+            return "FM".to_string();
+        }
         if self.settings.operating_mode == crate::settings::OperatingMode::Phone {
             // SSTV rides the Phone segment but transmits SOUNDCARD audio, so — exactly like
             // FT8 — it needs a DATA submode (PKTUSB/PKTLSB → Yaesu DATA / Icom D / Kenwood
@@ -3574,6 +3609,12 @@ impl Engine {
         if self.fm_channel && dial_mhz >= 29.0 {
             return RouteMode::Fm;
         }
+        // …and the `sat_fm` arm, for the same invariant: a rig held on an FM bird routes on FM.
+        // (The satellite pick names its class explicitly via `route_intent`, so this arm answers
+        // for the QSYs that follow it rather than for the pick itself.)
+        if self.sat_fm && dial_mhz >= 29.0 {
+            return RouteMode::Fm;
+        }
         match self.settings.operating_mode {
             OperatingMode::Cw => RouteMode::Cw,
             OperatingMode::Rtty => RouteMode::Rtty,
@@ -3619,8 +3660,13 @@ impl Engine {
     /// The FM repeater plumbing (shift, offset Hz, CTCSS tone) the radio loop should command while
     /// the rig is in FM. APRS forces SIMPLEX / no tone so it never inherits the operator's
     /// Phone-section repeater shift (which would transmit the beacon off-frequency).
+    ///
+    /// A satellite FM bird forces the same, and for a sharper version of the same reason: a bird
+    /// has no repeater shift at all — its uplink is the split TX dial (cross-band) or the one dial
+    /// it shares with the downlink (simplex) — so a stale terrestrial shift would key it somewhere
+    /// the operator never chose.
     pub fn fm_repeater_config(&self) -> (String, i64, f32) {
-        if self.aprs_fm {
+        if self.aprs_fm || self.sat_fm {
             ("simplex".to_string(), 0, 0.0)
         } else {
             (
@@ -6175,21 +6221,35 @@ impl Engine {
     /// the rail rather than swallowed.
     ///
     /// `fm` = this transponder is an FM bird, from the SatNOGS record the caller
-    /// already parsed. It picks the routing CLASS only ([`RouteMode::Fm`] vs
-    /// [`RouteMode::Ssb`]), which is what lets one band reach two rigs. It does
-    /// NOT command the rig into FM: that needs the simplex/CTCSS plumbing
-    /// `repeater_tune` carries, and a satellite has no repeater shift — an FM
-    /// bird's uplink is the split dial written here, so inheriting a stale
-    /// `rptr_shift` would transmit it off-frequency.
+    /// already parsed (`satnogs::Transmitter::is_fm`, over the one mode map in
+    /// [`tempo_core::doppler::mode_is_fm`]). It decides two
+    /// things, from that single answer so they cannot disagree:
+    ///
+    /// - the routing CLASS ([`RouteMode::Fm`] vs [`RouteMode::Ssb`]), which is
+    ///   what lets one band reach two rigs;
+    /// - the mode the rig is COMMANDED into, via `sat_fm` — FM for an FM bird,
+    ///   USB otherwise. That is a correctness gate, not a preference: a packet
+    ///   or FM-voice downlink demodulated as USB is garbled audio, exactly as
+    ///   it is for terrestrial APRS.
+    ///
+    /// The FM hold forces SIMPLEX plumbing (`fm_repeater_config`), because a
+    /// satellite has no repeater shift — an FM bird's uplink is the split dial
+    /// written below, or on a simplex channel the same dial as the downlink —
+    /// so inheriting a stale `rptr_shift` would transmit it off-frequency.
     ///
     /// `now_ms` stamps the seed described below; pass the same clock the track
     /// loop feeds [`Self::sat_doppler_tick`].
     pub fn sat_tune_nominal(&mut self, fm: bool, now_ms: u64) -> SatBinding {
+        // `simplex: false` here is not a claim about the bird: these refusals
+        // return before any transponder shape was consulted (no hold at all) or
+        // before routing resolved anything (a band-plan miss), and the UI prints
+        // the reason alone for both.
         let refuse = |note: &str| SatBinding {
             radio_id: None,
             radio_name: String::new(),
             band: String::new(),
             fm,
+            simplex: false,
             downlink_mhz: None,
             uplink_mhz: None,
             pending_downlink_mhz: None,
@@ -6251,6 +6311,7 @@ impl Engine {
             radio_name,
             band: band.to_string(),
             fm,
+            simplex: t.is_simplex(),
             downlink_mhz: None,
             uplink_mhz: None,
             pending_downlink_mhz: None,
@@ -6325,14 +6386,31 @@ impl Engine {
             // fallback, a tier `route_radio` cannot see) — hand it to
             // `set_frequency` verbatim instead of letting it recompute.
             self.route_target = routed;
-            // "USB" is the satellite convention on VHF/UHF and what the Phone
-            // policy commands there anyway, so the stored sideband and the
-            // commanded mode cannot disagree. (An FM bird keeps today's mode
-            // behaviour — see the `fm` note above.)
-            self.set_frequency(down_mhz, band, "USB");
+            // The bird's OWN mode class decides what the rig is put in — the
+            // same one map that chose the routing class, so the two cannot
+            // disagree. "USB" is the satellite convention on VHF/UHF (and what
+            // the Phone policy commands there anyway); FM is a correctness gate,
+            // not a preference — an FM-repeater or packet downlink demodulated
+            // as USB is garbled audio, exactly as it is for terrestrial APRS.
+            self.set_frequency(down_mhz, band, if fm { "FM" } else { "USB" });
+            // `set_frequency` clears the FM holds (a QSY normally leaves one), so
+            // — exactly like `aprs_tune` and `repeater_tune` — re-arm after it.
+            // Set ONLY on the leg actually written: with no dial write there was
+            // no handoff, and putting a rig we were never handed into FM would be
+            // moving a radio nobody gave us.
+            self.sat_fm = fm;
             binding.pending_downlink_mhz = Some(down_mhz);
         }
-        if map.drives_uplink() && t.uplink_centre_hz != 0 {
+        // A SIMPLEX bird (145.825 up AND down) is ONE channel on ONE dial: there
+        // is no second frequency to put on a split, and asking for one is
+        // actively harmful. `sat_split_tx_vfo` answers "Sub" under a Main/Sub
+        // mapping, which the native CI-V backend serves by engaging the
+        // IC-9700's SATELLITE MODE — a 2 m/70 cm CROSS-BAND pairing — for a
+        // same-band 2 m packet bird, swapping both bands to the rig's stored
+        // satellite VFOs on the way. Mid-pass it gets worse, not better: the two
+        // legs want opposite corrections, ≈7 kHz apart at 145.825, which is a
+        // same-band odd split the rig cannot express at all.
+        if map.drives_uplink() && t.uplink_centre_hz != 0 && !t.is_simplex() {
             // AFTER the QSY, never before: a plain `set_frequency` returns the
             // rig to simplex (leftover pile-up split must not shift the next
             // frequency), which would drop a split written first.
@@ -6369,6 +6447,15 @@ impl Engine {
             // say so rather than letting a filled bullet imply it did.
             binding.note = Some(
                 "Uplink-only mapping — the transmit VFO is set; the dial stays yours.".to_string(),
+            );
+        } else if binding.simplex && map.drives_uplink() {
+            // ONE leg, on purpose. The operator's mapping asked for an uplink and
+            // got a single frequency instead, so say why in place of leaving them
+            // to wonder which VFO the transmit leg landed on. Only under a mapping
+            // that drives the uplink: under downlink-only they never asked.
+            binding.note = Some(
+                "Simplex channel — you transmit on this same dial, so no split was written."
+                    .to_string(),
             );
         }
         // SEED the Doppler limiter with what we just sent. Two things depend on
@@ -6670,16 +6757,20 @@ impl Engine {
             min_shift_hz: self.settings.sat_min_shift_hz,
             min_interval_ms: self.settings.sat_update_ms,
         };
+        // Read the hold BEFORE the legs: a SIMPLEX bird has no uplink leg to
+        // drive — one dial carries both — and letting the mapping alone decide
+        // would grow a split back mid-pass that the pick deliberately declined,
+        // engaging the rig's cross-band satellite mode on a same-band channel.
+        let st = self.sat_tune.as_ref()?;
         let legs = dop::Legs {
             downlink: map.drives_downlink(),
-            uplink: map.drives_uplink(),
+            uplink: map.drives_uplink() && !st.transponder.is_simplex(),
         };
         // Slot-timed modes hold the dial still for the length of an over; the
         // manual modes steer through it. See doppler::TxPolicy.
         let policy = dop::TxPolicy::for_slot_mode(
             self.settings.operating_mode == crate::settings::OperatingMode::Digital,
         );
-        let st = self.sat_tune.as_ref()?;
         let want = dop::tuning(&st.transponder, st.state, range_rate_km_s);
         let c = dop::correction(want, st.sent, now_ms, limits, legs, policy.may_steer(keyed));
         if c.is_empty() {
@@ -19643,6 +19734,191 @@ mod tests {
         assert_eq!(b.radio_id, Some(ft991a));
         assert_ne!(b.radio_id, Some(ic9700));
         assert!((e.settings.dial_mhz - 436.795).abs() < 1e-9);
+    }
+
+    /// The APRS field-report station, reproduced exactly: a dual-radio shack
+    /// with the HF rig ("Yeasu", the operator's profile name) ACTIVE and its
+    /// band list ALSO claiming 2 m, the IC-9700 beside it, and the two rules a
+    /// dual-radio operator writes (FM and Digital to the 9700).
+    ///
+    /// That 2 m overlap is load-bearing, not incidental: it makes the coverage
+    /// TIER decline — rank 2 against rank 2, and a tie keeps the active radio —
+    /// which is exactly why the pick stayed on the HF rig here while the same
+    /// operator's earlier RS-44 test routed correctly on 70 cm, a band the HF
+    /// rig does not list.
+    fn aprs_field_station() -> (Engine, u32) {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.rig_model = 1042; // FTdx10
+        e.settings.sync_active_from_flat();
+        let ic9700 = e.add_radio();
+        e.settings.rig_model = 3081;
+        e.settings.sync_active_from_flat();
+        e.rename_radio(0, "Yeasu");
+        e.rename_radio(ic9700, "IC-9700");
+        e.set_radio_bands(0, vec!["20m".into(), "2m".into()]);
+        e.set_radio_bands(ic9700, vec!["2m".into(), "70cm".into()]);
+        e.set_routing_rules(vec![
+            crate::settings::RoutingRule {
+                bands: vec!["2m".into(), "70cm".into()],
+                mode: Some(crate::settings::RouteMode::Fm),
+                radio: ic9700,
+            },
+            crate::settings::RoutingRule {
+                bands: vec![],
+                mode: Some(crate::settings::RouteMode::Digital),
+                radio: ic9700,
+            },
+        ]);
+        e.set_active_radio(0);
+        e.settings.band = "20m".into();
+        e.settings.dial_mhz = 14.074;
+        let mut s = e.settings().clone();
+        s.operating_mode = crate::settings::OperatingMode::Phone;
+        s.sat_doppler = true;
+        s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
+        e.apply_settings(s);
+        (e, ic9700)
+    }
+
+    /// The ISS/NO-84-class APRS digipeater: 145.825 up AND down, one channel.
+    fn aprs_bird() -> tempo_core::doppler::Transponder {
+        tempo_core::doppler::Transponder::channel(145_825_000, 145_825_000)
+    }
+
+    #[test]
+    fn an_aprs_digipeater_bird_routes_to_the_fm_rig_and_writes_no_split() {
+        // THE field report (0.24.4, dual-radio). Picking the ISS-class APRS
+        // digipeater produced a readiness rail reading
+        //   "Radio: Yeasu · 2m · SSB — 145.825 ↓ · 145.825 ↑"
+        // — the HF rig, classed SSB, with a split whose TX dial equalled its RX
+        // dial. Three defects in one pick, pinned here together because they
+        // share one cause:
+        //
+        //  1. CLASS. The bird's SatNOGS mode is "AFSK". The class test was
+        //     `mode.starts_with("FM")`, which matches two names in the entire
+        //     58-entry vocabulary, so every packet bird read as SSB: the
+        //     operator's FM rule never matched and the coverage tier's rank TIE
+        //     kept the active radio.
+        //  2. MODE. USB was commanded on a signal that only exists after an FM
+        //     discriminator — the same correctness gate the terrestrial APRS
+        //     tune already carries.
+        //  3. SPLIT. A simplex channel is ONE dial. Requesting a split on it
+        //     engages the IC-9700's CROSS-BAND satellite mode for a same-band
+        //     2 m packet bird, and mid-pass the legs drift ≈7 kHz apart — a
+        //     same-band odd split the rig cannot express.
+        let (mut e, ic9700) = aprs_field_station();
+        assert_eq!(
+            e.settings.active_radio, 0,
+            "precondition: the HF rig is active, as it is when a bird comes over"
+        );
+
+        // Why the CLASS is the whole ballgame on this station, pinned as a
+        // precondition: under the SSB class — what `starts_with("FM")` produced
+        // for "AFSK" — nothing routes at all. No rule matches, the coverage tier
+        // ties (both rigs list 2 m, and a tie keeps the active radio) and the
+        // sat fallback fails open on an HF rig whose ranges are unknown. So the
+        // pick stayed on the Yaesu. Under the FM class it is decided at tier 1,
+        // by the operator's own rule, independent of every band list below it.
+        assert_eq!(
+            e.settings.route_radio("2m", crate::settings::RouteMode::Ssb),
+            None,
+            "precondition: the SSB class reaches no other rig here — the field report"
+        );
+        assert_eq!(
+            e.settings.route_radio("2m", crate::settings::RouteMode::Fm),
+            Some(ic9700),
+            "precondition: the FM class is an operator instruction, honored at tier 1"
+        );
+
+        // The class comes from the SatNOGS mode string, through the one map the
+        // command uses — this is the field case end to end, not a hand-set flag.
+        let fm = tempo_core::doppler::mode_is_fm("AFSK");
+        assert!(fm, "precondition: the mode map reads AFSK as an FM bird");
+        e.set_sat_transponder(Some(("ISS|Mode V APRS".into(), 0, aprs_bird())));
+        let b = e.sat_tune_nominal(fm, 1_000_000);
+
+        // 1 — the operator's FM rule fires and the 9700 takes the pick.
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "an FM bird must follow the operator's FM rule, not sit on the HF rig"
+        );
+        assert_eq!(b.radio_id, Some(ic9700));
+        assert_eq!(b.band, "2m");
+        assert!(b.fm, "and the rail says FM, not SSB");
+
+        // 2 — FM is what gets commanded, with SIMPLEX plumbing: a satellite has
+        // no repeater shift, and inheriting the operator's last machine's would
+        // transmit off-frequency.
+        assert_eq!(e.rig_mode_effective(), "FM");
+        assert_eq!(e.fm_repeater_config(), ("simplex".to_string(), 0, 0.0));
+
+        // 3 — one dial, no split, so nothing downstream can engage satellite
+        // mode; and the rail reports the one leg it actually wrote.
+        assert_eq!(e.split_tx_mhz(), None, "a simplex channel has no split");
+        assert!((e.settings.dial_mhz - 145.825).abs() < 1e-9);
+        assert!(b.simplex);
+        assert_eq!(b.pending_downlink_mhz, Some(145.825));
+        assert_eq!(b.pending_uplink_mhz, None);
+        let note = b.note.expect("the rail must say why there is only one leg");
+        assert!(
+            note.to_lowercase().contains("simplex"),
+            "the note must name the reason, got: {note}"
+        );
+    }
+
+    #[test]
+    fn a_simplex_bird_never_grows_a_split_mid_pass() {
+        // The pick declines the split; the TICK must decline it too, or the
+        // first Doppler correction of the pass puts one back — and with it the
+        // IC-9700's satellite mode, on a same-band 2 m channel.
+        //
+        // The dial must not be steered either. One dial cannot carry both
+        // corrections: receive wants f(1−β) and transmit f(1+β), ≈7.1 kHz apart
+        // at 145.825 on an ISS pass. Steering to the receive leg would put the
+        // TRANSMIT leg twice as far off the bird's receiver as leaving it alone.
+        let (mut e, _) = aprs_field_station();
+        e.set_sat_transponder(Some(("ISS|Mode V APRS".into(), 0, aprs_bird())));
+        e.sat_tune_nominal(true, 1_000_000);
+        assert_eq!(e.split_tx_mhz(), None, "precondition: the pick wrote none");
+
+        // A whole pass's geometry: approaching hard, through TCA, to receding.
+        for (i, rate) in [-7.5f64, -4.0, 0.0, 4.0, 7.5].iter().enumerate() {
+            e.sat_doppler_tick(*rate, 2_000_000 + i as u64 * 5_000, false);
+            assert_eq!(e.split_tx_mhz(), None, "a split appeared at rate {rate}");
+            assert!(
+                (e.settings.dial_mhz - 145.825).abs() < 1e-9,
+                "the shared channel must not be steered (rate {rate}), got {}",
+                e.settings.dial_mhz
+            );
+        }
+    }
+
+    #[test]
+    fn a_linear_bird_is_untouched_by_the_fm_map_and_the_simplex_rule() {
+        // The RS-44 pin. The operator's own earlier test routed correctly, and
+        // every part of it must keep behaving exactly as it did: SSB class, USB
+        // commanded, a cross-band split written, and both legs steered in
+        // OPPOSITE directions once the bird is up.
+        let (mut e, ic9700, _) = sat_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        let b = e.sat_tune_nominal(tempo_core::doppler::mode_is_fm("USB"), 1_000_000);
+
+        assert_eq!(e.settings.active_radio, ic9700);
+        assert!(!b.fm, "a linear transponder is SSB class");
+        assert!(!b.simplex, "and a cross-band pair, not one channel");
+        assert_eq!(e.rig_mode_effective(), "USB");
+        assert_eq!(
+            e.split_tx_mhz().map(|m| (m * 1e6).round() as u64),
+            Some(145_965_000),
+            "the uplink still rides the split TX dial"
+        );
+        assert_eq!(b.note, None, "nothing to explain — both legs were written");
+
+        // Mid-pass: receding ⇒ hear it low, transmit high. Unchanged.
+        e.sat_doppler_tick(5.0, 2_000_000, false);
+        assert!(e.settings.dial_mhz < 435.640, "got {}", e.settings.dial_mhz);
+        assert!(e.split_tx_mhz().unwrap() > 145.965);
     }
 
     #[test]

@@ -65,6 +65,20 @@ impl Transponder {
             half_width_hz: 0,
         }
     }
+
+    /// A SIMPLEX channel — one frequency for BOTH legs. The ISS/NO-84-class
+    /// APRS digipeaters (145.825 up *and* down) are the whole population, and
+    /// they are not a cross-band pair that happens to be close: they are one
+    /// channel, and the radio has one dial on it.
+    ///
+    /// EXACT equality, deliberately — no tolerance. Both legs arrive as integer
+    /// Hz from the same SatNOGS field on a simplex record, so equality is the
+    /// honest test; a tolerance would be a guessed threshold that silently drops
+    /// a split some bird genuinely needs. A beacon (uplink centre 0) is not
+    /// simplex — it has no transmit leg at all.
+    pub fn is_simplex(&self) -> bool {
+        self.uplink_centre_hz != 0 && self.uplink_centre_hz == self.downlink_centre_hz
+    }
 }
 
 /// The operator's position within the transponder, carried across the pass.
@@ -105,6 +119,30 @@ pub fn tuning(t: &Transponder, state: DopplerState, range_rate_km_s: f64) -> Tun
 
     // Downlink: what the operator wants to hear, before Doppler.
     let want_down = add_offset(t.downlink_centre_hz, offset);
+
+    // A SIMPLEX channel has ONE dial carrying both legs, and the two
+    // corrections are equal and opposite (hear it low, transmit high). A single
+    // dial can only take one of them, and the value that serves both is their
+    // midpoint — the uncorrected channel.
+    //
+    // This is not a shortcut, it is the only safe answer: steering the shared
+    // dial to the RECEIVE correction lands the TRANSMIT leg 2β off the bird's
+    // receiver. On a 145.825 ISS pass that is ≈7.1 kHz — twice as far off as
+    // simply not correcting, and outside an FM-N passband. Half of ±3.5 kHz sits
+    // comfortably inside FM capture on a 15 kHz channel, which is exactly why
+    // every 145.825 operator parks on the published frequency by hand.
+    //
+    // Scoped strictly to uplink == downlink: a CROSS-BAND FM channel
+    // (SO-50, 145.850↑ / 436.795↓) has two dials and must keep steering both —
+    // 436 MHz needs ~±10 kHz of correction.
+    if t.is_simplex() {
+        return Tuning {
+            downlink_hz: want_down,
+            uplink_hz: want_down,
+            downlink_shift_hz: 0,
+            uplink_shift_hz: 0,
+        };
+    }
     // Uplink: the SAME position in the passband, mirrored when inverting.
     let up_offset = if t.invert { -offset } else { offset };
     let want_up = add_offset(t.uplink_centre_hz, up_offset);
@@ -180,6 +218,49 @@ fn raw_offset_for(t: &Transponder, tuned_downlink_hz: u64, range_rate_km_s: f64)
     let beta = (range_rate_km_s * 1000.0) / C_M_S;
     let bird_frame = shift(tuned_downlink_hz, beta); // inverse of the -beta in `tuning`
     bird_frame as i64 - t.downlink_centre_hz as i64
+}
+
+/// Every mode name that means **the radio must be in FM**, matched per TOKEN.
+///
+/// Written as tokens rather than prefixes because the SatNOGS vocabulary is
+/// compound: `"FSK AX.25 G3RUH"`, `"MSK AX.100 Mode 5"`, `"GFSK/BPSK"`,
+/// `"GENESIS FSK"`, `"AFSK TUBiX10"`. A prefix test reads only the first word
+/// and misses three of those; a substring test would swallow `MFSK`.
+const FM_MODE_TOKENS: [&str; 14] = [
+    // FM voice, both spellings SatNOGS uses.
+    "FM", "FMN", "NFM", //
+    // Packet/data carried BY an FM signal — the radio still demodulates FM and
+    // the payload comes off the discriminator. AFSK is the ISS/APRS class.
+    "AFSK", "FSK", "4FSK", "GFSK", "FFSK", "GMSK", "MSK", "DUV", "DSTAR",
+    // Not SatNOGS `mode` values (APRS lives in `description`), but other
+    // sources spell packet birds this way and they are FM all the same.
+    "PKT", "PACKET",
+];
+
+/// Does this satellite mode string mean **the radio must be in FM**?
+///
+/// The one mode-class map for the satellite path — routing class, commanded rig
+/// mode and uplink mode all read this, so they cannot form different beliefs
+/// about the same bird.
+///
+/// | mode | class | why |
+/// |---|---|---|
+/// | `FM`, `FMN` | FM | FM voice — the SO-50/AO-91 repeaters |
+/// | `AFSK`, `FSK …`, `GFSK`, `GMSK`, `MSK …`, `4FSK`, `FFSK`, `DUV`, `DSTAR` | FM | data carried by an FM signal: the rig demodulates FM, the modem takes the audio |
+/// | `USB`, `LSB`, `CW`, `AM`, `BPSK`, `QPSK`, `MFSK`, `FT8`, `SSTV`, `DVB-S2`, … | SSB | linear-path modes — an SSB/linear transponder or a soundcard tone mode |
+/// | anything unrecognised, or absent | SSB | see below |
+///
+/// UNKNOWN READS AS SSB, for two reasons. It is what this path did for every
+/// mode before the map existed, so an unseen SatNOGS mode name cannot silently
+/// move a station's bird to a different rig; and USB is the VHF/UHF satellite
+/// convention, which is what the operator would have set by hand.
+///
+/// `MFSK` is deliberately NOT FM: the WSJT/FT8 family and the MFSK image modes
+/// are audio tone modes through an SSB path, and a substring match on "FSK"
+/// would have claimed them.
+pub fn mode_is_fm(mode: &str) -> bool {
+    mode.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|tok| FM_MODE_TOKENS.iter().any(|m| tok.eq_ignore_ascii_case(m)))
 }
 
 /// The sideband pair for a transponder, given the downlink mode the satellite
@@ -496,6 +577,87 @@ mod tests {
             (up_bird_frame - expected_up_centre).abs() <= 2,
             "uplink lost the operator's position: {up_bird_frame} vs {expected_up_centre}"
         );
+    }
+
+    #[test]
+    fn the_mode_class_map_reads_data_over_fm_as_fm_and_tone_modes_as_ssb() {
+        // THE field-report bug, at its source. The pick path classified an FM
+        // bird by `mode.starts_with("FM")`, which matches exactly two names in
+        // the whole 58-entry SatNOGS vocabulary — so every packet bird (the ISS
+        // APRS digipeater included) read as SSB: wrong routing rule, and USB
+        // commanded on a signal that only exists after an FM discriminator.
+        //
+        // Verbatim mode strings from db.satnogs.org/api/modes.
+        for m in [
+            "FM",
+            "FMN",
+            "AFSK",
+            "AFSK TUBiX10",
+            "FSK",
+            "FSK AX.25 G3RUH",
+            "FSK AX.100 Mode 5",
+            "GENESIS FSK", // the FM token is the SECOND word — a prefix test misses it
+            "4FSK",
+            "GFSK",
+            "GFSK Pkst",
+            "GFSK/BPSK",
+            "FFSK",
+            "GMSK",
+            "GMSK USP",
+            "MSK AX.100 Mode 6",
+            "DUV",
+            "DSTAR",
+            " afsk ", // case/space tolerant, like every other mode compare here
+        ] {
+            assert!(mode_is_fm(m), "{m} is FM to a radio");
+        }
+        for m in [
+            "USB", "LSB", "CW", "AM", "DSB", "BPSK", "DBPSK", "QPSK", "OQPSK", "PSK31", "64-QAM",
+            "OFDM", "APT", "ASK", "LoRa", "DVB-S2", "SSTV", "FT8", "WSJT", "CERTO", "SIDLOC",
+            // MFSK is the trap a substring match on "FSK" falls into: the
+            // WSJT/FT8 family and the MFSK image modes are audio tone modes
+            // through an SSB path, not discriminator modes.
+            "MFSK",
+        ] {
+            assert!(!mode_is_fm(m), "{m} rides a linear/SSB path");
+        }
+        // Unknown and absent both fall to SSB — today's behaviour for anything
+        // unrecognised, so a new SatNOGS mode name cannot silently reroute a rig.
+        assert!(!mode_is_fm("DOKA"));
+        assert!(!mode_is_fm(""));
+    }
+
+    #[test]
+    fn a_simplex_channel_rides_one_dial_and_is_not_steered_apart() {
+        // ISS/NO-84-class APRS: 145.825 up AND down. One channel, one dial —
+        // and the two Doppler corrections are equal and opposite, so a shared
+        // dial can only take their midpoint: the uncorrected channel.
+        //
+        // Steering it to the RECEIVE correction would put the TRANSMIT leg
+        // twice as far off the bird's receiver as leaving it alone (≈7.1 kHz at
+        // 145.825, outside an FM-N passband) — this pins that we do not.
+        let iss = Transponder::channel(145_825_000, 145_825_000);
+        assert!(iss.is_simplex());
+        for rate in [-7.5, -3.0, 0.0, 3.0, 7.5] {
+            let r = tuning(&iss, DopplerState::default(), rate);
+            assert_eq!(r.downlink_hz, 145_825_000, "receive dial parks, rate {rate}");
+            assert_eq!(r.uplink_hz, r.downlink_hz, "one dial carries both legs");
+            assert_eq!(r.downlink_shift_hz, 0);
+            assert_eq!(r.uplink_shift_hz, 0, "and nothing is claimed as shifted");
+        }
+
+        // The scope line: a CROSS-BAND FM channel is NOT simplex and must keep
+        // steering both legs — 436 MHz needs ~±10 kHz of correction, and SO-50
+        // is the bird half the FM operators on the planet work.
+        let so50 = Transponder::channel(145_850_000, 436_795_000);
+        assert!(!so50.is_simplex());
+        let r = tuning(&so50, DopplerState::default(), 5.0);
+        assert!(r.downlink_shift_hz < -6_000, "got {}", r.downlink_shift_hz);
+        assert!(r.uplink_shift_hz > 2_000, "got {}", r.uplink_shift_hz);
+
+        // Neither is a linear pair or a beacon (uplink centre 0 = no TX leg).
+        assert!(!rs44().is_simplex());
+        assert!(!Transponder::channel(0, 435_300_000).is_simplex());
     }
 
     #[test]
