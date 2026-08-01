@@ -220,6 +220,27 @@ from an older or newer version can never wedge startup into a dead screen.
   Only the FT-style cycle gets to finish: in CW, RTTY, SSTV, the voice keyer and APRS,
   TX Off still stops the over on the spot, and the cockpit Stop buttons now unkey even in
   the last fraction of a second of an over instead of leaving the rig keyed to the tail.
+### Added
+
+- **The recall card's picture opens their QRZ page.** Click the callbook photo on the
+  station you are working — or the initials circle when they have no photo — and QRZ opens
+  in your browser, so you can read the page while you are still in the QSO. The circle is
+  a link only once the callbook has actually resolved the call; before that it is the same
+  plain badge it always was. Clicking it does not move the cursor out of the log field you
+  are part-way through typing, and it is reachable from the keyboard like any other control.
+
+- **CQ+73 filter chip** in Band Activity (a tester request): the CQ view plus RR73/73
+  signoffs — a signoff means that frequency is about to free up. Sits between CQ and
+  To me; the plain CQ chip is unchanged. Detection rides the message parser, so a
+  `DM73` grid or an `RRR` roger never counts as a signoff.
+
+### Fixed
+
+- **The Band Activity filter chips wrap onto a second line instead of running off the edge
+  of a narrow rail.** The chip row could not wrap, which made it a single unbreakable
+  block: with the rail dragged to its narrowest the last chips sat past the panel edge,
+  and nothing in that column scrolls sideways, so there was no way to reach them. Adding a
+  seventh chip turned that from marginal into certain.
 
 ## [0.24.0] — 2026-07-31
 

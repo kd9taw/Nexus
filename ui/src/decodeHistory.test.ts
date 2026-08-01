@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  DECODE_FILTERS,
   DecodeHistory,
   fmtUtc,
   orderEntries,
@@ -69,6 +70,30 @@ describe('Rx Frequency filter (rx)', () => {
     expect(passesFilter(row({ message: 'TX', freqHz: 1500, mine: true }), 'rx', 500)).toBe(true)
     expect(passesFilter(row({ message: 'NEAR', freqHz: 500 + RX_TOL_HZ }), 'rx', 500)).toBe(true)
     expect(passesFilter(row({ message: 'FAR', freqHz: 2400 }), 'rx', 500)).toBe(false)
+  })
+})
+
+describe('CQ+73 filter (cq73 — tester request: 73s alongside the CQs)', () => {
+  // Classification is the ENGINE's: Msg::parse types each message and the row's
+  // `signoff` flag (Rr73/Bye73) rides the DTO like `isCq` does — this predicate
+  // only trusts the flag, so token-positional proof (DM73 grids, calls containing
+  // 73) lives with the parser tests in tempo-core/tempo-app.
+  it('passes CQ rows and signoff rows; rejects plain traffic', () => {
+    expect(passesFilter(row({ message: 'CQ W1AW FN31', freqHz: 1200, isCq: true }), 'cq73', 500)).toBe(true)
+    expect(passesFilter(row({ message: 'K2DEF W9XYZ RR73', freqHz: 1200, signoff: true }), 'cq73', 500)).toBe(true)
+    expect(passesFilter(row({ message: 'K2DEF W9XYZ 73', freqHz: 1200, signoff: true }), 'cq73', 500)).toBe(true)
+    // A grid message whose grid merely LOOKS like 73 — the engine left signoff off.
+    expect(passesFilter(row({ message: 'K2DEF W9XYZ DM73', freqHz: 1200 }), 'cq73', 500)).toBe(false)
+    expect(passesFilter(row({ message: 'K2DEF W9XYZ -10', freqHz: 1200 }), 'cq73', 500)).toBe(false)
+  })
+
+  it('plain CQ still EXCLUDES signoffs — zero change for existing operators', () => {
+    expect(passesFilter(row({ message: 'K2DEF W9XYZ RR73', freqHz: 1200, signoff: true }), 'cq', 500)).toBe(false)
+    expect(passesFilter(row({ message: 'K2DEF W9XYZ 73', freqHz: 1200, signoff: true }), 'cq', 500)).toBe(false)
+  })
+
+  it('the chip bar slots CQ+73 between CQ and To me', () => {
+    expect(DECODE_FILTERS).toEqual(['all', 'cq', 'cq73', 'me', 'rx', 'b4', 'new'])
   })
 })
 

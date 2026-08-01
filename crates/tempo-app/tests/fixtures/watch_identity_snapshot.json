@@ -108,6 +108,7 @@
       "newDxcc": false,
       "newGrid": true,
       "rv": -1,
+      "signoff": false,
       "snr": 72,
       "tier": "FT4",
       "txAt": null,

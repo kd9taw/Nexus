@@ -331,6 +331,19 @@ impl Msg {
         Msg::Other(s.split_whitespace().collect::<Vec<_>>().join(" "))
     }
 
+    /// True for the payloads that END a QSO — `RR73` and `73`. Token-positional by
+    /// construction (it rides the parse, never a substring scan), so a `DM73` grid or
+    /// a callsign containing 73 never classifies. `RRR` is excluded on purpose: it
+    /// rogers the report but promises a 73 still to come, so the frequency isn't
+    /// freeing yet. HONEST LIMIT: the parse's three-token Bye73 arm does not verify
+    /// the addressees are callsigns (inbox.rs documents the same trap), so free-text
+    /// signoffs like "HPE CUAGN 73" count — correct for "the frequency is freeing",
+    /// wrong for "identified station signed"; a consumer needing the latter gates on
+    /// looks_like_call itself. Drives the Band Activity CQ+73 filter chip.
+    pub fn is_signoff(&self) -> bool {
+        matches!(self, Msg::Rr73 { .. } | Msg::Bye73 { .. })
+    }
+
     /// The callsign this message is directed to, if any.
     pub fn addressee(&self) -> Option<&str> {
         match self {
@@ -568,6 +581,38 @@ mod fidelity_tests {
         assert!(same_call("KD9TAW", "kd9taw/p"));
         assert!(same_call("KD9TAW/P", "KD9TAW"));
         assert!(!same_call("KD9TAW", "KD9TAX"));
+    }
+
+    #[test]
+    fn signoff_is_token_positional_not_substring() {
+        // The QSO-ending payloads — and ONLY those. The classifier rides the parse
+        // (payload token position), never a substring scan of the text.
+        assert!(Msg::parse("K2DEF W9XYZ 73").is_signoff());
+        assert!(Msg::parse("K2DEF W9XYZ RR73").is_signoff());
+        // RRR rogers the report but promises a 73 still to come — QSO not over.
+        assert!(!Msg::parse("K2DEF W9XYZ RRR").is_signoff());
+        // A grid whose text merely CONTAINS 73 is a Grid, not a signoff ("RR73" is
+        // the one grid-shaped token the parser special-cases away from the grid arm).
+        let g = Msg::parse("K2DEF W9XYZ DM73");
+        assert!(matches!(g, Msg::Grid { ref grid, .. } if grid == "DM73"));
+        assert!(!g.is_signoff());
+        // 73 inside a callsign token is not a signoff either.
+        assert!(!Msg::parse("CQ JA73XYZ PM95").is_signoff());
+        // "R73" routes to free text (not a phantom report); its final token is R73,
+        // not 73, so it is not a signoff. Four-token free text never reaches the
+        // three-token Bye73 arm either.
+        assert!(!Msg::parse("K2DEF W9XYZ R73").is_signoff());
+        assert!(!Msg::parse("TNX FER QSO 73").is_signoff());
+        // HONEST LIMIT, pinned deliberately: the parser's three-token arm matches on
+        // the FINAL token alone and does not require the first two to be callsigns
+        // (the trap inbox.rs:101-104 documents and defends against chunk-side).
+        // So three-token free text ending in the bare 73 token IS a Bye73/signoff:
+        // "HPE CUAGN 73" — and for this consumer that is the RIGHT call (a free-text
+        // 73 is a signoff; the frequency is about to open). Any future consumer that
+        // needs callsign-verified signoffs must gate on looks_like_call itself —
+        // is_signoff() answers "does this message end a QSO", not "who ended it".
+        assert!(Msg::parse("HPE CUAGN 73").is_signoff());
+        assert!(Msg::parse("TNX QSO 73").is_signoff());
     }
 
     #[test]

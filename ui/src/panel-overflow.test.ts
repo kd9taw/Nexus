@@ -140,6 +140,26 @@ describe('Logbook header: ten touch-floored buttons wrap instead of squeezing', 
   })
 })
 
+describe('Band Activity: the filter chips wrap instead of clipping in the rail', () => {
+  // The same nowrap-atom mechanism as `.log-actions` above, re-armed by the CQ+73 chip
+  // (2026-07-31). `.od-controls` wraps, but the chip group inside it does not, so the
+  // seven chips are ONE unbreakable atom whose min-content is their sum. In roster mode
+  // the full bar renders in `.cockpit-decodes-side`, inside `.cockpit-side` AND
+  // `.cockpit-panes` — both `overflow-x: hidden`, so past the floor the row is CLIPPED,
+  // never scrolled. The right rail clamps to RIGHT_MIN = 260px (usePaneWidths), minus
+  // panel padding, which the seven-chip sum exceeds: the trailing chips (B4 / New) stop
+  // existing for the operator. Adding the WIDEST label to a nowrap row is what tipped it.
+  it('.od-filters wraps', () => {
+    const v = winner('.od-filters', 'flex-wrap')
+    expect(
+      v,
+      '.od-filters has no flex-wrap: the seven chips (All/CQ/CQ+73/To me/On RX/B4/New) do not ' +
+        'fit the 260px minimum rail, and .cockpit-side clips overflow-x — the last chips become ' +
+        'unreachable instead of moving to a second line.',
+    ).toBe('wrap')
+  })
+})
+
 describe('SSTV: the band view re-arms its own floor', () => {
   // gap-closure/verified.md V14 — `.sstv-band { min-height: 220px }` inside
   // `.sstv-canvas { flex: 1.1 1 0; min-height: 0; align-items: center }`, whose own comment
